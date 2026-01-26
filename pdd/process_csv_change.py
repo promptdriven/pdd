@@ -81,7 +81,7 @@ def process_csv_change(
         csv_file: Path to the input CSV file. Must contain 'prompt_name' and
                   'change_instructions' columns.
         strength: Strength parameter for the LLM model (0.0 to 1.0).
-        temperature: Temperature parameter for the LLM model (0.0 to 1.0).
+        temperature: Temperature parameter for the LLM model (0.0 to 2.0).
         code_directory: Path to the directory containing the code files.
         language: Default programming language if the prompt filename doesn't
                   specify one (e.g., '_python').
@@ -117,8 +117,8 @@ def process_csv_change(
     if not 0.0 <= strength <= 1.0:
          console.print(f"[bold red]Error:[/bold red] 'strength' must be between 0.0 and 1.0. Given: {strength}")
          return False, [], 0.0, None # Return None for model_name on early exit
-    if not 0.0 <= temperature <= 1.0: # Added temperature validation (assuming 0-1 range)
-         console.print(f"[bold red]Error:[/bold red] 'temperature' must be between 0.0 and 1.0. Given: {temperature}")
+    if not 0.0 <= temperature <= 2.0:
+         console.print(f"[bold red]Error:[/bold red] 'temperature' must be between 0.0 and 2.0. Given: {temperature}")
          return False, [], 0.0, None # Return None for model_name on early exit
     if budget < 0.0:
          console.print(f"[bold red]Error:[/bold red] 'budget' must be non-negative. Given: {budget}")
@@ -328,6 +328,12 @@ def process_csv_change(
                         elif current_model_name and model_name != current_model_name:
                              console.print(f"[bold yellow]Warning:[/bold yellow] Model name changed from '{model_name}' to '{current_model_name}' in row {row_num}.")
                              # Keep the first model_name
+
+                        # Validate that modified_prompt is not empty
+                        if not modified_prompt or not modified_prompt.strip():
+                            console.print(f"[bold yellow]Warning:[/bold yellow] LLM returned empty content for '{prompt_name_from_csv}' (row {row_num}). Skipping.")
+                            overall_success = False
+                            continue
 
                         list_of_jsons.append({
                             "file_name": prompt_name_from_csv, # Use original prompt name from CSV as key

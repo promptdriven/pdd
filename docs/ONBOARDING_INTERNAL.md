@@ -117,7 +117,64 @@ PDD has Google Cloud credits and limited Claude Max seats. Use AI CLI tools in t
 
 This approach leverages our GCP credits while conserving limited Claude Max usage for when it's really needed.
 
-## PDD Module Development Workflows
+## Agentic Workflows (Recommended)
+
+For most development tasks, use the agentic commands that automate the entire workflow.
+
+**Prerequisites:**
+- GitHub CLI: `brew install gh && gh auth login`
+- One Agentic CLI (install at least one):
+  - **Claude Code**: `npm install -g @anthropic-ai/claude-code`
+  - **Gemini CLI**: `npm install -g @google/gemini-cli`
+  - **Codex CLI**: `npm install -g @openai/codex`
+
+API keys are managed via Infisical (no need to set them locally).
+
+### Web Interface (Easiest)
+
+```bash
+infisical run -- pdd connect
+```
+
+This opens a browser-based interface where you can run all PDD commands visually.
+
+### Bug Fixes (CLI)
+
+```bash
+# Step 1: Analyze bug and create failing tests automatically
+infisical run -- pdd bug https://github.com/gltanaka/pdd/issues/XXX
+
+# Step 2: Fix the failing tests
+infisical run -- pdd fix https://github.com/gltanaka/pdd/issues/XXX
+```
+
+The `pdd bug` command:
+- Checks for duplicates
+- Triages and reproduces the bug
+- Creates failing unit tests
+- Opens a draft PR
+
+The `pdd fix` command:
+- Iteratively fixes code until tests pass
+- Updates the PR automatically
+
+### Feature Requests (CLI)
+
+```bash
+# Implements the feature end-to-end
+infisical run -- pdd change https://github.com/gltanaka/pdd/issues/XXX
+```
+
+This runs a 12-step workflow that researches, clarifies requirements, implements changes, and creates a PR.
+
+### When to Use Manual Workflows
+
+Fall back to manual workflows (below) when:
+- The agentic workflow fails repeatedly
+- You need fine-grained control over individual steps
+- Debugging why agentic workflow isn't working
+
+## Manual Workflows (Advanced/Fallback)
 
 PDD has different workflows for **bug fixes** vs **new features**. The key principle: *bug fixes start with tests; features start with prompts*.
 
@@ -176,7 +233,8 @@ flowchart TD
 
 2. **Write a failing test** (manually or via Claude Code):
    ```bash
-   # NOTE: `pdd bug` doesn't work reliably yet - write tests manually
+   # NOTE: For most cases, use `pdd bug <issue-url>` instead (see Agentic Workflows above)
+   # Use manual test writing only when agentic workflow fails
    # Add test to tests/test_module_name.py
 
    # Run the test to confirm it FAILS
@@ -363,12 +421,14 @@ Before merging a PR, ensure it contains:
 
 | Command | Purpose | When to Use |
 |---------|---------|-------------|
-| `pdd fix` | Fix code to pass failing tests | Bug fixes, feature iteration |
+| `pdd connect` | **[RECOMMENDED]** Launch web interface | Visual PDD interaction |
+| `pdd bug <url>` | **[RECOMMENDED]** Analyze bug and create failing tests | Bug fixes from GitHub issues |
+| `pdd fix <url>` | **[RECOMMENDED]** Fix failing tests from pdd bug | After pdd bug creates tests |
+| `pdd change <url>` | **[RECOMMENDED]** Implement feature request | New features from GitHub issues |
+| `pdd fix` (manual) | Fix code to pass failing tests | Fallback when agentic fails |
 | `pdd update` | Check if prompt needs changes | After fix, before PR |
 | `pdd test` | Generate tests to increase coverage | Before regeneration (target: 80%) |
 | `pdd sync` | Regenerate code, example & update few-shot DB | After fixes succeed |
-
-> **Note**: `pdd bug` doesn't work reliably yet. Write tests manually or with Claude Code.
 
 ### Important Notes
 

@@ -1,0 +1,56 @@
+% You are an expert Python Software Engineer. Your goal is to write a Python module 'email_validator' that validates email addresses.
+
+% Here are the inputs and outputs of the module:
+
+Public API:
+    class EmailValidator:
+        def validate_email(self, email: str) -> ValidationResult:
+            """
+            Validates an email address and returns a ValidationResult.
+
+            Args:
+                email: The email address to validate
+
+            Returns:
+                ValidationResult with validation status and normalized email
+
+            Raises:
+                TypeError: If email is None
+            """
+
+    @dataclass
+    class ValidationResult:
+        is_valid: bool                    # Whether the email is valid
+        normalized_email: str             # Lowercase, whitespace-stripped email
+        error_message: Optional[str]      # Error description if invalid, None if valid
+
+% Validation rules:
+    1. Must contain exactly one @ symbol
+    2. Local part (before @) cannot be empty
+    3. Domain part (after @) must contain at least one dot
+    4. No consecutive dots (..) allowed anywhere in the email
+    5. Whitespace is stripped before validation
+    6. Email is normalized to lowercase
+
+% Edge cases to handle:
+    - None input: Raise TypeError with message "email cannot be None"
+    - Empty string (after stripping): Return invalid with error "Email cannot be empty"
+    - Multiple @ symbols: Return invalid with error "Email must contain exactly one @ symbol"
+    - Missing local part: Return invalid with error "Local part cannot be empty"
+    - Missing dot in domain: Return invalid with error "Domain must contain at least one dot"
+    - Consecutive dots: Return invalid with error "Email cannot contain consecutive dots"
+    - Unicode characters in local part: Allowed (valid)
+
+% Examples of valid emails:
+    - "user@example.com"
+    - "user.name@example.com"
+    - "user+tag@example.org"
+    - "user@sub.domain.example.com"
+    - "  USER@EXAMPLE.COM  " (normalized to "user@example.com")
+
+% Examples of invalid emails:
+    - "invalid-email" (no @ symbol)
+    - "user@localhost" (no dot in domain)
+    - "user@@example.com" (multiple @ symbols)
+    - "@example.com" (empty local part)
+    - "user..name@example.com" (consecutive dots)

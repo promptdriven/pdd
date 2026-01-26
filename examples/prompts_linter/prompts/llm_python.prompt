@@ -1,0 +1,92 @@
+You are an expert Python developer specializing in LLM integration and robust error handling. Your task is to architect the `src/utils/llm.py` module for the PDD Prompt Linter. This module acts as a resilient wrapper around `LiteLLM`, managing provider detection, cost-effective model selection, strict JSON schema enforcement, and a "safe fallback" mechanism that ensures the linter never crashes due to API failures.
+
+Requirements
+1.  **Provider Detection**: Automatically detect available API keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`) from the environment. If no keys are present, the module must explicitly signal that LLM features are unavailable (triggering heuristic-only mode).
+2.  **Model Selection**: Implement logic to select a "cheap" model by default based on the detected provider:
+    *   OpenAI: `gpt-4o-mini`
+    *   Google: `gemini-2.0-flash-exp`
+    *   Anthropic: `claude-3-haiku-20240307`
+    *   Allow overrides via arguments.
+3.  **Safe Execution**: The primary public function `analyze_prompt` must never raise an exception to the caller. It should return `None` or an empty result object on failure (timeout, auth error, rate limit), allowing the pipeline to fall back to heuristics.
+4.  **JSON Enforcement**: The LLM output must be strictly validated against the `LLMResponse` Pydantic model. If the output is not valid JSON or does not match the schema, treat it as a failure (return `None`).
+5.  **Robust JSON Parsing**: Handle malformed JSON responses by:
+    *   Stripping markdown code block wrappers (```json and ```)
+    *   Extracting JSON from embedded text (finding first `{` and last `}`)
+    *   Gracefully handling truncated responses
+6.  **Constraints**: Enforce a default timeout (20s), token budget (2000 tokens to prevent truncation), and max retries (2).
+7.  **Logging**: Log warnings for API failures with debug information so the user knows why the LLM step was skipped, but do not crash.
+
+Dependencies
+% Here are examples of how to use internal modules:
+<internal_example_modules>
+<src.utils.llm><include>examples/llm_example.py</include></src.utils.llm>
+<src.utils.models><include>examples/models_example.py</include></src.utils.models>
+</internal_example_modules>
+
+Prompt Dependencies:
+- models_Python.prompt
+
+Instructions
+-   Import `litellm` and standard libraries (`os`, `json`, `logging`).
+-   Import `ValidationError` from `pydantic` for schema validation errors.
+-   Import the `LLMResponse` model from `src.utils.models`.
+-   Define a constant dictionary `DEFAULT_MODELS` mapping providers to their cheap models.
+-   Define a `SYSTEM_PROMPT` constant that instructs the LLM to act as a PDD expert and output valid JSON matching the schema. The system prompt must explicitly instruct the LLM to analyze prompts for:
+    -   **Anatomy**: Missing key structural sections (Requirements, Dependencies, Instructions, Deliverable/Input-Output)
+    -   **Determinism**: Presence of non-deterministic tags (`<web>`, `<shell>`, `<exec>`, `<run>`)
+    -   **Modularity**: Multiple file definitions in a single prompt (should be split)
+    -   **Context Engineering**: Repo dumps or excessive code without proper `<include>` tags
+    -   **Requirements Clarity**: Vague or missing specific requirements
+    -   **Attention Hierarchy**: Critical information buried in the middle rather than at start/end
+    -   **Atomic Instructions**: Instructions that are too broad and should be broken down
+    -   **Error Handling**: Missing or insufficient error handling specifications
+-   Implement a helper function `get_provider_and_model(user_model: Optional[str]) -> Tuple[Optional[str], Optional[str]]` that:
+    -   Checks for API keys in the environment
+    -   Returns (provider, model) based on priority: OpenAI → Anthropic → Google
+    -   If user_model is provided, returns ("custom", user_model)
+    -   Returns (None, None) if no API keys found
+-   Implement the main function `analyze_prompt(prompt_text: str, config: Optional[Dict[str, Any]]) -> Optional[LLMResponse]`.
+    -   **Input**: The raw prompt text and an optional configuration dictionary (containing timeout, model override, etc.).
+    -   **Logic**:
+        1.  Extract config values: `user_model`, `timeout` (default 20), `max_retries` (default 2)
+        2.  Call `get_provider_and_model()` to detect provider/model. If None, log and return None.
+        3.  Construct messages array with system prompt and user prompt.
+        4.  Call `litellm.completion` with:
+            -   `model=model`
+            -   `messages=messages`
+            -   `temperature=0.1` (low for deterministic JSON)
+            -   `max_tokens=2000` (increased to prevent truncation)
+            -   `timeout=timeout`
+            -   `num_retries=max_retries`
+            -   `response_format={"type": "json_object"}` only for GPT models
+        5.  Extract content from `response.choices[0].message.content`
+        6.  Clean the content:
+            -   Strip whitespace
+            -   Remove markdown code block wrappers (```json or ``` at start/end)
+            -   If doesn't start with `{`, find first `{` and last `}` to extract JSON
+        7.  Parse JSON string with `json.loads()`
+        8.  Validate against Pydantic model: `LLMResponse(**data)`
+        9.  Return the validated `LLMResponse` object
+    -   **Error Handling**: Wrap the entire call in try/except blocks catching:
+        -   `litellm.exceptions.AuthenticationError` → log "Authentication failed"
+        -   `litellm.exceptions.Timeout` → log "Request timed out"
+        -   `litellm.exceptions.RateLimitError` → log "Rate limit exceeded"
+        -   `json.JSONDecodeError` → log "Failed to return valid JSON" with debug info
+        -   `ValidationError` → log "Response did not match expected schema"
+        -   `Exception` → catch-all log "Unexpected error during LLM analysis"
+        -   All errors should return `None`
+-   Ensure the system prompt explicitly defines the required JSON schema structure with fields: `guide_alignment_summary`, `top_fixes`, and `suggestions`.
+-   The system prompt should instruct the LLM to focus on PDD principles: clarity, modularity, context definition, atomic instructions, determinism, and proper structure.
+-   The system prompt should ask the LLM to provide actionable fixes with `before` and `after` text for each suggestion, prioritized by severity (High/Medium/Low).
+-   Do not use `dotenv` to load files; rely on the process environment.
+
+Deliverable
+-   `src/utils/llm.py`: The complete Python module implementing the logic described above.
+
+Implementation assumptions (explicit)
+-   `litellm` is installed and handles the underlying HTTP requests.
+-   The `LLMResponse` model in `src/utils/models.py` is the single source of truth for the output schema.
+-   The caller (`pipeline.py`) handles the merging of LLM results with heuristic results; this module only provides the LLM portion or `None`.
+-   The increased token budget (2000) is necessary to prevent JSON truncation for complex prompts.
+-   The system prompt guides the LLM to analyze PDD compliance across all major categories (anatomy, determinism, modularity, context, clarity, atomic instructions).
+-   The LLM provides deeper semantic analysis than the heuristic rules, catching subtle issues and offering specific text improvements.

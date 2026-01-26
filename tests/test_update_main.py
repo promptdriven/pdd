@@ -177,7 +177,7 @@ def test_update_main_with_git_no_input_code(
         ctx=mock_ctx,
         input_prompt_file="some_prompt_file.prompt",
         modified_code_file="modified_code.py",
-        input_code_file=None,  # Not provided
+        input_code_file=None,  # Not provided,
         output=output,
         use_git=git
     )
@@ -368,30 +368,29 @@ def temp_git_repo(tmp_path, mock_get_language_for_repo):
 def test_create_and_find_prompt_code_pairs(temp_git_repo):
     """
     Test that the helper function correctly finds code files and creates missing prompts.
+    With structure preservation, prompts mirror the source directory structure.
     """
     repo_path_str = str(temp_git_repo)
 
-    # Prompts for module1 and module2 should not exist yet in the prompts directory
-    module1_prompt_path = temp_git_repo / "prompts" / "module1_python.prompt"
-    module2_prompt_path = temp_git_repo / "prompts" / "module2_javascript.prompt"
-    existing_prompt_path = temp_git_repo / "prompts" / "existing_module_python.prompt"
-    assert not module1_prompt_path.exists()
-    assert not module2_prompt_path.exists()
+    # With structure preservation, prompts for files in src/ go to prompts/src/
+    module1_prompt_path = temp_git_repo / "prompts" / "src" / "module1_python.prompt"
+    module2_prompt_path = temp_git_repo / "prompts" / "src" / "module2_javascript.prompt"
+    existing_prompt_path_nested = temp_git_repo / "prompts" / "src" / "existing_module_python.prompt"
 
     # Run the function
     pairs = find_and_resolve_all_pairs(repo_path_str)
 
-    # Assert that missing prompts were created in the prompts directory
+    # Assert that prompts were created in the prompts/src directory
     assert module1_prompt_path.exists()
     assert module1_prompt_path.read_text() == ""
     assert module2_prompt_path.exists()
     assert module2_prompt_path.read_text() == ""
-    assert existing_prompt_path.exists()
-    assert existing_prompt_path.read_text() == "Existing prompt."
+    assert existing_prompt_path_nested.exists()
+    assert existing_prompt_path_nested.read_text() == ""
 
     # Assert that the returned pairs are correct
     expected_pairs = [
-        (str(existing_prompt_path), str(temp_git_repo / "src" / "existing_module.py")),
+        (str(existing_prompt_path_nested), str(temp_git_repo / "src" / "existing_module.py")),
         (str(module1_prompt_path), str(temp_git_repo / "src" / "module1.py")),
         (str(module2_prompt_path), str(temp_git_repo / "src" / "module2.js")),
     ]
@@ -426,9 +425,10 @@ def test_update_main_repo_mode_orchestration(mock_update_file_pair, temp_git_rep
     # Check the console output for the summary table
     captured = capsys.readouterr()
     assert "Repository Update Summary" in captured.out
-    assert "prompts/module1_python.prompt" in captured.out
-    assert "prompts/module2_javascript.prompt" in captured.out
-    assert "prompts/existing_module_python.prompt" in captured.out
+    # With structure preservation, paths include src/
+    assert "prompts/src/module1_python.prompt" in captured.out
+    assert "prompts/src/module2_javascript.prompt" in captured.out
+    assert "prompts/src/existing_module_python.prompt" in captured.out
     assert "Total Estimated Cost" in captured.out
     
     assert result is not None
@@ -456,6 +456,7 @@ contexts:
       - "backend/**"
     defaults:
       prompts_dir: "prompts/backend"
+      generate_output_path: "backend"
 '''
     (repo_path / ".pddrc").write_text(pddrc_content)
 
@@ -476,10 +477,13 @@ contexts:
     git.Repo.init(repo_path)
 
     # Mock update_prompt to avoid actual LLM calls
+    # Mock get_language to avoid PDD_PATH dependency
     with patch("pdd.update_main.update_prompt") as mock_update_prompt, \
-         patch("pdd.update_main.get_available_agents") as mock_agents:
+         patch("pdd.update_main.get_available_agents") as mock_agents, \
+         patch("pdd.update_main.get_language") as mock_get_language:
         mock_update_prompt.return_value = ("generated prompt", 0.01, "mock-model")
         mock_agents.return_value = []
+        mock_get_language.return_value = "python"
 
         ctx = click.Context(click.Command("update"))
         ctx.obj = {"strength": 0.5, "temperature": 0.0, "verbose": False, "quiet": True}
@@ -503,3 +507,205 @@ contexts:
         f"Wrong path exists: {wrong_prompt_path.exists()}"
     assert not wrong_prompt_path.exists(), \
         f"Prompt was created at wrong path {wrong_prompt_path} instead of {expected_prompt_path}"
+
+
+def test_update_preserves_subdirectory_structure_issue_254(tmp_path, monkeypatch):
+    """
+    Test that pdd update preserves subdirectory structure from code file path.
+    Regression test for GitHub issue #254.
+
+    When updating pdd/commands/generate.py with generate_output_path="pdd",
+    the prompt should be created at: prompts/commands/generate_python.prompt
+    (preserving 'commands/' subdirectory, stripping 'pdd/' package root)
+    """
+    import git
+    from pathlib import Path
+    from unittest.mock import patch
+
+    # Setup: Create a temp directory structure
+    repo_path = tmp_path / "test_repo"
+    repo_path.mkdir()
+
+    # Create .pddrc with context that has generate_output_path
+    pddrc_content = '''
+contexts:
+  pdd_cli:
+    paths:
+      - "pdd/**"
+    defaults:
+      generate_output_path: "pdd"
+'''
+    (repo_path / ".pddrc").write_text(pddrc_content)
+
+    # Create pdd/commands/ directory and code file
+    pdd_dir = repo_path / "pdd"
+    pdd_dir.mkdir()
+    commands_dir = pdd_dir / "commands"
+    commands_dir.mkdir()
+    code_file = commands_dir / "generate.py"
+    code_file.write_text("def example(): pass")
+
+    # Change to repo directory
+    monkeypatch.chdir(repo_path)
+
+    # Initialize git repo
+    git.Repo.init(repo_path)
+
+    # Mock update_prompt to avoid actual LLM calls
+    # Mock get_language to avoid PDD_PATH dependency
+    with patch("pdd.update_main.update_prompt") as mock_update_prompt, \
+         patch("pdd.update_main.get_available_agents") as mock_agents, \
+         patch("pdd.update_main.get_language") as mock_get_language:
+        mock_update_prompt.return_value = ("generated prompt", 0.01, "mock-model")
+        mock_agents.return_value = []
+        mock_get_language.return_value = "python"
+
+        ctx = click.Context(click.Command("update"))
+        ctx.obj = {"strength": 0.5, "temperature": 0.0, "verbose": False, "quiet": True}
+
+        # Act: Call update_main in regeneration mode (only code file provided)
+        result = update_main(
+            ctx=ctx,
+            input_prompt_file=None,  # Regeneration mode
+            modified_code_file=str(code_file),
+            input_code_file=None,
+            output=None,
+            use_git=False
+        )
+
+    # Assert: Prompt should preserve subdirectory structure (stripping package root)
+    # Expected: prompts/commands/generate_python.prompt (NOT prompts/pdd/commands/)
+    expected_prompt_path = repo_path / "prompts" / "commands" / "generate_python.prompt"
+    wrong_prompt_path = repo_path / "prompts" / "generate_python.prompt"
+
+    assert expected_prompt_path.exists(), \
+        f"Expected prompt at {expected_prompt_path}, but it was not created there. " \
+        f"Wrong path exists: {wrong_prompt_path.exists()}"
+    assert not wrong_prompt_path.exists(), \
+        f"Prompt was created at wrong path {wrong_prompt_path} instead of {expected_prompt_path}"
+
+
+# --- Tests for agentic update source-file mutation bug ---
+
+def test_agentic_update_does_not_modify_source_when_output_specified(tmp_path):
+    """
+    When --output is specified, the agentic update path must NOT modify the
+    source prompt file. Only the output path should contain the updated content.
+    Regression test for: agentic update overwrites source in-place ignoring --output.
+    """
+    source_prompt = tmp_path / "source.prompt"
+    output_prompt = tmp_path / "output.prompt"
+    code_file = tmp_path / "modified_code.py"
+    original_code = tmp_path / "original_code.py"
+
+    original_content = "original prompt content\n"
+    source_prompt.write_text(original_content)
+    code_file.write_text("def foo(): return 42\n")
+    original_code.write_text("def foo(): pass\n")
+
+    ctx = click.Context(click.Command("update"))
+    ctx.obj = {
+        "strength": 0.5,
+        "temperature": 0.0,
+        "verbose": False,
+        "time": 0.25,
+        "force": False,
+        "quiet": False,
+    }
+
+    with patch("pdd.update_main.get_available_agents", return_value=["anthropic"]), \
+         patch("pdd.update_main.get_tests_dir_from_config", return_value=None), \
+         patch("pdd.update_main.run_agentic_update") as mock_agentic:
+
+        def agentic_side_effect(prompt_file, **kwargs):
+            """Simulate agentic update modifying the prompt_file in-place."""
+            Path(prompt_file).write_text("agentic modified content\n")
+            return (True, "ok", 0.01, "claude", [str(prompt_file)])
+
+        mock_agentic.side_effect = agentic_side_effect
+
+        result = update_main(
+            ctx=ctx,
+            input_prompt_file=str(source_prompt),
+            modified_code_file=str(code_file),
+            input_code_file=str(original_code),
+            output=str(output_prompt),
+            use_git=False,
+            simple=False,
+        )
+
+    # Source must remain unchanged
+    assert source_prompt.read_text() == original_content, \
+        "Source prompt file was modified by agentic update despite --output being specified"
+    # Output should have the updated content
+    assert output_prompt.exists(), "Output file was not created"
+    assert output_prompt.read_text() == "agentic modified content\n"
+    # Function should return success
+    assert result is not None
+    assert result[0] == "agentic modified content\n"
+
+
+def test_agentic_update_failure_does_not_corrupt_source(tmp_path):
+    """
+    When agentic update fails after partially modifying a file, the source
+    prompt must remain unchanged if --output is specified.
+    """
+    source_prompt = tmp_path / "source.prompt"
+    output_prompt = tmp_path / "output.prompt"
+    code_file = tmp_path / "modified_code.py"
+    original_code = tmp_path / "original_code.py"
+
+    original_content = "original prompt content\n"
+    source_prompt.write_text(original_content)
+    code_file.write_text("def foo(): return 42\n")
+    original_code.write_text("def foo(): pass\n")
+
+    ctx = click.Context(click.Command("update"))
+    ctx.obj = {
+        "strength": 0.5,
+        "temperature": 0.0,
+        "verbose": False,
+        "time": 0.25,
+        "force": False,
+        "quiet": True,
+    }
+
+    with patch("pdd.update_main.get_available_agents", return_value=["anthropic"]), \
+         patch("pdd.update_main.get_tests_dir_from_config", return_value=None), \
+         patch("pdd.update_main.run_agentic_update") as mock_agentic, \
+         patch("pdd.update_main.construct_paths") as mock_cp, \
+         patch("pdd.update_main.update_prompt") as mock_up:
+
+        def agentic_side_effect(prompt_file, **kwargs):
+            """Simulate agentic update that modifies file then fails."""
+            Path(prompt_file).write_text("partially corrupted\n")
+            return (False, "agentic failed", 0.0, "claude", [])
+
+        mock_agentic.side_effect = agentic_side_effect
+
+        # Set up legacy fallback mocks
+        mock_cp.return_value = (
+            {},
+            {
+                "input_prompt_file": original_content,
+                "modified_code_file": "def foo(): return 42\n",
+                "input_code_file": "def foo(): pass\n",
+            },
+            {"output": str(output_prompt)},
+            None
+        )
+        mock_up.return_value = ("legacy updated content\n", 0.02, "gpt-4")
+
+        result = update_main(
+            ctx=ctx,
+            input_prompt_file=str(source_prompt),
+            modified_code_file=str(code_file),
+            input_code_file=str(original_code),
+            output=str(output_prompt),
+            use_git=False,
+            simple=False,
+        )
+
+    # Source must remain unchanged even after agentic failure
+    assert source_prompt.read_text() == original_content, \
+        "Source prompt was corrupted by failed agentic update"

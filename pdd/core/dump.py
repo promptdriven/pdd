@@ -16,6 +16,43 @@ import requests
 from .. import __version__
 from .errors import console, get_core_dump_errors
 
+
+def garbage_collect_core_dumps(keep: int = 10) -> int:
+    """Delete old core dumps, keeping only the most recent `keep` files.
+
+    Core dumps are sorted by modification time (mtime), and the oldest
+    files beyond the `keep` limit are deleted.
+
+    Args:
+        keep: Number of core dump files to keep. Default is 10.
+
+    Returns:
+        The number of deleted files.
+    """
+    core_dump_dir = Path.cwd() / ".pdd" / "core_dumps"
+    if not core_dump_dir.exists():
+        return 0
+
+    # Find all core dump files and sort by mtime (newest first)
+    dumps = sorted(
+        core_dump_dir.glob("pdd-core-*.json"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True
+    )
+
+    # Delete files beyond the keep limit
+    deleted = 0
+    for dump_file in dumps[keep:]:
+        try:
+            dump_file.unlink()
+            deleted += 1
+        except OSError:
+            # If we can't delete a file, just skip it
+            pass
+
+    return deleted
+
+
 def _write_core_dump(
     ctx: click.Context,
     normalized_results: List[Any],
@@ -70,8 +107,8 @@ def _write_core_dump(
         file_contents = {}
         core_dump_files = ctx.obj.get("core_dump_files", set())
 
-        if not ctx.obj.get("quiet"):
-            console.print(f"[info]Core dump: Found {len(core_dump_files)} tracked files[/info]")
+        if ctx.obj.get("verbose") and not ctx.obj.get("quiet"):
+            console.print(f"[info]Debug snapshot: Found {len(core_dump_files)} tracked files[/info]")
 
         # Auto-include relevant meta files for the invoked commands
         meta_dir = Path.cwd() / ".pdd" / "meta"
@@ -100,8 +137,8 @@ def _write_core_dump(
         for file_path in core_dump_files:
             try:
                 path = Path(file_path)
-                if not ctx.obj.get("quiet"):
-                    console.print(f"[info]Core dump: Checking file {file_path}[/info]")
+                if ctx.obj.get("verbose") and not ctx.obj.get("quiet"):
+                    console.print(f"[info]Debug snapshot: Checking file {file_path}[/info]")
 
                 if path.exists() and path.is_file():
                     if path.stat().st_size < 50000:  # 50KB limit
@@ -113,23 +150,23 @@ def _write_core_dump(
                                 key = str(path)
 
                             file_contents[key] = path.read_text(encoding='utf-8')
-                            if not ctx.obj.get("quiet"):
-                                console.print(f"[info]Core dump: Added content for {key}[/info]")
+                            if ctx.obj.get("verbose") and not ctx.obj.get("quiet"):
+                                console.print(f"[info]Debug snapshot: Added content for {key}[/info]")
                         except UnicodeDecodeError:
                             file_contents[str(path)] = "<binary>"
-                            if not ctx.obj.get("quiet"):
-                                console.print(f"[warning]Core dump: Binary file {path}[/warning]")
+                            if ctx.obj.get("verbose") and not ctx.obj.get("quiet"):
+                                console.print(f"[warning]Debug snapshot: Binary file {path}[/warning]")
                     else:
                         file_contents[str(path)] = "<too large>"
-                        if not ctx.obj.get("quiet"):
-                            console.print(f"[warning]Core dump: File too large {path}[/warning]")
+                        if ctx.obj.get("verbose") and not ctx.obj.get("quiet"):
+                            console.print(f"[warning]Debug snapshot: File too large {path}[/warning]")
                 else:
-                    if not ctx.obj.get("quiet"):
-                        console.print(f"[warning]Core dump: File not found or not a file: {file_path}[/warning]")
+                    if ctx.obj.get("verbose") and not ctx.obj.get("quiet"):
+                        console.print(f"[warning]Debug snapshot: File not found or not a file: {file_path}[/warning]")
             except Exception as e:
                 file_contents[str(file_path)] = f"<error reading file: {e}>"
-                if not ctx.obj.get("quiet"):
-                    console.print(f"[warning]Core dump: Error reading {file_path}: {e}[/warning]")
+                if ctx.obj.get("verbose") and not ctx.obj.get("quiet"):
+                    console.print(f"[warning]Debug snapshot: Error reading {file_path}: {e}[/warning]")
 
         payload: Dict[str, Any] = {
             "schema_version": 1,
@@ -166,15 +203,26 @@ def _write_core_dump(
 
         dump_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
+        # Garbage collect old core dumps after writing (Issue #231)
+        # This ensures we keep at most N dumps, not N+1
+        keep_core_dumps = ctx.obj.get("keep_core_dumps", 10)
+        garbage_collect_core_dumps(keep=keep_core_dumps)
+
         if not ctx.obj.get("quiet"):
-            console.print(
-                f"[info]Core dump written to [path]{dump_path}[/path]. "
-                "You can attach this file when reporting a bug.[/info]"
-            )
+            # Check if the dump still exists after GC (may be deleted if keep=0)
+            if dump_path.exists():
+                console.print(
+                    f"[info]📦 Debug snapshot saved to [path]{dump_path}[/path] "
+                    "(attach when reporting bugs)[/info]"
+                )
+            else:
+                console.print(
+                    "[info]📦 Debug snapshot saved and immediately cleaned up (--keep-core-dumps=0)[/info]"
+                )
     except Exception as exc:
-        # Never let core dumping itself crash the CLI
+        # Never let debug snapshot creation crash the CLI
         if not ctx.obj.get("quiet"):
-            console.print(f"[warning]Failed to write core dump: {exc}[/warning]", style="warning")
+            console.print(f"[warning]Failed to write debug snapshot: {exc}[/warning]", style="warning")
 
 
 def _get_github_token() -> Optional[str]:

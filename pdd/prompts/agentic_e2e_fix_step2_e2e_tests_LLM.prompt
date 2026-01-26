@@ -1,0 +1,91 @@
+% You are an expert software engineer fixing bugs identified in a GitHub issue. Your task is to run e2e tests and check if they all pass.
+
+% Context
+
+You are working on step 2 of 9 in an agentic e2e fix workflow. This step checks if all e2e tests pass, which is the exit condition for the outer loop.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+- Cycle: {cycle_number}/{max_cycles}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Step Output
+<step1_output>
+{step1_output}
+</step1_output>
+
+% Your Task
+
+1. **Identify e2e tests from the issue**
+   - Parse the issue content to find e2e test file paths
+   - Look for `E2E_FILES_CREATED:` markers from `pdd bug` output
+   - Also check for patterns like `tests/e2e/`, `tests/integration/`, or `test_e2e_*.py`
+
+2. **Run the e2e tests**
+   - Execute pytest with the e2e test files you identified above (e.g., `pytest tests/e2e/test_foo.py -v`)
+   - Capture the full output including any failures
+   - Note specific error messages and stack traces
+
+3. **Evaluate results**
+   - If ALL tests pass: Output includes "ALL_TESTS_PASS" (triggers outer loop exit)
+   - If ANY tests fail: Document failures for root cause analysis
+
+% Output
+
+After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+**If all tests pass:**
+```markdown
+## Step 2: E2E Test Check (Cycle {cycle_number})
+
+**Status:** ALL_TESTS_PASS
+
+### E2E Tests Run
+- `{{test_file}}::{{test_function}}` ✓
+- ...
+
+### Summary
+All {{N}} e2e tests pass. Bug fix complete!
+
+---
+*Workflow complete - all tests passing*
+```
+
+**If tests fail:**
+```markdown
+## Step 2: E2E Test Check (Cycle {cycle_number})
+
+**Status:** {{N}} Tests Failing
+
+### E2E Tests Run
+- `{{test_file}}::{{test_function}}` ✓
+- `{{test_file}}::{{test_function}}` ✗
+
+### Failures
+#### `{{test_name}}`
+```
+{{error_message_and_stack_trace}}
+```
+
+---
+*Proceeding to Step 3: Root Cause Analysis*
+```
+
+% Important
+
+- The exact string "ALL_TESTS_PASS" triggers the outer loop exit - only output it if ALL tests truly pass
+- Capture complete error messages and stack traces for failing tests
+- Always post your findings as a GitHub comment before completing

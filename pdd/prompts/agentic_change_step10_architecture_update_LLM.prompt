@@ -1,0 +1,177 @@
+% You are an expert software engineer using Prompt-Driven Development (PDD). Your task is to update architecture metadata for prompts created/modified in the previous step.
+
+% Context
+
+You are working on step 10 of 13 in an agentic change workflow. Previous step implemented prompt changes. This step adds PDD architecture metadata tags to new/modified prompts and updates architecture.json if it exists.
+
+% PDD Architecture Tags Reference
+
+<pdd_prompting_guide>
+<include>docs/prompting_guide.md</include>
+</pdd_prompting_guide>
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+- Worktree Path: {worktree_path}
+- FILES_CREATED: {files_created}
+- FILES_MODIFIED: {files_modified}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Step Output
+<step9_output>
+{step9_output}
+</step9_output>
+
+% Your Task
+
+1. **Navigate to worktree**
+   - All modifications happen in: {worktree_path}
+
+2. **Check if architecture.json exists**
+   - Look for `architecture.json` in the project root
+   - If not found, skip architecture.json updates but still add tags to prompts
+
+3. **For each NEW prompt in FILES_CREATED (prompt files only):**
+   a. Read the prompt content
+   b. Generate `<pdd-reason>` tag:
+      - 60-120 character description of module's purpose
+      - Based on % Goal or % Role & Scope sections
+   c. Generate `<pdd-interface>` tag:
+      - Infer from % Requirements section
+      - For Python modules: extract function names, signatures, return types
+      - For CLI modules: extract command names and descriptions
+      - Use interface type: module | cli | command | frontend
+      - Format as valid JSON
+   d. Generate `<pdd-dependency>` tags:
+      - Extract from `<include>` directives in the prompt
+      - Only include .prompt file dependencies (not .py, .md, etc.)
+      - One `<pdd-dependency>` tag per dependency
+   e. Prepend tags to the prompt file (before first % line)
+
+4. **For each MODIFIED prompt in FILES_MODIFIED:**
+   a. Check if prompt already has PDD tags at the top
+   b. If tags exist and requirements changed significantly, update them
+   c. If no tags exist, add them following the same process as step 3
+   d. Skip if no meaningful interface changes
+
+5. **Update architecture.json (if it exists):**
+   a. For new prompts: Add new entry with reason, interface, dependencies
+   b. For modified prompts: Sync entry from prompt tags
+   c. Preserve existing entries not being modified
+
+% Output
+
+After completing your changes, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+**If tags added/updated:**
+```markdown
+## Step 10: Architecture Update
+
+**Status:** Updated
+
+### Tags Added/Updated
+| Prompt | Action | Interface Type |
+|--------|--------|---------------|
+| `prompts/xxx.prompt` | Added tags | module |
+| `prompts/yyy.prompt` | Updated tags | cli |
+
+### architecture.json Changes
+- Added: `xxx.prompt`
+- Updated: `yyy.prompt`
+
+ARCHITECTURE_FILES_MODIFIED: prompts/xxx.prompt, prompts/yyy.prompt, architecture.json
+
+---
+*Proceeding to Step 11: Identify Issues*
+```
+
+**If no architecture.json exists:**
+```markdown
+## Step 10: Architecture Update
+
+**Status:** Tags Added (no architecture.json)
+
+### Tags Added/Updated
+| Prompt | Action | Interface Type |
+|--------|--------|---------------|
+| `prompts/xxx.prompt` | Added tags | module |
+
+ARCHITECTURE_FILES_MODIFIED: prompts/xxx.prompt
+
+---
+*Proceeding to Step 11: Identify Issues*
+```
+
+**If no prompt files to update (only docs/non-prompt files changed):**
+```markdown
+## Step 10: Architecture Update
+
+**Status:** Skipped (no prompt files in changes)
+
+No new or modified prompt files require architecture metadata updates.
+
+---
+*Proceeding to Step 11: Identify Issues*
+```
+
+% Important
+
+- Work in the worktree directory, not the main repo
+- Tags must be prepended BEFORE the first % line in prompts
+- Always post your findings as a GitHub comment before completing
+- The ARCHITECTURE_FILES_MODIFIED line is CRITICAL for the orchestrator to track changes
+- Use the exact format: `ARCHITECTURE_FILES_MODIFIED: file1, file2, file3` (comma-separated, same line)
+
+% Tag Format Examples
+
+**Example `<pdd-reason>` tag:**
+```xml
+<pdd-reason>Orchestrates the 13-step agentic change workflow for implementing GitHub issues.</pdd-reason>
+```
+
+**Example `<pdd-interface>` tag (module type):**
+```xml
+<pdd-interface>
+{{
+  "type": "module",
+  "module": {{
+    "functions": [
+      {{"name": "run_agentic_change_orchestrator", "signature": "(issue_url, issue_content, ...)", "returns": "Tuple[bool, str, float, str, List[str]]"}}
+    ]
+  }}
+}}
+</pdd-interface>
+```
+
+**Example `<pdd-interface>` tag (cli type):**
+```xml
+<pdd-interface>
+{{
+  "type": "cli",
+  "cli": {{
+    "commands": [
+      {{"name": "change", "description": "Implement a GitHub issue as prompt changes"}}
+    ]
+  }}
+}}
+</pdd-interface>
+```
+
+**Example `<pdd-dependency>` tags:**
+```xml
+<pdd-dependency>llm_invoke_python.prompt</pdd-dependency>
+<pdd-dependency>path_resolution_python.prompt</pdd-dependency>
+```

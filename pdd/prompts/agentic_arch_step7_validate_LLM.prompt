@@ -1,0 +1,122 @@
+<pdd-reason>Validates architecture.json: checks circular deps, priority ordering, missing deps, field completeness.</pdd-reason>
+<pdd-interface>
+{{
+  "type": "module",
+  "module": {{
+    "functions": [
+      {{"name": "validate_architecture", "signature": "(step6_output: str)", "returns": "str ('VALID' or list of validation errors)"}}
+    ]
+  }}
+}}
+</pdd-interface>
+<pdd-dependency>agentic_arch_step6_generate_LLM.prompt</pdd-dependency>
+% You are an expert software architect. Your task is to validate the generated architecture.json for correctness and consistency.
+
+% Context
+
+You are working on step 7 of 8 in an agentic architecture workflow. Step 6 generated the architecture.json. Now validate it for errors.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Architecture to Validate
+<architecture_json>
+{step6_output}
+</architecture_json>
+
+% Validation Checks
+
+Perform ALL of the following checks:
+
+**Architecture JSON Validation (1-11):**
+
+1. **Valid JSON:** Parse the content as JSON; must be a top-level array
+2. **Required fields:** Each entry must have: reason, description, dependencies, priority, filename, filepath
+3. **No circular dependencies:** Follow dependency chains; no entry should depend on itself (directly or transitively)
+4. **Priority ordering matches dependency graph:** If A depends on B, then B.priority < A.priority
+5. **No missing dependencies:** Every filename referenced in a dependencies array must exist as a filename in another entry
+6. **No priority gaps:** Priorities must be sequential integers starting at 1 (1, 2, 3, ..., N)
+7. **No duplicate priorities:** Each priority value must be unique
+8. **No duplicate filenames:** Each filename must be unique
+9. **Filename conventions:** Must follow `<base>_<LangOrFramework>.prompt` pattern
+10. **Interface validity:** If present, interface.type must be one of: component, page, module, api, graphql, cli, job, message, config
+11. **context_urls format:** If present, each entry must have `url` (string) and `purpose` (string)
+
+**Scaffolding Files Validation (12-14):**
+
+12. **Essential scaffolding files exist:** Check that these files were created on disk:
+    - At least one dependency file exists: `package.json`, `requirements.txt`, `pyproject.toml`, `go.mod`, or `Cargo.toml`
+    - `.gitignore` file exists
+    - `README.md` file exists
+
+13. **Dependency file validity:** Validate the format of dependency files:
+    - `package.json`: Valid JSON with `name`, `version`, and `scripts` fields
+    - `requirements.txt`: Non-empty, one package per line
+    - `pyproject.toml`: Valid TOML with `[project]` or `[tool.poetry]` section
+    - `go.mod`: Has `module` declaration
+    - `Cargo.toml`: Valid TOML with `[package]` section
+
+14. **Dockerfile validity (if exists):** If a Dockerfile was created:
+    - Must have at least one `FROM` instruction
+    - Should have appropriate build stages for the tech stack
+
+% Output
+
+1. **Output validation result marker**
+
+   If ALL checks pass, output exactly on its own line:
+   ```
+   VALIDATION_RESULT: VALID
+   ```
+
+   If any checks fail, output:
+   ```
+   VALIDATION_RESULT: INVALID
+   ```
+
+   Followed by the validation errors in this format:
+   ```markdown
+   ## Validation Errors
+
+   1. **[Check Name]:** [Description of the error]
+      - Entry: [filename or priority]
+      - Issue: [specific problem]
+      - Fix: [suggested fix]
+
+   2. **[Check Name]:** [Description of the error]
+      ...
+   ```
+
+2. **Post results to GitHub**
+   Use `gh issue comment` to post results to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+```markdown
+## Step 7: Validation
+
+**Status:** [VALID | Errors Found]
+
+### Results
+- Architecture checks passed: [N]/11
+- Scaffolding checks passed: [N]/3
+- Errors found: [N]
+
+### Errors (if any)
+[list of errors with suggested fixes]
+
+---
+*[Proceeding to Step 8: Fix | Architecture validated successfully]*
+```
+
+% Important
+
+- Be thorough: check every entry against every rule
+- Report ALL errors found, not just the first one
+- Always output `VALIDATION_RESULT: VALID` or `VALIDATION_RESULT: INVALID` on its own line
+- Always post your findings as a GitHub comment

@@ -2348,3 +2348,116 @@ def test_fix_errors_prompt_preserves_all_existing_tests():
         "Prompt must explicitly forbid removing test functions"
     assert "every single test function from the input" in prompt_content, \
         "Prompt must require output to include every input test function"
+
+
+# ============================================================================
+# Regression Tests for protect_tests Feature (Issue #303)
+# ============================================================================
+
+@patch('pdd.fix_main.construct_paths')
+@patch('pdd.fix_main.fix_error_loop')
+def test_fix_main_passes_protect_tests_to_fix_error_loop(
+    mock_fix_error_loop,
+    mock_construct_paths,
+    mock_ctx
+):
+    """
+    REGRESSION TEST (Issue #303): Test that fix_main passes protect_tests
+    parameter to fix_error_loop as specified in the prompt.
+    """
+    mock_construct_paths.return_value = (
+        {},
+        {'prompt_file': 'p', 'code_file': 'c', 'unit_test_file': 't'},
+        {'output_test': 'o/t.py', 'output_code': 'o/c.py', 'output_results': 'r/r.log'},
+        None
+    )
+    mock_fix_error_loop.return_value = (True, "test", "code", 1, 0.5, "gpt-4")
+
+    m_open = mock_open()
+    with patch('builtins.open', m_open):
+        fix_main(
+            ctx=mock_ctx,
+            prompt_file="p.prompt",
+            code_file="c.py",
+            unit_test_file="t.py",
+            error_file="e.log",
+            output_test=None,
+            output_code=None,
+            output_results=None,
+            loop=True,
+            verification_program="verify.py",
+            max_attempts=3,
+            budget=5.0,
+            auto_submit=False,
+            protect_tests=True  # KEY: Set to True (non-default)
+        )
+
+    mock_fix_error_loop.assert_called_once()
+    call_kwargs = mock_fix_error_loop.call_args.kwargs
+    assert 'protect_tests' in call_kwargs, "protect_tests must be passed to fix_error_loop"
+    assert call_kwargs['protect_tests'] is True
+
+
+@patch('pdd.fix_main.Path')
+@patch('pdd.fix_main.construct_paths')
+@patch('pdd.fix_main.fix_errors_from_unit_tests')
+def test_fix_main_passes_protect_tests_to_fix_errors_from_unit_tests(
+    mock_fix_errors,
+    mock_construct_paths,
+    mock_path,
+    mock_ctx
+):
+    """
+    REGRESSION TEST (Issue #303): Test that fix_main passes protect_tests
+    parameter to fix_errors_from_unit_tests in non-loop mode.
+    """
+    mock_ctx.obj['local'] = True  # Force local execution
+    mock_path.return_value.exists.return_value = True
+
+    mock_construct_paths.return_value = (
+        {},
+        {'prompt_file': 'p', 'code_file': 'c', 'unit_test_file': 't', 'error_file': 'e'},
+        {'output_test': 'o/t.py', 'output_code': 'o/c.py', 'output_results': 'r/r.log'},
+        None
+    )
+    mock_fix_errors.return_value = (False, False, "", "", "analysis", 0.5, "gpt-4")
+
+    fix_main(
+        ctx=mock_ctx,
+        prompt_file="p.prompt",
+        code_file="c.py",
+        unit_test_file="t.py",
+        error_file="e.log",
+        output_test=None,
+        output_code=None,
+        output_results=None,
+        loop=False,
+        verification_program=None,
+        max_attempts=3,
+        budget=5.0,
+        auto_submit=False,
+        protect_tests=True  # KEY: Set to True (non-default)
+    )
+
+    mock_fix_errors.assert_called_once()
+    call_kwargs = mock_fix_errors.call_args.kwargs
+    assert 'protect_tests' in call_kwargs, "protect_tests must be passed to fix_errors_from_unit_tests"
+    assert call_kwargs['protect_tests'] is True
+
+
+def test_fix_main_code_checks_protect_tests_before_writing_test():
+    """fix_main.py should check protect_tests before writing test file.
+
+    This is a source code inspection test to ensure the conditional:
+        if fixed_unit_test and not protect_tests:
+    exists in fix_main.py, preventing test file writes when protect_tests=True.
+    """
+    from pathlib import Path
+
+    # Read the fix_main.py source code
+    fix_main_path = Path(__file__).parent.parent / "pdd" / "fix_main.py"
+    source = fix_main_path.read_text()
+
+    # Check that the code includes "protect_tests" check when writing test file
+    assert "if fixed_unit_test and not protect_tests:" in source, \
+        "fix_main.py should check 'if fixed_unit_test and not protect_tests:' before writing test file"

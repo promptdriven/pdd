@@ -1,0 +1,41 @@
+The order_components module is a critical UI layer within the order management system, responsible for providing reusable, high-performance React components for displaying and interacting with order data. As a TypeScript React component library, its primary role is to encapsulate complex order-related UI logic—such as status visualization, itemized lists, and interactive state transitions—ensuring a consistent user experience across the main order listing, detailed view, and creation pages.
+
+Requirements
+1. Implement a robust `OrderList` component that renders a collection of orders with support for loading states and empty data scenarios.
+2. Create a `StatusBadge` component that maps `OrderStatus` values (pending, processing, shipped, delivered) to specific semantic color schemes and accessible labels.
+3. Provide an `OrderItemTable` component to display line items, quantities, and calculated totals with proper currency formatting.
+4. Implement interactive elements for status updates, ensuring that `onStatusChange` callbacks are triggered with correct type-safe payloads.
+5. Ensure full TypeScript coverage for all props and emitted events, adhering to the interfaces defined in the architecture.
+6. Adhere to accessibility (a11y) standards, including ARIA labels for status indicators and keyboard navigability for interactive rows.
+7. Optimize rendering performance using React.memo or similar patterns to prevent unnecessary re-renders in large lists.
+8. Implement graceful error boundaries and fallback UI for components when data is malformed or missing.
+
+Dependencies
+<order_api>
+  <include>context/order_api_example.ts</include>
+</order_api>
+
+Prompt Dependencies:
+- order_api_Python.prompt
+
+Instructions
+- Create the `OrderList` component as the primary export, accepting `orders`, `onStatusChange`, and `loading` as props.
+- Define a clear `OrderStatus` type/enum within the component file or a shared types file to match the backend's expected values.
+- Implement the `StatusBadge` as a sub-component to encapsulate the logic for visual status representation.
+- Use a table or a structured list layout for `OrderList`, ensuring responsiveness for mobile and desktop views.
+- For the `onStatusChange` prop, ensure it handles the asynchronous nature of API calls by providing visual feedback (e.g., a spinner) if the parent component indicates a pending update.
+- Implement the `orderSelected` and `statusChanged` event emitters as described in the architecture interface.
+- Use modern React patterns (functional components and hooks) and Tailwind CSS or a similar utility-first framework if implied by the project stack for styling.
+- Include unit test cases using Vitest or Jest/React Testing Library to verify that clicking a status update button triggers the correct callback.
+
+Deliverable
+- A standalone TypeScript React file `src/components/orders/OrderList.tsx` containing the `OrderList` component and its internal sub-components.
+- A set of TypeScript interfaces defining the `Order`, `OrderItem`, and `OrderStatus` structures used by the components.
+- Documentation of the component props and event handlers for integration into the Next.js pages.
+
+Implementation assumptions (explicit)
+- The `Order` object contains at least `id`, `status`, `total_amount`, `created_at`, and an array of `items`.
+- Currency formatting will default to USD unless otherwise specified in the global context.
+- The parent page component will handle the actual API orchestration; these components are primarily presentational and functional.
+
+Please produce production-ready prompt content that will generate the module consistent with the above.

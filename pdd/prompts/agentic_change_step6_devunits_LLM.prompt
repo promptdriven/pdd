@@ -1,0 +1,313 @@
+% You are an expert software engineer using Prompt-Driven Development (PDD). Your task is to identify which dev units (prompt + code + example + test) are involved in implementing this change request.
+
+% Context
+
+You are working on step 6 of 12 in an agentic change workflow. Previous steps conducted research, verified clarity, and analyzed documentation changes needed.
+
+% PDD Background
+
+<pdd_prompting_guide>
+<include>docs/prompting_guide.md</include>
+</pdd_prompting_guide>
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Step Outputs
+<step1_output>
+{step1_output}
+</step1_output>
+
+<step2_output>
+{step2_output}
+</step2_output>
+
+<step3_output>
+{step3_output}
+</step3_output>
+
+<step4_output>
+{step4_output}
+</step4_output>
+
+<step5_output>
+{step5_output}
+</step5_output>
+
+% Module Dependency Graph (Auto-Generated)
+
+The following shows which modules depend on which other modules. When you identify a module that needs modification, ALL modules that depend on it (directly or transitively) may also need updates.
+
+<dependency_context>
+{dependency_context}
+</dependency_context>
+
+**IMPORTANT:** Use this dependency information to identify transitively affected modules. For example, if module A depends on module B, and you're modifying B, then A should be listed in the Dependencies section.
+
+% Your Task
+
+1. **Understand the change request**
+   - What new functionality is being requested?
+   - What existing functionality needs modification?
+   - What are the inputs, outputs, and constraints?
+
+2. **Determine Project Structure**
+   Check for a `.pddrc` file in the project root. If found, extract:
+   - `generate_output_path`: where source code is located (e.g., `src/`, `lib/`, `pdd/`)
+   - `test_output_path`: where tests are located (e.g., `tests/`, `__tests__/`)
+   - `example_output_path`: where examples are located (e.g., `context/`, `examples/`)
+   - `default_language`: the programming language (e.g., `python`, `typescript`)
+
+   If no `.pddrc`, discover by examining the codebase:
+   - Source directory: look at imports in existing prompts and code structure
+   - Tests directory: search for `test_*.py`, `*_test.go`, `*.spec.ts`, etc.
+   - Language: identify from file extensions in `prompts/` (e.g., `_python.prompt`, `_typescript.prompt`)
+
+3. **Component Discovery (CRITICAL)**
+   Before proposing new modules, thoroughly search for existing components that could fulfill the requirement:
+   - Search the source directory (from step 2) for modules with similar functionality (use keyword search, grep for related functions)
+   - Review `prompts/` to understand what each existing module does
+   - Check if existing modules can be extended rather than duplicating functionality
+   - Check imports and dependencies to understand module relationships
+   - Document which existing modules were considered and why they can/cannot be reused
+
+4. **Explore the codebase**
+   - List existing prompts in `prompts/` AND ALL SUBDIRECTORIES (e.g., `prompts/commands/`, `prompts/agentic_steps/`)
+   - Identify prompts related to the requested functionality
+   - Check the example directory (from .pddrc or discovery) for related examples
+   - Look for existing tests in the test directory (from .pddrc or discovery)
+   - **Cross-reference with the dependency graph above** to identify modules that will be affected by changes
+
+5. **Identify affected dev units**
+   For each affected module, identify the complete dev unit using paths from step 2:
+   - **Prompt file**: `prompts/{{module}}_{language}.prompt`
+   - **Code file**: `{source_dir}/{{module}}.{ext}`
+   - **Example file**: `{example_dir}/{{module}}_example.{ext}`
+   - **Test file**: `{test_dir}/test_{{module}}.{ext}`
+
+   Where `{language}`, `{source_dir}`, `{example_dir}`, `{test_dir}`, and `{ext}` come from .pddrc or discovery.
+
+6. **Categorize dev units (PREFER MODIFY over CREATE)**
+   - **MODIFY**: Existing dev units that need changes - ALWAYS prefer this when possible
+   - **CREATE**: New dev units - ONLY when no existing module can be extended to provide the functionality
+   - **DEPENDENCY**: Dev units that are dependencies (may need interface updates)
+     - **Use the dependency graph above** to identify modules that depend on the modules being modified
+     - If module X is being modified and module Y depends on X (per the graph), add Y to Dependencies
+
+   **Anti-duplication check:** For each CREATE, you MUST justify why MODIFY is not possible. List specific existing modules that were considered and explain why they cannot be extended.
+
+   **Integration Point Discovery (CRITICAL for CREATE):**
+   When CREATEing new modules, you MUST also search for "integration points" - files that aggregate, register, or import other modules. These files often need to be MODIFIED when new modules are added to a directory.
+
+   **How to find integration points:**
+
+   1. **Search the target directory** for files that import/include multiple modules:
+      - Look for `main.py`, `index.ts`, `app.py`, `__init__.py`, `routes.py`, etc.
+      - Search for files with `_main` suffix (e.g., `sync_main.py`, `cli_main.py`)
+      - Check for registry/factory files that list or import other modules
+
+   2. **Grep for import patterns** in the directory where you're creating new modules:
+      ```bash
+      # Find files that import from this directory
+      grep -r "from <directory>" --include="*.py" | cut -d: -f1 | sort -u
+      grep -r "import.*<module_pattern>" --include="*.ts" | cut -d: -f1 | sort -u
+      ```
+
+   3. **Check for entry points** defined in:
+      - `pyproject.toml` or `setup.py` (Python)
+      - `package.json` main/exports fields (Node.js)
+      - Firebase `main.py` for Cloud Functions
+      - Framework-specific configs (e.g., Next.js `pages/`, FastAPI routers)
+
+   4. **Look for aggregator patterns:**
+      - Files that import ALL modules from a directory
+      - Files with decorator patterns (e.g., `@app.route`, `@https_fn.on_request`)
+      - Files that export/re-export multiple modules
+
+   **When you find an integration point:**
+   - Check its corresponding prompt file exists (e.g., `main.py` → `main_python.prompt`)
+   - Add it to "Dev Units to MODIFY" with reason explaining what needs to be registered
+   - If no prompt exists, note it in the output as a manual update needed
+
+   **Common integration point patterns by framework:**
+   | Framework | Integration Point | What to add |
+   |-----------|-------------------|-------------|
+   | Firebase Functions | `main.py` | Function export, lazy_import, decorator |
+   | FastAPI | `main.py` or `app.py` | Router include, endpoint registration |
+   | Express.js | `app.js` or `index.js` | Route registration, middleware |
+   | Django | `urls.py` | URL pattern |
+   | React Router | Router config file | Route component |
+   | CLI tools | Main CLI file | Command registration |
+
+7. **Cross-Layer Dependency Detection (Frontend ↔ Backend)**
+
+   When creating or modifying backend endpoints, search for frontend code that references them:
+
+   a. **Extract endpoint names** from backend dev units being created/modified:
+      - Function names (e.g., `getAutoBuySettings`, `updateAutoBuySettings`)
+      - API paths if applicable (e.g., `/api/auto-buy-settings`)
+
+   b. **Search frontend for references:**
+      ```bash
+      # Search for function calls in frontend (use actual function names from step a)
+      grep -r "<function_name>" frontend/src/ --include="*.tsx" --include="*.ts"
+
+      # Search for commented-out references (TODO patterns indicating waiting for backend)
+      grep -r "TODO.*<function_name>\|<function_name>.*TODO" frontend/src/ --include="*.tsx" --include="*.ts"
+
+      # Search for "coming soon" or placeholder patterns near the function name
+      grep -r -A5 -B5 "coming soon\|not yet implemented\|TEMPORARY" frontend/src/ --include="*.tsx" --include="*.ts"
+      ```
+
+   c. **For each frontend file found, check if a prompt exists:**
+      - Look for corresponding prompt in `prompts/frontend/`
+      - Match by component path (e.g., `frontend/src/components/billing/AutoBuySettings/` → `prompts/frontend/components/billing/auto_buy_settings_TypescriptReact.prompt`)
+      - Use naming conventions: component directory name → snake_case + `_TypescriptReact.prompt`
+
+   d. **Categorize frontend changes:**
+      - **PROMPT EXISTS** → Add to "Dev Units to MODIFY" (standard PDD flow)
+      - **NO PROMPT** → Add to "Direct Edit Candidates" (scoped direct code edits)
+
+   **Direct Edit Candidates** are files that:
+   - Have NO corresponding `.prompt` file (not PDD-generated)
+   - Contain TODO markers, "coming soon" placeholders, or commented-out code
+   - Reference the backend endpoints being created/modified
+   - Only need scoped edits: uncomment code, remove placeholders, remove temporary errors
+
+% Important: Scope of `pdd change`
+
+**`pdd change` modifies prompt files (`.prompt`), documentation, AND Direct Edit Candidates.**
+
+The dev unit table above shows the FULL structure for reference:
+- **Prompt files**: Modified directly by `pdd change`
+- **Code files with prompts**: GENERATED by `pdd sync`, not by `pdd change`
+- **Code files WITHOUT prompts (Direct Edit Candidates)**: Can be edited directly by `pdd change` with scoped edits only
+- **Example files**: GENERATED artifacts
+- **Test files**: Updated during `pdd sync`, not `pdd change`
+
+**Direct Edit Rules** (for files with NO corresponding prompt):
+Only these edit patterns are allowed:
+1. Uncomment code blocks marked with TODO comments
+2. Remove placeholder messages ("coming soon", "not yet implemented", etc.)
+3. Remove temporary error throws (TEMPORARY markers)
+
+After the PR from `pdd change` is merged, run `pdd sync <module>` to regenerate code from prompts.
+
+% Output
+
+After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+```markdown
+## Step 6: Dev Units Identified
+
+**Status:** [Found N dev units | No Dev Units Found]
+
+### Change Summary
+[1-2 sentence summary of what needs to change]
+
+### Project Structure (from .pddrc or discovery)
+- **Source directory:** [e.g., `src/`, `lib/`, `pdd/`]
+- **Test directory:** [e.g., `tests/`, `__tests__/`]
+- **Example directory:** [e.g., `context/`, `examples/`]
+- **Language:** [e.g., `python`, `typescript`]
+
+### Dev Units to MODIFY
+| Prompt | Code | Example | Test |
+|--------|------|---------|------|
+| `prompts/xxx_{lang}.prompt` | `{source_dir}/xxx.{ext}` | `{example_dir}/xxx_example.{ext}` | `{test_dir}/test_xxx.{ext}` |
+
+*(Use actual paths from project structure above)*
+
+### Dev Units to CREATE
+| Prompt | Code | Example | Test |
+|--------|------|---------|------|
+| `prompts/yyy_{lang}.prompt` | `{source_dir}/yyy.{ext}` | `{example_dir}/yyy_example.{ext}` | `{test_dir}/test_yyy.{ext}` |
+
+*(Use actual paths from project structure above)*
+
+### Reuse Analysis (REQUIRED for each CREATE)
+For each new dev unit proposed, explain:
+- **Module:** `yyy`
+- **Existing modules considered:** [list modules that were evaluated]
+- **Why extension not possible:** [specific reason why existing modules cannot be extended]
+
+### Dependencies (may need interface updates)
+- `prompts/zzz_{lang}.prompt` - [reason]
+
+### Integration Points Discovered
+*Search for files that aggregate/register modules in the affected directories*
+
+| Integration Point | Reason for Update | Prompt File |
+|-------------------|-------------------|-------------|
+| [file path] | [what needs to be registered] | [corresponding .prompt or "manual update needed"] |
+
+**Search performed:**
+- [List grep/search commands used to discover integration points]
+
+### Frontend Dev Units (Cross-Layer)
+*Search for frontend files that reference backend endpoints being created/modified*
+
+**Backend endpoints being created/modified:**
+- [List function names extracted from backend dev units]
+
+**Frontend files referencing these endpoints:**
+| Frontend File | Prompt File | Action |
+|---------------|-------------|--------|
+| [file path] | [prompt path or "None"] | [MODIFY prompt / Direct Edit] |
+
+**Search performed:**
+- [List grep/search commands used to find frontend references]
+
+### Direct Edit Candidates (No Prompt)
+*Files that need scoped direct edits because no corresponding prompt exists*
+
+| File | Edit Type | Markers Found |
+|------|-----------|---------------|
+| [file path] | [uncomment/remove placeholder] | [TODO marker text or placeholder text found] |
+
+**Note:** Direct edits are limited to: uncommenting code, removing "coming soon" placeholders, removing TEMPORARY error throws.
+
+### Files Explored
+- [List of files/directories checked]
+
+---
+*Proceeding to Step 7: Architecture Review*
+```
+
+**If no dev units can be identified (STOP workflow):**
+```markdown
+## Step 6: Dev Units Identified
+
+**Status:** No Dev Units Found
+
+### Analysis
+[Explanation of why no dev units could be identified]
+
+### Recommendation
+[Suggestions for clarifying the request or alternative approaches]
+
+---
+*Investigation paused - unable to identify affected modules.*
+```
+
+% Important
+
+- Use the PDD prompting guide to understand dev unit structure
+- Be thorough in exploring the codebase
+- Consider both direct changes and ripple effects on dependencies
+- If no dev units can be identified, STOP the workflow
+- Always post your findings as a GitHub comment before completing

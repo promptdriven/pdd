@@ -11,6 +11,8 @@ from unittest.mock import patch, MagicMock
 from pathlib import Path
 from click.testing import CliRunner
 
+from pdd import cli
+
 
 @pytest.fixture(autouse=True)
 def set_pdd_path(monkeypatch):
@@ -59,8 +61,6 @@ contexts:
         with patch("pdd.cmd_test_main.generate_test") as mock_generate_test:
             mock_generate_test.return_value = ("generated tests", 0.01, "test-model")
 
-            from pdd import cli
-
             runner = CliRunner()
             result = runner.invoke(cli.cli, [
                 "--local",  # Force local execution for unit test
@@ -104,8 +104,6 @@ contexts:
         with patch("pdd.cmd_test_main.generate_test") as mock_generate_test:
             mock_generate_test.return_value = ("tests", 0.01, "model")
 
-            from pdd import cli
-
             runner = CliRunner()
             result = runner.invoke(cli.cli, [
                 "--local",  # Force local execution for unit test
@@ -142,8 +140,6 @@ contexts:
 
         with patch("pdd.cmd_test_main.generate_test") as mock_generate_test:
             mock_generate_test.return_value = ("tests", 0.01, "model")
-
-            from pdd import cli
 
             runner = CliRunner()
             result = runner.invoke(cli.cli, [
@@ -187,13 +183,12 @@ contexts:
         with patch("pdd.change_main.change_func") as mock_change_func:
             mock_change_func.return_value = ("changed code", 0.01, "model")
 
-            from pdd import cli
-
             runner = CliRunner()
             result = runner.invoke(cli.cli, [
                 "--local",  # Force local execution for unit test
                 "--context", "test-ctx",
                 "change",
+                "--manual",  # Use legacy/manual mode
                 "change.prompt",  # CHANGE_PROMPT_FILE
                 "code.py",  # INPUT_CODE
                 "input.prompt",  # INPUT_PROMPT_FILE (positional)
@@ -234,8 +229,6 @@ contexts:
 
         with patch("pdd.crash_main.fix_code_module_errors") as mock_fix:
             mock_fix.return_value = (False, False, "", "", "", 0.01, "model")
-
-            from pdd import cli
 
             runner = CliRunner()
             result = runner.invoke(cli.cli, [

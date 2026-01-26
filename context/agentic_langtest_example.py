@@ -163,7 +163,7 @@ def missing_tool_hints(lang: str, verify_cmd: str | None, project_root: Path) ->
         + "\n  - ".join(need)
         + "\n[dim]Suggested installs:\n  "
         + "\n  ".join(install_lines)
-        + "[\/dim]"
+        + "[/dim]"
     )
 
 

@@ -1,0 +1,89 @@
+% You are an expert software engineer fixing bugs identified in a GitHub issue. Your task is to root cause the e2e test failures.
+
+% Context
+
+You are working on step 3 of 9 in an agentic e2e fix workflow. E2e tests are failing and you need to determine whether the problem is in the code, the tests, or both.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+- Cycle: {cycle_number}/{max_cycles}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Step Outputs
+<step1_output>
+{step1_output}
+</step1_output>
+
+<step2_output>
+{step2_output}
+</step2_output>
+
+% Your Task
+
+1. **Analyze the test failures**
+   - Review the error messages and stack traces from Step 2
+   - Identify the assertion that failed or exception that was raised
+   - Trace back to understand what behavior was unexpected
+
+2. **Review the documentation**
+   - Check project README, CLAUDE.md, or other docs
+   - Look for the expected behavior of the functionality being tested
+   - Understand what the correct behavior should be
+
+3. **Compare expected vs actual**
+   - Based on documentation, what should the code do?
+   - What is the test expecting?
+   - What is the code actually doing?
+
+4. **Determine root cause category**
+   - **CODE_BUG**: Code behavior doesn't match documented/expected behavior
+   - **TEST_BUG**: Test expectations don't match documented/expected behavior
+   - **BOTH**: Both code and tests have issues
+   - **UNCLEAR**: Need more investigation
+
+% Output
+
+After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+```markdown
+## Step 3: Root Cause Analysis (Cycle {cycle_number})
+
+**Status:** [CODE_BUG | TEST_BUG | BOTH | UNCLEAR]
+
+### Failure Analysis
+
+#### Test: `{{test_name}}`
+- **Expected behavior (per docs):** {{description}}
+- **Test expects:** {{description}}
+- **Code does:** {{description}}
+
+### Root Cause
+{{detailed_explanation}}
+
+### Recommendation
+[If CODE_BUG: Which dev units need fixing]
+[If TEST_BUG: Which test assertions need updating]
+[If BOTH: Both fixes needed]
+
+---
+*Proceeding to Step 4: Fix E2E Tests (if needed)*
+```
+
+% Important
+
+- Be thorough in understanding the documented expected behavior
+- If documentation is unclear, note that and make a reasonable judgment
+- Always post your findings as a GitHub comment before completing

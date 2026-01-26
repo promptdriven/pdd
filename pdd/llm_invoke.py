@@ -119,8 +119,6 @@ from pydantic import BaseModel, ValidationError
 import openai  # Import openai for exception handling as LiteLLM maps to its types
 import warnings
 import time as time_module # Alias to avoid conflict with 'time' parameter
-# Import the default model constant
-from pdd import DEFAULT_LLM_MODEL
 from pdd.path_resolution import get_default_resolver
 
 # Opt-in to future pandas behavior regarding downcasting
@@ -178,6 +176,92 @@ class InsufficientCreditsError(Exception):
 
 # --- Cloud Execution Helpers ---
 
+def _ensure_all_properties_required(schema: Dict[str, Any]) -> Dict[str, Any]:
+    """Recursively ensure ALL properties are in the required array (OpenAI strict mode).
+
+    OpenAI's strict mode requires that all properties at ALL levels of a JSON schema
+    are listed in the 'required' array. Pydantic's model_json_schema() only includes
+    fields without default values in 'required', which causes OpenAI to reject the schema.
+
+    This function walks the entire schema tree and ensures every object type has all
+    its properties in the 'required' array.
+
+    Args:
+        schema: A JSON schema dictionary
+
+    Returns:
+        The schema with all properties added to 'required' at all nesting levels
+    """
+    if not isinstance(schema, dict):
+        return schema
+
+    # If this is an object with properties, make all properties required
+    if schema.get('type') == 'object' and 'properties' in schema:
+        schema['required'] = list(schema['properties'].keys())
+        # Recurse into each property
+        for prop_schema in schema['properties'].values():
+            _ensure_all_properties_required(prop_schema)
+
+    # Handle array items
+    if schema.get('type') == 'array' and 'items' in schema:
+        _ensure_all_properties_required(schema['items'])
+
+    # Handle anyOf/oneOf/allOf
+    for key in ('anyOf', 'oneOf', 'allOf'):
+        if key in schema:
+            for sub_schema in schema[key]:
+                _ensure_all_properties_required(sub_schema)
+
+    # Handle $defs
+    if '$defs' in schema:
+        for def_schema in schema['$defs'].values():
+            _ensure_all_properties_required(def_schema)
+
+    return schema
+
+
+def _add_additional_properties_false(schema: Dict[str, Any]) -> Dict[str, Any]:
+    """Recursively add additionalProperties: false to all object schemas.
+
+    OpenAI's strict mode requires additionalProperties: false on ALL object
+    schemas, including nested ones. This function walks the schema tree and
+    adds the property to every object type.
+
+    Args:
+        schema: A JSON schema dictionary
+
+    Returns:
+        The schema with additionalProperties: false on all objects
+    """
+    if not isinstance(schema, dict):
+        return schema
+
+    # If this is an object type, add additionalProperties: false
+    if schema.get('type') == 'object':
+        schema['additionalProperties'] = False
+        # Recursively process properties
+        if 'properties' in schema:
+            for prop_name, prop_schema in schema['properties'].items():
+                _add_additional_properties_false(prop_schema)
+
+    # Handle arrays - process items schema
+    if schema.get('type') == 'array' and 'items' in schema:
+        _add_additional_properties_false(schema['items'])
+
+    # Handle anyOf, oneOf, allOf
+    for key in ('anyOf', 'oneOf', 'allOf'):
+        if key in schema:
+            for sub_schema in schema[key]:
+                _add_additional_properties_false(sub_schema)
+
+    # Handle $defs (Pydantic's reference definitions)
+    if '$defs' in schema:
+        for def_name, def_schema in schema['$defs'].items():
+            _add_additional_properties_false(def_schema)
+
+    return schema
+
+
 def _pydantic_to_json_schema(pydantic_class: Type[BaseModel]) -> Dict[str, Any]:
     """Convert a Pydantic model class to JSON Schema for cloud transport.
 
@@ -188,6 +272,8 @@ def _pydantic_to_json_schema(pydantic_class: Type[BaseModel]) -> Dict[str, Any]:
         JSON Schema dictionary that can be serialized and sent to cloud
     """
     schema = pydantic_class.model_json_schema()
+    # Ensure all properties are in required array (OpenAI strict mode requirement)
+    _ensure_all_properties_required(schema)
     # Include class name for debugging/logging purposes
     schema['__pydantic_class_name__'] = pydantic_class.__name__
     return schema
@@ -328,7 +414,18 @@ def _llm_invoke_cloud(
             raise InsufficientCreditsError(error_msg)
 
         elif response.status_code in (401, 403):
-            error_msg = response.json().get("error", f"Authentication failed ({response.status_code})")
+            # Clear stale JWT cache to prevent repeated failures
+            try:
+                from pdd.auth_service import clear_jwt_cache
+                clear_jwt_cache()
+            except Exception:
+                pass  # Don't fail if cache clearing fails
+
+            server_error = response.json().get("error", "")
+            error_msg = (
+                f"Authentication expired ({server_error or response.status_code}). "
+                "Please re-authenticate with: pdd auth logout && pdd auth login"
+            )
             raise CloudFallbackError(error_msg)
 
         elif response.status_code >= 500:
@@ -534,8 +631,8 @@ else:
     logger.debug(f".env file not found at {ENV_PATH}. API keys might need to be provided manually.")
 
 # Default model if PDD_MODEL_DEFAULT is not set
-# Use the imported constant as the default
-DEFAULT_BASE_MODEL = os.getenv("PDD_MODEL_DEFAULT", DEFAULT_LLM_MODEL)
+# No hardcoded default - will use first available model from CSV if None
+DEFAULT_BASE_MODEL = os.getenv("PDD_MODEL_DEFAULT", None)
 
 # --- LiteLLM Cache Configuration (S3 compatible for GCS, with SQLite fallback) ---
 GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME")
@@ -891,11 +988,11 @@ def _select_model_candidates(
         # Strategy (simplified and deterministic): pick the first available model
         # from the CSV as the surrogate base. This mirrors typical CSV ordering
         # expectations and keeps behavior predictable across environments.
+        # Fix for issue #296: Don't warn when any base model (from env var or default) is not found in CSV
         try:
             base_model = available_df.iloc[0]
-            logger.warning(
-                f"Base model '{base_model_name}' not found in CSV. Falling back to surrogate base '{base_model['model']}' (Option A')."
-            )
+            # Silently use the first available model from user's CSV without warning
+            # Users who intentionally customize their CSV shouldn't see warnings about removed models
         except Exception:
             # If any unexpected error occurs during fallback, raise a clear error
             raise ValueError(
@@ -1929,11 +2026,16 @@ def llm_invoke(
                             logger.info(f"[INFO] Requesting structured output (Pydantic: {output_pydantic.__name__}) for {model_name_litellm}")
                         # Use json_schema with strict=True to enforce ALL required fields are present
                         # This prevents LLMs from omitting required fields when they think they're not needed
+                        schema = output_pydantic.model_json_schema()
+                        # Ensure all properties are in required array (OpenAI strict mode requirement)
+                        _ensure_all_properties_required(schema)
+                        # Add additionalProperties: false recursively for strict mode (required by OpenAI)
+                        _add_additional_properties_false(schema)
                         response_format = {
                             "type": "json_schema",
                             "json_schema": {
                                 "name": output_pydantic.__name__,
-                                "schema": output_pydantic.model_json_schema(),
+                                "schema": schema,
                                 "strict": True
                             }
                         }
@@ -1953,7 +2055,11 @@ def llm_invoke(
                                 "strict": False
                             }
                         }
-                    
+                        # Ensure all properties are in required array (OpenAI strict mode requirement)
+                        _ensure_all_properties_required(response_format["json_schema"]["schema"])
+                        # Add additionalProperties: false recursively for strict mode (required by OpenAI)
+                        _add_additional_properties_false(response_format["json_schema"]["schema"])
+
                     litellm_kwargs["response_format"] = response_format
 
                     # LM Studio requires "json_schema" format, not "json_object"
@@ -2137,8 +2243,10 @@ def llm_invoke(
                                     schema = output_schema
                                     name = "response"
 
-                                # Add additionalProperties: false for strict mode (required by OpenAI)
-                                schema['additionalProperties'] = False
+                                # Ensure all properties are in required array (OpenAI strict mode requirement)
+                                _ensure_all_properties_required(schema)
+                                # Add additionalProperties: false recursively for strict mode (required by OpenAI)
+                                _add_additional_properties_false(schema)
 
                                 # Use text.format with json_schema for structured output
                                 text_block = {

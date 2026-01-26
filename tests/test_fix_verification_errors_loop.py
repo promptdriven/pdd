@@ -1346,3 +1346,61 @@ def test_max_attempts_negative_still_rejected(setup_test_environment):
     assert result["success"] is False
     assert result["total_attempts"] == 0
     assert result["total_cost"] == 0.0
+
+
+def test_empty_code_file_returns_early_with_error(setup_test_environment):
+    """Test that empty code file returns early with a clear error message.
+
+    This prevents infinite loops when the code file is empty (0 bytes).
+    The function should detect this condition before attempting any LLM calls
+    and return a failure with a clear error message about the empty file.
+    """
+    env = setup_test_environment
+
+    # Write empty content to code file (the bug trigger)
+    env["code_file"].write_text("", encoding="utf-8")
+
+    # Configure mocks in case the function doesn't catch empty file early
+    env["mock_runner"].return_value = (0, "test output")
+    env["mock_fixer"].return_value = {
+        'explanation': ["test"], 'fixed_program': env["program_content"],
+        'fixed_code': "", 'total_cost': 0.001,
+        'model_name': 'test', 'verification_issues_count': 0,
+    }
+
+    result = fix_verification_errors_loop(**env["default_args"])
+
+    # Should fail immediately without making any LLM attempts
+    assert result["success"] is False
+    assert result["total_attempts"] == 0
+    # Explicitly check for "empty" in the error message to ensure clear user feedback
+    error_msg = result.get("error", "") or result["statistics"].get("status_message", "")
+    assert "empty" in error_msg.lower(), f"Expected 'empty' in error message, got: {error_msg}"
+
+
+def test_whitespace_only_code_file_returns_early_with_error(setup_test_environment):
+    """Test that whitespace-only code file also returns early with error.
+
+    A file containing only spaces, tabs, or newlines is effectively empty
+    and should be treated the same as a 0-byte file.
+    """
+    env = setup_test_environment
+
+    # Write whitespace-only content to code file
+    env["code_file"].write_text("   \n\t\n   ", encoding="utf-8")
+
+    # Configure mocks in case the function doesn't catch empty file early
+    env["mock_runner"].return_value = (0, "test output")
+    env["mock_fixer"].return_value = {
+        'explanation': ["test"], 'fixed_program': env["program_content"],
+        'fixed_code': "", 'total_cost': 0.001,
+        'model_name': 'test', 'verification_issues_count': 0,
+    }
+
+    result = fix_verification_errors_loop(**env["default_args"])
+
+    # Should fail immediately without making any LLM attempts
+    assert result["success"] is False
+    assert result["total_attempts"] == 0
+    error_msg = result.get("error", "") or result["statistics"].get("status_message", "")
+    assert "empty" in error_msg.lower(), f"Expected 'empty' in error message, got: {error_msg}"

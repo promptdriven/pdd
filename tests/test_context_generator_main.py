@@ -1,4 +1,3 @@
-import sys
 import os
 import asyncio
 import pytest
@@ -6,9 +5,6 @@ from unittest.mock import MagicMock, patch, AsyncMock
 from pathlib import Path
 import click
 import ast
-
-# Adjust path to import the module under test
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from pdd.context_generator_main import context_generator_main, _validate_and_fix_python_syntax
 
@@ -264,6 +260,132 @@ def test_cloud_generation_receives_token_parameter(mock_ctx, mock_construct_path
         f"Current parameters: {param_names}"
     )
 
+
+def test_format_md_with_explicit_output_path(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path):
+    """Test that --format md option overrides extension even with explicit --output path."""
+    mock_ctx.obj['local'] = True
+    prompt_file = tmp_path / "test.prompt"
+    code_file = tmp_path / "test.py"
+    explicit_output = tmp_path / "custom_example.py"  # User provides .py extension
+    prompt_file.write_text("Prompt")
+    code_file.write_text("Code")
+    # construct_paths returns format-adjusted path with .md extension
+    format_adjusted_path = str(tmp_path / "test_example.md")
+    mock_construct_paths.return_value = ({}, {"prompt_file": "Prompt", "code_file": "Code"}, {"output": format_adjusted_path}, "python")
+    mock_context_generator.return_value = ("# Markdown Example", 0.0, "model")
+    
+    # Call with format="md" and explicit output path
+    context_generator_main(mock_ctx, str(prompt_file), str(code_file), str(explicit_output), format="md")
+    
+    # Should have saved to .md file (extension overridden from .py)
+    expected_output = tmp_path / "custom_example.md"
+    assert expected_output.exists(), f"Expected output file {expected_output} to exist"
+    assert expected_output.read_text() == "# Markdown Example"
+    # Original .py path should not exist
+    assert not explicit_output.exists(), f"Original path {explicit_output} should not exist (extension was changed)"
+
+def test_format_code_with_explicit_output_path(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path):
+    """Test that --format code option uses language extension based on language variable even with explicit --output path."""
+    mock_ctx.obj['local'] = True
+    prompt_file = tmp_path / "test.prompt"
+    code_file = tmp_path / "test.py"
+    explicit_output = tmp_path / "custom_example.md"  # User provides .md extension
+    prompt_file.write_text("Prompt")
+    code_file.write_text("Code")
+    # construct_paths returns the user's path unchanged (or default path) and language
+    default_path = str(tmp_path / "test_example.py")  # Default path would have .py extension
+    mock_construct_paths.return_value = ({}, {"prompt_file": "Prompt", "code_file": "Code"}, {"output": default_path}, "python")
+    mock_context_generator.return_value = ("# Python Example", 0.0, "model")
+    
+    # Call with format="code" and explicit output path with wrong extension
+    context_generator_main(mock_ctx, str(prompt_file), str(code_file), str(explicit_output), format="code")
+    
+    # Should have saved to .py file (extension overridden from .md to match language)
+    expected_output = tmp_path / "custom_example.py"
+    assert expected_output.exists(), f"Expected output file {expected_output} to exist"
+    assert expected_output.read_text() == "# Python Example"
+    # Original .md path should not exist
+    assert not explicit_output.exists(), f"Original path {explicit_output} should not exist (extension was changed)"
+
+def test_format_md_without_explicit_output(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path):
+    """Test that --format md option works with default output path generation."""
+    mock_ctx.obj['local'] = True
+    prompt_file = tmp_path / "test.prompt"
+    code_file = tmp_path / "test.py"
+    output_file = tmp_path / "test_example.md"  # Default path with .md extension
+    prompt_file.write_text("Prompt")
+    code_file.write_text("Code")
+    # construct_paths should return path with .md extension due to format option
+    mock_construct_paths.return_value = ({}, {"prompt_file": "Prompt", "code_file": "Code"}, {"output": str(output_file)}, "python")
+    mock_context_generator.return_value = ("# Markdown Example", 0.0, "model")
+    
+    # Call with format="md" but no explicit output
+    context_generator_main(mock_ctx, str(prompt_file), str(code_file), None, format="md")
+    
+    assert output_file.exists()
+    assert output_file.read_text() == "# Markdown Example"
+
+def test_format_code_default_behavior(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path):
+    """Test that --format code (default) uses language extension."""
+    mock_ctx.obj['local'] = True
+    prompt_file = tmp_path / "test.prompt"
+    code_file = tmp_path / "test.py"
+    output_file = tmp_path / "test_example.py"  # Default path with language extension
+    prompt_file.write_text("Prompt")
+    code_file.write_text("Code")
+    # construct_paths returns path with language extension (.py for Python)
+    mock_construct_paths.return_value = ({}, {"prompt_file": "Prompt", "code_file": "Code"}, {"output": str(output_file)}, "python")
+    mock_context_generator.return_value = ("# Python Example", 0.0, "model")
+    
+    # Call with format="code" (explicitly)
+    context_generator_main(mock_ctx, str(prompt_file), str(code_file), None, format="code")
+    
+    assert output_file.exists()
+    assert output_file.read_text() == "# Python Example"
+
+def test_format_option_passed_to_construct_paths(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path):
+    """Test that format option is passed through to construct_paths."""
+    mock_ctx.obj['local'] = True
+    prompt_file = tmp_path / "test.prompt"
+    code_file = tmp_path / "test.py"
+    output_file = tmp_path / "test_example.md"
+    prompt_file.write_text("Prompt")
+    code_file.write_text("Code")
+    mock_construct_paths.return_value = ({}, {"prompt_file": "Prompt", "code_file": "Code"}, {"output": str(output_file)}, "python")
+    mock_context_generator.return_value = ("# Example", 0.0, "model")
+    
+    context_generator_main(mock_ctx, str(prompt_file), str(code_file), None, format="md")
+    
+    # Verify construct_paths was called with format in command_options
+    call_args = mock_construct_paths.call_args
+    assert call_args is not None
+    command_options = call_args.kwargs.get('command_options', {})
+    assert command_options.get('format') == 'md', "format option should be passed to construct_paths"
+
+def test_format_md_skips_python_syntax_validation(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path):
+    """Test that --format md option skips Python syntax validation for markdown output."""
+    from unittest.mock import patch
+    mock_ctx.obj['local'] = True
+    prompt_file = tmp_path / "test.prompt"
+    code_file = tmp_path / "test.py"
+    output_file = tmp_path / "test_example.md"
+    prompt_file.write_text("Prompt")
+    code_file.write_text("Code")
+    # Markdown content that would fail Python syntax validation
+    markdown_content = "# Example Usage\n\nThis is markdown, not Python code.\n- Item 1\n- Item 2"
+    mock_construct_paths.return_value = ({}, {"prompt_file": "Prompt", "code_file": "Code"}, {"output": str(output_file)}, "python")
+    mock_context_generator.return_value = (markdown_content, 0.0, "model")
+    
+    # Patch _validate_and_fix_python_syntax to verify it's NOT called
+    with patch('pdd.context_generator_main._validate_and_fix_python_syntax') as mock_validate:
+        context_generator_main(mock_ctx, str(prompt_file), str(code_file), None, format="md")
+        
+        # Verify Python syntax validation was NOT called (markdown shouldn't be validated as Python)
+        mock_validate.assert_not_called()
+        
+        # Verify the markdown content was saved unchanged
+        assert output_file.exists()
+        assert output_file.read_text() == markdown_content
 
 def test_z3_syntax_fixer_logic():
     try:

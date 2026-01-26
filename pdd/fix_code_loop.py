@@ -215,7 +215,7 @@ def run_process_with_output(cmd_args, timeout=300):
     captured_stdout = []
     captured_stderr = []
 
-    def stream_pipe(pipe, sink, capture_list):
+    def stream_pipe(pipe, capture_list):
         while True:
             try:
                 chunk = pipe.read(1)
@@ -226,8 +226,8 @@ def run_process_with_output(cmd_args, timeout=300):
                 # OSError can occur when pipe is closed during read
                 break
 
-    t_out = threading.Thread(target=stream_pipe, args=(proc.stdout, sys.stdout, captured_stdout), daemon=True)
-    t_err = threading.Thread(target=stream_pipe, args=(proc.stderr, sys.stderr, captured_stderr), daemon=True)
+    t_out = threading.Thread(target=stream_pipe, args=(proc.stdout, captured_stdout), daemon=True)
+    t_err = threading.Thread(target=stream_pipe, args=(proc.stderr, captured_stderr), daemon=True)
 
     t_out.start()
     t_err.start()
@@ -253,22 +253,30 @@ def run_process_with_output(cmd_args, timeout=300):
         except Exception:
             pass
 
-    # Close pipes to unblock reader threads
-    try:
-        proc.stdout.close()
-    except Exception:
-        pass
-    try:
-        proc.stderr.close()
-    except Exception:
-        pass
+    # Wait for threads to finish reading with timeout
+    # For normal completion, threads will exit when they read EOF from the pipe
+    # For timeout/kill cases, we may need to close pipes to unblock them
+    THREAD_JOIN_TIMEOUT = 5  # seconds - enough time to drain normal output buffers
 
-    # Wait for threads with timeout to prevent indefinite hangs
-    THREAD_JOIN_TIMEOUT = 5  # seconds
     t_out.join(timeout=THREAD_JOIN_TIMEOUT)
     t_err.join(timeout=THREAD_JOIN_TIMEOUT)
 
-    # If threads are still alive after timeout, log it (they're daemon threads so won't block exit)
+    # If threads are still alive after first timeout, close pipes to unblock them
+    # This handles cases where child processes keep pipes open
+    if t_out.is_alive() or t_err.is_alive():
+        try:
+            proc.stdout.close()
+        except Exception:
+            pass
+        try:
+            proc.stderr.close()
+        except Exception:
+            pass
+        # Give threads a bit more time after closing pipes
+        t_out.join(timeout=2)
+        t_err.join(timeout=2)
+
+    # If threads are still alive after all attempts, log it
     if t_out.is_alive() or t_err.is_alive():
         captured_stderr.append(b"\n[Thread join timeout - some output may be lost]\n")
 
@@ -292,6 +300,7 @@ def fix_code_loop(
     prompt_file: str = "",
     agentic_fallback: bool = True,
     use_cloud: bool = False,
+    prior_cost: float = 0.0,
 ) -> Tuple[bool, str, str, int, float, Optional[str]]:
     """
     Attempts to fix errors in a code module through multiple iterations.
@@ -431,7 +440,7 @@ def fix_code_loop(
 
     # Step 2: Initialize variables
     attempts = 0
-    total_cost = 0.0
+    total_cost = prior_cost  # Include prior costs from operations like auto-deps (Issue #364)
     success = False
     model_name = None
     history_log = "<history>\n"

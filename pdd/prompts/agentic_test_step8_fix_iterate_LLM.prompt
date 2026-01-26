@@ -1,0 +1,169 @@
+% You are an expert software engineer handling a test generation request. Your task is to fix failing tests and re-run them until they pass.
+
+% Context
+
+You are working on step 8 of 9 in an agentic test generation workflow. Previous step ran the tests and some failed.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+- Worktree Path: {worktree_path}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Steps Output
+<step1_output>
+{step1_output}
+</step1_output>
+
+<step2_output>
+{step2_output}
+</step2_output>
+
+<step3_output>
+{step3_output}
+</step3_output>
+
+<step4_output>
+{step4_output}
+</step4_output>
+
+<step5_output>
+{step5_output}
+</step5_output>
+
+<step6_output>
+{step6_output}
+</step6_output>
+
+<step7_output>
+{step7_output}
+</step7_output>
+
+% Test Files
+{test_files}
+
+% Test Results from Step 7
+{test_results}
+
+% Your Task
+
+1. **Analyze failing tests**
+   For each failing test:
+   - Is the test incorrect (wrong selectors, bad assertions)?
+   - Is the application behavior unexpected?
+   - Is there a timing issue (need to wait for elements)?
+   - Is there a setup/environment issue?
+
+2. **Fix the test issues**
+   Common fixes:
+   - **Wrong selector:** Update to correct selector
+   - **Timing issue:** Add appropriate waits
+   - **Wrong assertion:** Fix expected values
+   - **Setup issue:** Add proper setup/fixtures
+
+   **Do NOT modify the application code** - only fix the tests.
+
+3. **Re-run tests**
+   After each fix:
+   - Run the tests again
+   - Check if the fix worked
+   - Move to next failing test
+
+4. **Iterate until all pass**
+   - Maximum 5 fix attempts per test
+   - If a test cannot be fixed, document why and skip it
+
+% Output
+
+After completing your fixes, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+**If all tests now pass:**
+```markdown
+## Step 8: Fix & Iterate
+
+**Status:** All Tests Passing
+
+### Fixes Applied
+
+#### Test: `test_name_1`
+- **Issue:** [what was wrong]
+- **Fix:** [what was changed]
+
+#### Test: `test_name_2`
+...
+
+### Final Test Results
+- **Passed:** [N]
+- **Failed:** 0
+- **Fix Iterations:** [N]
+
+---
+*Proceeding to Step 9: Submit PR*
+```
+
+**If some tests still fail:**
+```markdown
+## Step 8: Fix & Iterate
+
+**Status:** Some Tests Still Failing
+
+### Fixes Applied
+
+#### Test: `test_name_1` - Fixed
+- **Issue:** [what was wrong]
+- **Fix:** [what was changed]
+
+### Tests That Could Not Be Fixed
+
+#### Test: `test_name_2` - Still Failing
+- **Issue:** [root cause]
+- **Attempts:** [N]
+- **Reason:** [why it couldn't be fixed - e.g., "Application bug, not test issue"]
+
+### Final Test Results
+- **Passed:** [N]
+- **Failed:** [N]
+- **Fix Iterations:** [N]
+
+### Recommendation
+[Should we proceed with failing tests, or stop?]
+
+---
+*Proceeding to Step 9: Submit PR (with known failing tests)*
+```
+
+% Machine-Readable Output (REQUIRED)
+
+**You MUST output these lines at the very end of your response.**
+
+```
+FIX_STATUS: [COMPLETE | PARTIAL | FAILED]
+TESTS_PASSED: [N]
+TESTS_FAILED: [N]
+FIX_ITERATIONS: [N]
+```
+
+If you modified test files:
+```
+FILES_MODIFIED: path/to/test_file1, path/to/test_file2
+```
+
+% Important
+
+- Only modify test code, never application code
+- Document every fix clearly
+- If a test truly cannot pass, document why
+- Give up on a test after 5 attempts
+- Always post your findings as a GitHub comment before completing

@@ -1,0 +1,123 @@
+# prompt_code_diff_LLM.prompt
+
+You are a strict code analyst evaluating whether a PROMPT can REGENERATE the CODE.
+
+CRITICAL QUESTION: If an LLM only had this prompt, could it produce code that passes the same tests?
+
+PROMPT/REQUIREMENTS (with line numbers):
+```
+{prompt_numbered}
+```
+
+CODE (with line numbers):
+```
+{code_numbered}
+```
+
+## Analysis Focus
+
+**Be STRICT and PESSIMISTIC.** Your job is to find gaps that would cause regeneration failures.
+
+1. **Regeneration Risk Analysis**: Identify ALL code knowledge NOT in the prompt:
+   - Magic values, constants, thresholds (e.g., timeout=30, retry=3, buffer_size=4096)
+   - Specific algorithms or implementation approaches chosen
+   - Edge case handling not mentioned in prompt
+   - Error messages, status codes, specific exceptions
+   - API contracts, data formats, field names
+   - Dependencies, imports, library-specific patterns
+   - Performance optimizations or workarounds
+   - Business logic details embedded in code
+
+2. **Hidden Knowledge Detection**: Code often contains "tribal knowledge" that developers added but never documented:
+   - Why was THIS approach chosen over alternatives?
+   - What bugs or edge cases does this code handle that aren't obvious?
+   - What assumptions does the code make about inputs/environment?
+
+3. **Test Failure Prediction**: Would regenerated code likely fail tests because:
+   - Exact values/strings don't match expectations?
+   - Edge cases aren't handled the same way?
+   - API contracts differ from what tests expect?
+
+## Response Format
+
+Respond with a JSON object:
+
+1. "overallScore": integer 0-100
+   - 90-100: Prompt could regenerate code that passes tests
+   - 70-89: Minor details missing, regeneration might work with luck
+   - 50-69: Significant gaps, regeneration would likely fail some tests
+   - 0-49: Major knowledge missing, regeneration would definitely fail
+
+2. "promptToCodeScore": integer 0-100 - How well the code implements the prompt requirements
+
+3. "codeToPromptScore": integer 0-100 - How well the prompt documents/describes the code
+
+4. "canRegenerate": boolean - Conservative assessment: could this prompt produce working code?
+
+5. "regenerationRisk": "low", "medium", "high", or "critical"
+   - "low": Prompt captures all essential details
+   - "medium": Some implementation details missing but core logic documented
+   - "high": Significant undocumented behavior that would differ on regeneration
+   - "critical": Code has major features/logic not in prompt at all
+
+6. "summary": 1-2 sentences on regeneration viability, be direct about risks
+
+7. "sections": array of PROMPT requirement sections, each with:
+   - "id": unique string like "req_1", "req_2"
+   - "promptRange": {{"startLine": int, "endLine": int, "text": "excerpt"}}
+   - "codeRanges": array of {{"startLine": int, "endLine": int, "text": "excerpt"}} (empty if missing)
+   - "status": "matched", "partial", or "missing"
+   - "matchConfidence": 0-100
+   - "semanticLabel": descriptive label like "Error Handling", "Input Validation"
+   - "notes": REQUIRED explanation - be specific about what's missing or at risk
+
+8. "codeSections": array of CODE sections NOT adequately documented in prompt:
+   - "id": unique string like "code_1", "code_2"
+   - "promptRange": {{"startLine": int, "endLine": int, "text": "excerpt"}} (empty if undocumented)
+   - "codeRanges": array of {{"startLine": int, "endLine": int, "text": "excerpt"}}
+   - "status": "matched", "partial", or "extra"
+   - "matchConfidence": 0-100
+   - "semanticLabel": descriptive label
+   - "notes": REQUIRED - explain what knowledge would be LOST on regeneration
+     * For "extra": "REGENERATION RISK: [specific feature/value/logic] is not in prompt and would be lost or different"
+     * For "partial": "INCOMPLETE: Prompt mentions [X] but doesn't specify [critical detail Y]"
+
+9. "hiddenKnowledge": array of objects describing undocumented code knowledge:
+   - "type": "magic_value" | "algorithm_choice" | "edge_case" | "error_handling" | "api_contract" | "optimization" | "business_logic" | "assumption"
+   - "location": {{"startLine": int, "endLine": int}}
+   - "description": what the code knows that the prompt doesn't say
+   - "regenerationImpact": "would_differ" | "would_fail" | "might_work"
+   - "suggestedPromptAddition": what to add to the prompt to capture this
+
+10. "lineMappings": array of line-level mappings:
+    - "promptLine": int
+    - "codeLines": array of ints
+    - "matchType": "exact", "semantic", "partial", "none"
+
+11. "stats": {{
+    "totalRequirements": int,
+    "matchedRequirements": int,
+    "missingRequirements": int,
+    "totalCodeFeatures": int,
+    "documentedFeatures": int,
+    "undocumentedFeatures": int,
+    "promptToCodeCoverage": float,
+    "codeToPromptCoverage": float,
+    "hiddenKnowledgeCount": int,
+    "criticalGaps": int
+}}
+
+12. "missing": array of strings - requirements in prompt not implemented
+13. "extra": array of strings - CRITICAL: code features that would be LOST on regeneration
+14. "suggestions": array of specific additions to make to the prompt to enable regeneration
+
+## Strictness Guidelines
+
+- **Assume regeneration WILL differ** unless the prompt explicitly specifies behavior
+- A function that "handles errors" in the prompt might handle them DIFFERENTLY on regeneration
+- Constants, timeouts, retry counts, buffer sizes - if not in prompt, they WILL be different
+- Specific error messages, log formats, status codes - WILL be different unless specified
+- Algorithm choices (e.g., quicksort vs mergesort, BFS vs DFS) - WILL be different unless specified
+- The goal is to make the prompt complete enough that ANY competent LLM would produce equivalent code
+- Mark as "extra" anything in code that prompt doesn't EXPLICITLY require
+- When in doubt, mark it as a gap - false positives are better than missed risks

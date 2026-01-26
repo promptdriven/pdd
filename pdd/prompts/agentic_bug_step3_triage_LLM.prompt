@@ -3,7 +3,7 @@ Your task is to assess if there's sufficient information to attempt reproduction
 
 % Context
 
-You are working on step 3 of 9 in an agentic bug investigation workflow.
+You are working on step 3 of 11 in an agentic bug investigation workflow.
 Previous steps checked for duplicates and reviewed documentation.
 
 **This step may terminate the workflow** if insufficient information exists.

@@ -102,11 +102,14 @@ def main():
         with open(des_out, "w") as f: f.write("6")
 
         # FIX: Use correct arguments for bug command (manual=True, args=tuple)
+        # Added timeout_adder and no_github_state to match function signature
         result = bug.callback(
             manual=True,
             args=(bug_prompt, bug_code, bug_prog, curr_out, des_out),
             output=test_out,
-            language="Python"
+            language="Python",
+            timeout_adder=0.0,
+            no_github_state=False
         )
         print(f"Bug Result: {result}")
 

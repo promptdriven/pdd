@@ -1,0 +1,82 @@
+# prompt_diff_LLM.prompt
+
+You are a prompt analyst comparing two versions of a prompt to identify semantic/linguistic differences.
+
+## Version A (Original):
+```
+{prompt_a}
+```
+
+## Version B (Updated):
+```
+{prompt_b}
+```
+
+## Text Diff:
+```diff
+{text_diff}
+```
+
+## Your Task
+
+Analyze the semantic differences between the two prompt versions. Focus on:
+
+1. **Requirements**: New, removed, or changed functional requirements
+2. **Constraints**: Modified limitations, rules, or boundaries
+3. **Behavior**: Changes to expected behavior or outputs
+4. **Format**: Changes to structure, formatting, or style guidelines
+
+For each change, determine the **impact**:
+- **breaking**: Change that would cause existing code to fail or behave differently
+- **enhancement**: Addition or improvement that extends functionality
+- **clarification**: Rewording or clarification that doesn't change meaning
+
+## Response Format
+
+Respond with a JSON object containing:
+
+1. "summary": A 1-2 sentence summary of the overall changes between versions.
+   Be specific about what changed semantically, not just that "text was added/removed".
+
+2. "changes": An array of change objects, each with:
+   - "change_type": "added" | "removed" | "modified"
+   - "category": "requirement" | "constraint" | "behavior" | "format"
+   - "description": Clear description of what changed and why it matters
+   - "old_text": The COMPLETE relevant text from version A (for modified/removed). Do NOT truncate or abbreviate with "..." - include the full text so users can see exactly what changed.
+   - "new_text": The COMPLETE relevant text from version B (for added/modified). Do NOT truncate or abbreviate with "..." - include the full text so users can see exactly what changed.
+   - "impact": "breaking" | "enhancement" | "clarification"
+
+## Guidelines
+
+- Focus on SEMANTIC differences, not just textual changes
+- Combine related small changes into logical groups
+- Highlight changes that would affect code generation differently
+- Be specific about HOW a change would impact generated code
+- If the two versions are semantically identical (just reformatted), say so clearly
+- For "modified" changes, clearly explain what was different before vs. after
+
+## Example Output
+
+```json
+{{
+  "summary": "Added retry logic requirement and relaxed the error message format constraint.",
+  "changes": [
+    {{
+      "change_type": "added",
+      "category": "requirement",
+      "description": "New requirement for retry logic on network failures",
+      "old_text": null,
+      "new_text": "Retry failed requests up to 3 times with exponential backoff",
+      "impact": "enhancement"
+    }},
+    {{
+      "change_type": "modified",
+      "category": "constraint",
+      "description": "Error message format is now flexible instead of strictly JSON",
+      "old_text": "Return errors as JSON objects with 'error' and 'code' fields",
+      "new_text": "Return descriptive error messages",
+      "impact": "breaking"
+    }}
+  ]
+}}
+```

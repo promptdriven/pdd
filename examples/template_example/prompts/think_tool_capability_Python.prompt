@@ -1,0 +1,95 @@
+<prompt>
+<arch>
+  <include>../../examples/template_example/architecture.json</include>
+</arch>
+
+<core>
+  <include>../../examples/template_example/src/edit_file_tool/core.py</include>
+</core>
+
+<cost_tracker>
+  <include>../../examples/template_example/src/edit_file_tool/cost_tracker_utility.py</include>
+</cost_tracker>
+
+% Here are examples of how to use internal modules:
+<internal_example_modules>
+    % Example of how to use the cost tracker utility for calculating USD costs and handling token usage:
+    <edit_file_tool.cost_tracker_utility><include>src/examples/cost_tracker_utility_example.py</include></edit_file_tool.cost_tracker_utility>
+
+    % Example of the core module's expected interaction and result handling:
+    <edit_file_tool.core><include>src/examples/core_example.py</include></edit_file_tool.core>
+
+    % Example of utilizing the extended thinking capability and response block processing:
+    <edit_file_tool.think_tool_capability><include>src/examples/think_tool_capability_example.py</include></edit_file_tool.think_tool_capability>
+</internal_example_modules>
+
+Module Overview
+Stateless utility module to invoke Claude API via litellm with Extended Thinking support, returning Anthropic-formatted responses and calculated USD costs.
+
+Dependencies
+- litellm: Multi-provider API client (Anthropic, Vertex AI, Bedrock)
+- cost_tracker_utility: Import from edit_file_tool for cost calculation
+
+Requirements
+1. Function: invoke_with_thinking(messages, tools, model) -> Tuple[dict, float]
+2. Use litellm.acompletion() with max_tokens=4096
+3. Enable thinking (budget_tokens=1024) for models containing "claude-3-7", "claude-sonnet-4", or "claude-opus-4"
+   - NOTE: claude-haiku-4-5 does NOT support extended thinking - do not enable for haiku models
+4. Implement thinking fallback: retry without thinking on BadRequestError
+5. Convert litellm response (OpenAI format) to Anthropic format expected by <core>
+6. Extract token usage with field name fallbacks (prompt_tokens/input_tokens, completion_tokens/output_tokens)
+7. Include cache tokens: cache_creation_input_tokens, cache_read_input_tokens
+8. Delegate cost calculation to cost_tracker_utility.calculate_cost()
+9. Return tuple of (anthropic_response_dict, cost_usd)
+10. Provider Auto-Detection:
+    - If model starts with "vertex_ai/":
+      - Read VERTEX_CREDENTIALS (path to JSON file), VERTEX_PROJECT, VERTEX_LOCATION from env
+      - Load the JSON file and pass contents as vertex_credentials parameter (JSON string)
+      - Pass vertex_ai_project and vertex_ai_location to litellm.acompletion()
+    - If model starts with "anthropic/" (or no prefix):
+      - Use ANTHROPIC_API_KEY from env (litellm auto-detects this)
+    - Log which provider path is being used (DEBUG level)
+
+Response Conversion (OUTGOING from litellm -> Anthropic format for core.py)
+- Convert litellm ModelResponse to dict with "content" (list of blocks) and "usage"
+- Handle content types: str -> text block, list -> recursive flatten, dict with "type" -> pass-through
+- Convert tool_calls (function.name, function.arguments) to tool_use blocks (type, id, name, input)
+
+**CRITICAL: Message Format Requirements (INCOMING to litellm)**
+This module receives messages from core.py and passes them to litellm.acompletion().
+Callers MUST provide messages in OpenAI format, NOT Anthropic native format:
+
+CORRECT - OpenAI format (what callers must provide):
+```python
+# User message
+{"role": "user", "content": "Edit this file..."}
+
+# Assistant message with tool calls
+{"role": "assistant", "tool_calls": [{"id": "call_123", "type": "function", "function": {"name": "text_editor_20250124", "arguments": "{...}"}}]}
+
+# Tool result message
+{"role": "tool", "tool_call_id": "call_123", "name": "text_editor_20250124", "content": "str_replace completed"}
+```
+
+WRONG - Anthropic native format (causes LiteLLM validation error):
+```python
+# DO NOT USE - LiteLLM will reject this with "Invalid user message" error
+{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "...", "content": "..."}]}
+```
+
+This module does NOT convert incoming messages - it expects OpenAI format from callers.
+
+Logging
+- Logger name: __name__
+- DEBUG: Model name, thinking status, message/tool counts (no content)
+- WARNING: Thinking fallback events
+
+Context & Documentation
+<web> https://docs.litellm.ai/docs/completion/input </web>
+<web> https://docs.litellm.ai/docs/reasoning_content </web>
+<web> https://docs.litellm.ai/docs/exception_mapping </web>
+<web> https://docs.litellm.ai/docs/providers/vertex_partner </web>
+
+Deliverable
+Production-ready module: src/edit_file_tool/think_tool_capability.py
+</prompt>

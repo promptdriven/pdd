@@ -1,0 +1,83 @@
+<prompt>
+You will create a detailed, production-ready implementation specification (and corresponding Python code) for the `src/edit_file_tool/cost_tracker_utility.py` module. This module is a stateless utility responsible for calculating the total USD cost of Anthropic Claude API usage for the Edit File Tool, including standard input/output token charges and Anthropic native prompt caching charges (cache writes and cache reads) with correct model-specific pricing.
+
+Requirements
+1. Implement a stateless Python 3.9+ utility module `cost_tracker_utility.py` that exposes the function `calculate_cost(model: str, input_tokens: int, output_tokens: int, cache_write_tokens: int = 0, cache_read_tokens: int = 0) -> float` exactly as specified by the architecture interface.
+2. Provide accurate, model-specific token pricing for supported Claude model families used by this project (at minimum: Claude 3.7 Sonnet, Claude 3.5 Sonnet/Haiku, Claude 3 Opus/Sonnet/Haiku). If the exact model string includes version suffixes (e.g., `claude-3-7-sonnet-20250219`), pricing must be resolved via robust prefix/family matching rather than exact equality only.
+3. Support Anthropic prompt caching pricing rules in the returned cost:
+   - Standard input tokens: charged at normal input rate.
+   - Standard output tokens: charged at normal output rate.
+   - Cache writes: charged at a 25% premium over standard input token rate (i.e., 1.25 × input rate for `cache_write_tokens`).
+   - Cache reads: charged at a 90% discount compared to standard input tokens (i.e., 0.10 × input rate for `cache_read_tokens`).
+4. Validate inputs defensively:
+   - Token counts must be integers and must be >= 0; raise `ValueError` with clear messages on invalid values.
+   - `model` must be a non-empty string; raise `ValueError` otherwise.
+5. Define clear behavior for unknown/unsupported model names:
+   - Primary approach: attempt to infer family pricing via substring/prefix matching.
+   - If unresolved, raise a `ValueError` listing the unknown model and the supported families, rather than silently returning 0 or using an arbitrary default.
+6. Ensure numerical stability and predictable results:
+   - Use float arithmetic and return a float in USD.
+   - Do not round inside `calculate_cost`; leave formatting/rounding to callers (CLI prints).
+7. Provide optional lightweight logging hooks without requiring configuration:
+   - Avoid noisy logs by default; if you include logging, use the standard `logging` module and log at DEBUG level only.
+8. Keep the module dependency-free (standard library only) and fast:
+   - Cost computation must be O(1) with minimal overhead; no I/O.
+9. Include thorough docstrings and type hints for public functions and key internal helpers/constants.
+10. Include simple self-check tests as either:
+   - A minimal `if __name__ == "__main__":` sanity run, or
+   - A small internal test function callable by unit tests (do not add external test files unless explicitly requested elsewhere).
+11. Security: do not handle secrets; do not read environment variables; purely compute from provided counts and model string.
+12. Compatibility: the function must be safe to call from async code and CLI code; no global mutable state that can cause cross-call contamination.
+
+Dependencies
+Prompt Dependencies:
+- None (per architecture item `cost_tracker_utility_Python.prompt`, dependencies=[])
+
+Instructions
+- Create `src/edit_file_tool/cost_tracker_utility.py` as a standalone utility module.
+- Implement `calculate_cost(...)` with the exact signature: `calculate_cost(model: str, input_tokens: int, output_tokens: int, cache_write_tokens: int = 0, cache_read_tokens: int = 0) -> float`.
+- Build a pricing table as module-level constants mapping “model family keys” to per-1M-token USD prices for input and output. Use a structure like:
+  - `MODEL_PRICING = { "claude-3-7-sonnet": {"input_per_mtok": ..., "output_per_mtok": ...}, ... }`
+  Prefer explicit keys for the major families and handle versioned model names by selecting the best match.
+- Implement a helper like `_resolve_model_family(model: str) -> str` that:
+  - Normalizes the model string (strip, lower).
+  - Matches known families by checking `startswith` and/or substring containment.
+  - Returns the canonical family key used in `MODEL_PRICING`.
+  - Raises `ValueError` if no match is found.
+- Implement input validation helpers, e.g. `_validate_tokens(name: str, value: int) -> int` that:
+  - Checks that `value` is an integer (not bool, which is int subclass).
+  - Checks that `value >= 0`.
+  - Raises `ValueError` with a clear message if validation fails.
+  - **CRITICAL: Returns the validated value** so callers can use the return value directly.
+- Compute the total cost:
+  - Convert per-1M-token prices to per-token rates: `rate = per_mtok / 1_000_000`.
+  - Standard input cost: `input_tokens * input_rate`.
+  - Standard output cost: `output_tokens * output_rate`.
+  - Cache write cost: `cache_write_tokens * input_rate * 1.25`.
+  - Cache read cost: `cache_read_tokens * input_rate * 0.10`.
+  - Total is sum of all components.
+- Edge cases:
+  - All token counts can be 0; return 0.0.
+  - Large token counts should not overflow typical float ranges for expected usage; still, keep arithmetic straightforward.
+  - If callers pass cache tokens without standard tokens, still compute correctly.
+- Provide a second helper (optional but recommended) returning a detailed breakdown dict for verbose callers, e.g. `calculate_cost_breakdown(...) -> Dict[str, float]`. Do not change the required API; this is additive.
+- Document in docstrings how cache tokens should be counted (callers supply them) and what the pricing multipliers mean.
+- Testing notes:
+  - Add a small internal `_run_sanity_checks()` that asserts:
+    - Negative tokens raise ValueError.
+    - Unknown model raises ValueError.
+    - Known model returns expected value for simple counts (choose small numbers and compute expected precisely).
+  - Ensure these checks do not run on import (only under `__main__` or explicit call).
+- Do not import any project-internal modules; keep it isolated so both `core.py` and `cache_manager_utility.py` can import it without cycles.
+- Keep naming consistent with the architecture: file name `cost_tracker_utility.py` and primary function `calculate_cost`.
+
+Deliverable
+- A complete Python module at `src/edit_file_tool/cost_tracker_utility.py` implementing `calculate_cost` (required) plus any small internal helpers/constants needed for robust model resolution and validation.
+- Inline documentation (module docstring + function docstrings) and minimal sanity-check code (non-invasive) demonstrating correctness.
+
+Implementation assumptions (explicit)
+- Assume token pricing values can be embedded as constants based on commonly published Anthropic Claude pricing for the supported families; if exact numbers are uncertain, structure the code so updating constants is straightforward and centralized, and clearly label the constants as “USD per 1M tokens”.
+- Assume upstream code (core/cache manager) will provide accurate `input_tokens`, `output_tokens`, `cache_write_tokens`, and `cache_read_tokens` extracted from Anthropic API responses; this module does not parse API responses.
+
+Please produce production-ready prompt content that will generate the module consistent with the above.
+</prompt>

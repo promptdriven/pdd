@@ -11,6 +11,7 @@ google-cloud-aiplatform>=1.3
 jsonschema==4.23.0
 keyring==25.6.0
 litellm[caching]>=1.80.0
+lxml>=5.0.0
 nest_asyncio==1.6.0
 openai>=1.99.5
 pandas==2.2.3
@@ -26,6 +27,13 @@ semver==3.0.2
 setuptools
 textual
 z3_solver==4.14.1.0
+
+# Server dependencies (for pdd connect)
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+websockets>=13.0
+watchdog>=4.0.0
+tiktoken>=0.7.0
 
 # Dev dependencies
 build

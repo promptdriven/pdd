@@ -739,3 +739,185 @@ class TestNonPythonAgenticFallback:
         assert error_log.exists()
         content = error_log.read_text()
         assert "java" in content.lower() or "verification" in content.lower()
+
+
+class TestCumulativeCostDisplay:
+    """
+    Tests for GitHub issue #364: PDD sync doesn't accumulate cost when comparing with max-budget.
+
+    The bug: When fix_code_loop is called after other operations (like auto-deps) have already
+    incurred costs, the "Total Cost" displayed in the output only shows costs within the
+    fix loop, NOT the cumulative total including prior operations.
+
+    Example from the bug report:
+    - Auto-deps cost: ~$3
+    - Fix loop displays: "Total Cost: $0.3255, Budget: $19.9718"
+    - Budget is correctly reduced ($20 - $3 ≈ $19.97)
+    - But "Total Cost" misleadingly shows only $0.33 instead of ~$3.33
+
+    The fix should add a `prior_cost` parameter so fix_code_loop can display:
+    "Attempt Cost: $0.22, Total Cost: $3.33, Budget: $19.97"
+    """
+
+    @patch("pdd.fix_code_loop.fix_code_module_errors")
+    def test_total_cost_display_includes_prior_cost(self, mock_fix, tmp_path, monkeypatch, capsys):
+        """
+        Verify that the 'Total Cost' displayed in fix_code_loop output includes
+        prior operation costs (e.g., from auto-deps).
+
+        This test FAILS on the current buggy code because:
+        - fix_code_loop initializes total_cost = 0.0 internally (line 442)
+        - The display at line 684 shows only loop-local costs
+        - There's no way to pass prior costs to be included in the display
+
+        Expected behavior after fix:
+        - fix_code_loop accepts a `prior_cost` parameter
+        - The displayed "Total Cost" = prior_cost + loop costs
+        """
+        from pdd.fix_code_loop import fix_code_loop
+
+        monkeypatch.chdir(tmp_path)
+
+        # Create test files
+        verification_program = tmp_path / "verify.py"
+        verification_program.write_text("raise ValueError('Simulated failure')")
+
+        code_file = tmp_path / "code.py"
+        code_file.write_text("def broken(): pass")
+
+        error_log = tmp_path / "error.log"
+
+        # Simulate prior cost from auto-deps ($3.00)
+        prior_cost = 3.00
+        original_budget = 20.00
+        remaining_budget = original_budget - prior_cost  # $17.00
+
+        # Mock fix_code_module_errors to simulate one fix attempt costing $0.50
+        loop_attempt_cost = 0.50
+        def mock_fix_fn(*args, **kwargs):
+            return (
+                True, True,  # update_program, update_code
+                "print('Fixed')",  # fixed_program
+                "def fixed(): pass",  # fixed_code
+                "LLM analysis",  # program_code_fix
+                loop_attempt_cost,  # cost
+                "test-model"  # model_name
+            )
+        mock_fix.side_effect = mock_fix_fn
+
+        # Capture rprint output by patching the console
+        captured_output = []
+        original_rprint = None
+
+        import pdd.fix_code_loop as fcl_module
+        original_rprint = fcl_module.rprint
+
+        def capturing_rprint(*args, **kwargs):
+            # Convert args to string and store
+            output_str = " ".join(str(arg) for arg in args)
+            captured_output.append(output_str)
+            # Also call original for any side effects
+            original_rprint(*args, **kwargs)
+
+        monkeypatch.setattr(fcl_module, "rprint", capturing_rprint)
+
+        # Call fix_code_loop with remaining_budget (simulating what sync_orchestration does)
+        # The prior_cost parameter allows the display to show cumulative costs
+        success, final_program, final_code, attempts, total_cost, model = fix_code_loop(
+            code_file=str(code_file),
+            prompt="Test prompt",
+            verification_program=str(verification_program),
+            strength=0.5,
+            temperature=0.5,
+            max_attempts=3,
+            budget=remaining_budget,  # $17.00 remaining
+            error_log_file=str(error_log),
+            verbose=True,
+            prior_cost=prior_cost,  # Pass prior cost to show cumulative total (Issue #364 fix)
+        )
+
+        # Find the cost display line in captured output
+        cost_display_lines = [
+            line for line in captured_output
+            if "Total Cost:" in line and "Budget:" in line
+        ]
+
+        assert len(cost_display_lines) >= 1, (
+            f"Expected to find 'Total Cost:' display line in output. "
+            f"Captured output: {captured_output}"
+        )
+
+        cost_line = cost_display_lines[0]
+
+        # Extract the displayed total cost value
+        # Format: "Attempt Cost: $X.XXXX, Total Cost: $Y.YYYY, Budget: $Z.ZZZZ"
+        import re
+        total_cost_match = re.search(r"Total Cost: \$(\d+\.?\d*)", cost_line)
+        assert total_cost_match, f"Could not parse Total Cost from: {cost_line}"
+
+        displayed_total_cost = float(total_cost_match.group(1))
+
+        # The bug: displayed_total_cost currently equals only loop_attempt_cost ($0.50)
+        # It SHOULD equal prior_cost + loop_attempt_cost ($3.50)
+        expected_cumulative_cost = prior_cost + loop_attempt_cost  # $3.50
+
+        # This assertion FAILS on buggy code (displays $0.50 instead of $3.50)
+        assert displayed_total_cost >= expected_cumulative_cost - 0.01, (
+            f"ISSUE #364 BUG: 'Total Cost' display does not include prior operation costs!\n"
+            f"  Prior cost (e.g., auto-deps): ${prior_cost:.2f}\n"
+            f"  Loop attempt cost: ${loop_attempt_cost:.2f}\n"
+            f"  Expected displayed Total Cost: ${expected_cumulative_cost:.2f}\n"
+            f"  Actual displayed Total Cost: ${displayed_total_cost:.2f}\n"
+            f"  Full output line: {cost_line}\n"
+            f"\n"
+            f"The displayed 'Total Cost' should accumulate costs from prior operations "
+            f"(like auto-deps) to give users an accurate view of their spending."
+        )
+
+    @patch("pdd.fix_code_loop.fix_code_module_errors")
+    def test_zero_prior_cost_backward_compatibility(self, mock_fix, tmp_path, monkeypatch):
+        """
+        Verify that fix_code_loop works correctly when no prior costs exist.
+        This ensures backward compatibility after adding the prior_cost parameter.
+
+        When prior_cost=0 (or not specified), the displayed Total Cost should
+        equal just the loop costs (same as current behavior).
+        """
+        from pdd.fix_code_loop import fix_code_loop
+
+        monkeypatch.chdir(tmp_path)
+
+        # Create test files
+        verification_program = tmp_path / "verify.py"
+        verification_program.write_text("raise ValueError('fail')")
+
+        code_file = tmp_path / "code.py"
+        code_file.write_text("def fn(): pass")
+
+        error_log = tmp_path / "error.log"
+
+        # Mock fix to return success with known cost
+        loop_cost = 0.25
+        mock_fix.return_value = (
+            True, True, "print('ok')", "def fn(): return 1",
+            "analysis", loop_cost, "model"
+        )
+
+        success, _, _, attempts, returned_total_cost, _ = fix_code_loop(
+            code_file=str(code_file),
+            prompt="Test",
+            verification_program=str(verification_program),
+            strength=0.5,
+            temperature=0.5,
+            max_attempts=3,
+            budget=10.0,
+            error_log_file=str(error_log),
+            verbose=False,
+            # prior_cost=0.0,  # Default should be 0
+        )
+
+        # With no prior cost, returned total should equal loop cost
+        assert returned_total_cost == pytest.approx(loop_cost, abs=0.001), (
+            f"With no prior cost, returned total_cost should equal loop cost. "
+            f"Expected: {loop_cost}, Got: {returned_total_cost}"
+        )

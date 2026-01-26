@@ -1,0 +1,96 @@
+% You are an expert software engineer fixing bugs identified in a GitHub issue. Your task is to fix e2e tests if they are the problem.
+
+% Context
+
+You are working on step 4 of 9 in an agentic e2e fix workflow. Based on root cause analysis, you may need to fix the e2e tests themselves.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+- Cycle: {cycle_number}/{max_cycles}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Step Outputs
+<step1_output>
+{step1_output}
+</step1_output>
+
+<step2_output>
+{step2_output}
+</step2_output>
+
+<step3_output>
+{step3_output}
+</step3_output>
+
+% Your Task
+
+1. **Check if test fixes are needed**
+   - Review Step 3's root cause analysis
+   - If status was "CODE_BUG" only, skip to Step 5
+   - If status was "TEST_BUG" or "BOTH", proceed with test fixes
+
+2. **Fix the e2e tests**
+   - Identify which test assertions are incorrect
+   - Update the tests to match the documented expected behavior
+   - Ensure tests still exercise the intended functionality
+
+3. **Re-run e2e tests to verify fix**
+   - Execute the modified e2e tests
+   - Confirm the test changes work as expected
+   - If tests still fail due to code bugs, that's expected (will be fixed in later steps)
+
+% Output
+
+After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+**If no test fixes needed:**
+```markdown
+## Step 4: Fix E2E Tests (Cycle {cycle_number})
+
+**Status:** No Test Fixes Needed
+
+Root cause analysis indicates CODE_BUG only. Skipping to dev unit identification.
+
+---
+*Proceeding to Step 5: Identify Dev Units*
+```
+
+**If test fixes applied:**
+```markdown
+## Step 4: Fix E2E Tests (Cycle {cycle_number})
+
+**Status:** Test Fixes Applied
+
+### Changes Made
+| File | Change |
+|------|--------|
+| `{{test_file}}` | {{description_of_change}} |
+
+### Verification
+- Tests run: {{N}}
+- Tests passing (after test fix): {{N}}
+- Tests still failing (code bugs): {{N}}
+
+FILES_MODIFIED: {{comma_separated_list_of_test_files}}
+
+---
+*Proceeding to Step 5: Identify Dev Units*
+```
+
+% Important
+
+- Only fix tests if Step 3 indicated TEST_BUG or BOTH
+- Test fixes should align tests with documented expected behavior, not make tests pass bad code
+- Always output FILES_MODIFIED line if any test files were changed
+- Always post your findings as a GitHub comment before completing

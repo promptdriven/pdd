@@ -38,6 +38,7 @@ def resolve_prompt_code_pair(code_file_path: str, quiet: bool = False, output_di
     Derives the corresponding prompt file path from a code file path.
     Searches for and creates prompts only in the specified output directory or 'prompts' directory.
     If the prompt file does not exist, it creates an empty one in the target directory.
+    Preserves the subdirectory structure of the code file relative to the repository root.
 
     Args:
         code_file_path: Path to the code file
@@ -50,48 +51,71 @@ def resolve_prompt_code_pair(code_file_path: str, quiet: bool = False, output_di
     # Extract the filename without extension and directory
     code_filename = os.path.basename(code_file_path)
     base_name, _ = os.path.splitext(code_filename)
+    
+    code_file_abs_path = os.path.abspath(code_file_path)
+    code_dir = os.path.dirname(code_file_abs_path)
 
-    # Determine the output directory
+    # Find the repository root (where the code file is located)
+    # This is needed for relative path calculation to preserve structure
+    repo_root = code_dir
+    try:
+        import git
+        repo = git.Repo(code_dir, search_parent_directories=True)
+        repo_root = repo.working_tree_dir
+    except:
+        # If not a git repo, use the directory containing the code file
+        pass
+
+    # Determine the base prompts directory
     if output_dir:
         # Use the custom output directory (absolute path)
-        prompts_dir = os.path.abspath(output_dir)
+        base_prompts_dir = os.path.abspath(output_dir)
     else:
-        # Find the repository root (where the code file is located)
-        code_file_abs_path = os.path.abspath(code_file_path)
-        code_dir = os.path.dirname(code_file_abs_path)
-
-        # For repository mode, find the actual repo root
-        repo_root = code_dir
-        try:
-            import git
-            repo = git.Repo(code_dir, search_parent_directories=True)
-            repo_root = repo.working_tree_dir
-        except:
-            # If not a git repo, use the directory containing the code file
-            pass
-
         # Use context-aware prompts_dir from .pddrc if available
         context_name, context_config = detect_context_for_file(code_file_path, repo_root)
         prompts_dir_config = context_config.get("prompts_dir", "prompts")
         if os.path.isabs(prompts_dir_config):
-            prompts_dir = prompts_dir_config
+            base_prompts_dir = prompts_dir_config
         else:
-            prompts_dir = os.path.join(repo_root, prompts_dir_config)
+            base_prompts_dir = os.path.join(repo_root, prompts_dir_config)
+
+    # Calculate relative path from repo_root to code_dir to preserve structure
+    try:
+        rel_dir = os.path.relpath(code_dir, repo_root)
+        if rel_dir == ".":
+            rel_dir = ""
+        else:
+            # If context has a code root (generate_output_path), strip that prefix
+            # E.g., for pdd/commands/file.py with generate_output_path="pdd",
+            # strip "pdd/" to get "commands/"
+            code_root = context_config.get("generate_output_path", "")
+            if code_root and rel_dir.startswith(code_root + os.sep):
+                # Strip the code root prefix
+                rel_dir = rel_dir[len(code_root) + len(os.sep):]
+            elif code_root and rel_dir == code_root:
+                # File is directly in code root
+                rel_dir = ""
+    except ValueError:
+        # Can happen on Windows if paths are on different drives
+        rel_dir = ""
+
+    # Construct the final directory including the relative structure
+    final_prompts_dir = os.path.join(base_prompts_dir, rel_dir)
 
     # Construct the prompt filename in the determined directory
     prompt_filename = f"{base_name}_{language}.prompt"
-    prompt_path_str = os.path.join(prompts_dir, prompt_filename)
+    prompt_path_str = os.path.join(final_prompts_dir, prompt_filename)
     prompt_path = Path(prompt_path_str)
 
     # Ensure prompts directory exists
-    prompts_path = Path(prompts_dir)
+    prompts_path = Path(final_prompts_dir)
     if not prompts_path.exists():
         try:
             prompts_path.mkdir(parents=True, exist_ok=True)
             if not quiet:
-                console.print(f"[success]Created prompts directory:[/success] [path]{prompts_dir}[/path]")
+                console.print(f"[success]Created prompts directory:[/success] [path]{final_prompts_dir}[/path]")
         except OSError as e:
-            console.print(f"[error]Failed to create prompts directory {prompts_dir}: {e}[/error]")
+            console.print(f"[error]Failed to create prompts directory {final_prompts_dir}: {e}[/error]")
 
     if not prompt_path.exists():
         try:
@@ -222,7 +246,7 @@ def update_file_pair(prompt_file: str, code_file: str, ctx: click.Context, repo:
                 temperature=ctx.obj.get("temperature", 0),
                 verbose=verbose,
                 time=ctx.obj.get('time', DEFAULT_TIME),
-                simple=True,  # Force legacy since we already tried agentic
+                simple=True,  # Force legacy since we already tried agentic,
                 quiet=quiet,
                 prompt_file=prompt_file,
             )
@@ -477,8 +501,17 @@ def update_main(
 
             if use_agentic:
                 tests_dir = get_tests_dir_from_config()
+
+                # If output differs from input, work on a copy to avoid modifying source
+                if final_output_path != actual_input_prompt_file:
+                    import shutil
+                    shutil.copy2(actual_input_prompt_file, final_output_path)
+                    agentic_prompt_file = final_output_path
+                else:
+                    agentic_prompt_file = actual_input_prompt_file
+
                 success, message, agentic_cost, provider, changed_files = run_agentic_update(
-                    prompt_file=actual_input_prompt_file,
+                    prompt_file=agentic_prompt_file,
                     code_file=modified_code_file,
                     test_files=None,
                     tests_dir=tests_dir,
@@ -487,13 +520,8 @@ def update_main(
                 )
 
                 if success:
-                    with open(actual_input_prompt_file, 'r') as f:
+                    with open(agentic_prompt_file, 'r') as f:
                         updated_prompt = f.read()
-
-                    # Handle output path if different from input
-                    if final_output_path != actual_input_prompt_file:
-                        with open(final_output_path, 'w') as f:
-                            f.write(updated_prompt)
 
                     if not quiet:
                         rprint("[bold green]Prompt updated successfully (agentic).[/bold green]")

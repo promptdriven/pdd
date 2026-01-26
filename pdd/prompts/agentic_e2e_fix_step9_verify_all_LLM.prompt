@@ -1,0 +1,146 @@
+% You are an expert software engineer fixing bugs identified in a GitHub issue. Your task is to perform final verification and control the outer loop.
+
+% Context
+
+You are working on step 9 of 9 in an agentic e2e fix workflow. This step verifies the current state and determines if another cycle is needed.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+- Cycle: {cycle_number}/{max_cycles}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Step Outputs
+<step1_output>
+{step1_output}
+</step1_output>
+
+<step2_output>
+{step2_output}
+</step2_output>
+
+<step3_output>
+{step3_output}
+</step3_output>
+
+<step4_output>
+{step4_output}
+</step4_output>
+
+<step5_output>
+{step5_output}
+</step5_output>
+
+<step6_output>
+{step6_output}
+</step6_output>
+
+<step7_output>
+{step7_output}
+</step7_output>
+
+<step8_output>
+{step8_output}
+</step8_output>
+
+% Your Task
+
+1. **Run full test suite**
+   - Run all unit tests: `pytest tests/ -v`
+   - Run all e2e tests identified in the issue
+   - Capture complete results
+
+2. **Assess current state**
+   - How many tests pass vs fail?
+   - Are the original bugs fixed?
+   - Are there new failures?
+
+3. **Determine next action**
+   - If all tests pass: Workflow complete
+   - If tests still fail and cycle < max_cycles: Another cycle needed
+   - If tests still fail and cycle >= max_cycles: Max cycles reached, report status
+
+% Output
+
+After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+**If all tests pass:**
+```markdown
+## Step 9: Final Verification (Cycle {cycle_number})
+
+**Status:** ALL_TESTS_PASS
+
+### Test Results
+- Unit tests: {{N}}/{{M}} pass
+- E2E tests: {{N}}/{{M}} pass
+
+### Summary
+All bugs fixed successfully in {cycle_number} cycle(s).
+
+### Files Changed (Total)
+{{list_of_all_files_modified}}
+
+---
+*Workflow complete - all tests passing*
+```
+
+**If more cycles needed:**
+```markdown
+## Step 9: Final Verification (Cycle {cycle_number})
+
+**Status:** CONTINUE_CYCLE
+
+### Test Results
+- Unit tests: {{N}}/{{M}} pass ({{K}} still failing)
+- E2E tests: {{N}}/{{M}} pass ({{K}} still failing)
+
+### Remaining Failures
+| Test | Failure Type |
+|------|--------------|
+| `test_{{name}}` | {{type}} |
+
+### Analysis
+{{explanation_of_remaining_failures}}
+
+---
+*Starting Cycle {next_cycle}*
+```
+
+**If max cycles reached:**
+```markdown
+## Step 9: Final Verification (Cycle {cycle_number})
+
+**Status:** MAX_CYCLES_REACHED
+
+### Test Results
+- Unit tests: {{N}}/{{M}} pass ({{K}} still failing)
+- E2E tests: {{N}}/{{M}} pass ({{K}} still failing)
+
+### Remaining Failures
+| Test | Failure Type |
+|------|--------------|
+| `test_{{name}}` | {{type}} |
+
+### Recommendation
+{{manual_intervention_suggestions}}
+
+---
+*Workflow stopped - max cycles reached*
+```
+
+% Important
+
+- The exact strings "ALL_TESTS_PASS", "CONTINUE_CYCLE", or "MAX_CYCLES_REACHED" control the outer loop
+- Be accurate in test counts - don't round or estimate
+- Include specific failure information for debugging
+- Always post your findings as a GitHub comment before completing

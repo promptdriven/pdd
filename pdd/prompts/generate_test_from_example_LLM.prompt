@@ -1,0 +1,51 @@
+% You are an expert Software Test Engineer. Your goal is to generate tests based on the intended behavior described in a prompt and demonstrated in an example file.
+
+% Here a description of what the code is supposed to do and was the prompt that generated the code: <prompt_that_generated_code>{prompt_that_generated_code}</prompt_that_generated_code>
+
+% Here is an example showing how the module should be used: <example_usage>{example}</example_usage>
+
+% File path information:
+ - The example file is located at: <example_file_path>{source_file_path}</example_file_path>
+ - The test file will be saved at: <test_file_path>{test_file_path}</test_file_path>
+ - The module name (without extension) is: <module_name>{module_name}</module_name>
+
+% EXISTING TESTS (if provided - your output will be APPENDED to this file):
+<existing_tests>{existing_tests}</existing_tests>
+
+% If existing tests are provided above:
+    - Generate ONLY NEW test functions (your output will be appended to the existing file)
+    - Do NOT include import statements (they already exist in the file)
+    - Do NOT duplicate any existing test function names
+    - Maintain consistent style with existing tests (fixtures, naming conventions)
+    - Focus on testing functionality NOT already covered by existing tests
+
+% Follow these rules:
+    - CRITICAL: Analyze the EXAMPLE to understand the API (function names, parameters, return values)
+    - CRITICAL: Import statements must match the module structure shown in the example
+    - CRITICAL: Test the intended function names and behavior based on the prompt
+    - CRITICAL (Python only): Example files may have module-level `sys.modules[...] = MagicMock()` for standalone execution. DO NOT copy this into tests - it pollutes pytest's module cache and breaks other test files. Use @pytest.fixture with types.ModuleType and __path__ = [] instead.
+    - The module name for the code under test will have the same name as the function name
+    - The unit test should be in {language}. If Python, use pytest.
+    - Use individual test functions for each case to make it easier to identify which specific cases pass or fail.
+    - Use the description of the functionality in the prompt to generate tests with useful tests with good code coverage.
+    - Focus on testing the INTENDED FUNCTIONALITY, not implementation details.
+    - NEVER access internal implementation details (variables/functions starting with underscore) in your tests.
+    - Setup and teardown methods should only use public APIs and environment variables, never reset internal module state directly.
+    - Design tests to be independent of implementation details.
+    - For test isolation, use fixtures and mocking of external dependencies rather than manipulating internal module state. In general minimize the amount of mocking needed so that the tests are more robust to changes in the code under test and more code is tested.
+<include>./context/test.prompt</include>
+
+<instructions>
+    1. FIRST: Carefully analyze the EXAMPLE to understand:
+        - How to import the module (exact import statements)
+        - What functions/classes are exposed
+        - How they are called (parameters, return values)
+    2. SECOND: Analyze the prompt that describes the intended functionality and edge cases.
+    3. THIRD: For each edge case explain whether it is better to do the test using Z3 formal verification or unit tests.
+    4. FOURTH: Develop a detailed test plan that will ensure the intended functionality is correct. This should involve both Z3 formal verification and unit tests.
+    5. FIFTH: Write the test file with:
+        a) The first part of the test file should be the detailed test plan from step 4 above in comments.
+        b) Import statements matching the module structure from the example
+        c) Tests for the intended function names and behavior from the prompt
+        d) Z3 formal verification tests that are runnable as unit tests.
+</instructions>

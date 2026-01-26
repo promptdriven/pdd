@@ -15,8 +15,8 @@ from rich.panel import Panel
 from rich.text import Text # ADDED THIS IMPORT
 
 # Import the function to be tested using an absolute path
-from pdd.code_generator_main import code_generator_main, CLOUD_REQUEST_TIMEOUT
-from pdd.core.cloud import CloudConfig
+from pdd.code_generator_main import code_generator_main
+from pdd.core.cloud import CloudConfig, get_cloud_timeout
 from pdd.get_jwt_token import AuthError, NetworkError, TokenError, UserCancelledError, RateLimitError
 
 # Get the cloud URL for assertions in tests
@@ -462,9 +462,134 @@ def test_full_gen_cloud_success(
             "verbose": mock_ctx.obj['verbose']
         },
         headers={"Authorization": "Bearer test_jwt_token", "Content-Type": "application/json"},
-        timeout=CLOUD_REQUEST_TIMEOUT
+        timeout=get_cloud_timeout()
     )
     assert (temp_dir_setup["output_dir"] / output_file_name).exists()
+
+
+# Tests for JSON fence stripping from cloud responses
+@pytest.mark.parametrize("fenced_code,expected_output", [
+    ('```json\n{"key": "value"}\n```', '{"key": "value"}'),
+    ('```\n{"key": "value"}\n```', '{"key": "value"}'),
+    ('```json\n\n{"nested": {"a": 1}}\n\n```', '{"nested": {"a": 1}}'),
+    ('{"key": "value"}', '{"key": "value"}'),  # No fences, unchanged
+    ('  ```json\n{"key": "value"}\n```  ', '{"key": "value"}'),  # With whitespace
+])
+def test_cloud_json_response_fence_stripping(
+    fenced_code, expected_output, mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_pdd_preprocess_fixture, mock_get_jwt_token_fixture, mock_requests_post_fixture, mock_env_vars
+):
+    """Test that markdown code fences are stripped from JSON responses in cloud mode."""
+    mock_ctx.obj['local'] = False
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "json_fence_prompt.prompt"
+    create_file(prompt_file_path, "Generate JSON")
+
+    output_file_name = "fence_output.json"
+    output_file_path_str = str(temp_dir_setup["output_dir"] / output_file_name)
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": "Generate JSON"},
+        {"output": output_file_path_str},
+        "json"  # JSON language triggers fence stripping
+    )
+
+    mock_response = MagicMock(spec=requests.Response)
+    mock_response.json.return_value = {
+        "generatedCode": fenced_code,
+        "totalCost": 0.001,
+        "modelName": "cloud_model"
+    }
+    mock_response.status_code = 200
+    mock_response.raise_for_status = MagicMock()
+    mock_requests_post_fixture.return_value = mock_response
+
+    code, incremental, cost, model = code_generator_main(
+        mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+    )
+
+    assert code == expected_output
+    assert not incremental
+    assert (temp_dir_setup["output_dir"] / output_file_name).exists()
+    assert (temp_dir_setup["output_dir"] / output_file_name).read_text() == expected_output
+
+
+def test_cloud_non_json_response_not_stripped(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_pdd_preprocess_fixture, mock_get_jwt_token_fixture, mock_requests_post_fixture, mock_env_vars
+):
+    """Test that code fences are NOT stripped for non-JSON language responses."""
+    mock_ctx.obj['local'] = False
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "python_fence_prompt.prompt"
+    create_file(prompt_file_path, "Generate Python")
+
+    output_file_name = "fence_output.py"
+    output_file_path_str = str(temp_dir_setup["output_dir"] / output_file_name)
+
+    # Python code that happens to have backticks in it
+    python_code_with_backticks = '```python\ndef hello(): pass\n```'
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": "Generate Python"},
+        {"output": output_file_path_str},
+        "python"  # Non-JSON language should NOT trigger fence stripping
+    )
+
+    mock_response = MagicMock(spec=requests.Response)
+    mock_response.json.return_value = {
+        "generatedCode": python_code_with_backticks,
+        "totalCost": 0.001,
+        "modelName": "cloud_model"
+    }
+    mock_response.status_code = 200
+    mock_response.raise_for_status = MagicMock()
+    mock_requests_post_fixture.return_value = mock_response
+
+    code, incremental, cost, model = code_generator_main(
+        mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+    )
+
+    # For non-JSON, the code should remain unchanged (with fences)
+    assert code == python_code_with_backticks
+    assert (temp_dir_setup["output_dir"] / output_file_name).read_text() == python_code_with_backticks
+
+
+def test_cloud_json_case_insensitive_language(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_pdd_preprocess_fixture, mock_get_jwt_token_fixture, mock_requests_post_fixture, mock_env_vars
+):
+    """Test that JSON fence stripping works with case-insensitive language check."""
+    mock_ctx.obj['local'] = False
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "json_case_prompt.prompt"
+    create_file(prompt_file_path, "Generate JSON")
+
+    output_file_name = "case_output.json"
+    output_file_path_str = str(temp_dir_setup["output_dir"] / output_file_name)
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": "Generate JSON"},
+        {"output": output_file_path_str},
+        "JSON"  # Uppercase JSON
+    )
+
+    fenced_json = '```json\n{"test": true}\n```'
+    mock_response = MagicMock(spec=requests.Response)
+    mock_response.json.return_value = {
+        "generatedCode": fenced_json,
+        "totalCost": 0.001,
+        "modelName": "cloud_model"
+    }
+    mock_response.status_code = 200
+    mock_response.raise_for_status = MagicMock()
+    mock_requests_post_fixture.return_value = mock_response
+
+    code, incremental, cost, model = code_generator_main(
+        mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+    )
+
+    assert code == '{"test": true}'
 
 
 @pytest.mark.parametrize("cloud_error, local_fallback_expected", [
@@ -1938,7 +2063,471 @@ def test_explicit_unit_test_file_precedence(
 
     called_kwargs = mock_local_generator_fixture.call_args.kwargs
     called_prompt = called_kwargs["prompt"]
-    
+
     assert "<unit_test_content>" in called_prompt
     assert "def test_explicit(): pass" in called_prompt
     assert "def test_auto(): pass" not in called_prompt
+
+
+# --- Tests for LLM Array Unwrapping ---
+
+class TestLLMArrayUnwrapping:
+    """
+    Tests for unwrapping arrays that LLMs incorrectly wrap in objects.
+
+    LLMs sometimes return {"items": [...]} or {"data": [...]} when the schema
+    expects a plain array [...]. This tests the fix to unwrap such responses.
+    """
+
+    def test_unwrap_items_wrapper(self):
+        """Test unwrapping {"items": [...]} to [...]."""
+        # Simulate the unwrapping logic from code_generator_main.py
+        output_schema = {"type": "array"}
+        parsed = {"items": [{"name": "module1"}, {"name": "module2"}]}
+
+        if output_schema.get("type") == "array" and isinstance(parsed, dict):
+            if "items" in parsed and isinstance(parsed["items"], list):
+                parsed = parsed["items"]
+
+        assert parsed == [{"name": "module1"}, {"name": "module2"}]
+        assert isinstance(parsed, list)
+
+    def test_unwrap_data_wrapper(self):
+        """Test unwrapping {"data": [...]} to [...]."""
+        output_schema = {"type": "array"}
+        parsed = {"data": [1, 2, 3]}
+
+        if output_schema.get("type") == "array" and isinstance(parsed, dict):
+            if "items" in parsed and isinstance(parsed["items"], list):
+                parsed = parsed["items"]
+            elif "data" in parsed and isinstance(parsed["data"], list):
+                parsed = parsed["data"]
+
+        assert parsed == [1, 2, 3]
+        assert isinstance(parsed, list)
+
+    def test_unwrap_results_wrapper(self):
+        """Test unwrapping {"results": [...]} to [...]."""
+        output_schema = {"type": "array"}
+        parsed = {"results": ["a", "b", "c"]}
+
+        if output_schema.get("type") == "array" and isinstance(parsed, dict):
+            if "items" in parsed and isinstance(parsed["items"], list):
+                parsed = parsed["items"]
+            elif "data" in parsed and isinstance(parsed["data"], list):
+                parsed = parsed["data"]
+            elif "results" in parsed and isinstance(parsed["results"], list):
+                parsed = parsed["results"]
+
+        assert parsed == ["a", "b", "c"]
+        assert isinstance(parsed, list)
+
+    def test_no_unwrap_when_schema_not_array(self):
+        """Test that unwrapping is skipped when schema type is not array."""
+        output_schema = {"type": "object"}  # Not an array schema
+        parsed = {"items": [1, 2, 3]}
+        original = parsed.copy()
+
+        if output_schema.get("type") == "array" and isinstance(parsed, dict):
+            if "items" in parsed and isinstance(parsed["items"], list):
+                parsed = parsed["items"]
+
+        # Should remain unchanged
+        assert parsed == original
+        assert isinstance(parsed, dict)
+
+    def test_no_unwrap_when_already_list(self):
+        """Test that actual lists are not modified."""
+        output_schema = {"type": "array"}
+        parsed = [1, 2, 3]  # Already a list
+        original = parsed.copy()
+
+        if output_schema.get("type") == "array" and isinstance(parsed, dict):
+            if "items" in parsed and isinstance(parsed["items"], list):
+                parsed = parsed["items"]
+
+        # Should remain unchanged
+        assert parsed == original
+        assert isinstance(parsed, list)
+
+    def test_no_unwrap_when_items_not_list(self):
+        """Test that non-list 'items' values are not unwrapped."""
+        output_schema = {"type": "array"}
+        parsed = {"items": "not a list"}  # items is not a list
+        original = parsed.copy()
+
+        if output_schema.get("type") == "array" and isinstance(parsed, dict):
+            if "items" in parsed and isinstance(parsed["items"], list):
+                parsed = parsed["items"]
+
+        # Should remain unchanged
+        assert parsed == original
+        assert isinstance(parsed, dict)
+
+    def test_unwrap_nested_architecture(self):
+        """Test unwrapping a realistic architecture.json wrapper case."""
+        output_schema = {"type": "array"}
+        parsed = {
+            "items": [
+                {
+                    "filename": "auth",
+                    "filepath": "src/auth.py",
+                    "description": "Authentication module",
+                    "dependencies": [],
+                    "priority": 1,
+                    "reason": "Core security"
+                },
+                {
+                    "filename": "database",
+                    "filepath": "src/database.py",
+                    "description": "Database connection",
+                    "dependencies": ["auth"],
+                    "priority": 2,
+                    "reason": "Data persistence"
+                }
+            ]
+        }
+
+        if output_schema.get("type") == "array" and isinstance(parsed, dict):
+            if "items" in parsed and isinstance(parsed["items"], list):
+                parsed = parsed["items"]
+
+        assert isinstance(parsed, list)
+        assert len(parsed) == 2
+        assert parsed[0]["filename"] == "auth"
+        assert parsed[1]["filename"] == "database"
+
+    def test_items_takes_precedence_over_data(self):
+        """Test that 'items' is checked before 'data'."""
+        output_schema = {"type": "array"}
+        parsed = {"items": [1], "data": [2]}  # Both present
+
+        if output_schema.get("type") == "array" and isinstance(parsed, dict):
+            if "items" in parsed and isinstance(parsed["items"], list):
+                parsed = parsed["items"]
+            elif "data" in parsed and isinstance(parsed["data"], list):
+                parsed = parsed["data"]
+
+        # items should take precedence
+        assert parsed == [1]
+
+    def test_json_serialization_after_unwrap(self):
+        """Test that unwrapped arrays can be serialized back to JSON."""
+        output_schema = {"type": "array"}
+        parsed = {"items": [{"key": "value"}]}
+
+        if output_schema.get("type") == "array" and isinstance(parsed, dict):
+            if "items" in parsed and isinstance(parsed["items"], list):
+                parsed = parsed["items"]
+                generated_code_content = json.dumps(parsed, indent=2)
+
+        expected = '[\n  {\n    "key": "value"\n  }\n]'
+        assert generated_code_content == expected
+
+
+# --- Tests for Example Display (Pinned & Cloud Response) ---
+
+def test_pinned_example_extraction_verbose(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_pdd_preprocess_fixture,
+    mock_get_jwt_token_fixture, mock_requests_post_fixture, mock_env_vars, capsys
+):
+    """Test that pinned example ID from <pin> tag is displayed in verbose mode."""
+    mock_ctx.obj['local'] = False
+    mock_ctx.obj['verbose'] = True
+
+    prompt_content = "Test prompt\n<pin>test-example-id-123</pin>\nMore content"
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "pin_prompt.prompt"
+    create_file(prompt_file_path, prompt_content)
+
+    output_file_path_str = str(temp_dir_setup["output_dir"] / "pin_output.py")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": prompt_content},
+        {"output": output_file_path_str},
+        "python"
+    )
+    # pdd_preprocess returns prompt unchanged (passthrough)
+    mock_pdd_preprocess_fixture.return_value = prompt_content
+
+    # Mock cloud response with examplesUsed array
+    mock_response = MagicMock(spec=requests.Response)
+    mock_response.json.return_value = {
+        "generatedCode": DEFAULT_MOCK_GENERATED_CODE,
+        "totalCost": 0.001,
+        "modelName": "test-model",
+        "examplesUsed": [{"id": "test-example-id-123", "title": "Test Example Title"}]
+    }
+    mock_response.raise_for_status = MagicMock()
+    mock_requests_post_fixture.return_value = mock_response
+
+    with patch('pdd.code_generator_main.console') as mock_console:
+        code_generator_main(
+            mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+        )
+
+        # Check that console.print was called with pinned example message
+        print_calls = [str(call) for call in mock_console.print.call_args_list]
+        pinned_call_found = any("Using pinned example" in call and "test-example-id-123" in call for call in print_calls)
+        assert pinned_call_found, f"Expected 'Using pinned example: test-example-id-123' in console output. Got: {print_calls}"
+
+
+def test_pinned_example_no_verbose(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_pdd_preprocess_fixture,
+    mock_get_jwt_token_fixture, mock_requests_post_fixture, mock_env_vars
+):
+    """Test that pinned example is NOT displayed when verbose=False."""
+    mock_ctx.obj['local'] = False
+    mock_ctx.obj['verbose'] = False  # Not verbose
+
+    prompt_content = "Test prompt\n<pin>test-example-id-456</pin>\nMore content"
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "pin_prompt_quiet.prompt"
+    create_file(prompt_file_path, prompt_content)
+
+    output_file_path_str = str(temp_dir_setup["output_dir"] / "pin_output_quiet.py")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": prompt_content},
+        {"output": output_file_path_str},
+        "python"
+    )
+    mock_pdd_preprocess_fixture.return_value = prompt_content
+
+    mock_response = MagicMock(spec=requests.Response)
+    mock_response.json.return_value = {
+        "generatedCode": DEFAULT_MOCK_GENERATED_CODE,
+        "totalCost": 0.001,
+        "modelName": "test-model"
+    }
+    mock_response.raise_for_status = MagicMock()
+    mock_requests_post_fixture.return_value = mock_response
+
+    with patch('pdd.code_generator_main.console') as mock_console:
+        code_generator_main(
+            mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+        )
+
+        # Check that "Using pinned example" was NOT printed
+        print_calls = [str(call) for call in mock_console.print.call_args_list]
+        pinned_call_found = any("Using pinned example" in call for call in print_calls)
+        assert not pinned_call_found, f"'Using pinned example' should not appear when verbose=False. Got: {print_calls}"
+
+
+def test_no_pin_tag_no_display(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_pdd_preprocess_fixture,
+    mock_get_jwt_token_fixture, mock_requests_post_fixture, mock_env_vars
+):
+    """Test that no pinned example message when prompt has no <pin> tag."""
+    mock_ctx.obj['local'] = False
+    mock_ctx.obj['verbose'] = True
+
+    prompt_content = "Test prompt without pin tag"
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "no_pin_prompt.prompt"
+    create_file(prompt_file_path, prompt_content)
+
+    output_file_path_str = str(temp_dir_setup["output_dir"] / "no_pin_output.py")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": prompt_content},
+        {"output": output_file_path_str},
+        "python"
+    )
+    mock_pdd_preprocess_fixture.return_value = prompt_content
+
+    mock_response = MagicMock(spec=requests.Response)
+    mock_response.json.return_value = {
+        "generatedCode": DEFAULT_MOCK_GENERATED_CODE,
+        "totalCost": 0.001,
+        "modelName": "test-model"
+    }
+    mock_response.raise_for_status = MagicMock()
+    mock_requests_post_fixture.return_value = mock_response
+
+    with patch('pdd.code_generator_main.console') as mock_console:
+        code_generator_main(
+            mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+        )
+
+        # Check that "Using pinned example" was NOT printed
+        print_calls = [str(call) for call in mock_console.print.call_args_list]
+        pinned_call_found = any("Using pinned example" in call for call in print_calls)
+        assert not pinned_call_found, f"'Using pinned example' should not appear without <pin> tag. Got: {print_calls}"
+
+
+def test_cloud_response_with_examples_used(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_pdd_preprocess_fixture,
+    mock_get_jwt_token_fixture, mock_requests_post_fixture, mock_env_vars
+):
+    """Test that examplesUsed from cloud response is displayed in success panel."""
+    mock_ctx.obj['local'] = False
+    mock_ctx.obj['verbose'] = True
+
+    prompt_content = "Test prompt"
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "example_response.prompt"
+    create_file(prompt_file_path, prompt_content)
+
+    output_file_path_str = str(temp_dir_setup["output_dir"] / "example_output.py")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": prompt_content},
+        {"output": output_file_path_str},
+        "python"
+    )
+    mock_pdd_preprocess_fixture.return_value = prompt_content
+
+    # Mock cloud response with examplesUsed array
+    mock_response = MagicMock(spec=requests.Response)
+    mock_response.json.return_value = {
+        "generatedCode": DEFAULT_MOCK_GENERATED_CODE,
+        "totalCost": 0.001,
+        "modelName": "test-model",
+        "examplesUsed": [{"id": "ex-123", "title": "Test Example Title"}]
+    }
+    mock_response.raise_for_status = MagicMock()
+    mock_requests_post_fixture.return_value = mock_response
+
+    with patch('pdd.code_generator_main.console') as mock_console:
+        code_generator_main(
+            mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+        )
+
+        # Check that console.print was called with example info in Panel
+        # Need to inspect Panel objects for their content
+        example_info_found = False
+        for call in mock_console.print.call_args_list:
+            args = call[0] if call[0] else ()
+            for arg in args:
+                if isinstance(arg, Panel):
+                    # Panel.renderable contains the content
+                    panel_content = str(arg.renderable)
+                    if "ex-123" in panel_content and "Test Example Title" in panel_content:
+                        example_info_found = True
+                        break
+                elif isinstance(arg, str):
+                    if "ex-123" in arg and "Test Example Title" in arg:
+                        example_info_found = True
+                        break
+        assert example_info_found, f"Expected example info 'ex-123 (Test Example Title)' in console output"
+
+
+def test_cloud_response_empty_examples_used(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_pdd_preprocess_fixture,
+    mock_get_jwt_token_fixture, mock_requests_post_fixture, mock_env_vars
+):
+    """Test standard success message when examplesUsed array is empty."""
+    mock_ctx.obj['local'] = False
+    mock_ctx.obj['verbose'] = True
+
+    prompt_content = "Test prompt"
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "no_example_response.prompt"
+    create_file(prompt_file_path, prompt_content)
+
+    output_file_path_str = str(temp_dir_setup["output_dir"] / "no_example_output.py")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": prompt_content},
+        {"output": output_file_path_str},
+        "python"
+    )
+    mock_pdd_preprocess_fixture.return_value = prompt_content
+
+    # Mock cloud response with empty examplesUsed array
+    mock_response = MagicMock(spec=requests.Response)
+    mock_response.json.return_value = {
+        "generatedCode": DEFAULT_MOCK_GENERATED_CODE,
+        "totalCost": 0.001,
+        "modelName": "test-model",
+        "examplesUsed": []  # Empty array
+    }
+    mock_response.raise_for_status = MagicMock()
+    mock_requests_post_fixture.return_value = mock_response
+
+    with patch('pdd.code_generator_main.console') as mock_console:
+        code_generator_main(
+            mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+        )
+
+        # Check that success message is present but without example info
+        # Need to inspect Panel objects for their content
+        cloud_success_found = False
+        example_info_found = False
+        for call in mock_console.print.call_args_list:
+            args = call[0] if call[0] else ()
+            for arg in args:
+                if isinstance(arg, Panel):
+                    panel_content = str(arg.renderable)
+                    if "Cloud generation successful" in panel_content:
+                        cloud_success_found = True
+                    if "Example:" in panel_content:
+                        example_info_found = True
+                elif isinstance(arg, str):
+                    if "Cloud generation successful" in arg:
+                        cloud_success_found = True
+                    if "Example:" in arg:
+                        example_info_found = True
+        assert cloud_success_found, f"Expected 'Cloud generation successful' in console output"
+        assert not example_info_found, f"'Example:' should not appear when examplesUsed is empty"
+
+
+def test_cloud_response_without_examples_used_key(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_pdd_preprocess_fixture,
+    mock_get_jwt_token_fixture, mock_requests_post_fixture, mock_env_vars
+):
+    """Test standard success message when examplesUsed key is missing from response."""
+    mock_ctx.obj['local'] = False
+    mock_ctx.obj['verbose'] = True
+
+    prompt_content = "Test prompt"
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "missing_example_key.prompt"
+    create_file(prompt_file_path, prompt_content)
+
+    output_file_path_str = str(temp_dir_setup["output_dir"] / "missing_key_output.py")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": prompt_content},
+        {"output": output_file_path_str},
+        "python"
+    )
+    mock_pdd_preprocess_fixture.return_value = prompt_content
+
+    # Mock cloud response without examplesUsed key at all
+    mock_response = MagicMock(spec=requests.Response)
+    mock_response.json.return_value = {
+        "generatedCode": DEFAULT_MOCK_GENERATED_CODE,
+        "totalCost": 0.001,
+        "modelName": "test-model"
+        # No examplesUsed key
+    }
+    mock_response.raise_for_status = MagicMock()
+    mock_requests_post_fixture.return_value = mock_response
+
+    with patch('pdd.code_generator_main.console') as mock_console:
+        code_generator_main(
+            mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+        )
+
+        # Check that success message is present but without example info
+        # Need to inspect Panel objects for their content
+        cloud_success_found = False
+        example_info_found = False
+        for call in mock_console.print.call_args_list:
+            args = call[0] if call[0] else ()
+            for arg in args:
+                if isinstance(arg, Panel):
+                    panel_content = str(arg.renderable)
+                    if "Cloud generation successful" in panel_content:
+                        cloud_success_found = True
+                    if "Example:" in panel_content:
+                        example_info_found = True
+                elif isinstance(arg, str):
+                    if "Cloud generation successful" in arg:
+                        cloud_success_found = True
+                    if "Example:" in arg:
+                        example_info_found = True
+        assert cloud_success_found, f"Expected 'Cloud generation successful' in console output"
+        assert not example_info_found, f"'Example:' should not appear when examplesUsed key is missing"

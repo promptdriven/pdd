@@ -1,0 +1,76 @@
+<prompt>
+You will create a detailed implementation specification (and the corresponding Python module code) for the `cache_manager_utility` module at `src/edit_file_tool/cache_manager_utility.py`. This module is a stateless utility responsible for deciding when Anthropic native prompt caching should be enabled for a file-edit request, based on user preference (`use_cache`) and file characteristics (size and simple complexity heuristics), so the rest of the system (core async API wrapper and CLI) can consistently optimize cost without duplicating logic.
+
+Requirements
+1. Implement the public function `should_use_cache(file_path: str, file_size: int, use_cache: Union[str, bool] = 'auto') -> bool` exactly as the primary contract; it must be deterministic and side-effect free with respect to external systems (no network; no persistent state).
+2. Support cache modes: "auto" (default), "always", "never", plus boolean overrides where `True` means always and `False` means never; treat case-insensitively for string modes and accept common synonyms conservatively only if explicitly specified in the prompt (default: only the three modes).
+3. Auto-detection behavior must align with the PRD: disable caching for very small files (<1KB), always enable for large files (>4KB), and for medium files (1–4KB) decide using lightweight complexity metrics (e.g., line count, non-empty line ratio, average line length) in a way that is explainable and testable.
+4. The module must validate inputs robustly: `file_size` must be an int >= 0; `file_path` must be a non-empty string (but does not need to exist if `file_size` is provided); `use_cache` must be one of the allowed types/values; raise `ValueError` for invalid inputs with clear messages.
+5. Error handling: If `use_cache='auto'` and optional file reads for complexity fail (e.g., missing file, permission error), the function must fall back gracefully to a size-only decision rather than crashing; however, invalid arguments must still raise.
+6. Performance: avoid reading large files fully when not necessary; do not read file contents at all if caching is forced on/off or if size threshold already decides; if reading is needed, read at most a bounded amount (e.g., first N bytes) sufficient for heuristics, and document the tradeoff.
+7. Logging: keep the module usable as a library; use the standard `logging` module with a module-level logger; emit debug-level logs describing decisions (mode chosen, thresholds, heuristics) without leaking sensitive file content (never log file contents).
+8. Security/privacy: do not store file content; do not log file contents; ensure only metadata and derived metrics are logged.
+9. Provide internal helper functions for readability and testability (e.g., `_normalize_use_cache`, `_compute_complexity_metrics`, `_should_cache_auto`), but keep the public surface minimal (export only what is needed).
+10. Include docstrings and type hints throughout, compatible with Python 3.9+.
+11. Provide a small, focused unit-test plan in comments (or optionally a minimal pytest file if the repository pattern indicates), covering boundary sizes (exactly 1024 and 4096), mode overrides, invalid inputs, and missing file behavior in auto mode.
+12. The implementation must integrate cleanly with the rest of the system: it should be callable from CLI and core without additional dependencies beyond the standard library and the cost tracker utility module (if needed later); do not import anthropic SDK here.
+
+Dependencies
+<cost_tracker_utility>
+  [File not found: context/cost_tracker_utility_example.py]
+</cost_tracker_utility>
+Prompt Dependencies:
+- cost_tracker_utility_Python.prompt (dependency per architecture; only import if actually required—prefer not importing if unused to keep utility minimal)
+
+Instructions
+- Create `src/edit_file_tool/cache_manager_utility.py` implementing a stateless utility module.
+- Implement `should_use_cache(file_path, file_size, use_cache='auto') -> bool`:
+  - Normalize `use_cache`:
+    - If `use_cache is True` => return True immediately.
+    - If `use_cache is False` => return False immediately.
+    - If string:
+      - Normalize by stripping and lowercasing.
+      - "always" => True, "never" => False, "auto" => proceed to auto decision.
+      - Otherwise raise `ValueError` listing allowed values.
+    - If other type => raise `ValueError`.
+  - Validate `file_size`:
+    - Must be int (not bool) and >= 0, else raise `ValueError`.
+  - Auto decision:
+    - Use size-only thresholds first:
+      - If `file_size < 1024` => return False.
+      - If `file_size > 4096` => return True.
+    - For 1024 <= size <= 4096, compute lightweight complexity heuristics:
+      - Attempt to read a bounded prefix of the file (e.g., up to 16KB) using `utf-8` with errors="ignore" (never raise decode errors). If `file_path` cannot be read, fall back to a conservative decision rule based on size alone (define and document it; e.g., cache if size >= 2048).
+      - Compute metrics from the sampled text:
+        - `line_count` (splitlines count; ensure non-zero).
+        - `non_empty_lines` count (strip whitespace).
+        - `non_empty_ratio = non_empty_lines / line_count`.
+        - `avg_line_length` based on sampled lines.
+        - Optionally `code_density` approximations like ratio of non-whitespace chars.
+      - Decide caching for medium files using an explicit rule set, e.g.:
+        - Cache if `line_count >= 80` OR (`non_empty_ratio >= 0.6` AND `avg_line_length >= 35`) OR `file_size >= 3072`.
+        - Do not cache otherwise.
+      - Ensure the rule is deterministic and covered by tests; include comments explaining rationale aligned to PRD claims (medium files can have first-request overhead, so be selective).
+- Add module-level constants for thresholds (e.g., `SMALL_FILE_BYTES = 1024`, `LARGE_FILE_BYTES = 4096`, `SAMPLE_BYTES = 16384`) to make behavior easy to tune.
+- Use `pathlib.Path` for file handling but accept `file_path` as a string input.
+- Logging:
+  - `logger = logging.getLogger(__name__)`
+  - Log decision inputs and outputs at debug: mode, size, computed metrics, and chosen rule branch; never log file content.
+- Testing notes (include as comments at bottom or in docstring):
+  - Verify "always"/True overrides regardless of size.
+  - Verify "never"/False overrides regardless of size.
+  - Verify boundaries: 1023 => False; 1024 => medium rules; 4096 => medium rules; 4097 => True.
+  - Verify invalid `use_cache` raises ValueError; invalid `file_size` raises ValueError; empty file_path raises ValueError only if auto mode needs to read (or validate always—choose one and document).
+  - Verify missing file in auto medium range falls back to size-only rule and does not raise.
+- Keep the module focused: do not implement actual Anthropic request shaping here; only decision logic for whether caching should be used.
+
+Deliverable
+- `src/edit_file_tool/cache_manager_utility.py` containing production-ready implementation of `should_use_cache` with helpers, constants, docstrings, type hints, and safe logging.
+- Inline test plan comments (or minimal pytest tests if consistent with repository conventions) demonstrating expected behavior for thresholds, overrides, invalid inputs, and read-failure fallback.
+
+Implementation assumptions (explicit)
+- The caller provides an accurate `file_size` (in bytes) computed elsewhere; this module may optionally read a small prefix of the file only for medium-size auto decisions and only if the file path is readable.
+- Anthropic prompt caching behavior (ephemeral cache, 5-minute minimum) is handled in the core API wrapper; this module only decides whether caching should be enabled for a given edit request.
+
+Please produce production-ready prompt content that will generate the module consistent with the above.
+</prompt>

@@ -1,0 +1,292 @@
+% You are an expert software engineer using Prompt-Driven Development (PDD). Your task is to implement the prompt changes analyzed in the previous step.
+
+% Context
+
+You are working on step 9 of 12 in an agentic change workflow. Previous steps reviewed architecture and analyzed exactly what prompt changes are needed.
+
+**This step modifies files.** All changes are made in a git worktree to avoid affecting the main branch.
+
+% CRITICAL: Scope
+
+**You MAY read** any files to understand the codebase.
+
+**This workflow CREATES/MODIFIES:**
+- Prompt files (`.prompt` files) - always allowed
+- Documentation files (`.md`, `.txt`, etc.) - always allowed
+- **Direct Edit Candidates** (from Step 6) - scoped edits only (see below)
+
+**Direct Edit Rules (for files with NO corresponding prompt):**
+Files listed as "Direct Edit Candidates" in Step 6 can be edited, but ONLY these patterns are allowed:
+1. **Uncomment code blocks** marked with TODO comments referencing the endpoints being created
+2. **Remove placeholder messages** ("coming soon", "not yet implemented", etc.)
+3. **Remove temporary error throws** (lines with TEMPORARY markers)
+
+**FORBIDDEN for Direct Edits:**
+- Adding new code (beyond uncommenting existing code)
+- Modifying logic or algorithms
+- Changing imports (beyond uncommenting)
+- Any file that HAS a corresponding `.prompt` file (use prompt modification instead)
+
+**STILL FORBIDDEN (unchanged):**
+- Code files that are PDD-generated (have corresponding prompts) - use `pdd sync`
+- Example files (these are GENERATED artifacts)
+- Test files (these are updated during `pdd sync`)
+
+Violating this scope is a CRITICAL ERROR that should stop the workflow.
+
+Code generation for prompt-based modules happens separately via `pdd sync` after the PR is merged.
+
+% PDD Background
+
+<pdd_prompting_guide>
+<include>docs/prompting_guide.md</include>
+</pdd_prompting_guide>
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+- Worktree Path: {worktree_path}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Step Outputs
+<step5_output>
+{step5_output}
+</step5_output>
+
+<step6_output>
+{step6_output}
+</step6_output>
+
+<step7_output>
+{step7_output}
+</step7_output>
+
+<step8_output>
+{step8_output}
+</step8_output>
+
+% Your Task
+
+1. **Navigate to worktree**
+   - Change to the worktree directory: {worktree_path}
+   - All file modifications happen here, not in the main repo
+
+2. **Implement documentation changes from Step 5**
+   For each documentation file identified in Step 5's output:
+   - Update README.md (or equivalent) with new command documentation
+   - Update docs/ files with guides, tutorials, or API docs
+   - Follow the draft content provided in Step 5
+   - Preserve existing formatting and style conventions
+
+3. **Modify existing prompts**
+   For each prompt identified for modification in Step 8:
+   - Read the current prompt file
+   - Apply the changes specified in Step 8
+   - Preserve existing structure and formatting
+   - Keep the prompt concise (10-30% of expected code size)
+
+4. **Create new prompts**
+   For each new prompt identified in Step 8:
+   - Use the standard prompt structure, adapting paths based on the project's .pddrc (from Step 6):
+     ```
+     <include>context/{language}_preamble.prompt</include>
+
+     % Goal
+     [One sentence describing the module]
+
+     % Role & Scope
+     [Module purpose and boundaries]
+
+     % Requirements
+     1. [Testable requirement]
+     2. [Testable requirement]
+     ...
+
+     % Dependencies
+     <module_name><include>{example_dir}/module_example.{ext}</include></module_name>
+
+     % Deliverables
+     - Code: `{source_dir}/module_name.{ext}`
+     ```
+
+   Substitute actual values from the project's .pddrc:
+   - `{language}`: from `default_language` (e.g., `python`, `typescript`)
+   - `{example_dir}`: from `example_output_path` (e.g., `context/`, `examples/`)
+   - `{source_dir}`: from `generate_output_path` (e.g., `src/`, `lib/`, `pdd/`)
+   - `{ext}`: file extension for the language (e.g., `.py`, `.ts`)
+
+5. **Final Validation: No Code Duplication (CRITICAL)**
+   Before completing, verify:
+   - Each new prompt creates functionality that does NOT exist elsewhere in the codebase
+   - No prompt duplicates logic from another module (if it does, extend the existing module instead)
+   - The dependency graph makes sense (no circular dependencies, proper layering)
+
+   If duplication is detected, STOP and recommend modifying an existing prompt instead of creating a new one.
+
+6. **Apply Direct Edits (if any)**
+   For each file listed as a "Direct Edit Candidate" in Step 6's output:
+
+   **Pre-Edit Validation (REQUIRED):**
+   Before editing any file directly:
+   a. Confirm file is listed in Step 6's "Direct Edit Candidates" table
+   b. Confirm NO prompt file exists for this component (check `prompts/frontend/` etc.)
+   c. Confirm edit is one of: uncomment, remove placeholder, remove temporary error
+   d. Document the specific TODO/TEMPORARY marker that justifies the edit
+
+   If any check fails, SKIP the direct edit and note it as "Manual update required".
+
+   **Allowed Edit Patterns:**
+   - Find `/* TODO: Uncomment when ... */` blocks and remove the comment markers
+   - Find `// TODO: Uncomment ...` lines before commented code and uncomment it
+   - Remove `throw new Error("TEMPORARY: ...")` or similar placeholder errors
+   - Remove `"coming soon"` or `"not yet implemented"` message assignments
+   - Remove conditional branches that exist only as placeholders (e.g., `else {{ setError("coming soon") }}`)
+
+   **Document each direct edit** with:
+   - File path
+   - Lines modified
+   - What was changed (uncommented/removed)
+   - The marker that justified the edit
+
+7. **Track changes**
+   - Report all files modified with `FILES_MODIFIED:` prefix
+   - Report all files created with `FILES_CREATED:` prefix
+   - Report all direct edits with `DIRECT_EDITS:` prefix
+
+% Output
+
+After completing your changes, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+**If changes successful:**
+```markdown
+## Step 9: Implement Changes
+
+**Status:** Changes Applied
+
+### Files Modified
+FILES_MODIFIED: prompts/xxx_{lang}.prompt, README.md
+
+### Files Created
+FILES_CREATED: prompts/yyy_{lang}.prompt
+
+### Direct Edits
+DIRECT_EDITS: frontend/src/path/to/Component.tsx
+
+*(Use actual language from project's .pddrc)*
+
+### Summary of Changes
+
+#### `prompts/xxx_{lang}.prompt`
+- Added requirement for [feature]
+- Updated dependency to include [module]
+
+#### `prompts/yyy_{lang}.prompt` (new)
+- Created new prompt for [purpose]
+- Includes [N] requirements
+
+#### Direct Edit Details (if any)
+For each file in DIRECT_EDITS:
+- **File:** `frontend/src/path/to/Component.tsx`
+- **Lines modified:** 87-93, 195-201, 203-231
+- **Changes:**
+  - Uncommented `fetchData` function call (TODO marker: "Uncomment when backend ready")
+  - Removed "coming soon" placeholder branch
+  - Removed TEMPORARY error throw
+
+### Worktree Location
+Changes are in: `{worktree_path}`
+
+### Next Steps
+After review, run `pdd sync` on modified prompts to regenerate code.
+
+---
+*Proceeding to Step 10: Identify Issues*
+```
+
+**If changes failed (STOP workflow):**
+```markdown
+## Step 9: Implement Changes
+
+**Status:** FAIL: Implementation Error
+
+### Error Details
+[What went wrong]
+
+### Attempted Changes
+[What was attempted before failure]
+
+### Recommendation
+[How to resolve the issue]
+
+---
+*Investigation paused - implementation failed.*
+```
+
+% Important
+
+- All changes must be in the worktree, not the main repo
+- Follow PDD prompt conventions strictly
+- If implementation fails, STOP the workflow
+- Always post your findings as a GitHub comment before completing
+
+% CRITICAL: Scope Validation
+
+Before completing, verify:
+1. ALL files in FILES_MODIFIED and FILES_CREATED are `.prompt` or documentation files
+2. ALL files in DIRECT_EDITS were listed as "Direct Edit Candidates" in Step 6
+3. Direct edits only contain: uncomments, placeholder removals, temporary error removals
+4. NO PDD-generated code files (files with corresponding prompts) were directly modified
+5. NO example files were created or modified
+
+If you modified or created ANY code file that was NOT a Direct Edit Candidate, this is a CRITICAL ERROR:
+- Undo those changes
+- Only implement the prompt/doc changes and allowed direct edits
+- Report the scope violation in your output
+
+SCOPE_VIOLATION: [Yes/No]
+
+% CRITICAL: Output Format for File Tracking
+
+Your final response MUST include these exact lines for the orchestrator to parse:
+
+```
+FILES_MODIFIED: prompts/file1_{lang}.prompt, prompts/file2_{lang}.prompt
+FILES_CREATED: prompts/file3_{lang}.prompt
+DIRECT_EDITS: frontend/src/components/path/Component.tsx
+```
+
+These lines MUST:
+- Start with `FILES_MODIFIED:`, `FILES_CREATED:`, or `DIRECT_EDITS:` exactly (case-insensitive)
+- Be followed by a comma-separated list of file paths on the SAME LINE
+- NOT use markdown bullets, numbered lists, or multi-line formats
+- Appear in your final summary (not just in the GitHub comment)
+- Use actual language from project's .pddrc (e.g., `_python`, `_typescript`)
+- DIRECT_EDITS line is only required if there are direct edit candidates from Step 6
+
+Example of CORRECT format:
+```
+FILES_MODIFIED: prompts/sync_main_python.prompt, prompts/fix_error_loop_python.prompt
+FILES_CREATED: prompts/parallel_fix_python.prompt
+DIRECT_EDITS: frontend/src/components/billing/AutoBuySettings/AutoBuySettings.tsx
+```
+
+(Substitute actual language suffix based on project configuration)
+
+Example of WRONG format (will cause workflow failure):
+```
+### Files Modified:
+1. prompts/sync_main_python.prompt
+2. prompts/fix_error_loop_python.prompt
+```

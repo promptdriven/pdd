@@ -1,0 +1,6 @@
+Write a Python function called `encode_message` that takes a string and returns an encoded version of it.
+
+The function should:
+- Accept a single string parameter
+- Return the encoded string
+- Handle lowercase letters

@@ -1,24 +1,27 @@
 """
 Utility commands (install_completion, verify/fix-verification).
 """
+from __future__ import annotations
 import click
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict, Any
 
 from ..fix_verification_main import fix_verification_main
 from ..track_cost import track_cost
 from ..core.errors import handle_error
+from ..operation_log import log_operation
 
 @click.command("install_completion")
 @click.pass_context
-def install_completion_cmd(ctx: click.Context):
+def install_completion_cmd(ctx: click.Context) -> None:
     """Install shell completion for the PDD CLI."""
+    # Safely retrieve quiet flag, defaulting to False if ctx.obj is None
+    quiet = (ctx.obj or {}).get("quiet", False)
     try:
         from .. import cli as cli_module  # Import parent module for proper patching
-        quiet = ctx.obj.get("quiet", False)
         # Call through cli_module so patches to pdd.cli.install_completion work
         cli_module.install_completion(quiet=quiet)
     except Exception as e:
-        handle_error(e, "install_completion", ctx.obj.get("quiet", False))
+        handle_error(e, "install_completion", quiet)
 
 
 @click.command("verify")
@@ -64,6 +67,7 @@ def install_completion_cmd(ctx: click.Context):
     help="Enable agentic fallback if the primary fix mechanism fails.",
 )
 @click.pass_context
+@log_operation(operation="verify", clears_run_report=True, updates_run_report=True)
 @track_cost
 def verify(
     ctx: click.Context,
@@ -76,7 +80,7 @@ def verify(
     max_attempts: int,
     budget: float,
     agentic_fallback: bool,
-) -> Optional[Tuple]:
+) -> Optional[Tuple[Dict[str, Any], float, str]]:
     """Verify code using a verification program."""
     try:
         # verify command implies a loop if max_attempts > 1, but let's enable loop by default
@@ -106,5 +110,6 @@ def verify(
     except click.Abort:
         raise
     except Exception as exception:
-        handle_error(exception, "verify", ctx.obj.get("quiet", False))
+        quiet = (ctx.obj or {}).get("quiet", False)
+        handle_error(exception, "verify", quiet)
         return None
