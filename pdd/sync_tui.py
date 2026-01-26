@@ -795,10 +795,8 @@ class SyncApp(App):
         original_stderr = sys.stderr
         original_stdin = sys.stdin
 
-        if isinstance(self, App):
-            app_running = self.is_running
-        else:
-            app_running = False
+        # Check if the app is running (for tests/non-interactive contexts, is_running may be False)
+        app_running = self.is_running
 
         if app_running:
             # Create redirectors
