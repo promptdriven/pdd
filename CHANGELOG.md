@@ -1,3 +1,26 @@
+## v0.0.130 (2026-01-25)
+
+### Feat
+
+- Improve live status section in pdd connect UI
+- Improve pdd connect web UI per issue #398
+- Add agentic test generation for non-Python languages
+- Upgrade architecture generation and fix test file detection
+- **config**: resolve prompt_path via env and .pddrc (implements #18)
+- Set `PDD_MODEL_DEFAULT` for regression tests in Makefile and add `error_log.txt`.
+- Introduce new agentic features and critical bug fixes, and add an error log for iterative fix attempts.
+
+### Fix
+
+- Address Copilot review - add aria-label for accessibility
+- **construct_paths**: improve prompts_dir resolution logic to respect CLI and environment variable settings
+- malformed json for the architecture description in prompts
+- Handle double-brace escaped JSON in pdd-interface parsing
+
+### Refactor
+
+- **config**: update prompts_dir resolution to use only PDD_PROMPTS_DIR environment variable, without aliases
+
 ## v0.0.129 (2026-01-25)
 
 ### Feat
