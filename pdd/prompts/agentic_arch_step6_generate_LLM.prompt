@@ -92,20 +92,58 @@ Generate a complete, valid architecture.json following these rules:
 
 % Output
 
-Write the generated architecture.json content. Output ONLY the valid JSON array, with no additional commentary or markdown fencing.
+1. **Write architecture.json to disk**
+   Save the JSON array directly to `architecture.json` in the current working directory:
+   - The file must contain ONLY the valid JSON array
+   - No markdown fencing, no comments, no wrapper objects
+   - Validate the JSON is syntactically correct before writing
 
-After generating, use `gh issue comment` to post a summary to issue #{issue_number}:
+2. **Create project scaffolding files**
+   Based on the tech stack confirmed in Step 2 and the module design from Step 4, create ALL necessary files to make the project runnable after code generation.
+
+   **Required for ALL projects:**
+   - `.gitignore` - Appropriate ignore patterns for the tech stack
+   - `README.md` - Project description, setup instructions, architecture overview
+
+   **Dependency management (based on tech stack):**
+   - Python: `requirements.txt` or `pyproject.toml` with all dependencies from Step 5
+   - Node.js/TypeScript: `package.json` with scripts (dev, build, test, start)
+   - TypeScript projects: `tsconfig.json` with appropriate compiler options
+   - Go: `go.mod` with module path and dependencies
+   - Rust: `Cargo.toml` with package info and dependencies
+   - Java: `pom.xml` or `build.gradle`
+   - Monorepo: Root workspace config (pnpm-workspace.yaml, turbo.json, etc.) + per-app configs
+
+   **Container/deployment (if applicable):**
+   - `Dockerfile` - Multi-stage build appropriate for the stack
+   - `docker-compose.yml` - If the project needs multiple services (database, cache, etc.)
+
+   **CI/CD:**
+   - `.github/workflows/ci.yml` - Basic workflow for lint, test, build
+
+   **Framework-specific configs:**
+   - Next.js: `next.config.js` or `next.config.ts`
+   - Vite: `vite.config.ts`
+   - Tailwind: `tailwind.config.js`, `postcss.config.js`
+   - ESLint: `.eslintrc.json` or `eslint.config.js`
+   - Prettier: `.prettierrc`
+   - Database migrations: `alembic.ini`, `prisma/schema.prisma`, etc.
+
+   **Use your judgment:** Only create files that make sense for this specific project. Don't create files that won't be used. Consider what the PRD requires and what the tech stack needs.
+
+3. **Post summary to GitHub**
+   Use `gh issue comment` to post a summary to issue #{issue_number}:
 
 ```
 gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 ```
 
 ```markdown
-## Step 6: Architecture Generated
+## Step 6: Architecture & Scaffolding Generated
 
 **Status:** Generation Complete
 
-### Summary
+### Architecture Summary
 - Total modules: [N]
 - Priority range: 1-[max]
 - Technologies: [list]
@@ -115,14 +153,49 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 |----------|----------|----------|--------------|
 | 1 | [filename] | [filepath] | [] |
 
+### Scaffolding Files Created
+| File | Purpose |
+|------|---------|
+| package.json | Node.js dependencies and scripts |
+| Dockerfile | Container build configuration |
+| ... | ... |
+
 ---
 *Proceeding to Step 7: Validate*
 ```
 
+4. **Report ALL files created**
+   Output on its own line at the end, listing ALL files (architecture + scaffolding):
+   `FILES_CREATED: architecture.json, package.json, .gitignore, README.md, Dockerfile, ...`
+
+% Scaffolding Decision Guide
+
+Use this matrix to determine which files to create based on the confirmed tech stack:
+
+| Tech Stack | Required Scaffolding Files |
+|------------|---------------------------|
+| Python (FastAPI/Flask/Django) | requirements.txt OR pyproject.toml, Dockerfile, .gitignore, README.md |
+| Node.js (Express/NestJS) | package.json, Dockerfile, .gitignore, README.md |
+| TypeScript (any) | package.json, tsconfig.json, Dockerfile, .gitignore, README.md |
+| React/Next.js | package.json, tsconfig.json, next.config.js, tailwind.config.js, .gitignore, README.md |
+| Go (Gin/Echo/Fiber) | go.mod, Dockerfile, .gitignore, README.md |
+| Rust | Cargo.toml, Dockerfile, .gitignore, README.md |
+| Full-stack monorepo | Root package.json, pnpm-workspace.yaml OR turbo.json, per-app configs, docker-compose.yml |
+
+**Always include:**
+- README.md with: project description, prerequisites, installation, running locally, architecture overview
+- .gitignore appropriate for the tech stack (node_modules, __pycache__, .env, etc.)
+- Dockerfile if containerization is appropriate
+- docker-compose.yml if multiple services are needed (DB, Redis, etc.)
+- CI workflow (.github/workflows/ci.yml) for automated testing
+
 % Important
 
+- Write the JSON to `architecture.json` file directly - do NOT output JSON to stdout
+- Write ALL scaffolding files directly to disk at their appropriate paths
 - The JSON must be valid (no comments, no trailing commas)
 - Sort the array by ascending priority
 - Ensure all dependency references exist in the array
 - Include context_urls from step 5 where available
-- Always post your findings as a GitHub comment before completing
+- Always post your findings as a GitHub comment
+- Always output `FILES_CREATED:` with the complete list of ALL files created
