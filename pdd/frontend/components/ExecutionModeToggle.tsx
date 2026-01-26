@@ -13,10 +13,6 @@ const ExecutionModeToggle: React.FC<ExecutionModeToggleProps> = ({
 }) => {
   return (
     <div className="flex items-center gap-1.5 sm:gap-2">
-      <label className="text-xs sm:text-sm text-surface-300 font-medium whitespace-nowrap">
-        Mode:
-      </label>
-
       <div className="flex bg-surface-800 border border-surface-700 rounded-lg p-0.5 sm:p-1">
         {/* Local Execution Button */}
         <button

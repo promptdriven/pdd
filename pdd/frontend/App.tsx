@@ -946,24 +946,25 @@ const App: React.FC = () => {
 
             {/* RIGHT: Live status section */}
             <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
-              {/* Jobs button with activity indicator - toggles dashboard visibility */}
+              {/* Jobs button with LED indicator - toggles dashboard visibility */}
               <button
                 onClick={() => setShowJobsDashboard(!showJobsDashboard)}
-                className={`relative flex items-center gap-1.5 px-2 sm:px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-all ${
+                className={`relative flex items-center gap-2 px-2 sm:px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-all ${
                   showJobsDashboard
-                    ? 'bg-[#DFA84A] text-surface-900 shadow-lg'
-                    : activeJobs.length > 0
-                      ? 'bg-[#FDCE49]/20 text-[#FDCE49] border border-[#FDCE49]/40 animate-glow-pulse'
-                      : 'bg-surface-700/50 text-surface-400 border border-surface-600/50 hover:bg-surface-700'
+                    ? 'bg-surface-700 text-white'
+                    : 'bg-surface-700/50 text-surface-300 border border-surface-600/50 hover:bg-surface-700'
                 }`}
                 title={activeJobs.length > 0 ? `${activeJobs.length} jobs running - click to ${showJobsDashboard ? 'hide' : 'show'}` : 'Show jobs dashboard'}
               >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-                </svg>
+                {/* LED indicator */}
+                <span className={`w-2.5 h-2.5 rounded-full ${
+                  activeJobs.length > 0
+                    ? 'bg-green-400 shadow-[0_0_8px_rgba(74,222,128,0.8)] animate-pulse'
+                    : 'bg-green-900/50 border border-green-800/50'
+                }`} />
                 <span className="hidden sm:inline">Jobs</span>
                 {activeJobs.length > 0 && (
-                  <span className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-[#FDCE49] text-surface-900 text-[10px] font-bold rounded-full flex items-center justify-center animate-flash">
+                  <span className="text-green-400 font-mono text-xs">
                     {activeJobs.length}
                   </span>
                 )}
@@ -1022,84 +1023,74 @@ const App: React.FC = () => {
         </div>
       </header>
 
-      {/* Collapsible Remote Session Panel */}
+      {/* Remote/Local Dropdown Modal - positioned relative to the header */}
       {showRemotePanel && (
-        <div className="glass border-b border-surface-700/50 animate-slide-down">
-          <div className="mx-auto px-4 sm:px-6 lg:px-8 2xl:px-12 py-3">
-            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 sm:gap-4">
-              {/* Execution mode toggle */}
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-surface-400">Mode:</span>
-                <ExecutionModeToggle
-                  mode={executionMode}
-                  onModeChange={setExecutionMode}
-                />
+        <>
+          {/* Backdrop for click-outside dismiss */}
+          <div
+            className="fixed inset-0 z-30"
+            onClick={() => setShowRemotePanel(false)}
+          />
+          {/* Dropdown modal - max 1/3 width, positioned in top-right area */}
+          <div className="absolute top-16 right-4 sm:right-6 lg:right-8 z-40 w-[min(90vw,400px)] max-w-[33vw] min-w-[280px] animate-slide-down">
+            <div className="glass rounded-xl border border-surface-700/50 shadow-2xl overflow-hidden">
+              {/* Header */}
+              <div className="px-4 py-3 border-b border-surface-700/50 bg-surface-800/50">
+                <h3 className="text-sm font-medium text-white">Execution Settings</h3>
               </div>
 
-              {/* Audio notification toggle */}
-              <button
-                onClick={handleToggleAudio}
-                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                  audioEnabled
-                    ? 'bg-accent-500/20 text-accent-300 hover:bg-accent-500/30'
-                    : 'bg-surface-700/50 text-surface-400 hover:bg-surface-700'
-                }`}
-                title={audioEnabled ? 'Audio notifications enabled - click to disable' : 'Audio notifications disabled - click to enable'}
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  {audioEnabled ? (
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-                  ) : (
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15zm11.707-6.707l4 4m0-4l-4 4" />
-                  )}
-                </svg>
-                <span className="hidden sm:inline">{audioEnabled ? 'Sound On' : 'Sound Off'}</span>
-              </button>
-
-              {/* Remote session selector - only shown in remote mode */}
-              {executionMode === 'remote' && (
-                <div className="flex-1 w-full sm:w-auto">
-                  <RemoteSessionSelector
-                    sessions={remoteSessions}
-                    selectedSessionId={selectedRemoteSession}
-                    onSelectSession={setSelectedRemoteSession}
-                    error={remoteSessionError}
-                    onRefresh={async () => {
-                      try {
-                        const sessions = await api.listRemoteSessions();
-                        setRemoteSessions(sessions);
-                        setRemoteSessionError(null);
-                      } catch (err) {
-                        setRemoteSessionError(err instanceof Error ? err.message : String(err));
-                      }
-                    }}
+              <div className="p-4 space-y-4">
+                {/* Execution mode toggle */}
+                <div>
+                  <ExecutionModeToggle
+                    mode={executionMode}
+                    onModeChange={setExecutionMode}
                   />
                 </div>
-              )}
 
-              {/* Close button */}
-              <button
-                onClick={() => setShowRemotePanel(false)}
-                className="absolute right-4 sm:relative sm:right-auto text-surface-400 hover:text-white p-1 rounded-lg hover:bg-surface-700/50 transition-colors"
-                title="Close panel"
-                aria-label="Close remote session panel"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
+                {/* Remote session selector - only shown in remote mode */}
+                {executionMode === 'remote' && (
+                  <div>
+                    <RemoteSessionSelector
+                      sessions={remoteSessions}
+                      selectedSessionId={selectedRemoteSession}
+                      onSelectSession={setSelectedRemoteSession}
+                      error={remoteSessionError}
+                      onRefresh={async () => {
+                        try {
+                          const sessions = await api.listRemoteSessions();
+                          setRemoteSessions(sessions);
+                          setRemoteSessionError(null);
+                        } catch (err) {
+                          setRemoteSessionError(err instanceof Error ? err.message : String(err));
+                        }
+                      }}
+                    />
+                  </div>
+                )}
+
+                {/* Help text */}
+                <p className="text-xs text-surface-500">
+                  {executionMode === 'local'
+                    ? 'Commands execute on this machine in terminal windows.'
+                    : selectedRemoteSession
+                      ? 'Commands will be sent to the selected remote session via cloud.'
+                      : 'Select a remote session to execute commands remotely.'}
+                </p>
+              </div>
+
+              {/* Footer with Done button */}
+              <div className="px-4 py-3 border-t border-surface-700/50 bg-surface-800/30">
+                <button
+                  onClick={() => setShowRemotePanel(false)}
+                  className="w-full px-4 py-2 bg-[#DFA84A] hover:bg-[#FDCE49] text-surface-900 rounded-lg text-sm font-medium transition-colors"
+                >
+                  Done
+                </button>
+              </div>
             </div>
-
-            {/* Help text */}
-            <p className="text-xs text-surface-500 mt-2">
-              {executionMode === 'local'
-                ? 'Commands execute on this machine in terminal windows.'
-                : selectedRemoteSession
-                  ? 'Commands will be sent to the selected remote session via cloud.'
-                  : 'Select a remote session to execute commands remotely.'}
-            </p>
           </div>
-        </div>
+        </>
       )}
 
       {/* Status bar - modern glass effect */}
