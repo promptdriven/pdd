@@ -66,6 +66,22 @@ class OutputCapture:
         return self.buffer.getvalue()
 
 
+def _restore_captured_streams(ctx: click.Context) -> None:
+    """Restore original streams if they were captured for core dump.
+
+    This must be called before any early exit (ctx.exit(0)) to prevent
+    sys.stdout/stderr from remaining wrapped with OutputCapture, which
+    causes test pollution when running multiple tests.
+    """
+    if isinstance(ctx.obj, dict):
+        stdout_capture = ctx.obj.get("_stdout_capture")
+        stderr_capture = ctx.obj.get("_stderr_capture")
+        if stdout_capture:
+            sys.stdout = stdout_capture.original_stream
+        if stderr_capture:
+            sys.stderr = stderr_capture.original_stream
+
+
 class PDDCLI(click.Group):
     """Custom Click Group that adds a Generate Suite section to root help."""
 
@@ -262,11 +278,17 @@ class PDDCLI(click.Group):
     help="List available contexts from .pddrc and exit.",
 )
 @click.option(
-    "--core-dump",
+    "--core-dump/--no-core-dump",
     "core_dump",
-    is_flag=True,
-    default=False,
-    help="Write a JSON core dump for this run into .pdd/core_dumps (for bug reports).",
+    default=True,
+    help="Write a JSON core dump for this run into .pdd/core_dumps (default: on). Use --no-core-dump to disable.",
+)
+@click.option(
+    "--keep-core-dumps",
+    "keep_core_dumps",
+    type=click.IntRange(min=0),
+    default=10,
+    help="Number of core dumps to keep (default: 10, min: 0). Older dumps are garbage collected after each dump write.",
 )
 @click.version_option(version=__version__, package_name="pdd-cli")
 @click.pass_context
@@ -284,6 +306,7 @@ def cli(
     context_override: Optional[str],
     list_contexts: bool,
     core_dump: bool,
+    keep_core_dumps: int,
 ):
     """
     Main entry point for the PDD CLI. Handles global options and initializes context.
@@ -317,6 +340,12 @@ def cli(
     # Persist context override for downstream calls
     ctx.obj["context"] = context_override
     ctx.obj["core_dump"] = core_dump
+    ctx.obj["keep_core_dumps"] = keep_core_dumps
+
+    # Garbage collect old core dumps on every CLI invocation (Issue #231)
+    # This runs regardless of --no-core-dump to ensure cleanup always happens
+    from .dump import garbage_collect_core_dumps
+    garbage_collect_core_dumps(keep=keep_core_dumps)
 
     # Set up terminal output capture if core_dump is enabled
     if core_dump:
@@ -348,6 +377,7 @@ def cli(
         # Print one per line; avoid Rich formatting for portability
         for name in names:
             click.echo(name)
+        _restore_captured_streams(ctx)
         ctx.exit(0)
 
     # Optional early validation for --context
@@ -381,6 +411,7 @@ def cli(
         if not quiet:
             console.print("[info]Run `pdd --help` for usage or `pdd setup` to finish onboarding.[/info]")
         click.echo(ctx.get_help())
+        _restore_captured_streams(ctx)
         ctx.exit(0)
 
 # --- Result Callback for Command Execution Summary ---

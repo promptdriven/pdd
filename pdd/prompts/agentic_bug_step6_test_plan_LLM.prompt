@@ -2,7 +2,7 @@
 
 % Context
 
-You are working on step 6 of 9 in an agentic bug investigation workflow. Previous steps have identified the root cause of the issue.
+You are working on step 6 of 11 in an agentic bug investigation workflow. Previous steps have identified the root cause of the issue.
 
 % Inputs
 
@@ -35,6 +35,10 @@ You are working on step 6 of 9 in an agentic bug investigation workflow. Previou
 <step5_output>
 {step5_output}
 </step5_output>
+
+<step5_5_output>
+{step5_5_output}
+</step5_5_output>
 
 % Your Task
 

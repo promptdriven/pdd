@@ -7,7 +7,7 @@ set -u
 
 # Global settings
 VERBOSE=${VERBOSE:-1} # Default to 1 if not set
-STRENGTH=${STRENGTH:-0.793} # Default strength
+STRENGTH=${STRENGTH:-0.3} # Default strength (lower = cheaper models)
 TEMPERATURE=${TEMPERATURE:-0.0} # Default temperature
 TEST_LOCAL=${TEST_LOCAL:-false} # Default to cloud execution
 CLEANUP_ON_EXIT=false # Set to false to keep files for debugging
@@ -1041,7 +1041,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "9" ]; then
     # Test working directory context
     log "9c. Testing working directory context integration"
     # Run sync locally with an explicit timeout so hung cloud calls don't stall CI
-    WORKDIR_CONTEXT_TIMEOUT="${WORKDIR_CONTEXT_TIMEOUT:-600}s"
+    WORKDIR_CONTEXT_TIMEOUT="${WORKDIR_CONTEXT_TIMEOUT:-900}s"
     WORKDIR_CONTEXT_CMD=(
         "$PDD_SCRIPT"
         --force

@@ -13,12 +13,13 @@ from pdd.get_jwt_token import (
 
 
 @pytest.mark.asyncio
+@patch("pdd.get_jwt_token._cache_jwt")
 @patch("pdd.get_jwt_token._get_cached_jwt", return_value=None)
 @patch("pdd.get_jwt_token.FirebaseAuthenticator.verify_firebase_token", return_value=True)
 @patch("pdd.get_jwt_token.FirebaseAuthenticator._refresh_firebase_token", return_value="new_id_token_123")
 @patch("pdd.get_jwt_token.FirebaseAuthenticator._get_stored_refresh_token", return_value="stored_refresh_token")
 async def test_get_jwt_token_with_valid_stored_token(
-    mock_get_stored_token, mock_refresh_token, mock_verify, mock_cache
+    mock_get_stored_token, mock_refresh_token, mock_verify, mock_cache_read, mock_cache_write
 ):
     """
     If a valid refresh token is stored, get_jwt_token should refresh it and skip the Device Flow.
@@ -31,6 +32,8 @@ async def test_get_jwt_token_with_valid_stored_token(
 
 
 @pytest.mark.asyncio
+@patch("pdd.get_jwt_token.webbrowser.open")
+@patch("pdd.get_jwt_token._cache_jwt")
 @patch("pdd.get_jwt_token._get_cached_jwt", return_value=None)
 @patch("pdd.get_jwt_token.FirebaseAuthenticator._store_refresh_token")
 @patch("pdd.get_jwt_token.FirebaseAuthenticator.exchange_github_token_for_firebase_token", return_value=("id_token_abc", "refresh_token_new"))
@@ -53,7 +56,9 @@ async def test_get_jwt_token_with_invalid_stored_token_reauth(
     mock_poll_for_token,
     mock_exchange_github,
     mock_store_refresh,
-    mock_cache
+    mock_cache_read,
+    mock_cache_write,
+    mock_webbrowser,
 ):
     """
     If the refresh token is invalid or refresh fails, get_jwt_token should invoke the Device Flow.
@@ -67,6 +72,8 @@ async def test_get_jwt_token_with_invalid_stored_token_reauth(
 
 
 @pytest.mark.asyncio
+@patch("pdd.get_jwt_token.webbrowser.open")
+@patch("pdd.get_jwt_token._cache_jwt")
 @patch("pdd.get_jwt_token._get_cached_jwt", return_value=None)
 @patch("pdd.get_jwt_token.FirebaseAuthenticator._store_refresh_token")
 @patch("pdd.get_jwt_token.FirebaseAuthenticator.exchange_github_token_for_firebase_token", return_value=("new_id_token", "new_refresh_token"))
@@ -85,7 +92,9 @@ async def test_get_jwt_token_no_stored_token_triggers_device_flow(
     mock_poll_for_token,
     mock_exchange_github,
     mock_store_refresh,
-    mock_cache
+    mock_cache_read,
+    mock_cache_write,
+    mock_webbrowser,
 ):
     """
     If there is no stored refresh token, get_jwt_token should prompt the Device Flow and complete auth.
@@ -99,6 +108,7 @@ async def test_get_jwt_token_no_stored_token_triggers_device_flow(
 
 
 @pytest.mark.asyncio
+@patch("pdd.get_jwt_token.webbrowser.open")
 @patch("pdd.get_jwt_token._get_cached_jwt", return_value=None)
 @patch("pdd.get_jwt_token.FirebaseAuthenticator._get_stored_refresh_token", return_value=None)
 @patch("pdd.get_jwt_token.DeviceFlow.request_device_code", return_value={
@@ -113,7 +123,8 @@ async def test_get_jwt_token_user_cancels_device_flow(
     mock_poll_for_token,
     mock_request_device_code,
     mock_get_stored_token,
-    mock_cache
+    mock_cache,
+    mock_webbrowser,
 ):
     """
     If the user cancels authorization at GitHub, get_jwt_token should raise a UserCancelledError.
@@ -126,6 +137,7 @@ async def test_get_jwt_token_user_cancels_device_flow(
 
 
 @pytest.mark.asyncio
+@patch("pdd.get_jwt_token.webbrowser.open")
 @patch("pdd.get_jwt_token._get_cached_jwt", return_value=None)
 @patch("pdd.get_jwt_token.FirebaseAuthenticator._get_stored_refresh_token", return_value=None)
 @patch("pdd.get_jwt_token.DeviceFlow.request_device_code", return_value={
@@ -140,7 +152,8 @@ async def test_get_jwt_token_device_code_expired(
     mock_poll_for_token,
     mock_request_device_code,
     mock_get_stored_token,
-    mock_cache
+    mock_cache,
+    mock_webbrowser,
 ):
     """
     If the device code expires, get_jwt_token should raise an AuthError.
@@ -243,29 +256,240 @@ class TestJWTCaching:
             if hasattr(jwt_module, 'JWT_CACHE_FILE'):
                 jwt_module.JWT_CACHE_FILE = tmp_path / "jwt_cache"
 
-            with patch("pdd.get_jwt_token.FirebaseAuthenticator._get_stored_refresh_token",
-                       return_value="refresh_token") as mock_keyring:
-                with patch("pdd.get_jwt_token.FirebaseAuthenticator._refresh_firebase_token",
-                           return_value="id_token_abc"):
-                    with patch("pdd.get_jwt_token.FirebaseAuthenticator.verify_firebase_token",
-                               return_value=True):
-                        # First call - may access keyring to get refresh token
-                        token1 = await get_jwt_token("key", "client")
-                        assert token1 == "id_token_abc"
-                        first_keyring_calls = mock_keyring.call_count
+            # Bypass audience check - mock token "id_token_abc" isn't valid JWT format,
+            # so audience extraction fails. When PDD_ENV is set by other tests,
+            # the audience mismatch would invalidate the cache.
+            with patch("pdd.get_jwt_token._get_expected_jwt_audience", return_value=None):
+                with patch("pdd.get_jwt_token.FirebaseAuthenticator._get_stored_refresh_token",
+                           return_value="refresh_token") as mock_keyring:
+                    with patch("pdd.get_jwt_token.FirebaseAuthenticator._refresh_firebase_token",
+                               return_value="id_token_abc"):
+                        with patch("pdd.get_jwt_token.FirebaseAuthenticator.verify_firebase_token",
+                                   return_value=True):
+                            # First call - may access keyring to get refresh token
+                            token1 = await get_jwt_token("key", "client")
+                            assert token1 == "id_token_abc"
+                            first_keyring_calls = mock_keyring.call_count
 
-                        # Second call - should use cached JWT, NOT access keyring
-                        token2 = await get_jwt_token("key", "client")
-                        assert token2 == "id_token_abc"
-                        second_keyring_calls = mock_keyring.call_count - first_keyring_calls
+                            # Second call - should use cached JWT, NOT access keyring
+                            token2 = await get_jwt_token("key", "client")
+                            assert token2 == "id_token_abc"
+                            second_keyring_calls = mock_keyring.call_count - first_keyring_calls
 
-                        # BUG: Currently fails because keyring accessed every time
-                        assert second_keyring_calls == 0, (
-                            f"Second call accessed keyring {second_keyring_calls} times. "
-                            "Expected 0 - JWT should be cached between calls to avoid "
-                            "repeated keyring/password prompts."
-                        )
+                            # BUG: Currently fails because keyring accessed every time
+                            assert second_keyring_calls == 0, (
+                                f"Second call accessed keyring {second_keyring_calls} times. "
+                                "Expected 0 - JWT should be cached between calls to avoid "
+                                "repeated keyring/password prompts."
+                            )
         finally:
             # Restore original JWT_CACHE_FILE to avoid affecting other tests
             if original_cache_file is not None:
                 jwt_module.JWT_CACHE_FILE = original_cache_file
+
+
+@pytest.mark.asyncio
+@patch("pdd.get_jwt_token.webbrowser.open")
+@patch("pdd.get_jwt_token._cache_jwt")
+@patch("pdd.get_jwt_token._get_cached_jwt", return_value=None)
+@patch("pdd.get_jwt_token.FirebaseAuthenticator._store_refresh_token")
+@patch("pdd.get_jwt_token.FirebaseAuthenticator.exchange_github_token_for_firebase_token", return_value=("id_token_abc", "refresh_token_new"))
+@patch("pdd.get_jwt_token.DeviceFlow.poll_for_token", return_value="github_token_123")
+@patch("pdd.get_jwt_token.DeviceFlow.request_device_code", return_value={
+    "device_code": "test_device",
+    "user_code": "ABCD-EFGH",
+    "verification_uri": "https://github.com/login/device",
+    "interval": 5,
+    "expires_in": 900
+})
+@patch("pdd.get_jwt_token.FirebaseAuthenticator._get_stored_refresh_token", return_value=None)
+async def test_get_jwt_token_with_no_browser_false(
+    mock_get_stored, mock_device_code, mock_poll, mock_exchange,
+    mock_store, mock_cache_read, mock_cache_write, mock_browser_open
+):
+    """
+    Test that browser is opened when no_browser=False (default behavior).
+    """
+    token = await get_jwt_token("fake_firebase_key", "fake_github_client", no_browser=False)
+    assert token == "id_token_abc"
+    # Verify browser.open was called
+    mock_browser_open.assert_called_once_with("https://github.com/login/device")
+
+
+@pytest.mark.asyncio
+@patch("pdd.get_jwt_token.webbrowser.open")
+@patch("pdd.get_jwt_token._cache_jwt")
+@patch("pdd.get_jwt_token._get_cached_jwt", return_value=None)
+@patch("pdd.get_jwt_token.FirebaseAuthenticator._store_refresh_token")
+@patch("pdd.get_jwt_token.FirebaseAuthenticator.exchange_github_token_for_firebase_token", return_value=("id_token_abc", "refresh_token_new"))
+@patch("pdd.get_jwt_token.DeviceFlow.poll_for_token", return_value="github_token_123")
+@patch("pdd.get_jwt_token.DeviceFlow.request_device_code", return_value={
+    "device_code": "test_device",
+    "user_code": "ABCD-EFGH",
+    "verification_uri": "https://github.com/login/device",
+    "interval": 5,
+    "expires_in": 900
+})
+@patch("pdd.get_jwt_token.FirebaseAuthenticator._get_stored_refresh_token", return_value=None)
+async def test_get_jwt_token_with_no_browser_true(
+    mock_get_stored, mock_device_code, mock_poll, mock_exchange,
+    mock_store, mock_cache_read, mock_cache_write, mock_browser_open
+):
+    """
+    Test that browser is NOT opened when no_browser=True.
+    """
+    token = await get_jwt_token("fake_firebase_key", "fake_github_client", no_browser=True)
+    assert token == "id_token_abc"
+    # Verify browser.open was NOT called
+    mock_browser_open.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch("pdd.get_jwt_token.webbrowser.open", side_effect=Exception("Browser open failed"))
+@patch("pdd.get_jwt_token._cache_jwt")
+@patch("pdd.get_jwt_token._get_cached_jwt", return_value=None)
+@patch("pdd.get_jwt_token.FirebaseAuthenticator._store_refresh_token")
+@patch("pdd.get_jwt_token.FirebaseAuthenticator.exchange_github_token_for_firebase_token", return_value=("id_token_abc", "refresh_token_new"))
+@patch("pdd.get_jwt_token.DeviceFlow.poll_for_token", return_value="github_token_123")
+@patch("pdd.get_jwt_token.DeviceFlow.request_device_code", return_value={
+    "device_code": "test_device",
+    "user_code": "ABCD-EFGH",
+    "verification_uri": "https://github.com/login/device",
+    "interval": 5,
+    "expires_in": 900
+})
+@patch("pdd.get_jwt_token.FirebaseAuthenticator._get_stored_refresh_token", return_value=None)
+async def test_get_jwt_token_browser_open_error_handled(
+    mock_get_stored, mock_device_code, mock_poll, mock_exchange,
+    mock_store, mock_cache_read, mock_cache_write, mock_browser_open
+):
+    """
+    Test that browser opening errors are handled gracefully and auth still succeeds.
+    """
+    token = await get_jwt_token("fake_firebase_key", "fake_github_client", no_browser=False)
+    assert token == "id_token_abc"
+    # Verify browser.open was called but error was caught
+    mock_browser_open.assert_called_once_with("https://github.com/login/device")
+
+
+# --- Issue #358: _get_cached_jwt() crashes with expires_at: null ---
+
+class TestGetCachedJWTExpiresAtNull:
+    """
+    Tests for Issue #358: _get_cached_jwt() crashes with TypeError when
+    cache file has expires_at: null.
+
+    Bug: dict.get('key', default) returns None when the key EXISTS with value None,
+    not the default value. This causes TypeError on comparison with float.
+
+    Issue: https://github.com/promptdriven/pdd/issues/358
+    """
+
+    def test_get_cached_jwt_crashes_with_expires_at_null(self, tmp_path):
+        """
+        REPRODUCES BUG: _get_cached_jwt() should handle expires_at: null gracefully.
+
+        Current buggy behavior: Raises TypeError: '>' not supported between
+        instances of 'NoneType' and 'float'
+
+        Expected behavior after fix: Returns None (treats as expired/invalid cache)
+
+        This test FAILS on the current buggy code.
+        """
+        import json
+        import pdd.get_jwt_token as jwt_module
+
+        # Save original and restore after test
+        original_cache_file = jwt_module.JWT_CACHE_FILE
+
+        try:
+            # Set up cache file in temp directory
+            jwt_module.JWT_CACHE_FILE = tmp_path / ".pdd" / "jwt_cache"
+            jwt_module.JWT_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+            # Create corrupted cache file with expires_at: null
+            # This is the exact scenario described in Issue #358
+            corrupted_cache = {
+                "id_token": "some_token",
+                "expires_at": None  # JSON null -> Python None
+            }
+            with open(jwt_module.JWT_CACHE_FILE, 'w') as f:
+                json.dump(corrupted_cache, f)
+
+            # This should NOT raise TypeError - it should return None gracefully
+            # BUG: Currently raises TypeError: '>' not supported between
+            # instances of 'NoneType' and 'float'
+            from pdd.get_jwt_token import _get_cached_jwt
+            result = _get_cached_jwt()
+
+            # If we get here without exception, the bug is fixed
+            # Expected: None (cache is invalid/expired)
+            assert result is None, "Should return None for invalid expires_at value"
+
+        finally:
+            jwt_module.JWT_CACHE_FILE = original_cache_file
+
+    def test_get_cached_jwt_handles_expires_at_non_numeric_string(self, tmp_path):
+        """
+        Edge case: expires_at is a non-numeric string.
+
+        Expected: Should not crash, should return None.
+        """
+        import json
+        import pdd.get_jwt_token as jwt_module
+
+        original_cache_file = jwt_module.JWT_CACHE_FILE
+
+        try:
+            jwt_module.JWT_CACHE_FILE = tmp_path / ".pdd" / "jwt_cache"
+            jwt_module.JWT_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+            # Create cache with string expires_at (corrupted data)
+            corrupted_cache = {
+                "id_token": "some_token",
+                "expires_at": "not_a_number"
+            }
+            with open(jwt_module.JWT_CACHE_FILE, 'w') as f:
+                json.dump(corrupted_cache, f)
+
+            from pdd.get_jwt_token import _get_cached_jwt
+            result = _get_cached_jwt()
+
+            # Should handle gracefully without crash
+            assert result is None, "Should return None for non-numeric expires_at"
+
+        finally:
+            jwt_module.JWT_CACHE_FILE = original_cache_file
+
+    def test_get_cached_jwt_handles_expires_at_boolean(self, tmp_path):
+        """
+        Edge case: expires_at is a boolean value.
+
+        Note: In Python, bool is subclass of int, so True == 1, False == 0.
+        This shouldn't crash but the token would be expired.
+        """
+        import json
+        import pdd.get_jwt_token as jwt_module
+
+        original_cache_file = jwt_module.JWT_CACHE_FILE
+
+        try:
+            jwt_module.JWT_CACHE_FILE = tmp_path / ".pdd" / "jwt_cache"
+            jwt_module.JWT_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+            # Create cache with boolean expires_at
+            corrupted_cache = {
+                "id_token": "some_token",
+                "expires_at": False  # == 0, which is in the past
+            }
+            with open(jwt_module.JWT_CACHE_FILE, 'w') as f:
+                json.dump(corrupted_cache, f)
+
+            from pdd.get_jwt_token import _get_cached_jwt
+            result = _get_cached_jwt()
+
+            # Boolean False == 0, so this is "expired" and should return None
+            assert result is None, "Should return None for expired (False == 0) expires_at"
+
+        finally:
+            jwt_module.JWT_CACHE_FILE = original_cache_file

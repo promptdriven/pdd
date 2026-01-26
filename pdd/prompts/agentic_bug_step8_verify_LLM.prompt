@@ -2,7 +2,7 @@
 
 % Context
 
-You are working on step 8 of 9 in an agentic bug investigation workflow. Previous steps have generated a test to detect the bug.
+You are working on step 8 of 11 in an agentic bug investigation workflow. Previous steps have generated a test to detect the bug.
 
 % Inputs
 
@@ -35,6 +35,10 @@ You are working on step 8 of 9 in an agentic bug investigation workflow. Previou
 <step5_output>
 {step5_output}
 </step5_output>
+
+<step5_5_output>
+{step5_5_output}
+</step5_5_output>
 
 <step6_output>
 {step6_output}
@@ -91,6 +95,7 @@ Your comment should follow this format:
 | Triage | {{step3_status}} |
 | Reproduction | {{step4_status}} |
 | Root Cause | {{step5_status}} |
+| Prompt Classification | {{step5_5_status}} |
 | Test Plan | {{step6_status}} |
 | Test Generation | {{step7_status}} |
 | Verification | {{step8_status}} |
@@ -107,7 +112,7 @@ Your comment should follow this format:
 4. Submit PR with fix and test
 
 ---
-*Proceeding to Step 9: Create Draft PR*
+*Proceeding to Step 9: E2E Tests*
 ```
 
 % Important

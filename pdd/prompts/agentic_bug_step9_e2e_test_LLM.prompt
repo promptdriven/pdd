@@ -1,0 +1,293 @@
+% You are an expert software engineer investigating a bug report. Your task is to generate and run end-to-end (E2E) tests that verify the bug at a system level.
+
+% Context
+
+You are working on step 9 of 11 in an agentic bug investigation workflow. Previous steps have:
+- Identified the root cause (Step 5)
+- Generated a failing unit test (Step 7)
+- Verified the unit test correctly catches the bug (Step 8)
+
+Now you need to create E2E tests that verify the bug at a higher level of integration.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Steps Output
+<step1_output>
+{step1_output}
+</step1_output>
+
+<step2_output>
+{step2_output}
+</step2_output>
+
+<step3_output>
+{step3_output}
+</step3_output>
+
+<step4_output>
+{step4_output}
+</step4_output>
+
+<step5_output>
+{step5_output}
+</step5_output>
+
+<step5_5_output>
+{step5_5_output}
+</step5_5_output>
+
+<step6_output>
+{step6_output}
+</step6_output>
+
+<step7_output>
+{step7_output}
+</step7_output>
+
+<step8_output>
+{step8_output}
+</step8_output>
+
+% Worktree Information
+
+You are operating in an isolated git worktree at: {worktree_path}
+The unit test file(s) created in Step 7 are: {files_to_stage}
+
+% E2E Test Strategy
+
+E2E tests differ from unit tests:
+- **Unit tests** mock dependencies and test individual functions in isolation
+- **E2E tests** exercise the full system path that a user or API consumer would take
+
+% CRITICAL: Discover E2E Test Environment First
+
+Before writing any E2E test, you MUST understand the existing test infrastructure. First, identify the primary language of the repository, then search for language-appropriate configuration files.
+
+1. **Identify Repository Language**
+   - Check file extensions: `.py`, `.js`, `.ts`, `.go`, `.rs`, `.java`, `.rb`, `.cs`, etc.
+   - Read `package.json`, `pyproject.toml`, `go.mod`, `Cargo.toml`, `pom.xml`, `Gemfile` for dependencies
+
+2. **Test Configuration Files (by language)**
+
+   **Python:**
+   - `pytest.ini`, `pyproject.toml`, `setup.cfg` - test runner settings
+   - `conftest.py` files (especially in `tests/`, `tests/e2e/`, `tests/integration/`) - shared fixtures
+   - `tox.ini`, `noxfile.py` - test environment definitions
+
+   **JavaScript/TypeScript:**
+   - `jest.config.js`, `jest.config.ts` - Jest configuration
+   - `vitest.config.js`, `vitest.config.ts` - Vitest configuration
+   - `cypress.config.js`, `playwright.config.ts` - E2E framework configs
+   - `__tests__/`, `*.test.js`, `*.spec.ts` patterns
+
+   **Go:**
+   - `go.mod` - module definition
+   - `*_test.go` files - test files with TestXxx functions
+   - `testdata/` directories - test fixtures
+
+   **Rust:**
+   - `Cargo.toml` - dependencies and test settings
+   - `tests/` directory - integration tests
+   - `#[cfg(test)]` modules for unit tests
+
+   **Java:**
+   - `pom.xml`, `build.gradle` - Maven/Gradle configs
+   - `src/test/java/` - test sources
+   - JUnit, TestNG configurations
+
+   **Ruby:**
+   - `Gemfile` - dependencies (rspec, minitest, capybara)
+   - `spec/`, `test/` directories
+   - `spec_helper.rb`, `rails_helper.rb` - RSpec setup
+
+3. **Environment Variables**
+   - `.env`, `.env.example`, `.env.test`, `.env.local` - required environment variables
+   - `README.md`, `CONTRIBUTING.md` - setup documentation
+   - `.github/workflows/*.yml`, `.gitlab-ci.yml`, `Makefile` - CI configs show how tests are run
+   - Search for env var access patterns in existing tests:
+     - Python: `os.environ`, `os.getenv`, `dotenv`
+     - JavaScript: `process.env`, `dotenv`
+     - Go: `os.Getenv`
+     - Rust: `std::env::var`
+     - Java: `System.getenv`
+
+4. **Authentication & Credentials**
+   - `*credentials*.json`, `*auth*.json`, `*service_account*.json` patterns
+   - Test fixtures that set up auth (look for setup/beforeAll/beforeEach functions)
+   - Mock auth utilities or test user credentials
+   - Environment variables for API keys, tokens, secrets
+
+5. **Database & External Services**
+   - Docker Compose files (`docker-compose*.yml`) for test services
+   - Database fixtures, migration scripts for test DBs
+   - Mock servers or test doubles for external APIs
+   - Emulator configurations (Firebase, GCP, AWS LocalStack, etc.)
+
+6. **Existing E2E Test Patterns**
+   - Find files with `e2e`, `integration`, `functional`, `acceptance` in name
+   - Study their imports, fixtures, setup/teardown patterns
+   - Note how they handle auth, env vars, and external services
+   - Copy their test structure and patterns exactly
+
+**If you cannot find sufficient E2E infrastructure:**
+- Check if E2E tests require manual setup steps documented elsewhere
+- Output `E2E_SKIP: E2E infrastructure not found - manual setup required` with details
+- Suggest what infrastructure would be needed in your GitHub comment
+
+% Your Task
+
+1. **Discover the E2E test environment** (REQUIRED FIRST STEP)
+   - Search for and read the configuration files listed above
+   - Identify required environment variables and how to set them
+   - Find existing E2E test fixtures and patterns to reuse
+   - Understand authentication requirements and test credentials
+   - If critical infrastructure is missing, output `E2E_SKIP` with explanation
+
+2. **Analyze the bug's user-facing impact**
+   - How does this bug manifest to end users or API consumers?
+   - What user action or API call triggers the bug?
+   - What is the expected vs actual behavior from the user's perspective?
+
+3. **Identify the E2E test approach**
+   - Determine what type of E2E test is appropriate:
+     - **CLI tests**: If the bug affects command-line behavior
+       - Python: subprocess, Click's CliRunner
+       - JavaScript: execa, child_process
+       - Go: os/exec, testing with command args
+       - Rust: std::process::Command, assert_cmd crate
+     - **API tests**: If the bug affects an API endpoint
+       - Python: requests, httpx, FastAPI TestClient
+       - JavaScript: supertest, axios, fetch
+       - Go: net/http/httptest
+       - Rust: reqwest, actix-web test utilities
+     - **Browser/UI tests**: If the bug affects web UI
+       - Playwright, Cypress, Selenium (cross-language)
+       - Puppeteer (JavaScript)
+     - **Integration tests**: If the bug affects data flow between components
+   - Reuse existing E2E test patterns, fixtures, and utilities from the repository
+   - Use the same test runner and framework as existing E2E tests
+
+4. **Generate the E2E test**
+   - Create a test that exercises the full code path from user input to output
+   - Import and use existing fixtures for auth, database, environment setup
+   - Do NOT mock the buggy component - the E2E test should hit the real code
+   - The test should fail on the current buggy code
+   - Include clear assertions about expected behavior
+   - Follow the repository's existing E2E test patterns exactly
+
+5. **Write and run the E2E test file**
+   - Place the E2E test in the same location as existing E2E tests
+   - Use the same naming conventions as existing E2E tests
+   - Ensure required environment variables are set before running
+   - Run the test to verify it fails for the right reason (the bug, not setup issues)
+
+% Critical: E2E Test Requirements
+
+The E2E test MUST:
+- Exercise the real code path (minimal mocking)
+- Fail on the current buggy code
+- Pass once the bug is fixed
+- Be deterministic and not flaky
+- Complete within a reasonable timeout (< 60 seconds)
+
+The E2E test should NOT:
+- Mock the component that contains the bug
+- Test edge cases already covered by unit tests
+- Require external services that aren't available in CI
+
+% Test Execution
+
+After writing the E2E test, run it to verify:
+1. The test executes without setup errors (imports work, fixtures load)
+2. The test fails because of the bug (not because of test bugs)
+3. The failure message clearly indicates the bug
+
+If the test doesn't fail or fails for the wrong reason:
+- Debug and fix the test
+- Re-run until it correctly catches the bug
+- Output `E2E_FAIL: Test does not catch bug correctly` if you cannot make the test work
+
+% Output
+
+After generating and running the test, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+```markdown
+## Step 9: E2E Test
+
+### Environment Discovery
+- **Repository language:** [Python / JavaScript / TypeScript / Go / Rust / Java / Ruby / etc.]
+- **Test framework:** [pytest / Jest / Vitest / Playwright / go test / cargo test / JUnit / RSpec / etc.]
+- **Existing E2E tests found:** [Yes/No - list files if found]
+- **Test configuration:** [config file name and location]
+- **Fixtures/helpers used:** [List shared test utilities discovered]
+- **Environment variables required:** [List any env vars needed]
+- **Auth/credentials:** [How auth is handled - fixtures, env vars, mock]
+
+### E2E Test File
+`{{e2e_test_file_path}}`
+
+### Test Type
+[CLI / API / Browser / Integration]
+
+### What This Test Verifies
+[Brief explanation of the user-facing behavior being tested]
+
+### Test Code
+```{{language}}
+{{generated_e2e_test_code}}
+```
+
+### Test Execution Result
+```
+{{test_output}}
+```
+
+### E2E Test Status
+**[PASS: E2E test correctly detects the bug | FAIL: E2E test does not work as expected]**
+
+---
+*Proceeding to Step 10: Create Draft PR*
+```
+
+% Machine-Readable Output
+
+After writing files, output this line exactly (for automated tracking):
+```
+E2E_FILES_CREATED: <comma-separated list of file paths you created>
+```
+Examples by language:
+- Python: `E2E_FILES_CREATED: tests/e2e/test_e2e_issue_123.py`
+- JavaScript: `E2E_FILES_CREATED: tests/e2e/issue-123.e2e.test.js`
+- TypeScript: `E2E_FILES_CREATED: tests/e2e/issue-123.e2e.spec.ts`
+- Go: `E2E_FILES_CREATED: tests/e2e/issue_123_test.go`
+- Rust: `E2E_FILES_CREATED: tests/e2e_issue_123.rs`
+
+If you modified existing files instead of creating new ones:
+```
+E2E_FILES_MODIFIED: <comma-separated list of file paths you modified>
+```
+
+% Important
+
+- The E2E test MUST fail on the current (buggy) code
+- The test should pass once the bug is fixed
+- Focus on the user-facing behavior, not internal implementation
+- Run the test and include the actual output in your comment
+- Always post your findings as a GitHub comment before completing
+- If the test cannot be made to work, output `E2E_FAIL: Test does not catch bug correctly`
+- If no E2E test is applicable (e.g., the bug is purely internal with no user-facing impact), output `E2E_SKIP: No E2E test applicable for this bug type` and explain why

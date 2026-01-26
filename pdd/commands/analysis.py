@@ -5,7 +5,7 @@ Analysis commands (detect-change, conflicts, bug, crash, trace).
 """
 import os
 import click
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Dict, Any
 
 from ..detect_change_main import detect_change_main
 from ..conflicts_main import conflicts_main
@@ -15,6 +15,11 @@ from ..crash_main import crash_main
 from ..trace_main import trace_main
 from ..track_cost import track_cost
 from ..core.errors import handle_error
+from ..operation_log import log_operation
+
+def get_context_obj(ctx: click.Context) -> Dict[str, Any]:
+    """Safely retrieve the context object, defaulting to empty dict if None."""
+    return ctx.obj or {}
 
 @click.command("detect")
 @click.argument("files", nargs=-1, type=click.Path(exists=True, dir_okay=False))
@@ -28,8 +33,8 @@ from ..core.errors import handle_error
 @track_cost
 def detect_change(
     ctx: click.Context,
-    files: Tuple[str, ...],
-    output: Optional[str],
+    files: Tuple[str, ...] = (),
+    output: Optional[str] = None,
 ) -> Optional[Tuple[List, float, str]]:
     """Detect if prompts need to be changed based on a description.
     
@@ -53,7 +58,7 @@ def detect_change(
     except (click.Abort, click.ClickException):
         raise
     except Exception as exception:
-        handle_error(exception, "detect", ctx.obj.get("quiet", False))
+        handle_error(exception, "detect", get_context_obj(ctx).get("quiet", False))
         return None
 
 
@@ -72,7 +77,7 @@ def conflicts(
     ctx: click.Context,
     prompt1: str,
     prompt2: str,
-    output: Optional[str],
+    output: Optional[str] = None,
 ) -> Optional[Tuple[List, float, str]]:
     """Check for conflicts between two prompt files."""
     try:
@@ -81,13 +86,13 @@ def conflicts(
             prompt1=prompt1,
             prompt2=prompt2,
             output=output,
-            verbose=ctx.obj.get("verbose", False),
+            verbose=get_context_obj(ctx).get("verbose", False),
         )
         return result, total_cost, model_name
     except (click.Abort, click.ClickException):
         raise
     except Exception as exception:
-        handle_error(exception, "conflicts", ctx.obj.get("quiet", False))
+        handle_error(exception, "conflicts", get_context_obj(ctx).get("quiet", False))
         return None
 
 
@@ -111,14 +116,28 @@ def conflicts(
     default="Python",
     help="Programming language for the unit test (Manual mode only).",
 )
+@click.option(
+    "--timeout-adder",
+    type=float,
+    default=0.0,
+    help="Additional seconds to add to each step's timeout (agentic mode only).",
+)
+@click.option(
+    "--no-github-state",
+    is_flag=True,
+    default=False,
+    help="Disable GitHub state persistence (agentic mode only).",
+)
 @click.pass_context
 @track_cost
 def bug(
     ctx: click.Context,
-    manual: bool,
-    args: Tuple[str, ...],
-    output: Optional[str],
-    language: str,
+    manual: bool = False,
+    args: Tuple[str, ...] = (),
+    output: Optional[str] = None,
+    language: str = "Python",
+    timeout_adder: float = 0.0,
+    no_github_state: bool = False,
 ) -> Optional[Tuple[str, float, str]]:
     """Generate a unit test (manual) or investigate a bug (agentic).
 
@@ -129,6 +148,7 @@ def bug(
         pdd bug --manual PROMPT_FILE CODE_FILE PROGRAM_FILE CURRENT_OUTPUT DESIRED_OUTPUT
     """
     try:
+        obj = get_context_obj(ctx)
         if manual:
             if len(args) != 5:
                 raise click.UsageError(
@@ -165,8 +185,10 @@ def bug(
             
             success, message, cost, model, changed_files = run_agentic_bug(
                 issue_url=issue_url,
-                verbose=ctx.obj.get("verbose", False),
-                quiet=ctx.obj.get("quiet", False),
+                verbose=obj.get("verbose", False),
+                quiet=obj.get("quiet", False),
+                timeout_adder=timeout_adder,
+                use_github_state=not no_github_state,
             )
             
             result_str = f"Success: {success}\nMessage: {message}\nChanged Files: {changed_files}"
@@ -175,7 +197,7 @@ def bug(
     except (click.Abort, click.ClickException):
         raise
     except Exception as exception:
-        handle_error(exception, "bug", ctx.obj.get("quiet", False))
+        handle_error(exception, "bug", get_context_obj(ctx).get("quiet", False))
         return None
 
 
@@ -215,6 +237,7 @@ def bug(
     help="Maximum cost allowed for the fixing process (default: 5.0).",
 )
 @click.pass_context
+@log_operation("crash", clears_run_report=True)
 @track_cost
 def crash(
     ctx: click.Context,
@@ -222,15 +245,15 @@ def crash(
     code_file: str,
     program_file: str,
     error_file: str,
-    output: Optional[str],
-    output_program: Optional[str],
-    loop: bool,
-    max_attempts: Optional[int],
-    budget: Optional[float],
+    output: Optional[str] = None,
+    output_program: Optional[str] = None,
+    loop: bool = False,
+    max_attempts: Optional[int] = None,
+    budget: Optional[float] = None,
 ) -> Optional[Tuple[str, float, str]]:
     """Analyze a crash and fix the code and program."""
     try:
-        # crash_main returns: success, final_code, final_program, attempts, cost, model
+        # crash_main returns: success, final_code, final_program, attempts, total_cost, model_name
         success, final_code, final_program, attempts, total_cost, model_name = crash_main(
             ctx=ctx,
             prompt_file=prompt_file,
@@ -249,7 +272,7 @@ def crash(
     except (click.Abort, click.ClickException):
         raise
     except Exception as exception:
-        handle_error(exception, "crash", ctx.obj.get("quiet", False))
+        handle_error(exception, "crash", get_context_obj(ctx).get("quiet", False))
         return None
 
 
@@ -270,7 +293,7 @@ def trace(
     prompt_file: str,
     code_file: str,
     code_line: int,
-    output: Optional[str],
+    output: Optional[str] = None,
 ) -> Optional[Tuple[str, float, str]]:
     """Trace execution flow back to the prompt."""
     try:
@@ -286,5 +309,5 @@ def trace(
     except (click.Abort, click.ClickException):
         raise
     except Exception as exception:
-        handle_error(exception, "trace", ctx.obj.get("quiet", False))
+        handle_error(exception, "trace", get_context_obj(ctx).get("quiet", False))
         return None

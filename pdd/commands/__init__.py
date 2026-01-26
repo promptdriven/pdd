@@ -8,10 +8,14 @@ from .fix import fix
 from .modify import split, change, update
 from .maintenance import sync, auto_deps, setup
 from .analysis import detect_change, conflicts, bug, crash, trace
+from .connect import connect
+from .auth import auth_group
 from .misc import preprocess
+from .sessions import sessions
 from .report import report_core
 from .templates import templates_group
 from .utility import install_completion_cmd, verify
+from .which import which
 
 def register_commands(cli: click.Group) -> None:
     """Register all subcommands with the main CLI group."""
@@ -34,9 +38,13 @@ def register_commands(cli: click.Group) -> None:
     cli.add_command(report_core)
     cli.add_command(install_completion_cmd, name="install_completion")
     cli.add_command(verify)
+    cli.add_command(which)
     
     # Register templates group directly to commands dict to handle nesting if needed,
     # or just add_command works for groups too.
     # The original code did: cli.commands["templates"] = templates_group
     # Using add_command is cleaner if it works for the structure.
     cli.add_command(templates_group)
+    cli.add_command(connect)
+    cli.add_command(auth_group)
+    cli.add_command(sessions)

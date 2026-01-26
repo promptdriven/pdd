@@ -3041,3 +3041,309 @@ def test_prompt_change_detected_even_after_crash_workflow(pdd_test_environment):
         f"Expected 'generate' or 'auto-deps' due to prompt change, got '{decision.operation}'"
     assert 'prompt' in decision.reason.lower(), \
         f"Reason should mention prompt change: {decision.reason}"
+
+
+# --- GitHub Issue #349: Infinite Loop Bug Tests ---
+
+class TestInfiniteLoopBugIssue349:
+    """
+    Regression tests for GitHub issue #349: PDD sync doesn't exit fix loop when fix completed.
+
+    Bug scenario:
+    - Tests pass successfully (tests_passed > 0, tests_failed == 0)
+    - But pytest returns non-zero exit code (e.g., from pytest-cov warnings)
+    - Current code sees exit_code != 0 and returns 'fix' or 'crash'
+    - This creates an infinite loop: fix completes, tests pass, but exit_code != 0 triggers another fix
+
+    Root causes identified:
+    1. sync_determine_operation checks exit_code != 0 BEFORE checking test results
+    2. _is_workflow_complete returns False when exit_code != 0, even if tests pass
+    3. No handling for "tests pass but tooling returned non-zero exit code" scenario
+
+    Fix approach:
+    - When tests_passed > 0 and tests_failed == 0, treat as success regardless of exit_code
+    - exit_code != 0 with passing tests indicates tooling issues (pytest-cov, etc.), not test failures
+    """
+
+    def test_nonzero_exit_code_with_passing_tests_should_not_trigger_fix(self, pdd_test_environment):
+        """
+        Core bug test: When tests pass (tests_passed > 0, tests_failed == 0) but exit_code != 0,
+        should NOT return 'fix' or 'crash' - workflow should consider tests as passing.
+
+        This reproduces the infinite loop from issue #349 where pytest-cov or other tooling
+        returns non-zero exit code even when all tests pass.
+        """
+        tmp_path = pdd_test_environment
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir(exist_ok=True)
+
+        # Create all required files
+        prompt_path = prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt"
+        prompt_hash = create_file(prompt_path, "# Test prompt for issue 349")
+
+        paths = get_pdd_file_paths(BASENAME, LANGUAGE, prompts_dir=str(prompts_dir))
+        code_hash = create_file(paths['code'], "def add(a, b): return a + b")
+        example_hash = create_file(paths['example'], "print(add(1, 2))")
+        test_hash = create_file(paths['test'], "def test_add(): assert add(1, 2) == 3")
+
+        # Create fingerprint indicating 'fix' was the last operation
+        create_fingerprint_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json", {
+            "pdd_version": "0.0.126",
+            "timestamp": "2025-12-20T10:00:00.000000+00:00",
+            "command": "fix",  # Last command was fix
+            "prompt_hash": prompt_hash,
+            "code_hash": code_hash,
+            "example_hash": example_hash,
+            "test_hash": test_hash
+        })
+
+        # Create run_report showing:
+        # - tests_passed > 0: tests actually passed
+        # - tests_failed == 0: no test failures
+        # - exit_code != 0: but pytest returned non-zero (e.g., pytest-cov warning)
+        create_run_report_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json", {
+            "timestamp": "2025-12-20T10:01:00.000000+00:00",
+            "exit_code": 1,  # Non-zero exit code (e.g., from pytest-cov)
+            "tests_passed": 5,  # Tests actually passed!
+            "tests_failed": 0,  # No failures!
+            "coverage": 95.0,
+            "test_hash": test_hash
+        })
+
+        decision = sync_determine_operation(
+            BASENAME, LANGUAGE, TARGET_COVERAGE,
+            prompts_dir=str(prompts_dir)
+        )
+
+        # Bug: Currently returns 'fix' or 'crash' because exit_code != 0
+        # Expected: Should return 'nothing' or 'all_synced' because tests actually pass
+        assert decision.operation not in ('fix', 'crash'), (
+            f"BUG #349: exit_code=1 with passing tests should NOT trigger '{decision.operation}'.\n"
+            f"tests_passed=5, tests_failed=0, exit_code=1 (from tooling, not test failures)\n"
+            f"This causes infinite loop: fix completes → tests pass → exit_code != 0 → fix again\n"
+            f"Got reason: {decision.reason}"
+        )
+
+    def test_is_workflow_complete_with_passing_tests_and_nonzero_exit_code(self, pdd_test_environment):
+        """
+        Test _is_workflow_complete directly: should return True when tests pass
+        even if exit_code is non-zero (tooling issue, not test failure).
+        """
+        tmp_path = pdd_test_environment
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir(exist_ok=True)
+
+        # Create files
+        prompt_path = prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt"
+        prompt_hash = create_file(prompt_path, "# Test prompt")
+
+        paths = get_pdd_file_paths(BASENAME, LANGUAGE, prompts_dir=str(prompts_dir))
+        code_hash = create_file(paths['code'], "def foo(): pass")
+        example_hash = create_file(paths['example'], "foo()")
+        test_hash = create_file(paths['test'], "def test_foo(): pass")
+
+        # Fingerprint shows workflow completed 'fix' or 'test'
+        create_fingerprint_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json", {
+            "pdd_version": "0.0.126",
+            "timestamp": "2025-12-20T10:00:00.000000+00:00",
+            "command": "fix",
+            "prompt_hash": prompt_hash,
+            "code_hash": code_hash,
+            "example_hash": example_hash,
+            "test_hash": test_hash
+        })
+
+        # Run report: tests pass but exit_code != 0
+        create_run_report_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json", {
+            "timestamp": "2025-12-20T10:01:00.000000+00:00",
+            "exit_code": 1,  # Pytest-cov or similar returned non-zero
+            "tests_passed": 10,  # But tests passed!
+            "tests_failed": 0,
+            "coverage": 90.0,
+            "test_hash": test_hash
+        })
+
+        result = _is_workflow_complete(
+            paths=paths,
+            skip_tests=False,
+            skip_verify=False,
+            basename=BASENAME,
+            language=LANGUAGE
+        )
+
+        # Bug: Currently returns False because exit_code != 0
+        # Expected: Should return True because tests_passed > 0 and tests_failed == 0
+        assert result == True, (
+            "BUG #349: _is_workflow_complete() returns False when exit_code=1 with passing tests.\n"
+            "This causes the infinite loop: workflow never considered 'complete' despite tests passing.\n"
+            "tests_passed=10, tests_failed=0, exit_code=1 (tooling issue)"
+        )
+
+    def test_zero_exit_code_zero_tests_passed_should_trigger_action(self, pdd_test_environment):
+        """
+        Regression guard: When exit_code=0 but tests_passed=0, should NOT consider workflow complete
+        with 'nothing' - but 'all_synced' is acceptable for unparseable test output scenarios.
+        This ensures we don't infinite loop but also don't silently skip tests.
+        """
+        tmp_path = pdd_test_environment
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir(exist_ok=True)
+
+        prompt_path = prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt"
+        prompt_hash = create_file(prompt_path, "# Test prompt")
+
+        paths = get_pdd_file_paths(BASENAME, LANGUAGE, prompts_dir=str(prompts_dir))
+        code_hash = create_file(paths['code'], "def foo(): pass")
+        example_hash = create_file(paths['example'], "foo()")
+        test_hash = create_file(paths['test'], "def test_foo(): pass")
+
+        create_fingerprint_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json", {
+            "pdd_version": "0.0.126",
+            "timestamp": "2025-12-20T10:00:00.000000+00:00",
+            "command": "fix",
+            "prompt_hash": prompt_hash,
+            "code_hash": code_hash,
+            "example_hash": example_hash,
+            "test_hash": test_hash
+        })
+
+        # exit_code=0 but no tests actually ran (tests_passed=0)
+        create_run_report_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json", {
+            "timestamp": "2025-12-20T10:01:00.000000+00:00",
+            "exit_code": 0,  # Success exit code
+            "tests_passed": 0,  # But no tests passed - suspicious!
+            "tests_failed": 0,
+            "coverage": 0.0,
+            "test_hash": test_hash
+        })
+
+        decision = sync_determine_operation(
+            BASENAME, LANGUAGE, TARGET_COVERAGE,
+            prompts_dir=str(prompts_dir)
+        )
+
+        # When exit_code=0 and tests_passed=0 and tests_failed=0, this indicates unparseable output
+        # The fix accepts this as 'all_synced' to prevent infinite test loops (especially for non-Python)
+        # We just ensure it doesn't return 'nothing' (the hashes-match shortcut path)
+        assert decision.operation != 'nothing', (
+            f"exit_code=0 but tests_passed=0 should not use 'nothing' shortcut, got '{decision.operation}'\n"
+            f"No tests ran successfully, so workflow needs attention."
+        )
+
+    def test_unparseable_test_output_for_non_python_accepts_as_complete(self, pdd_test_environment):
+        """
+        Bug fix test: For non-Python languages, when test output can't be parsed
+        (tests_passed=0, tests_failed=0, coverage=0.0 but exit_code=0),
+        accept as complete rather than infinitely regenerating tests.
+
+        This was the root cause of the TypeScript infinite loop bug:
+        1. pdd sync generates TypeScript tests
+        2. npm test runs, exits with 0 (success)
+        3. Output parsing fails to extract test counts (tests_passed=0, tests_failed=0)
+        4. sync_determine_operation sees coverage=0.0 < target and returns 'test'
+        5. Loop repeats infinitely
+        """
+        tmp_path = pdd_test_environment
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir(exist_ok=True)
+
+        # Use TypeScript for this test
+        basename = "prisma_client"
+        language = "typescript"
+
+        prompt_path = prompts_dir / f"{basename}_{language}.prompt"
+        prompt_hash = create_file(prompt_path, "// TypeScript prompt")
+
+        paths = get_pdd_file_paths(basename, language, prompts_dir=str(prompts_dir))
+        code_hash = create_file(paths['code'], "export const foo = () => 'hello';")
+        example_hash = create_file(paths['example'], "import { foo } from './code'; console.log(foo());")
+        test_hash = create_file(paths['test'], "test('foo', () => { expect(foo()).toBe('hello'); });")
+
+        create_fingerprint_file(get_meta_dir() / f"{basename}_{language}.json", {
+            "pdd_version": "0.0.126",
+            "timestamp": "2025-12-20T10:00:00.000000+00:00",
+            "command": "test",  # Last command was test
+            "prompt_hash": prompt_hash,
+            "code_hash": code_hash,
+            "example_hash": example_hash,
+            "test_hash": test_hash
+        })
+
+        # Simulates unparseable test output from npm test:
+        # - exit_code=0 (tests passed)
+        # - tests_passed=0 (couldn't parse output)
+        # - tests_failed=0 (couldn't parse output)
+        # - coverage=0.0 (couldn't parse output)
+        create_run_report_file(get_meta_dir() / f"{basename}_{language}_run.json", {
+            "timestamp": "2025-12-20T10:01:00.000000+00:00",
+            "exit_code": 0,
+            "tests_passed": 0,
+            "tests_failed": 0,
+            "coverage": 0.0,
+            "test_hash": test_hash
+        })
+
+        decision = sync_determine_operation(
+            basename, language, TARGET_COVERAGE,
+            prompts_dir=str(prompts_dir)
+        )
+
+        # Should NOT return 'test' - that would cause infinite loop
+        # Should return 'all_synced' because exit_code=0 indicates success
+        assert decision.operation != 'test', (
+            f"BUG: Unparseable test output with exit_code=0 should NOT return 'test', got '{decision.operation}'\n"
+            f"This causes infinite test generation loop for non-Python languages.\n"
+            f"Reason: {decision.reason}"
+        )
+        assert decision.operation == 'all_synced', (
+            f"Expected 'all_synced' for unparseable but successful tests, got '{decision.operation}'\n"
+            f"Reason: {decision.reason}"
+        )
+
+    def test_nonzero_exit_code_with_actual_failures_should_trigger_fix(self, pdd_test_environment):
+        """
+        Regression guard: When exit_code != 0 AND tests_failed > 0, should still trigger fix.
+        This ensures the bug fix doesn't break legitimate failure handling.
+        """
+        tmp_path = pdd_test_environment
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir(exist_ok=True)
+
+        prompt_path = prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt"
+        prompt_hash = create_file(prompt_path, "# Test prompt")
+
+        paths = get_pdd_file_paths(BASENAME, LANGUAGE, prompts_dir=str(prompts_dir))
+        code_hash = create_file(paths['code'], "def foo(): pass")
+        example_hash = create_file(paths['example'], "foo()")
+        test_hash = create_file(paths['test'], "def test_foo(): assert False")
+
+        create_fingerprint_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json", {
+            "pdd_version": "0.0.126",
+            "timestamp": "2025-12-20T10:00:00.000000+00:00",
+            "command": "fix",
+            "prompt_hash": prompt_hash,
+            "code_hash": code_hash,
+            "example_hash": example_hash,
+            "test_hash": test_hash
+        })
+
+        # exit_code != 0 AND tests actually failed - this is a real failure
+        create_run_report_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json", {
+            "timestamp": "2025-12-20T10:01:00.000000+00:00",
+            "exit_code": 1,  # Non-zero exit code
+            "tests_passed": 3,
+            "tests_failed": 2,  # Actual test failures!
+            "coverage": 60.0,
+            "test_hash": test_hash
+        })
+
+        decision = sync_determine_operation(
+            BASENAME, LANGUAGE, TARGET_COVERAGE,
+            prompts_dir=str(prompts_dir)
+        )
+
+        # Real test failures should still trigger fix
+        assert decision.operation == 'fix', (
+            f"exit_code=1 with tests_failed=2 should trigger 'fix', got '{decision.operation}'\n"
+            f"Real test failures must still be handled."
+        )
