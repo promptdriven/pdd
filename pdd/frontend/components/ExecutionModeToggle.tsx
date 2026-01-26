@@ -13,7 +13,11 @@ const ExecutionModeToggle: React.FC<ExecutionModeToggleProps> = ({
 }) => {
   return (
     <div className="flex items-center gap-1.5 sm:gap-2">
-      <div className="flex bg-surface-800 border border-surface-700 rounded-lg p-0.5 sm:p-1">
+      <div
+        className="flex bg-surface-800 border border-surface-700 rounded-lg p-0.5 sm:p-1"
+        role="group"
+        aria-label="Execution mode"
+      >
         {/* Local Execution Button */}
         <button
           onClick={() => onModeChange('local')}
