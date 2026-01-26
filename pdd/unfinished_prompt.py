@@ -1,5 +1,6 @@
 from typing import Tuple, Optional
 import ast
+import warnings
 from pydantic import BaseModel, Field
 from rich import print as rprint
 from .load_prompt_template import load_prompt_template
@@ -70,7 +71,9 @@ def unfinished_prompt(
         should_try_python_parse = (language or "").lower() == "python" or _looks_like_python(prompt_text)
         if should_try_python_parse:
             try:
-                ast.parse(prompt_text)
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", SyntaxWarning)
+                    ast.parse(prompt_text)
                 reasoning = "Syntactic Python check passed (ast.parse succeeded); treating as finished."
                 if verbose:
                     rprint("[green]" + reasoning + "[/green]")
