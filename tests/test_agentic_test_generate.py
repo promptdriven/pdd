@@ -246,14 +246,13 @@ def test_missing_template(mock_load, mock_env):
     """Test that the function returns failure if the prompt template cannot be loaded."""
     mock_load.return_value = None
 
-    content, cost, model, success = run_agentic_test_generate(
+    content, cost, model = run_agentic_test_generate(
         mock_env["prompt"], mock_env["code"], mock_env["test"], quiet=True
     )
 
     assert content == ""
     assert cost == 0.0
     assert model == "unknown"
-    assert success is False
 
 
 @patch("pdd.agentic_test_generate.get_available_agents")
@@ -261,14 +260,13 @@ def test_no_agents_available(mock_agents, mock_env):
     """Test that the function returns failure if no agents are available."""
     mock_agents.return_value = []
 
-    content, cost, model, success = run_agentic_test_generate(
+    content, cost, model = run_agentic_test_generate(
         mock_env["prompt"], mock_env["code"], mock_env["test"], quiet=True
     )
 
     assert content == ""
     assert cost == 0.0
     assert model == "unknown"
-    assert success is False
 
 
 @patch("pdd.agentic_test_generate.run_agentic_task")
@@ -287,14 +285,13 @@ def test_successful_generation(mock_agents, mock_load, mock_run, mock_env):
 
     mock_run.side_effect = side_effect
 
-    content, cost, model, success = run_agentic_test_generate(
+    content, cost, model = run_agentic_test_generate(
         mock_env["prompt"], mock_env["code"], mock_env["test"], quiet=True
     )
 
     assert content == "describe('add', () => { it('adds numbers', () => {}); });"
     assert cost == 0.15
     assert model == "agentic-anthropic"
-    assert success is True
 
 
 @patch("pdd.agentic_test_generate.run_agentic_task")
@@ -306,48 +303,13 @@ def test_agent_returns_invalid_json(mock_agents, mock_load, mock_run, mock_env):
     mock_load.return_value = "Template"
     mock_run.return_value = (True, "I generated the tests", 0.1, "anthropic")
 
-    content, cost, model, success = run_agentic_test_generate(
+    content, cost, model = run_agentic_test_generate(
         mock_env["prompt"], mock_env["code"], mock_env["test"], quiet=True
     )
 
     # Should still work but content will be empty (no test file created)
     assert content == ""
     assert cost == 0.1
-    assert success is False  # No valid JSON with success field
-
-
-@patch("pdd.agentic_test_generate.run_agentic_task")
-@patch("pdd.agentic_test_generate.load_prompt_template")
-@patch("pdd.agentic_test_generate.get_available_agents")
-def test_success_inferred_when_json_missing_but_test_file_exists(
-    mock_agents, mock_load, mock_run, mock_env
-):
-    """Test fallback: agent succeeded and created test file, but JSON not in final output.
-
-    Reproduces the bug where Claude CLI's --output-format json puts only the
-    last assistant text in 'result'. If the agent outputs JSON in a non-final
-    turn (e.g., before a TodoWrite call), PDD receives the summary table
-    instead, which contains no JSON. The agent DID succeed and the test file
-    exists, so we should infer success.
-    """
-    mock_agents.return_value = ["anthropic"]
-    mock_load.return_value = "Template"
-
-    # Agent creates test file but returns non-JSON summary text (last turn)
-    def side_effect(*args, **kwargs):
-        test_content = "describe('add', () => { it('works', () => {}); });"
-        mock_env["test"].write_text(test_content)
-        return (True, "## Summary\n| Tests | Status |\n|-------|--------|\n| 49 | Passed |", 0.15, "anthropic")
-
-    mock_run.side_effect = side_effect
-
-    content, cost, model, success = run_agentic_test_generate(
-        mock_env["prompt"], mock_env["code"], mock_env["test"], quiet=True
-    )
-
-    assert content == "describe('add', () => { it('works', () => {}); });"
-    assert cost == 0.15
-    assert success is True
 
 
 @patch("pdd.agentic_test_generate.run_agentic_task")
@@ -366,14 +328,13 @@ def test_detects_test_file_at_different_path(mock_agents, mock_load, mock_run, m
 
     mock_run.side_effect = side_effect
 
-    content, cost, model, success = run_agentic_test_generate(
+    content, cost, model = run_agentic_test_generate(
         mock_env["prompt"], mock_env["code"], mock_env["test"],
         quiet=True, verbose=True
     )
 
     # Should find the test file at the alternative path
     assert content == "test('works', () => {});"
-    assert success is True
 
 
 @patch("pdd.agentic_test_generate.run_agentic_task")
@@ -392,13 +353,12 @@ def test_json_in_markdown_block(mock_agents, mock_load, mock_run, mock_env):
     '''
     mock_run.return_value = (True, agent_output, 0.2, "anthropic")
 
-    content, cost, model, success = run_agentic_test_generate(
+    content, cost, model = run_agentic_test_generate(
         mock_env["prompt"], mock_env["code"], mock_env["test"], quiet=True
     )
 
     # JSON parsing should succeed
     assert cost == 0.2
-    assert success is True
 
 
 @patch("pdd.agentic_test_generate.run_agentic_task")
@@ -415,14 +375,13 @@ def test_handles_missing_input_files(mock_agents, mock_load, mock_run, mock_env)
     mock_env["code"].unlink()
 
     # Should not crash, just proceed with empty content
-    content, cost, model, success = run_agentic_test_generate(
+    content, cost, model = run_agentic_test_generate(
         mock_env["prompt"], mock_env["code"], mock_env["test"],
         quiet=True, verbose=True
     )
 
     # Function should still complete
     assert cost == 0.1
-    assert success is True
 
 
 @patch("pdd.agentic_test_generate.run_agentic_task")
@@ -434,12 +393,11 @@ def test_model_name_formatting(mock_agents, mock_load, mock_run, mock_env):
     mock_load.return_value = "Template"
     mock_run.return_value = (True, '{"success": true}', 0.1, "google")
 
-    content, cost, model, success = run_agentic_test_generate(
+    content, cost, model = run_agentic_test_generate(
         mock_env["prompt"], mock_env["code"], mock_env["test"], quiet=True
     )
 
     assert model == "agentic-google"
-    assert success is True
 
 
 @patch("pdd.agentic_test_generate.run_agentic_task")
@@ -451,9 +409,8 @@ def test_model_name_fallback(mock_agents, mock_load, mock_run, mock_env):
     mock_load.return_value = "Template"
     mock_run.return_value = (True, '{"success": true}', 0.1, "")
 
-    content, cost, model, success = run_agentic_test_generate(
+    content, cost, model = run_agentic_test_generate(
         mock_env["prompt"], mock_env["code"], mock_env["test"], quiet=True
     )
 
     assert model == "agentic-cli"
-    assert success is True

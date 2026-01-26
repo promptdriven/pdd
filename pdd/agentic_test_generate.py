@@ -151,7 +151,7 @@ def run_agentic_test_generate(
     *,
     verbose: bool = False,
     quiet: bool = False,
-) -> tuple[str, float, str, bool]:
+) -> tuple[str, float, str]:
     """
     Agentic test generation for non-Python languages.
 
@@ -166,11 +166,10 @@ def run_agentic_test_generate(
         quiet: Suppress standard output.
 
     Returns:
-        Tuple (generated_content, cost, model_name, success):
+        Tuple (generated_content, cost, model_name):
             generated_content: The content of the generated test file.
             cost: Estimated LLM cost.
             model_name: Model/provider used.
-            success: Whether the agentic test generation succeeded (tests passed).
     """
     project_root = Path.cwd()
 
@@ -187,7 +186,7 @@ def run_agentic_test_generate(
         )
         if not quiet:
             console.print(f"[bold red]{error_msg}[/bold red]")
-        return "", 0.0, "unknown", False
+        return "", 0.0, "unknown"
 
     if verbose and not quiet:
         console.print(f"[green]Available agents:[/green] {', '.join(agents)}")
@@ -198,7 +197,7 @@ def run_agentic_test_generate(
         error_msg = "Failed to load prompt template 'agentic_test_generate_LLM'"
         if not quiet:
             console.print(f"[bold red]{error_msg}[/bold red]")
-        return "", 0.0, "unknown", False
+        return "", 0.0, "unknown"
 
     # Read input files
     prompt_content = ""
@@ -232,7 +231,7 @@ def run_agentic_test_generate(
         error_msg = f"Error formatting agent prompt template: {e}"
         if not quiet:
             console.print(f"[bold red]{error_msg}[/bold red]")
-        return "", 0.0, "unknown", False
+        return "", 0.0, "unknown"
 
     if verbose and not quiet:
         console.print(f"[cyan]Prompt file:[/cyan] {prompt_file}")
@@ -256,9 +255,6 @@ def run_agentic_test_generate(
     mtimes_after = _get_file_mtimes(project_root)
     changed_files = _detect_changed_files(mtimes_before, mtimes_after, project_root)
 
-    # Read the generated test file (before success check so it's available for fallback)
-    generated_content = _read_generated_test_file(output_test_file)
-
     # Parse agent output
     parsed_data = _extract_json_from_text(agent_output)
 
@@ -269,19 +265,9 @@ def run_agentic_test_generate(
         final_success = parsed_data.get("success", False)
         if "message" in parsed_data:
             message = parsed_data["message"]
-    elif agent_success and generated_content:
-        # Fallback: JSON was not in the final assistant turn (multi-turn output).
-        # Claude CLI --output-format json only returns the last assistant text
-        # in 'result'. If the agent output JSON in a non-final turn (e.g. before
-        # a TodoWrite call), we won't see it. Infer success from the agent's
-        # exit status and the test file's existence on disk.
-        final_success = True
-        message = "Agent completed successfully (inferred from exit status and test file)"
-        if verbose and not quiet:
-            console.print(
-                "[yellow]Warning: Could not parse JSON from agent output. "
-                "Inferring success from exit status and test file presence.[/yellow]"
-            )
+
+    # Read the generated test file
+    generated_content = _read_generated_test_file(output_test_file)
 
     # If the expected output file doesn't exist, check if agent created it with different extension
     if not generated_content and changed_files:
@@ -307,4 +293,4 @@ def run_agentic_test_generate(
 
     model_name = f"agentic-{provider}" if provider else "agentic-cli"
 
-    return generated_content, cost, model_name, final_success
+    return generated_content, cost, model_name
