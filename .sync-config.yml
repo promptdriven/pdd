@@ -19,6 +19,7 @@ shared:
   - tests/conftest.py
   - tests/prompt_tester.py
   - tests/*regression*.sh
+  - tests/fixtures/
 
   # Root config files
   - README.md
@@ -52,10 +53,6 @@ shared:
   # Context examples
   - context/**/*_example.py
   - context/cloud_function_call.py
-
-  # Test prompts for regression (needed by both repos)
-  - prompts/test_other_python.prompt
-  - prompts/encode_message_python.prompt
 
   # LLM prompts (preprocessed for PyPI, also sync to public repo)
   - prompts/*_LLM.prompt
