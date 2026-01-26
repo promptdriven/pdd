@@ -586,6 +586,42 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
     }).length;
   }, [architecture, promptsInfo]);
 
+  // Run pdd sync for a single module (adds to queue)
+  const handleRunSyncForModule = useCallback((module: ArchitectureModule) => {
+    if (!onAddToQueue) return;
+
+    const promptMap = new Map<string, PromptInfo>();
+    promptsInfo.forEach(p => {
+      const filename = p.prompt.split('/').pop() || '';
+      promptMap.set(filename, p);
+    });
+
+    const match = module.filename.match(/_([A-Za-z]+)\.prompt$/);
+    const language = match ? match[1].toLowerCase() : undefined;
+    const basename = module.filename.replace(/_[A-Za-z]+\.prompt$/, '');
+
+    // Use the full PromptInfo from promptsInfo if available
+    const existingPrompt = promptMap.get(module.filename);
+    const promptInfo: PromptInfo = existingPrompt || {
+      prompt: `prompts/${module.filename}`,
+      sync_basename: basename,
+      language,
+      code: module.filepath,
+    };
+
+    // Build rawOptions matching what CommandOptionsModal produces for SYNC
+    const syncConfig = COMMANDS[CommandType.SYNC];
+    const rawOptions: Record<string, any> = {};
+    syncConfig.options.forEach(opt => {
+      if (opt.defaultValue !== undefined) {
+        rawOptions[opt.name] = opt.defaultValue;
+      }
+    });
+
+    const displayCommand = buildDisplayCommand(CommandType.SYNC, promptInfo, { ...rawOptions });
+    onAddToQueue(CommandType.SYNC, promptInfo, { ...rawOptions }, displayCommand);
+  }, [promptsInfo, onAddToQueue]);
+
   // Queue sync for all remaining modules (sorted by priority)
   const handleSyncAll = useCallback(() => {
     if (!architecture || !onAddToQueue) return;
@@ -1679,7 +1715,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
                 appName={appName}
                 onRegenerate={handleRegenerate}
                 onModuleClick={handleModuleClick}
-                onModuleSync={handleModuleClick}
+                onRunSync={handleRunSyncForModule}
                 onGeneratePrompts={handleGeneratePrompts}
                 isGeneratingPrompts={isGeneratingPrompts}
                 existingPrompts={existingPrompts}

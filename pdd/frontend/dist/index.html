@@ -44,6 +44,12 @@
                 800: '#1e40af',
                 900: '#1e3a8a',
               },
+              // PDD brand colors
+              pdd: {
+                gold: '#FDCE49',
+                goldActive: '#DFA84A',
+                goldHover: '#FFD966',
+              },
             },
             fontFamily: {
               sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
@@ -64,6 +70,8 @@
               'scale-in': 'scaleIn 0.2s ease-out',
               'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
               'slide-in-right': 'slideInRight 0.25s ease-out',
+              'flash': 'flash 1s ease-in-out infinite',
+              'glow-pulse': 'glowPulse 2s ease-in-out infinite',
             },
             textColor: {
               text: {
@@ -140,6 +148,14 @@
       @keyframes indeterminate {
         0% { transform: translateX(-100%); }
         100% { transform: translateX(300%); }
+      }
+      @keyframes flash {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+      }
+      @keyframes glowPulse {
+        0%, 100% { box-shadow: 0 0 5px rgba(253, 206, 73, 0.3); }
+        50% { box-shadow: 0 0 20px rgba(253, 206, 73, 0.6); }
       }
 
       .animate-fade-in { animation: fadeIn 0.3s ease-out; }
@@ -287,6 +303,17 @@
         stroke-width: 3px !important;
       }
 
+      /* Position edges behind nodes in ReactFlow */
+      .react-flow__edges {
+        z-index: 0 !important;
+      }
+      .react-flow__nodes {
+        z-index: 10 !important;
+      }
+      .react-flow__node {
+        z-index: 10 !important;
+      }
+
       /* CodeMirror Autocomplete styles */
       .cm-tooltip {
         z-index: 1000 !important;
@@ -367,7 +394,7 @@
   }
 }
 </script>
-  <script type="module" crossorigin src="/assets/index-AzIzdD_B.js"></script>
+  <script type="module" crossorigin src="/assets/index-BnUqjNYV.js"></script>
   <link rel="stylesheet" crossorigin href="/assets/index-B5DZHykP.css">
 </head>
   <body class="bg-surface-950 text-gray-200">

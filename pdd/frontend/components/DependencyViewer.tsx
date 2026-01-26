@@ -32,7 +32,7 @@ interface DependencyViewerProps {
   appName?: string;
   onRegenerate: () => void;
   onModuleClick: (module: ArchitectureModule) => void;
-  onModuleSync?: (module: ArchitectureModule) => void;
+  onRunSync?: (module: ArchitectureModule) => void;  // Run pdd sync command for a module
   onGeneratePrompts?: () => void;
   isGeneratingPrompts?: boolean;
   existingPrompts?: Set<string>;
@@ -132,7 +132,7 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
   appName,
   onRegenerate,
   onModuleClick,
-  onModuleSync,
+  onRunSync,
   onGeneratePrompts,
   isGeneratingPrompts = false,
   existingPrompts = new Set(),
@@ -191,7 +191,7 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
           hasPrompt,
           colors: getCategoryColors(category),
           onClick: onModuleClick,
-          onSync: onModuleSync,
+          onRunSync: onRunSync,
           editMode,
           onEdit: onModuleEdit,
           onDelete: onModuleDelete,
@@ -253,7 +253,7 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
 
     // All modules have positions - use them as-is
     return { initialNodes: nodes, initialEdges: edges };
-  }, [architecture, existingPrompts, promptInfoMap, onModuleClick, editMode, onModuleEdit, onModuleDelete, highlightedModules]);
+  }, [architecture, existingPrompts, promptInfoMap, onModuleClick, onRunSync, editMode, onModuleEdit, onModuleDelete, highlightedModules]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
@@ -508,8 +508,8 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
         )}
       </div>
 
-      {/* React Flow Graph */}
-      <div className="flex-1 min-h-0">
+      {/* React Flow Graph - edges render behind nodes via CSS */}
+      <div className="flex-1 min-h-0 [&_.react-flow__edges]:z-0 [&_.react-flow__nodes]:z-10">
         <ReactFlow
           nodes={nodes}
           edges={edges}

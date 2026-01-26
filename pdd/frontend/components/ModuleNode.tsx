@@ -15,7 +15,7 @@ export interface ModuleNodeData {
     text: string;
   };
   onClick?: (module: ArchitectureModule) => void;
-  onSync?: (module: ArchitectureModule) => void;
+  onRunSync?: (module: ArchitectureModule) => void;  // Run pdd sync command
   // Edit mode props
   editMode?: boolean;
   onEdit?: (module: ArchitectureModule) => void;
@@ -24,7 +24,7 @@ export interface ModuleNodeData {
 }
 
 const ModuleNode: React.FC<NodeProps<ModuleNodeData>> = ({ data, selected, xPos, yPos }) => {
-  const { label, module, promptInfo, hasPrompt, colors, onClick, onSync, editMode, onEdit, isHighlighted } = data;
+  const { label, module, promptInfo, hasPrompt, colors, onClick, onRunSync, editMode, onEdit, isHighlighted } = data;
   const hasCode = !!promptInfo?.code;
   const hasTest = !!promptInfo?.test;
   const hasExample = !!promptInfo?.example;
@@ -44,8 +44,8 @@ const ModuleNode: React.FC<NodeProps<ModuleNodeData>> = ({ data, selected, xPos,
 
   const handleSyncClick = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (onSync) {
-      onSync(module);
+    if (onRunSync) {
+      onRunSync(module);
     }
   };
 
@@ -86,8 +86,9 @@ const ModuleNode: React.FC<NodeProps<ModuleNodeData>> = ({ data, selected, xPos,
             ${hasPrompt ? 'ring-2 ring-emerald-500/50' : ''}
             ${selected ? 'ring-2 ring-accent-500' : ''}
             ${isHighlighted ? 'ring-2 ring-red-500 animate-pulse' : ''}
+            backdrop-blur-sm
           `}
-          style={{ width: 200, minHeight: 85 }}
+          style={{ width: 200, minHeight: 85, opacity: 0.95 }}
         >
           {/* Edit button overlay - only visible in edit mode on hover */}
           {editMode && (
@@ -102,22 +103,22 @@ const ModuleNode: React.FC<NodeProps<ModuleNodeData>> = ({ data, selected, xPos,
             </button>
           )}
 
-          {/* Sync button - visible on hover when prompt exists */}
-          {hasPrompt && onSync && !editMode && (
+          {/* Sync button - run pdd sync command (only when prompt exists and not in edit mode) */}
+          {hasPrompt && onRunSync && !editMode && (
             <button
               onClick={handleSyncClick}
-              className="absolute -top-2 -right-2 w-6 h-6 bg-blue-600 hover:bg-blue-500 rounded-full flex items-center justify-center shadow-lg z-20 opacity-0 group-hover:opacity-100 transition-opacity"
-              title="Sync tags from architecture"
+              className="absolute -top-2 -right-2 w-6 h-6 bg-gradient-to-br from-[#FDCE49] to-[#DFA84A] hover:from-[#FFD966] hover:to-[#FDCE49] rounded-full flex items-center justify-center shadow-lg z-20 transition-all hover:scale-110"
+              title="Run pdd sync (prompt → code)"
             >
-              <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              <svg className="w-3 h-3 text-surface-900" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M14 5l7 7m0 0l-7 7m7-7H3" />
               </svg>
             </button>
           )}
 
-          {/* Prompt status indicator */}
+          {/* Prompt status indicator - repositioned when sync button exists */}
           {hasPrompt && (
-            <div className={`absolute ${hasPrompt && onSync && !editMode ? '-top-1.5 right-5' : '-top-1.5 -right-1.5'} w-5 h-5 bg-emerald-500 rounded-full flex items-center justify-center shadow-lg z-10`}>
+            <div className={`absolute ${onRunSync && !editMode ? '-top-1.5 right-5' : '-top-1.5 -right-1.5'} w-5 h-5 bg-emerald-500 rounded-full flex items-center justify-center shadow-lg z-10`}>
               <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
               </svg>
