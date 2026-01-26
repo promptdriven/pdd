@@ -2,24 +2,21 @@
 
 ### Feat
 
-- Improve live status section in pdd connect UI
-- Improve pdd connect web UI per issue #398
-- Add agentic test generation for non-Python languages
-- Upgrade architecture generation and fix test file detection
-- **config**: resolve prompt_path via env and .pddrc (implements #18)
-- Set `PDD_MODEL_DEFAULT` for regression tests in Makefile and add `error_log.txt`.
-- Introduce new agentic features and critical bug fixes, and add an error log for iterative fix attempts.
+- **agentic test generation**: Non-Python languages now use the new `agentic_test_generate` module for test generation, with dedicated LLM and language-specific prompts.
+- **architecture generation**: Upgraded Step 6-8 prompts for richer module discovery, validation, and self-healing. Improved test file detection in sync operations.
+- **pdd connect UI**: Enhanced live status section and web interface per issue #398.
+- **config**: Resolve `prompts_dir` via `PDD_PROMPTS_DIR` environment variable and `.pddrc` (implements #18). Thanks Benjamin Knobloch!
 
 ### Fix
 
-- Address Copilot review - add aria-label for accessibility
-- **construct_paths**: improve prompts_dir resolution logic to respect CLI and environment variable settings
-- malformed json for the architecture description in prompts
-- Handle double-brace escaped JSON in pdd-interface parsing
+- **sync discovery mode**: Fixed regression from PR #275 by adding fallback for `code_dir` when discovering modules.
+- **JSON parsing**: Handle double-brace escaped JSON (`{{` / `}}`) in `<pdd-interface>` metadata tags (issue #375).
+- **architecture prompts**: Escape literal braces to prevent malformed JSON in architecture descriptions.
+- **accessibility**: Add `aria-label` to UI components for screen reader support.
 
 ### Refactor
 
-- **config**: update prompts_dir resolution to use only PDD_PROMPTS_DIR environment variable, without aliases
+- **construct_paths**: Simplify `prompts_dir` resolution to use only `PDD_PROMPTS_DIR`, removing legacy aliases. Thanks Benjamin Knobloch!
 
 ## v0.0.129 (2026-01-25)
 
