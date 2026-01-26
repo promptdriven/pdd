@@ -133,8 +133,8 @@ class TestLanguageFormatCSV:
             f"Rust run_test_command should contain 'cargo test', got: {rust_cmd}"
         )
 
-    def test_js_ts_has_jest_test_command(self, language_format_path):
-        """JavaScript/TypeScript should have npx jest as run_test_command."""
+    def test_js_ts_empty_triggers_agentic_mode(self, language_format_path):
+        """JavaScript/TypeScript should have empty run_test_command (triggers agentic mode)."""
         with open(language_format_path, 'r') as f:
             reader = csv.DictReader(f)
             rows = {row['language']: row for row in reader}
@@ -142,8 +142,9 @@ class TestLanguageFormatCSV:
         if 'run_test_command' not in (rows.get('JavaScript', {}).keys()):
             pytest.skip("run_test_command column not yet added")
 
+        # Empty = agentic mode will handle test discovery and execution
         js_cmd = rows.get('JavaScript', {}).get('run_test_command', '').strip()
         ts_cmd = rows.get('TypeScript', {}).get('run_test_command', '').strip()
 
-        assert 'npx jest' in js_cmd, f"JavaScript should have npx jest in run_test_command, got: {js_cmd}"
-        assert 'npx jest' in ts_cmd, f"TypeScript should have npx jest in run_test_command, got: {ts_cmd}"
+        assert js_cmd == '', f"JavaScript should have empty run_test_command for agentic mode, got: {js_cmd}"
+        assert ts_cmd == '', f"TypeScript should have empty run_test_command for agentic mode, got: {ts_cmd}"
