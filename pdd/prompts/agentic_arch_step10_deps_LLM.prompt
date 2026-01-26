@@ -1,0 +1,213 @@
+<pdd-reason>Validates prompt file dependencies by running preprocess on each prompt.</pdd-reason>
+<pdd-interface>
+{{
+  "type": "module",
+  "module": {{
+    "functions": [
+      {{"name": "validate_dependencies", "signature": "()", "returns": "str ('VALID' or list of dependency errors)"}}
+    ]
+  }}
+}}
+</pdd-interface>
+<pdd-dependency>agentic_arch_step9_sync_LLM.prompt</pdd-dependency>
+% You are a PDD prompt validation expert. Your task is to validate that all prompt file dependencies can be resolved.
+
+% Context
+
+You are working on step 10 of the agentic architecture workflow. Step 7 generated prompt files, Steps 8-9 validated architecture and sync configuration. Now validate that all prompt file dependencies (includes, pdd-dependencies) are correct and resolvable.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Validation Using PDD Preprocess
+
+The PDD preprocess function resolves all includes and dependencies in a prompt file. Running it reveals any missing or invalid references.
+
+**1. Find all prompt files:**
+
+```bash
+# List all generated prompts
+find prompts -name "*.prompt" -type f | sort
+```
+
+**2. Run preprocess on each prompt:**
+
+```bash
+# Enable debug mode for detailed output
+export PDD_PREPROCESS_DEBUG=1
+
+# Test each prompt
+for prompt in $(find prompts -name "*.prompt" -type f); do
+    echo "=== Preprocessing: $prompt ==="
+    python -c "
+import sys
+sys.path.insert(0, '.')
+from pdd.preprocess import preprocess
+
+with open('$prompt') as f:
+    content = f.read()
+
+try:
+    result = preprocess(content, recursive=False)
+    print('OK: Preprocessed successfully')
+
+    # Check for unresolved placeholders
+    import re
+    placeholders = re.findall(r'\[File not found: ([^\]]+)\]', result)
+    if placeholders:
+        print(f'WARNING: Missing files: {placeholders}')
+
+except Exception as e:
+    print(f'ERROR: {e}')
+    sys.exit(1)
+" 2>&1
+done
+```
+
+**3. Check include tags manually:**
+
+```bash
+# Extract all include paths
+for prompt in $(find prompts -name "*.prompt" -type f); do
+    echo "=== Includes in: $prompt ==="
+    grep -oP '<include>\K[^<]+' "$prompt" 2>/dev/null | while read include; do
+        # Skip URLs
+        if [[ "$include" == http* ]]; then
+            echo "  [URL] $include"
+            continue
+        fi
+
+        # Check if file exists
+        if [[ -f "$include" ]]; then
+            echo "  ✓ $include"
+        elif [[ -f "$(dirname $prompt)/$include" ]]; then
+            echo "  ✓ $include (relative)"
+        elif [[ "$include" == *"example"* ]]; then
+            echo "  [EXAMPLE] $include (will be created during sync)"
+        else
+            echo "  ✗ MISSING: $include"
+        fi
+    done
+done
+```
+
+**4. Check pdd-dependency tags:**
+
+```bash
+# Verify all declared dependencies exist
+for prompt in $(find prompts -name "*.prompt" -type f); do
+    echo "=== Dependencies in: $prompt ==="
+    grep -oP '<pdd-dependency>\K[^<]+' "$prompt" 2>/dev/null | while read dep; do
+        # Check if dependency exists in architecture.json
+        if grep -q "\"$dep\"" architecture.json; then
+            echo "  ✓ $dep"
+        else
+            echo "  ✗ MISSING: $dep not in architecture.json"
+        fi
+    done
+done
+```
+
+**5. Common dependency issues:**
+
+| Issue | Symptom | Fix |
+|-------|---------|-----|
+| Missing include file | `[File not found: X]` | Create the file or remove include |
+| False pdd-dependency | Dependency not in architecture | Remove or add module to architecture |
+| Circular include | Stack overflow or infinite loop | Break the cycle |
+| Invalid path | File exists but wrong path | Fix the include path |
+
+**Allowed missing files:**
+- `examples/*` - Example files are created during `pdd sync`
+- `*_example.*` - Same as above
+- External URLs in `<web>` tags - Fetched at runtime
+
+% Output
+
+**1. Run preprocess validation for ALL prompts**
+
+Execute the actual commands and collect results.
+
+**2. Output validation result marker**
+
+If ALL prompts preprocess successfully (no errors, only allowed warnings), output:
+```
+VALIDATION_RESULT: VALID
+```
+
+If ANY prompt fails to preprocess OR has invalid dependencies, output:
+```
+VALIDATION_RESULT: INVALID
+```
+
+Followed by error details:
+```markdown
+## Dependency Validation Errors
+
+### Preprocess Failures
+| Prompt | Error |
+|--------|-------|
+| prompts/api/api_courses_route_TypeScript.prompt | FileNotFoundError: types/course.ts |
+
+### Missing Includes
+| Prompt | Missing File |
+|--------|--------------|
+| prompts/frontend/dashboard_page_TypeScriptReact.prompt | components/Header.tsx |
+
+### False pdd-dependency Declarations
+| Prompt | Invalid Dependency |
+|--------|-------------------|
+| prompts/api/api_lessons_route_TypeScript.prompt | nonexistent_module_TypeScript.prompt |
+
+### Suggested Fixes
+1. Create missing file: types/course.ts
+2. Remove invalid dependency from prompts/api/api_lessons_route_TypeScript.prompt
+3. Add missing module to architecture.json
+```
+
+**3. Post results to GitHub**
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+```markdown
+## Step 10: Prompt Dependency Validation
+
+**Status:** [VALID | INVALID]
+
+### Preprocess Results
+- Prompts tested: [N]
+- Successful: [M]/[N]
+- Failed: [list or "None"]
+
+### Include Validation
+- Total includes: [N]
+- Resolved: [M]
+- Missing (errors): [list or "None"]
+- Missing (examples, OK): [list or "None"]
+
+### pdd-dependency Validation
+- Total declarations: [N]
+- Valid: [M]
+- Invalid: [list or "None"]
+
+### Errors (if any)
+[Detailed error list with fixes]
+
+---
+*[All validations passed! | Returning to Step 11 for fixes]*
+```
+
+% Important
+
+- Run preprocess on EVERY prompt file
+- Missing example files are OK (created during sync)
+- Missing actual dependencies are ERRORS
+- False pdd-dependency declarations are ERRORS
+- Preprocess exceptions are ERRORS
+- Always output `VALIDATION_RESULT: VALID` or `VALIDATION_RESULT: INVALID`
+- Always post findings to GitHub
