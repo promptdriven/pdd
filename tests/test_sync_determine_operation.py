@@ -3181,8 +3181,9 @@ class TestInfiniteLoopBugIssue349:
 
     def test_zero_exit_code_zero_tests_passed_should_trigger_action(self, pdd_test_environment):
         """
-        Regression guard: When exit_code=0 but tests_passed=0, should NOT consider workflow complete.
-        This ensures we don't over-correct the bug fix.
+        Regression guard: When exit_code=0 but tests_passed=0, should NOT consider workflow complete
+        with 'nothing' - but 'all_synced' is acceptable for unparseable test output scenarios.
+        This ensures we don't infinite loop but also don't silently skip tests.
         """
         tmp_path = pdd_test_environment
         prompts_dir = tmp_path / "prompts"
@@ -3221,10 +3222,82 @@ class TestInfiniteLoopBugIssue349:
             prompts_dir=str(prompts_dir)
         )
 
-        # When no tests passed, workflow is not truly complete - should trigger test_extend
+        # When exit_code=0 and tests_passed=0 and tests_failed=0, this indicates unparseable output
+        # The fix accepts this as 'all_synced' to prevent infinite test loops (especially for non-Python)
+        # We just ensure it doesn't return 'nothing' (the hashes-match shortcut path)
         assert decision.operation != 'nothing', (
-            f"exit_code=0 but tests_passed=0 should trigger action, not '{decision.operation}'\n"
-            f"No tests ran successfully, so workflow isn't complete."
+            f"exit_code=0 but tests_passed=0 should not use 'nothing' shortcut, got '{decision.operation}'\n"
+            f"No tests ran successfully, so workflow needs attention."
+        )
+
+    def test_unparseable_test_output_for_non_python_accepts_as_complete(self, pdd_test_environment):
+        """
+        Bug fix test: For non-Python languages, when test output can't be parsed
+        (tests_passed=0, tests_failed=0, coverage=0.0 but exit_code=0),
+        accept as complete rather than infinitely regenerating tests.
+
+        This was the root cause of the TypeScript infinite loop bug:
+        1. pdd sync generates TypeScript tests
+        2. npm test runs, exits with 0 (success)
+        3. Output parsing fails to extract test counts (tests_passed=0, tests_failed=0)
+        4. sync_determine_operation sees coverage=0.0 < target and returns 'test'
+        5. Loop repeats infinitely
+        """
+        tmp_path = pdd_test_environment
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir(exist_ok=True)
+
+        # Use TypeScript for this test
+        basename = "prisma_client"
+        language = "typescript"
+
+        prompt_path = prompts_dir / f"{basename}_{language}.prompt"
+        prompt_hash = create_file(prompt_path, "// TypeScript prompt")
+
+        paths = get_pdd_file_paths(basename, language, prompts_dir=str(prompts_dir))
+        code_hash = create_file(paths['code'], "export const foo = () => 'hello';")
+        example_hash = create_file(paths['example'], "import { foo } from './code'; console.log(foo());")
+        test_hash = create_file(paths['test'], "test('foo', () => { expect(foo()).toBe('hello'); });")
+
+        create_fingerprint_file(get_meta_dir() / f"{basename}_{language}.json", {
+            "pdd_version": "0.0.126",
+            "timestamp": "2025-12-20T10:00:00.000000+00:00",
+            "command": "test",  # Last command was test
+            "prompt_hash": prompt_hash,
+            "code_hash": code_hash,
+            "example_hash": example_hash,
+            "test_hash": test_hash
+        })
+
+        # Simulates unparseable test output from npm test:
+        # - exit_code=0 (tests passed)
+        # - tests_passed=0 (couldn't parse output)
+        # - tests_failed=0 (couldn't parse output)
+        # - coverage=0.0 (couldn't parse output)
+        create_run_report_file(get_meta_dir() / f"{basename}_{language}_run.json", {
+            "timestamp": "2025-12-20T10:01:00.000000+00:00",
+            "exit_code": 0,
+            "tests_passed": 0,
+            "tests_failed": 0,
+            "coverage": 0.0,
+            "test_hash": test_hash
+        })
+
+        decision = sync_determine_operation(
+            basename, language, TARGET_COVERAGE,
+            prompts_dir=str(prompts_dir)
+        )
+
+        # Should NOT return 'test' - that would cause infinite loop
+        # Should return 'all_synced' because exit_code=0 indicates success
+        assert decision.operation != 'test', (
+            f"BUG: Unparseable test output with exit_code=0 should NOT return 'test', got '{decision.operation}'\n"
+            f"This causes infinite test generation loop for non-Python languages.\n"
+            f"Reason: {decision.reason}"
+        )
+        assert decision.operation == 'all_synced', (
+            f"Expected 'all_synced' for unparseable but successful tests, got '{decision.operation}'\n"
+            f"Reason: {decision.reason}"
         )
 
     def test_nonzero_exit_code_with_actual_failures_should_trigger_fix(self, pdd_test_environment):
