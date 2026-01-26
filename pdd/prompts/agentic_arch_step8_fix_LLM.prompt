@@ -36,6 +36,8 @@ You are working on step 8 of 8 in an agentic architecture workflow. Step 7 found
 
 Fix each validation error identified in step 7:
 
+**Architecture JSON Fixes:**
+
 1. **Circular dependencies:** Restructure the dependency graph to eliminate cycles. Consider:
    - Extracting shared interfaces into a new foundational module
    - Removing unnecessary dependencies
@@ -58,11 +60,34 @@ Fix each validation error identified in step 7:
 
 8. **Invalid context_urls format:** Ensure each has url and purpose strings
 
+**Scaffolding File Fixes:**
+
+9. **Missing scaffolding files:** Create any missing essential files:
+   - If no dependency file exists: Create `package.json`, `requirements.txt`, or appropriate file for the tech stack
+   - If `.gitignore` missing: Create with appropriate patterns for the tech stack
+   - If `README.md` missing: Create with project description and setup instructions
+
+10. **Invalid scaffolding files:** Fix format issues:
+    - `package.json`: Ensure valid JSON with required fields (name, version, scripts)
+    - `requirements.txt`: Fix formatting (one package per line)
+    - `Dockerfile`: Ensure valid FROM instruction exists
+
+11. **Missing Dockerfile:** If containerization is appropriate for the project but Dockerfile is missing, create one with:
+    - Multi-stage build for the tech stack
+    - Appropriate base image
+    - Proper COPY and RUN instructions
+
 % Output
 
-Output the COMPLETE corrected architecture.json as a valid JSON array. Include ALL entries (not just the fixed ones). Output ONLY the JSON, with no additional commentary or markdown fencing.
+1. **Write corrected architecture.json to disk**
+   Save the COMPLETE corrected JSON array to `architecture.json` in the current working directory (overwriting the existing file):
+   - Include ALL entries (not just the fixed ones)
+   - The file must contain ONLY the valid JSON array
+   - No markdown fencing, no comments, no wrapper objects
+   - Validate the JSON is syntactically correct before writing
 
-After fixing, use `gh issue comment` to post a summary to issue #{issue_number}:
+2. **Post summary to GitHub**
+   Use `gh issue comment` to post a summary to issue #{issue_number}:
 
 ```
 gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
@@ -78,18 +103,26 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 2. [Description of fix 2]
 
 ### Summary
-- Errors fixed: [N]
+- Architecture errors fixed: [N]
+- Scaffolding errors fixed: [N]
 - Modules reordered: [Yes/No]
 - New modules added: [N or 0]
+- Scaffolding files created/fixed: [list or "None"]
 
 ---
 *Returning to Step 7 for re-validation*
 ```
 
+3. **Report ALL files modified or created**
+   Output on its own line at the end, listing all files that were modified or created:
+   `FILES_MODIFIED: architecture.json, package.json, .gitignore, ...`
+
 % Important
 
-- Output the ENTIRE corrected JSON array, not just the changed entries
+- Write the JSON to `architecture.json` file directly - do NOT output JSON to stdout
+- Write any new or fixed scaffolding files directly to disk
 - Ensure the fixed JSON is valid (no comments, no trailing commas)
 - Maintain all existing correct entries unchanged
 - Sort by ascending priority after fixes
-- Always post your findings as a GitHub comment before completing
+- Always post your findings as a GitHub comment
+- Always output `FILES_MODIFIED:` with the complete list of ALL files modified or created
