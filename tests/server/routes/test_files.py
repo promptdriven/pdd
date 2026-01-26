@@ -479,3 +479,217 @@ class TestParsePromptStem:
         basename, lang = parse_func("module_PYTHON")
         assert basename == "module"
         assert lang == "python"
+
+    def test_prisma_suffix(self, parse_func):
+        """Test prisma suffix for schema files."""
+        basename, lang = parse_func("prisma_schema_Prisma")
+        assert basename == "prisma_schema"
+        assert lang == "prisma"
+
+    def test_sql_suffix(self, parse_func):
+        """Test sql suffix."""
+        basename, lang = parse_func("migrations_sql")
+        assert basename == "migrations"
+        assert lang == "sql"
+
+    def test_graphql_suffix(self, parse_func):
+        """Test graphql suffix."""
+        basename, lang = parse_func("schema_graphql")
+        assert basename == "schema"
+        assert lang == "graphql"
+
+
+# ============================================================================
+# Tests for test file detection with non-executable languages
+# ============================================================================
+
+class TestNonExecutableLanguageTestDetection:
+    """
+    Tests for test file detection for non-executable languages.
+
+    Non-executable languages (Prisma, SQL, GraphQL, etc.) don't have native
+    test frameworks, so tests are typically written in Python or TypeScript.
+    The file detection should search for .py and .ts test files for these languages.
+    """
+
+    @pytest.fixture
+    def project_with_prisma_tests(self, tmp_path):
+        """Create a project structure with Prisma schema and Python tests."""
+        root = tmp_path / "prisma_project"
+        root.mkdir()
+
+        # Create .pddrc with database context
+        pddrc = root / ".pddrc"
+        pddrc.write_text("""
+version: "1.0"
+contexts:
+  database:
+    paths: ["*prisma_schema*"]
+    defaults:
+      generate_output_path: "prisma/"
+      test_output_path: "tests/prisma/"
+      example_output_path: "examples/prisma/"
+  default:
+    defaults:
+      generate_output_path: "src/"
+      test_output_path: "tests/"
+""")
+
+        # Create prompts directory with Prisma prompt
+        prompts = root / "prompts"
+        prompts.mkdir()
+        (prompts / "prisma_schema_Prisma.prompt").write_text("Prisma schema prompt")
+
+        # Create code file
+        prisma_dir = root / "prisma"
+        prisma_dir.mkdir()
+        (prisma_dir / "prisma_schema.prisma").write_text("// Prisma schema")
+
+        # Create test file (Python, not Prisma!)
+        tests_prisma = root / "tests" / "prisma"
+        tests_prisma.mkdir(parents=True)
+        (tests_prisma / "test_prisma_schema.py").write_text("# Python tests for Prisma schema")
+
+        # Create example file
+        examples_prisma = root / "examples" / "prisma"
+        examples_prisma.mkdir(parents=True)
+        (examples_prisma / "prisma_schema_example.prisma").write_text("// Example")
+
+        return root
+
+    @pytest.fixture
+    def project_with_sql_tests(self, tmp_path):
+        """Create a project structure with SQL and TypeScript tests."""
+        root = tmp_path / "sql_project"
+        root.mkdir()
+
+        # Create prompts directory with SQL prompt
+        prompts = root / "prompts"
+        prompts.mkdir()
+        (prompts / "migrations_sql.prompt").write_text("SQL migrations prompt")
+
+        # Create test file (TypeScript, not SQL!)
+        tests = root / "tests"
+        tests.mkdir()
+        (tests / "test_migrations.ts").write_text("// TypeScript tests for SQL")
+
+        return root
+
+    @pytest.mark.asyncio
+    async def test_prisma_test_file_detected_as_python(self, project_with_prisma_tests):
+        """Test that Prisma prompts detect Python test files."""
+        from pdd.server.routes.files import list_prompt_files, set_path_validator
+        from pdd.server.security import PathValidator
+
+        validator = PathValidator(project_with_prisma_tests)
+        set_path_validator(validator)
+
+        results = await list_prompt_files(validator)
+
+        # Find the Prisma prompt result
+        prisma_result = next(
+            (r for r in results if "prisma_schema" in r["prompt"]),
+            None
+        )
+
+        assert prisma_result is not None, "Prisma prompt not found"
+        assert prisma_result["language"] == "prisma"
+        assert prisma_result["context"] == "database"
+
+        # The key test: Python test file should be detected for Prisma
+        assert "test" in prisma_result, "Test file not detected for Prisma prompt"
+        assert prisma_result["test"].endswith(".py"), \
+            f"Expected .py test file, got: {prisma_result.get('test')}"
+        assert "test_prisma_schema.py" in prisma_result["test"]
+
+    @pytest.mark.asyncio
+    async def test_prisma_code_file_detected(self, project_with_prisma_tests):
+        """Test that Prisma code file is correctly detected."""
+        from pdd.server.routes.files import list_prompt_files, set_path_validator
+        from pdd.server.security import PathValidator
+
+        validator = PathValidator(project_with_prisma_tests)
+        set_path_validator(validator)
+
+        results = await list_prompt_files(validator)
+
+        prisma_result = next(
+            (r for r in results if "prisma_schema" in r["prompt"]),
+            None
+        )
+
+        assert prisma_result is not None
+        assert "code" in prisma_result
+        assert prisma_result["code"].endswith(".prisma")
+
+    @pytest.mark.asyncio
+    async def test_sql_test_file_detected_as_typescript(self, project_with_sql_tests):
+        """Test that SQL prompts detect TypeScript test files."""
+        from pdd.server.routes.files import list_prompt_files, set_path_validator
+        from pdd.server.security import PathValidator
+
+        validator = PathValidator(project_with_sql_tests)
+        set_path_validator(validator)
+
+        results = await list_prompt_files(validator)
+
+        sql_result = next(
+            (r for r in results if "migrations" in r["prompt"]),
+            None
+        )
+
+        assert sql_result is not None, "SQL prompt not found"
+        assert sql_result["language"] == "sql"
+
+        # TypeScript test file should be detected for SQL
+        assert "test" in sql_result, "Test file not detected for SQL prompt"
+        assert sql_result["test"].endswith(".ts"), \
+            f"Expected .ts test file, got: {sql_result.get('test')}"
+
+    def test_non_executable_languages_set(self):
+        """Verify the NON_EXECUTABLE_LANGUAGES set contains expected languages."""
+        from pdd.server.routes.files import list_prompt_files
+        import inspect
+
+        # Get the source code of list_prompt_files to find NON_EXECUTABLE_LANGUAGES
+        source = inspect.getsource(list_prompt_files)
+
+        # Verify key non-executable languages are mentioned
+        assert "prisma" in source.lower()
+        assert "sql" in source.lower()
+        assert "graphql" in source.lower()
+        assert "terraform" in source.lower()
+
+    @pytest.mark.asyncio
+    async def test_python_tests_still_detected_for_python(self, tmp_path):
+        """Verify Python prompts still detect .py test files (regression test)."""
+        root = tmp_path / "python_project"
+        root.mkdir()
+
+        # Create Python prompt
+        prompts = root / "prompts"
+        prompts.mkdir()
+        (prompts / "calculator_python.prompt").write_text("Calculator prompt")
+
+        # Create Python test
+        tests = root / "tests"
+        tests.mkdir()
+        (tests / "test_calculator.py").write_text("# Python tests")
+
+        from pdd.server.routes.files import list_prompt_files, set_path_validator
+        from pdd.server.security import PathValidator
+
+        validator = PathValidator(root)
+        set_path_validator(validator)
+
+        results = await list_prompt_files(validator)
+
+        python_result = next(
+            (r for r in results if "calculator" in r["prompt"]),
+            None
+        )
+
+        assert python_result is not None
+        assert python_result["language"] == "python"
+        assert "test" in python_result
+        assert python_result["test"].endswith(".py")

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { CommandType } from './types';
 import { COMMANDS } from './constants';
 import { buildCommandRequest, buildDisplayCommand } from './lib/commandBuilder';
@@ -97,6 +97,14 @@ const App: React.FC = () => {
   const [selectedRemoteSession, setSelectedRemoteSession] = useState<string | null>(null);
   const [remoteSessionError, setRemoteSessionError] = useState<string | null>(null);
   const [showRemotePanel, setShowRemotePanel] = useState(false);
+
+  // Jobs dashboard visibility state
+  const [showJobsDashboard, setShowJobsDashboard] = useState(false);
+
+  // Track scroll position and sub-view when entering PromptSpace to restore on back
+  // Using refs to persist across the component unmount/remount cycle
+  const savedScrollPositionRef = useRef<number>(0);
+  const savedSubViewRef = useRef<DevUnitsSubView>(devUnitsSubView);
 
   // Task queue for sequential execution
   const taskQueue = useTaskQueue({
@@ -781,13 +789,40 @@ const App: React.FC = () => {
     }
   }, []);
 
+  // Open prompt space and save scroll position + sub-view for back navigation
+  const handleOpenPromptSpace = useCallback((prompt: PromptInfo) => {
+    savedScrollPositionRef.current = window.scrollY;
+    savedSubViewRef.current = devUnitsSubView;
+    setEditingPrompt(prompt);
+  }, [devUnitsSubView]);
+
+  // Handle back from PromptSpace - restore sub-view and scroll position
+  const handleBackFromPromptSpace = useCallback(() => {
+    const scrollY = savedScrollPositionRef.current;
+    const previousSubView = savedSubViewRef.current;
+
+    // Restore the sub-view first
+    setDevUnitsSubView(previousSubView);
+    setEditingPrompt(null);
+
+    // Restore scroll position after React fully re-renders the previous view
+    // Use multiple attempts to ensure DOM is ready
+    const restoreScroll = () => {
+      window.scrollTo({ top: scrollY, behavior: 'instant' });
+    };
+    // Try immediately, then after short delays to catch async renders
+    setTimeout(restoreScroll, 0);
+    setTimeout(restoreScroll, 100);
+    setTimeout(restoreScroll, 250);
+  }, []);
+
   // If editing a prompt, show full-screen PromptSpace
   if (editingPrompt) {
     return (
       <>
         <PromptSpace
           prompt={editingPrompt}
-          onBack={() => setEditingPrompt(null)}
+          onBack={handleBackFromPromptSpace}
           onRunCommand={handlePromptSpaceCommand}
           onAddToQueue={handlePromptSpaceAddToQueue}
           isExecuting={isExecuting}
@@ -821,11 +856,11 @@ const App: React.FC = () => {
   return (
     <ErrorBoundary>
     <div className="min-h-screen bg-surface-950">
-      {/* Modern responsive header */}
+      {/* Modern responsive header - Restructured with branding left, workflows center, status right */}
       <header className="glass sticky top-0 z-40 border-b border-surface-700/50">
         <div className="mx-auto px-4 sm:px-6 lg:px-8 2xl:px-12">
-          <div className="flex items-center justify-between h-16">
-            {/* Logo - responsive sizing */}
+          <div className="flex items-center justify-between h-16 gap-4">
+            {/* LEFT: Branding */}
             <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
               <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg bg-surface-800/80 flex items-center justify-center shadow-glow p-1">
                 <svg viewBox="0 0 1024 1024" className="w-full h-full" xmlns="http://www.w3.org/2000/svg">
@@ -845,151 +880,132 @@ const App: React.FC = () => {
                 </svg>
               </div>
               <div className="hidden sm:block">
-                <h1 className="text-base sm:text-lg font-bold text-white whitespace-nowrap">Prompt Driven Development</h1>
+                <h1 className="text-base sm:text-lg font-bold text-white whitespace-nowrap">Prompt Driven</h1>
               </div>
             </div>
 
-            {/* View switcher - centered on larger screens */}
-            <div className="flex gap-1 sm:gap-2 bg-surface-800/50 p-1 rounded-xl max-w-[280px] xs:max-w-none overflow-x-auto scrollbar-hide">
-              <button
-                onClick={() => setView('devunits')}
-                className={`px-2 xs:px-3 sm:px-4 py-1 xs:py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
-                  view === 'devunits'
-                    ? 'bg-accent-600 text-white shadow-lg shadow-accent-500/25'
-                    : 'text-surface-300 hover:text-white hover:bg-surface-700'
-                }`}
-              >
-                <Squares2X2Icon className="hidden sm:inline w-4 h-4 mr-1" />Dev Units
-              </button>
-              <button
-                onClick={() => setView('bug')}
-                className={`px-2 xs:px-3 sm:px-4 py-1 xs:py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
-                  view === 'bug'
-                    ? 'bg-accent-600 text-white shadow-lg shadow-accent-500/25'
-                    : 'text-surface-300 hover:text-white hover:bg-surface-700'
-                }`}
-              >
-                <BugAntIcon className="hidden sm:inline w-4 h-4 mr-1" />Bug
-              </button>
-              <button
-                onClick={() => setView('fix')}
-                className={`px-2 xs:px-3 sm:px-4 py-1 xs:py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
-                  view === 'fix'
-                    ? 'bg-accent-600 text-white shadow-lg shadow-accent-500/25'
-                    : 'text-surface-300 hover:text-white hover:bg-surface-700'
-                }`}
-              >
-                <svg className="hidden sm:inline w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                </svg>Fix
-              </button>
-              <button
-                onClick={() => setView('change')}
-                className={`px-2 xs:px-3 sm:px-4 py-1 xs:py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
-                  view === 'change'
-                    ? 'bg-accent-600 text-white shadow-lg shadow-accent-500/25'
-                    : 'text-surface-300 hover:text-white hover:bg-surface-700'
-                }`}
-              >
-                <svg className="hidden sm:inline w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
-                </svg>Change
-              </button>
-              <button
-                onClick={() => setView('settings')}
-                className={`px-2 xs:px-3 sm:px-4 py-1 xs:py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
-                  view === 'settings'
-                    ? 'bg-accent-600 text-white shadow-lg shadow-accent-500/25'
-                    : 'text-surface-300 hover:text-white hover:bg-surface-700'
-                }`}
-              >
-                <Cog6ToothIcon className="hidden sm:inline w-4 h-4 mr-1" />Settings
-              </button>
+            {/* CENTER: Main workflow buttons with gold border */}
+            <div className="flex-1 flex justify-center">
+              <div className="flex gap-1 sm:gap-1.5 p-1.5 rounded-xl border-2 border-[#FDCE49]/60 bg-surface-800/40 max-w-fit overflow-x-auto scrollbar-hide">
+                <button
+                  onClick={() => setView('devunits')}
+                  className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
+                    view === 'devunits'
+                      ? 'bg-[#DFA84A] text-surface-900 shadow-lg'
+                      : 'text-surface-300 hover:text-white hover:bg-surface-700/80 hover:shadow-[0_0_10px_rgba(253,206,73,0.3)]'
+                  }`}
+                >
+                  <Squares2X2Icon className="hidden sm:inline w-4 h-4 mr-1.5" />Dev Units
+                </button>
+                <button
+                  onClick={() => setView('bug')}
+                  className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
+                    view === 'bug'
+                      ? 'bg-[#DFA84A] text-surface-900 shadow-lg'
+                      : 'text-surface-300 hover:text-white hover:bg-surface-700/80 hover:shadow-[0_0_10px_rgba(253,206,73,0.3)]'
+                  }`}
+                >
+                  <BugAntIcon className="hidden sm:inline w-4 h-4 mr-1.5" />Bug
+                </button>
+                <button
+                  onClick={() => setView('fix')}
+                  className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
+                    view === 'fix'
+                      ? 'bg-[#DFA84A] text-surface-900 shadow-lg'
+                      : 'text-surface-300 hover:text-white hover:bg-surface-700/80 hover:shadow-[0_0_10px_rgba(253,206,73,0.3)]'
+                  }`}
+                >
+                  <svg className="hidden sm:inline w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                  </svg>Fix
+                </button>
+                <button
+                  onClick={() => setView('change')}
+                  className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
+                    view === 'change'
+                      ? 'bg-[#DFA84A] text-surface-900 shadow-lg'
+                      : 'text-surface-300 hover:text-white hover:bg-surface-700/80 hover:shadow-[0_0_10px_rgba(253,206,73,0.3)]'
+                  }`}
+                >
+                  <svg className="hidden sm:inline w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+                  </svg>Change
+                </button>
+                <button
+                  onClick={() => setView('settings')}
+                  className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
+                    view === 'settings'
+                      ? 'bg-[#DFA84A] text-surface-900 shadow-lg'
+                      : 'text-surface-300 hover:text-white hover:bg-surface-700/80 hover:shadow-[0_0_10px_rgba(253,206,73,0.3)]'
+                  }`}
+                >
+                  <Cog6ToothIcon className="hidden sm:inline w-4 h-4 mr-1.5" />Settings
+                </button>
+              </div>
             </div>
 
-            {/* Remote session toggle button */}
-            <button
-              onClick={() => setShowRemotePanel(!showRemotePanel)}
-              className={`flex items-center gap-1.5 px-2 sm:px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-colors ${
-                executionMode === 'remote'
-                  ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
-                  : 'bg-surface-700/50 text-surface-400 border border-surface-600/50 hover:bg-surface-700'
-              }`}
-              title={showRemotePanel ? 'Hide remote session panel' : 'Show remote session panel'}
-            >
-              <span aria-hidden="true">{executionMode === 'remote' ? '🌐' : '💻'}</span>
-              <span className="sr-only">
-                {executionMode === 'remote' ? 'Remote execution mode' : 'Local execution mode'}
-              </span>
-              <span className="hidden sm:inline">{executionMode === 'remote' ? 'Remote' : 'Local'}</span>
-              <svg
-                className={`w-3 h-3 transition-transform ${showRemotePanel ? 'rotate-180' : ''}`}
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
+            {/* RIGHT: Live status section */}
+            <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
+              {/* Jobs button with LED indicator - toggles dashboard visibility */}
+              <button
+                onClick={() => setShowJobsDashboard(!showJobsDashboard)}
+                className={`relative flex items-center gap-2 px-2 sm:px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-all ${
+                  showJobsDashboard
+                    ? 'bg-surface-700 text-white'
+                    : 'bg-surface-700/50 text-surface-300 border border-surface-600/50 hover:bg-surface-700'
+                }`}
+                title={activeJobs.length > 0 ? `${activeJobs.length} jobs running - click to ${showJobsDashboard ? 'hide' : 'show'}` : 'Show jobs dashboard'}
               >
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
-            </button>
-
-            {/* Server status - responsive */}
-            <div className={`flex items-center gap-1.5 sm:gap-2 text-xs sm:text-sm px-2 sm:px-3 py-1.5 rounded-full transition-colors ${
-              serverConnected
-                ? 'bg-green-500/10 text-green-400 border border-green-500/20'
-                : 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20'
-            }`}>
-              <span className={`w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full ${serverConnected ? 'bg-green-400 animate-pulse-slow' : 'bg-yellow-400 animate-pulse'}`} />
-              <span className="hidden xs:inline">{serverConnected ? 'Connected' : 'Offline'}</span>
-            </div>
-
-            {/* Audio notification toggle (compact) */}
-            <button
-              onClick={handleToggleAudio}
-              className={`p-1.5 rounded-lg transition-colors ${
-                audioEnabled
-                  ? 'text-accent-400 hover:bg-accent-500/20'
-                  : 'text-surface-500 hover:bg-surface-700/50'
-              }`}
-              title={audioEnabled ? 'Sound notifications on' : 'Sound notifications off'}
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                {audioEnabled ? (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-                ) : (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15zm11.707-6.707l4 4m0-4l-4 4" />
+                {/* LED indicator */}
+                <span className={`w-2.5 h-2.5 rounded-full ${
+                  activeJobs.length > 0
+                    ? 'bg-green-400 shadow-[0_0_8px_rgba(74,222,128,0.8)] animate-pulse'
+                    : 'bg-green-900/50 border border-green-800/50'
+                }`} />
+                <span className="hidden sm:inline">Jobs</span>
+                {activeJobs.length > 0 && (
+                  <span className="text-green-400 font-mono text-xs">
+                    {activeJobs.length}
+                  </span>
                 )}
-              </svg>
-            </button>
+              </button>
 
-            {/* Cloud auth status */}
-            <AuthStatusIndicator onReauth={() => setShowReauthModal(true)} />
-          </div>
-        </div>
-      </header>
+              {/* Remote/Local toggle */}
+              <button
+                onClick={() => setShowRemotePanel(!showRemotePanel)}
+                className={`flex items-center gap-1.5 px-2 sm:px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-colors ${
+                  executionMode === 'remote'
+                    ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
+                    : 'bg-surface-700/50 text-surface-400 border border-surface-600/50 hover:bg-surface-700'
+                }`}
+                title={showRemotePanel ? 'Hide remote session panel' : 'Show remote session panel'}
+              >
+                <span aria-hidden="true">{executionMode === 'remote' ? '🌐' : '💻'}</span>
+                <span className="sr-only">
+                  {executionMode === 'remote' ? 'Remote execution mode' : 'Local execution mode'}
+                </span>
+                <span className="hidden sm:inline">{executionMode === 'remote' ? 'Remote' : 'Local'}</span>
+              </button>
 
-      {/* Collapsible Remote Session Panel */}
-      {showRemotePanel && (
-        <div className="glass border-b border-surface-700/50 animate-slide-down">
-          <div className="mx-auto px-4 sm:px-6 lg:px-8 2xl:px-12 py-3">
-            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 sm:gap-4">
-              {/* Execution mode toggle */}
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-surface-400">Mode:</span>
-                <ExecutionModeToggle
-                  mode={executionMode}
-                  onModeChange={setExecutionMode}
-                />
+              {/* Connection status */}
+              <div className={`flex items-center gap-1.5 text-xs px-2 py-1.5 rounded-full transition-colors ${
+                serverConnected
+                  ? 'bg-green-500/10 text-green-400 border border-green-500/20'
+                  : 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20'
+              }`}>
+                <span className={`w-2 h-2 rounded-full ${serverConnected ? 'bg-green-400 animate-pulse-slow' : 'bg-yellow-400 animate-pulse'}`} />
+                <span className="hidden sm:inline">{serverConnected ? 'Connected' : 'Offline'}</span>
               </div>
 
-              {/* Audio notification toggle */}
+              {/* Audio toggle */}
               <button
                 onClick={handleToggleAudio}
-                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                className={`p-1.5 rounded-lg transition-colors ${
                   audioEnabled
-                    ? 'bg-accent-500/20 text-accent-300 hover:bg-accent-500/30'
-                    : 'bg-surface-700/50 text-surface-400 hover:bg-surface-700'
+                    ? 'text-accent-400 hover:bg-accent-500/20'
+                    : 'text-surface-500 hover:bg-surface-700/50'
                 }`}
-                title={audioEnabled ? 'Audio notifications enabled - click to disable' : 'Audio notifications disabled - click to enable'}
+                title={audioEnabled ? 'Sound notifications on' : 'Sound notifications off'}
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   {audioEnabled ? (
@@ -998,53 +1014,83 @@ const App: React.FC = () => {
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15zm11.707-6.707l4 4m0-4l-4 4" />
                   )}
                 </svg>
-                <span className="hidden sm:inline">{audioEnabled ? 'Sound On' : 'Sound Off'}</span>
               </button>
 
-              {/* Remote session selector - only shown in remote mode */}
-              {executionMode === 'remote' && (
-                <div className="flex-1 w-full sm:w-auto">
-                  <RemoteSessionSelector
-                    sessions={remoteSessions}
-                    selectedSessionId={selectedRemoteSession}
-                    onSelectSession={setSelectedRemoteSession}
-                    error={remoteSessionError}
-                    onRefresh={async () => {
-                      try {
-                        const sessions = await api.listRemoteSessions();
-                        setRemoteSessions(sessions);
-                        setRemoteSessionError(null);
-                      } catch (err) {
-                        setRemoteSessionError(err instanceof Error ? err.message : String(err));
-                      }
-                    }}
-                  />
-                </div>
-              )}
-
-              {/* Close button */}
-              <button
-                onClick={() => setShowRemotePanel(false)}
-                className="absolute right-4 sm:relative sm:right-auto text-surface-400 hover:text-white p-1 rounded-lg hover:bg-surface-700/50 transition-colors"
-                title="Close panel"
-                aria-label="Close remote session panel"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
+              {/* Cloud auth status */}
+              <AuthStatusIndicator onReauth={() => setShowReauthModal(true)} />
             </div>
-
-            {/* Help text */}
-            <p className="text-xs text-surface-500 mt-2">
-              {executionMode === 'local'
-                ? 'Commands execute on this machine in terminal windows.'
-                : selectedRemoteSession
-                  ? 'Commands will be sent to the selected remote session via cloud.'
-                  : 'Select a remote session to execute commands remotely.'}
-            </p>
           </div>
         </div>
+      </header>
+
+      {/* Remote/Local Dropdown Modal - positioned relative to the header */}
+      {showRemotePanel && (
+        <>
+          {/* Backdrop for click-outside dismiss */}
+          <div
+            className="fixed inset-0 z-30"
+            onClick={() => setShowRemotePanel(false)}
+          />
+          {/* Dropdown modal - max 1/3 width, positioned in top-right area */}
+          <div className="absolute top-16 right-4 sm:right-6 lg:right-8 z-40 w-[min(90vw,400px)] max-w-[33vw] min-w-[280px] animate-slide-down">
+            <div className="glass rounded-xl border border-surface-700/50 shadow-2xl overflow-hidden">
+              {/* Header */}
+              <div className="px-4 py-3 border-b border-surface-700/50 bg-surface-800/50">
+                <h3 className="text-sm font-medium text-white">Execution Settings</h3>
+              </div>
+
+              <div className="p-4 space-y-4">
+                {/* Execution mode toggle */}
+                <div>
+                  <ExecutionModeToggle
+                    mode={executionMode}
+                    onModeChange={setExecutionMode}
+                  />
+                </div>
+
+                {/* Remote session selector - only shown in remote mode */}
+                {executionMode === 'remote' && (
+                  <div>
+                    <RemoteSessionSelector
+                      sessions={remoteSessions}
+                      selectedSessionId={selectedRemoteSession}
+                      onSelectSession={setSelectedRemoteSession}
+                      error={remoteSessionError}
+                      onRefresh={async () => {
+                        try {
+                          const sessions = await api.listRemoteSessions();
+                          setRemoteSessions(sessions);
+                          setRemoteSessionError(null);
+                        } catch (err) {
+                          setRemoteSessionError(err instanceof Error ? err.message : String(err));
+                        }
+                      }}
+                    />
+                  </div>
+                )}
+
+                {/* Help text */}
+                <p className="text-xs text-surface-500">
+                  {executionMode === 'local'
+                    ? 'Commands execute on this machine in terminal windows.'
+                    : selectedRemoteSession
+                      ? 'Commands will be sent to the selected remote session via cloud.'
+                      : 'Select a remote session to execute commands remotely.'}
+                </p>
+              </div>
+
+              {/* Footer with Done button */}
+              <div className="px-4 py-3 border-t border-surface-700/50 bg-surface-800/30">
+                <button
+                  onClick={() => setShowRemotePanel(false)}
+                  className="w-full px-4 py-2 bg-[#DFA84A] hover:bg-[#FDCE49] text-surface-900 rounded-lg text-sm font-medium transition-colors"
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
       )}
 
       {/* Status bar - modern glass effect */}
@@ -1103,6 +1149,96 @@ const App: React.FC = () => {
         </div>
       )}
 
+      {/* Sub-navigation area - full width, just below nav bar */}
+      <div className="glass border-b border-surface-700/50">
+        <div className="mx-auto px-4 sm:px-6 lg:px-8 2xl:px-12 py-3 sm:py-4">
+          {view === 'devunits' && (
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-[#FDCE49]/20 flex items-center justify-center">
+                  <Squares2X2Icon className="w-5 h-5 text-[#FDCE49]" />
+                </div>
+                <div>
+                  <h2 className="text-lg sm:text-xl font-semibold text-white">Dev Units</h2>
+                  <p className="text-xs sm:text-sm text-surface-400">Manage your development modules and architecture</p>
+                </div>
+              </div>
+              {/* Graph/List toggle */}
+              <div className="flex bg-surface-800/60 p-1 rounded-lg border border-surface-700/50">
+                <button
+                  onClick={() => setDevUnitsSubView('graph')}
+                  className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-md text-xs sm:text-sm font-medium transition-all duration-200 ${
+                    devUnitsSubView === 'graph'
+                      ? 'bg-[#DFA84A] text-surface-900 shadow-md'
+                      : 'text-surface-300 hover:text-white hover:bg-surface-700/50'
+                  }`}
+                >
+                  <Squares2X2Icon className="inline w-4 h-4 mr-1.5" />Graph View
+                </button>
+                <button
+                  onClick={() => setDevUnitsSubView('list')}
+                  className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-md text-xs sm:text-sm font-medium transition-all duration-200 ${
+                    devUnitsSubView === 'list'
+                      ? 'bg-[#DFA84A] text-surface-900 shadow-md'
+                      : 'text-surface-300 hover:text-white hover:bg-surface-700/50'
+                  }`}
+                >
+                  <DocumentTextIcon className="inline w-4 h-4 mr-1.5" />List View
+                </button>
+              </div>
+            </div>
+          )}
+          {view === 'bug' && (
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-red-500/20 flex items-center justify-center">
+                <BugAntIcon className="w-5 h-5 text-red-400" />
+              </div>
+              <div>
+                <h2 className="text-lg sm:text-xl font-semibold text-white">Bug Investigation Agent</h2>
+                <p className="text-xs sm:text-sm text-surface-400">Automatically investigate GitHub issues and generate failing test cases</p>
+              </div>
+            </div>
+          )}
+          {view === 'fix' && (
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-blue-500/20 flex items-center justify-center">
+                <svg className="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                </svg>
+              </div>
+              <div>
+                <h2 className="text-lg sm:text-xl font-semibold text-white">PR Fix Agent</h2>
+                <p className="text-xs sm:text-sm text-surface-400">Automatically fix code issues based on PR review comments</p>
+              </div>
+            </div>
+          )}
+          {view === 'change' && (
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-purple-500/20 flex items-center justify-center">
+                <svg className="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+                </svg>
+              </div>
+              <div>
+                <h2 className="text-lg sm:text-xl font-semibold text-white">Change Request Agent</h2>
+                <p className="text-xs sm:text-sm text-surface-400">Automatically implement feature requests and changes from GitHub issues</p>
+              </div>
+            </div>
+          )}
+          {view === 'settings' && (
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-surface-700/50 flex items-center justify-center">
+                <Cog6ToothIcon className="w-5 h-5 text-surface-300" />
+              </div>
+              <div>
+                <h2 className="text-lg sm:text-xl font-semibold text-white">Settings</h2>
+                <p className="text-xs sm:text-sm text-surface-400">Configure project settings and preferences</p>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* Main content - responsive padding and max-width */}
       <main className="mx-auto px-4 sm:px-6 lg:px-8 2xl:px-12 py-4 sm:py-6 pb-16 sm:pb-20">
         {!serverConnected && (
@@ -1125,37 +1261,12 @@ const App: React.FC = () => {
 
         {view === 'devunits' ? (
           <div className="animate-fade-in">
-            {/* Graph/List toggle */}
-            <div className="flex items-center justify-between mb-4 sm:mb-6">
-              <div className="flex bg-surface-800/60 p-1 rounded-lg border border-surface-700/50">
-                <button
-                  onClick={() => setDevUnitsSubView('graph')}
-                  className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-md text-xs sm:text-sm font-medium transition-all duration-200 ${
-                    devUnitsSubView === 'graph'
-                      ? 'bg-accent-600 text-white shadow-md'
-                      : 'text-surface-300 hover:text-white hover:bg-surface-700/50'
-                  }`}
-                >
-                  <Squares2X2Icon className="inline w-4 h-4 mr-1.5" />Graph View
-                </button>
-                <button
-                  onClick={() => setDevUnitsSubView('list')}
-                  className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-md text-xs sm:text-sm font-medium transition-all duration-200 ${
-                    devUnitsSubView === 'list'
-                      ? 'bg-accent-600 text-white shadow-md'
-                      : 'text-surface-300 hover:text-white hover:bg-surface-700/50'
-                  }`}
-                >
-                  <DocumentTextIcon className="inline w-4 h-4 mr-1.5" />List View
-                </button>
-              </div>
-            </div>
 
             {devUnitsSubView === 'graph' ? (
               <ArchitectureView
                 serverConnected={serverConnected}
                 isExecuting={isExecuting}
-                onOpenPromptSpace={(prompt) => setEditingPrompt(prompt)}
+                onOpenPromptSpace={handleOpenPromptSpace}
                 onBatchStart={handleBatchOperationStart}
                 onBatchProgress={handleBatchOperationProgress}
                 onBatchComplete={handleBatchOperationComplete}
@@ -1169,8 +1280,8 @@ const App: React.FC = () => {
             ) : (
               <div>
                 <PromptSelector
-                  onEditPrompt={(prompt) => { setSelectedPrompt(prompt); setEditingPrompt(prompt); }}
-                  onCreatePrompt={setEditingPrompt}
+                  onEditPrompt={(prompt) => { setSelectedPrompt(prompt); handleOpenPromptSpace(prompt); }}
+                  onCreatePrompt={handleOpenPromptSpace}
                   selectedPrompt={selectedPrompt}
                 />
               </div>
@@ -1182,17 +1293,6 @@ const App: React.FC = () => {
           </div>
         ) : view === 'bug' ? (
           <div className="max-w-6xl mx-auto animate-fade-in">
-            {/* Header */}
-            <div className="mb-6 text-center sm:text-left">
-              <h2 className="text-xl sm:text-2xl font-semibold text-white mb-2 flex items-center justify-center sm:justify-start gap-2">
-                <span className="w-10 h-10 rounded-xl bg-red-500/20 flex items-center justify-center"><BugAntIcon className="w-5 h-5" /></span>
-                Bug Investigation Agent
-              </h2>
-              <p className="text-surface-400 text-sm">
-                Automatically investigate GitHub issues and generate failing test cases with AI-powered analysis.
-              </p>
-            </div>
-
             <div className="grid gap-4 md:grid-cols-2">
               {/* Left column: Input and action */}
               <div className="space-y-4">
@@ -1317,21 +1417,6 @@ const App: React.FC = () => {
           </div>
         ) : view === 'fix' ? (
           <div className="max-w-6xl mx-auto animate-fade-in">
-            {/* Header */}
-            <div className="mb-6 text-center sm:text-left">
-              <h2 className="text-xl sm:text-2xl font-semibold text-white mb-2 flex items-center justify-center sm:justify-start gap-2">
-                <span className="w-10 h-10 rounded-xl bg-blue-500/20 flex items-center justify-center">
-                  <svg className="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                  </svg>
-                </span>
-                PR Fix Agent
-              </h2>
-              <p className="text-surface-400 text-sm">
-                Automatically fix code issues based on PR review comments with AI-powered analysis.
-              </p>
-            </div>
-
             <div className="grid gap-4 md:grid-cols-2">
               {/* Left column: Input and action */}
               <div className="space-y-4">
@@ -1455,21 +1540,6 @@ const App: React.FC = () => {
           </div>
         ) : view === 'change' ? (
           <div className="max-w-6xl mx-auto animate-fade-in">
-            {/* Header */}
-            <div className="mb-6 text-center sm:text-left">
-              <h2 className="text-xl sm:text-2xl font-semibold text-white mb-2 flex items-center justify-center sm:justify-start gap-2">
-                <span className="w-10 h-10 rounded-xl bg-purple-500/20 flex items-center justify-center">
-                  <svg className="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
-                  </svg>
-                </span>
-                Change Request Agent
-              </h2>
-              <p className="text-surface-400 text-sm">
-                Automatically implement feature requests and changes from GitHub issues with AI-powered analysis.
-              </p>
-            </div>
-
             <div className="grid gap-4 md:grid-cols-2">
               {/* Left column: Input and action */}
               <div className="space-y-4">
@@ -1595,7 +1665,7 @@ const App: React.FC = () => {
         ) : null}
       </main>
 
-      {/* Job Dashboard - shows active and completed jobs */}
+      {/* Job Dashboard - shows active and completed jobs, only when Jobs button clicked */}
       <JobDashboard
         activeJobs={activeJobs}
         completedJobs={completedJobs}
@@ -1608,6 +1678,8 @@ const App: React.FC = () => {
         onMarkJobStatus={markJobStatus}
         batchOperation={batchOperation}
         onCancelBatchOperation={handleCancelBatchOperation}
+        isVisible={showJobsDashboard}
+        onClose={() => setShowJobsDashboard(false)}
       />
 
       {/* Task Queue Panel - shows queued tasks for sequential execution */}
@@ -1652,10 +1724,10 @@ const App: React.FC = () => {
               </g>
             </svg>
           </span>
-          <span className="hidden sm:inline">Prompt Driven Development</span>
+          <span className="hidden sm:inline">Prompt Driven</span>
           <span className="sm:hidden">PDD</span>
           <span className="text-surface-600">•</span>
-          <span>{isAnyJobRunning ? 'Jobs running - see dashboard below' : 'Commands tracked in dashboard'}</span>
+          <span>{isAnyJobRunning ? 'Jobs running - click Jobs button above' : 'Commands tracked in dashboard'}</span>
         </div>
       </footer>
 

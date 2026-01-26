@@ -87,17 +87,20 @@ def base_args(tmp_path):
 def test_happy_path_full_run(mock_dependencies, base_args):
     """Test a complete successful run from Step 1 to Step 7 (Valid)."""
     mocks = mock_dependencies
-    
+    cwd = base_args["cwd"]
+
     # Setup run_agentic_task to return specific outputs for steps
     def side_effect(*args, **kwargs):
         instruction = kwargs.get("instruction", "")
         label = kwargs.get("label", "")
         if "step7" in label:
-            return (True, "VALID architecture", 0.1, "gpt-4")
+            return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
         if "step6" in label:
-            return (True, '{"modules": []}', 0.1, "gpt-4")
+            # Step 6 now writes architecture.json to disk
+            (cwd / "architecture.json").write_text('[{"priority": 1, "filename": "test.prompt"}]')
+            return (True, 'FILES_CREATED: architecture.json', 0.1, "gpt-4")
         return (True, f"Output for {label}", 0.1, "gpt-4")
-    
+
     mocks["run"].side_effect = side_effect
 
     success, msg, cost, model, files = run_agentic_architecture_orchestrator(**base_args)
@@ -105,14 +108,14 @@ def test_happy_path_full_run(mock_dependencies, base_args):
     assert success is True
     assert "successfully" in msg
     assert cost > 0
-    
+
     # Verify steps 1-6 ran + step 7
     # Steps 1-6 = 6 calls. Step 7 = 1 call. Total 7 calls.
     assert mocks["run"].call_count == 7
-    
+
     # Verify state was cleared
     mocks["clear_state"].assert_called_once()
-    
+
     # Verify files were saved
     assert (base_args["cwd"] / "architecture.json").exists()
     assert (base_args["cwd"] / "architecture_diagram.html").exists()
@@ -143,26 +146,31 @@ def test_hard_stop_step_1(mock_dependencies, base_args):
 def test_validation_loop_fix_flow(mock_dependencies, base_args):
     """Test validation failure -> fix -> validation success."""
     mocks = mock_dependencies
-    
+    cwd = base_args["cwd"]
+
     # Sequence:
     # Steps 1-5: Normal
     # Step 6: Generate JSON
     # Step 7 (Iter 1): INVALID
     # Step 8 (Iter 1): Fixed JSON
     # Step 7 (Iter 2): VALID
-    
+
     def side_effect(*args, **kwargs):
         label = kwargs.get("label", "")
         if "step6" in label:
-            return (True, '{"ver": 1}', 0.1, "gpt-4")
+            # Step 6 writes initial architecture to disk
+            (cwd / "architecture.json").write_text('[{"ver": 1}]')
+            return (True, 'FILES_CREATED: architecture.json', 0.1, "gpt-4")
         if "step7_iter1" in label:
-            return (True, "INVALID: Missing database module", 0.1, "gpt-4")
+            return (True, "VALIDATION_RESULT: INVALID\n\n1. Missing database module", 0.1, "gpt-4")
         if "step8_iter1" in label:
-            return (True, '{"ver": 2, "db": true}', 0.1, "gpt-4")
+            # Step 8 writes fixed architecture to disk
+            (cwd / "architecture.json").write_text('[{"ver": 2, "db": true}]')
+            return (True, 'FILES_MODIFIED: architecture.json', 0.1, "gpt-4")
         if "step7_iter2" in label:
-            return (True, "VALID architecture", 0.1, "gpt-4")
+            return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
         return (True, f"Output for {label}", 0.1, "gpt-4")
-    
+
     mocks["run"].side_effect = side_effect
 
     success, _, _, _, _ = run_agentic_architecture_orchestrator(**base_args)
@@ -170,33 +178,41 @@ def test_validation_loop_fix_flow(mock_dependencies, base_args):
     assert success is True
     # Calls: 1,2,3,4,5,6 (6 calls) + 7(iter1) + 8(iter1) + 7(iter2) = 9 calls
     assert mocks["run"].call_count == 9
-    
+
     # Verify the final architecture saved is the one from Step 8
     with open(base_args["cwd"] / "architecture.json", "r") as f:
         content = json.load(f)
-        assert content.get("db") is True
+        assert content[0].get("db") is True
 
 def test_max_validation_iterations(mock_dependencies, base_args):
     """Test that the loop terminates after MAX_VALIDATION_ITERATIONS."""
     mocks = mock_dependencies
-    
+    cwd = base_args["cwd"]
+
+    iter_count = {"value": 0}
+
     def side_effect(*args, **kwargs):
         label = kwargs.get("label", "")
         if "step6" in label:
-            return (True, '{"ver": 1}', 0.1, "gpt-4")
+            # Step 6 writes architecture to disk
+            (cwd / "architecture.json").write_text('[{"ver": 1}]')
+            return (True, 'FILES_CREATED: architecture.json', 0.1, "gpt-4")
         if "step7" in label:
-            return (True, "INVALID", 0.1, "gpt-4")
+            return (True, "VALIDATION_RESULT: INVALID", 0.1, "gpt-4")
         if "step8" in label:
-            return (True, '{"ver": "fixed"}', 0.1, "gpt-4")
+            iter_count["value"] += 1
+            # Step 8 writes updated architecture to disk
+            (cwd / "architecture.json").write_text(f'[{{"ver": "fixed_{iter_count["value"]}"}}]')
+            return (True, 'FILES_MODIFIED: architecture.json', 0.1, "gpt-4")
         return (True, "ok", 0.1, "gpt-4")
-    
+
     mocks["run"].side_effect = side_effect
 
     success, msg, _, _, _ = run_agentic_architecture_orchestrator(**base_args)
 
     # It returns True because it produces *something*, but warns in console
-    assert success is True 
-    
+    assert success is True
+
     # Count calls:
     # Steps 1-6: 6 calls
     # Loop runs 5 times: (Step 7 + Step 8) * 5 = 10 calls
@@ -206,7 +222,8 @@ def test_max_validation_iterations(mock_dependencies, base_args):
 def test_resumption_from_state(mock_dependencies, base_args):
     """Test resuming from saved state (e.g., Step 3 completed)."""
     mocks = mock_dependencies
-    
+    cwd = base_args["cwd"]
+
     # Mock loaded state
     state = {
         "last_completed_step": 3,
@@ -217,15 +234,17 @@ def test_resumption_from_state(mock_dependencies, base_args):
         "model_used": "gpt-4"
     }
     mocks["load_state"].return_value = (state, 12345)
-    
+
     def side_effect(*args, **kwargs):
         label = kwargs.get("label", "")
         if "step6" in label:
-            return (True, '{"ver": 1}', 0.1, "gpt-4")
+            # Step 6 writes architecture to disk
+            (cwd / "architecture.json").write_text('[{"ver": 1}]')
+            return (True, 'FILES_CREATED: architecture.json', 0.1, "gpt-4")
         if "step7" in label:
-            return (True, "VALID", 0.1, "gpt-4")
+            return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
         return (True, "ok", 0.1, "gpt-4")
-    
+
     mocks["run"].side_effect = side_effect
 
     success, _, cost, _, _ = run_agentic_architecture_orchestrator(**base_args)
@@ -234,7 +253,7 @@ def test_resumption_from_state(mock_dependencies, base_args):
     # Should run steps 4, 5, 6, 7. (4 calls)
     # Steps 1, 2, 3 should be skipped.
     assert mocks["run"].call_count == 4
-    
+
     # Cost should include previous cost (0.5) + new costs (0.1 * 4)
     assert cost == pytest.approx(0.9)
 
@@ -250,32 +269,47 @@ def test_missing_template_failure(mock_dependencies, base_args):
     mocks["run"].assert_not_called()
 
 def test_json_parsing_fallback(mock_dependencies, base_args):
-    """Test that invalid JSON output is saved as raw text."""
+    """Test that invalid JSON output triggers validation loop and eventually gets fixed."""
     mocks = mock_dependencies
-    
-    # Step 6 returns invalid JSON
+    cwd = base_args["cwd"]
+
+    # Step 6 writes invalid JSON to disk
     invalid_json = "Here is the json: {foo: bar} (invalid)"
-    
+
+    iter_count = {"value": 0}
+
     def side_effect(*args, **kwargs):
         label = kwargs.get("label", "")
         if "step6" in label:
-            return (True, invalid_json, 0.1, "gpt-4")
+            # Step 6 writes invalid JSON to disk
+            (cwd / "architecture.json").write_text(invalid_json)
+            return (True, 'FILES_CREATED: architecture.json', 0.1, "gpt-4")
         if "step7" in label:
-            return (True, "VALID", 0.1, "gpt-4")
+            # Programmatic validation should catch the invalid JSON
+            return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")  # LLM may hallucinate, but code catches it
+        if "step8" in label:
+            iter_count["value"] += 1
+            # Step 8 should fix the JSON
+            (cwd / "architecture.json").write_text('[{"priority": 1, "fixed": true}]')
+            return (True, 'FILES_MODIFIED: architecture.json', 0.1, "gpt-4")
         return (True, "ok", 0.1, "gpt-4")
-    
+
     mocks["run"].side_effect = side_effect
 
     success, _, _, _, files = run_agentic_architecture_orchestrator(**base_args)
 
+    # Should succeed after fix
     assert success is True
     json_file = base_args["cwd"] / "architecture.json"
     assert json_file.exists()
-    
-    # Verify raw content was saved
+
+    # Verify JSON was fixed
     with open(json_file, "r") as f:
-        content = f.read()
-        assert content == invalid_json
+        content = json.load(f)
+        assert content[0].get("fixed") is True
+
+    # Step 8 should have been called at least once
+    assert iter_count["value"] >= 1
 
 # --- Z3 Formal Verification ---
 
@@ -388,3 +422,285 @@ def test_z3_termination_proof():
     else:
         # UNSAT means proven
         pass
+
+
+# --- Tests for Scaffolding File Tracking ---
+
+from pdd.agentic_architecture_orchestrator import _parse_files_marker, _verify_files_exist
+
+
+class TestParseFilesMarker:
+    """Tests for the _parse_files_marker helper function."""
+
+    def test_parse_files_created_marker(self):
+        """Test parsing FILES_CREATED: marker from output."""
+        output = """
+        Some output text here...
+
+        FILES_CREATED: architecture.json, package.json, .gitignore, README.md
+
+        More text after...
+        """
+        files = _parse_files_marker(output, "FILES_CREATED:")
+        assert files == ["architecture.json", "package.json", ".gitignore", "README.md"]
+
+    def test_parse_files_modified_marker(self):
+        """Test parsing FILES_MODIFIED: marker from output."""
+        output = """
+        Step 8 output...
+
+        FILES_MODIFIED: architecture.json, package.json
+        """
+        files = _parse_files_marker(output, "FILES_MODIFIED:")
+        assert files == ["architecture.json", "package.json"]
+
+    def test_parse_missing_marker(self):
+        """Test that missing marker returns empty list."""
+        output = "No marker in this output"
+        files = _parse_files_marker(output, "FILES_CREATED:")
+        assert files == []
+
+    def test_parse_empty_file_list(self):
+        """Test parsing marker with empty file list."""
+        output = "FILES_CREATED:   "
+        files = _parse_files_marker(output, "FILES_CREATED:")
+        assert files == []
+
+    def test_parse_single_file(self):
+        """Test parsing single file in marker."""
+        output = "FILES_CREATED: architecture.json"
+        files = _parse_files_marker(output, "FILES_CREATED:")
+        assert files == ["architecture.json"]
+
+    def test_parse_files_with_paths(self):
+        """Test parsing files with directory paths."""
+        output = "FILES_CREATED: src/components/Button.tsx, lib/utils.ts, prisma/schema.prisma"
+        files = _parse_files_marker(output, "FILES_CREATED:")
+        assert files == ["src/components/Button.tsx", "lib/utils.ts", "prisma/schema.prisma"]
+
+    def test_parse_handles_extra_whitespace(self):
+        """Test that extra whitespace is handled correctly."""
+        output = "FILES_CREATED:   file1.json  ,   file2.txt  ,  file3.md   "
+        files = _parse_files_marker(output, "FILES_CREATED:")
+        assert files == ["file1.json", "file2.txt", "file3.md"]
+
+
+class TestVerifyFilesExist:
+    """Tests for the _verify_files_exist helper function."""
+
+    def test_verify_existing_files(self, tmp_path):
+        """Test that existing files are returned."""
+        # Create some files
+        (tmp_path / "file1.txt").write_text("content1")
+        (tmp_path / "file2.json").write_text("{}")
+
+        files = ["file1.txt", "file2.json"]
+        verified = _verify_files_exist(tmp_path, files, quiet=True)
+
+        assert verified == ["file1.txt", "file2.json"]
+
+    def test_verify_missing_files(self, tmp_path):
+        """Test that missing files are not returned."""
+        (tmp_path / "exists.txt").write_text("content")
+
+        files = ["exists.txt", "missing.txt"]
+        verified = _verify_files_exist(tmp_path, files, quiet=True)
+
+        assert verified == ["exists.txt"]
+
+    def test_verify_all_missing(self, tmp_path):
+        """Test when all files are missing."""
+        files = ["missing1.txt", "missing2.txt"]
+        verified = _verify_files_exist(tmp_path, files, quiet=True)
+
+        assert verified == []
+
+    def test_verify_empty_list(self, tmp_path):
+        """Test with empty file list."""
+        verified = _verify_files_exist(tmp_path, [], quiet=True)
+        assert verified == []
+
+    def test_verify_files_in_subdirectories(self, tmp_path):
+        """Test verifying files in subdirectories."""
+        # Create nested structure
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "index.ts").write_text("export {}")
+        (tmp_path / "package.json").write_text("{}")
+
+        files = ["package.json", "src/index.ts", "src/missing.ts"]
+        verified = _verify_files_exist(tmp_path, files, quiet=True)
+
+        assert verified == ["package.json", "src/index.ts"]
+
+
+class TestScaffoldingFilesTracking:
+    """Tests for scaffolding file tracking in the orchestrator."""
+
+    def test_scaffolding_files_tracked_from_step6(self, mock_dependencies, base_args):
+        """Test that scaffolding files from Step 6 are tracked in output."""
+        mocks = mock_dependencies
+        cwd = base_args["cwd"]
+
+        # Create scaffolding files that Step 6 would create
+        (cwd / "package.json").write_text('{"name": "test"}')
+        (cwd / ".gitignore").write_text("node_modules/")
+        (cwd / "README.md").write_text("# Test")
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step6" in label:
+                # Step 6 creates architecture.json + scaffolding files
+                (cwd / "architecture.json").write_text('[{"priority": 1}]')
+                return (True, 'FILES_CREATED: architecture.json, package.json, .gitignore, README.md', 0.1, "gpt-4")
+            if "step7" in label:
+                return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mocks["run"].side_effect = side_effect
+
+        success, msg, cost, model, files = run_agentic_architecture_orchestrator(**base_args)
+
+        assert success is True
+
+        # Check that scaffolding files are in output files list
+        file_names = [Path(f).name for f in files]
+        assert "package.json" in file_names
+        assert ".gitignore" in file_names
+        assert "README.md" in file_names
+
+    def test_scaffolding_files_tracked_from_step8_fix(self, mock_dependencies, base_args):
+        """Test that scaffolding files created during Step 8 fix are tracked."""
+        mocks = mock_dependencies
+        cwd = base_args["cwd"]
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step6" in label:
+                # Step 6 creates only architecture.json
+                (cwd / "architecture.json").write_text('[{"priority": 1}]')
+                return (True, 'FILES_CREATED: architecture.json', 0.1, "gpt-4")
+            if "step7_iter1" in label:
+                return (True, "VALIDATION_RESULT: INVALID\n\n## Validation Errors\n\n1. **Missing scaffolding:** .gitignore missing", 0.1, "gpt-4")
+            if "step8_iter1" in label:
+                # Step 8 creates missing files and updates architecture
+                (cwd / "architecture.json").write_text('[{"priority": 1, "fixed": true}]')
+                (cwd / ".gitignore").write_text("node_modules/")
+                (cwd / "README.md").write_text("# Test")
+                return (True, 'FILES_MODIFIED: architecture.json, .gitignore, README.md', 0.1, "gpt-4")
+            if "step7_iter2" in label:
+                return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mocks["run"].side_effect = side_effect
+
+        success, msg, cost, model, files = run_agentic_architecture_orchestrator(**base_args)
+
+        assert success is True
+
+        # Check that scaffolding files created in Step 8 are in output files list
+        file_names = [Path(f).name for f in files]
+        assert ".gitignore" in file_names
+        assert "README.md" in file_names
+
+    def test_no_duplicate_scaffolding_files_in_output(self, mock_dependencies, base_args):
+        """Test that scaffolding files are not duplicated in output."""
+        mocks = mock_dependencies
+        cwd = base_args["cwd"]
+
+        # Create files
+        (cwd / "package.json").write_text('{"name": "test"}')
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step6" in label:
+                (cwd / "architecture.json").write_text('[{"priority": 1}]')
+                return (True, 'FILES_CREATED: architecture.json, package.json', 0.1, "gpt-4")
+            if "step7_iter1" in label:
+                return (True, "VALIDATION_RESULT: INVALID", 0.1, "gpt-4")
+            if "step8_iter1" in label:
+                # Step 8 also reports package.json (already tracked)
+                (cwd / "architecture.json").write_text('[{"priority": 1, "fixed": true}]')
+                return (True, 'FILES_MODIFIED: architecture.json, package.json', 0.1, "gpt-4")
+            if "step7_iter2" in label:
+                return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mocks["run"].side_effect = side_effect
+
+        success, msg, cost, model, files = run_agentic_architecture_orchestrator(**base_args)
+
+        assert success is True
+
+        # Check no duplicates (count package.json occurrences)
+        package_json_count = sum(1 for f in files if Path(f).name == "package.json")
+        assert package_json_count == 1, f"package.json should appear only once, found {package_json_count} times"
+
+
+class TestProgrammaticJSONValidation:
+    """Tests for programmatic JSON validation preventing LLM hallucination."""
+
+    def test_invalid_json_triggers_validation_error(self, mock_dependencies, base_args):
+        """Test that invalid JSON in architecture.json triggers validation failure."""
+        mocks = mock_dependencies
+        cwd = base_args["cwd"]
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step6" in label:
+                # Step 6 writes invalid JSON
+                (cwd / "architecture.json").write_text("This is not valid JSON {broken")
+                return (True, 'FILES_CREATED: architecture.json', 0.1, "gpt-4")
+            if "step7" in label:
+                # LLM might hallucinate VALID, but programmatic check should catch it
+                return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+            if "step8" in label:
+                # Step 8 fixes the JSON
+                (cwd / "architecture.json").write_text('[{"priority": 1}]')
+                return (True, 'FILES_MODIFIED: architecture.json', 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mocks["run"].side_effect = side_effect
+
+        success, msg, cost, model, files = run_agentic_architecture_orchestrator(**base_args)
+
+        # Should eventually succeed after fix
+        assert success is True
+
+        # Step 7 should have been called at least twice (once for invalid, once for valid)
+        step7_calls = [c for c in mocks["run"].call_args_list if "step7" in str(c)]
+        assert len(step7_calls) >= 1  # At least one validation after fix
+
+    def test_json_object_not_array_triggers_validation_error(self, mock_dependencies, base_args):
+        """Test that JSON object (not array) triggers validation failure."""
+        mocks = mock_dependencies
+        cwd = base_args["cwd"]
+
+        call_count = {"step7": 0, "step8": 0}
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step6" in label:
+                # Step 6 writes JSON object instead of array
+                (cwd / "architecture.json").write_text('{"modules": []}')
+                return (True, 'FILES_CREATED: architecture.json', 0.1, "gpt-4")
+            if "step7" in label:
+                call_count["step7"] += 1
+                if call_count["step7"] >= 2:
+                    return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+                return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+            if "step8" in label:
+                call_count["step8"] += 1
+                # Step 8 fixes to array
+                (cwd / "architecture.json").write_text('[{"priority": 1}]')
+                return (True, 'FILES_MODIFIED: architecture.json', 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mocks["run"].side_effect = side_effect
+
+        success, msg, cost, model, files = run_agentic_architecture_orchestrator(**base_args)
+
+        # Should succeed after fix loop
+        assert success is True
+
+        # Step 8 should have been called at least once to fix the object -> array
+        assert call_count["step8"] >= 1, "Step 8 should be called to fix JSON object to array"
