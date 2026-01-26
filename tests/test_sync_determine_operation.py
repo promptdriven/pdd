@@ -224,6 +224,9 @@ class TestSyncLock:
         # Before fix: lock.fd is still an open file object
         assert lock.fd is None, "File descriptor should be closed after KeyboardInterrupt"
 
+        # Restore original flock before trying to acquire lock2
+        monkeypatch.setattr("fcntl.flock", original_flock)
+
         # Verify lock file cleanup
         lock_file = get_locks_dir() / f"{BASENAME}_{LANGUAGE}.lock"
         # Lock file may still exist, but should not be locked
@@ -244,6 +247,7 @@ class TestSyncLock:
 
         # Mock fcntl.flock to raise RuntimeError after file is opened
         import fcntl
+        original_flock = fcntl.flock
         def mock_flock(fd, op):
             raise RuntimeError("Unexpected error during lock acquisition")
 
@@ -255,6 +259,9 @@ class TestSyncLock:
 
         # BUG: File descriptor should be closed but currently remains open
         assert lock.fd is None, "File descriptor should be closed after RuntimeError"
+
+        # Restore original flock before trying to acquire lock2
+        monkeypatch.setattr("fcntl.flock", original_flock)
 
         # Verify lock file is not held
         lock2 = SyncLock(BASENAME, LANGUAGE)

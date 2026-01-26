@@ -181,18 +181,26 @@ class SyncLock:
             # Create lock file and acquire file descriptor lock
             self.lock_file.touch()
             self.fd = open(self.lock_file, 'w')
-            
-            if HAS_FCNTL:
-                # POSIX systems
-                fcntl.flock(self.fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            elif HAS_MSVCRT:
-                # Windows systems
-                msvcrt.locking(self.fd.fileno(), msvcrt.LK_NBLCK, 1)
-            
-            # Write current PID to lock file
-            self.fd.write(str(self.current_pid))
-            self.fd.flush()
-            
+
+            try:
+                # Critical section - must close file if anything fails
+                if HAS_FCNTL:
+                    # POSIX systems
+                    fcntl.flock(self.fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                elif HAS_MSVCRT:
+                    # Windows systems
+                    msvcrt.locking(self.fd.fileno(), msvcrt.LK_NBLCK, 1)
+
+                # Write current PID to lock file
+                self.fd.write(str(self.current_pid))
+                self.fd.flush()
+            except:
+                # Close file on ANY exception (not just IOError/OSError)
+                if self.fd:
+                    self.fd.close()
+                    self.fd = None
+                raise
+
         except (IOError, OSError) as e:
             if self.fd:
                 self.fd.close()
@@ -223,11 +231,8 @@ def get_extension(language: str) -> str:
     """Get file extension for a programming language."""
     extensions = {
         'python': 'py',
-        'javascript': 'js',
+        'javascript': 'js', 
         'typescript': 'ts',
-        'typescriptreact': 'tsx',
-        'javascriptreact': 'jsx',
-        'prisma': 'prisma',
         'java': 'java',
         'cpp': 'cpp',
         'c': 'c',
@@ -374,13 +379,6 @@ def _generate_paths_from_templates(
     # Ensure prompt is always present (fallback to provided prompt_path)
     if 'prompt' not in result:
         result['prompt'] = Path(prompt_path)
-
-    # Ensure example and test paths are always present (fallback to defaults)
-    # This maintains compatibility with sync workflow that expects these keys
-    if 'example' not in result:
-        result['example'] = Path(f"examples/{name}_example.{extension}")
-    if 'test' not in result:
-        result['test'] = Path(f"tests/test_{name}.{extension}")
 
     # Handle test_files for Bug #156 compatibility
     if 'test' in result:
@@ -1438,46 +1436,6 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
                 )
             elif run_report.tests_failed == 0 and run_report.tests_passed > 0:
                 # Tests pass but coverage is below target
-                # CRITICAL: First check if test file actually exists
-                # The run_report may have synthetic tests_passed=1 from crash/verify success
-                # but actual test file hasn't been generated yet
-                pdd_files = get_pdd_file_paths(basename, language, prompts_dir, context_override=context_override)
-                test_file_exists = pdd_files.get('test') and pdd_files['test'].exists()
-
-                if not test_file_exists:
-                    # Test file doesn't exist - need to generate tests first
-                    return SyncDecision(
-                        operation='test',
-                        reason='Example validated but test file missing - generate tests',
-                        confidence=0.90,
-                        estimated_cost=estimate_operation_cost('test'),
-                        details={
-                            'decision_type': 'heuristic',
-                            'run_report_tests_passed': run_report.tests_passed,
-                            'test_file_exists': False,
-                            'workflow_stage': 'test_generation_needed'
-                        }
-                    )
-
-                # Skip test_extend for non-Python languages - code coverage tooling is Python-specific
-                # and test_extend would produce no content or fail for other languages
-                if language.lower() != 'python':
-                    return SyncDecision(
-                        operation='all_synced',
-                        reason=f'Tests pass ({run_report.tests_passed} passed). Coverage {run_report.coverage:.1f}% below target but test_extend not supported for {language} - accepting as complete',
-                        confidence=0.90,
-                        estimated_cost=estimate_operation_cost('all_synced'),
-                        details={
-                            'decision_type': 'heuristic',
-                            'current_coverage': run_report.coverage,
-                            'target_coverage': target_coverage,
-                            'tests_passed': run_report.tests_passed,
-                            'tests_failed': run_report.tests_failed,
-                            'test_extend_skipped': True,
-                            'language': language,
-                            'skip_reason': 'non-python language'
-                        }
-                    )
                 # Return 'test_extend' to signal we need to ADD more tests, not regenerate
                 return SyncDecision(
                     operation='test_extend',
