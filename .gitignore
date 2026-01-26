@@ -11,6 +11,9 @@ __pycache__/
 pdd/litellm_cache.sqlite/cache.db
 litellm_cache.sqlite/
 
+# Auto-deps lock files (created by filelock for concurrent access prevention)
+*.csv.lock
+
 # Claude folder
 .claude/
 
@@ -202,12 +205,19 @@ yarn-error.log*
 package-lock.json
 yarn.lock
 
-.pdd/core_dumps/*
-
 # PDD internal directory (backups, locks, meta, worktrees, etc.)
 .pdd/
 Makefile.test-staging
 
-# Large model weights (HuggingFace clones)
-demos/3blue1brown/models/
-pdd/prompts
+# Local prompt files (for convenience, not committed)
+pdd/prompts/*.prompt
+pdd/prompts/*.sh
+pdd/prompts/*.txt
+
+# Temporary files
+error_log.txt
+*.backup
+project_dependencies.csv.backup
+
+# User stories (if not meant to be committed)
+user_stories/
