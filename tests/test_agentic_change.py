@@ -312,36 +312,137 @@ def test_comments_fetch_failure_resilience(mock_dependencies):
 def test_clone_failure(mock_dependencies):
     """Test handling of git clone failure."""
     _, mock_subprocess, _, _ = mock_dependencies
-    
+
     issue_data = {"title": "T", "body": "B", "user": {"login": "u"}, "comments_url": ""}
-    
+
     def subprocess_side_effect(args, **kwargs):
         cmd = args if isinstance(args, list) else []
-        
+
         if "api" in cmd:
             m = MagicMock()
             m.returncode = 0
             m.stdout = json.dumps(issue_data)
             return m
-            
+
         # Clone fails
         if "repo" in cmd and "clone" in cmd:
             m = MagicMock()
             m.returncode = 1
             m.stderr = "Permission denied"
             return m
-            
+
         m = MagicMock()
         m.returncode = 1 # Force clone path
         return m
 
     mock_subprocess.side_effect = subprocess_side_effect
-    
+
     with patch("pdd.agentic_change.Path.cwd") as mock_cwd:
         mock_cwd.return_value.__truediv__.return_value.exists.return_value = False
-        
+
         success, msg, _, _, _ = run_agentic_change("https://github.com/owner/repo/issues/1")
-    
+
     assert success is False
     assert "Failed to clone repository" in msg
     assert "Permission denied" in msg
+
+
+def test_issue_content_curly_braces_escaped(mock_dependencies):
+    """
+    Test that curly braces in issue content are escaped to prevent
+    Python's .format() from interpreting them as placeholders.
+
+    Reproduces bug: KeyError when issue contains code like { setError("coming soon") }
+    """
+    _, mock_subprocess, mock_orch, _ = mock_dependencies
+
+    # Issue body contains JavaScript code with curly braces
+    issue_data = {
+        "title": "Fix error handling",
+        "body": "The function does this:\n```javascript\nfunction handleClick() { setError(\"coming soon\") }\n```",
+        "user": {"login": "author"},
+        "comments_url": "https://api.github.com/repos/owner/repo/issues/248/comments"
+    }
+
+    # Comment also contains code with curly braces
+    comments_data = [
+        {"user": {"login": "reviewer"}, "body": "You should use: `const obj = { key: value }`"}
+    ]
+
+    def subprocess_side_effect(args, **kwargs):
+        cmd = args if isinstance(args, list) else []
+
+        # Comments API
+        if "api" in cmd and "comments" in cmd[-1]:
+            m = MagicMock()
+            m.returncode = 0
+            m.stdout = json.dumps(comments_data)
+            return m
+
+        # Issue API
+        if "api" in cmd and "issues/248" in cmd[-1]:
+            m = MagicMock()
+            m.returncode = 0
+            m.stdout = json.dumps(issue_data)
+            return m
+
+        # Clone command
+        if "repo" in cmd and "clone" in cmd:
+            m = MagicMock()
+            m.returncode = 0
+            return m
+
+        # Default
+        m = MagicMock()
+        m.returncode = 1
+        return m
+
+    mock_subprocess.side_effect = subprocess_side_effect
+
+    with patch("pdd.agentic_change.Path.cwd") as mock_cwd:
+        mock_cwd.return_value.__truediv__.return_value.exists.return_value = False
+
+        success, msg, _, _, _ = run_agentic_change(
+            "https://github.com/owner/repo/issues/248"
+        )
+
+    assert success is True
+
+    # Verify the orchestrator was called
+    mock_orch.assert_called_once()
+    call_kwargs = mock_orch.call_args[1]
+    content = call_kwargs["issue_content"]
+
+    # Curly braces should be ESCAPED (doubled) to prevent .format() errors
+    # { becomes {{ and } becomes }}
+    #
+    # The BUG: When issue content contains { setError("coming soon") },
+    # calling prompt_template.format(**context) fails with:
+    #   KeyError: ' setError("coming soon") '
+    # because Python interprets { ... } as a format placeholder.
+
+    # The FIX: Escape all curly braces in issue_content so { becomes {{
+    # After escaping, .format() will convert {{ back to { in the output,
+    # but won't try to substitute them as placeholders.
+
+    # Verify that the content can be safely used in .format() without KeyError
+    # This is the actual bug reproduction - if braces aren't escaped, this raises KeyError
+    try:
+        # Simulate what the orchestrator does: call .format() with the content
+        # The content should have {issue_content} placeholder escaped, so when
+        # we format a template containing this escaped content, it works.
+        test_template = "Issue content: {content}"
+        test_template.format(content=content)
+        # If we get here, the content itself is safe
+    except KeyError as e:
+        pytest.fail(f"Content contains unescaped braces that cause KeyError: {e}")
+
+    # Additionally verify the escaping is correct:
+    # The original "{ setError" should now be "{{ setError" (two opening braces)
+    # Count opening braces before "setError" - should be 2 (escaped), not 1 (raw)
+    import re
+    # Find pattern: one or more { followed by space and "setError"
+    match = re.search(r'(\{+)\s*setError', content)
+    assert match is not None, "Should find braces before setError"
+    braces = match.group(1)
+    assert len(braces) == 2, f"Expected 2 opening braces (escaped), got {len(braces)}: '{braces}'"

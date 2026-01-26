@@ -13,10 +13,7 @@ from rich.panel import Panel
 from . import DEFAULT_STRENGTH, DEFAULT_TIME
 from .construct_paths import construct_paths
 from .bug_to_unit_test import bug_to_unit_test
-from .core.cloud import CloudConfig
-
-# Cloud request timeout
-CLOUD_REQUEST_TIMEOUT = 400  # seconds
+from .core.cloud import CloudConfig, get_cloud_timeout
 
 console = Console()
 
@@ -144,7 +141,7 @@ def bug_main(
                         cloud_url,
                         json=payload,
                         headers=headers,
-                        timeout=CLOUD_REQUEST_TIMEOUT
+                        timeout=get_cloud_timeout()
                     )
                     response.raise_for_status()
 
@@ -168,9 +165,9 @@ def bug_main(
 
                 except requests.exceptions.Timeout:
                     if cloud_only:
-                        console.print(f"[red]Cloud execution timed out ({CLOUD_REQUEST_TIMEOUT}s).[/red]")
+                        console.print(f"[red]Cloud execution timed out ({get_cloud_timeout()}s).[/red]")
                         raise click.UsageError("Cloud execution timed out")
-                    console.print(f"[yellow]Cloud execution timed out ({CLOUD_REQUEST_TIMEOUT}s). Falling back to local.[/yellow]")
+                    console.print(f"[yellow]Cloud execution timed out ({get_cloud_timeout()}s). Falling back to local.[/yellow]")
                     current_execution_is_local = True
 
                 except requests.exceptions.HTTPError as e:

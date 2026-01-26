@@ -478,9 +478,9 @@ regression: ensure-dev-deps
 	@find staging/regression -type f ! -name ".*" -delete
 ifdef TEST_NUM
 	@echo "Running specific test: $(TEST_NUM)"
-	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH bash tests/regression.sh $(TEST_NUM)
+	@PDD_MODEL_DEFAULT=vertex_ai/gemini-3-flash-preview PYTHONPATH=$(PDD_DIR):$$PYTHONPATH bash tests/regression.sh $(TEST_NUM)
 else
-	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH bash tests/regression.sh
+	@PDD_MODEL_DEFAULT=vertex_ai/gemini-3-flash-preview PYTHONPATH=$(PDD_DIR):$$PYTHONPATH bash tests/regression.sh
 endif
 
 SYNC_PARALLEL ?= 1
@@ -646,7 +646,16 @@ release: check-deps check-suspicious-files
 	@$(MAKE) check-suspicious-files
 	@# Update CHANGELOG.md with changes from this release
 	@echo "Updating CHANGELOG.md..."
-	@claude --dangerously-skip-permissions -p "do a git diff between the prior version and the current version to update CHANGELOG.md to make the description more accurate and complete but concise. Be sure to not missing any updates. We are using a prompt driven development approach: docs/prompting_guide.md."
+	@claude --dangerously-skip-permissions -p "Update CHANGELOG.md for the latest release. Steps: \
+1. Run 'git tag | tail -2' to find the prior and current version tags. \
+2. Run 'git diff <prior>..HEAD --stat' and 'git log <prior>..HEAD --oneline' to see all changes. \
+3. For files with significant changes (>20 lines in the stat), run 'git diff <prior>..HEAD -- <file>' to understand the SEMANTIC meaning of the change, not just that lines changed. Look for: new features, behavior changes, removed constants/functions, generalized logic. \
+4. Note any DELETED files (shown as 'delete mode' or '0 insertions, N deletions') - these are often meaningful (e.g., removed prompts, deprecated modules). \
+5. IMPORTANT: PR numbers in merge commits (e.g., 'Merge pull request #337') are from the FORK (gltanaka/pdd), NOT the public repo (promptdriven/pdd). Do NOT include fork PR numbers in the CHANGELOG - they will confuse users who look them up on the public repo. \
+6. For external contributor credits ONLY: use 'gh pr list --repo promptdriven/pdd --state merged --limit 20' to find upstream PRs. Verify PRs exist with 'gh pr view <num> --repo promptdriven/pdd --json state,title'. Only credit PRs that are actually merged on promptdriven/pdd. \
+7. Organize changes into sections: Feat, Fix, Build, Refactor, Docs. \
+8. Keep descriptions concise but complete. Every significant code change should be represented. \
+We are using a prompt driven development approach: docs/prompting_guide.md."
 
 analysis:
 	@echo "Running regression analysis"

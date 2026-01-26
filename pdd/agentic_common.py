@@ -23,10 +23,49 @@ except ImportError:
 
 # Constants
 AGENT_PROVIDER_PREFERENCE: List[str] = ["anthropic", "google", "openai"]
+
+# CLI command mapping for each provider
+CLI_COMMANDS: Dict[str, str] = {
+    "anthropic": "claude",
+    "google": "gemini",
+    "openai": "codex",
+}
+
+# Common installation paths for CLI tools (platform-specific)
+# Used as fallback when shutil.which() fails to find the binary
+_COMMON_CLI_PATHS: Dict[str, List[Path]] = {
+    "claude": [
+        Path.home() / ".npm-global" / "bin" / "claude",
+        Path.home() / ".local" / "bin" / "claude",
+        Path.home() / "bin" / "claude",
+        Path("/usr/local/bin/claude"),
+        Path("/opt/homebrew/bin/claude"),
+        Path("/home/linuxbrew/.linuxbrew/bin/claude"),
+        # nvm base path - glob-expanded in _find_cli_binary() to search
+        # ~/.nvm/versions/node/*/bin/ for all installed node versions
+        Path.home() / ".nvm" / "versions" / "node",
+    ],
+    "codex": [
+        Path.home() / ".npm-global" / "bin" / "codex",
+        Path.home() / ".local" / "bin" / "codex",
+        Path("/usr/local/bin/codex"),
+        Path("/opt/homebrew/bin/codex"),
+    ],
+    "gemini": [
+        Path.home() / ".local" / "bin" / "gemini",
+        Path("/usr/local/bin/gemini"),
+        Path("/opt/homebrew/bin/gemini"),
+    ],
+}
+
+# Maximum depth to search for .pddrc file
+MAX_PDDRC_SEARCH_DEPTH: int = 10
+
 DEFAULT_TIMEOUT_SECONDS: float = 240.0
 MIN_VALID_OUTPUT_LENGTH: int = 50
 DEFAULT_MAX_RETRIES: int = 3
 DEFAULT_RETRY_DELAY: float = 5.0
+MAX_PATH_DISPLAY_LENGTH: int = 200  # Truncation length for PATH in diagnostic messages
 
 # GitHub State Markers
 GITHUB_STATE_MARKER_START = "<!-- PDD_WORKFLOW_STATE:"
@@ -50,32 +89,175 @@ CODEX_PRICING = Pricing(1.50, 6.00, 0.25)
 
 console = Console()
 
+
+# ---------------------------------------------------------------------------
+# CLI Discovery (addresses GitHub issue #234: Claude not found during agentic fallback)
+# ---------------------------------------------------------------------------
+
+
+def _load_agentic_config() -> Dict[str, Any]:
+    """
+    Load agentic CLI configuration from .pddrc.
+
+    Looks for an 'agentic' section in .pddrc with CLI path overrides:
+
+        agentic:
+          claude_path: /path/to/claude
+          codex_path: /path/to/codex
+          gemini_path: /path/to/gemini
+
+    Returns empty dict if no config found.
+    """
+    import yaml
+
+    # Search for .pddrc in current dir and parent dirs
+    search_path = Path.cwd()
+    pddrc_path: Optional[Path] = None
+    for _ in range(MAX_PDDRC_SEARCH_DEPTH):
+        candidate = search_path / ".pddrc"
+        if candidate.is_file():
+            pddrc_path = candidate
+            break
+        parent = search_path.parent
+        if parent == search_path:
+            break
+        search_path = parent
+
+    # Also check home directory
+    if not pddrc_path:
+        home_pddrc = Path.home() / ".pddrc"
+        if home_pddrc.is_file():
+            pddrc_path = home_pddrc
+
+    if not pddrc_path:
+        return {}
+
+    try:
+        with open(pddrc_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f)
+        if isinstance(config, dict):
+            return config.get("agentic", {}) or {}
+    except Exception:
+        pass
+
+    return {}
+
+
+def _find_cli_binary(name: str, config: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """
+    Find a CLI binary using multiple strategies.
+
+    This function addresses a common issue where CLI tools like 'claude' are
+    installed and runnable from the user's shell, but not found by shutil.which()
+    when pdd runs. This happens because shell profiles (.bashrc, .zshrc) may add
+    directories to PATH that aren't available in the pdd process environment.
+
+    Strategies (in order):
+        1. Check for explicit path override in .pddrc agentic config
+        2. Try shutil.which() for standard PATH lookup
+        3. Search common installation directories
+
+    Args:
+        name: CLI binary name (e.g., "claude", "codex", "gemini")
+        config: Optional pre-loaded agentic config dict (avoids repeated file reads)
+
+    Returns:
+        Full path to the binary if found, None otherwise
+    """
+    # Strategy 1: Check .pddrc config override
+    if config is None:
+        config = _load_agentic_config()
+
+    config_key = f"{name}_path"
+    if config_key in config:
+        custom_path = Path(config[config_key])
+        if custom_path.exists() and os.access(custom_path, os.X_OK):
+            return str(custom_path)
+
+    # Strategy 2: Standard PATH lookup
+    path_result = shutil.which(name)
+    if path_result:
+        return path_result
+
+    # Strategy 3: Search common installation directories
+    common_paths = _COMMON_CLI_PATHS.get(name, [])
+    for path in common_paths:
+        # Handle nvm-style paths that need glob expansion
+        # nvm installs to ~/.nvm/versions/node/vX.Y.Z/bin/
+        if "nvm" in str(path) and path.name == "node":
+            # Glob for all node versions and check for the CLI in each
+            try:
+                for version_dir in path.glob("*/bin"):
+                    cli_path = version_dir / name
+                    if cli_path.exists() and os.access(cli_path, os.X_OK):
+                        return str(cli_path)
+            except Exception:
+                pass
+        elif path.exists() and os.access(path, os.X_OK):
+            return str(path)
+
+    return None
+
+
+def _get_cli_diagnostic_info(name: str) -> str:
+    """
+    Generate diagnostic information for CLI discovery failures.
+
+    Returns a helpful message for troubleshooting when a CLI binary cannot be found.
+    """
+    lines = [
+        f"CLI '{name}' not found. Troubleshooting steps:",
+        "",
+        f"1. Check installation: which {name}",
+        f"2. Common installation paths searched:",
+    ]
+
+    for path in _COMMON_CLI_PATHS.get(name, []):
+        lines.append(f"   - {path}")
+
+    lines.extend([
+        "",
+        "3. Configure custom path in .pddrc:",
+        f"   agentic:",
+        f"     {name}_path: /path/to/{name}",
+        "",
+        f"4. Current PATH: {os.environ.get('PATH', 'not set')[:MAX_PATH_DISPLAY_LENGTH]}...",
+    ])
+
+    return "\n".join(lines)
+
+
 def get_available_agents() -> List[str]:
     """
     Returns list of available provider names based on CLI existence and API key configuration.
+
+    Uses _find_cli_binary() for robust CLI discovery that searches:
+    1. .pddrc config overrides
+    2. Standard PATH (shutil.which)
+    3. Common installation directories
     """
     available = []
 
     # 1. Anthropic (Claude)
     # Available if 'claude' CLI exists. API key not strictly required (subscription auth).
-    if shutil.which("claude"):
+    if _find_cli_binary("claude"):
         available.append("anthropic")
 
     # 2. Google (Gemini)
     # Available if 'gemini' CLI exists AND (API key is set OR Vertex AI auth is configured)
-    has_gemini_cli = shutil.which("gemini") is not None
+    has_gemini_cli = _find_cli_binary("gemini") is not None
     has_google_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
     has_vertex_auth = (
-        os.environ.get("GOOGLE_APPLICATION_CREDENTIALS") and 
+        os.environ.get("GOOGLE_APPLICATION_CREDENTIALS") and
         os.environ.get("GOOGLE_GENAI_USE_VERTEXAI") == "true"
     )
-    
+
     if has_gemini_cli and (has_google_key or has_vertex_auth):
         available.append("google")
 
     # 3. OpenAI (Codex)
     # Available if 'codex' CLI exists AND OPENAI_API_KEY is set
-    if shutil.which("codex") and os.environ.get("OPENAI_API_KEY"):
+    if _find_cli_binary("codex") and os.environ.get("OPENAI_API_KEY"):
         available.append("openai")
 
     return available
@@ -194,8 +376,15 @@ def run_agentic_task(
                 last_output = output
 
                 # False Positive Detection
+                # Issue #249: Empty output should ALWAYS be detected as false positive,
+                # regardless of cost. Claude may consume tokens running tools but produce
+                # no text response, which means the task wasn't actually completed.
                 if success:
-                    is_false_positive = (cost == 0.0 and len(output.strip()) < MIN_VALID_OUTPUT_LENGTH)
+                    output_length = len(output.strip())
+                    is_false_positive = (
+                        output_length == 0 or  # Empty output is always a false positive
+                        (cost == 0.0 and output_length < MIN_VALID_OUTPUT_LENGTH)  # Zero cost with short output
+                    )
 
                     if is_false_positive:
                         if not quiet:
@@ -236,60 +425,90 @@ def run_agentic_task(
                 pass
 
 def _run_with_provider(
-    provider: str, 
-    prompt_path: Path, 
-    cwd: Path, 
+    provider: str,
+    prompt_path: Path,
+    cwd: Path,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     verbose: bool = False,
-    quiet: bool = False
+    quiet: bool = False,
+    cli_path: Optional[str] = None
 ) -> Tuple[bool, str, float]:
     """
     Internal helper to run a specific provider's CLI.
     Returns (success, output_or_error, cost).
+
+    Args:
+        provider: Provider name (anthropic, google, openai)
+        prompt_path: Path to the prompt file
+        cwd: Working directory
+        timeout: Timeout in seconds
+        verbose: Verbose output
+        quiet: Suppress output
+        cli_path: Optional explicit CLI path (if None, uses _find_cli_binary)
     """
-    
+
     # Prepare Environment
     env = os.environ.copy()
     env["TERM"] = "dumb"
     env["NO_COLOR"] = "1"
     env["CI"] = "1"
 
+    # Get CLI binary name for this provider
+    cli_name = CLI_COMMANDS.get(provider)
+    if not cli_name:
+        return False, f"Unknown provider {provider}", 0.0
+
+    # Find CLI binary path (use explicit path if provided)
+    if cli_path is None:
+        cli_path = _find_cli_binary(cli_name)
+    if not cli_path:
+        return False, f"CLI '{cli_name}' not found. {_get_cli_diagnostic_info(cli_name)}", 0.0
+
     cmd: List[str] = []
-    
-    # Construct Command
+
+    # Read prompt content for providers that pipe via stdin
+    prompt_content = prompt_path.read_text(encoding="utf-8") if prompt_path.exists() else ""
+
+    # Construct Command using discovered cli_path (Issue #234 fix)
     if provider == "anthropic":
         # Remove API key to force subscription auth if configured that way
         env.pop("ANTHROPIC_API_KEY", None)
-        # Note: Tests expect NO -p flag for Anthropic, and prompt path as last arg
+        # Use -p - to pipe prompt as direct user message via stdin.
+        # This prevents Claude from interpreting file-discovered instructions
+        # as "automated bot workflow" and refusing to execute.
         cmd = [
-            "claude", 
-            "--dangerously-skip-permissions", 
+            cli_path,
+            "-p", "-",
+            "--dangerously-skip-permissions",
             "--output-format", "json",
-            str(prompt_path)
         ]
     elif provider == "google":
         cmd = [
-            "gemini", 
-            "-p", str(prompt_path), 
-            "--yolo", 
+            cli_path,
+            "-p", str(prompt_path),
+            "--yolo",
             "--output-format", "json"
         ]
     elif provider == "openai":
         cmd = [
-            "codex", 
-            "exec", 
-            "--full-auto", 
-            "--json", 
+            cli_path,
+            "exec",
+            "--full-auto",
+            "--json",
             str(prompt_path)
         ]
     else:
         return False, f"Unknown provider {provider}", 0.0
+
+    # For anthropic, pipe prompt content via stdin; others use file path in cmd
+    stdin_content = prompt_content if provider == "anthropic" else None
 
     try:
         result = subprocess.run(
             cmd,
             cwd=cwd,
             env=env,
+            input=stdin_content,
             capture_output=True,
             text=True,
             timeout=timeout

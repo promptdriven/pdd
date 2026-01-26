@@ -16,7 +16,7 @@ RUN_ALL_TESTS_ENABLED = os.getenv("PDD_RUN_ALL_TESTS") == "1"
 
 
 @pytest.mark.real
-def test_real_fix_command(create_dummy_files, tmp_path):
+def test_real_fix_command(create_dummy_files, tmp_path, monkeypatch):
     """Test the 'fix' command with real files by calling the function directly."""
     if not (os.getenv("PDD_RUN_REAL_LLM_TESTS") or RUN_ALL_TESTS_ENABLED):
         pytest.skip(
@@ -195,14 +195,13 @@ sys.exit(0 if test_result.wasSuccessful() else 1)
     }
 
     # Change working directory to tmp_path so imports work correctly
-    original_cwd = os.getcwd()
-    os.chdir(tmp_path)
-    
+    # Use monkeypatch for automatic cleanup (prevents test pollution)
+    monkeypatch.chdir(tmp_path)
+
     # Set PDD_PATH to the project root so prompt templates can be found
     # Get the project root dynamically from the current test file location
-    original_pdd_path = os.getenv('PDD_PATH')
     project_root = Path(__file__).parent.parent  # Go up from tests/ to project root
-    os.environ['PDD_PATH'] = str(project_root)
+    monkeypatch.setenv('PDD_PATH', str(project_root))
 
     try:
         # Call fix_main directly - with no mock this time
@@ -250,17 +249,7 @@ sys.exit(0 if test_result.wasSuccessful() else 1)
 
     except Exception as e:
         pytest.fail(f"Real fix test failed: {e}")
-
-    finally:
-        # Restore original PDD_PATH
-        if original_pdd_path:
-             os.environ['PDD_PATH'] = original_pdd_path
-        else:
-             if 'PDD_PATH' in os.environ:
-                 del os.environ['PDD_PATH']
-        
-        # Restore original working directory
-        os.chdir(original_cwd)
+    # Note: monkeypatch automatically restores cwd and PDD_PATH after test
 
 
 def test_fix_command_exits_nonzero_for_nonexistent_error_file(tmp_path):
@@ -317,7 +306,7 @@ def test_cli_fix_multiple_test_files(tmp_path):
     error_file = tmp_path / "error.txt"
     error_file.write_text("error content")
 
-    with patch('pdd.commands.fix.fix_main') as mock_fix_main:
+    with patch('pdd.fix_main.fix_main') as mock_fix_main:
         mock_fix_main.return_value = (True, "fixed_test", "fixed_code", 1, 0.1, "gpt-4")
         result = runner.invoke(cli.cli, [
             'fix',
@@ -346,6 +335,7 @@ def test_cli_fix_multiple_test_files(tmp_path):
             agentic_fallback=True,
             strength=None,
             temperature=None,
+            protect_tests=False,
         )
         mock_fix_main.assert_any_call(
             ctx=ANY,
@@ -364,6 +354,7 @@ def test_cli_fix_multiple_test_files(tmp_path):
             agentic_fallback=True,
             strength=None,
             temperature=None,
+            protect_tests=False,
         )
 
 @pytest.mark.parametrize("num_test_files", [1, 2])
@@ -383,7 +374,7 @@ def test_cli_fix_loop_mode_no_error_file(tmp_path, num_test_files):
     for tf in test_files:
         tf.write_text("test content")
 
-    with patch('pdd.commands.fix.fix_main') as mock_fix_main:
+    with patch('pdd.fix_main.fix_main') as mock_fix_main:
         mock_fix_main.return_value = (True, "fixed_test", "fixed_code", 1, 0.1, "gpt-4")
         result = runner.invoke(cli.cli, [
             'fix', '--manual', '--loop', '--verification-program', str(verify_file),
@@ -417,3 +408,18 @@ def test_cli_fix_non_loop_mode_requires_error_file(tmp_path):
     # Should fail because ERROR_FILE is missing
     assert result.exit_code != 0, "Should fail without ERROR_FILE in non-loop mode"
     assert "requires at least 4 arguments" in result.output or "ERROR_FILE" in result.output
+
+
+def test_run_agentic_e2e_fix_has_protect_tests_parameter():
+    """run_agentic_e2e_fix function signature should include protect_tests.
+
+    This ensures the CLI can pass the --protect-tests flag to the agentic e2e fix.
+    """
+    import inspect
+    from pdd.agentic_e2e_fix import run_agentic_e2e_fix
+
+    sig = inspect.signature(run_agentic_e2e_fix)
+    params = list(sig.parameters.keys())
+
+    assert 'protect_tests' in params, \
+        "run_agentic_e2e_fix must accept protect_tests parameter"

@@ -1042,7 +1042,17 @@ def _is_workflow_complete(paths: Dict[str, Path], skip_tests: bool = False, skip
     # Without this, newly generated code would incorrectly be marked as "complete"
     if basename and language:
         run_report = read_run_report(basename, language)
-        if not run_report or run_report.exit_code != 0:
+        
+        # Bug #349: If tests passed, consider workflow complete even if exit_code != 0
+        # This handles cases where tooling (like pytest-cov) returns non-zero exit code
+        # despite all tests passing.
+        if not run_report:
+            return False
+            
+        # Check for success: either exit_code is 0 OR tests passed successfully
+        is_success = (run_report.exit_code == 0) or (run_report.tests_passed > 0 and run_report.tests_failed == 0)
+        
+        if not is_success:
             return False
 
         # Check that run_report corresponds to current test files (staleness detection)
@@ -1364,37 +1374,42 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
         
         # Then check for runtime crashes (only if no test failures)
         if run_report.exit_code != 0:
-            # Context-aware decision: prefer 'fix' over 'crash' when example has run successfully before
-            has_example_run_successfully = _check_example_success_history(basename, language)
+            # Bug #349: If tests passed, ignore non-zero exit code (likely tooling noise)
+            # Only trigger crash/fix if tests actually failed or didn't run
+            tests_passed_successfully = run_report.tests_passed > 0 and run_report.tests_failed == 0
             
-            if has_example_run_successfully:
-                return SyncDecision(
-                    operation='fix',
-                    reason='Runtime error detected but example has run successfully before - prefer fix over crash',
-                    confidence=0.90,
-                    estimated_cost=estimate_operation_cost('fix'),
-                    details={
-                        'decision_type': 'heuristic',
-                        'exit_code': run_report.exit_code,
-                        'timestamp': run_report.timestamp,
-                        'example_success_history': True,
-                        'decision_rationale': 'prefer_fix_over_crash'
-                    }
-                )
-            else:
-                return SyncDecision(
-                    operation='crash',
-                    reason='Runtime error detected in last run - no successful example history',
-                    confidence=0.95,
-                    estimated_cost=estimate_operation_cost('crash'),
-                    details={
-                        'decision_type': 'heuristic',
-                        'exit_code': run_report.exit_code,
-                        'timestamp': run_report.timestamp,
-                        'example_success_history': False,
-                        'decision_rationale': 'crash_without_history'
-                    }
-                )
+            if not tests_passed_successfully:
+                # Context-aware decision: prefer 'fix' over 'crash' when example has run successfully before
+                has_example_run_successfully = _check_example_success_history(basename, language)
+                
+                if has_example_run_successfully:
+                    return SyncDecision(
+                        operation='fix',
+                        reason='Runtime error detected but example has run successfully before - prefer fix over crash',
+                        confidence=0.90,
+                        estimated_cost=estimate_operation_cost('fix'),
+                        details={
+                            'decision_type': 'heuristic',
+                            'exit_code': run_report.exit_code,
+                            'timestamp': run_report.timestamp,
+                            'example_success_history': True,
+                            'decision_rationale': 'prefer_fix_over_crash'
+                        }
+                    )
+                else:
+                    return SyncDecision(
+                        operation='crash',
+                        reason='Runtime error detected in last run - no successful example history',
+                        confidence=0.95,
+                        estimated_cost=estimate_operation_cost('crash'),
+                        details={
+                            'decision_type': 'heuristic',
+                            'exit_code': run_report.exit_code,
+                            'timestamp': run_report.timestamp,
+                            'example_success_history': False,
+                            'decision_rationale': 'crash_without_history'
+                        }
+                    )
         
         if run_report.coverage < target_coverage:
             if skip_tests:
@@ -1431,6 +1446,27 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
                     }
                 )
             else:
+                # Bug fix: If tests_passed=0 AND tests_failed=0 AND exit_code=0,
+                # the test output couldn't be parsed but tests likely passed.
+                # For non-Python languages, this is common when the test framework
+                # output doesn't match our parsing patterns.
+                # In this case, accept the workflow as complete rather than loop infinitely.
+                if run_report.tests_passed == 0 and run_report.tests_failed == 0 and run_report.exit_code == 0:
+                    return SyncDecision(
+                        operation='all_synced',
+                        reason=f'Tests completed (exit_code=0) but coverage {run_report.coverage:.1f}% could not be verified - accepting as complete',
+                        confidence=0.70,
+                        estimated_cost=estimate_operation_cost('all_synced'),
+                        details={
+                            'decision_type': 'heuristic',
+                            'current_coverage': run_report.coverage,
+                            'target_coverage': target_coverage,
+                            'tests_passed': run_report.tests_passed,
+                            'tests_failed': run_report.tests_failed,
+                            'exit_code': run_report.exit_code,
+                            'unparseable_output': True
+                        }
+                    )
                 return SyncDecision(
                     operation='test',
                     reason=f'Coverage {run_report.coverage:.1f}% below target {target_coverage:.1f}%',
@@ -1564,20 +1600,24 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
 
             # BUG 4 & 1: No run_report OR crash detected (exit_code != 0)
             if not run_report or run_report.exit_code != 0:
-                return SyncDecision(
-                    operation='crash',
-                    reason='All files exist but needs validation' +
-                           (' - no run_report' if not run_report else f' - exit_code={run_report.exit_code}'),
-                    confidence=0.85,
-                    estimated_cost=estimate_operation_cost('crash'),
-                    details={
-                        'decision_type': 'heuristic',
-                        'all_files_exist': True,
-                        'run_report_missing': not run_report,
-                        'exit_code': None if not run_report else run_report.exit_code,
-                        'workflow_stage': 'post_regeneration_validation'
-                    }
-                )
+                # Bug #349: If tests passed, ignore non-zero exit code
+                tests_passed_successfully = run_report and run_report.tests_passed > 0 and run_report.tests_failed == 0
+                
+                if not tests_passed_successfully:
+                    return SyncDecision(
+                        operation='crash',
+                        reason='All files exist but needs validation' +
+                               (' - no run_report' if not run_report else f' - exit_code={run_report.exit_code}'),
+                        confidence=0.85,
+                        estimated_cost=estimate_operation_cost('crash'),
+                        details={
+                            'decision_type': 'heuristic',
+                            'all_files_exist': True,
+                            'run_report_missing': not run_report,
+                            'exit_code': None if not run_report else run_report.exit_code,
+                            'workflow_stage': 'post_regeneration_validation'
+                        }
+                    )
 
             # BUG 2: Verify not run yet (run_report exists, exit_code=0, but command != verify/test)
             if fingerprint and fingerprint.command not in ['verify', 'test', 'fix', 'update'] and not skip_verify:
@@ -1598,7 +1638,10 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
             # This happens when run_report.test_hash doesn't match current test file, or
             # when fingerprint timestamp > run_report timestamp (legacy detection)
             # Need to re-run tests to get accurate results
-            if run_report and run_report.exit_code == 0:
+            # Bug #349: Also check if tests passed successfully even if exit_code != 0
+            is_success = run_report and ((run_report.exit_code == 0) or (run_report.tests_passed > 0 and run_report.tests_failed == 0))
+            
+            if is_success:
                 return SyncDecision(
                     operation='test',
                     reason='Run report is stale - need to re-run tests to verify current state',

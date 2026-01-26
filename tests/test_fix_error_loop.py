@@ -2,11 +2,19 @@ import os
 import shutil
 from pathlib import Path
 import subprocess
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock, mock_open
 import pytest
+import requests
 import pdd
 
-from pdd.fix_error_loop import fix_error_loop
+from pdd.fix_error_loop import (
+    fix_error_loop,
+    cloud_fix_errors,
+    run_pytest_on_file,
+    format_log_for_output,
+    _normalize_agentic_result,
+    escape_brackets
+)
 
 
 @pytest.fixture
@@ -1107,3 +1115,630 @@ def test_initial_test_exception_triggers_agentic_fallback(setup_files):
     assert mock_agentic.called, \
         "BUG (Issue #266): Agentic fallback was NOT triggered after initial pytest exception. " \
         "Line 425's early return bypasses the agentic fallback code."
+
+
+# --- Fixtures ---
+
+@pytest.fixture
+def mock_files(tmp_path):
+    """Create dummy test and code files."""
+    d = tmp_path / "project"
+    d.mkdir()
+    code_file = d / "code.py"
+    test_file = d / "test_code.py"
+    prompt_file = d / "prompt.txt"
+    
+    code_file.write_text("def foo(): return 1")
+    test_file.write_text("def test_foo(): assert foo() == 1")
+    prompt_file.write_text("Write foo")
+    
+    return str(code_file), str(test_file), str(prompt_file)
+
+@pytest.fixture
+def mock_cloud_config():
+    with patch("pdd.fix_error_loop.CloudConfig") as mock:
+        yield mock
+
+@pytest.fixture
+def mock_requests():
+    with patch("pdd.fix_error_loop.requests") as mock:
+        yield mock
+
+@pytest.fixture
+def mock_console():
+    """Mock rich console to suppress output."""
+    with patch("pdd.fix_error_loop.rprint") as mock_print:
+        yield mock_print
+
+# --- Unit Tests for Helper Functions ---
+
+def test_escape_brackets():
+    assert escape_brackets("List[int]") == "List\\[int\\]"
+    assert escape_brackets("No brackets") == "No brackets"
+    assert escape_brackets("[a] [b]") == "\\[a\\] \\[b\\]"
+
+def test_run_pytest_on_file_parsing():
+    """Test that pytest output is correctly parsed into counts."""
+    mock_output = {
+        "test_results": [{
+            "failures": 1,
+            "errors": 2,
+            "warnings": 3,
+            "standard_output": "stdout content",
+            "standard_error": "stderr content"
+        }]
+    }
+    
+    with patch("pdd.fix_error_loop.run_pytest_and_capture_output", return_value=mock_output):
+        f, e, w, logs = run_pytest_on_file("dummy_test.py")
+        assert f == 1
+        assert e == 2
+        assert w == 3
+        assert "stdout content" in logs
+        assert "stderr content" in logs
+
+def test_format_log_for_output():
+    """Test XML formatting of the log structure."""
+    log_structure = {
+        "iterations": [
+            {
+                "number": 1,
+                "initial_test_output": "Init Fail",
+                "fix_attempt": "Fixing bug",
+                "model_name": "gpt-4",
+                "verification": "Verify OK",
+                "post_test_output": "Still Fail"
+            },
+            {
+                "number": 2,
+                "fix_attempt": "Fixing bug again",
+                "verification": "Verify OK",
+                "post_test_output": "Pass"
+            }
+        ]
+    }
+    
+    output = format_log_for_output(log_structure)
+    
+    assert "<pytest_output iteration=1>" in output
+    assert "Init Fail" in output
+    assert "<fix_attempt iteration=1>" in output
+    assert "Model: gpt-4" in output
+    assert "<verification_output iteration=1>" in output
+    assert "=== Final Pytest Run ===" in output
+    assert "Pass" in output
+
+def test_normalize_agentic_result():
+    """Test normalization of various tuple shapes from agentic fix."""
+    # 5-tuple
+    res = _normalize_agentic_result((True, "msg", 1.0, "model", ["file1"]))
+    assert res == (True, "msg", 1.0, "model", ["file1"])
+    
+    # 4-tuple
+    res = _normalize_agentic_result((True, "msg", 1.0, "model"))
+    assert res == (True, "msg", 1.0, "model", [])
+    
+    # 2-tuple
+    res = _normalize_agentic_result((False, "fail"))
+    assert res == (False, "fail", 0.0, "agentic-cli", [])
+
+# --- Unit Tests for cloud_fix_errors ---
+
+def test_cloud_fix_errors_success(mock_cloud_config, mock_requests):
+    """Test successful cloud fix call."""
+    mock_cloud_config.get_jwt_token.return_value = "fake_token"
+    mock_cloud_config.get_endpoint_url.return_value = "http://api/fix"
+    
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "updateUnitTest": True,
+        "updateCode": True,
+        "fixedUnitTest": "new_test",
+        "fixedCode": "new_code",
+        "analysis": "fixed it",
+        "totalCost": 0.05,
+        "modelName": "cloud-gpt"
+    }
+    mock_requests.post.return_value = mock_response
+    
+    result = cloud_fix_errors(
+        "test", "code", "prompt", "error", "err_file", 0.5, 0.1
+    )
+    
+    assert result == (True, True, "new_test", "new_code", "fixed it", 0.05, "cloud-gpt")
+    mock_requests.post.assert_called_once()
+
+def test_cloud_fix_errors_no_token(mock_cloud_config):
+    """Test error when no JWT token is available."""
+    mock_cloud_config.get_jwt_token.return_value = None
+    with pytest.raises(RuntimeError, match="no JWT token"):
+        cloud_fix_errors("t", "c", "p", "e", "f", 0.5, 0.1)
+
+def test_cloud_fix_errors_http_402(mock_cloud_config, mock_requests):
+    """Test handling of 402 Payment Required."""
+    import requests
+    mock_cloud_config.get_jwt_token.return_value = "token"
+    
+    mock_response = MagicMock()
+    mock_response.status_code = 402
+    mock_response.json.return_value = {"currentBalance": "0.00", "estimatedCost": "0.10"}
+    
+    # Fix: Assign real exception classes to the mock so 'except' works
+    mock_requests.exceptions.HTTPError = requests.exceptions.HTTPError
+    mock_requests.exceptions.Timeout = requests.exceptions.Timeout
+    mock_requests.exceptions.RequestException = requests.exceptions.RequestException
+    
+    err = requests.exceptions.HTTPError(response=mock_response)
+    mock_requests.post.side_effect = err
+    
+    with pytest.raises(RuntimeError, match="Insufficient credits"):
+        cloud_fix_errors("t", "c", "p", "e", "f", 0.5, 0.1)
+
+def test_cloud_fix_errors_auth_failure(mock_console):
+    with patch("pdd.fix_error_loop.CloudConfig") as mock_config:
+        mock_config.get_jwt_token.return_value = None
+        
+        with pytest.raises(RuntimeError, match="Cloud authentication failed"):
+            cloud_fix_errors("t", "c", "p", "e", "f", 0.5, 0.1)
+
+# --- Unit Tests for fix_error_loop ---
+
+def test_fix_error_loop_files_missing(mock_console):
+    with patch("os.path.isfile", return_value=False):
+        success, _, _, attempts, _, _ = fix_error_loop(
+            "test.py", "code.py", "p.txt", "prompt", "verify.py", 0.5, 0.1, 5, 1.0
+        )
+        assert success is False
+        assert attempts == 0
+
+@patch("pdd.fix_error_loop.run_pytest_on_file")
+def test_fix_error_loop_initially_passing(mock_pytest, mock_files):
+    """Test that loop exits immediately if tests pass initially."""
+    code, test, prompt = mock_files
+    mock_pytest.return_value = (0, 0, 0, "All good")
+    
+    success, final_test, final_code, attempts, cost, model = fix_error_loop(
+        test, code, prompt, "prompt", "verify.py", 0.5, 0.1, 5, 1.0
+    )
+    
+    assert success is True
+    assert attempts == 0
+    assert cost == 0.0
+    assert "def foo" in final_code
+
+@patch("pdd.fix_error_loop.run_pytest_on_file")
+@patch("pdd.fix_error_loop.fix_errors_from_unit_tests")
+@patch("pdd.fix_error_loop.subprocess.run")
+def test_fix_error_loop_one_iteration_success(mock_subprocess, mock_fix, mock_pytest, mock_files):
+    """Test a scenario where it fails initially, fixes, and then passes."""
+    code, test, prompt = mock_files
+    mock_pytest.side_effect = [
+        (1, 0, 0, "Fail"), 
+        (0, 0, 0, "Pass")
+    ]
+    mock_fix.return_value = (
+        False, True, "", "fixed_code_content", "analysis", 0.1, "gpt-4"
+    )
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = "Verify OK"
+    
+    success, final_test, final_code, attempts, cost, model = fix_error_loop(
+        test, code, prompt, "prompt", "verify.py", 0.5, 0.1, 5, 1.0
+    )
+    
+    assert success is True
+    assert attempts == 1
+    assert cost == 0.1
+    assert model == "gpt-4"
+    
+    with open(code, 'r') as f:
+        assert f.read() == "fixed_code_content"
+
+@patch("pdd.fix_error_loop.run_pytest_on_file")
+@patch("pdd.fix_error_loop.fix_errors_from_unit_tests")
+@patch("pdd.fix_error_loop.subprocess.run")
+@patch("pdd.fix_error_loop.shutil.copy")
+def test_fix_error_loop_verification_failure_restores_backup(mock_copy, mock_subprocess, mock_fix, mock_pytest, mock_files):
+    """Test that if verification fails, code is restored from backup."""
+    code, test, prompt = mock_files
+    mock_pytest.side_effect = [
+        (1, 0, 0, "Fail"),
+        (1, 0, 0, "Fail Still") 
+    ]
+    mock_fix.return_value = (False, True, "", "bad_code", "analysis", 0.1, "gpt-4")
+    mock_subprocess.return_value.returncode = 1
+    mock_subprocess.return_value.stdout = "Syntax Error"
+    
+    fix_error_loop(
+        test, code, prompt, "prompt", "verify.py", 0.5, 0.1, 1, 1.0, agentic_fallback=False
+    )
+    
+    assert mock_copy.call_count >= 2
+    args, _ = mock_copy.call_args
+    assert args[1] == code
+
+@patch("pdd.fix_error_loop.run_pytest_on_file")
+@patch("pdd.fix_error_loop.cloud_fix_errors")
+@patch("pdd.fix_error_loop.subprocess.run")
+def test_fix_error_loop_cloud_mode(mock_subprocess, mock_cloud, mock_pytest, mock_files):
+    """Test that use_cloud=True calls cloud_fix_errors."""
+    code, test, prompt = mock_files
+    mock_pytest.side_effect = [(1, 0, 0, "Fail"), (0, 0, 0, "Pass")]
+    mock_cloud.return_value = (False, True, "", "cloud_code", "analysis", 0.2, "cloud-model")
+    mock_subprocess.return_value.returncode = 0
+    
+    success, _, _, attempts, cost, _ = fix_error_loop(
+        test, code, prompt, "prompt", "verify.py", 0.5, 0.1, 5, 1.0,
+        use_cloud=True
+    )
+    
+    assert success is True
+    assert attempts == 1
+    assert cost == 0.2
+    mock_cloud.assert_called_once()
+
+@patch("pdd.fix_error_loop.run_pytest_on_file")
+@patch("pdd.fix_error_loop._safe_run_agentic_fix")
+def test_initial_exception_triggers_agentic(mock_agentic, mock_pytest, mock_files):
+    """Test that an exception during initial test triggers agentic fallback immediately."""
+    code, test, prompt = mock_files
+    mock_pytest.side_effect = Exception("Pytest crashed")
+    mock_agentic.return_value = (True, "Fixed", 0.1, "agent", [])
+    
+    success, _, _, attempts, _, _ = fix_error_loop(
+        test, code, prompt, "prompt", "verify.py", 0.5, 0.1, 5, 1.0,
+        agentic_fallback=True
+    )
+    
+    assert success is True
+    assert attempts == 1 
+    mock_agentic.assert_called_once()
+
+def test_fix_error_loop_fix_succeeds(mock_console, mock_files):
+    """Test a loop where it fails initially, then succeeds after one fix."""
+    code, test, prompt = mock_files
+    with patch("pdd.fix_error_loop.run_pytest_on_file") as mock_pytest, \
+         patch("pdd.fix_error_loop.fix_errors_from_unit_tests") as mock_fix, \
+         patch("shutil.copy"), \
+         patch("subprocess.run") as mock_subprocess:
+        
+        # 1. Initial run: Fails
+        # 2. Post-fix run: Passes
+        mock_pytest.side_effect = [
+            (1, 0, 0, "Fail"), # Initial
+            (0, 0, 0, "Pass")  # After fix
+        ]
+        
+        # Mock LLM fix
+        mock_fix.return_value = (True, True, "fixed_test", "fixed_code", "analysis", 0.1, "gpt-4")
+        
+        # Mock verification program success
+        mock_subprocess.return_value.returncode = 0
+        mock_subprocess.return_value.stdout = "OK"
+        
+        success, final_test, final_code, attempts, cost, model = fix_error_loop(
+            test, code, prompt, "prompt", "verify.py", 0.5, 0.1, 5, 1.0
+        )
+        
+        assert success is True
+        assert attempts == 1
+        assert cost == 0.1
+        assert model == "gpt-4"
+        # Should have written files
+        with open(code, 'r') as f:
+            assert f.read() == "fixed_code"
+
+def test_fix_error_loop_budget_exceeded(mock_console, mock_files):
+    """Test that loop stops if budget is exceeded."""
+    code, test, prompt = mock_files
+    with patch("pdd.fix_error_loop.run_pytest_on_file") as mock_pytest, \
+         patch("pdd.fix_error_loop.fix_errors_from_unit_tests") as mock_fix, \
+         patch("shutil.copy"), \
+         patch("subprocess.run") as mock_subprocess:
+        
+        mock_pytest.return_value = (1, 0, 0, "Fail") # Always fail
+        
+        # Cost 0.6 per call, budget 1.0 -> Should run twice then stop
+        mock_fix.return_value = (True, True, "ft", "fc", "an", 0.6, "gpt-4")
+        mock_subprocess.return_value.returncode = 0
+        
+        success, _, _, attempts, cost, _ = fix_error_loop(
+            test, code, prompt, "prompt", "verify.py", 0.5, 0.1, 5, 1.0,
+            agentic_fallback=False # Disable fallback to check loop exit
+        )
+        
+        assert success is False
+        assert attempts == 2 # 0.6 + 0.6 = 1.2 > 1.0
+        assert cost == 1.2
+
+def test_fix_error_loop_verification_fails_restores_backup(mock_console, mock_files):
+    """Test that if verification program fails, code is restored from backup."""
+    code, test, prompt = mock_files
+    with patch("pdd.fix_error_loop.run_pytest_on_file") as mock_pytest, \
+         patch("pdd.fix_error_loop.fix_errors_from_unit_tests") as mock_fix, \
+         patch("shutil.copy") as mock_copy, \
+         patch("subprocess.run") as mock_subprocess:
+        
+        mock_pytest.return_value = (1, 0, 0, "Fail")
+        mock_fix.return_value = (False, True, "", "bad_code", "analysis", 0.1, "gpt-4")
+        
+        # Verification fails
+        mock_subprocess.return_value.returncode = 1
+        mock_subprocess.return_value.stderr = "Syntax Error"
+        
+        # Run only 1 attempt
+        fix_error_loop(
+            test, code, prompt, "prompt", "verify.py", 0.5, 0.1, 1, 1.0,
+            agentic_fallback=False
+        )
+        
+        # Check that shutil.copy was called to restore (backup -> code_file)
+        # We expect at least 2 copies: 2 for backup creation, 1 for restore
+        assert mock_copy.call_count >= 3 
+        # The last call should likely be the restore
+        args, _ = mock_copy.call_args
+        # args[0] is source (backup), args[1] is dest (code.py)
+        assert "backups" in args[0]
+        assert args[1] == code
+
+def test_fix_error_loop_best_state_recovery(mock_console, mock_files):
+    """
+    Test that if the final iteration is worse than a previous one, 
+    the best iteration is restored.
+    """
+    code, test, prompt = mock_files
+    with patch("pdd.fix_error_loop.run_pytest_on_file") as mock_pytest, \
+         patch("pdd.fix_error_loop.fix_errors_from_unit_tests") as mock_fix, \
+         patch("shutil.copy") as mock_copy, \
+         patch("subprocess.run") as mock_subprocess:
+        
+        # Iteration 0 (Initial): 5 fails
+        # Iteration 1: 1 fail (Best)
+        # Iteration 2: 3 fails (Worse)
+        mock_pytest.side_effect = [
+            (5, 0, 0, "Init"),
+            (1, 0, 0, "Better"),
+            (3, 0, 0, "Worse")
+        ]
+        
+        mock_fix.return_value = (True, True, "t", "c", "a", 0.1, "m")
+        mock_subprocess.return_value.returncode = 0
+        
+        fix_error_loop(
+            test, code, prompt, "prompt", "verify.py", 0.5, 0.1, 2, 1.0,
+            agentic_fallback=False
+        )
+        
+        # We expect restoration of the best iteration (Iteration 1)
+        # Look for copy calls where source contains "test_1_" or "code_1_"
+        restore_calls = [
+            call for call in mock_copy.call_args_list 
+            if "test_1_" in str(call) or "code_1_" in str(call)
+        ]
+        # Should restore both test and code
+        assert len(restore_calls) >= 2
+
+@patch("pdd.fix_error_loop.run_pytest_on_file")
+@patch("pdd.fix_error_loop._safe_run_agentic_fix")
+def test_agentic_fallback_triggered(mock_agentic, mock_pytest, mock_files):
+    """Test that agentic fallback is triggered when loop exhausts attempts."""
+    code, test, prompt = mock_files
+    mock_pytest.return_value = (1, 0, 0, "Fail")
+    mock_agentic.return_value = (True, "Agent fixed it", 0.5, "agent-model", ["code.py"])
+    
+    # We need to patch fix_errors_from_unit_tests to avoid real LLM calls and control cost
+    with patch("pdd.fix_error_loop.fix_errors_from_unit_tests") as mock_fix:
+        mock_fix.return_value = (False, False, "", "", "", 0.1, "model")
+        
+        success, _, _, attempts, cost, model = fix_error_loop(
+            test, code, prompt, "prompt", "verify.py", 0.5, 0.1, 1, 1.0,
+            agentic_fallback=True
+        )
+        
+        assert success is True
+        assert attempts == 1
+        # Cost = 0.1 (loop) + 0.5 (agent) = 0.6
+        assert cost == 0.6
+        assert model == "agent-model"
+        mock_agentic.assert_called_once()
+
+# --- Z3 Formal Verification Tests ---
+
+def test_z3_best_state_logic():
+    """Verify the logic for determining if the final state is better than the best recorded state."""
+    try:
+        import z3
+    except ImportError:
+        pytest.skip("z3-solver not installed")
+
+    s = z3.Solver()
+    b_err, b_fail, b_warn = z3.Int('b_err'), z3.Int('b_fail'), z3.Int('b_warn')
+    f_err, f_fail, f_warn = z3.Int('f_err'), z3.Int('f_fail'), z3.Int('f_warn')
+
+    s.add(b_err >= 0, b_fail >= 0, b_warn >= 0)
+    s.add(f_err >= 0, f_fail >= 0, f_warn >= 0)
+
+    def implementation_is_better(fe, ff, fw, be, bf, bw):
+        cond1 = fe < be
+        cond2 = z3.And(fe == be, ff < bf)
+        cond3 = z3.And(fe == be, ff == bf, fw < bw)
+        return z3.Or(cond1, cond2, cond3)
+
+    def spec_is_better(fe, ff, fw, be, bf, bw):
+        return z3.If(fe != be, fe < be,
+                     z3.If(ff != bf, ff < bf,
+                           fw < bw))
+
+    impl = implementation_is_better(f_err, f_fail, f_warn, b_err, b_fail, b_warn)
+    spec = spec_is_better(f_err, f_fail, f_warn, b_err, b_fail, b_warn)
+
+    s.add(impl != spec)
+    if s.check() == z3.sat:
+        pytest.fail("Z3 found a discrepancy between implementation logic and lexicographical specification")
+
+def test_z3_budget_constraint():
+    """Verify that the loop condition total_cost < budget ensures we stop within bounds."""
+    try:
+        import z3
+    except ImportError:
+        pytest.skip("z3-solver not installed")
+
+    s = z3.Solver()
+    budget, current_cost, step_cost, next_cost = z3.Real('budget'), z3.Real('current_cost'), z3.Real('step_cost'), z3.Real('next_cost')
+
+    s.add(budget > 0, step_cost > 0, current_cost >= 0)
+    loop_entry = current_cost < budget
+    s.add(next_cost == current_cost + step_cost)
+
+    property_to_prove = z3.Implies(loop_entry, next_cost < budget + step_cost)
+    s.add(z3.Not(property_to_prove))
+    
+    if s.check() == z3.sat:
+        pytest.fail("Z3 found that cost can exceed budget + step_cost")
+
+def test_z3_best_iteration_logic():
+    """
+    Verify the logic for selecting the 'best' iteration.
+    Logic: Minimize Errors, then Fails, then Warnings.
+    """
+    try:
+        import z3
+    except ImportError:
+        pytest.skip("z3-solver not installed")
+
+    s = z3.Solver()
+    
+    # State A
+    fails_a = z3.Int('fails_a')
+    errors_a = z3.Int('errors_a')
+    warnings_a = z3.Int('warnings_a')
+    
+    # State B
+    fails_b = z3.Int('fails_b')
+    errors_b = z3.Int('errors_b')
+    warnings_b = z3.Int('warnings_b')
+    
+    # Constraints: All counts must be non-negative
+    s.add(fails_a >= 0, errors_a >= 0, warnings_a >= 0)
+    s.add(fails_b >= 0, errors_b >= 0, warnings_b >= 0)
+    
+    # Definition of "A is better than B" based on code logic:
+    # if (errors < best_errors or
+    #    (errors == best_errors and fails < best_fails) or
+    #    (errors == best_errors and fails == best_fails and warnings < best_warnings))
+    
+    def is_better(f1, e1, w1, f2, e2, w2):
+        return z3.Or(
+            e1 < e2,
+            z3.And(e1 == e2, f1 < f2),
+            z3.And(e1 == e2, f1 == f2, w1 < w2)
+        )
+    
+    # Verify Transitivity: If A better than B, and B better than C, then A better than C
+    fails_c = z3.Int('fails_c')
+    errors_c = z3.Int('errors_c')
+    warnings_c = z3.Int('warnings_c')
+    s.add(fails_c >= 0, errors_c >= 0, warnings_c >= 0)
+    
+    a_better_b = is_better(fails_a, errors_a, warnings_a, fails_b, errors_b, warnings_b)
+    b_better_c = is_better(fails_b, errors_b, warnings_b, fails_c, errors_c, warnings_c)
+    a_better_c = is_better(fails_a, errors_a, warnings_a, fails_c, errors_c, warnings_c)
+    
+    # We want to prove: (A > B) AND (B > C) IMPLIES (A > C)
+    # To prove validity with Z3, we check if the negation is unsatisfiable.
+    s.add(a_better_b)
+    s.add(b_better_c)
+    s.add(z3.Not(a_better_c)) # Negation
+    
+    result = s.check()
+    assert result == z3.unsat, "Best iteration logic is not transitive!"
+
+def test_z3_loop_termination_condition():
+    """
+    Verify the loop termination condition logic.
+    Loop continues while: attempts < max_attempts AND total_cost < budget
+    """
+    try:
+        import z3
+    except ImportError:
+        pytest.skip("z3-solver not installed")
+
+    s = z3.Solver()
+    
+    attempts = z3.Int('attempts')
+    max_attempts = z3.Int('max_attempts')
+    cost = z3.Real('cost')
+    budget = z3.Real('budget')
+    
+    # Preconditions
+    s.add(max_attempts > 0)
+    s.add(budget > 0)
+    s.add(attempts >= 0)
+    s.add(cost >= 0)
+    
+    # Loop condition
+    continue_loop = z3.And(attempts < max_attempts, cost < budget)
+    
+    # Verify: If cost exceeds budget, loop MUST NOT continue
+    # Implies(cost > budget, Not(continue_loop))
+    
+    s.add(cost > budget)
+    s.add(continue_loop) # Assert the loop continues despite cost > budget
+    
+    result = s.check()
+    assert result == z3.unsat, "Loop condition allows continuation even if budget exceeded!"
+
+
+# --- Regression Tests for protect_tests Feature (Issue #303) ---
+
+@patch("pdd.fix_error_loop.run_pytest_on_file")
+@patch("pdd.fix_error_loop.fix_errors_from_unit_tests")
+@patch("pdd.fix_error_loop.subprocess.run")
+def test_protect_tests_prevents_unit_test_write(mock_subprocess, mock_fix, mock_pytest, mock_files):
+    """
+    REGRESSION TEST (Issue #303): When protect_tests=True and LLM returns
+    updated_unit_test=True, the unit test file should NOT be written to disk,
+    but the code file SHOULD still be written when updated_code=True.
+    """
+    code, test, prompt = mock_files
+
+    # Save original test content before any changes
+    with open(test, 'r') as f:
+        original_test_content = f.read()
+
+    # Initial: fail, Post-fix: pass
+    mock_pytest.side_effect = [
+        (1, 0, 0, "FAILED test"),
+        (0, 0, 0, "PASSED")
+    ]
+
+    # LLM returns BOTH unit test AND code updates
+    mock_fix.return_value = (
+        True,                    # updated_unit_test = True
+        True,                    # updated_code = True
+        "new_test_content",      # fixed_unit_test (LLM wants to change this)
+        "new_code_content",      # fixed_code
+        "analysis", 0.1, "gpt-4"
+    )
+
+    # Verification succeeds
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = "OK"
+
+    success, final_test, final_code, attempts, cost, model = fix_error_loop(
+        test, code, prompt, "prompt text", "verify.py",
+        0.5, 0.1, 5, 1.0,
+        protect_tests=True  # KEY: Enable protect_tests
+    )
+
+    assert success is True
+    assert attempts == 1
+
+    # Code file SHOULD be updated (protect_tests doesn't affect code)
+    with open(code, 'r') as f:
+        assert f.read() == "new_code_content", "Code should be written"
+
+    # Test file should NOT be updated (protected!)
+    with open(test, 'r') as f:
+        assert f.read() == original_test_content, \
+            "Test file should NOT be modified when protect_tests=True"

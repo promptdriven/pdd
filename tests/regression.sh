@@ -7,7 +7,7 @@ set -u
 
 # Global settings
 VERBOSE=${VERBOSE:-1} # Default to 1 if not set
-STRENGTH=${STRENGTH:-0.3} # Default strength
+STRENGTH=${STRENGTH:-0.5} # Default strength
 TEMPERATURE=${TEMPERATURE:-0.0} # Default temperature
 TEST_LOCAL=${TEST_LOCAL:-false} # Default to cloud execution
 CLEANUP_ON_EXIT=false # Set to false to keep files for debugging
@@ -65,7 +65,7 @@ if [ -x "$PDD_BASE_DIR/pdd-local.sh" ]; then
   log "Using local CLI script (pdd-local.sh) for regression tests"
   PDD_SCRIPT="$PDD_BASE_DIR/pdd-local.sh"
 fi
-PROMPTS_PATH="$PDD_BASE_DIR/prompts"
+FIXTURES_PATH="$SCRIPT_DIR/fixtures"
 CONTEXT_PATH="$PDD_BASE_DIR/context"
 CONTEXT_PATH_GLOB="$CONTEXT_PATH/*.py" # Escaping might be needed depending on shell interpretation
 
@@ -340,8 +340,8 @@ cd "$REGRESSION_DIR" # Work inside the regression directory
 
 
 log "Current directory: $(pwd)"
-log "PDD Script: $(command -v $PDD_SCRIPT || echo 'Not in PATH')"
-log "Prompt Path: $PROMPTS_PATH"
+log "PDD Script: $(command -v "$PDD_SCRIPT" || echo 'Not in PATH')"
+log "Fixtures Path: $FIXTURES_PATH"
 log "Context Path: $CONTEXT_PATH"
 log "Log File: $LOG_FILE"
 log "Cost File: $COST_FILE"
@@ -436,8 +436,8 @@ mkdir -p "$CHANGE_CSV_CODE_DIR"
 mkdir -p "$CHANGE_CSV_OUT_DIR"
 printf "def func_a():\\n  print('Hello A')\\n" > "$CHANGE_CSV_CODE_DIR/$DUMMY_CODE_A"
 printf "def func_b():\\n  print('Hello B')\\n" > "$CHANGE_CSV_CODE_DIR/$DUMMY_CODE_B"
-cp "$PROMPTS_PATH/$MATH_PROMPT" "$DUMMY_PROMPT_A" # Use math prompt as base
-cp "$PROMPTS_PATH/$MATH_PROMPT" "$DUMMY_PROMPT_B" # Use math prompt as base
+cp "$FIXTURES_PATH/$MATH_PROMPT" "$DUMMY_PROMPT_A" # Use math prompt as base
+cp "$FIXTURES_PATH/$MATH_PROMPT" "$DUMMY_PROMPT_B" # Use math prompt as base
 cat << EOF > "$CHANGE_CSV_FILE"
 prompt_name,change_instructions
 "$DUMMY_PROMPT_A","Change function name to func_a_modified"
@@ -494,7 +494,7 @@ contexts:
 EOF
 
   # 0a. --list-contexts should print available contexts and exit 0
-  CONTEXTS_OUTPUT=$($PDD_SCRIPT --list-contexts 2>> "$LOG_FILE")
+  CONTEXTS_OUTPUT=$("$PDD_SCRIPT" --list-contexts 2>> "$LOG_FILE")
   STATUS=$?
   if [ $STATUS -ne 0 ]; then
     log_error "--list-contexts exited with non-zero status: $STATUS"
@@ -515,16 +515,16 @@ fi
 # 1. Generate
 if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "1" ]; then
   log "1. Testing 'generate' command"
-  run_pdd_command --local generate --output "$MATH_SCRIPT" "$PROMPTS_PATH/$MATH_PROMPT"
+  run_pdd_command --local generate --output "$MATH_SCRIPT" "$FIXTURES_PATH/$MATH_PROMPT"
   check_exists "$MATH_SCRIPT" "'generate' output"
   cp "$MATH_SCRIPT" "$ORIGINAL_MATH_SCRIPT" # Backup for update test
 
   # 1a. Generate with different strength/temp
   log "1a. Testing 'generate' with different strength/temp"
   # Pass global options FIRST, then the command and its specific options/args
-  run_pdd_command --local --strength 0.5 --temperature 0.0 generate --output "gen_low_str.py" "$PROMPTS_PATH/$MATH_PROMPT"
+  run_pdd_command --local --strength 0.5 --temperature 0.0 generate --output "gen_low_str.py" "$FIXTURES_PATH/$MATH_PROMPT"
   check_exists "gen_low_str.py" "'generate' low strength output"
-  run_pdd_command --local --strength $STRENGTH --temperature 1.5 generate --output "gen_high_temp.py" "$PROMPTS_PATH/$MATH_PROMPT"
+  run_pdd_command --local --strength $STRENGTH --temperature 1.5 generate --output "gen_high_temp.py" "$FIXTURES_PATH/$MATH_PROMPT"
   check_exists "gen_high_temp.py" "'generate' high temp output"
 
   # 1b. Generate with env var output path (via envonly context)
@@ -533,7 +533,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "1" ]; then
   mkdir -p "$ENV_OUT_DIR"
   export PDD_GENERATE_OUTPUT_PATH="$ENV_OUT_DIR/" # Trailing slash indicates directory
   # Use envonly context so env vars take precedence (no context paths)
-  run_pdd_command --local --context envonly generate "$PROMPTS_PATH/$MATH_PROMPT" # No --output
+  run_pdd_command --local --context envonly generate "$FIXTURES_PATH/$MATH_PROMPT" # No --output
   # Default name is <basename>.<lang_ext> which should be simple_math.py
   check_exists "$ENV_OUT_DIR/$MATH_SCRIPT" "'generate' output via env var" # Check for the Python file, not the prompt
 
@@ -561,7 +561,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "2" ]; then
   #     exit 1
   # fi
 
-  run_pdd_command example --output "$MATH_VERIFICATION_PROGRAM" "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT"
+  run_pdd_command example --output "$MATH_VERIFICATION_PROGRAM" "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT"
   check_exists "$MATH_VERIFICATION_PROGRAM" "'example' output"
 fi
 
@@ -569,10 +569,10 @@ fi
 if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "3" ]; then
   log "3. Testing 'preprocess' command"
   # Basic preprocess
-  run_pdd_command preprocess --output "preprocessed_${MATH_PROMPT}" "$PROMPTS_PATH/$MATH_PROMPT"
+  run_pdd_command preprocess --output "preprocessed_${MATH_PROMPT}" "$FIXTURES_PATH/$MATH_PROMPT"
   check_exists "preprocessed_${MATH_PROMPT}" "'preprocess' basic output"
   # XML preprocess
-  run_pdd_command preprocess --xml --output "${MATH_BASENAME}_xml.prompt" "$PROMPTS_PATH/$MATH_PROMPT"
+  run_pdd_command preprocess --xml --output "${MATH_BASENAME}_xml.prompt" "$FIXTURES_PATH/$MATH_PROMPT"
   check_exists "${MATH_BASENAME}_xml.prompt" "'preprocess --xml' output"
 
   # 3a. Testing complex 'preprocess' features
@@ -608,7 +608,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "4" ]; then
   # Modify the script slightly
   log "Modifying script for update test"
   echo "# Added comment for update test" >> "$MATH_SCRIPT"
-  run_pdd_command update --output "$UPDATED_MATH_PROMPT" "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT" "$ORIGINAL_MATH_SCRIPT"
+  run_pdd_command update --output "$UPDATED_MATH_PROMPT" "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT" "$ORIGINAL_MATH_SCRIPT"
   check_exists "$UPDATED_MATH_PROMPT" "'update' output"
 
   # 4a. Update with --git
@@ -627,7 +627,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "4" ]; then
     log "Warning: data directory not found at $PDD_BASE_DIR/data or $PDD_BASE_DIR/pdd/data"
   fi
   cp "../$ORIGINAL_MATH_SCRIPT" "$MATH_SCRIPT" # Copy original version
-  cp "$PROMPTS_PATH/$MATH_PROMPT" .
+  cp "$FIXTURES_PATH/$MATH_PROMPT" .
   git add "$MATH_SCRIPT" "$MATH_PROMPT"
   git commit -m "Initial commit" > /dev/null 2>&1
   echo "# Git modification" >> "$MATH_SCRIPT" # Modify tracked file
@@ -641,7 +641,7 @@ fi
 if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "5" ]; then
   log "5. Testing 'change' command"
   # Use the updated prompt from step 4 as input
-  run_pdd_command change --output "$CHANGED_MATH_PROMPT" \
+  run_pdd_command change --manual --output "$CHANGED_MATH_PROMPT" \
                          "$DETECT_CHANGE_FILE" \
                          "$MATH_SCRIPT" \
                          "$UPDATED_MATH_PROMPT"
@@ -649,7 +649,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "5" ]; then
 
   # 5a. Change with --csv
   log "5a. Testing 'change --csv'"
-  run_pdd_command change --csv --output "$CHANGE_CSV_OUT_DIR/" "$CHANGE_CSV_FILE" "$CHANGE_CSV_CODE_DIR/" # Note trailing slash for output dir
+  run_pdd_command change --manual --csv --output "$CHANGE_CSV_OUT_DIR/" "$CHANGE_CSV_FILE" "$CHANGE_CSV_CODE_DIR/" # Note trailing slash for output dir
   check_exists "$CHANGE_CSV_OUT_DIR/$DUMMY_PROMPT_A" "'change --csv' output A"
   check_exists "$CHANGE_CSV_OUT_DIR/$DUMMY_PROMPT_B" "'change --csv' output B"
 
@@ -678,7 +678,7 @@ fi
 if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "6" ]; then
   log "6. Testing 'crash' command"
   # Make sure example program exists and is runnable first
-  run_pdd_command example --output "$MATH_VERIFICATION_PROGRAM" "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT"
+  run_pdd_command example --output "$MATH_VERIFICATION_PROGRAM" "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT"
   log "Running example program before introducing error..."
   # Run the example once and if it fails, immediately try to fix with 'crash'
   set +e
@@ -690,7 +690,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "6" ]; then
       log "Initial example run failed; invoking 'crash' to fix it..."
       run_pdd_command crash --output "$CRASH_FIXED_SCRIPT" \
                             --output-program "$CRASH_FIXED_PROGRAM" \
-                            "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT" \
+                            "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT" \
                             "$MATH_VERIFICATION_PROGRAM" "$MATH_ERROR_LOG"
 
       # Adopt fixed files if they were created
@@ -738,7 +738,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "6" ]; then
       # Run crash (non-loop) - Increase strength here
       run_pdd_command crash --output "$CRASH_FIXED_SCRIPT" \
                             --output-program "$CRASH_FIXED_PROGRAM" \
-                            "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT" \
+                            "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT" \
                             "$MATH_VERIFICATION_PROGRAM" "$MATH_ERROR_LOG"
       
       # Conditionally adopt the fixed files if they were created
@@ -809,7 +809,7 @@ EOF
       run_pdd_command_noexit crash --loop --max-attempts 5 --budget 5.0 \
                             --output "${CRASH_FIXED_SCRIPT}_loop" \
                             --output-program "${CRASH_FIXED_PROGRAM}_loop" \
-                            "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT" \
+                            "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT" \
                             "$MATH_VERIFICATION_PROGRAM" "${MATH_ERROR_LOG}_loop"
 
       # Conditionally adopt the fixed files if they were created by the loop
@@ -840,7 +840,7 @@ EOF
       log "Restored $MATH_SCRIPT from backup"
   else
       log "Warning: Original math script backup not found, regenerating from prompt"
-      run_pdd_command generate --output "$MATH_SCRIPT" "$PROMPTS_PATH/$MATH_PROMPT"
+      run_pdd_command generate --output "$MATH_SCRIPT" "$FIXTURES_PATH/$MATH_PROMPT"
   fi
 fi
 
@@ -865,7 +865,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "7" ]; then
           --output-program "$VERIFY_PROGRAM_OUTPUT" \
           --max-attempts 5 \
           --budget 5.0 \
-          "$PROMPTS_PATH/$MATH_PROMPT" \
+          "$FIXTURES_PATH/$MATH_PROMPT" \
           "$MATH_SCRIPT" \
           "$MATH_VERIFICATION_PROGRAM"
 
@@ -1021,7 +1021,7 @@ EOF
   fi
 
   # If the installed pdd CLI does not support -e/--env, skip this section
-  if ! $PDD_SCRIPT generate --help 2>&1 | grep -q -- "--env"; then
+  if ! "$PDD_SCRIPT" generate --help 2>&1 | grep -q -- "--env"; then
     log "Skipping parameterized generate: current pdd CLI does not support -e/--env"
     EXTRA_ARGS=("__SKIP__")
   fi
@@ -1064,7 +1064,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "8" ]; then
   # Therefore, the test file should include the line: 'from simple_math import add'
   # EOF
 
-  run_pdd_command test --output "$MATH_TEST_SCRIPT" --language Python "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT"
+  run_pdd_command test --output "$MATH_TEST_SCRIPT" --language Python "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT"
   check_exists "$MATH_TEST_SCRIPT" "'test' initial output"
 
   # 8a. Test with coverage improvement
@@ -1108,7 +1108,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "8" ]; then
                        --coverage-report "$COVERAGE_REPORT" \
                        --existing-tests "$MATH_TEST_SCRIPT" \
                        --target-coverage $TARGET_COVERAGE \
-                       "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT"
+                       "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT"
   check_exists "$IMPROVED_TEST_SCRIPT" "'test' coverage improvement output"
 
   # 8b. Test with merge
@@ -1131,7 +1131,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "8" ]; then
                        --existing-tests "$MATH_TEST_SCRIPT" \
                        --target-coverage $TARGET_COVERAGE \
                        --merge \
-                       "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT"
+                       "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT"
   check_exists "$MATH_TEST_SCRIPT" "'test --merge' output (should overwrite)"
   log "Running merged tests..."
   python -m pytest "$MATH_TEST_SCRIPT" >> "$LOG_FILE" 2>&1 || log "Merged tests failed (non-fatal for script)."
@@ -1143,7 +1143,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "8" ]; then
   export PDD_TEST_OUTPUT_PATH="$ENV_OUT_DIR_TEST/" # Trailing slash indicates directory
 
   # Use envonly context so env vars take precedence (no context paths)
-  run_pdd_command --context envonly test "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT" # No --output
+  run_pdd_command --context envonly test "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT" # No --output
   # Default name is test_<basename>.<lang_ext>
   check_exists "$ENV_OUT_DIR_TEST/$MATH_TEST_SCRIPT" "'test' output via env var"
 
@@ -1160,7 +1160,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "9" ]; then
   if grep -q -E "===+ (FAILURES|ERRORS) ===+" "$PYTEST_LOG"; then
       log "Running 'fix' command (non-loop)"
       run_pdd_command_noexit fix --output-test "$FIXED_MATH_TEST_SCRIPT" --output-code "$FIXED_MATH_SCRIPT" --output-results "fix_results.log" \
-                          "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT" "$MATH_TEST_SCRIPT" "$PYTEST_LOG"
+                          "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT" "$MATH_TEST_SCRIPT" "$PYTEST_LOG"
 
       # Adopt fixed versions if they were created
       adopted_fix=false
@@ -1187,7 +1187,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "9" ]; then
                               --verification-program "$MATH_VERIFICATION_PROGRAM" \
                               --max-attempts 2 --budget 5.0 \
                               --auto-submit \
-                              "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT" "$MATH_TEST_SCRIPT" "$MATH_ERROR_LOOP_LOG"
+                              "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT" "$MATH_TEST_SCRIPT" "$MATH_ERROR_LOOP_LOG"
           # Adopt loop fixed versions if created
           if [ -f "$FIXED_LOOP_MATH_SCRIPT" ]; then
               cp "$FIXED_LOOP_MATH_SCRIPT" "$MATH_SCRIPT"
@@ -1223,9 +1223,9 @@ fi
 if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "11" ]; then
   log "11. Testing 'detect' command"
   run_pdd_command detect --output "$DETECT_RESULTS_CSV" \
-                         "$PROMPTS_PATH/$MATH_PROMPT" \
+                         "$FIXTURES_PATH/$MATH_PROMPT" \
                          "$SPLIT_SUB_PROMPT" \
-                         "$PROMPTS_PATH/$OTHER_PROMPT" \
+                         "$FIXTURES_PATH/$OTHER_PROMPT" \
                          "$DETECT_CHANGE_FILE"
   check_exists "$DETECT_RESULTS_CSV" "'detect' results CSV"
 fi
@@ -1234,8 +1234,8 @@ fi
 if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "12" ]; then
   log "12. Testing 'conflicts' command"
   run_pdd_command conflicts --output "$CONFLICTS_RESULTS_CSV" \
-                            "$PROMPTS_PATH/$MATH_PROMPT" \
-                            "$PROMPTS_PATH/$OTHER_PROMPT"
+                            "$FIXTURES_PATH/$MATH_PROMPT" \
+                            "$FIXTURES_PATH/$OTHER_PROMPT"
   check_exists "$CONFLICTS_RESULTS_CSV" "'conflicts' results CSV"
 fi
 
@@ -1247,7 +1247,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "13" ]; then
   log "Ensuring clean math script for trace test"
   if [ ! -f "$ORIGINAL_MATH_SCRIPT" ]; then
       log "Warning: Original math script backup not found, regenerating for trace test"
-      run_pdd_command generate --output "$MATH_SCRIPT" "$PROMPTS_PATH/$MATH_PROMPT"
+      run_pdd_command generate --output "$MATH_SCRIPT" "$FIXTURES_PATH/$MATH_PROMPT"
   else
       cp "$ORIGINAL_MATH_SCRIPT" "$MATH_SCRIPT"
       log "Restored $MATH_SCRIPT from backup for trace test"
@@ -1265,7 +1265,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "13" ]; then
   fi
   log "Tracing line $ADD_FUNC_LINE in $MATH_SCRIPT"
   run_pdd_command_noexit trace --output "$TRACE_RESULTS_LOG" \
-                        "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT" "$ADD_FUNC_LINE"
+                        "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT" "$ADD_FUNC_LINE"
   
   # Check if trace command succeeded and handle accordingly
   if [ $? -eq 0 ]; then
@@ -1283,7 +1283,7 @@ fi
 if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "14" ]; then
   log "14. Testing 'bug' command"
   log "Ensuring verification program is runnable for 'bug' test"
-  run_pdd_command example --output "$MATH_VERIFICATION_PROGRAM" "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT"
+  run_pdd_command example --output "$MATH_VERIFICATION_PROGRAM" "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT"
   log "Generating current output for 'bug' command"
   python "$MATH_VERIFICATION_PROGRAM" > "current_output.txt" 2>&1 || true # Allow failure
   log "Creating desired output for 'bug' command"
@@ -1291,7 +1291,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "14" ]; then
   echo "The result of addition is: 8" > "desired_output.txt" # Assuming 5+3 example
 
   run_pdd_command bug --manual --output "$BUG_TEST_SCRIPT" --language Python \
-                      "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT" \
+                      "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT" \
                       "$MATH_VERIFICATION_PROGRAM" \
                       "current_output.txt" "desired_output.txt"
   check_exists "$BUG_TEST_SCRIPT" "'bug' generated test script"
@@ -1303,7 +1303,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "15" ]; then
   AUTO_DEPS_CSV="project_dependencies.csv"
   run_pdd_command auto-deps --output "$AUTO_DEPS_PROMPT" \
                             --csv "$AUTO_DEPS_CSV" \
-                            "$PROMPTS_PATH/$MATH_PROMPT" "$CONTEXT_PATH_GLOB" # Use quotes if glob pattern has spaces or special chars
+                            "$FIXTURES_PATH/$MATH_PROMPT" "$CONTEXT_PATH_GLOB" # Use quotes if glob pattern has spaces or special chars
   check_exists "$AUTO_DEPS_PROMPT" "'auto-deps' modified prompt"
   check_exists "$AUTO_DEPS_CSV" "'auto-deps' dependency CSV"
 
@@ -1319,7 +1319,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "15" ]; then
   fi
   run_pdd_command auto-deps --force-scan --output "forced_scan_${AUTO_DEPS_PROMPT}" \
                              --csv "$AUTO_DEPS_CSV" \
-                             "$PROMPTS_PATH/$MATH_PROMPT" "$CONTEXT_PATH_GLOB"
+                             "$FIXTURES_PATH/$MATH_PROMPT" "$CONTEXT_PATH_GLOB"
   check_exists "forced_scan_${AUTO_DEPS_PROMPT}" "'auto-deps --force-scan' output"
   # Check if CSV timestamp updated (simple check)
   if [ "$AUTO_DEPS_CSV" -ot "forced_scan_${AUTO_DEPS_PROMPT}" ]; then # Check if CSV is older
@@ -1335,7 +1335,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "16" ]; then
   # Test --quiet
   log "16a. Testing '--quiet'"
   QUIET_LOG="quiet_run.log"
-  run_pdd_command --quiet generate --output "quiet_gen.py" "$PROMPTS_PATH/$MATH_PROMPT" > "$QUIET_LOG" 2>&1
+  run_pdd_command --quiet generate --output "quiet_gen.py" "$FIXTURES_PATH/$MATH_PROMPT" > "$QUIET_LOG" 2>&1
   # Check if log is small (basic check)
   QUIET_SIZE=$(wc -c < "$QUIET_LOG")
   if [ "$QUIET_SIZE" -lt 100 ]; then # Arbitrary small size
@@ -1350,9 +1350,9 @@ fi
 # log "17. Testing Multi-Command Chaining"
 # # This syntax might depend heavily on how pdd parses chained commands.
 # # Assuming space separation works:
-# run_pdd_command generate --output chained_gen.py $PROMPTS_PATH/$MATH_PROMPT \
-#                 example --output chained_example.py $PROMPTS_PATH/$MATH_PROMPT chained_gen.py \
-#                 test --output chained_test.py $PROMPTS_PATH/$MATH_PROMPT chained_gen.py
+# run_pdd_command generate --output chained_gen.py $FIXTURES_PATH/$MATH_PROMPT \
+#                 example --output chained_example.py $FIXTURES_PATH/$MATH_PROMPT chained_gen.py \
+#                 test --output chained_test.py $FIXTURES_PATH/$MATH_PROMPT chained_gen.py
 # check_exists chained_gen.py "Chained 'generate' output"
 # check_exists chained_example.py "Chained 'example' output"
 # check_exists chained_test.py "Chained 'test' output"
@@ -1365,7 +1365,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "18" ]; then
   # Provide non-existent prompt to generate
   run_pdd_expect_fail generate --output "nonexistent.py" "nonexistent/prompt.prompt"
   # Provide invalid line number to trace
-  run_pdd_command trace --output "invalid_trace.log" "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT" 99999
+  run_pdd_command trace --output "invalid_trace.log" "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT" 99999
   check_exists "invalid_trace.log" "'trace' error-handling output"
   python - <<'PY'
 from pathlib import Path
@@ -1376,7 +1376,7 @@ if "Prompt Line:" not in text:
     raise SystemExit("trace fallback output missing 'Prompt Line' entry")
 PY
   # Provide non-existent error file to fix
-  run_pdd_expect_fail fix --output-test "err_test.py" --output-code "err_code.py" "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT" "$MATH_TEST_SCRIPT" "nonexistent/error.log"
+  run_pdd_expect_fail fix --output-test "err_test.py" --output-code "err_code.py" "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT" "$MATH_TEST_SCRIPT" "nonexistent/error.log"
 fi
 
 # 19. Templates
@@ -1769,7 +1769,7 @@ EOF
 
   # 1. Generate WITH --exclude-tests (no test context, expect failure)
   log "Generating with --exclude-tests (no auto-discovery)..."
-  run_pdd_command generate --exclude-tests --output "encode_message.py" "$PROMPTS_PATH/encode_message_python.prompt"
+  run_pdd_command generate --exclude-tests --output "encode_message.py" "$FIXTURES_PATH/encode_message_python.prompt"
   check_exists "encode_message.py" "'generate' with --exclude-tests"
 
   # Run pytest - expect FAILURE
@@ -1782,7 +1782,7 @@ EOF
 
   # 2. Generate normally - auto-discovery should find test file (expect success)
   log "Generating with auto-discovery (default behavior)..."
-  run_pdd_command generate --output "encode_message.py" "$PROMPTS_PATH/encode_message_python.prompt"
+  run_pdd_command generate --output "encode_message.py" "$FIXTURES_PATH/encode_message_python.prompt"
   check_exists "encode_message.py" "'generate' with auto-discovery"
 
   # Run pytest - expect SUCCESS

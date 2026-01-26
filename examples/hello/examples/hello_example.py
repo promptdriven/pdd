@@ -1,34 +1,32 @@
 import sys
 import os
 
-# Add the directory containing the module to the Python path
-# The program is in 'examples/', but the module is in 'src/'
-# We need to go up one level from 'examples' to reach the root, then into 'src'
+# The program is in examples/, the module is in src/
+# We need to go up one level from examples/ to the project root, then into src/
 current_dir = os.path.dirname(os.path.abspath(__file__))
-src_dir = os.path.join(current_dir, '..', 'src')
+project_root = os.path.dirname(current_dir)
+src_dir = os.path.join(project_root, "src")
+
+# Add the src directory to the Python path
 sys.path.append(src_dir)
 
-# Import the specific function from the module
-# The module file is named 'hello.py', so we import from 'hello'
-try:
-    from hello import hello
-except ImportError as e:
-    print(f"Error: Could not import 'hello' from 'hello' module. Details: {e}")
-    print(f"Current sys.path: {sys.path}")
-    sys.exit(1)
+# Import hello from the hello.py file
+from hello import hello
 
-def main() -> None:
+def main() -> None: 
     """
-    Demonstrates the usage of the hello() function.
+    Demonstrates how to import and call the hello function from the module.
+
+    Input Parameters:
+    - None
+
+    Output:
+    - Prints 'hello' to the standard output.
     """
-    print("Calling the hello function from the imported module...")
+    print("Calling the hello function from the imported module:")
     
-    # Call the function
-    # Input: None
-    # Output: Prints "hello" to standard output
+    # Execute the function defined in the module
     hello()
-    
-    print("Function execution complete.")
 
 if __name__ == "__main__":
     main()

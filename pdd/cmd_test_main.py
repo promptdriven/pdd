@@ -14,12 +14,9 @@ from rich.panel import Panel
 
 from .config_resolution import resolve_effective_config
 from .construct_paths import construct_paths
-from .core.cloud import CloudConfig
+from .core.cloud import CloudConfig, get_cloud_timeout
 from .generate_test import generate_test
 from .increase_tests import increase_tests
-
-# Cloud request timeout
-CLOUD_REQUEST_TIMEOUT = 400  # seconds
 
 console = Console()
 
@@ -112,6 +109,40 @@ def cmd_test_main(
     eff_time = eff_config["time"]
     verbose = ctx.obj.get("verbose", False)
     is_local = ctx.obj.get("local", False)
+
+    # 3.5 Non-Python: Use agentic mode directly
+    # For non-Python languages, the single LLM call often produces incorrect test file
+    # extensions or doesn't follow the correct framework. Agentic mode lets the agent
+    # explore the project and determine the correct test setup.
+    if detected_language and detected_language.lower() != 'python':
+        from .agentic_test_generate import run_agentic_test_generate
+
+        if verbose:
+            console.print(
+                f"[cyan]Non-Python language detected ({detected_language}). "
+                "Using agentic test generation.[/cyan]"
+            )
+
+        output_test_path = Path(output_file_paths.get("output", "test_output"))
+
+        generated_content, total_cost, model_name = run_agentic_test_generate(
+            prompt_file=Path(prompt_file),
+            code_file=Path(code_file),
+            output_test_file=output_test_path,
+            verbose=verbose,
+            quiet=ctx.obj.get("quiet", False),
+        )
+
+        # The agent writes the test file directly, but we still return the content
+        # for consistency with the Python flow
+        if generated_content and generated_content.strip():
+            if not ctx.obj.get("quiet", False):
+                console.print(f"[green]Agentic test generation completed.[/green]")
+        else:
+            if not ctx.obj.get("quiet", False):
+                console.print("[yellow]Warning: Agentic test generation produced no content.[/yellow]")
+
+        return generated_content, total_cost, model_name
 
     # 4. Prepare content variables
     prompt_content = input_strings.get("prompt_file", "")
@@ -221,7 +252,7 @@ def cmd_test_main(
                 cloud_url,
                 json=payload,
                 headers=headers,
-                timeout=CLOUD_REQUEST_TIMEOUT
+                timeout=get_cloud_timeout()
             )
 
             # Check for HTTP errors explicitly
@@ -381,3 +412,9 @@ def cmd_test_main(
         return "", 0.0, f"Error: {e}"
 
     return generated_content, total_cost, model_name
+
+
+def main() -> None:
+    """CLI entrypoint for legacy/manual test generation."""
+    from .commands.generate import test as test_command
+    test_command.main(standalone_mode=True)

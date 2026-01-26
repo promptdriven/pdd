@@ -15,6 +15,7 @@ from .sessions import sessions
 from .report import report_core
 from .templates import templates_group
 from .utility import install_completion_cmd, verify
+from .which import which
 
 def register_commands(cli: click.Group) -> None:
     """Register all subcommands with the main CLI group."""
@@ -37,6 +38,7 @@ def register_commands(cli: click.Group) -> None:
     cli.add_command(report_core)
     cli.add_command(install_completion_cmd, name="install_completion")
     cli.add_command(verify)
+    cli.add_command(which)
     
     # Register templates group directly to commands dict to handle nesting if needed,
     # or just add_command works for groups too.

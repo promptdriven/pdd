@@ -425,7 +425,7 @@ def test_generate_loops_when_unfinished_never_true(monkeypatch):
     monkeypatch.setattr(code_gen_mod, "postprocess", postprocess_passthrough, raising=False)
 
     # Run generator with the simple math prompt content
-    prompt_text = (repo_root / "prompts" / "simple_math_python.prompt").read_text()
+    prompt_text = (repo_root / "tests" / "fixtures" / "simple_math_python.prompt").read_text()
     final_code, total_cost, model_name = cg_func(
         prompt=prompt_text,
         language="python",
