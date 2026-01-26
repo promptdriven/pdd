@@ -666,3 +666,440 @@ class TestServerPortConfiguration:
         assert mgr.server_port == 8080
         assert mgr.session_id is None
         assert mgr.cloud_url is None
+
+
+# --- Tests for Heartbeat Bug Fixes (Issue #363) ---
+
+class TestHeartbeatImmediateFirstBeat:
+    """
+    Tests for Bug Fix #1: First heartbeat should be sent immediately on startup,
+    not after a 60-second delay which could cause the cloud session to timeout.
+    """
+
+    @pytest.mark.asyncio
+    async def test_first_heartbeat_sent_immediately(self, manager, mock_cloud_config, mock_httpx_client):
+        """
+        Test that the first heartbeat is sent immediately when the loop starts,
+        before waiting for any interval.
+        """
+        manager.session_id = "sess-1"
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_httpx_client.post.return_value = mock_response
+
+        # Track when heartbeats are sent
+        heartbeat_times = []
+
+        original_post = mock_httpx_client.post
+
+        async def tracking_post(*args, **kwargs):
+            heartbeat_times.append(asyncio.get_event_loop().time())
+            return original_post(*args, **kwargs)
+
+        mock_httpx_client.post = AsyncMock(side_effect=tracking_post)
+        mock_httpx_client.post.return_value = mock_response
+
+        # Create stop event that will be set after first heartbeat
+        manager._stop_event = asyncio.Event()
+
+        iteration = [0]
+
+        async def mock_wait_for(coro, timeout):
+            coro.close()
+            iteration[0] += 1
+            if iteration[0] == 1:
+                # After first heartbeat, stop the loop
+                raise asyncio.CancelledError()
+            raise asyncio.TimeoutError()
+
+        with patch("asyncio.wait_for", side_effect=mock_wait_for):
+            try:
+                await manager._heartbeat_loop()
+            except asyncio.CancelledError:
+                pass
+
+        # Verify heartbeat was called (first call should be immediate, before wait_for)
+        assert mock_httpx_client.post.call_count >= 1
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_interval_is_30_seconds(self, manager, mock_cloud_config):
+        """
+        Test that heartbeat interval is 30 seconds (not 60) after the first heartbeat.
+        """
+        manager.session_id = "sess-1"
+        manager._stop_event = asyncio.Event()
+
+        captured_timeouts = []
+
+        async def capture_wait_for(coro, timeout):
+            captured_timeouts.append(timeout)
+            coro.close()
+            if len(captured_timeouts) >= 2:
+                raise asyncio.CancelledError()
+            raise asyncio.TimeoutError()
+
+        with patch("asyncio.wait_for", side_effect=capture_wait_for):
+            with patch("httpx.AsyncClient") as MockClient:
+                mock_instance = AsyncMock()
+                mock_response = MagicMock()
+                mock_response.status_code = 200
+                mock_instance.post.return_value = mock_response
+                MockClient.return_value.__aenter__.return_value = mock_instance
+                MockClient.return_value.__aexit__.return_value = None
+
+                try:
+                    await manager._heartbeat_loop()
+                except asyncio.CancelledError:
+                    pass
+
+        # First interval should be 5 seconds (quick establishment)
+        # Second interval should be 30 seconds (normal interval)
+        assert len(captured_timeouts) >= 1
+        assert captured_timeouts[0] == 5.0  # First interval is short
+        if len(captured_timeouts) >= 2:
+            assert captured_timeouts[1] == 30.0  # Subsequent intervals are 30s
+
+
+class TestHeartbeatRetryLogic:
+    """
+    Tests for Bug Fix #2: Heartbeat should retry on failure with exponential backoff,
+    not silently skip the heartbeat which could cause session disconnection.
+    """
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_retries_on_network_error(self, manager, mock_cloud_config, mock_httpx_client):
+        """
+        Test that heartbeat retries up to 3 times on network errors.
+        """
+        manager.session_id = "sess-1"
+        manager._stop_event = asyncio.Event()
+
+        # Track retry attempts
+        attempt_count = [0]
+
+        async def failing_post(*args, **kwargs):
+            attempt_count[0] += 1
+            if attempt_count[0] < 3:
+                raise Exception("Network error")
+            # Third attempt succeeds
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            return mock_response
+
+        mock_httpx_client.post = AsyncMock(side_effect=failing_post)
+
+        iteration = [0]
+
+        async def mock_wait_for(coro, timeout):
+            coro.close()
+            iteration[0] += 1
+            if iteration[0] >= 1:
+                raise asyncio.CancelledError()
+            raise asyncio.TimeoutError()
+
+        with patch("asyncio.wait_for", side_effect=mock_wait_for):
+            try:
+                await manager._heartbeat_loop()
+            except asyncio.CancelledError:
+                pass
+
+        # Should have retried 3 times
+        assert attempt_count[0] == 3
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_exponential_backoff(self, manager, mock_cloud_config, mock_httpx_client):
+        """
+        Test that heartbeat uses exponential backoff between retries.
+        """
+        manager.session_id = "sess-1"
+        manager._stop_event = asyncio.Event()
+
+        sleep_times = []
+
+        original_sleep = asyncio.sleep
+
+        async def tracking_sleep(delay):
+            sleep_times.append(delay)
+            # Don't actually sleep in tests
+
+        # Make all attempts fail to trigger retries
+        mock_httpx_client.post = AsyncMock(side_effect=Exception("Network error"))
+
+        iteration = [0]
+
+        async def mock_wait_for(coro, timeout):
+            coro.close()
+            iteration[0] += 1
+            if iteration[0] >= 1:
+                raise asyncio.CancelledError()
+            raise asyncio.TimeoutError()
+
+        with patch("asyncio.wait_for", side_effect=mock_wait_for):
+            with patch("asyncio.sleep", side_effect=tracking_sleep):
+                try:
+                    await manager._heartbeat_loop()
+                except asyncio.CancelledError:
+                    pass
+
+        # Should have sleep times with exponential backoff: 1.0, 2.0
+        # (3 attempts = 2 sleeps between them)
+        assert len(sleep_times) == 2
+        assert sleep_times[0] == 1.0
+        assert sleep_times[1] == 2.0
+
+
+class TestJWTTokenRefresh:
+    """
+    Tests for Bug Fix #3: Automatic JWT token refresh on 401 errors.
+    This prevents session disconnection when the JWT token expires (~1 hour).
+    """
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_refreshes_token_on_401(self, manager, mock_cloud_config, mock_httpx_client):
+        """
+        Test that heartbeat attempts to refresh token when receiving 401.
+        """
+        manager.session_id = "sess-1"
+        manager._stop_event = asyncio.Event()
+
+        call_count = [0]
+
+        async def mock_post(*args, **kwargs):
+            call_count[0] += 1
+            mock_response = MagicMock()
+            if call_count[0] == 1:
+                # First call returns 401 (token expired)
+                mock_response.status_code = 401
+            else:
+                # After refresh, succeed
+                mock_response.status_code = 200
+            return mock_response
+
+        mock_httpx_client.post = AsyncMock(side_effect=mock_post)
+
+        # Mock successful token refresh
+        refresh_called = [False]
+
+        async def mock_refresh_token():
+            refresh_called[0] = True
+            manager.jwt_token = "new-token"
+            return True
+
+        manager._refresh_token = mock_refresh_token
+
+        iteration = [0]
+
+        async def mock_wait_for(coro, timeout):
+            coro.close()
+            iteration[0] += 1
+            if iteration[0] >= 1:
+                raise asyncio.CancelledError()
+            raise asyncio.TimeoutError()
+
+        with patch("asyncio.wait_for", side_effect=mock_wait_for):
+            try:
+                await manager._heartbeat_loop()
+            except asyncio.CancelledError:
+                pass
+
+        # Token refresh should have been called
+        assert refresh_called[0] is True
+        # Should have retried after refresh
+        assert call_count[0] >= 2
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_only_refreshes_once_per_cycle(self, manager, mock_cloud_config, mock_httpx_client):
+        """
+        Test that heartbeat only attempts token refresh once per heartbeat cycle,
+        not repeatedly if refresh fails.
+        """
+        manager.session_id = "sess-1"
+        manager._stop_event = asyncio.Event()
+
+        # Always return 401
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+        mock_httpx_client.post = AsyncMock(return_value=mock_response)
+
+        refresh_count = [0]
+
+        async def mock_refresh_token():
+            refresh_count[0] += 1
+            return False  # Refresh fails
+
+        manager._refresh_token = mock_refresh_token
+
+        iteration = [0]
+
+        async def mock_wait_for(coro, timeout):
+            coro.close()
+            iteration[0] += 1
+            if iteration[0] >= 1:
+                raise asyncio.CancelledError()
+            raise asyncio.TimeoutError()
+
+        with patch("asyncio.wait_for", side_effect=mock_wait_for):
+            try:
+                await manager._heartbeat_loop()
+            except asyncio.CancelledError:
+                pass
+
+        # Token refresh should only be called once per heartbeat cycle
+        assert refresh_count[0] == 1
+
+    @pytest.mark.asyncio
+    async def test_refresh_token_updates_jwt(self, manager):
+        """
+        Test that _refresh_token method correctly updates the jwt_token.
+        """
+        import os
+
+        original_token = manager.jwt_token
+        new_token = "new-refreshed-token"
+
+        # Mock the Firebase authenticator
+        with patch.dict(os.environ, {"NEXT_PUBLIC_FIREBASE_API_KEY": "test-api-key"}):
+            with patch("pdd.remote_session.KEYRING_AVAILABLE", True):
+                with patch("pdd.remote_session.FirebaseAuthenticator") as MockAuth:
+                    mock_auth_instance = MagicMock()
+                    mock_auth_instance._get_stored_refresh_token.return_value = "refresh-token"
+                    mock_auth_instance._refresh_firebase_token = AsyncMock(return_value=new_token)
+                    MockAuth.return_value = mock_auth_instance
+
+                    with patch("pdd.remote_session._get_cached_jwt", return_value=None):
+                        with patch("pdd.get_jwt_token._cache_jwt"):
+                            result = await manager._refresh_token()
+
+        assert result is True
+        assert manager.jwt_token == new_token
+
+    @pytest.mark.asyncio
+    async def test_refresh_token_returns_false_on_failure(self, manager):
+        """
+        Test that _refresh_token returns False when refresh fails.
+        """
+        import os
+
+        with patch.dict(os.environ, {"NEXT_PUBLIC_FIREBASE_API_KEY": "test-api-key"}):
+            with patch("pdd.remote_session.KEYRING_AVAILABLE", True):
+                with patch("pdd.remote_session.FirebaseAuthenticator") as MockAuth:
+                    mock_auth_instance = MagicMock()
+                    mock_auth_instance._get_stored_refresh_token.return_value = "refresh-token"
+                    mock_auth_instance._refresh_firebase_token = AsyncMock(
+                        side_effect=Exception("Refresh failed")
+                    )
+                    MockAuth.return_value = mock_auth_instance
+
+                    with patch("pdd.remote_session._get_cached_jwt", return_value=None):
+                        result = await manager._refresh_token()
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_refresh_token_uses_cached_token_if_available(self, manager):
+        """
+        Test that _refresh_token uses cached token if another coroutine already refreshed.
+        """
+        original_token = manager.jwt_token
+        cached_new_token = "already-refreshed-token"
+
+        with patch("pdd.remote_session._get_cached_jwt", return_value=cached_new_token):
+            result = await manager._refresh_token()
+
+        assert result is True
+        assert manager.jwt_token == cached_new_token
+
+
+class TestGetPendingCommands401Handling:
+    """
+    Tests for get_pending_commands 401 handling with automatic token refresh.
+    """
+
+    @pytest.mark.asyncio
+    async def test_get_pending_commands_refreshes_token_on_401(
+        self, manager, mock_cloud_config, mock_httpx_client
+    ):
+        """
+        Test that get_pending_commands refreshes token on 401 and retries.
+        """
+        manager.session_id = "sess-1"
+
+        call_count = [0]
+
+        async def mock_get(*args, **kwargs):
+            call_count[0] += 1
+            mock_response = MagicMock()
+            if call_count[0] == 1:
+                mock_response.status_code = 401
+            else:
+                mock_response.status_code = 200
+                mock_response.json.return_value = {"commands": []}
+            return mock_response
+
+        mock_httpx_client.get = AsyncMock(side_effect=mock_get)
+
+        refresh_called = [False]
+
+        async def mock_refresh_token():
+            refresh_called[0] = True
+            manager.jwt_token = "new-token"
+            return True
+
+        manager._refresh_token = mock_refresh_token
+
+        commands = await manager.get_pending_commands()
+
+        assert refresh_called[0] is True
+        assert call_count[0] == 2
+        assert commands == []
+
+    @pytest.mark.asyncio
+    async def test_get_pending_commands_returns_empty_on_refresh_failure(
+        self, manager, mock_cloud_config, mock_httpx_client
+    ):
+        """
+        Test that get_pending_commands returns empty list if refresh fails.
+        """
+        manager.session_id = "sess-1"
+
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+        mock_httpx_client.get = AsyncMock(return_value=mock_response)
+
+        async def mock_refresh_token():
+            return False  # Refresh fails
+
+        manager._refresh_token = mock_refresh_token
+
+        commands = await manager.get_pending_commands()
+
+        assert commands == []
+
+    @pytest.mark.asyncio
+    async def test_get_pending_commands_only_refreshes_once(
+        self, manager, mock_cloud_config, mock_httpx_client
+    ):
+        """
+        Test that get_pending_commands only attempts refresh once per call.
+        """
+        manager.session_id = "sess-1"
+
+        # Always return 401
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+        mock_httpx_client.get = AsyncMock(return_value=mock_response)
+
+        refresh_count = [0]
+
+        async def mock_refresh_token():
+            refresh_count[0] += 1
+            manager.jwt_token = "new-token"
+            return True
+
+        manager._refresh_token = mock_refresh_token
+
+        commands = await manager.get_pending_commands()
+
+        # Should only refresh once, even if second attempt also returns 401
+        assert refresh_count[0] == 1
+        assert commands == []
