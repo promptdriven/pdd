@@ -181,18 +181,26 @@ class SyncLock:
             # Create lock file and acquire file descriptor lock
             self.lock_file.touch()
             self.fd = open(self.lock_file, 'w')
-            
-            if HAS_FCNTL:
-                # POSIX systems
-                fcntl.flock(self.fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            elif HAS_MSVCRT:
-                # Windows systems
-                msvcrt.locking(self.fd.fileno(), msvcrt.LK_NBLCK, 1)
-            
-            # Write current PID to lock file
-            self.fd.write(str(self.current_pid))
-            self.fd.flush()
-            
+
+            try:
+                # Critical section - must close file if anything fails
+                if HAS_FCNTL:
+                    # POSIX systems
+                    fcntl.flock(self.fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                elif HAS_MSVCRT:
+                    # Windows systems
+                    msvcrt.locking(self.fd.fileno(), msvcrt.LK_NBLCK, 1)
+
+                # Write current PID to lock file
+                self.fd.write(str(self.current_pid))
+                self.fd.flush()
+            except:
+                # Close file on ANY exception (not just IOError/OSError)
+                if self.fd:
+                    self.fd.close()
+                    self.fd = None
+                raise
+
         except (IOError, OSError) as e:
             if self.fd:
                 self.fd.close()
