@@ -208,16 +208,3 @@ yarn.lock
 # PDD internal directory (backups, locks, meta, worktrees, etc.)
 .pdd/
 Makefile.test-staging
-
-# Local prompt files (for convenience, not committed)
-pdd/prompts/*.prompt
-pdd/prompts/*.sh
-pdd/prompts/*.txt
-
-# Temporary files
-error_log.txt
-*.backup
-project_dependencies.csv.backup
-
-# User stories (if not meant to be committed)
-user_stories/
