@@ -168,43 +168,42 @@ def test_sync_app_env_isolation():
         assert os.environ.get("TERM") == "xterm-256color"
         return {"success": True}
 
-    # Setup shared refs (10 positional ref arguments)
-    refs = [[""]] * 10
-    stop_event = threading.Event()
-
-    # Capture initial environment variables to verify restoration
-    original_force_color = os.environ.get("FORCE_COLOR")
-    original_term = os.environ.get("TERM")
-    original_columns = os.environ.get("COLUMNS")
-
-    # Create a minimal SyncApp instance for testing
-    app = SyncApp(
-        "test", 1.0, mock_worker,
-        *refs, stop_event=stop_event
-    )
-
-    # Mock the UI components to avoid initialization errors
-    app.log_widget = MagicMock()
-    app._log_width = 80
-    app._app_ref = [app] # Mimic on_mount setting this for stdin redirector
-
-    # Mock `asyncio.create_task` to prevent it from trying to start a real async task
-    # and `app.exit` since no actual app is running.
-    with patch("asyncio.create_task") as mock_create_task, \
-         patch.object(app, 'exit') as mock_app_exit, \
-         patch.object(app, 'run_worker') as mock_run_worker, \
-         patch.object(app, 'call_from_thread') as mock_call_from_thread, \
-         patch("sys.stdout", new_callable=StringIO) as mock_stdout, \
-         patch("sys.stderr", new_callable=StringIO) as mock_stderr:
-
-        # Call run_worker_task, which should set environment variables
-        app.run_worker_task()
-
-    # Verify env vars are restored to their original values after run_worker_task finishes
-    assert os.environ.get("FORCE_COLOR") == original_force_color
-    assert os.environ.get("TERM") == original_term
-    assert os.environ.get("COLUMNS") == original_columns
-
+        # Setup shared refs (10 positional ref arguments)
+        refs = [[""]] * 10
+        stop_event = threading.Event()
+    
+        # Capture initial environment variables to verify restoration
+        original_force_color = os.environ.get("FORCE_COLOR")
+        original_term = os.environ.get("TERM")
+        original_columns = os.environ.get("COLUMNS")
+    
+        # Create a minimal SyncApp instance for testing
+        app = SyncApp(
+            "test", 1.0, mock_worker,
+            *refs, stop_event=stop_event
+        )
+    
+        # Mock the UI components to avoid initialization errors
+        app.log_widget = MagicMock()
+        app._log_width = 80
+        app._app_ref = [app] # Mimic on_mount setting this for stdin redirector
+    
+        # Mock `asyncio.create_task` to prevent it from trying to start a real async task
+        # and `app.exit` since no actual app is running.
+        with patch("asyncio.create_task") as mock_create_task, \
+             patch.object(app, 'exit') as mock_app_exit, \
+             patch.object(app, 'run_worker') as mock_run_worker, \
+             patch.object(app, 'call_from_thread') as mock_call_from_thread, \
+             patch("sys.stdout", new_callable=StringIO) as mock_stdout, \
+             patch("sys.stderr", new_callable=StringIO) as mock_stderr:
+    
+            # Call run_worker_task, which should set environment variables
+            app.run_worker_task()
+    
+        # Verify env vars are restored to their original values after run_worker_task finishes
+        assert os.environ.get("FORCE_COLOR") == original_force_color
+        assert os.environ.get("TERM") == original_term
+        assert os.environ.get("COLUMNS") == original_columns
 def test_progress_callback_thread_safety():
     """Verify _update_progress schedules a UI update."""
     # Setup shared refs (10 positional ref arguments)
