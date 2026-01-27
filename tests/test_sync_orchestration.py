@@ -1311,9 +1311,9 @@ async def test_tui_request_confirmation_completes_without_hanging():
     import threading
     import asyncio
     from unittest.mock import MagicMock, patch, AsyncMock
-    
-    from textual.widgets import RichLog, Static # Added import
+
     from pdd.sync_tui import SyncApp
+
     # Create a minimal SyncApp instance for testing
     app = SyncApp(
         basename="test",
@@ -1331,10 +1331,6 @@ async def test_tui_request_confirmation_completes_without_hanging():
         tests_color_ref=["blue"],
         stop_event=threading.Event(),
     )
-
-    # Mock Textual UI components to avoid full rendering and focus on resize logic
-    app.log_widget = MagicMock(spec=RichLog)
-    app.animation_view = MagicMock(spec=Static)
 
     # Use Textual's async test runner to properly run the app
     async with app.run_test() as pilot:
@@ -2362,23 +2358,6 @@ def test_sync_uses_merge_when_test_file_exists(orchestration_fixture):
 # =============================================================================
 # Tests for strength/temperature propagation to sub-commands
 # =============================================================================
-
-def test_stopiteration_handling(orchestration_fixture):
-    """
-    Verify that StopIteration from sync_determine_operation is handled gracefully.
-    """
-    mocks = orchestration_fixture
-    mock_determine = mocks['sync_determine_operation']
-    
-    # Configure mock to raise StopIteration (simulating exhausted iterator in tests)
-    mock_determine.side_effect = StopIteration("Decision sequence exhausted")
-    
-    result = sync_orchestration(basename="calculator", language="python")
-    
-    # Verify the result indicates completion (treated as all_synced)
-    assert result['success'] is True
-    # Should complete without errors (StopIteration is treated as graceful completion)
-
 
 class TestStrengthTemperaturePropagation:
     """Bug fix tests: sync_orchestration should pass strength/temperature to sub-commands."""

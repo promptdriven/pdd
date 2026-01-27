@@ -25,159 +25,6 @@ from .sync_animation import AnimationState, _render_animation_frame, DEEP_NAVY, 
 from . import logo_animation
 from rich.style import Style
 
-# --- Sync steering (used by sync_orchestration.py) ---
-
-_ACTIVE_SYNC_APP = None  # set by SyncApp when running interactively
-
-# Default steering timeout (seconds).
-DEFAULT_STEER_TIMEOUT_S = 8.0
-
-
-def _is_headless_environment() -> bool:
-    """Best-effort check for whether we're in a headless / CI / non-interactive run."""
-
-    # Test override (used by unit tests and local debugging)
-    try:
-        override = os.environ.get("PDD_TEST_HEADLESS", "").strip().lower()
-        if override in {"1", "true", "yes"}:
-            return True
-        if override in {"0", "false", "no"}:
-            return False
-    except Exception:
-        pass
-
-    try:
-        if os.environ.get("CI", "").strip().lower() in {"1", "true", "yes"}:
-            return True
-    except Exception:
-        pass
-
-    # IMPORTANT: do not consult `sys.stdout` here because SyncApp redirects it.
-    # Use the original stdio streams instead.
-    try:
-        return not bool(getattr(sys.__stdout__, "isatty", lambda: False)())
-    except Exception:
-        return True
-
-
-
-class ChoiceScreen(ModalScreen[str]):
-    """Modal choice picker with a default selection after a short timeout."""
-
-    CSS = """
-    ChoiceScreen {
-        align: center middle;
-    }
-
-    #choice-dialog {
-        width: 90;
-        height: auto;
-        border: thick $primary;
-        background: #0A0A23;
-        padding: 1 2;
-    }
-
-    #choice-title {
-        width: 100%;
-        text-align: center;
-        text-style: bold;
-        color: #00D8FF;
-        margin-bottom: 1;
-    }
-
-    #choice-prompt {
-        width: 100%;
-        color: #FFFFFF;
-        margin-bottom: 1;
-    }
-
-    #choice-buttons {
-        width: 100%;
-        height: auto;
-    }
-
-    #choice-buttons Button {
-        width: 100%;
-        margin: 0 0 1 0;
-    }
-    """
-
-    BINDINGS = [
-        Binding("escape", "cancel", "Cancel"),
-    ]
-
-    def __init__(
-        self,
-        title: str,
-        prompt: str,
-        choices: list[str],
-        default: str,
-        timeout_s: float,
-    ) -> None:
-        super().__init__()
-        self.title_text = title
-        self.prompt_text = prompt
-        self.choices = choices
-        self.default = default
-        self.timeout_s = max(0.0, float(timeout_s))
-        self._dismissed = False
-
-    def compose(self) -> ComposeResult:
-        with Container(id="choice-dialog"):
-            yield Label(self.title_text, id="choice-title")
-            yield Label(self.prompt_text, id="choice-prompt")
-            with Vertical(id="choice-buttons"):
-                for idx, choice in enumerate(self.choices, start=1):
-                    # Show numeric shortcuts for the first 9 options
-                    label = f"{idx}. {choice}" if idx <= 9 else choice
-                    variant = "primary" if choice == self.default else "default"
-                    # Use a stable, Textual-safe id and map back via index
-                    yield Button(label, id=f"choice-{idx}", variant=variant)
-
-    async def on_mount(self) -> None:
-        # Auto-default after timeout
-        if self.timeout_s > 0:
-            asyncio.create_task(self._auto_default())
-
-    async def _auto_default(self) -> None:
-        try:
-            await asyncio.sleep(self.timeout_s)
-        except Exception:
-            return
-        if not self._dismissed:
-            self._dismissed = True
-            self.dismiss(self.default)
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id and event.button.id.startswith("choice-"):
-            # Button ids are `choice-<1-based index>`
-            try:
-                idx_str = event.button.id[len("choice-"):]
-                idx = int(idx_str)
-                if 1 <= idx <= len(self.choices):
-                    choice = self.choices[idx - 1]
-                else:
-                    choice = self.default
-            except Exception:
-                choice = self.default
-            self._dismissed = True
-            self.dismiss(choice)
-
-    def on_key(self, event) -> None:
-        # Numeric shortcuts 1-9
-        try:
-            if event.character and event.character.isdigit():
-                idx = int(event.character)
-                if 1 <= idx <= 9 and idx <= len(self.choices):
-                    self._dismissed = True
-                    self.dismiss(self.choices[idx - 1])
-        except Exception:
-            pass
-
-    def action_cancel(self) -> None:
-        # Treat cancel as choosing the default
-        self._dismissed = True
-        self.dismiss(self.default)
 
 class ConfirmScreen(ModalScreen[bool]):
     """A modal confirmation dialog for user prompts within the TUI."""
@@ -483,49 +330,6 @@ class ThreadSafeRedirector(io.TextIOBase):
 
 
 class SyncApp(App):
-    def _reflow_log_widget(self, *, max_lines: int = 2000) -> None:
-        """Reflow historical log lines so wrapping matches the current width.
-
-        Textual/RichLog will repaint on resize, but it may not re-wrap already-added
-        renderables. We keep a plain-text log buffer via redirector wrappers; on
-        resize, clear and replay those lines.
-        """
-        if not hasattr(self, "log_widget") or self.log_widget is None:
-            return
-
-        # Prefer the redirector's captured logs when available; fall back to app property.
-        try:
-            lines = list(self.captured_logs)
-        except Exception:
-            lines = []
-
-        if not lines:
-            return
-
-        # Bound replay to avoid excessive work on huge logs.
-        if max_lines and len(lines) > max_lines:
-            lines = lines[-max_lines:]
-
-        # Clear and replay.
-        try:
-            self.log_widget.clear()
-        except Exception:
-            # If clear isn't available, do nothing.
-            return
-
-        log_pattern = re.compile(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}')
-        for line in lines:
-            try:
-                text = Text.from_ansi(line)
-                if log_pattern.match(text.plain):
-                    text.style = Style(dim=True)
-                self.log_widget.write(text)
-            except Exception:
-                # Last resort: write raw.
-                try:
-                    self.log_widget.write(str(line))
-                except Exception:
-                    pass
     """Textual App for PDD Sync."""
 
     CSS = """
@@ -586,7 +390,6 @@ class SyncApp(App):
         tests_color_ref: List[str],
         stop_event: threading.Event,
         progress_callback_ref: Optional[List[Optional[Callable[[int, int], None]]]] = None,
-        no_steer: bool = False,
     ):
         super().__init__()
         self.basename = basename
@@ -607,7 +410,6 @@ class SyncApp(App):
         self.progress_callback_ref = progress_callback_ref
 
         self.stop_event = stop_event
-        self.no_steer = no_steer
 
         # Internal animation state
         self.animation_state = AnimationState(basename, budget)
@@ -642,26 +444,9 @@ class SyncApp(App):
         # Track log widget width for proper text wrapping
         # Accounts for: log-container border (2), RichLog padding (2), scrollbar (2)
         self._log_width = 74  # Default fallback (80 - 6)
-        # Minimum UI width used when clamping the layout to avoid overly narrow renders.
-        self._min_ui_width = 80
-        # _fixed_ui_width stores the frozen UI width that the app should render against.
-        # It is set once based on the initial terminal size (respecting _min_ui_width)
-        # and then reused for subsequent layout calculations. Keeping this width fixed
-        # prevents resize-related rendering issues and reflow glitches in Textual/Rich
-        # when the underlying terminal is resized while the app is running.
-        self._fixed_ui_width: Optional[int] = None
 
         # Reference to self for stdin redirector (using list for mutability)
         self._app_ref: List[Optional['SyncApp']] = [None]
-
-        # Choice mechanism for worker thread to request a selection
-        self._choice_event = threading.Event()
-        self._choice_result: Optional[str] = None
-        self._choice_title = ""
-        self._choice_prompt = ""
-        self._choice_choices: list[str] = []
-        self._choice_default = ""
-        self._choice_timeout_s = 0.0
 
     @property
     def captured_logs(self) -> List[str]:
@@ -698,9 +483,6 @@ class SyncApp(App):
         yield Container(RichLog(highlight=True, markup=True, wrap=True, id="log"), id="log-container")
 
     def on_mount(self) -> None:
-        global _ACTIVE_SYNC_APP
-        _ACTIVE_SYNC_APP = self
-
         self.log_widget = self.query_one("#log", RichLog)
         self.progress_bar = self.query_one("#progress-bar", ProgressBar)
         self.progress_container = self.query_one("#progress-container", Container)
@@ -718,10 +500,8 @@ class SyncApp(App):
         self.particles = logo_animation._parse_logo_art(local_ascii_logo_art)
 
         # Set initial styles and formation targets
-        width = self.size.width if self.size.width > 0 else self._min_ui_width
-        width = max(self._min_ui_width, int(width))
-        self._fixed_ui_width = width
-        height = 18  # Fixed animation height
+        width = self.size.width if self.size.width > 0 else 80
+        height = 18 # Fixed animation height
 
         for p in self.particles:
             p.style = Style(color=logo_animation.ELECTRIC_CYAN)
@@ -741,33 +521,12 @@ class SyncApp(App):
         # Start animation timer (20 FPS for smoother logo)
         self.set_interval(0.05, self.update_animation)
 
-        # Calculate initial log width based on frozen UI width
-        self._log_width = max(20, self._fixed_ui_width - 6)
-        os.environ["COLUMNS"] = str(self._log_width)
+        # Calculate initial log width based on current size
+        if self.size.width > 0:
+            self._log_width = max(20, self.size.width - 6)
 
         # Start worker
         self.run_worker_task()
-
-    def on_resize(self, event) -> None:
-        """Handle terminal resizes.
-
-        Fixed-width mode: do not recompute animation/log widths. However, Textual can
-        leave RichLog in a visually stale state after *horizontal* resizes until a
-        later layout pass (often triggered by a vertical resize). Force an immediate
-        layout + repaint so the bottom panel doesn't glitch.
-        """
-        try:
-            # Recompute layout and repaint the screen.
-            try:
-                self.refresh(layout=True)
-            except Exception:
-                self.refresh()
-
-            # Force the log widget to repaint at its new viewport size.
-            if hasattr(self, "log_widget") and self.log_widget is not None:
-                self.log_widget.refresh()
-        except Exception:
-            return
 
     @work(thread=True)
     def run_worker_task(self) -> None:
@@ -795,39 +554,27 @@ class SyncApp(App):
         original_stderr = sys.stderr
         original_stdin = sys.stdin
 
-        # Check if the app is running (for tests/non-interactive contexts, is_running may be False)
-        app_running = self.is_running
+        # Create redirectors
+        base_redirector = ThreadSafeRedirector(self, self.log_widget)
+        self._stdin_redirector = TUIStdinRedirector(self._app_ref)
 
-        if app_running:
-            # Create redirectors
-            base_redirector = ThreadSafeRedirector(self, self.log_widget)
-            self._stdin_redirector = TUIStdinRedirector(self._app_ref)
+        # Wrap stdout to capture prompts for input() calls
+        self.redirector = TUIStdoutWrapper(base_redirector, self._stdin_redirector)
 
-            # Wrap stdout to capture prompts for input() calls
-            self.redirector = TUIStdoutWrapper(base_redirector, self._stdin_redirector)
-
-            sys.stdout = self.redirector
-            sys.stderr = base_redirector  # stderr doesn't need prompt capture
-            sys.stdin = self._stdin_redirector
-        else:
-            # In tests / non-interactive contexts, the Textual loop isn't running.
-            # Avoid redirectors that depend on call_from_thread / a running app.
-            self.redirector = None
-            self._stdin_redirector = None
+        sys.stdout = self.redirector
+        sys.stderr = base_redirector  # stderr doesn't need prompt capture
+        sys.stdin = self._stdin_redirector
 
         try:
             self.worker_result = self.worker_func()
         except EOFError as e:
             # Handle EOF from stdin redirector - input was needed but cancelled/failed
             self.worker_exception = e
-            if app_running:
-                self.call_from_thread(
-                    self.log_widget.write,
-                    f"[bold yellow]Input required but not provided: {e}[/bold yellow]\n"
-                    "[dim]Hint: Ensure API keys are configured in environment or .env file[/dim]"
-                )
-            else:
-                print(f"Input required but not provided: {e}", file=original_stderr)
+            self.call_from_thread(
+                self.log_widget.write,
+                f"[bold yellow]Input required but not provided: {e}[/bold yellow]\n"
+                "[dim]Hint: Ensure API keys are configured in environment or .env file[/dim]"
+            )
             self.worker_result = {
                 "success": False,
                 "total_cost": 0.0,
@@ -839,8 +586,7 @@ class SyncApp(App):
         except BaseException as e:
             self.worker_exception = e
             # Print to widget
-            if app_running:
-                self.call_from_thread(self.log_widget.write, f"[bold red]Error in sync worker: {e}[/bold red]")
+            self.call_from_thread(self.log_widget.write, f"[bold red]Error in sync worker: {e}[/bold red]")
             # Print to original stderr so it's visible after TUI closes
             print(f"\nError in sync worker thread: {type(e).__name__}: {e}", file=original_stderr)
             import traceback
@@ -856,10 +602,9 @@ class SyncApp(App):
                 "errors": [f"{type(e).__name__}: {e}"]
             }
         finally:
-            if app_running:
-                sys.stdout = original_stdout
-                sys.stderr = original_stderr
-                sys.stdin = original_stdin
+            sys.stdout = original_stdout
+            sys.stderr = original_stderr
+            sys.stdin = original_stdin
             self._app_ref[0] = None
 
             # Restore original environment values
@@ -880,29 +625,30 @@ class SyncApp(App):
                 del os.environ["COLUMNS"]
 
             # Force flush any remaining buffer
-            if app_running and self.redirector is not None:
-                try:
-                    if hasattr(self.redirector, 'flush'):
-                        self.redirector.flush()
-                except Exception:
-                    pass
             try:
-                self.call_from_thread(self.exit, result=self.worker_result)
-            except RuntimeError:
-                # In tests or other non-interactive contexts the Textual app may not be running.
-                # Fall back to calling exit directly so worker cleanup doesn't crash.
-                try:
-                    self.exit(result=self.worker_result)
-                except Exception:
-                    pass
+                if hasattr(self.redirector, 'flush'):
+                    self.redirector.flush()
+            except Exception:
+                pass
+            self.call_from_thread(self.exit, result=self.worker_result)
 
     def update_animation(self) -> None:
         """Updates the animation frame based on current shared state."""
         if self.stop_event.is_set():
             return
 
-        # Render at a frozen UI width (determined at mount time), ignoring resizes.
-        width = self._fixed_ui_width or self._min_ui_width
+        # We need the width of the app/screen.
+        width = self.size.width
+        if width == 0: # Not ready yet
+            width = 80
+
+        # Update log width and COLUMNS env var for resize handling
+        # This ensures Rich Panels created after resize use the new width
+        # Offset of 6 accounts for: border (2), padding (2), scrollbar (2)
+        new_log_width = max(20, width - 6)
+        if new_log_width != self._log_width:
+            self._log_width = new_log_width
+            os.environ["COLUMNS"] = str(self._log_width)
 
         # --- LOGO ANIMATION PHASE ---
         if self.logo_phase:
@@ -1002,106 +748,6 @@ class SyncApp(App):
 
         return self._confirm_result
 
-    def request_choice(self, title: str, prompt: str, choices: list[str], default: str, *, timeout_s: float = DEFAULT_STEER_TIMEOUT_S) -> str:
-        """Ask the user to choose from a list of options.
-
-        Safe to call from non-UI threads.
-        If the user provides no input for `timeout_s`, defaults to `default`.
-        In headless mode, returns `default`.
-        """
-        if _is_headless_environment():
-            return default
-
-        self._choice_event.clear()
-        self._choice_result = None
-        self._choice_title = title
-        self._choice_prompt = prompt
-        self._choice_choices = list(choices)
-        self._choice_default = default
-        self._choice_timeout_s = float(timeout_s)
-
-        def schedule_modal() -> None:
-            asyncio.create_task(self._show_choice_modal_async())
-
-        self.call_from_thread(schedule_modal)
-
-        # Give the UI time to mount and the timeout to elapse; the screen itself
-        # auto-dismisses at `timeout_s`, so we just need a safe cushion here.
-        if not self._choice_event.wait(timeout=max(10.0, self._choice_timeout_s + 30.0)):
-            return default
-
-        return self._choice_result or default
-
-    async def _show_choice_modal_async(self) -> None:
-        """Async method to show the choice modal."""
-        try:
-            result = await self.push_screen_wait(
-                ChoiceScreen(
-                    self._choice_title,
-                    self._choice_prompt,
-                    self._choice_choices,
-                    self._choice_default,
-                    self._choice_timeout_s,
-                )
-            )
-            self._choice_result = result
-        except Exception as e:
-            print(f"Choice modal error: {e}", file=sys.__stderr__)
-            self._choice_result = self._choice_default
-        finally:
-            self._choice_event.set()
-
-
-    def request_steering(self, recommended_op: str, reason: str, *, timeout_s: float = DEFAULT_STEER_TIMEOUT_S) -> tuple[str, bool]:
-        """Return (chosen_operation, should_abort).
-
-        In headless/CI mode, returns (recommended_op, False).
-        """
-        if _is_headless_environment():
-            return recommended_op, False
-
-        if self.no_steer:
-            return recommended_op, False
-
-        choices = [
-            recommended_op,
-            "generate",
-            "example",
-            "crash",
-            "verify",
-            "test",
-            "test_extend",
-            "fix",
-            "update",
-            "auto-deps",
-            "abort",
-        ]
-
-        seen = set()
-        deduped: list[str] = []
-        for c in choices:
-            if c not in seen:
-                seen.add(c)
-                deduped.append(c)
-
-        title = "Sync steering"
-        prompt = (
-            f"Recommended: {recommended_op} ({reason})\nChoose next operation:"
-            if reason else
-            f"Recommended: {recommended_op}\nChoose next operation:"
-        )
-
-        chosen = self.request_choice(
-            title=title,
-            prompt=prompt,
-            choices=deduped,
-            default=recommended_op,
-            timeout_s=timeout_s,
-        )
-        if chosen == "abort":
-            return recommended_op, True
-        return chosen, False
-
     async def _show_confirm_modal_async(self) -> None:
         """Async method to show the confirmation modal."""
         try:
@@ -1200,43 +846,3 @@ def show_exit_animation():
     console.print(Align.center(logo_panel))
     time.sleep(1.0)
     console.clear()
-
-def maybe_steer_operation(
-    operation: str,
-    reason: str = "",
-    app: Optional["SyncApp"] = None,
-    quiet: bool = False,
-    skip_tests: bool = False,
-    skip_verify: bool = False,
-    *,
-    timeout_s: float = DEFAULT_STEER_TIMEOUT_S,
-    **kwargs,
-) -> tuple[str, bool]:
-    """Adapter used by sync_orchestration.py to support user steering.
-
-    Returns:
-        (chosen_operation, should_abort)
-
-    Notes:
-    - In headless/CI/non-TTY runs we do not prompt.
-    - `quiet`, `skip_tests`, and `skip_verify` are accepted for compatibility.
-    - Extra kwargs are accepted so older/newer callers don't crash.
-    """
-    if quiet or _is_headless_environment():
-        return operation, False
-
-    disallowed = set()
-    if skip_tests:
-        disallowed.update({"test", "test_extend", "fix"})
-    if skip_verify:
-        disallowed.add("verify")
-
-    active_app = app or _ACTIVE_SYNC_APP
-    if active_app is None:
-        return operation, False
-
-    chosen, should_abort = active_app.request_steering(operation, reason, timeout_s=timeout_s)
-    if chosen in disallowed:
-        return operation, False
-
-    return chosen, should_abort
