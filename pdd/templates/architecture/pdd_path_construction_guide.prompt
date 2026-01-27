@@ -1,0 +1,362 @@
+% PDD Path Construction Guide
+% This document explains how PDD sync finds prompts and generates output code paths.
+% Use this as a reference when generating architecture.json and .pddrc files.
+
+% ============================================================================
+% HOW PDD PATH RESOLUTION ACTUALLY WORKS (CRITICAL)
+% ============================================================================
+
+When you run `pdd sync home_page`, PDD goes through these steps:
+
+1. **Context Detection** (`construct_paths.py`):
+   - Loads `.pddrc` and finds all contexts
+   - Matches basename `home_page` against each context's `paths:` patterns using fnmatch
+   - Returns the first matching context's configuration
+
+2. **Path Generation** (`sync_determine_operation.py`):
+   - If matched context has `outputs.code.path`, uses `_generate_paths_from_templates()`
+   - This extracts the EXACT path from `outputs.code.path` config
+   - If no `outputs` config, falls back to `generate_output_path` directory + basename
+
+3. **Prompt Discovery** (`sync_main.py`):
+   - Gets `prompts_dir` from config (usually from `default` context)
+   - Scans for files matching `{{basename}}_{{language}}.prompt`
+   - Language matching is case-insensitive
+
+**KEY INSIGHT**: The `outputs.code.path` in a context OVERRIDES directory-based path generation.
+This is why Next.js projects need one context per module with exact paths.
+
+% ============================================================================
+% CORE CONCEPT: THE BASENAME
+% ============================================================================
+
+The BASENAME is the key input to `pdd sync`. Everything revolves around it.
+
+When you run: `pdd sync hello_world`
+- "hello_world" is the basename
+- PDD uses this to find the prompt file
+- PDD uses this to determine the output code path
+
+**How to extract basename from filename:**
+```
+filename: home_page_TypeScriptReact.prompt
+         └─────────┴─────────────────┴──────
+         basename   language suffix   extension
+
+Step 1: Remove .prompt → home_page_TypeScriptReact
+Step 2: Remove _Language suffix → home_page
+Result: basename = "home_page"
+```
+
+**More examples:**
+| filename | basename | language |
+|----------|----------|----------|
+| `prisma_schema_Prisma.prompt` | `prisma_schema` | `Prisma` |
+| `api_tasks_id_route_TypeScript.prompt` | `api_tasks_id_route` | `TypeScript` |
+| `task_card_component_TypeScriptReact.prompt` | `task_card_component` | `TypeScriptReact` |
+
+% ============================================================================
+% HOW PDD FINDS THE PROMPT FILE
+% ============================================================================
+
+Given basename "foo", PDD searches for prompts:
+
+1. Gets `prompts_dir` from `.pddrc` (usually `prompts/` from `default` context)
+2. Scans directory for files matching pattern `{{basename}}_*.prompt`
+3. Extracts language from filename suffix
+
+**IMPORTANT**: Prompt files must be in a FLAT directory structure.
+- ✅ `prompts/home_page_TypeScriptReact.prompt`
+- ❌ `prompts/pages/home_page_TypeScriptReact.prompt` (nested - won't be found unless prompts_dir configured)
+
+**Prompt filename format:**
+```
+{{basename}}_{{Language}}.prompt
+```
+
+**Language suffix MUST be PascalCase:**
+- ✅ `TypeScript`, `TypeScriptReact`, `Python`, `Prisma`
+- ❌ `typescript`, `TYPESCRIPT`, `Typescript`
+
+% ============================================================================
+% HOW PDD DETERMINES OUTPUT CODE PATH
+% ============================================================================
+
+There are TWO configuration styles. Choose ONE based on your project type:
+
+**Style 1: outputs.code.path (REQUIRED for frameworks with strict filenames)**
+
+Use this for Next.js, Nuxt, SvelteKit where files MUST have exact names like
+`page.tsx`, `route.ts`, `layout.tsx`.
+
+```yaml
+contexts:
+  home_page:
+    paths: ["*home_page*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/page.tsx"  # EXACT output path - no templates!
+```
+
+When `pdd sync home_page` runs:
+1. Matches context `home_page` (pattern `*home_page*` matches basename `home_page`)
+2. Finds `outputs.code.path: "app/page.tsx"`
+3. Outputs code to `app/page.tsx`
+
+**Style 2: generate_output_path (for simple projects)**
+
+Use this for Python, Go, or simple Node.js projects where output filename = basename.
+
+```yaml
+contexts:
+  default:
+    defaults:
+      prompts_dir: "prompts/"
+      generate_output_path: "src/"  # Directory-based: outputs {{basename}}.{{ext}}
+```
+
+When `pdd sync hello_world` runs:
+1. No specific context matches, uses `default`
+2. Uses `generate_output_path: "src/"`
+3. Outputs code to `src/hello_world.py`
+
+**CRITICAL**: These styles are MUTUALLY EXCLUSIVE.
+- Framework projects (Next.js): Use `outputs.code.path` with exact paths
+- Simple projects (Python): Use `generate_output_path` with directory
+
+% ============================================================================
+% VALID LANGUAGE SUFFIXES (CASE-SENSITIVE)
+% ============================================================================
+
+Use EXACTLY these PascalCase language names:
+
+| Language | Suffix | Extension | Use For |
+|----------|--------|-----------|---------|
+| TypeScript | `TypeScript` | .ts | Node.js, API routes, utilities |
+| TypeScript React | `TypeScriptReact` | .tsx | React components, Next.js pages |
+| JavaScript | `JavaScript` | .js | Legacy Node.js |
+| JavaScript React | `JavaScriptReact` | .jsx | Legacy React |
+| Python | `Python` | .py | FastAPI, Flask, Django, scripts |
+| Go | `Go` | .go | Go services |
+| Rust | `Rust` | .rs | Rust projects |
+| Prisma | `Prisma` | .prisma | Database schema |
+| SQL | `SQL` | .sql | Database migrations |
+| YAML | `YAML` | .yaml | Config files |
+
+**WRONG - Do NOT use framework names:**
+| Wrong | Correct | Why |
+|-------|---------|-----|
+| `NextJS`, `Next` | `TypeScript` or `TypeScriptReact` | Next.js uses TypeScript |
+| `React`, `ReactJS` | `TypeScriptReact` or `JavaScriptReact` | React uses TS/JS |
+| `Node`, `NodeJS` | `TypeScript` or `JavaScript` | Node.js uses TS/JS |
+| `FastAPI`, `Flask` | `Python` | These are Python frameworks |
+| `Express` | `TypeScript` | Express uses TypeScript |
+
+% ============================================================================
+% .pddrc CONTEXT MATCHING
+% ============================================================================
+
+The `paths:` patterns in a context match against the BASENAME using fnmatch:
+
+```yaml
+contexts:
+  home_page:
+    paths: ["*home_page*"]  # Pattern to match basename
+    defaults:
+      outputs:
+        code:
+          path: "app/page.tsx"
+```
+
+**Pattern examples:**
+| Pattern | Matches basename | Doesn't match |
+|---------|------------------|---------------|
+| `*home_page*` | `home_page`, `my_home_page` | `homepage`, `home-page` |
+| `*api*` | `api_tasks_route`, `user_api` | `tasks_route` |
+| `prisma_*` | `prisma_schema`, `prisma_client` | `my_prisma` |
+
+**CRITICAL**: Do NOT put `prompts_dir` in every context!
+
+```yaml
+# ❌ WRONG - breaks context matching
+contexts:
+  home_page:
+    paths: ["*home_page*"]
+    defaults:
+      prompts_dir: "prompts/"  # DON'T duplicate this!
+      outputs:
+        code:
+          path: "app/page.tsx"
+  default:
+    defaults:
+      prompts_dir: "prompts/"
+
+# ✅ CORRECT - prompts_dir only in default
+contexts:
+  home_page:
+    paths: ["*home_page*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/page.tsx"
+  default:
+    defaults:
+      prompts_dir: "prompts/"
+      generate_output_path: "src/"
+```
+
+% ============================================================================
+% ARCHITECTURE.JSON FIELDS
+% ============================================================================
+
+**filename**: The PROMPT file name (basename + language suffix)
+- Format: `{{descriptive_name}}_{{Language}}.prompt`
+- Use underscores to separate words, NOT slashes
+- This becomes the basename for `pdd sync`
+
+**filepath**: The OUTPUT code path (where generated code will be written)
+- Use framework-specific paths with exact filenames
+- INDEPENDENT from filename - mapped via `.pddrc`
+
+**CRITICAL**: filename encodes WHAT, filepath encodes WHERE.
+
+| filename (prompt) | basename | filepath (output) |
+|-------------------|----------|-------------------|
+| `prisma_schema_Prisma.prompt` | `prisma_schema` | `prisma/schema.prisma` |
+| `home_page_TypeScriptReact.prompt` | `home_page` | `app/page.tsx` |
+| `api_tasks_route_TypeScript.prompt` | `api_tasks_route` | `app/api/tasks/route.ts` |
+| `api_tasks_id_route_TypeScript.prompt` | `api_tasks_id_route` | `app/api/tasks/[id]/route.ts` |
+
+**WRONG filename examples:**
+- `prisma/schema_Prisma.prompt` ❌ (NO SLASHES in filename!)
+- `app/page_TypeScriptReact.prompt` ❌ (NO SLASHES!)
+- `page_NextJS.prompt` ❌ (NO FRAMEWORK NAMES!)
+- `home-page_TypeScriptReact.prompt` ❌ (use underscores, not hyphens)
+
+% ============================================================================
+% COMPLETE WORKING EXAMPLE (VERIFIED)
+% ============================================================================
+
+For a complete, verified working example of a Next.js Task Notes application with
+13 modules, see:
+
+<complete_working_example>
+<include>pdd/templates/architecture/example_nextjs_task_notes.prompt</include>
+</complete_working_example>
+
+**Quick Reference - Key patterns from the example:**
+
+| filename | basename | filepath | context paths |
+|----------|----------|----------|---------------|
+| `prisma_schema_Prisma.prompt` | `prisma_schema` | `prisma/schema.prisma` | `["*prisma_schema*"]` |
+| `home_page_TypeScriptReact.prompt` | `home_page` | `app/page.tsx` | `["*home_page*"]` |
+| `api_tasks_id_route_TypeScript.prompt` | `api_tasks_id_route` | `app/api/tasks/[id]/route.ts` | `["*api_tasks_id_route*"]` |
+| `task_card_component_TypeScriptReact.prompt` | `task_card_component` | `components/TaskCard.tsx` | `["*task_card_component*"]` |
+
+**Commands:**
+```bash
+pdd sync prisma_schema      → prisma/schema.prisma
+pdd sync home_page          → app/page.tsx
+pdd sync api_tasks_id_route → app/api/tasks/[id]/route.ts
+```
+
+% ============================================================================
+% HOW TO VERIFY YOUR CONFIGURATION
+% ============================================================================
+
+After creating architecture.json and .pddrc, ALWAYS verify paths resolve correctly:
+
+**Method 1: Python verification script (RECOMMENDED)**
+```python
+from pdd.sync_determine_operation import get_pdd_file_paths
+
+# Test each module from architecture.json
+modules = [
+    # (basename, language, expected_output_path)
+    ('prisma_schema', 'prisma', 'prisma/schema.prisma'),
+    ('home_page', 'typescriptreact', 'app/page.tsx'),
+    ('api_tasks_route', 'typescript', 'app/api/tasks/route.ts'),
+]
+
+print("Verifying path resolution:")
+for basename, language, expected in modules:
+    result = get_pdd_file_paths(
+        basename=basename,
+        language=language,
+        prompts_dir='prompts',
+        context_override=basename  # Use basename as context name
+    )
+    actual = str(result.get('code', 'NOT FOUND'))
+    status = "✅" if expected in actual else "❌"
+    print(f"  {{status}} {{basename}}: {{actual}}")
+```
+
+**Method 2: pdd sync dry-run**
+```bash
+pdd sync home_page --dry-run
+```
+
+% ============================================================================
+% COMMON MISTAKES AND FIXES
+% ============================================================================
+
+1. **Using slashes in filename**
+   - ❌ `app/api/tasks/route_TypeScript.prompt`
+   - ✅ `api_tasks_route_TypeScript.prompt`
+
+2. **Using framework names as language suffix**
+   - ❌ `page_NextJS.prompt`
+   - ✅ `page_TypeScriptReact.prompt`
+
+3. **Wrong case for language suffix**
+   - ❌ `home_page_typescript.prompt`
+   - ✅ `home_page_TypeScript.prompt`
+
+4. **Putting prompts_dir in every context**
+   - ❌ Every context has `prompts_dir: "prompts/"`
+   - ✅ Only `default` context has `prompts_dir`
+
+5. **Missing context for a module**
+   - ❌ No context matches `api_tasks_route`
+   - ✅ Add context with `paths: ["*api_tasks_route*"]`
+
+6. **Using templates for framework-specific files**
+   - ❌ `path: "app/{{name}}.tsx"` (would output `app/home_page.tsx`)
+   - ✅ `path: "app/page.tsx"` (exact path)
+
+% ============================================================================
+% REFERENCE: KEY CODE FILES
+% ============================================================================
+
+For deeper understanding, these are the key code files:
+
+**Context detection and matching:**
+<context_detection_code>
+<include>pdd/construct_paths.py</include>
+</context_detection_code>
+
+**Path generation from templates:**
+<path_generation_code>
+<include>pdd/sync_determine_operation.py</include>
+</path_generation_code>
+
+**Prompt discovery and sync orchestration:**
+<sync_main_code>
+<include>pdd/sync_main.py</include>
+</sync_main_code>
+
+% ============================================================================
+% SUMMARY CHECKLIST
+% ============================================================================
+
+Before finishing architecture.json and .pddrc generation:
+
+□ Every filename uses underscores, NO slashes
+□ Every filename ends with valid PascalCase language suffix
+□ Every filepath matches framework conventions
+□ Every module has a corresponding context in .pddrc
+□ Each context's `paths:` pattern matches its basename
+□ Each context's `outputs.code.path` matches its filepath
+□ `prompts_dir` appears ONLY in `default` context
+□ Verified paths using Python script or dry-run

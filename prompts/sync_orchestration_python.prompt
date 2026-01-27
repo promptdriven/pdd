@@ -176,7 +176,7 @@ The orchestrator executes these operations as determined by `sync_determine_oper
 4. **crash**: Fix runtime errors to make code executable
 5. **verify**: Verify against prompt intent (unless `--skip-verify`)
 6. **test**: Generate unit tests (unless `--skip-tests`)
-7. **test_extend**: Extend existing tests to improve coverage toward target
+7. **test_extend**: Extend existing tests to improve coverage toward target (Python only - skip for non-Python languages since code coverage tooling is Python-specific)
 8. **fix**: Resolve test failures
 9. **update**: Back-propagate learnings to prompt
 
@@ -343,7 +343,7 @@ For non-Python languages, set `max_attempts=0` to skip iterative loops and go di
 ```python
 # Module level
 MAX_CONSECUTIVE_TESTS = 3  # Break after this many consecutive test operations
-MAX_TEST_EXTEND_ATTEMPTS = 2  # Accept coverage after this many test_extend attempts
+MAX_TEST_EXTEND_ATTEMPTS = 2  # Accept coverage after this many test_extend attempts (Python only; non-Python skips test_extend entirely)
 MAX_CONSECUTIVE_CRASHES = 3  # Break after this many consecutive crash operations
 
 # Inside sync_worker_logic()

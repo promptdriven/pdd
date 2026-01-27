@@ -255,14 +255,14 @@ Place architecture metadata tags at the **top of your prompt file** (after any `
 <pdd-reason>Brief description of module's purpose (60-120 chars)</pdd-reason>
 
 <pdd-interface>
-{
+{{
   "type": "module",
-  "module": {
+  "module": {{
     "functions": [
-      {"name": "function_name", "signature": "(...)", "returns": "Type"}
+      {{"name": "function_name", "signature": "(...)", "returns": "Type"}}
     ]
-  }
-}
+  }}
+}}
 </pdd-interface>
 
 <pdd-dependency>dependency_prompt_1.prompt</pdd-dependency>
@@ -284,14 +284,14 @@ Place architecture metadata tags at the **top of your prompt file** (after any `
 - **Example**:
   ```xml
   <pdd-interface>
-  {
+  {{
     "type": "module",
-    "module": {
+    "module": {{
       "functions": [
-        {"name": "llm_invoke", "signature": "(prompt, strength, ...)", "returns": "Dict"}
+        {{"name": "llm_invoke", "signature": "(prompt, strength, ...)", "returns": "Dict"}}
       ]
-    }
-  }
+    }}
+  }}
   </pdd-interface>
   ```
 

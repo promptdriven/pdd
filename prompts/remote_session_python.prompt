@@ -27,17 +27,22 @@
 
   4. **RemoteSessionManager class**:
      - Constructor takes `jwt_token: str`, `project_path: Path`, and `server_port: int = 9876`
+     - Also initialize `_token_refresh_lock = asyncio.Lock()` for thread-safe token refresh
      - `register()`: Register session with cloud, return cloud_url
        - Params: session_name (optional)
        - Call POST to `registerSession` cloud endpoint
        - Store session_id and cloud_url on success
        - Returns the cloud_url for display to user
-     - `start_heartbeat()`: Start async background task sending heartbeats every 60 seconds
+     - `start_heartbeat()`: Start async background task sending heartbeats every 30 seconds
      - `stop_heartbeat()`: Stop heartbeat task gracefully
      - `start_command_polling()`: Start polling cloud for pending commands
      - `stop_command_polling()`: Stop command polling gracefully
      - `deregister()`: Call POST to `deregisterSession` endpoint on shutdown
      - Static `list_sessions(jwt_token)`: GET `listSessions` endpoint, return List[SessionInfo]
+     - `_refresh_token()`: Async method to refresh JWT token using Firebase refresh token
+       - Uses lock to prevent concurrent refresh attempts
+       - First checks if cached token was already refreshed by another coroutine
+       - Returns True on success, False on failure
 
   5. **Command Polling behavior**:
      - Poll cloud for pending commands every 5 seconds via `getCommands` endpoint
@@ -57,16 +62,26 @@
      - Handle transient failures gracefully
 
   8. **Heartbeat behavior**:
-     - Send heartbeat to `heartbeatSession` endpoint every 60 seconds
+     - Send first heartbeat IMMEDIATELY on startup (prevents early session timeout)
+     - Use 5-second delay after first heartbeat, then 30-second intervals
+     - Retry logic: 3 attempts with exponential backoff (1s, 2s, 4s) on network errors
+     - On 401 errors (token expired): attempt token refresh via `_refresh_token()`, then retry
+     - Only attempt token refresh once per heartbeat cycle
      - Use asyncio.Event for clean shutdown
      - Log warnings on heartbeat failures but don't crash
 
-  9. **Module-level state**:
-     - `_active_session_manager` global for server access
-     - `get_active_session_manager()` and `set_active_session_manager()` accessors
+  9. **Command Polling 401 handling**:
+     - `get_pending_commands()` should detect 401 errors and attempt token refresh
+     - Retry the request once after successful token refresh
+     - Return empty list on persistent 401 or refresh failure
+
+  10. **Module-level state**:
+      - `_active_session_manager` global for server access
+      - `get_active_session_manager()` and `set_active_session_manager()` accessors
 
 % Dependencies
   <pdd.core.cloud><include>context/cloud_example.py</include></pdd.core.cloud>
+  <pdd.get_jwt_token><include>context/get_jwt_token_example.py</include></pdd.get_jwt_token>
 
 % Technical Constraints
   - Use httpx.AsyncClient for async HTTP (timeout 30s default, shorter for heartbeat/status)

@@ -462,7 +462,7 @@ Remember: Regression tests are crucial for maintaining system stability. They sh
 
 ## Method 4: Generating Architecture from a PRD (GitHub Issue)
 
-Instead of manually writing `architecture.json`, you can point `pdd generate` at a GitHub issue containing your PRD. An 8-step agentic workflow will analyze the PRD, research the tech stack, and produce a validated `architecture.json`.
+Instead of manually writing `architecture.json`, you can point `pdd generate` at a GitHub issue containing your PRD. An 11-step agentic workflow will analyze the PRD, research the tech stack, generate `architecture.json`, create `.pddrc` configuration, and produce prompt files for each module.
 
 ### Prerequisites
 
@@ -484,18 +484,19 @@ Instead of manually writing `architecture.json`, you can point `pdd generate` at
    - Analyzes your PRD for features and tech stack
    - Researches documentation and best practices
    - Designs the module breakdown with dependency ordering
-   - Generates and validates `architecture.json`
+   - Generates `architecture.json` and `.pddrc` configuration
+   - Creates prompt files for each module
+   - Validates completeness, sync configuration, and dependencies
 
 4. **Review the output**: The workflow produces:
    - `architecture.json` - Module definitions with priorities and dependencies
    - `architecture_diagram.html` - Interactive Mermaid visualization
+   - `.pddrc` - Project configuration with context-specific paths
+   - `prompts/*.prompt` - Prompt files for each module (unless `--skip-prompts`)
 
-5. **Generate prompts from architecture**:
+5. **Run sync on generated prompts** (prompts are already generated):
    ```bash
-   pdd generate --template generic/generate_prompt \
-     -e MODULE=orders_api -e LANG_OR_FRAMEWORK=Python \
-     -e ARCHITECTURE_FILE=architecture.json \
-     --output prompts/orders_api_Python.prompt
+   pdd sync my_module
    ```
 
 ### Resuming a Failed Run
