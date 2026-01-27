@@ -144,13 +144,7 @@ for filename in $(cat architecture.json | jq -r '.[].filename'); do
 done
 ```
 
-**5. Validate `<include>` paths in prompt files match .pddrc `example_output_path`:**
-
-For each prompt file in architecture.json, extract all `<include>path</include>` tags and verify each path starts with an `example_output_path` prefix from `.pddrc`. Skip URLs (`http://`/`https://`), template variables (`${{...}}`), and `pdd/` internal paths.
-
-Example error: `.pddrc` has `example_output_path: context/` but prompt contains `<include>src/models_example.py</include>` — the path should be `context/models_example.py`.
-
-**6. Common issues and fixes:**
+**5. Common issues and fixes:**
 
 | Issue | Example | Fix |
 |-------|---------|-----|
@@ -158,7 +152,6 @@ Example error: `.pddrc` has `example_output_path: context/` but prompt contains 
 | Missing dependency | A depends on "foo.prompt" not in architecture | Add foo module or remove dependency |
 | Circular dependency | A → B → C → A | Extract shared interface to new module D |
 | Missing prompt file | Module in architecture but no prompt | Step 8 didn't create it - rerun step 8 |
-| Wrong include path | `<include>src/model_example.py</include>` but .pddrc has `example_output_path: context/` | Change to `<include>context/model_example.py</include>` |
 
 % Output
 
@@ -195,16 +188,10 @@ Followed by error details:
 ### Circular Dependencies
 - A → B → C → A
 
-### Include Path Errors
-| Prompt File | Include Path | Expected Prefix |
-|-------------|-------------|-----------------|
-| models_Python.prompt | src/models_example.py | context/ |
-
 ### Suggested Fixes
 1. Change prisma_client_TypeScript.prompt priority from 4 to 2
 2. Change api_notes_route_TypeScript.prompt priority from 3 to 3
 3. Remove invalid dependency from home_page_TypeScriptReact.prompt
-4. Fix include path in models_Python.prompt: change `src/models_example.py` to `context/models_example.py`
 ```
 
 **3. Post results to GitHub**
@@ -224,7 +211,6 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 - Priority violations: [count or "None"]
 - Missing dependencies: [count or "None"]
 - Circular dependencies: [count or "None"]
-- Include path errors: [count or "None"]
 
 ### Priority Order (for pdd sync)
 | Priority | Module | Dependencies |
@@ -249,7 +235,5 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 - Missing dependencies in architecture.json are ERRORS
 - Circular dependencies are ERRORS
 - DO NOT run preprocess - example files won't exist until pdd sync runs
-- DO validate that <include> paths in prompt files start with the example_output_path from .pddrc
-- Skip include path validation for URLs, template variables (${{...}}), and pdd/ internal paths
 - Always output `VALIDATION_RESULT: VALID` or `VALIDATION_RESULT: INVALID`
 - Always post findings to GitHub

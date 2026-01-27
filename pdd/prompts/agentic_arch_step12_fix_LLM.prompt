@@ -71,20 +71,14 @@ Fix architecture completeness issues:
 
 **If failed_validation_step is "sync" (Step 10):**
 
-Fix .pddrc sync configuration issues.
-
-**FIRST: Detect which strategy the .pddrc uses:**
-- **Strategy A (per-module):** .pddrc has individual contexts with `outputs.code.path` per module
-- **Strategy B (template-based):** .pddrc has group contexts with `generate_output_path` and `prompts_dir` subdirectory
+Fix .pddrc sync configuration issues:
 
 1. **Failed pdd sync --dry-run:**
    - "No prompt files found": Create missing prompt file at correct path
-     - Strategy A: Place in `prompts/` (flat)
-     - Strategy B: Place in the group context's `prompts_dir` subdirectory (e.g., `prompts/backend/`)
    - "Unknown context": Add context to .pddrc or fix context name
    - Verify prompts_dir matches where prompts actually are
 
-2. **Filepath Mismatches (Strategy A — per-module exact paths):**
+2. **Filepath Mismatches:**
    Add or update context in .pddrc with exact `outputs.code.path`:
    ```yaml
    contexts:
@@ -98,35 +92,18 @@ Fix .pddrc sync configuration issues.
 
      default:
        defaults:
-         prompts_dir: "prompts/"  # ONLY place with prompts_dir for Strategy A
+         prompts_dir: "prompts/"  # ONLY place with prompts_dir
          generate_output_path: "src/"
    ```
 
-   **Strategy A key rules:**
+   **Key rules:**
    - Each module with a specific filepath needs its own context
    - `paths:` pattern must match the basename (e.g., `["*home_page*"]` for `home_page_TypeScriptReact.prompt`)
    - `outputs.code.path` must be the EXACT filepath from architecture.json
-   - **CRITICAL: `prompts_dir` goes ONLY in the `default` context, NOT in per-module contexts!**
+   - **CRITICAL: `prompts_dir` goes ONLY in the `default` context, NOT in specific contexts!**
+   - See PDD Path Construction Guide above for details
 
-3. **Filepath Mismatches (Strategy B — template-based group contexts):**
-   Verify group context configuration:
-   ```yaml
-   contexts:
-     backend:
-       paths: ["*"]
-       defaults:
-         prompts_dir: "prompts/backend"    # Points to subdirectory
-         generate_output_path: "backend/"  # PDD appends {basename}.{ext}
-   ```
-
-   **Strategy B key rules:**
-   - One group context per directory, NOT one per module
-   - `generate_output_path` must match the output directory from architecture.json
-   - `prompts_dir` on the group context points to subdirectory (e.g., `"prompts/backend"`)
-   - Prompt files must exist in that subdirectory
-   - Do NOT add `outputs.code.path` — template expansion handles it
-
-4. **After fixing, verify:**
+3. **After fixing, verify:**
    ```bash
    pdd sync MODULE_BASENAME --dry-run
    ```
@@ -158,14 +135,6 @@ Fix dependency graph issues in architecture.json:
    If architecture.json has a module but no prompt file exists:
    - Create the prompt file in the prompts/ directory
    - Or remove the module from architecture.json if not needed
-
-5. **Wrong Include Paths:**
-   If `<include>` paths in prompt files don't match .pddrc `example_output_path`:
-   - Read `.pddrc` to find the correct `example_output_path` for each context
-   - In each affected prompt file, replace the wrong path prefix in `<include>` tags
-   - Only fix the prefix, keep the filename unchanged
-   - Example: if `example_output_path` is `context/` and prompt has `<include>src/models_example.py</include>`, change to `<include>context/models_example.py</include>`
-   - Skip URLs (`http://`, `https://`), template variables (`${{...}}`), and `pdd/` internal paths
 
 % ============================================================================
 % CLEANUP: FILES AND METADATA WITH WRONG LOCATIONS OR NAMING
@@ -218,11 +187,9 @@ ls -la .pdd/backups/ 2>/dev/null
 % STEP B: CLEANUP PROMPT FILES
 % ----------------------------------------------------------------------------
 
-**1. Delete prompt files at incorrect paths:**
-
-   **Strategy A (per-module):** Prompts should be FLAT in `prompts/`. Delete nested ones:
+**1. Delete prompt files at nested paths (WRONG):**
    ```bash
-   # Remove incorrectly nested prompt files (Strategy A only)
+   # Remove ALL incorrectly nested prompt files
    find prompts -mindepth 2 -name "*.prompt" -delete 2>/dev/null
 
    # Remove empty subdirectories
@@ -232,20 +199,11 @@ ls -la .pdd/backups/ 2>/dev/null
    rm -rf prompts/prisma/ prompts/app/ prompts/api/ prompts/lib/ 2>/dev/null
    ```
 
-   **Strategy B (template-based):** Prompts should be in the group's `prompts_dir` subdirectory.
-   Delete prompts at the wrong level:
-   ```bash
-   # If prompts are wrongly flat when they should be in a subdirectory
-   # (only for Strategy B — check .pddrc prompts_dir first!)
-   # Move them to the correct subdirectory, e.g.:
-   mkdir -p prompts/backend
-   mv prompts/crm_models_Python.prompt prompts/backend/ 2>/dev/null
-   ```
-
-**2. Create prompt files at the correct path:**
-
-   **Strategy A:** `prompts/prisma_schema_Prisma.prompt`, `prompts/home_page_TypeScriptReact.prompt`
-   **Strategy B:** `prompts/backend/crm_models_Python.prompt`, `prompts/backend/auth_service_Python.prompt`
+**2. Create correct FLAT prompt files:**
+   After deleting nested files, create new ones at the correct flat path:
+   - `prompts/prisma_schema_Prisma.prompt` ✓
+   - `prompts/home_page_TypeScriptReact.prompt` ✓
+   - `prompts/api_counter_route_TypeScript.prompt` ✓
 
 % ----------------------------------------------------------------------------
 % STEP C: CLEANUP ARCHITECTURE.JSON (METADATA)
@@ -318,9 +276,8 @@ ls -la .pdd/backups/ 2>/dev/null
          generate_output_path: "src/"
    ```
 
-**6. Ensure .pddrc contexts cover all modules (depends on strategy):**
-
-   **Strategy A (per-module — Next.js/Nuxt/SvelteKit):** Each module needs its own context.
+**6. Ensure EVERY module has a dedicated context with exact outputs.code.path:**
+   For Next.js/Nuxt/SvelteKit projects, each module needs its own context.
    **CRITICAL: Put `prompts_dir` ONLY in the `default` context!**
    ```yaml
    contexts:
@@ -340,18 +297,8 @@ ls -la .pdd/backups/ 2>/dev/null
 
      default:
        defaults:
-         prompts_dir: "prompts/"  # ONLY place with prompts_dir for Strategy A!
+         prompts_dir: "prompts/"  # ONLY place with prompts_dir!
          generate_output_path: "src/"
-   ```
-
-   **Strategy B (template-based — Python/Go/Rust):** Group contexts cover all modules in a directory.
-   ```yaml
-   contexts:
-     backend:
-       paths: ["*"]
-       defaults:
-         prompts_dir: "prompts/backend"    # Subdirectory for this group
-         generate_output_path: "backend/"  # PDD appends {basename}.{ext}
    ```
 
 % ----------------------------------------------------------------------------
@@ -429,7 +376,7 @@ ls -la .pdd/backups/ 2>/dev/null
 Before applying validation fixes, verify:
 
 **Files:**
-1. [ ] **Prompt files**: Strategy A — FLAT in `prompts/`. Strategy B — in group context's `prompts_dir` subdirectory (e.g., `prompts/backend/`)
+1. [ ] **Prompt files**: ALL are FLAT in `prompts/` directory (no nested subdirectories)
 2. [ ] **No orphan code files**: No generated code at incorrect paths from previous failed runs
 3. [ ] **Preprocessed files**: No stale `*_preprocessed.prompt` files with old basenames
 
@@ -438,13 +385,9 @@ Before applying validation fixes, verify:
 5. [ ] **Filenames**: ALL follow `{{basename}}_{{Language}}.prompt` pattern
 6. [ ] **Dependencies**: ALL reference corrected filenames (no slashes)
 
-**Metadata - .pddrc (Strategy A — per-module exact paths):**
+**Metadata - .pddrc:**
 7. [ ] **Contexts**: Each module has dedicated context with `paths: ["*basename*"]`
 8. [ ] **Outputs**: Each context has exact `outputs.code.path` matching architecture.json filepath
-
-**Metadata - .pddrc (Strategy B — template-based group contexts):**
-7. [ ] **Contexts**: Group contexts cover all modules via `generate_output_path`
-8. [ ] **prompts_dir**: Each group context has `prompts_dir` pointing to its subdirectory
 
 **PDD Internal Metadata (.pdd/ directory):**
 9. [ ] **Meta files**: No stale `.pdd/meta/*.json` files for old/renamed basenames
@@ -486,7 +429,7 @@ rm -f src/*.ts src/*.tsx 2>/dev/null  # If code was wrongly placed in src/
 rm -f .pdd/meta/*_run.json 2>/dev/null           # Old run metadata
 rm -rf .pdd/backups/* 2>/dev/null                 # Failed attempt backups
 rm -f .pdd/locks/*.lock 2>/dev/null               # Stale locks
-rm -f .pdd/core_dumps/*.json 2>/dev/null          # Old PDD core_dump debug snapshots created when runs crash or hit internal errors
+rm -f .pdd/core_dumps/*.json 2>/dev/null          # Old debug snapshots
 
 # E. Clean up stale preprocessed files
 find . -name "*_preprocessed.prompt" -delete 2>/dev/null
@@ -601,8 +544,8 @@ FILES_DELETED: prompts/api/old_module_TypeScript.prompt, prompts/nested/path.pro
 - Write files directly to disk - don't just output them
 - architecture.json must be valid JSON array with NO SLASHES in filename field
 - .pddrc must be valid YAML with proper indentation and dedicated context per module
-- Prompt files MUST be in the correct directory: FLAT in `prompts/` for Strategy A, or in the group's `prompts_dir` subdirectory for Strategy B
-- Every new module in architecture.json needs a prompt file at the correct path for its strategy
+- Prompt files MUST be FLAT in `prompts/` directory - NO nested subdirectories
+- Every new module in architecture.json needs a prompt file at `prompts/{{basename}}_{{Language}}.prompt`
 - Clean up any incorrectly placed files BEFORE creating correct ones
 - After fixes, workflow will re-run ALL validations from step 9
 - Always post findings to GitHub

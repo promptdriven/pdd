@@ -89,12 +89,6 @@ pdd --context CONTEXT_NAME sync BASENAME --dry-run
 1. The .pddrc `paths:` patterns actually match the basename (e.g., `["*app_layout*"]` matches `app_layout`)
 2. You don't have the same `prompts_dir` value in every context (this breaks matching!)
 
-**NOTE on Strategy B (template-based group contexts):**
-If .pddrc uses group contexts with `generate_output_path` (for Python/Go/Rust backends),
-auto-detection works via the group context's `paths: ["*"]` pattern. The dry-run output path
-is computed from `generate_output_path` + basename + extension (e.g., `backend/` + `crm_models` + `.py`).
-Prompt files must be in the group context's `prompts_dir` subdirectory (e.g., `prompts/backend/`).
-
 **3. Analyze dry-run output:**
 
 **SUCCESSFUL dry-run shows:**
@@ -144,11 +138,10 @@ done
 
 | Issue | Symptom | Fix |
 |-------|---------|-----|
-| Missing prompt file | "No prompt files found" | Create prompt at correct path (Strategy A: `prompts/`, Strategy B: `prompts/{subdir}/`) |
-| Wrong prompts_dir | Prompt not found | Fix `prompts_dir` in .pddrc — default context (A) or group context (B) |
-| Missing context entry | Wrong output path | Strategy A: add per-module context with `outputs.code.path`. Strategy B: add group context with `generate_output_path` |
-| Filepath mismatch | Output path differs | Strategy A: fix `outputs.code.path`. Strategy B: fix `generate_output_path` directory |
-| Prompt in wrong dir | "No prompt files found" | Strategy B: move prompt from `prompts/` to `prompts/{subdir}/` matching group context's `prompts_dir` |
+| Missing prompt file | "No prompt files found" | Step 8 didn't create the prompt |
+| Wrong prompts_dir | Prompt not found | Fix context prompts_dir in .pddrc |
+| Missing modules entry | Wrong output path | Add entry to .pddrc modules section |
+| Filepath mismatch | Output path differs | Update .pddrc modules filepath |
 
 % Output
 
@@ -183,29 +176,14 @@ Followed by error details:
 |--------|----------|--------|
 | api_courses_route | app/api/courses/route.ts | app/api/api_courses_route.ts |
 
-### Suggested Fixes (Strategy A — per-module exact paths)
-1. Create missing prompt: `prompts/api_courses_route_TypeScript.prompt` (FLAT in `prompts/`)
-2. Add per-module context to .pddrc:
+### Suggested Fixes
+1. Create missing prompt: prompts/api/api_courses_route_TypeScript.prompt
+2. Add to .pddrc modules section:
    ```yaml
-   contexts:
+   modules:
      api_courses_route:
-       paths: ["*api_courses_route*"]
-       defaults:
-         outputs:
-           code:
-             path: "app/api/courses/route.ts"
-   ```
-
-### Suggested Fixes (Strategy B — template-based group contexts)
-1. Create missing prompt in group subdirectory: `prompts/backend/crm_models_Python.prompt`
-2. Verify group context in .pddrc:
-   ```yaml
-   contexts:
-     backend:
-       paths: ["*"]
-       defaults:
-         prompts_dir: "prompts/backend"
-         generate_output_path: "backend/"
+       filepath: "app/api/courses/route.ts"
+       prompts_dir: "prompts/api/"
    ```
 ```
 
@@ -241,7 +219,6 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 - Run `pdd sync --dry-run` for EVERY module - this is the authoritative test
 - If dry-run fails for ANY module, validation FAILS
 - If dry-run output path doesn't match architecture.json filepath, validation FAILS
-- For Strategy A (Next.js/Nuxt/SvelteKit): filepath alignment with exact `outputs.code.path` is CRITICAL
-- For Strategy B (Python/Go/Rust): filepath alignment via template expansion (`generate_output_path` + basename + ext) — verify the directory and extension are correct
+- For Next.js/Nuxt/SvelteKit: filepath alignment is CRITICAL
 - Always output `VALIDATION_RESULT: VALID` or `VALIDATION_RESULT: INVALID`
 - Always post findings to GitHub
