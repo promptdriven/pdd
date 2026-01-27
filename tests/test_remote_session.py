@@ -41,8 +41,11 @@ def mock_httpx_client():
     """Mock httpx.AsyncClient context manager."""
     with patch("httpx.AsyncClient") as MockClient:
         mock_instance = AsyncMock()
-        MockClient.return_value.__aenter__.return_value = mock_instance
-        MockClient.return_value.__aexit__.return_value = None
+        # Properly mock the async context manager
+        mock_client_cm = MagicMock()
+        mock_client_cm.__aenter__ = AsyncMock(return_value=mock_instance)
+        mock_client_cm.__aexit__ = AsyncMock(return_value=None)
+        MockClient.return_value = mock_client_cm
         yield mock_instance
 
 # --- Global State Tests ---
@@ -690,14 +693,11 @@ class TestHeartbeatImmediateFirstBeat:
         # Track when heartbeats are sent
         heartbeat_times = []
 
-        original_post = mock_httpx_client.post
-
         async def tracking_post(*args, **kwargs):
             heartbeat_times.append(asyncio.get_event_loop().time())
-            return original_post(*args, **kwargs)
+            return mock_response
 
-        mock_httpx_client.post = AsyncMock(side_effect=tracking_post)
-        mock_httpx_client.post.return_value = mock_response
+        mock_httpx_client.post.side_effect = tracking_post
 
         # Create stop event that will be set after first heartbeat
         manager._stop_event = asyncio.Event()
@@ -875,7 +875,7 @@ class TestJWTTokenRefresh:
                 mock_response.status_code = 200
             return mock_response
 
-        mock_httpx_client.post = AsyncMock(side_effect=mock_post)
+        mock_httpx_client.post.side_effect = mock_post
 
         # Mock successful token refresh
         refresh_called = [False]
@@ -885,7 +885,7 @@ class TestJWTTokenRefresh:
             manager.jwt_token = "new-token"
             return True
 
-        manager._refresh_token = mock_refresh_token
+        manager._refresh_token = AsyncMock(side_effect=mock_refresh_token)
 
         iteration = [0]
 
@@ -919,7 +919,7 @@ class TestJWTTokenRefresh:
         # Always return 401
         mock_response = MagicMock()
         mock_response.status_code = 401
-        mock_httpx_client.post = AsyncMock(return_value=mock_response)
+        mock_httpx_client.post.return_value = mock_response
 
         refresh_count = [0]
 
@@ -927,7 +927,7 @@ class TestJWTTokenRefresh:
             refresh_count[0] += 1
             return False  # Refresh fails
 
-        manager._refresh_token = mock_refresh_token
+        manager._refresh_token = AsyncMock(side_effect=mock_refresh_token)
 
         iteration = [0]
 
