@@ -82,6 +82,7 @@ Implement the following helper functions:
     - Derive example and test paths by calling `construct_paths` with `command="example"` and `command="test"` respectively
     - When the code file does not exist, optionally create a temporary empty code file to allow `construct_paths` to resolve example/test locations, then remove it
     - Provide robust fallback mechanisms (derive directories from `resolved_config`; final fallback to defaults like `{basename}.{ext}`, `{basename}_example.{ext}`, `test_{basename}.{ext}`)
+-   `get_extension(language: str) -> str`: Returns the file extension for a programming language. Must include mappings for: `python` → `py`, `javascript` → `js`, `typescript` → `ts`, `typescriptreact` → `tsx`, `javascriptreact` → `jsx`, `prisma` → `prisma`, and other common languages. Falls back to lowercase language name if no mapping found.
 -   `calculate_sha256(file_path: Path) -> Optional[str]`: Calculates the SHA256 hash of a file if it exists, otherwise returns `None`.
 -   `read_fingerprint(basename: str, language: str) -> Optional[Fingerprint]`: Reads and validates the JSON fingerprint file from `{META_DIR}/{safe_basename}_{language}.json`. Uses `_safe_basename()` for path construction. Returns `None` if it doesn't exist or is invalid.
 -   `read_run_report(basename: str, language: str) -> Optional[RunReport]`: Reads and validates the JSON run report file from `{META_DIR}/{safe_basename}_{language}_run.json`. Uses `_safe_basename()` for path construction.
@@ -141,7 +142,10 @@ Log mode performs the complete analysis (reading fingerprints, calculating hashe
         -   If the example has previously run successfully (based on fingerprint/run reports history) → return `fix`.
         -   Otherwise → return `crash`.
     -   If `coverage < target_coverage` and `skip_tests=False`:
-        -   If tests pass (`tests_failed == 0` and `tests_passed > 0`) → return `test_extend` to ADD more tests (not regenerate)
+        -   If tests pass (`tests_failed == 0` and `tests_passed > 0`):
+            -   **CRITICAL**: First check if the test file actually exists. The run_report may have synthetic `tests_passed=1` from crash/verify success but actual test file hasn't been generated yet. If test file missing → return `test` to generate tests.
+            -   For non-Python languages → return `all_synced` (skip `test_extend` since code coverage tooling is Python-specific and would produce no content)
+            -   For Python → return `test_extend` to ADD more tests (not regenerate)
         -   Otherwise → return `test` to generate tests
     -   If `coverage < target_coverage` and `skip_tests=True` → return `all_synced` to indicate workflow completion despite low coverage.
     -   If any of these conditions are met, stop analysis here.
