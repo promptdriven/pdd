@@ -168,23 +168,25 @@ def run_agentic_architecture(
     verbose: bool = False,
     quiet: bool = False,
     timeout_adder: float = 0.0,
-    use_github_state: bool = True
+    use_github_state: bool = True,
+    skip_prompts: bool = False
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
     Entry point for the agentic architecture workflow.
-    
+
     1. Validates the GitHub issue URL.
     2. Fetches issue details and comments using `gh` CLI.
     3. Ensures the repository is available locally (clones if necessary).
     4. Invokes the architecture orchestrator.
-    
+
     Args:
         issue_url: Full URL to the GitHub issue.
         verbose: Enable verbose logging.
         quiet: Suppress non-error output.
         timeout_adder: Additional seconds to add to step timeouts.
         use_github_state: Whether to persist state to GitHub comments.
-        
+        skip_prompts: If True, skip Step 9 (prompt generation). Default False (prompts ARE generated).
+
     Returns:
         Tuple containing:
         - success (bool): Whether the workflow completed successfully.
@@ -263,5 +265,6 @@ def run_agentic_architecture(
         verbose=verbose,
         quiet=quiet,
         timeout_adder=timeout_adder,
-        use_github_state=use_github_state
+        use_github_state=use_github_state,
+        skip_prompts=skip_prompts
     )

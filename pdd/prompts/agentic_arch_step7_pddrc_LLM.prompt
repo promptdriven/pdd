@@ -1,0 +1,94 @@
+<pdd-reason>Generates and validates .pddrc configuration file based on architecture.json, ensuring proper context mapping and output path templates.</pdd-reason>
+<pdd-interface>
+{{
+  "type": "module",
+  "module": {{
+    "functions": [
+      {{"name": "generate_pddrc", "signature": "(architecture_json: str)", "returns": "str (path to .pddrc file)"}}
+    ]
+  }}
+}}
+</pdd-interface>
+<pdd-dependency>agentic_arch_step6_generate_LLM.prompt</pdd-dependency>
+% You are a PDD configuration expert. Your task is to generate a complete and correct .pddrc file based on the architecture.json.
+
+% Context
+
+You are working on step 7 of the agentic architecture workflow. Step 6 generated architecture.json. Now generate the .pddrc configuration file.
+
+This step is CRITICAL because:
+- Without correct .pddrc, `pdd sync` will output files to wrong paths
+- For Next.js/Nuxt/SvelteKit, each module needs its own context with exact output path
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Architecture (from Step 6)
+<architecture_json>
+{step6_output}
+</architecture_json>
+
+% Algorithm for Generating .pddrc
+
+For EACH module in architecture.json:
+
+```
+1. Extract basename from filename:
+   "home_page_TypeScriptReact.prompt" → "home_page"
+   "api_tasks_id_route_TypeScript.prompt" → "api_tasks_id_route"
+
+2. Create context entry:
+   - context name = basename
+   - paths = ["*{{basename}}*"]
+   - outputs.code.path = filepath from architecture.json
+
+3. Do NOT add prompts_dir to individual contexts
+```
+
+After all modules, add default context with `prompts_dir: "prompts/"`.
+
+% Key Rules
+
+1. **One context per module** - each module needs its own context for exact filepath
+2. **paths pattern** - use `["*{{basename}}*"]` to match the basename
+3. **outputs.code.path** - use EXACT filepath from architecture.json (no templates!)
+4. **prompts_dir** - put ONLY in `default` context, never in other contexts
+
+% Output Requirements
+
+1. **Write .pddrc to disk**
+
+2. **Verify YAML syntax:**
+   ```bash
+   python3 -c "import yaml; yaml.safe_load(open('.pddrc'))" && echo "YAML OK"
+   ```
+
+3. **Post summary to GitHub**
+
+4. **Output status:** `PDDRC_STATUS: COMPLETE` and `FILES_CREATED: .pddrc`
+
+% ============================================================================
+% VERIFIED WORKING EXAMPLE - FOLLOW THIS PATTERN EXACTLY
+% ============================================================================
+
+This .pddrc example is verified to work. Your .pddrc MUST follow this exact pattern.
+
+<verified_working_example>
+<include>pdd/templates/architecture/example_nextjs_task_notes.prompt</include>
+</verified_working_example>
+
+% Your Task
+
+Now generate the .pddrc following the pattern shown in the example above.
+
+For each module in architecture.json:
+1. Extract basename from filename (remove `_Language.prompt` suffix)
+2. Create context with `paths: ["*{{basename}}*"]`
+3. Set `outputs.code.path` to the exact filepath
+
+Remember:
+- prompts_dir goes ONLY in default context
+- Each context's outputs.code.path matches filepath from architecture.json exactly

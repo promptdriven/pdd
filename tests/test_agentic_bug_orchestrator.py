@@ -1146,3 +1146,248 @@ def test_steps_1_to_5_run_in_main_directory(tmp_path):
                 f"Step {label} should run in main directory ({tmp_path}), "
                 f"but ran in {cwd}"
             )
+
+
+# --- Issue #393: Format String Injection and Silent Failure Tests ---
+
+
+def test_curly_braces_in_llm_output_do_not_cause_keyerror(mock_dependencies, default_args):
+    """
+    Issue #393: LLM outputs containing curly braces should not cause KeyError.
+
+    Bug: When step outputs contain {placeholder} patterns (common in code/error
+    analysis), subsequent prompt formatting with .format() interprets them as
+    format placeholders, causing KeyError exceptions.
+
+    Fix: Escape curly braces in step outputs before storing in context.
+    """
+    mock_run, mock_load, _ = mock_dependencies
+
+    # Step 1 returns output with curly braces (simulating LLM analyzing code with templates)
+    def side_effect_run(*args, **kwargs):
+        label = kwargs.get('label', '')
+        if label == 'step1':
+            # This output contains {url} which would cause KeyError without escaping
+            return (True, "The error occurs because {url} is not in context", 0.1, "gpt-4")
+        if label == 'step7':
+            return (True, "FILES_CREATED: test.py", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    # Template for step 2 includes step1_output
+    def side_effect_load(name):
+        if "step2" in name:
+            return "Previous analysis: {step1_output}"
+        return "Prompt for {issue_number}"
+
+    mock_load.side_effect = side_effect_load
+
+    # This should NOT raise KeyError - the curly braces should be escaped
+    success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    # Should complete successfully (or at least not fail due to format string injection)
+    assert success is True, f"Should not fail due to curly braces in output: {msg}"
+    assert mock_run.call_count == 11  # All 11 steps should execute
+
+
+def test_curly_braces_in_restored_context_do_not_cause_keyerror(mock_dependencies, default_args, tmp_path):
+    """
+    Issue #393: Curly braces in restored step outputs should not cause KeyError on resume.
+
+    When resuming from saved state, step outputs containing {placeholder} patterns
+    should be escaped before being added to context.
+    """
+    import json
+    from pdd.agentic_bug_orchestrator import _get_state_dir
+
+    mock_run, mock_load, _ = mock_dependencies
+    default_args["cwd"] = tmp_path
+
+    # Create state file with step output containing curly braces
+    state_dir = _get_state_dir(tmp_path)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_file = state_dir / f"bug_state_{default_args['issue_number']}.json"
+
+    state = {
+        "workflow": "bug",
+        "issue_number": default_args["issue_number"],
+        "issue_url": default_args["issue_url"],
+        "last_completed_step": 2,
+        "step_outputs": {
+            "1": "No duplicates found",
+            # This output has curly braces that would cause KeyError without escaping
+            "2": "Bug analysis: The template uses {missing_key} which fails",
+        },
+        "total_cost": 0.2,
+        "model_used": "gpt-4",
+        "changed_files": [],
+        "worktree_path": None,
+    }
+    with open(state_file, "w") as f:
+        json.dump(state, f)
+
+    # Template for step 3 includes step2_output
+    def side_effect_load(name):
+        if "step3" in name:
+            return "Previous: {step2_output}"
+        return "Prompt for {issue_number}"
+
+    mock_load.side_effect = side_effect_load
+
+    def side_effect_run(*args, **kwargs):
+        label = kwargs.get('label', '')
+        if label == 'step7':
+            return (True, "FILES_CREATED: test.py", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    # This should NOT raise KeyError - restored outputs should be escaped
+    success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is True, f"Should not fail due to curly braces in restored output: {msg}"
+
+
+def test_keyerror_prints_to_console(mock_dependencies, default_args):
+    """
+    Issue #393: KeyError during prompt formatting should print error to console.
+
+    Bug: When a KeyError occurs during prompt formatting, the error was caught
+    but never printed, making debugging impossible.
+
+    Fix: Print the error message to console before returning.
+    """
+    mock_run, mock_load, mock_console = mock_dependencies
+
+    # Return a template that requires a key not present in context
+    mock_load.return_value = "This template needs {non_existent_key}"
+
+    # Run with quiet=False to verify console output
+    default_args["quiet"] = False
+
+    success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is False
+    assert "formatting error" in msg.lower() or "missing" in msg.lower()
+
+    # Verify console.print was called with the error message
+    print_calls = [str(call) for call in mock_console.print.call_args_list]
+    error_printed = any("error" in call.lower() and "non_existent_key" in call.lower()
+                       for call in print_calls)
+    assert error_printed, (
+        f"KeyError should be printed to console. Print calls: {print_calls}"
+    )
+
+
+def test_resume_message_shows_step_5_5_not_step_6(mock_dependencies, default_args, tmp_path):
+    """
+    Issue #393: Resume message should show step 5.5, not step 6, when resuming after step 5.
+
+    Bug: When last_completed_step=5, the resume message said "Resuming from step 6"
+    but the actual start step was 5.5, causing confusion.
+
+    Fix: Calculate actual start step before printing resume message.
+    """
+    import json
+    from pdd.agentic_bug_orchestrator import _get_state_dir
+
+    mock_run, mock_load, mock_console = mock_dependencies
+    default_args["cwd"] = tmp_path
+    default_args["quiet"] = False  # Enable console output to verify message
+
+    # Create state file with last_completed_step=5
+    state_dir = _get_state_dir(tmp_path)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_file = state_dir / f"bug_state_{default_args['issue_number']}.json"
+
+    state = {
+        "workflow": "bug",
+        "issue_number": default_args["issue_number"],
+        "issue_url": default_args["issue_url"],
+        "last_completed_step": 5,  # Step 5 completed, next should be 5.5
+        "step_outputs": {
+            "1": "ok", "2": "ok", "3": "ok", "4": "ok", "5": "ok"
+        },
+        "total_cost": 0.5,
+        "model_used": "gpt-4",
+        "changed_files": [],
+        "worktree_path": None,
+    }
+    with open(state_file, "w") as f:
+        json.dump(state, f)
+
+    def side_effect_run(*args, **kwargs):
+        label = kwargs.get('label', '')
+        if label == 'step7':
+            return (True, "FILES_CREATED: test.py", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    run_agentic_bug_orchestrator(**default_args)
+
+    # Verify the resume message shows step 5.5, not step 6
+    print_calls = [str(call) for call in mock_console.print.call_args_list]
+    resume_msg = next((call for call in print_calls if "Resuming" in call), None)
+
+    assert resume_msg is not None, "Resume message should be printed"
+    assert "5.5" in resume_msg, (
+        f"Resume message should say 'Resuming from step 5.5', got: {resume_msg}"
+    )
+    # Make sure it doesn't incorrectly say step 6
+    assert "from step 6" not in resume_msg.lower(), (
+        f"Resume message should NOT say 'from step 6' when resuming to 5.5: {resume_msg}"
+    )
+
+
+def test_resume_message_shows_step_6_after_step_5_5(mock_dependencies, default_args, tmp_path):
+    """
+    Issue #393: Resume message should show step 6 when last_completed_step is 5.5.
+    """
+    import json
+    from pdd.agentic_bug_orchestrator import _get_state_dir
+
+    mock_run, mock_load, mock_console = mock_dependencies
+    default_args["cwd"] = tmp_path
+    default_args["quiet"] = False
+
+    # Create state file with last_completed_step=5.5
+    state_dir = _get_state_dir(tmp_path)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_file = state_dir / f"bug_state_{default_args['issue_number']}.json"
+
+    state = {
+        "workflow": "bug",
+        "issue_number": default_args["issue_number"],
+        "issue_url": default_args["issue_url"],
+        "last_completed_step": 5.5,  # Step 5.5 completed, next should be 6
+        "step_outputs": {
+            "1": "ok", "2": "ok", "3": "ok", "4": "ok", "5": "ok", "5.5": "ok"
+        },
+        "total_cost": 0.6,
+        "model_used": "gpt-4",
+        "changed_files": [],
+        "worktree_path": None,
+    }
+    with open(state_file, "w") as f:
+        json.dump(state, f)
+
+    def side_effect_run(*args, **kwargs):
+        label = kwargs.get('label', '')
+        if label == 'step7':
+            return (True, "FILES_CREATED: test.py", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    run_agentic_bug_orchestrator(**default_args)
+
+    # Verify the resume message shows step 6
+    print_calls = [str(call) for call in mock_console.print.call_args_list]
+    resume_msg = next((call for call in print_calls if "Resuming" in call), None)
+
+    assert resume_msg is not None, "Resume message should be printed"
+    assert "from step 6" in resume_msg.lower() or "step 6" in resume_msg, (
+        f"Resume message should say 'Resuming from step 6' after 5.5 completed, got: {resume_msg}"
+    )
