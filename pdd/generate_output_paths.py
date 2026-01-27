@@ -445,7 +445,9 @@ def generate_output_paths(
             try:
                 absolute_path = os.path.abspath(final_path)
                 result_paths[output_key] = absolute_path
-                logger.info(f"Determined path for '{output_key}' ({source}): {absolute_path}")
+                # Use DEBUG level since these paths may be overridden by outputs.code.path config
+                # in sync_determine_operation._generate_paths_from_templates()
+                logger.debug(f"Determined path for '{output_key}' ({source}): {absolute_path}")
             except Exception as e:
                  logger.error(f"Failed to resolve path '{final_path}' to absolute path: {e}")
                  # Decide how to handle: skip, use relative, raise error? Using relative for now.
