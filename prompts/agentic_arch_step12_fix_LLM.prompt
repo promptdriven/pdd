@@ -429,7 +429,7 @@ rm -f src/*.ts src/*.tsx 2>/dev/null  # If code was wrongly placed in src/
 rm -f .pdd/meta/*_run.json 2>/dev/null           # Old run metadata
 rm -rf .pdd/backups/* 2>/dev/null                 # Failed attempt backups
 rm -f .pdd/locks/*.lock 2>/dev/null               # Stale locks
-rm -f .pdd/core_dumps/*.json 2>/dev/null          # Old debug snapshots
+rm -f .pdd/core_dumps/*.json 2>/dev/null          # Old PDD core_dump debug snapshots created when runs crash or hit internal errors
 
 # E. Clean up stale preprocessed files
 find . -name "*_preprocessed.prompt" -delete 2>/dev/null
