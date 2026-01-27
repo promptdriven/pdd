@@ -28,7 +28,7 @@ For CLI users, PDD also offers powerful **agentic commands** that implement GitH
 - `pdd change <issue-url>` - Implement feature requests (12-step workflow)
 - `pdd bug <issue-url>` - Create failing tests for bugs
 - `pdd fix <issue-url>` - Fix the failing tests
-- `pdd generate <issue-url>` - Generate architecture.json from a PRD issue (8-step workflow)
+- `pdd generate <issue-url>` - Generate architecture.json from a PRD issue (11-step workflow)
 - `pdd test <issue-url>` - Generate UI tests from issue descriptions (9-step workflow)
 
 For prompt-based workflows, the **`sync`** command automates the complete development cycle with intelligent decision-making, real-time visual feedback, and sophisticated state management.
@@ -796,8 +796,6 @@ Options:
 - `--skip-tests`: Skip unit test generation and fixing
 - `--target-coverage FLOAT`: Desired code coverage percentage (default is 90.0)
 - `--dry-run`: Display real-time sync analysis for this basename instead of running sync operations. This performs the same state analysis as a normal sync run but without acquiring exclusive locks or executing any operations, allowing inspection even when another sync process is active.
-- `--no-steer`: Disable interactive steering during the sync process. By default, PDD may pause at key decision points (e.g., choosing the next operation) and allow you to select between multiple valid options instead of automatically choosing one. Use this flag to disable steering and rely solely on automatic heuristics.
-- `--steer-timeout FLOAT`: Timeout in seconds for steering prompts (default: 8.0). When steering is enabled, this controls how long to wait for user input before selecting the recommended option.
 
 **Real-time Progress Animation**:
 The sync command provides live visual feedback showing:
@@ -809,8 +807,6 @@ The sync command provides live visual feedback showing:
   - Blue: File analysis in progress
 - Running cost totals and time elapsed
 - Progress through the workflow steps
-
-By default, the animation may temporarily pause to present interactive choices (such as selecting which operation to run next). Your selection immediately influences the remaining workflow and the animation resumes with the chosen path. Use `--no-steer` to disable this behavior.
 
 **Language Detection**:
 The sync command automatically detects the programming language by scanning for existing prompt files matching the pattern `{basename}_{language}.prompt` in the prompts directory. For example:
@@ -841,8 +837,6 @@ The sync command automatically detects what files exist and executes the appropr
 6. **test**: Generate comprehensive unit tests if they don't exist (unless --skip-tests)
 7. **fix**: Resolve any bugs found by unit tests
 8. **update**: Back-propagate any learnings to the prompt file
-
-By default, PDD will surface multiple viable workflow paths when they exist and let you steer the execution interactively rather than relying solely on automatic heuristics. Use `--no-steer` to disable interactive steering.
 
 **Advanced Decision Making**:
 - **Fingerprint-based Change Detection**: Uses content hashes and timestamps to precisely detect what changed
@@ -919,12 +913,6 @@ pdd --verbose sync --dry-run factorial_calculator
 
 # Monitor what sync would do without executing (with state analysis)
 pdd sync --dry-run calculator
-
-# Interactive sync with manual steering at decision points (steering enabled by default)
-pdd sync calculator
-
-# Disable interactive steering to rely solely on automatic heuristics
-pdd sync --no-steer calculator
 
 # Context-aware examples with automatic configuration detection
 cd backend && pdd --force sync calculator     # Uses backend context settings with animation
@@ -1018,21 +1006,33 @@ pdd [GLOBAL OPTIONS] generate --output src/calculator.py  --original-prompt old_
 
 **Agentic Architecture Mode:**
 
-When the positional argument is a GitHub issue URL instead of a prompt file, `generate` enters agentic architecture mode. The issue body serves as the PRD (Product Requirements Document), and an 8-step agentic workflow generates `architecture.json` automatically.
+When the positional argument is a GitHub issue URL instead of a prompt file, `generate` enters agentic architecture mode. The issue body serves as the PRD (Product Requirements Document), and an 11-step agentic workflow generates `architecture.json`, `.pddrc`, and prompt files automatically.
 
 ```bash
 pdd generate https://github.com/owner/repo/issues/42
 ```
 
-The 8-step workflow:
+The 11-step workflow:
+
+**Analysis & Generation (Steps 1-8):**
 1. **Analyze PRD**: Extract features, tech stack, and requirements from the issue content
 2. **Deep Analysis**: Feature decomposition, module boundaries, shared concerns
 3. **Research**: Web search for tech stack documentation and best practices
 4. **Design**: Module breakdown with dependency graph and priority ordering
 5. **Research Dependencies**: Find relevant API docs and code examples per module
-6. **Generate**: Produce complete `architecture.json` with proper priorities
-7. **Validate**: Check for circular deps, priority ordering, missing deps
-8. **Fix**: Auto-fix validation issues (loops back to step 7, max 5 iterations)
+6. **Generate**: Produce complete `architecture.json` and scaffolding files
+7. **Generate .pddrc**: Create project configuration with context-specific paths
+8. **Generate Prompts**: Create prompt files for each module in `architecture.json`
+
+**Validation (Steps 9-11):**
+9. **Completeness Validation**: Verify all modules have prompts and dependencies
+10. **Sync Validation**: Run `pdd sync --dry-run` on each module to catch path issues
+11. **Dependency Validation**: Preprocess prompts to verify `<include>` tags resolve
+
+Each validation step retries up to 3 times with automatic fixes before proceeding.
+
+**Options:**
+- `--skip-prompts`: Skip prompt file generation (steps 8-11), only generate `architecture.json` and `.pddrc`
 
 Prerequisites:
 - `gh` CLI must be installed and authenticated
@@ -1045,7 +1045,11 @@ Prerequisites:
 Example:
 ```bash
 pdd generate https://github.com/myorg/myrepo/issues/42
-# Generates: architecture.json + architecture_diagram.html
+# Generates: architecture.json, architecture_diagram.html, .pddrc, prompts/*.prompt
+
+# Skip prompt generation (faster, just architecture)
+pdd generate --skip-prompts https://github.com/myorg/myrepo/issues/42
+# Generates: architecture.json, architecture_diagram.html, .pddrc
 ```
 
 #### Prompt Templates

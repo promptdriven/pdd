@@ -75,6 +75,40 @@ This tutorial walks through implementing a GitHub issue using PDD.
    - The PR is updated with the fix
    - Review and merge when ready
 
+### Method 4: Generating Tests (UI, CLI, or API)
+
+1. **Create a GitHub Issue**
+   - Describe what needs to be tested:
+     - **Web UI**: Webpage URL, screenshots, expected behaviors
+     - **CLI**: Commands to test, expected outputs
+     - **API**: Endpoints to test, HTTP methods, expected responses
+   - Include examples of expected behavior
+   - Specify what elements/interactions/responses should be verified
+
+2. **Generate Tests**
+   ```bash
+   pdd test https://github.com/myorg/myrepo/issues/789
+   ```
+   This analyzes the target and creates comprehensive tests (Playwright for web, pytest for CLI, pytest+requests for API).
+
+3. **Handle Clarifying Questions**
+   - If PDD needs more information (e.g., credentials, test environment setup, API authentication), it posts questions to the issue
+   - Answer them in the GitHub issue comments
+   - Run `pdd test` again to resume
+
+4. **Review the Generated Tests**
+   - The PR contains tests for the specified target:
+     - **Web UI**: Playwright tests
+     - **CLI**: pytest with subprocess
+     - **API**: pytest with requests/httpx
+   - Review and adjust tests as needed
+
+5. **Fix Any Issues Found**
+   ```bash
+   pdd fix https://github.com/myorg/myrepo/issues/789
+   ```
+   Use this if tests reveal bugs that need fixing.
+
 ### Tips
 
 - **Resume from anywhere**: Workflow state is saved to GitHub, so you can continue on any machine
@@ -428,7 +462,7 @@ Remember: Regression tests are crucial for maintaining system stability. They sh
 
 ## Method 4: Generating Architecture from a PRD (GitHub Issue)
 
-Instead of manually writing `architecture.json`, you can point `pdd generate` at a GitHub issue containing your PRD. An 8-step agentic workflow will analyze the PRD, research the tech stack, and produce a validated `architecture.json`.
+Instead of manually writing `architecture.json`, you can point `pdd generate` at a GitHub issue containing your PRD. An 11-step agentic workflow will analyze the PRD, research the tech stack, generate `architecture.json`, create `.pddrc` configuration, and produce prompt files for each module.
 
 ### Prerequisites
 
@@ -450,18 +484,19 @@ Instead of manually writing `architecture.json`, you can point `pdd generate` at
    - Analyzes your PRD for features and tech stack
    - Researches documentation and best practices
    - Designs the module breakdown with dependency ordering
-   - Generates and validates `architecture.json`
+   - Generates `architecture.json` and `.pddrc` configuration
+   - Creates prompt files for each module
+   - Validates completeness, sync configuration, and dependencies
 
 4. **Review the output**: The workflow produces:
    - `architecture.json` - Module definitions with priorities and dependencies
    - `architecture_diagram.html` - Interactive Mermaid visualization
+   - `.pddrc` - Project configuration with context-specific paths
+   - `prompts/*.prompt` - Prompt files for each module (unless `--skip-prompts`)
 
-5. **Generate prompts from architecture**:
+5. **Run sync on generated prompts** (prompts are already generated):
    ```bash
-   pdd generate --template generic/generate_prompt \
-     -e MODULE=orders_api -e LANG_OR_FRAMEWORK=Python \
-     -e ARCHITECTURE_FILE=architecture.json \
-     --output prompts/orders_api_Python.prompt
+   pdd sync my_module
    ```
 
 ### Resuming a Failed Run
