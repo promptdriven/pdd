@@ -1007,6 +1007,8 @@ def code_generator_main(
                             # First expand $VARS using existing helper, then {TOKENS}
                             expanded = _expand_vars(arg, env_vars)
                             for key, val in placeholder_map.items():
+                                # Handle both double braces (YAML escaping) and single braces
+                                expanded = expanded.replace('{{' + key + '}}', val)
                                 expanded = expanded.replace('{' + key + '}', val)
                             return expanded
                         args_list = [_subst_arg(a) for a in fm_args]
