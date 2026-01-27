@@ -283,3 +283,280 @@ def test_write_pretty_architecture_json(tmp_path):
     assert content.startswith('[\n  {\n')
     assert content.endswith('\n')
     assert json.loads(content) == data
+
+
+# --- Tests for XSS Prevention (Issue #411) ---
+class TestXSSPrevention:
+    """
+    Test suite for XSS vulnerability prevention in Mermaid diagram tooltips.
+
+    These tests verify that user-controlled data from architecture.json is properly
+    HTML-escaped before being embedded in the generated HTML. The vulnerability exists
+    at lines 120-127 in pdd/render_mermaid.py where user data is copied without
+    HTML escaping before being embedded in JSON that will be rendered via innerHTML.
+
+    All tests should FAIL with the current vulnerable code and PASS after applying
+    html.escape() to all user-controlled fields.
+    """
+
+    def test_xss_prevention_in_all_tooltip_fields(self):
+        """
+        Test 1: Verify all tooltip fields properly escape HTML special characters.
+
+        This is the primary test that covers all 6 vulnerable fields identified in
+        the root cause analysis: filename, description, tags, dependencies, filepath,
+        and priority. Each field receives an XSS payload, and we verify that HTML
+        entities are used instead of raw HTML characters.
+        """
+        arch = [{
+            "filename": "test<img src=x onerror=alert('XSS')>.py",
+            "description": "Normal text<script>alert('XSS')</script>",
+            "tags": ["api", "<img src=x onerror=alert('XSS')>"],
+            "dependencies": ["utils<script>alert(1)</script>"],
+            "filepath": "/src/test<svg/onload=alert('XSS')>.py",
+            "priority": "<High>",
+        }]
+
+        html_doc = generate_html("", arch, "Test App")
+
+        # Extract the JSON from the generated HTML
+        json_str = html_doc.split('const moduleData = ')[1].split(';')[0]
+
+        # Verify HTML special characters are escaped in the JSON string
+        # After fix: should contain &lt; &gt; instead of < >
+        # Before fix: contains raw < > characters, creating XSS vulnerability
+        assert '&lt;img' in json_str or '\\u003c' in json_str, \
+            "filename field: < character should be escaped (as &lt; or \\u003c)"
+        assert '&lt;script&gt;' in json_str or '\\u003cscript\\u003e' in json_str, \
+            "description field: <script> tags should be escaped"
+        assert '&lt;svg' in json_str or '\\u003csvg' in json_str, \
+            "filepath field: <svg tag should be escaped"
+        assert '&lt;High&gt;' in json_str or '\\u003cHigh\\u003e' in json_str, \
+            "priority field: < > should be escaped"
+
+        # Verify that unescaped XSS payloads are NOT present
+        assert '<img src=x onerror=' not in json_str, \
+            "Raw XSS payload should not be present in JSON"
+        assert '<script>alert(' not in json_str, \
+            "Unescaped script tags should not be present in JSON"
+
+    def test_xss_in_filename_field(self):
+        """
+        Test 2: XSS prevention in filename field.
+
+        Verifies that malicious HTML/JavaScript in the filename is properly escaped.
+        """
+        arch = [{
+            "filename": "test<img src=x onerror=alert('XSS-filename')>.py",
+        }]
+
+        html_doc = generate_html("", arch, "Test App")
+        json_str = html_doc.split('const moduleData = ')[1].split(';')[0]
+
+        # After fix: should be escaped
+        assert '&lt;img' in json_str or '\\u003cimg' in json_str, \
+            "filename: <img tag should be HTML-escaped"
+        # Before fix: unescaped payload is present
+        assert '<img src=x onerror=' not in json_str, \
+            "filename: unescaped XSS payload should not be present"
+
+    def test_xss_in_description_field(self):
+        """
+        Test 3: XSS prevention in description field.
+
+        Verifies that malicious script tags in description are properly escaped.
+        """
+        arch = [{
+            "filename": "safe.py",
+            "description": "Normal text<script>alert('XSS-description')</script>more text",
+        }]
+
+        html_doc = generate_html("", arch, "Test App")
+        json_str = html_doc.split('const moduleData = ')[1].split(';')[0]
+
+        # After fix: should contain escaped HTML entities
+        assert '&lt;script&gt;' in json_str or '\\u003cscript\\u003e' in json_str, \
+            "description: <script> tags should be HTML-escaped"
+        # Before fix: unescaped script tags present
+        assert '<script>alert(' not in json_str, \
+            "description: unescaped script tags should not be present"
+
+    def test_xss_in_tags_array(self):
+        """
+        Test 4: XSS prevention in tags array.
+
+        Verifies that malicious HTML in tags array elements is properly escaped.
+        Tags are arrays that get joined with commas in the tooltip rendering.
+        """
+        arch = [{
+            "filename": "api.py",
+            "tags": ["api", "<img src=x onerror=fetch('https://evil.com')>", "backend"],
+        }]
+
+        html_doc = generate_html("", arch, "Test App")
+        json_str = html_doc.split('const moduleData = ')[1].split(';')[0]
+        data = json.loads(json_str)
+
+        # After fix: malicious tag should be escaped in the JSON
+        malicious_tag = data["api"]["tags"][1]
+        assert '&lt;img' in json_str or not malicious_tag.startswith('<img'), \
+            "tags: malicious tag elements should be HTML-escaped"
+        # Before fix: contains unescaped HTML
+        assert not malicious_tag.startswith('<img src=x onerror='), \
+            "tags: unescaped XSS payload should not be present"
+
+    def test_xss_in_dependencies_array(self):
+        """
+        Test 5: XSS prevention in dependencies array.
+
+        Verifies that malicious HTML in dependencies array is properly escaped.
+        """
+        arch = [{
+            "filename": "main.py",
+            "dependencies": ["utils<script>alert('XSS-deps')</script>", "helpers"],
+        }]
+
+        html_doc = generate_html("", arch, "Test App")
+        json_str = html_doc.split('const moduleData = ')[1].split(';')[0]
+
+        # After fix: should be escaped
+        assert '&lt;script&gt;' in json_str or '\\u003cscript\\u003e' in json_str, \
+            "dependencies: <script> tags should be HTML-escaped"
+        # Before fix: unescaped
+        assert '<script>alert(' not in json_str, \
+            "dependencies: unescaped script tags should not be present"
+
+    def test_xss_in_filepath_field(self):
+        """
+        Test 6: XSS prevention in filepath field.
+
+        Verifies that malicious SVG/HTML in filepath is properly escaped.
+        """
+        arch = [{
+            "filename": "test.py",
+            "filepath": "/src/components/test<svg/onload=alert('XSS-filepath')>.py",
+        }]
+
+        html_doc = generate_html("", arch, "Test App")
+        json_str = html_doc.split('const moduleData = ')[1].split(';')[0]
+
+        # After fix: should be escaped
+        assert '&lt;svg' in json_str or '\\u003csvg' in json_str, \
+            "filepath: <svg tag should be HTML-escaped"
+        # Before fix: unescaped
+        assert '<svg/onload=' not in json_str, \
+            "filepath: unescaped SVG XSS should not be present"
+
+    def test_xss_multiple_vectors_simultaneously(self):
+        """
+        Test 7: Multiple XSS vectors across different modules.
+
+        Verifies that when multiple modules each have different XSS payloads,
+        all are properly escaped.
+        """
+        arch = [
+            {
+                "filename": "module1<script>alert(1)</script>.py",
+                "description": "First module",
+            },
+            {
+                "filename": "module2.py",
+                "description": "Second<img src=x onerror=alert(2)>",
+            },
+            {
+                "filename": "module3.py",
+                "tags": ["<svg onload=alert(3)>"],
+            },
+        ]
+
+        html_doc = generate_html("", arch, "Test App")
+        json_str = html_doc.split('const moduleData = ')[1].split(';')[0]
+
+        # After fix: all should be escaped
+        assert '<script>alert(1)' not in json_str, \
+            "module1 XSS should be escaped"
+        assert '<img src=x onerror=alert(2)' not in json_str, \
+            "module2 XSS should be escaped"
+        assert '<svg onload=alert(3)' not in json_str, \
+            "module3 XSS should be escaped"
+
+    def test_xss_priority_field_edge_case(self):
+        """
+        Test 8: XSS prevention in priority field with special characters.
+
+        Priority can be a number or string. Test that string priority values
+        with HTML are properly escaped.
+        """
+        arch = [{
+            "filename": "test.py",
+            "priority": "<High>",
+        }]
+
+        html_doc = generate_html("", arch, "Test App")
+        json_str = html_doc.split('const moduleData = ')[1].split(';')[0]
+
+        # After fix: should be escaped
+        assert '&lt;High&gt;' in json_str or '\\u003cHigh\\u003e' in json_str, \
+            "priority: < > characters should be HTML-escaped"
+        # Before fix: unescaped
+        assert '"priority": "<High>"' not in json_str, \
+            "priority: unescaped < > should not be present"
+
+    def test_regression_legitimate_special_characters(self):
+        """
+        Test 9: Regression test - ensure legitimate characters still work.
+
+        Verifies that the fix doesn't break legitimate use of special characters
+        like quotes, apostrophes, and Unicode.
+        """
+        arch = [{
+            "filename": "user's_file.py",
+            "description": 'A "quoted" description with unicode: café',
+            "tags": ["it's", "api"],
+            "priority": 1,
+        }]
+
+        html_doc = generate_html("", arch, "Test App")
+        json_str = html_doc.split('const moduleData = ')[1].split(';')[0]
+
+        # Should be valid JSON
+        data = json.loads(json_str)
+
+        # Data should be preserved correctly (JSON handles quotes/apostrophes)
+        assert "user's_file" in data or "user\\'s_file" in str(data)
+        assert '"quoted"' in data["user's_file"]["description"] or \
+               '\"quoted\"' in str(data["user's_file"]["description"])
+        assert data["user's_file"]["priority"] == 1
+
+    def test_empty_and_default_values_escaping(self):
+        """
+        Test 10: XSS prevention with empty values and defaults.
+
+        Verifies that default values like "N/A" and "No description" are safe,
+        and empty arrays/strings don't cause issues with escaping.
+        """
+        arch = [
+            {
+                "filename": "minimal.py",
+                # Missing optional fields - will use defaults
+            },
+            {
+                "filename": "empty<script>.py",
+                "description": "",
+                "tags": [],
+                "dependencies": [],
+                "filepath": "",
+            },
+        ]
+
+        html_doc = generate_html("", arch, "Test App")
+        json_str = html_doc.split('const moduleData = ')[1].split(';')[0]
+        data = json.loads(json_str)
+
+        # Verify defaults are used
+        assert data["minimal"]["priority"] == "N/A"
+        assert data["minimal"]["description"] == "No description"
+
+        # Verify empty filename still gets escaped
+        assert '<script>' not in json_str, \
+            "XSS in filename should be escaped even with empty other fields"
