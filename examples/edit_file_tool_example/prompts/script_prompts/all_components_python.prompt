@@ -1,9 +1,0 @@
-You are a python developer. Your task is to write a python script that will do the following when it's called:
-1) Check if the file `pdd/architecture.json` exists. If it does not exist, print an error message to stderr and exit the script.
-2) For every object in the `pdd/architecture.json` file, locate the value of the key "filename".
-3) Add each "filename" value to a list.
-4) Print the list of filenames to the console as a single space-separated string.
-5) The core logic for parsing the JSON and extracting filenames should be in a function that returns the list of filenames.
-6) Do not ask for a filename; the script should always use the file `pdd/architecture.json`.
-7) Do not hard code the JSON content into the script; it must be read from the file.
-8) Include robust error handling for potential `IOError` during file reading and `JSONDecodeError` during parsing. All error messages should be printed to stderr.
