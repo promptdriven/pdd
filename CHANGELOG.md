@@ -2,21 +2,33 @@
 
 ### Feat
 
-- Add draggable task queue panel and --skip-prompts option
-- Refactor agentic architecture workflow from 8 to 11 steps
-- Add steerable option to pdd sync + fix TUI resize issues
-- add a new hello example and suppress SyntaxWarning during `ast.parse` in `unfinished_prompt.py`.
-- suppress SyntaxWarning during AST parsing, and refine sync configuration.
+- **agentic architecture**: Expanded workflow from 8 to 11 steps. New steps: Step 7 generates `.pddrc`, Step 8 generates prompts, Steps 9-11 validate completeness/sync/dependencies with in-place fixing.
+- **draggable task queue panel**: Task queue panel in web UI can now be dragged and repositioned. Position is persisted to localStorage.
+- **--skip-prompts option**: New flag for `pdd generate` to skip Step 8 (prompt generation) and validation steps 9-11 in agentic architecture mode.
+- **SyntaxWarning suppression**: `ast.parse()` calls in `unfinished_prompt.py` now suppress `SyntaxWarning` for cleaner output when parsing partial code.
 
 ### Fix
 
-- Resolve AsyncMock unawaited coroutine warnings in tests
-- Update tests to handle double-brace template placeholders
-- Update tests and fix double-brace placeholder substitution
-- Improve non-Python sync and frontend file detection
-- Resolve silent failure at step 5.5 in pdd bug command (#393)
-- Improve remote session connectivity with token refresh and heartbeat fixes
-- Bug: File Handle Resource Leak in SyncLock.acquire()
+- **file handle leak (Issue #403)**: Fixed resource leak in `SyncLock.acquire()` where file descriptors were not closed on non-IOError exceptions (e.g., `KeyboardInterrupt`). Added try-finally block to ensure cleanup. Thanks Serhan Asad!
+- **step 5.5 silent failure (Issue #393)**: Fixed `KeyError` during prompt formatting in `pdd bug` by escaping curly braces in LLM outputs before storing in context.
+- **remote session reliability**: Improved `pdd connect` with immediate first heartbeat, 30-second intervals (was 60s), retry logic with exponential backoff, and automatic JWT token refresh on 401 errors.
+- **non-Python sync**: Skip `test_extend` operation for non-Python languages (coverage tooling is Python-specific). Also ensure example/test paths always have fallback defaults.
+- **frontend file detection**: Support new `outputs.code.path` and `outputs.test.path` config format in file route discovery.
+- **double-brace placeholders**: Fixed tests and template handling for `{{` / `}}` escaped JSON in prompt templates.
+
+### Refactor
+
+- **architecture step prompts**: Renamed step 7 (`validate`) → step 9 (`completeness`), step 8 (`fix`) → step 12 (`fix`). Added new prompts for steps 7 (`pddrc`), 8 (`prompts`), 10 (`sync`), 11 (`deps`).
+
+### Docs
+
+- Update architecture workflow documentation from 8 to 11 steps
+- Clarify `core_dumps` comment in fix prompt
+
+### Build
+
+- **deleted prompts**: Removed `agentic_arch_step7_validate_LLM.prompt` and `agentic_arch_step8_fix_LLM.prompt` (replaced by new step structure)
+- **new test**: Added E2E test suite for Issue #403 file handle leak (`test_e2e_issue_403_file_handle_leak.py`)
 
 ## v0.0.130 (2026-01-25)
 
