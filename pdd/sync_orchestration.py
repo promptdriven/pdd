@@ -1116,15 +1116,6 @@ def sync_orchestration(
                             break
 
                     if operation == 'test_extend':
-                        # Skip test_extend for non-Python languages - code coverage tooling is Python-specific
-                        # This is a safety check in case sync_determine_operation doesn't catch it
-                        if language.lower() != 'python':
-                            log_event(basename, language, "test_extend_skipped", {
-                                "reason": f"test_extend not supported for {language}, accepting current state"
-                            }, invocation_mode="sync")
-                            success = True
-                            break
-
                         # Count test_extend attempts to prevent infinite loop
                         extend_attempts = sum(1 for op in operation_history if op == 'test_extend')
                         if extend_attempts >= MAX_TEST_EXTEND_ATTEMPTS:

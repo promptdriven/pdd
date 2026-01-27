@@ -1585,44 +1585,9 @@ def test_deepseek_maas_passes_response_format_for_structured_output(mock_set_llm
     from pdd.llm_invoke import _load_model_data
     real_data = _load_model_data(None)  # None uses package default CSV path
 
-    # Filter to only include a DeepSeek MaaS model.
-    # Model IDs can change; prefer a stable match over a single hard-coded string.
-    candidates = [
-        "vertex_ai/deepseek-ai/deepseek-v3.2-maas",
-        "vertex_ai/deepseek-ai/deepseek-v3-2-maas",
-        "vertex_ai/deepseek-ai/deepseek-v3.1-maas",
-        "vertex_ai/deepseek-ai/deepseek-v3-1-maas",
-        "vertex_ai/deepseek-ai/deepseek-v3-maas",
-        "vertex_ai/deepseek-ai/deepseek-r1-0528-maas",
-    ]
-
-    deepseek_data = pd.DataFrame()
-    for mid in candidates:
-        deepseek_data = real_data[real_data["model"] == mid].copy()
-        if len(deepseek_data) == 1:
-            break
-
-    # Fallback: pick any DeepSeek MaaS row if none of the known IDs are present
-    if deepseek_data.empty:
-        deepseek_data = real_data[
-            real_data["model"].astype(str).str.startswith("vertex_ai/deepseek-ai/")
-            & real_data["model"].astype(str).str.contains("maas", case=False, na=False)
-        ].copy()
-
-    if deepseek_data.empty:
-        available = sorted(
-            real_data[real_data["model"].astype(str).str.startswith("vertex_ai/deepseek-ai/")]["model"].astype(str).unique()
-        )
-        pytest.skip(
-            "DeepSeek MaaS model not found in packaged CSV; skipping structured output propagation check. "
-            + ("Available DeepSeek models: " + ", ".join(available) if available else "No DeepSeek models present.")
-        )
-
-    # If multiple DeepSeek MaaS rows exist, pick the first for the remainder of the test
-    if len(deepseek_data) > 1:
-        deepseek_data = deepseek_data.head(1).copy()
-
-    deepseek_model_id = str(deepseek_data.iloc[0]["model"])
+    # Filter to only include DeepSeek MaaS model
+    deepseek_data = real_data[real_data['model'] == 'vertex_ai/deepseek-ai/deepseek-v3.2-maas'].copy()
+    assert len(deepseek_data) == 1, "DeepSeek MaaS model not found in CSV"
 
     with patch('pdd.llm_invoke._load_model_data', return_value=deepseek_data):
         with patch.dict(os.environ, {'VERTEX_CREDENTIALS': 'fake_creds'}):
@@ -1631,7 +1596,7 @@ def test_deepseek_maas_passes_response_format_for_structured_output(mock_set_llm
                 json_response = '{"field1": "test_value", "field2": 42}'
                 mock_response = create_mock_litellm_response(
                     json_response,
-                    model_name=deepseek_model_id
+                    model_name='vertex_ai/deepseek-ai/deepseek-v3.2-maas'
                 )
                 mock_completion.return_value = mock_response
 
@@ -1649,7 +1614,7 @@ def test_deepseek_maas_passes_response_format_for_structured_output(mock_set_llm
                 # Verify DeepSeek was called
                 mock_completion.assert_called_once()
                 call_args, call_kwargs = mock_completion.call_args
-                assert call_kwargs['model'] == deepseek_model_id, \
+                assert call_kwargs['model'] == 'vertex_ai/deepseek-ai/deepseek-v3.2-maas', \
                     f"Expected DeepSeek model, got {call_kwargs['model']}"
 
                 # EXPECTED: DeepSeek MaaS should have response_format passed
@@ -1685,14 +1650,10 @@ def test_vertex_ai_claude_opus_passes_response_format_for_structured_output(mock
 
     # Filter to only include Vertex AI Claude Opus model
     opus_data = real_data[real_data['model'] == 'vertex_ai/claude-opus-4-5'].copy()
-
-    if opus_data.empty:
-        pytest.skip(
-            "vertex_ai/claude-opus-4-5 not found in packaged CSV; skipping structured output propagation check."
-        )
+    assert len(opus_data) == 1, "Vertex AI Claude Opus model not found in CSV"
 
     # Verify CSV has structured_output=True
-    assert opus_data.iloc[0]['structured_output'], \
+    assert opus_data.iloc[0]['structured_output'] == True, \
         "vertex_ai/claude-opus-4-5 should have structured_output=True in CSV"
 
     with patch('pdd.llm_invoke._load_model_data', return_value=opus_data):
@@ -1751,11 +1712,7 @@ def test_structured_output_uses_strict_json_schema_mode(mock_set_llm_cache):
     # Use a model with structured_output=True
     real_data = _load_model_data(None)
     opus_data = real_data[real_data['model'] == 'vertex_ai/claude-opus-4-5'].copy()
-
-    if opus_data.empty:
-        pytest.skip(
-            "vertex_ai/claude-opus-4-5 not found in packaged CSV; skipping strict schema enforcement test."
-        )
+    assert len(opus_data) == 1, "Vertex AI Claude Opus model not found in CSV"
 
     with patch('pdd.llm_invoke._load_model_data', return_value=opus_data):
         with patch.dict(os.environ, {'VERTEX_CREDENTIALS': 'fake_creds'}):

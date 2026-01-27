@@ -28,7 +28,7 @@ For CLI users, PDD also offers powerful **agentic commands** that implement GitH
 - `pdd change <issue-url>` - Implement feature requests (12-step workflow)
 - `pdd bug <issue-url>` - Create failing tests for bugs
 - `pdd fix <issue-url>` - Fix the failing tests
-- `pdd generate <issue-url>` - Generate architecture.json from a PRD issue (11-step workflow)
+- `pdd generate <issue-url>` - Generate architecture.json from a PRD issue (8-step workflow)
 - `pdd test <issue-url>` - Generate UI tests from issue descriptions (9-step workflow)
 
 For prompt-based workflows, the **`sync`** command automates the complete development cycle with intelligent decision-making, real-time visual feedback, and sophisticated state management.
@@ -1006,33 +1006,21 @@ pdd [GLOBAL OPTIONS] generate --output src/calculator.py  --original-prompt old_
 
 **Agentic Architecture Mode:**
 
-When the positional argument is a GitHub issue URL instead of a prompt file, `generate` enters agentic architecture mode. The issue body serves as the PRD (Product Requirements Document), and an 11-step agentic workflow generates `architecture.json`, `.pddrc`, and prompt files automatically.
+When the positional argument is a GitHub issue URL instead of a prompt file, `generate` enters agentic architecture mode. The issue body serves as the PRD (Product Requirements Document), and an 8-step agentic workflow generates `architecture.json` automatically.
 
 ```bash
 pdd generate https://github.com/owner/repo/issues/42
 ```
 
-The 11-step workflow:
-
-**Analysis & Generation (Steps 1-8):**
+The 8-step workflow:
 1. **Analyze PRD**: Extract features, tech stack, and requirements from the issue content
 2. **Deep Analysis**: Feature decomposition, module boundaries, shared concerns
 3. **Research**: Web search for tech stack documentation and best practices
 4. **Design**: Module breakdown with dependency graph and priority ordering
 5. **Research Dependencies**: Find relevant API docs and code examples per module
-6. **Generate**: Produce complete `architecture.json` and scaffolding files
-7. **Generate .pddrc**: Create project configuration with context-specific paths
-8. **Generate Prompts**: Create prompt files for each module in `architecture.json`
-
-**Validation (Steps 9-11):**
-9. **Completeness Validation**: Verify all modules have prompts and dependencies
-10. **Sync Validation**: Run `pdd sync --dry-run` on each module to catch path issues
-11. **Dependency Validation**: Preprocess prompts to verify `<include>` tags resolve
-
-Each validation step retries up to 3 times with automatic fixes before proceeding.
-
-**Options:**
-- `--skip-prompts`: Skip prompt file generation (steps 8-11), only generate `architecture.json` and `.pddrc`
+6. **Generate**: Produce complete `architecture.json` with proper priorities
+7. **Validate**: Check for circular deps, priority ordering, missing deps
+8. **Fix**: Auto-fix validation issues (loops back to step 7, max 5 iterations)
 
 Prerequisites:
 - `gh` CLI must be installed and authenticated
@@ -1045,11 +1033,7 @@ Prerequisites:
 Example:
 ```bash
 pdd generate https://github.com/myorg/myrepo/issues/42
-# Generates: architecture.json, architecture_diagram.html, .pddrc, prompts/*.prompt
-
-# Skip prompt generation (faster, just architecture)
-pdd generate --skip-prompts https://github.com/myorg/myrepo/issues/42
-# Generates: architecture.json, architecture_diagram.html, .pddrc
+# Generates: architecture.json + architecture_diagram.html
 ```
 
 #### Prompt Templates
