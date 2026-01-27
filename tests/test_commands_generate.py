@@ -140,6 +140,7 @@ def test_cli_generate_github_issue_url_triggers_agentic_mode(mock_agentic, mock_
         issue_url="https://github.com/owner/repo/issues/42",
         verbose=False,
         quiet=False,
+        skip_prompts=False,
     )
     assert "Architecture generated" in result.output
 

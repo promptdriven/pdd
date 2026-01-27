@@ -1,0 +1,197 @@
+<pdd-reason>Validates architecture completeness: PRD coverage, layer completeness, dependency graph validity.</pdd-reason>
+<pdd-interface>
+{{
+  "type": "module",
+  "module": {{
+    "functions": [
+      {{"name": "validate_completeness", "signature": "(architecture_json: str, prd_summary: str)", "returns": "str ('VALID' or list of completeness errors)"}}
+    ]
+  }}
+}}
+</pdd-interface>
+<pdd-dependency>agentic_arch_step8_prompts_LLM.prompt</pdd-dependency>
+% You are an expert software architect. Your task is to validate that the architecture is COMPLETE and covers all PRD requirements.
+
+% Context
+
+You are working on step 9 of the agentic architecture workflow. Step 8 generated prompt files. Now validate that the architecture covers ALL requirements for a COMPLETE, COMPILABLE, RUNNABLE project - NOT just a skeleton.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Architecture to Validate
+<architecture_json>
+{step6_output}
+</architecture_json>
+
+% PRD Summary (from Step 1)
+<prd_summary>
+{step1_output}
+</prd_summary>
+
+% Validation Checks
+
+**1. PRD Coverage Check**
+
+Extract ALL features/requirements from the PRD summary and verify each has a corresponding module:
+
+```bash
+# List all modules
+cat architecture.json | jq -r '.[] | "\(.filename): \(.reason)"'
+```
+
+For EACH PRD requirement, find the module(s) that implement it:
+- User authentication → auth_middleware, login_page, etc.
+- Course management → api_courses_route, courses_page, etc.
+- Data persistence → database models, API routes, etc.
+
+**Flag as ERROR if:**
+- A PRD feature has NO corresponding module
+- A core user flow is incomplete (e.g., create without read/update/delete)
+
+**2. Layer Completeness Check**
+
+Based on the project type, verify all essential layers exist:
+
+**For Web Applications (React, Next.js, Vue, etc.):**
+- [ ] Entry point (page.tsx, index.tsx, App.tsx, +page.svelte)
+- [ ] Root layout (layout.tsx, App.tsx with Router)
+- [ ] All routes mentioned in PRD have pages
+- [ ] API routes for all data operations
+- [ ] Types/interfaces for data shapes
+- [ ] State management (if needed)
+
+**For Backend Services (FastAPI, Express, etc.):**
+- [ ] Main entry point (main.py, server.ts, app.ts)
+- [ ] All API endpoints from PRD
+- [ ] Database models/schemas for entities
+- [ ] Authentication/authorization (if mentioned)
+- [ ] Configuration management
+
+**For Full-Stack:**
+- [ ] All frontend requirements
+- [ ] All backend requirements
+- [ ] Shared types between frontend/backend
+
+Run layer check:
+```bash
+# Check for entry points
+cat architecture.json | jq -r '.[].filepath' | grep -E "(page\.|index\.|main\.|app\.|server\.)"
+
+# Check for API routes
+cat architecture.json | jq -r '.[].filepath' | grep -E "(route\.|api/|endpoint)"
+
+# Check for types/models
+cat architecture.json | jq -r '.[].filepath' | grep -E "(types|models|schemas|interfaces)"
+```
+
+**3. Dependency Graph Analysis**
+
+Verify the dependency graph is valid and complete:
+
+```bash
+# List all dependencies
+cat architecture.json | jq -r '.[] | "\(.filename) depends on: \(.dependencies | join(", "))"'
+
+# Find modules with no dependencies (should be base/config modules)
+cat architecture.json | jq -r '.[] | select(.dependencies | length == 0) | .filename'
+
+# Find modules that nothing depends on (should be entry points/pages)
+```
+
+**Check for:**
+- Circular dependencies (A→B→C→A)
+- Orphan modules (not connected to the graph, except config/types)
+- Missing dependency references (referencing non-existent modules)
+
+**4. Compilability Check**
+
+Verify the architecture would compile without import errors:
+
+- For TypeScript: All imported types should have corresponding type modules
+- For Python: All imported modules should exist
+- Shared utilities referenced by multiple modules should exist
+
+% Output
+
+**1. Run all validation checks**
+
+Execute the actual commands and analyze results.
+
+**2. Output validation result marker**
+
+If ALL checks pass, output exactly on its own line:
+```
+VALIDATION_RESULT: VALID
+```
+
+If any checks fail, output:
+```
+VALIDATION_RESULT: INVALID
+```
+
+Followed by error details:
+```markdown
+## Completeness Validation Errors
+
+### PRD Coverage Gaps
+- [ ] Feature X: No module implements this
+- [ ] Feature Y: Incomplete implementation (missing update/delete)
+
+### Missing Layers
+- [ ] No root layout found
+- [ ] No type definitions for shared data
+
+### Dependency Graph Issues
+- [ ] Circular dependency: A → B → A
+- [ ] Orphan module: X is not connected
+
+### Compilability Issues
+- [ ] Module X imports Y which doesn't exist
+```
+
+**3. Post results to GitHub**
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+```markdown
+## Step 9: Architecture Completeness Validation
+
+**Status:** [VALID | INVALID]
+
+### PRD Coverage
+- Requirements found: [N]
+- Requirements covered: [M]/[N]
+- Missing: [list or "None"]
+
+### Layer Completeness
+- Entry points: [Yes/No]
+- API routes: [Yes/No]
+- Type definitions: [Yes/No]
+- State management: [Yes/No/N/A]
+
+### Dependency Graph
+- Circular dependencies: [None | list]
+- Orphan modules: [None | list]
+- Missing references: [None | list]
+
+### Errors (if any)
+[Detailed error list]
+
+---
+*[Proceeding to Step 10 | Returning to Step 12 for fixes]*
+```
+
+% Important
+
+- A skeleton is NOT valid - the architecture must cover ALL PRD requirements
+- Every user-facing feature needs: UI + API + data layer
+- Missing CRUD operations for an entity is an error
+- Orphan modules (except config/types/constants) indicate incomplete architecture
+- Always output `VALIDATION_RESULT: VALID` or `VALIDATION_RESULT: INVALID`
+- Always post findings to GitHub

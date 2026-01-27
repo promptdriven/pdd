@@ -14,7 +14,7 @@
 
 % Context
 
-You are working on step 6 of 8 in an agentic architecture workflow. All analysis and research is complete. Now generate the final architecture.json.
+You are working on step 6 of 12 in an agentic architecture workflow. All analysis and research is complete. Now generate the final architecture.json.
 
 % Architecture Schema Reference
 
@@ -65,7 +65,7 @@ Generate a complete, valid architecture.json following these rules:
    - `description`: Architectural responsibilities, interfaces, error handling
    - `dependencies`: Array of prompt filenames this module depends on
    - `priority`: Integer starting at 1, sequential without gaps
-   - `filename`: PDD convention `<base>_<LangOrFramework>.prompt`
+   - `filename`: PDD convention `<base>_<Language>.prompt` (see VALID LANGUAGE SUFFIXES below)
    - `filepath`: Framework-appropriate output path
 
 3. **Optional fields:**
@@ -78,11 +78,22 @@ Generate a complete, valid architecture.json following these rules:
    - If A depends on B, then B.priority < A.priority
    - Sequential integers: 1, 2, 3, ... (no gaps)
 
-5. **Filename conventions:**
-   - `<descriptive_base>_<LangOrFramework>.prompt`
-   - LangOrFramework matches the tech stack (Python, TypeScriptReact, Go, etc.)
+5. **VALID LANGUAGE SUFFIXES** (CRITICAL - use EXACTLY one of these):
+   - For TypeScript/JavaScript projects: `TypeScript`, `TypeScriptReact`, `JavaScript`, `JavaScriptReact`
+   - For Python projects: `Python`
+   - For other languages: `Go`, `Rust`, `Java`, `Prisma`, `SQL`, `YAML`, etc.
 
-6. **Interface types:**
+   **WRONG suffixes (DO NOT USE):**
+   - ❌ `NextJS`, `Next`, `Nextjs` → Use `TypeScript` or `TypeScriptReact`
+   - ❌ `React`, `ReactJS` → Use `TypeScriptReact` or `JavaScriptReact`
+   - ❌ `Node`, `NodeJS` → Use `TypeScript` or `JavaScript`
+   - ❌ `FastAPI`, `Flask` → Use `Python`
+
+6. **Filename conventions:**
+   - `<descriptive_base>_<Language>.prompt`
+   - Language is the PROGRAMMING LANGUAGE, not the framework name
+
+7. **Interface types:**
    - api: endpoints array with method, path, auth
    - module: functions array with name, signature, returns
    - page: route, params, dataSources
@@ -199,3 +210,18 @@ Use this matrix to determine which files to create based on the confirmed tech s
 - Include context_urls from step 5 where available
 - Always post your findings as a GitHub comment
 - Always output `FILES_CREATED:` with the complete list of ALL files created
+
+% ============================================================================
+% VERIFIED WORKING EXAMPLE - FOLLOW THIS PATTERN EXACTLY
+% ============================================================================
+
+This is a complete, verified working example for a Next.js project.
+Your architecture.json MUST follow this exact pattern for filename and filepath.
+
+<verified_working_example>
+<include>pdd/templates/architecture/example_nextjs_task_notes.prompt</include>
+</verified_working_example>
+
+% Now Generate
+
+Generate architecture.json following the pattern in the example above.

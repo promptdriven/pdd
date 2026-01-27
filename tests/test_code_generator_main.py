@@ -1714,6 +1714,10 @@ def test_architecture_postprocess_passes_absolute_input_path(
 
     template_path = pathlib.Path("pdd/templates/architecture/architecture_json.prompt").resolve()
     template_content = template_path.read_text(encoding="utf-8")
+    # Template uses double braces for YAML escaping; normalize to single for test
+    template_content = template_content.replace("{{INPUT_FILE}}", "{INPUT_FILE}")
+    template_content = template_content.replace("{{APP_NAME}}", "{APP_NAME}")
+    template_content = template_content.replace("{{OUTPUT_HTML}}", "{OUTPUT_HTML}")
 
     # Work inside the temp repo to mimic running `pdd` from project root with a relative --output
     monkeypatch.chdir(temp_dir_setup["tmp_path"])
@@ -1791,6 +1795,10 @@ def test_architecture_postprocess_rewrites_json_pretty(
     mock_subprocess_run_fixture.side_effect = render_side_effect
     template_path = pathlib.Path("pdd/templates/architecture/architecture_json.prompt").resolve()
     template_content = template_path.read_text(encoding="utf-8")
+    # Template uses double braces for YAML escaping; normalize to single for test
+    template_content = template_content.replace("{{INPUT_FILE}}", "{INPUT_FILE}")
+    template_content = template_content.replace("{{APP_NAME}}", "{APP_NAME}")
+    template_content = template_content.replace("{{OUTPUT_HTML}}", "{OUTPUT_HTML}")
 
     prompt_file_path = temp_dir_setup["prompts_dir"] / "architecture.prompt"
     create_file(prompt_file_path, template_content)

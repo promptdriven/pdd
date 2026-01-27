@@ -252,8 +252,15 @@ def run_agentic_bug_orchestrator(
 
     if state is not None:
         last_completed_step = state.get("last_completed_step", 0)
+        # Calculate actual start step before printing resume message (handle step 5.5)
+        if last_completed_step == 5:
+            resume_start_step: Union[int, float] = 5.5
+        elif last_completed_step == 5.5:
+            resume_start_step = 6
+        else:
+            resume_start_step = last_completed_step + 1
         if not quiet:
-            console.print(f"[yellow]Resuming from step {last_completed_step + 1} (steps 1-{last_completed_step} cached)[/yellow]")
+            console.print(f"[yellow]Resuming from step {resume_start_step} (steps 1-{last_completed_step} cached)[/yellow]")
 
         total_cost = state.get("total_cost", 0.0)
         last_model_used = state.get("model_used", "unknown")
@@ -277,8 +284,10 @@ def run_agentic_bug_orchestrator(
             context["worktree_path"] = str(worktree_path)
 
         # Restore context from step outputs
+        # Escape curly braces to prevent format string injection (Issue #393)
         for step_key, output in step_outputs.items():
-            context[f"step{step_key}_output"] = output
+            escaped_output = output.replace("{", "{{").replace("}", "}}")
+            context[f"step{step_key}_output"] = escaped_output
 
         # Restore files_to_stage if available
         if changed_files:
@@ -363,7 +372,10 @@ def run_agentic_bug_orchestrator(
         try:
             formatted_prompt = prompt_template.format(**context)
         except KeyError as e:
-            return False, f"Prompt formatting error in step {step_num}: missing {e}", total_cost, last_model_used, changed_files
+            msg = f"Prompt formatting error in step {step_num}: missing key {e}"
+            if not quiet:
+                console.print(f"[red]Error: {msg}[/red]")
+            return False, msg, total_cost, last_model_used, changed_files
 
         # Run the task
         success, output, cost, model = run_agentic_task(
@@ -379,7 +391,10 @@ def run_agentic_bug_orchestrator(
         # Update tracking
         total_cost += cost
         last_model_used = model
-        context[f"step{step_suffix}_output"] = output
+        # Escape curly braces in output to prevent format string injection (Issue #393)
+        # LLM outputs may contain {placeholders} that would cause KeyError in subsequent prompts
+        escaped_output = output.replace("{", "{{").replace("}", "}}")
+        context[f"step{step_suffix}_output"] = escaped_output
 
         # --- Post-Step Logic: Hard Stops & Parsing ---
 

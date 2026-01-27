@@ -530,99 +530,133 @@ async def list_prompt_files(
         }
 
         # ===== CODE FILE DETECTION =====
-        # Use generate_output_path from .pddrc if available
+        # Use outputs.code.path or generate_output_path from .pddrc if available
         code_dirs = []
+        explicit_code_path = None
 
-        # Priority 1: .pddrc generate_output_path
-        pddrc_code_dir = context_defaults.get("generate_output_path")
-        if pddrc_code_dir:
-            # Strip trailing slash
-            pddrc_code_dir = pddrc_code_dir.rstrip("/")
-            code_dirs.append(pddrc_code_dir)
+        # Priority 0: Check new 'outputs' format (Issue #237)
+        # Format: outputs: { code: { path: "app/layout.tsx" } }
+        outputs_config = context_defaults.get("outputs", {})
+        if outputs_config and isinstance(outputs_config, dict):
+            code_output = outputs_config.get("code", {})
+            if code_output and isinstance(code_output, dict):
+                explicit_code_path = code_output.get("path")
 
-        # Priority 2: Default locations
-        code_dirs.extend(["src", ""])  # Empty string for project root
+        # If explicit path is set, check it directly
+        if explicit_code_path:
+            code_path = project_root / explicit_code_path
+            if code_path.exists():
+                related["code"] = str(code_path.relative_to(project_root))
 
-        for code_dir in code_dirs:
-            for ext in extensions:
-                # Try with subdirectory first, then without
-                paths_to_try = []
-                if code_dir:
-                    if prompt_subdir:
-                        paths_to_try.append(project_root / code_dir / prompt_subdir / f"{sync_basename}{ext}")
-                    paths_to_try.append(project_root / code_dir / f"{sync_basename}{ext}")
-                else:
-                    if prompt_subdir:
-                        paths_to_try.append(project_root / prompt_subdir / f"{sync_basename}{ext}")
-                    paths_to_try.append(project_root / f"{sync_basename}{ext}")
+        # Priority 1: .pddrc generate_output_path (legacy format)
+        if "code" not in related:
+            pddrc_code_dir = context_defaults.get("generate_output_path")
+            if pddrc_code_dir:
+                # Strip trailing slash
+                pddrc_code_dir = pddrc_code_dir.rstrip("/")
+                code_dirs.append(pddrc_code_dir)
 
-                for code_path in paths_to_try:
-                    if code_path.exists():
-                        related["code"] = str(code_path.relative_to(project_root))
+            # Priority 2: Default locations
+            code_dirs.extend(["src", ""])  # Empty string for project root
+
+            for code_dir in code_dirs:
+                for ext in extensions:
+                    # Try with subdirectory first, then without
+                    paths_to_try = []
+                    if code_dir:
+                        if prompt_subdir:
+                            paths_to_try.append(project_root / code_dir / prompt_subdir / f"{sync_basename}{ext}")
+                        paths_to_try.append(project_root / code_dir / f"{sync_basename}{ext}")
+                    else:
+                        if prompt_subdir:
+                            paths_to_try.append(project_root / prompt_subdir / f"{sync_basename}{ext}")
+                        paths_to_try.append(project_root / f"{sync_basename}{ext}")
+
+                    for code_path in paths_to_try:
+                        if code_path.exists():
+                            related["code"] = str(code_path.relative_to(project_root))
+                            break
+                    if "code" in related:
                         break
                 if "code" in related:
                     break
-            if "code" in related:
-                break
 
         # ===== TEST FILE DETECTION =====
-        # Use test_output_path from .pddrc if available
+        # Use outputs.test.path or test_output_path from .pddrc if available
         test_dirs = []
+        explicit_test_path = None
 
-        pddrc_test_dir = context_defaults.get("test_output_path")
-        if pddrc_test_dir:
-            pddrc_test_dir = pddrc_test_dir.rstrip("/")
-            test_dirs.append(pddrc_test_dir)
+        # Check new 'outputs' format first (Issue #237)
+        if outputs_config and isinstance(outputs_config, dict):
+            test_output = outputs_config.get("test", {})
+            if test_output and isinstance(test_output, dict):
+                explicit_test_path = test_output.get("path")
 
-        test_dirs.extend(["tests", "test", ""])  # Empty string for project root
-        test_prefixes = ["test_", ""]
-        test_suffixes = ["", "_test"]
+        # If explicit path is set, check it directly
+        if explicit_test_path:
+            test_path = project_root / explicit_test_path
+            if test_path.exists():
+                related["test"] = str(test_path.relative_to(project_root))
 
-        # For non-executable languages (schema/config), tests are usually in Python/TS
-        # These languages don't have native test frameworks, so tests are written in
-        # general-purpose languages like Python or TypeScript
-        NON_EXECUTABLE_LANGUAGES = {
-            "prisma", "sql", "graphql", "protobuf", "terraform", "hcl",
-            "html", "css", "makefile", "dockerfile", "nix", "starlark",
-            "glsl", "wgsl", "scss", "sass", "less", "pug", "ejs", "twig",
-            "handlebars", "jinja",
-        }
+        # Legacy format: test_output_path
+        if "test" not in related:
+            pddrc_test_dir = context_defaults.get("test_output_path")
+            if pddrc_test_dir:
+                pddrc_test_dir = pddrc_test_dir.rstrip("/")
+                test_dirs.append(pddrc_test_dir)
 
-        # Determine test file extensions to search
-        if language and language.lower() in NON_EXECUTABLE_LANGUAGES:
-            # For config/schema languages, search for Python and TypeScript test files
-            test_extensions = [".py", ".ts", ".tsx", ".js", ".jsx"]
-        else:
-            # For executable languages, use language-specific extensions first,
-            # then add Python/TypeScript as fallbacks
-            test_extensions = list(extensions) + [".py", ".ts"]
-            # Dedupe while preserving order
-            test_extensions = list(dict.fromkeys(test_extensions))
+            test_dirs.extend(["tests", "test", ""])  # Empty string for project root
+            test_prefixes = ["test_", ""]
+            # Include .test and .spec suffixes common in Jest/TypeScript projects
+            test_suffixes = [".test", ".spec", "", "_test"]
 
-        for test_dir in test_dirs:
-            found = False
-            for prefix in test_prefixes:
-                for suffix in test_suffixes:
-                    # Skip invalid combination (no prefix and no suffix with just basename)
-                    if not prefix and not suffix:
-                        continue
-                    for ext in test_extensions:
-                        test_name = f"{prefix}{sync_basename}{suffix}{ext}"
-                        # Try with subdirectory first, then without
-                        paths_to_try = []
-                        if test_dir:
-                            if prompt_subdir:
-                                paths_to_try.append(project_root / test_dir / prompt_subdir / test_name)
-                            paths_to_try.append(project_root / test_dir / test_name)
-                        else:
-                            if prompt_subdir:
-                                paths_to_try.append(project_root / prompt_subdir / test_name)
-                            paths_to_try.append(project_root / test_name)
+            # For non-executable languages (schema/config), tests are usually in Python/TS
+            # These languages don't have native test frameworks, so tests are written in
+            # general-purpose languages like Python or TypeScript
+            NON_EXECUTABLE_LANGUAGES = {
+                "prisma", "sql", "graphql", "protobuf", "terraform", "hcl",
+                "html", "css", "makefile", "dockerfile", "nix", "starlark",
+                "glsl", "wgsl", "scss", "sass", "less", "pug", "ejs", "twig",
+                "handlebars", "jinja",
+            }
 
-                        for test_path in paths_to_try:
-                            if test_path.exists():
-                                related["test"] = str(test_path.relative_to(project_root))
-                                found = True
+            # Determine test file extensions to search
+            if language and language.lower() in NON_EXECUTABLE_LANGUAGES:
+                # For config/schema languages, search for Python and TypeScript test files
+                test_extensions = [".py", ".ts", ".tsx", ".js", ".jsx"]
+            else:
+                # For executable languages, use language-specific extensions first,
+                # then add Python/TypeScript as fallbacks
+                test_extensions = list(extensions) + [".py", ".ts"]
+                # Dedupe while preserving order
+                test_extensions = list(dict.fromkeys(test_extensions))
+
+            for test_dir in test_dirs:
+                found = False
+                for prefix in test_prefixes:
+                    for suffix in test_suffixes:
+                        # Skip invalid combination (no prefix and no suffix with just basename)
+                        if not prefix and not suffix:
+                            continue
+                        for ext in test_extensions:
+                            test_name = f"{prefix}{sync_basename}{suffix}{ext}"
+                            # Try with subdirectory first, then without
+                            paths_to_try = []
+                            if test_dir:
+                                if prompt_subdir:
+                                    paths_to_try.append(project_root / test_dir / prompt_subdir / test_name)
+                                paths_to_try.append(project_root / test_dir / test_name)
+                            else:
+                                if prompt_subdir:
+                                    paths_to_try.append(project_root / prompt_subdir / test_name)
+                                paths_to_try.append(project_root / test_name)
+
+                            for test_path in paths_to_try:
+                                if test_path.exists():
+                                    related["test"] = str(test_path.relative_to(project_root))
+                                    found = True
+                                    break
+                            if found:
                                 break
                         if found:
                             break
@@ -630,42 +664,55 @@ async def list_prompt_files(
                         break
                 if found:
                     break
-            if found:
-                break
 
         # ===== EXAMPLE FILE DETECTION =====
-        # Use example_output_path from .pddrc if available
+        # Use outputs.example.path or example_output_path from .pddrc if available
         example_dirs = []
+        explicit_example_path = None
 
-        pddrc_example_dir = context_defaults.get("example_output_path")
-        if pddrc_example_dir:
-            pddrc_example_dir = pddrc_example_dir.rstrip("/")
-            example_dirs.append(pddrc_example_dir)
+        # Check new 'outputs' format first (Issue #237)
+        if outputs_config and isinstance(outputs_config, dict):
+            example_output = outputs_config.get("example", {})
+            if example_output and isinstance(example_output, dict):
+                explicit_example_path = example_output.get("path")
 
-        example_dirs.extend(["examples", ""])  # Empty string for project root
+        # If explicit path is set, check it directly
+        if explicit_example_path:
+            example_path = project_root / explicit_example_path
+            if example_path.exists():
+                related["example"] = str(example_path.relative_to(project_root))
 
-        for example_dir in example_dirs:
-            for ext in extensions:
-                example_name = f"{sync_basename}_example{ext}"
-                # Try with subdirectory first, then without
-                paths_to_try = []
-                if example_dir:
-                    if prompt_subdir:
-                        paths_to_try.append(project_root / example_dir / prompt_subdir / example_name)
-                    paths_to_try.append(project_root / example_dir / example_name)
-                else:
-                    if prompt_subdir:
-                        paths_to_try.append(project_root / prompt_subdir / example_name)
-                    paths_to_try.append(project_root / example_name)
+        # Legacy format: example_output_path
+        if "example" not in related:
+            pddrc_example_dir = context_defaults.get("example_output_path")
+            if pddrc_example_dir:
+                pddrc_example_dir = pddrc_example_dir.rstrip("/")
+                example_dirs.append(pddrc_example_dir)
 
-                for example_path in paths_to_try:
-                    if example_path.exists():
-                        related["example"] = str(example_path.relative_to(project_root))
+            example_dirs.extend(["examples", ""])  # Empty string for project root
+
+            for example_dir in example_dirs:
+                for ext in extensions:
+                    example_name = f"{sync_basename}_example{ext}"
+                    # Try with subdirectory first, then without
+                    paths_to_try = []
+                    if example_dir:
+                        if prompt_subdir:
+                            paths_to_try.append(project_root / example_dir / prompt_subdir / example_name)
+                        paths_to_try.append(project_root / example_dir / example_name)
+                    else:
+                        if prompt_subdir:
+                            paths_to_try.append(project_root / prompt_subdir / example_name)
+                        paths_to_try.append(project_root / example_name)
+
+                    for example_path in paths_to_try:
+                        if example_path.exists():
+                            related["example"] = str(example_path.relative_to(project_root))
+                            break
+                    if "example" in related:
                         break
                 if "example" in related:
                     break
-            if "example" in related:
-                break
 
         results.append(related)
 

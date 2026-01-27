@@ -1,3 +1,23 @@
+## v0.0.131 (2026-01-26)
+
+### Feat
+
+- Add draggable task queue panel and --skip-prompts option
+- Refactor agentic architecture workflow from 8 to 11 steps
+- Add steerable option to pdd sync + fix TUI resize issues
+- add a new hello example and suppress SyntaxWarning during `ast.parse` in `unfinished_prompt.py`.
+- suppress SyntaxWarning during AST parsing, and refine sync configuration.
+
+### Fix
+
+- Resolve AsyncMock unawaited coroutine warnings in tests
+- Update tests to handle double-brace template placeholders
+- Update tests and fix double-brace placeholder substitution
+- Improve non-Python sync and frontend file detection
+- Resolve silent failure at step 5.5 in pdd bug command (#393)
+- Improve remote session connectivity with token refresh and heartbeat fixes
+- Bug: File Handle Resource Leak in SyncLock.acquire()
+
 ## v0.0.130 (2026-01-25)
 
 ### Feat
