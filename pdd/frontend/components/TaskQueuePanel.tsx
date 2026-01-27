@@ -5,12 +5,53 @@
  * - Collapsible panel showing queued tasks
  * - Execution mode toggle (Auto/Manual)
  * - Control buttons (Start, Pause, Clear, etc.)
+ * - Draggable panel that can be repositioned
  */
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { TaskQueueItem as TaskItem, ExecutionMode } from '../hooks/useTaskQueue';
 import TaskQueueItemComponent from './TaskQueueItem';
 import TaskQueueControls from './TaskQueueControls';
+
+// Storage key for panel position
+const PANEL_POSITION_KEY = 'pdd-task-queue-position';
+
+interface PanelPosition {
+  x: number;
+  y: number;
+}
+
+const getDefaultPosition = (): PanelPosition => ({
+  x: window.innerWidth - 380 - 16, // right-4 equivalent
+  y: 64, // top-16 equivalent
+});
+
+const loadSavedPosition = (): PanelPosition | null => {
+  try {
+    const saved = localStorage.getItem(PANEL_POSITION_KEY);
+    if (saved) {
+      const pos = JSON.parse(saved);
+      // Validate the position is within viewport bounds
+      if (typeof pos.x === 'number' && typeof pos.y === 'number') {
+        return {
+          x: Math.max(0, Math.min(pos.x, window.innerWidth - 100)),
+          y: Math.max(0, Math.min(pos.y, window.innerHeight - 100)),
+        };
+      }
+    }
+  } catch (e) {
+    console.warn('Failed to load panel position:', e);
+  }
+  return null;
+};
+
+const savePosition = (pos: PanelPosition) => {
+  try {
+    localStorage.setItem(PANEL_POSITION_KEY, JSON.stringify(pos));
+  } catch (e) {
+    console.warn('Failed to save panel position:', e);
+  }
+};
 
 interface TaskQueuePanelProps {
   tasks: TaskItem[];
@@ -56,6 +97,80 @@ const TaskQueuePanel: React.FC<TaskQueuePanelProps> = ({
 }) => {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+
+  // Panel position state for drag-to-move functionality
+  const [position, setPosition] = useState<PanelPosition>(() => loadSavedPosition() || getDefaultPosition());
+  const [isDraggingPanel, setIsDraggingPanel] = useState(false);
+  const dragStartRef = useRef<{ mouseX: number; mouseY: number; panelX: number; panelY: number } | null>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  // Handle window resize to keep panel in bounds
+  useEffect(() => {
+    const handleResize = () => {
+      setPosition(prev => ({
+        x: Math.max(0, Math.min(prev.x, window.innerWidth - 100)),
+        y: Math.max(0, Math.min(prev.y, window.innerHeight - 100)),
+      }));
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  // Panel drag handlers
+  const handlePanelDragStart = useCallback((e: React.MouseEvent) => {
+    // Only start drag if clicking the drag handle area
+    if ((e.target as HTMLElement).closest('[data-drag-handle]')) {
+      e.preventDefault();
+      setIsDraggingPanel(true);
+      dragStartRef.current = {
+        mouseX: e.clientX,
+        mouseY: e.clientY,
+        panelX: position.x,
+        panelY: position.y,
+      };
+    }
+  }, [position]);
+
+  useEffect(() => {
+    if (!isDraggingPanel) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!dragStartRef.current) return;
+
+      const deltaX = e.clientX - dragStartRef.current.mouseX;
+      const deltaY = e.clientY - dragStartRef.current.mouseY;
+
+      const newX = Math.max(0, Math.min(dragStartRef.current.panelX + deltaX, window.innerWidth - 100));
+      const newY = Math.max(0, Math.min(dragStartRef.current.panelY + deltaY, window.innerHeight - 100));
+
+      setPosition({ x: newX, y: newY });
+    };
+
+    const handleMouseUp = () => {
+      setIsDraggingPanel(false);
+      dragStartRef.current = null;
+      // Save position when drag ends
+      setPosition(pos => {
+        savePosition(pos);
+        return pos;
+      });
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isDraggingPanel]);
+
+  // Reset position to default (top-right corner)
+  const resetPosition = useCallback(() => {
+    const defaultPos = getDefaultPosition();
+    setPosition(defaultPos);
+    savePosition(defaultPos);
+  }, []);
 
   // All hooks must be called before any early returns!
   // Drag handlers - defined unconditionally
@@ -107,29 +222,55 @@ const TaskQueuePanel: React.FC<TaskQueuePanelProps> = ({
   }
 
   return (
-    <div className="fixed top-16 right-4 z-40 pointer-events-none" style={{ width: '380px' }}>
+    <div
+      ref={panelRef}
+      className={`fixed z-40 pointer-events-none ${isDraggingPanel ? 'select-none' : ''}`}
+      style={{
+        width: '380px',
+        left: `${position.x}px`,
+        top: `${position.y}px`,
+      }}
+    >
       <div
         className={`
           pointer-events-auto bg-surface-900/95 backdrop-blur-lg rounded-2xl border border-surface-700/50 shadow-2xl
-          transition-all duration-300 ease-in-out
+          transition-[max-height] duration-300 ease-in-out
           ${isCollapsed ? 'max-h-14' : 'max-h-[70vh]'}
+          ${isDraggingPanel ? 'cursor-grabbing' : ''}
         `}
       >
         {/* Header bar */}
         <div
-          className="flex items-center justify-between px-4 py-3 border-b border-surface-700/50 cursor-pointer"
-          onClick={() => setIsCollapsed(!isCollapsed)}
+          className="flex items-center justify-between px-4 py-3 border-b border-surface-700/50"
+          onMouseDown={handlePanelDragStart}
         >
-          <div className="flex items-center gap-3">
-            {/* Toggle icon */}
-            <svg
-              className={`w-4 h-4 text-surface-400 transition-transform ${isCollapsed ? '' : 'rotate-180'}`}
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
+          <div className="flex items-center gap-2">
+            {/* Drag handle */}
+            <div
+              data-drag-handle
+              className="text-surface-500 hover:text-surface-300 cursor-grab active:cursor-grabbing p-1 -ml-1"
+              title="Drag to move panel"
             >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
-            </svg>
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8h16M4 16h16" />
+              </svg>
+            </div>
+
+            {/* Toggle icon */}
+            <button
+              onClick={() => setIsCollapsed(!isCollapsed)}
+              className="text-surface-400 hover:text-surface-300 transition-colors"
+              title={isCollapsed ? 'Expand' : 'Collapse'}
+            >
+              <svg
+                className={`w-4 h-4 transition-transform ${isCollapsed ? '' : 'rotate-180'}`}
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+              </svg>
+            </button>
 
             <h2 className="text-sm font-medium text-white flex items-center gap-2">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -162,8 +303,8 @@ const TaskQueuePanel: React.FC<TaskQueuePanelProps> = ({
             </span>
           </div>
 
-          {/* Mode indicator */}
-          <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+          {/* Mode indicator and reset button */}
+          <div className="flex items-center gap-2">
             <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${
               executionMode === 'auto'
                 ? 'bg-green-500/20 text-green-400'
@@ -171,6 +312,20 @@ const TaskQueuePanel: React.FC<TaskQueuePanelProps> = ({
             }`}>
               {executionMode === 'auto' ? 'Auto' : 'Manual'}
             </span>
+
+            {/* Reset position button */}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                resetPosition();
+              }}
+              className="text-surface-500 hover:text-surface-300 p-1 rounded transition-colors"
+              title="Reset panel position"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+            </button>
           </div>
         </div>
 
