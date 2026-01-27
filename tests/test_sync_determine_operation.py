@@ -403,7 +403,23 @@ def test_decision_fix_on_test_failures(mock_construct, pdd_test_environment):
     assert "Test failures detected" in decision.reason
 
 @patch('sync_determine_operation.construct_paths')
-def test_decision_test_on_low_coverage(mock_construct, pdd_test_environment):
+@patch('sync_determine_operation.get_pdd_file_paths')
+def test_decision_test_on_low_coverage(mock_get_pdd_paths, mock_construct, pdd_test_environment):
+    tmp_path = pdd_test_environment
+
+    # Create test file on disk so test_file_exists check passes
+    Path("tests").mkdir(exist_ok=True)
+    test_path = tmp_path / "tests" / f"test_{BASENAME}.py"
+    create_file(test_path, "def test_foo(): pass")
+
+    # Mock get_pdd_file_paths to return the test path
+    mock_get_pdd_paths.return_value = {
+        'prompt': tmp_path / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt",
+        'code': tmp_path / f"{BASENAME}.py",
+        'example': tmp_path / f"{BASENAME}_example.py",
+        'test': test_path,
+    }
+
     # Create fingerprint (required for run_report to be processed)
     fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
     create_fingerprint_file(fp_path, {
