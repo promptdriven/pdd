@@ -7,9 +7,9 @@ language: json
 output: architecture.json
 post_process_python: ./pdd/render_mermaid.py
 post_process_args:
-  - "{INPUT_FILE}"
-  - "{APP_NAME}"
-  - "{OUTPUT_HTML}"
+  - "{{INPUT_FILE}}"
+  - "{{APP_NAME}}"
+  - "{{OUTPUT_HTML}}"
 variables:
   APP_NAME:
     required: false
@@ -146,7 +146,7 @@ INSTRUCTIONS:
   - reason (briefly explain why this code module needs to exist), description, dependencies (filenames), priority (1 = highest), filename, filepath, optional tags.
   - interface: include only the applicable sub-object (component, page, module, api, graphql, cli, job, message, or config). Omit all non-applicable sub-objects entirely.
   - When interface.type is "page", each entry in `dataSources` must be an object with at least `kind` and `source` (e.g., URL or identifier). The `kind` field MUST be exactly one of: `"api"`, `"query"`, `"stream"`, `"file"`, `"cache"`, `"message"`, `"job"`, or `"other"`. Do not invent new values like `"api/mutation"`; instead, use `"api"` (for any HTTP/REST/GraphQL endpoint) or `"other"` and describe details such as queries vs. mutations in `description` or `notes`. Provide `method`, `description`, and any other useful metadata when known.
-- context_urls (optional): An array of {url, purpose} objects associating web documentation references with this module. These are converted to `<web>` tags during prompt generation, enabling the LLM to fetch relevant API documentation. Populate with official docs, tutorials, or code examples relevant to the module's implementation.
+- context_urls (optional): An array of {{url, purpose}} objects associating web documentation references with this module. These are converted to `<web>` tags during prompt generation, enabling the LLM to fetch relevant API documentation. Populate with official docs, tutorials, or code examples relevant to the module's implementation.
 - Valid JSON only. No comments or trailing commas.
 
 OUTPUT FORMAT - CRITICAL: Return a raw JSON array, NOT an object with "items" or "data" wrapper:
@@ -207,24 +207,81 @@ INTERFACE TYPES (emit only applicable):
 - message: topics (array of {name, direction: "publish"|"subscribe", schema?, qos?})
 - config: keys (array of {name, type, default?, required?, source: "env"|"file"|"secret"})
 
+FRAMEWORK DETECTION (do this first):
+Before generating architecture, detect the framework from PRD/tech stack:
+- Next.js App Router: Look for "app router", "app/", "Next.js 13+", "Next.js 14", "Next.js 15"
+- Next.js Pages Router: Look for "pages router", "pages/", "Next.js 12" or older
+- Nuxt 3: Look for "Nuxt", "nuxt.config", "Vue"
+- SvelteKit: Look for "SvelteKit", "+page.svelte", "Svelte"
+- Standard (Python, Go, Rust, etc.): No special file naming requirements
+
+For frameworks with strict file naming conventions (Next.js, Nuxt, SvelteKit), you MUST follow their required filenames.
+
 FILENAME CONVENTIONS:
-- The "filename" field is the prompt filename to generate (not the code file). Use PDD convention: <base>_<LangOrFramework>.prompt where <LangOrFramework> matches the tech stack.
-- Examples (adapt to your stack):
-  - Next.js (TypeScript React): page_TypeScriptReact.prompt -> generates page.tsx; layout_TypeScriptReact.prompt -> layout.tsx
-  - Python backend: api_Python.prompt -> api.py; orders_Python.prompt -> orders.py
-- Choose descriptive <base> names (e.g., orders_page, orders_api) and keep names consistent across dependencies.
+- The "filename" field is the prompt filename: <base>_<Language>.prompt
+- Use DESCRIPTIVE basenames that capture the module's purpose and context
+- The basename should be unique and meaningful so prompts are self-documenting
+- CRITICAL: The filename field must NOT contain slashes (/). Use underscores (_) to separate path components.
+  - WRONG: "api/courses/route_TypeScript.prompt" (slashes create nested directories)
+  - CORRECT: "api_courses_route_TypeScript.prompt" (underscores keep prompt flat)
+
+**VALID LANGUAGE SUFFIXES** (MUST use exactly one of these - case-sensitive PascalCase):
+- **TypeScript projects**: `TypeScript` (.ts) or `TypeScriptReact` (.tsx)
+- **JavaScript projects**: `JavaScript` (.js) or `JavaScriptReact` (.jsx)
+- **Python projects**: `Python` (.py)
+- **Go projects**: `Go` (.go)
+- **Rust projects**: `Rust` (.rs)
+- **Prisma schemas**: `Prisma` (.prisma)
+- **Other**: `Java`, `C#`, `Ruby`, `PHP`, `Swift`, `Kotlin`, `Scala`, `SQL`, `Shell`, `YAML`, `JSON`, `HTML`, `CSS`, `SCSS`, `Svelte`, `Vue`
+
+**WRONG language suffixes** (DO NOT use these invented names):
+- ❌ `NextJS`, `Next`, `Nextjs` - Use `TypeScript` or `TypeScriptReact` instead
+- ❌ `React`, `ReactJS` - Use `TypeScriptReact` or `JavaScriptReact` instead
+- ❌ `Node`, `NodeJS` - Use `TypeScript` or `JavaScript` instead
+- ❌ `FastAPI`, `Flask`, `Django` - Use `Python` instead
+- ❌ `Express`, `NestJS` - Use `TypeScript` or `JavaScript` instead
+
+Examples for Next.js App Router (use descriptive names with path context):
+  ✓ "api_courses_route_TypeScript.prompt" - API route for courses endpoint
+  ✓ "api_lessons_id_route_TypeScript.prompt" - API route for lessons with dynamic [id]
+  ✓ "dashboard_page_TypeScriptReact.prompt" - Dashboard page component
+  ✓ "app_layout_TypeScriptReact.prompt" - Root app layout
+  ✓ "auth_middleware_TypeScript.prompt" - Authentication middleware
+
+Examples for standard projects (Python, Go, etc.):
+  ✓ "orders_Python.prompt" - Orders module
+  ✓ "api_routes_Python.prompt" - API routes module
+  ✓ "models_Python.prompt" - Data models
+
+Keep names consistent across dependencies - if module A depends on B, use the same naming style.
 
 FILEPATH CONVENTIONS:
-- The "filepath" field specifies the path of the output source file from the source tree root, using conventions appropriate for the language and framework.
-- Examples (adapt to your stack):
-  - Next.js app router: app/orders/page.tsx, app/layout.tsx, app/api/orders/route.ts
-  - Next.js pages router: pages/orders.tsx, pages/api/orders.ts
-  - Python FastAPI: src/api.py, src/orders.py, src/models/order.py
-  - React components: src/components/OrderList.tsx, src/hooks/useOrders.ts
-  - Config files: .env.example, pyproject.toml, package.json
-- Use forward slashes (/) for path separators regardless of OS.
-- Include the appropriate file extension for the target language (.tsx, .py, .rs, .go, etc.).
-- Follow standard directory structures for the framework (e.g., app/ for Next.js 13+, src/ for typical React/Python projects).
+- The "filepath" field specifies the FULL output path including filename
+- Use framework-appropriate paths and filenames
+
+For Next.js App Router (STRICT naming - file MUST be route.ts, page.tsx, layout.tsx):
+- API routes: app/api/{path}/route.ts
+  Example: filepath="app/api/courses/route.ts", filepath="app/api/lessons/[id]/route.ts"
+- Pages: app/{path}/page.tsx
+  Example: filepath="app/dashboard/page.tsx", filepath="app/orders/[id]/page.tsx"
+- Layouts: app/{path}/layout.tsx
+  Example: filepath="app/layout.tsx", filepath="app/dashboard/layout.tsx"
+- Middleware: middleware.ts (at project root)
+  Example: filepath="middleware.ts"
+
+For standard projects:
+- Use descriptive filenames matching the prompt basename
+  Example: filename="orders_Python.prompt" → filepath="src/orders.py"
+  Example: filename="api_routes_Python.prompt" → filepath="src/api/routes.py"
+
+PATH-FILENAME RELATIONSHIP:
+- For Next.js/Nuxt/SvelteKit: The filepath uses framework-required filenames (route.ts, page.tsx)
+  while the prompt filename remains descriptive for context
+- For standard projects: The filepath filename should match the prompt basename
+  (e.g., orders_Python.prompt → orders.py)
+
+Use forward slashes (/) for path separators regardless of OS.
+Follow standard directory structures for the framework (e.g., app/ for Next.js 13+, src/ for typical Python projects).
 
 DEPENDENCY RULES:
 - The "dependencies" array must list other items by their prompt filenames (the "filename" values), not code filenames.
