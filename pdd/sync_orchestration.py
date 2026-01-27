@@ -17,8 +17,6 @@ from dataclasses import asdict, dataclass, field
 import tempfile
 import sys
 
-from .sync_tui import maybe_steer_operation, DEFAULT_STEER_TIMEOUT_S
-
 import click
 import logging
 
@@ -26,7 +24,6 @@ import logging
 MAX_CONSECUTIVE_TESTS = 3  # Allow up to 3 consecutive test attempts
 MAX_TEST_EXTEND_ATTEMPTS = 2  # Allow up to 2 attempts to extend tests for coverage
 MAX_CONSECUTIVE_CRASHES = 3  # Allow up to 3 consecutive crash attempts (Bug #157 fix)
-DEFAULT_STEER_TIMEOUT_S = 8.0
 
 # --- Real PDD Component Imports ---
 from .sync_tui import SyncApp
@@ -886,8 +883,6 @@ def sync_orchestration(
     context_config: Optional[Dict[str, str]] = None,
     context_override: Optional[str] = None,
     confirm_callback: Optional[Callable[[str, str], bool]] = None,
-    no_steer: bool = False,
-    steer_timeout: float = DEFAULT_STEER_TIMEOUT_S,
 ) -> Dict[str, Any]:
     """
     Orchestrates the complete PDD sync workflow with parallel animation.
@@ -1036,69 +1031,8 @@ def sync_orchestration(
                             "percentage": (budget_remaining / budget) * 100
                         }, invocation_mode="sync")
 
-                    try:
-                        decision = sync_determine_operation(
-                            basename,
-                            language,
-                            target_coverage,
-                            budget_remaining,
-                            False,
-                            prompts_dir,
-                            skip_tests,
-                            skip_verify,
-                            context_override,
-                        )
-                    except StopIteration:
-                        # In unit tests, sync_determine_operation may be mocked with a finite
-                        # iterator. Treat exhaustion as a graceful completion rather than a crash.
-                        class _Decision:
-                            pass
-
-                        decision = _Decision()
-                        decision.operation = "all_synced"
-                        decision.reason = "Decision sequence exhausted (mock). Treating as all_synced."
-                        decision.confidence = 1.0
-                        decision.estimated_cost = 0.0
-                        decision.details = {"decision_type": "mock"}
-                        log_event(
-                            basename,
-                            language,
-                            "decision_exhausted",
-                            {"note": "StopIteration from sync_determine_operation"},
-                            invocation_mode="sync",
-                        )
+                    decision = sync_determine_operation(basename, language, target_coverage, budget_remaining, False, prompts_dir, skip_tests, skip_verify, context_override)
                     operation = decision.operation
-
-                    # Interactive steering: allow user to override the recommended operation.
-                    if no_steer:
-                        steered_op = operation
-                        should_abort = False
-                    else:
-                        steered_op, should_abort = maybe_steer_operation(
-                                operation,
-                                decision.reason,
-                                app_ref[0],
-                                quiet,
-                                skip_tests,
-                                skip_verify,
-                                timeout_s=steer_timeout,
-                        )
-                    if should_abort:
-                        errors.append("User aborted sync via steering.")
-                        log_event(basename, language, "steering_abort", {"recommended": operation}, invocation_mode="sync")
-                        break
-
-                    if steered_op != operation:
-                        log_event(
-                            basename,
-                            language,
-                            "steering_override",
-                            {"recommended": operation, "chosen": steered_op, "reason": decision.reason},
-                            invocation_mode="sync",
-                        )
-                        operation = steered_op
-                        # Keep decision.operation aligned with the chosen path for downstream logging.
-                        decision.operation = steered_op
                     
                     log_entry = create_log_entry(
                         operation=decision.operation,
@@ -1182,6 +1116,15 @@ def sync_orchestration(
                             break
 
                     if operation == 'test_extend':
+                        # Skip test_extend for non-Python languages - code coverage tooling is Python-specific
+                        # This is a safety check in case sync_determine_operation doesn't catch it
+                        if language.lower() != 'python':
+                            log_event(basename, language, "test_extend_skipped", {
+                                "reason": f"test_extend not supported for {language}, accepting current state"
+                            }, invocation_mode="sync")
+                            success = True
+                            break
+
                         # Count test_extend attempts to prevent infinite loop
                         extend_attempts = sum(1 for op in operation_history if op == 'test_extend')
                         if extend_attempts >= MAX_TEST_EXTEND_ATTEMPTS:
@@ -1793,7 +1736,7 @@ def sync_orchestration(
         worker_exception = app.worker_exception
 
     # Check for worker exception that might have caused a crash (TUI mode only)
-    if not headless and isinstance(worker_exception, BaseException):
+    if not headless and worker_exception:
         print(f"\n[Error] Worker thread crashed with exception: {worker_exception}", file=sys.stderr)
 
         if hasattr(app, 'captured_logs') and app.captured_logs:

@@ -156,7 +156,7 @@ class AtomicStateUpdate:
 
 def load_sync_log(basename: str, language: str) -> List[Dict[str, Any]]:
     """Load sync log entries for a basename and language."""
-    log_file = META_DIR / f"{_safe_basename(basename)}_{language.lower()}_sync.log"
+    log_file = META_DIR / f"{_safe_basename(basename)}_{language}_sync.log"
     if not log_file.exists():
         return []
     try:
@@ -198,7 +198,7 @@ def update_sync_log_entry(entry: Dict[str, Any], result: Dict[str, Any], duratio
 
 def append_sync_log(basename: str, language: str, entry: Dict[str, Any]):
     """Append completed log entry to the sync log file."""
-    log_file = META_DIR / f"{_safe_basename(basename)}_{language.lower()}_sync.log"
+    log_file = META_DIR / f"{_safe_basename(basename)}_{language}_sync.log"
     META_DIR.mkdir(parents=True, exist_ok=True)
     with open(log_file, 'a') as f:
         f.write(json.dumps(entry) + '\n')
@@ -222,7 +222,7 @@ def save_run_report(report: Dict[str, Any], basename: str, language: str,
         language: The programming language.
         atomic_state: Optional AtomicStateUpdate for atomic writes (Issue #159 fix).
     """
-    report_file = META_DIR / f"{_safe_basename(basename)}_{language.lower()}_run.json"
+    report_file = META_DIR / f"{_safe_basename(basename)}_{language}_run.json"
     if atomic_state:
         # Buffer for atomic write
         atomic_state.set_run_report(report, report_file)
@@ -262,7 +262,7 @@ def _save_operation_fingerprint(basename: str, language: str, operation: str,
         test_files=current_hashes.get('test_files'),  # Bug #156
     )
 
-    fingerprint_file = META_DIR / f"{_safe_basename(basename)}_{language.lower()}.json"
+    fingerprint_file = META_DIR / f"{_safe_basename(basename)}_{language}.json"
     if atomic_state:
         # Buffer for atomic write
         atomic_state.set_fingerprint(asdict(fingerprint), fingerprint_file)
@@ -836,7 +836,7 @@ def _create_mock_context(**kwargs) -> click.Context:
 
 def _display_sync_log(basename: str, language: str, verbose: bool = False) -> Dict[str, Any]:
     """Displays the sync log for a given basename and language."""
-    log_file = META_DIR / f"{_safe_basename(basename)}_{language.lower()}_sync.log"
+    log_file = META_DIR / f"{_safe_basename(basename)}_{language}_sync.log"
     if not log_file.exists():
         print(f"No sync log found for '{basename}' in language '{language}'.")
         return {'success': False, 'errors': ['Log file not found.'], 'log_entries': []}
@@ -958,18 +958,8 @@ def sync_orchestration(
         pdd_files = get_pdd_file_paths(basename, language, prompts_dir, context_override=context_override)
     except FileNotFoundError as e:
         if "test_config.py" in str(e) or "tests/test_" in str(e):
-            # Case-insensitive prompt file lookup for fallback
-            fallback_prompt = Path(prompts_dir) / f"{basename}_{language}.prompt"
-            if not fallback_prompt.exists():
-                prompts_dir_path = Path(prompts_dir)
-                if prompts_dir_path.is_dir():
-                    target_lower = fallback_prompt.name.lower()
-                    for candidate in prompts_dir_path.iterdir():
-                        if candidate.name.lower() == target_lower and candidate.is_file():
-                            fallback_prompt = candidate
-                            break
             pdd_files = {
-                'prompt': fallback_prompt,
+                'prompt': Path(prompts_dir) / f"{basename}_{language}.prompt",
                 'code': Path(f"src/{basename}.{get_extension(language)}"),
                 'example': Path(f"context/{basename}_example.{get_extension(language)}"),
                 'test': Path(f"tests/test_{basename}.{get_extension(language)}")
@@ -1287,7 +1277,7 @@ def sync_orchestration(
                                 # Use absolute paths to avoid path_resolution_mode mismatch between sync (cwd) and generate (config_base)
                                 result = code_generator_main(ctx, prompt_file=str(pdd_files['prompt'].resolve()), output=str(pdd_files['code'].resolve()), original_prompt_file_path=None, force_incremental_flag=False)
                                 # Clear stale run_report so crash/verify is required for newly generated code
-                                run_report_file = META_DIR / f"{_safe_basename(basename)}_{language.lower()}_run.json"
+                                run_report_file = META_DIR / f"{_safe_basename(basename)}_{language}_run.json"
                                 run_report_file.unlink(missing_ok=True)
                             elif operation == 'example':
                                 # Ensure example directory exists before generating
@@ -1571,8 +1561,7 @@ def sync_orchestration(
                             elif isinstance(result, tuple) and len(result) >= 3:
                                 if operation == 'test': success = pdd_files['test'].exists()
                                 else: success = bool(result[0])
-                                # Cost is always at index 1 in both 3-tuple and 4-tuple returns
-                                cost = result[1] if len(result) >= 2 and isinstance(result[1], (int, float)) else 0.0
+                                cost = result[-2] if len(result) >= 2 and isinstance(result[-2], (int, float)) else 0.0
                                 current_cost_ref[0] += cost
                             else:
                                 success = result is not None
@@ -1590,8 +1579,8 @@ def sync_orchestration(
                                  actual_cost = result.get('cost', 0.0)
                                  model_name = result.get('model', 'unknown')
                             elif isinstance(result, tuple) and len(result) >= 3:
-                                 actual_cost = result[1] if isinstance(result[1], (int, float)) else 0.0
-                                 model_name = result[2] if len(result) >= 3 and isinstance(result[2], str) else 'unknown'
+                                 actual_cost = result[-2] if len(result) >= 2 else 0.0
+                                 model_name = result[-1] if len(result) >= 1 else 'unknown'
                             last_model_name = str(model_name)
                             operations_completed.append(operation)
                             _save_operation_fingerprint(basename, language, operation, pdd_files, actual_cost, str(model_name), atomic_state=atomic_state)
