@@ -9,12 +9,12 @@
   }}
 }}
 </pdd-interface>
-<pdd-dependency>agentic_arch_step8_completeness_LLM.prompt</pdd-dependency>
+<pdd-dependency>agentic_arch_step9_completeness_LLM.prompt</pdd-dependency>
 % You are a PDD configuration expert. Your task is to validate that `pdd sync` can run for every module.
 
 % Context
 
-You are working on step 9 of the agentic architecture workflow. Step 7 generated prompt files, Step 8 validated architecture completeness. Now validate that the .pddrc configuration allows `pdd sync` to work correctly for ALL modules.
+You are working on step 10 of the agentic architecture workflow. Step 8 generated prompt files, Step 9 validated architecture completeness. Now validate that the .pddrc configuration allows `pdd sync` to work correctly for ALL modules.
 
 % Inputs
 
@@ -35,17 +35,34 @@ The `pdd sync --dry-run` command tests sync configuration without executing:
 - Shows what output path would be generated
 - Reports any configuration errors
 
-**1. Extract all module basenames:**
+**IMPORTANT: Using the --context flag**
+
+The `--context` flag is a GLOBAL flag that goes BEFORE the `sync` command:
+```bash
+pdd --context CONTEXT_NAME sync BASENAME --dry-run
+```
+
+When to use `--context`:
+- When automatic context detection might fail (no matching paths pattern)
+- When you want to explicitly test a specific context
+- When the module's filepath doesn't match any paths pattern in .pddrc
+
+**1. Extract all module basenames and their contexts:**
 
 ```bash
 # Get all basenames from architecture.json
 cat architecture.json | jq -r '.[].filename' | sed 's/_[A-Za-z]*\.prompt$//' | sort -u
+
+# List available contexts from .pddrc
+grep -E '^\s+[a-zA-Z_-]+:$' .pddrc | head -20
 ```
 
 **2. Run pdd sync --dry-run for EACH module:**
 
+If .pddrc is correctly configured, auto-detection should work without `--context`:
+
 ```bash
-# Test each module
+# Test each module - relies on auto-detection from .pddrc paths patterns
 for basename in $(cat architecture.json | jq -r '.[].filename' | sed 's/_[A-Za-z]*\.prompt$//' | sort -u); do
     echo "=== Testing: $basename ==="
     pdd sync "$basename" --dry-run 2>&1
@@ -54,6 +71,23 @@ for basename in $(cat architecture.json | jq -r '.[].filename' | sed 's/_[A-Za-z
     fi
 done
 ```
+
+**If auto-detection fails**, you can use `--context` to explicitly specify the context name from .pddrc:
+
+```bash
+# Find the context name for a basename by checking which context's paths pattern matches it
+# For example, if .pddrc has:
+#   app_layout:
+#     paths: ["*app_layout*"]
+# Then use: pdd --context app_layout sync app_layout --dry-run
+
+# Test with explicit context (use the context NAME from .pddrc, not necessarily the basename)
+pdd --context CONTEXT_NAME sync BASENAME --dry-run
+```
+
+**IMPORTANT:** If auto-detection fails, check that:
+1. The .pddrc `paths:` patterns actually match the basename (e.g., `["*app_layout*"]` matches `app_layout`)
+2. You don't have the same `prompts_dir` value in every context (this breaks matching!)
 
 **3. Analyze dry-run output:**
 
@@ -83,13 +117,13 @@ For EACH module, compare:
 They MUST match exactly. If not, the .pddrc `modules` section needs fixing.
 
 ```bash
-# For each module, verify output path matches
+# For each module, verify output path matches (using auto-detection)
 for entry in $(cat architecture.json | jq -c '.[]'); do
     filename=$(echo "$entry" | jq -r '.filename')
     expected_path=$(echo "$entry" | jq -r '.filepath')
     basename=$(echo "$filename" | sed 's/_[A-Za-z]*\.prompt$//')
 
-    # Get actual output from dry-run
+    # Get actual output from dry-run (auto-detection should find correct context)
     actual_path=$(pdd sync "$basename" --dry-run 2>&1 | grep "Output:" | awk '{{print $2}}')
 
     if [ "$expected_path" != "$actual_path" ]; then
@@ -104,7 +138,7 @@ done
 
 | Issue | Symptom | Fix |
 |-------|---------|-----|
-| Missing prompt file | "No prompt files found" | Step 7 didn't create the prompt |
+| Missing prompt file | "No prompt files found" | Step 8 didn't create the prompt |
 | Wrong prompts_dir | Prompt not found | Fix context prompts_dir in .pddrc |
 | Missing modules entry | Wrong output path | Add entry to .pddrc modules section |
 | Filepath mismatch | Output path differs | Update .pddrc modules filepath |
@@ -160,7 +194,7 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 ```
 
 ```markdown
-## Step 9: Sync Validation (pdd sync --dry-run)
+## Step 10: Sync Validation (pdd sync --dry-run)
 
 **Status:** [VALID | INVALID]
 
@@ -177,7 +211,7 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 [Detailed error list with fixes]
 
 ---
-*[Proceeding to Step 10 | Returning to Step 11 for fixes]*
+*[Proceeding to Step 11 | Returning to Step 12 for fixes]*
 ```
 
 % Important

@@ -1,0 +1,239 @@
+<pdd-reason>Validates dependency graph: ensures priorities are correct so dependencies are generated before dependents.</pdd-reason>
+<pdd-interface>
+{{
+  "type": "module",
+  "module": {{
+    "functions": [
+      {{"name": "validate_dependency_graph", "signature": "()", "returns": "str ('VALID' or list of dependency errors)"}}
+    ]
+  }}
+}}
+</pdd-interface>
+<pdd-dependency>agentic_arch_step10_sync_LLM.prompt</pdd-dependency>
+% You are a PDD dependency validation expert. Your task is to validate that the dependency graph in architecture.json is correct.
+
+% Context
+
+You are working on step 11 of the agentic architecture workflow. Step 8 generated prompt files, Steps 9-10 validated architecture and sync configuration. Now validate that the dependency graph is correct - meaning modules are ordered so dependencies are generated BEFORE the modules that depend on them.
+
+% Why This Matters
+
+When running `pdd sync`, modules are generated in priority order (1, 2, 3...). If module A depends on module B:
+- B must have a LOWER priority number than A
+- B will be generated FIRST, creating the example file
+- A will be generated SECOND, and can include B's example file
+
+If priorities are wrong, `pdd sync` will fail because it tries to include files that don't exist yet.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Architecture
+<architecture_json>
+{step6_output}
+</architecture_json>
+
+% Validation Steps
+
+**1. Extract the dependency graph from architecture.json:**
+
+```bash
+# Show each module with its dependencies and priority
+cat architecture.json | jq -r '.[] | "Priority \(.priority): \(.filename) depends on: [\(.dependencies | join(", "))]"' | sort -t: -k1 -n
+```
+
+**2. Check for priority violations:**
+
+For each module, verify that ALL its dependencies have a LOWER priority number.
+
+```bash
+# This script checks for priority violations
+python3 << 'PYEOF'
+import json
+
+with open('architecture.json') as f:
+    modules = json.load(f)
+
+# Build lookup by filename
+by_filename = {{m['filename']: m for m in modules}}
+
+errors = []
+for module in modules:
+    module_priority = module['priority']
+    module_name = module['filename']
+
+    for dep in module.get('dependencies', []):
+        if dep not in by_filename:
+            errors.append(f"ERROR: {{module_name}} depends on {{dep}} which doesn't exist in architecture.json")
+            continue
+
+        dep_priority = by_filename[dep]['priority']
+        if dep_priority >= module_priority:
+            errors.append(f"PRIORITY ERROR: {{module_name}} (priority {{module_priority}}) depends on {{dep}} (priority {{dep_priority}}). Dependency must have LOWER priority!")
+
+if errors:
+    print("DEPENDENCY GRAPH INVALID")
+    for e in errors:
+        print(f"  - {{e}}")
+else:
+    print("DEPENDENCY GRAPH VALID")
+    print(f"  - {{len(modules)}} modules checked")
+    print(f"  - All dependencies have correct priority ordering")
+PYEOF
+```
+
+**3. Check for circular dependencies:**
+
+```bash
+python3 << 'PYEOF'
+import json
+
+with open('architecture.json') as f:
+    modules = json.load(f)
+
+by_filename = {{m['filename']: m for m in modules}}
+
+def find_cycle(start, current, visited, path):
+    if current in visited:
+        if current == start:
+            return path + [current]
+        return None
+    visited.add(current)
+    path.append(current)
+
+    module = by_filename.get(current)
+    if module:
+        for dep in module.get('dependencies', []):
+            result = find_cycle(start, dep, visited.copy(), path.copy())
+            if result:
+                return result
+    return None
+
+cycles = []
+for module in modules:
+    cycle = find_cycle(module['filename'], module['filename'], set(), [])
+    if cycle and len(cycle) > 2:  # A real cycle, not just self
+        cycle_str = ' -> '.join(cycle)
+        if cycle_str not in [c for c in cycles]:
+            cycles.append(cycle_str)
+
+if cycles:
+    print("CIRCULAR DEPENDENCIES FOUND:")
+    for c in cycles:
+        print(f"  - {{c}}")
+else:
+    print("No circular dependencies found")
+PYEOF
+```
+
+**4. Verify prompt files exist for all modules:**
+
+```bash
+# Check that each module in architecture.json has a corresponding prompt file
+for filename in $(cat architecture.json | jq -r '.[].filename'); do
+    # Find the prompt file (could be in prompts/ or subdirectory)
+    found=$(find prompts -name "$filename" -type f 2>/dev/null | head -1)
+    if [ -z "$found" ]; then
+        echo "MISSING PROMPT: $filename"
+    else
+        echo "OK: $found"
+    fi
+done
+```
+
+**5. Common issues and fixes:**
+
+| Issue | Example | Fix |
+|-------|---------|-----|
+| Priority violation | A (priority 2) depends on B (priority 3) | Change B's priority to 1, A's to 2 |
+| Missing dependency | A depends on "foo.prompt" not in architecture | Add foo module or remove dependency |
+| Circular dependency | A → B → C → A | Extract shared interface to new module D |
+| Missing prompt file | Module in architecture but no prompt | Step 8 didn't create it - rerun step 8 |
+
+% Output
+
+**1. Run all validation checks**
+
+Execute the commands above and collect results.
+
+**2. Output validation result marker**
+
+If the dependency graph is valid (no priority violations, no missing dependencies, no cycles):
+```
+VALIDATION_RESULT: VALID
+```
+
+If there are any issues:
+```
+VALIDATION_RESULT: INVALID
+```
+
+Followed by error details:
+```markdown
+## Dependency Graph Errors
+
+### Priority Violations
+| Module | Priority | Depends On | Dep Priority | Issue |
+|--------|----------|------------|--------------|-------|
+| api_notes_route_TypeScript.prompt | 3 | prisma_client_TypeScript.prompt | 4 | Dependency has HIGHER priority |
+
+### Missing Dependencies
+| Module | Missing Dependency |
+|--------|-------------------|
+| home_page_TypeScriptReact.prompt | nonexistent_TypeScript.prompt |
+
+### Circular Dependencies
+- A → B → C → A
+
+### Suggested Fixes
+1. Change prisma_client_TypeScript.prompt priority from 4 to 2
+2. Change api_notes_route_TypeScript.prompt priority from 3 to 3
+3. Remove invalid dependency from home_page_TypeScriptReact.prompt
+```
+
+**3. Post results to GitHub**
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+```markdown
+## Step 11: Dependency Graph Validation
+
+**Status:** [VALID | INVALID]
+
+### Dependency Graph Analysis
+- Total modules: [N]
+- Total dependencies: [M]
+- Priority violations: [count or "None"]
+- Missing dependencies: [count or "None"]
+- Circular dependencies: [count or "None"]
+
+### Priority Order (for pdd sync)
+| Priority | Module | Dependencies |
+|----------|--------|--------------|
+| 1 | prisma_schema_Prisma.prompt | [] |
+| 2 | prisma_client_TypeScript.prompt | [prisma_schema_Prisma.prompt] |
+| 3 | api_notes_route_TypeScript.prompt | [prisma_client_TypeScript.prompt] |
+| ... | ... | ... |
+
+### Errors (if any)
+[Detailed error list with fixes]
+
+---
+*[All validations passed! | Needs fixes]*
+```
+
+% Important
+
+- A module's dependencies MUST have LOWER priority numbers
+- Priority 1 modules should have NO dependencies (they're generated first)
+- The highest priority modules (pages, entry points) typically depend on lower-priority modules
+- Missing dependencies in architecture.json are ERRORS
+- Circular dependencies are ERRORS
+- DO NOT run preprocess - example files won't exist until pdd sync runs
+- Always output `VALIDATION_RESULT: VALID` or `VALIDATION_RESULT: INVALID`
+- Always post findings to GitHub
