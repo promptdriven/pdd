@@ -12,7 +12,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock
 
-from pdd.llm_invoke import _litellm_success_callback, _CALLBACK_DATA
+from pdd.llm_invoke import _litellm_success_callback, _LAST_CALLBACK_DATA
 
 
 class TestConcurrentLLMCallbacks:
@@ -43,7 +43,7 @@ class TestConcurrentLLMCallbacks:
         }
 
         def simulate_llm_callback(thread_id):
-            """Simulate an LLM call with callback that writes to/reads from thread-local _CALLBACK_DATA."""
+            """Simulate an LLM call with callback that writes to/reads from thread-local _LAST_CALLBACK_DATA."""
             test_case = test_cases[thread_id]
 
             # Create mock completion response
@@ -66,7 +66,7 @@ class TestConcurrentLLMCallbacks:
             elif thread_id == 'thread_2':
                 time.sleep(0.02)
 
-            # Step 1: Callback writes to global _CALLBACK_DATA
+            # Step 1: Callback writes to global _LAST_CALLBACK_DATA
             # This simulates LiteLLM calling our success callback
             _litellm_success_callback(
                 kwargs=mock_kwargs,
@@ -78,14 +78,14 @@ class TestConcurrentLLMCallbacks:
             # Small delay to let other threads write (simulates async callback timing)
             time.sleep(0.03)
 
-            # Step 2: Read from thread-local _CALLBACK_DATA
+            # Step 2: Read from thread-local _LAST_CALLBACK_DATA
             # This simulates llm_invoke reading the callback data (pdd/llm_invoke.py:2751)
             with results_lock:
                 thread_results[thread_id] = {
-                    'read_cost': getattr(_CALLBACK_DATA, 'cost', 0.0),
-                    'read_input_tokens': getattr(_CALLBACK_DATA, 'input_tokens', 0),
-                    'read_output_tokens': getattr(_CALLBACK_DATA, 'output_tokens', 0),
-                    'read_finish_reason': getattr(_CALLBACK_DATA, 'finish_reason', None),
+                    'read_cost': getattr(_LAST_CALLBACK_DATA, 'cost', 0.0),
+                    'read_input_tokens': getattr(_LAST_CALLBACK_DATA, 'input_tokens', 0),
+                    'read_output_tokens': getattr(_LAST_CALLBACK_DATA, 'output_tokens', 0),
+                    'read_finish_reason': getattr(_LAST_CALLBACK_DATA, 'finish_reason', None),
                     'expected_cost': test_case['cost'],
                     'expected_input_tokens': test_case['input_tokens'],
                     'expected_output_tokens': test_case['output_tokens'],
@@ -174,7 +174,7 @@ class TestConcurrentLLMCallbacks:
 
             mock_kwargs = {}
 
-            # Call callback (writes to thread-local _CALLBACK_DATA)
+            # Call callback (writes to thread-local _LAST_CALLBACK_DATA)
             _litellm_success_callback(
                 kwargs=mock_kwargs,
                 completion_response=mock_response,
@@ -182,12 +182,12 @@ class TestConcurrentLLMCallbacks:
                 end_time=1.0
             )
 
-            # Read from thread-local _CALLBACK_DATA (immediately after callback)
+            # Read from thread-local _LAST_CALLBACK_DATA (immediately after callback)
             result = {
-                'cost': getattr(_CALLBACK_DATA, 'cost', 0.0),
-                'input_tokens': getattr(_CALLBACK_DATA, 'input_tokens', 0),
-                'output_tokens': getattr(_CALLBACK_DATA, 'output_tokens', 0),
-                'finish_reason': getattr(_CALLBACK_DATA, 'finish_reason', None),
+                'cost': getattr(_LAST_CALLBACK_DATA, 'cost', 0.0),
+                'input_tokens': getattr(_LAST_CALLBACK_DATA, 'input_tokens', 0),
+                'output_tokens': getattr(_LAST_CALLBACK_DATA, 'output_tokens', 0),
+                'finish_reason': getattr(_LAST_CALLBACK_DATA, 'finish_reason', None),
             }
             results.append(result)
 

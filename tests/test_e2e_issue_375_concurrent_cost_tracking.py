@@ -5,7 +5,7 @@ This E2E test exercises the full code path that a user would experience when run
 concurrent operations in server mode (`pdd connect`). It verifies that cost tracking
 works correctly when multiple jobs run concurrently.
 
-The fix: Thread-local storage (`_CALLBACK_DATA`) isolates callback data per thread,
+The fix: Thread-local storage (`_LAST_CALLBACK_DATA`) isolates callback data per thread,
 ensuring each concurrent job tracks its own cost data independently.
 
 Scenario from the bug report:
@@ -18,14 +18,14 @@ Scenario from the bug report:
 This E2E test:
 1. Simulates 3 concurrent threads calling _litellm_success_callback() (as happens during LLM calls)
 2. Each thread configured to write different cost values ($0.10, $0.30, $0.05)
-3. Each thread reads from _CALLBACK_DATA after writing (as llm_invoke does)
+3. Each thread reads from _LAST_CALLBACK_DATA after writing (as llm_invoke does)
 4. Verifies each thread retrieves its own cost (not corrupted by other threads)
 
 The test should FAIL on buggy code (threads read wrong costs) and PASS once the fix
 is applied (using threading.local() for thread-safe callback data storage).
 
 This is an E2E test (not just a unit test) because it:
-- Uses real _litellm_success_callback() and _CALLBACK_DATA
+- Uses real _litellm_success_callback() and _LAST_CALLBACK_DATA
 - Simulates the actual execution flow in server mode
 - Tests the full write→read cycle that happens in production
 - Exercises the same code paths users encounter
@@ -37,7 +37,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock
 
-from pdd.llm_invoke import _litellm_success_callback, _CALLBACK_DATA
+from pdd.llm_invoke import _litellm_success_callback, _LAST_CALLBACK_DATA
 
 
 @pytest.mark.e2e
@@ -55,8 +55,8 @@ class TestConcurrentCostTrackingE2E:
 
         This test simulates the exact scenario from the bug report:
         - 3 concurrent jobs (matching server's max_concurrent=3)
-        - Each job's LiteLLM callback writes different costs to _CALLBACK_DATA
-        - Each job reads back from _CALLBACK_DATA (as llm_invoke does at line 2749)
+        - Each job's LiteLLM callback writes different costs to _LAST_CALLBACK_DATA
+        - Each job reads back from _LAST_CALLBACK_DATA (as llm_invoke does at line 2749)
         - Verify each job gets its own cost (not corrupted by other jobs)
 
         Expected behavior (after fix):
@@ -66,7 +66,7 @@ class TestConcurrentCostTrackingE2E:
 
         Bug behavior (Issue #375):
         - All jobs read the last written value (likely $0.05 from Job 3)
-        - Cost data is corrupted due to shared global _CALLBACK_DATA
+        - Cost data is corrupted due to shared global _LAST_CALLBACK_DATA
         - 2 out of 3 jobs report wrong costs
         """
         # Track results with thread-safe data structure
@@ -88,8 +88,8 @@ class TestConcurrentCostTrackingE2E:
 
             This mirrors the exact flow in pdd/llm_invoke.py:
             - Line 2733: litellm.completion() triggers callback
-            - Callback (line 764-767): Writes to _CALLBACK_DATA
-            - Line 2749: llm_invoke reads from _CALLBACK_DATA
+            - Callback (line 764-767): Writes to _LAST_CALLBACK_DATA
+            - Line 2749: llm_invoke reads from _LAST_CALLBACK_DATA
             """
             config = job_configs[job_id]
 
@@ -117,7 +117,7 @@ class TestConcurrentCostTrackingE2E:
             elif job_id == 'job_3':
                 time.sleep(0.02)
 
-            # STEP 1: LiteLLM triggers success callback (writes to _CALLBACK_DATA)
+            # STEP 1: LiteLLM triggers success callback (writes to _LAST_CALLBACK_DATA)
             # This is the write path - pdd/llm_invoke.py lines 764-767
             _litellm_success_callback(
                 kwargs=mock_kwargs,
@@ -131,13 +131,13 @@ class TestConcurrentCostTrackingE2E:
             # and when llm_invoke reads the data
             time.sleep(0.03)
 
-            # STEP 2: llm_invoke reads from thread-local _CALLBACK_DATA
+            # STEP 2: llm_invoke reads from thread-local _LAST_CALLBACK_DATA
             # This is the read path - pdd/llm_invoke.py line 2751
             # With thread-local storage, each thread reads its own data
-            read_cost = getattr(_CALLBACK_DATA, 'cost', 0.0)
-            read_input_tokens = getattr(_CALLBACK_DATA, 'input_tokens', 0)
-            read_output_tokens = getattr(_CALLBACK_DATA, 'output_tokens', 0)
-            read_finish_reason = getattr(_CALLBACK_DATA, 'finish_reason', None)
+            read_cost = getattr(_LAST_CALLBACK_DATA, 'cost', 0.0)
+            read_input_tokens = getattr(_LAST_CALLBACK_DATA, 'input_tokens', 0)
+            read_output_tokens = getattr(_LAST_CALLBACK_DATA, 'output_tokens', 0)
+            read_finish_reason = getattr(_LAST_CALLBACK_DATA, 'finish_reason', None)
 
             # Store what this job read
             with results_lock:
@@ -211,7 +211,7 @@ class TestConcurrentCostTrackingE2E:
 
             failure_msg += (
                 f"\nRoot cause:\n"
-                f"  The global _CALLBACK_DATA dictionary in pdd/llm_invoke.py:689\n"
+                f"  The global _LAST_CALLBACK_DATA dictionary in pdd/llm_invoke.py:690\n"
                 f"  is shared across all threads in server mode. When concurrent jobs\n"
                 f"  run, their callbacks overwrite each other's cost data before jobs\n"
                 f"  can read it (race condition at lines 764-767 write, line 2749 read).\n\n"
@@ -220,7 +220,7 @@ class TestConcurrentCostTrackingE2E:
                 f"  - Cost reports are incorrect\n"
                 f"  - Users are misled about their spending\n\n"
                 f"Fix:\n"
-                f"  Replace _CALLBACK_DATA with threading.local() for\n"
+                f"  Replace _LAST_CALLBACK_DATA with threading.local() for\n"
                 f"  thread-safe callback data storage.\n"
                 f"{'='*70}\n"
             )
@@ -259,9 +259,9 @@ class TestConcurrentCostTrackingE2E:
             )
 
             # Read cost (should get correct value from thread-local storage)
-            read_cost = getattr(_CALLBACK_DATA, 'cost', 0.0)
-            read_input_tokens = getattr(_CALLBACK_DATA, 'input_tokens', 0)
-            read_output_tokens = getattr(_CALLBACK_DATA, 'output_tokens', 0)
+            read_cost = getattr(_LAST_CALLBACK_DATA, 'cost', 0.0)
+            read_input_tokens = getattr(_LAST_CALLBACK_DATA, 'input_tokens', 0)
+            read_output_tokens = getattr(_LAST_CALLBACK_DATA, 'output_tokens', 0)
 
             # Verify correctness
             assert read_input_tokens == config['input_tokens'], (

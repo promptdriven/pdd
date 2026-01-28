@@ -158,8 +158,7 @@ def test_llm_invoke_valid_input(mock_load_models, mock_set_llm_cache):
             mock_response = create_mock_litellm_response(mock_response_content, model_name='gpt-5-nano')
             mock_completion.return_value = mock_response
             mock_cost = 0.0001
-            mock_callback_data = type('obj', (object,), {'cost': mock_cost, 'input_tokens': 10, 'output_tokens': 10, 'finish_reason': 'stop'})()
-            with patch('pdd.llm_invoke._CALLBACK_DATA', mock_callback_data):
+            with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 10}):
                  response = llm_invoke(
                      "Valid prompt about {topic}", 
                      {"topic": "cats"},
@@ -211,8 +210,7 @@ def test_llm_invoke_strength_less_than_half(mock_load_models, mock_set_llm_cache
             mock_response = create_mock_litellm_response(mock_response_content, model_name='gemini-pro')
             mock_completion.return_value = mock_response
             mock_cost = 0.00002 
-            mock_callback_data = type('obj', (object,), {'cost': mock_cost, 'input_tokens': 5, 'output_tokens': 5, 'finish_reason': 'stop'})()
-            with patch('pdd.llm_invoke._CALLBACK_DATA', mock_callback_data):
+            with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 5, "output_tokens": 5}):
                 response = llm_invoke(
                     "Test prompt", {"topic": "test"},
                     strength=0.3, 
@@ -315,7 +313,7 @@ def test_e2e_include_preprocess_llm_no_missing_key(tmp_path, monkeypatch):
     with patch("pdd.llm_invoke._load_model_data", return_value=_mock_models_df()):
         with patch.dict(os.environ, {"OPENAI_API_KEY": "fake", "PDD_FORCE_LOCAL": "1"}, clear=False):
             with patch("pdd.llm_invoke.litellm.completion", return_value=_mock_litellm_response()):
-                with patch("pdd.llm_invoke._CALLBACK_DATA", {"cost": 0.0, "input_tokens": 5, "output_tokens": 5}):
+                with patch("pdd.llm_invoke._LAST_CALLBACK_DATA", {"cost": 0.0, "input_tokens": 5, "output_tokens": 5}):
                     resp = llm_invoke(prompt=processed_prompt, input_json={}, strength=0.5, temperature=0.0, verbose=False)
 
     assert isinstance(resp, dict)
@@ -329,8 +327,7 @@ def test_llm_invoke_strength_greater_than_half(mock_load_models, mock_set_llm_ca
             mock_response = create_mock_litellm_response(mock_response_content, model_name='gemini-pro')
             mock_completion.return_value = mock_response
             mock_cost = 0.00009 
-            mock_callback_data = type('obj', (object,), {'cost': mock_cost, 'input_tokens': 8, 'output_tokens': 8, 'finish_reason': 'stop'})()
-            with patch('pdd.llm_invoke._CALLBACK_DATA', mock_callback_data):
+            with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 8, "output_tokens": 8}):
                 response = llm_invoke(
                     "Test prompt", {"topic": "test"},
                     strength=0.7, 
@@ -351,8 +348,7 @@ def test_llm_invoke_output_pydantic_supported(mock_load_models, mock_set_llm_cac
             mock_response = create_mock_litellm_response(expected_result, model_name='gpt-5-nano')
             mock_completion.return_value = mock_response
             mock_cost = 0.00015
-            mock_callback_data = type('obj', (object,), {'cost': mock_cost, 'input_tokens': 10, 'output_tokens': 5, 'finish_reason': 'stop'})()
-            with patch('pdd.llm_invoke._CALLBACK_DATA', mock_callback_data):
+            with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 5}):
                 response = llm_invoke(
                     prompt="Provide data.", input_json={"query": "Provide data."},
                     strength=0.5, 
@@ -383,8 +379,7 @@ def test_llm_invoke_output_pydantic_unsupported_parses(mock_load_models, mock_se
             mock_response = create_mock_litellm_response(json_response_str, model_name='gemini-pro')
             mock_completion.return_value = mock_response
             mock_cost = 0.00008
-            mock_callback_data = type('obj', (object,), {'cost': mock_cost, 'input_tokens': 10, 'output_tokens': 15, 'finish_reason': 'stop'})()
-            with patch('pdd.llm_invoke._CALLBACK_DATA', mock_callback_data):
+            with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 15}):
                 response = llm_invoke(
                     prompt="Provide data.", input_json={"query": "Provide data."},
                     strength=0.3, 
@@ -428,8 +423,7 @@ def test_llm_invoke_output_pydantic_unsupported_fails_parse(mock_load_models, mo
             mock_response = create_mock_litellm_response(invalid_json_str, model_name='test-model')
             mock_completion.return_value = mock_response
             mock_cost = 0.00009
-            mock_callback_data = type('obj', (object,), {'cost': mock_cost, 'input_tokens': 11, 'output_tokens': 16, 'finish_reason': 'stop'})()
-            with patch('pdd.llm_invoke._CALLBACK_DATA', mock_callback_data):
+            with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 11, "output_tokens": 16}):
                 # All models fail validation, so RuntimeError should be raised
                 with pytest.raises(RuntimeError, match="All candidate models failed"):
                     llm_invoke(
@@ -490,7 +484,7 @@ def test_llm_invoke_auth_error_new_key_retry(mock_load_models, mock_set_llm_cach
          patch('builtins.open', mock_open()), \
          patch('builtins.input', mock_input), \
          patch('pdd.llm_invoke.litellm.completion', mock_completion), \
-         patch('pdd.llm_invoke._CALLBACK_DATA', {"cost": 0.0001, "input_tokens": 10, "output_tokens": 10}):
+         patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": 0.0001, "input_tokens": 10, "output_tokens": 10}):
         response = llm_invoke(prompt=prompt, input_json=input_json, strength=0.5, verbose=True)
         assert response['result'] == "Success after retry"
         assert response['model_name'] == 'gpt-5-nano'
@@ -512,8 +506,7 @@ def test_llm_invoke_verbose(mock_load_models, mock_set_llm_cache, caplog): # Cha
             )
             mock_completion.return_value = mock_response
             mock_cost = 0.00005
-            mock_callback_data = type('obj', (object,), {'cost': mock_cost, 'input_tokens': 15, 'output_tokens': 25, 'finish_reason': 'stop'})()
-            with patch('pdd.llm_invoke._CALLBACK_DATA', mock_callback_data):
+            with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 15, "output_tokens": 25}):
                 prompt = "Tell me a joke about {topic}."
                 input_json = {"topic": "cats"}
                 strength = 0.5 
@@ -558,8 +551,7 @@ def test_llm_invoke_with_env_variables(mock_load_models, mock_set_llm_cache):
             mock_response = create_mock_litellm_response("Mocked LLM response", model_name='gpt-5-nano')
             mock_completion.return_value = mock_response
             mock_cost = 0.0001
-            mock_callback_data = type('obj', (object,), {'cost': mock_cost, 'input_tokens': 10, 'output_tokens': 5, 'finish_reason': 'stop'})()
-            with patch('pdd.llm_invoke._CALLBACK_DATA', mock_callback_data):
+            with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 5}):
                 prompt = "Tell me a joke about cats."
                 input_json = {"topic": "cats"}
                 response = llm_invoke(prompt=prompt, input_json=input_json) 
@@ -878,8 +870,7 @@ def test_llm_invoke_retries_on_invalid_python_code(mock_load_models, mock_set_ll
             mock_completion.side_effect = [mock_response_1, mock_response_2]
 
             mock_cost = 0.0001
-            mock_callback_data = type('obj', (object,), {'cost': mock_cost, 'input_tokens': 10, 'output_tokens': 10, 'finish_reason': 'stop'})()
-            with patch('pdd.llm_invoke._CALLBACK_DATA', mock_callback_data):
+            with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 10}):
                 response = llm_invoke(
                     prompt="Generate code for {task}",
                     input_json={"task": "test"},
@@ -916,8 +907,7 @@ def test_llm_invoke_uses_repaired_code_without_retry(mock_load_models, mock_set_
             mock_completion.return_value = mock_response
 
             mock_cost = 0.0001
-            mock_callback_data = type('obj', (object,), {'cost': mock_cost, 'input_tokens': 10, 'output_tokens': 10, 'finish_reason': 'stop'})()
-            with patch('pdd.llm_invoke._CALLBACK_DATA', mock_callback_data):
+            with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 10}):
                 response = llm_invoke(
                     prompt="Generate code for {task}",
                     input_json={"task": "test"},
@@ -956,8 +946,7 @@ def test_llm_invoke_no_retry_in_batch_mode(mock_load_models, mock_set_llm_cache,
             mock_batch_completion.return_value = [mock_response]
 
             mock_cost = 0.0001
-            mock_callback_data = type('obj', (object,), {'cost': mock_cost, 'input_tokens': 10, 'output_tokens': 10, 'finish_reason': 'stop'})()
-            with patch('pdd.llm_invoke._CALLBACK_DATA', mock_callback_data):
+            with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 10}):
                 response = llm_invoke(
                     prompt="Generate code for {task}",
                     input_json=[{"task": "test"}],  # List triggers batch mode
@@ -1108,8 +1097,7 @@ def test_llm_invoke_responses_api_malformed_json_should_not_return_string(mock_l
         with patch('pdd.llm_invoke.litellm.responses', return_value=mock_responses_return) as mock_responses:
             with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
                 mock_cost = 0.0001
-                mock_callback_data = type('obj', (object,), {'cost': mock_cost, 'input_tokens': 10, 'output_tokens': 10, 'finish_reason': 'stop'})()
-            with patch('pdd.llm_invoke._CALLBACK_DATA', mock_callback_data):
+                with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 10}):
                     response = llm_invoke(
                         prompt="Test prompt {text}",
                         input_json={"text": "test"},
@@ -1148,8 +1136,7 @@ def test_llm_invoke_responses_api_valid_json_parses_correctly(mock_load_models, 
         with patch('pdd.llm_invoke.litellm.responses', return_value=mock_responses_return) as mock_responses:
             with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
                 mock_cost = 0.0001
-                mock_callback_data = type('obj', (object,), {'cost': mock_cost, 'input_tokens': 10, 'output_tokens': 10, 'finish_reason': 'stop'})()
-            with patch('pdd.llm_invoke._CALLBACK_DATA', mock_callback_data):
+                with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 10}):
                     response = llm_invoke(
                         prompt="Test prompt {text}",
                         input_json={"text": "test"},
@@ -1365,8 +1352,7 @@ class TestApiKeyInputHang:
 
             with patch('builtins.input', side_effect=mock_input_side_effect):
                 with patch('pdd.llm_invoke.litellm.completion', mock_completion):
-                    mock_callback_data = type('obj', (object,), {'cost': 0.001, 'input_tokens': 0, 'output_tokens': 0, 'finish_reason': 'stop'})()
-            with patch('pdd.llm_invoke._CALLBACK_DATA', mock_callback_data):
+                    with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": 0.001}):
                         # Should successfully invoke with a model that has API key
                         # (even though first model's key was cancelled)
                         result = llm_invoke(prompt=prompt, input_json=input_json, strength=0.5)
@@ -1404,8 +1390,7 @@ def test_llm_invoke_pydantic_validation_failure_triggers_model_fallback(mock_loa
             mock_completion.side_effect = [first_response, second_response]
 
             mock_cost = 0.0001
-            mock_callback_data = type('obj', (object,), {'cost': mock_cost, 'input_tokens': 10, 'output_tokens': 10, 'finish_reason': 'stop'})()
-            with patch('pdd.llm_invoke._CALLBACK_DATA', mock_callback_data):
+            with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 10}):
                 response = llm_invoke(
                     prompt="Provide data.",
                     input_json={"query": "test"},
@@ -1458,8 +1443,7 @@ def test_llm_invoke_missing_required_field_triggers_model_fallback(mock_load_mod
             mock_completion.side_effect = [first_response, second_response]
 
             mock_cost = 0.0001
-            mock_callback_data = type('obj', (object,), {'cost': mock_cost, 'input_tokens': 10, 'output_tokens': 10, 'finish_reason': 'stop'})()
-            with patch('pdd.llm_invoke._CALLBACK_DATA', mock_callback_data):
+            with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 10}):
                 response = llm_invoke(
                     prompt="Fix the code that has errors.",
                     input_json={"code": "broken_code"},
@@ -1507,8 +1491,7 @@ def test_llm_invoke_all_models_fail_validation_raises_runtime_error(mock_load_mo
             mock_completion.side_effect = responses
 
             mock_cost = 0.0001
-            mock_callback_data = type('obj', (object,), {'cost': mock_cost, 'input_tokens': 10, 'output_tokens': 10, 'finish_reason': 'stop'})()
-            with patch('pdd.llm_invoke._CALLBACK_DATA', mock_callback_data):
+            with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 10}):
                 with pytest.raises(RuntimeError, match="All candidate models failed"):
                     llm_invoke(
                         prompt="Fix the code that has errors.",
@@ -1562,8 +1545,7 @@ def test_llm_invoke_dict_response_missing_field_triggers_fallback(mock_load_mode
             mock_completion.side_effect = [first_response, second_response]
 
             mock_cost = 0.0001
-            mock_callback_data = type('obj', (object,), {'cost': mock_cost, 'input_tokens': 10, 'output_tokens': 10, 'finish_reason': 'stop'})()
-            with patch('pdd.llm_invoke._CALLBACK_DATA', mock_callback_data):
+            with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 10}):
                 response = llm_invoke(
                     prompt="Fix the code that has errors.",
                     input_json={"code": "broken_code"},
@@ -1618,7 +1600,7 @@ def test_deepseek_maas_passes_response_format_for_structured_output(mock_set_llm
                 )
                 mock_completion.return_value = mock_response
 
-                with patch('pdd.llm_invoke._CALLBACK_DATA',
+                with patch('pdd.llm_invoke._LAST_CALLBACK_DATA',
                           {"cost": 0.0001, "input_tokens": 10, "output_tokens": 10}):
                     response = llm_invoke(
                         prompt="Return a sample output.",
@@ -1685,7 +1667,7 @@ def test_vertex_ai_claude_opus_passes_response_format_for_structured_output(mock
                 )
                 mock_completion.return_value = mock_response
 
-                with patch('pdd.llm_invoke._CALLBACK_DATA',
+                with patch('pdd.llm_invoke._LAST_CALLBACK_DATA',
                           {"cost": 0.0001, "input_tokens": 10, "output_tokens": 10}):
                     response = llm_invoke(
                         prompt="Return a sample output.",
@@ -1743,7 +1725,7 @@ def test_structured_output_uses_strict_json_schema_mode(mock_set_llm_cache):
                 )
                 mock_completion.return_value = mock_response
 
-                with patch('pdd.llm_invoke._CALLBACK_DATA',
+                with patch('pdd.llm_invoke._LAST_CALLBACK_DATA',
                           {"cost": 0.0001, "input_tokens": 10, "output_tokens": 10}):
                     llm_invoke(
                         prompt="Return a sample output.",
@@ -2006,7 +1988,7 @@ def test_llm_invoke_force_local_env_var():
                     mock_load.return_value = mock_df
 
                     with patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key"}):
-                        with patch("pdd.llm_invoke._CALLBACK_DATA", {"cost": 0.001}):
+                        with patch("pdd.llm_invoke._LAST_CALLBACK_DATA", {"cost": 0.001}):
                             llm_invoke(
                                 prompt="Test {topic}",
                                 input_json={"topic": "test"},
@@ -2047,7 +2029,7 @@ def test_llm_invoke_use_cloud_false():
                 mock_load.return_value = mock_df
 
                 with patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key"}):
-                    with patch("pdd.llm_invoke._CALLBACK_DATA", {"cost": 0.001}):
+                    with patch("pdd.llm_invoke._LAST_CALLBACK_DATA", {"cost": 0.001}):
                         llm_invoke(
                             prompt="Test {topic}",
                             input_json={"topic": "test"},
@@ -2114,7 +2096,7 @@ def test_llm_invoke_cloud_fallback_on_error():
                 mock_load.return_value = mock_df
 
                 with patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key"}):
-                    with patch("pdd.llm_invoke._CALLBACK_DATA", {"cost": 0.001}):
+                    with patch("pdd.llm_invoke._LAST_CALLBACK_DATA", {"cost": 0.001}):
                         # Mock the console to avoid output during test
                         with patch("rich.console.Console"):
                             result = llm_invoke(
@@ -2177,7 +2159,7 @@ def test_llm_invoke_cloud_invocation_error_fallback():
                 mock_load.return_value = mock_df
 
                 with patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key"}):
-                    with patch("pdd.llm_invoke._CALLBACK_DATA", {"cost": 0.001}):
+                    with patch("pdd.llm_invoke._LAST_CALLBACK_DATA", {"cost": 0.001}):
                         with patch("rich.console.Console"):
                             result = llm_invoke(
                                 prompt="Test {topic}",
@@ -2409,8 +2391,7 @@ def test_llm_invoke_time_none_does_not_crash(mock_load_models, mock_set_llm_cach
             )
             mock_completion.return_value = mock_response
             mock_cost = 0.00003
-            mock_callback_data = type('obj', (object,), {'cost': mock_cost, 'input_tokens': 10, 'output_tokens': 20, 'finish_reason': 'stop'})()
-            with patch('pdd.llm_invoke._CALLBACK_DATA', mock_callback_data):
+            with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 20}):
                 # This should NOT raise TypeError
                 response = llm_invoke(
                     prompt="Test prompt {var}",
@@ -2455,8 +2436,7 @@ def test_openai_strict_mode_schema_includes_additional_properties_false(mock_loa
             mock_response = create_mock_litellm_response(expected_result, model_name='gpt-5-nano')
             mock_completion.return_value = mock_response
             mock_cost = 0.00015
-            mock_callback_data = type('obj', (object,), {'cost': mock_cost, 'input_tokens': 10, 'output_tokens': 5, 'finish_reason': 'stop'})()
-            with patch('pdd.llm_invoke._CALLBACK_DATA', mock_callback_data):
+            with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 5}):
                 response = llm_invoke(
                     prompt="Provide data.", input_json={"query": "Provide data."},
                     strength=0.5,
@@ -2525,8 +2505,7 @@ def test_no_warning_for_removed_base_model(mock_set_llm_cache, caplog):
                     mock_response = create_mock_litellm_response("Test", model_name='gemini/gemini-2.0-flash-exp')
                     mock_completion.return_value = mock_response
 
-                    mock_callback_data = type('obj', (object,), {'cost': 0.0001, 'input_tokens': 10, 'output_tokens': 10, 'finish_reason': 'stop'})()
-                    with patch('pdd.llm_invoke._CALLBACK_DATA', mock_callback_data):
+                    with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": 0.0001, "input_tokens": 10, "output_tokens": 10}):
                         with caplog.at_level(logging.WARNING):
                             response = llm_invoke(
                                 prompt="Test prompt",
@@ -2590,8 +2569,7 @@ def test_first_available_model_selected_when_base_missing(mock_set_llm_cache, ca
                     mock_response = create_mock_litellm_response("Test", model_name='gemini/gemini-2.0-flash-exp')
                     mock_completion.return_value = mock_response
 
-                    mock_callback_data = type('obj', (object,), {'cost': 0.0001, 'input_tokens': 10, 'output_tokens': 10, 'finish_reason': 'stop'})()
-                    with patch('pdd.llm_invoke._CALLBACK_DATA', mock_callback_data):
+                    with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": 0.0001, "input_tokens": 10, "output_tokens": 10}):
                         response = llm_invoke(
                             prompt="Test prompt",
                             input_json={"test": "data"},
@@ -2647,8 +2625,7 @@ def test_legitimate_api_key_warnings_still_shown(mock_set_llm_cache, caplog):
                     mock_response = create_mock_litellm_response("Test", model_name='gpt-4o-mini')
                     mock_completion.return_value = mock_response
 
-                    mock_callback_data = type('obj', (object,), {'cost': 0.0001, 'input_tokens': 10, 'output_tokens': 10, 'finish_reason': 'stop'})()
-                    with patch('pdd.llm_invoke._CALLBACK_DATA', mock_callback_data):
+                    with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": 0.0001, "input_tokens": 10, "output_tokens": 10}):
                         with caplog.at_level(logging.WARNING):
                             response = llm_invoke(
                                 prompt="Test prompt",
@@ -2719,8 +2696,7 @@ def test_fallback_works_across_different_strength_values(mock_set_llm_cache, cap
                     mock_response = create_mock_litellm_response("Test", model_name='gemini/gemini-2.0-flash-exp')
                     mock_completion.return_value = mock_response
 
-                    mock_callback_data = type('obj', (object,), {'cost': 0.0001, 'input_tokens': 10, 'output_tokens': 10, 'finish_reason': 'stop'})()
-                    with patch('pdd.llm_invoke._CALLBACK_DATA', mock_callback_data):
+                    with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": 0.0001, "input_tokens": 10, "output_tokens": 10}):
                         with caplog.at_level(logging.WARNING):
                             response_low = llm_invoke(
                                 prompt="Test prompt",
@@ -2743,8 +2719,7 @@ def test_fallback_works_across_different_strength_values(mock_set_llm_cache, cap
                     mock_response = create_mock_litellm_response("Test", model_name='claude-3-opus')
                     mock_completion.return_value = mock_response
 
-                    mock_callback_data_high = type('obj', (object,), {'cost': 0.001, 'input_tokens': 10, 'output_tokens': 10, 'finish_reason': 'stop'})()
-                    with patch('pdd.llm_invoke._CALLBACK_DATA', mock_callback_data_high):
+                    with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": 0.001, "input_tokens": 10, "output_tokens": 10}):
                         with caplog.at_level(logging.WARNING):
                             response_high = llm_invoke(
                                 prompt="Test prompt",
@@ -2807,8 +2782,7 @@ def test_user_csv_removes_unwanted_model_family(mock_set_llm_cache, caplog):
                     mock_response = create_mock_litellm_response("Test", model_name='gemini/gemini-2.0-flash-exp')
                     mock_completion.return_value = mock_response
 
-                    mock_callback_data = type('obj', (object,), {'cost': 0.0001, 'input_tokens': 10, 'output_tokens': 10, 'finish_reason': 'stop'})()
-                    with patch('pdd.llm_invoke._CALLBACK_DATA', mock_callback_data):
+                    with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": 0.0001, "input_tokens": 10, "output_tokens": 10}):
                         with caplog.at_level(logging.WARNING):
                             response = llm_invoke(
                                 prompt="Test prompt for model family exclusion",
