@@ -659,7 +659,8 @@ def _create_synthetic_run_report_for_agentic_success(
     )
 
     # Save the report
-    report_file = META_DIR / f"{_safe_basename(basename)}_{language}_run_report.json"
+    # NOTE: Must use _run.json (not _run_report.json) to match read_run_report() in sync_determine_operation.py
+    report_file = META_DIR / f"{_safe_basename(basename)}_{language}_run.json"
     if atomic_state:
         atomic_state.set_run_report(asdict(report), report_file)
     else:
