@@ -46,7 +46,7 @@ So why are we still **patching**?
 
 ---
 
-## PART 1: THE ECONOMICS OF DARNING (2:00 - 5:00)
+## PART 1: THE ECONOMICS OF DARNING (2:00 - 5:45)
 
 [PAUSE: 2s]
 
@@ -76,24 +76,82 @@ For *fifty years*, generating new code was expensive. Writing from scratch took 
 
 [PAUSE: 1.5s]
 
+[TONE: acknowledging, fair]
+Now, here's where it gets interesting. AI made patching faster *too*. Cursor, Claude Code, Copilot—they're **incredible** tools. They understand your codebase, suggest fixes, catch bugs before you make them.
+
+[PAUSE: 1s]
+
+[TONE: validating]
+Look—each patch is getting *faster*. That's **real**. That's what you feel when you use these tools.
+
+[PAUSE: 1.5s]
+
+[TONE: pivoting to reveal]
+But watch the *dashed* line. The **total** cost. It's barely moving.
+
+[PAUSE: 1s]
+
+[TONE: explaining the paradox]
+Because even though each patch is faster, every patch still leaves *residue*. Technical debt. And that debt accumulates—**faster** now, because you're patching faster.
+
+[PAUSE: 1.5s]
+
+[TONE: stark, data-driven]
+AI gave you a **sixty percent** speedup on individual patches. But your total cost? Down **four percent**. The debt ate the rest.
+
+[PAUSE: 2s]
+
+### CONTEXT ROT
+
+[TONE: revealing something new]
+And there's something *else* hiding in that debt. Something specific to **AI-assisted** development.
+
+[PAUSE: 1.5s]
+
+[TONE: setting up the concept]
+When your codebase is *small*, AI tools are **brilliant**. The context window—what the model can actually *see*—covers almost everything. It understands how the pieces connect.
+
+[PAUSE: 1.5s]
+
+[TONE: building tension]
+[PACE: slightly slower]
+But codebases *grow*. And that window? [PAUSE: 0.5s] It stays the **same size**.
+
+[PAUSE: 1.5s]
+
+[TONE: vivid imagery]
+Now the AI is looking through a **keyhole**. It has to *guess* what's relevant. And increasingly... [PAUSE: 0.5s] it guesses **wrong**.
+
+[PAUSE: 1s]
+
+[TONE: connecting to experience]
+The code it *needs* is outside the window. The code *inside*? [PAUSE: 0.3s] Something else entirely.
+
+[PAUSE: 1.5s]
+
+[TONE: explanatory, empathetic]
+This is why AI-assisted patching feels *great* at first... and **frustrating** later. It's not the model getting *dumber*. It's the **ratio** getting worse. Every patch makes the codebase bigger. Every patch shrinks what the AI can see.
+
+[PAUSE: 2s]
+
+[TONE: solution emerging]
+Regeneration doesn't have this problem. A single module with a clear prompt? [PAUSE: 0.5s] That **fits** in the window. [PAUSE: 0.3s] *Every* time.
+
+[PAUSE: 1.5s]
+
 [TONE: significant, emphatic]
 [PACE: slightly slower]
-But look where we are **now**. The cost to generate code just crossed **below** the cost to carefully patch it.
+Meanwhile, generation just crossed below **both** lines. And it comes with no debt. [PAUSE: 0.5s] No *rot*.
 
 [PAUSE: 2s]
 
 [TONE: appreciative but pivoting]
-Tools like Cursor and Claude Code are *fantastic*. Best darning needles **ever made**. They make patching faster, cleaner, less painful.
+Tools like Cursor and Claude Code are the best darning needles **ever made**. I *use* them. They're fantastic.
 
 [PAUSE: 1s]
 
 [TONE: pointed, landing the blow]
-But they're still **darning needles**.
-
-[PAUSE: 1.5s]
-
-[TONE: weary wisdom]
-And here's the thing about darning: every patch you add makes the *next* patch harder. The sock gets stiffer. The code gets more tangled. Patches... [PAUSE: 0.5s] **accumulate**.
+But they're still **darning needles**. And the fundamental problem with darning isn't *speed*—it's **accumulation**.
 
 [PAUSE: 1.5s]
 
@@ -104,16 +162,16 @@ This is the part of software economics *nobody talks about*. **Eighty to ninety 
 [PAUSE: 1s]
 
 [TONE: driving home the point]
-It's *maintaining* it. [PAUSE: 0.3s] Patching it. [PAUSE: 0.3s] Navigating around all the previous patches.
+It's *maintaining* it. [PAUSE: 0.3s] Navigating around all the previous patches. [PAUSE: 0.3s] Understanding what the last ten developers did and *why*.
 
 [PAUSE: 0.8s]
 
-[EMOTION: ominous]
-And those costs... **compound**.
+[EMOTION: ominous but hopeful]
+And those costs... **compound**. [PAUSE: 0.8s] Unless you regenerate. Then they reset to **zero**.
 
 ---
 
-## PART 2: THE PARADIGM SHIFT (5:00 - 8:00)
+## PART 2: THE PARADIGM SHIFT (5:45 - 8:45)
 
 [PAUSE: 2s]
 
@@ -169,7 +227,7 @@ The prompt is your mold. The code is just... *plastic*.
 
 ---
 
-## PART 3: THE MOLD HAS THREE PARTS (8:00 - 13:00)
+## PART 3: THE MOLD HAS THREE PARTS (8:45 - 13:45)
 
 [PAUSE: 2s]
 
@@ -272,7 +330,7 @@ The code is *output*. The mold is what **matters**.
 
 ---
 
-## PART 4: THE PRECISION TRADEOFF (13:00 - 15:00)
+## PART 4: THE PRECISION TRADEOFF (13:45 - 15:45)
 
 [PAUSE: 2s]
 
@@ -315,7 +373,7 @@ More tests, less prompt. The walls do the precision work.
 
 ---
 
-## PART 5: COMPOUND RETURNS (15:00 - 17:00)
+## PART 5: COMPOUND RETURNS (15:45 - 17:45)
 
 [PAUSE: 2s]
 
@@ -365,7 +423,7 @@ But the economics **changed**. And when economics change, behavior that was rati
 
 ---
 
-## PART 6: THE SKILL SHIFT (17:00 - 18:30)
+## PART 6: THE SKILL SHIFT (17:45 - 19:15)
 
 [PAUSE: 2s]
 
@@ -394,7 +452,7 @@ The code is still there. It's still complex. But you don't *live* in it anymore.
 
 ---
 
-## CLOSING (18:30 - 20:00)
+## CLOSING (19:15 - 20:45)
 
 [PAUSE: 2s]
 
@@ -443,4 +501,4 @@ The **mold**... is what matters.
 
 ---
 
-**Total runtime: ~18-20 minutes**
+**Total runtime: ~19-21 minutes**
