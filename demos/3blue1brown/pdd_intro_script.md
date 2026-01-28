@@ -1,7 +1,7 @@
 # Prompt-Driven Development: A 3Blue1Brown Style Video Script
 
 **Working Title:** "Why You're Still Darning Socks"
-**Duration:** ~18-20 minutes
+**Duration:** ~19-21 minutes
 **Visual Style:** Manim animations, clean geometric representations, smooth transitions
 
 ---
@@ -39,9 +39,9 @@ So why are we still patching?
 
 ---
 
-## PART 1: THE ECONOMICS OF DARNING (2:00 - 5:00)
+## PART 1: THE ECONOMICS OF DARNING (2:00 - 5:45)
 
-**[VISUAL: Price chart animation. 1950: A pair of socks costs several hours of wages. Graph shows labor cost vs garment cost over time. The lines cross around 1970-80.]**
+**[VISUAL: Price chart animation. 1950: A pair of quality wool socks costs about an hour of wages. Graph shows labor cost vs garment cost over time. The lines cross around 1970-80.]**
 
 **NARRATOR:**
 This isn't nostalgia. It's economics.
@@ -54,45 +54,83 @@ In 1950, a wool sock cost real money relative to an hour of labor. Darning made 
 
 By 1990, the math flipped. A new sock cost less than the time to repair the old one. Darning became irrational.
 
-**[VISUAL: Transition to a similar chart for code. Y-axis: "Cost to generate code" vs "Cost to patch code". The "generate" line drops steeply from 2020-2024.]**
+**[VISUAL: Transition to a similar chart for code. Y-axis: "Cost (Developer Hours)". Three elements: "Cost to generate" (blue line, high), "Immediate patch cost" (amber solid line, low), and a dashed amber line at the top labeled "Total cost (with debt)" with shaded area between the two amber lines.]**
 
 Now look at code.
 
-**[VISUAL: Key dates appear on the falling line: GPT-3, Codex, GPT-4, Claude, Gemini. Each one drops the line further.]**
+**[VISUAL: Key dates appear on the falling "generate" line: GPT-3, Codex, GPT-4, Claude, Gemini. Each one drops the line further.]**
 
 For fifty years, generating new code was expensive. Writing from scratch took hours, days, weeks. So when something broke, you patched. Of course you patched. It was rational.
 
-**[VISUAL: The "generate" line crosses below the "patch" line. The crossing point pulses. Label: "We are here."]**
+**[VISUAL: Post-2020, both the blue "generate" line AND the amber "immediate patch" line start dropping. The drops are real and visible—AI helps both.]**
 
-But look where we are now. The cost to generate code just crossed below the cost to carefully patch it.
+Now, here's where it gets interesting. AI made patching faster too. Cursor, Claude Code, Copilot—they're incredible tools. They understand your codebase, suggest fixes, catch bugs before you make them.
 
-**[VISUAL: Return to split screen. Developer with Cursor / Grandma with needle. But now they're both slightly faded, sepia-toned. Historical.]**
+**[VISUAL: Focus on the immediate patch line dropping. This is the viewer's lived experience. Validate it.]**
 
-Tools like Cursor and Claude Code are fantastic. Best darning needles ever made. They make patching faster, cleaner, less painful.
+Look—each patch is getting faster. That's real. That's what you feel when you use these tools.
 
-**[VISUAL: The developer's edit completes. Satisfied look. Then—zoom out again to the massive codebase. A new bug appears somewhere else, caused by the patch.]**
+**[VISUAL: Camera pulls back. As the immediate line drops, the shaded debt area EXPANDS upward. The dashed "total cost" line at the top barely moves. The gap between what you feel and what's real becomes visible.]**
 
-But they're still darning needles.
+But watch the dashed line. The total cost. It's barely moving.
 
-**[VISUAL: The developer sighs, starts another patch. The cycle continues.]**
+Because even though each patch is faster, every patch still leaves residue. Technical debt. And that debt accumulates—faster now, because you're patching faster.
 
-And here's the thing about darning: every patch you add makes the next patch harder. The sock gets stiffer. The code gets more tangled. Patches accumulate.
+**[VISUAL: Annotation appears: "Immediate: -60%" pointing to the dropping solid line. Another annotation: "Total: -4%" pointing to the nearly-flat dashed line. The contrast is stark.]**
 
-**[VISUAL: Time-lapse of the codebase. Patches multiply. The structure becomes increasingly complex. Comments appear: "// don't touch this", "// legacy", "// temporary fix (2019)"]**
+AI gave you a sixty percent speedup on individual patches. But your total cost? Down four percent. The debt ate the rest.
+
+**[VISUAL: Zoom into the shaded debt area. It separates into two distinct layers: a darker "Code Complexity" layer and a lighter "Context Rot" layer with a subtle static/noise texture.]**
+
+And there's something else hiding in that debt. Something specific to AI-assisted development.
+
+**[VISUAL: The chart morphs into a new visualization. A glowing rectangular "context window" appears over a small codebase represented as a 4x4 grid of code blocks. The window covers most of the grid (~80%).]**
+
+When your codebase is small, AI tools are brilliant. The context window—what the model can actually see—covers almost everything. It understands how the pieces connect.
+
+**[VISUAL: The codebase grid grows: 4x4 → 8x8 → 16x16 → 32x32. The context window stays the SAME SIZE. A counter shows: "Context coverage: 80% → 40% → 10% → 2%". The window becomes a tiny rectangle over a massive grid.]**
+
+But codebases grow. And that window? It stays the same size.
+
+**[VISUAL: Inside the tiny window, some blocks are highlighted red—irrelevant code that the AI grabbed. Outside the window, green-highlighted blocks show the code that was actually needed but couldn't be seen.]**
+
+Now the AI is looking through a keyhole. It has to guess what's relevant. And increasingly, it guesses wrong. The code it needs is outside the window. The code inside? Something else entirely.
+
+**[VISUAL: Return to the chart. The "Context Rot" layer in the debt area pulses. Annotation: "Faster patching → faster growth → faster rot".]**
+
+This is why AI-assisted patching feels great at first and frustrating later. It's not the model getting dumber. It's the ratio getting worse. Every patch makes the codebase bigger. Every patch shrinks what the AI can see.
+
+**[VISUAL: The "Generate" line pulses with emphasis. Small annotation: "Small modules. Clear prompts. Always fits in context."]**
+
+Regeneration doesn't have this problem. A single module with a clear prompt? That fits in the window. Every time.
+
+**[VISUAL: The blue "generate" line crosses below the dashed "total cost" line. Then keeps going, crossing below even the solid "immediate" line. Label: "We are here."]**
+
+Meanwhile, generation just crossed below both lines. And it comes with no debt. No rot.
+
+**[VISUAL: Split screen. Developer with Cursor / Grandma with needle. Both are working efficiently—this isn't dismissive of their tools.]**
+
+Tools like Cursor and Claude Code are the best darning needles ever made. I use them. They're fantastic.
+
+**[VISUAL: Zoom out on the developer's side. The codebase is massive, tangled. Comments appear: "// don't touch this", "// legacy", "// temporary fix (2019)"]**
+
+But they're still darning needles. And the fundamental problem with darning isn't speed—it's accumulation.
+
+**[VISUAL: Time-lapse of the codebase. Even with AI-assisted patches, complexity grows. Faster patching just means faster accumulation.]**
 
 This is the part of software economics nobody talks about. 80 to 90 percent of software cost isn't building the initial system.
 
 **[VISUAL: Pie chart materializes. "Initial Development: 10-20%". "Maintenance: 80-90%".]**
 
-It's maintaining it. Patching it. Navigating around all the previous patches.
+It's maintaining it. Navigating around all the previous patches. Understanding what the last ten developers did and why.
 
-**[VISUAL: The pie chart morphs into an exponentially growing cost curve.]**
+**[VISUAL: The pie chart morphs into an exponentially growing cost curve. A second, flat line appears: "Regeneration cost (no debt)".]**
 
-And those costs compound.
+And those costs compound. Unless you regenerate. Then they reset to zero.
 
 ---
 
-## PART 2: THE PARADIGM SHIFT (5:00 - 8:00)
+## PART 2: THE PARADIGM SHIFT (5:45 - 8:45)
 
 **[VISUAL: A factory floor. Industrial. An injection molding machine dominates the frame.]**
 
@@ -139,7 +177,7 @@ The prompt is your mold. The code is just plastic.
 
 ---
 
-## PART 3: THE MOLD HAS THREE PARTS (8:00 - 13:00)
+## PART 3: THE MOLD HAS THREE PARTS (8:45 - 13:45)
 
 **[VISUAL: Cross-section of an injection mold. Technical, precise. Three regions highlight one by one.]**
 
@@ -228,7 +266,7 @@ The code is output. The mold is what matters.
 
 ---
 
-## PART 4: THE PRECISION TRADEOFF (13:00 - 15:00)
+## PART 4: THE PRECISION TRADEOFF (13:45 - 15:45)
 
 **[VISUAL: Split screen. LEFT: A 3D printer depositing material precisely, layer by layer. RIGHT: Injection mold with liquid flowing until it hits walls.]**
 
@@ -267,7 +305,7 @@ The more walls you have, the less you need to specify. The mold does the precisi
 
 ---
 
-## PART 5: COMPOUND RETURNS (15:00 - 17:00)
+## PART 5: COMPOUND RETURNS (15:45 - 17:45)
 
 **[VISUAL: A graph with two curves. One labeled "Patching", one labeled "PDD". X-axis is time. Y-axis is "Cumulative Value of Investment".]**
 
@@ -314,7 +352,7 @@ But the economics changed. And when economics change, behavior that was rational
 
 ---
 
-## PART 6: THE SKILL SHIFT (17:00 - 18:30)
+## PART 6: THE SKILL SHIFT (17:45 - 19:15)
 
 **[VISUAL: A craftsman looking at an injection molding machine, uncertain. Then sitting at a CAD workstation, designing molds. Their expression shifts from uncertainty to engagement.]**
 
@@ -343,7 +381,7 @@ The code is still there. It's still complex. But you don't live in it anymore. Y
 
 ---
 
-## CLOSING (18:30 - 20:00)
+## CLOSING (19:15 - 20:45)
 
 **[VISUAL: Pull back to show a complete system. Multiple modules, each with a prompt, tests, and generated code. The prompts and tests glow steadily. The code is present but not highlighted—it's output.]**
 
