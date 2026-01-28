@@ -526,6 +526,14 @@ class JobManager:
         stdout_text = ''.join(stdout_lines)
         stderr_text = ''.join(stderr_lines)
 
+        # For sync command, check stdout for failure indicators even if exit_code is 0
+        # This handles the case where sync returns 0 but actually failed
+        if exit_code == 0 and job.command == "sync":
+            # Look for the summary line printed by sync_main.py
+            # It prints: "Overall status: [red]Failed[/red]" or "Overall status: [green]Success[/green]"
+            if "Overall status:" in stdout_text and "Failed" in stdout_text:
+                raise RuntimeError("Sync operation failed (see output for details)")
+
         if exit_code != 0:
             # Combine stdout and stderr for complete error context
             # Filter out INFO/DEBUG logs to find the actual error message
