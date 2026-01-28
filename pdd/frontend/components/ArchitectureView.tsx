@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { api, ArchitectureModule, PromptInfo, PromptGenerationResult, GenerationGlobalOptions, ArchitectureValidationResult, ArchitectureSyncResult } from '../api';
+import { api, ArchitectureModule, PromptInfo, PromptGenerationResult, ArchitectureValidationResult, ArchitectureSyncResult } from '../api';
 import DependencyViewer from './DependencyViewer';
 import FileBrowser from './FileBrowser';
 import GenerationProgressModal from './GenerationProgressModal';
@@ -10,8 +10,8 @@ import AddModuleModal from './AddModuleModal';
 import SyncFromPromptModal from './SyncFromPromptModal';
 import SyncOptionsModal from './SyncOptionsModal';
 import { useArchitectureHistory } from '../hooks/useArchitectureHistory';
-import { GLOBAL_DEFAULTS, GLOBAL_OPTIONS, COMMANDS } from '../constants';
-import { GlobalOption, CommandOption, CommandType } from '../types';
+import { COMMANDS } from '../constants';
+import { CommandType } from '../types';
 import { buildDisplayCommand } from '../lib/commandBuilder';
 import BatchFilterDropdown from './BatchFilterDropdown';
 import { computeBatches, filterModulesByBatch } from '../lib/batchUtils';
@@ -36,98 +36,6 @@ interface ArchitectureViewProps {
 
 type EditorMode = 'empty' | 'editor' | 'graph';
 
-// Helper to format option names for display
-function formatOptionName(name: string): string {
-  return name
-    .split('-')
-    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(' ');
-}
-
-// Individual option input component - matches PromptSpace styling
-const OptionInput: React.FC<{
-  option: CommandOption | GlobalOption;
-  value: any;
-  onChange: (value: any) => void;
-  compact?: boolean;
-}> = ({ option, value, onChange, compact = false }) => {
-  const inputId = `arch-option-${option.name}`;
-
-  if (option.type === 'checkbox') {
-    return (
-      <label htmlFor={inputId} className={`flex items-start gap-3 ${compact ? 'p-2' : 'p-3'} rounded-xl bg-surface-800/30 hover:bg-surface-800/50 transition-colors cursor-pointer group`}>
-        <input
-          type="checkbox"
-          id={inputId}
-          checked={!!value}
-          onChange={(e) => onChange(e.target.checked)}
-          className="w-4 h-4 mt-0.5 rounded bg-surface-700 border-surface-600 text-accent-500 focus:ring-accent-500 focus:ring-offset-surface-800"
-        />
-        <div className="flex-1 min-w-0">
-          <div className={`${compact ? 'text-xs' : 'text-sm'} font-medium text-white group-hover:text-accent-300 transition-colors`}>{formatOptionName(option.name)}</div>
-          <div className={`${compact ? 'text-[10px]' : 'text-xs'} text-surface-400 mt-0.5`}>{option.description}</div>
-        </div>
-      </label>
-    );
-  }
-
-  if (option.type === 'range') {
-    const min = option.min ?? 0;
-    const max = option.max ?? 1;
-    const step = option.step ?? 0.1;
-    const displayValue = value ?? option.defaultValue ?? min;
-
-    return (
-      <div className={compact ? 'space-y-1.5' : 'space-y-2'}>
-        <div className="flex items-center justify-between">
-          <label htmlFor={inputId} className={`${compact ? 'text-xs' : 'text-sm'} font-medium text-white`}>
-            {formatOptionName(option.name)}
-          </label>
-          <span className={`${compact ? 'text-xs' : 'text-sm'} font-mono text-accent-400 bg-accent-500/10 px-2 py-0.5 rounded-lg`}>
-            {typeof displayValue === 'number' ? displayValue.toFixed(2) : displayValue}
-          </span>
-        </div>
-        <p className={`${compact ? 'text-[10px]' : 'text-xs'} text-surface-400`}>{option.description}</p>
-        <div className="flex items-center gap-3">
-          <span className="text-[10px] text-surface-500 w-6 text-right">{min}</span>
-          <input
-            type="range"
-            id={inputId}
-            min={min}
-            max={max}
-            step={step}
-            value={displayValue}
-            onChange={(e) => onChange(parseFloat(e.target.value))}
-            className="flex-1 h-2 bg-surface-700 rounded-full appearance-none cursor-pointer accent-accent-500
-              [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4
-              [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent-500
-              [&::-webkit-slider-thumb]:shadow-lg [&::-webkit-slider-thumb]:shadow-accent-500/30
-              [&::-webkit-slider-thumb]:hover:bg-accent-400 [&::-webkit-slider-thumb]:transition-colors"
-          />
-          <span className="text-[10px] text-surface-500 w-6">{max}</span>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div>
-      <label htmlFor={inputId} className={`block ${compact ? 'text-xs' : 'text-sm'} font-medium text-white mb-1.5`}>
-        {formatOptionName(option.name)}
-      </label>
-      <p className={`${compact ? 'text-[10px]' : 'text-xs'} text-surface-400 mb-2`}>{option.description}</p>
-      <input
-        type={option.type === 'number' ? 'number' : 'text'}
-        id={inputId}
-        value={value || ''}
-        onChange={(e) => onChange(option.type === 'number' ? (e.target.value ? Number(e.target.value) : '') : e.target.value)}
-        placeholder={option.placeholder}
-        className="w-full px-3 py-2.5 bg-surface-900/50 border border-surface-600 rounded-xl text-white placeholder-surface-500 focus:outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500/50 text-sm transition-all"
-      />
-    </div>
-  );
-};
-
 const ArchitectureView: React.FC<ArchitectureViewProps> = ({
   serverConnected,
   isExecuting,
@@ -149,17 +57,9 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
   const [mode, setMode] = useState<EditorMode>('empty');
   const [appName, setAppName] = useState('');
   const [prdContent, setPrdContent] = useState('');
-  const [prdPath, setPrdPath] = useState<string | null>(null);
-  const [techStackContent, setTechStackContent] = useState('');
-  const [techStackPath, setTechStackPath] = useState<string | null>(null);
-  const [showTechStack, setShowTechStack] = useState(false);
-  const [showFileBrowser, setShowFileBrowser] = useState<'prd' | 'techStack' | 'architecture' | null>(null);
+  const [showFileBrowser, setShowFileBrowser] = useState<'architecture' | null>(null);
   const [architecturePathInput, setArchitecturePathInput] = useState('architecture.json');
   const [loadArchitectureError, setLoadArchitectureError] = useState<string | null>(null);
-
-  // Architecture generation state
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [generationError, setGenerationError] = useState<string | null>(null);
 
   // GitHub issue URL generation state
   const [issueUrl, setIssueUrl] = useState('');
@@ -177,26 +77,11 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
   const [showProgressModal, setShowProgressModal] = useState(false);
   const [showOrderModal, setShowOrderModal] = useState(false);
 
-  // Global options state
-  const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
-  const [globalOptions, setGlobalOptions] = useState<GenerationGlobalOptions>({
-    strength: GLOBAL_DEFAULTS.strength,
-    temperature: GLOBAL_DEFAULTS.temperature,
-    time: GLOBAL_DEFAULTS.time,
-    verbose: GLOBAL_DEFAULTS.verbose,
-    quiet: GLOBAL_DEFAULTS.quiet,
-    force: GLOBAL_DEFAULTS.force,
-    local: GLOBAL_DEFAULTS.local,
-  });
-
   // Cancel ref for batch generation
   const cancelRequestedRef = useRef(false);
 
   // Sidebar collapsed state
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-
-  // Section transition state for smooth view switching
-  const [isSectionTransitioning, setIsSectionTransitioning] = useState(false);
 
   // Existing prompts state - track which prompts already exist with their file info
   const [existingPrompts, setExistingPrompts] = useState<Set<string>>(new Set());
@@ -324,39 +209,27 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
     loadArchitecture();
   }, [serverConnected, loadExistingPrompts]);
 
-  // Handle file selection from browser
+  // Handle file selection from browser (architecture files only)
   const handleFileSelect = useCallback(async (path: string) => {
     try {
       const content = await api.getFileContent(path);
-      if (showFileBrowser === 'prd') {
-        setPrdContent(content.content);
-        setPrdPath(path);
-        // Transition to editor mode if we were in empty state
-        if (mode === 'empty') {
-          setMode('editor');
-        }
-      } else if (showFileBrowser === 'techStack') {
-        setTechStackContent(content.content);
-        setTechStackPath(path);
-      } else if (showFileBrowser === 'architecture') {
-        // Load architecture.json file directly
-        try {
-          const modules = JSON.parse(content.content) as ArchitectureModule[];
-          setArchitecture(modules);
-          setMode('graph');
-          // Load existing prompts after architecture is loaded
-          await loadExistingPrompts();
-        } catch (parseError) {
-          console.error('Failed to parse architecture.json:', parseError);
-          alert('Invalid architecture.json format. Please select a valid architecture file.');
-          return;
-        }
+      // Load architecture.json file directly
+      try {
+        const modules = JSON.parse(content.content) as ArchitectureModule[];
+        setArchitecture(modules);
+        setMode('graph');
+        // Load existing prompts after architecture is loaded
+        await loadExistingPrompts();
+      } catch (parseError) {
+        console.error('Failed to parse architecture.json:', parseError);
+        alert('Invalid architecture.json format. Please select a valid architecture file.');
+        return;
       }
       setShowFileBrowser(null);
     } catch (e: any) {
       console.error('Failed to load file:', e);
     }
-  }, [showFileBrowser, mode, loadExistingPrompts]);
+  }, [loadExistingPrompts]);
 
   // Load architecture from path input
   const handleLoadArchitectureFromPath = useCallback(async () => {
@@ -384,106 +257,6 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
     }
   }, [architecturePathInput, loadExistingPrompts]);
 
-  // Generate architecture from PRD
-  const handleGenerate = async () => {
-    if (!prdContent.trim() && !prdPath) {
-      setGenerationError('Please provide a PRD (Product Requirements Document)');
-      return;
-    }
-
-    setIsGenerating(true);
-    setGenerationError(null);
-
-    try {
-      // Check if we're in remote mode
-      if (executionMode === 'remote' && selectedRemoteSession) {
-        // For remote execution, we need file paths (not inline content)
-        // If user provided inline content, warn them
-        if (!prdPath && prdContent.trim()) {
-          setGenerationError('Remote execution requires PRD to be loaded from a file. Please use "Load PRD" to select a file.');
-          setIsGenerating(false);
-          return;
-        }
-
-        // Build environment variables for the generate command
-        const envArgs: string[] = [];
-        if (prdPath) envArgs.push(`PRD_FILE=${prdPath}`);
-        if (techStackPath) envArgs.push(`TECH_STACK_FILE=${techStackPath}`);
-        if (appName) envArgs.push(`APP_NAME=${appName}`);
-
-        // Build options object
-        const options: Record<string, any> = {
-          output: 'architecture.json',
-          template: 'architecture/architecture_json',
-          env: envArgs,
-        };
-
-        // Add global options if provided
-        if (globalOptions) {
-          const { strength, temperature, time, verbose, quiet, force } = globalOptions;
-          if (strength !== undefined) options.strength = strength;
-          if (temperature !== undefined) options.temperature = temperature;
-          if (time !== undefined) options.time = time;
-          if (verbose) options.verbose = true;
-          if (quiet) options.quiet = true;
-          if (force) options.force = true;
-        }
-
-        // Submit to remote session
-        try {
-          await api.submitRemoteCommand({
-            sessionId: selectedRemoteSession,
-            type: 'generate',
-            payload: { args: {}, options },
-          });
-
-          // For remote, we can't immediately reload architecture
-          // Show success message and let user know to check remote
-          setGenerationError(null);
-          setIsGenerating(false);
-          alert('Architecture generation command submitted to remote session. Check the remote machine for results.');
-        } catch (error) {
-          setGenerationError(`Failed to submit remote command: ${error instanceof Error ? error.message : String(error)}`);
-        }
-      } else {
-        // Local execution
-        const result = await api.generateArchitecture({
-          prdPath: prdPath || undefined,
-          prdContent: prdPath ? undefined : prdContent,
-          techStackPath: techStackPath || undefined,
-          techStackContent: techStackPath ? undefined : (techStackContent || undefined),
-          appName: appName || undefined,
-          globalOptions,
-        });
-
-        if (result.success) {
-          // Reload architecture
-          const modules = await api.getArchitecture();
-          setArchitecture(modules);
-          setMode('graph');
-          setSidebarCollapsed(true);
-        } else {
-          setGenerationError(result.message || 'Generation failed');
-        }
-      }
-    } catch (e: any) {
-      console.error('Failed to generate architecture:', e);
-      setGenerationError(e.message || 'Failed to generate architecture');
-    } finally {
-      setIsGenerating(false);
-    }
-  };
-
-  // Cancel running architecture generation
-  const handleCancelArchitectureGeneration = async () => {
-    try {
-      await api.cancelCommand();
-      setIsGenerating(false);
-    } catch (e) {
-      console.error('Failed to cancel:', e);
-    }
-  };
-
   // Generate architecture from GitHub issue URL
   const handleGenerateFromIssue = async () => {
     if (!issueUrl.trim()) {
@@ -504,26 +277,12 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
     try {
       // Check if we're in remote mode
       if (executionMode === 'remote' && selectedRemoteSession) {
-        // Build options object for remote execution
-        const options: Record<string, any> = {};
-
-        // Add global options if provided
-        if (globalOptions) {
-          const { strength, temperature, time, verbose, quiet, force } = globalOptions;
-          if (strength !== undefined) options.strength = strength;
-          if (temperature !== undefined) options.temperature = temperature;
-          if (time !== undefined) options.time = time;
-          if (verbose) options.verbose = true;
-          if (quiet) options.quiet = true;
-          if (force) options.force = true;
-        }
-
         // Submit to remote session - pass issue URL as prompt_file argument
         try {
           await api.submitRemoteCommand({
             sessionId: selectedRemoteSession,
             type: 'generate',
-            payload: { args: { prompt_file: issueUrl }, options },
+            payload: { args: { prompt_file: issueUrl }, options: {} },
           });
 
           // Clear the input and notify user
@@ -542,10 +301,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
         }
       } else {
         // Local execution
-        const result = await api.generateArchitectureFromIssue(issueUrl, {
-          verbose: globalOptions.verbose,
-          quiet: globalOptions.quiet,
-        });
+        const result = await api.generateArchitectureFromIssue(issueUrl, {});
 
         if (result.success) {
           // Job started - show message to user
@@ -583,12 +339,6 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
 
     onOpenPromptSpace(promptInfo);
   }, [onOpenPromptSpace]);
-
-  // Handle regenerate
-  const handleRegenerate = useCallback(() => {
-    setSidebarCollapsed(false);
-    setMode('editor');
-  }, []);
 
   // Open the order modal before generating prompts
   const handleGeneratePrompts = useCallback(() => {
@@ -859,31 +609,18 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
           onBatchProgress?.(i + 1, moduleRequests.length, module);
 
           try {
-            // Build the same options structure as generatePromptFromArchitecture
+            // Build the options structure for generatePromptFromArchitecture
             const envArgs: string[] = [
               `MODULE=${module}`,
               `LANG_OR_FRAMEWORK=${langOrFramework}`,
               `ARCHITECTURE_FILE=architecture.json`,
             ];
-            if (prdPath) envArgs.push(`PRD_FILE=${prdPath}`);
-            if (techStackPath) envArgs.push(`TECH_STACK_FILE=${techStackPath}`);
 
             const options: Record<string, any> = {
               template: 'generic/generate_prompt',
               env: envArgs,
               output: `prompts/${module}_${langOrFramework}.prompt`,
             };
-
-            // Add global options if provided
-            if (globalOptions) {
-              const { strength, temperature, time, verbose, quiet, force } = globalOptions;
-              if (strength !== undefined) options.strength = strength;
-              if (temperature !== undefined) options.temperature = temperature;
-              if (time !== undefined) options.time = time;
-              if (verbose) options.verbose = true;
-              if (quiet) options.quiet = true;
-              if (force) options.force = true;
-            }
 
             // Submit to remote session
             const { commandId } = await api.submitRemoteCommand({
@@ -924,9 +661,6 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
           {
             modules: moduleRequests,
             architectureFile: 'architecture.json',
-            prdFile: prdPath || undefined,
-            techStackFile: techStackPath || undefined,
-            globalOptions,
           },
           (current, total, module) => {
             setPromptGenerationProgress({ current, total, currentModule: module });
@@ -953,7 +687,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
       setIsGeneratingPrompts(false);
       setPromptGenerationProgress(null);
     }
-  }, [prdPath, techStackPath, globalOptions, onBatchStart, onBatchProgress, onBatchComplete, executionMode, selectedRemoteSession, onRemoteJobSubmitted]);
+  }, [onBatchStart, onBatchProgress, onBatchComplete, executionMode, selectedRemoteSession, onRemoteJobSubmitted]);
 
   // Cancel prompt generation and current running command
   const handleCancelPromptGeneration = useCallback(async () => {
@@ -1257,30 +991,12 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
           </div>
           <h2 className="text-xl font-semibold text-white mb-2">No architecture.json found</h2>
           <p className="text-surface-400 text-sm mb-6">
-            Generate a new architecture from a PRD or GitHub issue, or load an existing architecture.json file.
+            Generate a new architecture from a GitHub issue, or load an existing architecture.json file.
           </p>
 
-          {/* Primary actions */}
-          <div className="flex gap-3 justify-center mb-4">
-            <button
-              onClick={() => setMode('editor')}
-              className="px-4 py-2.5 bg-accent-600 hover:bg-accent-500 text-white rounded-xl font-medium transition-colors"
-              disabled={!serverConnected}
-            >
-              Write PRD
-            </button>
-            <button
-              onClick={() => setShowFileBrowser('prd')}
-              className="px-4 py-2.5 bg-surface-700 hover:bg-surface-600 text-white rounded-xl font-medium transition-colors"
-              disabled={!serverConnected}
-            >
-              Load PRD
-            </button>
-          </div>
-
           {/* GitHub Issue URL option */}
-          <div className="pt-4 border-t border-surface-700/50 mb-4">
-            <p className="text-surface-500 text-xs mb-3">Or generate from a GitHub issue</p>
+          <div className="mb-6">
+            <p className="text-surface-500 text-xs mb-3">Generate from a GitHub issue</p>
             <div className="flex gap-2">
               <input
                 type="text"
@@ -1301,7 +1017,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                   isGeneratingFromIssue
                     ? 'bg-surface-600 text-surface-400 cursor-not-allowed'
-                    : 'bg-green-600 hover:bg-green-500 text-white'
+                    : 'bg-accent-600 hover:bg-accent-500 text-white'
                 }`}
                 disabled={!serverConnected || isGeneratingFromIssue || !issueUrl.trim()}
               >
@@ -1366,14 +1082,8 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
           <FileBrowser
             onSelect={handleFileSelect}
             onClose={() => setShowFileBrowser(null)}
-            filter={showFileBrowser === 'architecture' ? '.json' : '.md'}
-            title={
-              showFileBrowser === 'prd'
-                ? 'Select PRD File'
-                : showFileBrowser === 'architecture'
-                ? 'Select Architecture File'
-                : 'Select Tech Stack File'
-            }
+            filter=".json"
+            title="Select Architecture File"
           />
         )}
       </div>
@@ -1412,188 +1122,6 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
 
           {!sidebarCollapsed && (
             <>
-              {/* PRD Section */}
-              <div className="flex-1 flex flex-col min-h-0">
-                <div className="p-2 border-b border-surface-700/50 flex items-center justify-between">
-                  <span className="text-xs font-medium text-surface-400 uppercase tracking-wider">PRD</span>
-                  <button
-                    onClick={() => setShowFileBrowser('prd')}
-                    className="p-1 hover:bg-surface-700 rounded text-surface-400 hover:text-white transition-colors"
-                    title="Browse files"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-                    </svg>
-                  </button>
-                </div>
-                {prdPath && (
-                  <div className="px-2 py-1 bg-surface-800/50 text-xs text-surface-400 truncate">
-                    {prdPath}
-                  </div>
-                )}
-                <textarea
-                  key={prdPath || 'prd-manual'}
-                  value={prdContent}
-                  onChange={(e) => {
-                    setPrdContent(e.target.value);
-                    setPrdPath(null); // Clear path when editing
-                  }}
-                  placeholder="# Product Requirements&#10;&#10;## Overview&#10;Describe your product...&#10;&#10;## Features&#10;- Feature 1&#10;- Feature 2"
-                  className="flex-1 p-3 bg-transparent text-sm text-white placeholder-surface-600 resize-none focus:outline-none font-mono"
-                />
-              </div>
-
-              {/* Tech Stack Section (Collapsible) */}
-              <div className="border-t border-surface-700/50">
-                <button
-                  onClick={() => {
-                    if (isSectionTransitioning) return;
-                    setIsSectionTransitioning(true);
-                    // Small delay for smooth transition
-                    requestAnimationFrame(() => {
-                      setShowTechStack(!showTechStack);
-                      setTimeout(() => setIsSectionTransitioning(false), 150);
-                    });
-                  }}
-                  className="w-full p-2 flex items-center justify-between text-left hover:bg-surface-800/30 transition-colors"
-                >
-                  <span className="text-xs font-medium text-surface-400 uppercase tracking-wider">Tech Stack (optional)</span>
-                  <svg className={`w-4 h-4 text-surface-400 transition-transform duration-200 ${showTechStack ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  </svg>
-                </button>
-                {showTechStack && (
-                  <div className={`border-t border-surface-700/30 transition-opacity duration-150 ${isSectionTransitioning ? 'opacity-50' : 'opacity-100'}`}>
-                    <div className="p-2 flex items-center justify-end">
-                      <button
-                        onClick={() => setShowFileBrowser('techStack')}
-                        className="p-1 hover:bg-surface-700 rounded text-surface-400 hover:text-white transition-colors"
-                        title="Browse files"
-                      >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-                        </svg>
-                      </button>
-                    </div>
-                    {techStackPath && (
-                      <div className="px-2 py-1 bg-surface-800/50 text-xs text-surface-400 truncate">
-                        {techStackPath}
-                      </div>
-                    )}
-                    <textarea
-                      key={techStackPath || 'tech-manual'}
-                      value={techStackContent}
-                      onChange={(e) => {
-                        setTechStackContent(e.target.value);
-                        setTechStackPath(null);
-                      }}
-                      placeholder="Backend: Python, FastAPI&#10;Frontend: React, TypeScript&#10;Database: PostgreSQL"
-                      className="w-full h-24 p-3 bg-transparent text-sm text-white placeholder-surface-600 resize-none focus:outline-none font-mono"
-                    />
-                  </div>
-                )}
-              </div>
-
-              {/* Advanced Options (Collapsible) */}
-              <div className="border-t border-surface-700/50">
-                <button
-                  onClick={() => {
-                    if (isSectionTransitioning) return;
-                    setIsSectionTransitioning(true);
-                    requestAnimationFrame(() => {
-                      setShowAdvancedOptions(!showAdvancedOptions);
-                      setTimeout(() => setIsSectionTransitioning(false), 150);
-                    });
-                  }}
-                  className="w-full p-2 flex items-center justify-between text-left hover:bg-surface-800/30 transition-colors"
-                >
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-medium text-surface-400 uppercase tracking-wider">Advanced Options</span>
-                    {(globalOptions.strength !== GLOBAL_DEFAULTS.strength ||
-                      globalOptions.temperature !== GLOBAL_DEFAULTS.temperature ||
-                      globalOptions.time !== GLOBAL_DEFAULTS.time ||
-                      globalOptions.local ||
-                      globalOptions.verbose ||
-                      globalOptions.quiet ||
-                      globalOptions.force) && (
-                      <span className="w-2 h-2 rounded-full bg-accent-500 animate-pulse" title="Custom settings applied" />
-                    )}
-                  </div>
-                  <svg className={`w-4 h-4 text-surface-400 transition-transform duration-200 ${showAdvancedOptions ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  </svg>
-                </button>
-                {showAdvancedOptions && (
-                  <div className={`border-t border-surface-700/30 p-3 space-y-3 transition-opacity duration-150 ${isSectionTransitioning ? 'opacity-50' : 'opacity-100'}`}>
-                    {/* Model Settings Group */}
-                    <div className="space-y-3 p-3 rounded-xl bg-surface-800/20 border border-surface-700/30">
-                      <div className="text-[10px] font-medium text-surface-500 uppercase tracking-wider">Model Settings</div>
-                      {GLOBAL_OPTIONS.filter(opt => ['strength', 'temperature', 'time'].includes(opt.name)).map(opt => (
-                        <OptionInput
-                          key={opt.name}
-                          option={opt}
-                          value={globalOptions[opt.name as keyof GenerationGlobalOptions]}
-                          onChange={(val) => setGlobalOptions(prev => ({ ...prev, [opt.name]: val }))}
-                          compact
-                        />
-                      ))}
-                    </div>
-
-                    {/* Execution Options Group */}
-                    <div className="space-y-1 p-3 rounded-xl bg-surface-800/20 border border-surface-700/30">
-                      <div className="text-[10px] font-medium text-surface-500 uppercase tracking-wider mb-2">Execution Options</div>
-                      {GLOBAL_OPTIONS.filter(opt => ['local', 'verbose', 'quiet', 'force'].includes(opt.name)).map(opt => (
-                        <OptionInput
-                          key={opt.name}
-                          option={opt}
-                          value={globalOptions[opt.name as keyof GenerationGlobalOptions]}
-                          onChange={(val) => setGlobalOptions(prev => ({ ...prev, [opt.name]: val }))}
-                          compact
-                        />
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Generate Button */}
-              <div className="p-3 border-t border-surface-700/50">
-                {generationError && (
-                  <div className="mb-2 p-2 bg-red-500/10 border border-red-500/20 rounded-lg text-xs text-red-400">
-                    {generationError}
-                  </div>
-                )}
-                {isGenerating ? (
-                  <div className="flex gap-2">
-                    <div className="flex-1 px-4 py-2.5 bg-surface-700 rounded-xl flex items-center justify-center gap-2">
-                      <svg className="animate-spin h-4 w-4 text-surface-400" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                      </svg>
-                      <span className="text-sm text-surface-400">Generating...</span>
-                    </div>
-                    <button
-                      onClick={handleCancelArchitectureGeneration}
-                      className="px-3 py-2.5 bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-500/30 rounded-xl text-sm font-medium transition-colors"
-                    >
-                      Stop
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    onClick={handleGenerate}
-                    disabled={isExecuting || !serverConnected || (!prdContent.trim() && !prdPath)}
-                    className={`w-full px-4 py-2.5 rounded-xl font-medium transition-all duration-200 flex items-center justify-center gap-2 ${
-                      isExecuting || !serverConnected || (!prdContent.trim() && !prdPath)
-                        ? 'bg-surface-700 text-surface-500 cursor-not-allowed'
-                        : 'bg-gradient-to-r from-accent-600 to-accent-500 hover:from-accent-500 hover:to-accent-400 text-white shadow-lg shadow-accent-500/25'
-                    }`}
-                  >
-                    {architecture ? 'Regenerate' : 'Generate Architecture'}
-                  </button>
-                )}
-              </div>
-
               {/* Generate Prompts Button - only when architecture exists */}
               {architecture && architecture.length > 0 && (
                 <div className="p-3 border-t border-surface-700/50">
@@ -1836,7 +1364,6 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
                 architecture={displayArchitecture}
                 prdContent={prdContent}
                 appName={appName}
-                onRegenerate={handleRegenerate}
                 onModuleClick={handleModuleClick}
                 onRunSync={handleRunSyncForModule}
                 onGeneratePrompts={handleGeneratePrompts}

@@ -33,7 +33,6 @@ interface DependencyViewerProps {
   architecture: ArchitectureModule[];
   prdContent: string;
   appName?: string;
-  onRegenerate: () => void;
   onModuleClick: (module: ArchitectureModule) => void;
   onRunSync?: (module: ArchitectureModule) => void;  // Run pdd sync command for a module
   onGeneratePrompts?: () => void;
@@ -139,7 +138,6 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
   architecture,
   prdContent,
   appName,
-  onRegenerate,
   onModuleClick,
   onRunSync,
   onGeneratePrompts,
