@@ -15,7 +15,6 @@ from .agentic_change_orchestrator import run_agentic_change_orchestrator
 
 console = Console()
 
-
 def _escape_format_braces(text: str) -> str:
     """
     Escape curly braces in text to prevent Python's .format() from
@@ -126,8 +125,10 @@ def _setup_repository(owner: str, repo: str, quiet: bool) -> Path:
             check=False
         )
         if result.returncode != 0:
+            shutil.rmtree(temp_dir, ignore_errors=True)  # Cleanup on failure
             raise RuntimeError(f"Failed to clone repository: {result.stderr.strip()}")
     except Exception as e:
+        shutil.rmtree(temp_dir, ignore_errors=True)  # Cleanup on exception
         raise RuntimeError(f"Failed to execute clone command: {e}")
 
     return temp_dir
