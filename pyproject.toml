@@ -33,7 +33,7 @@ keywords = [
 ]
 dependencies = [
     "GitPython==3.1.44",
-    "Requests==2.32.3",
+    "Requests==2.32.4",
     "aiofiles==24.1.0",
     "click==8.1.7",
     "firecrawl-py==2.5.3",
