@@ -271,61 +271,29 @@ def add(a, b):
         pytest.fail(f"Real generation test failed: {e}")
 
 
-# --- Issue #409: Environment Variable Pollution Tests ---
-
-
 @patch('pdd.core.cli.auto_update')
 @patch('pdd.commands.generate.code_generator_main')
 def test_issue_409_env_vars_do_not_pollute_os_environ(mock_main, mock_auto_update, runner, create_dummy_files, monkeypatch):
-    """Test that environment variables set via -e flag do not persist in os.environ after command completion.
-
-    This test detects the bug reported in issue #409 where os.environ.update(env_vars) at
-    pdd/commands/generate.py:152 permanently pollutes the process environment with variables
-    passed via the -e/--env flag.
-
-    Expected behavior (per documentation and code comment):
-    - Variables passed with -e should be available "for the duration of this command"
-    - After command completes, os.environ should be restored to its original state
-
-    Actual behavior (before fix):
-    - Variables persist permanently in os.environ due to missing cleanup
-    - Causes test pollution, security leaks, and unpredictable behavior
-    """
-    # Create test files
     files = create_dummy_files("pollution_test.prompt")
     mock_main.return_value = ('code', False, 0.0, 'model')
-
-    # Define test variables that should NOT persist
     test_vars = {
         'TEST_VAR_409': 'test_value',
         'SECRET_KEY_409': 'secret123',
         'API_TOKEN_409': 'token456'
     }
 
-    # Capture os.environ state BEFORE command execution
-    # Store keys that exist before the test
     env_before = set(os.environ.keys())
 
-    # Ensure test variables don't exist before the test
     for key in test_vars.keys():
         monkeypatch.delenv(key, raising=False)
-
-    # Build command line arguments with -e flags
     cmd_args = ["generate"]
     for key, value in test_vars.items():
         cmd_args.extend(["-e", f"{key}={value}"])
     cmd_args.append(str(files["pollution_test.prompt"]))
-
-    # Execute the generate command with environment variables
     result = runner.invoke(cli.cli, cmd_args)
     assert result.exit_code == 0, f"Command failed: {result.output}"
-
-    # Verify code_generator_main was called with correct env_vars parameter
     call_kwargs = mock_main.call_args.kwargs
     assert call_kwargs["env_vars"] == test_vars, "env_vars parameter should contain test variables"
-
-    # CRITICAL CHECK: Environment variables should NOT persist in os.environ after command completion
-    # This is the primary bug detection - this assertion will FAIL on the buggy code
     env_after = set(os.environ.keys())
     pollution_detected = []
 
@@ -333,17 +301,13 @@ def test_issue_409_env_vars_do_not_pollute_os_environ(mock_main, mock_auto_updat
         if key in os.environ:
             pollution_detected.append(f"{key}={os.environ[key]}")
 
-    # Assert that no test variables leaked into os.environ
     assert len(pollution_detected) == 0, (
         f"BUG DETECTED (Issue #409): Environment variables persist after command completion! "
         f"Polluted variables: {pollution_detected}. "
         f"These variables were set via -e flag and should NOT exist in os.environ after the command. "
         f"Root cause: pdd/commands/generate.py:152 calls os.environ.update(env_vars) without cleanup."
     )
-
-    # Additional check: Verify no NEW keys were added to os.environ
     new_keys = env_after - env_before
-    # Filter out keys that might be legitimately added by the test framework
     unexpected_new_keys = [k for k in new_keys if k in test_vars]
 
     assert len(unexpected_new_keys) == 0, (
