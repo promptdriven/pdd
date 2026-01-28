@@ -235,7 +235,31 @@ def _commit_and_push(
             files_to_commit.append(filepath)
 
     if not files_to_commit:
-        return True, "No changes to commit"
+        # No new uncommitted changes, but check for unpushed commits
+        # This handles the case where LLM agents created commits during the workflow
+        if not quiet:
+            console.print("[dim]No uncommitted changes detected, checking for unpushed commits...[/dim]")
+        push_result = subprocess.run(
+            ["git", "push"],
+            cwd=cwd,
+            capture_output=True,
+            text=True
+        )
+        if push_result.returncode == 0:
+            # Check if anything was actually pushed
+            unpushed_check = subprocess.run(
+                ["git", "log", "@{u}..HEAD", "--oneline"],
+                cwd=cwd,
+                capture_output=True,
+                text=True
+            )
+            if unpushed_check.returncode == 0 and unpushed_check.stdout.strip():
+                return True, "Pushed existing commits"
+            else:
+                return True, "No changes to commit or push"
+        else:
+            # Push failed or nothing to push (up to date)
+            return True, "No changes to push (up to date)"
 
     # Stage only workflow-changed files
     for filepath in files_to_commit:
