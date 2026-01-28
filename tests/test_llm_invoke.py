@@ -2525,7 +2525,8 @@ def test_no_warning_for_removed_base_model(mock_set_llm_cache, caplog):
                     mock_response = create_mock_litellm_response("Test", model_name='gemini/gemini-2.0-flash-exp')
                     mock_completion.return_value = mock_response
 
-                    with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": 0.0001, "input_tokens": 10, "output_tokens": 10}):
+                    mock_callback_data = type('obj', (object,), {'cost': 0.0001, 'input_tokens': 10, 'output_tokens': 10, 'finish_reason': 'stop'})()
+                    with patch('pdd.llm_invoke._CALLBACK_DATA', mock_callback_data):
                         with caplog.at_level(logging.WARNING):
                             response = llm_invoke(
                                 prompt="Test prompt",
@@ -2589,7 +2590,8 @@ def test_first_available_model_selected_when_base_missing(mock_set_llm_cache, ca
                     mock_response = create_mock_litellm_response("Test", model_name='gemini/gemini-2.0-flash-exp')
                     mock_completion.return_value = mock_response
 
-                    with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": 0.0001, "input_tokens": 10, "output_tokens": 10}):
+                    mock_callback_data = type('obj', (object,), {'cost': 0.0001, 'input_tokens': 10, 'output_tokens': 10, 'finish_reason': 'stop'})()
+                    with patch('pdd.llm_invoke._CALLBACK_DATA', mock_callback_data):
                         response = llm_invoke(
                             prompt="Test prompt",
                             input_json={"test": "data"},
@@ -2645,7 +2647,8 @@ def test_legitimate_api_key_warnings_still_shown(mock_set_llm_cache, caplog):
                     mock_response = create_mock_litellm_response("Test", model_name='gpt-4o-mini')
                     mock_completion.return_value = mock_response
 
-                    with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": 0.0001, "input_tokens": 10, "output_tokens": 10}):
+                    mock_callback_data = type('obj', (object,), {'cost': 0.0001, 'input_tokens': 10, 'output_tokens': 10, 'finish_reason': 'stop'})()
+                    with patch('pdd.llm_invoke._CALLBACK_DATA', mock_callback_data):
                         with caplog.at_level(logging.WARNING):
                             response = llm_invoke(
                                 prompt="Test prompt",
@@ -2716,7 +2719,8 @@ def test_fallback_works_across_different_strength_values(mock_set_llm_cache, cap
                     mock_response = create_mock_litellm_response("Test", model_name='gemini/gemini-2.0-flash-exp')
                     mock_completion.return_value = mock_response
 
-                    with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": 0.0001, "input_tokens": 10, "output_tokens": 10}):
+                    mock_callback_data = type('obj', (object,), {'cost': 0.0001, 'input_tokens': 10, 'output_tokens': 10, 'finish_reason': 'stop'})()
+                    with patch('pdd.llm_invoke._CALLBACK_DATA', mock_callback_data):
                         with caplog.at_level(logging.WARNING):
                             response_low = llm_invoke(
                                 prompt="Test prompt",
@@ -2739,7 +2743,8 @@ def test_fallback_works_across_different_strength_values(mock_set_llm_cache, cap
                     mock_response = create_mock_litellm_response("Test", model_name='claude-3-opus')
                     mock_completion.return_value = mock_response
 
-                    with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": 0.001, "input_tokens": 10, "output_tokens": 10}):
+                    mock_callback_data_high = type('obj', (object,), {'cost': 0.001, 'input_tokens': 10, 'output_tokens': 10, 'finish_reason': 'stop'})()
+                    with patch('pdd.llm_invoke._CALLBACK_DATA', mock_callback_data_high):
                         with caplog.at_level(logging.WARNING):
                             response_high = llm_invoke(
                                 prompt="Test prompt",
@@ -2802,7 +2807,8 @@ def test_user_csv_removes_unwanted_model_family(mock_set_llm_cache, caplog):
                     mock_response = create_mock_litellm_response("Test", model_name='gemini/gemini-2.0-flash-exp')
                     mock_completion.return_value = mock_response
 
-                    with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": 0.0001, "input_tokens": 10, "output_tokens": 10}):
+                    mock_callback_data = type('obj', (object,), {'cost': 0.0001, 'input_tokens': 10, 'output_tokens': 10, 'finish_reason': 'stop'})()
+                    with patch('pdd.llm_invoke._CALLBACK_DATA', mock_callback_data):
                         with caplog.at_level(logging.WARNING):
                             response = llm_invoke(
                                 prompt="Test prompt for model family exclusion",

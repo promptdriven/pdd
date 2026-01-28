@@ -211,7 +211,7 @@ class TestConcurrentCostTrackingE2E:
 
             failure_msg += (
                 f"\nRoot cause:\n"
-                f"  The global _CALLBACK_DATA dictionary in pdd/llm_invoke.py:690\n"
+                f"  The global _CALLBACK_DATA dictionary in pdd/llm_invoke.py:689\n"
                 f"  is shared across all threads in server mode. When concurrent jobs\n"
                 f"  run, their callbacks overwrite each other's cost data before jobs\n"
                 f"  can read it (race condition at lines 764-767 write, line 2749 read).\n\n"
