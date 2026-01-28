@@ -1201,7 +1201,7 @@ def sync_orchestration(
                             success = True
                             break
 
-                    if operation in ['all_synced', 'nothing', 'fail_and_request_manual_merge', 'error', 'analyze_conflict']:
+                    if operation in ['all_synced', 'nothing', 'fail_and_request_manual_merge', 'error']:
                         current_function_name_ref[0] = "synced" if operation in ['all_synced', 'nothing'] else "conflict"
                         success = operation in ['all_synced', 'nothing']
                         error_msg = None
@@ -1210,9 +1210,6 @@ def sync_orchestration(
                             error_msg = decision.reason
                         elif operation == 'error':
                             errors.append(f"Error determining operation: {decision.reason}")
-                            error_msg = decision.reason
-                        elif operation == 'analyze_conflict':
-                            errors.append(f"Conflict detected: {decision.reason}")
                             error_msg = decision.reason
                         
                         update_log_entry(log_entry, success=success, cost=0.0, model='none', duration=0.0, error=error_msg)
