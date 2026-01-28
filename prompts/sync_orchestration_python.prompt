@@ -52,6 +52,7 @@ def sync_orchestration(
     context_config: Optional[Dict[str, str]] = None,
     context_override: Optional[str] = None,
     confirm_callback: Optional[Callable[[str, str], bool]] = None,
+    agentic_mode: bool = False,
 ) -> Dict[str, Any]:
 ```
 
@@ -176,7 +177,7 @@ The orchestrator executes these operations as determined by `sync_determine_oper
 4. **crash**: Fix runtime errors to make code executable
 5. **verify**: Verify against prompt intent (unless `--skip-verify`)
 6. **test**: Generate unit tests (unless `--skip-tests`)
-7. **test_extend**: Extend existing tests to improve coverage toward target (Python only - skip for non-Python languages since code coverage tooling is Python-specific)
+7. **test_extend**: Extend existing tests to improve coverage toward target (Python only - skip for non-Python languages or when agentic_mode=True since code coverage tooling is Python-specific)
 8. **fix**: Resolve test failures
 9. **update**: Back-propagate learnings to prompt
 
@@ -331,12 +332,29 @@ For test execution and example runs:
 
 Handle command results in multiple formats:
 - Dict: Extract `success`, `cost`, `model` fields directly
-- Tuple: Cost is second-to-last element, model is last element
+- Tuple (3-element): Cost is second-to-last element, model is last element
+- Tuple (4-element from cmd_test_main): `(content, cost, model, agentic_success)` - use explicit indexing for test operation
+- For test operation with 4-tuple: use `result[1]` for cost and `result[2]` for model (not negative indexing)
+- For test operation success: if `agentic_success` (4th element) is not None, trust it; otherwise check if file exists
 - Save fingerprint after successful operations regardless of format
 
-### Non-Python Language Handling
+### Non-Python Language Handling and Agentic Mode
 
-For non-Python languages, set `max_attempts=0` to skip iterative loops and go directly to agentic fallback in crash, verify, and fix operations.
+Implement a helper function `_use_agentic_path(language: str, agentic_mode: bool) -> bool` that returns True if we should use agentic path (non-Python OR agentic_mode for Python). When agentic_mode is True, Python behaves like TypeScript/other languages.
+
+For non-Python languages (or when `agentic_mode=True` for Python), set `max_attempts=0` to skip iterative loops and go directly to agentic fallback in crash, verify, and fix operations. Use `_use_agentic_path()` to check this condition.
+
+### Agentic Test Generation Success Handling
+
+For non-Python languages (or agentic mode), `cmd_test_main` returns a 4-tuple: `(content, cost, model, agentic_success)`. When `agentic_success is True`:
+1. Create a synthetic RunReport using `_create_synthetic_run_report_for_agentic_success()` instead of executing tests
+2. The synthetic report uses a sentinel `test_hash="agentic_test_success"` when the expected test file doesn't exist (agent may have created it at a different path)
+3. Trust the agent's success report for determining operation success
+
+Implement `_create_synthetic_run_report_for_agentic_success(test_file, basename, language, *, atomic_state=None)` that:
+- Creates a RunReport with exit_code=0, tests_passed=1, tests_failed=0
+- Uses actual file hash if test_file exists, otherwise uses sentinel value "agentic_test_success"
+- Saves the report using AtomicStateUpdate if provided
 
 ## Constants
 

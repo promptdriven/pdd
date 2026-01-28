@@ -19,10 +19,11 @@
         - `strength` - An optional float (default None). If provided, overrides the 'strength' value from `ctx.obj`. Used by orchestrators to pass explicit values.
         - `temperature` - An optional float (default None). If provided, overrides the 'temperature' value from `ctx.obj`. Used by orchestrators to pass explicit values.
     Outputs:
-        - Returns a tuple containing (`str`, `float`, `str`):
+        - Returns a tuple containing (`str`, `float`, `str`, `bool | None`):
             - `str`: The generated unit test code.
             - `float`: The total cost of the operation.
             - `str`: The name of the model used.
+            - `bool | None`: Agentic success flag. For non-Python languages using agentic test generation: `True` if tests were generated and pass, `False` if generation failed. For Python (cloud/local execution): `None`.
 
 % Behavior:
 %  - Use `resolve_effective_config(ctx, resolved_config, param_overrides={...})` to resolve strength, temperature, and time after `construct_paths` returns.
@@ -52,7 +53,16 @@
 %      * If `output` is None, or is a directory path or ends with '/', write to the resolved file from `construct_paths`.
 %      * If `merge` is True and `existing_tests` is provided, write to `existing_tests[0]` using append mode ("a"), prepending "\n\n" before new content.
 %      * Ensure parent directories exist and write with UTF-8 encoding.
-%  - On any error (path construction, generation, postprocess, or file I/O), print a Rich-formatted error and return an error result tuple `("", 0.0, f"Error: {exception}")` to allow the orchestrator to handle gracefully. Re-raise `click.Abort` exceptions to properly handle user cancellations.
+%  - On any error (path construction, generation, postprocess, or file I/O), print a Rich-formatted error and return an error result tuple `("", 0.0, f"Error: {exception}", None)` to allow the orchestrator to handle gracefully. Re-raise `click.Abort` exceptions to properly handle user cancellations.
+
+% Non-Python Language Handling (Agentic Test Generation):
+%  - For non-Python languages, use `run_agentic_test_generate` instead of cloud/local execution.
+%  - Detection: Check `detected_language.lower() != 'python'` where `detected_language` comes from `construct_paths` resolved config.
+%  - The `run_agentic_test_generate` function returns a 4-tuple: `(generated_content, cost, model_name, agentic_success)`.
+%  - `agentic_success` is `True` if the agentic test generation succeeded (tests pass), `False` otherwise.
+%  - Pass this `agentic_success` value through as the 4th element of the return tuple so the orchestration layer can trust the agent's success report.
+%  - For non-Python, the function signature for return is: `return generated_content, total_cost, model_name, agentic_success`
+%  - For Python (normal cloud/local path), return `None` as the 4th element: `return generated_content, total_cost, model_name, None`
 
 <examples>
    % Here are examples of how to use internal modules:
