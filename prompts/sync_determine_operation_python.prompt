@@ -143,9 +143,12 @@ Log mode performs the complete analysis (reading fingerprints, calculating hashe
         -   Otherwise → return `crash`.
     -   If `coverage < target_coverage` and `skip_tests=False`:
         -   If tests pass (`tests_failed == 0` and `tests_passed > 0`):
-            -   **CRITICAL**: First check if the test file actually exists. The run_report may have synthetic `tests_passed=1` from crash/verify success but actual test file hasn't been generated yet. If test file missing → return `test` to generate tests.
-            -   For non-Python languages → return `all_synced` (skip `test_extend` since code coverage tooling is Python-specific and would produce no content)
-            -   For Python → return `test_extend` to ADD more tests (not regenerate)
+            -   **CRITICAL**: First check if the test file actually exists. The run_report may have synthetic `tests_passed=1` from crash/verify success but actual test file hasn't been generated yet.
+            -   **Distinguishing synthetic vs real run reports**: Synthetic run_reports are created by crash/verify operations to indicate successful execution (exit_code=0) without actual test execution. Real run_reports from test operations include a `test_hash` field.
+            -   For non-Python languages (agentic test generation): Check `run_report.test_hash` to differentiate:
+                - If `test_hash is None` (synthetic from crash/verify) AND test file missing → return `test` to generate tests
+                - If `test_hash is not None` (from agentic test generation, including sentinel value `"agentic_test_success"` when agent succeeds but file is at different path) → return `all_synced` (trust the agent's reported success)
+            -   For Python: If test file missing → return `test`; otherwise return `test_extend` to ADD more tests
         -   Otherwise → return `test` to generate tests
     -   If `coverage < target_coverage` and `skip_tests=True` → return `all_synced` to indicate workflow completion despite low coverage.
     -   If any of these conditions are met, stop analysis here.
@@ -218,11 +221,13 @@ Log mode performs the complete analysis (reading fingerprints, calculating hashe
             ```
     -   **No Changes (Hashes Match Fingerprint) with gating:**
         -   If `code` exists but `example` does not → **`example`**.
-        -   If `code` and `example` exist but no `test` and `skip_tests=False` → apply runtime gating before `test`:
-            -   If no `RunReport` → **`crash`** (perform a runtime check of the example first)
-            -   If `RunReport.exit_code != 0` → **`crash`**
-            -   If last fingerprint command != `verify` and `skip_verify=False` → **`verify`**
-            -   Else → **`test`**
+        -   If `code` and `example` exist but no `test` and `skip_tests=False`:
+            -   **For non-Python languages (agentic test generation)**: First check if run_report indicates successful agentic test generation (`tests_passed > 0`, `tests_failed == 0`, and `test_hash is not None`). If so, return **`all_synced`** even though test file doesn't exist at expected path (agent may have created it with different extension/name).
+            -   Apply runtime gating before `test`:
+                -   If no `RunReport` → **`crash`** (perform a runtime check of the example first)
+                -   If `RunReport.exit_code != 0` → **`crash`**
+                -   If last fingerprint command != `verify` and `skip_verify=False` → **`verify`**
+                -   Else → **`test`**
         -   If `code`, `example`, AND `test` all exist but workflow is incomplete → apply same gating:
             -   If no `RunReport` → **`crash`** (validate regenerated code works)
             -   If `RunReport.exit_code != 0` → **`crash`** (code crashed, needs fix)
@@ -265,7 +270,8 @@ Log mode performs the complete analysis (reading fingerprints, calculating hashe
         - Hash comparisons (`prompt_changed`, `code_changed`, etc.)
         - Fingerprint state (`fingerprint_found`, `last_command`/`previous_command`)
         - Run report details (`tests_failed`, `coverage`, `exit_code`, timestamps)
-        - Workflow markers like `workflow_stage` (e.g., `crash_validation`, `crash_fix`, `crash_retry`, `verify_validation`, `test_generation`, `revalidation`, `post_regeneration_validation`, `verification_pending`, `continue_after_interruption`), `auto_deps_completed`, `no_run_report`, `skip_tests`, `skip_verify`, `has_dependencies`, `run_report_stale`
+        - Workflow markers like `workflow_stage` (e.g., `crash_validation`, `crash_fix`, `crash_retry`, `verify_validation`, `test_generation`, `test_generation_needed`, `revalidation`, `post_regeneration_validation`, `verification_pending`, `continue_after_interruption`), `auto_deps_completed`, `no_run_report`, `skip_tests`, `skip_verify`, `has_dependencies`, `run_report_stale`
+        - Agentic test markers: `has_real_test_hash` (True when run_report has non-null test_hash from actual test generation), `agentic_test_complete` (True when agentic test generation completed successfully for non-Python language), `test_hash` (the actual hash or sentinel value)
 
 #### 7. References: Here is how to use the internal modules that are available and must be used in this implementation:
     <internal_modules>

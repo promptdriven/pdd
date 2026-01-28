@@ -21,6 +21,10 @@ export interface ModuleNodeData {
   onEdit?: (module: ArchitectureModule) => void;
   onDelete?: (filename: string) => void;
   isHighlighted?: boolean;  // For error highlighting (e.g., circular dependencies)
+  // Batch (connected component) info
+  batchId?: number;
+  batchColor?: string;
+  batchName?: string;
 }
 
 const ModuleNode: React.FC<NodeProps<ModuleNodeData>> = ({ data, selected, xPos, yPos }) => {
@@ -90,6 +94,15 @@ const ModuleNode: React.FC<NodeProps<ModuleNodeData>> = ({ data, selected, xPos,
           `}
           style={{ width: 200, minHeight: 85, opacity: 0.95 }}
         >
+          {/* Batch color stripe indicator */}
+          {data.batchColor && (
+            <div
+              className="absolute -left-1.5 top-1/2 -translate-y-1/2 w-1.5 h-10 rounded-full"
+              style={{ backgroundColor: data.batchColor }}
+              title={data.batchName || `Batch ${data.batchId}`}
+            />
+          )}
+
           {/* Edit button overlay - only visible in edit mode on hover */}
           {editMode && (
             <button
@@ -111,7 +124,7 @@ const ModuleNode: React.FC<NodeProps<ModuleNodeData>> = ({ data, selected, xPos,
               title="Run pdd sync (prompt → code)"
             >
               <svg className="w-3 h-3 text-surface-900" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M14 5l7 7m0 0l-7 7m7-7H3" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
               </svg>
             </button>
           )}

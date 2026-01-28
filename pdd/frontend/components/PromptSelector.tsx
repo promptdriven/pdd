@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { api, PromptInfo } from '../api';
 import CreatePromptModal from './CreatePromptModal';
+import SyncOptionsModal from './SyncOptionsModal';
 
 interface PromptSelectorProps {
   onEditPrompt: (prompt: PromptInfo) => void;
   onCreatePrompt?: (prompt: PromptInfo) => void;
+  onRunSync?: (prompt: PromptInfo, options?: Record<string, any>) => void;
   selectedPrompt: PromptInfo | null;
 }
 
@@ -22,7 +24,8 @@ const PromptCard: React.FC<{
   prompt: PromptInfo;
   isSelected: boolean;
   onEditPrompt: () => void;
-}> = ({ prompt, isSelected, onEditPrompt }) => {
+  onSyncClick?: () => void;
+}> = ({ prompt, isSelected, onEditPrompt, onSyncClick }) => {
   const languageColor = prompt.language
     ? LANGUAGE_COLORS[prompt.language] || 'bg-surface-700/50 text-surface-300 border-surface-600'
     : 'bg-surface-700/50 text-surface-300 border-surface-600';
@@ -30,6 +33,13 @@ const PromptCard: React.FC<{
   const handleCardClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     onEditPrompt();
+  };
+
+  const handleSyncClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (onSyncClick) {
+      onSyncClick();
+    }
   };
 
   return (
@@ -53,6 +63,18 @@ const PromptCard: React.FC<{
                 </span>
               )}
             </div>
+            {/* Sync button */}
+            {onSyncClick && (
+              <button
+                onClick={handleSyncClick}
+                className="flex-shrink-0 w-7 h-7 bg-gradient-to-br from-[#FDCE49] to-[#DFA84A] hover:from-[#FFD966] hover:to-[#FDCE49] rounded-full flex items-center justify-center shadow-lg transition-all hover:scale-110"
+                title="Run pdd sync (prompt → code)"
+              >
+                <svg className="w-3.5 h-3.5 text-surface-900" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+              </button>
+            )}
           </div>
           <p className="text-[10px] sm:text-xs text-surface-400 font-mono mb-2 sm:mb-3 truncate">{prompt.prompt}</p>
 
@@ -97,6 +119,7 @@ const FileTag: React.FC<{
 const PromptSelector: React.FC<PromptSelectorProps> = ({
   onEditPrompt,
   onCreatePrompt,
+  onRunSync,
   selectedPrompt,
 }) => {
   const [prompts, setPrompts] = useState<PromptInfo[]>([]);
@@ -108,6 +131,10 @@ const PromptSelector: React.FC<PromptSelectorProps> = ({
   const [showChangedOnly, setShowChangedOnly] = useState(false);
   const [changedPrompts, setChangedPrompts] = useState<string[]>([]);
   const [loadingChanged, setLoadingChanged] = useState(false);
+
+  // Sync options modal state
+  const [showSyncOptionsModal, setShowSyncOptionsModal] = useState(false);
+  const [pendingSyncPrompt, setPendingSyncPrompt] = useState<PromptInfo | null>(null);
 
   // Filter prompts based on search query and changed-only filter
   const filteredPrompts = useMemo(() => {
@@ -374,6 +401,10 @@ const PromptSelector: React.FC<PromptSelectorProps> = ({
               prompt={prompt}
               isSelected={selectedPrompt?.prompt === prompt.prompt}
               onEditPrompt={() => onEditPrompt(prompt)}
+              onSyncClick={onRunSync ? () => {
+                setPendingSyncPrompt(prompt);
+                setShowSyncOptionsModal(true);
+              } : undefined}
             />
           ))}
         </div>
@@ -388,6 +419,24 @@ const PromptSelector: React.FC<PromptSelectorProps> = ({
           existingPrompts={prompts}
         />
       )}
+
+      {/* Sync Options Modal */}
+      <SyncOptionsModal
+        isOpen={showSyncOptionsModal}
+        title="Sync Options"
+        description={`Configure options for syncing ${pendingSyncPrompt?.sync_basename || 'prompt'}`}
+        onConfirm={(options) => {
+          if (pendingSyncPrompt && onRunSync) {
+            onRunSync(pendingSyncPrompt, options);
+          }
+          setShowSyncOptionsModal(false);
+          setPendingSyncPrompt(null);
+        }}
+        onClose={() => {
+          setShowSyncOptionsModal(false);
+          setPendingSyncPrompt(null);
+        }}
+      />
     </div>
   );
 };

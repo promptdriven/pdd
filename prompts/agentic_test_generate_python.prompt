@@ -15,10 +15,11 @@ correct framework), this module delegates to an agentic CLI that can:
 % Entry Point
 `run_agentic_test_generate(prompt_file, code_file, output_test_file, *, verbose: bool = False, quiet: bool = False)`
 
-Returns: `tuple[str, float, str]` → `(generated_content, cost, model_name)`
+Returns: `tuple[str, float, str, bool]` → `(generated_content, cost, model_name, success)`
 - generated_content: The content of the generated test file
 - cost: Estimated LLM cost
 - model_name: Model/provider used (formatted as "agentic-{provider}")
+- success: Whether the agentic test generation succeeded (tests passed)
 
 % LLM Prompt Template
 Uses `agentic_test_generate_LLM` (loaded via load_prompt_template).
