@@ -55,14 +55,14 @@
 %      * Ensure parent directories exist and write with UTF-8 encoding.
 %  - On any error (path construction, generation, postprocess, or file I/O), print a Rich-formatted error and return an error result tuple `("", 0.0, f"Error: {exception}", None)` to allow the orchestrator to handle gracefully. Re-raise `click.Abort` exceptions to properly handle user cancellations.
 
-% Non-Python Language Handling (Agentic Test Generation):
-%  - For non-Python languages, use `run_agentic_test_generate` instead of cloud/local execution.
-%  - Detection: Check `detected_language.lower() != 'python'` where `detected_language` comes from `construct_paths` resolved config.
+% Agentic Test Generation:
+%  - Use `run_agentic_test_generate` for non-Python languages OR when `agentic_mode=True` in ctx.obj.
+%  - Detection: `use_agentic_tests = (detected_language.lower() != 'python') or ctx.obj.get('agentic_mode', False)`
 %  - The `run_agentic_test_generate` function returns a 4-tuple: `(generated_content, cost, model_name, agentic_success)`.
 %  - `agentic_success` is `True` if the agentic test generation succeeded (tests pass), `False` otherwise.
 %  - Pass this `agentic_success` value through as the 4th element of the return tuple so the orchestration layer can trust the agent's success report.
-%  - For non-Python, the function signature for return is: `return generated_content, total_cost, model_name, agentic_success`
-%  - For Python (normal cloud/local path), return `None` as the 4th element: `return generated_content, total_cost, model_name, None`
+%  - For agentic mode, return: `return generated_content, total_cost, model_name, agentic_success`
+%  - For Python without agentic_mode (normal cloud/local path), return `None` as the 4th element: `return generated_content, total_cost, model_name, None`
 
 <examples>
    % Here are examples of how to use internal modules:

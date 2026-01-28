@@ -1261,7 +1261,8 @@ def sync_orchestration(
                         review_examples=review_examples, local=local, budget=budget - current_cost_ref[0],
                         max_attempts=max_attempts, target_coverage=target_coverage,
                         confirm_callback=get_confirm_callback(),
-                        context=context_override
+                        context=context_override,
+                        agentic_mode=agentic_mode,
                     )
                     
                     result = {}

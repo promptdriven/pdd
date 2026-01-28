@@ -111,16 +111,21 @@ def cmd_test_main(
     verbose = ctx.obj.get("verbose", False)
     is_local = ctx.obj.get("local", False)
 
-    # 3.5 Non-Python: Use agentic mode directly
+    # 3.5 Agentic test generation: Use for non-Python OR when agentic_mode is enabled
     # For non-Python languages, the single LLM call often produces incorrect test file
     # extensions or doesn't follow the correct framework. Agentic mode lets the agent
     # explore the project and determine the correct test setup.
-    if detected_language and detected_language.lower() != 'python':
+    # For Python with agentic_mode=True, we also use agentic test generation for consistency.
+    agentic_mode = ctx.obj.get("agentic_mode", False)
+    use_agentic_tests = (detected_language and detected_language.lower() != 'python') or agentic_mode
+
+    if use_agentic_tests:
         from .agentic_test_generate import run_agentic_test_generate
 
         if verbose:
+            reason = "agentic_mode enabled" if agentic_mode else f"non-Python language ({detected_language})"
             console.print(
-                f"[cyan]Non-Python language detected ({detected_language}). "
+                f"[cyan]{reason.capitalize()}. "
                 "Using agentic test generation.[/cyan]"
             )
 
