@@ -20,6 +20,7 @@
         - `skip_tests` (bool): Skip unit test generation
         - `target_coverage` (Optional[float]): Code coverage percentage. None = use .pddrc or default (90.0)
         - `dry_run` (bool): Analyze sync state without executing operations
+        - `agentic_mode` (bool): When True, Python behaves like non-Python languages (uses agentic path for operations)
 
     Outputs:
         - Tuple of (Dict[str, Any] results, float total_cost, str model_name)
