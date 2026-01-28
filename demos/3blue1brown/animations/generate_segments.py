@@ -48,32 +48,67 @@ REFERENCE_IMAGES = {
     "right": "references/grandmother_reference.png",
 }
 
-# Segment definitions with durations
+# Character consistency details to append to prompts
+CHARACTER_DETAILS = {
+    "left": """
+Character details: 32-year-old male, short dark brown hair, light stubble beard,
+rectangular black-framed glasses, dark navy blue hoodie, pale complexion.
+Setting: Dark room, single monitor with blue glow, minimalist desk.
+Vertical 9:16 portrait framing, cinematic, photorealistic, 4K.""",
+
+    "right": """
+Character details: 75-year-old grandmother, silver-gray hair in neat bun,
+wire-rimmed round spectacles, cream knit cardigan over floral dress, gentle weathered face.
+Setting: 1950s domestic interior, warm amber oil lamp lighting.
+Vertical 9:16 portrait framing, cinematic, photorealistic, 4K, nostalgic tone.""",
+}
+
+
+def enhance_prompt(prompt: str, side: str, use_enhancement: bool = True) -> str:
+    """Enhance a prompt with character consistency details."""
+    if not use_enhancement or side not in CHARACTER_DETAILS:
+        return prompt
+
+    # Remove any existing "cinematic, photorealistic" etc to avoid duplication
+    # Then append our character details
+    return f"{prompt.rstrip('.')}\n\n{CHARACTER_DETAILS[side].strip()}"
+
+# Segment definitions with durations and prompt files
 SEGMENTS = {
     "01a": {
         "name": "establish_split_screen",
         "duration": 8,
-        "file": "01a_establish_split_screen.md",
+        "file": "01a_establish_split_screen.md",  # Legacy shared file
+        "left_prompt": "prompts/01a_left_developer.md",
+        "right_prompt": "prompts/01a_right_grandmother.md",
     },
     "01b": {
         "name": "synchronized_completion",
         "duration": 7,
         "file": "01b_synchronized_completion.md",
+        "left_prompt": "prompts/01b_left_developer.md",
+        "right_prompt": "prompts/01b_right_grandmother.md",
     },
     "01c": {
         "name": "brief_satisfaction",
         "duration": 3,
         "file": "01c_brief_satisfaction.md",
+        "left_prompt": "prompts/01c_left_developer.md",
+        "right_prompt": "prompts/01c_right_grandmother.md",
     },
     "01d": {
         "name": "zoom_out_reveal",
         "duration": 14,
         "file": "01d_zoom_out_reveal.md",
+        "left_prompt": "prompts/01d_left_developer.md",
+        "right_prompt": "prompts/01d_right_grandmother.md",
     },
     "01e": {
         "name": "hold_accumulated_weight",
         "duration": 6,
         "file": "01e_hold_accumulated_weight.md",
+        "left_prompt": "prompts/01e_left_developer.md",
+        "right_prompt": "prompts/01e_right_grandmother.md",
     },
 }
 
@@ -88,14 +123,33 @@ def extract_prompt(md_content: str, section_name: str = "Concise Version") -> st
     return ""
 
 
+def extract_veo_prompt(md_content: str) -> str:
+    """Extract the Veo prompt from a dedicated prompt file."""
+    return extract_prompt(md_content, "Veo Prompt")
+
+
 def extract_left_prompt(md_content: str) -> str:
-    """Extract the left side prompt for compositing."""
+    """Extract the left side prompt for compositing (legacy shared files)."""
     return extract_prompt(md_content, "Left Side Only (If Compositing)")
 
 
 def extract_right_prompt(md_content: str) -> str:
-    """Extract the right side prompt for compositing."""
+    """Extract the right side prompt for compositing (legacy shared files)."""
     return extract_prompt(md_content, "Right Side Only (If Compositing)")
+
+
+def load_side_prompt(script_dir: Path, segment: dict, side: str) -> str:
+    """Load prompt from dedicated side-specific prompt file."""
+    prompt_key = f"{side}_prompt"
+    if prompt_key not in segment:
+        return ""
+
+    prompt_path = script_dir / segment[prompt_key]
+    if not prompt_path.exists():
+        return ""
+
+    content = prompt_path.read_text()
+    return extract_veo_prompt(content)
 
 
 def save_video(client: genai.Client, video, output_path: Path, use_vertexai: bool = False) -> bool:
@@ -198,6 +252,37 @@ def load_reference_image(image_path: Path):
         return None
 
 
+def extract_last_frame(video_path: Path, output_path: Path) -> bool:
+    """Extract the last frame from a video using ffmpeg."""
+    import subprocess
+
+    try:
+        # Get video duration first
+        probe_cmd = [
+            "ffprobe", "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            str(video_path)
+        ]
+        result = subprocess.run(probe_cmd, capture_output=True, text=True)
+        duration = float(result.stdout.strip())
+
+        # Extract frame at duration - 0.1 seconds (last frame)
+        extract_cmd = [
+            "ffmpeg", "-y",
+            "-ss", str(max(0, duration - 0.1)),
+            "-i", str(video_path),
+            "-vframes", "1",
+            "-q:v", "2",
+            str(output_path)
+        ]
+        subprocess.run(extract_cmd, capture_output=True, check=True)
+        return output_path.exists()
+    except Exception as e:
+        print(f"  Error extracting last frame: {e}")
+        return False
+
+
 def generate_video(
     client: genai.Client,
     prompt: str,
@@ -217,11 +302,13 @@ def generate_video(
 
     try:
         # Build the generation arguments
+        # Use 9:16 vertical for side-by-side compositing (avoids horizontal squash)
+        aspect = "9:16" if reference_image is not None else "16:9"
         gen_kwargs = {
             "model": model,
             "prompt": prompt,
             "config": types.GenerateVideosConfig(
-                aspect_ratio="16:9",
+                aspect_ratio=aspect,
                 number_of_videos=1,
             ),
         }
@@ -307,6 +394,16 @@ def main():
         help="Use reference images for character consistency (requires --separate-sides)",
     )
     parser.add_argument(
+        "--sequential",
+        action="store_true",
+        help="Use last frame of previous segment as input for next (smooth transitions)",
+    )
+    parser.add_argument(
+        "--no-enhance",
+        action="store_true",
+        help="Don't enhance prompts with character details",
+    )
+    parser.add_argument(
         "--project",
         type=str,
         default=DEFAULT_PROJECT,
@@ -324,6 +421,14 @@ def main():
     if args.use_references and not args.separate_sides:
         print("Warning: --use-references requires --separate-sides, enabling it automatically")
         args.separate_sides = True
+
+    if args.sequential and not args.separate_sides:
+        print("Warning: --sequential requires --separate-sides, enabling it automatically")
+        args.separate_sides = True
+
+    if args.sequential and args.segment:
+        print("Warning: --sequential works best when generating all segments in order")
+        print("         Single segment will use reference image as starting point")
 
     # Initialize the client
     client = None
@@ -397,6 +502,12 @@ def main():
 
     results = {}
 
+    # Track last frames for sequential mode
+    last_frames = {"left": None, "right": None}
+    frames_dir = script_dir / "frames"
+    if args.sequential and not args.dry_run:
+        frames_dir.mkdir(exist_ok=True)
+
     for segment_id in segments_to_generate:
         segment = SEGMENTS[segment_id]
         md_path = script_dir / segment["file"]
@@ -415,9 +526,22 @@ def main():
         md_content = md_path.read_text()
 
         if args.separate_sides:
-            # Generate left and right sides separately
-            left_prompt = extract_left_prompt(md_content)
-            right_prompt = extract_right_prompt(md_content)
+            # Try to load from dedicated prompt files first
+            left_prompt = load_side_prompt(script_dir, segment, "left")
+            right_prompt = load_side_prompt(script_dir, segment, "right")
+
+            # Fall back to legacy shared file extraction
+            if not left_prompt:
+                left_prompt = extract_left_prompt(md_content)
+                # Enhance legacy prompts with character details
+                if (args.use_references or args.sequential) and not args.no_enhance:
+                    left_prompt = enhance_prompt(left_prompt, "left")
+
+            if not right_prompt:
+                right_prompt = extract_right_prompt(md_content)
+                # Enhance legacy prompts with character details
+                if (args.use_references or args.sequential) and not args.no_enhance:
+                    right_prompt = enhance_prompt(right_prompt, "right")
 
             if not left_prompt or not right_prompt:
                 print(f"  Error: Could not extract left/right prompts")
@@ -433,12 +557,31 @@ def main():
                 results[segment_id] = True
                 continue
 
+            # Determine which image to use for each side
+            # Sequential mode: use last frame from previous segment (if available)
+            # Reference mode: use reference images
+            # Otherwise: no image (text-to-video)
+            left_image = None
+            right_image = None
+
+            if args.sequential and last_frames["left"] is not None:
+                left_image = last_frames["left"]
+                print(f"  Using last frame from previous segment (left)")
+            elif args.use_references:
+                left_image = reference_images["left"]
+
+            if args.sequential and last_frames["right"] is not None:
+                right_image = last_frames["right"]
+                print(f"  Using last frame from previous segment (right)")
+            elif args.use_references:
+                right_image = reference_images["right"]
+
             # Generate left side
             left_output = output_dir / f"{segment_id}_{segment['name']}_left.mp4"
             left_success = generate_video(
                 client, left_prompt, left_output, model=args.model,
                 use_vertexai=not args.api_key,
-                reference_image=reference_images["left"] if args.use_references else None
+                reference_image=left_image
             )
 
             # Generate right side
@@ -446,8 +589,21 @@ def main():
             right_success = generate_video(
                 client, right_prompt, right_output, model=args.model,
                 use_vertexai=not args.api_key,
-                reference_image=reference_images["right"] if args.use_references else None
+                reference_image=right_image
             )
+
+            # Extract last frames for sequential mode
+            if args.sequential and left_success:
+                left_frame_path = frames_dir / f"{segment_id}_left_last.png"
+                if extract_last_frame(left_output, left_frame_path):
+                    last_frames["left"] = load_reference_image(left_frame_path)
+                    print(f"  Extracted last frame: {left_frame_path.name}")
+
+            if args.sequential and right_success:
+                right_frame_path = frames_dir / f"{segment_id}_right_last.png"
+                if extract_last_frame(right_output, right_frame_path):
+                    last_frames["right"] = load_reference_image(right_frame_path)
+                    print(f"  Extracted last frame: {right_frame_path.name}")
 
             results[segment_id] = left_success and right_success
         else:

@@ -43,6 +43,10 @@ def composite_videos(left_path: Path, right_path: Path, output_path: Path) -> bo
     - Left video on left half
     - Right video on right half
     - White vertical line divider in center
+
+    Handles both 16:9 and 9:16 input videos:
+    - 9:16 inputs: Stack side by side (no scaling needed)
+    - 16:9 inputs: Crop center portion to avoid horizontal squash
     """
     print(f"\nCompositing: {output_path.name}")
     print(f"  Left:  {left_path.name}")
@@ -56,20 +60,45 @@ def composite_videos(left_path: Path, right_path: Path, output_path: Path) -> bo
         print(f"  Error: Right video not found: {right_path}")
         return False
 
-    # FFmpeg filter to:
-    # 1. Scale both videos to half width
-    # 2. Stack them horizontally
-    # 3. Add a white vertical line in the center
-    filter_complex = (
-        # Scale left video to half width, maintaining aspect ratio
-        "[0:v]scale=iw/2:ih[left];"
-        # Scale right video to half width
-        "[1:v]scale=iw/2:ih[right];"
-        # Stack horizontally
-        "[left][right]hstack=inputs=2[stacked];"
-        # Draw white vertical line in center (2 pixels wide)
-        "[stacked]drawbox=x=(iw/2)-1:y=0:w=2:h=ih:color=white:t=fill[out]"
-    )
+    # Check input video dimensions
+    probe_cmd = [
+        "ffprobe", "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=width,height",
+        "-of", "csv=p=0",
+        str(left_path)
+    ]
+    try:
+        result = subprocess.run(probe_cmd, capture_output=True, text=True, check=True)
+        width, height = map(int, result.stdout.strip().split(','))
+        is_vertical = height > width
+        print(f"  Input format: {width}x{height} ({'vertical 9:16' if is_vertical else 'horizontal 16:9'})")
+    except Exception:
+        is_vertical = False  # Assume horizontal if probe fails
+
+    if is_vertical:
+        # 9:16 videos: Stack side by side directly
+        # Two 9:16 = 18:16 ≈ 1.125:1, then pad to 16:9
+        filter_complex = (
+            # Stack horizontally (no scaling - preserves quality)
+            "[0:v][1:v]hstack=inputs=2[stacked];"
+            # Draw white vertical line in center (2 pixels wide)
+            "[stacked]drawbox=x=(iw/2)-1:y=0:w=2:h=ih:color=white:t=fill[lined];"
+            # Pad to 16:9 with black bars (letterbox)
+            "[lined]pad=w=ih*16/9:h=ih:x=(ow-iw)/2:y=0:color=black[out]"
+        )
+    else:
+        # 16:9 videos: Crop center 50% width from each to avoid squash
+        filter_complex = (
+            # Crop center portion of left video (half width, full height)
+            "[0:v]crop=iw/2:ih:iw/4:0[left];"
+            # Crop center portion of right video
+            "[1:v]crop=iw/2:ih:iw/4:0[right];"
+            # Stack horizontally
+            "[left][right]hstack=inputs=2[stacked];"
+            # Draw white vertical line in center (2 pixels wide)
+            "[stacked]drawbox=x=(iw/2)-1:y=0:w=2:h=ih:color=white:t=fill[out]"
+        )
 
     cmd = [
         "ffmpeg",

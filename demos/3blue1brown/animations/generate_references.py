@@ -27,8 +27,9 @@ DEFAULT_PROJECT = "prompt-driven-development"
 DEFAULT_LOCATION = "us-central1"
 
 # Character reference prompts - detailed and consistent
+# Using vertical 9:16 portrait framing for side-by-side compositing
 DEVELOPER_PROMPT = """
-Portrait photo of a 32-year-old male software developer at a minimalist desk.
+Vertical portrait photo of a 32-year-old male software developer at a minimalist desk.
 - Short dark brown hair, neatly trimmed
 - Light stubble beard
 - Rectangular black-framed glasses
@@ -39,12 +40,12 @@ Portrait photo of a 32-year-old male software developer at a minimalist desk.
 - Dark room with modern tech aesthetic
 - Cool blue ambient lighting from monitor
 
-Medium shot, upper body and desk visible. Photorealistic, cinematic lighting,
-shallow depth of field, 4K quality, professional photography style.
+Vertical 9:16 portrait framing, medium shot, upper body and desk visible.
+Photorealistic, cinematic lighting, shallow depth of field, 4K quality.
 """
 
 GRANDMOTHER_PROMPT = """
-Portrait photo of a 75-year-old grandmother in 1950s domestic setting.
+Vertical portrait photo of a 75-year-old grandmother in 1950s domestic setting.
 - Silver-gray hair in a neat bun
 - Warm, kind face with gentle wrinkles
 - Wire-rimmed round spectacles
@@ -56,14 +57,15 @@ Portrait photo of a 75-year-old grandmother in 1950s domestic setting.
 - Cozy domestic interior with period-accurate 1950s details
 - Warm amber/golden lighting
 
-Medium shot, upper body visible. Photorealistic, cinematic lighting,
-shallow depth of field, 4K quality, nostalgic documentary style.
+Vertical 9:16 portrait framing, medium shot, upper body visible.
+Photorealistic, cinematic lighting, shallow depth of field, 4K quality, nostalgic tone.
 """
 
 
-def generate_image(client: genai.Client, prompt: str, output_path: Path) -> bool:
+def generate_image(client: genai.Client, prompt: str, output_path: Path, aspect_ratio: str = "9:16") -> bool:
     """Generate an image using Imagen and save it."""
     print(f"\nGenerating image: {output_path.name}")
+    print(f"  Aspect ratio: {aspect_ratio}")
     print(f"  Prompt: {prompt[:80]}...")
 
     try:
@@ -73,7 +75,7 @@ def generate_image(client: genai.Client, prompt: str, output_path: Path) -> bool
             prompt=prompt,
             config=types.GenerateImagesConfig(
                 number_of_images=1,
-                aspect_ratio="16:9",
+                aspect_ratio=aspect_ratio,
                 person_generation="allow_adult",
             ),
         )
