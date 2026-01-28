@@ -58,13 +58,37 @@ import {
   defaultAIMilestonesProps,
 } from "./06-AIMilestones";
 import {
+  ContextRot,
+  CONTEXT_ROT_FPS,
+  CONTEXT_ROT_DURATION_FRAMES,
+  CONTEXT_ROT_WIDTH,
+  CONTEXT_ROT_HEIGHT,
+  defaultContextRotProps,
+} from "./07-ContextRot";
+import {
   CrossingPoint,
   CROSSING_POINT_FPS,
   CROSSING_POINT_DURATION_FRAMES,
   CROSSING_POINT_WIDTH,
   CROSSING_POINT_HEIGHT,
   defaultCrossingPointProps,
-} from "./07-CrossingPoint";
+} from "./08-CrossingPoint";
+import {
+  PieChart,
+  PIE_CHART_FPS,
+  PIE_CHART_DURATION_FRAMES,
+  PIE_CHART_WIDTH,
+  PIE_CHART_HEIGHT,
+  defaultPieChartProps,
+} from "./12-PieChart";
+import {
+  PieToCurve,
+  PIE_TO_CURVE_FPS,
+  PIE_TO_CURVE_DURATION_FRAMES,
+  PIE_TO_CURVE_WIDTH,
+  PIE_TO_CURVE_HEIGHT,
+  defaultPieToCurveProps,
+} from "./13-PieToCurve";
 
 export const RemotionRoot: React.FC = () => {
   return (
@@ -135,7 +159,18 @@ export const RemotionRoot: React.FC = () => {
           defaultProps={defaultAIMilestonesProps}
         />
       </Folder>
-      <Folder name="07-CrossingPoint">
+      <Folder name="07-ContextRot">
+        <Composition
+          id="ContextRot"
+          component={ContextRot}
+          durationInFrames={CONTEXT_ROT_DURATION_FRAMES}
+          fps={CONTEXT_ROT_FPS}
+          width={CONTEXT_ROT_WIDTH}
+          height={CONTEXT_ROT_HEIGHT}
+          defaultProps={defaultContextRotProps}
+        />
+      </Folder>
+      <Folder name="08-CrossingPoint">
         <Composition
           id="CrossingPoint"
           component={CrossingPoint}
@@ -144,6 +179,28 @@ export const RemotionRoot: React.FC = () => {
           width={CROSSING_POINT_WIDTH}
           height={CROSSING_POINT_HEIGHT}
           defaultProps={defaultCrossingPointProps}
+        />
+      </Folder>
+      <Folder name="12-PieChart">
+        <Composition
+          id="PieChart"
+          component={PieChart}
+          durationInFrames={PIE_CHART_DURATION_FRAMES}
+          fps={PIE_CHART_FPS}
+          width={PIE_CHART_WIDTH}
+          height={PIE_CHART_HEIGHT}
+          defaultProps={defaultPieChartProps}
+        />
+      </Folder>
+      <Folder name="13-PieToCurve">
+        <Composition
+          id="PieToCurve"
+          component={PieToCurve}
+          durationInFrames={PIE_TO_CURVE_DURATION_FRAMES}
+          fps={PIE_TO_CURVE_FPS}
+          width={PIE_TO_CURVE_WIDTH}
+          height={PIE_TO_CURVE_HEIGHT}
+          defaultProps={defaultPieToCurveProps}
         />
       </Folder>
       <Folder name="Examples">

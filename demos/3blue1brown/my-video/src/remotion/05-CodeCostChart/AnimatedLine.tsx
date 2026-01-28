@@ -1,11 +1,6 @@
 import React from "react";
 import { Easing, interpolate, useCurrentFrame, useVideoConfig } from "remotion";
-import { CHART_MARGINS, YEAR_RANGE, HOURS_RANGE } from "./constants";
-
-interface DataPoint {
-  year: number;
-  hours: number;
-}
+import { CHART_MARGINS, YEAR_RANGE, HOURS_RANGE, DataPoint } from "./constants";
 
 interface AnimatedLineProps {
   data: DataPoint[];
@@ -14,6 +9,8 @@ interface AnimatedLineProps {
   endFrame: number;
   strokeWidth?: number;
   label?: string;
+  dashed?: boolean;
+  showDot?: boolean;
 }
 
 export const AnimatedLine: React.FC<AnimatedLineProps> = ({
@@ -23,6 +20,8 @@ export const AnimatedLine: React.FC<AnimatedLineProps> = ({
   endFrame,
   strokeWidth = 4,
   label,
+  dashed = false,
+  showDot = true,
 }) => {
   const frame = useCurrentFrame();
   const { width, height } = useVideoConfig();
@@ -148,11 +147,12 @@ export const AnimatedLine: React.FC<AnimatedLineProps> = ({
             strokeWidth={strokeWidth}
             strokeLinecap="round"
             strokeLinejoin="round"
+            strokeDasharray={dashed ? "12,8" : undefined}
           />
         )}
 
         {/* Animated dot at the drawing tip */}
-        {drawProgress > 0 && drawProgress < 1 && (
+        {showDot && drawProgress > 0 && drawProgress < 1 && (
           <circle
             cx={tipX}
             cy={tipY}
@@ -171,11 +171,13 @@ export const AnimatedLine: React.FC<AnimatedLineProps> = ({
             top: endPoint.y,
             transform: "translateY(-50%)",
             fontFamily: "Inter, system-ui, sans-serif",
-            fontSize: 24,
+            fontSize: 22,
             fontWeight: 600,
             color: color,
             opacity: labelOpacity,
             textShadow: "0 2px 4px rgba(0,0,0,0.5)",
+            maxWidth: 180,
+            lineHeight: 1.3,
           }}
         >
           {label}
