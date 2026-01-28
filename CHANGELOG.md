@@ -2,18 +2,33 @@
 
 ### Feat
 
-- **demos**: update TTS script with context rot section and nuanced debt argument
-- **demos**: add 3Blue1Brown video animation specs and context rot section
-- **sync**: add agentic mode flag and update prompts for non-Python support
-- **sync**: add agentic mode support and fix non-Python test generation
-- **frontend**: add batch filtering for parallel sync workflows
-- Install dependencies for the 3blue1brown demo video project.
-- **logging**: enhance verbose logging configuration for LiteLLM integration
-- Add 3Blue1Brown style PDD intro script and update changelog with expanded agentic architecture, various bug fixes, and refactors.
+- **sync**: Add `agentic_mode` parameter to `sync_orchestration()`. When enabled, Python uses the same agentic path as non-Python languages—skipping iterative LLM loops for crash/verify/fix operations and delegating to agentic handlers. Useful for consistent behavior across languages.
+- **sync**: Agentic test generation now returns success flag (4th element in tuple). Orchestrator trusts this flag for non-Python languages instead of checking file existence, since agents may create tests at different paths or with different extensions.
+- **sync**: Synthetic `RunReport` creation for agentic test success. When agentic test generation succeeds, a synthetic run report with `test_hash="agentic_test_success"` is created to signal workflow completion without re-running tests.
+- **sync_determine_operation**: Differentiate between synthetic run reports (from crash/verify with `test_hash=None`) and real agentic test reports (with `test_hash` set). Prevents infinite loops where sync kept re-triggering test generation.
+- **frontend**: Batch filtering for parallel sync workflows. New `BatchFilterDropdown` component shows connected components computed via Union-Find algorithm. Users can filter modules by batch and sync entire batches at once.
+- **frontend**: New `SyncOptionsModal` for configuring sync operations before execution.
+- **logging**: Suppress LiteLLM debug banner ("Give Feedback / Get Help") by default. Enable with `--verbose` flag or `PDD_VERBOSE_LOGGING=1`. Thanks Benjamin Knobloch!
+- **agentic_change_orchestrator**: Preprocess prompt templates with `<include>` directive resolution before formatting. Catches `KeyError`, `ValueError`, and generic exceptions with specific error messages.
+
+### Fix
+
+- **preprocess**: Escape braces in PDD metadata tags during `double_curly()` preprocessing. Prevents `str.format()` from misinterpreting JSON braces in `<pdd-interface>` and similar tags as placeholders.
+- **cmd_test_main**: Return 4-tuple `(content, cost, model, agentic_success)` instead of 3-tuple. Enables orchestrator to detect agentic success for non-Python languages.
+- **sync_orchestration**: Handle 4-tuple return from `cmd_test_main` correctly when extracting cost and model information.
 
 ### Refactor
 
-- **frontend**: remove PRD/tech stack editor from architecture view
+- **frontend**: Remove PRD/tech stack editor from architecture view. Simplifies UI by removing rarely-used inline editing.
+- **sync_orchestration**: Extract `_use_agentic_path()` helper function to centralize agentic path decision logic.
+- **sync_orchestration**: Extract `_create_synthetic_run_report_for_agentic_success()` helper for cleaner synthetic report creation.
+
+### Build
+
+- **reverted**: Reverted memory leak fix commits (3a7af31b, a347f61c) due to system instability. The file handle cleanup approach caused issues; will revisit with different strategy.
+- **deleted tests**: Removed `test_e2e_issue_403_file_handle_leak.py` and related file handle cleanup tests from `test_sync_determine_operation.py`.
+
+Thanks James Levine for the _LLM preprocess fixes!
 
 ## v0.0.131 (2026-01-26)
 
