@@ -4,6 +4,7 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import List, Tuple, Optional, Any
@@ -125,10 +126,16 @@ def _setup_repository(owner: str, repo: str, quiet: bool) -> Path:
             check=False
         )
         if result.returncode != 0:
-            shutil.rmtree(temp_dir, ignore_errors=True)  # Cleanup on failure
+            try:
+                shutil.rmtree(temp_dir)
+            except Exception as cleanup_error:
+                print(f"Warning: Failed to cleanup temp directory {temp_dir}: {cleanup_error}", file=sys.stderr)
             raise RuntimeError(f"Failed to clone repository: {result.stderr.strip()}")
     except Exception as e:
-        shutil.rmtree(temp_dir, ignore_errors=True)  # Cleanup on exception
+        try:
+            shutil.rmtree(temp_dir)
+        except Exception as cleanup_error:
+            print(f"Warning: Failed to cleanup temp directory {temp_dir}: {cleanup_error}", file=sys.stderr)
         raise RuntimeError(f"Failed to execute clone command: {e}")
 
     return temp_dir
