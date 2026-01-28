@@ -68,6 +68,16 @@ from . import DEFAULT_STRENGTH
 # Note: _safe_basename is imported from sync_determine_operation
 
 
+def _use_agentic_path(language: str, agentic_mode: bool) -> bool:
+    """Returns True if we should use agentic path (non-Python OR agentic_mode for Python).
+
+    This is used to determine whether to skip iterative LLM loops and delegate
+    directly to agentic handlers. When agentic_mode is True, Python behaves
+    like TypeScript/other languages.
+    """
+    return language.lower() != 'python' or agentic_mode
+
+
 # --- Atomic State Update (Issue #159 Fix) ---
 
 @dataclass
@@ -607,6 +617,58 @@ def _run_example_with_error_detection(
         return 0, stdout, stderr  # No errors, server was running fine
 
 
+def _create_synthetic_run_report_for_agentic_success(
+    test_file: Path,
+    basename: str,
+    language: str,
+    *,
+    atomic_state: Optional['AtomicStateUpdate'] = None,
+) -> RunReport:
+    """Create a synthetic RunReport when agentic test generation succeeds.
+
+    For non-Python languages, the agentic test generation already runs tests
+    internally. When it reports success, we create a synthetic RunReport to
+    signal workflow completion without re-running tests.
+
+    Args:
+        test_file: Path to the expected test file (may not exist if agent created elsewhere).
+        basename: Module basename for the report filename.
+        language: Programming language.
+        atomic_state: Optional atomic state for buffered writes.
+
+    Returns:
+        The created RunReport.
+    """
+    timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    # Use actual hash if file exists, otherwise use sentinel value to indicate
+    # agentic test generation succeeded (differentiates from crash/verify synthetic reports)
+    if test_file.exists():
+        test_hash = calculate_sha256(test_file)
+    else:
+        # Sentinel value: indicates agentic test success even though expected file path doesn't exist
+        # The agent may have created tests at a different path (e.g., .test.tsx instead of .tsx)
+        test_hash = "agentic_test_success"
+
+    report = RunReport(
+        timestamp=timestamp,
+        exit_code=0,
+        tests_passed=1,  # Synthetic: indicates tests passed
+        tests_failed=0,
+        coverage=0.0,  # Coverage not available from agentic mode
+        test_hash=test_hash,
+    )
+
+    # Save the report
+    report_file = META_DIR / f"{_safe_basename(basename)}_{language}_run_report.json"
+    if atomic_state:
+        atomic_state.set_run_report(asdict(report), report_file)
+    else:
+        report_file.parent.mkdir(parents=True, exist_ok=True)
+        report_file.write_text(json.dumps(asdict(report), indent=2))
+
+    return report
+
+
 def _execute_tests_and_create_run_report(
     test_file: Path,
     basename: str,
@@ -883,6 +945,7 @@ def sync_orchestration(
     context_config: Optional[Dict[str, str]] = None,
     context_override: Optional[str] = None,
     confirm_callback: Optional[Callable[[str, str], bool]] = None,
+    agentic_mode: bool = False,
 ) -> Dict[str, Any]:
     """
     Orchestrates the complete PDD sync workflow with parallel animation.
@@ -1116,11 +1179,11 @@ def sync_orchestration(
                             break
 
                     if operation == 'test_extend':
-                        # Skip test_extend for non-Python languages - code coverage tooling is Python-specific
+                        # Skip test_extend for non-Python languages (or agentic mode) - code coverage tooling is Python-specific
                         # This is a safety check in case sync_determine_operation doesn't catch it
-                        if language.lower() != 'python':
+                        if _use_agentic_path(language, agentic_mode):
                             log_event(basename, language, "test_extend_skipped", {
-                                "reason": f"test_extend not supported for {language}, accepting current state"
+                                "reason": f"test_extend not supported for {language} (or agentic_mode), accepting current state"
                             }, invocation_mode="sync")
                             success = True
                             break
@@ -1258,12 +1321,12 @@ def sync_orchestration(
                                 if current_run_report and current_run_report.exit_code != 0:
                                     has_crash = True
                                     crash_log_content = f"Test execution failed exit code: {current_run_report.exit_code}\n"
-                                elif language.lower() != 'python':
-                                    # Bug #364 fix: For non-Python languages, skip Python-based verification.
+                                elif _use_agentic_path(language, agentic_mode):
+                                    # Bug #364 fix: For non-Python languages (or agentic mode), skip Python-based verification.
                                     # Delegate crash detection and fixing to the agentic handler, which
                                     # uses the correct language-specific run command.
                                     has_crash = True
-                                    crash_log_content = f"Non-Python language ({language}) - delegating crash detection to agentic handler.\n"
+                                    crash_log_content = f"Language {language} (agentic_mode={agentic_mode}) - delegating crash detection to agentic handler.\n"
                                 else:
                                     # Manual check - run the example to see if it crashes
                                     env = os.environ.copy()
@@ -1354,9 +1417,9 @@ def sync_orchestration(
 
                                     Path("crash.log").write_text(crash_log_content)
                                     try:
-                                        # For non-Python languages, set max_attempts=0 to skip iterative loop
+                                        # For non-Python languages (or agentic mode), set max_attempts=0 to skip iterative loop
                                         # and go directly to agentic fallback
-                                        effective_max_attempts = 0 if language.lower() != 'python' else max_attempts
+                                        effective_max_attempts = 0 if _use_agentic_path(language, agentic_mode) else max_attempts
                                         result = crash_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), program_file=str(pdd_files['example']), error_file="crash.log", output=str(pdd_files['code']), output_program=str(pdd_files['example']), loop=True, max_attempts=effective_max_attempts, budget=budget - current_cost_ref[0], strength=strength, temperature=temperature)
                                     except Exception as e:
                                         print(f"Crash fix failed: {e}")
@@ -1367,9 +1430,9 @@ def sync_orchestration(
                                 if not pdd_files['example'].exists():
                                     skipped_operations.append('verify')
                                     continue
-                                # For non-Python languages, set max_attempts=0 to skip iterative loop
+                                # For non-Python languages (or agentic mode), set max_attempts=0 to skip iterative loop
                                 # and go directly to agentic fallback
-                                effective_max_attempts = 0 if language.lower() != 'python' else max_attempts
+                                effective_max_attempts = 0 if _use_agentic_path(language, agentic_mode) else max_attempts
                                 result = fix_verification_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), program_file=str(pdd_files['example']), output_results=f"{basename.replace('/', '_')}_verify_results.log", output_code=str(pdd_files['code']), output_program=str(pdd_files['example']), loop=True, verification_program=str(pdd_files['example']), max_attempts=effective_max_attempts, budget=budget - current_cost_ref[0], strength=strength, temperature=temperature)
                             elif operation == 'test':
                                 pdd_files['test'].parent.mkdir(parents=True, exist_ok=True)
@@ -1377,7 +1440,24 @@ def sync_orchestration(
                                 # instead of regenerating from scratch (which would overwrite fixes)
                                 test_file_exists = pdd_files['test'].exists()
                                 result = cmd_test_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), output=str(pdd_files['test']), language=language, coverage_report=None, existing_tests=[str(pdd_files['test'])] if test_file_exists else None, target_coverage=target_coverage, merge=test_file_exists, strength=strength, temperature=temperature)
-                                if pdd_files['test'].exists():
+
+                                # Extract agentic_success from result (4th element if present)
+                                agentic_success = None
+                                if isinstance(result, tuple) and len(result) >= 4:
+                                    agentic_success = result[3]
+
+                                # For agentic test generation (non-Python): if agent succeeded, skip execution
+                                # and create synthetic RunReport instead (tests already ran in agentic mode)
+                                if agentic_success is True:
+                                    # Create synthetic run report - trust the agent's success report
+                                    # even if the test file is at a different path than expected
+                                    _create_synthetic_run_report_for_agentic_success(
+                                        pdd_files['test'],
+                                        basename,
+                                        language,
+                                        atomic_state=atomic_state,
+                                    )
+                                elif pdd_files['test'].exists():
                                     _execute_tests_and_create_run_report(
                                         pdd_files['test'],
                                         basename,
@@ -1406,19 +1486,51 @@ def sync_orchestration(
                                         strength=strength,
                                         temperature=temperature
                                     )
-                                    _execute_tests_and_create_run_report(
-                                        pdd_files['test'],
-                                        basename,
-                                        language,
-                                        target_coverage,
-                                        code_file=pdd_files.get("code"),
-                                        atomic_state=atomic_state,
-                                        test_files=pdd_files.get('test_files'),  # Bug #156
-                                    )
+
+                                    # Extract agentic_success from result (4th element if present)
+                                    agentic_success = None
+                                    if isinstance(result, tuple) and len(result) >= 4:
+                                        agentic_success = result[3]
+
+                                    # For non-Python/non-TypeScript: if agentic test agent succeeded, skip execution
+                                    lang_lower = language.lower()
+                                    if lang_lower not in ('python', 'typescript') and agentic_success is True:
+                                        _create_synthetic_run_report_for_agentic_success(
+                                            pdd_files['test'],
+                                            basename,
+                                            language,
+                                            atomic_state=atomic_state,
+                                        )
+                                    else:
+                                        _execute_tests_and_create_run_report(
+                                            pdd_files['test'],
+                                            basename,
+                                            language,
+                                            target_coverage,
+                                            code_file=pdd_files.get("code"),
+                                            atomic_state=atomic_state,
+                                            test_files=pdd_files.get('test_files'),  # Bug #156
+                                        )
                                 else:
                                     # No existing test file, fall back to regular test generation
                                     result = cmd_test_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), output=str(pdd_files['test']), language=language, coverage_report=None, existing_tests=None, target_coverage=target_coverage, merge=False, strength=strength, temperature=temperature)
-                                    if pdd_files['test'].exists():
+
+                                    # Extract agentic_success from result (4th element if present)
+                                    agentic_success = None
+                                    if isinstance(result, tuple) and len(result) >= 4:
+                                        agentic_success = result[3]
+
+                                    # For non-Python/non-TypeScript: if agentic test agent succeeded, skip execution
+                                    lang_lower = language.lower()
+                                    if lang_lower not in ('python', 'typescript') and agentic_success is True:
+                                        if pdd_files['test'].exists():
+                                            _create_synthetic_run_report_for_agentic_success(
+                                                pdd_files['test'],
+                                                basename,
+                                                language,
+                                                atomic_state=atomic_state,
+                                            )
+                                    elif pdd_files['test'].exists():
                                         _execute_tests_and_create_run_report(
                                             pdd_files['test'],
                                             basename,
@@ -1442,7 +1554,7 @@ def sync_orchestration(
 
                                     if test_cmd:
                                         # Run language-appropriate test command
-                                        if language.lower() == 'python':
+                                        if language.lower() == 'python' and not agentic_mode:
                                             # Use pytest directly for Python
                                             python_executable = detect_host_python_executable()
                                             # Bug #156: Run pytest on ALL matching test files
@@ -1531,9 +1643,9 @@ def sync_orchestration(
                                                     unit_test_file_for_fix = str(ff_path.resolve())
                                                     break
 
-                                # For non-Python languages, set max_attempts=0 to skip iterative loop
+                                # For non-Python languages (or agentic mode), set max_attempts=0 to skip iterative loop
                                 # and go directly to agentic fallback
-                                effective_max_attempts = 0 if language.lower() != 'python' else max_attempts
+                                effective_max_attempts = 0 if _use_agentic_path(language, agentic_mode) else max_attempts
                                 # Bug #360 fix: output_test must match the actual failing file so the fix
                                 # is written to the correct file, not always the primary test file.
                                 # Without this, fix_main tests/writes the primary file (already fixed)
@@ -1555,8 +1667,20 @@ def sync_orchestration(
                                 success = result.get('success', False)
                                 current_cost_ref[0] += result.get('cost', 0.0)
                             elif isinstance(result, tuple) and len(result) >= 3:
-                                if operation == 'test': success = pdd_files['test'].exists()
-                                else: success = bool(result[0])
+                                if operation == 'test':
+                                    # For agentic test generation (non-Python languages), trust the
+                                    # agentic_success flag (4th element) since the agent may create
+                                    # test files with different extensions or at different paths.
+                                    # Only fall back to file existence check for Python (non-agentic mode).
+                                    agentic_success_flag = result[3] if len(result) >= 4 else None
+                                    if agentic_success_flag is not None:
+                                        # Agentic mode was used - trust the agent's success report
+                                        success = agentic_success_flag
+                                    else:
+                                        # Non-agentic mode (Python) - check if file exists
+                                        success = pdd_files['test'].exists()
+                                else:
+                                    success = bool(result[0])
                                 cost = result[-2] if len(result) >= 2 and isinstance(result[-2], (int, float)) else 0.0
                                 current_cost_ref[0] += cost
                             else:
@@ -1579,8 +1703,15 @@ def sync_orchestration(
                                  actual_cost = result.get('cost', 0.0)
                                  model_name = result.get('model', 'unknown')
                             elif isinstance(result, tuple) and len(result) >= 3:
-                                 actual_cost = result[-2] if len(result) >= 2 else 0.0
-                                 model_name = result[-1] if len(result) >= 1 else 'unknown'
+                                 # cmd_test_main returns 4-tuple: (content, cost, model, agentic_success)
+                                 # Other commands return 3-tuple: (content, cost, model)
+                                 # Use explicit indexing for test operation to handle 4-tuple correctly
+                                 if operation == 'test' and len(result) >= 4:
+                                     actual_cost = result[1] if isinstance(result[1], (int, float)) else 0.0
+                                     model_name = result[2] if isinstance(result[2], str) else 'unknown'
+                                 else:
+                                     actual_cost = result[-2] if isinstance(result[-2], (int, float)) else 0.0
+                                     model_name = result[-1] if len(result) >= 1 else 'unknown'
                             last_model_name = str(model_name)
                             operations_completed.append(operation)
                             _save_fingerprint_atomic(basename, language, operation, pdd_files, actual_cost, str(model_name), atomic_state=atomic_state)
@@ -1590,8 +1721,8 @@ def sync_orchestration(
 
                         # Post-operation checks (simplified)
                         if success and operation == 'crash':
-                            if language.lower() != 'python':
-                                # Bug #364 fix: For non-Python languages, trust the agentic result.
+                            if _use_agentic_path(language, agentic_mode):
+                                # Bug #364 fix: For non-Python languages (or agentic mode), trust the agentic result.
                                 # The agentic crash handler already verified using the correct
                                 # language-specific run command.
                                 # Save a successful RunReport so sync_determine_operation advances.
@@ -1639,8 +1770,8 @@ def sync_orchestration(
                         if success and operation == 'fix':
                             # Re-run tests to update run_report after successful fix
                             # This prevents infinite loop by updating the state machine
-                            if language.lower() != 'python':
-                                # Bug #364 fix: For non-Python languages, trust the agentic result.
+                            if _use_agentic_path(language, agentic_mode):
+                                # Bug #364 fix: For non-Python languages (or agentic mode), trust the agentic result.
                                 # The agentic fix handler already verified tests pass.
                                 # Save a successful RunReport so sync_determine_operation advances.
                                 test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
