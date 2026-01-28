@@ -22,6 +22,9 @@ import { ArchitectureModule, PromptInfo } from '../api';
 import { ChevronDownIcon, ChevronUpIcon, SparklesIcon, DocumentArrowDownIcon, SpinnerIcon } from './Icon';
 import Tooltip from './Tooltip';
 import ModuleNode, { ModuleNodeData } from './ModuleNode';
+import BatchFilterDropdown from './BatchFilterDropdown';
+import type { Batch } from '../lib/batchUtils';
+import { getBatchForModule } from '../lib/batchUtils';
 
 const NODE_WIDTH = 200;
 const NODE_HEIGHT = 85;
@@ -47,6 +50,12 @@ interface DependencyViewerProps {
   highlightedModules?: Set<string>;  // For error highlighting
   // Callback when Dagre calculates initial positions (for auto-saving)
   onInitialPositionsCalculated?: (positions: Map<string, { x: number; y: number }>) => void;
+  // Batch (connected component) filtering props
+  batches?: Batch[];
+  selectedBatch?: Batch | null;
+  onBatchSelect?: (batch: Batch | null) => void;
+  onSyncBatch?: (batch: Batch) => void;
+  remainingCountByBatch?: Map<number, number>;
 }
 
 // Determine category based on tags
@@ -145,6 +154,11 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
   onPositionsChange,
   highlightedModules = new Set(),
   onInitialPositionsCalculated,
+  batches = [],
+  selectedBatch = null,
+  onBatchSelect,
+  onSyncBatch,
+  remainingCountByBatch = new Map(),
 }) => {
   const [isPrdVisible, setIsPrdVisible] = useState(false);
   const [contextMenu, setContextMenu] = useState<{
@@ -179,6 +193,8 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
       const category = getCategory(m);
       const hasPrompt = existingPrompts.has(m.filename);
       const isHighlighted = highlightedModules.has(m.filename);
+      // Get batch info for this module
+      const batch = getBatchForModule(m.filename, batches);
       return {
         id: m.filename,
         type: 'moduleNode',
@@ -196,6 +212,10 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
           onEdit: onModuleEdit,
           onDelete: onModuleDelete,
           isHighlighted,
+          // Batch info for visual indicator
+          batchId: batch?.id,
+          batchColor: batch?.color,
+          batchName: batch?.name,
         },
       };
     });
@@ -253,7 +273,7 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
 
     // All modules have positions - use them as-is
     return { initialNodes: nodes, initialEdges: edges };
-  }, [architecture, existingPrompts, promptInfoMap, onModuleClick, onRunSync, editMode, onModuleEdit, onModuleDelete, highlightedModules]);
+  }, [architecture, existingPrompts, promptInfoMap, onModuleClick, onRunSync, editMode, onModuleEdit, onModuleDelete, highlightedModules, batches]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
@@ -562,6 +582,22 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
             maskColor="rgba(0, 0, 0, 0.6)"
           />
 
+          {/* Batch Filter Panel */}
+          {batches.length > 1 && (
+            <Panel position="top-left" className="!m-4">
+              <div className="bg-surface-800/90 rounded-lg p-2 border border-surface-700/50 backdrop-blur-sm">
+                <BatchFilterDropdown
+                  batches={batches}
+                  selectedBatch={selectedBatch}
+                  onSelectBatch={onBatchSelect || (() => {})}
+                  onSyncBatch={onSyncBatch}
+                  remainingCountByBatch={remainingCountByBatch}
+                  disabled={editMode}
+                />
+              </div>
+            </Panel>
+          )}
+
           {/* Legend Panel */}
           <Panel position="bottom-right" className="!m-4">
             <div className="bg-surface-800/90 rounded-lg p-3 border border-surface-700/50 backdrop-blur-sm">
@@ -617,6 +653,21 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
                   </div>
                   <span className="text-xs text-surface-300">Arrow shows dependency direction</span>
                 </div>
+                {batches.length > 1 && (
+                  <div className="flex items-center gap-2 pt-1 border-t border-surface-700/50 mt-1">
+                    <div className="flex gap-0.5">
+                      {batches.slice(0, 4).map((b) => (
+                        <div
+                          key={b.id}
+                          className="w-1.5 h-3 rounded-full"
+                          style={{ backgroundColor: b.color }}
+                        />
+                      ))}
+                      {batches.length > 4 && <span className="text-[8px] text-surface-500">...</span>}
+                    </div>
+                    <span className="text-xs text-surface-300">Batch groups</span>
+                  </div>
+                )}
                 {editMode && (
                   <div className="pt-1 border-t border-surface-700/50 mt-1">
                     <p className="text-[10px] text-surface-400 leading-relaxed">

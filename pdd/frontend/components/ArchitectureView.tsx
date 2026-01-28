@@ -8,10 +8,14 @@ import GraphToolbar from './GraphToolbar';
 import ModuleEditModal from './ModuleEditModal';
 import AddModuleModal from './AddModuleModal';
 import SyncFromPromptModal from './SyncFromPromptModal';
+import SyncOptionsModal from './SyncOptionsModal';
 import { useArchitectureHistory } from '../hooks/useArchitectureHistory';
 import { GLOBAL_DEFAULTS, GLOBAL_OPTIONS, COMMANDS } from '../constants';
 import { GlobalOption, CommandOption, CommandType } from '../types';
 import { buildDisplayCommand } from '../lib/commandBuilder';
+import BatchFilterDropdown from './BatchFilterDropdown';
+import { computeBatches, filterModulesByBatch } from '../lib/batchUtils';
+import type { Batch } from '../lib/batchUtils';
 
 interface ArchitectureViewProps {
   serverConnected: boolean;
@@ -215,6 +219,15 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<ArchitectureSyncResult | null>(null);
 
+  // Sync options modal state (for configuring sync options before running pdd sync)
+  const [showSyncOptionsModal, setShowSyncOptionsModal] = useState(false);
+  const [pendingSyncModule, setPendingSyncModule] = useState<ArchitectureModule | null>(null);
+  const [pendingSyncAll, setPendingSyncAll] = useState(false);
+
+  // Batch (connected component) filtering state
+  const [selectedBatch, setSelectedBatch] = useState<Batch | null>(null);
+  const [pendingSyncBatch, setPendingSyncBatch] = useState<Batch | null>(null);
+
   // Architecture history hook for undo/redo
   const {
     architecture: editableArchitecture,
@@ -249,6 +262,18 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
 
   // Display architecture: use editable version if in edit mode
   const displayArchitecture = editMode ? editableArchitecture : architecture;
+
+  // Compute batches (connected components) from architecture
+  const batches = useMemo(() => {
+    if (!displayArchitecture) return [];
+    return computeBatches(displayArchitecture);
+  }, [displayArchitecture]);
+
+  // Filter architecture by selected batch for display
+  const filteredArchitecture = useMemo(() => {
+    if (!displayArchitecture) return null;
+    return filterModulesByBatch(displayArchitecture, selectedBatch);
+  }, [displayArchitecture, selectedBatch]);
 
   // Load existing prompts
   const loadExistingPrompts = useCallback(async () => {
@@ -586,8 +611,38 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
     }).length;
   }, [architecture, promptsInfo]);
 
-  // Run pdd sync for a single module (adds to queue)
+  // Compute remaining modules per batch
+  const remainingCountByBatch = useMemo(() => {
+    const counts = new Map<number, number>();
+    if (!batches.length) return counts;
+
+    const promptMap = new Map<string, PromptInfo>();
+    promptsInfo.forEach(p => {
+      const filename = p.prompt.split('/').pop() || '';
+      promptMap.set(filename, p);
+    });
+
+    for (const batch of batches) {
+      const remaining = batch.modules.filter(module => {
+        const info = promptMap.get(module.filename);
+        if (!info) return true;
+        return !info.code || !info.test || !info.example;
+      }).length;
+      counts.set(batch.id, remaining);
+    }
+    return counts;
+  }, [batches, promptsInfo]);
+
+  // Show sync options modal for a single module
   const handleRunSyncForModule = useCallback((module: ArchitectureModule) => {
+    if (!onAddToQueue) return;
+    setPendingSyncModule(module);
+    setPendingSyncAll(false);
+    setShowSyncOptionsModal(true);
+  }, [onAddToQueue]);
+
+  // Actually run sync for a single module with selected options
+  const executeSyncForModule = useCallback((module: ArchitectureModule, options: Record<string, any>) => {
     if (!onAddToQueue) return;
 
     const promptMap = new Map<string, PromptInfo>();
@@ -609,21 +664,30 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
       code: module.filepath,
     };
 
-    // Build rawOptions matching what CommandOptionsModal produces for SYNC
-    const syncConfig = COMMANDS[CommandType.SYNC];
-    const rawOptions: Record<string, any> = {};
-    syncConfig.options.forEach(opt => {
-      if (opt.defaultValue !== undefined) {
-        rawOptions[opt.name] = opt.defaultValue;
-      }
-    });
-
-    const displayCommand = buildDisplayCommand(CommandType.SYNC, promptInfo, { ...rawOptions });
-    onAddToQueue(CommandType.SYNC, promptInfo, { ...rawOptions }, displayCommand);
+    const displayCommand = buildDisplayCommand(CommandType.SYNC, promptInfo, { ...options });
+    onAddToQueue(CommandType.SYNC, promptInfo, { ...options }, displayCommand);
   }, [promptsInfo, onAddToQueue]);
 
-  // Queue sync for all remaining modules (sorted by priority)
+  // Show sync options modal for all remaining modules
   const handleSyncAll = useCallback(() => {
+    if (!architecture || !onAddToQueue) return;
+    setPendingSyncModule(null);
+    setPendingSyncAll(true);
+    setPendingSyncBatch(null);
+    setShowSyncOptionsModal(true);
+  }, [architecture, onAddToQueue]);
+
+  // Show sync options modal for a specific batch
+  const handleSyncBatch = useCallback((batch: Batch) => {
+    if (!onAddToQueue) return;
+    setPendingSyncModule(null);
+    setPendingSyncAll(false);
+    setPendingSyncBatch(batch);
+    setShowSyncOptionsModal(true);
+  }, [onAddToQueue]);
+
+  // Actually queue sync for all remaining modules with selected options
+  const executeSyncAll = useCallback((options: Record<string, any>) => {
     if (!architecture || !onAddToQueue) return;
 
     const promptMap = new Map<string, PromptInfo>();
@@ -642,16 +706,6 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
 
     if (modulesToSync.length === 0) return;
 
-    // Build rawOptions matching what CommandOptionsModal produces for SYNC:
-    // Include command-specific defaults (max-attempts, budget)
-    const syncConfig = COMMANDS[CommandType.SYNC];
-    const rawOptions: Record<string, any> = {};
-    syncConfig.options.forEach(opt => {
-      if (opt.defaultValue !== undefined) {
-        rawOptions[opt.name] = opt.defaultValue;
-      }
-    });
-
     modulesToSync.forEach(module => {
       const match = module.filename.match(/_([A-Za-z]+)\.prompt$/);
       const language = match ? match[1].toLowerCase() : undefined;
@@ -667,10 +721,64 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
         code: module.filepath,
       };
 
-      const displayCommand = buildDisplayCommand(CommandType.SYNC, promptInfo, { ...rawOptions });
-      onAddToQueue(CommandType.SYNC, promptInfo, { ...rawOptions }, displayCommand);
+      const displayCommand = buildDisplayCommand(CommandType.SYNC, promptInfo, { ...options });
+      onAddToQueue(CommandType.SYNC, promptInfo, { ...options }, displayCommand);
     });
   }, [architecture, promptsInfo, onAddToQueue]);
+
+  // Actually queue sync for a specific batch with selected options
+  const executeSyncBatch = useCallback((batch: Batch, options: Record<string, any>) => {
+    if (!onAddToQueue) return;
+
+    const promptMap = new Map<string, PromptInfo>();
+    promptsInfo.forEach(p => {
+      const filename = p.prompt.split('/').pop() || '';
+      promptMap.set(filename, p);
+    });
+
+    // Get modules in this batch that still need syncing, sorted by priority
+    const modulesToSync = batch.modules
+      .filter(module => {
+        const info = promptMap.get(module.filename);
+        if (!info) return true;
+        return !info.code || !info.test || !info.example;
+      })
+      .sort((a, b) => a.priority - b.priority);
+
+    if (modulesToSync.length === 0) return;
+
+    modulesToSync.forEach(module => {
+      const match = module.filename.match(/_([A-Za-z]+)\.prompt$/);
+      const language = match ? match[1].toLowerCase() : undefined;
+      const basename = module.filename.replace(/_[A-Za-z]+\.prompt$/, '');
+
+      const existingPrompt = promptMap.get(module.filename);
+      const promptInfo: PromptInfo = existingPrompt || {
+        prompt: `prompts/${module.filename}`,
+        sync_basename: basename,
+        language,
+        code: module.filepath,
+      };
+
+      const displayCommand = buildDisplayCommand(CommandType.SYNC, promptInfo, { ...options });
+      onAddToQueue(CommandType.SYNC, promptInfo, { ...options }, displayCommand);
+    });
+  }, [promptsInfo, onAddToQueue]);
+
+  // Handle sync options modal confirmation
+  const handleSyncOptionsConfirm = useCallback((options: Record<string, any>) => {
+    if (pendingSyncAll) {
+      executeSyncAll(options);
+    } else if (pendingSyncBatch) {
+      executeSyncBatch(pendingSyncBatch, options);
+    } else if (pendingSyncModule) {
+      executeSyncForModule(pendingSyncModule, options);
+    }
+    setShowSyncOptionsModal(false);
+    setPendingSyncModule(null);
+    setPendingSyncAll(false);
+    setPendingSyncBatch(null);
+  }, [pendingSyncAll, pendingSyncBatch, pendingSyncModule, executeSyncAll, executeSyncBatch, executeSyncForModule]);
 
   // Handle generation with user-selected order
   const handleConfirmGeneratePrompts = useCallback(async (orderedModules: ArchitectureModule[]) => {
@@ -1538,6 +1646,21 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
                 </div>
               )}
 
+              {/* Batch Filter & Sync - only show if multiple batches exist */}
+              {batches.length > 1 && onAddToQueue && (
+                <div className="p-3 border-t border-surface-700/50">
+                  <p className="text-xs font-medium text-surface-400 uppercase tracking-wider mb-2">Sync by Batch</p>
+                  <BatchFilterDropdown
+                    batches={batches}
+                    selectedBatch={selectedBatch}
+                    onSelectBatch={setSelectedBatch}
+                    onSyncBatch={handleSyncBatch}
+                    remainingCountByBatch={remainingCountByBatch}
+                    showModuleList
+                  />
+                </div>
+              )}
+
               {/* Load Different Architecture File */}
               <div className="border-t border-surface-700/50">
                 <div className="p-3">
@@ -1728,6 +1851,11 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
                 onPositionsChange={handlePositionsChange}
                 highlightedModules={highlightedModules}
                 onInitialPositionsCalculated={handleInitialPositionsCalculated}
+                batches={batches}
+                selectedBatch={selectedBatch}
+                onBatchSelect={setSelectedBatch}
+                onSyncBatch={handleSyncBatch}
+                remainingCountByBatch={remainingCountByBatch}
               />
             )
           ) : (
@@ -1811,6 +1939,32 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
         result={syncResult}
         onSync={handleSync}
         onClose={handleCloseSyncModal}
+      />
+
+      {/* Sync Options Modal (for running pdd sync with options) */}
+      <SyncOptionsModal
+        isOpen={showSyncOptionsModal}
+        title={
+          pendingSyncAll
+            ? `Sync ${remainingModulesCount} Module${remainingModulesCount !== 1 ? 's' : ''}`
+            : pendingSyncBatch
+              ? `Sync ${pendingSyncBatch.name} (${remainingCountByBatch.get(pendingSyncBatch.id) || 0} modules)`
+              : 'Sync Module'
+        }
+        description={
+          pendingSyncAll
+            ? 'Configure options for syncing all remaining modules'
+            : pendingSyncBatch
+              ? `Configure options for syncing modules in ${pendingSyncBatch.name} (sorted by priority)`
+              : `Configure options for syncing ${pendingSyncModule?.filename || 'module'}`
+        }
+        onConfirm={handleSyncOptionsConfirm}
+        onClose={() => {
+          setShowSyncOptionsModal(false);
+          setPendingSyncModule(null);
+          setPendingSyncAll(false);
+          setPendingSyncBatch(null);
+        }}
       />
     </div>
   );

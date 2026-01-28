@@ -23,6 +23,7 @@ import { pddAutocompleteExtension } from '../lib/pddAutocomplete';
 import { findIncludeAtCursor, IncludeTagInfo, parseIncludeManyPaths } from '../lib/includeAnalyzer';
 import PromptCodeDiffModal from './PromptCodeDiffModal';
 import FilePickerInput from './FilePickerInput';
+import SyncOptionsModal from './SyncOptionsModal';
 
 // Helper to get language extension based on file path
 function getLanguageExtension(filePath: string) {
@@ -531,6 +532,9 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
   // Diff analysis modal state
   const [showDiffModal, setShowDiffModal] = useState(false);
 
+  // Sync options modal state (for configuring sync options before running Generate/Sync)
+  const [showSyncOptionsModal, setShowSyncOptionsModal] = useState(false);
+
   // Sync from architecture state
   const [isSyncingFromArch, setIsSyncingFromArch] = useState(false);
   const [syncFromArchError, setSyncFromArchError] = useState<string | null>(null);
@@ -749,6 +753,14 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
   const handleReloadCode = useCallback(() => {
     loadCodeContent();
   }, [loadCodeContent]);
+
+  // Handle showing diff modal - load code content if needed
+  const handleShowDiff = useCallback(async () => {
+    if (!codeContent && prompt.code) {
+      await loadCodeContent();
+    }
+    setShowDiffModal(true);
+  }, [codeContent, prompt.code, loadCodeContent]);
 
   // Initialize code editor when content is loaded and panel is visible and not collapsed
   useEffect(() => {
@@ -1563,7 +1575,7 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
                 hasExampleFile={!!prompt.example}
                 showPreview={showPreview}
                 onTogglePreview={() => setShowPreview(!showPreview)}
-                onShowDiff={() => setShowDiffModal(true)}
+                onShowDiff={handleShowDiff}
               />
 
               {/* Model Selection sliders (collapsible) */}
@@ -1637,21 +1649,21 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
                 {anyRightPanelOpen && (
                   <div className="flex flex-col items-center justify-center py-4 px-1 bg-surface-800/50 border-x border-surface-700/50">
                     <div className="flex flex-col gap-1">
-                      {/* Sync: prompt → code */}
+                      {/* Generate: prompt → code */}
                       {showCodePanel && (
                         <div className="flex flex-col gap-1 p-1.5 rounded-xl bg-accent-500/10 border border-accent-500/20">
                           <button
-                            onClick={() => { if (!isExecuting) handleCommandClick(CommandType.SYNC); }}
+                            onClick={() => { if (!isExecuting) handleCommandClick(CommandType.GENERATE); }}
                             disabled={isExecuting}
                             className={`flex flex-col items-center gap-1 p-2 rounded-lg text-xs font-medium transition-all duration-200 min-w-[52px] ${
                               isExecuting ? 'text-surface-500 cursor-not-allowed' : 'text-accent-300 hover:bg-accent-500/20 hover:text-white'
                             }`}
-                            title="Sync: prompt → code"
+                            title="Generate: prompt → code"
                           >
                             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
                             </svg>
-                            <span className="text-[10px] leading-tight text-center">Sync</span>
+                            <span className="text-[10px] leading-tight text-center">Generate</span>
                           </button>
                           <button
                             onClick={() => { if (!isExecuting) handleCommandClick(CommandType.UPDATE); }}

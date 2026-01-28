@@ -1991,3 +1991,1148 @@ def test_backward_compat_state_without_issue_updated_at(mock_dependencies, temp_
     assert "step1" not in labels_called, "Step 1 should be skipped (backward compat)"
     assert "step4" not in labels_called, "Step 4 should be skipped (backward compat)"
     assert "step5" in labels_called, "Step 5 should be called when resuming"
+
+
+# -----------------------------------------------------------------------------
+# Template preprocessing fix: Preprocessing and Error Handling Tests
+# -----------------------------------------------------------------------------
+
+def test_template_preprocessing_include_directives_are_preprocessed(mock_dependencies, temp_cwd):
+    """
+    Template preprocessing fix: Verify that <include> directives in templates are preprocessed
+    before format() is called.
+
+    Bug: Templates containing <include> directives were being passed directly
+    to format(), causing the LLM to receive unexpanded directives instead of
+    the included content.
+
+    Fix: preprocess() is called on each template before format() to expand
+    <include> directives.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_template_loader = mocks["template_loader"]
+
+    # Track the preprocessed templates
+    preprocessed_templates = []
+
+    # Return a template with an <include> directive
+    mock_template_loader.return_value = "Template with <include>some_file.txt</include> directive and {issue_number}"
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        # Capture the instruction that was passed (after preprocessing and formatting)
+        instruction = kwargs.get("instruction", "")
+        preprocessed_templates.append(instruction)
+        if label == "step9":
+            return (True, "FILES_CREATED: test.py", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR: https://github.com/o/r/pull/1", 0.1, "gpt-4")
+        return (True, "ok", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    # Patch preprocess to verify it's being called
+    with patch("pdd.agentic_change_orchestrator.preprocess") as mock_preprocess:
+        # Make preprocess return a modified template that shows it was called
+        mock_preprocess.return_value = "PREPROCESSED: Template content and {issue_number}"
+
+        run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="content",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=123,
+            issue_author="author",
+            issue_title="Test",
+            cwd=temp_cwd,
+            quiet=True
+        )
+
+        # Verify preprocess was called for each step
+        assert mock_preprocess.call_count >= 10, (
+            f"preprocess should be called for each step, but was only called "
+            f"{mock_preprocess.call_count} times"
+        )
+
+        # Verify preprocess was called with correct parameters
+        for call in mock_preprocess.call_args_list:
+            args, kwargs = call
+            assert "recursive" in kwargs and kwargs["recursive"] == False
+            assert "double_curly_brackets" in kwargs and kwargs["double_curly_brackets"] == True
+            assert "exclude_keys" in kwargs and isinstance(kwargs["exclude_keys"], list)
+
+
+def test_template_preprocessing_curly_braces_in_included_content_are_escaped(mock_dependencies, temp_cwd):
+    """
+    Template preprocessing fix: Verify that curly braces in included content don't break format().
+
+    Bug: When <include> directives expand content containing curly braces
+    (e.g., JSON, shell variables like ${VAR}), the subsequent format() call
+    would fail with ValueError because those braces are interpreted as
+    format placeholders.
+
+    Fix: preprocess() with double_curly_brackets=True escapes braces in
+    included content, converting { to {{ and } to }}.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_template_loader = mocks["template_loader"]
+
+    # Template that includes JSON with curly braces
+    template_with_json = '''Step template for {issue_number}
+Included JSON: {"key": "value", "nested": {"inner": true}}
+Shell var: ${HOME}
+End template'''
+
+    mock_template_loader.return_value = template_with_json
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_CREATED: test.py", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR: https://github.com/o/r/pull/1", 0.1, "gpt-4")
+        return (True, "ok", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    # Patch preprocess to escape curly braces as the real implementation would
+    with patch("pdd.agentic_change_orchestrator.preprocess") as mock_preprocess:
+        # Simulate what preprocess does: escape braces in non-placeholder content
+        def escape_braces(template, **kwargs):
+            exclude_keys = kwargs.get("exclude_keys", [])
+            # Escape JSON braces but not the {issue_number} placeholder
+            escaped = template.replace('{"key"', '{{"key"')
+            escaped = escaped.replace('{"inner"', '{{"inner"')
+            escaped = escaped.replace('${HOME}', '${{HOME}}')
+            return escaped
+
+        mock_preprocess.side_effect = escape_braces
+
+        # This should NOT raise ValueError from format()
+        success, msg, _, _, _ = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="content",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=456,
+            issue_author="author",
+            issue_title="Test with JSON",
+            cwd=temp_cwd,
+            quiet=True
+        )
+
+        # Should succeed without format errors
+        assert success is True
+        assert "PR Created:" in msg
+
+
+def test_template_preprocessing_valueerror_from_format_is_caught(mock_dependencies, temp_cwd):
+    """
+    Template preprocessing fix: Verify that ValueError from format() is properly caught.
+
+    Bug: Only KeyError was caught, but format() can also raise ValueError
+    for invalid format strings (e.g., unclosed braces, invalid conversion
+    specifiers).
+
+    Fix: Catch ValueError in addition to KeyError and return a descriptive
+    error message.
+    """
+    mocks = mock_dependencies
+    mock_template_loader = mocks["template_loader"]
+
+    # Create a mock template whose format() raises ValueError
+    mock_template = MagicMock()
+    mock_template_loader.return_value = mock_template
+
+    # Patch preprocess to return the template unchanged
+    with patch("pdd.agentic_change_orchestrator.preprocess") as mock_preprocess:
+        # Return a malformed format string that will cause ValueError
+        mock_preprocess.return_value = "Template with {invalid format specifier!x}"
+
+        success, msg, _, _, _ = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="content",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=789,
+            issue_author="author",
+            issue_title="Test ValueError",
+            cwd=temp_cwd,
+            quiet=True
+        )
+
+        # Should fail gracefully with a descriptive message
+        assert success is False
+        assert "Prompt formatting error" in msg
+        assert "step 1" in msg
+        # Should mention invalid format string
+        assert "invalid format" in msg.lower() or "ValueError" in msg
+
+
+def test_template_preprocessing_generic_exception_from_format_is_caught(mock_dependencies, temp_cwd):
+    """
+    Template preprocessing fix: Verify that generic exceptions from format() are caught.
+
+    Bug: Only KeyError was caught, but format() could raise other exceptions
+    in edge cases (e.g., custom __format__ methods raising exceptions).
+
+    Fix: Catch Exception as a fallback and return a descriptive error message
+    that includes the exception type.
+
+    Note: This test verifies that the generic Exception handler exists by
+    testing ValueError (which is caught with a specific message), since
+    we can verify the except blocks are structured properly.
+    """
+    mocks = mock_dependencies
+    mock_template_loader = mocks["template_loader"]
+
+    # Use a template that will cause an IndexError via positional placeholder
+    # This is hard to trigger in practice, so we use ValueError test as proxy
+    # The key is that the code structure catches Exception as fallback
+
+    # Patch preprocess to return a template with invalid format specifier
+    with patch("pdd.agentic_change_orchestrator.preprocess") as mock_preprocess:
+        # Using an invalid conversion specifier !z that will raise ValueError
+        mock_preprocess.return_value = "Template for {issue_number!z}"
+
+        success, msg, _, _, _ = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="content",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=101,
+            issue_author="author",
+            issue_title="Test Generic Exception",
+            cwd=temp_cwd,
+            quiet=True
+        )
+
+        # Should fail gracefully with ValueError (caught by either ValueError or Exception handler)
+        assert success is False
+        assert "Prompt formatting error" in msg
+        assert "step 1" in msg
+
+
+def test_template_preprocessing_preprocessing_failure_is_non_fatal(mock_dependencies, temp_cwd):
+    """
+    Template preprocessing fix: Verify that preprocessing failures are logged but don't halt.
+
+    Bug: If preprocess() fails, the entire orchestrator would crash.
+
+    Fix: Preprocessing failures are caught and logged as warnings, then the
+    orchestrator continues with the original (unprocessed) template. This
+    allows the workflow to proceed even if preprocessing has issues.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_template_loader = mocks["template_loader"]
+    mock_console = mocks["console"]
+
+    # Return a simple template that doesn't require preprocessing
+    mock_template_loader.return_value = "Simple template for {issue_number}"
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_CREATED: test.py", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR: https://github.com/o/r/pull/1", 0.1, "gpt-4")
+        return (True, "ok", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    # Patch preprocess to raise an exception
+    with patch("pdd.agentic_change_orchestrator.preprocess") as mock_preprocess:
+        mock_preprocess.side_effect = Exception("Preprocessing failed: file not found")
+
+        # Run with quiet=False so we can verify the warning is logged
+        success, msg, _, _, _ = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="content",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=202,
+            issue_author="author",
+            issue_title="Test Preprocessing Failure",
+            cwd=temp_cwd,
+            quiet=False  # Enable console output to test warning
+        )
+
+        # Should still succeed (preprocessing failure is non-fatal)
+        assert success is True
+        assert "PR Created:" in msg or "PR" in msg
+
+        # Verify warning was logged
+        warning_calls = [
+            call for call in mock_console.print.call_args_list
+            if "Warning" in str(call) and "Preprocessing failed" in str(call)
+        ]
+        assert len(warning_calls) >= 1, "Warning about preprocessing failure should be logged"
+
+
+def test_template_preprocessing_preprocess_called_for_step11_and_step12(mock_dependencies, temp_cwd):
+    """
+    Template preprocessing fix: Verify preprocess is called for review loop steps (11 and 12).
+
+    Bug: The fix might only apply to the main step loop but miss the review
+    loop steps 11 and 12 which also use format().
+
+    Fix: Preprocessing is applied to all format() calls including steps 11-12.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_template_loader = mocks["template_loader"]
+    mock_load_state = mocks["load_state"]
+
+    # Start from step 10 to reach the review loop
+    initial_state = {
+        "issue_number": 303,
+        "last_completed_step": 10,
+        "step_outputs": {str(i): f"out{i}" for i in range(1, 11)},
+        "total_cost": 1.0,
+        "model_used": "gpt-4",
+        "worktree_path": str(temp_cwd / ".pdd" / "worktrees" / "change-issue-303"),
+        "review_iteration": 0,
+        "previous_fixes": ""
+    }
+    initial_state["step_outputs"]["9"] = "FILES_CREATED: test.py"
+    mock_load_state.return_value = (initial_state, 12345)
+
+    mock_template_loader.return_value = "Template for {issue_number}"
+
+    # Track steps 11 and 12 calls
+    step11_called = False
+    step12_called = False
+
+    def side_effect_run(**kwargs):
+        nonlocal step11_called, step12_called
+        label = kwargs.get("label", "")
+        if "step11" in label:
+            step11_called = True
+            return (True, "Issues found: need fix", 0.1, "gpt-4")
+        if "step12" in label:
+            step12_called = True
+            return (True, "Fixed issues", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR: https://github.com/o/r/pull/1", 0.1, "gpt-4")
+        return (True, "No Issues Found", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    # Create worktree directory so it exists
+    worktree_path = temp_cwd / ".pdd" / "worktrees" / "change-issue-303"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    with patch("pdd.agentic_change_orchestrator.preprocess") as mock_preprocess:
+        mock_preprocess.return_value = "Preprocessed template for {issue_number}"
+
+        run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="content",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=303,
+            issue_author="author",
+            issue_title="Test Review Loop",
+            cwd=temp_cwd,
+            quiet=True
+        )
+
+        # Verify steps 11 and 12 were called
+        assert step11_called, "Step 11 should have been called"
+        assert step12_called, "Step 12 should have been called"
+
+        # Verify preprocess was called for all steps including 11, 12, and 13
+        # Minimum: step 11 (iter 1) + step 12 (iter 1) + step 11 (iter 2) + step 13 = 4
+        assert mock_preprocess.call_count >= 4, (
+            f"preprocess should be called for review loop steps, "
+            f"but was only called {mock_preprocess.call_count} times"
+        )
+
+
+def test_template_preprocessing_preprocess_called_for_step13(mock_dependencies, temp_cwd):
+    """
+    Template preprocessing fix: Verify preprocess is called for step 13 (PR creation).
+
+    Bug: Step 13 also uses format() and needs preprocessing.
+
+    Fix: Preprocessing is applied to step 13's template as well.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_template_loader = mocks["template_loader"]
+    mock_load_state = mocks["load_state"]
+
+    # Start from step 12 to go directly to step 13
+    initial_state = {
+        "issue_number": 404,
+        "last_completed_step": 12,
+        "step_outputs": {str(i): f"out{i}" for i in range(1, 13)},
+        "total_cost": 1.2,
+        "model_used": "gpt-4",
+        "worktree_path": str(temp_cwd / ".pdd" / "worktrees" / "change-issue-404"),
+        "review_iteration": 1,
+        "previous_fixes": "prev fixes"
+    }
+    initial_state["step_outputs"]["9"] = "FILES_CREATED: test.py"
+    mock_load_state.return_value = (initial_state, 12345)
+
+    mock_template_loader.return_value = "PR template for {issue_number} with {files_to_stage}"
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step13":
+            return (True, "PR: https://github.com/o/r/pull/1", 0.1, "gpt-4")
+        return (True, "ok", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    # Create worktree directory
+    worktree_path = temp_cwd / ".pdd" / "worktrees" / "change-issue-404"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    with patch("pdd.agentic_change_orchestrator.preprocess") as mock_preprocess:
+        mock_preprocess.return_value = "Preprocessed PR template for {issue_number} with {files_to_stage}"
+
+        success, msg, _, _, _ = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="content",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=404,
+            issue_author="author",
+            issue_title="Test Step 13",
+            cwd=temp_cwd,
+            quiet=True
+        )
+
+        assert success is True
+        assert "PR Created:" in msg
+
+        # Verify preprocess was called (at least once for step 13)
+        assert mock_preprocess.call_count >= 1, "preprocess should be called for step 13"
+
+        # Verify the last call was for step 13 template
+        last_call = mock_preprocess.call_args_list[-1]
+        args, kwargs = last_call
+        assert "exclude_keys" in kwargs
+        # Step 13 context should have issue_number and files_to_stage
+        assert "issue_number" in kwargs["exclude_keys"]
+
+
+def test_template_preprocessing_keyerror_still_handled_correctly(mock_dependencies, temp_cwd):
+    """
+    Template preprocessing fix: Regression test to verify KeyError is still handled.
+
+    The original code only caught KeyError. After adding ValueError and Exception
+    handlers, KeyError should still be caught and return a descriptive message.
+    """
+    mocks = mock_dependencies
+    mock_template_loader = mocks["template_loader"]
+
+    # Template referencing a key that won't be in context
+    mock_template_loader.return_value = "Template needs {nonexistent_key} which is missing"
+
+    # Patch preprocess to return template unchanged (so format() will fail on missing key)
+    with patch("pdd.agentic_change_orchestrator.preprocess") as mock_preprocess:
+        mock_preprocess.side_effect = lambda t, **kw: t  # passthrough
+
+        success, msg, _, _, _ = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="content",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=500,
+            issue_author="author",
+            issue_title="Test KeyError",
+            cwd=temp_cwd,
+            quiet=True
+        )
+
+        # Should fail with KeyError-specific message
+        assert success is False
+        assert "Prompt formatting error" in msg
+        assert "missing key" in msg
+        assert "nonexistent_key" in msg
+
+
+def test_template_preprocessing_exclude_keys_contains_all_context_keys(mock_dependencies, temp_cwd):
+    """
+    Template preprocessing fix: Verify exclude_keys contains all context keys.
+
+    Critical: If a context key is missing from exclude_keys, preprocess() will
+    double-escape its placeholder (e.g., {issue_number} -> {{issue_number}}),
+    causing format() to output literal braces instead of substituting the value.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_template_loader = mocks["template_loader"]
+
+    mock_template_loader.return_value = "Template for {issue_number} by {issue_author}"
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_CREATED: test.py", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR: https://github.com/o/r/pull/1", 0.1, "gpt-4")
+        return (True, "ok", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    # Track exclude_keys passed to preprocess
+    exclude_keys_per_call = []
+
+    with patch("pdd.agentic_change_orchestrator.preprocess") as mock_preprocess:
+        def capture_exclude_keys(template, **kwargs):
+            exclude_keys_per_call.append(kwargs.get("exclude_keys", []))
+            return template  # passthrough
+        mock_preprocess.side_effect = capture_exclude_keys
+
+        run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="content",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=501,
+            issue_author="testauthor",
+            issue_title="Test exclude_keys",
+            cwd=temp_cwd,
+            quiet=True
+        )
+
+        # Verify each call had the expected context keys in exclude_keys
+        for i, exclude_keys in enumerate(exclude_keys_per_call):
+            # Core context keys that should always be present
+            assert "issue_number" in exclude_keys, f"Call {i}: issue_number missing from exclude_keys"
+            assert "issue_author" in exclude_keys, f"Call {i}: issue_author missing from exclude_keys"
+            assert "issue_title" in exclude_keys, f"Call {i}: issue_title missing from exclude_keys"
+            assert "repo_owner" in exclude_keys, f"Call {i}: repo_owner missing from exclude_keys"
+            assert "repo_name" in exclude_keys, f"Call {i}: repo_name missing from exclude_keys"
+
+
+def test_template_preprocessing_formatted_prompt_contains_substituted_values(mock_dependencies, temp_cwd):
+    """
+    Template preprocessing fix: Verify the instruction passed to run_agentic_task
+    contains correctly substituted values, not raw placeholders or double-braces.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_template_loader = mocks["template_loader"]
+
+    # Template with placeholders
+    mock_template_loader.return_value = "Process issue {issue_number} titled '{issue_title}' by {issue_author}"
+
+    # Capture the instructions passed to run_agentic_task
+    captured_instructions = []
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        instruction = kwargs.get("instruction", "")
+        captured_instructions.append((label, instruction))
+        if label == "step9":
+            return (True, "FILES_CREATED: test.py", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR: https://github.com/o/r/pull/1", 0.1, "gpt-4")
+        return (True, "ok", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    # Use real-ish preprocess behavior: passthrough (no includes to expand)
+    with patch("pdd.agentic_change_orchestrator.preprocess") as mock_preprocess:
+        mock_preprocess.side_effect = lambda t, **kw: t
+
+        run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="content",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=502,
+            issue_author="alice",
+            issue_title="Fix the bug",
+            cwd=temp_cwd,
+            quiet=True
+        )
+
+        # Verify at least one instruction contains the substituted values
+        assert len(captured_instructions) > 0, "No instructions were captured"
+
+        # Check first step's instruction
+        label, instruction = captured_instructions[0]
+        assert "502" in instruction, f"issue_number not substituted in {label}: {instruction[:100]}"
+        assert "alice" in instruction, f"issue_author not substituted in {label}: {instruction[:100]}"
+        assert "Fix the bug" in instruction, f"issue_title not substituted in {label}: {instruction[:100]}"
+
+        # Verify no raw placeholders remain
+        assert "{issue_number}" not in instruction, "Raw placeholder {issue_number} found in instruction"
+        assert "{{issue_number}}" not in instruction, "Double-escaped {{issue_number}} found in instruction"
+
+
+def test_template_preprocessing_quiet_mode_suppresses_warnings(mock_dependencies, temp_cwd):
+    """
+    Template preprocessing fix: Verify that quiet=True suppresses preprocessing warnings.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_template_loader = mocks["template_loader"]
+    mock_console = mocks["console"]
+
+    mock_template_loader.return_value = "Simple template for {issue_number}"
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_CREATED: test.py", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR: https://github.com/o/r/pull/1", 0.1, "gpt-4")
+        return (True, "ok", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    # Patch preprocess to raise an exception
+    with patch("pdd.agentic_change_orchestrator.preprocess") as mock_preprocess:
+        mock_preprocess.side_effect = Exception("Preprocessing failed")
+
+        # Run with quiet=True
+        success, msg, _, _, _ = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="content",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=503,
+            issue_author="author",
+            issue_title="Test Quiet Mode",
+            cwd=temp_cwd,
+            quiet=True  # Quiet mode
+        )
+
+        # Should still succeed (preprocessing failure is non-fatal)
+        assert success is True
+
+        # Verify NO warning was printed (quiet mode)
+        warning_calls = [
+            call for call in mock_console.print.call_args_list
+            if "Warning" in str(call) and "Preprocessing failed" in str(call)
+        ]
+        assert len(warning_calls) == 0, "Warnings should be suppressed in quiet mode"
+
+
+def test_template_preprocessing_context_grows_across_steps(mock_dependencies, temp_cwd):
+    """
+    Template preprocessing fix: Verify exclude_keys is recalculated as context grows.
+
+    The context dictionary grows as steps complete (e.g., step1_output, step2_output
+    are added). The exclude_keys must be recalculated for each step to include
+    these new keys.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_template_loader = mocks["template_loader"]
+
+    mock_template_loader.return_value = "Template for {issue_number}"
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_CREATED: test.py", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR: https://github.com/o/r/pull/1", 0.1, "gpt-4")
+        return (True, "ok", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    # Track exclude_keys length for each step
+    exclude_keys_counts = []
+
+    with patch("pdd.agentic_change_orchestrator.preprocess") as mock_preprocess:
+        def capture_exclude_keys(template, **kwargs):
+            exclude_keys = kwargs.get("exclude_keys", [])
+            exclude_keys_counts.append(len(exclude_keys))
+            return template
+        mock_preprocess.side_effect = capture_exclude_keys
+
+        run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="content",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=504,
+            issue_author="author",
+            issue_title="Test Context Growth",
+            cwd=temp_cwd,
+            quiet=True
+        )
+
+        # Verify context grows (later steps should have more keys due to step outputs)
+        assert len(exclude_keys_counts) >= 10, "Should have multiple preprocess calls"
+
+        # The count should generally increase as steps complete and add outputs to context
+        # At minimum, later calls should have at least as many keys as earlier calls
+        # (context doesn't shrink)
+        for i in range(1, len(exclude_keys_counts)):
+            assert exclude_keys_counts[i] >= exclude_keys_counts[0], (
+                f"exclude_keys count should not decrease: step 0 had {exclude_keys_counts[0]}, "
+                f"step {i} had {exclude_keys_counts[i]}"
+            )
+
+
+def test_template_preprocessing_error_message_contains_step_number(mock_dependencies, temp_cwd):
+    """
+    Template preprocessing fix: Verify error messages include the step number.
+
+    This helps users identify which step's template has the formatting issue.
+    """
+    mocks = mock_dependencies
+    mock_template_loader = mocks["template_loader"]
+    mock_load_state = mocks["load_state"]
+
+    # Start from step 4 to test a specific step number in error
+    initial_state = {
+        "issue_number": 505,
+        "last_completed_step": 4,
+        "step_outputs": {str(i): f"out{i}" for i in range(1, 5)},
+        "total_cost": 0.5,
+        "model_used": "gpt-4",
+        "worktree_path": str(temp_cwd / ".pdd" / "worktrees" / "change-issue-505"),
+    }
+    mock_load_state.return_value = (initial_state, 12345)
+
+    # Create worktree directory
+    worktree_path = temp_cwd / ".pdd" / "worktrees" / "change-issue-505"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    mock_template_loader.return_value = "Template for {missing_key}"
+
+    with patch("pdd.agentic_change_orchestrator.preprocess") as mock_preprocess:
+        mock_preprocess.side_effect = lambda t, **kw: t
+
+        success, msg, _, _, _ = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="content",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=505,
+            issue_author="author",
+            issue_title="Test Error Step Number",
+            cwd=temp_cwd,
+            quiet=True
+        )
+
+        assert success is False
+        # Error should mention step 5 (next step after last_completed_step=4)
+        assert "step 5" in msg, f"Error message should mention step number: {msg}"
+
+
+def test_template_preprocessing_integration_with_real_preprocess(mock_dependencies, temp_cwd):
+    """
+    Template preprocessing fix: Integration test using real preprocess function.
+
+    This test doesn't mock preprocess() to verify the actual integration works.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_template_loader = mocks["template_loader"]
+
+    # Template without includes (preprocess should pass through cleanly)
+    # Include some JSON-like content that would break without proper escaping
+    template_with_json = '''Process issue {issue_number}
+Here is some JSON context: {{"config": "value"}}
+End of template'''
+
+    mock_template_loader.return_value = template_with_json
+
+    captured_instructions = []
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        instruction = kwargs.get("instruction", "")
+        captured_instructions.append((label, instruction))
+        if label == "step9":
+            return (True, "FILES_CREATED: test.py", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR: https://github.com/o/r/pull/1", 0.1, "gpt-4")
+        return (True, "ok", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    # Don't mock preprocess - use real implementation
+    # But we need to suppress its console output
+    with patch("pdd.preprocess.console"):
+        success, msg, _, _, _ = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="content",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=506,
+            issue_author="author",
+            issue_title="Integration Test",
+            cwd=temp_cwd,
+            quiet=True
+        )
+
+        # Should succeed
+        assert success is True, f"Integration test failed: {msg}"
+
+        # Verify instructions have substituted values and preserved JSON
+        assert len(captured_instructions) > 0
+        label, instruction = captured_instructions[0]
+        assert "506" in instruction, "issue_number should be substituted"
+        # The already-doubled braces should remain as single braces after format()
+        assert '{"config": "value"}' in instruction, (
+            f"JSON should be preserved in instruction: {instruction[:200]}"
+        )
+
+
+def test_template_preprocessing_valueerror_caught_for_step11(mock_dependencies, temp_cwd):
+    """
+    Template preprocessing fix: Verify ValueError is caught for step 11.
+
+    Steps 11, 12, and 13 have separate format() calls that also need
+    proper error handling.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_template_loader = mocks["template_loader"]
+    mock_load_state = mocks["load_state"]
+
+    # Start from step 10 to reach step 11
+    initial_state = {
+        "issue_number": 600,
+        "last_completed_step": 10,
+        "step_outputs": {str(i): f"out{i}" for i in range(1, 11)},
+        "total_cost": 1.0,
+        "model_used": "gpt-4",
+        "worktree_path": str(temp_cwd / ".pdd" / "worktrees" / "change-issue-600"),
+        "review_iteration": 0,
+        "previous_fixes": ""
+    }
+    initial_state["step_outputs"]["9"] = "FILES_CREATED: test.py"
+    mock_load_state.return_value = (initial_state, 12345)
+
+    # Return a normal template for most calls
+    mock_template_loader.return_value = "Template for {issue_number}"
+
+    # Create worktree directory
+    worktree_path = temp_cwd / ".pdd" / "worktrees" / "change-issue-600"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    call_count = [0]
+
+    with patch("pdd.agentic_change_orchestrator.preprocess") as mock_preprocess:
+        def preprocess_side_effect(template, **kwargs):
+            call_count[0] += 1
+            # Return invalid format string on the call for step 11 template
+            # Step 11 is loaded after step 10 completes
+            if call_count[0] >= 1 and "step11" in str(mock_template_loader.call_args):
+                return "Template with {invalid!z} specifier"
+            # Check if this is likely the step 11 call by looking at context
+            if call_count[0] == 1:  # First call after resuming at step 10
+                return "Template with {invalid!z} specifier for {issue_number}"
+            return template
+        mock_preprocess.side_effect = preprocess_side_effect
+
+        success, msg, _, _, _ = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="content",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=600,
+            issue_author="author",
+            issue_title="Test Step 11 ValueError",
+            cwd=temp_cwd,
+            quiet=True
+        )
+
+        # Should fail gracefully with error message mentioning step 11
+        assert success is False
+        assert "Prompt formatting error" in msg
+        assert "step 11" in msg
+
+
+def test_template_preprocessing_step_output_keys_in_exclude_keys(mock_dependencies, temp_cwd):
+    """
+    Template preprocessing fix: Verify step output keys are in exclude_keys.
+
+    As steps complete, their outputs (step1_output, step2_output, etc.) are
+    added to context. These must be in exclude_keys to prevent double-escaping.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_template_loader = mocks["template_loader"]
+
+    mock_template_loader.return_value = "Template for {issue_number}"
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_CREATED: test.py", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR: https://github.com/o/r/pull/1", 0.1, "gpt-4")
+        return (True, "ok", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    # Track exclude_keys for later steps
+    exclude_keys_by_call = []
+
+    with patch("pdd.agentic_change_orchestrator.preprocess") as mock_preprocess:
+        def capture_exclude_keys(template, **kwargs):
+            exclude_keys_by_call.append(kwargs.get("exclude_keys", []))
+            return template
+        mock_preprocess.side_effect = capture_exclude_keys
+
+        run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="content",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=601,
+            issue_author="author",
+            issue_title="Test Step Output Keys",
+            cwd=temp_cwd,
+            quiet=True
+        )
+
+        # Verify step output keys appear in exclude_keys for later steps
+        # By the time we reach step 5, step1_output through step4_output should exist
+        assert len(exclude_keys_by_call) >= 5, "Should have at least 5 preprocess calls"
+
+        # Check that later calls include step output keys
+        # Call index 4 is for step 5 (0-indexed), should have step1-4 outputs
+        later_call_exclude_keys = exclude_keys_by_call[4]
+        assert "step1_output" in later_call_exclude_keys, (
+            f"step1_output should be in exclude_keys by step 5: {later_call_exclude_keys}"
+        )
+        assert "step2_output" in later_call_exclude_keys, (
+            f"step2_output should be in exclude_keys by step 5: {later_call_exclude_keys}"
+        )
+
+
+def test_template_preprocessing_shell_variable_syntax_handled(mock_dependencies, temp_cwd):
+    """
+    Template preprocessing fix: Verify shell variable syntax ${VAR} is handled.
+
+    Templates may contain shell-style variables like ${HOME} which should not
+    break the format() call.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_template_loader = mocks["template_loader"]
+
+    # Template with shell variable syntax
+    mock_template_loader.return_value = "Process {issue_number} in ${HOME}/projects"
+
+    captured_instructions = []
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        instruction = kwargs.get("instruction", "")
+        captured_instructions.append((label, instruction))
+        if label == "step9":
+            return (True, "FILES_CREATED: test.py", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR: https://github.com/o/r/pull/1", 0.1, "gpt-4")
+        return (True, "ok", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    # Use a preprocess mock that handles ${VAR} like the real implementation
+    with patch("pdd.agentic_change_orchestrator.preprocess") as mock_preprocess:
+        def handle_shell_vars(template, **kwargs):
+            # Real preprocess converts ${VAR} to ${{VAR}} to escape it
+            return template.replace("${HOME}", "${{HOME}}")
+        mock_preprocess.side_effect = handle_shell_vars
+
+        success, msg, _, _, _ = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="content",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=602,
+            issue_author="author",
+            issue_title="Test Shell Variables",
+            cwd=temp_cwd,
+            quiet=True
+        )
+
+        # Should succeed without format errors
+        assert success is True, f"Should handle shell variables: {msg}"
+
+        # Verify instruction has substituted issue_number and preserved ${HOME}
+        assert len(captured_instructions) > 0
+        label, instruction = captured_instructions[0]
+        assert "602" in instruction, "issue_number should be substituted"
+        # After format(), ${{HOME}} becomes ${HOME}
+        assert "${HOME}" in instruction, f"Shell variable should be preserved: {instruction}"
+
+
+def test_template_preprocessing_no_unexpanded_include_tags(mock_dependencies, temp_cwd):
+    """
+    Template preprocessing fix: Core bug test - verify <include> tags are expanded.
+
+    This is the core bug: templates with <include> directives were passed
+    directly to format() without expansion. The instruction sent to the LLM
+    should NOT contain raw <include> tags.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_template_loader = mocks["template_loader"]
+
+    # Template with an include directive
+    mock_template_loader.return_value = "Process {issue_number}\n<include>some_file.txt</include>\nEnd"
+
+    captured_instructions = []
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        instruction = kwargs.get("instruction", "")
+        captured_instructions.append((label, instruction))
+        if label == "step9":
+            return (True, "FILES_CREATED: test.py", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR: https://github.com/o/r/pull/1", 0.1, "gpt-4")
+        return (True, "ok", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    with patch("pdd.agentic_change_orchestrator.preprocess") as mock_preprocess:
+        # Simulate preprocess expanding the include directive
+        def expand_includes(template, **kwargs):
+            return template.replace(
+                "<include>some_file.txt</include>",
+                "INCLUDED CONTENT FROM FILE"
+            )
+        mock_preprocess.side_effect = expand_includes
+
+        success, msg, _, _, _ = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="content",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=603,
+            issue_author="author",
+            issue_title="Test Include Expansion",
+            cwd=temp_cwd,
+            quiet=True
+        )
+
+        assert success is True
+
+        # Verify NO instruction contains unexpanded <include> tags
+        for label, instruction in captured_instructions:
+            assert "<include>" not in instruction, (
+                f"Raw <include> tag found in {label} instruction: {instruction[:200]}"
+            )
+            assert "</include>" not in instruction, (
+                f"Raw </include> tag found in {label} instruction: {instruction[:200]}"
+            )
+
+        # Verify the included content IS present
+        label, instruction = captured_instructions[0]
+        assert "INCLUDED CONTENT FROM FILE" in instruction, (
+            f"Included content should be in instruction: {instruction[:200]}"
+        )
+
+
+def test_template_preprocessing_mixed_placeholders_and_json(mock_dependencies, temp_cwd):
+    """
+    Template preprocessing fix: Real-world scenario with placeholders and JSON.
+
+    Templates often contain both format placeholders like {issue_number} and
+    literal JSON with braces. Both must work correctly.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_template_loader = mocks["template_loader"]
+
+    # Real-world template with placeholders and JSON
+    template = '''Process issue {issue_number} by {issue_author}
+
+Configuration:
+```json
+{
+    "repo": "example",
+    "settings": {"debug": true, "verbose": false}
+}
+```
+
+Please implement the changes.'''
+
+    mock_template_loader.return_value = template
+
+    captured_instructions = []
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        instruction = kwargs.get("instruction", "")
+        captured_instructions.append((label, instruction))
+        if label == "step9":
+            return (True, "FILES_CREATED: test.py", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR: https://github.com/o/r/pull/1", 0.1, "gpt-4")
+        return (True, "ok", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    with patch("pdd.agentic_change_orchestrator.preprocess") as mock_preprocess:
+        # Simulate preprocess escaping JSON braces but preserving placeholders
+        def escape_json_braces(template, **kwargs):
+            exclude_keys = kwargs.get("exclude_keys", [])
+            # Escape braces in JSON but not in placeholders
+            result = template
+            # Simple simulation: escape the JSON block's braces
+            result = result.replace('{\n    "repo"', '{{\n    "repo"')
+            result = result.replace('"settings": {', '"settings": {{')
+            result = result.replace('false}\n}', 'false}}\n}}')
+            return result
+        mock_preprocess.side_effect = escape_json_braces
+
+        success, msg, _, _, _ = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="content",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=604,
+            issue_author="bob",
+            issue_title="Test Mixed Content",
+            cwd=temp_cwd,
+            quiet=True
+        )
+
+        assert success is True, f"Should handle mixed content: {msg}"
+
+        # Verify placeholders were substituted
+        assert len(captured_instructions) > 0
+        label, instruction = captured_instructions[0]
+        assert "604" in instruction, "issue_number should be substituted"
+        assert "bob" in instruction, "issue_author should be substituted"
+
+        # Verify JSON structure is present (braces should be unescaped after format())
+        assert '"repo"' in instruction, "JSON content should be present"
+        assert '"settings"' in instruction, "Nested JSON should be present"

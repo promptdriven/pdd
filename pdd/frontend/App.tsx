@@ -1282,6 +1282,7 @@ const App: React.FC = () => {
                 <PromptSelector
                   onEditPrompt={(prompt) => { setSelectedPrompt(prompt); handleOpenPromptSpace(prompt); }}
                   onCreatePrompt={handleOpenPromptSpace}
+                  onRunSync={(prompt, options) => handleRunCommand(CommandType.SYNC, prompt, options)}
                   selectedPrompt={selectedPrompt}
                 />
               </div>
