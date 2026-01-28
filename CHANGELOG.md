@@ -1,3 +1,20 @@
+## v0.0.132 (2026-01-27)
+
+### Feat
+
+- **demos**: update TTS script with context rot section and nuanced debt argument
+- **demos**: add 3Blue1Brown video animation specs and context rot section
+- **sync**: add agentic mode flag and update prompts for non-Python support
+- **sync**: add agentic mode support and fix non-Python test generation
+- **frontend**: add batch filtering for parallel sync workflows
+- Install dependencies for the 3blue1brown demo video project.
+- **logging**: enhance verbose logging configuration for LiteLLM integration
+- Add 3Blue1Brown style PDD intro script and update changelog with expanded agentic architecture, various bug fixes, and refactors.
+
+### Refactor
+
+- **frontend**: remove PRD/tech stack editor from architecture view
+
 ## v0.0.131 (2026-01-26)
 
 ### Feat
