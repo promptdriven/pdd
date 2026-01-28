@@ -282,8 +282,6 @@ def test_issue_409_env_vars_do_not_pollute_os_environ(mock_main, mock_auto_updat
         'API_TOKEN_409': 'token456'
     }
 
-    env_before = set(os.environ.keys())
-
     for key in test_vars.keys():
         monkeypatch.delenv(key, raising=False)
     cmd_args = ["generate"]
@@ -294,7 +292,6 @@ def test_issue_409_env_vars_do_not_pollute_os_environ(mock_main, mock_auto_updat
     assert result.exit_code == 0, f"Command failed: {result.output}"
     call_kwargs = mock_main.call_args.kwargs
     assert call_kwargs["env_vars"] == test_vars, "env_vars parameter should contain test variables"
-    env_after = set(os.environ.keys())
     pollution_detected = []
 
     for key in test_vars.keys():
@@ -306,11 +303,4 @@ def test_issue_409_env_vars_do_not_pollute_os_environ(mock_main, mock_auto_updat
         f"Polluted variables: {pollution_detected}. "
         f"These variables were set via -e flag and should NOT exist in os.environ after the command. "
         f"Root cause: pdd/commands/generate.py:152 calls os.environ.update(env_vars) without cleanup."
-    )
-    new_keys = env_after - env_before
-    unexpected_new_keys = [k for k in new_keys if k in test_vars]
-
-    assert len(unexpected_new_keys) == 0, (
-        f"Unexpected new environment variables detected: {unexpected_new_keys}. "
-        f"These should not persist after command completion."
     )
