@@ -252,11 +252,17 @@ class TestGenerateHTML:
         json_str = extract_module_data_json(html_doc)
         data = json.loads(json_str)
 
-        # After XSS fix: HTML special characters should be escaped as HTML entities
-        # in the JSON data to prevent XSS when rendered via innerHTML
-        expected_description = "&lt;script&gt;alert('pwned')&lt;/script&gt;"
-        assert data["xss"]["description"] == expected_description, \
-            "HTML special characters should be escaped in JSON data to prevent XSS"
+        # After XSS fix: Unicode escaping in JSON source prevents literal XSS code in HTML
+        # When parsed by json.loads(), Unicode escapes become original characters
+        # This is safe because render_mermaid.py uses textContent (not innerHTML) for dynamic data
+
+        # Verify the JSON source contains Unicode escapes (not literal < >)
+        assert '\\u003cscript\\u003e' in json_str, \
+            "JSON source should contain Unicode-escaped HTML to prevent XSS payload in HTML source"
+
+        # After parsing, the data contains original characters (this is expected and safe)
+        assert data["xss"]["description"] == "<script>alert('pwned')</script>", \
+            "After JSON parsing, data contains original characters (safe with textContent)"
 
 
 def test_write_pretty_architecture_json(tmp_path):
@@ -438,13 +444,14 @@ class TestXSSPrevention:
         json_str = extract_module_data_json(html_doc)
         data = json.loads(json_str)
 
-        # After fix: malicious tag should be escaped in the JSON
-        malicious_tag = data["api"]["tags"][1]
-        assert '&lt;img' in json_str or not malicious_tag.startswith('<img'), \
-            "tags: malicious tag elements should be HTML-escaped"
-        # Before fix: contains unescaped HTML
-        assert not malicious_tag.startswith('<img src=x onerror='), \
-            "tags: unescaped XSS payload should not be present"
+        # After fix: malicious tag should be escaped in the JSON (either HTML entities or Unicode escapes)
+        # The JSON source should contain escaped form to prevent literal XSS code in HTML
+        assert '&lt;img' in json_str or '\\u003cimg' in json_str, \
+            "tags: malicious tag elements should be HTML-escaped or Unicode-escaped in JSON source"
+
+        # Note: After JSON parsing, Unicode escapes become original characters
+        # This is safe because render_mermaid.py uses textContent (not innerHTML) for dynamic content
+        # The parsed malicious_tag will contain '<img', but it won't execute as XSS
 
     def test_xss_in_dependencies_array(self):
         """

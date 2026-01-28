@@ -111,35 +111,37 @@ def generate_mermaid_code(architecture, app_name="System"):
 
 
 def generate_html(mermaid_code, architecture, app_name):
-    """Generate interactive HTML with hover tooltips."""
+    """Generate interactive HTML with hover tooltips.
 
-    def escape_html(value):
-        """Recursively escape HTML in strings, lists, and dicts."""
-        if isinstance(value, str):
-            return html.escape(value, quote=False)
-        elif isinstance(value, list):
-            return [escape_html(item) for item in value]
-        elif isinstance(value, dict):
-            return {k: escape_html(v) for k, v in value.items()}
-        else:
-            return value
+    Security: Uses textContent instead of innerHTML to prevent XSS attacks.
+    The moduleData is embedded as JSON, which is safely parsed by JavaScript.
+    All dynamic content is inserted via textContent, which treats everything as plain text.
+    """
 
     # Create module data as JSON for tooltips
+    # No HTML escaping needed since we use textContent, not innerHTML
     module_data = {}
     for m in architecture:
-        # Escape module_id for security, using same quote=False as values for consistency
-        module_id = html.escape(Path(m['filename']).stem, quote=False)
+        module_id = Path(m['filename']).stem
         module_data[module_id] = {
-            'filename': escape_html(m['filename']),
-            'priority': escape_html(m.get('priority', 'N/A')),
-            'description': escape_html(m.get('description', 'No description')),
-            'dependencies': escape_html(m.get('dependencies', [])),
-            'tags': escape_html(m.get('tags', [])),
-            'filepath': escape_html(m.get('filepath', '')), 
+            'filename': m['filename'],
+            'priority': m.get('priority', 'N/A'),
+            'description': m.get('description', 'No description'),
+            'dependencies': m.get('dependencies', []),
+            'tags': m.get('tags', []),
+            'filepath': m.get('filepath', ''),
         }
 
-    # Convert to JSON - the HTML entities are now safely embedded in the JSON strings
+    # Convert to JSON and escape HTML-sensitive characters using Unicode escapes
+    # This prevents XSS payloads from appearing literally in the HTML source
+    # even though textContent already prevents execution
     module_json = json.dumps(module_data)
+    # Escape HTML-sensitive characters to prevent payloads from appearing in source
+    module_json = (module_json
+                  .replace('<', r'\u003c')
+                  .replace('>', r'\u003e')
+                  .replace("'", r'\u0027')
+                  .replace('&', r'\u0026'))
     escaped_app_name = html.escape(app_name)
 
     return f"""<!DOCTYPE html>
@@ -177,20 +179,60 @@ window.addEventListener('load', () => {{
 }});
 function showTooltip(e, data) {{
     hideTooltip();
-    
+
     const tooltip = document.createElement('div');
     tooltip.id = 'module-tooltip';
-    tooltip.innerHTML = `
-        <div style=\"font-weight:600;margin-bottom:8px;font-size:1.1em;\">${{data.filename}}</div>
-        <div style=\"margin-bottom:6px;\"><strong>Priority:</strong> ${{data.priority}}</div>
-        <div style=\"margin-bottom:6px;\"><strong>Path:</strong> ${{data.filepath}}</div>
-        <div style=\"margin-bottom:6px;\"><strong>Tags:</strong> ${{data.tags.join(', ')}}</div>
-        <div style=\"margin-bottom:6px;\"><strong>Dependencies:</strong> ${{data.dependencies.length > 0 ? data.dependencies.join(', ') : 'None'}}</div>
-        <div style=\"margin-top:8px;padding-top:8px;border-top:1px solid #ddd;font-size:0.9em;color:#444;\">${{data.description}}</div>
-    `;
-    
+
+    // Create filename div
+    const filenameDiv = document.createElement('div');
+    filenameDiv.style.cssText = 'font-weight:600;margin-bottom:8px;font-size:1.1em;';
+    filenameDiv.textContent = data.filename;
+    tooltip.appendChild(filenameDiv);
+
+    // Create priority div
+    const priorityDiv = document.createElement('div');
+    priorityDiv.style.cssText = 'margin-bottom:6px;';
+    const priorityStrong = document.createElement('strong');
+    priorityStrong.textContent = 'Priority:';
+    priorityDiv.appendChild(priorityStrong);
+    priorityDiv.appendChild(document.createTextNode(' ' + data.priority));
+    tooltip.appendChild(priorityDiv);
+
+    // Create path div
+    const pathDiv = document.createElement('div');
+    pathDiv.style.cssText = 'margin-bottom:6px;';
+    const pathStrong = document.createElement('strong');
+    pathStrong.textContent = 'Path:';
+    pathDiv.appendChild(pathStrong);
+    pathDiv.appendChild(document.createTextNode(' ' + data.filepath));
+    tooltip.appendChild(pathDiv);
+
+    // Create tags div
+    const tagsDiv = document.createElement('div');
+    tagsDiv.style.cssText = 'margin-bottom:6px;';
+    const tagsStrong = document.createElement('strong');
+    tagsStrong.textContent = 'Tags:';
+    tagsDiv.appendChild(tagsStrong);
+    tagsDiv.appendChild(document.createTextNode(' ' + data.tags.join(', ')));
+    tooltip.appendChild(tagsDiv);
+
+    // Create dependencies div
+    const depsDiv = document.createElement('div');
+    depsDiv.style.cssText = 'margin-bottom:6px;';
+    const depsStrong = document.createElement('strong');
+    depsStrong.textContent = 'Dependencies:';
+    depsDiv.appendChild(depsStrong);
+    depsDiv.appendChild(document.createTextNode(' ' + (data.dependencies.length > 0 ? data.dependencies.join(', ') : 'None')));
+    tooltip.appendChild(depsDiv);
+
+    // Create description div
+    const descDiv = document.createElement('div');
+    descDiv.style.cssText = 'margin-top:8px;padding-top:8px;border-top:1px solid #ddd;font-size:0.9em;color:#444;';
+    descDiv.textContent = data.description;
+    tooltip.appendChild(descDiv);
+
     document.body.appendChild(tooltip);
-    
+
     const rect = e.target.closest('.node').getBoundingClientRect();
     tooltip.style.left = rect.right + 10 + 'px';
     tooltip.style.top = rect.top + window.scrollY + 'px';
