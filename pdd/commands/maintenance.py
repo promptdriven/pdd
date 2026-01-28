@@ -56,6 +56,12 @@ from ..core.utils import _run_setup_utility
     hidden=True,
     help="Deprecated: Use --dry-run instead.",
 )
+@click.option(
+    "--agentic",
+    is_flag=True,
+    default=False,
+    help="Use agentic mode for Python (skip iterative loops, trust agent results).",
+)
 @click.pass_context
 @track_cost
 def sync(
@@ -68,6 +74,7 @@ def sync(
     target_coverage: Optional[float],
     dry_run: bool,
     log: bool,
+    agentic: bool,
 ) -> Optional[Tuple[str, float, str]]:
     """
     Synchronize prompts with code and tests.
@@ -95,6 +102,7 @@ def sync(
             skip_tests=skip_tests,
             target_coverage=target_coverage,
             dry_run=dry_run,
+            agentic_mode=agentic,
         )
         return str(result), total_cost, model_name
     except click.Abort:

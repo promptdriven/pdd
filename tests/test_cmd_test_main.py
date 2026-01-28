@@ -282,8 +282,8 @@ def test_cmd_test_main_successful_generate_test_no_coverage(mock_ctx_fixture, mo
         handle = m_file()
         handle.write.assert_called_once_with("unit_test_code")
 
-        # Verify the result
-        assert result == ("unit_test_code", 0.10, "model_v1")
+        # Verify the result (4th element is agentic_success, None for Python)
+        assert result == ("unit_test_code", 0.10, "model_v1", None)
 
 
 # pylint: disable=redefined-outer-name
@@ -324,7 +324,8 @@ def test_cmd_test_main_successful_increase_test_with_coverage(mock_ctx_fixture, 
         m_file.assert_any_call(mock_files_fixture["output"], "w", encoding="utf-8")
         handle = m_file()
         handle.write.assert_called_once_with("more_tests")
-        assert result == ("more_tests", 0.20, "model_v2")
+        # 4th element is agentic_success, None for Python
+        assert result == ("more_tests", 0.20, "model_v2", None)
 
 
 # pylint: disable=redefined-outer-name
@@ -399,7 +400,8 @@ def test_cmd_test_main_output_directory_path_uses_resolved_file(mock_ctx_fixture
             merge=False,
         )
 
-        assert result == ("unit_test_code", 0.10, "model_v1")
+        # 4th element is agentic_success, None for Python
+        assert result == ("unit_test_code", 0.10, "model_v1", None)
         m_open.assert_called_once_with(str(resolved_file), "w", encoding="utf-8")
         handle = m_open()
         handle.write.assert_called_once_with("unit_test_code")
@@ -1269,8 +1271,8 @@ def test_cmd_test_main_cloud_e2e_generate_mode(tmp_path, monkeypatch, capsys):
     # Capture output to verify cloud execution
     captured = capsys.readouterr()
 
-    # Verify we got valid test code back
-    generated_test, cost, model = result
+    # Verify we got valid test code back (4th element is agentic_success)
+    generated_test, cost, model, _ = result
     assert len(generated_test) > 0, "Cloud should return generated test code"
     assert "def test" in generated_test.lower() or "class test" in generated_test.lower(), \
         "Should contain test functions or test class"
@@ -1333,8 +1335,8 @@ def test_cmd_test_main_example_file_detection(mock_ctx_fixture, mock_files_fixtu
         assert call_kwargs["code"] is None, "Should not pass code parameter"
         assert "example content" in call_kwargs["example"], "Should contain example content"
 
-        # Verify result
-        generated_test, cost, _ = result
+        # Verify result (4th element is agentic_success)
+        generated_test, cost, _, _ = result
         assert generated_test == DEFAULT_MOCK_GENERATED_TEST
         assert cost == DEFAULT_MOCK_COST
 
@@ -1392,7 +1394,7 @@ def test_cmd_test_main_non_example_file_uses_code(mock_ctx_fixture, mock_files_f
         assert call_kwargs["example"] is None, "Should not pass example parameter"
         assert "def add" in call_kwargs["code"], "Should contain code content"
 
-        # Verify result
-        generated_test, cost, _ = result
+        # Verify result (4th element is agentic_success)
+        generated_test, cost, _, _ = result
         assert generated_test == DEFAULT_MOCK_GENERATED_TEST
         assert cost == DEFAULT_MOCK_COST

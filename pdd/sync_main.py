@@ -299,6 +299,7 @@ def sync_main(
     skip_tests: bool,
     target_coverage: float,
     dry_run: bool,
+    agentic_mode: bool = False,
 ) -> Tuple[Dict[str, Any], float, str]:
     """
     CLI wrapper for the sync command. Handles parameter validation, path construction,
@@ -436,6 +437,7 @@ def sync_main(
                 verbose=verbose,
                 quiet=quiet,
                 context_override=context_override,
+                agentic_mode=agentic_mode,
             )
         return {}, 0.0, ""
 
@@ -574,6 +576,7 @@ def sync_main(
                 local=local,
                 context_config=resolved_config,
                 context_override=context_override,
+                agentic_mode=agentic_mode,
             )
 
             lang_cost = sync_result.get("total_cost", 0.0)

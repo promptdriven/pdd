@@ -355,7 +355,11 @@ LANGUAGE_EXTENSIONS = {
     "glsl": [".glsl"],
     "wgsl": [".wgsl"],
     "starlark": [".bzl"],
-    "dockerfile": [".dockerfile"],
+    "dockerfile": [".dockerfile", "Dockerfile"],
+    # Web languages
+    "html": [".html", ".htm"],
+    "css": [".css"],
+    "makefile": ["Makefile", ".mk"],
 }
 
 

@@ -71,7 +71,8 @@ def main():
     test_hash = create_file(Path(f"test_{basename}.py"), "assert add(2, 2) == 5")
     
     # Create a run report indicating failure (exit_code=1, tests_failed=1)
-    run_report = RunReport(datetime.now().isoformat(), 1, 0, 1, 50.0)
+    # RunReport now includes test_hash to distinguish real test runs from synthetic reports
+    run_report = RunReport(datetime.now().isoformat(), 1, 0, 1, 50.0, test_hash=test_hash)
     create_file(meta_dir / f"{basename}_{language}_run.json", json.dumps(run_report.__dict__))
     
     # Determine the operation
@@ -119,8 +120,8 @@ def main():
     fingerprint = Fingerprint("0.1.0", datetime.now().isoformat(), "fix", prompt_hash, code_hash, example_hash, test_hash)
     create_file(meta_dir / f"{basename}_{language}.json", json.dumps(fingerprint.__dict__))
     
-    # Create a successful run report
-    run_report = RunReport(datetime.now().isoformat(), 0, 1, 0, 100.0)
+    # Create a successful run report with test_hash to indicate real test execution
+    run_report = RunReport(datetime.now().isoformat(), 0, 1, 0, 100.0, test_hash=test_hash)
     create_file(meta_dir / f"{basename}_{language}_run.json", json.dumps(run_report.__dict__))
     
     # Determine the operation

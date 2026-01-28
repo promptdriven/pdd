@@ -151,7 +151,7 @@ def run_agentic_test_generate(
     *,
     verbose: bool = False,
     quiet: bool = False,
-) -> tuple[str, float, str]:
+) -> tuple[str, float, str, bool]:
     """
     Agentic test generation for non-Python languages.
 
@@ -166,10 +166,11 @@ def run_agentic_test_generate(
         quiet: Suppress standard output.
 
     Returns:
-        Tuple (generated_content, cost, model_name):
+        Tuple (generated_content, cost, model_name, success):
             generated_content: The content of the generated test file.
             cost: Estimated LLM cost.
             model_name: Model/provider used.
+            success: Whether the agentic test generation succeeded (tests passed).
     """
     project_root = Path.cwd()
 
@@ -186,7 +187,7 @@ def run_agentic_test_generate(
         )
         if not quiet:
             console.print(f"[bold red]{error_msg}[/bold red]")
-        return "", 0.0, "unknown"
+        return "", 0.0, "unknown", False
 
     if verbose and not quiet:
         console.print(f"[green]Available agents:[/green] {', '.join(agents)}")
@@ -197,7 +198,7 @@ def run_agentic_test_generate(
         error_msg = "Failed to load prompt template 'agentic_test_generate_LLM'"
         if not quiet:
             console.print(f"[bold red]{error_msg}[/bold red]")
-        return "", 0.0, "unknown"
+        return "", 0.0, "unknown", False
 
     # Read input files
     prompt_content = ""
@@ -231,7 +232,7 @@ def run_agentic_test_generate(
         error_msg = f"Error formatting agent prompt template: {e}"
         if not quiet:
             console.print(f"[bold red]{error_msg}[/bold red]")
-        return "", 0.0, "unknown"
+        return "", 0.0, "unknown", False
 
     if verbose and not quiet:
         console.print(f"[cyan]Prompt file:[/cyan] {prompt_file}")
@@ -293,4 +294,4 @@ def run_agentic_test_generate(
 
     model_name = f"agentic-{provider}" if provider else "agentic-cli"
 
-    return generated_content, cost, model_name
+    return generated_content, cost, model_name, final_success
