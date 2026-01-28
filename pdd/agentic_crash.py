@@ -397,7 +397,9 @@ def run_agentic_crash(
                 f"'{crash_log_path}': {exc}"
             )
 
-    project_root = prompt_path.parent
+    # Use cwd as project root (consistent with agentic_test_generate.py and agentic_verify.py)
+    # Bug fix: Previously used prompt_path.parent which was wrong when prompt is in prompts/ subdir
+    project_root = Path.cwd()
 
     if verbose and not quiet:
         console.print("[cyan]Starting agentic crash fallback (explore mode)...[/cyan]")
