@@ -223,27 +223,3 @@ h1{{font-size:2rem;font-weight:600;margin-bottom:2rem;padding-bottom:1rem;border
 <h1>{escaped_app_name}</h1>
 <div class="diagram"><pre class="mermaid">{mermaid_code}</pre></div>
 </body></html>"""
-
-
-if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python render_mermaid.py <architecture.json> [app_name] [output.html]")
-        sys.exit(1)
-
-    arch_file = sys.argv[1]
-    app_name = sys.argv[2] if len(sys.argv) > 2 else "System Architecture"
-    output_file = sys.argv[3] if len(sys.argv) > 3 else f"{Path(arch_file).stem}_diagram.html"
-
-    with open(arch_file) as f:
-        architecture = json.load(f)
-    write_pretty_architecture_json(arch_file, architecture)
-
-    mermaid_code = generate_mermaid_code(architecture, app_name)
-    html_content = generate_html(mermaid_code, architecture, app_name)
-
-    with open(output_file, 'w', encoding='utf-8') as f:
-        f.write(html_content)
-
-    print(f"✅ Generated: {output_file}")
-    print(f"📊 Modules: {len(architecture)}")
-    print(f"🌐 Open {output_file} in your browser!")
