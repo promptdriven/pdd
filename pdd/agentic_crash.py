@@ -287,7 +287,14 @@ def _run_program_file(
             cwd=project_root,
             capture_output=True,
             text=True,
+            stdin=subprocess.DEVNULL,  # Prevent blocking on input()
+            timeout=120,  # 2 minute timeout to prevent infinite hangs
         )
+    except subprocess.TimeoutExpired:
+        msg = f"Program '{program_path}' timed out after 120 seconds (may be waiting for input or stuck in infinite loop)"
+        if not quiet:
+            console.print(f"[red]{msg}[/red]")
+        return False, msg
     except OSError as exc:
         msg = f"Failed to execute program '{program_path}': {exc}"
         if not quiet:
