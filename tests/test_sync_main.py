@@ -425,6 +425,7 @@ def test_sync_dry_run_mode(mock_project_dir, mock_construct_paths, mock_sync_orc
             verbose=True,
             quiet=False,
             context_override=None,
+            agentic_mode=False,
         ),
         call(
             basename='log_test',
@@ -437,6 +438,7 @@ def test_sync_dry_run_mode(mock_project_dir, mock_construct_paths, mock_sync_orc
             verbose=True,
             quiet=False,
             context_override=None,
+            agentic_mode=False,
         ),
     ]
     mock_sync_orchestration.assert_has_calls(calls, any_order=True)
