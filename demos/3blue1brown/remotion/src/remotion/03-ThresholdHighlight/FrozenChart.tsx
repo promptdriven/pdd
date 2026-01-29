@@ -44,7 +44,7 @@ export const FrozenChart: React.FC = () => {
   const repairLinePath = `M ${getXPosition(repairStart.year)} ${getYPosition(repairStart.hours)} L ${getXPosition(repairEnd.year)} ${getYPosition(repairEnd.hours)}`;
 
   const yearTicks = [1950, 1960, 1970, 1980, 1990, 2000, 2010, 2020];
-  const hourTicks = [0, 0.5, 1, 1.5, 2, 2.5, 3];
+  const hourTicks = [0, 0.5, 1, 1.5];
 
   return (
     <div
@@ -194,7 +194,7 @@ export const FrozenChart: React.FC = () => {
             whiteSpace: "nowrap",
           }}
         >
-          Hours of labor to buy / repair
+          Hours of labor to buy / repair a sock
         </div>
       </div>
 

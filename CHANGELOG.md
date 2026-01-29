@@ -2,25 +2,24 @@
 
 ### Feat
 
-- **cmd_test_main**: use agentic test generation for Python in agentic mode
-- Enhance Git commit and push logic to include existing unpushed commits and fix LiteLLM debug suppression test reliability.
-- refine AI milestones with detailed benchmark data and uneven impact representation in 3blue1brown demo specs.
-- Introduce Qwen3-TTS 12Hz 1.7B CustomVoice model and its tokenizer for the 3blue1brown demo, along with related dependency and changelog updates.
+- **cmd_test_main**: Use agentic test generation for Python when `agentic_mode=True` (previously only non-Python languages used agentic tests)
+- **fix_verification_errors_loop**: Skip agentic fallback when initial run passes with `max_attempts=0`
 
 ### Fix
 
-- **tests**: use asyncio.run() instead of deprecated get_event_loop()
-- **tests**: isolate mtime snapshots in agentic_crash tests
-- **sync**: fix agentic run report filename and default agentic mode on
-- **prompt**: forbid interactive scripts in example generation
-- **sync**: fix agentic run report filename and default agentic mode on
-- **agentic_crash**: add timeout and stdin handling to prevent hangs
-- **agentic_crash**: use cwd as project root instead of prompt parent
-- Bug: Agentic fix doesn't push commits when exiting early at Step 2
+- **agentic_e2e_fix**: Push existing unpushed commits when exiting early at Step 2 (Issue #419 Thanks Serhan Asad!)
+- **agentic_crash**: Add 120s timeout and `stdin=DEVNULL` to prevent hangs on interactive scripts or infinite loops
+- **agentic_crash**: Use `cwd` as project root instead of `prompt_path.parent` (consistent with other agentic modules)
+- **agentic_common**: Fix Gemini CLI invocation—don't use `-p` flag which passes path literally instead of reading file content
+- **agentic_common**: Increase default timeout from 240s to 600s for complex verify tasks
+- **tests**: Use `asyncio.run()` instead of deprecated `get_event_loop()` pattern
+- **tests**: Isolate mtime snapshots in agentic_crash tests to prevent flaky failures
 
-### Refactor
+### Revert
 
-- **demos**: reorganize 3blue1brown directory structure
+- **agentic orchestrators**: Remove template preprocessing with `<include>` directive resolution (PR #405). The preprocessing caused issues; `<include>` tags should be resolved before prompts reach orchestrators.
+- **preprocess**: Undo brace escaping in PDD metadata tags—was over-escaping content
+
 
 ## v0.0.132 (2026-01-27)
 

@@ -11,8 +11,8 @@ export const THRESHOLD_HEIGHT = 1080;
 export const BEATS = {
   MARKER_GROW_START: 0,
   MARKER_GROW_END: 30,           // 0-1s: Circle marker grows in
-  LABEL_FADE_START: 30,
-  LABEL_FADE_END: 60,            // 1-2s: Label fades in with connector (right after marker)
+  LABEL_FADE_START: 60,
+  LABEL_FADE_END: 120,           // 2-4s: Label fades in with connector line
   PULSE_1_START: 30,
   PULSE_1_END: 90,               // 1-3s: First pulse wave
   PULSE_2_START: 90,
@@ -37,12 +37,10 @@ export const COLORS = {
   PULSE_GLOW: "#D9944A",         // Amber glow
 };
 
-// Crossing point calculation (where Cost to Buy ≈ Cost to Repair at 0.5 hours)
-// Based on the data: Cost to Buy at 1970 = 1.0, at 1980 = 0.4
-// Linear interpolation: 0.5 = 1.0 + (year - 1970) * (0.4 - 1.0) / 10
-// Solving: year = 1970 + (1.0 - 0.5) * 10 / 0.6 = 1978.33
+// Crossing point (where Cost to Buy = Cost to Repair at 0.5 hours)
+// Based on the data: Cost to Buy at 1963 = 0.5, matching Cost to Repair
 export const CROSSING_POINT = {
-  year: 1978.33,
+  year: 1963,
   hours: 0.5,
 };
 
@@ -55,18 +53,20 @@ export const CHART_MARGINS = {
 };
 
 export const YEAR_RANGE = { min: 1950, max: 2020 };
-export const HOURS_RANGE = { min: 0, max: 3 };
+export const HOURS_RANGE = { min: 0, max: 1.5 };
 
 // Chart data (same as SockPriceChart - frozen state)
 export const CHART_DATA = {
   costToBuy: [
-    { year: 1950, hours: 2.5 },
-    { year: 1960, hours: 1.8 },
-    { year: 1970, hours: 1.0 },
-    { year: 1980, hours: 0.4 },
-    { year: 1990, hours: 0.15 },
-    { year: 2000, hours: 0.08 },
-    { year: 2010, hours: 0.05 },
+    { year: 1950, hours: 1.0 },
+    { year: 1955, hours: 0.75 },
+    { year: 1960, hours: 0.55 },
+    { year: 1963, hours: 0.5 },
+    { year: 1970, hours: 0.2 },
+    { year: 1980, hours: 0.1 },
+    { year: 1990, hours: 0.06 },
+    { year: 2000, hours: 0.04 },
+    { year: 2010, hours: 0.03 },
     { year: 2020, hours: 0.03 },
   ],
   costToRepair: [
