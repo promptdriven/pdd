@@ -495,25 +495,47 @@ def fix_verification_errors_loop(
     try:
         if skip_llm:
             # Skip initial LLM assessment when max_attempts=0
-            console.print("[bold cyan]max_attempts=0: Skipping LLM assessment, proceeding to agentic fallback.[/bold cyan]")
-            # Set up state for skipping the LLM loop
-            stats['initial_issues'] = -1  # Unknown since we skipped assessment
-            stats['final_issues'] = -1
-            stats['best_iteration_num'] = -1
-            stats['best_iteration_issues'] = float('inf')
-            stats['status_message'] = 'Skipped LLM (max_attempts=0)'
-            stats['improvement_issues'] = 'N/A'
-            stats['improvement_percent'] = 'N/A'
-            overall_success = False  # Trigger agentic fallback
-            final_program_content = initial_program_content
-            final_code_content = initial_code_content
-            # Write log entry for skipped LLM
-            final_log_entry = "<FinalActions>\n"
-            final_log_entry += f'  <Action>Skipped LLM assessment and loop (max_attempts=0), proceeding to agentic fallback.</Action>\n'
-            final_log_entry += "</FinalActions>"
-            _write_log_entry(log_path, final_log_entry)
-            # Skip to final stats (the while loop below will also be skipped since 0 < 0 is False)
-            initial_issues_count = -1  # Sentinel: unknown/not applicable when LLM assessment is skipped; kept numeric for downstream comparisons
+            # But first check if the initial run already passed — no need for agentic fallback
+            if initial_return_code == 0:
+                # Initial run passed! Code already works, skip agentic fallback
+                console.print("[bold green]max_attempts=0: Initial program run passed (exit code 0). Skipping agentic fallback.[/bold green]")
+                stats['initial_issues'] = 0
+                stats['final_issues'] = 0
+                stats['best_iteration_num'] = 0
+                stats['best_iteration_issues'] = 0
+                stats['status_message'] = 'Success - initial run passed (max_attempts=0)'
+                stats['improvement_issues'] = 0
+                stats['improvement_percent'] = 0.0
+                overall_success = True  # Success! No agentic fallback needed
+                final_program_content = initial_program_content
+                final_code_content = initial_code_content
+                initial_issues_count = 0
+                # Write log entry for success
+                final_log_entry = "<FinalActions>\n"
+                final_log_entry += f'  <Action>max_attempts=0: Initial run passed (exit code 0). No fixing needed.</Action>\n'
+                final_log_entry += "</FinalActions>"
+                _write_log_entry(log_path, final_log_entry)
+            else:
+                # Initial run failed, proceed to agentic fallback
+                console.print("[bold cyan]max_attempts=0: Initial run failed. Skipping LLM assessment, proceeding to agentic fallback.[/bold cyan]")
+                # Set up state for skipping the LLM loop
+                stats['initial_issues'] = -1  # Unknown since we skipped assessment
+                stats['final_issues'] = -1
+                stats['best_iteration_num'] = -1
+                stats['best_iteration_issues'] = float('inf')
+                stats['status_message'] = 'Skipped LLM (max_attempts=0)'
+                stats['improvement_issues'] = 'N/A'
+                stats['improvement_percent'] = 'N/A'
+                overall_success = False  # Trigger agentic fallback
+                final_program_content = initial_program_content
+                final_code_content = initial_code_content
+                # Write log entry for skipped LLM
+                final_log_entry = "<FinalActions>\n"
+                final_log_entry += f'  <Action>Skipped LLM assessment and loop (max_attempts=0), proceeding to agentic fallback.</Action>\n'
+                final_log_entry += "</FinalActions>"
+                _write_log_entry(log_path, final_log_entry)
+                # Skip to final stats (the while loop below will also be skipped since 0 < 0 is False)
+                initial_issues_count = -1  # Sentinel: unknown/not applicable when LLM assessment is skipped; kept numeric for downstream comparisons
         else:
             if verbose:
                 console.print("Running initial assessment with fix_verification_errors...")

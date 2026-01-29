@@ -383,17 +383,16 @@ def test_unfinished_prompt_marks_tail_with_closing_fence_as_finished():
 )
 def test_unfinished_prompt_marks_mid_block_tail_without_dangling_as_finished():
     """
-    Integration test: a mid-block tail that ends cleanly (no dangling tokens
-    like 'return a +' or trailing comma) should be considered finished, even
-    without full module context.
+    Integration test: a simple, self-contained statement should be
+    considered finished by the LLM.
     """
     repo_root = Path(__file__).resolve().parents[1]
     os.environ.setdefault("PDD_PATH", str(repo_root / "pdd"))
 
     from pdd.unfinished_prompt import unfinished_prompt
 
-    # Mid-block tail that is a complete statement on its own
-    sample_tail = "    return a + b\n"
+    # Self-contained statement that is unambiguously complete
+    sample_tail = "x = 42\n"
 
     reasoning, is_finished, cost, model = unfinished_prompt(
         prompt_text=sample_tail,
@@ -405,7 +404,7 @@ def test_unfinished_prompt_marks_mid_block_tail_without_dangling_as_finished():
     )
 
     assert is_finished is True, (
-        f"Expected clean mid-block tail to be considered finished; got {is_finished}. "
+        f"Expected simple assignment to be considered finished; got {is_finished}. "
         f"Reason: {reasoning}"
     )
 

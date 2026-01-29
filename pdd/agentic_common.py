@@ -61,7 +61,7 @@ _COMMON_CLI_PATHS: Dict[str, List[Path]] = {
 # Maximum depth to search for .pddrc file
 MAX_PDDRC_SEARCH_DEPTH: int = 10
 
-DEFAULT_TIMEOUT_SECONDS: float = 240.0
+DEFAULT_TIMEOUT_SECONDS: float = 600.0  # Increased from 240s; Claude needs time for complex verify tasks
 MIN_VALID_OUTPUT_LENGTH: int = 50
 DEFAULT_MAX_RETRIES: int = 3
 DEFAULT_RETRY_DELAY: float = 5.0
@@ -483,9 +483,13 @@ def _run_with_provider(
             "--output-format", "json",
         ]
     elif provider == "google":
+        # Do NOT use -p flag for Gemini. The -p flag passes text literally,
+        # so passing a file path gives Gemini the path string instead of content.
+        # Instead, pass a short instruction as positional argument telling Gemini
+        # to read the prompt file (matches old _run_google_variants pattern).
         cmd = [
             cli_path,
-            "-p", str(prompt_path),
+            f"Read the file {prompt_path.name} for your full instructions and execute them.",
             "--yolo",
             "--output-format", "json"
         ]
