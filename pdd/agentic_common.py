@@ -61,7 +61,7 @@ _COMMON_CLI_PATHS: Dict[str, List[Path]] = {
 # Maximum depth to search for .pddrc file
 MAX_PDDRC_SEARCH_DEPTH: int = 10
 
-DEFAULT_TIMEOUT_SECONDS: float = 240.0
+DEFAULT_TIMEOUT_SECONDS: float = 600.0  # Increased from 240s; Claude needs time for complex verify tasks
 MIN_VALID_OUTPUT_LENGTH: int = 50
 DEFAULT_MAX_RETRIES: int = 3
 DEFAULT_RETRY_DELAY: float = 5.0
