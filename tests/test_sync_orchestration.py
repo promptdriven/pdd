@@ -99,7 +99,16 @@ def orchestration_fixture(tmp_path):
         mock_lock.return_value.__enter__.return_value = mock_lock
         mock_lock.return_value.__exit__.return_value = None
         mock_auto_deps.return_value = {'success': True, 'cost': 0.01, 'model': 'mock-model'}
-        mock_code_gen.return_value = {'success': True, 'cost': 0.05, 'model': 'mock-model'}
+
+        # Create the code file when code_generator_main is called
+        # This is needed because crash operation checks if code file exists
+        def create_code_file(*args, **kwargs):
+            """Mock function that creates the code file and returns success"""
+            code_file = tmp_path / 'src' / 'calculator.py'
+            code_file.write_text("# Mock code file created by fixture\ndef calculator():\n    pass\n")
+            return {'success': True, 'cost': 0.05, 'model': 'mock-model'}
+
+        mock_code_gen.side_effect = create_code_file
         mock_crash.return_value = {'success': True, 'cost': 0.08, 'model': 'mock-model'}
         mock_verify.return_value = {'success': True, 'cost': 0.10, 'model': 'mock-model'}
         mock_fix.return_value = {'success': True, 'cost': 0.15, 'model': 'mock-model'}
