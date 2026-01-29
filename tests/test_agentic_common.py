@@ -310,6 +310,67 @@ def test_anthropic_provider_pipes_prompt_via_stdin(mock_cwd, mock_env, mock_load
     assert kwargs.get("input") is not None
     assert instruction in kwargs["input"]
 
+
+def test_google_provider_delivers_prompt_via_positional_arg(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """Verify Gemini CLI receives prompt via positional argument, not -p flag.
+
+    The -p flag passes text literally, so passing a file path via -p gives Gemini
+    the path string instead of the file contents. The correct approach (used by
+    the old _run_google_variants) is to pass a short instruction as a positional
+    argument telling Gemini to read the prompt file.
+
+    This test mirrors test_anthropic_provider_pipes_prompt_via_stdin but for Google.
+    """
+    # Setup: Only Google available
+    def which_side_effect(cmd):
+        return "/bin/gemini" if cmd == "gemini" else None
+    mock_shutil_which.side_effect = which_side_effect
+    os.environ["GEMINI_API_KEY"] = "key"
+
+    mock_output = {
+        "response": "Done.",
+        "stats": {
+            "models": {
+                "gemini-1.5-flash": {"tokens": {"prompt": 1000, "candidates": 1000}}
+            }
+        }
+    }
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps(mock_output)
+    mock_subprocess.return_value.stderr = ""
+
+    instruction = "Fix the failing tests in the code"
+    success, msg, cost, provider = run_agentic_task(instruction, mock_cwd)
+
+    assert success
+    assert provider == "google"
+    args, kwargs = mock_subprocess.call_args
+    cmd = args[0]
+
+    # The -p flag should NOT be in the command for Gemini
+    # (Gemini's -p passes text literally, not as stdin piping like Claude)
+    assert "-p" not in cmd, f"Gemini should not use -p flag, but command was: {cmd}"
+
+    # The raw file path should NOT be passed as an argument
+    # (This is the bug: passing file path to -p gives Gemini a path string, not content)
+    prompt_files = list(mock_cwd.glob(".agentic_prompt_*.txt"))
+    for pf in prompt_files:
+        for arg in cmd:
+            assert str(pf) != arg, f"Raw file path should not be in command: {cmd}"
+
+    # A positional argument should contain an instruction to read the file
+    # (The correct approach: tell Gemini to read the file using its tool access)
+    positional_args = [arg for arg in cmd[1:] if not arg.startswith("-")]
+    found_read_instruction = any(
+        "Read the file" in arg or "read the file" in arg.lower()
+        for arg in positional_args
+    )
+    assert found_read_instruction, (
+        f"Command should include positional arg with file read instruction. "
+        f"Positional args: {positional_args}"
+    )
+
+
 def test_run_agentic_task_gemini_success(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
     """Test successful execution with Google (Gemini) and cost calculation."""
     # Setup availability: Anthropic missing, Google present
