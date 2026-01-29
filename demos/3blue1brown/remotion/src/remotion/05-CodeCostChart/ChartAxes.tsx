@@ -29,8 +29,8 @@ export const ChartAxes: React.FC<ChartAxesProps> = ({ opacity = 1 }) => {
 
   const currentOpacity = fadeIn * opacity;
 
-  // Year ticks for 1970-2024 range
-  const yearTicks = [1970, 1980, 1990, 2000, 2010, 2020, 2024];
+  // Year ticks: decades then individual years for 2020-2024
+  const yearTicks = [1970, 1980, 1990, 2000, 2010, 2020, 2022, 2024];
   // Hour ticks for 0-100 range
   const hourTicks = [0, 20, 40, 60, 80, 100];
 

@@ -359,7 +359,7 @@ export const CodeCostChart: React.FC<CodeCostChartPropsType> = ({
               margin: 0,
             }}
           >
-            "The crossover point has arrived."
+            "Generation: no accumulated debt"
           </p>
         </div>
       )}

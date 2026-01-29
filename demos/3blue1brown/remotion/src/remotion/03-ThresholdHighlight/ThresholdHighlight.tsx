@@ -152,9 +152,9 @@ export const ThresholdHighlight: React.FC<ThresholdHighlightPropsType> = ({
         <div
           style={{
             position: "absolute",
-            top: "50%",
+            top: "18%",
             left: "50%",
-            transform: "translate(-50%, -50%)",
+            transform: "translateX(-50%)",
             opacity: narrationOpacity,
             textAlign: "center",
             backgroundColor: "rgba(0, 0, 0, 0.7)",

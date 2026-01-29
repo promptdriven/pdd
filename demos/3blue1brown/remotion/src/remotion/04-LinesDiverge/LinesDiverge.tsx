@@ -67,8 +67,8 @@ export const LinesDiverge: React.FC<LinesDivergePropsType> = ({
     }
   );
 
-  // Build path for Cost to Buy line (frozen up to 1980)
-  const frozenBuyPath = CHART_DATA.costToBuyUntil1980
+  // Build path for Cost to Buy line (frozen up to 1963)
+  const frozenBuyPath = CHART_DATA.costToBuyUntil1963
     .map((d, i) => {
       const x = getXPosition(d.year);
       const y = getYPosition(d.hours);
@@ -76,19 +76,19 @@ export const LinesDiverge: React.FC<LinesDivergePropsType> = ({
     })
     .join(" ");
 
-  // Build animated path from 1980 to current year
+  // Build animated path from 1963 to current year
   const getAnimatedBuyPath = () => {
-    const data = CHART_DATA.costToBuyFrom1980;
-    let path = `M ${getXPosition(1980)} ${getYPosition(0.4)}`;
+    const data = CHART_DATA.costToBuyFrom1963;
+    let path = `M ${getXPosition(1963)} ${getYPosition(0.5)}`;
 
     for (const point of data) {
-      if (point.year > 1980 && point.year <= currentYear) {
+      if (point.year > 1963 && point.year <= currentYear) {
         path += ` L ${getXPosition(point.year)} ${getYPosition(point.hours)}`;
       }
     }
 
     // Add interpolated point for current year if between data points
-    if (currentYear > 1980 && currentYear < 2020) {
+    if (currentYear > 1963 && currentYear < 2020) {
       for (let i = 0; i < data.length - 1; i++) {
         if (currentYear > data[i].year && currentYear < data[i + 1].year) {
           const t = (currentYear - data[i].year) / (data[i + 1].year - data[i].year);
@@ -105,14 +105,14 @@ export const LinesDiverge: React.FC<LinesDivergePropsType> = ({
   };
 
   // Repair line path (static)
-  const repairLinePath = `M ${getXPosition(1950)} ${getYPosition(0.5)} L ${getXPosition(2020)} ${getYPosition(0.5)}`;
+  const repairLinePath = `M ${getXPosition(1920)} ${getYPosition(0.5)} L ${getXPosition(2020)} ${getYPosition(0.5)}`;
 
   // Crossing point position
   const crossingX = getXPosition(CROSSING_POINT.year);
   const crossingY = getYPosition(CROSSING_POINT.hours);
 
-  const yearTicks = [1950, 1960, 1970, 1980, 1990, 2000, 2010, 2020];
-  const hourTicks = [0, 0.5, 1, 1.5, 2, 2.5, 3];
+  const yearTicks = [1920, 1930, 1940, 1950, 1960, 1970, 1980, 1990, 2000, 2010, 2020];
+  const hourTicks = [0, 0.5, 1, 1.5];
 
   // Narration text fade in during hold phase
   const narrationOpacity = interpolate(
@@ -323,7 +323,7 @@ export const LinesDiverge: React.FC<LinesDivergePropsType> = ({
               whiteSpace: "nowrap",
             }}
           >
-            Hours of labor to buy / repair
+            Hours of labor to buy / repair a sock
           </div>
         </div>
 
@@ -408,9 +408,9 @@ export const LinesDiverge: React.FC<LinesDivergePropsType> = ({
           <div
             style={{
               position: "absolute",
-              top: "50%",
+              top: "18%",
               left: "50%",
-              transform: "translate(-50%, -50%)",
+              transform: "translateX(-50%)",
               opacity: narrationOpacity,
               textAlign: "center",
               backgroundColor: "rgba(0, 0, 0, 0.75)",
@@ -430,7 +430,7 @@ export const LinesDiverge: React.FC<LinesDivergePropsType> = ({
                 margin: 0,
               }}
             >
-              "By 1990, the math flipped. A new sock cost less than the time to repair the old one. Darning became irrational."
+              "By the mid-1960s, the math flipped. A new sock cost less than the time to repair the old one. Darning became irrational."
             </p>
           </div>
         )}

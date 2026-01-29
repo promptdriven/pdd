@@ -52,7 +52,7 @@ export const COLORS = {
 
 // Crossing point (threshold) from previous section
 export const CROSSING_POINT = {
-  year: 1978.33,
+  year: 1963,
   hours: 0.5,
 };
 
@@ -64,48 +64,58 @@ export const CHART_MARGINS = {
   left: 180,
 };
 
-export const YEAR_RANGE = { min: 1950, max: 2020 };
-export const HOURS_RANGE = { min: 0, max: 3 };
+export const YEAR_RANGE = { min: 1920, max: 2020 };
+export const HOURS_RANGE = { min: 0, max: 1.5 };
 
 // Chart data - Cost to Buy continues to drop dramatically
-// For this section, we animate from 1980 onwards
+// For this section, we animate from 1965 onwards (just past the crossing point)
 export const CHART_DATA = {
   // Full data for complete line display
   costToBuyFull: [
-    { year: 1950, hours: 2.5 },
-    { year: 1960, hours: 1.8 },
-    { year: 1970, hours: 1.0 },
-    { year: 1980, hours: 0.4 },
-    { year: 1990, hours: 0.15 },
-    { year: 2000, hours: 0.08 },
-    { year: 2010, hours: 0.05 },
+    { year: 1920, hours: 1.4 },
+    { year: 1930, hours: 1.3 },
+    { year: 1940, hours: 1.2 },
+    { year: 1950, hours: 1.0 },
+    { year: 1955, hours: 0.75 },
+    { year: 1960, hours: 0.55 },
+    { year: 1963, hours: 0.5 },
+    { year: 1970, hours: 0.2 },
+    { year: 1980, hours: 0.1 },
+    { year: 1990, hours: 0.06 },
+    { year: 2000, hours: 0.04 },
+    { year: 2010, hours: 0.03 },
     { year: 2020, hours: 0.03 },
   ],
-  // Data from 1980 onwards for animation
-  costToBuyFrom1980: [
-    { year: 1980, hours: 0.4 },
-    { year: 1990, hours: 0.15 },
-    { year: 2000, hours: 0.08 },
-    { year: 2010, hours: 0.05 },
+  // Data from 1963 onwards for animation
+  costToBuyFrom1963: [
+    { year: 1963, hours: 0.5 },
+    { year: 1970, hours: 0.2 },
+    { year: 1980, hours: 0.1 },
+    { year: 1990, hours: 0.06 },
+    { year: 2000, hours: 0.04 },
+    { year: 2010, hours: 0.03 },
     { year: 2020, hours: 0.03 },
   ],
   // Static repair line
   costToRepair: [
-    { year: 1950, hours: 0.5 },
+    { year: 1920, hours: 0.5 },
     { year: 2020, hours: 0.5 },
   ],
-  // Pre-1980 data (frozen from threshold section)
-  costToBuyUntil1980: [
-    { year: 1950, hours: 2.5 },
-    { year: 1960, hours: 1.8 },
-    { year: 1970, hours: 1.0 },
-    { year: 1980, hours: 0.4 },
+  // Pre-1963 data (frozen from threshold section)
+  costToBuyUntil1963: [
+    { year: 1920, hours: 1.4 },
+    { year: 1930, hours: 1.3 },
+    { year: 1940, hours: 1.2 },
+    { year: 1950, hours: 1.0 },
+    { year: 1955, hours: 0.75 },
+    { year: 1960, hours: 0.55 },
+    { year: 1963, hours: 0.5 },
   ],
 };
 
 // Year counter config
 export const YEAR_COUNTER = {
-  startYear: 1980,
+  startYear: 1965,
   endYear: 2020,
 };
 

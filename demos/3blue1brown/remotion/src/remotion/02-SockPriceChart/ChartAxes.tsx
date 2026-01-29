@@ -29,7 +29,7 @@ export const ChartAxes: React.FC<ChartAxesProps> = ({ opacity = 1 }) => {
 
   const currentOpacity = fadeIn * opacity;
 
-  const yearTicks = [1950, 1960, 1970, 1980, 1990, 2000, 2010, 2020];
+  const yearTicks = [1920, 1930, 1940, 1950, 1960, 1970, 1980, 1990];
   const hourTicks = [0, 0.5, 1, 1.5];
 
   const getXPosition = (year: number) => {
