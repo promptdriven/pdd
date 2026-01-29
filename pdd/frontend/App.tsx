@@ -816,43 +816,6 @@ const App: React.FC = () => {
     setTimeout(restoreScroll, 250);
   }, []);
 
-  // If editing a prompt, show full-screen PromptSpace
-  if (editingPrompt) {
-    return (
-      <>
-        <PromptSpace
-          prompt={editingPrompt}
-          onBack={handleBackFromPromptSpace}
-          onRunCommand={handlePromptSpaceCommand}
-          onAddToQueue={handlePromptSpaceAddToQueue}
-          isExecuting={isExecuting}
-          executionStatus={executionStatus}
-          lastCommand={lastCommand}
-          lastRunResult={lastRunResult}
-          onCancelCommand={handleCancelCommand}
-        />
-        <TaskQueuePanel
-          tasks={taskQueue.tasks}
-          executionMode={taskQueue.executionMode}
-          isQueueRunning={taskQueue.isQueueRunning}
-          isPaused={taskQueue.isPaused}
-          progress={taskQueue.progress}
-          onSetExecutionMode={taskQueue.setExecutionMode}
-          onStartQueue={taskQueue.startQueue}
-          onPauseQueue={taskQueue.pauseQueue}
-          onResumeQueue={taskQueue.resumeQueue}
-          onRunNextTask={taskQueue.runNextTask}
-          onRemoveTask={taskQueue.removeTask}
-          onSkipTask={taskQueue.skipTask}
-          onRetryTask={taskQueue.retryTask}
-          onReorderTasks={taskQueue.reorderTasks}
-          onClearCompleted={taskQueue.clearCompleted}
-          onClearAll={taskQueue.clearQueue}
-        />
-      </>
-    );
-  }
-
   return (
     <ErrorBoundary>
     <div className="min-h-screen bg-surface-950">
@@ -1152,6 +1115,30 @@ const App: React.FC = () => {
       {/* Sub-navigation area - full width, just below nav bar */}
       <div className="glass border-b border-surface-700/50">
         <div className="mx-auto px-4 sm:px-6 lg:px-8 2xl:px-12 py-3 sm:py-4">
+          {editingPrompt ? (
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleBackFromPromptSpace}
+                className="flex items-center gap-1.5 text-surface-400 hover:text-white transition-colors px-2 py-1.5 rounded-lg hover:bg-surface-700/50"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                </svg>
+                <span className="text-sm">Back</span>
+              </button>
+              <div className="h-5 w-px bg-surface-700" />
+              <div className="w-10 h-10 rounded-xl bg-accent-500/20 flex items-center justify-center">
+                <DocumentTextIcon className="w-5 h-5 text-accent-400" />
+              </div>
+              <div>
+                <h2 className="text-lg sm:text-xl font-semibold text-white">{editingPrompt.sync_basename}</h2>
+                <p className="text-xs sm:text-sm text-surface-400">
+                  {editingPrompt.language ? `${editingPrompt.language} prompt` : 'Editing prompt'}
+                </p>
+              </div>
+            </div>
+          ) : (
+            <>
           {view === 'devunits' && (
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <div className="flex items-center gap-3">
@@ -1236,10 +1223,28 @@ const App: React.FC = () => {
               </div>
             </div>
           )}
+            </>
+          )}
         </div>
       </div>
 
-      {/* Main content - responsive padding and max-width */}
+      {/* Main content - PromptSpace when editing, otherwise regular views */}
+      {editingPrompt ? (
+        <div className="flex-1 flex flex-col" style={{ height: 'calc(100vh - 8.5rem)' }}>
+          <PromptSpace
+            prompt={editingPrompt}
+            onBack={handleBackFromPromptSpace}
+            onRunCommand={handlePromptSpaceCommand}
+            onAddToQueue={handlePromptSpaceAddToQueue}
+            isExecuting={isExecuting}
+            executionStatus={executionStatus}
+            lastCommand={lastCommand}
+            lastRunResult={lastRunResult}
+            onCancelCommand={handleCancelCommand}
+            embedded
+          />
+        </div>
+      ) : (
       <main className="mx-auto px-4 sm:px-6 lg:px-8 2xl:px-12 py-4 sm:py-6 pb-16 sm:pb-20">
         {!serverConnected && (
           <div className="mb-4 sm:mb-6 p-3 sm:p-4 glass-light rounded-xl border border-yellow-500/20 animate-fade-in">
@@ -1665,6 +1670,7 @@ const App: React.FC = () => {
           </div>
         ) : null}
       </main>
+      )}
 
       {/* Job Dashboard - shows active and completed jobs, only when Jobs button clicked */}
       <JobDashboard
