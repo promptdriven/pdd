@@ -23,7 +23,6 @@ from pdd.agentic_common import (
     DEFAULT_MAX_RETRIES,
 )
 from pdd.load_prompt_template import load_prompt_template
-from pdd.preprocess import preprocess
 
 # Initialize console for rich output
 console = Console()
@@ -372,31 +371,10 @@ def run_agentic_test_orchestrator(
         if not prompt_template:
             return False, f"Missing prompt template: {template_name}", total_cost, model_used, []
 
-        # Preprocess the template to resolve <include> directives (Template preprocessing fix)
-        # This ensures the LLM receives the full context (e.g., prompting guide)
-        # Use double_curly_brackets=True with exclude_keys to escape curly braces in included
-        # content while preserving our format placeholders
-        try:
-            context_keys = list(context.keys())
-            prompt_template = preprocess(
-                prompt_template,
-                recursive=False,
-                double_curly_brackets=True,
-                exclude_keys=context_keys
-            )
-        except Exception as e:
-            if not quiet:
-                console.print(f"[yellow]Warning: Preprocessing failed for step {step_num}: {e}[/yellow]")
-            # Continue with unpreprocessed template - the LLM may still work with <include> tags
-
         try:
             formatted_prompt = prompt_template.format(**context)
         except KeyError as e:
-            return False, f"Prompt formatting error in step {step_num}: missing key {e}", total_cost, model_used, []
-        except ValueError as e:
-            return False, f"Prompt formatting error in step {step_num}: invalid format string - {e}", total_cost, model_used, []
-        except Exception as e:
-            return False, f"Prompt formatting error in step {step_num}: {type(e).__name__} - {e}", total_cost, model_used, []
+            return False, f"Context missing key for step {step_num}: {e}", total_cost, model_used, []
 
         timeout = TEST_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder
         step_success, step_output, step_cost, step_model = run_agentic_task(

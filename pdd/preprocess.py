@@ -466,15 +466,10 @@ def double_curly(text: str, exclude_keys: Optional[List[str]] = None) -> str:
         return m.group(0)
     text = re.sub(r"__PDD_VAR_(\d+)__", _restore_var, text)
     
-    # NEW: Restore PDD metadata tags with braces escaped for format() safety
-    # When PDD tags are in included content, their JSON braces must be escaped
-    # so that str.format() doesn't interpret them as placeholders.
+    # NEW: Restore PDD metadata tags
     def restore_pdd_tags(match):
         idx = int(match.group(1))
-        content = pdd_tags_content[idx]
-        # Escape braces in the content for format() safety
-        content = content.replace("{", "{{").replace("}", "}}")
-        return content
+        return pdd_tags_content[idx]
 
     text = re.sub(r"__PDD_TAG_(\d+)__", restore_pdd_tags, text)
     
