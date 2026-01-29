@@ -1,6 +1,7 @@
     - The environment variables are already set and packages are already installed so just show how to use the module.
     - Know that the generated example will be in a different directory ('pdd') than the module it is calling and will need an absolute reference. The module file name will be same as the function name, so import as 'from pdd.module_name import module_name'.
     - Be sure the units if any are described for the inputs and outputs (e.g. in dollars per million tokens)
+    - CRITICAL: The example script must NOT be interactive. It must run to completion without any user interaction or manual input. Do NOT use input(), sys.stdin, readline(), or any other mechanism that waits for user input. Do NOT create servers, event loops, or listeners that run indefinitely waiting for connections or events. The script will be executed in a headless, non-interactive environment where stdin is not available — any attempt to read from stdin will cause the program to hang indefinitely. All values must be hardcoded or passed as arguments.
     - When creating Click examples, be sure to pass in arguments so the example can be run without user input.
     - When working with files, create the content of required examples files that would be read by the function.
     - Do not use try/except blocks in the examples.

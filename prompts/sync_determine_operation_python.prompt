@@ -46,7 +46,7 @@ Create the following `dataclasses` to structure the data:
     -   `test_hash: Optional[str]`  # Hash of test file when tests were run (for staleness detection)
     -   `test_files: Optional[Dict[str, str]]`  # Bug #156: Multiple test file support {"test_foo.py": "hash1", ...}
 -   `SyncDecision`:
-    -   `operation: str` (e.g., 'auto-deps', 'generate', 'example', 'crash', 'verify', 'test', 'test_extend', 'fix', 'update', 'analyze_conflict', 'nothing', 'all_synced', 'error', 'fail_and_request_manual_merge')
+    -   `operation: str` (e.g., 'auto-deps', 'generate', 'example', 'crash', 'verify', 'test', 'test_extend', 'fix', 'update', 'nothing', 'all_synced', 'error', 'fail_and_request_manual_merge')
     -   `reason: str` (A human-readable explanation for the decision)
     -   `confidence: float` (Confidence level in the decision, 0.0 to 1.0, default 1.0 for deterministic decisions)
     -   `estimated_cost: float` (Estimated cost for the operation in dollars, default 0.0)
@@ -97,7 +97,6 @@ Implement the following helper functions:
     - 'test_extend': 0.60  # Same cost as test - generates additional tests
     - 'fix': 0.45
     - 'update': 0.25
-    - 'analyze_conflict': 0.20
     - Others ('nothing', 'all_synced', 'error', etc.): 0.0
 
 #### 4. The Main `sync_determine_operation` Function
@@ -171,7 +170,7 @@ Log mode performs the complete analysis (reading fingerprints, calculating hashe
     6. Verification (`verify`) - after example exists and doesn't crash
     7. Test generation (`test`) - after code verified
     8. Prompt updates (`update`) - when code changed
-    9. Complex conflicts (`analyze_conflict`) - when multiple files changed
+    9. Complex conflicts (prompt + derived files changed) - delete fingerprint and re-sync fresh
     
     -   **No Fingerprint (New or Untracked Unit):**
         -   If a `prompt` file exists:
@@ -250,7 +249,7 @@ Log mode performs the complete analysis (reading fingerprints, calculating hashe
         -   If only the `example_hash` differs -> **`verify`** (to run the new example).
     -   **Complex Changes (Multiple Files Modified)**:
         -   **CRITICAL**: Only treat as a true conflict if the **prompt** (source of truth) changed along with derived artifacts. If only derived artifacts changed but the prompt is unchanged, this is NOT a conflict per PDD doctrine.
-        -   If `prompt` changed + derived files changed → **`analyze_conflict`** (true conflict requiring LLM analysis)
+        -   If `prompt` changed + derived files changed → **delete fingerprint and run report**, then re-run `_perform_sync_analysis()` which will hit the "no fingerprint" path and return **`generate`** (or `auto-deps`)
         -   If ONLY derived artifacts changed (code, example, test) but prompt is unchanged:
             -   If `code` changed → **`verify`** (re-verify the modified code works)
             -   If `example` changed → **`verify`** (verify the modified example runs)

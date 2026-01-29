@@ -101,7 +101,7 @@ export const COMMANDS: Record<CommandType, CommandConfig> = {
     requiresPrompt: true,
     group: "sync-update",
     options: [
-      { name: 'agentic', type: 'checkbox', placeholder: '', description: 'Use agentic mode (skip iterative loops, trust agent results)' },
+      { name: 'agentic', type: 'checkbox', placeholder: '', description: 'Use agentic mode (skip iterative loops, trust agent results)', defaultValue: true },
       { name: 'max-attempts', type: 'number', placeholder: '3', description: 'Maximum fix attempts', defaultValue: '3' },
       { name: 'budget', type: 'number', placeholder: '20', description: 'Maximum cost in dollars', defaultValue: '20' },
       { name: 'skip-tests', type: 'checkbox', placeholder: '', description: 'Skip test generation' },

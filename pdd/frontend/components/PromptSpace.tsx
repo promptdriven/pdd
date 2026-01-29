@@ -451,6 +451,8 @@ interface PromptSpaceProps {
   lastCommand?: string | null;
   lastRunResult?: RunResult | null;
   onCancelCommand?: () => void;
+  /** When true, PromptSpace renders inside App layout without its own header */
+  embedded?: boolean;
 }
 
 const PromptSpace: React.FC<PromptSpaceProps> = ({
@@ -463,6 +465,7 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
   lastCommand = null,
   lastRunResult = null,
   onCancelCommand,
+  embedded = false,
 }) => {
   const editorContainerRef = useRef<HTMLDivElement>(null);
   const editorViewRef = useRef<EditorView | null>(null);
@@ -1189,8 +1192,9 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
   const [guidanceSidebarOpen, setGuidanceSidebarOpen] = useState(false);
 
   return (
-    <div className="h-screen flex flex-col bg-surface-950">
-      {/* Header - Modern responsive design */}
+    <div className={embedded ? "flex-1 flex flex-col bg-surface-950" : "h-screen flex flex-col bg-surface-950"}>
+      {/* Header - Modern responsive design (hidden in embedded mode) */}
+      {!embedded && (
       <header className="glass flex items-center justify-between px-3 sm:px-4 py-2.5 sm:py-3 border-b border-surface-700/50 sticky top-0 z-30">
         <div className="flex items-center gap-2 sm:gap-4 min-w-0">
           <button
@@ -1307,9 +1311,10 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
           </button>
         </div>
       </header>
+      )}
 
-      {/* Execution status bar - responsive */}
-      {executionStatus !== 'idle' && (
+      {/* Execution status bar - responsive (hidden in embedded mode, App has its own) */}
+      {!embedded && executionStatus !== 'idle' && (
         <div className={`
           px-3 sm:px-4 py-2 text-center text-xs sm:text-sm font-medium border-b animate-slide-down
           ${executionStatus === 'running' ? 'bg-accent-500/10 text-accent-300 border-accent-500/20' : ''}

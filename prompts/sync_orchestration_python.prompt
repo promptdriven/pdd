@@ -181,7 +181,7 @@ The orchestrator executes these operations as determined by `sync_determine_oper
 8. **fix**: Resolve test failures
 9. **update**: Back-propagate learnings to prompt
 
-Terminal states: `all_synced`, `nothing`, `fail_and_request_manual_merge`, `error`, `analyze_conflict`
+Terminal states: `all_synced`, `nothing`, `fail_and_request_manual_merge`, `error`
 
 ## Core Behaviors
 
