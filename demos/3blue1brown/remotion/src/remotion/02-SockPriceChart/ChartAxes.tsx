@@ -30,7 +30,7 @@ export const ChartAxes: React.FC<ChartAxesProps> = ({ opacity = 1 }) => {
   const currentOpacity = fadeIn * opacity;
 
   const yearTicks = [1950, 1960, 1970, 1980, 1990, 2000, 2010, 2020];
-  const hourTicks = [0, 0.5, 1, 1.5, 2, 2.5, 3];
+  const hourTicks = [0, 0.5, 1, 1.5];
 
   const getXPosition = (year: number) => {
     return (
@@ -175,7 +175,7 @@ export const ChartAxes: React.FC<ChartAxesProps> = ({ opacity = 1 }) => {
             whiteSpace: "nowrap",
           }}
         >
-          Hours of labor to buy / repair
+          Hours of labor to buy / repair a sock
         </div>
       </div>
 

@@ -43,13 +43,15 @@ export const COLORS = {
 // Chart data points
 export const CHART_DATA = {
   costToBuy: [
-    { year: 1950, hours: 2.5 },
-    { year: 1960, hours: 1.8 },
-    { year: 1970, hours: 1.0 },
-    { year: 1980, hours: 0.4 },
-    { year: 1990, hours: 0.15 },
-    { year: 2000, hours: 0.08 },
-    { year: 2010, hours: 0.05 },
+    { year: 1950, hours: 1.0 },
+    { year: 1955, hours: 0.75 },
+    { year: 1960, hours: 0.55 },
+    { year: 1963, hours: 0.5 },
+    { year: 1970, hours: 0.2 },
+    { year: 1980, hours: 0.1 },
+    { year: 1990, hours: 0.06 },
+    { year: 2000, hours: 0.04 },
+    { year: 2010, hours: 0.03 },
     { year: 2020, hours: 0.03 },
   ],
   costToRepair: [
@@ -67,7 +69,7 @@ export const CHART_MARGINS = {
 };
 
 export const YEAR_RANGE = { min: 1950, max: 2020 };
-export const HOURS_RANGE = { min: 0, max: 3 };
+export const HOURS_RANGE = { min: 0, max: 1.5 };
 
 // Props schema
 export const SockPriceChartProps = z.object({
