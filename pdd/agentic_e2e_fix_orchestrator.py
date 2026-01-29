@@ -20,7 +20,6 @@ from .agentic_common import (
     DEFAULT_MAX_RETRIES,
 )
 from .load_prompt_template import load_prompt_template
-from .preprocess import preprocess
 
 # Constants
 STEP_NAMES = {
@@ -236,35 +235,7 @@ def _commit_and_push(
             files_to_commit.append(filepath)
 
     if not files_to_commit:
-        # No new uncommitted changes, but check for unpushed commits
-        # This handles the case where LLM agents created commits during the workflow
-        if not quiet:
-            console.print("[dim]No uncommitted changes detected, checking for unpushed commits...[/dim]")
-
-        # First, check if there are any commits that haven't been pushed yet
-        unpushed_check = subprocess.run(
-            ["git", "log", "@{u}..HEAD", "--oneline"],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-        )
-        if unpushed_check.returncode != 0 or not unpushed_check.stdout.strip():
-            # Either the check failed or there are no unpushed commits
-            return True, "No changes to commit or push"
-
-        # There are unpushed commits; attempt to push them
-        if not quiet:
-            console.print("[dim]Found unpushed commits, pushing...[/dim]")
-        push_result = subprocess.run(
-            ["git", "push"],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-        )
-        if push_result.returncode == 0:
-            return True, "Pushed existing commits"
-        else:
-            return False, f"Push failed: {push_result.stderr}"
+        return True, "No changes to commit"
 
     # Stage only workflow-changed files
     for filepath in files_to_commit:
@@ -431,27 +402,7 @@ def run_agentic_e2e_fix_orchestrator(
                 if step_num == 9:
                     context["next_cycle"] = current_cycle + 1
 
-                # Preprocess the template to resolve <include> directives (Template preprocessing fix)
-                try:
-                    context_keys = list(context.keys())
-                    prompt_template = preprocess(
-                        prompt_template,
-                        recursive=False,
-                        double_curly_brackets=True,
-                        exclude_keys=context_keys
-                    )
-                except Exception as e:
-                    if not quiet:
-                        console.print(f"[yellow]Warning: Preprocessing failed for step {step_num}: {e}[/yellow]")
-
-                try:
-                    formatted_prompt = prompt_template.format(**context)
-                except KeyError as e:
-                    return False, f"Prompt formatting error in step {step_num}: missing key {e}", total_cost, model_used, []
-                except ValueError as e:
-                    return False, f"Prompt formatting error in step {step_num}: invalid format string - {e}", total_cost, model_used, []
-                except Exception as e:
-                    return False, f"Prompt formatting error in step {step_num}: {type(e).__name__} - {e}", total_cost, model_used, []
+                formatted_prompt = prompt_template.format(**context)
 
                 # 3. Run Task
                 base_timeout = E2E_FIX_STEP_TIMEOUTS.get(step_num, 340.0)
