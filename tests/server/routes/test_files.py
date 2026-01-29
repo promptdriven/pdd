@@ -516,7 +516,7 @@ class TestNonExecutableLanguageTestDetection:
     def project_with_prisma_tests(self, tmp_path):
         """Create a project structure with Prisma schema and Python tests."""
         root = tmp_path / "prisma_project"
-        root.mkdir()
+        root.mkdir(exist_ok=True)
 
         # Create .pddrc with database context
         pddrc = root / ".pddrc"
@@ -561,7 +561,7 @@ contexts:
     def project_with_sql_tests(self, tmp_path):
         """Create a project structure with SQL and TypeScript tests."""
         root = tmp_path / "sql_project"
-        root.mkdir()
+        root.mkdir(exist_ok=True)
 
         # Create prompts directory with SQL prompt
         prompts = root / "prompts"
@@ -664,7 +664,7 @@ contexts:
     async def test_python_tests_still_detected_for_python(self, tmp_path):
         """Verify Python prompts still detect .py test files (regression test)."""
         root = tmp_path / "python_project"
-        root.mkdir()
+        root.mkdir(exist_ok=True)
 
         # Create Python prompt
         prompts = root / "prompts"
@@ -693,3 +693,448 @@ contexts:
         assert python_result["language"] == "python"
         assert "test" in python_result
         assert python_result["test"].endswith(".py")
+
+
+# ============================================================================
+# Tests for match_context function - glob pattern matching
+# ============================================================================
+
+class TestMatchContext:
+    """
+    Tests for the match_context function that matches prompt paths to .pddrc contexts.
+
+    The key issue being tested: fnmatch doesn't handle ** glob patterns correctly.
+    ** should match any number of path segments (recursive), but fnmatch treats
+    * as not crossing directory boundaries.
+    """
+
+    @pytest.fixture
+    def match_context_func(self):
+        """Import the match_context function."""
+        from pdd.server.routes.files import match_context
+        return match_context
+
+    @pytest.fixture
+    def pddrc_with_nested_contexts(self):
+        """
+        Create a .pddrc config with nested contexts that use ** patterns.
+        Order matters: more specific contexts must come first.
+        """
+        return {
+            "contexts": {
+                # Most specific first
+                "frontend-types": {
+                    "paths": [
+                        "frontend/components/types/**",
+                        "prompts/frontend/components/types/**",
+                    ],
+                    "defaults": {"default_language": "typescript"}
+                },
+                "frontend-components": {
+                    "paths": [
+                        "frontend/components/**",
+                        "prompts/frontend/components/**",
+                    ],
+                    "defaults": {"default_language": "typescriptreact"}
+                },
+                "frontend": {
+                    "paths": [
+                        "frontend/**",
+                        "prompts/frontend/**",
+                    ],
+                    "defaults": {"default_language": "typescriptreact"}
+                },
+                "backend": {
+                    "paths": [
+                        "backend/**",
+                        "prompts/backend/**",
+                    ],
+                    "defaults": {"default_language": "python"}
+                },
+                "default": {
+                    "defaults": {"default_language": "python"}
+                }
+            }
+        }
+
+    def test_double_star_matches_nested_paths(self, match_context_func, pddrc_with_nested_contexts):
+        """
+        Test that ** pattern matches paths with multiple nested directories.
+
+        This is the core bug: fnmatch.fnmatch("prompts/frontend/app/page.prompt", "prompts/frontend/**")
+        returns False because * doesn't cross / boundaries.
+        """
+        # prompts/frontend/** should match prompts/frontend/app/page.prompt
+        context, _ = match_context_func(
+            "prompts/frontend/app/page_TypescriptReact.prompt",
+            pddrc_with_nested_contexts
+        )
+        assert context == "frontend", \
+            f"Expected 'frontend' but got '{context}'. ** pattern should match nested paths."
+
+    def test_double_star_matches_deeply_nested_paths(self, match_context_func, pddrc_with_nested_contexts):
+        """Test ** matches paths nested several levels deep."""
+        context, _ = match_context_func(
+            "prompts/frontend/app/admin/users/page_TypescriptReact.prompt",
+            pddrc_with_nested_contexts
+        )
+        assert context == "frontend", \
+            f"Expected 'frontend' but got '{context}'. ** should match deeply nested paths."
+
+    def test_more_specific_context_matched_first(self, match_context_func, pddrc_with_nested_contexts):
+        """Test that more specific patterns are matched before less specific ones."""
+        # This should match frontend-types, not frontend
+        context, _ = match_context_func(
+            "prompts/frontend/components/types/marketplace_typescript.prompt",
+            pddrc_with_nested_contexts
+        )
+        assert context == "frontend-types", \
+            f"Expected 'frontend-types' but got '{context}'. More specific context should match first."
+
+    def test_frontend_components_context(self, match_context_func, pddrc_with_nested_contexts):
+        """Test frontend-components context matches its paths."""
+        context, _ = match_context_func(
+            "prompts/frontend/components/button/button_typescriptreact.prompt",
+            pddrc_with_nested_contexts
+        )
+        assert context == "frontend-components", \
+            f"Expected 'frontend-components' but got '{context}'."
+
+    def test_backend_context_matches(self, match_context_func, pddrc_with_nested_contexts):
+        """Test backend context matches backend paths."""
+        context, _ = match_context_func(
+            "backend/functions/utils/validator.py",
+            pddrc_with_nested_contexts
+        )
+        assert context == "backend", \
+            f"Expected 'backend' but got '{context}'."
+
+    def test_backend_prompts_context_matches(self, match_context_func, pddrc_with_nested_contexts):
+        """Test backend context matches prompts/backend paths."""
+        context, _ = match_context_func(
+            "prompts/backend/utils/email_validator_python.prompt",
+            pddrc_with_nested_contexts
+        )
+        assert context == "backend", \
+            f"Expected 'backend' but got '{context}'."
+
+    def test_unmatched_path_returns_default(self, match_context_func, pddrc_with_nested_contexts):
+        """Test that unmatched paths return the default context."""
+        context, _ = match_context_func(
+            "random/unmatched/path.txt",
+            pddrc_with_nested_contexts
+        )
+        assert context == "default", \
+            f"Expected 'default' but got '{context}'."
+
+    def test_code_path_matches_frontend_types(self, match_context_func, pddrc_with_nested_contexts):
+        """Test that code paths also match correctly."""
+        context, _ = match_context_func(
+            "frontend/components/types/marketplace/marketplace.ts",
+            pddrc_with_nested_contexts
+        )
+        assert context == "frontend-types", \
+            f"Expected 'frontend-types' but got '{context}'."
+
+
+class TestPddrcConfiguration:
+    """
+    Tests that validate .pddrc configuration includes both code and prompts paths.
+
+    A common configuration bug is forgetting to add prompts/* patterns to contexts,
+    which causes match_context() to return "default" for prompt files.
+    """
+
+    @pytest.fixture
+    def pddrc_validator(self):
+        """Returns a function that validates pddrc has prompts paths for contexts."""
+        def validate(pddrc: dict, context_name: str, expected_prompts_pattern: str):
+            """
+            Validate that a context includes a pattern for prompts directory.
+
+            Args:
+                pddrc: Parsed .pddrc dict
+                context_name: Name of context to check
+                expected_prompts_pattern: Pattern that should exist (e.g., "prompts/frontend/**")
+
+            Returns:
+                True if pattern exists, False otherwise
+            """
+            contexts = pddrc.get("contexts", {})
+            context = contexts.get(context_name, {})
+            paths = context.get("paths", [])
+            return expected_prompts_pattern in paths
+        return validate
+
+    def test_frontend_contexts_should_include_prompts_paths(self, pddrc_validator):
+        """
+        Test that frontend contexts include prompts path patterns.
+
+        This prevents the bug where prompt files like
+        'prompts/frontend/app/page.prompt' fall through to 'default' context.
+        """
+        # This is a documentation test - showing what a correct config looks like
+        correct_config = {
+            "contexts": {
+                "frontend-types": {
+                    "paths": [
+                        "frontend/components/types/**",
+                        "prompts/frontend/components/types/**",  # Required!
+                    ]
+                },
+                "frontend-components": {
+                    "paths": [
+                        "frontend/components/**",
+                        "prompts/frontend/components/**",  # Required!
+                    ]
+                },
+                "frontend": {
+                    "paths": [
+                        "frontend/**",
+                        "prompts/frontend/**",  # Required!
+                    ]
+                },
+            }
+        }
+
+        # Verify the correct config has prompts paths
+        assert pddrc_validator(correct_config, "frontend", "prompts/frontend/**")
+        assert pddrc_validator(correct_config, "frontend-components", "prompts/frontend/components/**")
+        assert pddrc_validator(correct_config, "frontend-types", "prompts/frontend/components/types/**")
+
+    def test_context_order_matters_for_specificity(self):
+        """
+        Test that context order in .pddrc affects matching (more specific first).
+
+        When iterating contexts, the FIRST matching pattern wins.
+        So 'frontend-types' must come before 'frontend' in the config.
+        """
+        from pdd.server.routes.files import match_context
+
+        # Wrong order: frontend before frontend-types
+        wrong_order_config = {
+            "contexts": {
+                "frontend": {
+                    "paths": ["prompts/frontend/**"],
+                    "defaults": {}
+                },
+                "frontend-types": {
+                    "paths": ["prompts/frontend/components/types/**"],
+                    "defaults": {}
+                },
+            }
+        }
+
+        # This will match 'frontend' even though 'frontend-types' is more specific
+        context, _ = match_context(
+            "prompts/frontend/components/types/marketplace.prompt",
+            wrong_order_config
+        )
+        # With wrong order, we get 'frontend' instead of 'frontend-types'
+        assert context == "frontend"
+
+        # Correct order: frontend-types before frontend
+        correct_order_config = {
+            "contexts": {
+                "frontend-types": {
+                    "paths": ["prompts/frontend/components/types/**"],
+                    "defaults": {}
+                },
+                "frontend": {
+                    "paths": ["prompts/frontend/**"],
+                    "defaults": {}
+                },
+            }
+        }
+
+        context, _ = match_context(
+            "prompts/frontend/components/types/marketplace.prompt",
+            correct_order_config
+        )
+        # With correct order, we get 'frontend-types'
+        assert context == "frontend-types"
+
+
+class TestActualPddrcConfiguration:
+    """
+    Integration tests that verify the actual project .pddrc is correctly configured.
+
+    These tests ensure that the bug where prompts paths were missing from
+    frontend contexts doesn't regress.
+    """
+
+    @pytest.fixture
+    def actual_pddrc(self):
+        """Load the actual .pddrc from the project root."""
+        import yaml
+        from pathlib import Path
+
+        # Navigate to project root (pdd_cloud)
+        pddrc_path = Path(__file__).parents[4] / ".pddrc"
+        if not pddrc_path.exists():
+            pytest.skip(f".pddrc not found at {pddrc_path}")
+
+        with open(pddrc_path) as f:
+            return yaml.safe_load(f)
+
+    def test_frontend_context_includes_prompts_path(self, actual_pddrc):
+        """Verify frontend context has prompts/frontend/** pattern."""
+        frontend = actual_pddrc.get("contexts", {}).get("frontend", {})
+        paths = frontend.get("paths", [])
+        assert "prompts/frontend/**" in paths, \
+            "frontend context missing 'prompts/frontend/**' pattern - prompts won't match!"
+
+    def test_frontend_components_context_includes_prompts_path(self, actual_pddrc):
+        """Verify frontend-components context has prompts/frontend/components/** pattern."""
+        fc = actual_pddrc.get("contexts", {}).get("frontend-components", {})
+        paths = fc.get("paths", [])
+        assert "prompts/frontend/components/**" in paths, \
+            "frontend-components context missing prompts pattern!"
+
+    def test_frontend_types_context_includes_prompts_path(self, actual_pddrc):
+        """Verify frontend-types context has prompts/frontend/components/types/** pattern."""
+        ft = actual_pddrc.get("contexts", {}).get("frontend-types", {})
+        paths = ft.get("paths", [])
+        assert "prompts/frontend/components/types/**" in paths, \
+            "frontend-types context missing prompts pattern!"
+
+    def test_frontend_types_comes_before_frontend(self, actual_pddrc):
+        """Verify frontend-types is listed before frontend for correct specificity."""
+        contexts = actual_pddrc.get("contexts", {})
+        context_names = list(contexts.keys())
+
+        # Find positions
+        ft_pos = context_names.index("frontend-types") if "frontend-types" in context_names else -1
+        f_pos = context_names.index("frontend") if "frontend" in context_names else -1
+
+        assert ft_pos != -1, "frontend-types context not found"
+        assert f_pos != -1, "frontend context not found"
+        assert ft_pos < f_pos, \
+            f"frontend-types (pos {ft_pos}) must come before frontend (pos {f_pos}) for correct matching"
+
+    def test_frontend_components_comes_before_frontend(self, actual_pddrc):
+        """Verify frontend-components is listed before frontend for correct specificity."""
+        contexts = actual_pddrc.get("contexts", {})
+        context_names = list(contexts.keys())
+
+        fc_pos = context_names.index("frontend-components") if "frontend-components" in context_names else -1
+        f_pos = context_names.index("frontend") if "frontend" in context_names else -1
+
+        assert fc_pos != -1, "frontend-components context not found"
+        assert f_pos != -1, "frontend context not found"
+        assert fc_pos < f_pos, \
+            f"frontend-components (pos {fc_pos}) must come before frontend (pos {f_pos})"
+
+    def test_match_context_with_actual_pddrc(self, actual_pddrc):
+        """Integration test: verify match_context works with actual .pddrc."""
+        from pdd.server.routes.files import match_context
+
+        test_cases = [
+            ("prompts/frontend/app/page_TypescriptReact.prompt", "frontend"),
+            ("prompts/frontend/components/types/marketplace_typescript.prompt", "frontend-types"),
+            ("prompts/frontend/components/button/button_typescriptreact.prompt", "frontend-components"),
+            ("prompts/backend/utils/validator_python.prompt", "backend-utils"),
+        ]
+
+        for path, expected_context in test_cases:
+            context, _ = match_context(path, actual_pddrc)
+            assert context == expected_context, \
+                f"Path '{path}' should match '{expected_context}' but got '{context}'"
+
+
+class TestPathTemplateSubstitution:
+    """
+    Tests for path template placeholder substitution in outputs.*.path configs.
+
+    The .pddrc outputs section uses placeholders like {name} and {language}
+    that must be substituted before checking if files exist.
+    """
+
+    def test_code_path_template_substitution(self, tmp_path):
+        """Test that {name} placeholder in code path is substituted correctly."""
+        import asyncio
+        from pdd.server.routes.files import list_prompt_files, set_path_validator
+        from pdd.server.security import PathValidator
+
+        root = tmp_path / "project"
+        root.mkdir(exist_ok=True)
+
+        # Create .pddrc with templated code path
+        pddrc = root / ".pddrc"
+        pddrc.write_text("""
+version: "1.0"
+contexts:
+  mycontext:
+    paths:
+      - "prompts/**"
+    defaults:
+      outputs:
+        code:
+          path: "src/{name}/{name}.ts"
+""")
+
+        # Create prompt
+        prompts = root / "prompts"
+        prompts.mkdir()
+        (prompts / "widget_typescript.prompt").write_text("Widget prompt")
+
+        # Create code file at templated location
+        code_dir = root / "src" / "widget"
+        code_dir.mkdir(parents=True)
+        (code_dir / "widget.ts").write_text("// Widget code")
+
+        validator = PathValidator(root)
+        set_path_validator(validator)
+
+        results = asyncio.get_event_loop().run_until_complete(list_prompt_files(validator))
+        widget_result = next((r for r in results if "widget" in r.get("prompt", "")), None)
+
+        assert widget_result is not None, "Widget prompt not found"
+        assert "code" in widget_result, \
+            "Code file not detected - {name} placeholder may not be substituted"
+        assert widget_result["code"] == "src/widget/widget.ts", \
+            f"Expected 'src/widget/widget.ts', got '{widget_result.get('code')}'"
+
+    def test_test_path_template_substitution(self, tmp_path):
+        """Test that {name} placeholder in test path is substituted correctly."""
+        import asyncio
+        from pdd.server.routes.files import list_prompt_files, set_path_validator
+        from pdd.server.security import PathValidator
+
+        root = tmp_path / "project"
+        root.mkdir(exist_ok=True)
+
+        # Create .pddrc with templated test path
+        pddrc = root / ".pddrc"
+        pddrc.write_text("""
+version: "1.0"
+contexts:
+  mycontext:
+    paths:
+      - "prompts/**"
+    defaults:
+      outputs:
+        test:
+          path: "tests/{name}/__test__/{name}.test.ts"
+""")
+
+        # Create prompt
+        prompts = root / "prompts"
+        prompts.mkdir()
+        (prompts / "service_typescript.prompt").write_text("Service prompt")
+
+        # Create test file at templated location
+        test_dir = root / "tests" / "service" / "__test__"
+        test_dir.mkdir(parents=True)
+        (test_dir / "service.test.ts").write_text("// Service tests")
+
+        validator = PathValidator(root)
+        set_path_validator(validator)
+
+        results = asyncio.get_event_loop().run_until_complete(list_prompt_files(validator))
+        service_result = next((r for r in results if "service" in r.get("prompt", "")), None)
+
+        assert service_result is not None, "Service prompt not found"
+        assert "test" in service_result, \
+            "Test file not detected - {name} placeholder may not be substituted"
+        assert service_result["test"] == "tests/service/__test__/service.test.ts"
