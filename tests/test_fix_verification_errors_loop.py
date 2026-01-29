@@ -1329,6 +1329,51 @@ def test_max_attempts_zero_skips_loop_triggers_agentic(setup_test_environment, m
     assert result["model_name"] == "agentic-cli"
 
 
+def test_max_attempts_zero_skips_agentic_when_initial_passes(setup_test_environment, mocker):
+    """Test that max_attempts=0 skips agentic fallback when initial run passes.
+
+    When max_attempts=0 AND the initial program run succeeds (exit code 0):
+    - The LLM fix loop should be skipped
+    - Agentic fallback should NOT be triggered (code already works!)
+    - Result should show success=True
+
+    This prevents wasting time and tokens on agentic fallback when the code
+    is already correct.
+    """
+    env = setup_test_environment
+
+    # Initial run PASSES (exit code 0)
+    env["mock_runner"].side_effect = [
+        (0, "Running with test_arg\nVERIFICATION_SUCCESS"),  # Initial run succeeds
+    ]
+
+    # Fixer should not be called since loop is skipped
+    env["mock_fixer"].side_effect = []
+
+    # Mock agentic fallback - should NOT be called
+    mock_agentic = mocker.patch(
+        'pdd.fix_verification_errors_loop._safe_run_agentic_verify',
+        return_value=(True, "Should not be called", 0.05, "agentic-cli", [])
+    )
+
+    # Set max_attempts=0 with agentic_fallback=True
+    env["default_args"]["max_attempts"] = 0
+    env["default_args"]["agentic_fallback"] = True
+
+    result = fix_verification_errors_loop(**env["default_args"])
+
+    # Verify the normal fixer was never called (loop skipped)
+    env["mock_fixer"].assert_not_called()
+
+    # Verify agentic fallback was NOT called (initial run passed!)
+    mock_agentic.assert_not_called()
+
+    # Verify result shows success WITHOUT agentic fallback
+    assert result["success"] is True
+    assert result["total_attempts"] == 0  # No LLM attempts
+    # Model should not be "agentic-cli" since agentic wasn't used
+
+
 def test_max_attempts_negative_still_rejected(setup_test_environment):
     """Test that negative max_attempts values are still rejected.
 

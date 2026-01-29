@@ -11,7 +11,8 @@ from pdd.agentic_common import (
     _calculate_codex_cost,
     _find_cli_binary,
     GEMINI_PRICING_BY_FAMILY,
-    CODEX_PRICING
+    CODEX_PRICING,
+    DEFAULT_TIMEOUT_SECONDS,
 )
 
 # ---------------------------------------------------------------------------
@@ -107,6 +108,33 @@ def test_z3_pricing_properties():
     solver.add(cost_gemini > cost_gemini_no_cache)
     assert solver.check() == z3.unsat, "Gemini cached cost is higher than non-cached!"
     solver.pop()
+
+
+# ---------------------------------------------------------------------------
+# Timeout Configuration Tests
+# ---------------------------------------------------------------------------
+
+def test_default_timeout_sufficient_for_complex_tasks():
+    """Verify DEFAULT_TIMEOUT_SECONDS is at least 600s for complex agentic tasks.
+
+    Issue: Claude was doing correct work (reading files, spawning sub-agents,
+    editing code) but got killed at 240s mid-edit. Analysis of session logs
+    showed the 3rd attempt reached 97 lines of activity before timeout.
+
+    600s provides sufficient time for:
+    - Initial exploration (reading prompt, code, example files)
+    - Sub-agent spawning for codebase understanding
+    - Code analysis and editing
+    - Verification runs
+    """
+    # Minimum required timeout for complex verify/fix tasks
+    MIN_TIMEOUT_FOR_COMPLEX_TASKS = 600.0
+
+    assert DEFAULT_TIMEOUT_SECONDS >= MIN_TIMEOUT_FOR_COMPLEX_TASKS, (
+        f"DEFAULT_TIMEOUT_SECONDS ({DEFAULT_TIMEOUT_SECONDS}s) is too low. "
+        f"Complex agentic tasks need at least {MIN_TIMEOUT_FOR_COMPLEX_TASKS}s. "
+        "See issue analysis: Claude was killed mid-edit at 240s."
+    )
 
 
 # ---------------------------------------------------------------------------
