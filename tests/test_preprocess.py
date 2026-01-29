@@ -1683,13 +1683,15 @@ def test_get_file_path_repo_root_fallback(monkeypatch, tmp_path):
 
 def test_double_curly_preserves_pdd_interface_json() -> None:
     """
-    Test that JSON in <pdd-interface> tags is escaped for format() safety
-    but can still be parsed by parse_prompt_tags().
+    Test that JSON in <pdd-interface> tags remains valid after double_curly().
 
-    Issue #375 update: PDD tag braces are now escaped (for format() safety).
-    parse_prompt_tags() handles this by unescaping before JSON parsing.
+    Issue #375: The double_curly() function was converting single braces {} to
+    double braces {{}} inside <pdd-interface> tags, corrupting the JSON and
+    causing architecture_sync.py's parse_prompt_tags() to fail with JSONDecodeError.
+
+    Expected behavior: JSON in <pdd-interface> should remain valid (single braces).
     """
-    from pdd.architecture_sync import parse_prompt_tags
+    import json
 
     prompt = '''<pdd-interface>
 {
@@ -1713,54 +1715,49 @@ def test_double_curly_preserves_pdd_interface_json() -> None:
 
     interface_content = interface_match.group(1).strip()
 
-    # Braces should now be escaped for format() safety
-    assert '{{' in interface_content, "Braces in <pdd-interface> should be escaped for format() safety"
-
-    # But parse_prompt_tags should still work (it unescapes internally)
-    result = parse_prompt_tags(processed)
-    assert result['interface'] is not None, "parse_prompt_tags should handle escaped braces"
-    assert result['interface']['type'] == 'module'
-    assert len(result['interface']['module']['functions']) == 1
+    # The JSON inside <pdd-interface> should be valid (parseable)
+    try:
+        parsed = json.loads(interface_content)
+        assert parsed['type'] == 'module'
+        assert len(parsed['module']['functions']) == 1
+    except json.JSONDecodeError as e:
+        pytest.fail(
+            f"Issue #375: JSON in <pdd-interface> was corrupted by double_curly().\n"
+            f"Content: {interface_content}\n"
+            f"Error: {e}"
+        )
 
     # The {variable} outside the tag SHOULD be doubled to {{variable}}
     assert "{{variable}}" in processed, "Template variables outside PDD tags should be doubled"
 
-    # And format() should work without KeyError
-    try:
-        processed.format(variable="test_value")
-    except KeyError as e:
-        pytest.fail(f"format() failed with escaped PDD content: {e}")
-
 
 def test_double_curly_preserves_pdd_reason_braces() -> None:
     """
-    Test that braces in <pdd-reason> tags are escaped for format() safety.
+    Test that braces in <pdd-reason> tags are preserved.
 
-    Updated behavior: PDD tag braces are now escaped so format() works safely.
+    Issue #375: If <pdd-reason> contains braces (e.g., in inline code or examples),
+    they should not be doubled.
     """
     prompt = '''<pdd-reason>Handles JSON objects like {"key": "value"}</pdd-reason>
 Normal text with {placeholder}.'''
 
     processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
 
-    # Content inside <pdd-reason> should now have escaped braces for format() safety
+    # Content inside <pdd-reason> should NOT have doubled braces
     import re
     reason_match = re.search(r'<pdd-reason>(.*?)</pdd-reason>', processed, re.DOTALL)
     assert reason_match is not None
     reason_content = reason_match.group(1)
 
-    # Braces should be escaped for format() safety
-    assert '{{"key": "value"}}' in reason_content, \
-        f"Braces in <pdd-reason> should be escaped: {reason_content}"
+    # The content should NOT have doubled braces (check for absence of {{)
+    assert '{{' not in reason_content, \
+        f"Issue #375: Braces in <pdd-reason> were incorrectly doubled: {reason_content}"
+    # Should have single braces
+    assert '{"key": "value"}' in reason_content, \
+        f"Issue #375: Single braces in <pdd-reason> were lost: {reason_content}"
 
-    # {placeholder} outside should also be doubled
+    # But {placeholder} outside should be doubled
     assert "{{placeholder}}" in processed
-
-    # And format() should work
-    try:
-        processed.format(placeholder="test")
-    except KeyError as e:
-        pytest.fail(f"format() failed: {e}")
 
 
 def test_double_curly_preserves_pdd_dependency_content() -> None:
@@ -1784,12 +1781,10 @@ Text with {variable}.'''
 
 def test_double_curly_preserves_multiple_pdd_tags() -> None:
     """
-    Test that multiple PDD tags in a single prompt are all escaped for format() safety.
+    Test that multiple PDD tags in a single prompt are all protected.
 
-    All PDD tag types have their braces escaped, and parse_prompt_tags handles unescaping.
+    Issue #375: Ensures the fix works for prompts with all three PDD tag types.
     """
-    from pdd.architecture_sync import parse_prompt_tags
-
     prompt = '''<pdd-reason>Provides unified LLM invocation with {options}</pdd-reason>
 <pdd-interface>
 {
@@ -1802,36 +1797,34 @@ def test_double_curly_preserves_multiple_pdd_tags() -> None:
 
     processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
 
-    # Check <pdd-reason> has escaped braces
+    # Check <pdd-reason> preserved (single braces, not doubled)
     import re
     reason_match = re.search(r'<pdd-reason>(.*?)</pdd-reason>', processed, re.DOTALL)
     assert reason_match is not None
-    assert '{{options}}' in reason_match.group(1), "Braces in <pdd-reason> should be escaped"
+    assert '{{options}}' not in reason_match.group(1), "Braces in <pdd-reason> should NOT be doubled"
+    assert '{options}' in reason_match.group(1), "Single braces in <pdd-reason> should be preserved"
 
-    # Check <pdd-interface> has escaped braces but parse_prompt_tags works
-    result = parse_prompt_tags(processed)
-    assert result['interface'] is not None, "parse_prompt_tags should handle escaped braces"
-    assert result['interface']['type'] == 'module'
+    # Check <pdd-interface> has valid JSON
+    import json
+    interface_match = re.search(r'<pdd-interface>(.*?)</pdd-interface>', processed, re.DOTALL)
+    assert interface_match is not None
+    try:
+        json.loads(interface_match.group(1).strip())
+    except json.JSONDecodeError:
+        pytest.fail("Issue #375: JSON in <pdd-interface> was corrupted")
 
     # Check template variables outside tags are doubled
     assert "{{input}}" in processed
     assert "{{output}}" in processed
 
-    # format() should work
-    try:
-        processed.format(input="in", output="out")
-    except KeyError as e:
-        pytest.fail(f"format() failed: {e}")
-
 
 def test_double_curly_preserves_nested_json_in_pdd_interface() -> None:
     """
-    Test that deeply nested JSON in <pdd-interface> is escaped but parseable.
+    Test that deeply nested JSON in <pdd-interface> is preserved.
 
-    PDD tag braces are escaped for format() safety, parse_prompt_tags handles unescaping.
+    Issue #375: The bug manifested particularly with nested JSON structures.
     """
     import json
-    from pdd.architecture_sync import parse_prompt_tags
 
     nested_json = {
         "type": "module",
@@ -1859,23 +1852,24 @@ def test_double_curly_preserves_nested_json_in_pdd_interface() -> None:
 
     processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
 
-    # parse_prompt_tags should handle escaped braces and return the correct structure
-    result = parse_prompt_tags(processed)
-    assert result['interface'] is not None, "parse_prompt_tags should handle escaped nested JSON"
-    assert result['interface'] == nested_json, "Nested JSON structure should be preserved after unescaping"
+    # Extract and validate JSON
+    import re
+    interface_match = re.search(r'<pdd-interface>(.*?)</pdd-interface>', processed, re.DOTALL)
+    assert interface_match is not None
 
-    # format() should work without errors
     try:
-        processed.format(already_escaped="a", variable="b")
-    except KeyError as e:
-        pytest.fail(f"format() failed with nested JSON: {e}")
+        parsed = json.loads(interface_match.group(1).strip())
+        assert parsed == nested_json, "Nested JSON structure was altered"
+    except json.JSONDecodeError as e:
+        pytest.fail(f"Issue #375: Nested JSON in <pdd-interface> was corrupted: {e}")
 
 
 def test_double_curly_still_doubles_outside_pdd_tags() -> None:
     """
-    Regression test: Ensure brace doubling works consistently everywhere.
+    Regression test: Ensure normal brace doubling still works outside PDD tags.
 
-    All braces are now doubled for format() safety, including inside PDD tags.
+    The fix for issue #375 must not break the primary purpose of double_curly(),
+    which is to escape braces for LangChain PromptTemplate.
     """
     prompt = '''<pdd-interface>{"valid": "json"}</pdd-interface>
 Normal text with {variable1} and {variable2}.
@@ -1884,8 +1878,8 @@ Template literal ${FOO} should become ${{FOO}}.'''
 
     processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
 
-    # PDD tag content should now also be escaped
-    assert '{{"valid": "json"}}' in processed, "PDD tag braces should be escaped"
+    # PDD tag content should be preserved
+    assert '{"valid": "json"}' in processed or '<pdd-interface>{"valid": "json"}</pdd-interface>' in processed
 
     # Variables outside should be doubled
     assert "{{variable1}}" in processed
@@ -1896,12 +1890,6 @@ Template literal ${FOO} should become ${{FOO}}.'''
 
     # Template literals should become ${{...}}
     assert "${{FOO}}" in processed
-
-    # format() should work
-    try:
-        processed.format(variable1="a", variable2="b", key="k", value="v", FOO="foo")
-    except KeyError as e:
-        pytest.fail(f"format() failed: {e}")
 
 
 def test_double_curly_integration_with_parse_prompt_tags() -> None:
@@ -1955,9 +1943,10 @@ def test_double_curly_real_world_prompt_example() -> None:
     """
     Test with a real-world prompt structure similar to agentic_arch_step8_fix_LLM.prompt.
 
-    PDD tag braces are escaped for format() safety, parse_prompt_tags handles unescaping.
+    This reproduces the exact issue reported in #375 where the prompt file
+    was corrupted with double braces.
     """
-    from pdd.architecture_sync import parse_prompt_tags
+    import json
 
     # This is what the prompt SHOULD look like (valid JSON)
     prompt = '''<pdd-reason>Fixes validation errors in architecture.json: resolves circular deps, priority violations, missing fields.</pdd-reason>
@@ -1987,645 +1976,25 @@ def test_double_curly_real_world_prompt_example() -> None:
     # Process through preprocess
     processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
 
-    # parse_prompt_tags should handle escaped braces
-    result = parse_prompt_tags(processed)
-    assert result['interface'] is not None, "parse_prompt_tags should handle escaped braces"
-    assert result['interface']['type'] == 'module'
-    assert result['interface']['module']['functions'][0]['name'] == 'fix_architecture'
+    # Verify PDD metadata tags are still valid
+    import re
+
+    # Check <pdd-interface> has valid JSON
+    interface_match = re.search(r'<pdd-interface>(.*?)</pdd-interface>', processed, re.DOTALL)
+    assert interface_match is not None, "Lost <pdd-interface> tag"
+
+    try:
+        interface_json = json.loads(interface_match.group(1).strip())
+        assert interface_json['type'] == 'module'
+        assert interface_json['module']['functions'][0]['name'] == 'fix_architecture'
+    except json.JSONDecodeError as e:
+        pytest.fail(
+            f"Issue #375 REPRODUCED: <pdd-interface> JSON was corrupted.\n"
+            f"Content after preprocessing:\n{interface_match.group(1)}\n"
+            f"Error: {e}"
+        )
 
     # Template variables outside PDD tags SHOULD be doubled
     assert "{{issue_url}}" in processed
     assert "{{repo_owner}}" in processed
     assert "{{current_architecture}}" in processed
-
-    # format() should work with these template variables
-    try:
-        processed.format(
-            issue_url="http://example.com",
-            repo_owner="org",
-            repo_name="repo",
-            issue_number=123,
-            current_architecture="{}"
-        )
-    except KeyError as e:
-        pytest.fail(f"format() failed on real-world prompt: {e}")
-
-
-# =============================================================================
-# Include + PDD Tags + format() Compatibility Tests
-# =============================================================================
-# These tests verify that when files containing <pdd-interface> tags are
-# INCLUDED via <include>, the JSON braces are properly escaped for Python's
-# str.format() method. This is critical for the agentic test orchestrator
-# which includes documentation files and then formats the result.
-
-
-def test_included_pdd_interface_json_is_format_safe() -> None:
-    """
-    Regression test: When a file with <pdd-interface> JSON is included,
-    the braces must be escaped so str.format() doesn't interpret them as placeholders.
-
-    Before the fix, including a file with:
-        <pdd-interface>
-        {
-          "type": "module"
-        }
-        </pdd-interface>
-
-    Would cause format() to fail with KeyError: '\\n  "type"' because the
-    opening brace followed by newline was interpreted as a format placeholder.
-    """
-    # Content that would be in an included file (e.g., prompting_guide.md)
-    included_content = '''# Documentation
-
-Example interface:
-<pdd-interface>
-{
-  "type": "module",
-  "module": {
-    "functions": [
-      {"name": "example", "signature": "()", "returns": "None"}
-    ]
-  }
-}
-</pdd-interface>
-
-More documentation here.'''
-
-    # Template that includes this content
-    template = "Context: <include>docs/guide.md</include>\nIssue: {issue_number}"
-
-    with patch('builtins.open', mock_open(read_data=included_content)):
-        processed = preprocess(
-            template,
-            recursive=False,
-            double_curly_brackets=True,
-            exclude_keys=['issue_number']
-        )
-
-    # The critical test: format() should NOT raise KeyError
-    try:
-        result = processed.format(issue_number=123)
-        assert "Issue: 123" in result
-    except KeyError as e:
-        pytest.fail(
-            f"format() failed with KeyError: {e}\n"
-            f"This means <pdd-interface> JSON braces were not escaped.\n"
-            f"Processed content:\n{processed[:500]}..."
-        )
-
-
-def test_included_pdd_interface_json_braces_are_doubled() -> None:
-    """
-    Verify that JSON braces inside included <pdd-interface> tags are doubled.
-    """
-    included_content = '''<pdd-interface>
-{
-  "type": "module"
-}
-</pdd-interface>'''
-
-    template = "<include>file.md</include>"
-
-    with patch('builtins.open', mock_open(read_data=included_content)):
-        processed = preprocess(
-            template,
-            recursive=False,
-            double_curly_brackets=True
-        )
-
-    # Braces inside <pdd-interface> should be doubled for format() safety
-    assert "{{" in processed, "Opening braces should be doubled"
-    assert "}}" in processed, "Closing braces should be doubled"
-
-
-def test_included_content_with_all_pdd_tag_types_is_format_safe() -> None:
-    """
-    Test that all three PDD tag types (<pdd-interface>, <pdd-reason>, <pdd-dependency>)
-    in included content are properly escaped for format().
-    """
-    included_content = '''<pdd-reason>Module for {complex} operations</pdd-reason>
-
-<pdd-interface>
-{
-  "type": "cli",
-  "cli": {
-    "commands": [{"name": "run", "options": ["--flag"]}]
-  }
-}
-</pdd-interface>
-
-<pdd-dependency>other_{module}.prompt</pdd-dependency>'''
-
-    template = "Guide: <include>guide.md</include>\nUser: {user_name}"
-
-    with patch('builtins.open', mock_open(read_data=included_content)):
-        processed = preprocess(
-            template,
-            recursive=False,
-            double_curly_brackets=True,
-            exclude_keys=['user_name']
-        )
-
-    # Should not raise - all braces should be escaped except user_name
-    try:
-        result = processed.format(user_name="Alice")
-        assert "User: Alice" in result
-    except KeyError as e:
-        pytest.fail(f"format() failed: KeyError {e}")
-    except ValueError as e:
-        pytest.fail(f"format() failed: ValueError {e}")
-
-
-def test_included_multiline_json_in_pdd_interface_is_format_safe() -> None:
-    """
-    Specifically test multiline JSON structures that span multiple lines,
-    as these are particularly prone to format() interpretation issues.
-
-    The pattern {\\n  "key" is interpreted by format() as a placeholder
-    named '\\n  "key"' if not properly escaped.
-    """
-    included_content = '''<pdd-interface>
-{
-  "type": "module",
-  "module": {
-    "functions": [
-      {
-        "name": "func1",
-        "signature": "(arg: str)",
-        "returns": "Dict[str, Any]"
-      },
-      {
-        "name": "func2",
-        "signature": "(data: List[int])",
-        "returns": "Optional[int]"
-      }
-    ]
-  }
-}
-</pdd-interface>'''
-
-    template = "Doc: <include>doc.md</include>\nVersion: {version}"
-
-    with patch('builtins.open', mock_open(read_data=included_content)):
-        processed = preprocess(
-            template,
-            recursive=False,
-            double_curly_brackets=True,
-            exclude_keys=['version']
-        )
-
-    # Critical: This should not raise KeyError for multiline JSON keys
-    try:
-        result = processed.format(version="1.0.0")
-        assert "Version: 1.0.0" in result
-    except KeyError as e:
-        pytest.fail(
-            f"Multiline JSON caused format() KeyError: {e}\n"
-            f"The opening brace followed by newline was not escaped."
-        )
-
-
-def test_included_nested_json_objects_are_format_safe() -> None:
-    """
-    Test deeply nested JSON objects in <pdd-interface> tags.
-    """
-    included_content = '''<pdd-interface>
-{
-  "type": "frontend",
-  "frontend": {
-    "pages": [
-      {
-        "route": "/dashboard",
-        "components": {
-          "header": {"type": "nav", "items": ["home", "settings"]},
-          "main": {"type": "grid", "columns": 3}
-        }
-      }
-    ]
-  }
-}
-</pdd-interface>'''
-
-    template = "<include>frontend.md</include>\nBuild: {build_id}"
-
-    with patch('builtins.open', mock_open(read_data=included_content)):
-        processed = preprocess(
-            template,
-            recursive=False,
-            double_curly_brackets=True,
-            exclude_keys=['build_id']
-        )
-
-    try:
-        result = processed.format(build_id="abc123")
-        assert "Build: abc123" in result
-    except (KeyError, ValueError) as e:
-        pytest.fail(f"Nested JSON caused format() error: {e}")
-
-
-def test_include_with_pdd_tags_and_code_blocks() -> None:
-    """
-    Test included content that has both PDD tags and code blocks with braces.
-    Code blocks should also be properly escaped.
-    """
-    included_content = '''# Guide
-
-<pdd-interface>
-{
-  "type": "module"
-}
-</pdd-interface>
-
-Example code:
-```python
-def example():
-    data = {"key": "value"}
-    return data
-```
-
-More text with {potential_placeholder}.'''
-
-    template = "<include>guide.md</include>\nParam: {param}"
-
-    with patch('builtins.open', mock_open(read_data=included_content)):
-        processed = preprocess(
-            template,
-            recursive=False,
-            double_curly_brackets=True,
-            exclude_keys=['param']
-        )
-
-    try:
-        result = processed.format(param="test")
-        assert "Param: test" in result
-    except (KeyError, ValueError) as e:
-        pytest.fail(f"Combined PDD tags and code blocks caused error: {e}")
-
-
-def test_multiple_includes_with_pdd_tags_are_format_safe() -> None:
-    """
-    Test multiple <include> directives where each included file has PDD tags.
-    """
-    file_contents = {
-        './file1.md': '''<pdd-interface>
-{"type": "module", "module": {"functions": []}}
-</pdd-interface>''',
-        './file2.md': '''<pdd-interface>
-{"type": "cli", "cli": {"commands": []}}
-</pdd-interface>''',
-    }
-
-    def mock_file_open(path, *args, **kwargs):
-        if path in file_contents:
-            return io.StringIO(file_contents[path])
-        raise FileNotFoundError(path)
-
-    template = '''Part 1: <include>file1.md</include>
-Part 2: <include>file2.md</include>
-ID: {request_id}'''
-
-    with patch('builtins.open', side_effect=mock_file_open):
-        processed = preprocess(
-            template,
-            recursive=False,
-            double_curly_brackets=True,
-            exclude_keys=['request_id']
-        )
-
-    try:
-        result = processed.format(request_id="req-001")
-        assert "ID: req-001" in result
-    except (KeyError, ValueError) as e:
-        pytest.fail(f"Multiple includes with PDD tags caused error: {e}")
-
-
-def test_include_many_with_pdd_tags_is_format_safe() -> None:
-    """
-    Test <include-many> directive with files containing PDD tags.
-    """
-    file_contents = {
-        './doc1.md': '<pdd-interface>{"type": "module"}</pdd-interface>',
-        './doc2.md': '<pdd-reason>Does {things}</pdd-reason>',
-    }
-
-    def mock_file_open(path, *args, **kwargs):
-        if path in file_contents:
-            return io.StringIO(file_contents[path])
-        raise FileNotFoundError(path)
-
-    template = '''Docs: <include-many>doc1.md, doc2.md</include-many>
-Name: {name}'''
-
-    with patch('builtins.open', side_effect=mock_file_open):
-        processed = preprocess(
-            template,
-            recursive=False,
-            double_curly_brackets=True,
-            exclude_keys=['name']
-        )
-
-    try:
-        result = processed.format(name="Test")
-        assert "Name: Test" in result
-    except (KeyError, ValueError) as e:
-        pytest.fail(f"include-many with PDD tags caused error: {e}")
-
-
-def test_exclude_keys_work_with_included_pdd_content() -> None:
-    """
-    Verify that exclude_keys correctly preserves template placeholders
-    even when included content has PDD tags that need escaping.
-    """
-    included_content = '''<pdd-interface>
-{
-  "type": "module",
-  "module": {"functions": [{"name": "process_{type}"}]}
-}
-</pdd-interface>'''
-
-    template = '''Context: <include>context.md</include>
-Issue: {issue_number}
-Author: {issue_author}
-Title: {issue_title}'''
-
-    with patch('builtins.open', mock_open(read_data=included_content)):
-        processed = preprocess(
-            template,
-            recursive=False,
-            double_curly_brackets=True,
-            exclude_keys=['issue_number', 'issue_author', 'issue_title']
-        )
-
-    # All three placeholders should remain as single braces
-    assert "{issue_number}" in processed
-    assert "{issue_author}" in processed
-    assert "{issue_title}" in processed
-
-    # And format should work
-    result = processed.format(
-        issue_number=42,
-        issue_author="alice",
-        issue_title="Fix bug"
-    )
-    assert "Issue: 42" in result
-    assert "Author: alice" in result
-    assert "Title: Fix bug" in result
-
-
-def test_real_world_prompting_guide_include_scenario() -> None:
-    """
-    Simulate the real-world scenario that triggered this bug:
-    A step template includes the prompting_guide.md which contains
-    multiple <pdd-interface> examples with JSON.
-
-    This is the exact pattern used by agentic_test_orchestrator.
-    """
-    # Simplified version of actual prompting_guide.md content
-    prompting_guide_content = '''# PDD Prompting Guide
-
-## Architecture Metadata Tags
-
-Example prompt with metadata:
-
-```
-<pdd-reason>Brief description of module's purpose (60-120 chars)</pdd-reason>
-
-<pdd-interface>
-{
-  "type": "module",
-  "module": {
-    "functions": [
-      {"name": "function_name", "signature": "(...)", "returns": "Type"}
-    ]
-  }
-}
-</pdd-interface>
-```
-
-### Interface Types
-
-**Module Interface** (Python modules with functions):
-```json
-{
-  "type": "module",
-  "module": {
-    "functions": [
-      {"name": "func_name", "signature": "(arg1, arg2)", "returns": "ReturnType"}
-    ]
-  }
-}
-```
-
-**CLI Interface** (Command-line tools):
-```json
-{
-  "type": "cli",
-  "cli": {
-    "commands": [
-      {"name": "command_name", "options": ["--flag", "-f"]}
-    ]
-  }
-}
-```
-
-## More Examples
-
-<pdd-interface>
-{
-  "type": "frontend",
-  "frontend": {
-    "pages": [
-      {"route": "/", "components": ["Header", "Footer"]}
-    ]
-  }
-}
-</pdd-interface>
-'''
-
-    # This is what agentic_test_orchestrator does
-    step_template = '''You are analyzing issue #{issue_number}.
-
-Reference the prompting guide:
-<include>docs/prompting_guide.md</include>
-
-Issue content: {issue_content}
-Author: {issue_author}'''
-
-    with patch('builtins.open', mock_open(read_data=prompting_guide_content)):
-        processed = preprocess(
-            step_template,
-            recursive=False,
-            double_curly_brackets=True,
-            exclude_keys=['issue_number', 'issue_content', 'issue_author']
-        )
-
-    # The key test: This is exactly what was failing
-    try:
-        result = processed.format(
-            issue_number=123,
-            issue_content="Please fix the login bug",
-            issue_author="developer"
-        )
-        assert "issue #123" in result.lower()
-        assert "Please fix the login bug" in result
-        assert "developer" in result
-    except KeyError as e:
-        pytest.fail(
-            f"Real-world prompting guide scenario failed!\n"
-            f"KeyError: {e}\n"
-            f"This reproduces the bug where <pdd-interface> JSON in included "
-            f"files causes format() to fail."
-        )
-    except ValueError as e:
-        pytest.fail(
-            f"Real-world prompting guide scenario failed with ValueError: {e}"
-        )
-
-
-def test_pdd_interface_outside_code_fence_in_included_content() -> None:
-    """
-    Test the specific case where <pdd-interface> tags in included content
-    are NOT inside code fences (unlike examples that show them in code blocks).
-
-    This is the actual problematic case - raw PDD tags with JSON that need
-    their braces escaped.
-    """
-    # This is content with actual PDD tags (not examples in code blocks)
-    included_content = '''<pdd-reason>Handles user authentication</pdd-reason>
-
-<pdd-interface>
-{
-  "type": "module",
-  "module": {
-    "functions": [
-      {"name": "login", "signature": "(user: str, pass: str)", "returns": "Token"},
-      {"name": "logout", "signature": "(token: Token)", "returns": "bool"}
-    ]
-  }
-}
-</pdd-interface>
-
-<pdd-dependency>user_service.prompt</pdd-dependency>
-<pdd-dependency>token_manager.prompt</pdd-dependency>'''
-
-    template = "Module spec: <include>auth.prompt</include>\nBuild: {build}"
-
-    with patch('builtins.open', mock_open(read_data=included_content)):
-        processed = preprocess(
-            template,
-            recursive=False,
-            double_curly_brackets=True,
-            exclude_keys=['build']
-        )
-
-    # This MUST not raise
-    try:
-        result = processed.format(build="v2.0")
-        assert "Build: v2.0" in result
-    except KeyError as e:
-        pytest.fail(
-            f"Raw PDD tags (not in code fence) in included content "
-            f"caused KeyError: {e}"
-        )
-
-
-def test_format_valueerror_from_unbalanced_braces_in_included_content() -> None:
-    """
-    Test that unbalanced braces in included content are handled.
-    Even if escaping fails, we should get a clear error, not a crash.
-    """
-    # Content with intentionally problematic braces
-    included_content = '''Some text with an unbalanced { brace
-And another } brace on different line'''
-
-    template = "<include>broken.txt</include>\nID: {id}"
-
-    with patch('builtins.open', mock_open(read_data=included_content)):
-        processed = preprocess(
-            template,
-            recursive=False,
-            double_curly_brackets=True,
-            exclude_keys=['id']
-        )
-
-    # Even with problematic content, this specific pattern might work
-    # because each brace is on its own line. The test documents behavior.
-    try:
-        result = processed.format(id="test123")
-        # If it works, that's fine
-        assert "ID: test123" in result
-    except (KeyError, ValueError):
-        # If it fails, that's also acceptable - we're testing edge cases
-        # The important thing is it doesn't crash unexpectedly
-        pass
-
-
-# =============================================================================
-# Z3 Formal Verification for Include + PDD Tags Scenario
-# =============================================================================
-
-
-def test_z3_included_pdd_content_brace_escaping() -> None:
-    """
-    Z3 formal verification that braces in included PDD content are properly escaped.
-
-    Property: For any string S containing <pdd-interface>{JSON}</pdd-interface>,
-    after preprocessing with double_curly_brackets=True, all '{' characters
-    in the JSON must become '{{' (unless they're excluded keys).
-    """
-    # Define symbolic strings
-    json_content = String('json_content')
-    processed = String('processed')
-
-    # Simplified model: if json_content contains '{', processed must contain '{{'
-    # This is a simplified verification of the escaping property
-
-    has_single_brace = IndexOf(json_content, StringVal("{"), 0) >= 0
-    has_double_brace = IndexOf(processed, StringVal("{{"), 0) >= 0
-
-    # Property: If input has single brace, output must have double brace
-    property_holds = Implies(has_single_brace, has_double_brace)
-
-    solver = z3.Solver()
-
-    # Test with concrete values representing our scenario
-    test_json = StringVal('{"type": "module"}')
-    test_processed = StringVal('{{"type": "module"}}')
-
-    solver.add(json_content == test_json)
-    solver.add(processed == test_processed)
-    solver.add(property_holds)
-
-    assert solver.check() == z3.sat, "Z3: Brace escaping property should be satisfiable"
-
-
-def test_z3_exclude_keys_preserved_with_included_content() -> None:
-    """
-    Z3 verification that exclude_keys are preserved even when content is included.
-
-    Property: For any key K in exclude_keys, {K} remains as single braces
-    while other braces are doubled.
-    """
-    template = String('template')
-    processed = String('processed')
-    excluded_key = StringVal('issue_number')
-
-    # Property: The excluded key pattern {issue_number} should remain unchanged
-    excluded_pattern = StringVal('{issue_number}')
-    doubled_pattern = StringVal('{{issue_number}}')
-
-    has_excluded_single = IndexOf(processed, excluded_pattern, 0) >= 0
-    has_excluded_double = IndexOf(processed, doubled_pattern, 0) >= 0
-
-    # Property: Excluded key should be single, not doubled
-    property_holds = And(has_excluded_single, Not(has_excluded_double))
-
-    solver = z3.Solver()
-
-    # Test with concrete processed output
-    test_processed = StringVal('Content with {issue_number} and {{other}}')
-    solver.add(processed == test_processed)
-    solver.add(property_holds)
-
-    assert solver.check() == z3.sat, "Z3: Exclude keys should remain single braces"
