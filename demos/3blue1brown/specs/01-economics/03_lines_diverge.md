@@ -28,7 +28,7 @@ The chart continues from the threshold, showing the dramatic divergence as sock 
 
 3. **Gap Indicator**
    - Vertical dashed line showing the gap between the two lines
-   - Appears around 1990
+   - Appears around 1970
    - Label showing "Waste of time" or arrow indicating the irrational zone
 
 4. **Shaded Region**
@@ -39,7 +39,7 @@ The chart continues from the threshold, showing the dramatic divergence as sock 
 ### Animation Sequence
 
 1. **Frame 0-60 (0-2s):** Threshold marker fades to 50% opacity
-2. **Frame 0-270 (0-9s):** Time progresses 1980 → 2020
+2. **Frame 0-270 (0-9s):** Time progresses 1965 → 2020
    - "Cost to Buy" line draws downward dramatically
    - Year counter updates smoothly
 3. **Frame 120-180 (4-6s):** Shaded region fades in
@@ -67,7 +67,7 @@ By 2020:
 
 ## Narration Sync
 
-> "By 1990, the math flipped. A new sock cost less than the time to repair the old one. Darning became irrational."
+> "By the mid-1960s, the math flipped. A new sock cost less than the time to repair the old one. Darning became irrational."
 
 ## Code Structure (Remotion)
 
@@ -77,11 +77,11 @@ By 2020:
 
   <Sequence from={0} durationInFrames={270}>
     <ContinuedLineAnimation
-      startYear={1980}
+      startYear={1965}
       endYear={2020}
       data={costToBuyData}
     />
-    <YearCounter startYear={1980} endYear={2020} />
+    <YearCounter startYear={1965} endYear={2020} />
   </Sequence>
 
   <Sequence from={120}>

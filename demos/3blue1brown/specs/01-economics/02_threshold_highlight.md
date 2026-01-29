@@ -17,7 +17,7 @@ The crossing point from the previous chart gets highlighted with a pulsing effec
 ### Animation Elements
 
 1. **Crossing Point Marker**
-   - Circle at intersection (~1975, ~0.5 hours)
+   - Circle at intersection (~1963, ~0.5 hours)
    - Color: White (#FFFFFF)
    - Size: Starts at 0, grows to 20px radius
    - Pulsing glow effect (amber #D9944A at 50% opacity)

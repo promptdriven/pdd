@@ -297,9 +297,9 @@ The crossing point isn't just "generate < patch." It's "generate < patch + accum
 | 2020 | 10 hrs | +15 | **25 hrs** | 30 hrs |
 | 2022 | 7 hrs (-30%) | +17 | **24 hrs** | 18 hrs |
 | 2023 | 5 hrs (-50%) | +19 | **24 hrs** | 10 hrs |
-| 2024 | 4 hrs (-60%) | +20 | **24 hrs** | 6 hrs |
+| 2024 | 4.5 hrs (-55%) | +19.5 | **24 hrs** | 6 hrs |
 
-**The insight:** Immediate patch cost dropped 60% (10→4), but total cost barely moved (25→24).
+**The insight:** Immediate patch cost dropped 55% (10→4.5), but total cost barely moved (25→24).
 The debt ate all the productivity gains. Meanwhile, generation dropped 80% (30→6) with no debt.
 
 ### Key Visual Technique: The Expanding Gap

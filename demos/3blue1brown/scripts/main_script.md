@@ -8,7 +8,7 @@
 
 ## COLD OPEN: THE SOCK HOOK (0:00 - 2:00)
 
-**[VISUAL: Split screen. LEFT: Developer at keyboard, Cursor interface visible, making a slick AI-assisted edit. RIGHT: 1950s grandmother carefully darning a wool sock by lamplight.]**
+**[VISUAL: Split screen. LEFT: Developer at keyboard, Cursor interface visible, making a slick AI-assisted edit. RIGHT: 1950s great-grandmother carefully darning a wool sock by lamplight.]**
 
 **NARRATOR:**
 If you use Cursor, or Claude Code, or Copilot...
@@ -41,7 +41,7 @@ So why are we still patching?
 
 ## PART 1: THE ECONOMICS OF DARNING (2:00 - 5:45)
 
-**[VISUAL: Price chart animation. 1950: A pair of quality wool socks costs about an hour of wages. Graph shows labor cost vs garment cost over time. The lines cross around 1970-80.]**
+**[VISUAL: Price chart animation. 1950: A pair of quality wool socks costs about an hour of wages. Graph shows labor cost vs garment cost over time. The lines cross around 1960-65.]**
 
 **NARRATOR:**
 This isn't nostalgia. It's economics.
@@ -52,7 +52,7 @@ In 1950, a wool sock cost real money relative to an hour of labor. Darning made 
 
 **[VISUAL: The lines diverge dramatically. By 2020, socks are essentially free relative to labor.]**
 
-By 1990, the math flipped. A new sock cost less than the time to repair the old one. Darning became irrational.
+By the mid-1960s, the math flipped. A new sock cost less than the time to repair the old one. Darning became irrational.
 
 **[VISUAL: Transition to a similar chart for code. Y-axis: "Cost (Developer Hours)". Three elements: "Cost to generate" (blue line, high), "Immediate patch cost" (amber solid line, low), and a dashed amber line at the top labeled "Total cost (with debt)" with shaded area between the two amber lines.]**
 
@@ -76,9 +76,9 @@ But watch the dashed line. The total cost. It's barely moving.
 
 Because even though each patch is faster, every patch still leaves residue. Technical debt. And that debt accumulates—faster now, because you're patching faster.
 
-**[VISUAL: Annotation appears: "Immediate: -60%" pointing to the dropping solid line. Another annotation: "Total: -4%" pointing to the nearly-flat dashed line. The contrast is stark.]**
+**[VISUAL: Annotation appears: "Individual task: -55% (GitHub, 2022)" pointing to the dropping solid line. Another annotation: "Overall throughput: ~0% (Uplevel, 2024)" pointing to the nearly-flat dashed line. The contrast is stark.]**
 
-AI gave you a sixty percent speedup on individual patches. But your total cost? Down four percent. The debt ate the rest.
+GitHub measured a fifty-five percent speedup on individual coding tasks. But when researchers tracked overall developer throughput? No significant change. The debt ate the rest.
 
 **[VISUAL: Zoom into the shaded debt area. It separates into two distinct layers: a darker "Code Complexity" layer and a lighter "Context Rot" layer with a subtle static/noise texture.]**
 
@@ -135,11 +135,11 @@ And those costs compound. Unless you regenerate. Then they reset to zero.
 **[VISUAL: A factory floor. Industrial. An injection molding machine dominates the frame.]**
 
 **NARRATOR:**
-So what actually changed with clothes? It wasn't just that fabric got cheaper.
+There's a pattern here that shows up across industries. Not just cheaper materials—a deeper shift in *how things are made*.
 
 **[VISUAL: Close-up on the injection molding machine. Liquid plastic flows into a mold. The mold is precise—hard walls defining an exact shape.]**
 
-It was a paradigm shift in manufacturing. From crafting individual objects... to designing molds.
+Consider injection molding. Before it existed, you crafted individual objects. After it? You designed molds.
 
 **[VISUAL: The mold opens. A perfect plastic part ejects. Then another. Then another. Counter: 1... 10... 100... 10,000...]**
 

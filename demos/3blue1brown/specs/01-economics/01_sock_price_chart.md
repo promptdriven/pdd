@@ -17,10 +17,10 @@ Animated line chart showing the economic relationship between sock prices and la
 
 ### Chart Elements
 - **X-axis:** Years (1950 - 2020)
-- **Y-axis:** "Hours of labor to buy / repair a sock" (0 - 3 hours)
+- **Y-axis:** "Hours of labor to buy / repair a sock" (0 - 1.5 hours)
 - **Line 1 (Cost to Buy):**
   - Color: #4A90D9 (cool blue)
-  - Starts high (~2.5 hours in 1950)
+  - Starts high (~1.0 hours in 1950)
   - Drops steadily over time
 - **Line 2 (Cost to Repair/Darn):**
   - Color: #D9944A (warm amber)
@@ -34,7 +34,7 @@ Animated line chart showing the economic relationship between sock prices and la
 4. **Frame 150-300 (5-10s):** Both lines animate together, showing the 1950 starting point
 5. **Frame 300-450 (10-15s):** Time progresses, "Cost to Buy" drops
 6. **Frame 450-540 (15-18s):** Lines approach crossing point
-7. **Frame 540-600 (18-20s):** Hold at crossing point (circa 1970-80)
+7. **Frame 540-600 (18-20s):** Hold at crossing point (circa 1960-65)
 
 ### Typography
 - Title: "The Economics of Sock Repair" (fade in at start)
@@ -64,7 +64,7 @@ Animated line chart showing the economic relationship between sock prices and la
     <AnimatedLine data={costToRepairData} color="#D9944A" />
   </Sequence>
   <Sequence from={150}>
-    <TimeProgression startYear={1950} endYear={1980} />
+    <TimeProgression startYear={1950} endYear={1965} />
   </Sequence>
 </Sequence>
 ```
@@ -74,13 +74,15 @@ Animated line chart showing the economic relationship between sock prices and la
 ```json
 {
   "costToBuy": [
-    { "year": 1950, "hours": 2.5 },
-    { "year": 1960, "hours": 1.8 },
-    { "year": 1970, "hours": 1.0 },
-    { "year": 1980, "hours": 0.4 },
-    { "year": 1990, "hours": 0.15 },
-    { "year": 2000, "hours": 0.08 },
-    { "year": 2010, "hours": 0.05 },
+    { "year": 1950, "hours": 1.0 },
+    { "year": 1955, "hours": 0.75 },
+    { "year": 1960, "hours": 0.55 },
+    { "year": 1963, "hours": 0.5 },
+    { "year": 1970, "hours": 0.2 },
+    { "year": 1980, "hours": 0.1 },
+    { "year": 1990, "hours": 0.06 },
+    { "year": 2000, "hours": 0.04 },
+    { "year": 2010, "hours": 0.03 },
     { "year": 2020, "hours": 0.03 }
   ],
   "costToRepair": [

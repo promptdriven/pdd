@@ -62,7 +62,7 @@ In 1950, a wool sock cost *real money* relative to an hour of labor. Darning mad
 [PAUSE: 0.8s]
 
 [TONE: building momentum]
-By 1990, the math **flipped**. A new sock cost *less* than the time to repair the old one. Darning became... [PAUSE: 0.5s] [TONE: slightly amused] *irrational*.
+By the mid-1960s, the math **flipped**. A new sock cost *less* than the time to repair the old one. Darning became... [PAUSE: 0.5s] [TONE: slightly amused] *irrational*.
 
 [PAUSE: 1.5s]
 
@@ -97,7 +97,7 @@ Because even though each patch is faster, every patch still leaves *residue*. Te
 [PAUSE: 1.5s]
 
 [TONE: stark, data-driven]
-AI gave you a **sixty percent** speedup on individual patches. But your total cost? Down **four percent**. The debt ate the rest.
+GitHub measured a **fifty-five percent** speedup on individual coding tasks. But when researchers tracked overall developer throughput? **No significant change**. The debt ate the rest.
 
 [PAUSE: 2s]
 
@@ -176,12 +176,12 @@ And those costs... **compound**. [PAUSE: 0.8s] Unless you regenerate. Then they 
 [PAUSE: 2s]
 
 [TONE: curious, investigative]
-So what *actually* changed with clothes? It wasn't just that fabric got cheaper.
+There's a pattern here that shows up across industries. Not just cheaper materials—a deeper shift in *how things are made*.
 
 [PAUSE: 1s]
 
 [TONE: revelatory]
-It was a **paradigm shift** in manufacturing. From crafting individual objects... [PAUSE: 0.5s] to designing **molds**.
+Consider injection molding. Before it existed, you crafted individual objects. After it? [PAUSE: 0.5s] You designed **molds**.
 
 [PAUSE: 1.5s]
 
