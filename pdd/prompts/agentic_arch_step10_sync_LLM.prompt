@@ -1,0 +1,224 @@
+<pdd-reason>Validates .pddrc configuration using pdd sync --dry-run for each module.</pdd-reason>
+<pdd-interface>
+{{
+  "type": "module",
+  "module": {{
+    "functions": [
+      {{"name": "validate_sync", "signature": "(architecture_json: str)", "returns": "str ('VALID' or list of sync errors)"}}
+    ]
+  }}
+}}
+</pdd-interface>
+<pdd-dependency>agentic_arch_step9_completeness_LLM.prompt</pdd-dependency>
+% You are a PDD configuration expert. Your task is to validate that `pdd sync` can run for every module.
+
+% Context
+
+You are working on step 10 of the agentic architecture workflow. Step 8 generated prompt files, Step 9 validated architecture completeness. Now validate that the .pddrc configuration allows `pdd sync` to work correctly for ALL modules.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Architecture
+<architecture_json>
+{step6_output}
+</architecture_json>
+
+% Validation Using pdd sync --dry-run
+
+The `pdd sync --dry-run` command tests sync configuration without executing:
+- Detects the correct context from .pddrc
+- Resolves the prompt file path
+- Shows what output path would be generated
+- Reports any configuration errors
+
+**IMPORTANT: Using the --context flag**
+
+The `--context` flag is a GLOBAL flag that goes BEFORE the `sync` command:
+```bash
+pdd --context CONTEXT_NAME sync BASENAME --dry-run
+```
+
+When to use `--context`:
+- When automatic context detection might fail (no matching paths pattern)
+- When you want to explicitly test a specific context
+- When the module's filepath doesn't match any paths pattern in .pddrc
+
+**1. Extract all module basenames and their contexts:**
+
+```bash
+# Get all basenames from architecture.json
+cat architecture.json | jq -r '.[].filename' | sed 's/_[A-Za-z]*\.prompt$//' | sort -u
+
+# List available contexts from .pddrc
+grep -E '^\s+[a-zA-Z_-]+:$' .pddrc | head -20
+```
+
+**2. Run pdd sync --dry-run for EACH module:**
+
+If .pddrc is correctly configured, auto-detection should work without `--context`:
+
+```bash
+# Test each module - relies on auto-detection from .pddrc paths patterns
+for basename in $(cat architecture.json | jq -r '.[].filename' | sed 's/_[A-Za-z]*\.prompt$//' | sort -u); do
+    echo "=== Testing: $basename ==="
+    pdd sync "$basename" --dry-run 2>&1
+    if [ $? -ne 0 ]; then
+        echo "FAILED: $basename"
+    fi
+done
+```
+
+**If auto-detection fails**, you can use `--context` to explicitly specify the context name from .pddrc:
+
+```bash
+# Find the context name for a basename by checking which context's paths pattern matches it
+# For example, if .pddrc has:
+#   app_layout:
+#     paths: ["*app_layout*"]
+# Then use: pdd --context app_layout sync app_layout --dry-run
+
+# Test with explicit context (use the context NAME from .pddrc, not necessarily the basename)
+pdd --context CONTEXT_NAME sync BASENAME --dry-run
+```
+
+**IMPORTANT:** If auto-detection fails, check that:
+1. The .pddrc `paths:` patterns actually match the basename (e.g., `["*app_layout*"]` matches `app_layout`)
+2. You don't have the same `prompts_dir` value in every context (this breaks matching!)
+
+**3. Analyze dry-run output:**
+
+**SUCCESSFUL dry-run shows:**
+```
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ Displaying sync analysis for api_courses_route                               │
+╰──────────────────────────────────────────────────────────────────────────────╯
+Language: TypeScript
+  Prompt: prompts/api/api_courses_route_TypeScript.prompt
+  Output: app/api/courses/route.ts
+  Context: api
+  ...
+```
+
+**FAILED dry-run shows errors like:**
+- `No prompt files found for basename 'X'` → prompt file missing or wrong location
+- `Unknown context 'X'` → context not defined in .pddrc
+- `Path resolution error` → filepath mismatch in .pddrc modules
+
+**4. Verify filepath alignment:**
+
+For EACH module, compare:
+- architecture.json `filepath` field
+- dry-run `Output:` path
+
+They MUST match exactly. If not, the .pddrc `modules` section needs fixing.
+
+```bash
+# For each module, verify output path matches (using auto-detection)
+for entry in $(cat architecture.json | jq -c '.[]'); do
+    filename=$(echo "$entry" | jq -r '.filename')
+    expected_path=$(echo "$entry" | jq -r '.filepath')
+    basename=$(echo "$filename" | sed 's/_[A-Za-z]*\.prompt$//')
+
+    # Get actual output from dry-run (auto-detection should find correct context)
+    actual_path=$(pdd sync "$basename" --dry-run 2>&1 | grep "Output:" | awk '{{print $2}}')
+
+    if [ "$expected_path" != "$actual_path" ]; then
+        echo "MISMATCH: $basename"
+        echo "  Expected: $expected_path"
+        echo "  Actual:   $actual_path"
+    fi
+done
+```
+
+**5. Common issues to check:**
+
+| Issue | Symptom | Fix |
+|-------|---------|-----|
+| Missing prompt file | "No prompt files found" | Step 8 didn't create the prompt |
+| Wrong prompts_dir | Prompt not found | Fix context prompts_dir in .pddrc |
+| Missing modules entry | Wrong output path | Add entry to .pddrc modules section |
+| Filepath mismatch | Output path differs | Update .pddrc modules filepath |
+
+% Output
+
+**1. Run pdd sync --dry-run for ALL modules**
+
+Execute the actual commands - capture all output.
+
+**2. Output validation result marker**
+
+If ALL dry-runs succeed AND all filepaths match, output:
+```
+VALIDATION_RESULT: VALID
+```
+
+If ANY dry-run fails OR ANY filepath mismatches, output:
+```
+VALIDATION_RESULT: INVALID
+```
+
+Followed by error details:
+```markdown
+## Sync Validation Errors
+
+### Failed Dry-Runs
+| Module | Error |
+|--------|-------|
+| api_courses_route | No prompt files found |
+| dashboard_page | Unknown context 'pages' |
+
+### Filepath Mismatches
+| Module | Expected | Actual |
+|--------|----------|--------|
+| api_courses_route | app/api/courses/route.ts | app/api/api_courses_route.ts |
+
+### Suggested Fixes
+1. Create missing prompt: prompts/api/api_courses_route_TypeScript.prompt
+2. Add to .pddrc modules section:
+   ```yaml
+   modules:
+     api_courses_route:
+       filepath: "app/api/courses/route.ts"
+       prompts_dir: "prompts/api/"
+   ```
+```
+
+**3. Post results to GitHub**
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+```markdown
+## Step 10: Sync Validation (pdd sync --dry-run)
+
+**Status:** [VALID | INVALID]
+
+### Dry-Run Results
+- Modules tested: [N]
+- Successful: [M]/[N]
+- Failed: [list or "None"]
+
+### Filepath Alignment
+- All paths match: [Yes/No]
+- Mismatches: [list or "None"]
+
+### Errors (if any)
+[Detailed error list with fixes]
+
+---
+*[Proceeding to Step 11 | Returning to Step 12 for fixes]*
+```
+
+% Important
+
+- Run `pdd sync --dry-run` for EVERY module - this is the authoritative test
+- If dry-run fails for ANY module, validation FAILS
+- If dry-run output path doesn't match architecture.json filepath, validation FAILS
+- For Next.js/Nuxt/SvelteKit: filepath alignment is CRITICAL
+- Always output `VALIDATION_RESULT: VALID` or `VALIDATION_RESULT: INVALID`
+- Always post findings to GitHub

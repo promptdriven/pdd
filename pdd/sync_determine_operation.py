@@ -223,8 +223,11 @@ def get_extension(language: str) -> str:
     """Get file extension for a programming language."""
     extensions = {
         'python': 'py',
-        'javascript': 'js', 
+        'javascript': 'js',
         'typescript': 'ts',
+        'typescriptreact': 'tsx',
+        'javascriptreact': 'jsx',
+        'prisma': 'prisma',
         'java': 'java',
         'cpp': 'cpp',
         'c': 'c',
@@ -371,6 +374,13 @@ def _generate_paths_from_templates(
     # Ensure prompt is always present (fallback to provided prompt_path)
     if 'prompt' not in result:
         result['prompt'] = Path(prompt_path)
+
+    # Ensure example and test paths are always present (fallback to defaults)
+    # This maintains compatibility with sync workflow that expects these keys
+    if 'example' not in result:
+        result['example'] = Path(f"examples/{name}_example.{extension}")
+    if 'test' not in result:
+        result['test'] = Path(f"tests/test_{name}.{extension}")
 
     # Handle test_files for Bug #156 compatibility
     if 'test' in result:
@@ -1340,7 +1350,7 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
             # First check if the test file actually exists
             pdd_files = get_pdd_file_paths(basename, language, prompts_dir, context_override=context_override)
             test_file = pdd_files.get('test')
-            
+
             # Only suggest 'fix' if test file exists
             if test_file and test_file.exists():
                 return SyncDecision(
@@ -1375,11 +1385,11 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
             # Bug #349: If tests passed, ignore non-zero exit code (likely tooling noise)
             # Only trigger crash/fix if tests actually failed or didn't run
             tests_passed_successfully = run_report.tests_passed > 0 and run_report.tests_failed == 0
-            
+
             if not tests_passed_successfully:
                 # Context-aware decision: prefer 'fix' over 'crash' when example has run successfully before
                 has_example_run_successfully = _check_example_success_history(basename, language)
-                
+
                 if has_example_run_successfully:
                     return SyncDecision(
                         operation='fix',
@@ -1428,6 +1438,61 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
                 )
             elif run_report.tests_failed == 0 and run_report.tests_passed > 0:
                 # Tests pass but coverage is below target
+                # CRITICAL: First check if test file actually exists
+                # The run_report may have synthetic tests_passed=1 from crash/verify success
+                # but actual test file hasn't been generated yet
+                pdd_files = get_pdd_file_paths(basename, language, prompts_dir, context_override=context_override)
+                test_file_exists = pdd_files.get('test') and pdd_files['test'].exists()
+
+                # For non-Python languages (including TypeScript), the agentic test generator may create
+                # test files with different extensions or at different paths. We need to differentiate:
+                # 1. Synthetic run_report from crash/verify (test_hash=None) - tests NOT generated yet
+                # 2. Real run_report from agentic test generation (test_hash set) - tests were generated
+                # Only skip test generation if we have evidence that tests were actually generated.
+                lang_lower = language.lower()
+                is_agentic_language = lang_lower != 'python'
+
+                # Check if this is a synthetic run report (from crash/verify) vs real test execution
+                # Synthetic reports have test_hash=None because no actual test file was involved
+                has_real_test_hash = run_report.test_hash is not None
+
+                if not test_file_exists and (not is_agentic_language or not has_real_test_hash):
+                    # Test file doesn't exist and either:
+                    # - Python (non-agentic): always need the file at expected path
+                    # - Non-Python but no test_hash: synthetic run_report, tests not generated yet
+                    return SyncDecision(
+                        operation='test',
+                        reason='Example validated but test file missing - generate tests',
+                        confidence=0.90,
+                        estimated_cost=estimate_operation_cost('test'),
+                        details={
+                            'decision_type': 'heuristic',
+                            'run_report_tests_passed': run_report.tests_passed,
+                            'test_file_exists': False,
+                            'has_real_test_hash': has_real_test_hash,
+                            'workflow_stage': 'test_generation_needed'
+                        }
+                    )
+
+                # Skip test_extend for non-Python languages - code coverage tooling is Python-specific
+                # and test_extend would produce no content or fail for other languages
+                if language.lower() != 'python':
+                    return SyncDecision(
+                        operation='all_synced',
+                        reason=f'Tests pass ({run_report.tests_passed} passed). Coverage {run_report.coverage:.1f}% below target but test_extend not supported for {language} - accepting as complete',
+                        confidence=0.90,
+                        estimated_cost=estimate_operation_cost('all_synced'),
+                        details={
+                            'decision_type': 'heuristic',
+                            'current_coverage': run_report.coverage,
+                            'target_coverage': target_coverage,
+                            'tests_passed': run_report.tests_passed,
+                            'tests_failed': run_report.tests_failed,
+                            'test_extend_skipped': True,
+                            'language': language,
+                            'skip_reason': 'non-python language'
+                        }
+                    )
                 # Return 'test_extend' to signal we need to ADD more tests, not regenerate
                 return SyncDecision(
                     operation='test_extend',
@@ -1649,11 +1714,35 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
                 }
             )
         
-        if (paths['code'].exists() and paths['example'].exists() and 
+        if (paths['code'].exists() and paths['example'].exists() and
             not skip_tests and not paths['test'].exists()):
-            
+
             # Check if example has been crash-tested and verified before allowing test generation
             run_report = read_run_report(basename, language)
+
+            # For non-Python languages (including TypeScript), the agentic test generator may create
+            # test files with different extensions or at different paths. If the run_report
+            # shows tests passed successfully AND has a test_hash (not synthetic), consider complete.
+            # Synthetic run_reports from crash/verify have test_hash=None and should NOT skip test generation.
+            lang_lower = language.lower()
+            is_agentic_language = lang_lower != 'python'
+            has_real_test_hash = run_report.test_hash is not None if run_report else False
+            if is_agentic_language and run_report and run_report.tests_passed > 0 and run_report.tests_failed == 0 and has_real_test_hash:
+                return SyncDecision(
+                    operation='all_synced',
+                    reason=f'Tests pass ({run_report.tests_passed} passed) via agentic test generation - workflow complete',
+                    confidence=0.90,
+                    estimated_cost=estimate_operation_cost('all_synced'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'tests_passed': run_report.tests_passed,
+                        'tests_failed': run_report.tests_failed,
+                        'language': language,
+                        'agentic_test_complete': True,
+                        'test_hash': run_report.test_hash
+                    }
+                )
+
             if not run_report and not skip_verify:
                 # No run report exists - need to test the example first
                 # But if skip_verify is True, skip crash/verify and go to test generation

@@ -150,6 +150,48 @@ def create_mock_litellm_response(content, model_name="test-model", prompt_tokens
 
 # --- Test Cases ---
 
+def test_litellm_debug_suppression():
+    """
+    Test that LiteLLM debug messages are suppressed by verifying
+    that set_verbose and suppress_debug_info are configured correctly.
+    
+    This test ensures that the "Give Feedback / Get Help" messages
+    from LiteLLM are suppressed as intended. The module initialization
+    code in llm_invoke.py should have already set these values when
+    the module was imported.
+    """
+    import litellm
+    import logging
+    
+    # Verify that LiteLLM suppression settings are applied
+    # These attributes may not exist in all LiteLLM versions, so we check if they exist first
+    if hasattr(litellm, 'set_verbose'):
+        assert litellm.set_verbose is False, (
+            "litellm.set_verbose should be False to suppress verbose messages. "
+            "This prevents LiteLLM from printing 'Give Feedback / Get Help' messages."
+        )
+    
+    if hasattr(litellm, 'suppress_debug_info'):
+        assert litellm.suppress_debug_info is True, (
+            "litellm.suppress_debug_info should be True to suppress debug info messages. "
+            "This prevents LiteLLM from printing debug information before exceptions."
+        )
+    
+    # Also verify the logger level is set (not NOTSET)
+    # Note: The logger level is INFO in non-production mode and WARNING in production mode.
+    # The main suppression of "Give Feedback / Get Help" messages comes from
+    # set_verbose=False and suppress_debug_info=True, not from the logger level.
+    litellm_logger = logging.getLogger("litellm")
+    assert litellm_logger.level != logging.NOTSET, (
+        "litellm logger level should be explicitly set (not NOTSET). "
+        "In non-production mode it's INFO, in production mode it's WARNING."
+    )
+    # Verify it's at least INFO level (not DEBUG)
+    assert litellm_logger.level >= logging.INFO, (
+        f"litellm logger level should be at least INFO to suppress DEBUG messages, "
+        f"got {logging.getLevelName(litellm_logger.level)}"
+    )
+
 def test_llm_invoke_valid_input(mock_load_models, mock_set_llm_cache):
     first_model_key_name = "OPENAI_API_KEY" 
     with patch.dict(os.environ, {first_model_key_name: "fake_key_value"}):

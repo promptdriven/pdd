@@ -69,6 +69,12 @@ from ..core.utils import _run_setup_utility
     default=None,
     help="Timeout in seconds for steering prompts (default: 8.0).",
 )
+@click.option(
+    "--agentic",
+    is_flag=True,
+    default=False,
+    help="Use agentic mode for Python (skip iterative loops, trust agent results).",
+)
 @click.pass_context
 @track_cost
 def sync(
@@ -83,6 +89,7 @@ def sync(
     log: bool,
     no_steer: bool,
     steer_timeout: Optional[float],
+    agentic: bool,
 ) -> Optional[Tuple[str, float, str]]:
     """
     Synchronize prompts with code and tests.
@@ -112,6 +119,7 @@ def sync(
             dry_run=dry_run,
             no_steer=no_steer,
             steer_timeout=steer_timeout,
+            agentic_mode=agentic,
         )
         return str(result), total_cost, model_name
     except click.Abort:

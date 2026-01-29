@@ -33,7 +33,7 @@ def cmd_test_main(
     merge: bool = False,
     strength: float | None = None,
     temperature: float | None = None,
-) -> tuple[str, float, str]:
+) -> tuple[str, float, str, bool | None]:
     """
     CLI wrapper for generating or enhancing unit tests.
 
@@ -51,7 +51,8 @@ def cmd_test_main(
         temperature: Optional override for LLM temperature.
 
     Returns:
-        tuple: (generated_test_code, total_cost, model_name)
+        tuple: (generated_test_code, total_cost, model_name, agentic_success)
+            agentic_success is True/False for non-Python agentic generation, None for Python.
     """
     # 1. Prepare inputs for path construction
     input_file_paths = {
@@ -66,7 +67,7 @@ def cmd_test_main(
                 "[bold red]Error: 'existing_tests' is required when "
                 "'coverage_report' is provided.[/bold red]"
             )
-            return "", 0.0, "Error: Missing existing_tests"
+            return "", 0.0, "Error: Missing existing_tests", None
 
         input_file_paths["coverage_report"] = coverage_report
         # We pass the first existing test to help construct_paths resolve context if needed,
@@ -94,7 +95,7 @@ def cmd_test_main(
         )
     except Exception as e:
         console.print(f"[bold red]Error constructing paths: {e}[/bold red]")
-        return "", 0.0, f"Error: {e}"
+        return "", 0.0, f"Error: {e}", None
 
     # 3. Resolve effective configuration (strength, temperature, time)
     # Priority: Function Arg > CLI Context > Config File > Default
@@ -125,7 +126,7 @@ def cmd_test_main(
 
         output_test_path = Path(output_file_paths.get("output", "test_output"))
 
-        generated_content, total_cost, model_name = run_agentic_test_generate(
+        generated_content, total_cost, model_name, agentic_success = run_agentic_test_generate(
             prompt_file=Path(prompt_file),
             code_file=Path(code_file),
             output_test_file=output_test_path,
@@ -142,7 +143,7 @@ def cmd_test_main(
             if not ctx.obj.get("quiet", False):
                 console.print("[yellow]Warning: Agentic test generation produced no content.[/yellow]")
 
-        return generated_content, total_cost, model_name
+        return generated_content, total_cost, model_name, agentic_success
 
     # 4. Prepare content variables
     prompt_content = input_strings.get("prompt_file", "")
@@ -375,12 +376,12 @@ def cmd_test_main(
 
         except Exception as e:
             console.print(f"[bold red]Error during local execution: {e}[/bold red]")
-            return "", 0.0, f"Error: {e}"
+            return "", 0.0, f"Error: {e}", None
 
     # 7. Validate Output
     if not generated_content or not generated_content.strip():
         console.print("[bold red]Error: Generated test content is empty.[/bold red]")
-        return "", 0.0, "Error: Empty output"
+        return "", 0.0, "Error: Empty output", None
 
     # 8. Write Output
     try:
@@ -409,9 +410,9 @@ def cmd_test_main(
 
     except Exception as e:
         console.print(f"[bold red]Error writing output file: {e}[/bold red]")
-        return "", 0.0, f"Error: {e}"
+        return "", 0.0, f"Error: {e}", None
 
-    return generated_content, total_cost, model_name
+    return generated_content, total_cost, model_name, None
 
 
 def main() -> None:
