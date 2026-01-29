@@ -23,10 +23,16 @@ def ensure_meta_dir() -> None:
 
 
 def _safe_basename(basename: str) -> str:
-    """Sanitize basename for use in metadata filenames.
+    """
+    Sanitize a module basename for safe use in metadata filenames.
 
-    Replaces '/' with '_' to prevent path interpretation when the basename
-    contains subdirectory components (e.g., 'core/cloud' -> 'core_cloud').
+    This replaces path separators ("/") with underscores to prevent directory
+    traversal when constructing paths under the .pdd/meta directory, ensuring
+    that all derived files stay within the expected project metadata tree.
+
+    The normalization logic mirrors the behavior used in other modules
+    (such as sync_determine_operation.py) so that module identities map to
+    consistent on-disk filenames across the codebase.
     """
     return basename.replace('/', '_')
 
@@ -114,8 +120,7 @@ def append_log_entry(
     language: str, 
     entry: Dict[str, Any]
 ) -> None:
-    """
-    Append a single entry to the module's sync log.
+    """Append a single entry to the module's sync log.
     
     Args:
         basename: Module basename.
@@ -145,9 +150,7 @@ def create_log_entry(
     confidence: float = 0.0,
     decision_type: str = "unknown"
 ) -> Dict[str, Any]:
-    """
-    Create a new log entry dictionary structure.
-    """
+    """Create a new log entry dictionary structure."""
     return {
         "timestamp": datetime.now().isoformat(),
         "operation": operation,
@@ -165,9 +168,7 @@ def create_log_entry(
 
 
 def create_manual_log_entry(operation: str) -> Dict[str, Any]:
-    """
-    Convenience function to create a manual invocation log entry dict.
-    """
+    """Convenience function to create a manual invocation log entry dict."""
     return create_log_entry(
         operation=operation,
         reason="Manual invocation via CLI",
@@ -183,9 +184,7 @@ def update_log_entry(
     duration: float,
     error: Optional[str] = None
 ) -> Dict[str, Any]:
-    """
-    Update a log entry with execution results.
-    """
+    """Update a log entry with execution results."""
     entry["success"] = success
     entry["actual_cost"] = cost
     entry["model"] = model
@@ -201,9 +200,7 @@ def log_event(
     details: Any,
     invocation_mode: str = "manual"
 ) -> None:
-    """
-    Log a special event to the sync log.
-    """
+    """Log a special event to the sync log."""
     entry = {
         "timestamp": datetime.now().isoformat(),
         "type": "event",
@@ -222,8 +219,7 @@ def save_fingerprint(
     cost: float = 0.0,
     model: str = "unknown"
 ) -> None:
-    """
-    Save the current fingerprint/state to the state file.
+    """Save the current fingerprint/state to the state file.
 
     Writes the full Fingerprint dataclass format compatible with read_fingerprint()
     in sync_determine_operation.py. This ensures manual commands (generate, example)
@@ -260,9 +256,7 @@ def save_fingerprint(
 
 
 def save_run_report(basename: str, language: str, report_data: Dict[str, Any]) -> None:
-    """
-    Save a run report (test results) to the state file.
-    """
+    """Save a run report (test results) to the state file."""
     path = get_run_report_path(basename, language)
     try:
         with open(path, 'w', encoding='utf-8') as f:
@@ -273,9 +267,7 @@ def save_run_report(basename: str, language: str, report_data: Dict[str, Any]) -
 
 
 def clear_run_report(basename: str, language: str) -> None:
-    """
-    Remove an existing run report if it exists.
-    """
+    """Remove an existing run report if it exists."""
     path = get_run_report_path(basename, language)
     if path.exists():
         try:
@@ -290,9 +282,7 @@ def log_operation(
     updates_run_report: bool = False,
     clears_run_report: bool = False
 ) -> Callable:
-    """
-    Decorator for Click commands to automatically log operations and manage state.
-    """
+    """Decorator for Click commands to automatically log operations and manage state."""
     def decorator(func: Callable) -> Callable:
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:

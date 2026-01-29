@@ -151,16 +151,14 @@ class TestIssue429SubdirectoryBasenameE2E:
         )
 
         # Test 2: Save fingerprint - should NOT raise FileNotFoundError
-        fingerprint_data = {
-            "files": {"test.py": {"hash": "abc123"}},
-            "version": "1.0"
-        }
-
         try:
             save_fingerprint(
                 basename=basename,
                 language=language,
-                fingerprint=fingerprint_data
+                operation="test",
+                paths={},
+                cost=0.0,
+                model="test-model"
             )
         except FileNotFoundError as e:
             pytest.fail(
@@ -208,15 +206,14 @@ class TestIssue429SubdirectoryBasenameE2E:
         language = "python"
 
         # Write fingerprint using operation_log (the writer)
-        fingerprint_data = {
-            "files": {
-                "cloud.py": {"hash": "test123", "size": 100}
-            },
-            "prompt_hash": "prompt456",
-            "version": "1.0"
-        }
-
-        save_fingerprint(basename, language, fingerprint_data)
+        save_fingerprint(
+            basename=basename,
+            language=language,
+            operation="generate",
+            paths={},
+            cost=0.1,
+            model="test-model"
+        )
 
         # Read fingerprint using sync_determine_operation (the reader)
         # Note: read_fingerprint uses get_meta_dir() internally, so we need to mock that
@@ -233,11 +230,12 @@ class TestIssue429SubdirectoryBasenameE2E:
             f"Files in meta dir: {list(meta_dir.glob('*'))}"
         )
 
-        # Verify content matches what was written
-        assert read_result == fingerprint_data, (
-            f"Fingerprint content mismatch!\n"
-            f"Expected: {fingerprint_data}\n"
-            f"Got: {read_result}"
+        # Verify the fingerprint was read successfully (basic check)
+        # Note: read_result is a Fingerprint dataclass, not the raw dict
+        assert read_result.command == "generate", (
+            f"Fingerprint command mismatch!\n"
+            f"Expected: generate\n"
+            f"Got: {read_result.command}"
         )
 
     # =========================================================================

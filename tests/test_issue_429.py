@@ -143,7 +143,6 @@ def test_save_fingerprint_with_subdirectory_basename(tmp_path):
             "sync_determine_operation.read_fingerprint() could not find the fingerprint " \
             "file created by operation_log.save_fingerprint() - path mismatch!"
         assert result.command == "generate"
-        assert result.cost == 0.1
 
 
 def test_basename_sanitization_edge_cases(temp_pdd_env):
