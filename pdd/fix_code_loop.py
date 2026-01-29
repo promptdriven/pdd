@@ -299,6 +299,7 @@ def fix_code_loop(
     prompt_file: str = "",
     agentic_fallback: bool = True,
     use_cloud: bool = False,
+    prior_cost: float = 0.0,
 ) -> Tuple[bool, str, str, int, float, Optional[str]]:
     """
     Attempts to fix errors in a code module through multiple iterations.
@@ -438,7 +439,8 @@ def fix_code_loop(
 
     # Step 2: Initialize variables
     attempts = 0
-    total_cost = 0.0
+    # Start total_cost with any prior costs (e.g., from auto-deps or previous operations)
+    total_cost = float(prior_cost)
     success = False
     model_name = None
     history_log = "<history>\n"

@@ -87,16 +87,22 @@ def run_sync_tui_example():
     }
 
     # Initialize the App
-    # Note: We use a lambda to pass the app instance to the worker logic
+    # Note: SyncApp expects individual path/color refs rather than dicts.
     app = SyncApp(
         basename="example_project",
         budget=5.0,
         worker_func=lambda: mock_worker_logic(app, stop_event),
         function_name_ref=fn_ref,
         cost_ref=cost_ref,
-        paths=paths,
-        colors=colors,
-        stop_event=stop_event
+        prompt_path_ref=paths["prompt"],
+        code_path_ref=paths["code"],
+        example_path_ref=paths["example"],
+        tests_path_ref=paths["tests"],
+        prompt_color_ref=colors["prompt"],
+        code_color_ref=colors["code"],
+        example_color_ref=colors["example"],
+        tests_color_ref=colors["tests"],
+        stop_event=stop_event,
     )
 
     # Run the Textual App
