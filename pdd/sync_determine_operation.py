@@ -126,7 +126,7 @@ class RunReport:
 @dataclass
 class SyncDecision:
     """Represents a decision about what PDD operation to run next."""
-    operation: str  # 'auto-deps', 'generate', 'example', 'crash', 'verify', 'test', 'fix', 'update', 'analyze_conflict', 'nothing', 'all_synced', 'error', 'fail_and_request_manual_merge'
+    operation: str  # 'auto-deps', 'generate', 'example', 'crash', 'verify', 'test', 'fix', 'update', 'nothing', 'all_synced', 'error', 'fail_and_request_manual_merge'
     reason: str  # A human-readable explanation for the decision
     confidence: float = 1.0  # Confidence level in the decision, 0.0 to 1.0, default 1.0 for deterministic decisions
     estimated_cost: float = 0.0  # Estimated cost for the operation in dollars, default 0.0
@@ -871,7 +871,6 @@ def estimate_operation_cost(operation: str, language: str = "python") -> float:
         'test_extend': 0.60,  # Same cost as test - generates additional tests
         'fix': 0.45,
         'update': 0.25,
-        'analyze_conflict': 0.20,
         'nothing': 0.0,
         'all_synced': 0.0,
         'error': 0.0,
@@ -1931,18 +1930,30 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
         # per PDD doctrine - all are derived from the unchanged prompt
 
         if 'prompt' in changes:
-            # True conflict: prompt (source of truth) changed along with derived artifacts
-            return SyncDecision(
-                operation='analyze_conflict',
-                reason='Prompt and derived files changed - requires conflict analysis',
-                confidence=0.70,
-                estimated_cost=estimate_operation_cost('analyze_conflict'),
-                details={
-                    'decision_type': 'heuristic',
-                    'changed_files': changes,
-                    'num_changes': len(changes),
-                    'prompt_changed': True
-                }
+            # Prompt and derived files both changed — stale fingerprint.
+            # Delete metadata and re-run analysis fresh (will hit the "no fingerprint" path).
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(
+                "Prompt and derived files both changed — deleting fingerprint and run report "
+                "for fresh sync (basename=%s, language=%s, changes=%s)",
+                basename, language, changes
+            )
+
+            # Delete fingerprint and run report to force fresh sync
+            meta_dir = get_meta_dir()
+            safe_bn = _safe_basename(basename)
+            fp_path = meta_dir / f"{safe_bn}_{language}.json"
+            rr_path = meta_dir / f"{safe_bn}_{language}_run.json"
+            if fp_path.exists():
+                fp_path.unlink()
+            if rr_path.exists():
+                rr_path.unlink()
+
+            # Re-run analysis — with fingerprint gone, this hits the "no fingerprint" path
+            return _perform_sync_analysis(
+                basename, language, target_coverage, budget,
+                prompts_dir, skip_tests, skip_verify, context_override
             )
         else:
             # Only derived artifacts changed - prompt (source of truth) is unchanged

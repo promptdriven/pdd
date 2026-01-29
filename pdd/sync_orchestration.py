@@ -659,7 +659,8 @@ def _create_synthetic_run_report_for_agentic_success(
     )
 
     # Save the report
-    report_file = META_DIR / f"{_safe_basename(basename)}_{language}_run_report.json"
+    # NOTE: Must use _run.json (not _run_report.json) to match read_run_report() in sync_determine_operation.py
+    report_file = META_DIR / f"{_safe_basename(basename)}_{language}_run.json"
     if atomic_state:
         atomic_state.set_run_report(asdict(report), report_file)
     else:
@@ -1200,7 +1201,7 @@ def sync_orchestration(
                             success = True
                             break
 
-                    if operation in ['all_synced', 'nothing', 'fail_and_request_manual_merge', 'error', 'analyze_conflict']:
+                    if operation in ['all_synced', 'nothing', 'fail_and_request_manual_merge', 'error']:
                         current_function_name_ref[0] = "synced" if operation in ['all_synced', 'nothing'] else "conflict"
                         success = operation in ['all_synced', 'nothing']
                         error_msg = None
@@ -1209,9 +1210,6 @@ def sync_orchestration(
                             error_msg = decision.reason
                         elif operation == 'error':
                             errors.append(f"Error determining operation: {decision.reason}")
-                            error_msg = decision.reason
-                        elif operation == 'analyze_conflict':
-                            errors.append(f"Conflict detected: {decision.reason}")
                             error_msg = decision.reason
                         
                         update_log_entry(log_entry, success=success, cost=0.0, model='none', duration=0.0, error=error_msg)
@@ -1261,7 +1259,8 @@ def sync_orchestration(
                         review_examples=review_examples, local=local, budget=budget - current_cost_ref[0],
                         max_attempts=max_attempts, target_coverage=target_coverage,
                         confirm_callback=get_confirm_callback(),
-                        context=context_override
+                        context=context_override,
+                        agentic_mode=agentic_mode,
                     )
                     
                     result = {}

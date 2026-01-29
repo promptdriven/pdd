@@ -287,7 +287,14 @@ def _run_program_file(
             cwd=project_root,
             capture_output=True,
             text=True,
+            stdin=subprocess.DEVNULL,  # Prevent blocking on input()
+            timeout=120,  # 2 minute timeout to prevent infinite hangs
         )
+    except subprocess.TimeoutExpired:
+        msg = f"Program '{program_path}' timed out after 120 seconds (may be waiting for input or stuck in infinite loop)"
+        if not quiet:
+            console.print(f"[red]{msg}[/red]")
+        return False, msg
     except OSError as exc:
         msg = f"Failed to execute program '{program_path}': {exc}"
         if not quiet:
@@ -397,7 +404,9 @@ def run_agentic_crash(
                 f"'{crash_log_path}': {exc}"
             )
 
-    project_root = prompt_path.parent
+    # Use cwd as project root (consistent with agentic_test_generate.py and agentic_verify.py)
+    # Bug fix: Previously used prompt_path.parent which was wrong when prompt is in prompts/ subdir
+    project_root = Path.cwd()
 
     if verbose and not quiet:
         console.print("[cyan]Starting agentic crash fallback (explore mode)...[/cyan]")

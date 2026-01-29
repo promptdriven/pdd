@@ -199,11 +199,14 @@ def test_verification_failure(setup_files, mock_dependencies):
     assert "Error output" in msg
 
 
-def test_invalid_json_output(setup_files, mock_dependencies):
+def test_invalid_json_output(setup_files, mock_dependencies, tmp_path, monkeypatch):
     """Test handling of non-JSON output from agent."""
+    # Change CWD to tmp_path to isolate mtime snapshots from parallel tests
+    monkeypatch.chdir(tmp_path)
+
     prompt, code, prog, log = setup_files
     _, _, mock_task, _, _ = mock_dependencies
-    
+
     # Raw text output
     mock_task.return_value = (
         True,
@@ -211,7 +214,7 @@ def test_invalid_json_output(setup_files, mock_dependencies):
         0.2,
         "claude"
     )
-    
+
     success, msg, cost, model, changed = run_agentic_crash(prompt, code, prog, log, quiet=True)
     
     # Fallback: success comes from CLI success (True), message is raw text
@@ -383,15 +386,18 @@ def test_z3_logic_verification(setup_files, mock_dependencies):
     print("\nZ3 Formal Verification of success logic passed.")
 
 
-def test_z3_changed_files_logic(setup_files, mock_dependencies):
+def test_z3_changed_files_logic(setup_files, mock_dependencies, tmp_path, monkeypatch):
     """
-    Formally verify (conceptually) that changed_files is the union of 
+    Formally verify (conceptually) that changed_files is the union of
     agent-reported files and filesystem-detected files.
-    
-    While we don't use Z3 sets here due to complexity mapping to Python types 
-    in this context, we verify the set-union property via property-based testing 
+
+    While we don't use Z3 sets here due to complexity mapping to Python types
+    in this context, we verify the set-union property via property-based testing
     logic which aligns with formal verification principles.
     """
+    # Change CWD to tmp_path to isolate mtime snapshots from parallel tests
+    monkeypatch.chdir(tmp_path)
+
     prompt, code, prog, log = setup_files
     _, _, mock_task, _, _ = mock_dependencies
 

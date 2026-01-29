@@ -302,7 +302,7 @@ def test(
             strength = ctx.obj.get("strength") if ctx.obj else None
             temperature = ctx.obj.get("temperature") if ctx.obj else None
 
-            unit_test_code, cost, model = cmd_test_main(
+            unit_test_code, cost, model, _agentic_success = cmd_test_main(
                 ctx=ctx,
                 prompt_file=prompt_file,
                 code_file=code_file,
@@ -315,7 +315,7 @@ def test(
                 strength=strength,
                 temperature=temperature
             )
-            
+
             return unit_test_code, cost, model
 
     except (click.Abort, click.UsageError, click.BadArgumentUsage, click.FileError, click.BadParameter):
