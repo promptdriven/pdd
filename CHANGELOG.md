@@ -1,3 +1,27 @@
+## v0.0.133 (2026-01-28)
+
+### Feat
+
+- **cmd_test_main**: use agentic test generation for Python in agentic mode
+- Enhance Git commit and push logic to include existing unpushed commits and fix LiteLLM debug suppression test reliability.
+- refine AI milestones with detailed benchmark data and uneven impact representation in 3blue1brown demo specs.
+- Introduce Qwen3-TTS 12Hz 1.7B CustomVoice model and its tokenizer for the 3blue1brown demo, along with related dependency and changelog updates.
+
+### Fix
+
+- **tests**: use asyncio.run() instead of deprecated get_event_loop()
+- **tests**: isolate mtime snapshots in agentic_crash tests
+- **sync**: fix agentic run report filename and default agentic mode on
+- **prompt**: forbid interactive scripts in example generation
+- **sync**: fix agentic run report filename and default agentic mode on
+- **agentic_crash**: add timeout and stdin handling to prevent hangs
+- **agentic_crash**: use cwd as project root instead of prompt parent
+- Bug: Agentic fix doesn't push commits when exiting early at Step 2
+
+### Refactor
+
+- **demos**: reorganize 3blue1brown directory structure
+
 ## v0.0.132 (2026-01-27)
 
 ### Feat
