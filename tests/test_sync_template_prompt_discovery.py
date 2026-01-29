@@ -25,6 +25,43 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 
+def _make_frontend_context_project(tmp_path: Path, prompt_subdir: str = "app/sales") -> Path:
+    """Create a project with .pddrc frontend context and a prompt in a subdirectory.
+
+    Args:
+        tmp_path: Temporary directory root.
+        prompt_subdir: Subdirectory under prompts/frontend/ for the prompt file.
+
+    Returns:
+        The tmp_path root.
+    """
+    pddrc_content = """
+version: "1.0"
+contexts:
+  frontend:
+    paths:
+      - "frontend/**"
+      - "prompts/frontend/**"
+    defaults:
+      default_language: "typescriptreact"
+      outputs:
+        prompt:
+          path: "prompts/frontend/{category}/{name}_{language}.prompt"
+        code:
+          path: "frontend/src/{category}/{name}.tsx"
+  default:
+    defaults:
+      default_language: "python"
+"""
+    (tmp_path / ".pddrc").write_text(pddrc_content)
+
+    prompt_dir = tmp_path / "prompts" / "frontend" / prompt_subdir
+    prompt_dir.mkdir(parents=True)
+    (prompt_dir / "page_TypescriptReact.prompt").write_text("# Sales page")
+
+    return tmp_path
+
+
 class TestTemplateBasedPromptDiscovery:
     """Test that sync can find prompts using outputs.prompt.path templates."""
 
@@ -748,32 +785,7 @@ class TestDetectLanguagesReturnsPathsDict:
     @pytest.fixture
     def frontend_context_pddrc(self, tmp_path):
         """Create .pddrc with frontend context using subdirectory prompts."""
-        pddrc_content = """
-version: "1.0"
-contexts:
-  frontend:
-    paths:
-      - "frontend/**"
-      - "prompts/frontend/**"
-    defaults:
-      default_language: "typescriptreact"
-      outputs:
-        prompt:
-          path: "prompts/frontend/{category}/{name}_{language}.prompt"
-        code:
-          path: "frontend/src/{category}/{name}.tsx"
-  default:
-    defaults:
-      default_language: "python"
-"""
-        (tmp_path / ".pddrc").write_text(pddrc_content)
-
-        # Create prompt in nested subdirectory (mimics real project structure)
-        prompt_dir = tmp_path / "prompts" / "frontend" / "app" / "contributions" / "sales"
-        prompt_dir.mkdir(parents=True)
-        (prompt_dir / "page_TypescriptReact.prompt").write_text("# Sales page")
-
-        return tmp_path
+        return _make_frontend_context_project(tmp_path, prompt_subdir="app/contributions/sales")
 
     def test_detect_languages_returns_paths(self, frontend_context_pddrc):
         """
@@ -843,32 +855,7 @@ class TestContextOverridePromptsDir:
     @pytest.fixture
     def frontend_context_pddrc(self, tmp_path):
         """Create .pddrc with frontend context using subdirectory prompts."""
-        pddrc_content = """
-version: "1.0"
-contexts:
-  frontend:
-    paths:
-      - "frontend/**"
-      - "prompts/frontend/**"
-    defaults:
-      default_language: "typescriptreact"
-      outputs:
-        prompt:
-          path: "prompts/frontend/{category}/{name}_{language}.prompt"
-        code:
-          path: "frontend/src/{category}/{name}.tsx"
-  default:
-    defaults:
-      default_language: "python"
-"""
-        (tmp_path / ".pddrc").write_text(pddrc_content)
-
-        # Create prompt in nested subdirectory (mimics real project structure)
-        prompt_dir = tmp_path / "prompts" / "frontend" / "app" / "sales"
-        prompt_dir.mkdir(parents=True)
-        (prompt_dir / "page_TypescriptReact.prompt").write_text("# Sales page")
-
-        return tmp_path
+        return _make_frontend_context_project(tmp_path, prompt_subdir="app/sales")
 
     def test_context_override_searches_recursively(self, frontend_context_pddrc):
         """
