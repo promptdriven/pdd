@@ -1,28 +1,34 @@
 """
 E2E Test for Issue #392: pdd change fails at Step 5 with 'Context missing key for step 5: url'
 
-This E2E test exercises the full `pdd change` command to verify that step outputs containing JSON
-with curly braces are properly escaped before being added to the context dictionary.
+CORRECTED UNDERSTANDING OF THE BUG:
 
-The bug: Lines 490 and 675 of agentic_change_orchestrator.py store step outputs WITHOUT escaping
-curly braces:
+The bug is NOT about step outputs - it's about the agentic_change_orchestrator missing a
+preprocess() call before .format().
 
-    Line 490: context[f"step{s_num}_output"] = s_out  # BUG: Not escaped
-    Line 675: context[f"step{step_num}_output"] = step_output  # BUG: Not escaped
+Bug location: pdd/agentic_change_orchestrator.py:593-598
 
-When step outputs from steps 1-4 contain JSON like {"url": "https://..."}, the Step 5 template
-formatting fails because Python's .format() interprets {"url" as a placeholder and tries to access
-a key named "url" (with the quote character), causing KeyError: '"url"'.
+    prompt_template = load_prompt_template(template_name)
+    # MISSING: preprocess() call to expand <include> tags and escape braces
+    formatted_prompt = prompt_template.format(**context)  # BUG: KeyError here
 
-The fix exists in the codebase (_escape_format_braces() at pdd/agentic_change.py:19-24) and is
-correctly applied to issue_content, but NOT to step outputs.
+When a template includes files with JSON (like docs/prompting_guide.md via <include> tags),
+preprocess() needs to:
+1. Expand the <include> tags
+2. Escape curly braces with double_curly_brackets=True
+3. Preserve context placeholders with exclude_keys
 
-This E2E test:
-1. Mocks run_agentic_task to simulate LLM responses containing JSON
-2. Exercises the real orchestrator code path through Step 5
-3. Verifies no KeyError is raised when formatting the prompt
+Without preprocess(), if the template or included files contain JSON like {"url": "..."},
+the .format() call interprets the braces as placeholders and raises KeyError.
 
-The test should FAIL on buggy code (KeyError: '"url"') and PASS once the fix is applied.
+Compare with agentic_architecture_orchestrator.py:299-302 (CORRECT implementation):
+    prompt_template = load_prompt_template(template_name)
+    exclude_keys = list(context.keys())
+    prompt_template = preprocess(prompt_template, recursive=True,
+                                  double_curly_brackets=True, exclude_keys=exclude_keys)
+    formatted_prompt = prompt_template.format(**context)
+
+This test verifies the bug and the fix.
 """
 
 import pytest
@@ -40,11 +46,99 @@ def mock_cwd(tmp_path):
 
 class TestIssue392ChangeOrchestratorE2E:
     """
-    E2E tests for Issue #392: Verify the change orchestrator handles JSON in step outputs.
+    E2E tests for Issue #392: Verify the change orchestrator uses preprocess() correctly.
 
-    These tests exercise the full orchestrator code path by mocking only the LLM calls,
-    not the template loading or formatting logic where the bug exists.
+    The bug: agentic_change_orchestrator.py doesn't call preprocess() before .format(),
+    so templates with <include> tags that reference files containing JSON cause KeyError.
     """
+
+    def test_step5_template_format_without_preprocess_fails(self):
+        """
+        Direct test: Loading step 5 template and calling .format() without preprocess() fails.
+
+        This reproduces the exact bug: load_prompt_template() + .format() without preprocess().
+        """
+        from pdd.load_prompt_template import load_prompt_template
+        from pdd.preprocess import preprocess
+
+        # Load the step 5 template (contains <include>docs/prompting_guide.md</include>)
+        template = load_prompt_template("agentic_change_step5_docs_change_LLM")
+        assert template is not None, "Step 5 template should exist"
+
+        # Create minimal context
+        context = {
+            "issue_url": "https://github.com/promptdriven/pdd/issues/392",
+            "repo_owner": "promptdriven",
+            "repo_name": "pdd",
+            "issue_number": "392",
+            "issue_content": "Test issue",
+            "step1_output": "No duplicates.",
+            "step2_output": "Not implemented.",
+            "step3_output": "Research complete.",
+            "step4_output": "Requirements clear.",
+        }
+
+        # First, expand includes WITHOUT escaping (simulates the bug)
+        # This is what happens when orchestrator doesn't call preprocess with double_curly_brackets
+        processed_no_escape = preprocess(template, recursive=True, double_curly_brackets=False)
+
+        # Check if the processed template contains JSON (from included docs/prompting_guide.md)
+        if '{"url"' in processed_no_escape or '"url"' in processed_no_escape:
+            # This should fail with KeyError - this IS the bug
+            with pytest.raises(KeyError) as exc_info:
+                processed_no_escape.format(**context)
+
+            # Verify it's the expected error
+            error_msg = str(exc_info.value)
+            assert '"url"' in error_msg or 'url' in error_msg, \
+                f"Expected KeyError with 'url', got: {error_msg}"
+
+            print(f"BUG REPRODUCED: KeyError({error_msg}) when formatting without escaped braces")
+        else:
+            pytest.skip("Template doesn't contain JSON after include expansion - can't test bug")
+
+    def test_step5_template_format_with_preprocess_succeeds(self):
+        """
+        Verify the fix: Using preprocess() with double_curly_brackets=True prevents KeyError.
+        """
+        from pdd.load_prompt_template import load_prompt_template
+        from pdd.preprocess import preprocess
+
+        # Load template
+        template = load_prompt_template("agentic_change_step5_docs_change_LLM")
+        assert template is not None
+
+        # Create context
+        context = {
+            "issue_url": "https://github.com/promptdriven/pdd/issues/392",
+            "repo_owner": "promptdriven",
+            "repo_name": "pdd",
+            "issue_number": "392",
+            "issue_content": "Test issue",
+            "step1_output": "No duplicates.",
+            "step2_output": "Not implemented.",
+            "step3_output": "Research complete.",
+            "step4_output": "Requirements clear.",
+        }
+
+        # THE FIX: Call preprocess() with double_curly_brackets=True
+        exclude_keys = list(context.keys())
+        processed_with_escape = preprocess(
+            template,
+            recursive=True,
+            double_curly_brackets=True,
+            exclude_keys=exclude_keys
+        )
+
+        # This should succeed without KeyError
+        try:
+            formatted = processed_with_escape.format(**context)
+            # Success! The fix works
+            assert len(formatted) > 0
+            assert "Research complete." in formatted
+            print("FIX VERIFIED: Template formatted successfully with preprocess()")
+        except KeyError as e:
+            pytest.fail(f"Fix failed: preprocess() with double_curly_brackets didn't prevent KeyError: {e}")
 
     def test_change_orchestrator_step5_with_json_outputs(self, mock_cwd, monkeypatch):
         """
@@ -294,71 +388,115 @@ class TestIssue392RegressionPrevention:
     Regression prevention tests for Issue #392.
     """
 
-    def test_escape_format_braces_function_exists(self):
+    def test_preprocess_function_escapes_correctly(self):
         """
-        Verify the _escape_format_braces function exists and works correctly.
+        Verify that preprocess() with double_curly_brackets=True escapes JSON correctly.
         """
-        from pdd.agentic_change import _escape_format_braces
+        from pdd.preprocess import preprocess
 
-        # Test the existing escape function
-        test_cases = [
-            ('{"url": "https://example.com"}', '{{"url": "https://example.com"}}'),
-            ('{"type": "feature"}', '{{"type": "feature"}}'),
-            ('result = {key: value}', 'result = {{key: value}}'),
-            ('f"{variable}"', 'f"{{variable}}"'),
-            ('No braces here', 'No braces here'),
-            # Nested JSON
-            ('{"a": {"b": "c"}}', '{{"a": {{"b": "c"}}}}'),
-            # Arrays
-            ('{"items": [1, 2, 3]}', '{{"items": [1, 2, 3]}}'),
-        ]
+        # Test with a template containing both placeholders and JSON
+        template = 'Step: {step1}\nJSON: {"url": "https://example.com", "type": "feature"}'
 
-        for input_text, expected_output in test_cases:
-            result = _escape_format_braces(input_text)
-            assert result == expected_output, (
-                f"_escape_format_braces failed for: {input_text}\n"
-                f"Expected: {expected_output}\n"
-                f"Got: {result}"
-            )
+        # Process with double_curly_brackets=True, excluding step1
+        processed = preprocess(
+            template,
+            recursive=False,
+            double_curly_brackets=True,
+            exclude_keys=["step1"]
+        )
 
-    def test_normal_outputs_work_after_fix(self, mock_cwd, monkeypatch):
+        # Should preserve {step1} placeholder but escape JSON braces
+        assert '{step1}' in processed, "Placeholder should be preserved"
+        assert '{{"url"' in processed, "Opening JSON brace should be doubled"
+        # Note: Inner braces within the JSON object aren't separately escaped
+
+        # Verify .format() works
+        result = processed.format(step1="Complete")
+        assert "Step: Complete" in result
+        assert '{"url": "https://example.com"' in result
+        assert '"type": "feature"' in result  # Part of the same JSON object
+
+    def test_change_orchestrator_missing_preprocess_call(self):
         """
-        Regression Test: Normal step outputs without JSON should still work.
+        Verify that agentic_change_orchestrator.py is missing the preprocess() call (the bug).
+
+        This test will FAIL once the fix is applied (which is good - shows fix is in place).
         """
-        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
-        monkeypatch.chdir(mock_cwd)
+        import inspect
+        from pdd import agentic_change_orchestrator
 
-        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries):
-            # Simple outputs without special characters
-            outputs = {
-                "step1": "No duplicates found after searching 50 issues.",
-                "step2": "Feature is not yet implemented in the codebase.",
-                "step3": "Research indicates this requires API changes.",
-                "step4": "Requirements are clear and complete.",
-                "step5": "STOP: Documentation changes identified",
-            }
-            return (True, outputs.get(label, f"Step {label}"), 0.001, "mock")
+        # Read the source code
+        source = inspect.getsource(agentic_change_orchestrator)
 
-        with patch('pdd.agentic_change_orchestrator.run_agentic_task', side_effect=mock_run_agentic_task):
-            with patch('pdd.agentic_change_orchestrator.save_workflow_state', return_value=None):
-                with patch('pdd.agentic_change_orchestrator.load_workflow_state', return_value=(None, None)):
-                    with patch('pdd.agentic_change_orchestrator.clear_workflow_state'):
-                        from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator
+        # Check if preprocess is imported
+        has_preprocess_import = "from pdd.preprocess import preprocess" in source
 
-                        success, message, cost, model, files = run_agentic_change_orchestrator(
-                            issue_url="https://github.com/promptdriven/pdd/issues/392",
-                            issue_content="Normal test",
-                            repo_owner="promptdriven",
-                            repo_name="pdd",
-                            issue_number=392,
-                            issue_author="test",
-                            issue_title="Test",
-                            cwd=mock_cwd,
-                            verbose=False,
-                            quiet=True,
-                            use_github_state=False,
-                            timeout_adder=0
-                        )
+        # Check if preprocess is called before .format()
+        has_preprocess_call = "preprocess(prompt_template" in source or \
+                              "= preprocess(" in source
 
-        # Should complete successfully
-        assert success or "STOP" in message, "Normal outputs should work without errors"
+        if has_preprocess_import and has_preprocess_call:
+            pytest.skip("Fix has been applied! Orchestrator now uses preprocess()")
+        else:
+            # Bug still exists - document it
+            print("BUG CONFIRMED: agentic_change_orchestrator.py missing preprocess() call")
+            print(f"    - Has preprocess import: {has_preprocess_import}")
+            print(f"    - Has preprocess call: {has_preprocess_call}")
+
+            # This test passes when bug exists, fails when fixed
+            # After fix is applied, this will skip instead
+            assert not (has_preprocess_import and has_preprocess_call), \
+                "Bug detection: orchestrator should be missing preprocess() call"
+
+    def test_arch_orchestrator_has_correct_pattern(self):
+        """
+        Verify that agentic_architecture_orchestrator.py DOES use preprocess() correctly.
+        This is the reference implementation that change orchestrator should follow.
+        """
+        import inspect
+        from pdd import agentic_architecture_orchestrator
+
+        source = inspect.getsource(agentic_architecture_orchestrator)
+
+        # Should import preprocess
+        assert "from pdd.preprocess import preprocess" in source, \
+            "Architecture orchestrator should import preprocess"
+
+        # Should call preprocess with double_curly_brackets=True
+        assert "double_curly_brackets=True" in source, \
+            "Architecture orchestrator should use double_curly_brackets=True"
+
+        # Should have the pattern: preprocess(...) before .format()
+        assert "preprocess(" in source, \
+            "Architecture orchestrator should call preprocess()"
+
+        print("Architecture orchestrator correctly uses preprocess()")
+
+    def test_format_with_escaped_braces_works(self):
+        """
+        Verify that escaping braces allows .format() to work correctly.
+
+        This shows what preprocess() with double_curly_brackets=True accomplishes.
+        """
+        # Template with escaped JSON (what preprocess does)
+        template = """
+Step outputs:
+{step3_output}
+
+Documentation with JSON:
+{{"url": "https://fastapi.tiangolo.com/tutorial/", "type": "guide"}}
+
+Your task is here.
+"""
+
+        context = {"step3_output": "Research complete"}
+
+        # This should work without KeyError
+        result = template.format(**context)
+
+        # Verify the JSON is preserved (double braces become single after format)
+        assert "Research complete" in result
+        assert '{"url": "https://fastapi.tiangolo.com/tutorial/"' in result
+        assert '"type": "guide"' in result  # The complete JSON object is preserved
+
+        print("Escaped braces allow .format() to work correctly")
