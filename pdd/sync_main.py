@@ -46,6 +46,17 @@ def _validate_basename(basename: str) -> None:
         )
 
 
+def _python_first_sorted(lang_to_path: Dict[str, Path]) -> Dict[str, Path]:
+    """Return lang-to-path dict with Python first (if present), then sorted alphabetically."""
+    if 'python' in lang_to_path:
+        result: Dict[str, Path] = {'python': lang_to_path['python']}
+        for k in sorted(lang_to_path.keys()):
+            if k != 'python':
+                result[k] = lang_to_path[k]
+        return result
+    return dict(sorted(lang_to_path.items()))
+
+
 def _get_extension_safe(language: str) -> str:
     """Get file extension with fallback for when PDD_PATH is not set."""
     try:
@@ -265,14 +276,7 @@ def _detect_languages_with_context(basename: str, prompts_dir: Path, context_nam
                             found_lang_to_path[lang] = full_path
 
                     if found_lang_to_path:
-                        # Return with Python first if present
-                        if 'python' in found_lang_to_path:
-                            result: Dict[str, Path] = {'python': found_lang_to_path['python']}
-                            for k in sorted(found_lang_to_path.keys()):
-                                if k != 'python':
-                                    result[k] = found_lang_to_path[k]
-                            return result
-                        return dict(sorted(found_lang_to_path.items()))
+                        return _python_first_sorted(found_lang_to_path)
 
                     # Template expansion didn't find files - fallback to recursive glob
                     # This handles cases where basename alone doesn't provide category info
@@ -301,13 +305,7 @@ def _detect_languages_with_context(basename: str, prompts_dir: Path, context_nam
                                                 found_lang_to_path[normalized_lang] = prompt_file
 
                             if found_lang_to_path:
-                                if 'python' in found_lang_to_path:
-                                    result = {'python': found_lang_to_path['python']}
-                                    for k in sorted(found_lang_to_path.keys()):
-                                        if k != 'python':
-                                            result[k] = found_lang_to_path[k]
-                                    return result
-                                return dict(sorted(found_lang_to_path.items()))
+                                return _python_first_sorted(found_lang_to_path)
             except Exception:
                 pass
 
@@ -359,17 +357,7 @@ def _detect_languages(basename: str, prompts_dir: Path) -> Dict[str, Path]:
                     lang_to_path[potential_language] = prompt_file
                 # Explicitly exclude 'llm' even in test scenarios
 
-    # Return only development languages, with Python prioritized first, then sorted alphabetically
-    if 'python' in lang_to_path:
-        # Put Python first, then the rest sorted alphabetically
-        result: Dict[str, Path] = {'python': lang_to_path['python']}
-        for k in sorted(lang_to_path.keys()):
-            if k != 'python':
-                result[k] = lang_to_path[k]
-        return result
-    else:
-        # No Python, just return sorted alphabetically
-        return dict(sorted(lang_to_path.items()))
+    return _python_first_sorted(lang_to_path)
 
 
 def sync_main(
