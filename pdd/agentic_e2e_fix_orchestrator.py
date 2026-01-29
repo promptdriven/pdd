@@ -195,6 +195,20 @@ def _get_file_hashes(cwd: Path) -> Dict[str, Optional[str]]:
     return hashes
 
 
+def _has_unpushed_commits(cwd: Path) -> bool:
+    """Check if there are commits ahead of the remote tracking branch."""
+    result = subprocess.run(
+        ["git", "rev-list", "--count", "@{u}..HEAD"],
+        cwd=cwd,
+        capture_output=True,
+        text=True
+    )
+    if result.returncode == 0:
+        count = int(result.stdout.strip() or "0")
+        return count > 0
+    return False
+
+
 def _commit_and_push(
     cwd: Path,
     issue_number: int,
@@ -235,6 +249,18 @@ def _commit_and_push(
             files_to_commit.append(filepath)
 
     if not files_to_commit:
+        # Check if there are unpushed commits to push
+        if _has_unpushed_commits(cwd):
+            push_result = subprocess.run(
+                ["git", "push"],
+                cwd=cwd,
+                capture_output=True,
+                text=True
+            )
+            if push_result.returncode == 0:
+                return True, "Pushed existing commits"
+            else:
+                return False, f"Push failed: {push_result.stderr}"
         return True, "No changes to commit"
 
     # Stage only workflow-changed files
