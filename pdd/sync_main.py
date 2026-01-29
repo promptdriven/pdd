@@ -181,12 +181,44 @@ def _find_prompt_in_contexts(basename: str) -> Optional[Tuple[str, Path, str]]:
     return None
 
 
+def _extract_prompts_base_dir(prompt_template: str) -> Optional[str]:
+    """
+    Extract the base prompts directory from a template path.
+
+    For example:
+    - "prompts/frontend/{category}/{name}_{language}.prompt" -> "prompts/frontend"
+    - "prompts/backend/utils/{name}_{language}.prompt" -> "prompts/backend/utils"
+    - "{name}_{language}.prompt" -> None (no fixed prefix)
+    """
+    # Find the first placeholder
+    first_placeholder = prompt_template.find('{')
+    if first_placeholder == -1:
+        # No placeholders, return parent directory
+        return str(Path(prompt_template).parent)
+    if first_placeholder == 0:
+        # Template starts with placeholder, no fixed prefix
+        return None
+
+    # Get the part before the first placeholder
+    prefix = prompt_template[:first_placeholder]
+    # Remove trailing slash if present
+    prefix = prefix.rstrip('/')
+    # If prefix ends with a partial path segment, get the parent
+    if prefix and not prefix.endswith('/'):
+        # e.g., "prompts/frontend/" -> "prompts/frontend"
+        return prefix
+    return prefix if prefix else None
+
+
 def _detect_languages_with_context(basename: str, prompts_dir: Path, context_name: Optional[str] = None) -> List[str]:
     """
     Detects all available languages for a given basename, optionally using context config.
 
     If context_name is provided and has outputs.prompt.path configured, uses template-based
     discovery. Otherwise falls back to directory scanning.
+
+    When context_name is provided but template expansion fails (e.g., missing category),
+    falls back to recursive glob search in the context's prompts directory.
     """
     if context_name:
         pddrc_path = _find_pddrc_file()
@@ -233,6 +265,38 @@ def _detect_languages_with_context(basename: str, prompts_dir: Path, context_nam
                             other = sorted([l for l in found_languages if l != 'python'])
                             return ['python'] + other
                         return sorted(found_languages)
+
+                    # Template expansion didn't find files - fallback to recursive glob
+                    # This handles cases where basename alone doesn't provide category info
+                    # e.g., pdd sync --basename page --context frontend
+                    prompts_base_dir = _extract_prompts_base_dir(prompt_template)
+                    if prompts_base_dir:
+                        prompts_base_path = pddrc_parent / prompts_base_dir
+                        if prompts_base_path.is_dir():
+                            # Recursively search for {basename}_*.prompt files
+                            pattern = f"**/{name_part}_*.prompt"
+                            for prompt_file in prompts_base_path.glob(pattern):
+                                stem = prompt_file.stem
+                                if stem.startswith(f"{name_part}_"):
+                                    potential_language = stem[len(name_part) + 1:]
+                                    # Normalize language name (e.g., TypescriptReact -> typescriptreact)
+                                    normalized_lang = potential_language.lower()
+                                    if normalized_lang not in found_languages:
+                                        try:
+                                            if _is_known_language(potential_language):
+                                                if potential_language.lower() != 'llm':
+                                                    found_languages.append(normalized_lang)
+                                        except ValueError:
+                                            # PDD_PATH not set - use common languages
+                                            common_languages = {"python", "javascript", "java", "cpp", "c", "go", "rust", "typescript", "typescriptreact", "javascriptreact"}
+                                            if normalized_lang in common_languages:
+                                                found_languages.append(normalized_lang)
+
+                            if found_languages:
+                                if 'python' in found_languages:
+                                    other = sorted([l for l in found_languages if l != 'python'])
+                                    return ['python'] + other
+                                return sorted(found_languages)
             except Exception:
                 pass
 

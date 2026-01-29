@@ -742,5 +742,160 @@ contexts:
             os.chdir(original_cwd)
 
 
+class TestContextOverridePromptsDir:
+    """Test that --context uses the context's prompts directory recursively."""
+
+    @pytest.fixture
+    def frontend_context_pddrc(self, tmp_path):
+        """Create .pddrc with frontend context using subdirectory prompts."""
+        pddrc_content = """
+version: "1.0"
+contexts:
+  frontend:
+    paths:
+      - "frontend/**"
+      - "prompts/frontend/**"
+    defaults:
+      default_language: "typescriptreact"
+      outputs:
+        prompt:
+          path: "prompts/frontend/{category}/{name}_{language}.prompt"
+        code:
+          path: "frontend/src/{category}/{name}.tsx"
+  default:
+    defaults:
+      default_language: "python"
+"""
+        (tmp_path / ".pddrc").write_text(pddrc_content)
+
+        # Create prompt in nested subdirectory (mimics real project structure)
+        prompt_dir = tmp_path / "prompts" / "frontend" / "app" / "sales"
+        prompt_dir.mkdir(parents=True)
+        (prompt_dir / "page_TypescriptReact.prompt").write_text("# Sales page")
+
+        return tmp_path
+
+    def test_context_override_searches_recursively(self, frontend_context_pddrc):
+        """
+        When --context frontend is provided, sync should search in
+        prompts/frontend/**/ for prompt files, not just /prompts/.
+
+        Issue #3: `pdd sync --basename page --context frontend` fails with:
+        "No prompt files found for basename 'page' in directory '/prompts'"
+
+        But the prompt exists at: prompts/frontend/app/sales/page_TypescriptReact.prompt
+        """
+        from pdd.sync_main import _detect_languages_with_context
+
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(frontend_context_pddrc)
+
+            # With explicit context, should find prompt in prompts/frontend/**
+            # even when basename alone ("page") doesn't match template
+            languages = _detect_languages_with_context(
+                basename='page',
+                prompts_dir=Path('prompts'),  # Default dir
+                context_name='frontend'  # Explicitly provided context
+            )
+
+            assert 'typescriptreact' in languages, \
+                f"Should find prompt in context's prompts subdir recursively, got {languages}"
+        finally:
+            os.chdir(original_cwd)
+
+    def test_context_override_multiple_nested_levels(self, tmp_path):
+        """
+        Should find prompts nested multiple levels deep within context prompts dir.
+        """
+        pddrc_content = """
+version: "1.0"
+contexts:
+  frontend:
+    paths:
+      - "frontend/**"
+      - "prompts/frontend/**"
+    defaults:
+      default_language: "typescriptreact"
+      outputs:
+        prompt:
+          path: "prompts/frontend/{category}/{name}_{language}.prompt"
+        code:
+          path: "frontend/src/{category}/{name}.tsx"
+  default:
+    defaults:
+      default_language: "python"
+"""
+        (tmp_path / ".pddrc").write_text(pddrc_content)
+
+        # Create prompts at various nesting levels
+        (tmp_path / "prompts" / "frontend" / "components" / "ui" / "buttons").mkdir(parents=True)
+        (tmp_path / "prompts" / "frontend" / "components" / "ui" / "buttons" / "primary_TypescriptReact.prompt").write_text("# Primary button")
+
+        from pdd.sync_main import _detect_languages_with_context
+
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+
+            languages = _detect_languages_with_context(
+                basename='primary',
+                prompts_dir=Path('prompts'),
+                context_name='frontend'
+            )
+
+            assert 'typescriptreact' in languages, \
+                f"Should find deeply nested prompt, got {languages}"
+        finally:
+            os.chdir(original_cwd)
+
+    def test_context_override_finds_multiple_languages(self, tmp_path):
+        """
+        Should find all language variants when searching recursively.
+        """
+        pddrc_content = """
+version: "1.0"
+contexts:
+  frontend:
+    paths:
+      - "frontend/**"
+      - "prompts/frontend/**"
+    defaults:
+      default_language: "typescript"
+      outputs:
+        prompt:
+          path: "prompts/frontend/{category}/{name}_{language}.prompt"
+        code:
+          path: "frontend/src/{category}/{name}.tsx"
+  default:
+    defaults:
+      default_language: "python"
+"""
+        (tmp_path / ".pddrc").write_text(pddrc_content)
+
+        # Create multiple language variants
+        prompt_dir = tmp_path / "prompts" / "frontend" / "utils"
+        prompt_dir.mkdir(parents=True)
+        (prompt_dir / "formatter_typescript.prompt").write_text("# TS formatter")
+        (prompt_dir / "formatter_javascript.prompt").write_text("# JS formatter")
+
+        from pdd.sync_main import _detect_languages_with_context
+
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+
+            languages = _detect_languages_with_context(
+                basename='formatter',
+                prompts_dir=Path('prompts'),
+                context_name='frontend'
+            )
+
+            assert 'typescript' in languages, f"Should find typescript, got {languages}"
+            assert 'javascript' in languages, f"Should find javascript, got {languages}"
+        finally:
+            os.chdir(original_cwd)
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
