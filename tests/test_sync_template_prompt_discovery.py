@@ -742,6 +742,101 @@ contexts:
             os.chdir(original_cwd)
 
 
+class TestDetectLanguagesReturnsPathsDict:
+    """Test that _detect_languages_with_context returns Dict[str, Path] not List[str]."""
+
+    @pytest.fixture
+    def frontend_context_pddrc(self, tmp_path):
+        """Create .pddrc with frontend context using subdirectory prompts."""
+        pddrc_content = """
+version: "1.0"
+contexts:
+  frontend:
+    paths:
+      - "frontend/**"
+      - "prompts/frontend/**"
+    defaults:
+      default_language: "typescriptreact"
+      outputs:
+        prompt:
+          path: "prompts/frontend/{category}/{name}_{language}.prompt"
+        code:
+          path: "frontend/src/{category}/{name}.tsx"
+  default:
+    defaults:
+      default_language: "python"
+"""
+        (tmp_path / ".pddrc").write_text(pddrc_content)
+
+        # Create prompt in nested subdirectory (mimics real project structure)
+        prompt_dir = tmp_path / "prompts" / "frontend" / "app" / "contributions" / "sales"
+        prompt_dir.mkdir(parents=True)
+        (prompt_dir / "page_TypescriptReact.prompt").write_text("# Sales page")
+
+        return tmp_path
+
+    def test_detect_languages_returns_paths(self, frontend_context_pddrc):
+        """
+        _detect_languages_with_context should return {language: path} dict,
+        not just language names, so sync_main can use the correct file paths.
+        """
+        from pdd.sync_main import _detect_languages_with_context
+
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(frontend_context_pddrc)
+
+            result = _detect_languages_with_context(
+                basename='page',
+                prompts_dir=Path('prompts'),
+                context_name='frontend'
+            )
+
+            # Should return dict with paths, not just list of languages
+            assert isinstance(result, dict), f"Should return dict, got {type(result)}"
+            assert 'typescriptreact' in result
+            assert result['typescriptreact'].exists(), \
+                f"Path should exist: {result['typescriptreact']}"
+            assert 'page_TypescriptReact.prompt' in str(result['typescriptreact'])
+        finally:
+            os.chdir(original_cwd)
+
+    def test_detect_languages_fallback_returns_paths(self, tmp_path):
+        """
+        _detect_languages (non-context fallback) should also return {language: path} dict.
+        """
+        # Create .pddrc without outputs config
+        pddrc_content = """
+version: "1.0"
+contexts:
+  default:
+    defaults:
+      default_language: "python"
+"""
+        (tmp_path / ".pddrc").write_text(pddrc_content)
+
+        # Create prompt in default location
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir(parents=True)
+        (prompts_dir / "my_module_python.prompt").write_text("# Test prompt")
+
+        from pdd.sync_main import _detect_languages
+
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+
+            result = _detect_languages('my_module', prompts_dir)
+
+            # Should return dict with paths
+            assert isinstance(result, dict), f"Should return dict, got {type(result)}"
+            assert 'python' in result
+            assert result['python'].exists(), f"Path should exist: {result['python']}"
+            assert 'my_module_python.prompt' in str(result['python'])
+        finally:
+            os.chdir(original_cwd)
+
+
 class TestContextOverridePromptsDir:
     """Test that --context uses the context's prompts directory recursively."""
 
@@ -893,6 +988,64 @@ contexts:
 
             assert 'typescript' in languages, f"Should find typescript, got {languages}"
             assert 'javascript' in languages, f"Should find javascript, got {languages}"
+        finally:
+            os.chdir(original_cwd)
+
+    def test_sync_main_cli_context_enables_recursive_search(self, frontend_context_pddrc):
+        """
+        Bug: sync_main passes discovered_context (None when template fails)
+        instead of context_override (CLI --context value) to _detect_languages_with_context.
+
+        This causes "No prompt files found" even when --context frontend is provided.
+
+        The test verifies sync_main correctly passes CLI context to language detection.
+        """
+        import click
+        from unittest.mock import MagicMock
+
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(frontend_context_pddrc)
+
+            # Create mock Click context with context="frontend" (simulating --context frontend)
+            mock_ctx = MagicMock(spec=click.Context)
+            mock_ctx.obj = {
+                "context": "frontend",  # CLI --context frontend
+                "verbose": False,
+                "force": False,
+                "quiet": True,
+                "strength": 1.0,
+                "temperature": 0.0,
+                "time": 30,
+            }
+
+            from pdd.sync_main import sync_main
+
+            # Should NOT raise "No prompt files found" because:
+            # 1. context_override="frontend" is passed to _detect_languages_with_context
+            # 2. _detect_languages_with_context extracts prompts_base_dir from template
+            # 3. Recursive glob finds prompts/frontend/app/sales/page_TypescriptReact.prompt
+            #
+            # Bug behavior: Raises UsageError because discovered_context=None is passed
+            # instead of context_override="frontend"
+
+            results, total_cost, _ = sync_main(
+                ctx=mock_ctx,
+                basename='page',
+                max_attempts=1,
+                budget=1.0,
+                skip_verify=True,
+                skip_tests=True,
+                target_coverage=80.0,
+                dry_run=True,  # Don't actually sync, just verify discovery works
+            )
+
+            # If we get here without UsageError, the context was passed correctly
+            # dry_run returns empty results but doesn't raise
+            assert True, "sync_main should find prompt with --context frontend"
+
+        except click.UsageError as e:
+            pytest.fail(f"sync_main should not raise UsageError when --context is provided: {e}")
         finally:
             os.chdir(original_cwd)
 
