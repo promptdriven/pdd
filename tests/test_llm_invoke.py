@@ -154,7 +154,7 @@ def test_litellm_debug_suppression():
     """
     Test that LiteLLM debug messages are suppressed by verifying
     that set_verbose and suppress_debug_info are configured correctly.
-    
+
     This test ensures that the "Give Feedback / Get Help" messages
     from LiteLLM are suppressed as intended. The module initialization
     code in llm_invoke.py should have already set these values when
@@ -162,7 +162,13 @@ def test_litellm_debug_suppression():
     """
     import litellm
     import logging
-    
+    import importlib
+    import pdd.llm_invoke
+
+    # Reload the module to re-trigger initialization that suppresses litellm debug.
+    # This is necessary because other tests may have modified litellm.set_verbose.
+    importlib.reload(pdd.llm_invoke)
+
     # Verify that LiteLLM suppression settings are applied
     # These attributes may not exist in all LiteLLM versions, so we check if they exist first
     if hasattr(litellm, 'set_verbose'):

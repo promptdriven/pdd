@@ -11,7 +11,8 @@ from pdd.agentic_common import (
     _calculate_codex_cost,
     _find_cli_binary,
     GEMINI_PRICING_BY_FAMILY,
-    CODEX_PRICING
+    CODEX_PRICING,
+    DEFAULT_TIMEOUT_SECONDS,
 )
 
 # ---------------------------------------------------------------------------
@@ -107,6 +108,33 @@ def test_z3_pricing_properties():
     solver.add(cost_gemini > cost_gemini_no_cache)
     assert solver.check() == z3.unsat, "Gemini cached cost is higher than non-cached!"
     solver.pop()
+
+
+# ---------------------------------------------------------------------------
+# Timeout Configuration Tests
+# ---------------------------------------------------------------------------
+
+def test_default_timeout_sufficient_for_complex_tasks():
+    """Verify DEFAULT_TIMEOUT_SECONDS is at least 600s for complex agentic tasks.
+
+    Issue: Claude was doing correct work (reading files, spawning sub-agents,
+    editing code) but got killed at 240s mid-edit. Analysis of session logs
+    showed the 3rd attempt reached 97 lines of activity before timeout.
+
+    600s provides sufficient time for:
+    - Initial exploration (reading prompt, code, example files)
+    - Sub-agent spawning for codebase understanding
+    - Code analysis and editing
+    - Verification runs
+    """
+    # Minimum required timeout for complex verify/fix tasks
+    MIN_TIMEOUT_FOR_COMPLEX_TASKS = 600.0
+
+    assert DEFAULT_TIMEOUT_SECONDS >= MIN_TIMEOUT_FOR_COMPLEX_TASKS, (
+        f"DEFAULT_TIMEOUT_SECONDS ({DEFAULT_TIMEOUT_SECONDS}s) is too low. "
+        f"Complex agentic tasks need at least {MIN_TIMEOUT_FOR_COMPLEX_TASKS}s. "
+        "See issue analysis: Claude was killed mid-edit at 240s."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -309,6 +337,67 @@ def test_anthropic_provider_pipes_prompt_via_stdin(mock_cwd, mock_env, mock_load
     # Prompt content must be passed via subprocess input= parameter
     assert kwargs.get("input") is not None
     assert instruction in kwargs["input"]
+
+
+def test_google_provider_delivers_prompt_via_positional_arg(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """Verify Gemini CLI receives prompt via positional argument, not -p flag.
+
+    The -p flag passes text literally, so passing a file path via -p gives Gemini
+    the path string instead of the file contents. The correct approach (used by
+    the old _run_google_variants) is to pass a short instruction as a positional
+    argument telling Gemini to read the prompt file.
+
+    This test mirrors test_anthropic_provider_pipes_prompt_via_stdin but for Google.
+    """
+    # Setup: Only Google available
+    def which_side_effect(cmd):
+        return "/bin/gemini" if cmd == "gemini" else None
+    mock_shutil_which.side_effect = which_side_effect
+    os.environ["GEMINI_API_KEY"] = "key"
+
+    mock_output = {
+        "response": "Done.",
+        "stats": {
+            "models": {
+                "gemini-1.5-flash": {"tokens": {"prompt": 1000, "candidates": 1000}}
+            }
+        }
+    }
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps(mock_output)
+    mock_subprocess.return_value.stderr = ""
+
+    instruction = "Fix the failing tests in the code"
+    success, msg, cost, provider = run_agentic_task(instruction, mock_cwd)
+
+    assert success
+    assert provider == "google"
+    args, kwargs = mock_subprocess.call_args
+    cmd = args[0]
+
+    # The -p flag should NOT be in the command for Gemini
+    # (Gemini's -p passes text literally, not as stdin piping like Claude)
+    assert "-p" not in cmd, f"Gemini should not use -p flag, but command was: {cmd}"
+
+    # The raw file path should NOT be passed as an argument
+    # (This is the bug: passing file path to -p gives Gemini a path string, not content)
+    prompt_files = list(mock_cwd.glob(".agentic_prompt_*.txt"))
+    for pf in prompt_files:
+        for arg in cmd:
+            assert str(pf) != arg, f"Raw file path should not be in command: {cmd}"
+
+    # A positional argument should contain an instruction to read the file
+    # (The correct approach: tell Gemini to read the file using its tool access)
+    positional_args = [arg for arg in cmd[1:] if not arg.startswith("-")]
+    found_read_instruction = any(
+        "Read the file" in arg or "read the file" in arg.lower()
+        for arg in positional_args
+    )
+    assert found_read_instruction, (
+        f"Command should include positional arg with file read instruction. "
+        f"Positional args: {positional_args}"
+    )
+
 
 def test_run_agentic_task_gemini_success(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
     """Test successful execution with Google (Gemini) and cost calculation."""

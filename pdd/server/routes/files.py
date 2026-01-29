@@ -533,6 +533,14 @@ async def list_prompt_files(
             "context": context_name,         # Matched .pddrc context name
         }
 
+        # Helper to substitute placeholders in path templates
+        def substitute_path_template(template: str) -> str:
+            """Replace {name} and {language} placeholders in path template."""
+            result = template.replace("{name}", sync_basename)
+            if language:
+                result = result.replace("{language}", language)
+            return result
+
         # ===== CODE FILE DETECTION =====
         # Use outputs.code.path or generate_output_path from .pddrc if available
         code_dirs = []
@@ -546,9 +554,10 @@ async def list_prompt_files(
             if code_output and isinstance(code_output, dict):
                 explicit_code_path = code_output.get("path")
 
-        # If explicit path is set, check it directly
+        # If explicit path is set, substitute placeholders and check it directly
         if explicit_code_path:
-            code_path = project_root / explicit_code_path
+            resolved_code_path = substitute_path_template(explicit_code_path)
+            code_path = project_root / resolved_code_path
             if code_path.exists():
                 related["code"] = str(code_path.relative_to(project_root))
 
@@ -596,9 +605,10 @@ async def list_prompt_files(
             if test_output and isinstance(test_output, dict):
                 explicit_test_path = test_output.get("path")
 
-        # If explicit path is set, check it directly
+        # If explicit path is set, substitute placeholders and check it directly
         if explicit_test_path:
-            test_path = project_root / explicit_test_path
+            resolved_test_path = substitute_path_template(explicit_test_path)
+            test_path = project_root / resolved_test_path
             if test_path.exists():
                 related["test"] = str(test_path.relative_to(project_root))
 
@@ -680,9 +690,10 @@ async def list_prompt_files(
             if example_output and isinstance(example_output, dict):
                 explicit_example_path = example_output.get("path")
 
-        # If explicit path is set, check it directly
+        # If explicit path is set, substitute placeholders and check it directly
         if explicit_example_path:
-            example_path = project_root / explicit_example_path
+            resolved_example_path = substitute_path_template(explicit_example_path)
+            example_path = project_root / resolved_example_path
             if example_path.exists():
                 related["example"] = str(example_path.relative_to(project_root))
 

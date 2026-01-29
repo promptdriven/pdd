@@ -32,7 +32,6 @@ from pdd.sync_order import (
 )
 from pdd.construct_paths import _find_pddrc_file, _load_pddrc_config, _detect_context
 from pdd.get_extension import get_extension
-from pdd.preprocess import preprocess
 
 # Initialize console for rich output
 console = Console()
@@ -595,27 +594,10 @@ def run_agentic_change_orchestrator(
         if not prompt_template:
             return False, f"Missing prompt template: {template_name}", total_cost, model_used, []
 
-        # Preprocess the template to resolve <include> directives (Template preprocessing fix)
-        try:
-            context_keys = list(context.keys())
-            prompt_template = preprocess(
-                prompt_template,
-                recursive=False,
-                double_curly_brackets=True,
-                exclude_keys=context_keys
-            )
-        except Exception as e:
-            if not quiet:
-                console.print(f"[yellow]Warning: Preprocessing failed for step {step_num}: {e}[/yellow]")
-
         try:
             formatted_prompt = prompt_template.format(**context)
         except KeyError as e:
-            return False, f"Prompt formatting error in step {step_num}: missing key {e}", total_cost, model_used, []
-        except ValueError as e:
-            return False, f"Prompt formatting error in step {step_num}: invalid format string - {e}", total_cost, model_used, []
-        except Exception as e:
-            return False, f"Prompt formatting error in step {step_num}: {type(e).__name__} - {e}", total_cost, model_used, []
+            return False, f"Context missing key for step {step_num}: {e}", total_cost, model_used, []
 
         timeout = CHANGE_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder
         step_success, step_output, step_cost, step_model = run_agentic_task(
@@ -728,26 +710,7 @@ def run_agentic_change_orchestrator(
             s11_template = load_prompt_template("agentic_change_step11_identify_issues_LLM")
             context["review_iteration"] = review_iteration
             context["previous_fixes"] = previous_fixes
-            # Preprocess the template to resolve <include> directives (Template preprocessing fix)
-            try:
-                context_keys = list(context.keys())
-                s11_template = preprocess(
-                    s11_template,
-                    recursive=False,
-                    double_curly_brackets=True,
-                    exclude_keys=context_keys
-                )
-            except Exception as e:
-                if not quiet:
-                    console.print(f"[yellow]Warning: Preprocessing failed for step 11: {e}[/yellow]")
-            try:
-                s11_prompt = s11_template.format(**context)
-            except KeyError as e:
-                return False, f"Prompt formatting error in step 11: missing key {e}", total_cost, model_used, []
-            except ValueError as e:
-                return False, f"Prompt formatting error in step 11: invalid format string - {e}", total_cost, model_used, []
-            except Exception as e:
-                return False, f"Prompt formatting error in step 11: {type(e).__name__} - {e}", total_cost, model_used, []
+            s11_prompt = s11_template.format(**context)
             timeout11 = CHANGE_STEP_TIMEOUTS.get(11, 340.0) + timeout_adder
             s11_success, s11_output, s11_cost, s11_model = run_agentic_task(
                 instruction=s11_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout11, label=f"step11_iter{review_iteration}", max_retries=DEFAULT_MAX_RETRIES,
@@ -761,26 +724,7 @@ def run_agentic_change_orchestrator(
                 console.print(f"[bold][Step 12/13][/bold] Fixing issues (iteration {review_iteration}/{MAX_REVIEW_ITERATIONS})...")
             s12_template = load_prompt_template("agentic_change_step12_fix_issues_LLM")
             context["step11_output"] = s11_output
-            # Preprocess the template to resolve <include> directives (Template preprocessing fix)
-            try:
-                context_keys = list(context.keys())
-                s12_template = preprocess(
-                    s12_template,
-                    recursive=False,
-                    double_curly_brackets=True,
-                    exclude_keys=context_keys
-                )
-            except Exception as e:
-                if not quiet:
-                    console.print(f"[yellow]Warning: Preprocessing failed for step 12: {e}[/yellow]")
-            try:
-                s12_prompt = s12_template.format(**context)
-            except KeyError as e:
-                return False, f"Prompt formatting error in step 12: missing key {e}", total_cost, model_used, []
-            except ValueError as e:
-                return False, f"Prompt formatting error in step 12: invalid format string - {e}", total_cost, model_used, []
-            except Exception as e:
-                return False, f"Prompt formatting error in step 12: {type(e).__name__} - {e}", total_cost, model_used, []
+            s12_prompt = s12_template.format(**context)
             timeout12 = CHANGE_STEP_TIMEOUTS.get(12, 600.0) + timeout_adder
             s12_success, s12_output, s12_cost, s12_model = run_agentic_task(
                 instruction=s12_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout12, label=f"step12_iter{review_iteration}", max_retries=DEFAULT_MAX_RETRIES,
@@ -843,26 +787,7 @@ def run_agentic_change_orchestrator(
     if last_completed_step < 13:
         if not quiet: console.print("[bold][Step 13/13][/bold] Create PR and link to issue...")
         s13_template = load_prompt_template("agentic_change_step13_create_pr_LLM")
-        # Preprocess the template to resolve <include> directives (Template preprocessing fix)
-        try:
-            context_keys = list(context.keys())
-            s13_template = preprocess(
-                s13_template,
-                recursive=False,
-                double_curly_brackets=True,
-                exclude_keys=context_keys
-            )
-        except Exception as e:
-            if not quiet:
-                console.print(f"[yellow]Warning: Preprocessing failed for step 13: {e}[/yellow]")
-        try:
-            s13_prompt = s13_template.format(**context)
-        except KeyError as e:
-            return False, f"Prompt formatting error in step 13: missing key {e}", total_cost, model_used, []
-        except ValueError as e:
-            return False, f"Prompt formatting error in step 13: invalid format string - {e}", total_cost, model_used, []
-        except Exception as e:
-            return False, f"Prompt formatting error in step 13: {type(e).__name__} - {e}", total_cost, model_used, []
+        s13_prompt = s13_template.format(**context)
         timeout13 = CHANGE_STEP_TIMEOUTS.get(13, 340.0) + timeout_adder
         s13_success, s13_output, s13_cost, s13_model = run_agentic_task(
             instruction=s13_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout13, label="step13", max_retries=DEFAULT_MAX_RETRIES,
