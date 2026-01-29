@@ -269,3 +269,38 @@ def add(a, b):
         print(f"Successfully generated code at {output_path}")
     except Exception as e:
         pytest.fail(f"Real generation test failed: {e}")
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main')
+def test_issue_409_env_vars_do_not_pollute_os_environ(mock_main, mock_auto_update, runner, create_dummy_files, monkeypatch):
+    files = create_dummy_files("pollution_test.prompt")
+    mock_main.return_value = ('code', False, 0.0, 'model')
+    test_vars = {
+        'TEST_VAR_409': 'test_value',
+        'SECRET_KEY_409': 'secret123',
+        'API_TOKEN_409': 'token456'
+    }
+
+    for key in test_vars.keys():
+        monkeypatch.delenv(key, raising=False)
+    cmd_args = ["generate"]
+    for key, value in test_vars.items():
+        cmd_args.extend(["-e", f"{key}={value}"])
+    cmd_args.append(str(files["pollution_test.prompt"]))
+    result = runner.invoke(cli.cli, cmd_args)
+    assert result.exit_code == 0, f"Command failed: {result.output}"
+    call_kwargs = mock_main.call_args.kwargs
+    assert call_kwargs["env_vars"] == test_vars, "env_vars parameter should contain test variables"
+    pollution_detected = []
+
+    for key in test_vars.keys():
+        if key in os.environ:
+            pollution_detected.append(f"{key}={os.environ[key]}")
+
+    assert len(pollution_detected) == 0, (
+        f"BUG DETECTED (Issue #409): Environment variables persist after command completion! "
+        f"Polluted variables: {pollution_detected}. "
+        f"These variables were set via -e flag and should NOT exist in os.environ after the command. "
+        f"Root cause: pdd/commands/generate.py:152 calls os.environ.update(env_vars) without cleanup."
+    )

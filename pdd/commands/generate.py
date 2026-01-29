@@ -147,10 +147,6 @@ def generate(
                 if item in os.environ:
                     env_vars[item] = os.environ[item]
 
-        # Update os.environ for the duration of this command
-        # This allows the code generator and template expansion to see these values
-        os.environ.update(env_vars)
-
         # 4. Call Code Generator
         generated_code, is_incremental, cost, model = code_generator_main(
             ctx=ctx,
