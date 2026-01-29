@@ -193,11 +193,21 @@ class SyncLock:
             self.fd.write(str(self.current_pid))
             self.fd.flush()
             
-        except (IOError, OSError) as e:
-            if self.fd:
-                self.fd.close()
-                self.fd = None
-            raise TimeoutError(f"Failed to acquire lock: {e}")
+        except Exception as e:
+            # Ensure file descriptor is closed and lock file removed on ANY failure
+            try:
+                if self.fd:
+                    try:
+                        self.fd.close()
+                    finally:
+                        self.fd = None
+            finally:
+                try:
+                    self.lock_file.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            # Re-raise so caller receives the original exception (tests expect RuntimeError etc.)
+            raise
     
     def release(self):
         """Release the lock and clean up."""
