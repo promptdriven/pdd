@@ -1086,7 +1086,7 @@ contexts:
         validator = PathValidator(root)
         set_path_validator(validator)
 
-        results = asyncio.get_event_loop().run_until_complete(list_prompt_files(validator))
+        results = asyncio.run(list_prompt_files(validator))
         widget_result = next((r for r in results if "widget" in r.get("prompt", "")), None)
 
         assert widget_result is not None, "Widget prompt not found"
@@ -1131,7 +1131,7 @@ contexts:
         validator = PathValidator(root)
         set_path_validator(validator)
 
-        results = asyncio.get_event_loop().run_until_complete(list_prompt_files(validator))
+        results = asyncio.run(list_prompt_files(validator))
         service_result = next((r for r in results if "service" in r.get("prompt", "")), None)
 
         assert service_result is not None, "Service prompt not found"
