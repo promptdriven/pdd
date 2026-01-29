@@ -210,7 +210,7 @@ def _extract_prompts_base_dir(prompt_template: str) -> Optional[str]:
     return prefix if prefix else None
 
 
-def _detect_languages_with_context(basename: str, prompts_dir: Path, context_name: Optional[str] = None) -> List[str]:
+def _detect_languages_with_context(basename: str, prompts_dir: Path, context_name: Optional[str] = None) -> Dict[str, Path]:
     """
     Detects all available languages for a given basename, optionally using context config.
 
@@ -219,6 +219,10 @@ def _detect_languages_with_context(basename: str, prompts_dir: Path, context_nam
 
     When context_name is provided but template expansion fails (e.g., missing category),
     falls back to recursive glob search in the context's prompts directory.
+
+    Returns:
+        Dict mapping normalized language names to their prompt file paths.
+        E.g., {'typescriptreact': Path('prompts/frontend/app/sales/page_TypescriptReact.prompt')}
     """
     if context_name:
         pddrc_path = _find_pddrc_file()
@@ -243,7 +247,7 @@ def _detect_languages_with_context(basename: str, prompts_dir: Path, context_nam
 
                     # Try all known languages
                     languages_to_try = ['python', 'typescript', 'javascript', 'typescriptreact', 'go', 'rust', 'java']
-                    found_languages = []
+                    found_lang_to_path: Dict[str, Path] = {}
 
                     for lang in languages_to_try:
                         ext = _get_extension_safe(lang)
@@ -256,15 +260,19 @@ def _detect_languages_with_context(basename: str, prompts_dir: Path, context_nam
                         }
                         expanded_path = expand_template(prompt_template, template_context)
                         # Resolve relative to .pddrc location, not CWD
-                        if (pddrc_parent / expanded_path).exists():
-                            found_languages.append(lang)
+                        full_path = pddrc_parent / expanded_path
+                        if full_path.exists():
+                            found_lang_to_path[lang] = full_path
 
-                    if found_languages:
+                    if found_lang_to_path:
                         # Return with Python first if present
-                        if 'python' in found_languages:
-                            other = sorted([l for l in found_languages if l != 'python'])
-                            return ['python'] + other
-                        return sorted(found_languages)
+                        if 'python' in found_lang_to_path:
+                            result: Dict[str, Path] = {'python': found_lang_to_path['python']}
+                            for k in sorted(found_lang_to_path.keys()):
+                                if k != 'python':
+                                    result[k] = found_lang_to_path[k]
+                            return result
+                        return dict(sorted(found_lang_to_path.items()))
 
                     # Template expansion didn't find files - fallback to recursive glob
                     # This handles cases where basename alone doesn't provide category info
@@ -281,22 +289,25 @@ def _detect_languages_with_context(basename: str, prompts_dir: Path, context_nam
                                     potential_language = stem[len(name_part) + 1:]
                                     # Normalize language name (e.g., TypescriptReact -> typescriptreact)
                                     normalized_lang = potential_language.lower()
-                                    if normalized_lang not in found_languages:
+                                    if normalized_lang not in found_lang_to_path:
                                         try:
                                             if _is_known_language(potential_language):
                                                 if potential_language.lower() != 'llm':
-                                                    found_languages.append(normalized_lang)
+                                                    found_lang_to_path[normalized_lang] = prompt_file
                                         except ValueError:
                                             # PDD_PATH not set - use common languages
                                             common_languages = {"python", "javascript", "java", "cpp", "c", "go", "rust", "typescript", "typescriptreact", "javascriptreact"}
                                             if normalized_lang in common_languages:
-                                                found_languages.append(normalized_lang)
+                                                found_lang_to_path[normalized_lang] = prompt_file
 
-                            if found_languages:
-                                if 'python' in found_languages:
-                                    other = sorted([l for l in found_languages if l != 'python'])
-                                    return ['python'] + other
-                                return sorted(found_languages)
+                            if found_lang_to_path:
+                                if 'python' in found_lang_to_path:
+                                    result = {'python': found_lang_to_path['python']}
+                                    for k in sorted(found_lang_to_path.keys()):
+                                        if k != 'python':
+                                            result[k] = found_lang_to_path[k]
+                                    return result
+                                return dict(sorted(found_lang_to_path.items()))
             except Exception:
                 pass
 
@@ -304,7 +315,7 @@ def _detect_languages_with_context(basename: str, prompts_dir: Path, context_nam
     return _detect_languages(basename, prompts_dir)
 
 
-def _detect_languages(basename: str, prompts_dir: Path) -> List[str]:
+def _detect_languages(basename: str, prompts_dir: Path) -> Dict[str, Path]:
     """
     Detects all available languages for a given basename by finding
     matching prompt files in the prompts directory.
@@ -313,10 +324,14 @@ def _detect_languages(basename: str, prompts_dir: Path) -> List[str]:
     Supports subdirectory basenames like 'core/cloud':
     - For basename 'core/cloud', searches in prompts/core/ for cloud_*.prompt files
     - The stem comparison only uses the filename part ('cloud'), not the path ('core/cloud')
+
+    Returns:
+        Dict mapping language names to their prompt file paths.
+        E.g., {'python': Path('prompts/my_module_python.prompt')}
     """
-    development_languages = []
+    lang_to_path: Dict[str, Path] = {}
     if not prompts_dir.is_dir():
-        return []
+        return {}
 
     # For subdirectory basenames, extract just the name part for stem comparison
     if '/' in basename:
@@ -335,23 +350,26 @@ def _detect_languages(basename: str, prompts_dir: Path) -> List[str]:
                 if _is_known_language(potential_language):
                     # Exclude runtime languages (LLM) as they cannot form valid development units
                     if potential_language.lower() != 'llm':
-                        development_languages.append(potential_language)
+                        lang_to_path[potential_language] = prompt_file
             except ValueError:
                 # PDD_PATH not set (likely during testing) - assume language is valid
                 # if it matches common language patterns
                 common_languages = {"python", "javascript", "java", "cpp", "c", "go", "rust", "typescript"}
                 if potential_language.lower() in common_languages:
-                    development_languages.append(potential_language)
+                    lang_to_path[potential_language] = prompt_file
                 # Explicitly exclude 'llm' even in test scenarios
-    
+
     # Return only development languages, with Python prioritized first, then sorted alphabetically
-    if 'python' in development_languages:
+    if 'python' in lang_to_path:
         # Put Python first, then the rest sorted alphabetically
-        other_languages = sorted([lang for lang in development_languages if lang != 'python'])
-        return ['python'] + other_languages
+        result: Dict[str, Path] = {'python': lang_to_path['python']}
+        for k in sorted(lang_to_path.keys()):
+            if k != 'python':
+                result[k] = lang_to_path[k]
+        return result
     else:
         # No Python, just return sorted alphabetically
-        return sorted(development_languages)
+        return dict(sorted(lang_to_path.items()))
 
 
 def sync_main(
@@ -452,8 +470,11 @@ def sync_main(
             raise click.Abort()
 
     # 5. Detect all languages for the given basename
-    languages = _detect_languages_with_context(basename, prompts_dir, context_name=discovered_context)
-    if not languages:
+    # Use context_override (CLI --context value) instead of discovered_context
+    # because discovered_context is None when template discovery fails
+    # Returns Dict[str, Path] mapping language -> prompt file path
+    lang_to_path = _detect_languages_with_context(basename, prompts_dir, context_name=context_override)
+    if not lang_to_path:
         raise click.UsageError(
             f"No prompt files found for basename '{basename}' in directory '{prompts_dir}'.\n"
             f"Expected files with format: '{basename}_<language>.prompt'"
@@ -464,12 +485,11 @@ def sync_main(
         if not quiet:
             rprint(Panel(f"Displaying sync analysis for [bold cyan]{basename}[/bold cyan]", title="PDD Sync Dry Run", expand=False))
 
-        for lang in languages:
+        for lang, prompt_file_path in lang_to_path.items():
             if not quiet:
                 rprint(f"\n--- Log for language: [bold green]{lang}[/bold green] ---")
 
-            # Use construct_paths to get proper directory configuration for log mode
-            prompt_file_path = prompts_dir / f"{basename}_{lang}.prompt"
+            # prompt_file_path is now the correct discovered path from lang_to_path
             
             try:
                 resolved_config, _, _, _ = construct_paths(
@@ -493,7 +513,7 @@ def sync_main(
             sync_orchestration(
                 basename=basename,
                 language=lang,
-                prompts_dir=str(prompts_dir),
+                prompts_dir=str(prompt_file_path.parent),  # Use discovered path's parent
                 code_dir=str(code_dir),
                 examples_dir=str(examples_dir),
                 tests_dir=str(tests_dir),
@@ -516,7 +536,7 @@ def sync_main(
     if not quiet:
         summary_panel = Panel(
             f"Basename: [bold cyan]{basename}[/bold cyan]\n"
-            f"Languages: [bold green]{', '.join(languages)}[/bold green]\n"
+            f"Languages: [bold green]{', '.join(lang_to_path.keys())}[/bold green]\n"
             f"Budget: [bold yellow]${display_budget:.2f}[/bold yellow]\n"
             f"Max Attempts: [bold blue]{display_max_attempts}[/bold blue]",
             title="PDD Sync Starting",
@@ -531,7 +551,7 @@ def sync_main(
     # remaining_budget will be set from resolved config on first language iteration
     remaining_budget: Optional[float] = None
 
-    for lang in languages:
+    for lang, prompt_file_path in lang_to_path.items():
         if not quiet:
             rprint(f"\n[bold]🚀 Syncing for language: [green]{lang}[/green]...[/bold]")
 
@@ -544,8 +564,7 @@ def sync_main(
             continue
 
         try:
-            # Get the fully resolved configuration for this specific language using construct_paths.
-            prompt_file_path = prompts_dir / f"{basename}_{lang}.prompt"
+            # prompt_file_path is now the correct discovered path from lang_to_path
             
             command_options = {
                 "basename": basename,
@@ -620,7 +639,7 @@ def sync_main(
             sync_result = sync_orchestration(
                 basename=basename,
                 language=resolved_language,
-                prompts_dir=str(prompts_dir),
+                prompts_dir=str(prompt_file_path.parent),  # Use discovered path's parent
                 code_dir=str(code_dir),
                 examples_dir=str(examples_dir),
                 tests_dir=str(tests_dir),

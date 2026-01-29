@@ -254,16 +254,16 @@ def get_extension(language: str) -> str:
 
 
 def _resolve_prompts_root(prompts_dir: str) -> Path:
-    """Resolve prompts root relative to the .pddrc location when available."""
+    """
+    Resolve prompts root relative to the .pddrc location when available.
+
+    Note: This function previously stripped subdirectories after "prompts" which was
+    incorrect for context-specific prompts_dir values. Fixed in Issue #253/237.
+    """
     prompts_root = Path(prompts_dir)
     pddrc_path = _find_pddrc_file()
     if pddrc_path and not prompts_root.is_absolute():
         prompts_root = pddrc_path.parent / prompts_root
-
-    parts = prompts_root.parts
-    if "prompts" in parts:
-        prompt_index = parts.index("prompts")
-        prompts_root = Path(*parts[: prompt_index + 1])
 
     return prompts_root
 
@@ -347,8 +347,39 @@ def _generate_paths_from_templates(
     name = parts[-1] if parts else basename
     category = '/'.join(parts[:-1]) if len(parts) > 1 else ''
 
+    # Issue #237 fix: If category is empty but we have an actual prompt_path,
+    # try to derive the category from the prompt path by comparing with template
+    if not category and prompt_path and Path(prompt_path).exists():
+        prompt_template = outputs_config.get('prompt', {}).get('path', '')
+        if prompt_template and '{category}' in prompt_template:
+            # Extract category from actual prompt path
+            # Template: prompts/frontend/{category}/{name}_{language}.prompt
+            # Actual:   prompts/frontend/app/page_TypescriptReact.prompt
+            # Category: app
+            prompt_path_obj = Path(prompt_path)
+            prompt_parts = prompt_path_obj.parts
+
+            # Find where the template's fixed prefix ends
+            # E.g., "prompts/frontend/" -> look for index after "frontend"
+            template_prefix = prompt_template.split('{category}')[0].rstrip('/')
+            template_prefix_parts = Path(template_prefix).parts if template_prefix else ()
+
+            # Find the matching index in the actual path
+            if template_prefix_parts:
+                for i, part in enumerate(prompt_parts):
+                    if prompt_parts[i:i+len(template_prefix_parts)] == template_prefix_parts:
+                        # Category starts after the prefix, ends before the filename
+                        category_start = i + len(template_prefix_parts)
+                        category_end = len(prompt_parts) - 1  # Exclude filename
+                        if category_start < category_end:
+                            category = '/'.join(prompt_parts[category_start:category_end])
+                            logger.info(f"Derived category '{category}' from prompt path: {prompt_path}")
+                        break
+
     # Build dir_prefix (for legacy template compatibility)
     dir_prefix = '/'.join(parts[:-1]) + '/' if len(parts) > 1 else ''
+    if category and not dir_prefix:
+        dir_prefix = category + '/'
 
     # Build template context
     template_context = {
