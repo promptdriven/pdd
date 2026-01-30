@@ -18,9 +18,11 @@ Context override handling:
 
 ### File and Directory Structure:
 
--   **Lock Files**: `.pdd/locks/{basename}_{language}.lock`
--   **Fingerprint Files**: `.pdd/meta/{basename}_{language}.json` (This file should be version controlled)
--   **Run Report Files**: `.pdd/meta/{basename}_{language}_run.json` (This file should be in `.gitignore`)
+**Important**: All metadata paths use `language.lower()` for case-insensitive consistency on case-sensitive filesystems (Linux). Even if the prompt file is `task_model_Python.prompt`, all derived metadata uses the lowercased language `python`.
+
+-   **Lock Files**: `.pdd/locks/{basename}_{language.lower()}.lock`
+-   **Fingerprint Files**: `.pdd/meta/{basename}_{language.lower()}.json` (This file should be version controlled)
+-   **Run Report Files**: `.pdd/meta/{basename}_{language.lower()}_run.json` (This file should be in `.gitignore`)
 
 ### Detailed Implementation Requirements:
 
@@ -57,7 +59,7 @@ Create the following `dataclasses` to structure the data:
 
 Implement a `SyncLock` context manager:
 
--   `__init__(self, basename: str, language: str)`: Sets up the lock file path.
+-   `__init__(self, basename: str, language: str)`: Sets up the lock file path using `language.lower()` for case-insensitive consistency.
 -   `acquire(self)`:
     -   Checks if the lock is already held by the current process (re-entrancy).
     -   If the lock file exists, read the PID.
@@ -77,6 +79,7 @@ Implement the following helper functions:
 -   `_extract_name_part(basename: str) -> Tuple[str, str]`: For subdirectory basenames like 'core/cloud', returns (dir_prefix, name_part) tuple - 'core/cloud' → ('core/', 'cloud'), 'calculator' → ('', 'calculator').
 -   `get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts", context_override: Optional[str] = None) -> Dict[str, Path]`: Returns a dictionary mapping file types ('prompt', 'code', 'example', 'test', 'test_files') to their expected `pathlib.Path` objects. The 'test_files' key contains a list of all matching test files for Bug #156 multi-file support. Supports subdirectory basenames (e.g., 'core/cloud'). Use the project's internal `construct_paths` function (see included examples) to get configuration-aware paths based on .pddrc settings. The function should:
     - Build the prompt file path from basename, language, and prompts_dir
+    - **Case-insensitive prompt file lookup**: After constructing the prompt path, if the file doesn't exist, perform a case-insensitive search in the prompt directory (iterate files, compare `.lower()` names). This handles mixed-case prompt filenames like `task_model_Python.prompt` on case-sensitive filesystems.
     - Call `construct_paths` with `command="sync"` and `context_override=context_override` to get config-aware paths
     - Extract the code path from `output_file_paths['generate_output_path']` with fallbacks to `'output'` or `'code_file'`
     - Derive example and test paths by calling `construct_paths` with `command="example"` and `command="test"` respectively
@@ -84,8 +87,8 @@ Implement the following helper functions:
     - Provide robust fallback mechanisms (derive directories from `resolved_config`; final fallback to defaults like `{basename}.{ext}`, `{basename}_example.{ext}`, `test_{basename}.{ext}`)
 -   `get_extension(language: str) -> str`: Returns the file extension for a programming language. Must include mappings for: `python` → `py`, `javascript` → `js`, `typescript` → `ts`, `typescriptreact` → `tsx`, `javascriptreact` → `jsx`, `prisma` → `prisma`, and other common languages. Falls back to lowercase language name if no mapping found.
 -   `calculate_sha256(file_path: Path) -> Optional[str]`: Calculates the SHA256 hash of a file if it exists, otherwise returns `None`.
--   `read_fingerprint(basename: str, language: str) -> Optional[Fingerprint]`: Reads and validates the JSON fingerprint file from `{META_DIR}/{safe_basename}_{language}.json`. Uses `_safe_basename()` for path construction. Returns `None` if it doesn't exist or is invalid.
--   `read_run_report(basename: str, language: str) -> Optional[RunReport]`: Reads and validates the JSON run report file from `{META_DIR}/{safe_basename}_{language}_run.json`. Uses `_safe_basename()` for path construction.
+-   `read_fingerprint(basename: str, language: str) -> Optional[Fingerprint]`: Reads and validates the JSON fingerprint file from `{META_DIR}/{safe_basename}_{language.lower()}.json`. Uses `_safe_basename()` for path construction and `language.lower()` for case-insensitive consistency. Returns `None` if it doesn't exist or is invalid.
+-   `read_run_report(basename: str, language: str) -> Optional[RunReport]`: Reads and validates the JSON run report file from `{META_DIR}/{safe_basename}_{language.lower()}_run.json`. Uses `_safe_basename()` for path construction and `language.lower()` for case-insensitive consistency.
 -   `calculate_current_hashes(paths: Dict[str, Any]) -> Dict[str, Any]`: Computes the hashes for all current files on disk. For 'test_files', returns a dict of filename to hash mappings for Bug #156 multi-file support.
 -   `estimate_operation_cost(operation: str, language: str = "python") -> float`: Returns estimated cost in dollars for each operation based on typical LLM usage:
     - 'auto-deps': 0.10
@@ -381,7 +384,7 @@ Define path resolution functions or constants for PDD_DIR, META_DIR, LOCKS_DIR t
 
 ### Logging Requirements
 
-The `SyncDecision` object returned by this function will be logged by the orchestration layer to `.pdd/meta/{basename}_{language}_sync.log`. Therefore, ensure that:
+The `SyncDecision` object returned by this function will be logged by the orchestration layer to `.pdd/meta/{basename}_{language.lower()}_sync.log`. Therefore, ensure that:
 
 1. **All decisions include complete information**: Every `SyncDecision` must have meaningful values for all fields
 2. **Confidence levels are accurate**: Heuristic/deterministic decisions may use 0.80–0.95; use lower values for LLM-based or uncertain decisions

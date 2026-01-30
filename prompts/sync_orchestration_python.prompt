@@ -187,7 +187,7 @@ Terminal states: `all_synced`, `nothing`, `fail_and_request_manual_merge`, `erro
 
 ### Dry-Run Mode
 
-When `dry_run=True`, display the sync log at `.pdd/meta/{basename}_{language}_sync.log` (JSONL format) and return immediately. Normal mode shows concise output; verbose mode shows full details including decision type, confidence, and budget info.
+When `dry_run=True`, display the sync log at `.pdd/meta/{basename}_{language.lower()}_sync.log` (JSONL format) and return immediately. Normal mode shows concise output; verbose mode shows full details including decision type, confidence, and budget info.
 
 ### TUI Integration
 
@@ -213,6 +213,7 @@ Use `AtomicStateUpdate` context manager for consistent state writes:
 - Ensures run_report and fingerprint are both written or neither is written
 - Uses temp file + atomic rename pattern for crash safety
 - After each successful operation, save a `Fingerprint` to disk with current file hashes
+- **Case-insensitive language in paths**: All metadata file paths (fingerprint `.json`, run report `_run.json`, sync log `_sync.log`) must use `language.lower()` for consistent paths on case-sensitive filesystems. This applies to any direct path construction in this module (e.g., `f"{_safe_basename(basename)}_{language.lower()}_run.json"`).
 
 ### Skip Handling
 
@@ -300,7 +301,7 @@ entry = create_log_entry(
 ### Path Construction
 
 Use `get_pdd_file_paths()` to resolve file paths. Handle errors gracefully:
-- If `FileNotFoundError` mentions test files, construct default paths and continue (test will be generated)
+- If `FileNotFoundError` mentions test files, construct default paths and continue (test will be generated). Use case-insensitive prompt file lookup in fallback path construction (iterate directory, compare `.lower()` names).
 - For other path errors, return error dict immediately with clear message
 
 ### Cycle Detection
