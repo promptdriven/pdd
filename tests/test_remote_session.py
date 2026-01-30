@@ -1103,3 +1103,122 @@ class TestGetPendingCommands401Handling:
         # Should only refresh once, even if second attempt also returns 401
         assert refresh_count[0] == 1
         assert commands == []
+
+
+class TestUpdateCommand401Handling:
+    """
+    Tests for update_command 401 handling with automatic token refresh.
+    This is the root cause of the "stuck running" bug - update_command
+    doesn't refresh token on 401, so final status update fails.
+    """
+
+    @pytest.mark.asyncio
+    async def test_update_command_refreshes_token_on_401(
+        self, manager, mock_cloud_config, mock_httpx_client
+    ):
+        """
+        Test that update_command refreshes token on 401 and retries.
+        """
+        manager.session_id = "sess-1"
+
+        call_count = [0]
+
+        async def mock_post(*args, **kwargs):
+            call_count[0] += 1
+            mock_response = MagicMock()
+            if call_count[0] == 1:
+                mock_response.status_code = 401
+            else:
+                mock_response.status_code = 200
+                mock_response.json.return_value = {"success": True}
+            return mock_response
+
+        mock_httpx_client.post = AsyncMock(side_effect=mock_post)
+
+        refresh_called = [False]
+
+        async def mock_refresh_token():
+            refresh_called[0] = True
+            manager.jwt_token = "new-token"
+            return True
+
+        manager._refresh_token = mock_refresh_token
+
+        await manager.update_command("cmd-123", status="completed")
+
+        assert refresh_called[0] is True
+        assert call_count[0] == 2
+
+    @pytest.mark.asyncio
+    async def test_update_command_raises_on_refresh_failure(
+        self, manager, mock_cloud_config, mock_httpx_client
+    ):
+        """
+        Test that update_command raises RuntimeError if token refresh fails.
+        """
+        manager.session_id = "sess-1"
+
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+        mock_response.text = "Unauthorized"
+        mock_httpx_client.post = AsyncMock(return_value=mock_response)
+
+        async def mock_refresh_token():
+            return False  # Refresh fails
+
+        manager._refresh_token = mock_refresh_token
+
+        with pytest.raises(RuntimeError, match="token expired"):
+            await manager.update_command("cmd-123", status="completed")
+
+    @pytest.mark.asyncio
+    async def test_update_command_raises_if_401_persists_after_refresh(
+        self, manager, mock_cloud_config, mock_httpx_client
+    ):
+        """
+        Test that update_command raises if 401 persists after token refresh.
+        """
+        manager.session_id = "sess-1"
+
+        # Always return 401
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+        mock_response.text = "Unauthorized"
+        mock_httpx_client.post = AsyncMock(return_value=mock_response)
+
+        async def mock_refresh_token():
+            manager.jwt_token = "new-token"
+            return True  # Refresh succeeds but 401 persists
+
+        manager._refresh_token = mock_refresh_token
+
+        with pytest.raises(RuntimeError, match="after token refresh"):
+            await manager.update_command("cmd-123", status="completed")
+
+    @pytest.mark.asyncio
+    async def test_update_command_only_refreshes_once(
+        self, manager, mock_cloud_config, mock_httpx_client
+    ):
+        """
+        Test that update_command only attempts refresh once per call.
+        """
+        manager.session_id = "sess-1"
+
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+        mock_response.text = "Unauthorized"
+        mock_httpx_client.post = AsyncMock(return_value=mock_response)
+
+        refresh_count = [0]
+
+        async def mock_refresh_token():
+            refresh_count[0] += 1
+            manager.jwt_token = "new-token"
+            return True
+
+        manager._refresh_token = mock_refresh_token
+
+        with pytest.raises(RuntimeError):
+            await manager.update_command("cmd-123", status="completed")
+
+        assert refresh_count[0] == 1
