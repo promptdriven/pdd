@@ -317,6 +317,18 @@ export const CodeCostChart: React.FC<CodeCostChartPropsType> = ({
           >
             Overall throughput: ~0% (Uplevel, 2024)
           </p>
+          <p
+            style={{
+              fontFamily: "Inter, system-ui, sans-serif",
+              fontSize: 28,
+              color: COLORS.LINE_PATCH,
+              margin: 0,
+              marginTop: 8,
+              fontWeight: 600,
+            }}
+          >
+            Bug rate: +41% (Uplevel, 2024)
+          </p>
         </div>
       )}
 

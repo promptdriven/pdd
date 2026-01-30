@@ -29,8 +29,8 @@ The sock chart morphs into the code chart:
 - **Line 1 (Cost to Generate/Write from Scratch):**
   - Color: #4A90D9 (cool blue)
   - Starts high (~32 hours in 2015)
-  - Stays high through 2020
-  - Then drops dramatically 2020-2024
+  - Stays high through 2022
+  - Then drops dramatically 2023-2025
 - **Line 2 (Immediate Cost to Patch):**
   - Color: #D9944A (warm amber), solid line
   - Relatively flat (~8-10 hours) through 2020
@@ -65,8 +65,8 @@ The sock chart morphs into the code chart:
    - Dashed "Total Cost" line appears at top of shaded area
 
 4. **Frame 1500-2700 (50-90s):** 2020 → 2025 - THE KEY MOMENT
-   - "Generate" line drops steeply (blue plunges down)
-   - "Immediate Patch" line ALSO drops (amber goes down—validating AI tools)
+   - "Immediate Patch" line drops first (amber goes down—validating AI tools)
+   - "Generate" line stays near 30 through 2022, then plunges at 2023 (GPT-4/Claude arrive)
    - **BUT:** Tech debt area EXPANDS upward as immediate line drops
    - **NET EFFECT:** The dashed "Total Cost" line barely moves
    - Visual: immediate cost and debt area move in opposite directions, canceling out
@@ -77,6 +77,7 @@ The sock chart morphs into the code chart:
      - Where you ACTUALLY are (total cost: 24 hours)
    - Annotation appears near dropping solid line: "Individual task: -55% (GitHub, 2022)"
    - Second annotation appears near flat dashed line: "Overall throughput: ~0% (Uplevel, 2024)"
+   - Third annotation appears near expanding debt area: "Bug rate: +41% (Uplevel, 2024)"
 
 6. **Frame 3240-3600 (108-120s):** Crossing point
    - Generate line (3 hrs) now FAR below total patch cost (24 hrs)
@@ -109,7 +110,7 @@ The crossing point isn't just "generate < patch." It's "generate < patch + accum
 
 > "Now look at code."
 >
-> "For fifty years, generating new code was expensive. Writing from scratch took hours, days, weeks. So when something broke, you patched. Of course you patched. It was rational."
+> "For decades, generating new code was expensive. Writing from scratch took hours, days, weeks. So when something broke, you patched. Of course you patched. It was rational."
 >
 > [As both lines drop post-2020:]
 > "Now, here's where it gets interesting. AI made patching faster too. Cursor, Claude Code, Copilot—they're incredible tools. They understand your codebase, suggest fixes, catch bugs before you make them."
@@ -123,7 +124,7 @@ The crossing point isn't just "generate < patch." It's "generate < patch + accum
 > "Because even though each patch is faster, every patch still leaves residue. Technical debt. And that debt accumulates—faster now, because you're patching faster."
 >
 > [Annotations appear — study citations near their respective lines:]
-> "GitHub measured a fifty-five percent speedup on individual coding tasks. But when researchers tracked overall developer throughput? No significant change. The debt ate the rest."
+> "GitHub measured a fifty-five percent speedup on individual coding tasks. But when Uplevel tracked eight hundred developers over a year? No change in throughput—and forty-one percent more bugs. The debt ate the gains."
 >
 > [Generate line crosses far below both lines:]
 > "Meanwhile, generation just crossed below both lines. And it comes with no debt. No rot."
@@ -231,6 +232,12 @@ The crossing point isn't just "generate < patch." It's "generate < patch + accum
       fadeIn={30}
       delay={30}
     />
+    <Annotation
+      text="Bug rate: +41% (Uplevel, 2024)"
+      position="near-debt-area"
+      fadeIn={30}
+      delay={60}
+    />
   </Sequence>
 
   {/* Crossing point */}
@@ -252,8 +259,8 @@ The crossing point isn't just "generate < patch." It's "generate < patch + accum
   "costToGenerate": [
     { "year": 2015, "hours": 32 },
     { "year": 2020, "hours": 30 },
-    { "year": 2022, "hours": 18 },
-    { "year": 2023, "hours": 10 },
+    { "year": 2022, "hours": 28 },
+    { "year": 2023, "hours": 15 },
     { "year": 2024, "hours": 6 },
     { "year": 2025, "hours": 3 }
   ],
@@ -289,8 +296,8 @@ The crossing point isn't just "generate < patch." It's "generate < patch + accum
 | Year | Immediate | Debt | **Total** | Generate |
 |------|-----------|------|-----------|----------|
 | 2020 | 10 hrs | +15 | **25 hrs** | 30 hrs |
-| 2022 | 7 hrs (-30%) | +17 | **24 hrs** | 18 hrs |
-| 2023 | 5 hrs (-50%) | +19 | **24 hrs** | 10 hrs |
+| 2022 | 7 hrs (-30%) | +17 | **24 hrs** | 28 hrs |
+| 2023 | 5 hrs (-50%) | +19 | **24 hrs** | 15 hrs |
 | 2024 | 4 hrs (-60%) | +20 | **24 hrs** | 6 hrs |
 | 2025 | 3.5 hrs (-65%) | +21 | **24.5 hrs** | 3 hrs |
 

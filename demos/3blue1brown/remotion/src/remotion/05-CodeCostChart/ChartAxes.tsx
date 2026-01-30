@@ -31,8 +31,8 @@ export const ChartAxes: React.FC<ChartAxesProps> = ({ opacity = 1 }) => {
 
   // Year ticks: 2015 and 2020 marked, then individual years for 2020-2025
   const yearTicks = [2015, 2020, 2022, 2025];
-  // Hour ticks for 0-100 range
-  const hourTicks = [0, 20, 40, 60, 80, 100];
+  // Hour ticks for 0-35 range
+  const hourTicks = [0, 5, 10, 15, 20, 25, 30, 35];
 
   const getXPosition = (year: number) => {
     return (

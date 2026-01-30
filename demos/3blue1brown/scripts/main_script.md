@@ -58,11 +58,11 @@ By the mid-1960s, the math flipped. A new sock cost less than the time to repair
 
 Now look at code.
 
-**[VISUAL: Key dates appear on the falling "generate" line: GPT-3, Codex, GPT-4, Claude, Gemini. Each one drops the line further.]**
+**[VISUAL: Key dates appear on the falling "generate" line: Codex, GPT-4, Claude, Gemini. The line barely dips at Codex (2021-2022), then plunges steeply starting at GPT-4/Claude (2023).]**
 
-For fifty years, generating new code was expensive. Writing from scratch took hours, days, weeks. So when something broke, you patched. Of course you patched. It was rational.
+For decades, generating new code was expensive. Writing from scratch took hours, days, weeks. So when something broke, you patched. Of course you patched. It was rational.
 
-**[VISUAL: Post-2020, both the blue "generate" line AND the amber "immediate patch" line start dropping. The drops are real and visible—AI helps both.]**
+**[VISUAL: Post-2020, the amber "immediate patch" line starts dropping as Copilot helps with fixes. The blue "generate" line barely moves until 2023—then GPT-4 and Claude arrive, and it plunges.]**
 
 Now, here's where it gets interesting. AI made patching faster too. Cursor, Claude Code, Copilot—they're incredible tools. They understand your codebase, suggest fixes, catch bugs before you make them.
 
@@ -78,7 +78,7 @@ Because even though each patch is faster, every patch still leaves residue. Tech
 
 **[VISUAL: Annotation appears: "Individual task: -55% (GitHub, 2022)" pointing to the dropping solid line. Another annotation: "Overall throughput: ~0% (Uplevel, 2024)" pointing to the nearly-flat dashed line. The contrast is stark.]**
 
-GitHub measured a fifty-five percent speedup on individual coding tasks. But when researchers tracked overall developer throughput? No significant change. The debt ate the rest.
+GitHub measured a fifty-five percent speedup on individual coding tasks. But when Uplevel tracked eight hundred developers over a year? No change in throughput—and forty-one percent more bugs. The debt ate the gains.
 
 **[VISUAL: Zoom into the shaded debt area. It separates into two distinct layers: a darker "Code Complexity" layer and a lighter "Context Rot" layer with a subtle static/noise texture.]**
 

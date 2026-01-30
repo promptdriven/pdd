@@ -166,7 +166,11 @@ Research sources for claims made in the 3Blue1Brown-style PDD video.
 
 - **MIT / Microsoft & Accenture** — "The Productivity Effects of Generative AI: Evidence from a Field Experiment with GitHub Copilot"
   https://mit-genai.pubpub.org/pub/v5iixksv
-  *Key finding: 1,974 developers. 13-22% more PRs/week at Microsoft, 8-9% at Accenture. Does not account for quality/debt tradeoffs.*
+  *Key finding: 4,867 developers across Microsoft, Accenture, and a Fortune 100 company. 26% more PRs/week overall (13-22% at Microsoft, 8-9% at Accenture). Does not account for quality/debt tradeoffs.*
+
+- **Google Internal RCT** — "How much does AI impact development speed? An enterprise-based randomized controlled trial" (2024)
+  https://arxiv.org/abs/2410.12944
+  *Key finding: 96 Google engineers. AI-assisted group completed tasks 21% faster (96 min vs 114 min). More senior developers and those who code more hours per day benefited most. Confidence interval is large.*
 
 ---
 

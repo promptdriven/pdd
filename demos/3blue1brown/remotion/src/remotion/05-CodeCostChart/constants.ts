@@ -51,8 +51,8 @@ export const CHART_DATA = {
   costToGenerate: [
     { year: 2015, hours: 32 },
     { year: 2020, hours: 30 },
-    { year: 2022, hours: 18 },
-    { year: 2023, hours: 10 },
+    { year: 2022, hours: 28 },
+    { year: 2023, hours: 15 },
     { year: 2024, hours: 6 },
     { year: 2025, hours: 3 },
   ],
@@ -86,7 +86,7 @@ export const CHART_MARGINS = {
 };
 
 export const YEAR_RANGE = { min: 2015, max: 2025 };
-export const HOURS_RANGE = { min: 0, max: 100 };
+export const HOURS_RANGE = { min: 0, max: 35 };
 
 // Props schema
 export const CodeCostChartProps = z.object({
