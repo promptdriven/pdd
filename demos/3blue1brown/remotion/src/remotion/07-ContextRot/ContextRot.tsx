@@ -10,6 +10,8 @@ import {
   CHART_MARGINS,
   YEAR_RANGE,
   HOURS_RANGE,
+  CHART_DATA,
+  interpolateHours,
 } from "./constants";
 
 export const ContextRot: React.FC<ContextRotPropsType> = ({
@@ -111,34 +113,34 @@ export const ContextRot: React.FC<ContextRotPropsType> = ({
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
 
-  // Build simplified chart lines for part 3
-  const buildGeneratePath = () => {
-    const points = [
-      { year: 2015, hours: 2.5 },
-      { year: 2020, hours: 1.5 },
-      { year: 2023, hours: 0.8 },
-      { year: 2030, hours: 0.05 },
-    ];
-    let path = `M ${getXPosition(points[0].year)} ${getYPosition(points[0].hours)}`;
-    for (let i = 1; i < points.length; i++) {
-      path += ` L ${getXPosition(points[i].year)} ${getYPosition(points[i].hours)}`;
+  // Build SVG path from data points
+  const buildLinePath = (data: { year: number; hours: number }[]) => {
+    let path = `M ${getXPosition(data[0].year)} ${getYPosition(data[0].hours)}`;
+    for (let i = 1; i < data.length; i++) {
+      path += ` L ${getXPosition(data[i].year)} ${getYPosition(data[i].hours)}`;
     }
     return path;
   };
 
-  const buildPatchPath = () => {
-    return `M ${getXPosition(2015)} ${getYPosition(0.8)} L ${getXPosition(2030)} ${getYPosition(0.8)}`;
-  };
+  // Build debt area path between large CB immediate and total cost (2020-2025)
+  const buildDebtAreaPath = () => {
+    const startYear = 2020;
+    const endYear = 2025;
+    const steps = 20;
 
-  // Build debt region path for part 3
-  const buildDebtPath = () => {
-    const crossingYear = 2023.5;
-    return `
-      M ${getXPosition(crossingYear)} ${getYPosition(0.8)}
-      L ${getXPosition(2030)} ${getYPosition(0.05)}
-      L ${getXPosition(2030)} ${getYPosition(0.8)}
-      Z
-    `;
+    // Top edge (total cost) left to right
+    let path = `M ${getXPosition(startYear)} ${getYPosition(interpolateHours(CHART_DATA.totalCostLargeCodebase, startYear))}`;
+    for (let i = 1; i <= steps; i++) {
+      const year = startYear + (endYear - startYear) * (i / steps);
+      path += ` L ${getXPosition(year)} ${getYPosition(interpolateHours(CHART_DATA.totalCostLargeCodebase, year))}`;
+    }
+    // Bottom edge (large CB immediate) right to left
+    for (let i = steps; i >= 0; i--) {
+      const year = startYear + (endYear - startYear) * (i / steps);
+      path += ` L ${getXPosition(year)} ${getYPosition(interpolateHours(CHART_DATA.immediateCostLargeCodebase, year))}`;
+    }
+    path += " Z";
+    return path;
   };
 
   return (
@@ -199,10 +201,18 @@ export const ContextRot: React.FC<ContextRotPropsType> = ({
                   <feMergeNode in="SourceGraphic" />
                 </feMerge>
               </filter>
+
+              <filter id="smallCBGlow" x="-30%" y="-30%" width="160%" height="160%">
+                <feGaussianBlur in="SourceGraphic" stdDeviation="5" result="blur" />
+                <feMerge>
+                  <feMergeNode in="blur" />
+                  <feMergeNode in="SourceGraphic" />
+                </feMerge>
+              </filter>
             </defs>
 
-            {/* Grid lines */}
-            {[2016, 2020, 2024, 2028].map((year) => (
+            {/* Vertical grid lines */}
+            {[2016, 2018, 2020, 2022, 2024].map((year) => (
               <line
                 key={`v-${year}`}
                 x1={getXPosition(year)}
@@ -213,6 +223,21 @@ export const ContextRot: React.FC<ContextRotPropsType> = ({
                 strokeWidth={1}
                 strokeDasharray="5,5"
                 opacity={0.5}
+              />
+            ))}
+
+            {/* Horizontal grid lines */}
+            {[0, 5, 10, 15, 20, 25, 30, 35].map((hours) => (
+              <line
+                key={`h-${hours}`}
+                x1={CHART_MARGINS.left}
+                y1={getYPosition(hours)}
+                x2={width - CHART_MARGINS.right}
+                y2={getYPosition(hours)}
+                stroke={COLORS.GRID}
+                strokeWidth={1}
+                strokeDasharray="5,5"
+                opacity={0.3}
               />
             ))}
 
@@ -236,26 +261,17 @@ export const ContextRot: React.FC<ContextRotPropsType> = ({
               strokeWidth={2}
             />
 
-            {/* Debt region with context rot pulse */}
+            {/* Tech debt area with context rot pulse */}
             <path
-              d={buildDebtPath()}
+              d={buildDebtAreaPath()}
               fill={COLORS.CONTEXT_ROT}
               fillOpacity={0.4 * contextRotPulse}
               filter="url(#contextRotGlow)"
             />
 
-            {/* Cost to patch line */}
+            {/* Cost to Generate line with pulse */}
             <path
-              d={buildPatchPath()}
-              fill="none"
-              stroke={COLORS.LINE_PATCH}
-              strokeWidth={4}
-              strokeLinecap="round"
-            />
-
-            {/* Cost to generate line with pulse */}
-            <path
-              d={buildGeneratePath()}
+              d={buildLinePath(CHART_DATA.costToGenerate)}
               fill="none"
               stroke={COLORS.LINE_GENERATE}
               strokeWidth={5}
@@ -263,10 +279,52 @@ export const ContextRot: React.FC<ContextRotPropsType> = ({
               opacity={generateLinePulse + 0.5}
               filter={frame >= BEATS.SETUP_SOLUTION_START ? "url(#generateGlow)" : undefined}
             />
+
+            {/* Baseline immediate cost (pre-fork) */}
+            <path
+              d={buildLinePath(CHART_DATA.immediateCostBaseline)}
+              fill="none"
+              stroke={COLORS.LINE_PATCH}
+              strokeWidth={3}
+              strokeLinecap="round"
+              opacity={0.5}
+            />
+
+            {/* Small codebase fork — faint glow */}
+            <path
+              d={buildLinePath(CHART_DATA.immediateCostSmallCodebase)}
+              fill="none"
+              stroke={COLORS.LINE_PATCH}
+              strokeWidth={3}
+              strokeLinecap="round"
+              opacity={0.4}
+              filter="url(#smallCBGlow)"
+            />
+
+            {/* Large codebase fork */}
+            <path
+              d={buildLinePath(CHART_DATA.immediateCostLargeCodebase)}
+              fill="none"
+              stroke={COLORS.LINE_PATCH}
+              strokeWidth={3}
+              strokeLinecap="round"
+              opacity={0.7}
+            />
+
+            {/* Total cost large codebase (dashed) */}
+            <path
+              d={buildLinePath(CHART_DATA.totalCostLargeCodebase)}
+              fill="none"
+              stroke={COLORS.LINE_PATCH}
+              strokeWidth={3}
+              strokeLinecap="round"
+              strokeDasharray="12,6"
+              opacity={0.8}
+            />
           </svg>
 
           {/* Year labels */}
-          {[2015, 2020, 2025, 2030].map((year) => (
+          {[2015, 2020, 2025].map((year) => (
             <div
               key={`year-${year}`}
               style={{
@@ -342,7 +400,7 @@ export const ContextRot: React.FC<ContextRotPropsType> = ({
               right: 60,
               display: "flex",
               flexDirection: "column",
-              gap: 12,
+              gap: 10,
               padding: "16px 20px",
               backgroundColor: "rgba(26, 26, 46, 0.8)",
               borderRadius: 8,
@@ -374,6 +432,7 @@ export const ContextRot: React.FC<ContextRotPropsType> = ({
                   height: 4,
                   backgroundColor: COLORS.LINE_PATCH,
                   borderRadius: 2,
+                  opacity: 0.7,
                 }}
               />
               <span
@@ -383,7 +442,46 @@ export const ContextRot: React.FC<ContextRotPropsType> = ({
                   color: "rgba(255, 255, 255, 0.9)",
                 }}
               >
-                Cost to Patch
+                Patch (Small CB)
+              </span>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <div
+                style={{
+                  width: 30,
+                  height: 4,
+                  backgroundColor: COLORS.LINE_PATCH,
+                  borderRadius: 2,
+                  opacity: 0.5,
+                }}
+              />
+              <span
+                style={{
+                  fontFamily: "Inter, system-ui, sans-serif",
+                  fontSize: 16,
+                  color: "rgba(255, 255, 255, 0.7)",
+                }}
+              >
+                Patch (Large CB)
+              </span>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <div
+                style={{
+                  width: 30,
+                  height: 4,
+                  borderRadius: 2,
+                  background: `repeating-linear-gradient(90deg, ${COLORS.LINE_PATCH} 0px, ${COLORS.LINE_PATCH} 6px, transparent 6px, transparent 10px)`,
+                }}
+              />
+              <span
+                style={{
+                  fontFamily: "Inter, system-ui, sans-serif",
+                  fontSize: 16,
+                  color: "rgba(255, 255, 255, 0.9)",
+                }}
+              >
+                True Cost (with tech debt)
               </span>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>

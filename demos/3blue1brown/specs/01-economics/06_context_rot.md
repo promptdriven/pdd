@@ -10,10 +10,11 @@ Zoom into the debt area of the chart and reveal it contains two compounding fact
 
 ## Narrative Purpose
 
-This section explains WHY AI-assisted patching doesn't help as much as expected:
-1. Validates the viewer's experience ("AI was great at first...")
-2. Reveals the hidden mechanism ("...but now it suggests weird things")
-3. Sets up regeneration as the solution (small modules always fit in context)
+This section explains the mechanism behind the fork the viewer just saw in the code cost chart:
+1. Connects to the fork ("You just saw patching split into two paths...")
+2. Reveals WHY the large-codebase path stays flat ("...here's what's happening inside that debt area")
+3. Validates the viewer's experience ("AI was great at first, but now it suggests weird things")
+4. Sets up regeneration as the solution (small modules always fit in context)
 
 ## Technical Specifications
 
@@ -25,9 +26,10 @@ This section explains WHY AI-assisted patching doesn't help as much as expected:
 ### Part 1: Zoom Into the Debt (0-10s)
 
 **Animation Sequence:**
-1. **Frame 0-60 (0-2s):** Zoom into the shaded debt area of the chart
-   - Rest of chart fades to 20% opacity
-   - Debt area expands to fill most of the frame
+1. **Frame 0-60 (0-2s):** Zoom into the shaded debt area above the **large-codebase** fork
+   - The small-codebase fork and generate line fade to 20% opacity
+   - The large-codebase path and its debt area expand to fill most of the frame
+   - The fork point (2020) remains faintly visible at the left edge as an anchor
 2. **Frame 60-150 (2-5s):** The debt area separates into two distinct layers
    - Bottom layer (darker amber): "Code Complexity" - traditional tech debt
    - Top layer (lighter amber with static/noise texture): "Context Rot"
@@ -75,8 +77,9 @@ This section explains WHY AI-assisted patching doesn't help as much as expected:
 - Some irrelevant code is INSIDE the window
 
 **Frame 1020-1140 (34-38s):** Return to the chart
-- Zoom back out to show full chart
-- The "Context Rot" layer now pulses slightly
+- Zoom back out to show full chart with the fork visible
+- The large-codebase fork's "Context Rot" layer now pulses slightly
+- The small-codebase fork glows faintly below — a reminder of what's possible at small scale
 - Annotation: "Faster patching = faster growth = faster rot"
 
 **Frame 1140-1350 (38-45s):** Setup for the solution
@@ -106,11 +109,11 @@ This section explains WHY AI-assisted patching doesn't help as much as expected:
 
 ## Narration Sync
 
-> [Zoom into debt area]
-> "And there's something else hiding in that debt. Something specific to AI-assisted development."
+> [Zoom into debt area above the large-codebase fork]
+> "Remember that fork? On large codebases, patching didn't help. Let's look at why. There's something hiding in that debt area."
 
 > [Debt separates into two layers]
-> "Traditional complexity, yes. But also this—context rot."
+> "Traditional complexity, yes. But also this—context rot. An AI-specific problem."
 
 > [Context window appears over small codebase]
 > "When your codebase is small, AI tools are brilliant. The context window—what the model can actually see—covers almost everything."
@@ -124,8 +127,8 @@ This section explains WHY AI-assisted patching doesn't help as much as expected:
 > [Mismatch visualization]
 > "The code it needs is outside the window. The code inside is... something else. And the patches it suggests? They're based on incomplete information."
 
-> [Return to chart]
-> "This is why AI-assisted patching feels great at first and frustrating later. It's not the model getting dumber. It's the ratio getting worse."
+> [Return to chart — fork visible]
+> "This is why the fork exists. Small codebase? The window covers everything. Large codebase? The ratio gets worse with every patch. It's not the model getting dumber. It's the codebase outgrowing the window."
 
 > [Generate line pulses]
 > "Regeneration doesn't have this problem. A single module with a clear prompt? That always fits."
@@ -134,9 +137,9 @@ This section explains WHY AI-assisted patching doesn't help as much as expected:
 
 ```typescript
 <Sequence from={0} durationInFrames={1350}>
-  {/* Part 1: Zoom into debt */}
+  {/* Part 1: Zoom into large-codebase debt area */}
   <Sequence from={0} durationInFrames={300}>
-    <ZoomToDebtArea chart={<CodeCostChart />} />
+    <ZoomToDebtArea chart={<CodeCostChart />} target="large-codebase-fork" />
     <DebtLayerSeparation
       layer1={{ label: "Code Complexity", color: "#D9944A", opacity: 0.4 }}
       layer2={{ label: "Context Rot", color: "#E8B888", hasNoise: true }}
@@ -185,10 +188,11 @@ This section explains WHY AI-assisted patching doesn't help as much as expected:
       <MismatchHighlight />
     </Sequence>
 
-    {/* Return to chart */}
+    {/* Return to chart — fork visible */}
     <Sequence from={120} durationInFrames={120}>
-      <ZoomOutToChart />
-      <PulsingLayer layer="contextRot" />
+      <ZoomOutToChart showFork={true} />
+      <PulsingLayer layer="contextRot" target="large-codebase-fork" />
+      <GlowingLine line="small-codebase-fork" opacity={0.4} />
       <Annotation text="Faster patching = faster growth = faster rot" />
     </Sequence>
 

@@ -10,6 +10,7 @@ interface MilestoneMarkerProps {
   startFrame: number;
   labelPosition?: "top" | "bottom" | "left" | "right";
   labelOffsetY?: number;
+  impactScale?: number;
 }
 
 export const MilestoneMarker: React.FC<MilestoneMarkerProps> = ({
@@ -20,6 +21,7 @@ export const MilestoneMarker: React.FC<MilestoneMarkerProps> = ({
   startFrame,
   labelPosition = "top",
   labelOffsetY = 0,
+  impactScale: impactScaleProp = 1.0,
 }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
@@ -68,7 +70,7 @@ export const MilestoneMarker: React.FC<MilestoneMarkerProps> = ({
     ? 0.3 + 0.15 * Math.sin((frame - BEATS.HOLD_START) * 0.15)
     : 0;
 
-  const markerRadius = 16;
+  const markerRadius = 16 * impactScaleProp;
 
   // Impact ripple effect
   const rippleScale = interpolate(

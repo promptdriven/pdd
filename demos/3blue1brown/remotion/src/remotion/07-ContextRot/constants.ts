@@ -96,9 +96,66 @@ export const CHART_MARGINS = {
   left: 180,
 };
 
-// Year range for debt visualization
-export const YEAR_RANGE = { min: 2015, max: 2030 };
-export const HOURS_RANGE = { min: 0, max: 3 };
+// Year range (matching CodeCostChart)
+export const YEAR_RANGE = { min: 2015, max: 2025 };
+export const HOURS_RANGE = { min: 0, max: 35 };
+
+// Data point type
+export interface DataPoint {
+  year: number;
+  hours: number;
+}
+
+// Interpolate data to get hours at any year
+export const interpolateHours = (data: DataPoint[], year: number): number => {
+  if (year <= data[0].year) return data[0].hours;
+  if (year >= data[data.length - 1].year) return data[data.length - 1].hours;
+  for (let i = 0; i < data.length - 1; i++) {
+    if (year >= data[i].year && year <= data[i + 1].year) {
+      const t = (year - data[i].year) / (data[i + 1].year - data[i].year);
+      return data[i].hours + t * (data[i + 1].hours - data[i].hours);
+    }
+  }
+  return data[data.length - 1].hours;
+};
+
+// Chart data from CodeCostChart (forked structure)
+export const CHART_DATA = {
+  costToGenerate: [
+    { year: 2015, hours: 32 },
+    { year: 2020, hours: 30 },
+    { year: 2022, hours: 28 },
+    { year: 2023, hours: 15 },
+    { year: 2024, hours: 6 },
+    { year: 2025, hours: 3 },
+  ] as DataPoint[],
+  immediateCostBaseline: [
+    { year: 2015, hours: 10 },
+    { year: 2020, hours: 10 },
+  ] as DataPoint[],
+  immediateCostSmallCodebase: [
+    { year: 2020, hours: 10 },
+    { year: 2022, hours: 5 },
+    { year: 2023, hours: 3 },
+    { year: 2024, hours: 2 },
+    { year: 2025, hours: 1.5 },
+  ] as DataPoint[],
+  immediateCostLargeCodebase: [
+    { year: 2020, hours: 10 },
+    { year: 2022, hours: 10 },
+    { year: 2023, hours: 11 },
+    { year: 2024, hours: 12 },
+    { year: 2025, hours: 12 },
+  ] as DataPoint[],
+  totalCostLargeCodebase: [
+    { year: 2015, hours: 22 },
+    { year: 2020, hours: 25 },
+    { year: 2022, hours: 27 },
+    { year: 2023, hours: 30 },
+    { year: 2024, hours: 32 },
+    { year: 2025, hours: 33 },
+  ] as DataPoint[],
+};
 
 // Spring animation config
 export const SPRING_CONFIG = {

@@ -55,7 +55,6 @@ export const AIMilestones: React.FC<AIMilestonesPropsType> = ({
 
   // Get Y position on the cost curve for a given year
   const getCostAtYear = (year: number): number => {
-    // Find the two data points that bracket this year
     for (let i = 0; i < COST_DATA.length - 1; i++) {
       if (year >= COST_DATA[i].year && year <= COST_DATA[i + 1].year) {
         const t = (year - COST_DATA[i].year) / (COST_DATA[i + 1].year - COST_DATA[i].year);
@@ -84,34 +83,36 @@ export const AIMilestones: React.FC<AIMilestonesPropsType> = ({
     { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
   );
 
-  // Calculate milestone positions with staggered label placement
+  // Calculate milestone positions
   const getMilestoneY = (year: number) => {
     const cost = getCostAtYear(year);
     return getYPosition(cost);
   };
 
-  // Assign label positions to avoid overlap
+  // Label positions to avoid overlap — 7 milestones spread across 2021-2025.9
   const getLabelPosition = (index: number): "top" | "bottom" | "left" | "right" => {
-    // Alternate between top and bottom for visual balance
-    // Special handling for the three 2023 models
     const positions: ("top" | "bottom" | "left" | "right")[] = [
-      "top",     // GPT-3 (2020)
-      "top",     // Codex (2021)
-      "top",     // GPT-4 (2023)
-      "bottom",  // Claude (2023)
-      "right",   // Gemini (2023)
+      "top",     // Codex / Copilot (2021)
+      "top",     // GPT-4 (2023.25)
+      "top",     // Claude 3.5 Sonnet (2024.5) — biggest marker
+      "bottom",  // Claude 3.7 Sonnet (2025.15)
+      "top",     // Opus 4.5 (2025.7)
+      "bottom",  // GPT 5.2 (2025.8)
+      "right",   // Gemini 3 (2025.9)
     ];
     return positions[index] || "top";
   };
 
   const getLabelOffsetY = (index: number): number => {
-    // Add vertical offset for 2023 models to avoid collision
-    const offsets = [0, 0, -15, 15, 0];
+    const offsets = [0, 0, 0, 0, -10, 10, 0];
     return offsets[index] || 0;
   };
 
   // Year ticks for x-axis
-  const yearTicks = [2020, 2021, 2022, 2023, 2024];
+  const yearTicks = [2020, 2021, 2022, 2023, 2024, 2025];
+
+  // Cost ticks for y-axis
+  const costTicks = [0, 5, 10, 15, 20, 25, 30, 35];
 
   // Title fade in
   const titleOpacity = interpolate(
@@ -171,7 +172,7 @@ export const AIMilestones: React.FC<AIMilestonesPropsType> = ({
           }}
         >
           {/* Horizontal grid lines */}
-          {[0, 30, 60, 90, 120].map((cost) => (
+          {costTicks.map((cost) => (
             <line
               key={`h-grid-${cost}`}
               x1={CHART_MARGINS.left}
@@ -242,6 +243,26 @@ export const AIMilestones: React.FC<AIMilestonesPropsType> = ({
             </div>
           ))}
 
+          {/* Cost tick labels */}
+          {costTicks.map((cost) => (
+            <div
+              key={`cost-${cost}`}
+              style={{
+                position: "absolute",
+                left: CHART_MARGINS.left - 15,
+                top: getYPosition(cost),
+                transform: "translate(-100%, -50%)",
+                fontFamily: "Inter, system-ui, sans-serif",
+                fontSize: 24,
+                fontWeight: 500,
+                color: COLORS.AXIS_LABEL,
+                textAlign: "right",
+              }}
+            >
+              {cost}
+            </div>
+          ))}
+
           {/* Y-axis label */}
           <div
             style={{
@@ -265,7 +286,7 @@ export const AIMilestones: React.FC<AIMilestonesPropsType> = ({
                 whiteSpace: "nowrap",
               }}
             >
-              Cost Index (2020 = 100)
+              Cost (Developer Hours)
             </div>
           </div>
         </div>
@@ -318,6 +339,7 @@ export const AIMilestones: React.FC<AIMilestonesPropsType> = ({
             startFrame={milestone.startFrame}
             labelPosition={getLabelPosition(index)}
             labelOffsetY={getLabelOffsetY(index)}
+            impactScale={milestone.impactScale}
           />
         ))}
       </div>
@@ -330,7 +352,7 @@ export const AIMilestones: React.FC<AIMilestonesPropsType> = ({
           right: 40,
           opacity: interpolate(
             frame,
-            [BEATS.RAPID_MARKERS_END, BEATS.RAPID_MARKERS_END + 30],
+            [BEATS.FRONTIER_END, BEATS.FRONTIER_END + 30],
             [0, 1],
             { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
           ),
@@ -373,7 +395,7 @@ export const AIMilestones: React.FC<AIMilestonesPropsType> = ({
                 boxShadow: `0 0 8px ${milestone.color}60`,
               }}
             />
-            {milestone.name} ({milestone.year})
+            {milestone.name}
           </div>
         ))}
       </div>

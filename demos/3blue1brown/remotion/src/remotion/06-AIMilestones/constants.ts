@@ -2,38 +2,43 @@ import { z } from "zod";
 
 // Video specs for AI Milestones section
 export const AI_MILESTONES_FPS = 30;
-export const AI_MILESTONES_DURATION_SECONDS = 15;
+export const AI_MILESTONES_DURATION_SECONDS = 18;
 export const AI_MILESTONES_DURATION_FRAMES = AI_MILESTONES_FPS * AI_MILESTONES_DURATION_SECONDS;
 export const AI_MILESTONES_WIDTH = 1920;
 export const AI_MILESTONES_HEIGHT = 1080;
 
 // Animation beat timings (in frames at 30fps)
 export const BEATS = {
-  // Frame 0-60: Zoom into 2020-2024 region
+  // Frame 0-60: Zoom into 2020-2025 region
   ZOOM_START: 0,
   ZOOM_END: 60,
 
-  // Frame 60-120: GPT-3 marker pops in
-  GPT3_START: 60,
-  GPT3_END: 120,
+  // Frame 60-150: Codex/Copilot marker appears (2021) — small drop
+  CODEX_START: 60,
+  CODEX_END: 150,
 
-  // Frame 120-180: Codex marker appears
-  CODEX_START: 120,
-  CODEX_END: 180,
+  // Frame 150-240: GPT-4 marker appears (Mar 2023) — moderate drop
+  GPT4_START: 150,
+  GPT4_END: 240,
 
-  // Frame 180-270: GPT-4, Claude, Gemini appear in quick succession (staggered 30 frames)
-  GPT4_START: 180,
-  CLAUDE_START: 210,
-  GEMINI_START: 240,
-  RAPID_MARKERS_END: 270,
+  // Frame 240-330: Claude 3.5 Sonnet marker appears (Jun 2024) — LARGE drop (the cliff)
+  CLAUDE35_START: 240,
+  CLAUDE35_END: 330,
 
-  // Frame 270-360: All markers visible, line settles
-  SETTLE_START: 270,
-  SETTLE_END: 360,
+  // Frame 330-390: Claude 3.7 Sonnet marker appears (Feb 2025) — moderate drop
+  CLAUDE37_START: 330,
+  CLAUDE37_END: 390,
 
-  // Frame 360-450: Hold with subtle pulse
-  HOLD_START: 360,
-  HOLD_END: 450,
+  // Frame 390-450: Frontier cluster (staggered by 15 frames)
+  FRONTIER_START: 390,
+  OPUS_START: 390,
+  GPT52_START: 405,
+  GEMINI3_START: 420,
+  FRONTIER_END: 450,
+
+  // Frame 450-540: Hold with subtle pulse
+  HOLD_START: 450,
+  HOLD_END: 540,
 };
 
 // Color palette
@@ -48,12 +53,11 @@ export const COLORS = {
   // Cost line (from previous chart)
   LINE_COST: "#4A90D9",
 
-  // Milestone marker colors as specified
-  GPT3: "#10B981",    // Green
-  CODEX: "#3B82F6",   // Blue
-  GPT4: "#8B5CF6",    // Purple
-  CLAUDE: "#F59E0B",  // Orange
-  GEMINI: "#EF4444",  // Red
+  // Milestone marker colors
+  CODEX: "#3B82F6",     // Blue
+  GPT4: "#8B5CF6",      // Purple
+  CLAUDE: "#F59E0B",    // Orange (Claude 3.5, 3.7, Opus 4.5)
+  GEMINI: "#EF4444",    // Red
 
   // Faded state for non-zoom regions
   FADED: "rgba(255, 255, 255, 0.3)",
@@ -66,14 +70,17 @@ export interface Milestone {
   year: number;
   color: string;
   startFrame: number;
+  impactScale: number; // 1.0 = small, 1.2 = moderate, 1.5 = large
 }
 
 export const MILESTONES: Milestone[] = [
-  { id: "gpt3", name: "GPT-3", year: 2020, color: COLORS.GPT3, startFrame: BEATS.GPT3_START },
-  { id: "codex", name: "Codex", year: 2021, color: COLORS.CODEX, startFrame: BEATS.CODEX_START },
-  { id: "gpt4", name: "GPT-4", year: 2023, color: COLORS.GPT4, startFrame: BEATS.GPT4_START },
-  { id: "claude", name: "Claude", year: 2023, color: COLORS.CLAUDE, startFrame: BEATS.CLAUDE_START },
-  { id: "gemini", name: "Gemini", year: 2023, color: COLORS.GEMINI, startFrame: BEATS.GEMINI_START },
+  { id: "codex", name: "Codex / Copilot", year: 2021, color: COLORS.CODEX, startFrame: BEATS.CODEX_START, impactScale: 1.0 },
+  { id: "gpt4", name: "GPT-4", year: 2023.25, color: COLORS.GPT4, startFrame: BEATS.GPT4_START, impactScale: 1.2 },
+  { id: "claude35", name: "Claude 3.5 Sonnet", year: 2024.5, color: COLORS.CLAUDE, startFrame: BEATS.CLAUDE35_START, impactScale: 1.5 },
+  { id: "claude37", name: "Claude 3.7 Sonnet", year: 2025.15, color: COLORS.CLAUDE, startFrame: BEATS.CLAUDE37_START, impactScale: 1.2 },
+  { id: "opus45", name: "Opus 4.5", year: 2025.7, color: COLORS.CLAUDE, startFrame: BEATS.OPUS_START, impactScale: 1.0 },
+  { id: "gpt52", name: "GPT 5.2", year: 2025.8, color: COLORS.GPT4, startFrame: BEATS.GPT52_START, impactScale: 1.0 },
+  { id: "gemini3", name: "Gemini 3", year: 2025.9, color: COLORS.GEMINI, startFrame: BEATS.GEMINI3_START, impactScale: 1.0 },
 ];
 
 // Chart dimensions
@@ -84,24 +91,31 @@ export const CHART_MARGINS = {
   left: 180,
 };
 
-// Year range for the zoomed view (2020-2024)
-export const YEAR_RANGE = { min: 2020, max: 2024 };
+// Year range for the zoomed view (2020-2026)
+export const YEAR_RANGE = { min: 2020, max: 2026 };
 
-// Simulated cost data showing the dramatic drop during AI era
-// This represents cost in arbitrary units (dropping steeply)
+// Cost data in Developer Hours — uneven staircase descent
+// Each milestone causes a drop of different size
 export const COST_DATA = [
-  { year: 2020, cost: 100 },
-  { year: 2020.5, cost: 85 },
-  { year: 2021, cost: 70 },
-  { year: 2021.5, cost: 55 },
-  { year: 2022, cost: 42 },
-  { year: 2022.5, cost: 30 },
-  { year: 2023, cost: 18 },
-  { year: 2023.5, cost: 10 },
-  { year: 2024, cost: 5 },
+  { year: 2020, cost: 30 },
+  { year: 2020.5, cost: 29 },
+  { year: 2021, cost: 28 },       // Codex: small drop
+  { year: 2022, cost: 27 },
+  { year: 2023, cost: 26 },
+  { year: 2023.25, cost: 20 },    // GPT-4: moderate drop
+  { year: 2023.75, cost: 18 },
+  { year: 2024, cost: 16 },
+  { year: 2024.5, cost: 7 },      // Claude 3.5 Sonnet: LARGE drop (the cliff)
+  { year: 2024.75, cost: 6 },
+  { year: 2025, cost: 5.5 },
+  { year: 2025.15, cost: 4.5 },   // Claude 3.7 Sonnet: moderate drop
+  { year: 2025.5, cost: 4 },
+  { year: 2025.7, cost: 3.5 },    // Opus 4.5
+  { year: 2025.8, cost: 3.2 },    // GPT 5.2
+  { year: 2025.9, cost: 3 },      // Gemini 3: settled
 ];
 
-export const COST_RANGE = { min: 0, max: 120 };
+export const COST_RANGE = { min: 0, max: 35 };
 
 // Spring animation config as specified
 export const SPRING_CONFIG = {
