@@ -99,16 +99,7 @@ def orchestration_fixture(tmp_path):
         mock_lock.return_value.__enter__.return_value = mock_lock
         mock_lock.return_value.__exit__.return_value = None
         mock_auto_deps.return_value = {'success': True, 'cost': 0.01, 'model': 'mock-model'}
-
-        # Create the code file when code_generator_main is called
-        # This is needed because crash operation checks if code file exists
-        def create_code_file(*args, **kwargs):
-            """Mock function that creates the code file and returns success"""
-            code_file = tmp_path / 'src' / 'calculator.py'
-            code_file.write_text("# Mock code file created by fixture\ndef calculator():\n    pass\n")
-            return {'success': True, 'cost': 0.05, 'model': 'mock-model'}
-
-        mock_code_gen.side_effect = create_code_file
+        mock_code_gen.return_value = {'success': True, 'cost': 0.05, 'model': 'mock-model'}
         mock_crash.return_value = {'success': True, 'cost': 0.08, 'model': 'mock-model'}
         mock_verify.return_value = {'success': True, 'cost': 0.10, 'model': 'mock-model'}
         mock_fix.return_value = {'success': True, 'cost': 0.15, 'model': 'mock-model'}
@@ -4628,6 +4619,11 @@ def test_auto_fix_success_saves_complete_metadata(orchestration_fixture):
     - _save_fingerprint_atomic is NOT called for crash operation (BUG)
     - run_report.json is saved correctly (this works)
     """
+    # Create code file for crash operation to detect (fixture chdirs to tmp_path)
+    from pathlib import Path
+    code_file = Path('src') / 'calculator.py'
+    code_file.write_text("# Mock code file\ndef calculator():\n    pass\n")
+
     mock_determine = orchestration_fixture['sync_determine_operation']
     mock_save_fp = orchestration_fixture['_save_fingerprint_atomic']
 
