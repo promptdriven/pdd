@@ -141,9 +141,13 @@ export const CrossingPoint: React.FC<CrossingPointPropsType> = ({
       <div
         style={{
           position: "absolute",
-          top: 120,
+          top: 270,
           right: 60,
           opacity: 1,
+          backgroundColor: "rgba(26, 26, 46, 0.85)",
+          padding: "16px 20px",
+          borderRadius: 8,
+          border: "1px solid rgba(255, 255, 255, 0.15)",
         }}
       >
         {/* Cost to Generate */}
@@ -246,9 +250,9 @@ export const CrossingPoint: React.FC<CrossingPointPropsType> = ({
         <div
           style={{
             position: "absolute",
-            bottom: 60,
+            top: "50%",
             left: "50%",
-            transform: "translateX(-50%)",
+            transform: "translate(-50%, -50%)",
             opacity: interpolate(
               frame,
               [BEATS.HOLD_START + 30, BEATS.HOLD_START + 60],

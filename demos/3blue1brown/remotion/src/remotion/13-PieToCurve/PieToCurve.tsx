@@ -398,9 +398,9 @@ export const PieToCurve: React.FC<PieToCurvePropsType> = ({
         <div
           style={{
             position: "absolute",
-            bottom: 60,
+            top: "50%",
             left: "50%",
-            transform: "translateX(-50%)",
+            transform: "translate(-50%, -50%)",
             fontFamily: "Georgia, serif",
             fontSize: 36,
             fontStyle: "italic",
@@ -415,28 +415,6 @@ export const PieToCurve: React.FC<PieToCurvePropsType> = ({
         </div>
       )}
 
-      {/* === FORMULA ANNOTATION === */}
-      {frame >= BEATS.CURVE_END && (
-        <div
-          style={{
-            position: "absolute",
-            top: CHART_MARGINS.top + 30,
-            right: CHART_MARGINS.right - 80,
-            fontFamily: "JetBrains Mono, monospace",
-            fontSize: 20,
-            color: COLORS.AMBER,
-            opacity: interpolate(
-              frame,
-              [BEATS.CURVE_END, BEATS.CURVE_END + 30],
-              [0, 0.8],
-              { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-            ),
-            textShadow: "0 2px 8px rgba(0,0,0,0.5)",
-          }}
-        >
-          y = 1.35^(year-1)
-        </div>
-      )}
     </AbsoluteFill>
   );
 };
