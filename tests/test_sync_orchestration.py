@@ -4770,7 +4770,7 @@ class TestIssue203SaveOperationFingerprintTestPromptHash:
         fp_data3 = mock_atomic3.set_fingerprint.call_args[0][0]
         assert fp_data3['test_prompt_hash'] == new_prompt_hash  # Now linked to new prompt
 
-    def test_skip_test_operation_preserves_test_prompt_hash_without_atomic_state(self, tmp_path, monkeypatch):
+    def test_skip_prefixed_operation_preserves_test_prompt_hash_without_atomic_state(self, tmp_path, monkeypatch):
         """
         Issue #203 edge case: Skip-prefixed operations (like skip:test, without atomic_state)
         should preserve existing test_prompt_hash instead of losing it.
