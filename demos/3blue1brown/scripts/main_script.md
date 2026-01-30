@@ -98,11 +98,23 @@ Now the AI is looking through a keyhole. It has to guess what's relevant. And in
 
 **[VISUAL: Return to the chart. The "Context Rot" layer in the debt area pulses. Annotation: "Faster patching → faster growth → faster rot".]**
 
-This is why AI-assisted patching feels great at first and frustrating later. It's not the model getting dumber. It's the ratio getting worse. Every patch makes the codebase bigger. Every patch shrinks what the AI can see.
+This is why AI-assisted patching is really two stories.
+
+**[VISUAL: Return to the chart. The immediate patch cost line FORKS into two paths at 2020. Lower path labeled "Small codebase" plunges down. Upper path labeled "Large codebase" stays flat. Annotation: "Same tools. Different codebase sizes."]**
+
+On a small codebase—a few thousand lines—patching with AI is genuinely transformative. Fifty-five percent faster. The context window covers everything. That's real.
+
+**[VISUAL: Focus on the upper fork. The large-codebase line stays flat at ~10-12 hours. Small annotation: "METR, 2025: experienced devs 19% slower on mature repos".]**
+
+But on a large codebase—the kind you get after years of patching—experienced developers are actually nineteen percent *slower* with AI tools. The context window can't keep up. The model guesses wrong. You spend more time fixing its suggestions than writing the code yourself.
+
+**[VISUAL: Arrow from small-codebase fork curving upward toward large-codebase fork. Label: "Every patch adds code."]**
+
+And here's the catch: every patch makes the codebase bigger. So patching pushes you from the world where AI helps into the world where it doesn't.
 
 **[VISUAL: The "Generate" line pulses with emphasis. Small annotation: "Small modules. Clear prompts. Always fits in context."]**
 
-Regeneration doesn't have this problem. A single module with a clear prompt? That fits in the window. Every time.
+Regeneration doesn't have this problem. A single module with a clear prompt? That fits in the window. Every time. And research confirms: modules in the two-hundred to four-hundred line range have the *lowest* defect density. That's exactly the size you get from a focused prompt.
 
 **[VISUAL: The blue "generate" line crosses below the dashed "total cost" line. Then keeps going, crossing below even the solid "immediate" line. Label: "We are here."]**
 

@@ -11,6 +11,7 @@ interface AnimatedLineProps {
   label?: string;
   dashed?: boolean;
   showDot?: boolean;
+  lineOpacity?: number;
 }
 
 export const AnimatedLine: React.FC<AnimatedLineProps> = ({
@@ -22,6 +23,7 @@ export const AnimatedLine: React.FC<AnimatedLineProps> = ({
   label,
   dashed = false,
   showDot = true,
+  lineOpacity = 1,
 }) => {
   const frame = useCurrentFrame();
   const { width, height } = useVideoConfig();
@@ -136,7 +138,7 @@ export const AnimatedLine: React.FC<AnimatedLineProps> = ({
       <svg
         width={width}
         height={height}
-        style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none" }}
+        style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none", opacity: lineOpacity }}
       >
         {/* The animated line */}
         {drawProgress > 0 && pathD && (

@@ -45,7 +45,8 @@ export const COLORS = {
   AREA_TECH_DEBT: "rgba(217, 148, 74, 0.3)", // Amber 30% opacity - Tech Debt
 };
 
-// Chart data points - NEW DATA STRUCTURE
+// Chart data points - FORKED DATA STRUCTURE
+// At 2020, "Immediate Cost to Patch" forks into small and large codebase paths
 export const CHART_DATA = {
   // Line 1 - Blue solid: Cost to Generate
   costToGenerate: [
@@ -56,24 +57,36 @@ export const CHART_DATA = {
     { year: 2024, hours: 6 },
     { year: 2025, hours: 3 },
   ],
-  // Line 2 - Amber solid: Immediate Cost to Patch
-  immediateCostToPatch: [
+  // Line 2 - Amber solid: Immediate Cost to Patch (pre-fork baseline, 2015-2020)
+  immediateCostBaseline: [
     { year: 2015, hours: 10 },
     { year: 2020, hours: 10 },
-    { year: 2022, hours: 7 },
-    { year: 2023, hours: 5 },
-    { year: 2024, hours: 4 },
-    { year: 2025, hours: 3.5 },
   ],
-  // Line 3 - Amber dashed: Total Cost of Patching (= Immediate + Accumulated Debt)
-  // Shaded area fills between Line 2 and Line 3
-  totalCostToPatch: [
+  // Line 2a - Amber solid (bright): Small codebase fork (post-2020)
+  immediateCostSmallCodebase: [
+    { year: 2020, hours: 10 },
+    { year: 2022, hours: 5 },
+    { year: 2023, hours: 3 },
+    { year: 2024, hours: 2 },
+    { year: 2025, hours: 1.5 },
+  ],
+  // Line 2b - Amber solid (dimmer/thinner): Large codebase fork (post-2020)
+  immediateCostLargeCodebase: [
+    { year: 2020, hours: 10 },
+    { year: 2022, hours: 10 },
+    { year: 2023, hours: 11 },
+    { year: 2024, hours: 12 },
+    { year: 2025, hours: 12 },
+  ],
+  // Line 3 - Amber dashed: Total Cost of Patching, large codebase (= immediate + debt)
+  // This line RISES from 25 to 33 — the key visual
+  totalCostLargeCodebase: [
     { year: 2015, hours: 22 },
     { year: 2020, hours: 25 },
-    { year: 2022, hours: 24 },
-    { year: 2023, hours: 24 },
-    { year: 2024, hours: 24 },
-    { year: 2025, hours: 24.5 },
+    { year: 2022, hours: 27 },
+    { year: 2023, hours: 30 },
+    { year: 2024, hours: 32 },
+    { year: 2025, hours: 33 },
   ],
 };
 

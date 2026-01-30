@@ -62,9 +62,15 @@ export const AnimatedArea: React.FC<AnimatedAreaProps> = ({
 
   if (drawProgress <= 0) return null;
 
-  // Determine the year range for drawing based on progress
-  const minYear = YEAR_RANGE.min;
-  const maxYear = YEAR_RANGE.max;
+  // Determine the year range from the actual data (not global YEAR_RANGE)
+  // so the area only draws within its data boundaries
+  const dataMinYear = Math.min(topData[0].year, bottomData[0].year);
+  const dataMaxYear = Math.max(
+    topData[topData.length - 1].year,
+    bottomData[bottomData.length - 1].year
+  );
+  const minYear = dataMinYear;
+  const maxYear = dataMaxYear;
   const currentMaxYear = minYear + (maxYear - minYear) * drawProgress;
 
   // Create sample points across the year range for smooth area

@@ -1,5 +1,5 @@
 import React from "react";
-import { AbsoluteFill, interpolate, useCurrentFrame } from "remotion";
+import { AbsoluteFill, interpolate, useCurrentFrame, useVideoConfig } from "remotion";
 import { ChartAxes } from "./ChartAxes";
 import { AnimatedLine } from "./AnimatedLine";
 import { AnimatedArea } from "./AnimatedArea";
@@ -7,6 +7,9 @@ import {
   COLORS,
   CHART_DATA,
   BEATS,
+  CHART_MARGINS,
+  YEAR_RANGE,
+  HOURS_RANGE,
   CodeCostChartPropsType,
 } from "./constants";
 
@@ -14,6 +17,18 @@ export const CodeCostChart: React.FC<CodeCostChartPropsType> = ({
   showTitle = true,
 }) => {
   const frame = useCurrentFrame();
+  const { width, height } = useVideoConfig();
+
+  const chartWidth = width - CHART_MARGINS.left - CHART_MARGINS.right;
+  const chartHeight = height - CHART_MARGINS.top - CHART_MARGINS.bottom;
+
+  const getXPosition = (year: number) => {
+    return CHART_MARGINS.left + ((year - YEAR_RANGE.min) / (YEAR_RANGE.max - YEAR_RANGE.min)) * chartWidth;
+  };
+
+  const getYPosition = (hours: number) => {
+    return CHART_MARGINS.top + chartHeight - (hours / HOURS_RANGE.max) * chartHeight;
+  };
 
   // Title morph animation: fade out old title, fade in new title
   const oldTitleOpacity = interpolate(
@@ -30,17 +45,30 @@ export const CodeCostChart: React.FC<CodeCostChartPropsType> = ({
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
 
-  // Split the data for the two-phase animation
-  // Phase 1 (frame 150-360): Draw from 1970 to 2020
-  // Phase 2 (frame 360-480): Draw from 2020 to 2024 (dramatic changes)
+  // Split data for two-phase animation
+  // Phase 1 (frame 750-1500): Draw 2015 → 2020
+  // Phase 2 (frame 1500-2700): Draw 2020 → 2025 (fork + dramatic changes)
   const costToGeneratePhase1 = CHART_DATA.costToGenerate.filter(d => d.year <= 2020);
   const costToGeneratePhase2 = CHART_DATA.costToGenerate.filter(d => d.year >= 2020);
 
-  const immediateCostPhase1 = CHART_DATA.immediateCostToPatch.filter(d => d.year <= 2020);
-  const immediateCostPhase2 = CHART_DATA.immediateCostToPatch.filter(d => d.year >= 2020);
+  const totalCostPhase1 = CHART_DATA.totalCostLargeCodebase.filter(d => d.year <= 2020);
+  const totalCostPhase2 = CHART_DATA.totalCostLargeCodebase.filter(d => d.year >= 2020);
 
-  const totalCostPhase1 = CHART_DATA.totalCostToPatch.filter(d => d.year <= 2020);
-  const totalCostPhase2 = CHART_DATA.totalCostToPatch.filter(d => d.year >= 2020);
+  // "Same tools. Different codebase sizes." annotation - mid Phase 2
+  const forkAnnotationOpacity = interpolate(
+    frame,
+    [BEATS.DRAW_LINE_MID + 300, BEATS.DRAW_LINE_MID + 360],
+    [0, 1],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+  );
+
+  // Curved arrow annotation - appears with delay during Phase 2
+  const arrowOpacity = interpolate(
+    frame,
+    [BEATS.DRAW_LINE_MID + 600, BEATS.DRAW_LINE_MID + 660],
+    [0, 1],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+  );
 
   // Annotation opacities
   const emphasisOpacity = interpolate(
@@ -64,6 +92,11 @@ export const CodeCostChart: React.FC<CodeCostChartPropsType> = ({
     [0, 1],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
+
+  // Arrow coordinates: from small codebase (~3 hrs) to large codebase (~11 hrs) at ~2023.5
+  const arrowX = getXPosition(2023.5);
+  const arrowStartY = getYPosition(3);
+  const arrowEndY = getYPosition(11);
 
   return (
     <AbsoluteFill
@@ -114,25 +147,25 @@ export const CodeCostChart: React.FC<CodeCostChartPropsType> = ({
       {/* Chart axes and grid */}
       <ChartAxes />
 
-      {/* Tech Debt Shaded Area - Phase 1: 1970 to 2020 */}
+      {/* Tech Debt Shaded Area - Phase 1: 2015 to 2020 */}
       <AnimatedArea
         topData={totalCostPhase1}
-        bottomData={immediateCostPhase1}
+        bottomData={CHART_DATA.immediateCostBaseline}
         fillColor={COLORS.AREA_TECH_DEBT}
         startFrame={BEATS.DRAW_LINE_START}
         endFrame={BEATS.DRAW_LINE_MID}
       />
 
-      {/* Tech Debt Shaded Area - Phase 2: 2020 to 2024 */}
+      {/* Tech Debt Shaded Area - Phase 2: 2020 to 2025 (above large codebase line) */}
       <AnimatedArea
         topData={totalCostPhase2}
-        bottomData={immediateCostPhase2}
+        bottomData={CHART_DATA.immediateCostLargeCodebase}
         fillColor={COLORS.AREA_TECH_DEBT}
         startFrame={BEATS.DRAW_LINE_MID}
         endFrame={BEATS.DRAW_LINE_END}
       />
 
-      {/* Cost to Generate line - Phase 1: 1970 to 2020 */}
+      {/* Cost to Generate - Phase 1: 2015 to 2020 */}
       <AnimatedLine
         data={costToGeneratePhase1}
         color={COLORS.LINE_GENERATE}
@@ -141,7 +174,7 @@ export const CodeCostChart: React.FC<CodeCostChartPropsType> = ({
         strokeWidth={4}
       />
 
-      {/* Cost to Generate line - Phase 2: 2020 to 2024 (dramatic drop) */}
+      {/* Cost to Generate - Phase 2: 2020 to 2025 (dramatic drop) */}
       <AnimatedLine
         data={costToGeneratePhase2}
         color={COLORS.LINE_GENERATE}
@@ -151,26 +184,37 @@ export const CodeCostChart: React.FC<CodeCostChartPropsType> = ({
         label="Cost to Generate"
       />
 
-      {/* Immediate Cost to Patch - Phase 1: 1970 to 2020 */}
+      {/* Immediate Cost to Patch - Phase 1: baseline 2015-2020 (single line) */}
       <AnimatedLine
-        data={immediateCostPhase1}
+        data={CHART_DATA.immediateCostBaseline}
         color={COLORS.LINE_PATCH}
         startFrame={BEATS.DRAW_LINE_START}
         endFrame={BEATS.DRAW_LINE_MID}
         strokeWidth={4}
       />
 
-      {/* Immediate Cost to Patch - Phase 2: 2020 to 2024 (also drops) */}
+      {/* Immediate Patch - Phase 2: Small codebase fork (bright, drops to 1.5) */}
       <AnimatedLine
-        data={immediateCostPhase2}
+        data={CHART_DATA.immediateCostSmallCodebase}
         color={COLORS.LINE_PATCH}
         startFrame={BEATS.DRAW_LINE_MID}
         endFrame={BEATS.DRAW_LINE_END}
-        strokeWidth={4}
-        label="Immediate Patch Cost"
+        strokeWidth={3}
+        label="Small Codebase"
       />
 
-      {/* Total Cost of Patching (dashed) - Phase 1: 1970 to 2020 */}
+      {/* Immediate Patch - Phase 2: Large codebase fork (dimmer, stays flat 10-12) */}
+      <AnimatedLine
+        data={CHART_DATA.immediateCostLargeCodebase}
+        color={COLORS.LINE_PATCH}
+        startFrame={BEATS.DRAW_LINE_MID}
+        endFrame={BEATS.DRAW_LINE_END}
+        strokeWidth={2}
+        lineOpacity={0.7}
+        label="Large Codebase"
+      />
+
+      {/* Total Cost of Patching (dashed) - Phase 1: 2015 to 2020 */}
       <AnimatedLine
         data={totalCostPhase1}
         color={COLORS.LINE_PATCH_TOTAL}
@@ -181,7 +225,7 @@ export const CodeCostChart: React.FC<CodeCostChartPropsType> = ({
         showDot={false}
       />
 
-      {/* Total Cost of Patching (dashed) - Phase 2: 2020 to 2024 (barely moves) */}
+      {/* Total Cost (dashed) - Phase 2: 2020 to 2025 (RISES to 33) */}
       <AnimatedLine
         data={totalCostPhase2}
         color={COLORS.LINE_PATCH_TOTAL}
@@ -190,14 +234,85 @@ export const CodeCostChart: React.FC<CodeCostChartPropsType> = ({
         strokeWidth={3}
         dashed={true}
         showDot={false}
-        label="Total Cost (with debt)"
+        label="True Cost (with tech debt)"
       />
+
+      {/* "Same tools. Different codebase sizes." annotation during Phase 2 */}
+      {frame >= BEATS.DRAW_LINE_MID + 300 && frame < BEATS.EMPHASIS_START && (
+        <div
+          style={{
+            position: "absolute",
+            top: "50%",
+            left: "50%",
+            transform: "translate(-50%, -50%)",
+            opacity: forkAnnotationOpacity,
+            fontFamily: "Inter, system-ui, sans-serif",
+            fontSize: 26,
+            fontWeight: 600,
+            color: "#ffffff",
+            textShadow: "0 2px 10px rgba(0,0,0,0.8)",
+            backgroundColor: "rgba(0, 0, 0, 0.6)",
+            padding: "16px 32px",
+            borderRadius: 8,
+          }}
+        >
+          Same tools. Different codebase sizes.
+        </div>
+      )}
+
+      {/* Curved arrow from small fork to large fork: "Every patch adds code" */}
+      {frame >= BEATS.DRAW_LINE_MID + 600 && (
+        <svg
+          width={width}
+          height={height}
+          style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none" }}
+        >
+          <defs>
+            <marker
+              id="arrowhead"
+              markerWidth="10"
+              markerHeight="7"
+              refX="10"
+              refY="3.5"
+              orient="auto"
+            >
+              <polygon
+                points="0 0, 10 3.5, 0 7"
+                fill={COLORS.LINE_PATCH}
+                opacity={arrowOpacity}
+              />
+            </marker>
+          </defs>
+          <path
+            d={`M ${arrowX} ${arrowStartY} C ${arrowX + 80} ${arrowStartY}, ${arrowX + 80} ${arrowEndY}, ${arrowX} ${arrowEndY}`}
+            fill="none"
+            stroke={COLORS.LINE_PATCH}
+            strokeWidth={2}
+            strokeDasharray="6,4"
+            opacity={arrowOpacity}
+            markerEnd="url(#arrowhead)"
+          />
+          <text
+            x={arrowX + 90}
+            y={(arrowStartY + arrowEndY) / 2}
+            fill="#ffffff"
+            fontSize={20}
+            fontFamily="Inter, system-ui, sans-serif"
+            fontWeight={500}
+            opacity={arrowOpacity}
+            textAnchor="start"
+            dominantBaseline="middle"
+          >
+            Every patch adds code
+          </text>
+        </svg>
+      )}
 
       {/* Legend */}
       <div
         style={{
           position: "absolute",
-          top: 120,
+          top: 300,
           right: 40,
           opacity: legendOpacity,
           backgroundColor: "rgba(0, 0, 0, 0.4)",
@@ -210,9 +325,9 @@ export const CodeCostChart: React.FC<CodeCostChartPropsType> = ({
           style={{
             display: "flex",
             alignItems: "center",
-            marginBottom: 12,
+            marginBottom: 10,
             fontFamily: "Inter, system-ui, sans-serif",
-            fontSize: 20,
+            fontSize: 18,
             fontWeight: 500,
             color: "#ffffff",
           }}
@@ -229,14 +344,14 @@ export const CodeCostChart: React.FC<CodeCostChartPropsType> = ({
           Cost to Generate
         </div>
 
-        {/* Immediate Patch Cost */}
+        {/* Immediate Patch - Small Codebase */}
         <div
           style={{
             display: "flex",
             alignItems: "center",
-            marginBottom: 12,
+            marginBottom: 10,
             fontFamily: "Inter, system-ui, sans-serif",
-            fontSize: 20,
+            fontSize: 18,
             fontWeight: 500,
             color: "#ffffff",
           }}
@@ -244,13 +359,38 @@ export const CodeCostChart: React.FC<CodeCostChartPropsType> = ({
           <div
             style={{
               width: 36,
-              height: 4,
+              height: 3,
               backgroundColor: COLORS.LINE_PATCH,
               marginRight: 12,
               borderRadius: 2,
             }}
           />
-          Immediate Patch Cost
+          Patch (Small CB)
+        </div>
+
+        {/* Immediate Patch - Large Codebase */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            marginBottom: 10,
+            fontFamily: "Inter, system-ui, sans-serif",
+            fontSize: 18,
+            fontWeight: 500,
+            color: "#ffffff",
+            opacity: 0.7,
+          }}
+        >
+          <div
+            style={{
+              width: 36,
+              height: 2,
+              backgroundColor: COLORS.LINE_PATCH,
+              marginRight: 12,
+              borderRadius: 2,
+            }}
+          />
+          Patch (Large CB)
         </div>
 
         {/* Total Cost with Debt (dashed) */}
@@ -259,7 +399,7 @@ export const CodeCostChart: React.FC<CodeCostChartPropsType> = ({
             display: "flex",
             alignItems: "center",
             fontFamily: "Inter, system-ui, sans-serif",
-            fontSize: 20,
+            fontSize: 18,
             fontWeight: 500,
             color: "#ffffff",
           }}
@@ -271,11 +411,11 @@ export const CodeCostChart: React.FC<CodeCostChartPropsType> = ({
               x2={36}
               y2={2}
               stroke={COLORS.LINE_PATCH_TOTAL}
-              strokeWidth={4}
+              strokeWidth={3}
               strokeDasharray="8,4"
             />
           </svg>
-          Total Cost with Debt
+          True Cost (with tech debt)
         </div>
       </div>
 
@@ -284,9 +424,9 @@ export const CodeCostChart: React.FC<CodeCostChartPropsType> = ({
         <div
           style={{
             position: "absolute",
-            bottom: 180,
+            top: "50%",
             left: "50%",
-            transform: "translateX(-50%)",
+            transform: "translate(-50%, -50%)",
             opacity: emphasisOpacity,
             textAlign: "center",
             backgroundColor: "rgba(0, 0, 0, 0.75)",
@@ -304,7 +444,7 @@ export const CodeCostChart: React.FC<CodeCostChartPropsType> = ({
               fontWeight: 600,
             }}
           >
-            Individual task: -55% (GitHub, 2022)
+            Small codebase: -55% (Peng et al., 2023)
           </p>
           <p
             style={{
@@ -315,7 +455,7 @@ export const CodeCostChart: React.FC<CodeCostChartPropsType> = ({
               fontWeight: 500,
             }}
           >
-            Overall throughput: ~0% (Uplevel, 2024)
+            Large codebase: +19% slower (METR, 2025)
           </p>
           <p
             style={{
@@ -337,9 +477,9 @@ export const CodeCostChart: React.FC<CodeCostChartPropsType> = ({
         <div
           style={{
             position: "absolute",
-            bottom: 180,
+            top: "50%",
             left: "50%",
-            transform: "translateX(-50%)",
+            transform: "translate(-50%, -50%)",
             opacity: crossingOpacity,
             textAlign: "center",
             backgroundColor: "rgba(0, 0, 0, 0.75)",
@@ -359,7 +499,19 @@ export const CodeCostChart: React.FC<CodeCostChartPropsType> = ({
           >
             Generate: <span style={{ color: COLORS.LINE_GENERATE, fontWeight: 700 }}>3 hrs</span>
             {" "}&nbsp;&nbsp;&nbsp;vs&nbsp;&nbsp;&nbsp;{" "}
-            Total Patch: <span style={{ color: COLORS.LINE_PATCH, fontWeight: 700 }}>24 hrs</span>
+            Large CB Total: <span style={{ color: COLORS.LINE_PATCH, fontWeight: 700 }}>33 hrs</span>
+          </p>
+          <p
+            style={{
+              fontFamily: "Inter, system-ui, sans-serif",
+              fontSize: 22,
+              color: "rgba(255, 255, 255, 0.8)",
+              margin: 0,
+              marginBottom: 12,
+              fontWeight: 400,
+            }}
+          >
+            Patching wins... if you stay small. But patching makes you grow.
           </p>
           <p
             style={{
@@ -371,7 +523,7 @@ export const CodeCostChart: React.FC<CodeCostChartPropsType> = ({
               margin: 0,
             }}
           >
-            "We are here."
+            &ldquo;We are here.&rdquo;
           </p>
         </div>
       )}
