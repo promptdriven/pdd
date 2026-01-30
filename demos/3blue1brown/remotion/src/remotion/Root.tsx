@@ -153,6 +153,150 @@ import {
   PROMPT_CODE_HEIGHT,
   defaultPromptGeneratesCodeProps,
 } from "./20-PromptGeneratesCode";
+import {
+  CrossSectionIntro,
+  CROSS_SECTION_FPS,
+  CROSS_SECTION_DURATION_FRAMES,
+  CROSS_SECTION_WIDTH,
+  CROSS_SECTION_HEIGHT,
+  defaultCrossSectionIntroProps,
+} from "./21-CrossSectionIntro";
+import {
+  WallsIlluminate,
+  WALLS_ILLUMINATE_FPS,
+  WALLS_ILLUMINATE_DURATION_FRAMES,
+  WALLS_ILLUMINATE_WIDTH,
+  WALLS_ILLUMINATE_HEIGHT,
+  defaultWallsIlluminateProps,
+} from "./22-WallsIlluminate";
+import {
+  LiquidInjection,
+  LIQUID_INJECTION_FPS,
+  LIQUID_INJECTION_DURATION_FRAMES,
+  LIQUID_INJECTION_WIDTH,
+  LIQUID_INJECTION_HEIGHT,
+  defaultLiquidInjectionProps,
+} from "./23-LiquidInjection";
+import {
+  FocusSingleWall,
+  FOCUS_WALL_FPS,
+  FOCUS_WALL_DURATION_FRAMES,
+  FOCUS_WALL_WIDTH,
+  FOCUS_WALL_HEIGHT,
+  defaultFocusSingleWallProps,
+} from "./24-FocusSingleWall";
+import {
+  BugDiscovered,
+  BUG_DISCOVERED_FPS,
+  BUG_DISCOVERED_DURATION_FRAMES,
+  BUG_DISCOVERED_WIDTH,
+  BUG_DISCOVERED_HEIGHT,
+  defaultBugDiscoveredProps,
+} from "./25-BugDiscovered";
+import {
+  AddTestWall,
+  ADD_TEST_WALL_FPS,
+  ADD_TEST_WALL_DURATION_FRAMES,
+  ADD_TEST_WALL_WIDTH,
+  ADD_TEST_WALL_HEIGHT,
+  defaultAddTestWallProps,
+} from "./26-AddTestWall";
+import {
+  CodeRegenerates,
+  CODE_REGEN_FPS,
+  CODE_REGEN_DURATION_FRAMES,
+  CODE_REGEN_WIDTH,
+  CODE_REGEN_HEIGHT,
+  defaultCodeRegeneratesProps,
+} from "./27-CodeRegenerates";
+import {
+  RatchetTimelapse,
+  RATCHET_FPS,
+  RATCHET_DURATION_FRAMES,
+  RATCHET_WIDTH,
+  RATCHET_HEIGHT,
+  defaultRatchetTimelapseProps,
+} from "./28-RatchetTimelapse";
+import {
+  TraditionalVsPdd,
+  TRADITIONAL_VS_PDD_FPS,
+  TRADITIONAL_VS_PDD_DURATION_FRAMES,
+  TRADITIONAL_VS_PDD_WIDTH,
+  TRADITIONAL_VS_PDD_HEIGHT,
+  defaultTraditionalVsPddProps,
+} from "./29-TraditionalVsPdd";
+import {
+  InjectionNozzle,
+  NOZZLE_FPS,
+  NOZZLE_DURATION_FRAMES,
+  NOZZLE_WIDTH,
+  NOZZLE_HEIGHT,
+  defaultInjectionNozzleProps,
+} from "./30-InjectionNozzle";
+import {
+  PromptTextFlows,
+  PROMPT_FLOW_FPS,
+  PROMPT_FLOW_DURATION_FRAMES,
+  PROMPT_FLOW_WIDTH,
+  PROMPT_FLOW_HEIGHT,
+  defaultPromptTextFlowsProps,
+} from "./31-PromptTextFlows";
+import {
+  PromptVariations,
+  PROMPT_VARIATIONS_FPS,
+  PROMPT_VARIATIONS_DURATION_FRAMES,
+  PROMPT_VARIATIONS_WIDTH,
+  PROMPT_VARIATIONS_HEIGHT,
+  defaultPromptVariationsProps,
+} from "./32-PromptVariations";
+import {
+  PromptGovernsCode,
+  PROMPT_GOVERNS_FPS,
+  PROMPT_GOVERNS_DURATION_FRAMES,
+  PROMPT_GOVERNS_WIDTH,
+  PROMPT_GOVERNS_HEIGHT,
+  defaultPromptGovernsCodeProps,
+} from "./33-PromptGovernsCode";
+import {
+  GroundingPanel,
+  GROUNDING_PANEL_FPS,
+  GROUNDING_PANEL_DURATION_FRAMES,
+  GROUNDING_PANEL_WIDTH,
+  GROUNDING_PANEL_HEIGHT,
+  defaultGroundingPanelProps,
+} from "./34-GroundingPanel";
+import {
+  GroundingComparison,
+  GROUNDING_COMPARISON_FPS,
+  GROUNDING_COMPARISON_DURATION_FRAMES,
+  GROUNDING_COMPARISON_WIDTH,
+  GROUNDING_COMPARISON_HEIGHT,
+  defaultGroundingComparisonProps,
+} from "./35-GroundingComparison";
+import {
+  GroundingDatabase,
+  GROUNDING_DB_FPS,
+  GROUNDING_DB_DURATION_FRAMES,
+  GROUNDING_DB_WIDTH,
+  GROUNDING_DB_HEIGHT,
+  defaultGroundingDatabaseProps,
+} from "./36-GroundingDatabase";
+import {
+  ThreeComponents,
+  THREE_COMPONENTS_FPS,
+  THREE_COMPONENTS_DURATION_FRAMES,
+  THREE_COMPONENTS_WIDTH,
+  THREE_COMPONENTS_HEIGHT,
+  defaultThreeComponentsProps,
+} from "./37-ThreeComponents";
+import {
+  CodeOutputMoldGlows,
+  CODE_OUTPUT_FPS,
+  CODE_OUTPUT_DURATION_FRAMES,
+  CODE_OUTPUT_WIDTH,
+  CODE_OUTPUT_HEIGHT,
+  defaultCodeOutputMoldGlowsProps,
+} from "./38-CodeOutputMoldGlows";
 
 export const RemotionRoot: React.FC = () => {
   return (
@@ -353,6 +497,204 @@ export const RemotionRoot: React.FC = () => {
           width={PROMPT_CODE_WIDTH}
           height={PROMPT_CODE_HEIGHT}
           defaultProps={defaultPromptGeneratesCodeProps}
+        />
+      </Folder>
+      <Folder name="21-CrossSectionIntro">
+        <Composition
+          id="CrossSectionIntro"
+          component={CrossSectionIntro}
+          durationInFrames={CROSS_SECTION_DURATION_FRAMES}
+          fps={CROSS_SECTION_FPS}
+          width={CROSS_SECTION_WIDTH}
+          height={CROSS_SECTION_HEIGHT}
+          defaultProps={defaultCrossSectionIntroProps}
+        />
+      </Folder>
+      <Folder name="22-WallsIlluminate">
+        <Composition
+          id="WallsIlluminate"
+          component={WallsIlluminate}
+          durationInFrames={WALLS_ILLUMINATE_DURATION_FRAMES}
+          fps={WALLS_ILLUMINATE_FPS}
+          width={WALLS_ILLUMINATE_WIDTH}
+          height={WALLS_ILLUMINATE_HEIGHT}
+          defaultProps={defaultWallsIlluminateProps}
+        />
+      </Folder>
+      <Folder name="23-LiquidInjection">
+        <Composition
+          id="LiquidInjection"
+          component={LiquidInjection}
+          durationInFrames={LIQUID_INJECTION_DURATION_FRAMES}
+          fps={LIQUID_INJECTION_FPS}
+          width={LIQUID_INJECTION_WIDTH}
+          height={LIQUID_INJECTION_HEIGHT}
+          defaultProps={defaultLiquidInjectionProps}
+        />
+      </Folder>
+      <Folder name="24-FocusSingleWall">
+        <Composition
+          id="FocusSingleWall"
+          component={FocusSingleWall}
+          durationInFrames={FOCUS_WALL_DURATION_FRAMES}
+          fps={FOCUS_WALL_FPS}
+          width={FOCUS_WALL_WIDTH}
+          height={FOCUS_WALL_HEIGHT}
+          defaultProps={defaultFocusSingleWallProps}
+        />
+      </Folder>
+      <Folder name="25-BugDiscovered">
+        <Composition
+          id="BugDiscovered"
+          component={BugDiscovered}
+          durationInFrames={BUG_DISCOVERED_DURATION_FRAMES}
+          fps={BUG_DISCOVERED_FPS}
+          width={BUG_DISCOVERED_WIDTH}
+          height={BUG_DISCOVERED_HEIGHT}
+          defaultProps={defaultBugDiscoveredProps}
+        />
+      </Folder>
+      <Folder name="26-AddTestWall">
+        <Composition
+          id="AddTestWall"
+          component={AddTestWall}
+          durationInFrames={ADD_TEST_WALL_DURATION_FRAMES}
+          fps={ADD_TEST_WALL_FPS}
+          width={ADD_TEST_WALL_WIDTH}
+          height={ADD_TEST_WALL_HEIGHT}
+          defaultProps={defaultAddTestWallProps}
+        />
+      </Folder>
+      <Folder name="27-CodeRegenerates">
+        <Composition
+          id="CodeRegenerates"
+          component={CodeRegenerates}
+          durationInFrames={CODE_REGEN_DURATION_FRAMES}
+          fps={CODE_REGEN_FPS}
+          width={CODE_REGEN_WIDTH}
+          height={CODE_REGEN_HEIGHT}
+          defaultProps={defaultCodeRegeneratesProps}
+        />
+      </Folder>
+      <Folder name="28-RatchetTimelapse">
+        <Composition
+          id="RatchetTimelapse"
+          component={RatchetTimelapse}
+          durationInFrames={RATCHET_DURATION_FRAMES}
+          fps={RATCHET_FPS}
+          width={RATCHET_WIDTH}
+          height={RATCHET_HEIGHT}
+          defaultProps={defaultRatchetTimelapseProps}
+        />
+      </Folder>
+      <Folder name="29-TraditionalVsPdd">
+        <Composition
+          id="TraditionalVsPdd"
+          component={TraditionalVsPdd}
+          durationInFrames={TRADITIONAL_VS_PDD_DURATION_FRAMES}
+          fps={TRADITIONAL_VS_PDD_FPS}
+          width={TRADITIONAL_VS_PDD_WIDTH}
+          height={TRADITIONAL_VS_PDD_HEIGHT}
+          defaultProps={defaultTraditionalVsPddProps}
+        />
+      </Folder>
+      <Folder name="30-InjectionNozzle">
+        <Composition
+          id="InjectionNozzle"
+          component={InjectionNozzle}
+          durationInFrames={NOZZLE_DURATION_FRAMES}
+          fps={NOZZLE_FPS}
+          width={NOZZLE_WIDTH}
+          height={NOZZLE_HEIGHT}
+          defaultProps={defaultInjectionNozzleProps}
+        />
+      </Folder>
+      <Folder name="31-PromptTextFlows">
+        <Composition
+          id="PromptTextFlows"
+          component={PromptTextFlows}
+          durationInFrames={PROMPT_FLOW_DURATION_FRAMES}
+          fps={PROMPT_FLOW_FPS}
+          width={PROMPT_FLOW_WIDTH}
+          height={PROMPT_FLOW_HEIGHT}
+          defaultProps={defaultPromptTextFlowsProps}
+        />
+      </Folder>
+      <Folder name="32-PromptVariations">
+        <Composition
+          id="PromptVariations"
+          component={PromptVariations}
+          durationInFrames={PROMPT_VARIATIONS_DURATION_FRAMES}
+          fps={PROMPT_VARIATIONS_FPS}
+          width={PROMPT_VARIATIONS_WIDTH}
+          height={PROMPT_VARIATIONS_HEIGHT}
+          defaultProps={defaultPromptVariationsProps}
+        />
+      </Folder>
+      <Folder name="33-PromptGovernsCode">
+        <Composition
+          id="PromptGovernsCode"
+          component={PromptGovernsCode}
+          durationInFrames={PROMPT_GOVERNS_DURATION_FRAMES}
+          fps={PROMPT_GOVERNS_FPS}
+          width={PROMPT_GOVERNS_WIDTH}
+          height={PROMPT_GOVERNS_HEIGHT}
+          defaultProps={defaultPromptGovernsCodeProps}
+        />
+      </Folder>
+      <Folder name="34-GroundingPanel">
+        <Composition
+          id="GroundingPanel"
+          component={GroundingPanel}
+          durationInFrames={GROUNDING_PANEL_DURATION_FRAMES}
+          fps={GROUNDING_PANEL_FPS}
+          width={GROUNDING_PANEL_WIDTH}
+          height={GROUNDING_PANEL_HEIGHT}
+          defaultProps={defaultGroundingPanelProps}
+        />
+      </Folder>
+      <Folder name="35-GroundingComparison">
+        <Composition
+          id="GroundingComparison"
+          component={GroundingComparison}
+          durationInFrames={GROUNDING_COMPARISON_DURATION_FRAMES}
+          fps={GROUNDING_COMPARISON_FPS}
+          width={GROUNDING_COMPARISON_WIDTH}
+          height={GROUNDING_COMPARISON_HEIGHT}
+          defaultProps={defaultGroundingComparisonProps}
+        />
+      </Folder>
+      <Folder name="36-GroundingDatabase">
+        <Composition
+          id="GroundingDatabase"
+          component={GroundingDatabase}
+          durationInFrames={GROUNDING_DB_DURATION_FRAMES}
+          fps={GROUNDING_DB_FPS}
+          width={GROUNDING_DB_WIDTH}
+          height={GROUNDING_DB_HEIGHT}
+          defaultProps={defaultGroundingDatabaseProps}
+        />
+      </Folder>
+      <Folder name="37-ThreeComponents">
+        <Composition
+          id="ThreeComponents"
+          component={ThreeComponents}
+          durationInFrames={THREE_COMPONENTS_DURATION_FRAMES}
+          fps={THREE_COMPONENTS_FPS}
+          width={THREE_COMPONENTS_WIDTH}
+          height={THREE_COMPONENTS_HEIGHT}
+          defaultProps={defaultThreeComponentsProps}
+        />
+      </Folder>
+      <Folder name="38-CodeOutputMoldGlows">
+        <Composition
+          id="CodeOutputMoldGlows"
+          component={CodeOutputMoldGlows}
+          durationInFrames={CODE_OUTPUT_DURATION_FRAMES}
+          fps={CODE_OUTPUT_FPS}
+          width={CODE_OUTPUT_WIDTH}
+          height={CODE_OUTPUT_HEIGHT}
+          defaultProps={defaultCodeOutputMoldGlowsProps}
         />
       </Folder>
       <Folder name="Examples">
