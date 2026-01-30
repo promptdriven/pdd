@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -8,6 +9,8 @@ import time
 import webbrowser
 from pathlib import Path
 from typing import Dict, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 # Cross-platform keyring import with fallback for WSL compatibility
 try:
@@ -205,7 +208,7 @@ def _cache_jwt(jwt: str, expires_in: int = 3600) -> None:
         os.chmod(JWT_CACHE_FILE, 0o600)
     except (IOError, OSError) as e:
         # Cache write failed, continue without caching
-        print(f"Warning: Failed to cache JWT: {e}")
+        logger.warning(f"Failed to cache JWT: {e}")
 
 
 def _macos_force_delete_keychain_item(service_name: str, account_name: str) -> bool:
@@ -388,7 +391,7 @@ class FirebaseAuthenticator:
                     continue
 
                 # Non-duplicate error or final retry failed
-                print(f"Warning: Failed to store refresh token in keyring: {e}")
+                logger.warning(f"Failed to store refresh token in keyring: {e}")
                 return False
 
         return False
@@ -400,7 +403,7 @@ class FirebaseAuthenticator:
         try:
             return keyring.get_password(self.keyring_service_name, self.keyring_user_name)
         except Exception as e:
-            print(f"Warning: Failed to retrieve refresh token from keyring: {e}")
+            logger.warning(f"Failed to retrieve refresh token from keyring: {e}")
             return None
 
     def _delete_stored_refresh_token(self) -> bool:
