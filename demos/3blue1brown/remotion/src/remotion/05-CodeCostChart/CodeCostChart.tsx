@@ -304,7 +304,7 @@ export const CodeCostChart: React.FC<CodeCostChartPropsType> = ({
               fontWeight: 600,
             }}
           >
-            AI made each patch faster...
+            Individual task: -55% (GitHub, 2022)
           </p>
           <p
             style={{
@@ -315,7 +315,7 @@ export const CodeCostChart: React.FC<CodeCostChartPropsType> = ({
               fontWeight: 500,
             }}
           >
-            ...but debt still accumulates
+            Overall throughput: ~0% (Uplevel, 2024)
           </p>
         </div>
       )}
@@ -345,7 +345,7 @@ export const CodeCostChart: React.FC<CodeCostChartPropsType> = ({
               fontWeight: 500,
             }}
           >
-            Generate: <span style={{ color: COLORS.LINE_GENERATE, fontWeight: 700 }}>6 hrs</span>
+            Generate: <span style={{ color: COLORS.LINE_GENERATE, fontWeight: 700 }}>3 hrs</span>
             {" "}&nbsp;&nbsp;&nbsp;vs&nbsp;&nbsp;&nbsp;{" "}
             Total Patch: <span style={{ color: COLORS.LINE_PATCH, fontWeight: 700 }}>24 hrs</span>
           </p>
@@ -359,7 +359,7 @@ export const CodeCostChart: React.FC<CodeCostChartPropsType> = ({
               margin: 0,
             }}
           >
-            "Generation: no accumulated debt"
+            "We are here."
           </p>
         </div>
       )}

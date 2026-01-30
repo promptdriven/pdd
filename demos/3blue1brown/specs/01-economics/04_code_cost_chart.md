@@ -1,8 +1,8 @@
 # Section 1.4: Code Cost Chart
 
 **Tool:** Remotion
-**Duration:** ~20 seconds
-**Timestamp:** 2:45 - 3:05
+**Duration:** ~120 seconds
+**Timestamp:** 2:45 - 4:45
 
 ## Visual Description
 
@@ -24,11 +24,11 @@ The sock chart morphs into the code chart:
 
 ### Chart Elements
 
-- **X-axis:** Years (1970 - 2024)
+- **X-axis:** Years (2015 - 2025)
 - **Y-axis:** "Cost (Developer Hours)" (0 - 100 hours for a typical module)
 - **Line 1 (Cost to Generate/Write from Scratch):**
   - Color: #4A90D9 (cool blue)
-  - Starts very high (~80 hours in 1970)
+  - Starts high (~32 hours in 2015)
   - Stays high through 2020
   - Then drops dramatically 2020-2024
 - **Line 2 (Immediate Cost to Patch):**
@@ -51,49 +51,49 @@ The sock chart morphs into the code chart:
 
 ### Animation Sequence
 
-1. **Frame 0-90 (0-3s):** Morphing transition from sock chart
+1. **Frame 0-540 (0-18s):** Morphing transition from sock chart
    - Old labels fade, new labels fade in
    - Lines reshape smoothly
 
-2. **Frame 90-150 (3-5s):** New axes and title fully visible
+2. **Frame 540-750 (18-25s):** New axes and title fully visible
    - Only "Generate" and "Immediate Patch" lines visible initially
 
-3. **Frame 150-360 (5-12s):** Chart draws 1970 → 2020
+3. **Frame 750-1500 (25-50s):** Chart draws 2015 → 2020
    - "Cost to Generate" stays high (blue, solid)
    - "Immediate Cost to Patch" stays low (amber, solid)
    - Tech debt shaded area gradually grows above patch line
    - Dashed "Total Cost" line appears at top of shaded area
 
-4. **Frame 360-480 (12-16s):** 2020 → 2024 - THE KEY MOMENT
+4. **Frame 1500-2700 (50-90s):** 2020 → 2025 - THE KEY MOMENT
    - "Generate" line drops steeply (blue plunges down)
    - "Immediate Patch" line ALSO drops (amber goes down—validating AI tools)
    - **BUT:** Tech debt area EXPANDS upward as immediate line drops
    - **NET EFFECT:** The dashed "Total Cost" line barely moves
    - Visual: immediate cost and debt area move in opposite directions, canceling out
 
-5. **Frame 480-540 (16-18s):** Emphasis beat
+5. **Frame 2700-3240 (90-108s):** Emphasis beat
    - Highlight the gap between:
      - Where you FEEL you are (immediate cost: 4 hours)
      - Where you ACTUALLY are (total cost: 24 hours)
-   - Annotation appears: "AI made each patch faster..."
-   - Second annotation: "...but debt still accumulates"
+   - Annotation appears near dropping solid line: "Individual task: -55% (GitHub, 2022)"
+   - Second annotation appears near flat dashed line: "Overall throughput: ~0% (Uplevel, 2024)"
 
-6. **Frame 540-600 (18-20s):** Crossing point
-   - Generate line (6 hrs) now FAR below total patch cost (24 hrs)
+6. **Frame 3240-3600 (108-120s):** Crossing point
+   - Generate line (3 hrs) now FAR below total patch cost (24 hrs)
    - Generate line crosses below immediate patch cost too (4 hrs)
-   - Label: "Generation: no accumulated debt"
+   - Label: "We are here."
 
 ### Typography
 
 - Title: "The Economics of Code" (centered top)
 - Y-axis: "Developer Hours"
-- X-axis: Decades marked, then individual years for 2020-2024
+- X-axis: 2015 and 2020 marked, then individual years for 2020-2025
 
 ### Data Narrative
 
 The key insight is MORE NUANCED than "generation got cheap":
 
-1. **Pre-AI era (1970-2020):** Generation was expensive, patching was cheap. Patching was rational.
+1. **Pre-AI era (2015-2020):** Generation was expensive, patching was cheap. Patching was rational.
 2. **AI era (2020-2024):** AI reduced BOTH costs. Cursor, Claude Code, Copilot all make patching faster too.
 3. **But generation fell faster:** The same AI that helps you patch can generate entire modules.
 4. **The hidden cost:** Patching accumulates tech debt. Each patch makes the next one harder. Generation starts fresh—no debt.
@@ -102,7 +102,7 @@ The crossing point isn't just "generate < patch." It's "generate < patch + accum
 
 ### Easing
 
-- Morph transition: `easeInOutCubic` over 90 frames
+- Morph transition: `easeInOutCubic` over 540 frames
 - Line drawing: `easeOutQuad`
 
 ## Narration Sync
@@ -112,54 +112,53 @@ The crossing point isn't just "generate < patch." It's "generate < patch + accum
 > "For fifty years, generating new code was expensive. Writing from scratch took hours, days, weeks. So when something broke, you patched. Of course you patched. It was rational."
 >
 > [As both lines drop post-2020:]
-> "And yes—AI made patching faster too. Cursor, Claude Code, Copilot—they're remarkable tools."
+> "Now, here's where it gets interesting. AI made patching faster too. Cursor, Claude Code, Copilot—they're incredible tools. They understand your codebase, suggest fixes, catch bugs before you make them."
 >
 > [Camera follows the dropping immediate patch line:]
-> "Look—the cost of each patch is falling. That's real. That's what you feel when you use these tools."
+> "Look—each patch is getting faster. That's real. That's what you feel when you use these tools."
 >
 > [Camera pulls back to show the expanding debt area:]
-> "But watch the total. Watch what happens to the dashed line."
+> "But watch the dashed line. The total cost. It's barely moving."
 >
-> [Dashed line stays flat while immediate line drops:]
-> "It's barely moving. Because every patch—even fast ones—still leaves residue. Technical debt."
+> "Because even though each patch is faster, every patch still leaves residue. Technical debt. And that debt accumulates—faster now, because you're patching faster."
 >
-> [Annotations appear:]
-> "AI made each patch faster. But faster patches just means faster accumulation."
+> [Annotations appear — study citations near their respective lines:]
+> "GitHub measured a fifty-five percent speedup on individual coding tasks. But when researchers tracked overall developer throughput? No significant change. The debt ate the rest."
 >
-> [Generate line crosses far below total:]
-> "Generation doesn't have this problem. You start fresh. No debt to inherit, no debt to leave behind."
+> [Generate line crosses far below both lines:]
+> "Meanwhile, generation just crossed below both lines. And it comes with no debt. No rot."
 
 ## Code Structure (Remotion)
 
 ```typescript
-<Sequence from={0} durationInFrames={600}>
+<Sequence from={0} durationInFrames={3600}>
   {/* Morph transition */}
-  <Sequence from={0} durationInFrames={90}>
+  <Sequence from={0} durationInFrames={540}>
     <MorphTransition
       from={<SockChart />}
       to={<CodeChartAxes />}
     />
   </Sequence>
 
-  {/* Chart content - historical period (1970-2020) */}
-  <Sequence from={90}>
+  {/* Chart content - historical period (2015-2020) */}
+  <Sequence from={540}>
     <ChartTitle text="The Economics of Code" />
 
     {/* Generate line - stays high */}
     <AnimatedLine
-      data={costToGenerateData.slice(0, 6)}
+      data={costToGenerateData.slice(0, 2)}
       color="#4A90D9"
       strokeStyle="solid"
-      drawDuration={270}
+      drawDuration={960}
       label="Cost to generate"
     />
 
     {/* Immediate patch cost - stays low */}
     <AnimatedLine
-      data={immediateCostToPatch.slice(0, 4)}
+      data={immediateCostToPatch.slice(0, 2)}
       color="#D9944A"
       strokeStyle="solid"
-      drawDuration={270}
+      drawDuration={960}
       label="Immediate patch cost"
     />
 
@@ -169,35 +168,35 @@ The crossing point isn't just "generate < patch." It's "generate < patch + accum
       topData={totalCostToPatch}
       color="#D9944A"
       opacity={0.3}
-      drawDuration={270}
+      drawDuration={960}
     />
 
     {/* Total cost (dashed) - at top of shaded area */}
     <AnimatedLine
-      data={totalCostToPatch.slice(0, 4)}
+      data={totalCostToPatch.slice(0, 2)}
       color="#D9944A"
       strokeStyle="dashed"
-      drawDuration={270}
+      drawDuration={960}
       label="Total cost (with debt)"
     />
   </Sequence>
 
-  {/* AI era (2020-2024) - the key visual moment */}
-  <Sequence from={360}>
+  {/* AI era (2020-2025) - the key visual moment */}
+  <Sequence from={1500}>
     {/* Generate plunges */}
     <AnimatedLine
-      data={costToGenerateData.slice(5)}
+      data={costToGenerateData.slice(1)}
       color="#4A90D9"
       strokeStyle="solid"
-      drawDuration={120}
+      drawDuration={1200}
     />
 
     {/* Immediate patch drops (AI helps!) */}
     <AnimatedLine
-      data={immediateCostToPatch.slice(3)}
+      data={immediateCostToPatch.slice(1)}
       color="#D9944A"
       strokeStyle="solid"
-      drawDuration={120}
+      drawDuration={1200}
     />
 
     {/* Debt area EXPANDS as immediate drops */}
@@ -206,28 +205,28 @@ The crossing point isn't just "generate < patch." It's "generate < patch + accum
       topData={totalCostToPatchRecent}
       color="#D9944A"
       opacity={0.3}
-      drawDuration={120}
+      drawDuration={1200}
       expandAnimation={true}  // Visually emphasize growth
     />
 
     {/* Total cost barely moves (the punch line) */}
     <AnimatedLine
-      data={totalCostToPatch.slice(3)}
+      data={totalCostToPatch.slice(1)}
       color="#D9944A"
       strokeStyle="dashed"
-      drawDuration={120}
+      drawDuration={1200}
     />
   </Sequence>
 
-  {/* Emphasis: the gap between feeling and reality */}
-  <Sequence from={480}>
+  {/* Emphasis: study citation annotations */}
+  <Sequence from={2700}>
     <Annotation
-      text="AI made each patch faster..."
+      text="Individual task: -55% (GitHub, 2022)"
       position="near-immediate-line"
       fadeIn={30}
     />
     <Annotation
-      text="...but debt still accumulates"
+      text="Overall throughput: ~0% (Uplevel, 2024)"
       position="near-total-line"
       fadeIn={30}
       delay={30}
@@ -235,11 +234,12 @@ The crossing point isn't just "generate < patch." It's "generate < patch + accum
   </Sequence>
 
   {/* Crossing point */}
-  <Sequence from={540}>
+  <Sequence from={3240}>
     <CrossingPointHighlight
-      generateValue={6}
+      generateValue={3}
       totalPatchValue={24}
-      label="Generation: no accumulated debt"
+      immediatePatchValue={4}
+      label="We are here."
     />
   </Sequence>
 </Sequence>
@@ -250,42 +250,36 @@ The crossing point isn't just "generate < patch." It's "generate < patch + accum
 ```json
 {
   "costToGenerate": [
-    { "year": 1970, "hours": 80 },
-    { "year": 1980, "hours": 60 },
-    { "year": 1990, "hours": 50 },
-    { "year": 2000, "hours": 40 },
-    { "year": 2010, "hours": 35 },
+    { "year": 2015, "hours": 32 },
     { "year": 2020, "hours": 30 },
     { "year": 2022, "hours": 18 },
     { "year": 2023, "hours": 10 },
-    { "year": 2024, "hours": 6 }
+    { "year": 2024, "hours": 6 },
+    { "year": 2025, "hours": 3 }
   ],
   "immediateCostToPatch": [
-    { "year": 1970, "hours": 8 },
-    { "year": 1990, "hours": 9 },
-    { "year": 2010, "hours": 10 },
+    { "year": 2015, "hours": 10 },
     { "year": 2020, "hours": 10 },
     { "year": 2022, "hours": 7 },
     { "year": 2023, "hours": 5 },
-    { "year": 2024, "hours": 4 }
+    { "year": 2024, "hours": 4 },
+    { "year": 2025, "hours": 3.5 }
   ],
   "techDebtAccumulation": [
-    { "year": 1970, "hours": 0 },
-    { "year": 1990, "hours": 3 },
-    { "year": 2010, "hours": 8 },
+    { "year": 2015, "hours": 12 },
     { "year": 2020, "hours": 15 },
     { "year": 2022, "hours": 17 },
     { "year": 2023, "hours": 19 },
-    { "year": 2024, "hours": 20 }
+    { "year": 2024, "hours": 20 },
+    { "year": 2025, "hours": 21 }
   ],
   "totalCostToPatch (computed: immediate + debt)": [
-    { "year": 1970, "hours": 8,  "note": "8 + 0" },
-    { "year": 1990, "hours": 12, "note": "9 + 3" },
-    { "year": 2010, "hours": 18, "note": "10 + 8" },
+    { "year": 2015, "hours": 22, "note": "10 + 12" },
     { "year": 2020, "hours": 25, "note": "10 + 15" },
     { "year": 2022, "hours": 24, "note": "7 + 17" },
     { "year": 2023, "hours": 24, "note": "5 + 19" },
-    { "year": 2024, "hours": 24, "note": "4 + 20" }
+    { "year": 2024, "hours": 24, "note": "4 + 20" },
+    { "year": 2025, "hours": 24.5, "note": "3.5 + 21" }
   ]
 }
 ```
@@ -297,10 +291,12 @@ The crossing point isn't just "generate < patch." It's "generate < patch + accum
 | 2020 | 10 hrs | +15 | **25 hrs** | 30 hrs |
 | 2022 | 7 hrs (-30%) | +17 | **24 hrs** | 18 hrs |
 | 2023 | 5 hrs (-50%) | +19 | **24 hrs** | 10 hrs |
-| 2024 | 4.5 hrs (-55%) | +19.5 | **24 hrs** | 6 hrs |
+| 2024 | 4 hrs (-60%) | +20 | **24 hrs** | 6 hrs |
+| 2025 | 3.5 hrs (-65%) | +21 | **24.5 hrs** | 3 hrs |
 
-**The insight:** Immediate patch cost dropped 55% (10→4.5), but total cost barely moved (25→24).
-The debt ate all the productivity gains. Meanwhile, generation dropped 80% (30→6) with no debt.
+**The insight:** Immediate patch cost dropped 65% (10→3.5), but total cost barely moved (25→24.5).
+The debt ate all the productivity gains. Meanwhile, generation dropped 90% (30→3) with no debt.
+By 2025, generation (3 hrs) crosses below even the immediate patch cost (3.5 hrs).
 
 ### Key Visual Technique: The Expanding Gap
 
@@ -325,9 +321,8 @@ stroke) when it refuses to drop despite the immediate line falling.
 
 ### Data Sources & Rationale
 
-**Historical (1970-2020):** Based on Fred Brooks' *Mythical Man-Month* (~10 LOC/day on
-complex systems) and industry estimation benchmarks showing typical modules at 40-80 hours.
-Gradual decline reflects improved languages, IDEs, and frameworks.
+**Historical (2015-2020):** Based on industry estimation benchmarks showing typical modules
+at 30-40 hours. Gradual decline reflects improved languages, IDEs, and frameworks.
 
 **AI Era (2020-2024):** Studies show 20-55% productivity gains for BOTH generation and patching:
 - Peng et al. 2023: 55.8% faster task completion
