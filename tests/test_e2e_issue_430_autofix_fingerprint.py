@@ -102,7 +102,7 @@ class TestAutoFixFingerprintSaveE2E:
             "operations_completed": ["generate", "example"]
         }
 
-        fingerprint_file = meta_dir / f"{basename}_{language}_fingerprint.json"
+        fingerprint_file = meta_dir / f"{basename}_{language}.json"  # Correct filename format
         with open(fingerprint_file, 'w') as f:
             json.dump(initial_fingerprint, f, indent=2)
 
@@ -173,15 +173,17 @@ class TestAutoFixFingerprintSaveE2E:
         with open(fingerprint_file, 'r') as f:
             saved_fingerprint = json.load(f)
 
-        # 2. THE KEY ASSERTION: operations_completed should include 'crash'
-        ops_completed = saved_fingerprint.get('operations_completed', [])
-        assert 'crash' in ops_completed, (
-            f"ISSUE #430 BUG DETECTED: 'crash' missing from operations_completed!\n\n"
+        # 2. THE KEY ASSERTION: command field should be 'crash'
+        # Note: Fingerprint doesn't store operations_completed (that's in-memory only)
+        # It only stores the last operation in the 'command' field
+        saved_command = saved_fingerprint.get('command')
+        assert saved_command == 'crash', (
+            f"ISSUE #430 BUG DETECTED: fingerprint command should be 'crash'!\n\n"
             f"Scenario: Auto-fix successfully resolved import error during crash operation.\n\n"
-            f"Expected: operations_completed = ['generate', 'example', 'crash']\n"
-            f"Actual: operations_completed = {ops_completed}\n\n"
+            f"Expected: command = 'crash'\n"
+            f"Actual: command = {saved_command}\n\n"
             f"Root cause: The continue statement at sync_orchestration.py:1412 skips the\n"
-            f"operations_completed.append('crash') at line 1715.\n\n"
+            f"_save_fingerprint_atomic call that would save command='crash'.\n\n"
             f"Without this fix, the sync workflow metadata is incomplete:\n"
             f"- Fingerprint doesn't reflect the crash operation completed\n"
             f"- Next sync may incorrectly re-run the crash operation\n"
@@ -194,20 +196,11 @@ class TestAutoFixFingerprintSaveE2E:
             f"The fingerprint should reflect the last completed operation."
         )
 
-        # 4. Verify fingerprint shows auto-fix model
-        assert saved_fingerprint.get('model') == 'auto-fix', (
-            f"ISSUE #430: Fingerprint model should be 'auto-fix', got '{saved_fingerprint.get('model')}'\n"
-            f"This indicates auto-fix resolved the crash, not a regular LLM call."
-        )
+        # Note: Fingerprint doesn't store model or cost - those are tracked elsewhere
+        # The fingerprint only tracks the last operation (command) and file hashes
 
-        # 5. Verify fingerprint shows zero cost
-        assert saved_fingerprint.get('cost') == 0.0, (
-            f"ISSUE #430: Fingerprint cost should be 0.0, got {saved_fingerprint.get('cost')}\n"
-            f"Auto-fix operations are free (no LLM calls)."
-        )
-
-        # 6. Verify run report was also saved
-        run_report_file = meta_dir / f"{basename}_{language}_run_report.json"
+        # 4. Verify run report was also saved
+        run_report_file = meta_dir / f"{basename}_{language}_run.json"  # Correct filename format
         assert run_report_file.exists(), "Run report should be saved"
 
         with open(run_report_file, 'r') as f:
@@ -280,9 +273,6 @@ class TestAutoFixFingerprintSaveE2E:
         }
 
         # Simulate auto-fix success following the same pattern as other early exits
-        operations_completed = ['generate', 'example', 'crash']
-        atomic_state = {'operations_completed': operations_completed}
-
         # This is what SHOULD happen before continue at line 1412
         _save_fingerprint_atomic(
             basename,
@@ -291,20 +281,20 @@ class TestAutoFixFingerprintSaveE2E:
             pdd_files,
             0.0,
             'auto-fix',
-            atomic_state=atomic_state
+            atomic_state=None  # For E2E test, use direct write
         )
 
         # Verify the save happened correctly
-        fingerprint_file = meta_dir / f"{basename}_{language}_fingerprint.json"
+        fingerprint_file = meta_dir / f"{basename}_{language}.json"  # Note: no "_fingerprint" suffix
         assert fingerprint_file.exists()
 
         with open(fingerprint_file, 'r') as f:
             fingerprint = json.load(f)
 
         # Verify structure matches expected pattern
-        assert fingerprint['command'] == 'crash'
-        assert fingerprint['model'] == 'auto-fix'
-        assert fingerprint['cost'] == 0.0
-        assert fingerprint['operations_completed'] == operations_completed
+        # Note: Fingerprint only stores command and file hashes, not model/cost/operations_completed
+        assert fingerprint['command'] == 'crash', (
+            "Fingerprint command should be set to 'crash' after auto-fix success"
+        )
 
         # This proves the fix is consistent with existing patterns
