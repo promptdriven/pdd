@@ -74,6 +74,14 @@ import {
   defaultCrossingPointProps,
 } from "./08-CrossingPoint";
 import {
+  DeveloperEditZoomout,
+  ZOOM_OUT_FPS,
+  ZOOM_OUT_DURATION_FRAMES,
+  ZOOM_OUT_WIDTH,
+  ZOOM_OUT_HEIGHT,
+  defaultDeveloperEditZoomoutProps,
+} from "./09-DeveloperEditZoomout";
+import {
   PieChart,
   PIE_CHART_FPS,
   PIE_CHART_DURATION_FRAMES,
@@ -89,6 +97,14 @@ import {
   PIE_TO_CURVE_HEIGHT,
   defaultPieToCurveProps,
 } from "./13-PieToCurve";
+import {
+  PartsEject,
+  PARTS_EJECT_FPS,
+  PARTS_EJECT_DURATION_FRAMES,
+  PARTS_EJECT_WIDTH,
+  PARTS_EJECT_HEIGHT,
+  defaultPartsEjectProps,
+} from "./14-PartsEject";
 
 export const RemotionRoot: React.FC = () => {
   return (
@@ -181,6 +197,17 @@ export const RemotionRoot: React.FC = () => {
           defaultProps={defaultCrossingPointProps}
         />
       </Folder>
+      <Folder name="09-DeveloperEditZoomout">
+        <Composition
+          id="DeveloperEditZoomout"
+          component={DeveloperEditZoomout}
+          durationInFrames={ZOOM_OUT_DURATION_FRAMES}
+          fps={ZOOM_OUT_FPS}
+          width={ZOOM_OUT_WIDTH}
+          height={ZOOM_OUT_HEIGHT}
+          defaultProps={defaultDeveloperEditZoomoutProps}
+        />
+      </Folder>
       <Folder name="12-PieChart">
         <Composition
           id="PieChart"
@@ -201,6 +228,17 @@ export const RemotionRoot: React.FC = () => {
           width={PIE_TO_CURVE_WIDTH}
           height={PIE_TO_CURVE_HEIGHT}
           defaultProps={defaultPieToCurveProps}
+        />
+      </Folder>
+      <Folder name="14-PartsEject">
+        <Composition
+          id="PartsEject"
+          component={PartsEject}
+          durationInFrames={PARTS_EJECT_DURATION_FRAMES}
+          fps={PARTS_EJECT_FPS}
+          width={PARTS_EJECT_WIDTH}
+          height={PARTS_EJECT_HEIGHT}
+          defaultProps={defaultPartsEjectProps}
         />
       </Folder>
       <Folder name="Examples">
