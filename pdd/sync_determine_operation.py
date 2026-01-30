@@ -140,7 +140,7 @@ class SyncLock:
     def __init__(self, basename: str, language: str):
         self.basename = basename
         self.language = language
-        self.lock_file = get_locks_dir() / f"{_safe_basename(basename)}_{language}.lock"
+        self.lock_file = get_locks_dir() / f"{_safe_basename(basename)}_{language.lower()}.lock"
         self.fd = None
         self.current_pid = os.getpid()
     
@@ -456,8 +456,21 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                         prompt_path = str(prompts_root / prefix / prompt_filename)
             except ValueError:
                 pass
+
+        # Case-insensitive prompt file lookup: if the exact path doesn't exist,
+        # search for a case-insensitive match (e.g., "task_model_python.prompt"
+        # should find "task_model_Python.prompt" on case-sensitive filesystems)
+        if not Path(prompt_path).exists():
+            prompt_dir = Path(prompt_path).parent
+            if prompt_dir.is_dir():
+                target_lower = Path(prompt_path).name.lower()
+                for candidate in prompt_dir.iterdir():
+                    if candidate.name.lower() == target_lower and candidate.is_file():
+                        prompt_path = str(candidate)
+                        break
+
         logger.info(f"Checking prompt_path={prompt_path}, exists={Path(prompt_path).exists()}")
-        
+
         # Check if prompt file exists - if not, we still need configuration-aware paths
         if not Path(prompt_path).exists():
             # Use construct_paths with minimal inputs to get configuration-aware paths
@@ -778,8 +791,16 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         else:
             matching_test_files = [test_path] if test_path.exists() else []
         prompts_root = _resolve_prompts_root(prompts_dir)
+        # Case-insensitive prompt file lookup for fallback path
+        fallback_prompt_path = prompts_root / f"{basename}_{language}.prompt"
+        if not fallback_prompt_path.exists() and prompts_root.is_dir():
+            target_lower = fallback_prompt_path.name.lower()
+            for candidate in prompts_root.iterdir():
+                if candidate.name.lower() == target_lower and candidate.is_file():
+                    fallback_prompt_path = candidate
+                    break
         return {
-            'prompt': prompts_root / f"{basename}_{language}.prompt",
+            'prompt': fallback_prompt_path,
             'code': Path(f"{dir_prefix}{name_part}.{extension}"),
             'example': Path(f"{dir_prefix}{name_part}_example.{extension}"),
             'test': test_path,
@@ -806,7 +827,7 @@ def read_fingerprint(basename: str, language: str) -> Optional[Fingerprint]:
     """Reads and validates the JSON fingerprint file."""
     meta_dir = get_meta_dir()
     meta_dir.mkdir(parents=True, exist_ok=True)
-    fingerprint_file = meta_dir / f"{_safe_basename(basename)}_{language}.json"
+    fingerprint_file = meta_dir / f"{_safe_basename(basename)}_{language.lower()}.json"
     
     if not fingerprint_file.exists():
         return None
@@ -833,7 +854,7 @@ def read_run_report(basename: str, language: str) -> Optional[RunReport]:
     """Reads and validates the JSON run report file."""
     meta_dir = get_meta_dir()
     meta_dir.mkdir(parents=True, exist_ok=True)
-    run_report_file = meta_dir / f"{_safe_basename(basename)}_{language}_run.json"
+    run_report_file = meta_dir / f"{_safe_basename(basename)}_{language.lower()}_run.json"
     
     if not run_report_file.exists():
         return None
@@ -1220,7 +1241,7 @@ def _check_example_success_history(basename: str, language: str) -> bool:
     
     # Strategy 2b: Look for historical run reports with exit_code == 0
     # Check all run report files in the meta directory that match the pattern
-    run_report_pattern = f"{_safe_basename(basename)}_{language}_run"
+    run_report_pattern = f"{_safe_basename(basename)}_{language.lower()}_run"
     for file in meta_dir.glob(f"{run_report_pattern}*.json"):
         try:
             with open(file, 'r') as f:
@@ -1974,8 +1995,8 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
             # Delete fingerprint and run report to force fresh sync
             meta_dir = get_meta_dir()
             safe_bn = _safe_basename(basename)
-            fp_path = meta_dir / f"{safe_bn}_{language}.json"
-            rr_path = meta_dir / f"{safe_bn}_{language}_run.json"
+            fp_path = meta_dir / f"{safe_bn}_{language.lower()}.json"
+            rr_path = meta_dir / f"{safe_bn}_{language.lower()}_run.json"
             if fp_path.exists():
                 fp_path.unlink()
             if rr_path.exists():
