@@ -6,13 +6,15 @@
 
 ## Visual Description
 
-The "cost to generate" line crosses below the "cost to patch" line. This is the key moment - the equivalent of the sock threshold, but for code. Highlight with pulsing "We are here" label.
+The "cost to generate" line crosses below the "total cost to patch (large codebase)" line. This is the key moment — the equivalent of the sock threshold, but for code. The crossing is especially dramatic because the lines move in **opposite directions**: generate plunges while large-codebase total cost rises. Scissors closing from both sides. Highlight with pulsing "We are here" label.
 
 ## Technical Specifications
 
 ### Canvas
-- Zoom back out from Section 1.6 to show full chart
-- Both lines visible, crossing point in focus
+- Continues from Section 1.6 zoom-out — full chart with fork visible
+- Generate line and large-codebase total cost line in focus
+- Small-codebase fork visible below at lower opacity (contrast)
+- Crossing point sits at the intersection of generate and large-codebase total (~2022-2023)
 
 ### Animation Elements
 
@@ -21,7 +23,7 @@ The "cost to generate" line crosses below the "cost to patch" line. This is the 
    - All milestones still visible but smaller
 
 2. **Crossing Point Marker**
-   - Circle at intersection (approximately 2023-2024)
+   - Circle at intersection of generate line and large-codebase total cost line (~2022-2023, where generate drops from 28→15 and total rises from 27→30)
    - Color: White with blue glow (#4A90D9)
    - Size: 25px radius
    - Stronger pulse effect than sock chart (this is the KEY moment)
@@ -67,7 +69,7 @@ The "cost to generate" line crosses below the "cost to patch" line. This is the 
 
 ## Narration Sync
 
-> "But look where we are now. The cost to generate code just crossed below the cost to carefully patch it."
+> "But look where we are now. The cost to generate a module just crossed below the total cost of patching one — on any real-world codebase. And they're still moving apart."
 
 ## Code Structure (Remotion)
 
@@ -81,14 +83,16 @@ The "cost to generate" line crosses below the "cost to patch" line. This is the 
     />
   </Sequence>
 
-  {/* Crossing point */}
+  {/* Crossing point: generate vs large-codebase total cost */}
   <Sequence from={60}>
     <CrossingPointMarker
-      x={crossingX}
+      x={crossingX}  // generate ∩ totalCostToPatch_largeCodebase (~2022-2023)
       y={crossingY}
       pulseColor="#4A90D9"
       pulseIntensity="high"
     />
+    {/* Small-codebase fork visible as contrast */}
+    <GlowingLine line="small-codebase-fork" opacity={0.3} />
   </Sequence>
 
   {/* Label */}
@@ -111,6 +115,8 @@ The "cost to generate" line crosses below the "cost to patch" line. This is the 
 
 - This is THE key moment of Part 1
 - Should feel like a revelation, but mathematically grounded
+- The crossing is more dramatic with the fork: generate is falling while large-codebase total is rising — opposite trajectories make the gap widen visibly
+- The small-codebase fork visible below reminds the viewer: for small modules, both costs are already low — regeneration wins either way
 - The pulsing should draw attention without being cheesy
 - "We are here." period is important - it's a statement, not a question
 

@@ -34,18 +34,85 @@ export const COLORS = {
   AXIS: "#666677",
   AXIS_LABEL: "rgba(255, 255, 255, 0.8)",
   TITLE: "#ffffff",
-  LINE_GENERATE: "#4A90D9",      // Blue - cost to generate
-  LINE_PATCH: "#D9944A",          // Amber - cost to patch
-  MARKER: "#FFFFFF",              // White circle
-  MARKER_GLOW: "#4A90D9",         // Blue glow for the marker
-  PULSE_GLOW: "#4A90D9",          // Blue pulse rings
+  LINE_GENERATE: "#4A90D9",         // Blue - Cost to Generate
+  LINE_PATCH: "#D9944A",            // Amber - Cost to Patch (Immediate)
+  LINE_PATCH_TOTAL: "#D9944A",      // Amber - Total Cost (dashed)
+  AREA_TECH_DEBT: "rgba(217, 148, 74, 0.3)", // Amber 30% opacity - Tech Debt
+  MARKER: "#FFFFFF",                 // White circle
+  MARKER_GLOW: "#4A90D9",           // Blue glow for the marker
+  PULSE_GLOW: "#4A90D9",            // Blue pulse rings
 };
 
-// The crossing point (where cost to generate crosses below cost to patch)
-// This happens around 2023-2024 based on the spec
+// Data point type
+export interface DataPoint {
+  year: number;
+  hours: number;
+}
+
+// Chart data points - FORKED DATA STRUCTURE
+// At 2020, "Immediate Cost to Patch" forks into small and large codebase paths
+export const CHART_DATA = {
+  // Line 1 - Blue solid: Cost to Generate
+  costToGenerate: [
+    { year: 2015, hours: 32 },
+    { year: 2020, hours: 30 },
+    { year: 2022, hours: 28 },
+    { year: 2023, hours: 15 },
+    { year: 2024, hours: 6 },
+    { year: 2025, hours: 3 },
+  ] as DataPoint[],
+  // Line 2 - Amber solid: Immediate Cost to Patch (pre-fork baseline, 2015-2020)
+  immediateCostBaseline: [
+    { year: 2015, hours: 10 },
+    { year: 2020, hours: 10 },
+  ] as DataPoint[],
+  // Line 2a - Amber solid (bright): Small codebase fork (post-2020)
+  immediateCostSmallCodebase: [
+    { year: 2020, hours: 10 },
+    { year: 2022, hours: 5 },
+    { year: 2023, hours: 3 },
+    { year: 2024, hours: 2 },
+    { year: 2025, hours: 1.5 },
+  ] as DataPoint[],
+  // Line 2b - Amber solid (dimmer/thinner): Large codebase fork (post-2020)
+  immediateCostLargeCodebase: [
+    { year: 2020, hours: 10 },
+    { year: 2022, hours: 10 },
+    { year: 2023, hours: 11 },
+    { year: 2024, hours: 12 },
+    { year: 2025, hours: 12 },
+  ] as DataPoint[],
+  // Line 3 - Amber dashed: Total Cost of Patching, large codebase (= immediate + debt)
+  totalCostLargeCodebase: [
+    { year: 2015, hours: 22 },
+    { year: 2020, hours: 25 },
+    { year: 2022, hours: 27 },
+    { year: 2023, hours: 30 },
+    { year: 2024, hours: 32 },
+    { year: 2025, hours: 33 },
+  ] as DataPoint[],
+};
+
+// Interpolate hours from a data series at a given year
+export const interpolateHours = (data: DataPoint[], year: number): number => {
+  if (year <= data[0].year) return data[0].hours;
+  if (year >= data[data.length - 1].year) return data[data.length - 1].hours;
+
+  for (let i = 0; i < data.length - 1; i++) {
+    if (year >= data[i].year && year <= data[i + 1].year) {
+      const t = (year - data[i].year) / (data[i + 1].year - data[i].year);
+      return data[i].hours + t * (data[i + 1].hours - data[i].hours);
+    }
+  }
+  return data[data.length - 1].hours;
+};
+
+// The crossing point (where generate crosses below large-codebase total cost)
+// Between 2022-2023: generate goes 28→15, total goes 27→30
+// 28 - 13t = 27 + 3t → t = 1/16 → year ≈ 2022.06, hours ≈ 27.19
 export const CROSSING_POINT = {
-  year: 2023.5,
-  hours: 0.8,  // Approximate intersection point
+  year: 2022.0625,
+  hours: 27.1875,
 };
 
 // Chart margins
@@ -56,30 +123,9 @@ export const CHART_MARGINS = {
   left: 180,
 };
 
-// Year range for code cost chart (modern era)
-export const YEAR_RANGE = { min: 2015, max: 2030 };
-export const HOURS_RANGE = { min: 0, max: 3 };
-
-// Chart data for code costs
-export const CHART_DATA = {
-  // Cost to generate code - exponentially decreasing as AI improves
-  costToGenerate: [
-    { year: 2015, hours: 2.5 },
-    { year: 2018, hours: 2.0 },
-    { year: 2020, hours: 1.5 },
-    { year: 2022, hours: 1.0 },
-    { year: 2023, hours: 0.8 },
-    { year: 2024, hours: 0.5 },
-    { year: 2026, hours: 0.2 },
-    { year: 2028, hours: 0.1 },
-    { year: 2030, hours: 0.05 },
-  ],
-  // Cost to patch code - relatively flat (human cognitive cost)
-  costToPatch: [
-    { year: 2015, hours: 0.8 },
-    { year: 2030, hours: 0.8 },
-  ],
-};
+// Year range for code cost chart
+export const YEAR_RANGE = { min: 2015, max: 2025 };
+export const HOURS_RANGE = { min: 0, max: 35 };
 
 // Pulse effect configuration - more dramatic than sock threshold
 export const PULSE_CONFIG = {

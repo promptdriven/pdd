@@ -146,48 +146,98 @@ export const CrossingPoint: React.FC<CrossingPointPropsType> = ({
           opacity: 1,
         }}
       >
+        {/* Cost to Generate */}
         <div
           style={{
             display: "flex",
             alignItems: "center",
-            marginBottom: 16,
+            marginBottom: 12,
             fontFamily: "Inter, system-ui, sans-serif",
-            fontSize: 22,
+            fontSize: 18,
             fontWeight: 500,
             color: "#ffffff",
           }}
         >
           <div
             style={{
-              width: 40,
-              height: 5,
+              width: 36,
+              height: 4,
               backgroundColor: COLORS.LINE_GENERATE,
-              marginRight: 16,
+              marginRight: 12,
               borderRadius: 2,
             }}
           />
           Cost to Generate
         </div>
+        {/* Patch (small CB) */}
         <div
           style={{
             display: "flex",
             alignItems: "center",
+            marginBottom: 12,
             fontFamily: "Inter, system-ui, sans-serif",
-            fontSize: 22,
+            fontSize: 18,
+            fontWeight: 500,
+            color: "rgba(255, 255, 255, 0.5)",
+          }}
+        >
+          <div
+            style={{
+              width: 36,
+              height: 4,
+              backgroundColor: COLORS.LINE_PATCH,
+              marginRight: 12,
+              borderRadius: 2,
+              opacity: 0.35,
+            }}
+          />
+          Patch (small codebase)
+        </div>
+        {/* Patch (large CB) */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            marginBottom: 12,
+            fontFamily: "Inter, system-ui, sans-serif",
+            fontSize: 18,
             fontWeight: 500,
             color: "#ffffff",
           }}
         >
           <div
             style={{
-              width: 40,
-              height: 5,
+              width: 36,
+              height: 4,
               backgroundColor: COLORS.LINE_PATCH,
-              marginRight: 16,
+              marginRight: 12,
               borderRadius: 2,
+              opacity: 0.7,
             }}
           />
-          Cost to Patch
+          Patch (large codebase)
+        </div>
+        {/* True Cost with tech debt */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            fontFamily: "Inter, system-ui, sans-serif",
+            fontSize: 18,
+            fontWeight: 500,
+            color: "#ffffff",
+          }}
+        >
+          <div
+            style={{
+              width: 36,
+              height: 0,
+              borderTop: `4px dashed ${COLORS.LINE_PATCH_TOTAL}`,
+              marginRight: 12,
+              opacity: 0.9,
+            }}
+          />
+          True cost (with tech debt)
         </div>
       </div>
 
@@ -209,13 +259,13 @@ export const CrossingPoint: React.FC<CrossingPointPropsType> = ({
             backgroundColor: "rgba(0, 0, 0, 0.75)",
             padding: "20px 40px",
             borderRadius: 12,
-            maxWidth: 1000,
+            maxWidth: 1100,
           }}
         >
           <p
             style={{
               fontFamily: "Georgia, serif",
-              fontSize: 28,
+              fontSize: 26,
               color: "#ffffff",
               textShadow: "0 2px 10px rgba(0,0,0,0.8)",
               fontStyle: "italic",
@@ -223,7 +273,9 @@ export const CrossingPoint: React.FC<CrossingPointPropsType> = ({
               margin: 0,
             }}
           >
-            "The cost to generate code just crossed below the cost to carefully patch it."
+            "But look where we are now. The cost to generate a module just
+            crossed below the total cost of patching one — on any real-world
+            codebase. And they're still moving apart."
           </p>
         </div>
       )}

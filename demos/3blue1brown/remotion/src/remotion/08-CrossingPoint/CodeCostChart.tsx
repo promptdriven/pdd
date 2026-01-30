@@ -7,6 +7,8 @@ import {
   YEAR_RANGE,
   HOURS_RANGE,
   BEATS,
+  interpolateHours,
+  DataPoint,
 } from "./constants";
 
 export const CodeCostChart: React.FC = () => {
@@ -53,22 +55,41 @@ export const CodeCostChart: React.FC = () => {
     );
   };
 
-  // Build path for Cost to Generate line
-  const generateLinePoints = CHART_DATA.costToGenerate
-    .map((d, i) => {
-      const x = getXPosition(d.year);
-      const y = getYPosition(d.hours);
-      return `${i === 0 ? "M" : "L"} ${x} ${y}`;
-    })
-    .join(" ");
+  // Build SVG path from data points
+  const buildPath = (data: DataPoint[]) => {
+    return data
+      .map((d, i) => {
+        const x = getXPosition(d.year);
+        const y = getYPosition(d.hours);
+        return `${i === 0 ? "M" : "L"} ${x} ${y}`;
+      })
+      .join(" ");
+  };
 
-  // Build path for Cost to Patch line (straight horizontal)
-  const patchStart = CHART_DATA.costToPatch[0];
-  const patchEnd = CHART_DATA.costToPatch[1];
-  const patchLinePath = `M ${getXPosition(patchStart.year)} ${getYPosition(patchStart.hours)} L ${getXPosition(patchEnd.year)} ${getYPosition(patchEnd.hours)}`;
+  // Build tech debt shaded area between large CB immediate and total cost (2020-2025)
+  const buildTechDebtArea = () => {
+    const startYear = 2020;
+    const endYear = 2025;
+    const steps = 20;
 
-  const yearTicks = [2015, 2018, 2020, 2022, 2024, 2026, 2028, 2030];
-  const hourTicks = [0, 0.5, 1, 1.5, 2, 2.5, 3];
+    // Top edge (total cost) left to right
+    let path = `M ${getXPosition(startYear)} ${getYPosition(interpolateHours(CHART_DATA.totalCostLargeCodebase, startYear))}`;
+    for (let i = 1; i <= steps; i++) {
+      const year = startYear + (endYear - startYear) * (i / steps);
+      path += ` L ${getXPosition(year)} ${getYPosition(interpolateHours(CHART_DATA.totalCostLargeCodebase, year))}`;
+    }
+    // Bottom edge (large CB immediate) right to left
+    for (let i = steps; i >= 0; i--) {
+      const year = startYear + (endYear - startYear) * (i / steps);
+      path += ` L ${getXPosition(year)} ${getYPosition(interpolateHours(CHART_DATA.immediateCostLargeCodebase, year))}`;
+    }
+    path += " Z";
+    return path;
+  };
+
+  const yearTicks = [2016, 2018, 2020, 2022, 2024];
+  const yearLabels = [2015, 2020, 2025];
+  const hourTicks = [0, 5, 10, 15, 20, 25, 30, 35];
 
   return (
     <div
@@ -82,7 +103,6 @@ export const CodeCostChart: React.FC = () => {
         transformOrigin: "center center",
       }}
     >
-      {/* Grid and axes */}
       <svg
         width={width}
         height={height}
@@ -138,9 +158,15 @@ export const CodeCostChart: React.FC = () => {
           strokeWidth={2}
         />
 
-        {/* Cost to Generate line (blue) */}
+        {/* Tech debt shaded area (between large CB immediate and total cost) */}
         <path
-          d={generateLinePoints}
+          d={buildTechDebtArea()}
+          fill={COLORS.AREA_TECH_DEBT}
+        />
+
+        {/* Cost to Generate line (blue, solid) */}
+        <path
+          d={buildPath(CHART_DATA.costToGenerate)}
           fill="none"
           stroke={COLORS.LINE_GENERATE}
           strokeWidth={4}
@@ -148,18 +174,49 @@ export const CodeCostChart: React.FC = () => {
           strokeLinejoin="round"
         />
 
-        {/* Cost to Patch line (amber) */}
+        {/* Immediate cost baseline (amber, solid, pre-fork 2015-2020) */}
         <path
-          d={patchLinePath}
+          d={buildPath(CHART_DATA.immediateCostBaseline)}
           fill="none"
           stroke={COLORS.LINE_PATCH}
-          strokeWidth={4}
+          strokeWidth={3}
           strokeLinecap="round"
+        />
+
+        {/* Small codebase fork (amber, lower opacity as contrast) */}
+        <path
+          d={buildPath(CHART_DATA.immediateCostSmallCodebase)}
+          fill="none"
+          stroke={COLORS.LINE_PATCH}
+          strokeWidth={3}
+          strokeLinecap="round"
+          opacity={0.35}
+        />
+
+        {/* Large codebase fork (amber, solid) */}
+        <path
+          d={buildPath(CHART_DATA.immediateCostLargeCodebase)}
+          fill="none"
+          stroke={COLORS.LINE_PATCH}
+          strokeWidth={3}
+          strokeLinecap="round"
+          opacity={0.7}
+        />
+
+        {/* Total cost large codebase (amber, dashed) */}
+        <path
+          d={buildPath(CHART_DATA.totalCostLargeCodebase)}
+          fill="none"
+          stroke={COLORS.LINE_PATCH_TOTAL}
+          strokeWidth={3}
+          strokeLinecap="round"
+          strokeDasharray="12,6"
+          opacity={0.9}
         />
       </svg>
 
       {/* Year labels */}
-      {yearTicks.map((year) => (
+      {yearLabels.map((year) => (
         <div
           key={`year-${year}`}
           style={{
@@ -178,24 +235,26 @@ export const CodeCostChart: React.FC = () => {
       ))}
 
       {/* Hour labels */}
-      {hourTicks.map((hour) => (
-        <div
-          key={`hour-${hour}`}
-          style={{
-            position: "absolute",
-            left: CHART_MARGINS.left - 15,
-            top: getYPosition(hour),
-            transform: "translate(-100%, -50%)",
-            fontFamily: "Inter, system-ui, sans-serif",
-            fontSize: 24,
-            fontWeight: 500,
-            color: COLORS.AXIS_LABEL,
-            textAlign: "right",
-          }}
-        >
-          {hour}h
-        </div>
-      ))}
+      {hourTicks
+        .filter((h) => h % 10 === 0 || h === 5 || h === 15 || h === 25 || h === 35)
+        .map((hour) => (
+          <div
+            key={`hour-${hour}`}
+            style={{
+              position: "absolute",
+              left: CHART_MARGINS.left - 15,
+              top: getYPosition(hour),
+              transform: "translate(-100%, -50%)",
+              fontFamily: "Inter, system-ui, sans-serif",
+              fontSize: 22,
+              fontWeight: 500,
+              color: COLORS.AXIS_LABEL,
+              textAlign: "right",
+            }}
+          >
+            {hour}h
+          </div>
+        ))}
 
       {/* Y-axis label */}
       <div
@@ -220,7 +279,7 @@ export const CodeCostChart: React.FC = () => {
             whiteSpace: "nowrap",
           }}
         >
-          Developer hours per feature
+          Developer hours per module
         </div>
       </div>
 
