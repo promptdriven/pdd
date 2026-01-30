@@ -29,9 +29,6 @@ from .architecture_sync import (
     generate_tags_from_architecture,
 )
 
-# Cloud request timeout
-CLOUD_REQUEST_TIMEOUT = 400  # seconds
-
 console = Console()
 
 # --- Helper Functions ---

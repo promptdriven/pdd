@@ -3289,28 +3289,23 @@ class TestArchitectureJsonLookup:
 
     def test_find_architecture_json_in_project_root(self, tmp_path):
         """Test that architecture.json can be found in project root."""
+        from pdd.sync_determine_operation import _find_architecture_json
+
         subdir = tmp_path / "prompts" / "backend"
         subdir.mkdir(parents=True)
 
         arch_file = tmp_path / "architecture.json"
         arch_file.write_text('{"modules": []}')
 
-        def find_architecture_json(start_path: Path) -> Path | None:
-            current = start_path
-            while current != current.parent:
-                arch_path = current / "architecture.json"
-                if arch_path.exists():
-                    return arch_path
-                current = current.parent
-            return None
-
-        found = find_architecture_json(subdir)
+        found = _find_architecture_json(subdir)
         assert found == arch_file, (
             "Should find architecture.json in parent directory"
         )
 
     def test_match_prompt_to_architecture_module(self, tmp_path):
         """Test matching a prompt filename to its architecture.json module."""
+        from pdd.sync_determine_operation import _get_filepath_from_architecture
+
         architecture = {
             "modules": [
                 {
@@ -3327,33 +3322,21 @@ class TestArchitectureJsonLookup:
         arch_file = tmp_path / "architecture.json"
         arch_file.write_text(json.dumps(architecture))
 
-        def find_module_in_architecture(
-            arch_path: Path,
-            basename: str,
-            language: str
-        ) -> dict | None:
-            try:
-                with open(arch_path) as f:
-                    arch = json.load(f)
-                modules = arch.get("modules", arch) if isinstance(arch, dict) else arch
-                expected_filename = f"{basename}_{language.title()}.prompt"
-                for module in modules:
-                    if module.get("filename") == expected_filename:
-                        return module
-                expected_lower = expected_filename.lower()
-                for module in modules:
-                    if module.get("filename", "").lower() == expected_lower:
-                        return module
-                return None
-            except (FileNotFoundError, json.JSONDecodeError):
-                return None
+        # Test finding module by basename and language
+        filepath = _get_filepath_from_architecture(
+            arch_file, "models_findings_Python.prompt",
+            basename="models_findings", language="python"
+        )
+        assert filepath is not None, "Should find module by basename and language"
+        assert filepath == "src/backend/models/findings.py"
 
-        module = find_module_in_architecture(arch_file, "models_findings", "python")
-        assert module is not None, "Should find module by basename and language"
-        assert module["filepath"] == "src/backend/models/findings.py"
-
-        module = find_module_in_architecture(arch_file, "api_orders", "Python")
-        assert module is not None, "Should handle case variations"
+        # Test handling case variations
+        filepath = _get_filepath_from_architecture(
+            arch_file, "api_orders_Python.prompt",
+            basename="api_orders", language="Python"
+        )
+        assert filepath is not None, "Should handle case variations"
+        assert filepath == "src/api/orders.py"
 
 
 class TestGetPddFilePathsWithArchitecture:

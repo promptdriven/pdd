@@ -543,10 +543,10 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 project_root = arch_path.parent
                 code_path = project_root / arch_filepath
 
-                # Derive example and test paths from the code path
-                # Example: src/backend/models/findings.py -> examples/findings_example.py
-                # Test: src/backend/models/findings.py -> tests/test_findings.py
-                code_stem = code_path.stem  # "findings"
+                # Derive example and test paths using basename (not code_path.stem)
+                # Per README naming convention:
+                # Example: <basename>_example.<ext> -> examples/models_findings_example.py
+                # Test: test_<basename>.<ext> -> tests/test_models_findings.py
 
                 # Get configured directories from .pddrc if available
                 pddrc_path = _find_pddrc_file()
@@ -566,12 +566,12 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                         pass
 
                 # Example and test paths are also relative to project root
-                example_path = project_root / f"{example_dir}{code_stem}_example.{extension}"
-                test_path = project_root / f"{test_dir}test_{code_stem}.{extension}"
+                example_path = project_root / f"{example_dir}{basename}_example.{extension}"
+                test_path = project_root / f"{test_dir}test_{basename}.{extension}"
 
                 # Find matching test files
                 test_dir_path = test_path.parent
-                test_stem = f"test_{code_stem}"
+                test_stem = f"test_{basename}"
                 if test_dir_path.exists():
                     matching_test_files = sorted(test_dir_path.glob(f"{test_stem}*.{extension}"))
                 else:
