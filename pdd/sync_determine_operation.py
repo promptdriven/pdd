@@ -109,6 +109,7 @@ class Fingerprint:
     example_hash: Optional[str]
     test_hash: Optional[str]  # Keep for backward compat (primary test file)
     test_files: Optional[Dict[str, str]] = None  # Bug #156: {"test_foo.py": "hash1", ...}
+    test_prompt_hash: Optional[str] = None  # Issue #203: Hash of prompt when tests were generated
 
 
 @dataclass
@@ -823,7 +824,8 @@ def read_fingerprint(basename: str, language: str) -> Optional[Fingerprint]:
             code_hash=data.get('code_hash'),
             example_hash=data.get('example_hash'),
             test_hash=data.get('test_hash'),
-            test_files=data.get('test_files')  # Bug #156
+            test_files=data.get('test_files'),  # Bug #156
+            test_prompt_hash=data.get('test_prompt_hash')  # Issue #203
         )
     except (json.JSONDecodeError, KeyError, IOError):
         return None
@@ -1652,6 +1654,26 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
     
     if not changes:
         # No Changes (Hashes Match Fingerprint) - Progress workflow with skip awareness
+
+        # Issue #203: Check if tests are stale (generated from old prompt version)
+        # Even if workflow appears complete, tests may need regeneration if prompt changed
+        if (not skip_tests and fingerprint and paths['test'].exists() and
+            fingerprint.test_prompt_hash is not None and
+            fingerprint.test_prompt_hash != current_hashes.get('prompt_hash')):
+            return SyncDecision(
+                operation='test',
+                reason='Tests outdated - generated from old prompt version, need regeneration',
+                confidence=0.90,
+                estimated_cost=estimate_operation_cost('test'),
+                details={
+                    'decision_type': 'heuristic',
+                    'test_prompt_hash': fingerprint.test_prompt_hash,
+                    'current_prompt_hash': current_hashes.get('prompt_hash'),
+                    'tests_stale': True,
+                    'workflow_stage': 'test_regeneration_for_prompt_change'
+                }
+            )
+
         if _is_workflow_complete(paths, skip_tests, skip_verify, basename, language):
             return SyncDecision(
                 operation='nothing',

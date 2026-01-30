@@ -211,7 +211,8 @@ def save_fingerprint(
     operation: str,
     paths: Optional[Dict[str, Path]] = None,
     cost: float = 0.0,
-    model: str = "unknown"
+    model: str = "unknown",
+    test_prompt_hash: Optional[str] = None
 ) -> None:
     """
     Save the current fingerprint/state to the state file.
@@ -219,16 +220,37 @@ def save_fingerprint(
     Writes the full Fingerprint dataclass format compatible with read_fingerprint()
     in sync_determine_operation.py. This ensures manual commands (generate, example)
     don't break sync's fingerprint tracking.
+
+    Args:
+        test_prompt_hash: Issue #203 - Hash of prompt when tests were generated.
+                         If None, automatically determined based on operation:
+                         - generate: None (tests now stale)
+                         - test: current prompt hash (tests updated)
+                         - other: preserved from existing fingerprint
     """
     from dataclasses import asdict
     from datetime import timezone
-    from .sync_determine_operation import calculate_current_hashes, Fingerprint
+    from .sync_determine_operation import calculate_current_hashes, Fingerprint, read_fingerprint
     from . import __version__
 
     path = get_fingerprint_path(basename, language)
 
     # Calculate file hashes from paths (if provided)
     current_hashes = calculate_current_hashes(paths) if paths else {}
+
+    # Issue #203: Determine test_prompt_hash based on operation type
+    # This mirrors the logic in sync_orchestration._save_fingerprint_atomic
+    if test_prompt_hash is None:
+        if operation == 'generate':
+            # Code regenerated, tests are now stale
+            test_prompt_hash = None
+        elif operation == 'test':
+            # Tests regenerated, link to current prompt
+            test_prompt_hash = current_hashes.get('prompt_hash')
+        else:
+            # Other operations: preserve existing value
+            existing_fp = read_fingerprint(basename, language)
+            test_prompt_hash = existing_fp.test_prompt_hash if existing_fp else None
 
     # Create Fingerprint with same format as _save_fingerprint_atomic
     fingerprint = Fingerprint(
@@ -240,6 +262,7 @@ def save_fingerprint(
         example_hash=current_hashes.get('example_hash'),
         test_hash=current_hashes.get('test_hash'),
         test_files=current_hashes.get('test_files'),
+        test_prompt_hash=test_prompt_hash,  # Issue #203
     )
 
     try:
