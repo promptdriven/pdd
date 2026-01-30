@@ -134,6 +134,7 @@ export const ContextWindowVisualization: React.FC = () => {
           left: 100,
           width: gridAreaWidth,
           height: gridAreaHeight,
+          overflow: "visible",
         }}
       >
         <CodebaseGrid

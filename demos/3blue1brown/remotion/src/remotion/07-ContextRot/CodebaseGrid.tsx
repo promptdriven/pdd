@@ -21,15 +21,9 @@ export const CodebaseGrid: React.FC<CodebaseGridProps> = ({
 }) => {
   const frame = useCurrentFrame();
 
-  // Calculate block dimensions based on grid size and available space
-  const gridPadding = 40;
-  const availableWidth = width - gridPadding * 2;
-  const availableHeight = height - gridPadding * 2;
-
-  // Make blocks fit within available space
-  const blockWidth = (availableWidth - (gridSize - 1) * GRID_CONFIG.BLOCK_GAP) / gridSize;
-  const blockHeight = (availableHeight - (gridSize - 1) * GRID_CONFIG.BLOCK_GAP) / gridSize;
-  const blockSize = Math.min(blockWidth, blockHeight);
+  // Fixed block size — grid grows physically as gridSize increases
+  // This is the key visual: codebase expands while context window stays fixed
+  const blockSize = 50;
 
   // Calculate total grid dimensions
   const totalGridWidth = gridSize * blockSize + (gridSize - 1) * GRID_CONFIG.BLOCK_GAP;
@@ -155,7 +149,7 @@ export const CodebaseGrid: React.FC<CodebaseGridProps> = ({
     <svg
       width={width}
       height={height}
-      style={{ position: "absolute", top: 0, left: 0 }}
+      style={{ position: "absolute", top: 0, left: 0, overflow: "visible" }}
     >
       <defs>
         {/* Glow filter for context window */}

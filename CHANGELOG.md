@@ -1,3 +1,19 @@
+## v0.0.134 (2026-01-29)
+
+### Feat
+
+- Implement Context Rot visualization with detailed code cost chart data, updated narrative, and an `impactScale` prop for milestone markers.
+- Introduce a codebase size-dependent fork in the immediate patch cost line, update the total cost to rise for large codebases, and refine the chart's narrative and animation sequence.
+- update Code Cost Chart data, axes, and script to incorporate new research on AI's impact on code generation, patching, and bug rates, and add new reference documents.
+- extend Code Cost Chart duration to 120 seconds and update data, annotations, and time range to 2015-2025.
+- Introduce a new `hello` Python example and refine Remotion 3blue1brown demo charts with updated data ranges, axes, and narration positioning.
+- Enhance prompt path resolution and category derivation, update 3blue1brown demo chart data and timings, and document various agentic mode improvements and fixes.
+- Implement recursive prompt discovery fallback within context's base directory when template expansion fails, and add tests for this functionality.
+
+### Refactor
+
+- extract helper functions to deduplicate language sorting logic and test project setup.
+
 ## v0.0.133 (2026-01-28)
 
 ### Feat
