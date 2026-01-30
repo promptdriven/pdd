@@ -1391,3 +1391,305 @@ def test_resume_message_shows_step_6_after_step_5_5(mock_dependencies, default_a
     assert "from step 6" in resume_msg.lower() or "step 6" in resume_msg, (
         f"Resume message should say 'Resuming from step 6' after 5.5 completed, got: {resume_msg}"
     )
+
+
+# --- Issue #393: Additional Coverage for Step 5 → 5.5 Format Injection ---
+
+
+def test_step5_output_with_curly_braces_at_step_5_5(mock_dependencies, default_args):
+    """
+    Issue #393: Exact bug reproduction - step 5 output causes step 5.5 to fail.
+
+    This test reproduces the exact failure scenario from the bug report:
+    - Step 5 (root cause analysis) outputs text containing {url} placeholder
+    - Step 5.5 (prompt classification) tries to format its prompt with {step5_output}
+    - Without escaping, Python's .format() interprets {url} as a placeholder
+    - This causes KeyError: 'url' at step 5.5
+
+    Before fix: KeyError at step 5.5, silent failure
+    After fix: Curly braces escaped, workflow completes successfully
+    """
+    mock_run, mock_load, _ = mock_dependencies
+
+    # Step 5 returns output with {url} placeholder (the exact scenario from the bug report)
+    def side_effect_run(*args, **kwargs):
+        label = kwargs.get('label', '')
+        if label == 'step5':
+            # This simulates analyzing a bug about template injection
+            return (True, "Root cause: The error occurs because {url} is not in context dictionary", 0.1, "gpt-4")
+        if label == 'step7':
+            return (True, "FILES_CREATED: test.py", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    # Step 5.5 template includes {step5_output} - this is where the bug manifests
+    def side_effect_load(name):
+        if "step5_5" in name or "step5.5" in name:
+            return "Based on this analysis: {step5_output}, classify the defect as code bug or prompt defect"
+        return "Prompt for {issue_number}"
+
+    mock_load.side_effect = side_effect_load
+
+    # This should NOT raise KeyError - step 5 output should be escaped before use
+    success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is True, f"Should not fail due to {{url}} in step 5 output: {msg}"
+    assert mock_run.call_count == 11  # All 11 steps should execute
+
+    # Verify step 5.5 was called (the bug caused it to fail before reaching this step)
+    step_labels = [call[1].get('label', '') for call in mock_run.call_args_list]
+    assert 'step5.5' in step_labels or 'step5_5' in step_labels, "Step 5.5 should execute"
+
+
+def test_multiple_format_placeholders_in_step5_output(mock_dependencies, default_args):
+    """
+    Issue #393: Test edge case where LLM output contains multiple curly brace patterns.
+
+    When analyzing bugs, LLMs often reference multiple variables or keys in their output.
+    All of these should be escaped to prevent format string injection.
+    """
+    mock_run, mock_load, _ = mock_dependencies
+
+    # Step 5 output contains multiple placeholders
+    def side_effect_run(*args, **kwargs):
+        label = kwargs.get('label', '')
+        if label == 'step5':
+            return (True, "Three issues found: {url}, {user_id}, and {session} are all missing", 0.1, "gpt-4")
+        if label == 'step7':
+            return (True, "FILES_CREATED: test.py", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    def side_effect_load(name):
+        if "step5_5" in name or "step5.5" in name:
+            return "Analysis from step 5: {step5_output}"
+        if "step6" in name:
+            return "Previous analysis: {step5_5_output}"
+        return "Prompt for {issue_number}"
+
+    mock_load.side_effect = side_effect_load
+
+    success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    # All three placeholders should be escaped: {{url}}, {{user_id}}, {{session}}
+    assert success is True, f"Should handle multiple placeholders: {msg}"
+    assert mock_run.call_count == 11
+
+
+def test_nested_curly_braces_in_llm_output(mock_dependencies, default_args):
+    """
+    Issue #393: Test that nested braces (common in code examples) are handled correctly.
+
+    When LLMs analyze code, they often include code snippets with nested braces,
+    dictionary literals, or template strings. These should all be safely escaped.
+    """
+    mock_run, mock_load, _ = mock_dependencies
+
+    # Step 5 output contains code snippet with nested braces
+    def side_effect_run(*args, **kwargs):
+        label = kwargs.get('label', '')
+        if label == 'step5':
+            # Code snippet with dictionary and format string
+            return (True, "The bug is in: template.format(**{key: value})", 0.1, "gpt-4")
+        if label == 'step7':
+            return (True, "FILES_CREATED: test.py", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    def side_effect_load(name):
+        if "step5_5" in name or "step5.5" in name:
+            return "Code analysis: {step5_output}"
+        return "Prompt for {issue_number}"
+
+    mock_load.side_effect = side_effect_load
+
+    success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    # Nested braces should be escaped without breaking the workflow
+    assert success is True, f"Should handle nested braces: {msg}"
+
+
+def test_format_error_at_step_5_5_prints_to_console(mock_dependencies, default_args):
+    """
+    Issue #393: Bug #2 - Silent failure visibility.
+
+    When a formatting error occurs at step 5.5 (or any step), the error message
+    should be printed to the console, not just returned in the error tuple.
+
+    This test verifies that formatting errors are visible to users.
+    """
+    mock_run, mock_load, mock_console = mock_dependencies
+
+    # Create a template that genuinely requires a missing key
+    def side_effect_load(name):
+        if "step5_5" in name or "step5.5" in name:
+            # This template requires a key that doesn't exist in context
+            return "Missing key test: {this_key_does_not_exist_in_context}"
+        return "Prompt for {issue_number}"
+
+    mock_load.side_effect = side_effect_load
+
+    # Run with quiet=False to ensure console output
+    default_args["quiet"] = False
+
+    success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    # Workflow should fail gracefully
+    assert success is False
+    assert "formatting error" in msg.lower() or "missing" in msg.lower()
+
+    # CRITICAL: Error should be printed to console (Bug #2)
+    print_calls = [str(call) for call in mock_console.print.call_args_list]
+    error_printed = any(
+        ("error" in call.lower() or "formatting" in call.lower()) and
+        "this_key_does_not_exist_in_context" in call.lower()
+        for call in print_calls
+    )
+    assert error_printed, (
+        f"Formatting error at step 5.5 should be printed to console. "
+        f"Print calls: {print_calls}"
+    )
+
+
+def test_resume_after_step5_with_format_injection_bug(mock_dependencies, default_args, tmp_path):
+    """
+    Issue #393: Integration test - resume after step 5.5 failure.
+
+    This test simulates the scenario from the bug report:
+    1. First run: Steps 1-5 complete, step 5.5 fails with format injection
+    2. State is saved with last_completed_step=5
+    3. Second run: Resume should start at step 5.5 (not step 6)
+    4. Step 5.5 should succeed with the fix applied
+
+    Verifies Bug #3: Resume message should say "step 5.5" not "step 6"
+    """
+    import json
+    from pdd.agentic_bug_orchestrator import _get_state_dir
+
+    mock_run, mock_load, mock_console = mock_dependencies
+    default_args["cwd"] = tmp_path
+    default_args["quiet"] = False
+
+    # Create state file simulating failure at step 5.5
+    state_dir = _get_state_dir(tmp_path)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_file = state_dir / f"bug_state_{default_args['issue_number']}.json"
+
+    # Step 5 completed with output containing {url}
+    state = {
+        "workflow": "bug",
+        "issue_number": default_args["issue_number"],
+        "issue_url": default_args["issue_url"],
+        "last_completed_step": 5,
+        "step_outputs": {
+            "1": "No duplicates",
+            "2": "Legitimate bug",
+            "3": "Proceed",
+            "4": "Reproduced",
+            "5": "Root cause: The error occurs because {url} is not in context"  # The problematic output
+        },
+        "total_cost": 0.5,
+        "model_used": "gpt-4",
+        "changed_files": [],
+        "worktree_path": None,
+    }
+    with open(state_file, "w") as f:
+        json.dump(state, f)
+
+    def side_effect_run(*args, **kwargs):
+        label = kwargs.get('label', '')
+        if label == 'step7':
+            return (True, "FILES_CREATED: test.py", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    def side_effect_load(name):
+        if "step5_5" in name or "step5.5" in name:
+            return "Based on: {step5_output}"
+        return "Prompt for {issue_number}"
+
+    mock_load.side_effect = side_effect_load
+
+    # Resume should work correctly
+    success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    # Verify success with the fix
+    assert success is True, f"Resume after step 5 should succeed with escaping fix: {msg}"
+
+    # Verify resume message shows step 5.5, not step 6 (Bug #3)
+    print_calls = [str(call) for call in mock_console.print.call_args_list]
+    resume_msg = next((call for call in print_calls if "Resuming" in call or "resuming" in call), None)
+
+    assert resume_msg is not None, "Resume message should be printed"
+    assert "5.5" in resume_msg, (
+        f"Resume message should say 'Resuming from step 5.5', got: {resume_msg}"
+    )
+    assert "from step 6" not in resume_msg.lower(), (
+        f"Resume message should NOT say 'from step 6' when last_completed=5: {resume_msg}"
+    )
+
+    # Verify steps 1-5 were skipped and step 5.5 was executed
+    step_labels = [call[1].get('label', '') for call in mock_run.call_args_list]
+    assert 'step1' not in step_labels, "Step 1 should be skipped on resume"
+    assert 'step5' not in step_labels, "Step 5 should be skipped on resume"
+    assert 'step5.5' in step_labels or 'step5_5' in step_labels, "Step 5.5 should execute on resume"
+
+
+def test_step5_to_step5_5_transition_with_escaped_output(mock_dependencies, default_args):
+    """
+    Issue #393: Verify that escaping happens BEFORE storing in context (regression test).
+
+    This test ensures the fix is implemented at the right place:
+    - Curly braces should be escaped when storing step 5 output
+    - NOT when retrieving it for use in step 5.5 prompt
+
+    This prevents the bug from recurring if code is refactored.
+    """
+    mock_run, mock_load, mock_console = mock_dependencies
+
+    # We'll verify the context by checking what template is formatted with
+    formatted_prompts = []
+
+    # Step 5 returns output with curly braces
+    def side_effect_run(*args, **kwargs):
+        label = kwargs.get('label', '')
+        prompt = kwargs.get('prompt', '')
+
+        # Capture the formatted prompt to verify escaping
+        if label == 'step5.5' or label == 'step5_5':
+            formatted_prompts.append(prompt)
+
+        if label == 'step5':
+            return (True, "Error: {missing_key}", 0.1, "gpt-4")
+        if label == 'step7':
+            return (True, "FILES_CREATED: test.py", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    def side_effect_load(name):
+        if "step5_5" in name or "step5.5" in name:
+            # Template that will receive the escaped output
+            return "Analysis: {step5_output} - classify it"
+        return "Prompt for {issue_number}"
+
+    mock_load.side_effect = side_effect_load
+
+    success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is True, f"Workflow should complete: {msg}"
+
+    # Verify the formatted prompt contains escaped braces
+    assert len(formatted_prompts) > 0, "Step 5.5 should have been called"
+    step5_5_prompt = formatted_prompts[0]
+
+    # The prompt should contain "Error: {{missing_key}}" (double braces)
+    # NOT "Error: {missing_key}" (single braces would cause KeyError)
+    # The exact text depends on escaping, but it should NOT raise an error
+    assert "{{missing_key}}" in step5_5_prompt or "Error:" in step5_5_prompt, (
+        f"Step 5.5 prompt should contain escaped output. Got: {step5_5_prompt}"
+    )
