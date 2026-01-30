@@ -624,3 +624,117 @@ def test_fingerprint_hash_compatibility_with_sync(tmp_path):
 
         # Verify pdd_version is set
         assert result.pdd_version is not None, "pdd_version should be set"
+
+
+# --------------------------------------------------------------------------------
+# BUG REPRODUCTION TEST: Issue #437 - Null Hashes in Fingerprint
+# --------------------------------------------------------------------------------
+
+def test_log_operation_decorator_null_hashes_bug_issue_437(temp_pdd_env, tmp_path):
+    """
+    Regression test for Issue #437: Decorator creates fingerprints with null hashes.
+
+    Bug: The @log_operation decorator calls save_fingerprint() WITHOUT the required
+    'paths' parameter, causing all hash fields (prompt_hash, code_hash, example_hash,
+    test_hash) to be set to None/null instead of containing actual content hashes.
+
+    This test verifies that when a command decorated with @log_operation runs
+    successfully with updates_fingerprint=True, the resulting fingerprint file
+    contains actual hash values (64-character hex strings) rather than null.
+
+    Root cause: pdd/operation_log.py:338 calls:
+        save_fingerprint(basename, language, operation=operation, cost=cost, model=model)
+    Missing the 'paths' parameter that calculate_current_hashes() needs.
+
+    When fixed, the decorator should either:
+    1. Return paths from the decorated function for the decorator to use
+    2. Store paths in Click context for the decorator to access
+    3. Pass paths explicitly when calling decorated functions
+    """
+    # Create actual files with content so hashes can be calculated
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    examples_dir = tmp_path / "examples"
+    examples_dir.mkdir()
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+
+    basename = "test_module"
+    language = "python"
+
+    # Create files with actual content
+    prompt_file = prompts_dir / f"{basename}_{language}.prompt"
+    prompt_file.write_text("# Test prompt content\nThis is a test prompt.")
+
+    code_file = src_dir / f"{basename}.py"
+    code_file.write_text("def test_function():\n    return 'hello'\n")
+
+    example_file = examples_dir / f"{basename}_{language}.example"
+    example_file.write_text("# Example usage\ntest_function()\n")
+
+    test_file = tests_dir / f"test_{basename}.py"
+    test_file.write_text("def test_test_function():\n    assert True\n")
+
+    # Mock function decorated with @log_operation
+    @operation_log.log_operation(
+        operation="generate",
+        updates_fingerprint=True
+    )
+    def mock_generate_command(prompt_file: str):
+        """Simulates a generate command that should update fingerprints."""
+        # In a real command, this would generate code and return cost/model info
+        # For this test, we just return the tuple structure the decorator expects
+        return {"status": "generated"}, 0.25, "gpt-4"
+
+    # Run the decorated command
+    prompt_path = f"prompts/{basename}_{language}.prompt"
+    result = mock_generate_command(prompt_file=prompt_path)
+
+    # Verify the command executed successfully
+    assert result[0]["status"] == "generated"
+
+    # Load the fingerprint file that was created
+    fp_path = operation_log.get_fingerprint_path(basename, language)
+    assert fp_path.exists(), "Fingerprint file should be created"
+
+    with open(fp_path) as f:
+        fp_data = json.load(f)
+
+    # BUG DETECTION: With the current bug, all hash fields will be null
+    # This is what we're testing for - this assertion SHOULD FAIL on buggy code
+    # and PASS after the fix
+
+    # Verify basic structure exists
+    assert "prompt_hash" in fp_data
+    assert "code_hash" in fp_data
+    assert "example_hash" in fp_data
+    assert "test_hash" in fp_data
+
+    # THE CRITICAL ASSERTIONS: These will FAIL with the bug, PASS after fix
+    # With the bug, all hashes are None. After fix, they should be SHA-256 hex strings.
+    assert fp_data["prompt_hash"] is not None, (
+        "Bug Issue #437: prompt_hash is null! The decorator doesn't pass 'paths' to save_fingerprint()"
+    )
+    assert fp_data["code_hash"] is not None, (
+        "Bug Issue #437: code_hash is null! The decorator doesn't pass 'paths' to save_fingerprint()"
+    )
+
+    # After fix, verify they are valid SHA-256 hashes (64 hex characters)
+    if fp_data["prompt_hash"] is not None:
+        assert len(fp_data["prompt_hash"]) == 64, "prompt_hash should be SHA-256 (64 hex chars)"
+        assert all(c in "0123456789abcdef" for c in fp_data["prompt_hash"]), (
+            "prompt_hash should be hexadecimal"
+        )
+
+    if fp_data["code_hash"] is not None:
+        assert len(fp_data["code_hash"]) == 64, "code_hash should be SHA-256 (64 hex chars)"
+        assert all(c in "0123456789abcdef" for c in fp_data["code_hash"]), (
+            "code_hash should be hexadecimal"
+        )
+
+    # Verify other fingerprint fields are correctly populated
+    assert fp_data["command"] == "generate"
+    assert "pdd_version" in fp_data
+    assert "timestamp" in fp_data
