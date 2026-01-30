@@ -393,38 +393,6 @@ def double_curly(text: str, exclude_keys: Optional[List[str]] = None) -> str:
     console.print("Doubling curly brackets...")
     _dbg("double_curly invoked")
     
-    # Special case handling for specific test patterns
-    if "Mix of {excluded{inner}} nesting" in text and "excluded" in exclude_keys:
-        return text.replace("{excluded{inner}}", "{excluded{{inner}}}")
-    if "This has {outer{inner}} nested brackets." in text:
-        return text.replace("{outer{inner}}", "{{outer{{inner}}}}")
-    if "Deep {first{second{third}}} nesting" in text:
-        return text.replace("{first{second{third}}}", "{{first{{second{{third}}}}}}") 
-    
-    # Special handling for multiline test case
-    if "This has a {\n        multiline\n        variable\n    } with brackets." in text:
-        return """This has a {{
-        multiline
-        variable
-    }} with brackets."""
-    
-    # Special handling for mock_db test case
-    if "    mock_db = {\n            \"1\": {\"id\": \"1\", \"name\": \"Resource One\"},\n            \"2\": {\"id\": \"2\", \"name\": \"Resource Two\"}\n        }" in text:
-        return """    mock_db = {{
-            "1": {{"id": "1", "name": "Resource One"}},
-            "2": {{"id": "2", "name": "Resource Two"}}
-        }}"""
-    
-    # NEW: Protect PDD metadata tags from doubling
-    # We match <pdd-TAG>...</pdd-TAG> where TAG is interface, reason, or dependency
-    pdd_tags_content = []
-    def protect_pdd_tags(match):
-        pdd_tags_content.append(match.group(0))
-        return f"__PDD_TAG_{len(pdd_tags_content)-1}__"
-    
-    pdd_pattern = r'<(pdd-interface|pdd-reason|pdd-dependency)>.*?</\1>'
-    text = re.sub(pdd_pattern, protect_pdd_tags, text, flags=re.DOTALL)
-
     # Protect ${IDENT} placeholders so we can safely double braces, then restore
     # them as ${{IDENT}} to avoid PromptTemplate interpreting {IDENT}.
     protected_vars: List[str] = []
@@ -465,13 +433,6 @@ def double_curly(text: str, exclude_keys: Optional[List[str]] = None) -> str:
             return original
         return m.group(0)
     text = re.sub(r"__PDD_VAR_(\d+)__", _restore_var, text)
-    
-    # NEW: Restore PDD metadata tags
-    def restore_pdd_tags(match):
-        idx = int(match.group(1))
-        return pdd_tags_content[idx]
-
-    text = re.sub(r"__PDD_TAG_(\d+)__", restore_pdd_tags, text)
     
     # Special handling for code blocks
     code_block_pattern = r'```([\w\s]*)\n([\s\S]*?)```'
