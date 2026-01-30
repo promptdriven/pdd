@@ -108,13 +108,14 @@ export const CodeFlow: React.FC = () => {
       });
 
       // Overall stream intensity
+      // Note: BEATS.CODE_FILL_END and BEATS.FINAL_START are both 360, so we use FINAL_END for fade-out
       const streamIntensity = interpolate(
         frame,
         [
           BEATS.CODE_FLOW_START,
           BEATS.CODE_FLOW_START + 30,
+          BEATS.CODE_FILL_END - 30,
           BEATS.CODE_FILL_END,
-          BEATS.FINAL_START,
         ],
         [0, 1, 0.6, 0],
         {

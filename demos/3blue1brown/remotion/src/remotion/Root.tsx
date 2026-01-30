@@ -105,6 +105,54 @@ import {
   PARTS_EJECT_HEIGHT,
   defaultPartsEjectProps,
 } from "./14-PartsEject";
+import {
+  DefectDiscovered,
+  DEFECT_FPS,
+  DEFECT_DURATION_FRAMES,
+  DEFECT_WIDTH,
+  DEFECT_HEIGHT,
+  defaultDefectDiscoveredProps,
+} from "./15-DefectDiscovered";
+import {
+  PerfectParts,
+  PERFECT_PARTS_FPS,
+  PERFECT_PARTS_DURATION_FRAMES,
+  PERFECT_PARTS_WIDTH,
+  PERFECT_PARTS_HEIGHT,
+  defaultPerfectPartsProps,
+} from "./16-PerfectParts";
+import {
+  ValueAura,
+  VALUE_AURA_FPS,
+  VALUE_AURA_DURATION_FRAMES,
+  VALUE_AURA_WIDTH,
+  VALUE_AURA_HEIGHT,
+  defaultValueAuraProps,
+} from "./17-ValueAura";
+import {
+  PlasticRegenerates,
+  PLASTIC_REGEN_FPS,
+  PLASTIC_REGEN_DURATION_FRAMES,
+  PLASTIC_REGEN_WIDTH,
+  PLASTIC_REGEN_HEIGHT,
+  defaultPlasticRegeneratesProps,
+} from "./18-PlasticRegenerates";
+import {
+  MoldToPrompt,
+  MOLD_TO_PROMPT_FPS,
+  MOLD_TO_PROMPT_DURATION_FRAMES,
+  MOLD_TO_PROMPT_WIDTH,
+  MOLD_TO_PROMPT_HEIGHT,
+  defaultMoldToPromptProps,
+} from "./19-MoldToPrompt";
+import {
+  PromptGeneratesCode,
+  PROMPT_CODE_FPS,
+  PROMPT_CODE_DURATION_FRAMES,
+  PROMPT_CODE_WIDTH,
+  PROMPT_CODE_HEIGHT,
+  defaultPromptGeneratesCodeProps,
+} from "./20-PromptGeneratesCode";
 
 export const RemotionRoot: React.FC = () => {
   return (
@@ -239,6 +287,72 @@ export const RemotionRoot: React.FC = () => {
           width={PARTS_EJECT_WIDTH}
           height={PARTS_EJECT_HEIGHT}
           defaultProps={defaultPartsEjectProps}
+        />
+      </Folder>
+      <Folder name="15-DefectDiscovered">
+        <Composition
+          id="DefectDiscovered"
+          component={DefectDiscovered}
+          durationInFrames={DEFECT_DURATION_FRAMES}
+          fps={DEFECT_FPS}
+          width={DEFECT_WIDTH}
+          height={DEFECT_HEIGHT}
+          defaultProps={defaultDefectDiscoveredProps}
+        />
+      </Folder>
+      <Folder name="16-PerfectParts">
+        <Composition
+          id="PerfectParts"
+          component={PerfectParts}
+          durationInFrames={PERFECT_PARTS_DURATION_FRAMES}
+          fps={PERFECT_PARTS_FPS}
+          width={PERFECT_PARTS_WIDTH}
+          height={PERFECT_PARTS_HEIGHT}
+          defaultProps={defaultPerfectPartsProps}
+        />
+      </Folder>
+      <Folder name="17-ValueAura">
+        <Composition
+          id="ValueAura"
+          component={ValueAura}
+          durationInFrames={VALUE_AURA_DURATION_FRAMES}
+          fps={VALUE_AURA_FPS}
+          width={VALUE_AURA_WIDTH}
+          height={VALUE_AURA_HEIGHT}
+          defaultProps={defaultValueAuraProps}
+        />
+      </Folder>
+      <Folder name="18-PlasticRegenerates">
+        <Composition
+          id="PlasticRegenerates"
+          component={PlasticRegenerates}
+          durationInFrames={PLASTIC_REGEN_DURATION_FRAMES}
+          fps={PLASTIC_REGEN_FPS}
+          width={PLASTIC_REGEN_WIDTH}
+          height={PLASTIC_REGEN_HEIGHT}
+          defaultProps={defaultPlasticRegeneratesProps}
+        />
+      </Folder>
+      <Folder name="19-MoldToPrompt">
+        <Composition
+          id="MoldToPrompt"
+          component={MoldToPrompt}
+          durationInFrames={MOLD_TO_PROMPT_DURATION_FRAMES}
+          fps={MOLD_TO_PROMPT_FPS}
+          width={MOLD_TO_PROMPT_WIDTH}
+          height={MOLD_TO_PROMPT_HEIGHT}
+          defaultProps={defaultMoldToPromptProps}
+        />
+      </Folder>
+      <Folder name="20-PromptGeneratesCode">
+        <Composition
+          id="PromptGeneratesCode"
+          component={PromptGeneratesCode}
+          durationInFrames={PROMPT_CODE_DURATION_FRAMES}
+          fps={PROMPT_CODE_FPS}
+          width={PROMPT_CODE_WIDTH}
+          height={PROMPT_CODE_HEIGHT}
+          defaultProps={defaultPromptGeneratesCodeProps}
         />
       </Folder>
       <Folder name="Examples">
