@@ -1,3 +1,24 @@
+## v0.0.135 (2026-01-30)
+
+### Feat
+
+- Add new Remotion compositions and specifications for the 3blue1brown precision-tradeoff demo, and update operation logging and synchronization logic.
+- Add new Remotion compositions and specifications for the 3blue1brown precision-tradeoff demo, and update operation logging and synchronization logic.
+- introduce new Remotion scenes and their specifications for the 3blue1brown precision tradeoff demo.
+- add sync queue functionality to frontend components
+- Add numerous new Remotion scenes, specifications, and rendered video outputs for the 3blue1brown demo.
+- Add Remotion animations and specifications for the 3blue1brown demo's mold, bug discovery, and test wall segments.
+- introduce new Remotion scenes, video assets, and specifications to illustrate the paradigm shift concept in the 3blue1brown demo.
+- Add 'Parts Eject' and 'Developer Edit Zoomout' Remotion compositions for 3blue1brown demo, including new video assets and a job sync failure detection test.
+- enhance Crossing Point chart with detailed cost lines, tech debt shading, and updated legend and labels.
+
+### Fix
+
+- Preserve job output on job failure, refine sync failure detection to prevent false positives, and switch JWT warnings to use logging instead of print.
+- Preserve job output on job failure, refine sync failure detection to prevent false positives, and switch JWT warnings to use logging instead of print.
+- make sync pipeline fully case-insensitive for language detection
+- refine job sync failure detection, preserve job output on error, switch JWT warnings to logging, and update Remotion demo styles.
+
 ## v0.0.134 (2026-01-29)
 
 ### Feat
