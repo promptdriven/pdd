@@ -297,6 +297,62 @@ import {
   CODE_OUTPUT_HEIGHT,
   defaultCodeOutputMoldGlowsProps,
 } from "./38-CodeOutputMoldGlows";
+import {
+  PrinterFocus,
+  PRINTER_FOCUS_FPS,
+  PRINTER_FOCUS_DURATION_FRAMES,
+  PRINTER_FOCUS_WIDTH,
+  PRINTER_FOCUS_HEIGHT,
+  defaultPrinterFocusProps,
+} from "./39-3DPrinterFocus";
+import {
+  MoldFlowFocus,
+  MOLD_FLOW_FOCUS_FPS,
+  MOLD_FLOW_FOCUS_DURATION_FRAMES,
+  MOLD_FLOW_FOCUS_WIDTH,
+  MOLD_FLOW_FOCUS_HEIGHT,
+  defaultMoldFlowFocusProps,
+} from "./40-MoldFlowFocus";
+import {
+  PrecisionGraph,
+  PRECISION_GRAPH_FPS,
+  PRECISION_GRAPH_DURATION_FRAMES,
+  PRECISION_GRAPH_WIDTH,
+  PRECISION_GRAPH_HEIGHT,
+  defaultPrecisionGraphProps,
+} from "./41-PrecisionGraph";
+import {
+  GraphAnimateCurve,
+  GRAPH_ANIMATE_FPS,
+  GRAPH_ANIMATE_DURATION_FRAMES,
+  GRAPH_ANIMATE_WIDTH,
+  GRAPH_ANIMATE_HEIGHT,
+  defaultGraphAnimateCurveProps,
+} from "./42-GraphAnimateCurve";
+import {
+  LongPrompt,
+  LONG_PROMPT_FPS,
+  LONG_PROMPT_DURATION_FRAMES,
+  LONG_PROMPT_WIDTH,
+  LONG_PROMPT_HEIGHT,
+  defaultLongPromptProps,
+} from "./43-LongPrompt";
+import {
+  ShortPromptTests,
+  SHORT_PROMPT_FPS,
+  SHORT_PROMPT_DURATION_FRAMES,
+  SHORT_PROMPT_WIDTH,
+  SHORT_PROMPT_HEIGHT,
+  defaultShortPromptTestsProps,
+} from "./44-ShortPromptTests";
+import {
+  BothGenerateFinal,
+  BOTH_GENERATE_FPS,
+  BOTH_GENERATE_DURATION_FRAMES,
+  BOTH_GENERATE_WIDTH,
+  BOTH_GENERATE_HEIGHT,
+  defaultBothGenerateFinalProps,
+} from "./45-BothGenerateFinal";
 
 export const RemotionRoot: React.FC = () => {
   return (
@@ -695,6 +751,83 @@ export const RemotionRoot: React.FC = () => {
           width={CODE_OUTPUT_WIDTH}
           height={CODE_OUTPUT_HEIGHT}
           defaultProps={defaultCodeOutputMoldGlowsProps}
+        />
+      </Folder>
+      <Folder name="39-3DPrinterFocus">
+        <Composition
+          id="PrinterFocus"
+          component={PrinterFocus}
+          durationInFrames={PRINTER_FOCUS_DURATION_FRAMES}
+          fps={PRINTER_FOCUS_FPS}
+          width={PRINTER_FOCUS_WIDTH}
+          height={PRINTER_FOCUS_HEIGHT}
+          defaultProps={defaultPrinterFocusProps}
+        />
+      </Folder>
+      <Folder name="40-MoldFlowFocus">
+        <Composition
+          id="MoldFlowFocus"
+          component={MoldFlowFocus}
+          durationInFrames={MOLD_FLOW_FOCUS_DURATION_FRAMES}
+          fps={MOLD_FLOW_FOCUS_FPS}
+          width={MOLD_FLOW_FOCUS_WIDTH}
+          height={MOLD_FLOW_FOCUS_HEIGHT}
+          defaultProps={defaultMoldFlowFocusProps}
+        />
+      </Folder>
+      <Folder name="41-PrecisionGraph">
+        <Composition
+          id="PrecisionGraph"
+          component={PrecisionGraph}
+          durationInFrames={PRECISION_GRAPH_DURATION_FRAMES}
+          fps={PRECISION_GRAPH_FPS}
+          width={PRECISION_GRAPH_WIDTH}
+          height={PRECISION_GRAPH_HEIGHT}
+          defaultProps={defaultPrecisionGraphProps}
+        />
+      </Folder>
+      <Folder name="42-GraphAnimateCurve">
+        <Composition
+          id="GraphAnimateCurve"
+          component={GraphAnimateCurve}
+          durationInFrames={GRAPH_ANIMATE_DURATION_FRAMES}
+          fps={GRAPH_ANIMATE_FPS}
+          width={GRAPH_ANIMATE_WIDTH}
+          height={GRAPH_ANIMATE_HEIGHT}
+          defaultProps={defaultGraphAnimateCurveProps}
+        />
+      </Folder>
+      <Folder name="43-LongPrompt">
+        <Composition
+          id="LongPrompt"
+          component={LongPrompt}
+          durationInFrames={LONG_PROMPT_DURATION_FRAMES}
+          fps={LONG_PROMPT_FPS}
+          width={LONG_PROMPT_WIDTH}
+          height={LONG_PROMPT_HEIGHT}
+          defaultProps={defaultLongPromptProps}
+        />
+      </Folder>
+      <Folder name="44-ShortPromptTests">
+        <Composition
+          id="ShortPromptTests"
+          component={ShortPromptTests}
+          durationInFrames={SHORT_PROMPT_DURATION_FRAMES}
+          fps={SHORT_PROMPT_FPS}
+          width={SHORT_PROMPT_WIDTH}
+          height={SHORT_PROMPT_HEIGHT}
+          defaultProps={defaultShortPromptTestsProps}
+        />
+      </Folder>
+      <Folder name="45-BothGenerateFinal">
+        <Composition
+          id="BothGenerateFinal"
+          component={BothGenerateFinal}
+          durationInFrames={BOTH_GENERATE_DURATION_FRAMES}
+          fps={BOTH_GENERATE_FPS}
+          width={BOTH_GENERATE_WIDTH}
+          height={BOTH_GENERATE_HEIGHT}
+          defaultProps={defaultBothGenerateFinalProps}
         />
       </Folder>
       <Folder name="Examples">
