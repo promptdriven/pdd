@@ -1138,3 +1138,163 @@ contexts:
         assert "test" in service_result, \
             "Test file not detected - {name} placeholder may not be substituted"
         assert service_result["test"] == "tests/service/__test__/service.test.ts"
+
+
+# ============================================================================
+# Tests for sync_basename including subdirectory paths
+# ============================================================================
+
+class TestSyncBasenameSubdirectory:
+    """
+    Tests that sync_basename includes subdirectory paths when prompts are nested.
+
+    Bug: When multiple prompts have the same name (e.g., page_TypescriptReact.prompt)
+    in different subdirectories, pdd connect sends just '--basename page' to pdd sync,
+    which finds the wrong file (the first match instead of the specific one).
+
+    Fix: sync_basename should include the subdirectory path relative to prompts_base,
+    e.g., 'frontend/app/admin/discount-codes/page' instead of just 'page'.
+    """
+
+    @pytest.fixture
+    def project_with_nested_pages(self, tmp_path):
+        """
+        Create a project with multiple page_*.prompt files in different subdirectories,
+        mimicking the real-world issue where pdd connect picks the wrong prompt.
+        """
+        root = tmp_path / "project"
+        root.mkdir(exist_ok=True)
+
+        # Create .pddrc with frontend context
+        pddrc = root / ".pddrc"
+        pddrc.write_text("""
+version: "1.0"
+contexts:
+  frontend:
+    paths:
+      - "frontend/**"
+      - "prompts/frontend/**"
+    defaults:
+      default_language: "typescriptreact"
+      outputs:
+        prompt:
+          path: "prompts/frontend/{category}/{name}_{language}.prompt"
+        code:
+          path: "frontend/src/{category}/{name}.tsx"
+  default:
+    defaults:
+      default_language: "python"
+""")
+
+        # Create prompts directory structure with MULTIPLE page prompts
+        prompts = root / "prompts" / "frontend"
+
+        # Root-level page (the one that gets incorrectly matched)
+        app_dir = prompts / "app"
+        app_dir.mkdir(parents=True)
+        (app_dir / "page_TypescriptReact.prompt").write_text("Root app page")
+
+        # Nested page in admin/discount-codes (the one user actually wants)
+        discount_dir = prompts / "app" / "admin" / "discount-codes"
+        discount_dir.mkdir(parents=True)
+        (discount_dir / "page_TypescriptReact.prompt").write_text("Discount codes page")
+
+        # Another nested page to show multiple conflicts
+        users_dir = prompts / "app" / "admin" / "users"
+        users_dir.mkdir(parents=True)
+        (users_dir / "page_TypescriptReact.prompt").write_text("Users page")
+
+        return root
+
+    @pytest.mark.asyncio
+    async def test_sync_basename_includes_subdirectory_for_nested_prompts(self, project_with_nested_pages):
+        """
+        Test that sync_basename includes the subdirectory path for nested prompts.
+
+        When a prompt is at prompts/frontend/app/admin/discount-codes/page_TypescriptReact.prompt,
+        sync_basename should be 'frontend/app/admin/discount-codes/page' (not just 'page').
+        This allows pdd sync to find the correct file when there are multiple page prompts.
+        """
+        from pdd.server.routes.files import list_prompt_files, set_path_validator
+        from pdd.server.security import PathValidator
+
+        validator = PathValidator(project_with_nested_pages)
+        set_path_validator(validator)
+
+        results = await list_prompt_files(validator)
+
+        # Find the discount-codes page prompt
+        discount_result = next(
+            (r for r in results if "admin/discount-codes/page" in r.get("prompt", "")),
+            None
+        )
+
+        assert discount_result is not None, "Discount codes page prompt not found"
+
+        # KEY ASSERTION: sync_basename must include subdirectory path
+        # so pdd sync can find the correct prompt file
+        sync_basename = discount_result.get("sync_basename", "")
+        assert "admin/discount-codes" in sync_basename, \
+            f"sync_basename should include subdirectory path, got: '{sync_basename}'. " \
+            f"Without subdirectory, pdd sync will find the wrong 'page' prompt."
+
+    @pytest.mark.asyncio
+    async def test_all_page_prompts_have_unique_sync_basenames(self, project_with_nested_pages):
+        """
+        Test that all page prompts have unique sync_basenames to avoid conflicts.
+
+        If multiple prompts have the same sync_basename, pdd sync will pick the wrong one.
+        """
+        from pdd.server.routes.files import list_prompt_files, set_path_validator
+        from pdd.server.security import PathValidator
+
+        validator = PathValidator(project_with_nested_pages)
+        set_path_validator(validator)
+
+        results = await list_prompt_files(validator)
+
+        # Filter to just page prompts
+        page_prompts = [r for r in results if "page_TypescriptReact" in r.get("prompt", "")]
+
+        assert len(page_prompts) >= 3, \
+            f"Expected at least 3 page prompts, found {len(page_prompts)}"
+
+        # All sync_basenames should be unique
+        sync_basenames = [r.get("sync_basename") for r in page_prompts]
+        unique_basenames = set(sync_basenames)
+
+        assert len(unique_basenames) == len(sync_basenames), \
+            f"sync_basenames must be unique to avoid conflicts. " \
+            f"Found duplicates: {sync_basenames}"
+
+    @pytest.mark.asyncio
+    async def test_root_level_prompt_has_simple_sync_basename(self, project_with_nested_pages):
+        """
+        Test that root-level prompts (not in subdirectories) have simple sync_basenames.
+
+        The fix should only add subdirectory paths where needed, not break existing behavior.
+        """
+        from pdd.server.routes.files import list_prompt_files, set_path_validator
+        from pdd.server.security import PathValidator
+
+        validator = PathValidator(project_with_nested_pages)
+        set_path_validator(validator)
+
+        results = await list_prompt_files(validator)
+
+        # Find the root-level page prompt (prompts/frontend/app/page_TypescriptReact.prompt)
+        root_page = next(
+            (r for r in results
+             if r.get("prompt", "").endswith("app/page_TypescriptReact.prompt")
+             and "admin" not in r.get("prompt", "")),
+            None
+        )
+
+        assert root_page is not None, "Root app page prompt not found"
+
+        # The root page's sync_basename should include 'app' (its category)
+        # but not have unnecessary nesting
+        sync_basename = root_page.get("sync_basename", "")
+        # It should end with /page or be just the category/page
+        assert sync_basename.endswith("page") or sync_basename == "page", \
+            f"Unexpected sync_basename for root page: '{sync_basename}'"
