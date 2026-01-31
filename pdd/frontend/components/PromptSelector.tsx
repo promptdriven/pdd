@@ -7,6 +7,7 @@ interface PromptSelectorProps {
   onEditPrompt: (prompt: PromptInfo) => void;
   onCreatePrompt?: (prompt: PromptInfo) => void;
   onRunSync?: (prompt: PromptInfo, options?: Record<string, any>) => void;
+  onAddToQueue?: (prompt: PromptInfo, options?: Record<string, any>) => void;
   selectedPrompt: PromptInfo | null;
 }
 
@@ -120,6 +121,7 @@ const PromptSelector: React.FC<PromptSelectorProps> = ({
   onEditPrompt,
   onCreatePrompt,
   onRunSync,
+  onAddToQueue,
   selectedPrompt,
 }) => {
   const [prompts, setPrompts] = useState<PromptInfo[]>([]);
@@ -432,6 +434,13 @@ const PromptSelector: React.FC<PromptSelectorProps> = ({
           setShowSyncOptionsModal(false);
           setPendingSyncPrompt(null);
         }}
+        onAddToQueue={onAddToQueue ? (options) => {
+          if (pendingSyncPrompt) {
+            onAddToQueue(pendingSyncPrompt, options);
+          }
+          setShowSyncOptionsModal(false);
+          setPendingSyncPrompt(null);
+        } : undefined}
         onClose={() => {
           setShowSyncOptionsModal(false);
           setPendingSyncPrompt(null);

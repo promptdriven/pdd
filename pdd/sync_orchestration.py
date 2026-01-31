@@ -186,7 +186,7 @@ def _save_run_report_atomic(report: Dict[str, Any], basename: str, language: str
     """
     if atomic_state:
         # Buffer for atomic write
-        report_file = META_DIR / f"{_safe_basename(basename)}_{language}_run.json"
+        report_file = META_DIR / f"{_safe_basename(basename)}_{language.lower()}_run.json"
         atomic_state.set_run_report(report, report_file)
     else:
         # Direct write using operation_log
@@ -224,7 +224,7 @@ def _save_fingerprint_atomic(basename: str, language: str, operation: str,
             test_files=current_hashes.get('test_files'),  # Bug #156
         )
 
-        fingerprint_file = META_DIR / f"{_safe_basename(basename)}_{language}.json"
+        fingerprint_file = META_DIR / f"{_safe_basename(basename)}_{language.lower()}.json"
         atomic_state.set_fingerprint(asdict(fingerprint), fingerprint_file)
     else:
         # Direct write using operation_log
@@ -660,7 +660,7 @@ def _create_synthetic_run_report_for_agentic_success(
 
     # Save the report
     # NOTE: Must use _run.json (not _run_report.json) to match read_run_report() in sync_determine_operation.py
-    report_file = META_DIR / f"{_safe_basename(basename)}_{language}_run.json"
+    report_file = META_DIR / f"{_safe_basename(basename)}_{language.lower()}_run.json"
     if atomic_state:
         atomic_state.set_run_report(asdict(report), report_file)
     else:
@@ -847,7 +847,7 @@ def _create_mock_context(**kwargs) -> click.Context:
 
 def _display_sync_log(basename: str, language: str, verbose: bool = False) -> Dict[str, Any]:
     """Displays the sync log for a given basename and language."""
-    log_file = META_DIR / f"{_safe_basename(basename)}_{language}_sync.log"
+    log_file = META_DIR / f"{_safe_basename(basename)}_{language.lower()}_sync.log"
     if not log_file.exists():
         print(f"No sync log found for '{basename}' in language '{language}'.")
         return {'success': False, 'errors': ['Log file not found.'], 'log_entries': []}
@@ -970,8 +970,18 @@ def sync_orchestration(
         pdd_files = get_pdd_file_paths(basename, language, prompts_dir, context_override=context_override)
     except FileNotFoundError as e:
         if "test_config.py" in str(e) or "tests/test_" in str(e):
+            # Case-insensitive prompt file lookup for fallback
+            fallback_prompt = Path(prompts_dir) / f"{basename}_{language}.prompt"
+            if not fallback_prompt.exists():
+                prompts_dir_path = Path(prompts_dir)
+                if prompts_dir_path.is_dir():
+                    target_lower = fallback_prompt.name.lower()
+                    for candidate in prompts_dir_path.iterdir():
+                        if candidate.name.lower() == target_lower and candidate.is_file():
+                            fallback_prompt = candidate
+                            break
             pdd_files = {
-                'prompt': Path(prompts_dir) / f"{basename}_{language}.prompt",
+                'prompt': fallback_prompt,
                 'code': Path(f"src/{basename}.{get_extension(language)}"),
                 'example': Path(f"context/{basename}_example.{get_extension(language)}"),
                 'test': Path(f"tests/test_{basename}.{get_extension(language)}")

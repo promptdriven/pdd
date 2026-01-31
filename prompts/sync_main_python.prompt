@@ -54,6 +54,7 @@
 5. **Language Detection**:
     - If context was discovered via template, use template-based detection: expand template for each known language and check file existence
     - Otherwise, scan for prompt files matching `{basename}_{language}.prompt` in prompts directory
+    - **Case-insensitive**: Normalize detected language keys to lowercase (e.g., `"Python"` from `task_model_Python.prompt` becomes `"python"`). This ensures consistent metadata paths on case-sensitive filesystems (Linux).
     - Support subdirectory basenames (e.g., "core/cloud" searches prompts/core/ for cloud_*.prompt)
     - Exclude runtime languages (LLM) - they cannot form valid development units
     - Python prioritized first, then remaining languages sorted alphabetically

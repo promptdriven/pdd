@@ -14,13 +14,13 @@ A shared logging infrastructure module for tracking all PDD operations. This mod
 
 The module provides functions for:
 
-1. **Log File Operations** - Load, create, update, and append log entries to JSONL files in `.pdd/meta/{basename}_{language}_sync.log`. Entries include timestamp, operation, reason, cost, model, duration, and success status.
+1. **Log File Operations** - Load, create, update, and append log entries to JSONL files in `.pdd/meta/{basename}_{language}_sync.log` (where `{language}` is always lowercased via `language.lower()` for consistent paths on case-sensitive filesystems). Entries include timestamp, operation, reason, cost, model, duration, and success status.
 
 2. **Manual Invocation Support** - Convenience functions for creating log entries with `invocation_mode="manual"` and `reason="Manual invocation via CLI"`.
 
-3. **Module Identity Inference** - Extract basename and language from prompt file paths following the pattern `prompts/{basename}_{language}.prompt`.
+3. **Module Identity Inference** - Extract basename and language from prompt file paths following the pattern `prompts/{basename}_{language}.prompt`. The inferred language is always normalized to lowercase (e.g., `"Python"` from `task_model_Python.prompt` becomes `"python"`).
 
-4. **State File Management** - Save fingerprints after successful operations, save run reports after test execution, and clear stale run reports before operations that invalidate them.
+4. **State File Management** - Save fingerprints (`.pdd/meta/{basename}_{language.lower()}.json`), run reports (`_run.json`), and sync logs (`_sync.log`) after operations. All metadata paths use `language.lower()` for case-insensitive consistency. Clear stale run reports before operations that invalidate them.
 
 5. **Event Logging** - Log special events (lock_acquired, budget_warning, etc.) to the sync log.
 

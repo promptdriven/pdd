@@ -344,17 +344,20 @@ def _detect_languages(basename: str, prompts_dir: Path) -> Dict[str, Path]:
         # Ensure the file starts with the exact name part followed by an underscore
         if stem.startswith(f"{name_part}_"):
             potential_language = stem[len(name_part) + 1 :]
+            # Normalize language to lowercase for case-insensitive matching
+            # (e.g., "Python" from "task_model_Python.prompt" -> "python")
+            normalized_language = potential_language.lower()
             try:
                 if _is_known_language(potential_language):
                     # Exclude runtime languages (LLM) as they cannot form valid development units
-                    if potential_language.lower() != 'llm':
-                        lang_to_path[potential_language] = prompt_file
+                    if normalized_language != 'llm':
+                        lang_to_path[normalized_language] = prompt_file
             except ValueError:
                 # PDD_PATH not set (likely during testing) - assume language is valid
                 # if it matches common language patterns
                 common_languages = {"python", "javascript", "java", "cpp", "c", "go", "rust", "typescript"}
-                if potential_language.lower() in common_languages:
-                    lang_to_path[potential_language] = prompt_file
+                if normalized_language in common_languages:
+                    lang_to_path[normalized_language] = prompt_file
                 # Explicitly exclude 'llm' even in test scenarios
 
     return _python_first_sorted(lang_to_path)

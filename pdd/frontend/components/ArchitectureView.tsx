@@ -32,6 +32,8 @@ interface ArchitectureViewProps {
   onRemoteJobSubmitted?: (displayCommand: string, commandType: string, commandId: string, sessionId: string) => void;
   // Callback to add tasks to the job queue
   onAddToQueue?: (commandType: CommandType, prompt: PromptInfo, rawOptions: Record<string, any>, displayCommand: string) => void;
+  // Callback to run sync directly (not queued)
+  onRunSync?: (prompt: PromptInfo, options?: Record<string, any>) => void;
 }
 
 type EditorMode = 'empty' | 'editor' | 'graph';
@@ -47,6 +49,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
   selectedRemoteSession,
   onRemoteJobSubmitted,
   onAddToQueue,
+  onRunSync,
 }) => {
   // Architecture state
   const [architecture, setArchitecture] = useState<ArchitectureModule[] | null>(null);
@@ -383,18 +386,8 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
     return counts;
   }, [batches, promptsInfo]);
 
-  // Show sync options modal for a single module
-  const handleRunSyncForModule = useCallback((module: ArchitectureModule) => {
-    if (!onAddToQueue) return;
-    setPendingSyncModule(module);
-    setPendingSyncAll(false);
-    setShowSyncOptionsModal(true);
-  }, [onAddToQueue]);
-
-  // Actually run sync for a single module with selected options
-  const executeSyncForModule = useCallback((module: ArchitectureModule, options: Record<string, any>) => {
-    if (!onAddToQueue) return;
-
+  // Helper: build a PromptInfo from an architecture module
+  const buildPromptInfoForModule = useCallback((module: ArchitectureModule): PromptInfo => {
     const promptMap = new Map<string, PromptInfo>();
     promptsInfo.forEach(p => {
       const filename = p.prompt.split('/').pop() || '';
@@ -405,130 +398,164 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
     const language = match ? match[1].toLowerCase() : undefined;
     const basename = module.filename.replace(/_[A-Za-z]+\.prompt$/, '');
 
-    // Use the full PromptInfo from promptsInfo if available
     const existingPrompt = promptMap.get(module.filename);
-    const promptInfo: PromptInfo = existingPrompt || {
+    return existingPrompt || {
       prompt: `prompts/${module.filename}`,
       sync_basename: basename,
       language,
       code: module.filepath,
     };
+  }, [promptsInfo]);
 
-    const displayCommand = buildDisplayCommand(CommandType.SYNC, promptInfo, { ...options });
-    onAddToQueue(CommandType.SYNC, promptInfo, { ...options }, displayCommand);
-  }, [promptsInfo, onAddToQueue]);
+  // Helper: get modules that still need syncing from a list
+  const getModulesNeedingSync = useCallback((modules: ArchitectureModule[]): ArchitectureModule[] => {
+    const promptMap = new Map<string, PromptInfo>();
+    promptsInfo.forEach(p => {
+      const filename = p.prompt.split('/').pop() || '';
+      promptMap.set(filename, p);
+    });
+
+    return modules
+      .filter(module => {
+        const info = promptMap.get(module.filename);
+        if (!info) return true;
+        return !info.code || !info.test || !info.example;
+      })
+      .sort((a, b) => a.priority - b.priority);
+  }, [promptsInfo]);
+
+  // Show sync options modal for a single module
+  const handleRunSyncForModule = useCallback((module: ArchitectureModule) => {
+    if (!onAddToQueue && !onRunSync) return;
+    setPendingSyncModule(module);
+    setPendingSyncAll(false);
+    setShowSyncOptionsModal(true);
+  }, [onAddToQueue, onRunSync]);
 
   // Show sync options modal for all remaining modules
   const handleSyncAll = useCallback(() => {
-    if (!architecture || !onAddToQueue) return;
+    if (!architecture || (!onAddToQueue && !onRunSync)) return;
     setPendingSyncModule(null);
     setPendingSyncAll(true);
     setPendingSyncBatch(null);
     setShowSyncOptionsModal(true);
-  }, [architecture, onAddToQueue]);
+  }, [architecture, onAddToQueue, onRunSync]);
 
   // Show sync options modal for a specific batch
   const handleSyncBatch = useCallback((batch: Batch) => {
-    if (!onAddToQueue) return;
+    if (!onAddToQueue && !onRunSync) return;
     setPendingSyncModule(null);
     setPendingSyncAll(false);
     setPendingSyncBatch(batch);
     setShowSyncOptionsModal(true);
-  }, [onAddToQueue]);
+  }, [onAddToQueue, onRunSync]);
 
-  // Actually queue sync for all remaining modules with selected options
-  const executeSyncAll = useCallback((options: Record<string, any>) => {
-    if (!architecture || !onAddToQueue) return;
+  // Run sync directly for a single module
+  const runSyncForModule = useCallback((module: ArchitectureModule, options: Record<string, any>) => {
+    if (!onRunSync) return;
+    const promptInfo = buildPromptInfoForModule(module);
+    onRunSync(promptInfo, options);
+  }, [buildPromptInfoForModule, onRunSync]);
 
-    const promptMap = new Map<string, PromptInfo>();
-    promptsInfo.forEach(p => {
-      const filename = p.prompt.split('/').pop() || '';
-      promptMap.set(filename, p);
-    });
-
-    const modulesToSync = architecture
-      .filter(module => {
-        const info = promptMap.get(module.filename);
-        if (!info) return true;
-        return !info.code || !info.test || !info.example;
-      })
-      .sort((a, b) => a.priority - b.priority);
-
+  // Run sync directly for all remaining modules (runs only the first; rest queued)
+  const runSyncAll = useCallback((options: Record<string, any>) => {
+    if (!architecture || !onRunSync) return;
+    const modulesToSync = getModulesNeedingSync(architecture);
     if (modulesToSync.length === 0) return;
 
-    modulesToSync.forEach(module => {
-      const match = module.filename.match(/_([A-Za-z]+)\.prompt$/);
-      const language = match ? match[1].toLowerCase() : undefined;
-      const basename = module.filename.replace(/_[A-Za-z]+\.prompt$/, '');
+    // Run the first module directly
+    runSyncForModule(modulesToSync[0], options);
 
-      // Use the full PromptInfo from promptsInfo if available (has context, test, example)
-      // Otherwise construct a minimal one from the architecture module
-      const existingPrompt = promptMap.get(module.filename);
-      const promptInfo: PromptInfo = existingPrompt || {
-        prompt: `prompts/${module.filename}`,
-        sync_basename: basename,
-        language,
-        code: module.filepath,
-      };
+    // Queue the rest if onAddToQueue is available
+    if (onAddToQueue && modulesToSync.length > 1) {
+      modulesToSync.slice(1).forEach(module => {
+        const promptInfo = buildPromptInfoForModule(module);
+        const displayCommand = buildDisplayCommand(CommandType.SYNC, promptInfo, { ...options });
+        onAddToQueue(CommandType.SYNC, promptInfo, { ...options }, displayCommand);
+      });
+    }
+  }, [architecture, getModulesNeedingSync, runSyncForModule, buildPromptInfoForModule, onRunSync, onAddToQueue]);
 
-      const displayCommand = buildDisplayCommand(CommandType.SYNC, promptInfo, { ...options });
-      onAddToQueue(CommandType.SYNC, promptInfo, { ...options }, displayCommand);
-    });
-  }, [architecture, promptsInfo, onAddToQueue]);
+  // Run sync directly for a specific batch (runs first; rest queued)
+  const runSyncBatch = useCallback((batch: Batch, options: Record<string, any>) => {
+    if (!onRunSync) return;
+    const modulesToSync = getModulesNeedingSync(batch.modules);
+    if (modulesToSync.length === 0) return;
 
-  // Actually queue sync for a specific batch with selected options
-  const executeSyncBatch = useCallback((batch: Batch, options: Record<string, any>) => {
+    runSyncForModule(modulesToSync[0], options);
+
+    if (onAddToQueue && modulesToSync.length > 1) {
+      modulesToSync.slice(1).forEach(module => {
+        const promptInfo = buildPromptInfoForModule(module);
+        const displayCommand = buildDisplayCommand(CommandType.SYNC, promptInfo, { ...options });
+        onAddToQueue(CommandType.SYNC, promptInfo, { ...options }, displayCommand);
+      });
+    }
+  }, [getModulesNeedingSync, runSyncForModule, buildPromptInfoForModule, onRunSync, onAddToQueue]);
+
+  // Queue sync for a single module
+  const queueSyncForModule = useCallback((module: ArchitectureModule, options: Record<string, any>) => {
     if (!onAddToQueue) return;
+    const promptInfo = buildPromptInfoForModule(module);
+    const displayCommand = buildDisplayCommand(CommandType.SYNC, promptInfo, { ...options });
+    onAddToQueue(CommandType.SYNC, promptInfo, { ...options }, displayCommand);
+  }, [buildPromptInfoForModule, onAddToQueue]);
 
-    const promptMap = new Map<string, PromptInfo>();
-    promptsInfo.forEach(p => {
-      const filename = p.prompt.split('/').pop() || '';
-      promptMap.set(filename, p);
-    });
-
-    // Get modules in this batch that still need syncing, sorted by priority
-    const modulesToSync = batch.modules
-      .filter(module => {
-        const info = promptMap.get(module.filename);
-        if (!info) return true;
-        return !info.code || !info.test || !info.example;
-      })
-      .sort((a, b) => a.priority - b.priority);
-
+  // Queue sync for all remaining modules
+  const queueSyncAll = useCallback((options: Record<string, any>) => {
+    if (!architecture || !onAddToQueue) return;
+    const modulesToSync = getModulesNeedingSync(architecture);
     if (modulesToSync.length === 0) return;
 
     modulesToSync.forEach(module => {
-      const match = module.filename.match(/_([A-Za-z]+)\.prompt$/);
-      const language = match ? match[1].toLowerCase() : undefined;
-      const basename = module.filename.replace(/_[A-Za-z]+\.prompt$/, '');
-
-      const existingPrompt = promptMap.get(module.filename);
-      const promptInfo: PromptInfo = existingPrompt || {
-        prompt: `prompts/${module.filename}`,
-        sync_basename: basename,
-        language,
-        code: module.filepath,
-      };
-
+      const promptInfo = buildPromptInfoForModule(module);
       const displayCommand = buildDisplayCommand(CommandType.SYNC, promptInfo, { ...options });
       onAddToQueue(CommandType.SYNC, promptInfo, { ...options }, displayCommand);
     });
-  }, [promptsInfo, onAddToQueue]);
+  }, [architecture, getModulesNeedingSync, buildPromptInfoForModule, onAddToQueue]);
 
-  // Handle sync options modal confirmation
+  // Queue sync for a specific batch
+  const queueSyncBatch = useCallback((batch: Batch, options: Record<string, any>) => {
+    if (!onAddToQueue) return;
+    const modulesToSync = getModulesNeedingSync(batch.modules);
+    if (modulesToSync.length === 0) return;
+
+    modulesToSync.forEach(module => {
+      const promptInfo = buildPromptInfoForModule(module);
+      const displayCommand = buildDisplayCommand(CommandType.SYNC, promptInfo, { ...options });
+      onAddToQueue(CommandType.SYNC, promptInfo, { ...options }, displayCommand);
+    });
+  }, [getModulesNeedingSync, buildPromptInfoForModule, onAddToQueue]);
+
+  // Handle sync options modal "Run Sync" button
   const handleSyncOptionsConfirm = useCallback((options: Record<string, any>) => {
     if (pendingSyncAll) {
-      executeSyncAll(options);
+      onRunSync ? runSyncAll(options) : queueSyncAll(options);
     } else if (pendingSyncBatch) {
-      executeSyncBatch(pendingSyncBatch, options);
+      onRunSync ? runSyncBatch(pendingSyncBatch, options) : queueSyncBatch(pendingSyncBatch, options);
     } else if (pendingSyncModule) {
-      executeSyncForModule(pendingSyncModule, options);
+      onRunSync ? runSyncForModule(pendingSyncModule, options) : queueSyncForModule(pendingSyncModule, options);
     }
     setShowSyncOptionsModal(false);
     setPendingSyncModule(null);
     setPendingSyncAll(false);
     setPendingSyncBatch(null);
-  }, [pendingSyncAll, pendingSyncBatch, pendingSyncModule, executeSyncAll, executeSyncBatch, executeSyncForModule]);
+  }, [pendingSyncAll, pendingSyncBatch, pendingSyncModule, onRunSync, runSyncAll, runSyncBatch, runSyncForModule, queueSyncAll, queueSyncBatch, queueSyncForModule]);
+
+  // Handle sync options modal "Add to Queue" button
+  const handleSyncOptionsAddToQueue = useCallback((options: Record<string, any>) => {
+    if (pendingSyncAll) {
+      queueSyncAll(options);
+    } else if (pendingSyncBatch) {
+      queueSyncBatch(pendingSyncBatch, options);
+    } else if (pendingSyncModule) {
+      queueSyncForModule(pendingSyncModule, options);
+    }
+    setShowSyncOptionsModal(false);
+    setPendingSyncModule(null);
+    setPendingSyncAll(false);
+    setPendingSyncBatch(null);
+  }, [pendingSyncAll, pendingSyncBatch, pendingSyncModule, queueSyncAll, queueSyncBatch, queueSyncForModule]);
 
   // Handle generation with user-selected order
   const handleConfirmGeneratePrompts = useCallback(async (orderedModules: ArchitectureModule[]) => {
@@ -1486,6 +1513,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
               : `Configure options for syncing ${pendingSyncModule?.filename || 'module'}`
         }
         onConfirm={handleSyncOptionsConfirm}
+        onAddToQueue={onAddToQueue ? handleSyncOptionsAddToQueue : undefined}
         onClose={() => {
           setShowSyncOptionsModal(false);
           setPendingSyncModule(null);

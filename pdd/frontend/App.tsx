@@ -1281,6 +1281,7 @@ const App: React.FC = () => {
                   addSpawnedJob(displayCommand, commandType, commandId, { remote: true, sessionId });
                 }}
                 onAddToQueue={handleAddToQueue}
+                onRunSync={(prompt, options) => handleRunCommand(CommandType.SYNC, prompt, options)}
               />
             ) : (
               <div>
@@ -1288,6 +1289,11 @@ const App: React.FC = () => {
                   onEditPrompt={(prompt) => { setSelectedPrompt(prompt); handleOpenPromptSpace(prompt); }}
                   onCreatePrompt={handleOpenPromptSpace}
                   onRunSync={(prompt, options) => handleRunCommand(CommandType.SYNC, prompt, options)}
+                  onAddToQueue={(prompt, options) => {
+                    const rawOptions = options || {};
+                    const displayCommand = buildDisplayCommand(CommandType.SYNC, prompt, rawOptions);
+                    handleAddToQueue(CommandType.SYNC, prompt, rawOptions, displayCommand);
+                  }}
                   selectedPrompt={selectedPrompt}
                 />
               </div>
