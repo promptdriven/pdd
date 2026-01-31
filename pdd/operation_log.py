@@ -17,27 +17,36 @@ PDD_DIR = ".pdd"
 META_DIR = os.path.join(PDD_DIR, "meta")
 
 
-def ensure_meta_dir() -> None: 
+def ensure_meta_dir() -> None:
     """Ensure the .pdd/meta directory exists."""
     os.makedirs(META_DIR, exist_ok=True)
+
+
+def _safe_basename(basename: str) -> str:
+    """Sanitize basename for use in metadata filenames.
+
+    Replaces '/' with '_' to prevent path interpretation when the basename
+    contains subdirectory components (e.g., 'core/cloud' -> 'core_cloud').
+    """
+    return basename.replace('/', '_')
 
 
 def get_log_path(basename: str, language: str) -> Path:
     """Get the path to the sync log for a specific module."""
     ensure_meta_dir()
-    return Path(META_DIR) / f"{basename}_{language.lower()}_sync.log"
+    return Path(META_DIR) / f"{_safe_basename(basename)}_{language}_sync.log"
 
 
 def get_fingerprint_path(basename: str, language: str) -> Path:
     """Get the path to the fingerprint JSON file for a specific module."""
     ensure_meta_dir()
-    return Path(META_DIR) / f"{basename}_{language.lower()}.json"
+    return Path(META_DIR) / f"{_safe_basename(basename)}_{language}.json"
 
 
 def get_run_report_path(basename: str, language: str) -> Path:
     """Get the path to the run report file for a specific module."""
     ensure_meta_dir()
-    return Path(META_DIR) / f"{basename}_{language.lower()}_run.json"
+    return Path(META_DIR) / f"{_safe_basename(basename)}_{language}_run.json"
 
 
 def infer_module_identity(prompt_file_path: Union[str, Path]) -> Tuple[Optional[str], Optional[str]]:

@@ -624,3 +624,40 @@ def test_fingerprint_hash_compatibility_with_sync(tmp_path):
 
         # Verify pdd_version is set
         assert result.pdd_version is not None, "pdd_version should be set"
+
+
+# --------------------------------------------------------------------------------
+# REGRESSION TEST: Issue #237 - Subdirectory basename handling
+# --------------------------------------------------------------------------------
+
+def test_get_paths_with_subdirectory_basename(temp_pdd_env):
+    """
+    Regression test for Issue #237: Basenames with slashes should be sanitized.
+
+    When basename contains path separators (e.g., 'frontend/app/admin/discount-codes/page'),
+    the resulting metadata filenames should use underscores instead of slashes to create
+    flat filenames in .pdd/meta/, following the _safe_basename pattern from commit 0d27e561.
+
+    Bug: .pdd/meta/frontend/app/.../page_lang_sync.log was being created, but the
+    nested directories don't exist, causing "No such file or directory" errors.
+    """
+    basename = "frontend/app/admin/discount-codes/page"
+    lang = "typescriptreact"
+
+    log_path = operation_log.get_log_path(basename, lang)
+    fp_path = operation_log.get_fingerprint_path(basename, lang)
+    rr_path = operation_log.get_run_report_path(basename, lang)
+
+    # Paths should use underscores instead of slashes (sanitized)
+    expected_safe_basename = "frontend_app_admin_discount-codes_page"
+
+    assert log_path == Path(temp_pdd_env) / f"{expected_safe_basename}_{lang}_sync.log", \
+        f"Log path should be flat with sanitized basename, got: {log_path}"
+    assert fp_path == Path(temp_pdd_env) / f"{expected_safe_basename}_{lang}.json", \
+        f"Fingerprint path should be flat with sanitized basename, got: {fp_path}"
+    assert rr_path == Path(temp_pdd_env) / f"{expected_safe_basename}_{lang}_run.json", \
+        f"Run report path should be flat with sanitized basename, got: {rr_path}"
+
+    # Verify path is flat (no nested directories beyond .pdd/meta/)
+    assert log_path.parent == Path(temp_pdd_env), \
+        f"Log path should be directly in meta dir, not nested: {log_path}"

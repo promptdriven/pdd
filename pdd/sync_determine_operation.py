@@ -436,7 +436,10 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
     try:
         # Use construct_paths to get configuration-aware paths
         prompts_root = _resolve_prompts_root(prompts_dir)
-        prompt_filename = f"{basename}_{language}.prompt"
+        # Extract name part from basename to avoid path duplication when basename contains '/'
+        # (e.g., 'frontend/app/page' -> 'page')
+        name = basename.split('/')[-1] if '/' in basename else basename
+        prompt_filename = f"{name}_{language}.prompt"
         prompt_path = str(prompts_root / prompt_filename)
         pddrc_path = _find_pddrc_file()
         if pddrc_path:
