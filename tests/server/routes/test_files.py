@@ -1139,6 +1139,58 @@ contexts:
             "Test file not detected - {name} placeholder may not be substituted"
         assert service_result["test"] == "tests/service/__test__/service.test.ts"
 
+    def test_category_placeholder_substitution(self, tmp_path):
+        """
+        Test that {category} placeholder in code path is substituted correctly.
+
+        Bug: For template 'frontend/src/{category}/{name}/{name}.tsx', the {category}
+        placeholder was NOT replaced, leaving literal '{category}' in the path.
+        This caused code file detection to fail.
+        """
+        import asyncio
+        from pdd.server.routes.files import list_prompt_files, set_path_validator
+        from pdd.server.security import PathValidator
+
+        root = tmp_path / "project"
+        root.mkdir(exist_ok=True)
+
+        # Create .pddrc with {category} placeholder in code path
+        pddrc = root / ".pddrc"
+        pddrc.write_text("""
+version: "1.0"
+contexts:
+  frontend:
+    paths:
+      - "prompts/frontend/**"
+    defaults:
+      prompts_dir: "prompts/frontend"
+      outputs:
+        code:
+          path: "frontend/src/{category}/{name}/{name}.tsx"
+""")
+
+        # Create prompt in nested directory (category = app/contributions/sales)
+        prompts = root / "prompts" / "frontend" / "app" / "contributions" / "sales"
+        prompts.mkdir(parents=True)
+        (prompts / "page_TypescriptReact.prompt").write_text("Sales page prompt")
+
+        # Create code file at templated location
+        code_dir = root / "frontend" / "src" / "app" / "contributions" / "sales" / "page"
+        code_dir.mkdir(parents=True)
+        (code_dir / "page.tsx").write_text("// Sales page code")
+
+        validator = PathValidator(root)
+        set_path_validator(validator)
+
+        results = asyncio.run(list_prompt_files(validator))
+        page_result = next((r for r in results if "page" in r.get("prompt", "")), None)
+
+        assert page_result is not None, "Page prompt not found"
+        assert "code" in page_result, \
+            "Code file not detected - {category} placeholder not substituted"
+        assert page_result["code"] == "frontend/src/app/contributions/sales/page/page.tsx", \
+            f"Expected 'frontend/src/app/contributions/sales/page/page.tsx', got '{page_result.get('code')}'"
+
 
 # ============================================================================
 # Tests for sync_basename including subdirectory paths
