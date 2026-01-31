@@ -487,6 +487,7 @@ class RemoteSessionManager:
         # Retry logic with exponential backoff
         max_retries = 3
         retry_delay = 1  # Start with 1 second
+        token_refreshed = False
 
         for attempt in range(max_retries):
             try:
@@ -497,7 +498,21 @@ class RemoteSessionManager:
                         headers=self._get_headers()
                     )
 
-                    if result.status_code >= 400:
+                    if result.status_code == 401:
+                        # Token expired - try to refresh once
+                        if not token_refreshed:
+                            console.print("[yellow]JWT token expired during command update, attempting refresh...[/yellow]")
+                            if await self._refresh_token():
+                                token_refreshed = True
+                                continue  # Retry with new token
+                            else:
+                                console.print("[red]Token refresh failed. Please run 'pdd login' to re-authenticate.[/red]")
+                                raise RuntimeError("Authentication failed: token expired and refresh failed")
+                        else:
+                            console.print("[red]Command update still failing after token refresh (Status: 401)[/red]")
+                            raise RuntimeError("Authentication failed after token refresh")
+
+                    elif result.status_code >= 400:
                         error_msg = f"Failed to update command status: {result.text}"
                         console.print(f"[red]{error_msg}[/red]")
                         raise RuntimeError(error_msg)

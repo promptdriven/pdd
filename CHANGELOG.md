@@ -1,18 +1,43 @@
+## v0.0.135 (2026-01-30)
+
+### Feat
+
+- Add new Remotion compositions and specifications for the 3blue1brown precision-tradeoff demo, and update operation logging and synchronization logic.
+- Add new Remotion compositions and specifications for the 3blue1brown precision-tradeoff demo, and update operation logging and synchronization logic.
+- introduce new Remotion scenes and their specifications for the 3blue1brown precision tradeoff demo.
+- add sync queue functionality to frontend components
+- Add numerous new Remotion scenes, specifications, and rendered video outputs for the 3blue1brown demo.
+- Add Remotion animations and specifications for the 3blue1brown demo's mold, bug discovery, and test wall segments.
+- introduce new Remotion scenes, video assets, and specifications to illustrate the paradigm shift concept in the 3blue1brown demo.
+- Add 'Parts Eject' and 'Developer Edit Zoomout' Remotion compositions for 3blue1brown demo, including new video assets and a job sync failure detection test.
+- enhance Crossing Point chart with detailed cost lines, tech debt shading, and updated legend and labels.
+
+### Fix
+
+- Preserve job output on job failure, refine sync failure detection to prevent false positives, and switch JWT warnings to use logging instead of print.
+- Preserve job output on job failure, refine sync failure detection to prevent false positives, and switch JWT warnings to use logging instead of print.
+- make sync pipeline fully case-insensitive for language detection
+- refine job sync failure detection, preserve job output on error, switch JWT warnings to logging, and update Remotion demo styles.
+
 ## v0.0.134 (2026-01-29)
 
 ### Feat
 
-- Implement Context Rot visualization with detailed code cost chart data, updated narrative, and an `impactScale` prop for milestone markers.
-- Introduce a codebase size-dependent fork in the immediate patch cost line, update the total cost to rise for large codebases, and refine the chart's narrative and animation sequence.
-- update Code Cost Chart data, axes, and script to incorporate new research on AI's impact on code generation, patching, and bug rates, and add new reference documents.
-- extend Code Cost Chart duration to 120 seconds and update data, annotations, and time range to 2015-2025.
-- Introduce a new `hello` Python example and refine Remotion 3blue1brown demo charts with updated data ranges, axes, and narration positioning.
-- Enhance prompt path resolution and category derivation, update 3blue1brown demo chart data and timings, and document various agentic mode improvements and fixes.
-- Implement recursive prompt discovery fallback within context's base directory when template expansion fails, and add tests for this functionality.
+- **sync_main**: `_detect_languages_with_context` now returns `Dict[str, Path]` instead of `List[str]`, enabling sync to use the correct discovered prompt file paths instead of constructing them from basename
+- **sync_main**: Recursive prompt discovery fallback—when template expansion fails (e.g., missing category), falls back to glob search in the context's prompts base directory
+- **sync_main**: New `_extract_prompts_base_dir()` helper extracts the fixed prefix from prompt templates for fallback directory scanning
+- **sync_determine_operation**: Category derivation from actual prompt path when basename alone lacks category info (e.g., `pdd sync --basename page --context frontend` now correctly derives category from discovered path)
+
+### Fix
+
+- **preprocess**: Remove PDD tag protection from `double_curly()` (Issue #410). The protection caused `.format()` to raise KeyError on single-braced JSON inside `<pdd-interface>` tags. Architecture sync reads raw files directly, so protection was unnecessary.
+- **sync_determine_operation**: Fix `_resolve_prompts_root()` incorrectly stripping subdirectories after "prompts"—context-specific `prompts_dir` values like `prompts/frontend/app/sales` were being truncated to just `prompts`
 
 ### Refactor
 
-- extract helper functions to deduplicate language sorting logic and test project setup.
+- **sync_main**: Extract `_python_first_sorted()` helper to deduplicate language sorting logic (Python first, then alphabetical)
+- **tests**: Refactor `test_e2e_issue_375_malformed_json.py` to test the corrected behavior where all braces are doubled uniformly
+- **tests**: Add `TestDetectLanguagesReturnsPathsDict` test class verifying the new Dict return type
 
 ## v0.0.133 (2026-01-28)
 
