@@ -850,7 +850,9 @@ class RemoteSessionManager:
         """
         try:
             # 1. Update status to "processing"
+            console.print(f"[dim]Updating cloud status to 'processing' for {cmd.command_id}[/dim]")
             await self.update_command(cmd.command_id, status="processing")
+            console.print(f"[dim]Cloud status updated to 'processing'[/dim]")
 
             # 2. Check if command was cancelled before starting execution
             if await self._is_cancelled(cmd.command_id):
@@ -888,11 +890,23 @@ class RemoteSessionManager:
             }
 
             final_status = "completed" if job_status == "completed" else "failed"
+            console.print(f"[dim]Updating cloud status to '{final_status}' for {cmd.command_id}[/dim]")
             await self.update_command(
                 cmd.command_id,
                 status=final_status,
                 response=formatted_response
             )
+            console.print(f"[green]Cloud status updated to '{final_status}'[/green]")
+
+            # Verify the update was persisted by reading back the status
+            try:
+                verified_status = await self._get_command_status(cmd.command_id)
+                if verified_status != final_status:
+                    console.print(f"[yellow]WARNING: Cloud status mismatch! Expected '{final_status}', got '{verified_status}'[/yellow]")
+                else:
+                    console.print(f"[dim]Cloud status verified: {verified_status}[/dim]")
+            except Exception as verify_error:
+                console.print(f"[yellow]Could not verify cloud status: {verify_error}[/yellow]")
 
         except asyncio.CancelledError:
             # Task was cancelled externally
