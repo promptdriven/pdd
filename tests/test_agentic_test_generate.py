@@ -319,6 +319,40 @@ def test_agent_returns_invalid_json(mock_agents, mock_load, mock_run, mock_env):
 @patch("pdd.agentic_test_generate.run_agentic_task")
 @patch("pdd.agentic_test_generate.load_prompt_template")
 @patch("pdd.agentic_test_generate.get_available_agents")
+def test_success_inferred_when_json_missing_but_test_file_exists(
+    mock_agents, mock_load, mock_run, mock_env
+):
+    """Test fallback: agent succeeded and created test file, but JSON not in final output.
+
+    Reproduces the bug where Claude CLI's --output-format json puts only the
+    last assistant text in 'result'. If the agent outputs JSON in a non-final
+    turn (e.g., before a TodoWrite call), PDD receives the summary table
+    instead, which contains no JSON. The agent DID succeed and the test file
+    exists, so we should infer success.
+    """
+    mock_agents.return_value = ["anthropic"]
+    mock_load.return_value = "Template"
+
+    # Agent creates test file but returns non-JSON summary text (last turn)
+    def side_effect(*args, **kwargs):
+        test_content = "describe('add', () => { it('works', () => {}); });"
+        mock_env["test"].write_text(test_content)
+        return (True, "## Summary\n| Tests | Status |\n|-------|--------|\n| 49 | Passed |", 0.15, "anthropic")
+
+    mock_run.side_effect = side_effect
+
+    content, cost, model, success = run_agentic_test_generate(
+        mock_env["prompt"], mock_env["code"], mock_env["test"], quiet=True
+    )
+
+    assert content == "describe('add', () => { it('works', () => {}); });"
+    assert cost == 0.15
+    assert success is True
+
+
+@patch("pdd.agentic_test_generate.run_agentic_task")
+@patch("pdd.agentic_test_generate.load_prompt_template")
+@patch("pdd.agentic_test_generate.get_available_agents")
 def test_detects_test_file_at_different_path(mock_agents, mock_load, mock_run, mock_env):
     """Test detection of test file created at a different path than expected."""
     mock_agents.return_value = ["anthropic"]

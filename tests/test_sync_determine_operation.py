@@ -2413,6 +2413,48 @@ def test_get_pdd_file_paths_with_subdirectory_basename(pdd_test_environment, mon
         f"Expected path ending with 'examples/cloud_example.py', got {example_path}"
 
 
+def test_get_pdd_file_paths_no_path_duplication_with_deep_prompts_dir(tmp_path, monkeypatch):
+    """
+    Regression test for Issue #237: Path duplication when prompts_dir is a deep path.
+
+    When sync_main passes prompt_file_path.parent as prompts_dir (e.g.,
+    'prompts/frontend/app/admin/discount-codes'), and basename contains the same
+    path (e.g., 'frontend/app/admin/discount-codes/page'), the resulting prompt_path
+    should NOT have the path segment duplicated.
+
+    Bug: prompts/frontend/.../page_typescriptreact.prompt was being constructed as
+         prompts/frontend/.../frontend/.../page_typescriptreact.prompt
+    """
+    monkeypatch.chdir(tmp_path)
+
+    # Create deep directory structure
+    deep_prompts_dir = tmp_path / "prompts" / "frontend" / "app" / "admin" / "discount-codes"
+    deep_prompts_dir.mkdir(parents=True)
+
+    # Create the prompt file where it should be
+    prompt_file = deep_prompts_dir / "page_typescriptreact.prompt"
+    prompt_file.write_text("Test prompt")
+
+    # Call with the deep prompts_dir (as sync_main would after commit 960de48d)
+    paths = get_pdd_file_paths(
+        basename="frontend/app/admin/discount-codes/page",
+        language="typescriptreact",
+        prompts_dir=str(deep_prompts_dir),  # Deep path, not just "prompts"
+    )
+
+    # The prompt path should be the actual file, NOT have duplicated segments
+    prompt_path = paths.get("prompt")
+    assert prompt_path is not None
+
+    # Key assertion: path should NOT contain the segment twice
+    path_str = str(prompt_path)
+    assert path_str.count("frontend/app/admin/discount-codes") == 1, \
+        f"Path has duplicated segment: {path_str}"
+
+    # Should resolve to the actual file
+    assert prompt_path.exists(), f"Prompt path does not exist: {prompt_path}"
+
+
 # --- Regression Tests: All Files Exist But Workflow Incomplete ---
 
 class TestAllFilesExistWorkflowIncomplete:

@@ -256,6 +256,9 @@ def run_agentic_test_generate(
     mtimes_after = _get_file_mtimes(project_root)
     changed_files = _detect_changed_files(mtimes_before, mtimes_after, project_root)
 
+    # Read the generated test file (before success check so it's available for fallback)
+    generated_content = _read_generated_test_file(output_test_file)
+
     # Parse agent output
     parsed_data = _extract_json_from_text(agent_output)
 
@@ -266,9 +269,19 @@ def run_agentic_test_generate(
         final_success = parsed_data.get("success", False)
         if "message" in parsed_data:
             message = parsed_data["message"]
-
-    # Read the generated test file
-    generated_content = _read_generated_test_file(output_test_file)
+    elif agent_success and generated_content:
+        # Fallback: JSON was not in the final assistant turn (multi-turn output).
+        # Claude CLI --output-format json only returns the last assistant text
+        # in 'result'. If the agent output JSON in a non-final turn (e.g. before
+        # a TodoWrite call), we won't see it. Infer success from the agent's
+        # exit status and the test file's existence on disk.
+        final_success = True
+        message = "Agent completed successfully (inferred from exit status and test file)"
+        if verbose and not quiet:
+            console.print(
+                "[yellow]Warning: Could not parse JSON from agent output. "
+                "Inferring success from exit status and test file presence.[/yellow]"
+            )
 
     # If the expected output file doesn't exist, check if agent created it with different extension
     if not generated_content and changed_files:

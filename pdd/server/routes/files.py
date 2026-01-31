@@ -526,9 +526,12 @@ async def list_prompt_files(
         extensions = LANGUAGE_EXTENSIONS.get(language, [".py", ".ts", ".js", ".java"]) if language else [".py", ".ts", ".tsx", ".js", ".jsx", ".java"]
 
         # Try to find related files (code, test, example)
+        # Include prompt_subdir in sync_basename so pdd sync can find the correct prompt
+        # when there are multiple prompts with the same name in different subdirectories
+        full_sync_basename = f"{prompt_subdir}/{sync_basename}" if prompt_subdir else sync_basename
         related = {
             "prompt": relative_path,
-            "sync_basename": sync_basename,  # For sync command: "calculator"
+            "sync_basename": full_sync_basename,  # For sync command: "frontend/app/admin/page"
             "language": language,            # Detected language: "python"
             "context": context_name,         # Matched .pddrc context name
         }

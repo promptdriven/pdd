@@ -1,4 +1,4 @@
-You are generating unit tests for a non-Python codebase in a PDD (Prompt-Driven Development) project.
+You are generating unit tests for a PDD (Prompt-Driven Development) project.
 
 ## PDD Principle
 The PROMPT FILE is the source of truth. Tests verify that code conforms to the specification.
@@ -53,6 +53,9 @@ The PROMPT FILE is the source of truth. Tests verify that code conforms to the s
    - test_file: str (path to generated test file)
    - changed_files: list[str] (all files created/modified)
 
+   IMPORTANT: The JSON output MUST be your very last text output.
+   Do NOT call any tools or output any additional text after the JSON block.
+
 ## Critical Rules
 - The prompt file defines expected behavior - tests should verify this
 - DO NOT assume any specific test framework - discover it from the project
@@ -60,4 +63,5 @@ The PROMPT FILE is the source of truth. Tests verify that code conforms to the s
 - Match existing test style and conventions in the project
 - Use the CORRECT file extension for the test file based on the language
 - IMPORTANT: Read actual source files before assuming what functions/classes exist
-- You MUST run the tests and ensure they pass before completing
+- You MUST run the generated test file and ensure it passes before completing
+
