@@ -411,6 +411,13 @@ class JobManager:
             
         except Exception as e:
             job.error = str(e)
+            # Preserve captured output for debugging (live_stdout is updated by read_stream)
+            if job.live_stdout or job.live_stderr:
+                job.result = {
+                    "stdout": job.live_stdout,
+                    "stderr": job.live_stderr,
+                    "exit_code": None,
+                }
             job.status = JobStatus.FAILED
             console.print(f"[red]Job failed:[/red] {job.id} - {e}")
             
@@ -531,8 +538,11 @@ class JobManager:
         if exit_code == 0 and job.command == "sync":
             # Look for the summary line printed by sync_main.py
             # It prints: "Overall status: [red]Failed[/red]" or "Overall status: [green]Success[/green]"
-            if "Overall status:" in stdout_text and "Failed" in stdout_text:
-                raise RuntimeError("Sync operation failed (see output for details)")
+            # Check "Failed" only on the "Overall status:" line itself, not anywhere in stdout,
+            # since other code (e.g. get_jwt_token.py keyring warnings) may print "Failed" elsewhere.
+            for line in stdout_text.splitlines():
+                if "Overall status:" in line and "Failed" in line:
+                    raise RuntimeError("Sync operation failed (see output for details)")
 
         if exit_code != 0:
             # Combine stdout and stderr for complete error context
