@@ -2201,6 +2201,10 @@ def llm_invoke(
                 # Only add if litellm.cache is configured
                 if litellm.cache is not None:
                     litellm_kwargs["caching"] = True
+                    # Workaround for litellm bug where metadata=None causes AttributeError
+                    # in caching.py when it tries kwargs.get("metadata", {}).get("redis_namespace")
+                    if litellm_kwargs.get("metadata") is None:
+                        litellm_kwargs["metadata"] = {}
                     logger.debug("Caching enabled for this request")
                 else:
                     logger.debug("NOT ENABLING CACHING: litellm.cache is None at call time")
