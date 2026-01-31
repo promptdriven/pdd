@@ -294,7 +294,15 @@ def connect(
         if token:
             os.environ["PDD_ACCESS_TOKEN"] = token
 
-        app = create_app(project_root, allowed_origins=allowed_origins)
+        # Create ServerConfig with the actual port (after smart port detection)
+        # This ensures spawned terminal callbacks use the correct port
+        from ..server.models import ServerConfig
+        config = ServerConfig(
+            host=host,
+            port=port,  # The ACTUAL port after smart detection
+            allowed_origins=allowed_origins,
+        )
+        app = create_app(project_root, config=config)
     except Exception as e:
         click.echo(click.style(f"Failed to initialize server: {e}", fg="red", bold=True))
         ctx.exit(1)
