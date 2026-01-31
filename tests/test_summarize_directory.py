@@ -1060,3 +1060,324 @@ def test_summarize_directory_handles_subdirectories(tmp_path, mock_load_prompt_t
     assert len(rows) == 2, f"Expected 2 files, got {len(rows)}"
     assert any("root.py" in p for p in paths), "Should find root.py"
     assert any("nested.py" in p for p in paths), "Should find nested.py in subdirectory"
+
+
+# =============================================================================
+# TDD Regression Tests for git ls-files and binary filtering (Issue #237)
+# These tests prevent regression of the fix for processing 95,412 files
+# =============================================================================
+
+class TestGitLsFilesIntegration:
+    """Tests for _get_files_from_git() helper function."""
+
+    def test_get_files_from_git_returns_list_in_git_repo(self, tmp_path):
+        """Test that _get_files_from_git returns a list when in a git repo."""
+        from pdd.summarize_directory import _get_files_from_git
+        import subprocess
+
+        # Initialize a git repo
+        subprocess.run(['git', 'init'], cwd=tmp_path, capture_output=True)
+
+        # Create and add a file
+        test_file = tmp_path / "test.py"
+        test_file.write_text("print('hello')")
+        subprocess.run(['git', 'add', 'test.py'], cwd=tmp_path, capture_output=True)
+
+        result = _get_files_from_git(str(tmp_path))
+
+        assert result is not None, "Should return a list in a git repo"
+        assert isinstance(result, list), "Should return a list"
+        assert len(result) == 1, "Should find the one tracked file"
+        assert "test.py" in result[0], "Should include the test file"
+
+    def test_get_files_from_git_excludes_untracked_files(self, tmp_path):
+        """Test that _get_files_from_git excludes untracked files."""
+        from pdd.summarize_directory import _get_files_from_git
+        import subprocess
+
+        # Initialize a git repo
+        subprocess.run(['git', 'init'], cwd=tmp_path, capture_output=True)
+
+        # Create tracked file
+        tracked = tmp_path / "tracked.py"
+        tracked.write_text("tracked")
+        subprocess.run(['git', 'add', 'tracked.py'], cwd=tmp_path, capture_output=True)
+
+        # Create untracked file
+        untracked = tmp_path / "untracked.py"
+        untracked.write_text("untracked")
+
+        result = _get_files_from_git(str(tmp_path))
+
+        assert len(result) == 1, "Should only find tracked file"
+        assert "tracked.py" in result[0], "Should include tracked file"
+        assert not any("untracked.py" in f for f in result), "Should exclude untracked file"
+
+    def test_get_files_from_git_respects_gitignore(self, tmp_path):
+        """Test that _get_files_from_git respects .gitignore patterns."""
+        from pdd.summarize_directory import _get_files_from_git
+        import subprocess
+
+        # Initialize a git repo
+        subprocess.run(['git', 'init'], cwd=tmp_path, capture_output=True)
+
+        # Create .gitignore
+        gitignore = tmp_path / ".gitignore"
+        gitignore.write_text("ignored.py\nnode_modules/\n")
+        subprocess.run(['git', 'add', '.gitignore'], cwd=tmp_path, capture_output=True)
+
+        # Create tracked file
+        tracked = tmp_path / "tracked.py"
+        tracked.write_text("tracked")
+        subprocess.run(['git', 'add', 'tracked.py'], cwd=tmp_path, capture_output=True)
+
+        # Create ignored file (won't be tracked due to .gitignore)
+        ignored = tmp_path / "ignored.py"
+        ignored.write_text("ignored")
+
+        # Create node_modules directory (simulating the original issue)
+        node_modules = tmp_path / "node_modules"
+        node_modules.mkdir()
+        (node_modules / "package.js").write_text("module")
+
+        result = _get_files_from_git(str(tmp_path))
+
+        assert len(result) == 2, "Should find .gitignore and tracked.py"
+        assert not any("ignored.py" in f for f in result), "Should exclude ignored.py"
+        assert not any("node_modules" in f for f in result), "Should exclude node_modules"
+
+    def test_get_files_from_git_returns_none_outside_git_repo(self, tmp_path):
+        """Test that _get_files_from_git returns None when not in a git repo."""
+        from pdd.summarize_directory import _get_files_from_git
+
+        # Don't initialize git - this is just a regular directory
+        test_file = tmp_path / "test.py"
+        test_file.write_text("print('hello')")
+
+        result = _get_files_from_git(str(tmp_path))
+
+        assert result is None, "Should return None when not in a git repo"
+
+
+class TestGlobFallback:
+    """Tests for _get_files_from_glob() fallback function."""
+
+    def test_get_files_from_glob_filters_node_modules(self, tmp_path):
+        """Test that glob fallback filters out node_modules directory."""
+        from pdd.summarize_directory import _get_files_from_glob
+
+        # Create source file
+        src = tmp_path / "src.py"
+        src.write_text("source")
+
+        # Create node_modules (the original problem)
+        node_modules = tmp_path / "node_modules"
+        node_modules.mkdir()
+        (node_modules / "package.js").write_text("module")
+        (node_modules / "subdir").mkdir()
+        (node_modules / "subdir" / "nested.js").write_text("nested")
+
+        result = _get_files_from_glob(str(tmp_path))
+
+        assert any("src.py" in f for f in result), "Should include source file"
+        assert not any("node_modules" in f for f in result), "Should exclude node_modules"
+
+    def test_get_files_from_glob_filters_build_directories(self, tmp_path):
+        """Test that glob fallback filters out common build directories."""
+        from pdd.summarize_directory import _get_files_from_glob
+
+        # Create source file
+        src = tmp_path / "src.py"
+        src.write_text("source")
+
+        # Create various build directories that should be ignored
+        for dirname in ['.next', 'dist', 'build', 'coverage', '__pycache__', '.git']:
+            d = tmp_path / dirname
+            d.mkdir()
+            (d / "file.txt").write_text("content")
+
+        result = _get_files_from_glob(str(tmp_path))
+
+        assert any("src.py" in f for f in result), "Should include source file"
+        for dirname in ['.next', 'dist', 'build', 'coverage', '__pycache__', '.git']:
+            assert not any(dirname in f for f in result), f"Should exclude {dirname}"
+
+
+class TestBinaryFiltering:
+    """Tests for BINARY_EXTENSIONS filtering."""
+
+    def test_binary_extensions_includes_common_image_formats(self):
+        """Test that BINARY_EXTENSIONS includes common image formats."""
+        from pdd.summarize_directory import BINARY_EXTENSIONS
+
+        image_formats = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico']
+        for ext in image_formats:
+            assert ext in BINARY_EXTENSIONS, f"Should include {ext}"
+
+    def test_binary_extensions_includes_video_formats(self):
+        """Test that BINARY_EXTENSIONS includes video formats."""
+        from pdd.summarize_directory import BINARY_EXTENSIONS
+
+        video_formats = ['.mp4', '.webm', '.mov', '.avi']
+        for ext in video_formats:
+            assert ext in BINARY_EXTENSIONS, f"Should include {ext}"
+
+    def test_binary_extensions_includes_archive_formats(self):
+        """Test that BINARY_EXTENSIONS includes archive formats."""
+        from pdd.summarize_directory import BINARY_EXTENSIONS
+
+        archive_formats = ['.zip', '.tar', '.gz', '.rar', '.7z']
+        for ext in archive_formats:
+            assert ext in BINARY_EXTENSIONS, f"Should include {ext}"
+
+    def test_binary_extensions_includes_python_bytecode(self):
+        """Test that BINARY_EXTENSIONS includes Python bytecode."""
+        from pdd.summarize_directory import BINARY_EXTENSIONS
+
+        assert '.pyc' in BINARY_EXTENSIONS, "Should include .pyc"
+        assert '.pyo' in BINARY_EXTENSIONS, "Should include .pyo"
+
+    def test_summarize_directory_filters_binary_files(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        """Test that summarize_directory filters out binary files."""
+        # Create source file
+        src = tmp_path / "src.py"
+        src.write_text("print('hello')")
+
+        # Create binary files
+        (tmp_path / "image.png").write_bytes(b'\x89PNG\r\n\x1a\n')
+        (tmp_path / "video.webm").write_bytes(b'\x1a\x45\xdf\xa3')
+        (tmp_path / "archive.zip").write_bytes(b'PK\x03\x04')
+
+        csv_output, _, _ = summarize_directory(
+            directory_path=str(tmp_path),
+            strength=0.5,
+            temperature=0.7,
+            verbose=False,
+            csv_file=None
+        )
+
+        reader = csv.DictReader(StringIO(csv_output))
+        rows = list(reader)
+        paths = [r['full_path'] for r in rows]
+
+        assert len(rows) == 1, f"Should only process src.py, got {len(rows)} files"
+        assert any("src.py" in p for p in paths), "Should include src.py"
+        assert not any(".png" in p for p in paths), "Should exclude .png"
+        assert not any(".webm" in p for p in paths), "Should exclude .webm"
+        assert not any(".zip" in p for p in paths), "Should exclude .zip"
+
+
+class TestGitPreferredOverGlob:
+    """Tests ensuring git ls-files is preferred over glob."""
+
+    def test_summarize_directory_uses_git_when_available(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        """Test that summarize_directory prefers git over glob in a git repo."""
+        import subprocess
+
+        # Initialize a git repo
+        subprocess.run(['git', 'init'], cwd=tmp_path, capture_output=True)
+
+        # Create and track a file
+        tracked = tmp_path / "tracked.py"
+        tracked.write_text("tracked")
+        subprocess.run(['git', 'add', 'tracked.py'], cwd=tmp_path, capture_output=True)
+
+        # Create untracked file
+        untracked = tmp_path / "untracked.py"
+        untracked.write_text("untracked")
+
+        csv_output, _, _ = summarize_directory(
+            directory_path=str(tmp_path),
+            strength=0.5,
+            temperature=0.7,
+            verbose=False,
+            csv_file=None
+        )
+
+        reader = csv.DictReader(StringIO(csv_output))
+        rows = list(reader)
+        paths = [r['full_path'] for r in rows]
+
+        assert len(rows) == 1, "Should only process tracked file"
+        assert any("tracked.py" in p for p in paths), "Should include tracked.py"
+        assert not any("untracked.py" in p for p in paths), "Should exclude untracked.py"
+
+    def test_summarize_directory_falls_back_to_glob(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        """Test that summarize_directory falls back to glob when not in git repo."""
+        # Don't initialize git
+        src = tmp_path / "src.py"
+        src.write_text("source")
+
+        csv_output, _, _ = summarize_directory(
+            directory_path=str(tmp_path),
+            strength=0.5,
+            temperature=0.7,
+            verbose=False,
+            csv_file=None
+        )
+
+        reader = csv.DictReader(StringIO(csv_output))
+        rows = list(reader)
+
+        assert len(rows) == 1, "Should process file using glob fallback"
+
+
+class TestRegressionIssue237:
+    """Regression tests for Issue #237: 95,412 files being processed."""
+
+    def test_node_modules_never_processed(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        """Regression test: node_modules should never be processed."""
+        # Create source file
+        src = tmp_path / "index.js"
+        src.write_text("console.log('hello')")
+
+        # Create massive node_modules structure (simulating the issue)
+        node_modules = tmp_path / "node_modules"
+        node_modules.mkdir()
+        for i in range(10):  # Create many packages
+            pkg = node_modules / f"package{i}"
+            pkg.mkdir()
+            (pkg / "index.js").write_text(f"module {i}")
+            (pkg / "README.md").write_text(f"readme {i}")
+
+        csv_output, _, _ = summarize_directory(
+            directory_path=str(tmp_path),
+            strength=0.5,
+            temperature=0.7,
+            verbose=False,
+            csv_file=None
+        )
+
+        reader = csv.DictReader(StringIO(csv_output))
+        rows = list(reader)
+
+        # Should only process index.js, not any node_modules files
+        assert len(rows) == 1, f"Should only process 1 file, got {len(rows)}"
+        assert "index.js" in rows[0]['full_path'], "Should process index.js"
+
+    def test_large_binary_files_never_processed(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        """Regression test: large binary files should never cause context exceeded."""
+        # Create source file
+        src = tmp_path / "src.py"
+        src.write_text("print('hello')")
+
+        # Create files that caused context length exceeded
+        (tmp_path / "test-failed.png").write_bytes(b'\x89PNG' + b'\x00' * 1000)
+        (tmp_path / "video.webm").write_bytes(b'\x1a\x45' + b'\x00' * 1000)
+        (tmp_path / "trace.zip").write_bytes(b'PK\x03\x04' + b'\x00' * 1000)
+
+        csv_output, _, _ = summarize_directory(
+            directory_path=str(tmp_path),
+            strength=0.5,
+            temperature=0.7,
+            verbose=False,
+            csv_file=None
+        )
+
+        reader = csv.DictReader(StringIO(csv_output))
+        rows = list(reader)
+
+        assert len(rows) == 1, "Should only process src.py"
+        assert not any(".png" in r['full_path'] for r in rows), "Should not process .png"
+        assert not any(".webm" in r['full_path'] for r in rows), "Should not process .webm"
+        assert not any(".zip" in r['full_path'] for r in rows), "Should not process .zip"
