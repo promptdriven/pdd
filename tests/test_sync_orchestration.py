@@ -4678,12 +4678,14 @@ def test_auto_fix_success_saves_complete_metadata(orchestration_fixture):
 
     # 3. Verify the fingerprint was saved with correct metadata
     crash_fingerprint_call = fingerprint_calls[0]
-    # Call signature: _save_fingerprint_atomic(basename, language, operation, pdd_files, cost, model, atomic_state=...)
-    assert crash_fingerprint_call[0][0] == "calculator"  # basename
-    assert crash_fingerprint_call[0][1] == "python"  # language
-    assert crash_fingerprint_call[0][2] == 'crash'  # operation
-    assert crash_fingerprint_call[0][4] == 0.0, "Auto-fix should have cost=0.0"  # cost
-    assert crash_fingerprint_call[0][5] == 'auto-fix', "Auto-fix should use model='auto-fix'"  # model
+    call_args = crash_fingerprint_call[0]
+    basename, language, operation, pdd_files, cost, model = call_args[:6]
+
+    assert basename == "calculator"
+    assert language == "python"
+    assert operation == 'crash'
+    assert cost == 0.0, "Auto-fix should have cost=0.0"
+    assert model == 'auto-fix', "Auto-fix should use model='auto-fix'"
 
     # 4. Verify run_report was saved (this already works, but verify it)
     assert mock_save_report.called, "run_report should be saved after auto-fix"
