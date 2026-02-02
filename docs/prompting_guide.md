@@ -228,7 +228,7 @@ When an architecture.json entry includes a `context_urls` array, the `generate_p
 
 ```json
 "context_urls": [
-  {"url": "https://fastapi.tiangolo.com/tutorial/first-steps/", "purpose": "FastAPI routing patterns"}
+  {{"url": "https://fastapi.tiangolo.com/tutorial/first-steps/", "purpose": "FastAPI routing patterns"}}
 ]
 ```
 
@@ -312,50 +312,50 @@ The `<pdd-interface>` tag supports four interface types, matching the architectu
 
 **Module Interface** (Python modules with functions):
 ```json
-{
+{{
   "type": "module",
-  "module": {
+  "module": {{
     "functions": [
-      {"name": "func_name", "signature": "(arg1, arg2)", "returns": "Type"}
+      {{"name": "func_name", "signature": "(arg1, arg2)", "returns": "Type"}}
     ]
-  }
-}
+  }}
+}}
 ```
 
 **CLI Interface** (Command-line interfaces):
 ```json
-{
+{{
   "type": "cli",
-  "cli": {
+  "cli": {{
     "commands": [
-      {"name": "cmd_name", "description": "What it does"}
+      {{"name": "cmd_name", "description": "What it does"}}
     ]
-  }
-}
+  }}
+}}
 ```
 
 **Command Interface** (PDD commands):
 ```json
-{
+{{
   "type": "command",
-  "command": {
+  "command": {{
     "commands": [
-      {"name": "cmd_name", "description": "What it does"}
+      {{"name": "cmd_name", "description": "What it does"}}
     ]
-  }
-}
+  }}
+}}
 ```
 
 **Frontend Interface** (UI pages):
 ```json
-{
+{{
   "type": "frontend",
-  "frontend": {
+  "frontend": {{
     "pages": [
-      {"name": "page_name", "route": "/path"}
+      {{"name": "page_name", "route": "/path"}}
     ]
-  }
-}
+  }}
+}}
 ```
 
 ### Sync Workflow
@@ -823,9 +823,9 @@ Constraints:
 - Output a unified diff only
 
 Snippet:
-  export function parseUserId(input: string) {
+  export function parseUserId(input: string) {{
     return input.trim().split(":")[1];
-  }
+  }}
 ```
 
 PDD‑style prompt (source of truth):
