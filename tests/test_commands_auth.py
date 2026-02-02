@@ -11,6 +11,7 @@ validating that it's a valid numeric value. When the JWT lacks an `exp` claim,
 
 import base64
 import json
+import time
 import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
 from click.testing import CliRunner
@@ -241,3 +242,189 @@ class TestDownstreamNullHandling:
             is_valid, expires_at = auth_service.get_jwt_cache_info()
             assert is_valid is False, "Should return False for invalid expires_at"
             assert expires_at is None, "Should return None for invalid expires_at"
+
+
+class TestLogoutCLIMessages:
+    """
+    Tests for logout command CLI output messages.
+
+    Issue #449: Auth logout shows success message when not authenticated (inconsistent with clear-cache)
+
+    The `logout_cmd()` function displays "Logged out of PDD Cloud." even when the user
+    is not authenticated, which is misleading. The `clear-cache` command properly checks
+    if cache exists before showing success, but `logout` doesn't follow this pattern.
+    """
+
+    def test_logout_when_not_authenticated_should_show_accurate_message(self, tmp_path):
+        """
+        Issue #449: Logout when not authenticated should show accurate message, not misleading success.
+
+        Current buggy behavior:
+            - User is not authenticated (no JWT cache, no refresh token)
+            - `pdd auth logout` displays: "Logged out of PDD Cloud."
+            - This implies an action occurred when nothing actually changed
+
+        Expected behavior (after fix):
+            - Should display: "Not authenticated." or "Already logged out."
+            - Consistent with clear-cache which shows "Nothing to clear."
+
+        This test FAILS on the buggy code and PASSES once the fix is applied.
+        """
+        from pdd.commands.auth import auth_group
+
+        runner = CliRunner()
+
+        # Setup: Mock JWT cache location and authentication status
+        mock_cache_file = tmp_path / ".pdd" / "jwt_cache"
+
+        with patch("pdd.commands.auth.JWT_CACHE_FILE", mock_cache_file):
+            with patch("pdd.commands.auth.get_auth_status") as mock_auth_status:
+                # User is NOT authenticated
+                mock_auth_status.return_value = {"authenticated": False}
+
+                # Run logout command
+                result = runner.invoke(auth_group, ["logout"])
+
+        # THE BUG: Currently shows "Logged out of PDD Cloud." even when not authenticated
+        # This assertion FAILS on buggy code, PASSES after fix
+
+        # After fix: Should show "Not authenticated" or similar message
+        output_lower = result.output.lower()
+        assert (
+            "not authenticated" in output_lower
+            or "already logged out" in output_lower
+            or "no active session" in output_lower
+        ), (
+            f"Expected message indicating user is not authenticated, "
+            f"but got: {result.output.strip()}\n\n"
+            f"The command should check authentication status before showing success."
+        )
+
+        # Should NOT show the misleading success message
+        assert "Logged out of PDD Cloud" not in result.output, (
+            f"Should not claim 'Logged out' when user was never authenticated. "
+            f"Got output: {result.output.strip()}"
+        )
+
+        # Exit code should be 0 (informational, not an error)
+        assert result.exit_code == 0, f"Expected exit_code=0, got {result.exit_code}"
+
+    def test_logout_when_authenticated_shows_success_message(self, tmp_path):
+        """
+        Regression test: Logout when authenticated should show success message.
+
+        This tests the happy path to ensure the fix doesn't break normal logout behavior.
+        When the user IS authenticated, the success message "Logged out of PDD Cloud."
+        is appropriate and should continue to be displayed.
+        """
+        from pdd.commands.auth import auth_group
+
+        runner = CliRunner()
+
+        # Setup: Create JWT cache file to simulate authenticated state
+        mock_cache_file = tmp_path / ".pdd" / "jwt_cache"
+        mock_cache_file.parent.mkdir(parents=True, exist_ok=True)
+        mock_cache_file.write_text(json.dumps({
+            "id_token": "fake_jwt_token",
+            "expires_at": time.time() + 3600  # Valid for 1 hour
+        }))
+
+        with patch("pdd.commands.auth.JWT_CACHE_FILE", mock_cache_file):
+            with patch("pdd.commands.auth.get_auth_status") as mock_auth_status:
+                # User IS authenticated
+                mock_auth_status.return_value = {"authenticated": True}
+
+                # Mock service_logout to succeed
+                with patch("pdd.commands.auth.service_logout") as mock_logout:
+                    mock_logout.return_value = (True, None)
+
+                    # Run logout command
+                    result = runner.invoke(auth_group, ["logout"])
+
+        # Should show success message when user was authenticated
+        assert "Logged out of PDD Cloud" in result.output, (
+            f"Expected success message when user is authenticated. "
+            f"Got output: {result.output.strip()}"
+        )
+
+        # Should NOT show "Not authenticated" message
+        assert "Not authenticated" not in result.output.lower(), (
+            f"Should not show 'Not authenticated' when user was authenticated. "
+            f"Got output: {result.output.strip()}"
+        )
+
+        # Exit code should be 0
+        assert result.exit_code == 0, f"Expected exit_code=0, got {result.exit_code}"
+
+    def test_logout_with_refresh_token_only_shows_success(self, tmp_path):
+        """
+        Edge case: Logout when user has refresh token but no JWT cache.
+
+        User is authenticated via refresh token (no cached JWT), so logout should
+        show the success message, not "Not authenticated".
+        """
+        from pdd.commands.auth import auth_group
+
+        runner = CliRunner()
+
+        # Setup: No JWT cache file, but user has refresh token in keyring
+        mock_cache_file = tmp_path / ".pdd" / "jwt_cache"
+        # Don't create cache file - simulates no cached JWT
+
+        with patch("pdd.commands.auth.JWT_CACHE_FILE", mock_cache_file):
+            with patch("pdd.commands.auth.get_auth_status") as mock_auth_status:
+                # User IS authenticated (via refresh token)
+                mock_auth_status.return_value = {"authenticated": True}
+
+                # Mock service_logout to succeed
+                with patch("pdd.commands.auth.service_logout") as mock_logout:
+                    mock_logout.return_value = (True, None)
+
+                    # Run logout command
+                    result = runner.invoke(auth_group, ["logout"])
+
+        # Should show success message since user is authenticated
+        assert "Logged out of PDD Cloud" in result.output, (
+            f"Expected success message when user has refresh token. "
+            f"Got output: {result.output.strip()}"
+        )
+
+        # Should NOT show "Not authenticated"
+        assert "Not authenticated" not in result.output.lower(), (
+            f"User with refresh token should be considered authenticated. "
+            f"Got output: {result.output.strip()}"
+        )
+
+        # Exit code should be 0
+        assert result.exit_code == 0, f"Expected exit_code=0, got {result.exit_code}"
+
+    def test_consistency_with_clear_cache_behavior(self, tmp_path):
+        """
+        Documentation test: Verify clear-cache shows accurate message when nothing to clear.
+
+        This test documents the correct behavior pattern that `logout` should follow.
+        The `clear-cache` command properly checks if cache exists before showing success.
+        """
+        from pdd.commands.auth import auth_group
+
+        runner = CliRunner()
+
+        # Setup: No JWT cache file exists
+        mock_cache_file = tmp_path / ".pdd" / "jwt_cache"
+
+        with patch("pdd.commands.auth.JWT_CACHE_FILE", mock_cache_file):
+            # Run clear-cache command
+            result = runner.invoke(auth_group, ["clear-cache"])
+
+        # clear-cache shows accurate message when nothing to clear
+        assert "No JWT cache found" in result.output or "Nothing to clear" in result.output, (
+            f"clear-cache should tell user when there's nothing to clear. "
+            f"Got output: {result.output.strip()}"
+        )
+
+        # clear-cache does NOT show misleading success
+        assert "cleared" not in result.output.lower() or "nothing to clear" in result.output.lower(), (
+            f"clear-cache correctly avoids claiming success when nothing was done. "
+            f"logout should follow this same pattern. "
+            f"Got output: {result.output.strip()}"
+        )
