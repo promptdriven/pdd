@@ -1,3 +1,15 @@
+## v0.0.136 (2026-02-01)
+
+### Feat
+
+- Add 5-minute timeouts to `generate` and `test` commands in E2E operation logging tests, and create `error_log.txt` and `new_file.txt`.
+- add script to generate and composite Veo 3.1 video segments for 3blue1brown section 04, along with related test and infrastructure updates.
+
+### Fix
+
+- Update `test_connect` to correctly access `allowed_origins` via the config object and add new log and empty files.
+- Ensure reliable remote command completion detection and correct server port usage for callbacks.
+
 ## v0.0.135 (2026-01-30)
 
 ### Feat
