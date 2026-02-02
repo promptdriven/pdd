@@ -344,7 +344,9 @@ def _detect_languages(basename: str, prompts_dir: Path) -> Dict[str, Path]:
     #         -> prompts_dir already contains dir_part, use just name_part
     # Case 2: prompts_dir='prompts', basename='core/cloud'
     #         -> prompts_dir doesn't contain dir_part, use full basename
-    if dir_part and str(prompts_dir).endswith(dir_part):
+    # Use path parts comparison to avoid false positives (e.g., 'end' matching 'backend')
+    dir_parts = Path(dir_part).parts if dir_part else ()
+    if dir_parts and prompts_dir.parts[-len(dir_parts):] == dir_parts:
         pattern = f"{name_part}_*.prompt"
     else:
         pattern = f"{basename}_*.prompt"
