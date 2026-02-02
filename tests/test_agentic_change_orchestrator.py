@@ -1991,3 +1991,167 @@ def test_backward_compat_state_without_issue_updated_at(mock_dependencies, temp_
     assert "step1" not in labels_called, "Step 1 should be skipped (backward compat)"
     assert "step4" not in labels_called, "Step 4 should be skipped (backward compat)"
     assert "step5" in labels_called, "Step 5 should be called when resuming"
+
+
+# -----------------------------------------------------------------------------
+# Bug #448: JSON in step output causes KeyError in subsequent step formatting
+# -----------------------------------------------------------------------------
+
+def test_step_output_with_json_does_not_cause_keyerror(mock_dependencies, temp_cwd):
+    """
+    Bug #448: When LLM output contains JSON objects like {"url": "..."},
+    Python's str.format() interprets the curly braces as format placeholders.
+
+    This test reproduces the bug where step 4 output contains JSON like:
+        {"url": "https://example.com", "description": "API docs"}
+
+    When step 5's template is formatted, the {step4_output} is replaced with
+    this text, but then str.format() tries to find a key called '"url"'
+    (with quotes as part of the key name), causing KeyError.
+
+    The fix should escape curly braces in step outputs before embedding them
+    in subsequent prompt templates.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_template_loader = mocks["template_loader"]
+
+    # Simulate step 4 output containing JSON (this triggers the bug)
+    json_in_step4_output = '''
+## Step 4: Requirements Clarity Check
+
+**Status:** Requirements Clear
+
+I researched the following resources:
+- {"url": "https://example.com/api", "purpose": "API documentation"}
+- {"url": "https://docs.example.com", "purpose": "SDK reference"}
+
+The feature implementation is well-defined.
+
+---
+*Proceeding to Step 5: Documentation Changes*
+'''
+
+    call_count = [0]
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step4":
+            return (True, json_in_step4_output, 0.1, "gpt-4")
+        if label == "step9":
+            return (True, "FILES_CREATED: new.py", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "Arch updated", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/123", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    # Return a real string template that mimics the actual prompts
+    # Step 5 template includes {step4_output} placeholder
+    step5_template = """Step 5 prompt.
+Previous step output:
+{step4_output}
+Issue URL: {issue_url}
+"""
+
+    def return_template(template_name):
+        call_count[0] += 1
+        if "step5" in template_name:
+            return step5_template
+        # Return a simple template for other steps
+        return "{issue_url}"
+
+    mock_template_loader.side_effect = return_template
+
+    # This should NOT raise KeyError
+    success, msg, cost, model, files = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="Add new feature",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=448,
+        issue_author="me",
+        issue_title="Feature with JSON in output",
+        cwd=temp_cwd,
+        quiet=True
+    )
+
+    # If the bug is fixed, step 5 formatting should not raise KeyError
+    # The error message contains "Context missing key for step 5" when the bug exists
+    assert "Context missing key for step 5" not in msg, f"Bug #448 not fixed: {msg}"
+
+
+def test_step_output_with_curly_braces_escaped(mock_dependencies, temp_cwd):
+    """
+    Test that step outputs containing curly braces are properly escaped
+    so they don't interfere with str.format() in subsequent steps.
+
+    Various patterns that could cause issues:
+    - {"key": "value"} - JSON objects
+    - {variable_name} - Looks like a format placeholder
+    - {{already_escaped}} - Should remain as-is after unescaping
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_template_loader = mocks["template_loader"]
+
+    problematic_output = '''
+This output has various curly brace patterns:
+1. JSON: {"name": "test", "value": 123}
+2. Template placeholder lookalike: {some_variable}
+3. Already escaped: {{escaped_braces}}
+4. Complex nested: {"outer": {"inner": "value"}}
+'''
+
+    call_count = [0]
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step3":
+            return (True, problematic_output, 0.1, "gpt-4")
+        if label == "step9":
+            return (True, "FILES_CREATED: test.py", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "Arch updated", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    # Step 4 template includes {step3_output} placeholder
+    step4_template = """Step 4 prompt.
+Previous step output:
+{step3_output}
+Issue URL: {issue_url}
+"""
+
+    def return_template(template_name):
+        call_count[0] += 1
+        if "step4" in template_name:
+            return step4_template
+        return "{issue_url}"
+
+    mock_template_loader.side_effect = return_template
+
+    # This should not raise KeyError for any of the problematic patterns
+    success, msg, cost, model, files = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="Test curly brace handling",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=449,
+        issue_author="me",
+        issue_title="Curly brace test",
+        cwd=temp_cwd,
+        quiet=True
+    )
+
+    # Should not fail due to format key errors
+    assert "Context missing key for step 4" not in msg, f"Curly brace escaping failed: {msg}"

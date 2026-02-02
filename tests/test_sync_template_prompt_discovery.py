@@ -155,6 +155,33 @@ contexts:
         finally:
             os.chdir(original_cwd)
 
+    def test_detect_languages_with_subdirectory_basename(self, tmp_path):
+        """
+        Bug: _detect_languages uses full basename (including path) in glob pattern.
+
+        When basename='frontend/components/types/marketplace' and
+        prompts_dir='prompts/frontend/components/types', the glob pattern becomes
+        'frontend/components/types/marketplace_*.prompt' which looks for a nested
+        path that doesn't exist.
+
+        The pattern should use only the name part ('marketplace'), not the full basename.
+        """
+        # Create prompt file with capitalized language (also tests case insensitivity)
+        prompts_dir = tmp_path / "prompts" / "frontend" / "components" / "types"
+        prompts_dir.mkdir(parents=True)
+        (prompts_dir / "marketplace_Typescript.prompt").write_text("# Marketplace types")
+
+        from pdd.sync_main import _detect_languages
+
+        # Test _detect_languages directly with subdirectory basename
+        languages = _detect_languages(
+            basename='frontend/components/types/marketplace',
+            prompts_dir=prompts_dir
+        )
+
+        assert 'typescript' in languages, \
+            f"Should find typescript with subdirectory basename, got {list(languages.keys())}"
+
     def test_fallback_to_directory_scan_when_no_outputs_config(self, tmp_path):
         """
         When context doesn't have outputs.prompt.path, should fall back to
