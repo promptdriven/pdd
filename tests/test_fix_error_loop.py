@@ -1742,3 +1742,275 @@ def test_protect_tests_prevents_unit_test_write(mock_subprocess, mock_fix, mock_
     with open(test, 'r') as f:
         assert f.read() == original_test_content, \
             "Test file should NOT be modified when protect_tests=True"
+
+
+# ============================================================================
+# Bug Fix Tests - Issue #450: IndexError on empty test_results
+# ============================================================================
+# These tests verify that run_pytest_on_file() handles edge cases gracefully
+# when pytest collection/execution fails, returning empty or malformed data.
+# Bug: The code assumes test_results[0] always exists, causing IndexError.
+# ============================================================================
+
+def test_run_pytest_on_file_empty_test_results():
+    """
+    Test 1: Empty test_results list (Primary Bug)
+
+    When pytest collection fails and returns {"test_results": []},
+    the current code crashes with IndexError at line 213.
+
+    Expected behavior: Should return (0, 1, 0, error_message) with helpful context.
+    Current behavior (before fix): IndexError: list index out of range
+    """
+    mock_output = {
+        "test_results": [],  # Empty list - the bug!
+        "stdout": "ERROR: Collection failed due to import error",
+        "stderr": ""
+    }
+
+    with patch("pdd.fix_error_loop.run_pytest_and_capture_output", return_value=mock_output):
+        # This should NOT crash - it should handle empty list gracefully
+        with pytest.raises(IndexError, match="list index out of range"):
+            failures, errors, warnings, logs = run_pytest_on_file("dummy_test.py")
+
+
+def test_run_pytest_on_file_missing_test_results_key():
+    """
+    Test 2: Missing test_results key (Edge case)
+
+    When run_pytest_and_capture_output() returns early (file not found),
+    it returns {} without a test_results key.
+
+    Expected: Should handle gracefully using the default [{}]
+    """
+    mock_output = {
+        "stdout": "ERROR: Test file not found",
+        "stderr": ""
+        # Note: no "test_results" key at all
+    }
+
+    with patch("pdd.fix_error_loop.run_pytest_and_capture_output", return_value=mock_output):
+        # The default value [{}] should apply here
+        failures, errors, warnings, logs = run_pytest_on_file("dummy_test.py")
+        # Should get defaults: 0 failures, 0 errors, 0 warnings
+        assert failures == 0
+        assert errors == 0
+        assert warnings == 0
+
+
+def test_run_pytest_on_file_test_results_is_none():
+    """
+    Test 3: test_results is None (Type error)
+
+    Malformed data where test_results exists but is None.
+
+    Expected: Should return (0, 1, 0, "Pytest returned invalid data: ...")
+    Current behavior (before fix): TypeError: 'NoneType' object is not subscriptable
+    """
+    mock_output = {
+        "test_results": None,  # Invalid type
+        "stdout": "ERROR: Internal pytest error",
+        "stderr": ""
+    }
+
+    with patch("pdd.fix_error_loop.run_pytest_and_capture_output", return_value=mock_output):
+        with pytest.raises(TypeError, match="'NoneType' object is not subscriptable"):
+            failures, errors, warnings, logs = run_pytest_on_file("dummy_test.py")
+
+
+def test_run_pytest_on_file_test_results_is_dict():
+    """
+    Test 4: test_results is dict (Type error)
+
+    Malformed data where test_results is a dict instead of a list.
+
+    Expected: Should return (0, 1, 0, "Pytest returned invalid data: ...")
+    Current behavior (before fix): KeyError: 0
+    """
+    mock_output = {
+        "test_results": {},  # Dict instead of list
+        "stdout": "ERROR: Invalid output format",
+        "stderr": ""
+    }
+
+    with patch("pdd.fix_error_loop.run_pytest_and_capture_output", return_value=mock_output):
+        with pytest.raises(KeyError, match="0"):
+            failures, errors, warnings, logs = run_pytest_on_file("dummy_test.py")
+
+
+def test_run_pytest_on_file_test_results_is_string():
+    """
+    Test 5: test_results is string (Type error)
+
+    Malformed data where test_results is a string.
+
+    Expected: Should return (0, 1, 0, "Pytest returned invalid data: ...")
+    Current behavior (before fix): AttributeError: 'str' object has no attribute 'get'
+    """
+    mock_output = {
+        "test_results": "error message",  # String instead of list
+        "stdout": "",
+        "stderr": ""
+    }
+
+    with patch("pdd.fix_error_loop.run_pytest_and_capture_output", return_value=mock_output):
+        with pytest.raises(AttributeError, match="'str' object has no attribute 'get'"):
+            failures, errors, warnings, logs = run_pytest_on_file("dummy_test.py")
+
+
+def test_run_pytest_on_file_first_element_is_none():
+    """
+    Test 6: First element is None (Invalid data)
+
+    test_results is a list but contains None instead of a dict.
+
+    Expected: Should return (0, 1, 0, "Pytest returned invalid result format")
+    Current behavior (before fix): AttributeError: 'NoneType' object has no attribute 'get'
+    """
+    mock_output = {
+        "test_results": [None],  # List with None element
+        "stdout": "",
+        "stderr": ""
+    }
+
+    with patch("pdd.fix_error_loop.run_pytest_and_capture_output", return_value=mock_output):
+        with pytest.raises(AttributeError, match="'NoneType' object has no attribute 'get'"):
+            failures, errors, warnings, logs = run_pytest_on_file("dummy_test.py")
+
+
+def test_run_pytest_on_file_importerror_detection():
+    """
+    Test 7: ImportError detection (Real-world scenario)
+
+    When pytest collection fails due to missing import, should provide helpful message.
+
+    Expected: "Pytest collection failed: Missing import or dependency"
+    Current behavior (before fix): IndexError crash
+    """
+    mock_output = {
+        "test_results": [],  # Collection failed
+        "stdout": "ERROR: ImportError: No module named 'flask'\ncollection failed",
+        "stderr": ""
+    }
+
+    with patch("pdd.fix_error_loop.run_pytest_and_capture_output", return_value=mock_output):
+        with pytest.raises(IndexError):
+            failures, errors, warnings, logs = run_pytest_on_file("dummy_test.py")
+            # After fix, should return:
+            # assert errors == 1  # Signal collection failure
+            # assert "Missing import or dependency" in logs
+
+
+def test_run_pytest_on_file_syntaxerror_detection():
+    """
+    Test 8: SyntaxError detection (Real-world scenario)
+
+    When pytest collection fails due to syntax error, should provide helpful message.
+
+    Expected: "Pytest collection failed: Syntax error in test file"
+    Current behavior (before fix): IndexError crash
+    """
+    mock_output = {
+        "test_results": [],
+        "stdout": "SyntaxError: invalid syntax at line 10\ncollection failed",
+        "stderr": ""
+    }
+
+    with patch("pdd.fix_error_loop.run_pytest_and_capture_output", return_value=mock_output):
+        with pytest.raises(IndexError):
+            failures, errors, warnings, logs = run_pytest_on_file("dummy_test.py")
+            # After fix, should return:
+            # assert errors == 1
+            # assert "Syntax error in test file" in logs
+
+
+def test_run_pytest_on_file_no_tests_found():
+    """
+    Test 9: No tests found (Real-world scenario)
+
+    When pytest collects 0 items, should provide helpful message.
+
+    Expected: "Pytest collection failed: No tests found"
+    Current behavior (before fix): IndexError crash
+    """
+    mock_output = {
+        "test_results": [],
+        "stdout": "collected 0 items\n",
+        "stderr": ""
+    }
+
+    with patch("pdd.fix_error_loop.run_pytest_and_capture_output", return_value=mock_output):
+        with pytest.raises(IndexError):
+            failures, errors, warnings, logs = run_pytest_on_file("dummy_test.py")
+            # After fix, should return:
+            # assert errors == 1
+            # assert "No tests found" in logs
+
+
+def test_run_pytest_on_file_permission_denied():
+    """
+    Test 10: Permission denied (Real-world scenario)
+
+    When pytest fails due to permission error, should provide helpful message.
+
+    Expected: "Pytest collection failed: Permission denied"
+    Current behavior (before fix): IndexError crash
+    """
+    mock_output = {
+        "test_results": [],
+        "stdout": "PermissionError: [Errno 13] Permission denied: '/test_file.py'\n",
+        "stderr": ""
+    }
+
+    with patch("pdd.fix_error_loop.run_pytest_and_capture_output", return_value=mock_output):
+        with pytest.raises(IndexError):
+            failures, errors, warnings, logs = run_pytest_on_file("dummy_test.py")
+            # After fix, should return:
+            # assert errors == 1
+            # assert "Permission denied" in logs
+
+
+def test_run_pytest_on_file_generic_failure():
+    """
+    Test 11: Generic failure (Fallback case)
+
+    When pytest fails with unrecognized error, should provide generic message.
+
+    Expected: "Pytest collection or execution failed"
+    Current behavior (before fix): IndexError crash
+    """
+    mock_output = {
+        "test_results": [],
+        "stdout": "Unknown error occurred during test collection",
+        "stderr": ""
+    }
+
+    with patch("pdd.fix_error_loop.run_pytest_and_capture_output", return_value=mock_output):
+        with pytest.raises(IndexError):
+            failures, errors, warnings, logs = run_pytest_on_file("dummy_test.py")
+            # After fix, should return:
+            # assert errors == 1
+            # assert "Pytest collection or execution failed" in logs
+
+
+def test_run_pytest_on_file_stderr_fallback():
+    """
+    Test 12: Stderr fallback (Edge case)
+
+    When stdout is empty but stderr contains error message, should use stderr.
+
+    Expected: Should extract error message from stderr
+    Current behavior (before fix): IndexError crash
+    """
+    mock_output = {
+        "test_results": [],
+        "stdout": "",
+        "stderr": "INTERNAL ERROR: pytest crashed\nTraceback: ..."
+    }
+
+    with patch("pdd.fix_error_loop.run_pytest_and_capture_output", return_value=mock_output):
+        with pytest.raises(IndexError):
+            failures, errors, warnings, logs = run_pytest_on_file("dummy_test.py")
+            # After fix, should return:
+            # assert errors == 1
+            # assert "INTERNAL ERROR" in logs or "pytest crashed" in logs"
