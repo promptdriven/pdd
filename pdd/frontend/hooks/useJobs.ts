@@ -546,7 +546,12 @@ export function useJobs(options: UseJobsOptions = {}) {
             job.id
           );
 
-          if (!status) continue;
+          console.log(`[Remote Poll] Job ${job.id}: cloud status = ${status?.status || 'null'}`);
+
+          if (!status) {
+            console.warn(`[Remote Poll] Job ${job.id}: no status returned from cloud`);
+            continue;
+          }
 
           // Update output if streaming - parse line by line
           if (status.status === 'processing' && status.response?.streaming) {
@@ -584,6 +589,7 @@ export function useJobs(options: UseJobsOptions = {}) {
 
           // Check for completion
           if (status.status === 'completed' || status.status === 'failed' || status.status === 'cancelled') {
+            console.log(`[Remote Poll] Job ${job.id}: detected terminal status '${status.status}'`);
             const success = status.status === 'completed';
             const cancelled = status.status === 'cancelled';
 

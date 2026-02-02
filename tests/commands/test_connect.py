@@ -168,7 +168,7 @@ def test_connect_custom_frontend_url(mock_dependencies):
     
     # Verify custom URL added to CORS origins
     call_kwargs = mock_dependencies["create_app"].call_args[1]
-    assert custom_url in call_kwargs["allowed_origins"]
+    assert custom_url in call_kwargs["config"].allowed_origins
 
 def test_connect_allow_remote_with_token(mock_dependencies):
     """
