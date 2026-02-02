@@ -5,6 +5,7 @@ import hashlib
 import io
 import csv
 import os
+import subprocess
 from typing import Optional, List, Dict, Tuple, Callable
 from pydantic import BaseModel, Field
 from rich.console import Console
@@ -16,6 +17,66 @@ from .load_prompt_template import load_prompt_template
 from . import DEFAULT_TIME
 
 console = Console()
+
+# Binary extensions that can't be meaningfully summarized
+BINARY_EXTENSIONS = {
+    '.png', '.jpg', '.jpeg', '.gif', '.ico', '.webp', '.svg', '.bmp',
+    '.mp4', '.webm', '.mov', '.avi', '.mp3', '.wav', '.ogg',
+    '.zip', '.tar', '.gz', '.rar', '.7z',
+    '.woff', '.woff2', '.ttf', '.eot', '.otf',
+    '.pdf', '.exe', '.dll', '.so', '.dylib',
+    '.pyc', '.pyo',  # Python bytecode
+}
+
+
+def _get_files_from_git(directory_path: str) -> Optional[List[str]]:
+    """Get tracked files using git ls-files (respects .gitignore)."""
+    try:
+        abs_path = os.path.abspath(directory_path)
+
+        # Determine the working directory and relative path for git
+        if os.path.isdir(abs_path):
+            cwd = abs_path
+            git_path = '.'
+        else:
+            cwd = os.path.dirname(abs_path)
+            git_path = os.path.basename(abs_path)
+
+        result = subprocess.run(
+            ['git', 'ls-files', git_path],
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=cwd
+        )
+        files = [f for f in result.stdout.strip().split('\n') if f]
+        # Convert to absolute paths
+        return [os.path.join(cwd, f) for f in files]
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None  # Not a git repo or git not available
+
+
+def _get_files_from_glob(directory_path: str) -> List[str]:
+    """Fallback: get files using glob with basic filtering."""
+    if os.path.isdir(directory_path):
+        search_pattern = os.path.join(directory_path, "**", "*")
+    else:
+        search_pattern = directory_path
+
+    files = glob.glob(search_pattern, recursive=True)
+
+    # Basic directory filtering for non-git fallback
+    ignore_dirs = {'node_modules', '.next', '__pycache__', '.git', 'dist', 'build', 'coverage'}
+
+    filtered = []
+    for f in files:
+        if not os.path.isfile(f):
+            continue
+        if any(d in f.split(os.sep) for d in ignore_dirs):
+            continue
+        filtered.append(f)
+    return filtered
+
 
 class FileSummary(BaseModel):
     """Pydantic model for structured LLM output."""
@@ -80,26 +141,22 @@ def summarize_directory(
     if not prompt_template:
         raise FileNotFoundError(f"Prompt template '{prompt_template_name}' is empty or missing.")
 
-    # Step 3: Get list of files matching directory_path
-    # If directory_path is a directory, convert to recursive glob pattern
-    if os.path.isdir(directory_path):
-        search_pattern = os.path.join(directory_path, "**", "*")
-    else:
-        search_pattern = directory_path
+    # Step 3: Get list of files
+    # Try git first (respects .gitignore), fall back to glob
+    files = _get_files_from_git(directory_path)
+    if files is None:
+        files = _get_files_from_glob(directory_path)
 
-    files = glob.glob(search_pattern, recursive=True)
-    
-    # Filter out directories, keep only files
-    # Also filter out __pycache__ and .pyc/.pyo files
+    # Filter out binary files that can't be summarized
     filtered_files = []
     for f in files:
-        if os.path.isfile(f):
-            if "__pycache__" in f:
-                continue
-            if f.endswith(('.pyc', '.pyo')):
-                continue
-            filtered_files.append(f)
-    
+        if not os.path.isfile(f):
+            continue
+        _, ext = os.path.splitext(f)
+        if ext.lower() in BINARY_EXTENSIONS:
+            continue
+        filtered_files.append(f)
+
     files = filtered_files
 
     # Step 4: Return early if no files

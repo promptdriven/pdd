@@ -197,6 +197,11 @@ def create_app(
     global _app_state
     _app_state = AppState(project_root, config=config)
 
+    # Configure commands router with the correct port for spawned terminal callbacks
+    # This ensures the terminal callback URL uses the actual server port, not the default
+    from .routes.commands import set_server_port
+    set_server_port(_app_state.server_port)
+
     # Determine configuration with proper fallback
     origins = None
     if config:

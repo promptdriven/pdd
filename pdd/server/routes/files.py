@@ -538,10 +538,15 @@ async def list_prompt_files(
 
         # Helper to substitute placeholders in path templates
         def substitute_path_template(template: str) -> str:
-            """Replace {name} and {language} placeholders in path template."""
+            """Replace all placeholders in path template."""
             result = template.replace("{name}", sync_basename)
+            result = result.replace("{category}", prompt_subdir)
+            result = result.replace("{dir_prefix}", f"{prompt_subdir}/" if prompt_subdir else "")
             if language:
                 result = result.replace("{language}", language)
+            # Handle {ext} - extract from extensions list
+            ext = extensions[0].lstrip(".") if extensions else "tsx"
+            result = result.replace("{ext}", ext)
             return result
 
         # ===== CODE FILE DETECTION =====

@@ -110,7 +110,8 @@ class TestOperationLoggingE2E:
         # Run generate
         result = self.run_pdd_command(
             ["generate", str(prompt_file), "--output", str(output_file)],
-            cwd=project_dir
+            cwd=project_dir,
+            timeout=300  # 5 minutes for LLM API call (matches other E2E tests)
         )
 
         # Verify command succeeded
@@ -150,7 +151,8 @@ class TestOperationLoggingE2E:
         # Run test generation
         result = self.run_pdd_command(
             ["test", str(prompt_file), str(code_file), "--output", str(output_file)],
-            cwd=project_dir
+            cwd=project_dir,
+            timeout=300  # 5 minutes for LLM API call (matches other E2E tests)
         )
 
         # Verify command succeeded

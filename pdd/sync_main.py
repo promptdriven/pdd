@@ -334,10 +334,22 @@ def _detect_languages(basename: str, prompts_dir: Path) -> Dict[str, Path]:
     # For subdirectory basenames, extract just the name part for stem comparison
     if '/' in basename:
         name_part = basename.rsplit('/', 1)[1]  # 'cloud' from 'core/cloud'
+        dir_part = basename.rsplit('/', 1)[0]   # 'core' from 'core/cloud'
     else:
         name_part = basename
+        dir_part = ''
 
-    pattern = f"{basename}_*.prompt"
+    # Determine glob pattern based on whether prompts_dir already includes the subdirectory
+    # Case 1: prompts_dir='prompts/frontend/types', basename='frontend/types/foo'
+    #         -> prompts_dir already contains dir_part, use just name_part
+    # Case 2: prompts_dir='prompts', basename='core/cloud'
+    #         -> prompts_dir doesn't contain dir_part, use full basename
+    # Use path parts comparison to avoid false positives (e.g., 'end' matching 'backend')
+    dir_parts = Path(dir_part).parts if dir_part else ()
+    if dir_parts and prompts_dir.parts[-len(dir_parts):] == dir_parts:
+        pattern = f"{name_part}_*.prompt"
+    else:
+        pattern = f"{basename}_*.prompt"
     for prompt_file in prompts_dir.glob(pattern):
         # stem is the filename without extension (e.g., 'cloud_python')
         stem = prompt_file.stem
