@@ -23,6 +23,7 @@ from pdd.agentic_common import (
     DEFAULT_MAX_RETRIES,
 )
 from pdd.load_prompt_template import load_prompt_template
+from pdd.preprocess import preprocess
 
 # Initialize console for rich output
 console = Console()
@@ -370,6 +371,11 @@ def run_agentic_test_orchestrator(
         prompt_template = load_prompt_template(template_name)
         if not prompt_template:
             return False, f"Missing prompt template: {template_name}", total_cost, model_used, []
+
+        # Preprocess to expand <include> tags and escape curly braces
+        # Exclude context keys from escaping so they can be substituted
+        exclude_keys = list(context.keys())
+        prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
 
         try:
             formatted_prompt = prompt_template.format(**context)

@@ -20,6 +20,7 @@ from .agentic_common import (
     DEFAULT_MAX_RETRIES,
 )
 from .load_prompt_template import load_prompt_template
+from .preprocess import preprocess
 
 # Constants
 STEP_NAMES = {
@@ -428,6 +429,9 @@ def run_agentic_e2e_fix_orchestrator(
                 if step_num == 9:
                     context["next_cycle"] = current_cycle + 1
 
+                # Preprocess to escape curly braces in included content
+                exclude_keys = list(context.keys())
+                prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
                 formatted_prompt = prompt_template.format(**context)
 
                 # 3. Run Task
