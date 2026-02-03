@@ -1,3 +1,14 @@
+## v0.0.137 (2026-02-02)
+
+### Feat
+
+- update step 10 to use agentic pdd fix command (#351)
+- update changelog with new features and fixes
+
+### Fix
+
+- Auto-fix skips fingerprint save causing incomplete metadata (sync_orchestration.py:1350)
+
 ## v0.0.136 (2026-02-01)
 
 ### Feat
