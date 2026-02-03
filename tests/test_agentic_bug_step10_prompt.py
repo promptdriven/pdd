@@ -2,22 +2,19 @@
 Test Plan for agentic_bug_step10_pr_LLM.prompt
 
 This test file verifies that the Step 10 prompt generates a valid `pdd fix` command
-that users can actually run without encountering file-not-found errors.
+that users can actually run.
 
-Issue #350: pdd bug Step 10 generates pdd fix command referencing non-existent log file
+Issue #351: pdd bug Step 10 should use agentic fix format
 
-The bug: When Step 10 generates the `pdd fix` command, it includes `fix-issue-{issue_number}.log`
-as the ERROR_FILE argument. However:
-1. This file doesn't exist and was never created during the workflow
-2. Loop mode (`--loop` flag) doesn't use ERROR_FILE parameter - it treats all args after
-   code_file as test files
-3. The command fails when users try to run it
+The prompt should use the simpler agentic format:
+    pdd fix <github_issue_url>
 
-These tests FAIL on the current buggy prompt and PASS once the fix is applied.
+Instead of the deprecated loop mode format:
+    pdd --force fix --loop --max-attempts 5 ...
 
 Test Categories:
-1. Unit tests: Verify prompt doesn't reference non-existent log file
-2. Unit tests: Verify loop mode command syntax is correct
+1. Unit tests: Verify prompt uses the agentic fix format
+2. Unit tests: Verify prompt doesn't reference non-existent log files
 """
 
 import re
@@ -44,42 +41,48 @@ def step10_prompt_content() -> str:
 # --- Tests ---
 
 
-class TestStep10LoopModeCommandSyntax:
+class TestStep10AgenticFixCommandSyntax:
     """
-    Test that the Step 10 prompt generates a valid loop mode pdd fix command.
+    Test that the Step 10 prompt generates a valid agentic pdd fix command.
 
-    Loop mode syntax:
-        pdd fix --loop [OPTIONS] PROMPT_FILE CODE_FILE TEST_FILE [TEST_FILE...]
+    Agentic fix syntax:
+        pdd fix <github_issue_url>
 
-    Loop mode does NOT accept ERROR_FILE as the last argument.
-    Loop mode discovers errors by running tests iteratively.
+    This format automatically detects prompt files, code files, and test files
+    from the issue context.
     """
 
-    def test_prompt_does_not_include_log_file_in_command_template(
+    def test_prompt_uses_agentic_fix_format(
         self, step10_prompt_content: str
     ) -> None:
         """
-        Verify the prompt's pdd fix command template does NOT reference a log file.
+        Verify the prompt's pdd fix command uses the agentic format.
 
-        The command template should not include `fix-issue-{issue_number}.log` or
-        `fix-issue-{{issue_number}}.log` as an argument.
+        The command template should be: pdd fix {issue_url}
         """
-        # Look for the pdd fix command template in the prompt
-        # It should be in a bash code block
-        pdd_fix_pattern = r'pdd\s+.*?fix.*?--loop.*'
+        # Look for the agentic pdd fix command template in the prompt
+        pdd_fix_pattern = r'pdd\s+fix\s+\{issue_url\}'
         matches = re.findall(pdd_fix_pattern, step10_prompt_content, re.MULTILINE)
 
         assert matches, (
-            "Step 10 prompt should contain a 'pdd fix --loop' command template"
+            "Step 10 prompt should contain 'pdd fix {issue_url}' command template"
         )
 
-        # Check that none of the matches include a log file reference
-        for match in matches:
-            assert "fix-issue-" not in match or ".log" not in match, (
-                f"Step 10 prompt's pdd fix command includes non-existent log file. "
-                f"Loop mode doesn't use ERROR_FILE parameter. "
-                f"Found: {match}"
-            )
+    def test_prompt_does_not_use_deprecated_loop_format(
+        self, step10_prompt_content: str
+    ) -> None:
+        """
+        Verify the prompt does NOT use the deprecated --loop format.
+
+        The old format 'pdd fix --loop ...' is deprecated and should not appear.
+        """
+        pdd_fix_loop_pattern = r'pdd\s+.*?fix\s+--loop'
+        matches = re.findall(pdd_fix_loop_pattern, step10_prompt_content, re.MULTILINE)
+
+        assert not matches, (
+            f"Step 10 prompt should NOT contain deprecated '--loop' format. "
+            f"Found: {matches}"
+        )
 
     def test_prompt_does_not_instruct_using_error_log_path(
         self, step10_prompt_content: str
@@ -112,45 +115,30 @@ class TestStep10LoopModeCommandSyntax:
         )
 
 
-class TestStep10CommandArgumentOrder:
+class TestStep10NoLogFileReferences:
     """
-    Test that the generated command follows proper argument order for loop mode.
-
-    Correct order for loop mode:
-        pdd [GLOBAL_OPTIONS] fix --loop [FIX_OPTIONS] PROMPT_FILE CODE_FILE TEST_FILE [TEST_FILE...]
-
-    The ERROR_FILE argument only applies to non-loop mode:
-        pdd fix PROMPT_FILE CODE_FILE TEST_FILE [TEST_FILE...] ERROR_FILE
+    Test that the generated command does not reference non-existent log files.
     """
 
-    def test_command_ends_with_test_file_not_log_file(
+    def test_command_does_not_reference_log_file(
         self, step10_prompt_content: str
     ) -> None:
         """
-        Verify the pdd fix command template ends with TEST_FILE, not a .log file.
+        Verify the pdd fix command template does not reference log files.
 
-        In loop mode, the last positional argument should be the test file path
-        (e.g., {{test_file_path}}), NOT a log file.
+        The agentic format 'pdd fix {issue_url}' should not include any
+        .log file references in the command.
         """
-        # Find the pdd fix command template
-        # Look for the command that contains --loop and ends with arguments
-        pdd_fix_pattern = r'pdd\s+.*?fix\s+--loop.*?(\{\{[^}]+\}\}|\S+)(?=\s*$|\s*\n)'
-        matches = re.findall(pdd_fix_pattern, step10_prompt_content, re.MULTILINE)
+        # Find lines with pdd fix commands
+        lines = step10_prompt_content.split('\n')
+        pdd_fix_lines = [
+            line for line in lines
+            if 'pdd' in line and 'fix' in line
+        ]
 
-        assert matches, (
-            "Step 10 prompt should contain a complete 'pdd fix --loop' command template"
-        )
-
-        # Check the last argument in the command
-        for match in matches:
-            last_arg = match.strip()
-            assert not last_arg.endswith('.log'), (
-                f"Step 10 command template ends with a .log file, but loop mode "
-                f"expects test files as the last arguments. Found last arg: {last_arg}"
-            )
-            assert ".log" not in last_arg, (
-                f"Step 10 command template includes .log file reference in arguments. "
-                f"Loop mode doesn't use ERROR_FILE parameter. Found: {last_arg}"
+        for line in pdd_fix_lines:
+            assert 'fix-issue-' not in line or '.log' not in line, (
+                f"Step 10 command should not reference log files. Found: {line}"
             )
 
 
@@ -158,42 +146,37 @@ class TestStep10ExampleCommandValidity:
     """
     Test that the example command in the prompt is actually runnable.
 
-    The command should be valid and not reference files that don't exist.
+    The command should use the agentic format and be valid.
     """
 
-    def test_prompt_example_follows_loop_mode_syntax(
+    def test_prompt_example_follows_agentic_syntax(
         self, step10_prompt_content: str
     ) -> None:
         """
-        Verify any example pdd fix command follows loop mode syntax.
+        Verify any example pdd fix command follows agentic syntax.
 
-        Loop mode syntax:
-            pdd fix --loop [OPTIONS] PROMPT_FILE CODE_FILE TEST_FILE
+        Agentic syntax:
+            pdd fix {issue_url}
 
-        Should NOT have ERROR_FILE at the end when --loop is present.
+        Should be simple and not require manual file path arguments.
         """
-        # Extract lines that look like pdd fix commands
+        # Extract lines that look like pdd fix commands in bash blocks
         lines = step10_prompt_content.split('\n')
         pdd_fix_lines = [
             line for line in lines
-            if 'pdd' in line and 'fix' in line and '--loop' in line
+            if 'pdd' in line and 'fix' in line and not line.strip().startswith('#')
         ]
 
-        for line in pdd_fix_lines:
-            # If it's a loop mode command, it should not end with a .log file
-            if '--loop' in line:
-                # Extract the last word/token that looks like a file
-                tokens = line.strip().split()
-                if tokens:
-                    # Find positional args (not starting with --)
-                    positional_args = [
-                        t for t in tokens
-                        if not t.startswith('--') and not t.startswith('-')
-                        and t != 'pdd' and t != 'fix'
-                    ]
-                    if positional_args:
-                        last_positional = positional_args[-1]
-                        assert not last_positional.endswith('.log'), (
-                            f"Loop mode command should not end with .log file. "
-                            f"Found in line: {line}"
-                        )
+        # There should be at least one pdd fix command
+        assert pdd_fix_lines, (
+            "Step 10 prompt should contain at least one 'pdd fix' command example"
+        )
+
+        # Check that commands use the agentic format (simple issue_url argument)
+        has_agentic_format = any(
+            '{issue_url}' in line for line in pdd_fix_lines
+        )
+        assert has_agentic_format, (
+            f"Step 10 prompt should use agentic format 'pdd fix {{issue_url}}'. "
+            f"Found commands: {pdd_fix_lines}"
+        )
