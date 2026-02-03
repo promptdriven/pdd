@@ -2185,21 +2185,35 @@ FAILED test_sum_list.py::test_sum_list - AssertionError: assert 6 == 10
             'confirm_callback': None
         }
 
-        success, fixed_test, fixed_code, attempts, cost, model = fix_main(
-            ctx=ctx,
-            prompt_file=str(prompt_file),
-            code_file=str(code_file),
-            unit_test_file=str(unit_test_file),
-            error_file=str(error_file),
-            output_test=str(output_test),
-            output_code=str(output_code),
-            output_results=None,
-            loop=False,
-            verification_program=None,
-            max_attempts=3,
-            budget=5.0,
-            auto_submit=False
-        )
+        try:
+            success, fixed_test, fixed_code, attempts, cost, model = fix_main(
+                ctx=ctx,
+                prompt_file=str(prompt_file),
+                code_file=str(code_file),
+                unit_test_file=str(unit_test_file),
+                error_file=str(error_file),
+                output_test=str(output_test),
+                output_code=str(output_code),
+                output_results=None,
+                loop=False,
+                verification_program=None,
+                max_attempts=3,
+                budget=5.0,
+                auto_submit=False
+            )
+        except UsageError as e:
+            error_msg = str(e)
+            if "Account not approved" in error_msg:
+                pytest.skip(
+                    "PDD Cloud account not approved. Visit https://pdd.ai to request access, "
+                    "or run tests with --local flag to skip cloud E2E tests."
+                )
+            elif "No response content" in error_msg or "HTTP" in error_msg:
+                pytest.skip(
+                    f"PDD Cloud authentication failed: {error_msg}. "
+                    "Ensure your account is approved at https://pdd.ai"
+                )
+            raise
 
         # Capture output to check for cloud success
         captured = capsys.readouterr()
@@ -2286,21 +2300,35 @@ sys.exit(result.returncode)
             'confirm_callback': None
         }
 
-        success, fixed_test, fixed_code, attempts, cost, model = fix_main(
-            ctx=ctx,
-            prompt_file=str(prompt_file),
-            code_file=str(code_file),
-            unit_test_file=str(unit_test_file),
-            error_file=None,  # Loop mode generates errors
-            output_test=str(output_test),
-            output_code=str(output_code),
-            output_results=None,
-            loop=True,
-            verification_program=str(verification_file),
-            max_attempts=3,
-            budget=5.0,
-            auto_submit=False
-        )
+        try:
+            success, fixed_test, fixed_code, attempts, cost, model = fix_main(
+                ctx=ctx,
+                prompt_file=str(prompt_file),
+                code_file=str(code_file),
+                unit_test_file=str(unit_test_file),
+                error_file=None,  # Loop mode generates errors
+                output_test=str(output_test),
+                output_code=str(output_code),
+                output_results=None,
+                loop=True,
+                verification_program=str(verification_file),
+                max_attempts=3,
+                budget=5.0,
+                auto_submit=False
+            )
+        except UsageError as e:
+            error_msg = str(e)
+            if "Account not approved" in error_msg:
+                pytest.skip(
+                    "PDD Cloud account not approved. Visit https://pdd.ai to request access, "
+                    "or run tests with --local flag to skip cloud E2E tests."
+                )
+            elif "No response content" in error_msg or "HTTP" in error_msg:
+                pytest.skip(
+                    f"PDD Cloud authentication failed: {error_msg}. "
+                    "Ensure your account is approved at https://pdd.ai"
+                )
+            raise
 
         # Capture output to check for cloud usage
         captured = capsys.readouterr()
