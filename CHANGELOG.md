@@ -1,14 +1,30 @@
+## v0.0.137 (2026-02-02)
+
+### Feat
+
+- update step 10 to use agentic pdd fix command (#351)
+- update changelog with new features and fixes
+
+### Fix
+
+- Auto-fix skips fingerprint save causing incomplete metadata (sync_orchestration.py:1350)
+
 ## v0.0.136 (2026-02-01)
 
 ### Feat
 
-- Add 5-minute timeouts to `generate` and `test` commands in E2E operation logging tests, and create `error_log.txt` and `new_file.txt`.
-- add script to generate and composite Veo 3.1 video segments for 3blue1brown section 04, along with related test and infrastructure updates.
+- **summarize_directory**: Use `git ls-files` to respect `.gitignore` when listing files to summarize. Falls back to glob with basic filtering when not in a git repo.
+- **summarize_directory**: Add `BINARY_EXTENSIONS` constant to skip binary files (images, videos, archives, fonts, etc.) that cannot be meaningfully summarized.
+- **remote_session**: Add status verification after cloud updates and detailed logging for debugging command completion detection.
 
 ### Fix
 
-- Update `test_connect` to correctly access `allowed_origins` via the config object and add new log and empty files.
-- Ensure reliable remote command completion detection and correct server port usage for callbacks.
+- **agentic_change_orchestrator**: Fix `KeyError: '"url"'` when templates include files containing JSON (Issues #319, #373, #448). Added `preprocess()` calls before `.format()` in steps 5, 11, 12, and 13 to escape curly braces in included content.
+- **agentic_e2e_fix_orchestrator**: Add template preprocessing to escape curly braces before `.format()`.
+- **agentic_test_orchestrator**: Add template preprocessing to escape curly braces before `.format()`.
+- **sync_main**: Fix `_detect_languages` glob pattern when `prompts_dir` already includes the subdirectory from basename. Prevents invalid nested paths like `prompts/frontend/types/frontend/types/foo_*.prompt`.
+- **connect**: Create `ServerConfig` with actual port after smart port detection, ensuring spawned terminal callbacks use the correct port.
+- **remote_session**: Add verification read after status updates to detect persistence failures.
 
 ## v0.0.135 (2026-01-30)
 
