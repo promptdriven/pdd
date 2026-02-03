@@ -74,8 +74,9 @@ def copy_from_sync_config(
     sections: list[str],
     exclude_section: str,
     dest: str,
-    project_root: str
-) -> int:
+    project_root: str,
+    sync_deletions: bool = False
+) -> tuple[int, int]:
     """Copy files from specified YAML sections, applying exclusions.
 
     Args:
@@ -84,9 +85,10 @@ def copy_from_sync_config(
         exclude_section: Section name containing exclusion patterns
         dest: Destination directory root
         project_root: Source project root
+        sync_deletions: If True, delete files in dest that don't exist in source
 
     Returns:
-        Number of files copied
+        Tuple of (files copied, files deleted)
     """
     # Collect all patterns from specified sections
     patterns: list[str] = []
@@ -107,8 +109,22 @@ def copy_from_sync_config(
         return False
 
     copied = 0
-    copied_paths: set[str] = set()
+    deleted = 0
+    copied_paths: set[str] = set()  # Relative paths of files copied
     processed_dirs: set[str] = set()
+
+    # If sync_deletions is enabled, first collect existing files in dest matching patterns
+    existing_dest_files: set[str] = set()
+    if sync_deletions:
+        for pattern in patterns:
+            # Expand glob pattern relative to dest
+            full_pattern = os.path.join(dest, pattern)
+            matches = glob.glob(full_pattern, recursive=True)
+            for match in matches:
+                if os.path.isfile(match):
+                    rel_path = os.path.relpath(match, dest)
+                    if not is_excluded(rel_path):
+                        existing_dest_files.add(rel_path)
 
     for pattern in patterns:
         # Expand glob pattern relative to project root
@@ -144,26 +160,36 @@ def copy_from_sync_config(
                             continue
 
                         dest_file = os.path.join(dest, rel_file)
-                        if dest_file in copied_paths:
+                        if rel_file in copied_paths:
                             continue
 
                         os.makedirs(os.path.dirname(dest_file), exist_ok=True)
                         shutil.copy2(src_file, dest_file)
-                        copied_paths.add(dest_file)
+                        copied_paths.add(rel_file)
                         print(f"  Copied {rel_file}")
                         copied += 1
             else:
                 # Handle single file
-                if dest_path in copied_paths:
+                if rel_path in copied_paths:
                     continue
 
                 os.makedirs(os.path.dirname(dest_path), exist_ok=True)
                 shutil.copy2(src, dest_path)
-                copied_paths.add(dest_path)
+                copied_paths.add(rel_path)
                 print(f"  Copied {rel_path}")
                 copied += 1
 
-    return copied
+    # Delete files in dest that weren't copied from source
+    if sync_deletions:
+        stale_files = existing_dest_files - copied_paths
+        for rel_path in sorted(stale_files):
+            dest_path = os.path.join(dest, rel_path)
+            if os.path.isfile(dest_path):
+                os.remove(dest_path)
+                print(f"  Deleted {rel_path} (not in source)")
+                deleted += 1
+
+    return copied, deleted
 
 
 # ============================================================================
@@ -316,6 +342,11 @@ def main(argv: list[str] | None = None) -> int:
         default=[],
         help="Sections to copy from config (e.g., shared cap_only)",
     )
+    parser.add_argument(
+        "--sync-deletions",
+        action="store_true",
+        help="Delete files in dest that don't exist in source (only for --config mode)",
+    )
 
     # Optional: add extra package-data copy patterns (relative to 'pdd/')
     parser.add_argument(
@@ -369,14 +400,17 @@ def main(argv: list[str] | None = None) -> int:
         config = load_sync_config(args.config)
 
         print(f"Copying files from sections: {', '.join(args.sections)}")
-        copied = copy_from_sync_config(
+        copied, deleted = copy_from_sync_config(
             config,
             sections=args.sections,
             exclude_section="exclude",
             dest=args.dest,
             project_root=args.project_root,
+            sync_deletions=args.sync_deletions,
         )
         print(f"Total files copied from config: {copied}")
+        if deleted > 0:
+            print(f"Total files deleted (not in source): {deleted}")
         return 0
 
     # Original pyproject.toml mode
