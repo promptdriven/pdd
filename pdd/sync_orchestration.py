@@ -1059,11 +1059,12 @@ def sync_orchestration(
                         decision.confidence = 1.0
                         decision.estimated_cost = 0.0
                         decision.details = {"decision_type": "mock"}
-                        log_sync_event(
+                        log_event(
                             basename,
                             language,
                             "decision_exhausted",
                             {"note": "StopIteration from sync_determine_operation"},
+                            invocation_mode="sync",
                         )
                     operation = decision.operation
                     
