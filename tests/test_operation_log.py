@@ -661,3 +661,21 @@ def test_get_paths_with_subdirectory_basename(temp_pdd_env):
     # Verify path is flat (no nested directories beyond .pdd/meta/)
     assert log_path.parent == Path(temp_pdd_env), \
         f"Log path should be directly in meta dir, not nested: {log_path}"
+
+
+def test_basename_sanitization_deeply_nested(temp_pdd_env):
+    """Edge case: deeply nested subdirectory basenames should be fully sanitized."""
+    basename = "a/b/c/d/e"
+    lang = "python"
+
+    log_path = operation_log.get_log_path(basename, lang)
+    fp_path = operation_log.get_fingerprint_path(basename, lang)
+    rr_path = operation_log.get_run_report_path(basename, lang)
+
+    expected_safe = "a_b_c_d_e"
+    assert log_path.name == f"{expected_safe}_{lang}_sync.log"
+    assert fp_path.name == f"{expected_safe}_{lang}.json"
+    assert rr_path.name == f"{expected_safe}_{lang}_run.json"
+
+    # Verify no nested directories created
+    assert log_path.parent == Path(temp_pdd_env)
