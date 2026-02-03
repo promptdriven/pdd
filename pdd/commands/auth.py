@@ -119,7 +119,6 @@ def login(browser: Optional[bool]):
 
             if skip_browser:
                 console.print(f"[yellow]Note: {reason}[/yellow]")
-                console.print("[yellow]Please open the authentication URL manually in a browser.[/yellow]")
 
             # Pass no_browser parameter to get_jwt_token
             token = await get_jwt_token(
