@@ -4596,3 +4596,102 @@ print("Example works!")
         f"This verifies the fix: sync_orchestration.py:1266 uses "
         f"pdd_files['code'].resolve().parent instead of hardcoded Path.cwd() / 'src'"
     )
+
+
+# --- Issue #430: Auto-fix Fingerprint Save Bug Tests ---
+
+def test_auto_fix_success_saves_complete_metadata(orchestration_fixture):
+    """
+    Tests that when auto-fix successfully resolves an import error during the crash
+    operation, all metadata is properly saved (fingerprint, operations_completed, events).
+
+    This test reproduces issue #430: the auto-fix success path at line 1412 uses
+    `continue` which skips the fingerprint save at line 1716, causing incomplete
+    metadata tracking.
+
+    Expected behavior (after fix):
+    - operations_completed includes 'crash'
+    - _save_fingerprint_atomic is called with operation='crash', model='auto-fix', cost=0.0
+    - run_report.json is saved with exit_code=0
+
+    Actual behavior (before fix):
+    - operations_completed is missing 'crash' (BUG)
+    - _save_fingerprint_atomic is NOT called for crash operation (BUG)
+    - run_report.json is saved correctly (this works)
+    """
+    # Create code file for crash operation to detect (fixture chdirs to tmp_path)
+    from pathlib import Path
+    code_file = Path('src') / 'calculator.py'
+    code_file.write_text("# Mock code file\ndef calculator():\n    pass\n")
+
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_save_fp = orchestration_fixture['_save_fingerprint_atomic']
+
+    # Set up workflow: generate → example → crash (with auto-fix success)
+    mock_determine.side_effect = [
+        SyncDecision(operation='generate', reason='New unit'),
+        SyncDecision(operation='example', reason='Code exists, example missing'),
+        SyncDecision(operation='crash', reason='Example crashes'),
+        SyncDecision(operation='all_synced', reason='All operations complete'),
+    ]
+
+    # Mock the crash operation to simulate auto-fix success path
+    # We need to patch the internal functions that detect and fix import errors
+    with patch('pdd.sync_orchestration._run_example_with_error_detection') as mock_run_example, \
+         patch('pdd.sync_orchestration._try_auto_fix_import_error') as mock_auto_fix, \
+         patch('pdd.sync_orchestration._save_run_report_atomic') as mock_save_report:
+
+        # First call: example crashes with ModuleNotFoundError (auto-fixable)
+        # Second call: retry after auto-fix succeeds (returncode=0)
+        mock_run_example.side_effect = [
+            (1, "", "ModuleNotFoundError: No module named 'calculator'"),  # Initial crash
+            (0, "Example runs successfully", ""),  # After auto-fix
+        ]
+
+        # Auto-fix successfully fixes the import
+        mock_auto_fix.return_value = (True, "Added missing import")
+
+        # Run sync orchestration
+        result = sync_orchestration(basename="calculator", language="python")
+
+    # CRITICAL ASSERTIONS: These verify the bug is fixed
+
+    # 1. Verify operations_completed includes 'crash'
+    # BUG: Before fix, this assertion FAILS because continue at line 1412 skips
+    # the operations_completed.append('crash') at line 1715
+    assert 'crash' in result['operations_completed'], (
+        "Auto-fix success should track 'crash' in operations_completed. "
+        "Bug: continue at sync_orchestration.py:1412 skips line 1715"
+    )
+
+    # 2. Verify _save_fingerprint_atomic was called for crash operation
+    # BUG: Before fix, this assertion FAILS because continue at line 1412 skips
+    # the _save_fingerprint_atomic call at line 1716
+    fingerprint_calls = [
+        call for call in mock_save_fp.call_args_list
+        if len(call[0]) >= 3 and call[0][2] == 'crash'  # arg[2] is operation
+    ]
+    assert len(fingerprint_calls) > 0, (
+        "Auto-fix success should save fingerprint for 'crash' operation. "
+        "Bug: continue at sync_orchestration.py:1412 skips _save_fingerprint_atomic at line 1716"
+    )
+
+    # 3. Verify the fingerprint was saved with correct metadata
+    crash_fingerprint_call = fingerprint_calls[0]
+    call_args = crash_fingerprint_call[0]
+    basename, language, operation, pdd_files, cost, model = call_args[:6]
+
+    assert basename == "calculator"
+    assert language == "python"
+    assert operation == 'crash'
+    assert cost == 0.0, "Auto-fix should have cost=0.0"
+    assert model == 'auto-fix', "Auto-fix should use model='auto-fix'"
+
+    # 4. Verify run_report was saved (this already works, but verify it)
+    assert mock_save_report.called, "run_report should be saved after auto-fix"
+
+    # 5. Verify workflow succeeded and continued normally
+    assert result['success'] is True, "Workflow should succeed after auto-fix"
+    assert result['operations_completed'] == ['generate', 'example', 'crash'], (
+        "Expected all three operations to complete"
+    )
