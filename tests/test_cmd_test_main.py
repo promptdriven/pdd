@@ -1256,17 +1256,31 @@ def test_cmd_test_main_cloud_e2e_generate_mode(tmp_path, monkeypatch, capsys):
         "temperature": 0.0,
     }
 
-    result = cmd_test_main(
-        ctx=ctx,
-        prompt_file=str(prompt_file),
-        code_file=str(code_file),
-        output=str(output_file),
-        language="python",
-        coverage_report=None,
-        existing_tests=None,
-        target_coverage=None,
-        merge=False,
-    )
+    try:
+        result = cmd_test_main(
+            ctx=ctx,
+            prompt_file=str(prompt_file),
+            code_file=str(code_file),
+            output=str(output_file),
+            language="python",
+            coverage_report=None,
+            existing_tests=None,
+            target_coverage=None,
+            merge=False,
+        )
+    except click.UsageError as e:
+        error_msg = str(e)
+        if "Account not approved" in error_msg:
+            pytest.skip(
+                "PDD Cloud account not approved. Visit https://pdd.ai to request access, "
+                "or run tests with --local flag to skip cloud E2E tests."
+            )
+        elif "No response content" in error_msg or "HTTP" in error_msg:
+            pytest.skip(
+                f"PDD Cloud authentication failed: {error_msg}. "
+                "Ensure your account is approved at https://pdd.ai"
+            )
+        raise
 
     # Capture output to verify cloud execution
     captured = capsys.readouterr()
