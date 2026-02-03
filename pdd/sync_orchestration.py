@@ -1419,6 +1419,9 @@ def sync_orchestration(
                                             model_name = 'auto-fix'
                                             # Update crash_log_content for logging
                                             crash_log_content = f"Auto-fixed: {auto_fix_msg}"
+                                            # Fix for issue #430: Save fingerprint and track operation completion before continuing
+                                            operations_completed.append('crash')
+                                            _save_fingerprint_atomic(basename, language, 'crash', pdd_files, 0.0, 'auto-fix', atomic_state=atomic_state)
                                             continue  # Skip crash_main, move to next operation
                                         else:
                                             # Auto-fix didn't fully work, update error log and proceed
