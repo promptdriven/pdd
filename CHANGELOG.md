@@ -2,12 +2,12 @@
 
 ### Feat
 
-- update step 10 to use agentic pdd fix command (#351)
-- update changelog with new features and fixes
+- **agentic_bug_step10**: Simplify PR comment to use agentic `pdd fix {issue_url}` command instead of manual parameter specification. The agentic fix command now auto-detects prompt files, code files, and test files from issue context. Thanks James Levin!
 
 ### Fix
 
-- Auto-fix skips fingerprint save causing incomplete metadata (sync_orchestration.py:1350)
+- **auth**: Remove confusing "Please open the authentication URL manually" message when SSH auth succeeds via cached token (Issue #399) Thanks James Levin!
+- **sync_orchestration**: Auto-fix skips fingerprint save causing incomplete metadata (Issue #430) Thanks Serhan Asad!
 
 ## v0.0.136 (2026-02-01)
 

@@ -696,7 +696,8 @@ publish-public:
 		--dest $(PUBLIC_PDD_REPO_DIR) \
 		--project-root . \
 		--config .sync-config.yml \
-		--sections shared
+		--sections shared \
+		--sync-deletions
 	@# Create prompts symlink if needed (prompts/ -> pdd/prompts/)
 	@if [ -d "$(PUBLIC_PDD_REPO_DIR)/pdd/prompts" ] && [ ! -e "$(PUBLIC_PDD_REPO_DIR)/prompts" ]; then \
 		echo "Creating prompts symlink"; \
@@ -754,7 +755,8 @@ publish-public-cap:
 		--dest $(PUBLIC_PDD_CAP_REPO_DIR) \
 		--project-root . \
 		--config .sync-config.yml \
-		--sections shared cap_only
+		--sections shared cap_only \
+		--sync-deletions
 	@# Create prompts symlink if needed (prompts/ -> pdd/prompts/)
 	@if [ -d "$(PUBLIC_PDD_CAP_REPO_DIR)/pdd/prompts" ] && [ ! -e "$(PUBLIC_PDD_CAP_REPO_DIR)/prompts" ]; then \
 		echo "Creating prompts symlink"; \
