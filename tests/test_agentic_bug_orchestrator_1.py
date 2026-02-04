@@ -181,20 +181,29 @@ def test_worktree_creation_failure(mock_dependencies, tmp_path):
     assert mock_run.call_count == 5
 
 def test_prompt_formatting_error(mock_dependencies, tmp_path):
-    """Tests handling of malformed prompt templates."""
+    """Tests handling of malformed prompt templates.
+
+    Note: With the preprocessing fix, unknown placeholders like {non_existent_key}
+    are normally escaped and become literal text. To test KeyError handling,
+    we mock preprocess to return the template unchanged.
+    """
     mock_load, mock_run, _ = mock_dependencies
-    
+
     # Template expects a key that isn't in context
     mock_load.return_value = "Hello {non_existent_key}"
 
-    success, msg, _, _, _ = run_agentic_bug_orchestrator(
-        issue_url="url", issue_content="content", repo_owner="owner",
-        repo_name="name", issue_number=123, issue_author="author",
-        issue_title="title", cwd=tmp_path, quiet=True
-    )
+    # Mock preprocess to return template unchanged so KeyError can occur
+    with patch("pdd.agentic_bug_orchestrator.preprocess") as mock_preprocess:
+        mock_preprocess.side_effect = lambda t, **kwargs: t  # Return unchanged
 
-    assert success is False
-    assert "Prompt formatting error" in msg
+        success, msg, _, _, _ = run_agentic_bug_orchestrator(
+            issue_url="url", issue_content="content", repo_owner="owner",
+            repo_name="name", issue_number=123, issue_author="author",
+            issue_title="title", cwd=tmp_path, quiet=True
+        )
+
+        assert success is False
+        assert "Prompt formatting error" in msg
 
 def test_step_7_parsing_logic(mock_dependencies, tmp_path):
     """Verifies complex parsing of FILES_CREATED and FILES_MODIFIED."""
