@@ -1,3 +1,9 @@
+## v0.0.138 (2026-02-03)
+
+### Fix
+
+- Cloud E2E tests skip gracefully for unapproved accounts
+
 ## v0.0.137 (2026-02-02)
 
 ### Feat
