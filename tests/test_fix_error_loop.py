@@ -1755,10 +1755,7 @@ def test_run_pytest_on_file_empty_test_results():
     This is the primary bug from Issue #450: when pytest collection/execution fails,
     test_results can be an empty list [], causing IndexError at line 213.
 
-    The bug: output_data.get("test_results", [{}])[0]
-    - The default [{}] only applies when key is MISSING
-    - When key EXISTS but is empty [], the default is NOT used
-    - Then [0] on empty list → IndexError!
+    After the fix: Should return (0, 1, 0, helpful_error_message) instead of crashing.
     """
     mock_output = {
         "test_results": [],  # Empty list - the primary bug scenario
@@ -1767,10 +1764,16 @@ def test_run_pytest_on_file_empty_test_results():
         "exit_code": 1
     }
 
-    # This should raise IndexError with the buggy code
+    # After fix: Should handle gracefully with helpful error message
     with patch("pdd.fix_error_loop.run_pytest_and_capture_output", return_value=mock_output):
-        with pytest.raises(IndexError, match="list index out of range"):
-            run_pytest_on_file("dummy_test.py")
+        f, e, w, logs = run_pytest_on_file("dummy_test.py")
+        # Should return error state (0 failures, 1 error, 0 warnings)
+        assert f == 0
+        assert e == 1
+        assert w == 0
+        # Should provide helpful error message for ImportError
+        assert "Pytest collection failed: Missing import or dependency" in logs
+        assert "ImportError" in logs
 
 
 def test_run_pytest_on_file_missing_test_results():
@@ -1800,8 +1803,7 @@ def test_run_pytest_on_file_test_results_none():
     """
     Test that run_pytest_on_file handles test_results: None gracefully.
 
-    When test_results is None instead of a list, attempting [0] causes TypeError.
-    This is an edge case that should be handled with type validation.
+    When test_results is None instead of a list, the fix should handle it with type validation.
     """
     mock_output = {
         "test_results": None,  # Type mismatch - not a list
@@ -1810,18 +1812,20 @@ def test_run_pytest_on_file_test_results_none():
         "exit_code": 139
     }
 
-    # This should raise TypeError with the buggy code (NoneType is not subscriptable)
+    # After fix: Should handle with type validation
     with patch("pdd.fix_error_loop.run_pytest_and_capture_output", return_value=mock_output):
-        with pytest.raises(TypeError):
-            run_pytest_on_file("dummy_test.py")
+        f, e, w, logs = run_pytest_on_file("dummy_test.py")
+        assert f == 0
+        assert e == 1
+        assert w == 0
+        assert "Pytest returned invalid data" in logs
 
 
 def test_run_pytest_on_file_test_results_string():
     """
     Test that run_pytest_on_file handles test_results as string gracefully.
 
-    When test_results is a string instead of a list, attempting [0] gets the first character.
-    This is an edge case that should be handled with type validation.
+    When test_results is a string instead of a list, the fix should handle it with type validation.
     """
     mock_output = {
         "test_results": "error",  # Type mismatch - string not list
@@ -1830,11 +1834,13 @@ def test_run_pytest_on_file_test_results_string():
         "exit_code": 1
     }
 
-    # This should cause unexpected behavior (getting first char 'e')
+    # After fix: Should handle with type validation
     with patch("pdd.fix_error_loop.run_pytest_and_capture_output", return_value=mock_output):
-        # The buggy code will get "e" (first char) and try .get() on it
-        with pytest.raises(AttributeError, match="'str' object has no attribute 'get'"):
-            run_pytest_on_file("dummy_test.py")
+        f, e, w, logs = run_pytest_on_file("dummy_test.py")
+        assert f == 0
+        assert e == 1
+        assert w == 0
+        assert "Pytest returned invalid data" in logs
 
 
 def test_run_pytest_on_file_invalid_dict_in_list():
@@ -1851,10 +1857,13 @@ def test_run_pytest_on_file_invalid_dict_in_list():
         "exit_code": 1
     }
 
-    # This should raise AttributeError (NoneType has no .get method)
+    # After fix: Should validate dict structure
     with patch("pdd.fix_error_loop.run_pytest_and_capture_output", return_value=mock_output):
-        with pytest.raises(AttributeError, match="'NoneType' object has no attribute 'get'"):
-            run_pytest_on_file("dummy_test.py")
+        f, e, w, logs = run_pytest_on_file("dummy_test.py")
+        assert f == 0
+        assert e == 1
+        assert w == 0
+        assert "Pytest returned invalid result format" in logs
 
 
 def test_run_pytest_on_file_collection_failure_integration():
@@ -1881,7 +1890,11 @@ ModuleNotFoundError: No module named 'flask'
         "exit_code": 2  # pytest exit code 2 = collection error
     }
 
-    # This should raise IndexError with the buggy code
+    # After fix: Should handle gracefully
     with patch("pdd.fix_error_loop.run_pytest_and_capture_output", return_value=mock_output):
-        with pytest.raises(IndexError, match="list index out of range"):
-            run_pytest_on_file("tests/test_api.py")
+        f, e, w, logs = run_pytest_on_file("tests/test_api.py")
+        assert f == 0
+        assert e == 1
+        assert w == 0
+        assert "Pytest collection failed: Missing import or dependency" in logs
+        assert "ModuleNotFoundError" in logs

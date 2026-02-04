@@ -208,17 +208,53 @@ def run_pytest_on_file(test_file: str, extra_files: list[str] | None = None) -> 
     """
     # Use the subprocess-based runner to avoid module caching issues
     output_data = run_pytest_and_capture_output(test_file, extra_files=extra_files)
-    
-    # Extract results
-    results = output_data.get("test_results", [{}])[0]
-    
+
+    # Get test results with validation (Issue #450)
+    # Use a sentinel to distinguish between missing key and empty list
+    _MISSING = object()
+    test_results_list = output_data.get("test_results", _MISSING)
+
+    # If key is missing, use default behavior (backward compatibility)
+    if test_results_list is _MISSING:
+        test_results_list = [{}]
+
+    # Type check - handle malformed data
+    if not isinstance(test_results_list, list):
+        error_msg = output_data.get("stdout", "") or output_data.get("stderr", "")
+        return 0, 1, 0, f"Pytest returned invalid data: {error_msg[:200]}"
+
+    # Empty check - handle collection/execution failures (only when key exists but is empty)
+    if not test_results_list:
+        error_msg = output_data.get("stdout", "") or output_data.get("stderr", "")
+
+        # Provide helpful error messages based on common patterns
+        if "ImportError" in error_msg or "ModuleNotFoundError" in error_msg:
+            helpful_msg = "Pytest collection failed: Missing import or dependency"
+        elif "SyntaxError" in error_msg:
+            helpful_msg = "Pytest collection failed: Syntax error in test file"
+        elif "no tests ran" in error_msg or "collected 0 items" in error_msg:
+            helpful_msg = "Pytest collection failed: No tests found"
+        elif "PermissionError" in error_msg:
+            helpful_msg = "Pytest collection failed: Permission denied"
+        else:
+            helpful_msg = "Pytest collection or execution failed"
+
+        return 0, 1, 0, f"{helpful_msg}\n\n{error_msg}"
+
+    # Safe access
+    results = test_results_list[0]
+
+    # Validate result structure
+    if not isinstance(results, dict):
+        return 0, 1, 0, "Pytest returned invalid result format"
+
     failures = results.get("failures", 0)
     errors = results.get("errors", 0)
     warnings = results.get("warnings", 0)
-    
+
     # Combine stdout/stderr for the log
     logs = (results.get("standard_output", "") or "") + "\n" + (results.get("standard_error", "") or "")
-    
+
     return failures, errors, warnings, logs
 
 def format_log_for_output(log_structure):
