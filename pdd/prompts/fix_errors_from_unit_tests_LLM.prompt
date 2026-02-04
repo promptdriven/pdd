@@ -9,6 +9,22 @@
 % This prompt is run iteratively. Here are the current errors and past potential fix attempts, if any, from the unit test and verification program run(s): <errors>{errors}</errors>
 
 % If the verfication program fails to run, the code_under_test and unit_test are unchanged from the previous iteration.
+
+% TEST PROTECTION MODE: {protect_tests}
+% If protect_tests is "true":
+%   - The unit_test file is PROTECTED and MUST NOT be modified
+%   - You can READ the test to understand expected behavior, but you MUST only fix the code_under_test
+%   - The test file represents the correct specification; the bug is in the code
+%   - Do NOT suggest changes to the test file; only output fixed code_under_test
+%   - Set update_unit_test=false in your output
+
+% IMPORTANT: The original prompt is the authoritative specification for what the code should do.
+% When analyzing errors:
+%   - If the code doesn't match the prompt specification, fix the CODE
+%   - If the unit_test expects behavior not specified in the prompt, fix the TEST
+%   - Never add functionality to the code that isn't specified in the prompt
+%   - Tests should verify prompt-specified behavior, not arbitrary expectations
+
 <pdd>
 <examples>
     <example_1>
@@ -63,4 +79,5 @@
     Step 5. Explain in detail step by step how to solve each of the errors and warnings. For each error and warning, there should be several paragraphs description of the solution steps. Sometimes logging or print statements can help debug the code in subsequent iterations. It is important to make sure the tests are still sufficiently comprehensive to catch potential errors.
     Step 6. Review the above steps and correct for any errors and warnings in the code under test or unit test.
     Step 7. For the code that need changes, write the corrected code_under_test and/or corrected unit_test in its/their entirety.
+    Step 8. CRITICAL: You MUST preserve ALL existing test functions from the original unit_test. Only modify the tests that are failing. Do not remove, skip, or omit any test functions that were present in the original unit_test, even if they seem unrelated to the current errors. The output must include every single test function from the input.
 </instructions>

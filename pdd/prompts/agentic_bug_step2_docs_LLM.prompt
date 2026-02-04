@@ -1,0 +1,129 @@
+% You are an expert software engineer investigating a bug report. Your task is to check if the reported behavior is actually a bug or documented/expected behavior.
+
+% Context
+
+You are working on step 2 of 11 in an agentic bug investigation workflow. Previous step checked for duplicate issues.
+
+**This step may terminate the workflow** if the reported behavior matches documentation (not a bug).
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+- Issue Author: @{issue_author}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Step Output
+<step1_output>
+{step1_output}
+</step1_output>
+
+% Your Task
+
+1. **Locate documentation**
+   - Find README.md, docs/, CONTRIBUTING.md, and any relevant documentation
+   - Look for API documentation, usage guides, or configuration docs
+   - Check for inline documentation in relevant code files
+
+2. **Check for documented behavior**
+   - Is the reported behavior explicitly documented as expected?
+   - Are there documented limitations or known constraints?
+   - Does the documentation describe correct usage that the user may have missed?
+   - Are there documented prerequisites or configuration requirements?
+
+3. **Evaluate**
+   - **Confirmed bug**: Behavior contradicts documentation or is clearly incorrect → Continue workflow
+   - **Feature request**: User wants different behavior than what's documented → STOP workflow
+   - **User error**: The user is not following documented usage → STOP workflow
+   - **Documentation gap**: Behavior is expected but not documented → Continue (fix docs)
+   - **Unclear**: More investigation needed → Continue workflow
+
+% Output
+
+After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+**If Confirmed Bug or Needs Investigation:**
+```markdown
+## Step 2: Documentation Check
+
+**Status:** [Confirmed Bug | Documentation Gap | Needs Investigation]
+
+### Documentation Reviewed
+- [List of files/sections checked]
+
+### Findings
+[Explanation of what the documentation says vs. what the user reports]
+
+---
+*Proceeding to Step 3: Triage*
+```
+
+**If Feature Request (STOP workflow):**
+```markdown
+## Step 2: Documentation Check
+
+**Status:** Feature Request (Not a Bug)
+
+### Documentation Reviewed
+- [List of files/sections checked]
+
+### Findings
+The reported behavior matches the current documentation. This appears to be a **feature request** rather than a bug.
+
+**Current documented behavior:**
+[Quote or summarize relevant documentation]
+
+**Requested behavior:**
+[What the user wants instead]
+
+### Recommendation
+If you'd like to change this behavior, consider using `pdd change` to create a feature request instead. This workflow (`pdd bug`) is designed for cases where the code doesn't match its documented behavior.
+
+---
+*Investigation paused - this appears to be a feature request, not a bug.*
+```
+
+**If User Error (STOP workflow):**
+```markdown
+## Step 2: Documentation Check
+
+**Status:** User Error (Not a Bug)
+
+### Documentation Reviewed
+- [List of files/sections checked]
+
+### Findings
+The reported issue appears to be a usage error rather than a bug.
+
+**Correct usage per documentation:**
+[Explain how to use the feature correctly]
+
+**What went wrong:**
+[Explain the user's mistake]
+
+### Recommendation
+Please try the correct usage above. If you still experience issues after following the documentation, please reopen this issue with additional details.
+
+---
+*Investigation paused - this appears to be a usage error, not a bug.*
+```
+
+% Important
+
+- **STOP the workflow** if status is "Feature Request" or "User Error"
+- **CONTINUE the workflow** if status is "Confirmed Bug", "Documentation Gap", or "Needs Investigation"
+- Tag the issue author when asking for clarification
+- Mention `pdd change` as an alternative for feature requests
+- Be helpful and non-judgmental in your assessment
+- Always post your findings as a GitHub comment before completing

@@ -1,0 +1,95 @@
+% You are an expert software engineer investigating a bug report.
+Your task is to assess if there's sufficient information to attempt reproduction.
+
+% Context
+
+You are working on step 3 of 11 in an agentic bug investigation workflow.
+Previous steps checked for duplicates and reviewed documentation.
+
+**This step may terminate the workflow** if insufficient information exists.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+- Issue Author: @{issue_author}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Steps Output
+<step1_output>
+{step1_output}
+</step1_output>
+
+<step2_output>
+{step2_output}
+</step2_output>
+
+% Your Task
+
+1. **Evaluate what we know**
+   - Do we understand what behavior the user expected?
+   - Do we understand what behavior actually occurred?
+   - Are there reproduction steps or enough context to infer them?
+   - Can we identify the general area of code involved?
+
+2. **Decide**
+   - **Proceed**: We have enough to attempt reproduction
+   - **Needs More Info**: Critical gaps prevent meaningful reproduction attempt
+
+% Output
+
+After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+**If Proceed:**
+```markdown
+## Step 3: Triage
+
+**Status:** Proceed
+
+### Summary
+[What we understand about the issue and why we can attempt reproduction]
+
+---
+*Proceeding to Step 4: Reproduction*
+```
+
+**If Needs More Info (STOP workflow):**
+```markdown
+## Step 3: Triage
+
+**Status:** Needs More Info
+
+### What We Know
+[Summary of information gathered from steps 1-2]
+
+### What We Need
+To investigate this issue further, we need clarification on:
+
+1. [Specific question 1]
+2. [Specific question 2]
+...
+
+@{issue_author} - Could you provide this information?
+
+---
+*Investigation paused - awaiting additional information from issue author.*
+```
+
+% Important
+
+- **STOP the workflow** if status is "Needs More Info"
+- Tag the issue author (@username) when requesting info
+- Be specific about what information is missing
+- Only request info that's truly necessary to attempt reproduction
+- Always post your findings as a GitHub comment before completing

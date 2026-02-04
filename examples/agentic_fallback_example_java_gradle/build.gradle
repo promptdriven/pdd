@@ -1,0 +1,21 @@
+plugins {
+    id 'java'
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // Pull consistent JUnit 5 versions
+    testImplementation platform('org.junit:junit-bom:5.10.2')
+    // Aggregate that brings api + params + engine
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+
+    // Explicit launcher to satisfy Gradle 9.x error message
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+test {
+    useJUnitPlatform()
+}

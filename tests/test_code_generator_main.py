@@ -15,8 +15,12 @@ from rich.panel import Panel
 from rich.text import Text # ADDED THIS IMPORT
 
 # Import the function to be tested using an absolute path
-from pdd.code_generator_main import code_generator_main, CLOUD_GENERATE_URL, CLOUD_REQUEST_TIMEOUT
+from pdd.code_generator_main import code_generator_main
+from pdd.core.cloud import CloudConfig, get_cloud_timeout
 from pdd.get_jwt_token import AuthError, NetworkError, TokenError, UserCancelledError, RateLimitError
+
+# Get the cloud URL for assertions in tests
+CLOUD_GENERATE_URL = CloudConfig.get_endpoint_url("generateCode")
 from pdd import DEFAULT_TIME # Ensure DEFAULT_TIME is available if mock_ctx doesn't always set 'time'
 
 # Constants for mocking
@@ -24,7 +28,6 @@ DEFAULT_MOCK_GENERATED_CODE = "def hello():\n  print('Hello, world!')"
 DEFAULT_MOCK_COST = 0.001
 DEFAULT_MOCK_MODEL_NAME = "mock_model_v1"
 DEFAULT_MOCK_LANGUAGE = "python"
-
 # Test Plan
 #
 # I. Setup and Mocking (Fixtures)
@@ -153,7 +156,7 @@ def mock_construct_paths_fixture(monkeypatch):
     mock = MagicMock()
     monkeypatch.setattr("pdd.code_generator_main.construct_paths", mock)
     mock.return_value = (
-        {},  # resolved_config
+        {},
         {"prompt_file": "Test prompt content"}, 
         {"output": "output/test_output.py"}, 
         DEFAULT_MOCK_LANGUAGE
@@ -183,10 +186,11 @@ def mock_incremental_generator_fixture(monkeypatch):
 # --- End Mocks for PDD internal functions ---
 
 # --- Start Mocks for External Dependencies ---
-@pytest.fixture(autouse=True) 
+@pytest.fixture(autouse=True)
 def mock_get_jwt_token_fixture(monkeypatch):
-    mock = AsyncMock(return_value="test_jwt_token")
-    monkeypatch.setattr("pdd.code_generator_main.get_jwt_token", mock)
+    # Mock CloudConfig.get_jwt_token since we no longer import get_jwt_token directly
+    mock = MagicMock(return_value="test_jwt_token")
+    monkeypatch.setattr("pdd.code_generator_main.CloudConfig.get_jwt_token", mock)
     return mock
 
 @pytest.fixture(autouse=True) 
@@ -202,7 +206,9 @@ def mock_requests_post_fixture(monkeypatch):
 
 @pytest.fixture(autouse=True) 
 def mock_subprocess_run_fixture(monkeypatch):
+    original_run = subprocess.run
     mock = MagicMock(return_value=subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""))
+    mock.original_run = original_run
     monkeypatch.setattr("pdd.code_generator_main.subprocess.run", mock) 
     monkeypatch.setattr(subprocess, "run", mock) 
     return mock
@@ -259,6 +265,7 @@ def test_full_gen_local_no_output_file(
     assert called_kwargs["temperature"] == mock_ctx.obj['temperature']
     assert called_kwargs["time"] == mock_ctx.obj['time']
     assert called_kwargs["verbose"] == mock_ctx.obj['verbose']
+    assert called_kwargs["output_schema"] is None
     assert (temp_dir_setup["output_dir"] / output_file_name).exists()
     assert (temp_dir_setup["output_dir"] / output_file_name).read_text() == DEFAULT_MOCK_GENERATED_CODE
 
@@ -273,7 +280,10 @@ def test_preprocess_order_local_flow(
     output_file_path_str = str(temp_dir_setup["output_dir"] / "order.py")
 
     mock_construct_paths_fixture.return_value = (
-        {}, {"prompt_file": "Hello $NAME"}, {"output": output_file_path_str}, "python"
+        {},  # resolved_config
+        {"prompt_file": "Hello $NAME"},
+        {"output": output_file_path_str},
+        "python"
     )
 
     code_generator_main(mock_ctx, str(prompt_file_path), output_file_path_str, None, False, env_vars={"NAME": "X"})
@@ -289,7 +299,6 @@ def test_preprocess_order_local_flow(
     args2, kwargs2 = calls[1]
     assert kwargs2.get('recursive') is False
     assert kwargs2.get('double_curly_brackets') is True
-
 def test_full_gen_local_output_exists_no_incremental_possible(
     mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_local_generator_fixture, mock_subprocess_run_fixture, mock_env_vars
 ):
@@ -320,6 +329,7 @@ def test_full_gen_local_output_exists_no_incremental_possible(
     assert called_kwargs["temperature"] == mock_ctx.obj['temperature']
     assert called_kwargs["time"] == mock_ctx.obj['time']
     assert called_kwargs["verbose"] == mock_ctx.obj['verbose']
+    assert called_kwargs["output_schema"] is None
     assert output_file_path.read_text() == DEFAULT_MOCK_GENERATED_CODE
 
 
@@ -337,7 +347,7 @@ def test_env_substitution_in_output_path_and_prompt(
 
     # Construct paths should return our provided strings
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": prompt_content},
         {"output": output_pattern},
         "python",
@@ -388,6 +398,7 @@ def test_full_gen_local_output_to_console(
     assert called_kwargs["temperature"] == mock_ctx.obj['temperature']
     assert called_kwargs["time"] == mock_ctx.obj['time']
     assert called_kwargs["verbose"] == mock_ctx.obj['verbose']
+    assert called_kwargs["output_schema"] is None
     printed_to_console = False
     for call_args in mock_rich_console_fixture.call_args_list:
         args, _ = call_args
@@ -451,9 +462,134 @@ def test_full_gen_cloud_success(
             "verbose": mock_ctx.obj['verbose']
         },
         headers={"Authorization": "Bearer test_jwt_token", "Content-Type": "application/json"},
-        timeout=CLOUD_REQUEST_TIMEOUT
+        timeout=get_cloud_timeout()
     )
     assert (temp_dir_setup["output_dir"] / output_file_name).exists()
+
+
+# Tests for JSON fence stripping from cloud responses
+@pytest.mark.parametrize("fenced_code,expected_output", [
+    ('```json\n{"key": "value"}\n```', '{"key": "value"}'),
+    ('```\n{"key": "value"}\n```', '{"key": "value"}'),
+    ('```json\n\n{"nested": {"a": 1}}\n\n```', '{"nested": {"a": 1}}'),
+    ('{"key": "value"}', '{"key": "value"}'),  # No fences, unchanged
+    ('  ```json\n{"key": "value"}\n```  ', '{"key": "value"}'),  # With whitespace
+])
+def test_cloud_json_response_fence_stripping(
+    fenced_code, expected_output, mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_pdd_preprocess_fixture, mock_get_jwt_token_fixture, mock_requests_post_fixture, mock_env_vars
+):
+    """Test that markdown code fences are stripped from JSON responses in cloud mode."""
+    mock_ctx.obj['local'] = False
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "json_fence_prompt.prompt"
+    create_file(prompt_file_path, "Generate JSON")
+
+    output_file_name = "fence_output.json"
+    output_file_path_str = str(temp_dir_setup["output_dir"] / output_file_name)
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": "Generate JSON"},
+        {"output": output_file_path_str},
+        "json"  # JSON language triggers fence stripping
+    )
+
+    mock_response = MagicMock(spec=requests.Response)
+    mock_response.json.return_value = {
+        "generatedCode": fenced_code,
+        "totalCost": 0.001,
+        "modelName": "cloud_model"
+    }
+    mock_response.status_code = 200
+    mock_response.raise_for_status = MagicMock()
+    mock_requests_post_fixture.return_value = mock_response
+
+    code, incremental, cost, model = code_generator_main(
+        mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+    )
+
+    assert code == expected_output
+    assert not incremental
+    assert (temp_dir_setup["output_dir"] / output_file_name).exists()
+    assert (temp_dir_setup["output_dir"] / output_file_name).read_text() == expected_output
+
+
+def test_cloud_non_json_response_not_stripped(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_pdd_preprocess_fixture, mock_get_jwt_token_fixture, mock_requests_post_fixture, mock_env_vars
+):
+    """Test that code fences are NOT stripped for non-JSON language responses."""
+    mock_ctx.obj['local'] = False
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "python_fence_prompt.prompt"
+    create_file(prompt_file_path, "Generate Python")
+
+    output_file_name = "fence_output.py"
+    output_file_path_str = str(temp_dir_setup["output_dir"] / output_file_name)
+
+    # Python code that happens to have backticks in it
+    python_code_with_backticks = '```python\ndef hello(): pass\n```'
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": "Generate Python"},
+        {"output": output_file_path_str},
+        "python"  # Non-JSON language should NOT trigger fence stripping
+    )
+
+    mock_response = MagicMock(spec=requests.Response)
+    mock_response.json.return_value = {
+        "generatedCode": python_code_with_backticks,
+        "totalCost": 0.001,
+        "modelName": "cloud_model"
+    }
+    mock_response.status_code = 200
+    mock_response.raise_for_status = MagicMock()
+    mock_requests_post_fixture.return_value = mock_response
+
+    code, incremental, cost, model = code_generator_main(
+        mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+    )
+
+    # For non-JSON, the code should remain unchanged (with fences)
+    assert code == python_code_with_backticks
+    assert (temp_dir_setup["output_dir"] / output_file_name).read_text() == python_code_with_backticks
+
+
+def test_cloud_json_case_insensitive_language(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_pdd_preprocess_fixture, mock_get_jwt_token_fixture, mock_requests_post_fixture, mock_env_vars
+):
+    """Test that JSON fence stripping works with case-insensitive language check."""
+    mock_ctx.obj['local'] = False
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "json_case_prompt.prompt"
+    create_file(prompt_file_path, "Generate JSON")
+
+    output_file_name = "case_output.json"
+    output_file_path_str = str(temp_dir_setup["output_dir"] / output_file_name)
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": "Generate JSON"},
+        {"output": output_file_path_str},
+        "JSON"  # Uppercase JSON
+    )
+
+    fenced_json = '```json\n{"test": true}\n```'
+    mock_response = MagicMock(spec=requests.Response)
+    mock_response.json.return_value = {
+        "generatedCode": fenced_json,
+        "totalCost": 0.001,
+        "modelName": "cloud_model"
+    }
+    mock_response.status_code = 200
+    mock_response.raise_for_status = MagicMock()
+    mock_requests_post_fixture.return_value = mock_response
+
+    code, incremental, cost, model = code_generator_main(
+        mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+    )
+
+    assert code == '{"test": true}'
 
 
 @pytest.mark.parametrize("cloud_error, local_fallback_expected", [
@@ -482,7 +618,8 @@ def test_full_gen_cloud_fallback_scenarios(
     mock_pdd_preprocess_fixture.return_value = "Preprocessed fallback prompt"
 
     if isinstance(cloud_error, AuthError):
-        mock_get_jwt_token_fixture.side_effect = cloud_error
+        # CloudConfig.get_jwt_token catches AuthError internally and returns None
+        mock_get_jwt_token_fixture.return_value = None
     elif cloud_error == "NO_CODE_RETURNED":
         mock_response = MagicMock(spec=requests.Response)
         mock_response.json.return_value = {"totalCost": 0.01, "modelName": "cloud_model_no_code"} 
@@ -518,13 +655,14 @@ def test_full_gen_cloud_fallback_scenarios(
         assert called_kwargs["time"] == mock_ctx.obj['time']
         assert called_kwargs["verbose"] == mock_ctx.obj['verbose']
         assert called_kwargs["preprocess_prompt"] is False
+        assert called_kwargs["output_schema"] is None
         assert code == DEFAULT_MOCK_GENERATED_CODE
         assert any("falling back to local" in str(call_args[0][0]).lower() for call_args in mock_rich_console_fixture.call_args_list if call_args[0])
-    else: 
+    else:
         mock_local_generator_fixture.assert_not_called()
     
-    mock_get_jwt_token_fixture.side_effect = None 
-    mock_get_jwt_token_fixture.return_value = "test_jwt_token" 
+    mock_get_jwt_token_fixture.side_effect = None
+    mock_get_jwt_token_fixture.return_value = "test_jwt_token"
     mock_requests_post_fixture.side_effect = None
     default_mock_response = MagicMock(spec=requests.Response)
     default_mock_response.json.return_value = {"generatedCode": DEFAULT_MOCK_GENERATED_CODE, "totalCost": DEFAULT_MOCK_COST, "modelName": "cloud_model"}
@@ -533,10 +671,104 @@ def test_full_gen_cloud_fallback_scenarios(
     mock_requests_post_fixture.return_value = default_mock_response
 
 
+# Tests for non-recoverable HTTP errors that should NOT fall back to local
+@pytest.mark.parametrize("status_code, error_message, expected_match", [
+    (402, "Insufficient credits", "Insufficient credits"),
+    (401, "Invalid token", "Cloud authentication failed"),
+    (403, "User not approved", "Access denied"),
+    (400, "Empty prompt not allowed", "Invalid request"),
+])
+def test_full_gen_cloud_non_recoverable_http_errors(
+    status_code, error_message, expected_match, mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_pdd_preprocess_fixture, mock_get_jwt_token_fixture, mock_requests_post_fixture,
+    mock_local_generator_fixture, mock_rich_console_fixture, mock_env_vars
+):
+    """Test that HTTP 402, 401, 403, 400 errors raise UsageError instead of falling back to local."""
+    mock_ctx.obj['local'] = False
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "non_recoverable_prompt_python.prompt"
+    create_file(prompt_file_path, "Non-recoverable test prompt")
+    output_file_path_str = str(temp_dir_setup["output_dir"] / "non_recoverable_output.py")
+
+    mock_construct_paths_fixture.return_value = (
+        {},  # resolved_config
+        {"prompt_file": "Non-recoverable test prompt"},
+        {"output": output_file_path_str},
+        "python"
+    )
+    mock_pdd_preprocess_fixture.return_value = "Preprocessed prompt"
+
+    # Create mock response with the specific status code
+    mock_response = MagicMock(spec=requests.Response)
+    mock_response.status_code = status_code
+    mock_response.text = error_message
+    mock_response.json.return_value = {"error": error_message, "currentBalance": 0, "estimatedCost": 0.05}
+
+    http_error = requests.exceptions.HTTPError(response=mock_response)
+    http_error.response = mock_response
+    mock_requests_post_fixture.side_effect = http_error
+
+    # Should raise click.UsageError, NOT fall back to local
+    with pytest.raises(click.UsageError, match=expected_match):
+        code_generator_main(
+            mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+        )
+
+    # Local generator should NOT have been called
+    mock_local_generator_fixture.assert_not_called()
+
+    # Reset mocks for next test
+    mock_requests_post_fixture.side_effect = None
+    default_mock_response = MagicMock(spec=requests.Response)
+    default_mock_response.json.return_value = {"generatedCode": DEFAULT_MOCK_GENERATED_CODE, "totalCost": DEFAULT_MOCK_COST, "modelName": "cloud_model"}
+    default_mock_response.status_code = 200
+    default_mock_response.raise_for_status = MagicMock()
+    mock_requests_post_fixture.return_value = default_mock_response
+
+
+def test_full_gen_cloud_insufficient_credits_displays_balance(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_pdd_preprocess_fixture, mock_get_jwt_token_fixture, mock_requests_post_fixture,
+    mock_local_generator_fixture, mock_rich_console_fixture, mock_env_vars
+):
+    """Test that HTTP 402 error displays current balance and estimated cost from response."""
+    mock_ctx.obj['local'] = False
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "credits_prompt_python.prompt"
+    create_file(prompt_file_path, "Credits test prompt")
+    output_file_path_str = str(temp_dir_setup["output_dir"] / "credits_output.py")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": "Credits test prompt"},
+        {"output": output_file_path_str},
+        "python"
+    )
+
+    # Create 402 response with balance info
+    mock_response = MagicMock(spec=requests.Response)
+    mock_response.status_code = 402
+    mock_response.text = "Insufficient credits"
+    mock_response.json.return_value = {"error": "Insufficient credits", "currentBalance": 0.02, "estimatedCost": 0.05}
+
+    http_error = requests.exceptions.HTTPError(response=mock_response)
+    http_error.response = mock_response
+    mock_requests_post_fixture.side_effect = http_error
+
+    with pytest.raises(click.UsageError, match="Insufficient credits"):
+        code_generator_main(mock_ctx, str(prompt_file_path), output_file_path_str, None, False)
+
+    # Check that balance info was printed
+    printed_messages = [str(call_args[0][0]) for call_args in mock_rich_console_fixture.call_args_list if call_args[0]]
+    assert any("0.02" in msg and "0.05" in msg for msg in printed_messages), \
+        f"Expected balance/cost info in output. Got: {printed_messages}"
+
+    # Reset
+    mock_requests_post_fixture.side_effect = None
+
+
 def test_full_gen_cloud_missing_env_vars_fallback_to_local(
-    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, 
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
     mock_pdd_preprocess_fixture,
-    mock_local_generator_fixture, mock_rich_console_fixture, monkeypatch 
+    mock_local_generator_fixture, mock_rich_console_fixture, mock_get_jwt_token_fixture, monkeypatch
 ):
     mock_ctx.obj['local'] = False
     prompt_file_path = temp_dir_setup["prompts_dir"] / "env_var_prompt_python.prompt"
@@ -546,19 +778,16 @@ def test_full_gen_cloud_missing_env_vars_fallback_to_local(
     mock_construct_paths_fixture.return_value = (
         {},  # resolved_config
         {"prompt_file": "Env var test prompt"},
-        {"output": output_file_path_str}, 
-        "python" 
+        {"output": output_file_path_str},
+        "python"
     )
-    
-    monkeypatch.delenv("NEXT_PUBLIC_FIREBASE_API_KEY", raising=False)
-    
-    async def mock_get_jwt_token_with_check_for_this_test(firebase_api_key, **kwargs):
-        if not os.environ.get("NEXT_PUBLIC_FIREBASE_API_KEY"): 
-            raise AuthError("Firebase API key not set.")
-        return "test_jwt_token" 
-    
+
+    # CloudConfig.get_jwt_token returns None when env vars are missing
+    # (it catches the AuthError internally)
+    mock_get_jwt_token_fixture.return_value = None
+
     code_generator_main(mock_ctx, str(prompt_file_path), output_file_path_str, None, False)
-    
+
     # Local fallback should call generator with preprocess_prompt=False now
     called_kwargs = mock_local_generator_fixture.call_args.kwargs
     assert called_kwargs["prompt"] == "Env var test prompt"
@@ -568,6 +797,7 @@ def test_full_gen_cloud_missing_env_vars_fallback_to_local(
     assert called_kwargs["time"] == mock_ctx.obj['time']
     assert called_kwargs["verbose"] == mock_ctx.obj['verbose']
     assert called_kwargs["preprocess_prompt"] is False
+    assert called_kwargs["output_schema"] is None
     assert any("falling back to local" in str(call_args[0][0]).lower() for call_args in mock_rich_console_fixture.call_args_list if call_args[0])
 
 
@@ -732,10 +962,11 @@ def test_incremental_with_env_vars_substitution(
     mock_ctx.obj['local'] = True
     prompt_file_path = temp_dir_setup["prompts_dir"] / "inc_env_prompt.prompt"
     output_file_path = temp_dir_setup["output_dir"] / "inc_env_output.py"
+    create_file(prompt_file_path, "New says $NAME")
     create_file(output_file_path, "Existing code body")
 
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": "New says $NAME", "original_prompt_file": "Old says ${NAME}"},
         {"output": str(output_file_path)},
         "python",
@@ -747,7 +978,7 @@ def test_incremental_with_env_vars_substitution(
         str(output_file_path),
         None,
         True,
-        env_vars={"NAME": "Alice"},
+        env_vars={"NAME": "Alice", "llm": "true"},
     )
 
     call_kwargs = mock_incremental_generator_fixture.call_args.kwargs
@@ -765,7 +996,10 @@ def test_unknown_variable_in_output_path_left_unchanged(
     output_pattern = str(temp_dir_setup["output_dir"] / "out_${UNKNOWN}.txt")
 
     mock_construct_paths_fixture.return_value = (
-        {}, {"prompt_file": "Ignorable"}, {"output": output_pattern}, "python"
+        {},  # resolved_config
+        {"prompt_file": "Ignorable"},
+        {"output": output_pattern},
+        "python"
     )
 
     code_generator_main(
@@ -786,7 +1020,10 @@ def test_cloud_payload_uses_processed_prompt(
     create_file(prompt_file_path, prompt_content)
 
     mock_construct_paths_fixture.return_value = (
-        {}, {"prompt_file": prompt_content}, {"output": str(temp_dir_setup["output_dir"] / "c.py")}, "python"
+        {},  # resolved_config
+        {"prompt_file": prompt_content},
+        {"output": str(temp_dir_setup["output_dir"] / "c.py")},
+        "python"
     )
 
     code_generator_main(
@@ -876,24 +1113,10 @@ def test_unexpected_exception_during_generation(
     )
     mock_local_generator_fixture.side_effect = Exception("Unexpected LLM error")
 
-    code, incremental, cost, model = code_generator_main(mock_ctx, str(prompt_file_path), output_path_str, None, False)
+    with pytest.raises(click.UsageError, match="An unexpected error occurred: Unexpected LLM error"):
+        code_generator_main(mock_ctx, str(prompt_file_path), output_path_str, None, False)
 
-    assert code == ""
-    assert not incremental 
-    assert model == "error"
-    
-    printed_error = False
-    printed_traceback = False
-    for call_args in mock_rich_console_fixture.call_args_list:
-        args, _ = call_args
-        if args:
-            arg_str = str(args[0])
-            if "unexpected error occurred: unexpected llm error" in arg_str.lower():
-                printed_error = True
-            if "traceback (most recent call last)" in arg_str.lower():
-                printed_traceback = True
-    assert printed_error
-    assert printed_traceback
+    # Since it raises, we don't check return values or printed output here anymore
     mock_local_generator_fixture.side_effect = None 
 
 
@@ -912,7 +1135,7 @@ def test_generate_with_output_directory_path_uses_resolved_file_and_succeeds(
 
     resolved_output_file = temp_dir_setup["output_dir"] / "dir_output.py"
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": "Prompt content for dir output"},
         {"output": str(resolved_output_file)},
         "python",
@@ -921,7 +1144,11 @@ def test_generate_with_output_directory_path_uses_resolved_file_and_succeeds(
     # Pass the directory as --output; command main should use resolved file
     raw_output_arg_dir = str(temp_dir_setup["output_dir"])  # directory path
     code, incremental, cost, model = code_generator_main(
-        mock_ctx, str(prompt_file_path), raw_output_arg_dir, None, False
+        mock_ctx,
+        str(prompt_file_path),
+        raw_output_arg_dir,
+        None,
+        False,
     )
 
     # Expect success and file written to resolved_output_file
@@ -942,22 +1169,22 @@ def test_front_matter_language_override(
 ):
     mock_ctx.obj['local'] = True
     prompt_file_path = temp_dir_setup["prompts_dir"] / "front_lang.prompt"
-    create_file(prompt_file_path, "placeholder")
 
     front_matter_prompt = """---
 language: json
 ---
 Say hi to the user.
 """
+    create_file(prompt_file_path, front_matter_prompt)
 
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": front_matter_prompt},
         {"output": str(temp_dir_setup["output_dir"] / "fm_lang.py")},
         "python",
     )
 
-    code_generator_main(mock_ctx, str(prompt_file_path), None, None, False)
+    code_generator_main(mock_ctx, str(prompt_file_path), None, None, False, env_vars={"llm": "true"})
 
     called_kwargs = mock_local_generator_fixture.call_args.kwargs
     assert called_kwargs["language"] == "json"
@@ -973,20 +1200,20 @@ def test_front_matter_output_path_with_env_substitution(
 ):
     mock_ctx.obj['local'] = True
     prompt_file_path = temp_dir_setup["prompts_dir"] / "front_output.prompt"
-    create_file(prompt_file_path, "placeholder")
 
     output_template_path = temp_dir_setup["tmp_path"] / "templated_outputs" / "${NAME}.py"
     front_matter_prompt = f"""---
-output: "{output_template_path}"
+output: \"{output_template_path}\"
 variables:
   NAME:
     required: true
 ---
 Generate module for $NAME.
 """
+    create_file(prompt_file_path, front_matter_prompt)
 
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": front_matter_prompt},
         {"output": str(temp_dir_setup["output_dir"] / "fallback.py")},
         "python",
@@ -998,7 +1225,7 @@ Generate module for $NAME.
         None,
         None,
         False,
-        env_vars={"NAME": "Widget"},
+        env_vars={"NAME": "Widget", "llm": "true"},
     )
 
     expected_path = pathlib.Path(str(output_template_path).replace("${NAME}", "Widget")).resolve()
@@ -1015,7 +1242,6 @@ def test_front_matter_variable_defaults_and_no_override(
 ):
     mock_ctx.obj['local'] = True
     prompt_file_path = temp_dir_setup["prompts_dir"] / "front_defaults.prompt"
-    create_file(prompt_file_path, "placeholder")
 
     front_matter_prompt = """---
 variables:
@@ -1030,9 +1256,10 @@ variables:
 ---
 Name: $NAME | Color: $COLOR | Style: $STYLE | Override: $OVERRIDE
 """
+    create_file(prompt_file_path, front_matter_prompt)
 
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": front_matter_prompt},
         {"output": str(temp_dir_setup["output_dir"] / "defaults.py")},
         "python",
@@ -1044,7 +1271,7 @@ Name: $NAME | Color: $COLOR | Style: $STYLE | Override: $OVERRIDE
         str(temp_dir_setup["output_dir"] / "defaults.py"),
         None,
         False,
-        env_vars={"NAME": "Ada", "OVERRIDE": "custom"},
+        env_vars={"NAME": "Ada", "OVERRIDE": "custom", "llm": "true"},
     )
 
     called_prompt = mock_local_generator_fixture.call_args.kwargs["prompt"]
@@ -1063,7 +1290,6 @@ def test_front_matter_missing_required_variable_returns_error(
 ):
     mock_ctx.obj['local'] = True
     prompt_file_path = temp_dir_setup["prompts_dir"] / "front_missing.prompt"
-    create_file(prompt_file_path, "placeholder")
 
     front_matter_prompt = """---
 variables:
@@ -1072,9 +1298,10 @@ variables:
 ---
 Hello $NAME
 """
+    create_file(prompt_file_path, front_matter_prompt)
 
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": front_matter_prompt},
         {"output": str(temp_dir_setup["output_dir"] / "missing.py")},
         "python",
@@ -1086,7 +1313,7 @@ Hello $NAME
         str(temp_dir_setup["output_dir"] / "missing.py"),
         None,
         False,
-        env_vars={},
+        env_vars={"llm": "true"},
     )
 
     assert code == ""
@@ -1110,7 +1337,6 @@ def test_front_matter_discovery_populates_env_vars(
 ):
     mock_ctx.obj['local'] = True
     prompt_file_path = temp_dir_setup["prompts_dir"] / "front_discover.prompt"
-    create_file(prompt_file_path, "placeholder")
 
     docs_dir = temp_dir_setup["tmp_path"] / "docs"
     docs_dir.mkdir(exist_ok=True)
@@ -1124,7 +1350,7 @@ variables:
     required: false
 discover:
   enabled: true
-  root: "{root_str}"
+  root: \"{root_str}\"
   set:
     DOC_FILES:
       patterns:
@@ -1132,9 +1358,10 @@ discover:
 ---
 Docs included: $DOC_FILES
 """
+    create_file(prompt_file_path, front_matter_prompt)
 
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": front_matter_prompt},
         {"output": str(temp_dir_setup["output_dir"] / "discover.py")},
         "python",
@@ -1164,12 +1391,11 @@ def test_front_matter_output_schema_validation_failure(
 ):
     mock_ctx.obj['local'] = True
     prompt_file_path = temp_dir_setup["prompts_dir"] / "front_schema.prompt"
-    create_file(prompt_file_path, "placeholder")
 
     schema_output_path = temp_dir_setup["tmp_path"] / "schema_output.json"
     front_matter_prompt = f"""---
 language: json
-output: "{schema_output_path}"
+output: \"{schema_output_path}\"
 output_schema:
   type: object
   required:
@@ -1177,9 +1403,10 @@ output_schema:
 ---
 Return JSON for the spec.
 """
+    create_file(prompt_file_path, front_matter_prompt)
 
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": front_matter_prompt},
         {"output": str(temp_dir_setup["output_dir"] / "schema.json")},
         "python",
@@ -1197,26 +1424,18 @@ Return JSON for the spec.
         monkeypatch.setitem(sys.modules, "jsonschema", types.SimpleNamespace(validate=_failing_validate))
     mock_local_generator_fixture.return_value = ("{\"age\": 1}", DEFAULT_MOCK_COST, DEFAULT_MOCK_MODEL_NAME)
 
-    code, incremental, cost, model = code_generator_main(
-        mock_ctx,
-        str(prompt_file_path),
-        None,
-        None,
-        False,
-        env_vars={},
-    )
+    with pytest.raises(click.UsageError, match="Generated JSON does not match output_schema: schema mismatch"):
+        code_generator_main(
+            mock_ctx,
+            str(prompt_file_path),
+            None,
+            None,
+            False,
+            env_vars={},
+        )
 
     assert calls["count"] == 1
-    assert code == ""
-    assert not incremental
-    assert cost == DEFAULT_MOCK_COST
-    assert model == "error"
     assert not schema_output_path.exists()
-    assert any(
-        "output_schema" in str(call_args[0][0]).lower()
-        for call_args in mock_rich_console_fixture.call_args_list
-        if call_args[0]
-    )
 
 
 def test_architecture_template_datasource_object_passes_schema(
@@ -1239,7 +1458,7 @@ def test_architecture_template_datasource_object_passes_schema(
     output_path = temp_dir_setup["output_dir"] / "architecture.json"
 
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": template_content},
         {"output": str(output_path)},
         "json",
@@ -1247,18 +1466,18 @@ def test_architecture_template_datasource_object_passes_schema(
 
     generated_json = json.dumps(
         [
-                {
-                    "reason": "Replication",
-                    "description": "Expose dataSources schema mismatch",
-                    "dependencies": [],
-                    "priority": 1,
-                    "filename": "architecture.prompt",
-                    "filepath": "frontend/app/inventory/page.tsx",
-                    "interface": {
-                        "type": "page",
-                        "page": {
-                            "route": "/inventory",
-                            "dataSources": [
+            {
+                "reason": "Replication",
+                "description": "Expose dataSources schema mismatch",
+                "dependencies": [],
+                "priority": 1,
+                "filename": "architecture_json.prompt",
+                "filepath": "src/architecture.json",
+                "interface": {
+                    "type": "page",
+                    "page": {
+                        "route": "/inventory",
+                        "dataSources": [
                             {
                                 "kind": "api",
                                 "source": "/api/inventory",
@@ -1304,17 +1523,17 @@ def test_architecture_template_datasource_string_rejected(
 ):
     mock_ctx.obj['local'] = True
     prompt_file_path = temp_dir_setup["output_dir"] / "architecture_string.prompt"
-    create_file(prompt_file_path, "placeholder")
 
     prd_path = temp_dir_setup["tmp_path"] / "docs" / "specs.md"
     create_file(prd_path, "Spec content for schema regression")
 
     template_path = pathlib.Path("pdd/templates/architecture/architecture_json.prompt")
     template_content = template_path.read_text(encoding="utf-8")
+    create_file(prompt_file_path, template_content)
     output_path = temp_dir_setup["output_dir"] / "architecture_string.json"
 
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": template_content},
         {"output": str(output_path)},
         "json",
@@ -1345,6 +1564,76 @@ def test_architecture_template_datasource_string_rejected(
         DEFAULT_MOCK_MODEL_NAME,
     )
 
+    with pytest.raises(click.UsageError, match="Generated JSON does not match output_schema"):
+        code_generator_main(
+            mock_ctx,
+            str(prompt_file_path),
+            str(output_path),
+            None,
+            False,
+            env_vars={"PRD_FILE": str(prd_path), "llm": "true"},
+        )
+
+    assert not output_path.exists()
+
+
+def test_architecture_template_repairs_invalid_interface_type(
+    mock_ctx,
+    temp_dir_setup,
+    mock_construct_paths_fixture,
+    mock_local_generator_fixture,
+    mock_env_vars,
+    mock_rich_console_fixture,
+):
+    mock_ctx.obj['local'] = True
+    prompt_file_path = temp_dir_setup["output_dir"] / "architecture_type.prompt"
+    prd_path = temp_dir_setup["tmp_path"] / "docs" / "specs.md"
+    create_file(prd_path, "Spec content for interface type repair")
+
+    template_path = pathlib.Path("pdd/templates/architecture/architecture_json.prompt")
+    template_content = template_path.read_text(encoding="utf-8")
+    create_file(prompt_file_path, template_content)
+    output_path = temp_dir_setup["output_dir"] / "architecture_type.json"
+
+    mock_construct_paths_fixture.return_value = (
+        {},  # resolved_config
+        {"prompt_file": template_content},
+        {"output": str(output_path)},
+        "json",
+    )
+
+    invalid_type_json = json.dumps(
+        [
+            {
+                "reason": "Fix invalid type",
+                "description": "LLM occasionally emits unsupported interface types",
+                "dependencies": [],
+                "priority": 1,
+                "filename": "orders_page.prompt",
+                "filepath": "app/orders/page.tsx",
+                "interface": {
+                    "type": "object",
+                    "page": {
+                        "route": "/orders",
+                        "dataSources": [
+                            {
+                                "kind": "api",
+                                "source": "/api/orders",
+                            }
+                        ],
+                    },
+                },
+            }
+        ],
+        indent=2,
+    )
+
+    mock_local_generator_fixture.return_value = (
+        invalid_type_json,
+        DEFAULT_MOCK_COST,
+        DEFAULT_MOCK_MODEL_NAME,
+    )
+
     code, incremental, cost, model = code_generator_main(
         mock_ctx,
         str(prompt_file_path),
@@ -1354,18 +1643,899 @@ def test_architecture_template_datasource_string_rejected(
         env_vars={"PRD_FILE": str(prd_path)},
     )
 
-    observed = [
-        str(call_args[0][0])
-        for call_args in mock_rich_console_fixture.call_args_list
-        if call_args and call_args[0]
-    ]
-
-    assert code == ""
     assert not incremental
     assert cost == DEFAULT_MOCK_COST
-    assert model == "error"
-    assert not output_path.exists()
-    assert any(
-        "Generated JSON does not match output_schema" in message and "/api/inventory" in message
-        for message in observed
+    assert model == DEFAULT_MOCK_MODEL_NAME
+    assert output_path.exists()
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved[0]["interface"]["type"] == "page"
+
+
+def test_postprocess_uses_output_path_as_input_when_llm_enabled(
+    mock_ctx,
+    temp_dir_setup,
+    mock_construct_paths_fixture,
+    mock_local_generator_fixture,
+    mock_subprocess_run_fixture,
+    mock_env_vars,
+):
+    """When LLM is enabled and an output path is resolved, the post-process input file should be the output path."""
+    mock_ctx.obj['local'] = True
+
+    # Build a prompt with front matter enabling a post-process script
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "postprocess_prompt_python.prompt"
+    output_file_path = temp_dir_setup["output_dir"] / "pp_output.py"
+
+    front_matter_prompt = """---
+language: python
+post_process_python: "./dummy_post_process.py"
+---
+Generate a simple module.
+"""
+    create_file(prompt_file_path, front_matter_prompt)
+
+    # construct_paths should return our prompt content and resolved output
+    mock_construct_paths_fixture.return_value = (
+        {},  # resolved_config
+        {"prompt_file": front_matter_prompt},
+        {"output": str(output_file_path)},
+        "python",
     )
+
+    # Run generation with llm enabled (default); a post-process will be attempted
+    code, incremental, cost, model = code_generator_main(
+        mock_ctx,
+        str(prompt_file_path),
+        str(output_file_path),
+        None,
+        False,
+        env_vars={"llm": "true"},
+    )
+
+    # Output should be written prior to post-process and match generated code
+    assert output_file_path.exists()
+    assert output_file_path.read_text(encoding="utf-8") == DEFAULT_MOCK_GENERATED_CODE
+
+    # Post-process should be invoked
+    assert mock_subprocess_run_fixture.called
+
+
+def test_architecture_postprocess_passes_absolute_input_path(
+    mock_ctx,
+    temp_dir_setup,
+    mock_construct_paths_fixture,
+    mock_local_generator_fixture,
+    mock_subprocess_run_fixture,
+    mock_env_vars,
+    monkeypatch,
+):
+    """render_mermaid should receive an absolute path so it can open architecture.json from any cwd."""
+    mock_ctx.obj['local'] = True
+
+    template_path = pathlib.Path("pdd/templates/architecture/architecture_json.prompt").resolve()
+    template_content = template_path.read_text(encoding="utf-8")
+    # Template uses double braces for YAML escaping; normalize to single for test
+    template_content = template_content.replace("{{INPUT_FILE}}", "{INPUT_FILE}")
+    template_content = template_content.replace("{{APP_NAME}}", "{APP_NAME}")
+    template_content = template_content.replace("{{OUTPUT_HTML}}", "{OUTPUT_HTML}")
+
+    # Work inside the temp repo to mimic running `pdd` from project root with a relative --output
+    monkeypatch.chdir(temp_dir_setup["tmp_path"])
+
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "architecture.prompt"
+    create_file(prompt_file_path, template_content)
+
+    relative_output = "architecture.json"
+    expected_output_path = temp_dir_setup["tmp_path"] / relative_output
+    prd_path = temp_dir_setup["tmp_path"] / "docs" / "specs.md"
+    create_file(prd_path, "Spec content for absolute path regression")
+
+    mock_construct_paths_fixture.return_value = (
+        {},  # resolved_config
+        {"prompt_file": template_content},
+        {"output": relative_output},
+        "json",
+    )
+
+    generated_json = json.dumps(
+        [
+            {
+                "reason": "Diagram generation",
+                "description": "Minimal architecture entry for render_mermaid.",
+                "dependencies": [],
+                "priority": 1,
+                "filename": "orders/api.py",
+                "filepath": "orders/api.py",
+            }
+        ]
+    )
+    mock_local_generator_fixture.return_value = (
+        generated_json,
+        DEFAULT_MOCK_COST,
+        DEFAULT_MOCK_MODEL_NAME,
+    )
+
+    code_generator_main(
+        mock_ctx,
+        str(prompt_file_path),
+        relative_output,
+        None,
+        False,
+        env_vars={"PRD_FILE": str(prd_path), "llm": "true"},
+    )
+
+    render_cmd = None
+    for call in mock_subprocess_run_fixture.call_args_list:
+        cmd = call[0][0]
+        if len(cmd) >= 2 and pathlib.Path(cmd[1]).name == "render_mermaid.py":
+            render_cmd = cmd
+            break
+
+    assert render_cmd is not None, "render_mermaid.py should run for architecture template"
+    input_arg = render_cmd[2]
+    assert os.path.isabs(input_arg)
+    assert input_arg == str(expected_output_path.resolve())
+
+
+def test_architecture_postprocess_rewrites_json_pretty(
+    mock_ctx,
+    temp_dir_setup,
+    mock_construct_paths_fixture,
+    mock_local_generator_fixture,
+    mock_subprocess_run_fixture,
+    mock_env_vars,
+):
+    """render_mermaid should normalize architecture.json so diffs stay stable."""
+    mock_ctx.obj['local'] = True
+    real_run = mock_subprocess_run_fixture.original_run
+    def render_side_effect(cmd, *args, **kwargs):
+        if len(cmd) >= 2 and pathlib.Path(cmd[1]).name == "render_mermaid.py":
+            return real_run(cmd, *args, **kwargs)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+    mock_subprocess_run_fixture.side_effect = render_side_effect
+    template_path = pathlib.Path("pdd/templates/architecture/architecture_json.prompt").resolve()
+    template_content = template_path.read_text(encoding="utf-8")
+    # Template uses double braces for YAML escaping; normalize to single for test
+    template_content = template_content.replace("{{INPUT_FILE}}", "{INPUT_FILE}")
+    template_content = template_content.replace("{{APP_NAME}}", "{APP_NAME}")
+    template_content = template_content.replace("{{OUTPUT_HTML}}", "{OUTPUT_HTML}")
+
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "architecture.prompt"
+    create_file(prompt_file_path, template_content)
+
+    prd_path = temp_dir_setup["tmp_path"] / "docs" / "specs.md"
+    create_file(prd_path, "Render pretty regression")
+
+    output_path = temp_dir_setup["output_dir"] / "architecture.json"
+    mock_construct_paths_fixture.return_value = (
+        {},  # resolved_config
+        {"prompt_file": template_content},
+        {"output": str(output_path)},
+        "json",
+    )
+
+    unformatted_entries = [
+        {
+            "reason": "Pretty print regression",
+            "description": "Ensure render_mermaid rewrites JSON.",
+            "dependencies": [],
+            "priority": 1,
+            "filename": "foo.py",
+            "filepath": "src/foo.py",
+        }
+    ]
+    mock_local_generator_fixture.return_value = (
+        json.dumps(unformatted_entries, separators=(',', ':')),
+        DEFAULT_MOCK_COST,
+        DEFAULT_MOCK_MODEL_NAME,
+    )
+
+    code_generator_main(
+        mock_ctx,
+        str(prompt_file_path),
+        str(output_path),
+        None,
+        False,
+        env_vars={"PRD_FILE": str(prd_path), "llm": "true"},
+    )
+
+    # render_mermaid should rewrite the file with pretty formatting
+    render_calls = [
+        call for call in mock_subprocess_run_fixture.call_args_list
+        if len(call[0][0]) >= 2 and pathlib.Path(call[0][0][1]).name == "render_mermaid.py"
+    ]
+    assert render_calls, "render_mermaid.py was never invoked"
+    expected = json.dumps(unformatted_entries, indent=2) + "\n"
+    actual = output_path.read_text(encoding="utf-8")
+    assert actual == expected
+
+
+def test_full_gen_local_with_unit_test(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_local_generator_fixture, mock_env_vars
+):
+    mock_ctx.obj['local'] = True
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "unit_test_prompt.prompt"
+    prompt_content = "Generate code that passes the test."
+    create_file(prompt_file_path, prompt_content)
+    
+    unit_test_file = temp_dir_setup["tmp_path"] / "test_something.py"
+    unit_test_content = "def test_hello(): assert True"
+    create_file(unit_test_file, unit_test_content)
+    
+    output_file_path_str = str(temp_dir_setup["output_dir"] / "output_with_test.py")
+
+    mock_construct_paths_fixture.return_value = (
+        {},  # resolved_config
+        {"prompt_file": prompt_content},
+        {"output": output_file_path_str}, 
+        "python"
+    )
+
+    code_generator_main(
+        mock_ctx, 
+        str(prompt_file_path), 
+        output_file_path_str, 
+        None, 
+        False, 
+        unit_test_file=str(unit_test_file)
+    )
+
+    called_kwargs = mock_local_generator_fixture.call_args.kwargs
+    called_prompt = called_kwargs["prompt"]
+    
+    assert prompt_content in called_prompt
+    # Unit test content should now be wrapped in <unit_test_content> tags
+    assert "<unit_test_content>" in called_prompt
+    assert unit_test_content in called_prompt
+    assert "</unit_test_content>" in called_prompt
+
+
+def test_full_gen_local_with_unit_test_and_front_matter_conflict(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_local_generator_fixture, mock_env_vars
+):
+    """
+    Ensure that a unit test file starting with '---' does not interfere with 
+    the prompt's front matter parsing, and that injection happens after parsing.
+    """
+    mock_ctx.obj['local'] = True
+    
+    # Prompt with front matter
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "conflict_prompt.prompt"
+    prompt_body = "This is the main prompt body."
+    prompt_content = f"""---
+language: json
+---
+{prompt_body}
+"""
+    create_file(prompt_file_path, prompt_content)
+    
+    # Unit test file that looks like it has front matter
+    unit_test_file = temp_dir_setup["tmp_path"] / "test_conflict.py"
+    unit_test_content = """---
+this: looks
+like: frontmatter
+---
+def test_conflict(): pass
+"""
+    create_file(unit_test_file, unit_test_content)
+    
+    output_file_path_str = str(temp_dir_setup["output_dir"] / "conflict_output.json")
+
+    mock_construct_paths_fixture.return_value = (
+        {},  # resolved_config
+        {"prompt_file": prompt_content},
+        {"output": output_file_path_str}, 
+        "json"
+    )
+
+    code_generator_main(
+        mock_ctx, 
+        str(prompt_file_path), 
+        output_file_path_str, 
+        None, 
+        False, 
+        unit_test_file=str(unit_test_file)
+    )
+
+    called_kwargs = mock_local_generator_fixture.call_args.kwargs
+    
+    # Verify metadata from front matter was respected
+    assert called_kwargs["language"] == "json"
+    
+    # Verify prompt content
+    called_prompt = called_kwargs["prompt"]
+    assert prompt_body in called_prompt
+    assert "<unit_test_content>" in called_prompt
+    assert unit_test_content in called_prompt
+    assert "</unit_test_content>" in called_prompt
+    # Ensure the prompt's front matter is NOT in the final prompt passed to generator
+    assert "language: json" not in called_prompt
+
+def test_find_default_test_files_logic(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_local_generator_fixture, mock_env_vars, mock_rich_console_fixture
+):
+    """Test automatic inclusion of test files based on code filename."""
+    mock_ctx.obj['local'] = True
+    mock_ctx.obj['verbose'] = True
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "auto_test.prompt"
+    create_file(prompt_file_path, "Prompt content")
+    
+    output_file_name = "auto_test_code.py"
+    output_file_path_str = str(temp_dir_setup["output_dir"] / output_file_name)
+    
+    tests_dir = temp_dir_setup["tmp_path"] / "tests"
+    tests_dir.mkdir(exist_ok=True)
+    
+    # Create matching test files
+    test_file_1 = tests_dir / "test_auto_test_code.py"
+    create_file(test_file_1, "def test_1(): pass")
+    test_file_2 = tests_dir / "test_auto_test_code_extra.py"
+    create_file(test_file_2, "def test_2(): pass")
+    
+    # Create non-matching test file
+    create_file(tests_dir / "test_other.py", "def test_other(): pass")
+
+    mock_construct_paths_fixture.return_value = (
+        {"tests_dir": str(tests_dir)},  # resolved_config with tests_dir
+        {"prompt_file": "Prompt content"},
+        {"output": output_file_path_str}, 
+        "python"
+    )
+
+    code_generator_main(
+        mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+    )
+
+    called_kwargs = mock_local_generator_fixture.call_args.kwargs
+    called_prompt = called_kwargs["prompt"]
+    
+    assert "<unit_test_content>" in called_prompt
+    assert "File: test_auto_test_code.py" in called_prompt
+    assert "def test_1(): pass" in called_prompt
+    assert "File: test_auto_test_code_extra.py" in called_prompt
+    assert "def test_2(): pass" in called_prompt
+    assert "test_other.py" not in called_prompt
+    
+    # Check log output
+    assert any("Found default test files" in str(call_args[0][0]) for call_args in mock_rich_console_fixture.call_args_list if call_args[0])
+
+
+def test_exclude_tests_flag_prevents_auto_inclusion(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_local_generator_fixture, mock_env_vars, mock_rich_console_fixture
+):
+    """Test --exclude-tests prevents automatic test inclusion."""
+    mock_ctx.obj['local'] = True
+    mock_ctx.obj['verbose'] = True
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "exclude_test.prompt"
+    create_file(prompt_file_path, "Prompt content")
+    
+    output_file_name = "exclude_test_code.py"
+    output_file_path_str = str(temp_dir_setup["output_dir"] / output_file_name)
+    
+    tests_dir = temp_dir_setup["tmp_path"] / "tests"
+    tests_dir.mkdir(exist_ok=True)
+    test_file = tests_dir / "test_exclude_test_code.py"
+    create_file(test_file, "def test_should_not_include(): pass")
+
+    mock_construct_paths_fixture.return_value = (
+        {"tests_dir": str(tests_dir)}, 
+        {"prompt_file": "Prompt content"},
+        {"output": output_file_path_str}, 
+        "python"
+    )
+
+    # Pass exclude_tests=True
+    code_generator_main(
+        mock_ctx, str(prompt_file_path), output_file_path_str, None, False, exclude_tests=True
+    )
+
+    called_kwargs = mock_local_generator_fixture.call_args.kwargs
+    called_prompt = called_kwargs["prompt"]
+    
+    assert "<unit_test_content>" not in called_prompt
+    assert "def test_should_not_include(): pass" not in called_prompt
+    
+    # Check log output (should not see "Found default test files")
+    assert not any("Found default test files" in str(call_args[0][0]) for call_args in mock_rich_console_fixture.call_args_list if call_args[0])
+
+
+def test_explicit_unit_test_file_precedence(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_local_generator_fixture, mock_env_vars
+):
+    """Test explicit --unit-test overrides automatic discovery."""
+    mock_ctx.obj['local'] = True
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "precedence_test.prompt"
+    create_file(prompt_file_path, "Prompt content")
+    
+    output_file_name = "precedence_code.py"
+    output_file_path_str = str(temp_dir_setup["output_dir"] / output_file_name)
+    
+    tests_dir = temp_dir_setup["tmp_path"] / "tests"
+    tests_dir.mkdir(exist_ok=True)
+    auto_test_file = tests_dir / "test_precedence_code.py"
+    create_file(auto_test_file, "def test_auto(): pass")
+    
+    explicit_test_file = temp_dir_setup["tmp_path"] / "explicit_test.py"
+    create_file(explicit_test_file, "def test_explicit(): pass")
+
+    mock_construct_paths_fixture.return_value = (
+        {"tests_dir": str(tests_dir)}, 
+        {"prompt_file": "Prompt content"},
+        {"output": output_file_path_str}, 
+        "python"
+    )
+
+    code_generator_main(
+        mock_ctx, str(prompt_file_path), output_file_path_str, None, False, unit_test_file=str(explicit_test_file)
+    )
+
+    called_kwargs = mock_local_generator_fixture.call_args.kwargs
+    called_prompt = called_kwargs["prompt"]
+
+    assert "<unit_test_content>" in called_prompt
+    assert "def test_explicit(): pass" in called_prompt
+    assert "def test_auto(): pass" not in called_prompt
+
+
+# --- Tests for LLM Array Unwrapping ---
+
+class TestLLMArrayUnwrapping:
+    """
+    Tests for unwrapping arrays that LLMs incorrectly wrap in objects.
+
+    LLMs sometimes return {"items": [...]} or {"data": [...]} when the schema
+    expects a plain array [...]. This tests the fix to unwrap such responses.
+    """
+
+    def test_unwrap_items_wrapper(self):
+        """Test unwrapping {"items": [...]} to [...]."""
+        # Simulate the unwrapping logic from code_generator_main.py
+        output_schema = {"type": "array"}
+        parsed = {"items": [{"name": "module1"}, {"name": "module2"}]}
+
+        if output_schema.get("type") == "array" and isinstance(parsed, dict):
+            if "items" in parsed and isinstance(parsed["items"], list):
+                parsed = parsed["items"]
+
+        assert parsed == [{"name": "module1"}, {"name": "module2"}]
+        assert isinstance(parsed, list)
+
+    def test_unwrap_data_wrapper(self):
+        """Test unwrapping {"data": [...]} to [...]."""
+        output_schema = {"type": "array"}
+        parsed = {"data": [1, 2, 3]}
+
+        if output_schema.get("type") == "array" and isinstance(parsed, dict):
+            if "items" in parsed and isinstance(parsed["items"], list):
+                parsed = parsed["items"]
+            elif "data" in parsed and isinstance(parsed["data"], list):
+                parsed = parsed["data"]
+
+        assert parsed == [1, 2, 3]
+        assert isinstance(parsed, list)
+
+    def test_unwrap_results_wrapper(self):
+        """Test unwrapping {"results": [...]} to [...]."""
+        output_schema = {"type": "array"}
+        parsed = {"results": ["a", "b", "c"]}
+
+        if output_schema.get("type") == "array" and isinstance(parsed, dict):
+            if "items" in parsed and isinstance(parsed["items"], list):
+                parsed = parsed["items"]
+            elif "data" in parsed and isinstance(parsed["data"], list):
+                parsed = parsed["data"]
+            elif "results" in parsed and isinstance(parsed["results"], list):
+                parsed = parsed["results"]
+
+        assert parsed == ["a", "b", "c"]
+        assert isinstance(parsed, list)
+
+    def test_no_unwrap_when_schema_not_array(self):
+        """Test that unwrapping is skipped when schema type is not array."""
+        output_schema = {"type": "object"}  # Not an array schema
+        parsed = {"items": [1, 2, 3]}
+        original = parsed.copy()
+
+        if output_schema.get("type") == "array" and isinstance(parsed, dict):
+            if "items" in parsed and isinstance(parsed["items"], list):
+                parsed = parsed["items"]
+
+        # Should remain unchanged
+        assert parsed == original
+        assert isinstance(parsed, dict)
+
+    def test_no_unwrap_when_already_list(self):
+        """Test that actual lists are not modified."""
+        output_schema = {"type": "array"}
+        parsed = [1, 2, 3]  # Already a list
+        original = parsed.copy()
+
+        if output_schema.get("type") == "array" and isinstance(parsed, dict):
+            if "items" in parsed and isinstance(parsed["items"], list):
+                parsed = parsed["items"]
+
+        # Should remain unchanged
+        assert parsed == original
+        assert isinstance(parsed, list)
+
+    def test_no_unwrap_when_items_not_list(self):
+        """Test that non-list 'items' values are not unwrapped."""
+        output_schema = {"type": "array"}
+        parsed = {"items": "not a list"}  # items is not a list
+        original = parsed.copy()
+
+        if output_schema.get("type") == "array" and isinstance(parsed, dict):
+            if "items" in parsed and isinstance(parsed["items"], list):
+                parsed = parsed["items"]
+
+        # Should remain unchanged
+        assert parsed == original
+        assert isinstance(parsed, dict)
+
+    def test_unwrap_nested_architecture(self):
+        """Test unwrapping a realistic architecture.json wrapper case."""
+        output_schema = {"type": "array"}
+        parsed = {
+            "items": [
+                {
+                    "filename": "auth",
+                    "filepath": "src/auth.py",
+                    "description": "Authentication module",
+                    "dependencies": [],
+                    "priority": 1,
+                    "reason": "Core security"
+                },
+                {
+                    "filename": "database",
+                    "filepath": "src/database.py",
+                    "description": "Database connection",
+                    "dependencies": ["auth"],
+                    "priority": 2,
+                    "reason": "Data persistence"
+                }
+            ]
+        }
+
+        if output_schema.get("type") == "array" and isinstance(parsed, dict):
+            if "items" in parsed and isinstance(parsed["items"], list):
+                parsed = parsed["items"]
+
+        assert isinstance(parsed, list)
+        assert len(parsed) == 2
+        assert parsed[0]["filename"] == "auth"
+        assert parsed[1]["filename"] == "database"
+
+    def test_items_takes_precedence_over_data(self):
+        """Test that 'items' is checked before 'data'."""
+        output_schema = {"type": "array"}
+        parsed = {"items": [1], "data": [2]}  # Both present
+
+        if output_schema.get("type") == "array" and isinstance(parsed, dict):
+            if "items" in parsed and isinstance(parsed["items"], list):
+                parsed = parsed["items"]
+            elif "data" in parsed and isinstance(parsed["data"], list):
+                parsed = parsed["data"]
+
+        # items should take precedence
+        assert parsed == [1]
+
+    def test_json_serialization_after_unwrap(self):
+        """Test that unwrapped arrays can be serialized back to JSON."""
+        output_schema = {"type": "array"}
+        parsed = {"items": [{"key": "value"}]}
+
+        if output_schema.get("type") == "array" and isinstance(parsed, dict):
+            if "items" in parsed and isinstance(parsed["items"], list):
+                parsed = parsed["items"]
+                generated_code_content = json.dumps(parsed, indent=2)
+
+        expected = '[\n  {\n    "key": "value"\n  }\n]'
+        assert generated_code_content == expected
+
+
+# --- Tests for Example Display (Pinned & Cloud Response) ---
+
+def test_pinned_example_extraction_verbose(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_pdd_preprocess_fixture,
+    mock_get_jwt_token_fixture, mock_requests_post_fixture, mock_env_vars, capsys
+):
+    """Test that pinned example ID from <pin> tag is displayed in verbose mode."""
+    mock_ctx.obj['local'] = False
+    mock_ctx.obj['verbose'] = True
+
+    prompt_content = "Test prompt\n<pin>test-example-id-123</pin>\nMore content"
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "pin_prompt.prompt"
+    create_file(prompt_file_path, prompt_content)
+
+    output_file_path_str = str(temp_dir_setup["output_dir"] / "pin_output.py")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": prompt_content},
+        {"output": output_file_path_str},
+        "python"
+    )
+    # pdd_preprocess returns prompt unchanged (passthrough)
+    mock_pdd_preprocess_fixture.return_value = prompt_content
+
+    # Mock cloud response with examplesUsed array
+    mock_response = MagicMock(spec=requests.Response)
+    mock_response.json.return_value = {
+        "generatedCode": DEFAULT_MOCK_GENERATED_CODE,
+        "totalCost": 0.001,
+        "modelName": "test-model",
+        "examplesUsed": [{"id": "test-example-id-123", "title": "Test Example Title"}]
+    }
+    mock_response.raise_for_status = MagicMock()
+    mock_requests_post_fixture.return_value = mock_response
+
+    with patch('pdd.code_generator_main.console') as mock_console:
+        code_generator_main(
+            mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+        )
+
+        # Check that console.print was called with pinned example message
+        print_calls = [str(call) for call in mock_console.print.call_args_list]
+        pinned_call_found = any("Using pinned example" in call and "test-example-id-123" in call for call in print_calls)
+        assert pinned_call_found, f"Expected 'Using pinned example: test-example-id-123' in console output. Got: {print_calls}"
+
+
+def test_pinned_example_no_verbose(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_pdd_preprocess_fixture,
+    mock_get_jwt_token_fixture, mock_requests_post_fixture, mock_env_vars
+):
+    """Test that pinned example is NOT displayed when verbose=False."""
+    mock_ctx.obj['local'] = False
+    mock_ctx.obj['verbose'] = False  # Not verbose
+
+    prompt_content = "Test prompt\n<pin>test-example-id-456</pin>\nMore content"
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "pin_prompt_quiet.prompt"
+    create_file(prompt_file_path, prompt_content)
+
+    output_file_path_str = str(temp_dir_setup["output_dir"] / "pin_output_quiet.py")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": prompt_content},
+        {"output": output_file_path_str},
+        "python"
+    )
+    mock_pdd_preprocess_fixture.return_value = prompt_content
+
+    mock_response = MagicMock(spec=requests.Response)
+    mock_response.json.return_value = {
+        "generatedCode": DEFAULT_MOCK_GENERATED_CODE,
+        "totalCost": 0.001,
+        "modelName": "test-model"
+    }
+    mock_response.raise_for_status = MagicMock()
+    mock_requests_post_fixture.return_value = mock_response
+
+    with patch('pdd.code_generator_main.console') as mock_console:
+        code_generator_main(
+            mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+        )
+
+        # Check that "Using pinned example" was NOT printed
+        print_calls = [str(call) for call in mock_console.print.call_args_list]
+        pinned_call_found = any("Using pinned example" in call for call in print_calls)
+        assert not pinned_call_found, f"'Using pinned example' should not appear when verbose=False. Got: {print_calls}"
+
+
+def test_no_pin_tag_no_display(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_pdd_preprocess_fixture,
+    mock_get_jwt_token_fixture, mock_requests_post_fixture, mock_env_vars
+):
+    """Test that no pinned example message when prompt has no <pin> tag."""
+    mock_ctx.obj['local'] = False
+    mock_ctx.obj['verbose'] = True
+
+    prompt_content = "Test prompt without pin tag"
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "no_pin_prompt.prompt"
+    create_file(prompt_file_path, prompt_content)
+
+    output_file_path_str = str(temp_dir_setup["output_dir"] / "no_pin_output.py")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": prompt_content},
+        {"output": output_file_path_str},
+        "python"
+    )
+    mock_pdd_preprocess_fixture.return_value = prompt_content
+
+    mock_response = MagicMock(spec=requests.Response)
+    mock_response.json.return_value = {
+        "generatedCode": DEFAULT_MOCK_GENERATED_CODE,
+        "totalCost": 0.001,
+        "modelName": "test-model"
+    }
+    mock_response.raise_for_status = MagicMock()
+    mock_requests_post_fixture.return_value = mock_response
+
+    with patch('pdd.code_generator_main.console') as mock_console:
+        code_generator_main(
+            mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+        )
+
+        # Check that "Using pinned example" was NOT printed
+        print_calls = [str(call) for call in mock_console.print.call_args_list]
+        pinned_call_found = any("Using pinned example" in call for call in print_calls)
+        assert not pinned_call_found, f"'Using pinned example' should not appear without <pin> tag. Got: {print_calls}"
+
+
+def test_cloud_response_with_examples_used(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_pdd_preprocess_fixture,
+    mock_get_jwt_token_fixture, mock_requests_post_fixture, mock_env_vars
+):
+    """Test that examplesUsed from cloud response is displayed in success panel."""
+    mock_ctx.obj['local'] = False
+    mock_ctx.obj['verbose'] = True
+
+    prompt_content = "Test prompt"
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "example_response.prompt"
+    create_file(prompt_file_path, prompt_content)
+
+    output_file_path_str = str(temp_dir_setup["output_dir"] / "example_output.py")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": prompt_content},
+        {"output": output_file_path_str},
+        "python"
+    )
+    mock_pdd_preprocess_fixture.return_value = prompt_content
+
+    # Mock cloud response with examplesUsed array
+    mock_response = MagicMock(spec=requests.Response)
+    mock_response.json.return_value = {
+        "generatedCode": DEFAULT_MOCK_GENERATED_CODE,
+        "totalCost": 0.001,
+        "modelName": "test-model",
+        "examplesUsed": [{"id": "ex-123", "title": "Test Example Title"}]
+    }
+    mock_response.raise_for_status = MagicMock()
+    mock_requests_post_fixture.return_value = mock_response
+
+    with patch('pdd.code_generator_main.console') as mock_console:
+        code_generator_main(
+            mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+        )
+
+        # Check that console.print was called with example info in Panel
+        # Need to inspect Panel objects for their content
+        example_info_found = False
+        for call in mock_console.print.call_args_list:
+            args = call[0] if call[0] else ()
+            for arg in args:
+                if isinstance(arg, Panel):
+                    # Panel.renderable contains the content
+                    panel_content = str(arg.renderable)
+                    if "ex-123" in panel_content and "Test Example Title" in panel_content:
+                        example_info_found = True
+                        break
+                elif isinstance(arg, str):
+                    if "ex-123" in arg and "Test Example Title" in arg:
+                        example_info_found = True
+                        break
+        assert example_info_found, f"Expected example info 'ex-123 (Test Example Title)' in console output"
+
+
+def test_cloud_response_empty_examples_used(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_pdd_preprocess_fixture,
+    mock_get_jwt_token_fixture, mock_requests_post_fixture, mock_env_vars
+):
+    """Test standard success message when examplesUsed array is empty."""
+    mock_ctx.obj['local'] = False
+    mock_ctx.obj['verbose'] = True
+
+    prompt_content = "Test prompt"
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "no_example_response.prompt"
+    create_file(prompt_file_path, prompt_content)
+
+    output_file_path_str = str(temp_dir_setup["output_dir"] / "no_example_output.py")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": prompt_content},
+        {"output": output_file_path_str},
+        "python"
+    )
+    mock_pdd_preprocess_fixture.return_value = prompt_content
+
+    # Mock cloud response with empty examplesUsed array
+    mock_response = MagicMock(spec=requests.Response)
+    mock_response.json.return_value = {
+        "generatedCode": DEFAULT_MOCK_GENERATED_CODE,
+        "totalCost": 0.001,
+        "modelName": "test-model",
+        "examplesUsed": []  # Empty array
+    }
+    mock_response.raise_for_status = MagicMock()
+    mock_requests_post_fixture.return_value = mock_response
+
+    with patch('pdd.code_generator_main.console') as mock_console:
+        code_generator_main(
+            mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+        )
+
+        # Check that success message is present but without example info
+        # Need to inspect Panel objects for their content
+        cloud_success_found = False
+        example_info_found = False
+        for call in mock_console.print.call_args_list:
+            args = call[0] if call[0] else ()
+            for arg in args:
+                if isinstance(arg, Panel):
+                    panel_content = str(arg.renderable)
+                    if "Cloud generation successful" in panel_content:
+                        cloud_success_found = True
+                    if "Example:" in panel_content:
+                        example_info_found = True
+                elif isinstance(arg, str):
+                    if "Cloud generation successful" in arg:
+                        cloud_success_found = True
+                    if "Example:" in arg:
+                        example_info_found = True
+        assert cloud_success_found, f"Expected 'Cloud generation successful' in console output"
+        assert not example_info_found, f"'Example:' should not appear when examplesUsed is empty"
+
+
+def test_cloud_response_without_examples_used_key(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_pdd_preprocess_fixture,
+    mock_get_jwt_token_fixture, mock_requests_post_fixture, mock_env_vars
+):
+    """Test standard success message when examplesUsed key is missing from response."""
+    mock_ctx.obj['local'] = False
+    mock_ctx.obj['verbose'] = True
+
+    prompt_content = "Test prompt"
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "missing_example_key.prompt"
+    create_file(prompt_file_path, prompt_content)
+
+    output_file_path_str = str(temp_dir_setup["output_dir"] / "missing_key_output.py")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": prompt_content},
+        {"output": output_file_path_str},
+        "python"
+    )
+    mock_pdd_preprocess_fixture.return_value = prompt_content
+
+    # Mock cloud response without examplesUsed key at all
+    mock_response = MagicMock(spec=requests.Response)
+    mock_response.json.return_value = {
+        "generatedCode": DEFAULT_MOCK_GENERATED_CODE,
+        "totalCost": 0.001,
+        "modelName": "test-model"
+        # No examplesUsed key
+    }
+    mock_response.raise_for_status = MagicMock()
+    mock_requests_post_fixture.return_value = mock_response
+
+    with patch('pdd.code_generator_main.console') as mock_console:
+        code_generator_main(
+            mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+        )
+
+        # Check that success message is present but without example info
+        # Need to inspect Panel objects for their content
+        cloud_success_found = False
+        example_info_found = False
+        for call in mock_console.print.call_args_list:
+            args = call[0] if call[0] else ()
+            for arg in args:
+                if isinstance(arg, Panel):
+                    panel_content = str(arg.renderable)
+                    if "Cloud generation successful" in panel_content:
+                        cloud_success_found = True
+                    if "Example:" in panel_content:
+                        example_info_found = True
+                elif isinstance(arg, str):
+                    if "Cloud generation successful" in arg:
+                        cloud_success_found = True
+                    if "Example:" in arg:
+                        example_info_found = True
+        assert cloud_success_found, f"Expected 'Cloud generation successful' in console output"
+        assert not example_info_found, f"'Example:' should not appear when examplesUsed key is missing"

@@ -1,0 +1,44 @@
+% You are an expert Python engineer. Your goal is to write the `pdd/agentic_langtest.py` module.
+
+% Role & Scope
+A utility module responsible for generating language-specific test commands and providing helpful hints for missing toolchains. This module must be standalone with no internal project imports. It abstracts away the testing and environment-checking logic for different programming languages.
+
+% Requirements
+- All functions must be fully type-hinted.
+- Use `pathlib.Path` for path manipulations.
+- The file must start with `from __future__ import annotations`.
+
+% Core Logic
+
+The module provides two main functions: `default_verify_cmd_for` and `missing_tool_hints`.
+
+### `default_verify_cmd_for(lang: str, unit_test_file: str) -> str | None`
+
+This function generates a default verification command for a given programming language.
+
+-   **Python**: It returns a `pytest` command to run the specified test file.
+-   **JavaScript/TypeScript**: It detects the project root and generates a command to run `npm install && npm test` if a `package.json` is present. Otherwise, it falls back to running the test file with `node`.
+-   **Java**: It detects the project root and generates the appropriate command for Maven (`mvn test`) or Gradle (`./gradlew test` or `gradle test`), depending on the build files found.
+-   **C++**: This is a placeholder and should not be implemented.
+-   For unsupported languages, it returns `None`.
+
+### `missing_tool_hints(lang: str, verify_cmd: str | None, project_root: Path) -> str | None`
+
+This function checks for missing command-line tools required by the verification command and provides user-friendly installation hints.
+
+-   It checks for the presence of `npm` for JavaScript/TypeScript, `javac`/`java` and JUnit for Java, and `g++` for C++.
+-   If any tools are missing, it returns a formatted string with installation instructions for macOS (Homebrew) and Ubuntu (apt-get).
+-   If all required tools are present, it returns `None`.
+
+% Helper Functions
+
+The module uses the following private helper functions:
+
+-   `_which(cmd: str) -> bool`: Checks if a command exists in the system's PATH.
+-   `_find_project_root(start_path: str) -> Path`: Finds the project root by searching upwards for common marker files like `package.json`, `pom.xml`, or `build.gradle`.
+
+% Dependencies
+<pdd>This module is standalone and has no internal PDD dependencies.</pdd>
+
+% Deliverables
+- Code: `pdd/agentic_langtest.py` containing the functions and logic described above.

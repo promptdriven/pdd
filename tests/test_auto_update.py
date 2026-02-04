@@ -1,8 +1,34 @@
 """Unit tests for the auto_update module."""
 import importlib
+import os
 from unittest.mock import patch, MagicMock
 import pytest
 from pdd.auto_update import auto_update, detect_installation_method, get_upgrade_command
+
+
+@pytest.fixture(autouse=True)
+def clean_auto_update_env():
+    """Ensure auto_update tests run with clean environment (no CI mode skips)."""
+    # Save original values
+    orig_ci = os.environ.get("CI")
+    orig_skip = os.environ.get("PDD_SKIP_UPDATE_CHECK")
+
+    # Clear the environment variables that cause early exit
+    if "CI" in os.environ:
+        del os.environ["CI"]
+    if "PDD_SKIP_UPDATE_CHECK" in os.environ:
+        del os.environ["PDD_SKIP_UPDATE_CHECK"]
+
+    # Mock isatty to return True (simulating interactive terminal)
+    with patch("pdd.auto_update.sys.stdin.isatty", return_value=True):
+        yield
+
+    # Restore original values
+    if orig_ci is not None:
+        os.environ["CI"] = orig_ci
+    if orig_skip is not None:
+        os.environ["PDD_SKIP_UPDATE_CHECK"] = orig_skip
+
 
 @pytest.fixture(name="mock_importlib_metadata_version")
 def mock_importlib_metadata_version_fixture():
@@ -205,6 +231,24 @@ def test_detect_pip_installation():
     assert detect_installation_method(
         "/home/user/.pyenv/versions/3.9.0/bin/python"
     ) == "pip"
+
+
+def test_detect_uv_installation_windows():
+    """Test detection of UV installation on Windows with backslash paths."""
+    # Test Windows UV tool paths with backslashes
+    assert detect_installation_method(
+        r"C:\Users\pmbri\AppData\Roaming\uv\tools\pdd-cli\Scripts\python.exe"
+    ) == "uv"
+    assert detect_installation_method(
+        r"C:\Users\user\.local\share\uv\tools\pdd-cli\Scripts\python.exe"
+    ) == "uv"
+    assert detect_installation_method(
+        r"D:\uv\tools\pdd-cli\bin\python.exe"
+    ) == "uv"
+    # Test with forward slashes on Windows (some tools normalize paths)
+    assert detect_installation_method(
+        "C:/Users/user/AppData/Roaming/uv/tools/pdd-cli/Scripts/python.exe"
+    ) == "uv"
 
 
 def test_get_upgrade_command():

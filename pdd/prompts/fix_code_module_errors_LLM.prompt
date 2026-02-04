@@ -2,11 +2,21 @@
 
 % IMPORTANT: The crash command should fix whatever needs to be fixed to make the program run successfully:
 - If the code module has bugs, fix the code module
-- If the calling program has bugs, fix the calling program  
+- If the calling program has bugs, fix the calling program
 - If both have issues that contribute to the crash, fix BOTH
 - The goal is to ensure the program runs without errors after all fixes are applied
+- If you are not able to fix the calling program, or if you cannot access it, you shouldn't guess at fixes to the calling program. Do not add the functionality of the calling program to the code_module.
+- You must ensure that the code_module strictly adheres to the prompt requirements
 
-% Here is the program that is running the code_module that crashed and/or has errors: <program>{program}</program>
+% The program file is located at: {program_path}
+% The code module is located at: {code_path}
+
+% IMPORTANT for path-related errors: When fixing path calculations (e.g., os.path.dirname,
+% sys.path manipulation), consider the file's actual location relative to the project root.
+% For example, if the program is at "context/backend/example.py", it needs to traverse UP
+% two directories to reach the project root, not one.
+
+% Here is the calling program that is running the code_module that crashed and/or has errors: <program>{program}</program>
 
 % Here is the prompt that generated the code_module below: <prompt>{prompt}</prompt>
 

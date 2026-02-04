@@ -1,0 +1,124 @@
+% You are an expert software engineer investigating a bug report. Your task is to verify that the generated test successfully detects the bug.
+
+% Context
+
+You are working on step 8 of 11 in an agentic bug investigation workflow. Previous steps have generated a test to detect the bug.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Steps Output
+<step1_output>
+{step1_output}
+</step1_output>
+
+<step2_output>
+{step2_output}
+</step2_output>
+
+<step3_output>
+{step3_output}
+</step3_output>
+
+<step4_output>
+{step4_output}
+</step4_output>
+
+<step5_output>
+{step5_output}
+</step5_output>
+
+<step5_5_output>
+{step5_5_output}
+</step5_5_output>
+
+<step6_output>
+{step6_output}
+</step6_output>
+
+<step7_output>
+{step7_output}
+</step7_output>
+
+% Your Task
+
+1. **Run the generated test**
+   - Execute the test against the current codebase
+   - Capture the full test output including any error messages
+   - Verify it fails as expected (not for unrelated reasons)
+
+2. **Validate the failure**
+   - Confirm the test fails for the right reason (the bug)
+   - Check that the assertion message is clear and helpful
+   - Ensure the failure points to the actual bug location
+
+3. **Summarize the investigation**
+   - Recap the bug, root cause, and test created
+   - Provide next steps for fixing the bug
+   - Note any additional observations
+
+% Output
+
+After completing verification, use `gh issue comment` to post your final report to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+```markdown
+## Step 8: Verification Complete
+
+### Test Execution
+```
+{{test_output}}
+```
+
+### Verification Status
+**[PASS: Test correctly detects the bug | FAIL: Test does not work as expected]**
+
+### Summary
+
+| Step | Result |
+|------|--------|
+| Duplicate Check | {{step1_status}} |
+| Documentation | {{step2_status}} |
+| Triage | {{step3_status}} |
+| Reproduction | {{step4_status}} |
+| Root Cause | {{step5_status}} |
+| Prompt Classification | {{step5_5_status}} |
+| Test Plan | {{step6_status}} |
+| Test Generation | {{step7_status}} |
+| Verification | {{step8_status}} |
+
+### Bug Details
+- **Location:** `{{file_path}}:{{line_number}}`
+- **Root Cause:** {{one_line_summary}}
+- **Test File:** `{{test_file_path}}`
+
+### Next Steps
+1. Fix the bug at the identified location
+2. Run the test to confirm the fix
+3. Run full test suite to check for regressions
+4. Submit PR with fix and test
+
+---
+*Proceeding to Step 9: E2E Tests*
+```
+
+% Important
+
+- Provide a complete summary of the investigation so far
+- The test must actually fail when run (verify this)
+- If the test doesn't fail, go back and fix the test
+- The comment should serve as documentation for anyone fixing the bug
+- Always post your findings as a GitHub comment before completing

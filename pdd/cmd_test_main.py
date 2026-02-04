@@ -2,200 +2,425 @@
 Main entry point for the 'test' command.
 """
 from __future__ import annotations
-import click
-from pathlib import Path
-# pylint: disable=redefined-builtin
-from rich import print
 
+import json
+import os
+from pathlib import Path
+
+import click
+import requests
+from rich.console import Console
+from rich.panel import Panel
+
+from .config_resolution import resolve_effective_config
 from .construct_paths import construct_paths
+from .core.cloud import CloudConfig, get_cloud_timeout
 from .generate_test import generate_test
 from .increase_tests import increase_tests
 
+console = Console()
 
-# pylint: disable=too-many-arguments, too-many-locals, too-many-return-statements, too-many-branches, too-many-statements, broad-except
+
 def cmd_test_main(
     ctx: click.Context,
     prompt_file: str,
     code_file: str,
-    output: str | None,
-    language: str | None,
-    coverage_report: str | None,
-    existing_tests: str | None,
-    target_coverage: float | None,
-    merge: bool | None,
-) -> tuple[str, float, str]:
+    output: str | None = None,
+    language: str | None = None,
+    coverage_report: str | None = None,
+    existing_tests: list[str] | None = None,
+    target_coverage: float | None = None,
+    merge: bool = False,
+    strength: float | None = None,
+    temperature: float | None = None,
+) -> tuple[str, float, str, bool | None]:
     """
     CLI wrapper for generating or enhancing unit tests.
 
-    Reads a prompt file and a code file, generates unit tests using the `generate_test` function,
-    and handles the output location.
-
     Args:
-        ctx (click.Context): The Click context object.
-        prompt_file (str): Path to the prompt file.
-        code_file (str): Path to the code file.
-        output (str | None): Path to save the generated test file.
-        language (str | None): Programming language.
-        coverage_report (str | None): Path to the coverage report file.
-        existing_tests (str | None): Path to the existing unit test file.
-        target_coverage (float | None): Desired code coverage percentage.
-        merge (bool | None): Whether to merge new tests with existing tests.
+        ctx: Click context object containing global options.
+        prompt_file: Path to the prompt file.
+        code_file: Path to the code file.
+        output: Optional path for the output test file.
+        language: Optional programming language.
+        coverage_report: Optional path to a coverage report (triggers enhancement mode).
+        existing_tests: List of paths to existing test files (required if coverage_report is used).
+        target_coverage: Desired coverage percentage (not currently used by logic but accepted).
+        merge: If True, merge output into the first existing test file.
+        strength: Optional override for LLM strength.
+        temperature: Optional override for LLM temperature.
 
     Returns:
-        tuple[str, float, str]: Generated unit test code, total cost, and model name.
+        tuple: (generated_test_code, total_cost, model_name, agentic_success)
+            agentic_success is True/False for non-Python agentic generation, None for Python.
     """
-    # Initialize variables
-    unit_test = ""
-    total_cost = 0.0
-    model_name = ""
-    output_file_paths = {"output": output}
-    input_strings = {}
+    # 1. Prepare inputs for path construction
+    input_file_paths = {
+        "prompt_file": prompt_file,
+        "code_file": code_file,
+    }
 
-    verbose = ctx.obj["verbose"]
-    strength = ctx.obj["strength"]
-    temperature = ctx.obj["temperature"]
-    time = ctx.obj.get("time")
-
-    if verbose:
-        print(f"[bold blue]Prompt file:[/bold blue] {prompt_file}")
-        print(f"[bold blue]Code file:[/bold blue] {code_file}")
-        if output:
-            print(f"[bold blue]Output:[/bold blue] {output}")
-        if language:
-            print(f"[bold blue]Language:[/bold blue] {language}")
-
-    # Construct input strings, output file paths, and determine language
-    try:
-        input_file_paths = {
-            "prompt_file": prompt_file,
-            "code_file": code_file,
-        }
-        if coverage_report:
-            input_file_paths["coverage_report"] = coverage_report
-        if existing_tests:
-            input_file_paths["existing_tests"] = existing_tests
-
-        command_options = {
-            "output": output,
-            "language": language,
-            "merge": merge,
-            "target_coverage": target_coverage,
-        }
-
-        resolved_config, input_strings, output_file_paths, language = construct_paths(
-            input_file_paths=input_file_paths,
-            force=ctx.obj["force"],
-            quiet=ctx.obj["quiet"],
-            command="test",
-            command_options=command_options,
-            context_override=ctx.obj.get('context')
-        )
-    except Exception as exception:
-        # Catching a general exception is necessary here to handle a wide range of
-        # potential errors during file I/O and path construction, ensuring the
-        # CLI remains robust.
-        print(f"[bold red]Error constructing paths: {exception}[/bold red]")
-        ctx.exit(1)
-        return "", 0.0, ""
-
-    if verbose:
-        print(f"[bold blue]Language detected:[/bold blue] {language}")
-
-    # Generate or enhance unit tests
-    if not coverage_report:
-        try:
-            unit_test, total_cost, model_name = generate_test(
-                input_strings["prompt_file"],
-                input_strings["code_file"],
-                strength=strength,
-                temperature=temperature,
-                time=time,
-                language=language,
-                verbose=verbose,
-            )
-        except Exception as exception:
-            # A general exception is caught to handle various errors that can occur
-            # during the test generation process, which involves external model
-            # interactions and complex logic.
-            print(f"[bold red]Error generating tests: {exception}[/bold red]")
-            ctx.exit(1)
-            return "", 0.0, ""
-    else:
+    # If coverage report is provided, we need existing tests
+    if coverage_report:
         if not existing_tests:
-            print(
-                "[bold red]Error: --existing-tests is required "
-                "when using --coverage-report[/bold red]"
+            console.print(
+                "[bold red]Error: 'existing_tests' is required when "
+                "'coverage_report' is provided.[/bold red]"
             )
-            ctx.exit(1)
-            return "", 0.0, ""
-        try:
-            unit_test, total_cost, model_name = increase_tests(
-                existing_unit_tests=input_strings["existing_tests"],
-                coverage_report=input_strings["coverage_report"],
-                code=input_strings["code_file"],
-                prompt_that_generated_code=input_strings["prompt_file"],
-                language=language,
-                strength=strength,
-                temperature=temperature,
-                time=time,
-                verbose=verbose,
-            )
-        except Exception as exception:
-            # This broad exception is used to catch any issue that might arise
-            # while increasing test coverage, including problems with parsing
-            # reports or interacting with the language model.
-            print(f"[bold red]Error increasing test coverage: {exception}[/bold red]")
-            ctx.exit(1)
-            return "", 0.0, ""
+            return "", 0.0, "Error: Missing existing_tests", None
 
-    # Handle output - if output is a directory, use resolved file path from construct_paths
-    resolved_output = output_file_paths["output"]
-    if output is None:
-        output_file = resolved_output
-    else:
-        try:
-            is_dir_hint = output.endswith('/')
-        except Exception:
-            is_dir_hint = False
-        # Prefer resolved file if user passed a directory path
-        if is_dir_hint or (Path(output).exists() and Path(output).is_dir()):
-            output_file = resolved_output
-        else:
-            output_file = output
-    if merge and existing_tests:
-        output_file = existing_tests
+        input_file_paths["coverage_report"] = coverage_report
+        # We pass the first existing test to help construct_paths resolve context if needed,
+        # though construct_paths primarily uses prompt/code files for language detection.
+        if existing_tests:
+            input_file_paths["existing_test_0"] = existing_tests[0]
 
-    if not output_file:
-        print("[bold red]Error: Output file path could not be determined.[/bold red]")
-        ctx.exit(1)
-        return "", 0.0, ""
-    
-    # Check if unit_test content is empty
-    if not unit_test or not unit_test.strip():
-        print(f"[bold red]Error: Generated unit test content is empty or whitespace-only.[/bold red]")
-        print(f"[bold yellow]Debug: unit_test length: {len(unit_test) if unit_test else 0}[/bold yellow]")
-        print(f"[bold yellow]Debug: unit_test content preview: {repr(unit_test[:100]) if unit_test else 'None'}[/bold yellow]")
-        ctx.exit(1)
-        return "", 0.0, ""
-    
+    command_options = {
+        "output": output,
+        "language": language,
+        "merge": merge,
+        "target_coverage": target_coverage,
+    }
+
+    # 2. Construct paths and read inputs
     try:
+        resolved_config, input_strings, output_file_paths, detected_language = construct_paths(
+            input_file_paths=input_file_paths,
+            command_options=command_options,
+            force=ctx.obj.get("force", False),
+            quiet=ctx.obj.get("quiet", False),
+            command="test",
+            context_override=ctx.obj.get("context"),
+            confirm_callback=ctx.obj.get("confirm_callback"),
+        )
+    except Exception as e:
+        console.print(f"[bold red]Error constructing paths: {e}[/bold red]")
+        return "", 0.0, f"Error: {e}", None
+
+    # 3. Resolve effective configuration (strength, temperature, time)
+    # Priority: Function Arg > CLI Context > Config File > Default
+    eff_config = resolve_effective_config(
+        ctx,
+        resolved_config,
+        param_overrides={"strength": strength, "temperature": temperature}
+    )
+
+    eff_strength = eff_config["strength"]
+    eff_temperature = eff_config["temperature"]
+    eff_time = eff_config["time"]
+    verbose = ctx.obj.get("verbose", False)
+    is_local = ctx.obj.get("local", False)
+
+    # 3.5 Agentic test generation: Use for non-Python OR when agentic_mode is enabled
+    # For non-Python languages, the single LLM call often produces incorrect test file
+    # extensions or doesn't follow the correct framework. Agentic mode lets the agent
+    # explore the project and determine the correct test setup.
+    # For Python with agentic_mode=True, we also use agentic test generation for consistency.
+    agentic_mode = ctx.obj.get("agentic_mode", False)
+    use_agentic_tests = (detected_language and detected_language.lower() != 'python') or agentic_mode
+
+    if use_agentic_tests:
+        from .agentic_test_generate import run_agentic_test_generate
+
+        if verbose:
+            reason = "agentic_mode enabled" if agentic_mode else f"non-Python language ({detected_language})"
+            console.print(
+                f"[cyan]{reason.capitalize()}. "
+                "Using agentic test generation.[/cyan]"
+            )
+
+        output_test_path = Path(output_file_paths.get("output", "test_output"))
+
+        generated_content, total_cost, model_name, agentic_success = run_agentic_test_generate(
+            prompt_file=Path(prompt_file),
+            code_file=Path(code_file),
+            output_test_file=output_test_path,
+            verbose=verbose,
+            quiet=ctx.obj.get("quiet", False),
+        )
+
+        # The agent writes the test file directly, but we still return the content
+        # for consistency with the Python flow
+        if generated_content and generated_content.strip():
+            if not ctx.obj.get("quiet", False):
+                console.print(f"[green]Agentic test generation completed.[/green]")
+        else:
+            if not ctx.obj.get("quiet", False):
+                console.print("[yellow]Warning: Agentic test generation produced no content.[/yellow]")
+
+        return generated_content, total_cost, model_name, agentic_success
+
+    # 4. Prepare content variables
+    prompt_content = input_strings.get("prompt_file", "")
+    code_content = input_strings.get("code_file", "")
+
+    # Handle existing tests concatenation
+    concatenated_tests = None
+    if existing_tests:
+        test_contents = []
+        for et_path in existing_tests:
+            try:
+                # We read these manually because construct_paths only reads
+                # what's in input_file_paths keys. While we added
+                # existing_test_0, we might have multiple. To be safe and
+                # consistent with the requirement "read all files", we read
+                # them here. Note: construct_paths might have read
+                # 'existing_test_0', but we need all of them.
+                p = Path(et_path).expanduser().resolve()
+                if p.exists():
+                    test_contents.append(p.read_text(encoding="utf-8"))
+            except Exception as e:
+                console.print(
+                    f"[yellow]Warning: Could not read existing test file {et_path}: {e}[/yellow]"
+                )
+
+        if test_contents:
+            concatenated_tests = "\n".join(test_contents)
+            # Update input_strings for consistency if needed downstream
+            input_strings["existing_tests"] = concatenated_tests
+
+    # 5. Determine Execution Mode (Generate vs Increase)
+    mode = "increase" if coverage_report else "generate"
+
+    # Prepare metadata for generation
+    source_file_path = str(Path(code_file).expanduser().resolve())
+    # output_file_paths['output_file'] is set by construct_paths based on
+    # --output or defaults
+    test_file_path = str(
+        Path(output_file_paths.get("output_file", "test_output.py"))
+        .expanduser().resolve()
+    )
+    module_name = Path(source_file_path).stem
+
+    # Determine if code file is an example (for TDD style generation)
+    is_example = Path(code_file).stem.endswith("_example")
+
+    # Check for cloud-only mode
+    cloud_only = os.environ.get("PDD_CLOUD_ONLY", "").lower() in ("1", "true", "yes")
+
+    # 6. Execution Logic (Cloud vs Local)
+    generated_content = ""
+    total_cost = 0.0
+    model_name = "unknown"
+
+    # --- Cloud Execution ---
+    if not is_local:
+        try:
+            if verbose:
+                console.print(
+                    Panel(
+                        f"Attempting Cloud Execution (Mode: {mode})",
+                        title="Cloud Status",
+                        style="blue"
+                    )
+                )
+
+            # Get JWT Token using CloudConfig
+            jwt_token = CloudConfig.get_jwt_token(verbose=verbose)
+
+            if not jwt_token:
+                raise Exception("Failed to obtain JWT token.")
+
+            # Prepare Payload
+            payload = {
+                "promptContent": prompt_content,
+                "language": detected_language,
+                "strength": eff_strength,
+                "temperature": eff_temperature,
+                "time": eff_time,
+                "verbose": verbose,
+                "sourceFilePath": source_file_path,
+                "testFilePath": test_file_path,
+                "moduleName": module_name,
+                "mode": mode,
+            }
+
+            if mode == "generate":
+                if is_example:
+                    payload["example"] = code_content
+                    payload["codeContent"] = None
+                else:
+                    payload["codeContent"] = code_content
+                    payload["example"] = None
+
+                if concatenated_tests:
+                    payload["existingTests"] = concatenated_tests
+
+            elif mode == "increase":
+                payload["codeContent"] = code_content
+                payload["existingTests"] = concatenated_tests
+                payload["coverageReport"] = input_strings.get("coverage_report", "")
+
+            # Make Request
+            cloud_url = CloudConfig.get_endpoint_url("generateTest")
+            headers = {"Authorization": f"Bearer {jwt_token}"}
+            response = requests.post(
+                cloud_url,
+                json=payload,
+                headers=headers,
+                timeout=get_cloud_timeout()
+            )
+
+            # Check for HTTP errors explicitly
+            response.raise_for_status()
+
+            # Parse response
+            try:
+                data = response.json()
+            except json.JSONDecodeError as json_err:
+                if cloud_only:
+                    raise click.UsageError(f"Cloud returned invalid JSON: {json_err}")
+                console.print("[yellow]Cloud returned invalid JSON, falling back to local.[/yellow]")
+                is_local = True
+                raise  # Re-raise to exit try block
+
+            generated_content = data.get("generatedTest", "")
+            total_cost = float(data.get("totalCost", 0.0))
+            model_name = data.get("modelName", "cloud-model")
+
+            # Check for empty response
+            if not generated_content or not generated_content.strip():
+                if cloud_only:
+                    raise click.UsageError("Cloud returned empty test content")
+                console.print("[yellow]Cloud returned empty test content, falling back to local.[/yellow]")
+                is_local = True
+            else:
+                # Success!
+                console.print("[green]Cloud Success[/green]")
+
+        except click.UsageError:
+            # Re-raise UsageError without wrapping
+            raise
+        except requests.exceptions.Timeout as timeout_err:
+            if cloud_only:
+                raise click.UsageError(f"Cloud request timed out: {timeout_err}")
+            console.print("[yellow]Cloud request timed out, falling back to local.[/yellow]")
+            is_local = True
+        except requests.exceptions.HTTPError as http_err:
+            # Handle HTTP errors from raise_for_status()
+            # HTTPError from requests always has a response attribute
+            response_obj = getattr(http_err, 'response', None)
+            status_code = response_obj.status_code if response_obj is not None else None
+            error_text = response_obj.text if response_obj is not None else str(http_err)
+
+            # Non-recoverable errors - raise UsageError
+            if status_code == 402:
+                # Display balance info
+                try:
+                    error_data = http_err.response.json()
+                    balance = error_data.get("currentBalance", "unknown")
+                    cost = error_data.get("estimatedCost", "unknown")
+                    console.print(f"[red]Current balance: {balance}, Estimated cost: {cost}[/red]")
+                except Exception:
+                    pass
+                raise click.UsageError(f"Insufficient credits: {error_text}")
+            elif status_code == 401:
+                raise click.UsageError(f"Cloud authentication failed: {error_text}")
+            elif status_code == 403:
+                raise click.UsageError(f"Access denied: {error_text}")
+            elif status_code == 400:
+                raise click.UsageError(f"Invalid request: {error_text}")
+
+            # 5xx and other errors - fall back if allowed
+            if cloud_only:
+                raise click.UsageError(f"Cloud execution failed (HTTP {status_code}): {error_text}")
+            console.print(f"[yellow]Cloud execution failed (HTTP {status_code}), falling back to local.[/yellow]")
+            is_local = True
+        except json.JSONDecodeError:
+            # Already handled above, just ensure we fall through to local
+            pass
+        except Exception as e:
+            if cloud_only:
+                raise click.UsageError(f"Cloud execution failed: {e}")
+            console.print(f"[yellow]Cloud execution failed: {e}. Falling back to local.[/yellow]")
+            is_local = True
+
+    # --- Local Execution ---
+    if is_local:
+        try:
+            if verbose:
+                console.print(
+                    Panel(
+                        f"Running Local Execution (Mode: {mode})",
+                        title="Local Status",
+                        style="green"
+                    )
+                )
+
+            if mode == "generate":
+                # Determine args based on is_example
+                code_arg = None if is_example else code_content
+                example_arg = code_content if is_example else None
+
+                generated_content, total_cost, model_name = generate_test(
+                    prompt=prompt_content,
+                    code=code_arg,
+                    example=example_arg,
+                    strength=eff_strength,
+                    temperature=eff_temperature,
+                    time=eff_time,
+                    language=detected_language,
+                    verbose=verbose,
+                    source_file_path=source_file_path,
+                    test_file_path=test_file_path,
+                    module_name=module_name,
+                    existing_tests=concatenated_tests
+                )
+            else: # mode == "increase"
+                generated_content, total_cost, model_name = increase_tests(
+                    existing_unit_tests=concatenated_tests if concatenated_tests else "",
+                    coverage_report=input_strings.get("coverage_report", ""),
+                    code=code_content,
+                    prompt_that_generated_code=prompt_content,
+                    language=detected_language,
+                    strength=eff_strength,
+                    temperature=eff_temperature,
+                    time=eff_time,
+                    verbose=verbose
+                )
+
+        except Exception as e:
+            console.print(f"[bold red]Error during local execution: {e}[/bold red]")
+            return "", 0.0, f"Error: {e}", None
+
+    # 7. Validate Output
+    if not generated_content or not generated_content.strip():
+        console.print("[bold red]Error: Generated test content is empty.[/bold red]")
+        return "", 0.0, "Error: Empty output", None
+
+    # 8. Write Output
+    try:
+        final_output_path = Path(output_file_paths["output"])
+
         # Ensure parent directory exists
-        output_path = Path(output_file)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        with open(output_file, "w", encoding="utf-8") as file_handle:
-            file_handle.write(unit_test)
-        print(f"[bold green]Unit tests saved to:[/bold green] {output_file}")
-    except Exception as exception:
-        # A broad exception is caught here to handle potential file system errors
-        # (e.g., permissions, disk space) that can occur when writing the
-        # output file, preventing the program from crashing unexpectedly.
-        print(f"[bold red]Error saving tests to file: {exception}[/bold red]")
-        ctx.exit(1)
-        return "", 0.0, ""
+        final_output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    if verbose:
-        print(f"[bold blue]Total cost:[/bold blue] ${total_cost:.6f}")
-        print(f"[bold blue]Model used:[/bold blue] {model_name}")
+        write_mode = "w"
+        content_to_write = generated_content
 
-    return unit_test, total_cost, model_name
+        # Handle merge logic
+        if merge and existing_tests:
+            # If merging, we write to the first existing test file
+            final_output_path = Path(existing_tests[0])
+            write_mode = "a"
+            content_to_write = "\n\n" + generated_content
+            if verbose:
+                console.print(f"Merging new tests into existing file: {final_output_path}")
+
+        with open(str(final_output_path), write_mode, encoding="utf-8") as f:
+            f.write(content_to_write)
+
+        if not ctx.obj.get("quiet", False):
+            console.print(f"[green]Successfully wrote tests to {final_output_path}[/green]")
+
+    except Exception as e:
+        console.print(f"[bold red]Error writing output file: {e}[/bold red]")
+        return "", 0.0, f"Error: {e}", None
+
+    return generated_content, total_cost, model_name, None
+
+
+def main() -> None:
+    """CLI entrypoint for legacy/manual test generation."""
+    from .commands.generate import test as test_command
+    test_command.main(standalone_mode=True)

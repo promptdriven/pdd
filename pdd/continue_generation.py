@@ -39,7 +39,7 @@ def continue_generation(
         formatted_input_prompt (str): The input prompt with variables substituted.
         llm_output (str): Current output from the LLM to be checked and continued.
         strength (float): Strength parameter for the LLM model (0-1).
-        temperature (float): Temperature parameter for the LLM model (0-1).
+        temperature (float): Temperature parameter for the LLM model (0-2).
         time (float): Time budget for LLM calls.
         verbose (bool): Whether to print detailed information.
         
@@ -50,8 +50,8 @@ def continue_generation(
         # Validate inputs
         if not 0 <= strength <= 1:
             raise ValueError("Strength parameter must be between 0 and 1")
-        if not 0 <= temperature <= 1:
-            raise ValueError("Temperature parameter must be between 0 and 1")
+        if not 0 <= temperature <= 2:
+            raise ValueError("Temperature parameter must be between 0 and 2")
         if not llm_output:
             raise ValueError("LLM output cannot be empty")
 
@@ -84,7 +84,8 @@ def continue_generation(
             temperature=0,
             time=time,
             output_pydantic=TrimResultsStartOutput,
-            verbose=verbose
+            verbose=verbose,
+            language=language,
         )
         total_cost += trim_start_response['cost']
         code_block = trim_start_response['result'].code_block
@@ -111,7 +112,8 @@ def continue_generation(
                 strength=strength,
                 temperature=temperature,
                 time=time,
-                verbose=verbose
+                verbose=verbose,
+                language=language,
             )
             
             total_cost += continue_response['cost']
@@ -171,7 +173,8 @@ def continue_generation(
                     temperature=0,
                     time=time,
                     output_pydantic=TrimResultsOutput,
-                    verbose=verbose
+                    verbose=verbose,
+                    language=language,
                 )
                 total_cost += trim_response['cost']
                 code_block += trim_response['result'].trimmed_continued_generation

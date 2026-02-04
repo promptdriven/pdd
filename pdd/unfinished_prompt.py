@@ -1,5 +1,6 @@
 from typing import Tuple, Optional
 import ast
+import warnings
 from pydantic import BaseModel, Field
 from rich import print as rprint
 from .load_prompt_template import load_prompt_template
@@ -70,7 +71,9 @@ def unfinished_prompt(
         should_try_python_parse = (language or "").lower() == "python" or _looks_like_python(prompt_text)
         if should_try_python_parse:
             try:
-                ast.parse(prompt_text)
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", SyntaxWarning)
+                    ast.parse(prompt_text)
                 reasoning = "Syntactic Python check passed (ast.parse succeeded); treating as finished."
                 if verbose:
                     rprint("[green]" + reasoning + "[/green]")
@@ -114,13 +117,21 @@ def unfinished_prompt(
             temperature=temperature,
             time=time,
             verbose=verbose,
-            output_pydantic=PromptAnalysis
+            output_pydantic=PromptAnalysis,
+            language=language,
         )
 
         # Step 3: Extract and return results
-        result: PromptAnalysis = response['result']
+        result = response['result']
         total_cost = response['cost']
         model_name = response['model_name']
+
+        # Defensive type checking: ensure we got a PromptAnalysis, not a raw string
+        if not isinstance(result, PromptAnalysis):
+            raise TypeError(
+                f"Expected PromptAnalysis from llm_invoke, got {type(result).__name__}. "
+                f"This typically indicates JSON parsing failed. Value: {repr(result)[:200]}"
+            )
 
         if verbose:
            rprint("[green]Analysis complete![/green]")

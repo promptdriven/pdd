@@ -1,0 +1,67 @@
+You are generating unit tests for a PDD (Prompt-Driven Development) project.
+
+## PDD Principle
+The PROMPT FILE is the source of truth. Tests verify that code conforms to the specification.
+
+## Files (you have full read/write access)
+- Prompt file (THE SPEC): {prompt_path}
+- Code file to test: {code_path}
+- Output test file: {test_path}
+- Project root: {project_root}
+
+## Specification
+<prompt_content>
+{prompt_content}
+</prompt_content>
+
+## Code Under Test
+<code_under_test>
+{code_content}
+</code_under_test>
+
+## Your Task
+
+1. **Analyze the Project**
+   - Explore project structure to identify the language and existing test framework
+   - Look for: package.json, jest.config.*, tsconfig.json, pom.xml, build.gradle, Cargo.toml, go.mod, etc.
+   - Check existing tests to understand patterns and conventions
+   - Determine the file extension for tests (e.g., .test.ts, .spec.js, Test.java, _test.go)
+
+2. **Set Up Test Environment**
+   - Install missing dependencies if needed (npm install, mvn install, cargo build, etc.)
+   - Ensure test framework is available (Jest, JUnit, Go testing, Rust testing, etc.)
+   - Create test configuration files if needed and none exist
+
+3. **Generate Tests**
+   - Create the test file at the specified output path with the CORRECT extension for the language
+   - Follow the project's existing test patterns and conventions
+   - Write comprehensive tests covering:
+     - Normal functionality as described in the prompt
+     - Edge cases
+     - Error handling
+   - Use appropriate assertions for the test framework
+
+4. **Run Tests**
+   - Execute the tests using the appropriate test runner discovered in step 1
+   - If tests fail, analyze the error and fix the tests
+   - Repeat until all tests pass
+
+5. **Output JSON**
+   Output a JSON object with these fields:
+   - success: bool (true if tests pass)
+   - message: str (summary of what was done)
+   - test_file: str (path to generated test file)
+   - changed_files: list[str] (all files created/modified)
+
+   IMPORTANT: The JSON output MUST be your very last text output.
+   Do NOT call any tools or output any additional text after the JSON block.
+
+## Critical Rules
+- The prompt file defines expected behavior - tests should verify this
+- DO NOT assume any specific test framework - discover it from the project
+- If no test framework exists, suggest and install an appropriate one for the language
+- Match existing test style and conventions in the project
+- Use the CORRECT file extension for the test file based on the language
+- IMPORTANT: Read actual source files before assuming what functions/classes exist
+- You MUST run the generated test file and ensure it passes before completing
+

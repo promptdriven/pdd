@@ -1,126 +1,158 @@
-from typing import Tuple
-from rich import print
-from pydantic import BaseModel, Field
+from __future__ import annotations
+
+import re
+from typing import Tuple, Optional
+
+from rich.console import Console
+from pydantic import BaseModel, Field, ValidationError
+
+from . import DEFAULT_STRENGTH, DEFAULT_TIME
 from .load_prompt_template import load_prompt_template
 from .llm_invoke import llm_invoke
-from . import DEFAULT_TIME, DEFAULT_STRENGTH
+
+
+console = Console()
+
 
 class ExtractedCode(BaseModel):
-    """Pydantic model for the extracted code."""
-    extracted_code: str = Field(description="The extracted code from the LLM output")
+    focus: str = Field("", description="Focus of the code")
+    explanation: str = Field("", description="Explanation of the code")
+    extracted_code: str = Field(..., description="Extracted code")
 
-def postprocess_0(text: str) -> str:
-    """
-    Simple code extraction for strength = 0.
-    Extracts code between triple backticks.
-    """
-    lines = text.split('\n')
-    code_lines = []
-    in_code_block = False
-    
-    for line in lines:
-        if '```' in line: # MODIFIED: Was line.startswith('```')
-            if not in_code_block:
-                # Skip the language identifier line / content on opening delimiter line
-                in_code_block = True
-                continue
-            else:
-                # Content on closing delimiter line is skipped
-                in_code_block = False
-                continue
-        if in_code_block:
-            code_lines.append(line)
-    
-    return '\n'.join(code_lines)
+
+def postprocess_0(llm_output: str, language: str) -> str:
+    """Simple extraction of code blocks."""
+    if language == "prompt":
+        # Strip <prompt> tags
+        llm_output = re.sub(r"<prompt>\s*(.*?)\s*</prompt>", r"\1", llm_output, flags=re.DOTALL)
+        llm_output = llm_output.strip()
+
+        # Also strip triple backticks if present
+        lines = llm_output.splitlines()
+        if lines and lines[0].startswith("```"):
+            # Remove first line with opening backticks
+            lines = lines[1:]
+            # If there's a last line with closing backticks, remove it
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+        llm_output = "\n".join(lines)
+
+        return llm_output.strip()
+
+    # First try to find complete code blocks with closing backticks
+    code_blocks = re.findall(r"```(?:[a-zA-Z]+)?\n(.*?)\n```", llm_output, re.DOTALL)
+    if code_blocks:
+        return "\n".join(block.strip() for block in code_blocks)
+
+    # If no complete blocks found, try to find incomplete blocks (opening backticks without closing)
+    # But ensure there's actual content after the opening backticks
+    incomplete_match = re.search(r"```(?:[a-zA-Z]+)?\n(.+?)(?:\n```)?$", llm_output, re.DOTALL)
+    if incomplete_match:
+        content = incomplete_match.group(1).strip()
+        # Don't return if content is just closing backticks
+        if content and content != "```":
+            return content
+
+    return ""
+
 
 def postprocess(
     llm_output: str,
     language: str,
     strength: float = DEFAULT_STRENGTH,
-    temperature: float = 0,
+    temperature: float = 0.0,
     time: float = DEFAULT_TIME,
-    verbose: bool = False
+    verbose: bool = False,
 ) -> Tuple[str, float, str]:
     """
-    Extract code from LLM output string.
-    
+    Extracts code from a string output of an LLM.
+
     Args:
-        llm_output (str): The string output from the LLM containing code sections
-        language (str): The programming language of the code to extract
-        strength (float): The strength of the LLM model to use (0-1)
-        temperature (float): The temperature parameter for the LLM (0-1)
-        time (float): The thinking effort for the LLM model (0-1)
-        verbose (bool): Whether to print detailed processing information
-    
+        llm_output: A string containing a mix of text and code sections.
+        language: A string specifying the programming language of the code to be extracted.
+        strength: A float between 0 and 1 that represents the strength of the LLM model to use.
+        temperature: A float between 0 and 1 that represents the temperature parameter for the LLM model.
+        time: A float between 0 and 1 that controls the thinking effort for the LLM model.
+        verbose: A boolean that indicates whether to print detailed processing information.
+
     Returns:
-        Tuple[str, float, str]: (extracted_code, total_cost, model_name)
+        A tuple containing the extracted code string, total cost float and model name string.
     """
-    try:
-        # Input validation
-        if not llm_output or not isinstance(llm_output, str):
-            raise ValueError("llm_output must be a non-empty string")
-        if not language or not isinstance(language, str):
-            raise ValueError("language must be a non-empty string")
-        if not 0 <= strength <= 1:
-            raise ValueError("strength must be between 0 and 1")
-        if not 0 <= temperature <= 1:
-            raise ValueError("temperature must be between 0 and 1")
+    if not isinstance(llm_output, str) or not llm_output:
+        raise ValueError("llm_output must be a non-empty string")
+    if not isinstance(language, str) or not language:
+        raise ValueError("language must be a non-empty string")
+    if not isinstance(strength, (int, float)):
+        raise TypeError("strength must be a number")
+    if not 0 <= strength <= 1:
+        raise ValueError("strength must be between 0 and 1")
+    if not isinstance(temperature, (int, float)):
+        raise TypeError("temperature must be a number")
+    if not 0 <= temperature <= 1:
+        raise ValueError("temperature must be between 0 and 1")
 
-        # Step 1: If strength is 0, use simple extraction
-        if strength == 0:
-            if verbose:
-                print("[blue]Using simple code extraction (strength = 0)[/blue]")
-            return (postprocess_0(llm_output), 0.0, "simple_extraction")
-
-        # Step 2: Load the prompt template
-        prompt_template = load_prompt_template("extract_code_LLM")
-        if not prompt_template:
-            raise ValueError("Failed to load prompt template")
-
+    if language == "prompt":
+        extracted_code = postprocess_0(llm_output, language)
+        return extracted_code, 0.0, "simple_extraction"
+    
+    if strength == 0:
+        extracted_code = postprocess_0(llm_output, language)
         if verbose:
-            print("[blue]Loaded prompt template for code extraction[/blue]")
+            console.print("[blue]Using simple code extraction (strength = 0)[/blue]")
+        return extracted_code, 0.0, "simple_extraction"
 
-        # Step 3: Process using llm_invoke
-        input_json = {
-            "llm_output": llm_output,
-            "language": language
-        }
+    prompt_name = "extract_code_LLM"
+    prompt = load_prompt_template(prompt_name)
 
-        response = llm_invoke(
-            prompt=prompt_template,
+    if not prompt:
+        error_msg = "Failed to load prompt template"
+        console.print(f"[red]Error:[/red] {error_msg}")
+        raise ValueError(error_msg)
+
+    input_json = {"llm_output": llm_output, "language": language}
+
+    if verbose:
+        console.print("[blue]Loaded prompt template for code extraction[/blue]")
+
+    try:
+        result = llm_invoke(
+            prompt=prompt,
             input_json=input_json,
             strength=strength,
             temperature=temperature,
             time=time,
+            output_pydantic=ExtractedCode,
             verbose=verbose,
-            output_pydantic=ExtractedCode
         )
 
-        if not response or 'result' not in response:
-            raise ValueError("Failed to get valid response from LLM")
+        if not result or "result" not in result:
+            error_msg = "Failed to get valid response from LLM"
+            console.print(f"[red]Error during LLM invocation:[/red] {error_msg}")
+            raise ValueError(error_msg)
 
-        extracted_code_obj: ExtractedCode = response['result'] # Renamed for clarity
-        code_text = extracted_code_obj.extracted_code
+        extracted_code = result["result"].extracted_code
 
-        # Step 3c: Remove triple backticks and language identifier if present
-        lines = code_text.split('\n')
-        if lines and lines[0].startswith('```'):
+        # Clean up triple backticks
+        lines = extracted_code.splitlines()
+        if lines and lines[0].startswith("```"):
+            # Remove first line with opening backticks
             lines = lines[1:]
-        if lines and lines[-1].startswith('```'): # Check if lines is not empty again after potentially removing first line
-            lines = lines[:-1]
-        
-        final_code = '\n'.join(lines)
+            # If there's a last line with closing backticks, remove it
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+        extracted_code = "\n".join(lines)
+
+        total_cost = result["cost"]
+        model_name = result["model_name"]
 
         if verbose:
-            print("[green]Successfully extracted code[/green]")
+            console.print("[green]Successfully extracted code[/green]")
 
-        # Step 4: Return the results
-        return (
-            final_code,
-            response['cost'],
-            response['model_name']
-        )
+        return extracted_code, total_cost, model_name
 
+    except KeyError as e:
+        console.print(f"[red]Error in postprocess: {e}[/red]")
+        raise ValueError(f"Failed to get valid response from LLM: missing key {e}")
     except Exception as e:
-        print(f"[red]Error in postprocess: {str(e)}[/red]")
+        console.print(f"[red]Error in postprocess: {e}[/red]")
         raise

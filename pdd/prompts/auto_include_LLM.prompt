@@ -12,9 +12,45 @@ You are a prompt expert that helps select the necessary subset of "includes" (li
         'Step 1.' - A string of possible includes based on the input_prompt.
         'Step 2.' - A string explaining why an include might or might not be necessary for the prompt.
         'Step 3.' - A string of the minimum set of includes required to achieve the goal of the input_prompt.
-        'Step 4.' - A string of the string_of_includes based on Step 3.
+        'Step 4.' - A string of the string_of_includes based on Step 3 (see strict tag naming rules below).
     </output>
 </definitions>
+
+<tag_naming_rules_for_step_4>
+    IMPORTANT: Step 4 must emit XML snippets that wrap each <include> in a canonical dotted Python module tag.
+
+    Format:
+      <CANONICAL_MODULE_PATH><include>INCLUDE_PATH</include></CANONICAL_MODULE_PATH>
+
+    Canonical tag name rules:
+      - The wrapper tag MUST be a dotted Python import path (examples: utils.auth_helpers, utils.db_helpers, models.user).
+      - NEVER use *_example as the wrapper tag (e.g. do NOT output <auth_helpers_example>...</auth_helpers_example>).
+      - If INCLUDE_PATH is a context example (e.g. context/auth_helpers_example.py), the wrapper tag must be the real module
+        being exemplified (e.g. utils.auth_helpers). Prefer extracting the module path from the input_prompt text. If it is not
+        explicitly present, infer from filename + summary:
+          - default to utils.<base_name> for helpers/config/clients/etc
+          - default to models.<base_name> for data models
+      - If INCLUDE_PATH is not a context example, derive CANONICAL_MODULE_PATH from the file path by stripping the extension and
+        replacing '/' with '.' (e.g. core/change_handler.py -> core.change_handler).
+</tag_naming_rules_for_step_4>
+
+<common_mistakes>
+    CRITICAL: The available_includes list uses "File: path" format for INPUT only.
+    You must TRANSFORM this into proper <include> syntax for OUTPUT.
+
+    These output formats are WRONG (never output these):
+    - [File: path/to/file.py]
+    - File: path/to/file.py
+    - {{path/to/file.py}}
+    - path/to/file.py (without include tags)
+
+    This output format is CORRECT:
+    - <include>path/to/file.py</include>
+
+    Example transformation:
+    INPUT (available_includes):  File: context/auth_helpers_example.py
+    OUTPUT (Step 4):             <utils.auth_helpers><include>context/auth_helpers_example.py</include></utils.auth_helpers>
+</common_mistakes>
 
 <context>
     Here is the input_prompt to find the includes for: <input_prompt>{input_prompt}</input_prompt>
@@ -87,7 +123,8 @@ Here are some examples of how to do this:
         <example_string_of_includes>
             % Here are examples of how to use internal modules:
             <internal_example_modules>
-                % Here is an example of the change function that will be used: <change_example><include>core/change_handler.py</include></change_example>
+                % Here is an example of the change function that will be used:
+                <core.change_handler><include>core/change_handler.py</include></core.change_handler>
             </internal_example_modules>
         </example_string_of_includes>
     </example_1>
@@ -151,22 +188,52 @@ Here are some examples of how to do this:
             Summary: Rich markdown rendering and formatting utilities
         </example_available_includes>
         <example_string_of_includes>
-            % Here is an example of a LangChain Expression Language (LCEL) program: <lcel_example><include>frameworks/langchain_utils.py</include></lcel_example>
+            % Here is an example of a LangChain Expression Language (LCEL) program:
+            <frameworks.langchain_utils><include>frameworks/langchain_utils.py</include></frameworks.langchain_utils>
 
             % Here are examples of how to use internal modules:
             <internal_example_modules>
-                % Here is an example how to preprocess the prompt from a file: <preprocess_example><include>processing/prompt_processor.py</include></preprocess_example>
+                % Here is an example how to preprocess the prompt from a file:
+                <processing.prompt_processor><include>processing/prompt_processor.py</include></processing.prompt_processor>
 
-                % Example of selecting a Langchain LLM and counting tokens using llm_selector: <llm_selector_example><include>llm/model_selector.py</include></llm_selector_example>
+                % Example of selecting a Langchain LLM and counting tokens using llm_selector:
+                <llm.model_selector><include>llm/model_selector.py</include></llm.model_selector>
 
-                % Example usage of the unfinished_prompt function: <unfinished_prompt_example><include>processing/completion_detector.py</include></unfinished_prompt_example>
+                % Example usage of the unfinished_prompt function:
+                <processing.completion_detector><include>processing/completion_detector.py</include></processing.completion_detector>
 
-                % Here is an example how to continue the generation of a model output: <continue_generation_example><include>processing/completion_detector.py</include></continue_generation_example>
+                % Here is an example how to continue the generation of a model output:
+                <processing.completion_detector><include>processing/completion_detector.py</include></processing.completion_detector>
 
-                % Here is an example how to postprocess the model output result: <postprocess_example><include>processing/output_postprocessor.py</include></postprocess_example>
+                % Here is an example how to postprocess the model output result:
+                <processing.output_postprocessor><include>processing/output_postprocessor.py</include></processing.output_postprocessor>
             </internal_example_modules>
         </example_string_of_includes>
     </example_2>
+
+    <example_3>
+        <example_input_prompt>
+            % You are an expert Python engineer. Build an admin-only HTTP endpoint.
+            % The function must be decorated with @require_admin from utils.auth_helpers.
+            % Use utils.db_helpers to query Firestore and utils.error_handling for structured errors.
+        </example_input_prompt>
+        <example_available_includes>
+            File: context/auth_helpers_example.py
+            Summary: Example usage of authentication/authorization helpers such as require_admin
+            File: context/db_helpers_example.py
+            Summary: Example usage of Firestore database helper utilities for queries and pagination
+            File: context/error_handling_example.py
+            Summary: Example usage of structured error handling and custom exceptions
+        </example_available_includes>
+        <example_string_of_includes>
+            % Here are examples of how to use internal modules:
+            <internal_example_modules>
+                <utils.auth_helpers><include>context/auth_helpers_example.py</include></utils.auth_helpers>
+                <utils.db_helpers><include>context/db_helpers_example.py</include></utils.db_helpers>
+                <utils.error_handling><include>context/error_handling_example.py</include></utils.error_handling>
+            </internal_example_modules>
+        </example_string_of_includes>
+    </example_3>
 </examples>
 
 <instructions>
@@ -174,5 +241,9 @@ Here are some examples of how to do this:
         Step 1. Select possible includes from the available_includes based on the input_prompt.
         Step 2. Explain why an include might or might not be necessary for the prompt.
         Step 3. Determine the minimum set of includes required to achieve the goal of the input_prompt.
-        Step 4. Generate the string_of_includes based on Step 3.
+        Step 4. Generate the string_of_includes based on Step 3, following <tag_naming_rules_for_step_4>.
+
+    IMPORTANT for Step 4: Transform each file path from available_includes (format: "File: PATH")
+    into proper include syntax: <CANONICAL_MODULE><include>PATH</include></CANONICAL_MODULE>
+    Do NOT echo the "File:" format - always use <include>...</include> tags.
 </instructions>

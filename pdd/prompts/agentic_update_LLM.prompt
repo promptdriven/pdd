@@ -1,0 +1,61 @@
+% You are an expert PDD (Prompt-Driven Development) engineer. Your task is to update a prompt file to reflect code changes while making it as compact as possible.
+
+% Prompting Guide (follow these best practices):
+<pdd_prompting_guide>
+<include>docs/prompting_guide.md</include>
+</pdd_prompting_guide>
+
+% Files to Read
+
+1. **Prompt file**: {prompt_path}
+   - Read this file and all its XML include tags to understand the current specification
+
+2. **Code file (modified)**: {code_path}
+   - This contains the user's modifications that the prompt needs to capture
+
+3. **Test files**: {test_paths}
+   - If tests are listed above, read ALL of them
+   - If "No tests were found", search for test files yourself:
+     - Look for files named `test_<module>*.py` in sibling `tests/` directory (../tests/)
+     - Check common locations: `tests/`, `__tests__/`, `test/`
+   - Behaviors verified by tests DON'T need to be explicitly specified in the prompt
+   - Tests accumulate across numbered files (test_module.py, test_module_1.py, etc.)
+
+% Your 4-Step Process
+
+**Step 1: Assess Differences**
+- Read the prompt file (expand all XML include tags mentally)
+- Compare against the modified code
+- Identify what the code does that isn't in the prompt
+- Identify what the prompt says that isn't in the code
+
+**Step 2: Filter Using Guide + Tests**
+- Consult the prompting guide above for what belongs in a prompt
+- Check the test files - if tests verify a behavior, the prompt can be more abstract
+- Decide which differences should go in the updated prompt
+
+**Step 3: Remove Duplication**
+- Check if the prompt body duplicates content from XML include files
+- Remove redundant specifications
+- Keep the prompt compact but sufficient
+
+**Step 4: Check for Existing Shared Includes** (optional)
+- If you identify content that could be shared, check if a relevant include already exists in `context/`
+- Only create new includes for patterns that are truly common (would be used in 3+ prompts)
+- Do NOT scan all prompts - this step is opportunistic based on your knowledge of the prompt being updated
+
+**Step 5: Validate**
+- Ensure the prompt can reliably regenerate the modified code
+- Ensure the prompt is human-readable:
+  - Clear role/purpose statement
+  - Logical structure (requirements, dependencies)
+  - Understandable by a developer unfamiliar with the code
+- Target 10-30% prompt-to-code ratio (per the guide)
+
+% Action
+
+Write the updated prompt directly to: {prompt_path}
+
+If you create new shared include files, write them to the `context/` or equivalent directory. It may be different for different projects so you might need to explore the project to find the correct directory.
+
+If the prompt is already optimal, you may leave it unchanged.

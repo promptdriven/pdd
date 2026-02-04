@@ -1,0 +1,59 @@
+You are an expert Python software architect. Your goal is to implement the `pipeline` module for the PDD Prompt Linter. This module acts as the central orchestrator for the application, coordinating between heuristic analysis, LLM-based evaluation, report generation, and fix scaffolding. It serves as the single entry point for logic used by the CLI, Backend API, and Frontend UI.
+
+Requirements
+1.  **Orchestration Logic**: Implement a primary function `lint_text(text: str, config: LintConfig) -> Report` and a wrapper `lint_file(path: Path, config: LintConfig) -> Report`.
+2.  **Heuristic Execution**: Always run the deterministic rules from `rules.py` first. These checks must run regardless of LLM availability.
+3.  **LLM Integration**:
+    - Check `config.use_llm`. If True, attempt to call `llm.analyze_prompt(text)`.
+    - If the LLM call succeeds, merge the LLM-generated issues into the report additively.
+    - If the LLM call fails (returns None or raises specific exceptions handled in `llm.py`), gracefully degrade to heuristic-only mode without crashing.
+    - Ensure the final report indicates whether LLM analysis was performed or skipped.
+4.  **Scoring**: Calculate the final score (0-100) based on the weights defined in the PDD Guide (Modularity: 30, Contracts: 20, Context: 20, Determinism: 15, Abstraction: 15). Ensure category errors cap that category's score at zero.
+5.  **Fix Generation**: If `config.generate_fix` is True, call `fix.generate_scaffold(text, report)` and attach the suggested fix to the report object.
+6.  **Configuration**: Define a `LintConfig` Pydantic model (or use `models.py` if appropriate) to pass runtime flags (e.g., `use_llm`, `severity_threshold`, `generate_fix`) through the pipeline.
+7.  **Error Handling**: Treat input text as untrusted. Handle file read errors in `lint_file` gracefully by returning a Report with a fatal system error issue.
+8.  **Performance**: Ensure the pipeline is efficient. Heuristics should be instantaneous. LLM calls should respect the timeout defined in the config/LLM module.
+
+Dependencies
+<utils.models><include>examples/models_example.py</include></utils.models>
+<utils.rules><include>examples/rules_example.py</include></utils.rules>
+<utils.llm><include>examples/llm_example.py</include></utils.llm>
+<utils.fix><include>examples/fix_example.py</include></utils.fix>
+<utils.helpers><include>examples/helpers_example.py</include></utils.helpers>
+
+Prompt Dependencies:
+- models_Python.prompt
+- rules_Python.prompt
+- llm_Python.prompt
+- fix_Python.prompt
+- report_Python.prompt
+
+Instructions
+- Define a `LintConfig` dataclass or Pydantic model to encapsulate runtime options (e.g., `use_llm: bool = True`, `generate_fix: bool = False`).
+- Implement `lint_text(content: str, config: LintConfig = LintConfig()) -> Report`:
+    1. Initialize an empty `Report`.
+    2. Run `rules.analyze(content)` and extend the report's issues.
+    3. If `config.use_llm` is True, call `llm.analyze_prompt(content)`.
+       - If successful, map the `LLMResponse` to `Issue` objects and append them.
+       - If `llm.analyze_prompt` returns None (indicating fallback), log a warning (if logging is set up) or add a specific "Info" issue to the report stating LLM was unavailable.
+    4. Calculate the score using the weighted rubric.
+    5. If `config.generate_fix` is True, call `fix.generate_scaffold(content, report)` and set `report.suggested_fix`.
+    6. Return the `Report`.
+- Implement `lint_file(file_path: Path, config: LintConfig = LintConfig()) -> Report`:
+    1. specific error handling for file existence/permissions.
+    2. Read file content.
+    3. Delegate to `lint_text`.
+- Ensure strict type hinting for all function signatures.
+- The scoring logic should be robust:
+    - Group issues by category (Modularity, Contracts, etc.).
+    - Start with full points for each category.
+    - Deduct points based on issue severity (e.g., Error = -100% of category, Warning = -50% of category).
+    - Sum weighted category scores.
+
+Deliverable
+- `src/utils/pipeline.py`: The main orchestration module.
+
+Implementation assumptions (explicit)
+- `models.py` contains the definitions for `Issue`, `Report`, `Severity`, and `Category`.
+- `llm.analyze_prompt` handles its own exceptions and returns `None` on failure, or raises a specific exception that `pipeline` should catch if strictly necessary (prefer `None` return for simplicity).
+- The scoring algorithm is deterministic and strictly follows the rubric weights provided in the architecture context.

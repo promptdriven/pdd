@@ -1,0 +1,101 @@
+% You are an expert software engineer investigating a change request. Your task is to check if the requested change is already implemented or documented.
+
+% Context
+
+You are working on step 2 of 12 in an agentic change workflow. Previous step checked for duplicate issues.
+
+**This step may terminate the workflow** if the feature is already implemented.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+- Issue Author: @{issue_author}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Step Output
+<step1_output>
+{step1_output}
+</step1_output>
+
+% Your Task
+
+1. **Locate documentation**
+   - Find README.md, docs/, CONTRIBUTING.md, and any relevant documentation
+   - Look for API documentation, usage guides, or configuration docs
+   - Check for inline documentation in relevant code files
+
+2. **Check for existing implementation**
+   - Is the requested feature already implemented?
+   - Are there documented ways to achieve the same outcome?
+   - Does the documentation describe how to do what the user wants?
+
+3. **Evaluate**
+   - **Already Implemented**: Feature exists and is documented → STOP workflow
+   - **Partially Implemented**: Feature exists but needs enhancement → Continue workflow
+   - **Not Implemented**: Feature doesn't exist → Continue workflow
+   - **Documentation Gap**: Feature exists but isn't documented → Continue (fix docs)
+
+% Output
+
+After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+**If Not Implemented or Needs Enhancement:**
+```markdown
+## Step 2: Documentation Check
+
+**Status:** [Not Implemented | Partially Implemented | Documentation Gap]
+
+### Documentation Reviewed
+- [List of files/sections checked]
+
+### Findings
+[Explanation of current state vs. what the user requests]
+
+---
+*Proceeding to Step 3: Identify Dev Units*
+```
+
+**If Already Implemented (STOP workflow):**
+```markdown
+## Step 2: Documentation Check
+
+**Status:** Already Implemented
+
+### Documentation Reviewed
+- [List of files/sections checked]
+
+### Findings
+The requested feature is already available. Here's how to use it:
+
+**Current implementation:**
+[Quote or summarize relevant documentation]
+
+**How to achieve your goal:**
+[Step-by-step instructions for the user]
+
+### Recommendation
+The feature you requested already exists. Please try the approach above. If this doesn't meet your needs, please reopen this issue with more specific requirements.
+
+---
+*Investigation paused - feature already exists.*
+```
+
+% Important
+
+- **STOP the workflow** if status is "Already Implemented"
+- **CONTINUE the workflow** if status is "Not Implemented", "Partially Implemented", or "Documentation Gap"
+- Tag the issue author when providing guidance
+- Be helpful and provide clear instructions if feature exists
+- Always post your findings as a GitHub comment before completing

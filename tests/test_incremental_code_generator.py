@@ -104,18 +104,44 @@ def test_empty_input_validation(common_inputs, field):
         incremental_code_generator(**common_inputs)
 
 # Test input validation for invalid parameter ranges
+# Note: temperature valid range is 0-2 (matching code_generator.py), strength/time are 0-1
 @pytest.mark.parametrize("param, value", [
     ("strength", -0.1),
     ("strength", 1.1),
     ("temperature", -0.1),
-    ("temperature", 1.1),
+    ("temperature", 2.1),  # temperature max is 2.0, not 1.0
     ("time", -0.1),
     ("time", 1.1)
 ])
 def test_invalid_parameter_range(common_inputs, param, value):
     common_inputs[param] = value
-    with pytest.raises(ValueError, match="Strength, temperature, and time must be between 0 and 1"):
+    with pytest.raises(ValueError):
         incremental_code_generator(**common_inputs)
+
+
+# Test that temperature values between 1.0 and 2.0 are VALID
+# This matches the behavior of code_generator.py which allows temperature 0-2
+@pytest.mark.parametrize("temp_value", [1.0, 1.5, 1.9, 2.0])
+@patch("pdd.incremental_code_generator.llm_invoke")
+@patch("pdd.incremental_code_generator.load_prompt_template")
+@patch("pdd.incremental_code_generator.preprocess")
+def test_temperature_accepts_values_up_to_2(mock_preprocess, mock_load_template, mock_llm_invoke, common_inputs, temp_value):
+    """Temperature 1.5 should be valid - matching code_generator.py behavior.
+
+    This test ensures consistency between code_generator.py (allows 0-2)
+    and incremental_code_generator.py (should also allow 0-2).
+    """
+    common_inputs["temperature"] = temp_value
+    mock_load_template.return_value = "template"
+    mock_preprocess.return_value = "processed_template"
+    mock_llm_invoke.return_value = mock_diff_response(is_big_change=True)
+
+    # Should NOT raise ValueError for temperature values <= 2.0
+    updated_code, is_incremental, total_cost, model_name = incremental_code_generator(**common_inputs)
+
+    # Verify it ran successfully (returned regeneration recommendation)
+    assert updated_code is None
+    assert is_incremental is False
 
 # Test major change detection leading to full regeneration
 @patch("pdd.incremental_code_generator.llm_invoke")

@@ -183,7 +183,7 @@ def test_strength_0_malformed_only_closing_ticks():
     assert cost == 0.0
     assert model_name == "simple_extraction"
 
-@patch('pdd.postprocess.print') # Mock rich.print used in postprocess module
+@patch('pdd.postprocess.console.print') # Mock console.print used in postprocess module
 def test_strength_0_verbose_output(mock_rich_print):
     postprocess("```code```", "python", strength=0, verbose=True)
     mock_rich_print.assert_any_call("[blue]Using simple code extraction (strength = 0)[/blue]")
@@ -211,7 +211,7 @@ def test_strength_gt_0_llm_invoke_fails_no_result_key(mock_llm_invoke, mock_load
     with pytest.raises(ValueError, match="Failed to get valid response from LLM"):
         postprocess("some output", "python", strength=0.5)
 
-@patch('pdd.postprocess.print') # To check error print
+@patch('pdd.postprocess.console.print') # To check error print
 @patch('pdd.postprocess.load_prompt_template', return_value="dummy_prompt")
 @patch('pdd.postprocess.llm_invoke')
 def test_strength_gt_0_llm_invoke_raises_exception(mock_llm_invoke, mock_load_template, mock_rich_print):
@@ -326,7 +326,7 @@ def test_strength_gt_0_successful_extraction_llm_returns_code_with_internal_back
     assert cost == 0.08
     assert model_name == 'gpt-4'
 
-@patch('pdd.postprocess.print')
+@patch('pdd.postprocess.console.print')
 @patch('pdd.postprocess.load_prompt_template', return_value="dummy_prompt_template")
 @patch('pdd.postprocess.llm_invoke')
 def test_strength_gt_0_verbose_output(mock_llm_invoke, mock_load_template, mock_rich_print):
@@ -336,7 +336,7 @@ def test_strength_gt_0_verbose_output(mock_llm_invoke, mock_load_template, mock_
         'model_name': 'test_model'
     }
     postprocess("llm_output", "python", strength=0.5, verbose=True)
-    
+
     expected_calls = [
         call("[blue]Loaded prompt template for code extraction[/blue]"),
         call("[green]Successfully extracted code[/green]")
@@ -407,3 +407,185 @@ def test_default_parameters(mock_llm_invoke, mock_load_template):
     assert kwargs['time'] == DEFAULT_TIME # Default time
     assert kwargs['verbose'] == False   # Default verbose
     assert kwargs['output_pydantic'] == ExtractedCode
+
+
+# V. Regression Tests
+@patch('pdd.postprocess.load_prompt_template', return_value="test_prompt")
+@patch('pdd.postprocess.llm_invoke')
+def test_extracted_code_with_focus_and_explanation_no_json_leakage(mock_llm_invoke, mock_load_template):
+    """
+    Regression test for JSON leakage bug.
+
+    When the LLM returns ExtractedCode with focus, explanation, and extracted_code fields,
+    only the extracted_code should be returned. The focus and explanation fields should
+    NOT leak into the output as JSON markers.
+
+    This bug occurred when the Pydantic schema only had extracted_code but the prompt
+    asked for 3 fields, causing some LLMs to embed the extra fields inside the
+    extracted_code string value.
+    """
+    complex_code = '''def add(a: float, b: float) -> float:
+    """Add two numbers."""
+    return a + b
+
+def subtract(a: float, b: float) -> float:
+    """Subtract b from a."""
+    return a - b
+
+if __name__ == "__main__":
+    print(add(1, 2))'''
+
+    mock_llm_invoke.return_value = {
+        'result': ExtractedCode(
+            focus="Python arithmetic module",
+            explanation="The code implements basic arithmetic operations with type hints.",
+            extracted_code=complex_code
+        ),
+        'cost': 0.05,
+        'model_name': 'test_model'
+    }
+
+    result_code, cost, model_name = postprocess(
+        "some llm output",
+        "python",
+        strength=0.5
+    )
+
+    # Verify no JSON markers leaked into the extracted code
+    json_markers = ['"explanation":', '"focus":', '"description":', '"extracted_code":']
+    for marker in json_markers:
+        assert marker not in result_code, f"JSON marker '{marker}' leaked into extracted code"
+
+    # Verify the code is exactly what was in extracted_code
+    assert result_code == complex_code
+    assert cost == 0.05
+    assert model_name == 'test_model'
+
+
+@patch('pdd.postprocess.load_prompt_template', return_value="test_prompt")
+@patch('pdd.postprocess.llm_invoke')
+def test_extracted_code_model_has_all_prompt_fields(mock_llm_invoke, mock_load_template):
+    """
+    Verify ExtractedCode model accepts focus and explanation fields.
+
+    The extract_code_LLM.prompt asks for 3 fields: focus, explanation, extracted_code.
+    The Pydantic model must accept all 3 to prevent LLMs from embedding extra fields
+    inside the extracted_code string.
+    """
+    # This should not raise any validation errors
+    extracted = ExtractedCode(
+        focus="test focus",
+        explanation="test explanation",
+        extracted_code="print('hello')"
+    )
+
+    assert extracted.focus == "test focus"
+    assert extracted.explanation == "test explanation"
+    assert extracted.extracted_code == "print('hello')"
+
+
+@patch('pdd.postprocess.load_prompt_template', return_value="test_prompt")
+@patch('pdd.postprocess.llm_invoke')
+def test_extracted_code_model_optional_fields(mock_llm_invoke, mock_load_template):
+    """
+    Verify focus and explanation fields have defaults (are optional).
+
+    Some LLMs may only return extracted_code, so the other fields should be optional.
+    """
+    # This should not raise - focus and explanation should have defaults
+    extracted = ExtractedCode(extracted_code="print('hello')")
+
+    assert extracted.focus == ""
+    assert extracted.explanation == ""
+    assert extracted.extracted_code == "print('hello')"
+
+
+# Tests for issue #264: Strip <prompt> tags from generated .prompt files
+def test_strength_0_prompt_tags_stripped():
+    """Test that <prompt> and </prompt> tags are stripped when language is 'prompt'."""
+    llm_output = """<prompt>
+This is the actual prompt content that should be kept.
+</prompt>"""
+    expected_code = """This is the actual prompt content that should be kept."""
+    extracted_code, cost, model_name = postprocess(llm_output, "prompt", strength=0)
+    assert extracted_code == expected_code
+    assert cost == 0.0
+    assert model_name == "simple_extraction"
+
+
+def test_strength_0_prompt_tags_with_extra_whitespace():
+    """Test that <prompt> tags with extra whitespace are handled correctly."""
+    llm_output = """  <prompt>  
+Content with whitespace.
+  </prompt>  """
+    expected_code = """Content with whitespace."""
+    extracted_code, cost, model_name = postprocess(llm_output, "prompt", strength=0)
+    assert extracted_code == expected_code
+
+
+def test_strength_0_prompt_tags_nested_content():
+    """Test that nested content within <prompt> tags is preserved."""
+    llm_output = """<prompt>
+Outer content
+<inner>nested</inner>
+More content
+</prompt>"""
+    expected_code = """Outer content
+<inner>nested</inner>
+More content"""
+    extracted_code, cost, model_name = postprocess(llm_output, "prompt", strength=0)
+    assert extracted_code == expected_code
+
+
+def test_strength_0_prompt_tags_empty():
+    """Test that empty <prompt> tags return empty string."""
+    llm_output = """<prompt></prompt>"""
+    expected_code = """"""
+    extracted_code, cost, model_name = postprocess(llm_output, "prompt", strength=0)
+    assert extracted_code == expected_code
+
+
+def test_prompt_tags_stripped_with_llm_strength():
+    """CRITICAL: This is the real-world scenario (EXTRACTION_STRENGTH=0.5)."""
+    llm_output = """<prompt>
+This is the actual prompt content.
+</prompt>"""
+    expected_code = """This is the actual prompt content."""
+    extracted_code, cost, model_name = postprocess(llm_output, "prompt", strength=0.5)
+    assert extracted_code == expected_code
+    assert cost == 0.0
+    assert model_name == "simple_extraction"
+
+
+def test_prompt_language_strips_triple_backticks():
+    """Test that triple backticks are also stripped for language="prompt"."""
+    llm_output = """```xml
+<prompt>
+This is the actual prompt content.
+</prompt>
+```"""
+    expected_code = """This is the actual prompt content."""
+    extracted_code, cost, model_name = postprocess(llm_output, "prompt", strength=0.5)
+    assert extracted_code == expected_code
+
+
+def test_prompt_language_strips_backticks_and_tags():
+    """Test that both backticks and prompt tags are stripped."""
+    llm_output = """```
+<prompt>
+Clean prompt content.
+</prompt>
+```"""
+    expected_code = """Clean prompt content."""
+    extracted_code, cost, model_name = postprocess(llm_output, "prompt", strength=0.5)
+    assert extracted_code == expected_code
+
+
+def test_prompt_language_strips_backticks_only():
+    """Test that backticks are stripped even without prompt tags."""
+    llm_output = """```xml
+Clean prompt without tags.
+```"""
+    expected_code = """Clean prompt without tags."""
+    extracted_code, cost, model_name = postprocess(llm_output, "prompt", strength=0)
+    assert extracted_code == expected_code

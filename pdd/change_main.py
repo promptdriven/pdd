@@ -17,11 +17,11 @@ from rich import print as rprint
 from rich.panel import Panel
 
 # Use relative imports for internal modules
+from .config_resolution import resolve_effective_config
 from .construct_paths import construct_paths
 from .change import change as change_func
 from .process_csv_change import process_csv_change
 from .get_extension import get_extension
-from . import DEFAULT_STRENGTH, DEFAULT_TIME
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -72,9 +72,8 @@ def change_main(
     # Retrieve global options from context
     force: bool = ctx.obj.get("force", False)
     quiet: bool = ctx.obj.get("quiet", False)
-    strength: float = ctx.obj.get("strength", DEFAULT_STRENGTH)
-    temperature: float = ctx.obj.get("temperature", 0.0)
-    time_budget: float = ctx.obj.get("time", DEFAULT_TIME)
+    # Note: strength/temperature/time will be resolved after construct_paths
+    # using resolve_effective_config for proper priority handling
     # --- Get language and extension from context ---
     # These are crucial for knowing the target code file types, especially in CSV mode
     target_language: str = ctx.obj.get("language", "")
@@ -215,6 +214,13 @@ def change_main(
                 rprint(f"[bold red]Error: {msg}[/bold red]")
             logger.error(msg, exc_info=True)
             return msg, 0.0, ""
+
+        # Use centralized config resolution with proper priority:
+        # CLI > pddrc > defaults
+        effective_config = resolve_effective_config(ctx, resolved_config)
+        strength = effective_config["strength"]
+        temperature = effective_config["temperature"]
+        time_budget = effective_config["time"]
 
         # --- 3. Perform Prompt Modification ---
         if use_csv:
@@ -405,7 +411,7 @@ def change_main(
                         modified_content = item.get('modified_prompt')
 
                         # Skip if modification failed for this file or data is missing
-                        if not original_prompt_filename or modified_content is None:
+                        if not original_prompt_filename or not modified_content:
                             logger.warning(
                                 "Skipping save for item due to missing data or error: %s",
                                 item

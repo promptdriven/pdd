@@ -59,8 +59,8 @@ def incremental_code_generator(
     if not original_prompt or not new_prompt or not existing_code or not language:
         raise ValueError("All required inputs (original_prompt, new_prompt, existing_code, language) must be provided.")
 
-    if not 0 <= strength <= 1 or not 0 <= temperature <= 1 or not 0 <= time <= 1:
-        raise ValueError("Strength, temperature, and time must be between 0 and 1.")
+    if not 0 <= strength <= 1 or not 0 <= temperature <= 2 or not 0 <= time <= 1:
+        raise ValueError("Strength and time must be between 0 and 1. Temperature must be between 0 and 2.")
 
     try:
         total_cost = 0.0

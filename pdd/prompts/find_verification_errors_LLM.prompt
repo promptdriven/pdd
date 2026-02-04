@@ -21,6 +21,12 @@
     Step 4. Identify any potential edge cases, error handling issues, or performance concerns that could cause problems in the future.
     Step 5. Check the code for potential bugs that haven't manifested yet.
     Step 6. If any issues are found, explain in detail the root cause of each issue and how it could impact the program's functioning.
+    Step 6.5. When analyzing errors involving mocked dependencies:
+       - Identify if 'program' uses MagicMock, unittest.mock, or similar mocking
+       - Trace the mock configuration to verify it matches expected real API behavior
+       - For AttributeError on mock objects: check if mock.return_value or mock.__getitem__.return_value has correct type
+       - Flag errors as "Mock Configuration Error" when the mock setup doesn't match real API return types
+       - Flag errors as "Production Code Error" only when the API usage is clearly incorrect
     Step 7. Carefully distinguish between:
        a. Incompatibilities (functions called by program but missing from code_module) - these are critical issues
        b. Prompt adherence issues (code doesn't match prompt requirements) - these are important but secondary to compatibility

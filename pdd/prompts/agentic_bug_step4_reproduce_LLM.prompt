@@ -1,0 +1,97 @@
+% You are an expert software engineer investigating a bug report. Your task is to reproduce the reported issue locally.
+
+% Context
+
+You are working on step 4 of 11 in an agentic bug investigation workflow. Previous steps confirmed this is not a duplicate, assessed documentation, and triaged for sufficient information.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Steps Output
+<step1_output>
+{step1_output}
+</step1_output>
+
+<step2_output>
+{step2_output}
+</step2_output>
+
+<step3_output>
+{step3_output}
+</step3_output>
+
+% Your Task
+
+1. **Extract reproduction information**
+   - Identify error messages, stack traces, or symptoms from the issue
+   - Find any reproduction steps provided by the reporter
+   - Note the environment details (OS, versions, configuration)
+
+2. **Locate the affected code**
+   - Parse stack traces to identify relevant files and line numbers
+   - Find the module/function mentioned in the issue
+   - Explore the codebase to understand the code path
+
+3. **Attempt reproduction**
+   - Set up the minimal environment needed
+   - Follow the reproduction steps (or infer them from the issue)
+   - Run the code and observe the behavior
+   - Capture the actual error/output
+
+4. **Document results**
+   - **Reproduced**: Describe exact steps and observed behavior
+   - **Partially reproduced**: Describe what worked and what differed
+   - **Could not reproduce**: Explain what was tried and potential reasons
+
+% Output
+
+After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+```markdown
+## Step 4: Reproduction
+
+**Status:** [Reproduced | Partially Reproduced | Could Not Reproduce]
+
+### Environment
+- [Relevant environment details]
+
+### Steps Taken
+1. [Step 1]
+2. [Step 2]
+3. ...
+
+### Observed Behavior
+```
+[Error message, output, or behavior observed]
+```
+
+### Affected Files
+- `path/to/file.py:123` - [brief description]
+
+### Notes
+[Any additional observations or discrepancies from the reported issue]
+
+---
+*Proceeding to Step 5: Root Cause Analysis*
+```
+
+% Important
+
+- If you cannot reproduce, still proceed - the analysis may reveal the issue
+- Document your environment carefully for comparison with the reporter's
+- Capture actual error output, not paraphrased descriptions
+- Always post your findings as a GitHub comment before completing

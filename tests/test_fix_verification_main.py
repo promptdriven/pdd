@@ -25,6 +25,7 @@ def mock_context(tmp_path):
         'force': False,
         'quiet': False,
         'verbose': False,
+        'local': True,  # Force local execution to avoid cloud API calls in tests
     }
     # params usually holds command-specific parameters, leave empty for this command
     ctx.params = {}
@@ -353,6 +354,7 @@ def test_loop_mode_success(
         program_file=setup_files["program"],
         code_file=setup_files["code"],
         prompt='Original prompt content',
+        prompt_file=setup_files["prompt"],
         verification_program=setup_files["verifier"],
         strength=DEFAULT_STRENGTH,
         temperature=DEFAULT_TEMPERATURE,
@@ -361,7 +363,8 @@ def test_loop_mode_success(
         verification_log_file=output_results_path,
         verbose=False,
         program_args=[],
-        llm_time=DEFAULT_TIME
+        llm_time=DEFAULT_TIME,
+        agentic_fallback=True
     )
     mock_fix_errors.assert_not_called()
     mock_run_prog.assert_not_called()
@@ -412,6 +415,7 @@ def test_loop_mode_failure(
         program_file=setup_files["program"],
         code_file=setup_files["code"],
         prompt='Original prompt content',
+        prompt_file=setup_files["prompt"],
         verification_program=setup_files["verifier"],
         strength=DEFAULT_STRENGTH,
         temperature=DEFAULT_TEMPERATURE,
@@ -420,7 +424,8 @@ def test_loop_mode_failure(
         verification_log_file=mock_construct_paths_response[2]["output_results"],
         verbose=False,
         program_args=[],
-        llm_time=DEFAULT_TIME
+        llm_time=DEFAULT_TIME,
+        agentic_fallback=True
     )
     assert mock_fix_loop.call_args[1]['max_attempts'] == 5
     mock_fix_errors.assert_not_called()
@@ -501,29 +506,40 @@ def test_loop_mode_missing_verification_program(mock_context, setup_files):
 
 @patch('pdd.fix_verification_main.construct_paths')
 def test_construct_paths_file_not_found(mock_construct, mock_context, setup_files, capsys):
-    """Verify SystemExit if construct_paths raises FileNotFoundError."""
+    """Verify error tuple is returned if construct_paths raises FileNotFoundError.
+
+    Per the spec: For critical/unrecoverable errors, return an error tuple with
+    success=False and an error message in the model_name field. This allows
+    orchestrating code (such as `pdd sync`) to handle failures gracefully rather
+    than terminating via sys.exit(1).
+    """
     def construct_side_effect(*args, **kwargs):
         raise FileNotFoundError("mock_file.txt not found")
     mock_construct.side_effect = construct_side_effect
 
-    with pytest.raises(SystemExit) as e:
-        fix_verification_main(
-            ctx=mock_context,
-            prompt_file=setup_files["prompt"],
-            code_file=setup_files["code"],
-            program_file=setup_files["program"],
-            output_results=None,
-            output_code=None,
-            output_program=None,
-            loop=False,
-            verification_program=None
-        )
+    result = fix_verification_main(
+        ctx=mock_context,
+        prompt_file=setup_files["prompt"],
+        code_file=setup_files["code"],
+        program_file=setup_files["program"],
+        output_results=None,
+        output_code=None,
+        output_program=None,
+        loop=False,
+        verification_program=None
+    )
 
-    assert e.value.code == 1
+    # Should return error tuple: (success=False, program="", code="", attempts=0, cost=0.0, error_message)
+    assert result[0] is False  # success = False
+    assert result[1] == ""     # final_program = ""
+    assert result[2] == ""     # final_code = ""
+    assert result[3] == 0      # attempts = 0
+    assert result[4] == 0.0    # total_cost = 0.0
+    assert "Error:" in result[5]  # model_name field contains error message
+
     captured = capsys.readouterr()
-    # Check stderr for the rich_print output if it goes there, or stdout
-    # The code prints to rich_print, which defaults to stdout.
-    assert "Failed during path construction" in captured.out # Corrected to check captured.out
+    # Check that error message was printed
+    assert "Failed during path construction" in captured.out
     assert 'force' in mock_construct.call_args[1]
 
 
@@ -554,11 +570,13 @@ def test_output_code_write_error(
     # Define a simpler side_effect for mock_open_func
     def open_side_effect(filename_arg, mode_arg="r", *args, **kwargs):
         # nonlocal output_code_path # Not strictly needed due to closure
-        if filename_arg == output_code_path and "w" in mode_arg:
+        # Convert Path objects to strings for comparison
+        filename_str = str(filename_arg)
+        if filename_str == output_code_path and "w" in mode_arg:
             raise IOError("Disk full simulation")
-        
+
         # For other files, return a functional mock file handle
-        mock_file_handle = MagicMock() 
+        mock_file_handle = MagicMock()
         mock_file_handle.write = MagicMock()
         # mock_file_handle.read = MagicMock(return_value="Simulated read content") # Only if reads are expected
         mock_file_handle.__enter__.return_value = mock_file_handle
@@ -585,8 +603,10 @@ def test_output_code_write_error(
     expected_error_msg = f"[bold red]Error:[/bold red] Failed to write code file '{output_code_path}': OSError - Disk full simulation"
     mock_rich_print.assert_any_call(expected_error_msg)
 
-    mock_open_func.assert_any_call(output_results_path, "w")
-    mock_open_func.assert_any_call(output_program_path, "w")
+    # fix_verification_main now uses Path objects for file operations
+    from pathlib import Path
+    mock_open_func.assert_any_call(Path(output_results_path), "w")
+    mock_open_func.assert_any_call(Path(output_program_path), "w")
 
 
 @patch('pdd.fix_verification_main.fix_verification_errors_loop')
@@ -628,8 +648,200 @@ def test_verbose_flag_propagation(
     mock_fix_loop.assert_called_once_with(
         program_file=ANY, code_file=ANY, prompt=ANY, verification_program=ANY,
         strength=ANY, temperature=ANY, max_attempts=ANY, budget=ANY,
-        verification_log_file=ANY, verbose=True, program_args=ANY, llm_time=DEFAULT_TIME
+        verification_log_file=ANY, verbose=True, program_args=ANY, llm_time=DEFAULT_TIME,
+        prompt_file=ANY, agentic_fallback=True
     )
+
+
+# -----------------------------------------------------------------------------
+# Tests for Hybrid Cloud Mode (Bug Fix)
+# -----------------------------------------------------------------------------
+
+@pytest.fixture
+def mock_context_cloud_enabled(tmp_path):
+    """Creates a mock Click context with cloud enabled (local=False)."""
+    ctx = MagicMock(spec=click.Context)
+    ctx.obj = {
+        'strength': DEFAULT_STRENGTH,
+        'temperature': DEFAULT_TEMPERATURE,
+        'time': DEFAULT_TIME,
+        'force': False,
+        'quiet': False,
+        'verbose': False,
+        'local': False,  # Cloud/hybrid mode enabled
+    }
+    ctx.params = {}
+    return ctx
+
+
+@patch('pdd.fix_verification_main.fix_verification_errors_loop')
+@patch('pdd.fix_verification_main.fix_verification_errors')
+@patch('pdd.fix_verification_main.run_program')
+@patch('pdd.fix_verification_main.construct_paths')
+def test_loop_mode_hybrid_cloud_enabled_by_default(
+    mock_construct, mock_run_prog, mock_fix_errors, mock_fix_loop,
+    mock_context_cloud_enabled, setup_files, mock_construct_paths_response, tmp_path
+):
+    """Verify loop mode passes use_cloud=True when local=False (hybrid mode enabled by default).
+
+    This tests the bug fix where hybrid mode (local verification + cloud LLM calls)
+    should be enabled by default when the user hasn't specified --local.
+    """
+    mock_construct.return_value = mock_construct_paths_response
+    mock_fix_loop.return_value = {
+        'success': True,
+        'final_program': 'Final program',
+        'final_code': 'Final code',
+        'total_attempts': 2,
+        'total_cost': 0.5,
+        'model_name': 'cloud-model'
+    }
+
+    result = fix_verification_main(
+        ctx=mock_context_cloud_enabled,
+        prompt_file=setup_files["prompt"],
+        code_file=setup_files["code"],
+        program_file=setup_files["program"],
+        output_results=None,
+        output_code=None,
+        output_program=None,
+        loop=True,
+        verification_program=setup_files["verifier"]
+    )
+
+    mock_fix_loop.assert_called_once()
+    # Key assertion: use_cloud=True should be passed for hybrid mode
+    assert mock_fix_loop.call_args[1].get('use_cloud') is True, \
+        "use_cloud=True should be passed when local=False (hybrid mode)"
+    assert result[0] is True
+
+
+@patch('pdd.fix_verification_main.fix_verification_errors_loop')
+@patch('pdd.fix_verification_main.fix_verification_errors')
+@patch('pdd.fix_verification_main.run_program')
+@patch('pdd.fix_verification_main.construct_paths')
+def test_loop_mode_local_flag_disables_cloud(
+    mock_construct, mock_run_prog, mock_fix_errors, mock_fix_loop,
+    mock_context, setup_files, mock_construct_paths_response, tmp_path
+):
+    """Verify loop mode does NOT pass use_cloud when local=True.
+
+    When the user specifies --local, all execution should stay local,
+    including LLM calls in the verification loop.
+    """
+    # mock_context already has local=True
+    mock_construct.return_value = mock_construct_paths_response
+    mock_fix_loop.return_value = {
+        'success': True,
+        'final_program': 'Final program',
+        'final_code': 'Final code',
+        'total_attempts': 1,
+        'total_cost': 0.3,
+        'model_name': 'local-model'
+    }
+
+    result = fix_verification_main(
+        ctx=mock_context,
+        prompt_file=setup_files["prompt"],
+        code_file=setup_files["code"],
+        program_file=setup_files["program"],
+        output_results=None,
+        output_code=None,
+        output_program=None,
+        loop=True,
+        verification_program=setup_files["verifier"]
+    )
+
+    mock_fix_loop.assert_called_once()
+    # Key assertion: use_cloud should NOT be in kwargs when local=True
+    assert 'use_cloud' not in mock_fix_loop.call_args[1], \
+        "use_cloud should not be passed when local=True"
+    assert result[0] is True
+
+
+@patch.dict(os.environ, {'PDD_CLOUD_ONLY': '1'})
+@patch('pdd.fix_verification_main.fix_verification_errors_loop')
+@patch('pdd.fix_verification_main.fix_verification_errors')
+@patch('pdd.fix_verification_main.run_program')
+@patch('pdd.fix_verification_main.construct_paths')
+def test_loop_mode_cloud_only_env_enables_cloud(
+    mock_construct, mock_run_prog, mock_fix_errors, mock_fix_loop,
+    mock_context_cloud_enabled, setup_files, mock_construct_paths_response, tmp_path
+):
+    """Verify loop mode passes use_cloud=True when PDD_CLOUD_ONLY=1.
+
+    When PDD_CLOUD_ONLY is set, hybrid mode should be enabled for the loop.
+    """
+    mock_construct.return_value = mock_construct_paths_response
+    mock_fix_loop.return_value = {
+        'success': True,
+        'final_program': 'Final program',
+        'final_code': 'Final code',
+        'total_attempts': 1,
+        'total_cost': 0.4,
+        'model_name': 'cloud-model'
+    }
+
+    result = fix_verification_main(
+        ctx=mock_context_cloud_enabled,
+        prompt_file=setup_files["prompt"],
+        code_file=setup_files["code"],
+        program_file=setup_files["program"],
+        output_results=None,
+        output_code=None,
+        output_program=None,
+        loop=True,
+        verification_program=setup_files["verifier"]
+    )
+
+    mock_fix_loop.assert_called_once()
+    # Key assertion: use_cloud=True should be passed when PDD_CLOUD_ONLY=1
+    assert mock_fix_loop.call_args[1].get('use_cloud') is True, \
+        "use_cloud=True should be passed when PDD_CLOUD_ONLY=1"
+    assert result[0] is True
+
+
+@patch.dict(os.environ, {'PDD_CLOUD_ONLY': '1'})
+@patch('pdd.fix_verification_main.fix_verification_errors_loop')
+@patch('pdd.fix_verification_main.fix_verification_errors')
+@patch('pdd.fix_verification_main.run_program')
+@patch('pdd.fix_verification_main.construct_paths')
+def test_loop_mode_local_flag_overrides_cloud_only(
+    mock_construct, mock_run_prog, mock_fix_errors, mock_fix_loop,
+    mock_context, setup_files, mock_construct_paths_response, tmp_path
+):
+    """Verify --local flag takes priority over PDD_CLOUD_ONLY env var.
+
+    When user specifies --local, it should override the cloud-only env var.
+    """
+    # mock_context has local=True
+    mock_construct.return_value = mock_construct_paths_response
+    mock_fix_loop.return_value = {
+        'success': True,
+        'final_program': 'Final program',
+        'final_code': 'Final code',
+        'total_attempts': 1,
+        'total_cost': 0.2,
+        'model_name': 'local-model'
+    }
+
+    result = fix_verification_main(
+        ctx=mock_context,
+        prompt_file=setup_files["prompt"],
+        code_file=setup_files["code"],
+        program_file=setup_files["program"],
+        output_results=None,
+        output_code=None,
+        output_program=None,
+        loop=True,
+        verification_program=setup_files["verifier"]
+    )
+
+    mock_fix_loop.assert_called_once()
+    # Key assertion: local=True should override PDD_CLOUD_ONLY
+    assert 'use_cloud' not in mock_fix_loop.call_args[1], \
+        "local=True should override PDD_CLOUD_ONLY env var"
+    assert result[0] is True
 
 
 @patch('pdd.fix_verification_main.fix_verification_errors_loop')
@@ -718,6 +930,7 @@ def test_force_flag_retrieved_from_ctx_obj(
         program_file=setup_files["program"],
         code_file=setup_files["code"],
         prompt=mock_construct_paths_response[1]["prompt_file"],
+        prompt_file=setup_files["prompt"],
         verification_program=setup_files["verifier"],
         strength=DEFAULT_STRENGTH,
         temperature=DEFAULT_TEMPERATURE,
@@ -726,5 +939,6 @@ def test_force_flag_retrieved_from_ctx_obj(
         verification_log_file=mock_construct_paths_response[2]["output_results"],
         verbose=False, # mock_context.obj['verbose'] is False here
         program_args=[],
-        llm_time=DEFAULT_TIME
+        llm_time=DEFAULT_TIME,
+        agentic_fallback=True
     )

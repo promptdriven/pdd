@@ -1,0 +1,41 @@
+The order_api module is a core backend component responsible for exposing RESTful API endpoints for order management. Operating within the API layer of the system, it serves as the primary interface for frontend applications to create, retrieve, and update orders. Its role is to orchestrate requests between the client and the underlying data models, ensuring that business logic, authentication, and data validation are strictly enforced before any state changes occur in the database.
+
+Requirements
+1. Implement FastAPI endpoints for POST /api/orders, GET /api/orders/{order_id}, GET /api/orders, and PATCH /api/orders/{order_id}/status.
+2. Enforce JWT-based authentication for all endpoints, ensuring that users can only access or modify their own orders (unless they have administrative privileges).
+3. Validate all incoming request data using Pydantic schemas (OrderCreateRequest, OrderStatusUpdateRequest) and return standard 422 Unprocessable Entity errors for validation failures.
+4. Implement robust error handling for resource not found (404), unauthorized access (401/403), and internal server errors (500), returning consistent JSON error responses.
+5. Support pagination (page, limit) and filtering (status, date range, user_id) for the order listing endpoint.
+6. Ensure transactional integrity when creating orders, especially when interacting with the order_models component to persist order items and calculate totals.
+7. Log all significant operations, including order creation and status transitions, for auditability and debugging.
+
+Dependencies
+<order_models>
+  <include>context/order_models_example.py</include>
+</order_models>
+<database_config>
+  <include>context/database_config_example.py</include>
+</database_config>
+
+Prompt Dependencies:
+- order_models_Python.prompt
+
+Instructions
+- Use FastAPI's APIRouter to group order-related endpoints and define clear response models for each.
+- Integrate the SQLAlchemy models from order_models_Python.prompt for database interactions, using a dependency injection pattern for the database session.
+- For the POST /api/orders endpoint, ensure that the order total is calculated server-side using the Order.calculate_total method before saving.
+- Implement the PATCH /api/orders/{order_id}/status endpoint to use the Order.update_status method, ensuring only valid status transitions are allowed.
+- Use FastAPI's Query parameters for the GET /api/orders endpoint to handle filtering by status, start_date, end_date, and user_id.
+- Ensure that the GET /api/orders/{order_id} endpoint returns a detailed view including all order items.
+- Write clean, PEP 8 compliant Python code with type hints for all function signatures and variables.
+
+Deliverable
+- A single Python file located at src/api/orders.py containing the FastAPI router, Pydantic schemas for requests/responses, and endpoint implementation logic.
+- Unit tests for each endpoint using a testing framework like pytest and FastAPI's TestClient.
+
+Implementation assumptions (explicit)
+- A working JWT authentication middleware/dependency is available and can be injected into the routes.
+- The database session management is handled via a dependency provided in the database_config module.
+- The OrderStatus enum and Order/OrderItem models are fully defined in the order_models module.
+
+Please produce production-ready prompt content that will generate the module consistent with the above.

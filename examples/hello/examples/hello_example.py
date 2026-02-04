@@ -1,37 +1,32 @@
-"""
-This script provides a clear example of how to define and use a simple function.
-It combines the definition of a `hello` function and a script to run it
-into a single, self-contained, and runnable file.
-"""
+import sys
+import os
 
-def hello() -> None:
+# The program is in examples/, the module is in src/
+# We need to go up one level from examples/ to the project root, then into src/
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(current_dir)
+src_dir = os.path.join(project_root, "src")
+
+# Add the src directory to the Python path
+sys.path.append(src_dir)
+
+# Import hello from the hello.py file
+from hello import hello
+
+def main() -> None: 
     """
-    Prints the string "hello" to the standard output.
+    Demonstrates how to import and call the hello function from the module.
 
-    This function takes no arguments and has no return value (implicitly returns None).
-    Its sole side effect is printing the literal string "hello" to the console,
-    followed by a newline character.
+    Input Parameters:
+    - None
+
+    Output:
+    - Prints 'hello' to the standard output.
     """
-    print("hello")
-
-
-def run_example() -> None:
-    """
-    Demonstrates the proper usage of the `hello` function.
-
-    This function serves as a wrapper for the example call, making the script's
-    purpose clear.
-    """
-    print("Calling the `hello` function...")
-
-    # Call the function. It takes no arguments and its only action
-    # is to print "hello" to the console.
+    print("Calling the hello function from the imported module:")
+    
+    # Execute the function defined in the module
     hello()
 
-    print("...function call complete.")
-
-
-# The `if __name__ == "__main__"` block is standard Python practice.
-# It ensures the code inside only runs when the script is executed directly.
 if __name__ == "__main__":
-    run_example()
+    main()

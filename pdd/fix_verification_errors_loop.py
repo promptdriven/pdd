@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 import subprocess
@@ -7,6 +8,8 @@ from pathlib import Path
 from typing import Dict, Tuple, Any, Optional
 from xml.sax.saxutils import escape
 import time
+
+import requests
 
 from rich.console import Console
 
@@ -27,6 +30,125 @@ except ImportError:
 
 from . import DEFAULT_TIME # Import DEFAULT_TIME
 from .python_env_detector import detect_host_python_executable
+from .get_language import get_language
+from .agentic_langtest import default_verify_cmd_for
+from .agentic_verify import run_agentic_verify
+
+# Cloud configuration
+try:
+    from .core.cloud import CloudConfig, get_cloud_timeout
+    CLOUD_AVAILABLE = True
+except ImportError:
+    CLOUD_AVAILABLE = False
+    CloudConfig = None
+    get_cloud_timeout = None
+
+
+def cloud_verify_fix(
+    program: str,
+    prompt: str,
+    code: str,
+    output: str,
+    strength: float,
+    temperature: float,
+    time_param: float,
+    verbose: bool,
+    language: str = "python",
+) -> Dict[str, Any]:
+    """
+    Call cloud verifyCode endpoint for LLM verification fix.
+
+    Returns:
+        Dict with keys: fixed_code, fixed_program, explanation, verification_issues_count, total_cost, model_name
+    """
+    if not CLOUD_AVAILABLE or CloudConfig is None:
+        raise RuntimeError("Cloud configuration not available")
+
+    jwt_token = CloudConfig.get_jwt_token(verbose=verbose)
+    if not jwt_token:
+        raise RuntimeError("Cloud authentication failed - no JWT token")
+
+    payload = {
+        "programContent": program,
+        "promptContent": prompt,
+        "codeContent": code,
+        "outputContent": output,
+        "language": language,
+        "strength": strength,
+        "temperature": temperature,
+        "time": time_param if time_param is not None else 0.25,
+        "verbose": verbose,
+    }
+
+    headers = {
+        "Authorization": f"Bearer {jwt_token}",
+        "Content-Type": "application/json"
+    }
+    cloud_url = CloudConfig.get_endpoint_url("verifyCode")
+
+    timeout = get_cloud_timeout() if get_cloud_timeout else 900
+    response = requests.post(
+        cloud_url,
+        json=payload,
+        headers=headers,
+        timeout=timeout
+    )
+    response.raise_for_status()
+
+    response_data = response.json()
+    return {
+        "fixed_code": response_data.get("fixedCode", code),
+        "fixed_program": response_data.get("fixedProgram", program),
+        "explanation": response_data.get("explanation", ""),
+        "verification_issues_count": response_data.get("issuesCount", 0),
+        "total_cost": float(response_data.get("totalCost", 0.0)),
+        "model_name": response_data.get("modelName", "cloud_model"),
+    }
+
+def _normalize_agentic_result(result):
+    """
+    Normalize run_agentic_verify result into: (success: bool, msg: str, cost: float, model: str, changed_files: List[str])
+    Handles older 2/3/4-tuple shapes used by tests/monkeypatches.
+    """
+    if isinstance(result, tuple):
+        if len(result) == 5:
+            ok, msg, cost, model, changed_files = result
+            return bool(ok), str(msg), float(cost), str(model or "agentic-cli"), list(changed_files or [])
+        if len(result) == 4:
+            ok, msg, cost, model = result
+            return bool(ok), str(msg), float(cost), str(model or "agentic-cli"), []
+        if len(result) == 3:
+            ok, msg, cost = result
+            return bool(ok), str(msg), float(cost), "agentic-cli", []
+        if len(result) == 2:
+            ok, msg = result
+            return bool(ok), str(msg), 0.0, "agentic-cli", []
+    # Fallback (shouldn't happen)
+    return False, "Invalid agentic result shape", 0.0, "agentic-cli", []
+
+def _safe_run_agentic_verify(*, prompt_file, code_file, program_file, verification_log_file, verbose=False, cwd=None):
+    """
+    Call (possibly monkeypatched) run_agentic_verify and normalize its return.
+
+    Note: cwd parameter is accepted for compatibility but not passed to run_agentic_verify
+    as it determines the working directory from prompt_file.parent internally.
+    """
+    if not prompt_file:
+        return False, "Agentic verify requires a valid prompt file.", 0.0, "agentic-cli", []
+
+    try:
+        res = run_agentic_verify(
+            prompt_file=Path(prompt_file),
+            code_file=Path(code_file),
+            program_file=Path(program_file),
+            verification_log_file=Path(verification_log_file),
+            verbose=verbose,
+            quiet=not verbose,
+            # Note: cwd is not passed - run_agentic_verify uses prompt_file.parent as project root
+        )
+        return _normalize_agentic_result(res)
+    except Exception as e:
+        return False, f"Agentic verify failed: {e}", 0.0, "agentic-cli", []
 
 # Initialize Rich Console for pretty printing
 console = Console()
@@ -56,7 +178,7 @@ def _run_program(
         command.extend(args)
 
     try:
-        # Run from staging root directory instead of examples/ directory
+        # Run from staging root directory instead of examples/
         # This allows imports from both pdd/ and examples/ subdirectories
         staging_root = program_path.parent.parent  # Go up from examples/ to staging root
         
@@ -95,6 +217,7 @@ def fix_verification_errors_loop(
     program_file: str,
     code_file: str,
     prompt: str,
+    prompt_file: str,
     verification_program: str,
     strength: float,
     temperature: float,
@@ -105,19 +228,27 @@ def fix_verification_errors_loop(
     output_program_path: Optional[str] = None,
     verbose: bool = False,
     program_args: Optional[list[str]] = None,
-    llm_time: float = DEFAULT_TIME # Add time parameter
+    llm_time: float = DEFAULT_TIME, # Add time parameter
+    agentic_fallback: bool = True,
+    use_cloud: bool = False,
 ) -> Dict[str, Any]:
     """
     Attempts to fix errors in a code file based on program execution output
     against the prompt's intent, iterating multiple times with secondary verification.
 
+    Hybrid Cloud Support:
+        When use_cloud=True, the LLM fix calls are routed to the cloud verifyCode endpoint
+        while local program execution stays local. This allows the loop to pass local
+        verification results to the cloud for analysis and fixes.
+
     Args:
         program_file: Path to the Python program exercising the code.
         code_file: Path to the code file being tested/verified.
         prompt: The prompt defining the intended behavior.
+        prompt_file: Path to the prompt file.
         verification_program: Path to a secondary program to verify code changes.
         strength: LLM model strength (0.0 to 1.0).
-        temperature: LLM temperature (0.0 to 1.0).
+        temperature: LLM temperature (0.0 to 2.0).
         max_attempts: Maximum number of fix attempts.
         budget: Maximum allowed cost in USD.
         verification_log_file: Path for detailed XML logging (default: "verification.log").
@@ -126,6 +257,8 @@ def fix_verification_errors_loop(
         verbose: Enable verbose logging (default: False).
         program_args: Optional list of command-line arguments for the program_file.
         llm_time: Time parameter for fix_verification_errors calls (default: DEFAULT_TIME).
+        agentic_fallback: Enable agentic fallback if the primary fix mechanism fails.
+        use_cloud: If True, use cloud LLM for fix calls while keeping verification execution local.
 
     Returns:
         A dictionary containing:
@@ -137,6 +270,108 @@ def fix_verification_errors_loop(
             'model_name': str | None - Name of the LLM model used.
             'statistics': dict - Detailed statistics about the process.
     """
+    is_python = str(code_file).lower().endswith(".py")
+    if not is_python:
+        # For non-Python files, run the verification program to get an initial error state
+        console.print(f"[cyan]Non-Python target detected. Running verification program to get initial state...[/cyan]")
+        lang = get_language(os.path.splitext(code_file)[1])
+        verify_cmd = default_verify_cmd_for(lang, verification_program)
+        if not verify_cmd:
+            # No verify command available (e.g., Java without maven/gradle).
+            # Trigger agentic fallback directly.
+            console.print(f"[cyan]No verification command for {lang}. Triggering agentic fallback directly...[/cyan]")
+            verification_log_path = Path(verification_log_file)
+            verification_log_path.parent.mkdir(parents=True, exist_ok=True)
+            # Create minimal error log if it doesn't exist
+            if not verification_log_path.exists() or verification_log_path.stat().st_size == 0:
+                with open(verification_log_path, "w") as f:
+                    f.write(f"No verification command available for language: {lang}\n")
+                    f.write("Agentic fix will attempt to resolve the issue.\n")
+
+            agent_cwd = Path(prompt_file).parent if prompt_file else None
+            console.print(f"[cyan]Attempting agentic verify fallback (prompt_file={prompt_file!r})...[/cyan]")
+            success, agent_msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_verify(
+                prompt_file=prompt_file,
+                code_file=code_file,
+                program_file=verification_program,
+                verification_log_file=verification_log_file,
+                verbose=verbose,
+                cwd=agent_cwd,
+            )
+            if not success:
+                console.print(f"[bold red]Agentic verify fallback failed: {agent_msg}[/bold red]")
+            if agent_changed_files:
+                console.print(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
+                for f in agent_changed_files:
+                    console.print(f"  • {f}")
+            final_program = ""
+            final_code = ""
+            try:
+                with open(verification_program, "r") as f:
+                    final_program = f.read()
+            except Exception:
+                pass
+            try:
+                with open(code_file, "r") as f:
+                    final_code = f.read()
+            except Exception:
+                pass
+            return {
+                "success": success,
+                "final_program": final_program,
+                "final_code": final_code,
+                "total_attempts": 1,
+                "total_cost": agent_cost,
+                "model_name": agent_model,
+                "statistics": {},
+            }
+
+        verify_result = subprocess.run(verify_cmd, capture_output=True, text=True, shell=True)
+        pytest_output = (verify_result.stdout or "") + "\n" + (verify_result.stderr or "")
+        console.print("[cyan]Non-Python target detected. Triggering agentic fallback...[/cyan]")
+        verification_log_path = Path(verification_log_file)
+        verification_log_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(verification_log_path, "w") as f:
+            f.write(pytest_output)
+        
+        agent_cwd = Path(prompt_file).parent if prompt_file else None
+        console.print(f"[cyan]Attempting agentic verify fallback (prompt_file={prompt_file!r})...[/cyan]")
+        success, agent_msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_verify(
+            prompt_file=prompt_file,
+            code_file=code_file,
+            program_file=verification_program,
+            verification_log_file=verification_log_file,
+            verbose=verbose,
+            cwd=agent_cwd,
+        )
+        if not success:
+            console.print(f"[bold red]Agentic verify fallback failed: {agent_msg}[/bold red]")
+        if agent_changed_files:
+            console.print(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
+            for f in agent_changed_files:
+                console.print(f"  • {f}")
+        final_program = ""
+        final_code = ""
+        try:
+            with open(verification_program, "r") as f:
+                final_program = f.read()
+        except Exception:
+            pass
+        try:
+            with open(code_file, "r") as f:
+                final_code = f.read()
+        except Exception:
+            pass
+        return {
+            "success": success,
+            "final_program": final_program,
+            "final_code": final_code,
+            "total_attempts": 1,
+            "total_cost": agent_cost,
+            "model_name": agent_model,
+            "statistics": {},
+        }
+
     program_path = Path(program_file).resolve()
     code_path = Path(code_file).resolve()
     verification_program_path = Path(verification_program).resolve()
@@ -155,12 +390,12 @@ def fix_verification_errors_loop(
     if not 0.0 <= strength <= 1.0:
         console.print(f"[bold red]Error: Strength must be between 0.0 and 1.0.[/bold red]")
         return {"success": False, "final_program": "", "final_code": "", "total_attempts": 0, "total_cost": 0.0, "model_name": None, "statistics": {}}
-    if not 0.0 <= temperature <= 1.0:
-         console.print(f"[bold red]Error: Temperature must be between 0.0 and 1.0.[/bold red]")
+    if not 0.0 <= temperature <= 2.0:
+         console.print(f"[bold red]Error: Temperature must be between 0.0 and 2.0.[/bold red]")
          return {"success": False, "final_program": "", "final_code": "", "total_attempts": 0, "total_cost": 0.0, "model_name": None, "statistics": {}}
-    # Prompt requires positive max_attempts
-    if max_attempts <= 0:
-        console.print(f"[bold red]Error: Max attempts must be positive.[/bold red]")
+    # max_attempts must be non-negative (0 is valid - skips LLM loop, goes straight to agentic mode)
+    if max_attempts < 0:
+        console.print(f"[bold red]Error: Max attempts must be non-negative.[/bold red]")
         return {"success": False, "final_program": "", "final_code": "", "total_attempts": 0, "total_cost": 0.0, "model_name": None, "statistics": {}}
     if budget < 0:
         console.print(f"[bold red]Error: Budget cannot be negative.[/bold red]")
@@ -182,6 +417,7 @@ def fix_verification_errors_loop(
     total_cost = 0.0
     model_name: Optional[str] = None
     overall_success = False
+    any_verification_passed = False  # Track if ANY iteration passed secondary verification
     best_iteration = {
         'attempt': -1, # 0 represents initial state
         'program_backup': None,
@@ -202,6 +438,11 @@ def fix_verification_errors_loop(
     program_contents = "" # Keep track of current contents
     code_contents = ""    # Keep track of current contents
 
+    # Create backup directory in .pdd/backups/ to avoid polluting code/test directories
+    backup_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_dir = Path.cwd() / '.pdd' / 'backups' / code_path.stem / backup_timestamp
+    backup_dir.mkdir(parents=True, exist_ok=True)
+
     # --- Step 3: Determine Initial State ---
     if verbose:
         console.print("[bold cyan]Step 3: Determining Initial State...[/bold cyan]")
@@ -215,6 +456,21 @@ def fix_verification_errors_loop(
         console.print(f"[bold red]Error reading initial program/code files: {e}[/bold red]")
         stats['status_message'] = f'Error reading initial files: {e}' # Add status message
         return {"success": False, "final_program": "", "final_code": "", "total_attempts": 0, "total_cost": 0.0, "model_name": None, "statistics": stats}
+
+    # 3a-pre: Validate code file is not empty (prevents infinite loops with empty content)
+    if not initial_code_content or len(initial_code_content.strip()) == 0:
+        error_msg = f"Code file is empty or contains only whitespace: {code_path}"
+        console.print(f"[bold red]Error: {error_msg}[/bold red]")
+        stats['status_message'] = f'Error: Code file is empty - cannot verify'
+        return {
+            "success": False,
+            "final_program": initial_program_content,
+            "final_code": "",
+            "total_attempts": 0,
+            "total_cost": 0.0,
+            "model_name": None,
+            "statistics": stats
+        }
 
     # 3a: Run initial program with args
     initial_return_code, initial_output = _run_program(program_path, args=program_args)
@@ -232,128 +488,207 @@ def fix_verification_errors_loop(
     initial_log_entry += '</InitialState>'
     _write_log_entry(log_path, initial_log_entry)
 
+    # 3c: Check if skipping LLM assessment (max_attempts=0 means skip to agentic fallback)
+    skip_llm = (max_attempts == 0)
+
     # 3d: Call fix_verification_errors for initial assessment
     try:
-        if verbose:
-            console.print("Running initial assessment with fix_verification_errors...")
-        # Use actual strength/temp for realistic initial assessment
-        initial_fix_result = fix_verification_errors(
-            program=initial_program_content,
-            prompt=prompt,
-            code=initial_code_content,
-            output=initial_output,
-            strength=strength,
-            temperature=temperature,
-            verbose=verbose,
-            time=llm_time # Pass time
-        )
-        # 3e: Add cost
-        initial_cost = initial_fix_result.get('total_cost', 0.0)
-        total_cost += initial_cost
-        model_name = initial_fix_result.get('model_name') # Capture model name early
-        if verbose:
-             console.print(f"Initial assessment cost: ${initial_cost:.6f}, Total cost: ${total_cost:.6f}")
+        if skip_llm:
+            # Skip initial LLM assessment when max_attempts=0
+            # But first check if the initial run already passed — no need for agentic fallback
+            if initial_return_code == 0:
+                # Initial run passed! Code already works, skip agentic fallback
+                console.print("[bold green]max_attempts=0: Initial program run passed (exit code 0). Skipping agentic fallback.[/bold green]")
+                stats['initial_issues'] = 0
+                stats['final_issues'] = 0
+                stats['best_iteration_num'] = 0
+                stats['best_iteration_issues'] = 0
+                stats['status_message'] = 'Success - initial run passed (max_attempts=0)'
+                stats['improvement_issues'] = 0
+                stats['improvement_percent'] = 0.0
+                overall_success = True  # Success! No agentic fallback needed
+                final_program_content = initial_program_content
+                final_code_content = initial_code_content
+                initial_issues_count = 0
+                # Write log entry for success
+                final_log_entry = "<FinalActions>\n"
+                final_log_entry += f'  <Action>max_attempts=0: Initial run passed (exit code 0). No fixing needed.</Action>\n'
+                final_log_entry += "</FinalActions>"
+                _write_log_entry(log_path, final_log_entry)
+            else:
+                # Initial run failed, proceed to agentic fallback
+                console.print("[bold cyan]max_attempts=0: Initial run failed. Skipping LLM assessment, proceeding to agentic fallback.[/bold cyan]")
+                # Set up state for skipping the LLM loop
+                stats['initial_issues'] = -1  # Unknown since we skipped assessment
+                stats['final_issues'] = -1
+                stats['best_iteration_num'] = -1
+                stats['best_iteration_issues'] = float('inf')
+                stats['status_message'] = 'Skipped LLM (max_attempts=0)'
+                stats['improvement_issues'] = 'N/A'
+                stats['improvement_percent'] = 'N/A'
+                overall_success = False  # Trigger agentic fallback
+                final_program_content = initial_program_content
+                final_code_content = initial_code_content
+                # Write log entry for skipped LLM
+                final_log_entry = "<FinalActions>\n"
+                final_log_entry += f'  <Action>Skipped LLM assessment and loop (max_attempts=0), proceeding to agentic fallback.</Action>\n'
+                final_log_entry += "</FinalActions>"
+                _write_log_entry(log_path, final_log_entry)
+                # Skip to final stats (the while loop below will also be skipped since 0 < 0 is False)
+                initial_issues_count = -1  # Sentinel: unknown/not applicable when LLM assessment is skipped; kept numeric for downstream comparisons
+        else:
+            if verbose:
+                console.print("Running initial assessment with fix_verification_errors...")
+            # Use actual strength/temp for realistic initial assessment
+            # Use cloud or local based on use_cloud parameter
+            if use_cloud:
+                try:
+                    initial_fix_result = cloud_verify_fix(
+                        program=initial_program_content,
+                        prompt=prompt,
+                        code=initial_code_content,
+                        output=initial_output,
+                        strength=strength,
+                        temperature=temperature,
+                        time_param=llm_time,
+                        verbose=verbose,
+                        language="python" if is_python else get_language(os.path.splitext(code_file)[1]),
+                    )
+                    if verbose:
+                        console.print(f"[cyan]Cloud verify fix completed.[/cyan]")
+                except (requests.exceptions.RequestException, RuntimeError) as cloud_err:
+                    # Cloud failed - fall back to local
+                    console.print(f"[yellow]Cloud verify fix failed: {cloud_err}. Falling back to local.[/yellow]")
+                    initial_fix_result = fix_verification_errors(
+                        program=initial_program_content,
+                        prompt=prompt,
+                        code=initial_code_content,
+                        output=initial_output,
+                        strength=strength,
+                        temperature=temperature,
+                        verbose=verbose,
+                        time=llm_time
+                    )
+            else:
+                initial_fix_result = fix_verification_errors(
+                    program=initial_program_content,
+                    prompt=prompt,
+                    code=initial_code_content,
+                    output=initial_output,
+                    strength=strength,
+                    temperature=temperature,
+                    verbose=verbose,
+                    time=llm_time # Pass time
+                )
+            # 3e: Add cost
+            initial_cost = initial_fix_result.get('total_cost', 0.0)
+            total_cost += initial_cost
+            model_name = initial_fix_result.get('model_name') # Capture model name early
+            if verbose:
+                 console.print(f"Initial assessment cost: ${initial_cost:.6f}, Total cost: ${total_cost:.6f}")
 
-        # 3f: Extract initial issues
-        initial_issues_count = initial_fix_result.get('verification_issues_count', -1)
-        stats['initial_issues'] = initial_issues_count
-        if verbose:
-            console.print(f"Initial verification issues found: {initial_issues_count}")
-            if initial_fix_result.get('explanation'):
-                 console.print("Initial assessment explanation:")
-                 console.print(initial_fix_result['explanation'])
+            # 3f: Extract initial issues
+            initial_issues_count = initial_fix_result.get('verification_issues_count', -1)
+            stats['initial_issues'] = initial_issues_count
+            if verbose:
+                console.print(f"Initial verification issues found: {initial_issues_count}")
+                if initial_fix_result.get('explanation'):
+                     console.print("Initial assessment explanation:")
+                     console.print(initial_fix_result['explanation'])
 
-        # FIX: Add check for initial assessment error *before* checking success/budget
-        # Check if the fixer function returned its specific error state (None explanation/model)
-        if initial_fix_result.get('explanation') is None and initial_fix_result.get('model_name') is None:
-             error_msg = "Error: Fixer returned invalid/error state during initial assessment"
-             console.print(f"[bold red]{error_msg}. Aborting.[/bold red]")
-             stats['status_message'] = error_msg
-             stats['final_issues'] = -1 # Indicate unknown/error state
-             # Write final action log for error on initial check
-             final_log_entry = "<FinalActions>\n"
-             final_log_entry += f'  <Error>{escape(error_msg)}</Error>\n'
-             final_log_entry += "</FinalActions>"
-             _write_log_entry(log_path, final_log_entry)
-             # Return failure state
-             return {
-                 "success": False,
-                 "final_program": initial_program_content,
-                 "final_code": initial_code_content,
-                 "total_attempts": 0,
-                 "total_cost": total_cost, # May be non-zero if error occurred after some cost
-                 "model_name": model_name, # May have been set before error
-                 "statistics": stats,
-             }
+        # The following checks only apply when we ran the LLM assessment (not skipped)
+        if not skip_llm:
+            # FIX: Add check for initial assessment error *before* checking success/budget
+            # Check if the fixer function returned its specific error state (None explanation/model)
+            if initial_fix_result.get('explanation') is None and initial_fix_result.get('model_name') is None:
+                error_msg = "Error: Fixer returned invalid/error state during initial assessment"
+                console.print(f"[bold red]{error_msg}. Aborting.[/bold red]")
+                stats['status_message'] = error_msg
+                stats['final_issues'] = -1 # Indicate unknown/error state
+                # Write final action log for error on initial check
+                final_log_entry = "<FinalActions>\n"
+                final_log_entry += f'  <Error>{escape(error_msg)}</Error>\n'
+                final_log_entry += "</FinalActions>"
+                _write_log_entry(log_path, final_log_entry)
+                # Return failure state
+                return {
+                    "success": False,
+                    "final_program": initial_program_content,
+                    "final_code": initial_code_content,
+                    "total_attempts": 0,
+                    "total_cost": total_cost, # May be non-zero if error occurred after some cost
+                    "model_name": model_name, # May have been set before error
+                    "statistics": stats,
+                }
 
-        # 3g: Initialize best iteration tracker
-        # Store original paths as the 'backup' for iteration 0
-        best_iteration = {
-            'attempt': 0, # Use 0 for initial state
-            'program_backup': str(program_path), # Path to original
-            'code_backup': str(code_path),       # Path to original
-            'issues': initial_issues_count if initial_issues_count != -1 else float('inf')
-        }
-        stats['best_iteration_num'] = 0
-        stats['best_iteration_issues'] = best_iteration['issues']
-
-        # 3h: Check for immediate success or budget exceeded
-        if initial_issues_count == 0:
-            console.print("[bold green]Initial check found 0 verification issues. No fixing loop needed.[/bold green]")
-            overall_success = True
-            stats['final_issues'] = 0
-            stats['status_message'] = 'Success on initial check'
-            stats['improvement_issues'] = 0
-            stats['improvement_percent'] = 100.0 # Reached target of 0 issues
-
-            # Write final action log for successful initial check
-            final_log_entry = "<FinalActions>\n"
-            final_log_entry += f'  <Action>Process finished successfully on initial check.</Action>\n'
-            final_log_entry += "</FinalActions>"
-            _write_log_entry(log_path, final_log_entry)
-
-            # Step 7 (early exit): Print stats
-            console.print("\n[bold]--- Final Statistics ---[/bold]")
-            console.print(f"Initial Issues: {stats['initial_issues']}")
-            console.print(f"Final Issues: {stats['final_issues']}")
-            console.print(f"Best Iteration: {stats['best_iteration_num']} (Issues: {stats['best_iteration_issues']})")
-            console.print(f"Improvement (Issues Reduced): {stats['improvement_issues']}")
-            console.print(f"Improvement (Percent Towards 0 Issues): {stats['improvement_percent']:.2f}%")
-            console.print(f"Overall Status: {stats['status_message']}")
-            console.print(f"Total Attempts Made: {attempts}") # attempts is 0 here
-            console.print(f"Total Cost: ${total_cost:.6f}")
-            console.print(f"Model Used: {model_name or 'N/A'}")
-            # Step 8 (early exit): Return
-            return {
-                "success": overall_success,
-                "final_program": initial_program_content,
-                "final_code": initial_code_content,
-                "total_attempts": attempts, # attempts is 0
-                "total_cost": total_cost,
-                "model_name": model_name,
-                "statistics": stats,
+            # 3g: Initialize best iteration tracker
+            # Store original paths as the 'backup' for iteration 0
+            best_iteration = {
+                'attempt': 0, # Use 0 for initial state
+                'program_backup': str(program_path), # Path to original
+                'code_backup': str(code_path),       # Path to original
+                'issues': initial_issues_count if initial_issues_count != -1 else float('inf')
             }
-        elif total_cost >= budget:
-             console.print(f"[bold yellow]Budget ${budget:.4f} exceeded during initial assessment (Cost: ${total_cost:.4f}). Aborting.[/bold yellow]")
-             stats['status_message'] = 'Budget exceeded on initial check'
-             stats['final_issues'] = stats['initial_issues'] # Final issues same as initial
+            stats['best_iteration_num'] = 0
+            stats['best_iteration_issues'] = best_iteration['issues']
 
-             # Write final action log for budget exceeded on initial check
-             final_log_entry = "<FinalActions>\n"
-             final_log_entry += f'  <Action>Budget exceeded on initial check.</Action>\n'
-             final_log_entry += "</FinalActions>"
-             _write_log_entry(log_path, final_log_entry)
+            # 3h: Check for immediate success or budget exceeded
+            if initial_issues_count == 0:
+                console.print("[bold green]Initial check found 0 verification issues. No fixing loop needed.[/bold green]")
+                overall_success = True
+                stats['final_issues'] = 0
+                stats['status_message'] = 'Success on initial check'
+                stats['improvement_issues'] = 0
+                stats['improvement_percent'] = 100.0 # Reached target of 0 issues
 
-             # No changes made, return initial state
-             return {
-                 "success": False,
-                 "final_program": initial_program_content,
-                 "final_code": initial_code_content,
-                 "total_attempts": 0,
-                 "total_cost": total_cost,
-                 "model_name": model_name,
-                 "statistics": stats,
-             }
+                # Write final action log for successful initial check
+                final_log_entry = "<FinalActions>\n"
+                final_log_entry += f'  <Action>Process finished successfully on initial check.</Action>\n'
+                final_log_entry += "</FinalActions>"
+                _write_log_entry(log_path, final_log_entry)
+
+                # Step 7 (early exit): Print stats
+                console.print("\n[bold]--- Final Statistics ---[/bold]")
+                console.print(f"Initial Issues: {stats['initial_issues']}")
+                console.print(f"Final Issues: {stats['final_issues']}")
+                console.print(f"Best Iteration: {stats['best_iteration_num']} (Issues: {stats['best_iteration_issues']})")
+                console.print(f"Improvement (Issues Reduced): {stats['improvement_issues']}")
+                console.print(f"Improvement (Percent Towards 0 Issues): {stats['improvement_percent']:.2f}%")
+                console.print(f"Overall Status: {stats['status_message']}")
+                console.print(f"Total Attempts Made: {attempts}") # attempts is 0 here
+                console.print(f"Total Cost: ${total_cost:.6f}")
+                console.print(f"Model Used: {model_name or 'N/A'}")
+                # Step 8 (early exit): Return
+                return {
+                    "success": overall_success,
+                    "final_program": initial_program_content,
+                    "final_code": initial_code_content,
+                    "total_attempts": attempts, # attempts is 0
+                    "total_cost": total_cost,
+                    "model_name": model_name,
+                    "statistics": stats,
+                }
+            elif total_cost >= budget:
+                console.print(f"[bold yellow]Budget ${budget:.4f} exceeded during initial assessment (Cost: ${total_cost:.4f}). Aborting.[/bold yellow]")
+                stats['status_message'] = 'Budget exceeded on initial check'
+                stats['final_issues'] = stats['initial_issues'] # Final issues same as initial
+
+                # Write final action log for budget exceeded on initial check
+                final_log_entry = "<FinalActions>\n"
+                final_log_entry += f'  <Action>Budget exceeded on initial check.</Action>\n'
+                final_log_entry += "</FinalActions>"
+                _write_log_entry(log_path, final_log_entry)
+
+                # No changes made, return initial state
+                return {
+                    "success": False,
+                    "final_program": initial_program_content,
+                    "final_code": initial_code_content,
+                    "total_attempts": 0,
+                    "total_cost": total_cost,
+                    "model_name": model_name,
+                    "statistics": stats,
+                }
 
     except Exception as e:
         console.print(f"[bold red]Error during initial assessment with fix_verification_errors: {e}[/bold red]")
@@ -404,9 +739,9 @@ def fix_verification_errors_loop(
         #     code_contents = code_path.read_text(encoding="utf-8")
         # except IOError as e: ...
 
-        # 4d: Create backups
-        program_backup_path = program_path.with_stem(f"{program_path.stem}_iteration_{current_attempt}").with_suffix(program_path.suffix)
-        code_backup_path = code_path.with_stem(f"{code_path.stem}_iteration_{current_attempt}").with_suffix(code_path.suffix)
+        # 4d: Create backups in .pdd/backups/ (backup_dir already created above)
+        program_backup_path = backup_dir / f"program_{current_attempt}{program_path.suffix}"
+        code_backup_path = backup_dir / f"code_{current_attempt}{code_path.suffix}"
         try:
             # Copy from the *current* state before this iteration's fix
             program_path.write_text(program_contents, encoding="utf-8") # Ensure file matches memory state
@@ -426,7 +761,7 @@ def fix_verification_errors_loop(
             stats['status_message'] = f'Error creating backups on attempt {current_attempt}'
             break # Don't proceed without backups
 
-        # 4e: Call fix_verification_errors
+        # 4e: Call fix_verification_errors (cloud or local based on use_cloud parameter)
         iteration_log_xml += f'  <InputsToFixer>\n'
         iteration_log_xml += f'    <Program>{escape(program_contents)}</Program>\n'
         iteration_log_xml += f'    <Code>{escape(code_contents)}</Code>\n'
@@ -438,16 +773,46 @@ def fix_verification_errors_loop(
         try:
             if verbose:
                 console.print("Calling fix_verification_errors...")
-            fix_result = fix_verification_errors(
-                program=program_contents,
-                prompt=prompt,
-                code=code_contents,
-                output=program_output,
-                strength=strength,
-                temperature=temperature,
-                verbose=verbose,
-                time=llm_time # Pass time
-            )
+            # Use cloud or local based on use_cloud parameter
+            if use_cloud:
+                try:
+                    fix_result = cloud_verify_fix(
+                        program=program_contents,
+                        prompt=prompt,
+                        code=code_contents,
+                        output=program_output,
+                        strength=strength,
+                        temperature=temperature,
+                        time_param=llm_time,
+                        verbose=verbose,
+                        language="python" if is_python else get_language(os.path.splitext(code_file)[1]),
+                    )
+                    if verbose:
+                        console.print(f"[cyan]Cloud verify fix completed.[/cyan]")
+                except (requests.exceptions.RequestException, RuntimeError) as cloud_err:
+                    # Cloud failed - fall back to local
+                    console.print(f"[yellow]Cloud verify fix failed: {cloud_err}. Falling back to local.[/yellow]")
+                    fix_result = fix_verification_errors(
+                        program=program_contents,
+                        prompt=prompt,
+                        code=code_contents,
+                        output=program_output,
+                        strength=strength,
+                        temperature=temperature,
+                        verbose=verbose,
+                        time=llm_time
+                    )
+            else:
+                fix_result = fix_verification_errors(
+                    program=program_contents,
+                    prompt=prompt,
+                    code=code_contents,
+                    output=program_output,
+                    strength=strength,
+                    temperature=temperature,
+                    verbose=verbose,
+                    time=llm_time # Pass time
+                )
 
             # 4f: Add cost
             attempt_cost = fix_result.get('total_cost', 0.0)
@@ -593,6 +958,9 @@ def fix_verification_errors_loop(
 
         # Now, decide outcome based on issue count and verification status
         if secondary_verification_passed:
+            # Only track as "verification passed" if code was actually changed and verified
+            if code_updated:
+                any_verification_passed = True  # Track that at least one verification passed
             # Update best iteration if current attempt is better
             if current_issues_count != -1 and current_issues_count < best_iteration['issues']:
                  if verbose:
@@ -735,8 +1103,14 @@ def fix_verification_errors_loop(
                     if verbose:
                         console.print(f"Restored {program_path} from {best_program_path}")
                         console.print(f"Restored {code_path} from {best_code_path}")
-                    # Final issues count is the best achieved count
-                    stats['final_issues'] = best_iteration['issues']
+                    # Only mark as success if verification actually passed
+                    # (best_iteration is only updated when secondary verification passes,
+                    # but we double-check with any_verification_passed for safety)
+                    if any_verification_passed:
+                        stats['final_issues'] = 0
+                        overall_success = True
+                    else:
+                        stats['final_issues'] = best_iteration['issues']
                 else:
                     console.print(f"[bold red]Error: Backup files for best iteration {best_iteration['attempt']} not found! Cannot restore.[/bold red]")
                     final_log_entry += f'  <Error>Backup files for best iteration {best_iteration["attempt"]} not found.</Error>\n'
@@ -749,6 +1123,15 @@ def fix_verification_errors_loop(
                 final_log_entry += f'  <Error>Error restoring files from best iteration {best_iteration["attempt"]}: {escape(str(e))}</Error>\n'
                 stats['status_message'] += f' - Error restoring best iteration: {e}'
                 stats['final_issues'] = -1 # Indicate uncertainty
+
+        # If verification passed (even if issue count didn't decrease), consider it success
+        elif any_verification_passed:
+             console.print("[green]Verification passed. Keeping current state.[/green]")
+             final_log_entry += f'  <Action>Verification passed; keeping current state.</Action>\n'
+             # Verification passed = code works, so final issues is effectively 0
+             stats['final_issues'] = 0
+             stats['status_message'] = 'Success - verification passed'
+             overall_success = True
 
         # If no improvement was made or recorded (best is still initial state or worse)
         elif best_iteration['attempt'] <= 0 or best_iteration['issues'] >= initial_issues_val:
@@ -864,6 +1247,36 @@ def fix_verification_errors_loop(
     if final_known and stats['final_issues'] != 0:
         overall_success = False
 
+    if not overall_success and agentic_fallback:
+        console.print(f"[bold yellow]Initiating agentic fallback (prompt_file={prompt_file!r})...[/bold yellow]")
+        agent_cwd = Path(prompt_file).parent if prompt_file else None
+        agent_success, agent_msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_verify(
+            prompt_file=prompt_file,
+            code_file=code_file,
+            program_file=verification_program,
+            verification_log_file=verification_log_file,
+            verbose=verbose,
+            cwd=agent_cwd,
+        )
+        total_cost += agent_cost
+        if not agent_success:
+            console.print(f"[bold red]Agentic verify fallback failed: {agent_msg}[/bold red]")
+        if agent_changed_files:
+            console.print(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
+            for f in agent_changed_files:
+                console.print(f"  • {f}")
+        if agent_success:
+            console.print("[bold green]Agentic fallback successful.[/bold green]")
+            overall_success = True
+            model_name = agent_model or model_name
+            try:
+                final_code_content = Path(code_file).read_text(encoding="utf-8")
+                final_program_content = Path(program_file).read_text(encoding="utf-8")
+            except Exception as e:
+                console.print(f"[yellow]Warning: Could not read files after successful agentic fix: {e}[/yellow]")
+        else:
+            console.print("[bold red]Agentic fallback failed.[/bold red]")
+
     return {
         "success": overall_success,
         "final_program": final_program_content,
@@ -873,152 +1286,3 @@ def fix_verification_errors_loop(
         "model_name": model_name,
         "statistics": stats,
     }
-
-# Example usage (requires setting up dummy files and potentially mocking fix_verification_errors)
-if __name__ == "__main__":
-    # Create dummy files for demonstration
-    # In a real scenario, these files would exist and contain actual code/programs.
-    console.print("[yellow]Setting up dummy files for demonstration...[/yellow]")
-    temp_dir = Path("./temp_fix_verification_loop")
-    temp_dir.mkdir(exist_ok=True)
-
-    program_file = temp_dir / "my_program.py"
-    code_file = temp_dir / "my_code_module.py"
-    verification_program_file = temp_dir / "verify_syntax.py"
-
-    program_file.write_text("""
-import my_code_module
-import sys
-# Simulate using the module and checking output
-val = int(sys.argv[1]) if len(sys.argv) > 1 else 5
-result = my_code_module.process(val)
-expected = val * 2
-print(f"Input: {val}")
-print(f"Result: {result}")
-print(f"Expected: {expected}")
-if result == expected:
-    print("VERIFICATION_SUCCESS")
-else:
-    print(f"VERIFICATION_FAILURE: Expected {expected}, got {result}")
-""", encoding="utf-8")
-
-    # Initial code with a bug
-    code_file.write_text("""
-# my_code_module.py
-def process(x):
-    # Bug: should be x * 2
-    return x + 2
-""", encoding="utf-8")
-
-    # Simple verification program (e.g., syntax check)
-    verification_program_file.write_text("""
-import sys
-import py_compile
-import os
-# Check syntax of the code file (passed as argument, but we'll hardcode for simplicity here)
-code_to_check = os.environ.get("CODE_FILE_TO_CHECK", "temp_fix_verification_loop/my_code_module.py")
-print(f"Checking syntax of: {code_to_check}")
-try:
-    py_compile.compile(code_to_check, doraise=True)
-    print("Syntax OK.")
-    sys.exit(0) # Success
-except py_compile.PyCompileError as e:
-    print(f"Syntax Error: {e}")
-    sys.exit(1) # Failure
-except Exception as e:
-    print(f"Verification Error: {e}")
-    sys.exit(1) # Failure
-""", encoding="utf-8")
-    # Set environment variable for the verification script
-    os.environ["CODE_FILE_TO_CHECK"] = str(code_file.resolve())
-
-
-    # --- Mock fix_verification_errors ---
-    # This is crucial for testing without actual LLM calls / costs
-    # In a real test suite, use unittest.mock
-    _original_fix_verification_errors = fix_verification_errors
-    _call_count = 0
-
-    def mock_fix_verification_errors(program, prompt, code, output, strength, temperature, verbose):
-        global _call_count
-        _call_count += 1
-        cost = 0.001 * _call_count # Simulate increasing cost
-        model = "mock_model_v1"
-        explanation = ["Detected deviation: Output shows 'Result: 7', 'Expected: 10'.", "Issue seems to be in the `process` function calculation."]
-        issues_count = 1 # Assume 1 issue initially
-
-        fixed_program = program # Assume program doesn't need fixing
-        fixed_code = code
-
-        # Simulate fixing the code on the first *real* attempt (call_count == 2, as first is initial)
-        if "VERIFICATION_FAILURE" in output and _call_count >= 2:
-             explanation = ["Identified incorrect addition `x + 2`.", "Corrected to multiplication `x * 2` based on prompt intent and output mismatch."]
-             fixed_code = """
-# my_code_module.py
-def process(x):
-    # Fixed: should be x * 2
-    return x * 2
-"""
-             issues_count = 0 # Fixed!
-        elif "VERIFICATION_SUCCESS" in output:
-             explanation = ["Output indicates VERIFICATION_SUCCESS."]
-             issues_count = 0 # Already correct
-
-        return {
-            'explanation': explanation,
-            'fixed_program': fixed_program,
-            'fixed_code': fixed_code,
-            'total_cost': cost,
-            'model_name': model,
-            'verification_issues_count': issues_count,
-        }
-
-    # Replace the real function with the mock
-    # In package context, you might need to patch differently
-    # For this script execution:
-    # Note: This direct replacement might not work if the function is imported
-    # using `from .fix_verification_errors import fix_verification_errors`.
-    # A proper mock framework (`unittest.mock.patch`) is better.
-    # Let's assume for this example run, we can modify the global scope *before* the loop calls it.
-    # This is fragile. A better approach involves dependency injection or mocking frameworks.
-    # HACK: Re-assigning the imported name in the global scope of this script
-    globals()['fix_verification_errors'] = mock_fix_verification_errors
-
-
-    console.print("\n[bold blue]--- Running fix_verification_errors_loop (with mock) ---[/bold blue]")
-
-    # Example program_args: Pass input value 10 and another arg 5
-    # Note: The example program only uses the first arg sys.argv[1]
-    example_args = ["10", "another_arg"]
-
-    results = fix_verification_errors_loop(
-        program_file=str(program_file),
-        code_file=str(code_file),
-        prompt="Create a module 'my_code_module.py' with a function 'process(x)' that returns the input multiplied by 2.",
-        verification_program=str(verification_program_file),
-        strength=0.5,
-        temperature=0.1,
-        max_attempts=3,
-        budget=0.10, # Set a budget
-        verification_log_file=str(temp_dir / "test_verification.log"),
-        verbose=True,
-        program_args=example_args
-    )
-
-    console.print("\n[bold blue]--- Loop Finished ---[/bold blue]")
-    console.print(f"Success: {results['success']}")
-    console.print(f"Total Attempts: {results['total_attempts']}")
-    console.print(f"Total Cost: ${results['total_cost']:.6f}")
-    console.print(f"Model Name: {results['model_name']}")
-    # console.print(f"Final Program:\n{results['final_program']}") # Can be long
-    console.print(f"Final Code:\n{results['final_code']}")
-    console.print(f"Statistics:\n{results['statistics']}")
-
-    # Restore original function if needed elsewhere
-    globals()['fix_verification_errors'] = _original_fix_verification_errors
-
-    # Clean up dummy files
-    # console.print("\n[yellow]Cleaning up dummy files...[/yellow]")
-    # shutil.rmtree(temp_dir)
-    console.print(f"\n[yellow]Dummy files and logs are in: {temp_dir}[/yellow]")
-    console.print("[yellow]Please review the log file 'test_verification.log' inside that directory.[/yellow]")

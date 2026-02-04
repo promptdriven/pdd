@@ -1,4 +1,5 @@
-from typing import Tuple
+from __future__ import annotations
+from typing import Callable, Optional, Tuple
 from pathlib import Path
 from rich import print
 from pydantic import BaseModel, Field
@@ -16,10 +17,12 @@ def insert_includes(
     input_prompt: str,
     directory_path: str,
     csv_filename: str,
+    prompt_filename: Optional[str] = None,
     strength: float = DEFAULT_STRENGTH,
     temperature: float = 0.0,
     time: float = DEFAULT_TIME,
-    verbose: bool = False
+    verbose: bool = False,
+    progress_callback: Optional[Callable[[int, int], None]] = None
 ) -> Tuple[str, str, float, str]:
     """
     Determine needed dependencies and insert them into a prompt.
@@ -28,10 +31,14 @@ def insert_includes(
         input_prompt (str): The prompt to process
         directory_path (str): Directory path where the prompt file is located
         csv_filename (str): Name of the CSV file containing dependencies
+        prompt_filename (Optional[str]): The prompt filename being processed,
+            used to filter out self-referential example files
         strength (float): Strength parameter for the LLM model
         temperature (float): Temperature parameter for the LLM model
         time (float): Time budget for the LLM model
         verbose (bool, optional): Whether to print detailed information. Defaults to False.
+        progress_callback (Optional[Callable[[int, int], None]]): Callback for progress updates.
+            Called with (current, total) for each file processed.
 
     Returns:
         Tuple[str, str, float, str]: Tuple containing:
@@ -56,7 +63,7 @@ def insert_includes(
         except FileNotFoundError:
             if verbose:
                 print(f"[yellow]CSV file {csv_filename} not found. Creating empty CSV.[/yellow]")
-            csv_content = "full_path,file_summary,date\n"
+            csv_content = "full_path,file_summary,content_hash\n"
             Path(csv_filename).write_text(csv_content)
 
         # Step 3: Preprocess the prompt template
@@ -75,10 +82,12 @@ def insert_includes(
             input_prompt=input_prompt,
             directory_path=directory_path,
             csv_file=csv_content,
+            prompt_filename=prompt_filename,
             strength=strength,
             temperature=temperature,
             time=time,
-            verbose=verbose
+            verbose=verbose,
+            progress_callback=progress_callback
         )
 
         if verbose:

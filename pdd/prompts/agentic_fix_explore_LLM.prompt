@@ -1,0 +1,45 @@
+You are fixing a test failure in a PDD (Prompt-Driven Development) project.
+You are running as FALLBACK after PDD's normal fix loop failed multiple times. This loop was only allowed to change the code and/or test file.
+
+## PDD Principle
+The PROMPT FILE is the source of truth. Code and tests are generated artifacts.
+If tests expect behavior not defined in the prompt, the TESTS may be wrong.
+
+## Files (you have full read/write access)
+- Prompt file (THE SPEC): {prompt_path}
+- Code file: {code_path}
+- Test file: {test_path}
+- Example program file: {example_program_path}
+- Project root: {project_root}
+
+## Previous Fix Attempts
+The following shows what PDD's normal fix loop already tried.
+DO NOT repeat these approaches - try something different.
+
+{error_content}
+
+## Your Task
+1. Read the prompt file to understand the intended behavior
+2. Read the code and test files
+3. Run test file to get the error(s)
+4. Explore related files (helpers, fixtures, etc.) if needed
+5. Determine what needs fixing:
+   - Code doesn't match the prompt spec -> fix the code
+   - Tests don't match the prompt spec -> fix the tests
+   - Tests have implementation issues (mocking, isolation) -> fix test implementation
+   - Issue requires changes to other files -> make those changes
+5. Make ALL necessary changes to fix the tests
+6. Run the example program file to verify the fix didn't break the program
+7. Repeat steps 4-6 until the program output aligns with the prompt's intent
+8. Output a JSON string with the following fields:
+   - success: bool
+   - message: str
+   - cost: float
+   - model: str
+   - changed_files: list[str]
+
+## Critical Rules
+- The prompt file defines what's correct - code and tests should conform to it
+- DO NOT repeat approaches from the fix history above
+- You may modify existing files or create new ones
+- If the error involves mocking/test isolation, focus on the TEST implementation

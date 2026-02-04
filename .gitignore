@@ -3,11 +3,20 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.vsix
+.tmp/
+.agentic_prompt*
+sync_order.sh
+
+staging_data_dump.json
+.pdd/core_dumps/*
 
 .vscode/settings.json
 
 pdd/litellm_cache.sqlite/cache.db
 litellm_cache.sqlite/
+
+# Auto-deps lock files (created by filelock for concurrent access prevention)
+*.csv.lock
 
 # Claude folder
 .claude/
@@ -70,7 +79,9 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
-staging*
+staging/
+*.staging.log
+.staging_*
 
 # Translations
 *.mo
@@ -191,3 +202,22 @@ staging/
 
 # Testmon cache
 .testmon*
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+yarn.lock
+
+# Keep frontend build artifacts for pdd connect
+!pdd/frontend/dist/
+!pdd/frontend/lib/
+!pdd/frontend/package-lock.json
+
+# PDD internal directory (backups, locks, meta, worktrees, etc.)
+.pdd/
+Makefile.test-staging
+
+# Large model weights (HuggingFace clones)
+demos/3blue1brown/models/

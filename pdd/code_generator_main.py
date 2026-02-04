@@ -1,6 +1,5 @@
 import os
 import re
-import asyncio
 import json
 import pathlib
 import shlex
@@ -21,19 +20,33 @@ from .construct_paths import construct_paths
 from .preprocess import preprocess as pdd_preprocess
 from .code_generator import code_generator as local_code_generator_func
 from .incremental_code_generator import incremental_code_generator as incremental_code_generator_func
-from .get_jwt_token import get_jwt_token, AuthError, NetworkError, TokenError, UserCancelledError, RateLimitError
+from .core.cloud import CloudConfig, get_cloud_timeout
 from .python_env_detector import detect_host_python_executable
-
-# Environment variable names for Firebase/GitHub auth
-FIREBASE_API_KEY_ENV_VAR = "NEXT_PUBLIC_FIREBASE_API_KEY" 
-GITHUB_CLIENT_ID_ENV_VAR = "GITHUB_CLIENT_ID"
-PDD_APP_NAME = "PDD Code Generator"
-
-# Cloud function URL
-CLOUD_GENERATE_URL = "https://us-central1-prompt-driven-development.cloudfunctions.net/generateCode"
-CLOUD_REQUEST_TIMEOUT = 400  # seconds
+from .architecture_sync import (
+    get_architecture_entry_for_prompt,
+    has_pdd_tags,
+    generate_tags_from_architecture,
+)
 
 console = Console()
+
+# --- Helper Functions ---
+def _parse_llm_bool(value: str) -> bool:
+    """Parse LLM boolean value from string."""
+    if not value:
+        return True
+    llm_str = str(value).strip().lower()
+    if llm_str in {"0", "false", "no", "off"}:
+        return False
+    else:
+        return llm_str in {"1", "true", "yes", "on"}
+
+def _env_flag_enabled(name: str) -> bool:
+    """Return True when an env var is set to a truthy value."""
+    value = os.environ.get(name)
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 # --- Git Helper Functions ---
 def _run_git_command(command: List[str], cwd: Optional[str] = None) -> Tuple[int, str, str]:
@@ -103,6 +116,62 @@ def _parse_front_matter(text: str) -> Tuple[Optional[Dict[str, Any]], str]:
         return None, text
 
 
+def _is_architecture_template(meta: Optional[Dict[str, Any]]) -> bool:
+    """Detect the packaged architecture JSON template via its front matter name."""
+    return isinstance(meta, dict) and meta.get("name") == "architecture/architecture_json"
+
+
+def _repair_architecture_interface_types(payload: Any) -> Tuple[Any, bool]:
+    """
+    Patch common LLM slip-ups for the architecture template where interface.type
+    occasionally returns an unsupported value like "object". Only normalizes the
+    interface.type field and leaves other schema issues untouched so validation
+    still fails for genuinely malformed outputs.
+    """
+    allowed_types = {
+        "component",
+        "page",
+        "module",
+        "api",
+        "graphql",
+        "cli",
+        "job",
+        "message",
+        "config",
+    }
+    changed = False
+    if not isinstance(payload, list):
+        return payload, changed
+
+    for entry in payload:
+        if not isinstance(entry, dict):
+            continue
+        interface = entry.get("interface")
+        if not isinstance(interface, dict):
+            continue
+        raw_type = interface.get("type")
+        normalized = raw_type.lower() if isinstance(raw_type, str) else None
+        if normalized in allowed_types:
+            if normalized != raw_type:
+                interface["type"] = normalized
+                changed = True
+            continue
+
+        inferred_type = None
+        for key in ("page", "component", "module", "api", "graphql", "cli", "job", "message", "config"):
+            if isinstance(interface.get(key), dict):
+                inferred_type = key
+                break
+        if inferred_type is None:
+            inferred_type = "module"
+
+        if raw_type != inferred_type:
+            interface["type"] = inferred_type
+            changed = True
+
+    return payload, changed
+
+
 def get_git_content_at_ref(file_path: str, git_ref: str = "HEAD") -> Optional[str]:
     """Gets the content of the file as it was at the specified git_ref."""
     abs_file_path = pathlib.Path(file_path).resolve()
@@ -168,6 +237,28 @@ def git_add_files(file_paths: List[str], verbose: bool = False) -> bool:
         return False
 # --- End Git Helper Functions ---
 
+def _find_default_test_files(tests_dir: Optional[str], code_file_path: Optional[str]) -> List[str]:
+    """Find default test files for a given code file in the tests directory."""
+    if not tests_dir or not code_file_path:
+        return []
+
+    tests_path = pathlib.Path(tests_dir)
+    code_path = pathlib.Path(code_file_path)
+
+    if not tests_path.exists() or not tests_path.is_dir():
+        return []
+
+    code_stem = code_path.stem
+    code_suffix = code_path.suffix
+
+    # Look for files starting with test_{code_stem}
+    # We look for test_{code_stem}*.{code_suffix}
+    # e.g., hello.py -> test_hello.py, test_hello_1.py
+    pattern = f"test_{code_stem}*{code_suffix}"
+    found_files = list(tests_path.glob(pattern))
+
+    return [str(p) for p in sorted(found_files)]
+
 
 def code_generator_main(
     ctx: click.Context,
@@ -176,6 +267,8 @@ def code_generator_main(
     original_prompt_file_path: Optional[str],
     force_incremental_flag: bool,
     env_vars: Optional[Dict[str, str]] = None,
+    unit_test_file: Optional[str] = None,
+    exclude_tests: bool = False,
 ) -> Tuple[str, bool, float, str]:
     """
     CLI wrapper for generating code from prompts. Handles full and incremental generation,
@@ -202,19 +295,49 @@ def code_generator_main(
     command_options: Dict[str, Any] = {"output": output}
 
     try:
+        # Read prompt content once to determine LLM state and for construct_paths
+        with open(prompt_file, 'r', encoding='utf-8') as f:
+            raw_prompt_content = f.read()
+        
+        # Phase-2 templates: parse front matter metadata
+        fm_meta, body = _parse_front_matter(raw_prompt_content)
+        if fm_meta:
+            prompt_content = body
+        else:
+            prompt_content = raw_prompt_content
+        
+        # Determine LLM state early to avoid unnecessary overwrite prompts
+        llm_enabled: bool = True
+        env_llm_raw = None
+        try:
+            if env_vars and 'llm' in env_vars:
+                env_llm_raw = str(env_vars.get('llm'))
+            elif os.environ.get('llm') is not None:
+                env_llm_raw = os.environ.get('llm')
+            elif os.environ.get('LLM') is not None:
+                env_llm_raw = os.environ.get('LLM')
+        except Exception:
+            env_llm_raw = None
+
+        # Environment variables should override front matter
+        if env_llm_raw is not None:
+            llm_enabled = _parse_llm_bool(env_llm_raw)
+        elif fm_meta and isinstance(fm_meta, dict) and 'llm' in fm_meta:
+            llm_enabled = bool(fm_meta.get('llm', True))
+        # else: keep default True
+        
+        # If LLM is disabled, we're only doing post-processing, so skip overwrite confirmation
+        effective_force = force_overwrite or not llm_enabled
+        
         resolved_config, input_strings, output_file_paths, language = construct_paths(
             input_file_paths=input_file_paths_dict,
-            force=force_overwrite,
+            force=effective_force,
             quiet=quiet,
             command="generate",
             command_options=command_options,
-            context_override=ctx.obj.get('context')
+            context_override=ctx.obj.get('context'),
+            confirm_callback=cli_params.get('confirm_callback')
         )
-        prompt_content = input_strings["prompt_file"]
-        # Phase-2 templates: parse front matter metadata
-        fm_meta, body = _parse_front_matter(prompt_content)
-        if fm_meta:
-            prompt_content = body
         # Determine final output path: if user passed a directory, use resolved file path
         resolved_output = output_file_paths.get("output")
         if output is None:
@@ -229,9 +352,40 @@ def code_generator_main(
             else:
                 output_path = output
 
+        # --- Unit Test Inclusion Logic ---
+        test_files_to_include: List[str] = []
+        if unit_test_file:
+            test_files_to_include.append(unit_test_file)
+        elif not exclude_tests:
+            # Try to find default test files
+            tests_dir = resolved_config.get("tests_dir")
+            found_tests = _find_default_test_files(tests_dir, output_path)
+            if found_tests:
+                if verbose:
+                    console.print(f"[info]Found default test files: {', '.join(found_tests)}[/info]")
+                test_files_to_include.extend(found_tests)
+        
+        if test_files_to_include:
+            prompt_content += "\n\n<unit_test_content>\n"
+            prompt_content += "The following is the unit test content that the generated code must pass:\n"
+            for tf in test_files_to_include:
+                try:
+                    with open(tf, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    # If multiple files, label them? Or just concat?
+                    # Using code block with file path comment is safer for context.
+                    prompt_content += f"\nFile: {pathlib.Path(tf).name}\n```python\n{content}\n```\n"
+                except Exception as e:
+                    console.print(f"[yellow]Warning: Could not read unit test file {tf}: {e}[/yellow]")
+            prompt_content += "</unit_test_content>\n"
+        # ---------------------------------
+
     except FileNotFoundError as e:
         console.print(f"[red]Error: Input file not found: {e.filename}[/red]")
         return "", False, 0.0, "error"
+    except click.Abort:
+        # User cancelled - re-raise to stop the sync loop
+        raise
     except Exception as e:
         console.print(f"[red]Error during path construction: {e}[/red]")
         return "", False, 0.0, "error"
@@ -466,47 +620,12 @@ def code_generator_main(
         can_attempt_incremental = False
 
     try:
-        # Determine template-driven switches
-        llm_enabled: bool = True
+        # Resolve post-process script from env/CLI override, then front matter, then sensible default per template
         post_process_script: Optional[str] = None
         prompt_body_for_script: str = prompt_content
-        # Allow environment override for LLM toggle when front matter omits it
-        env_llm_raw = None
-        try:
-            if env_vars and 'llm' in env_vars:
-                env_llm_raw = str(env_vars.get('llm'))
-            elif os.environ.get('llm') is not None:
-                env_llm_raw = os.environ.get('llm')
-            elif os.environ.get('LLM') is not None:
-                env_llm_raw = os.environ.get('LLM')
-        except Exception:
-            env_llm_raw = None
-        if fm_meta and isinstance(fm_meta, dict):
-            try:
-                if 'llm' in fm_meta:
-                    llm_enabled = bool(fm_meta.get('llm', True))
-                elif env_llm_raw is not None:
-                    llm_str = str(env_llm_raw).strip().lower()
-                    if llm_str in {"0", "false", "no", "off"}:
-                        llm_enabled = False
-                    else:
-                        llm_enabled = llm_str in {"1", "true", "yes", "on"}
-            except Exception:
-                llm_enabled = True
-        elif env_llm_raw is not None:
-            try:
-                llm_str = str(env_llm_raw).strip().lower()
-                if llm_str in {"0", "false", "no", "off"}:
-                    llm_enabled = False
-                else:
-                    llm_enabled = llm_str in {"1", "true", "yes", "on"}
-            except Exception:
-                llm_enabled = True
         
         if verbose:
             console.print(f"[blue]LLM enabled:[/blue] {llm_enabled}")
-        
-        # Resolve post-process script from env/CLI override, then front matter, then sensible default per template
         try:
             post_process_script = None
             script_override = None
@@ -645,7 +764,8 @@ def code_generator_main(
             if verbose:
                 console.print(Panel("Performing full code generation...", title="[blue]Mode[/blue]", expand=False))
             
-            current_execution_is_local = is_local_execution_preferred
+            cloud_only = _env_flag_enabled("PDD_CLOUD_ONLY") or _env_flag_enabled("PDD_NO_LOCAL_FALLBACK")
+            current_execution_is_local = is_local_execution_preferred and not cloud_only
             
             if not current_execution_is_local:
                 if verbose: console.print("Attempting cloud code generation...")
@@ -654,32 +774,29 @@ def code_generator_main(
                 processed_prompt_for_cloud = _expand_vars(processed_prompt_for_cloud, env_vars)
                 processed_prompt_for_cloud = pdd_preprocess(processed_prompt_for_cloud, recursive=False, double_curly_brackets=True, exclude_keys=[])
                 if verbose: console.print(Panel(Text(processed_prompt_for_cloud, overflow="fold"), title="[cyan]Preprocessed Prompt for Cloud[/cyan]", expand=False))
-                
-                jwt_token: Optional[str] = None
-                try:
-                    firebase_api_key_val = os.environ.get(FIREBASE_API_KEY_ENV_VAR)
-                    github_client_id_val = os.environ.get(GITHUB_CLIENT_ID_ENV_VAR)
 
-                    if not firebase_api_key_val: raise AuthError(f"{FIREBASE_API_KEY_ENV_VAR} not set.")
-                    if not github_client_id_val: raise AuthError(f"{GITHUB_CLIENT_ID_ENV_VAR} not set.")
+                # Extract and display pinned example ID if present in prompt
+                pin_match = re.search(r'<pin>([^<]+)</pin>', processed_prompt_for_cloud)
+                if pin_match and verbose:
+                    pinned_example_id = pin_match.group(1).strip()
+                    console.print(f"[cyan]Using pinned example:[/cyan] {pinned_example_id}")
 
-                    jwt_token = asyncio.run(get_jwt_token(
-                        firebase_api_key=firebase_api_key_val,
-                        github_client_id=github_client_id_val,
-                        app_name=PDD_APP_NAME
-                    ))
-                except (AuthError, NetworkError, TokenError, UserCancelledError, RateLimitError) as e:
-                    console.print(f"[yellow]Cloud authentication/token error: {e}. Falling back to local execution.[/yellow]")
-                    current_execution_is_local = True
-                except Exception as e:
-                    console.print(f"[yellow]Unexpected error during cloud authentication: {e}. Falling back to local execution.[/yellow]")
+                # Get JWT token via CloudConfig (handles both injected tokens and device flow)
+                jwt_token = CloudConfig.get_jwt_token(verbose=verbose)
+
+                if not jwt_token:
+                    if cloud_only:
+                        console.print("[red]Cloud authentication failed.[/red]")
+                        raise click.UsageError("Cloud authentication failed")
+                    console.print("[yellow]Cloud authentication failed. Falling back to local execution.[/yellow]")
                     current_execution_is_local = True
 
                 if jwt_token and not current_execution_is_local:
                     payload = {"promptContent": processed_prompt_for_cloud, "language": language, "strength": strength, "temperature": temperature, "verbose": verbose}
                     headers = {"Authorization": f"Bearer {jwt_token}", "Content-Type": "application/json"}
+                    cloud_url = CloudConfig.get_endpoint_url("generateCode")
                     try:
-                        response = requests.post(CLOUD_GENERATE_URL, json=payload, headers=headers, timeout=CLOUD_REQUEST_TIMEOUT)
+                        response = requests.post(cloud_url, json=payload, headers=headers, timeout=get_cloud_timeout())
                         response.raise_for_status()
                         
                         response_data = response.json()
@@ -687,22 +804,87 @@ def code_generator_main(
                         total_cost = float(response_data.get("totalCost", 0.0))
                         model_name = response_data.get("modelName", "cloud_model")
 
-                        if generated_code_content is None:
+                        # Extract example information from examplesUsed array (cloud returns this)
+                        examples_used = response_data.get("examplesUsed", [])
+                        if examples_used:
+                            selected_example_id = examples_used[0].get("id")
+                            selected_example_title = examples_used[0].get("title")
+                        else:
+                            selected_example_id = None
+                            selected_example_title = None
+
+                        # Strip markdown code fences if present (cloud API returns fenced JSON)
+                        if generated_code_content and isinstance(language, str) and language.strip().lower() == "json":
+                            cleaned = generated_code_content.strip()
+                            if cleaned.startswith("```json"):
+                                cleaned = cleaned[7:]
+                            elif cleaned.startswith("```"):
+                                cleaned = cleaned[3:]
+                            if cleaned.endswith("```"):
+                                cleaned = cleaned[:-3]
+                            generated_code_content = cleaned.strip()
+
+                        if not generated_code_content:
+                            if cloud_only:
+                                console.print("[red]Cloud execution returned no code.[/red]")
+                                raise click.UsageError("Cloud execution returned no code")
                             console.print("[yellow]Cloud execution returned no code. Falling back to local.[/yellow]")
                             current_execution_is_local = True
                         elif verbose:
-                             console.print(Panel(f"Cloud generation successful. Model: {model_name}, Cost: ${total_cost:.6f}", title="[green]Cloud Success[/green]", expand=False))
+                             # Display example info if available
+                             if selected_example_id:
+                                 example_info = f" | Example: {selected_example_id}"
+                                 if selected_example_title:
+                                     example_info += f" ({selected_example_title})"
+                                 console.print(Panel(f"Cloud generation successful. Model: {model_name}, Cost: ${total_cost:.6f}{example_info}", title="[green]Cloud Success[/green]", expand=False))
+                             else:
+                                 console.print(Panel(f"Cloud generation successful. Model: {model_name}, Cost: ${total_cost:.6f}", title="[green]Cloud Success[/green]", expand=False))
                     except requests.exceptions.Timeout:
-                        console.print(f"[yellow]Cloud execution timed out ({CLOUD_REQUEST_TIMEOUT}s). Falling back to local.[/yellow]")
+                        if cloud_only:
+                            console.print(f"[red]Cloud execution timed out ({get_cloud_timeout()}s).[/red]")
+                            raise click.UsageError("Cloud execution timed out")
+                        console.print(f"[yellow]Cloud execution timed out ({get_cloud_timeout()}s). Falling back to local.[/yellow]")
                         current_execution_is_local = True
                     except requests.exceptions.HTTPError as e:
+                        status_code = e.response.status_code if e.response else 0
                         err_content = e.response.text[:200] if e.response else "No response content"
-                        console.print(f"[yellow]Cloud HTTP error ({e.response.status_code}): {err_content}. Falling back to local.[/yellow]")
-                        current_execution_is_local = True
+
+                        # Non-recoverable errors: do NOT fall back to local
+                        if status_code == 402:  # Insufficient credits
+                            try:
+                                error_data = e.response.json()
+                                current_balance = error_data.get("currentBalance", "unknown")
+                                estimated_cost = error_data.get("estimatedCost", "unknown")
+                                console.print(f"[red]Insufficient credits. Current balance: {current_balance}, estimated cost: {estimated_cost}[/red]")
+                            except Exception:
+                                console.print(f"[red]Insufficient credits: {err_content}[/red]")
+                            raise click.UsageError("Insufficient credits for cloud code generation")
+                        elif status_code == 401:  # Authentication error
+                            console.print(f"[red]Authentication failed: {err_content}[/red]")
+                            raise click.UsageError("Cloud authentication failed")
+                        elif status_code == 403:  # Authorization error (not approved)
+                            console.print(f"[red]Access denied: {err_content}[/red]")
+                            raise click.UsageError("Access denied - user not approved")
+                        elif status_code == 400:  # Validation error (e.g., empty prompt)
+                            console.print(f"[red]Invalid request: {err_content}[/red]")
+                            raise click.UsageError(f"Invalid request: {err_content}")
+                        else:
+                            # Recoverable errors (5xx, unexpected errors): fall back to local
+                            if cloud_only:
+                                console.print(f"[red]Cloud HTTP error ({status_code}): {err_content}[/red]")
+                                raise click.UsageError(f"Cloud HTTP error ({status_code}): {err_content}")
+                            console.print(f"[yellow]Cloud HTTP error ({status_code}): {err_content}. Falling back to local.[/yellow]")
+                            current_execution_is_local = True
                     except requests.exceptions.RequestException as e:
+                        if cloud_only:
+                            console.print(f"[red]Cloud network error: {e}[/red]")
+                            raise click.UsageError(f"Cloud network error: {e}")
                         console.print(f"[yellow]Cloud network error: {e}. Falling back to local.[/yellow]")
                         current_execution_is_local = True
                     except json.JSONDecodeError:
+                        if cloud_only:
+                            console.print("[red]Cloud returned invalid JSON.[/red]")
+                            raise click.UsageError("Cloud returned invalid JSON")
                         console.print("[yellow]Cloud returned invalid JSON. Falling back to local.[/yellow]")
                         current_execution_is_local = True
             
@@ -714,6 +896,10 @@ def code_generator_main(
                 local_prompt = pdd_preprocess(local_prompt, recursive=False, double_curly_brackets=True, exclude_keys=[])
                 # Language already resolved (front matter overrides detection if present)
                 gen_language = language
+                
+                # Extract output schema from front matter if available
+                output_schema = fm_meta.get("output_schema") if fm_meta else None
+                
                 generated_code_content, total_cost, model_name = local_code_generator_func(
                     prompt=local_prompt,
                     language=gen_language,
@@ -721,7 +907,8 @@ def code_generator_main(
                     temperature=temperature,
                     time=time_budget,
                     verbose=verbose,
-                    preprocess_prompt=False
+                    preprocess_prompt=False,
+                    output_schema=output_schema,
                 )
                 was_incremental_operation = False
                 if verbose:
@@ -792,9 +979,15 @@ def code_generator_main(
                         else:
                             # Write payload to a temp file for scripts expecting a file path input
                             suffix = '.json' if (isinstance(language, str) and str(language).lower().strip() == 'json') or (output_path and str(output_path).lower().endswith('.json')) else '.txt'
-                            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix=suffix, encoding='utf-8') as tf:
-                                tf.write(stdin_payload or '')
-                                temp_input_path = tf.name
+                            if output_path and llm_enabled:
+                                temp_input_path = str(pathlib.Path(output_path).resolve())
+                                pathlib.Path(temp_input_path).parent.mkdir(parents=True, exist_ok=True)
+                                with open(temp_input_path, 'w', encoding='utf-8') as f:
+                                    f.write(stdin_payload or '')
+                            else:
+                                with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix=suffix, encoding='utf-8') as tf:
+                                    tf.write(stdin_payload or '')
+                                    temp_input_path = tf.name
                             env['PDD_POSTPROCESS_INPUT_FILE'] = temp_input_path
                         # Compute placeholder values
                         app_name_val = (env_vars or {}).get('APP_NAME') if env_vars else None
@@ -858,8 +1051,6 @@ def code_generator_main(
                     console.print(f"[yellow]Post-process failed (rc={rc}). Stderr:\n{err[:500]}[/yellow]")
             except FileNotFoundError:
                 console.print(f"[yellow]Post-process script not found: {post_process_script}. Skipping.[/yellow]")
-            except FileNotFoundError:
-                console.print(f"[yellow]Post-process script not found: {post_process_script}. Skipping.[/yellow]")
             except subprocess.TimeoutExpired:
                 console.print("[yellow]Post-process script timed out. Skipping.[/yellow]")
             except Exception as e:
@@ -872,12 +1063,37 @@ def code_generator_main(
                         is_json_output = False
                         if isinstance(language, str) and str(language).lower().strip() == "json":
                             is_json_output = True
-                        elif output_path and str(output_path).endswith(".json"):
+                        elif output_path and str(output_path).lower().endswith(".json"):
                             is_json_output = True
                         if is_json_output:
+                            # Check if the generated content is an error message from llm_invoke
+                            if generated_code_content.strip().startswith("ERROR:"):
+                                raise click.UsageError(f"LLM generation failed: {generated_code_content}")
+                                
                             parsed = json.loads(generated_code_content)
+
+                            # Fix common LLM mistake: unwrap arrays wrapped in objects
+                            # LLMs often return {"items": [...]} or {"type": "array", "items": [...]}
+                            # when the schema expects a plain array [...]
+                            output_schema = fm_meta.get("output_schema", {})
+                            if output_schema.get("type") == "array" and isinstance(parsed, dict):
+                                # Check for common wrapper patterns
+                                if "items" in parsed and isinstance(parsed["items"], list):
+                                    parsed = parsed["items"]
+                                    generated_code_content = json.dumps(parsed, indent=2)
+                                elif "data" in parsed and isinstance(parsed["data"], list):
+                                    parsed = parsed["data"]
+                                    generated_code_content = json.dumps(parsed, indent=2)
+                                elif "results" in parsed and isinstance(parsed["results"], list):
+                                    parsed = parsed["results"]
+                                    generated_code_content = json.dumps(parsed, indent=2)
+
+                            if _is_architecture_template(fm_meta):
+                                parsed, repaired = _repair_architecture_interface_types(parsed)
+                                if repaired:
+                                    generated_code_content = json.dumps(parsed, indent=2)
                             try:
-                                import jsonschema  # type: ignore
+                                import jsonschema
                                 jsonschema.validate(instance=parsed, schema=fm_meta.get("output_schema"))
                             except ModuleNotFoundError:
                                 if verbose and not quiet:
@@ -890,7 +1106,30 @@ def code_generator_main(
             if output_path:
                 p_output = pathlib.Path(output_path)
                 p_output.parent.mkdir(parents=True, exist_ok=True)
-                p_output.write_text(generated_code_content, encoding="utf-8")
+
+                # Inject architecture metadata tags for .prompt files (reverse sync)
+                final_content = generated_code_content
+                if p_output.suffix == '.prompt':
+                    try:
+                        # Check if this prompt has an architecture entry
+                        arch_entry = get_architecture_entry_for_prompt(p_output.name)
+
+                        # Only inject tags if:
+                        # 1. Architecture entry exists
+                        # 2. Content doesn't already have PDD tags (preserve manual edits)
+                        if arch_entry and not has_pdd_tags(generated_code_content):
+                            tags = generate_tags_from_architecture(arch_entry)
+                            if tags:
+                                # Prepend tags to the generated content
+                                final_content = tags + '\n\n' + generated_code_content
+                                if verbose:
+                                    console.print("[info]Injected architecture metadata tags from architecture.json[/info]")
+                    except Exception as e:
+                        # Don't fail generation if tag injection fails
+                        if verbose:
+                            console.print(f"[yellow]Warning: Could not inject architecture tags: {e}[/yellow]")
+
+                p_output.write_text(final_content, encoding="utf-8")
                 if verbose or not quiet:
                     console.print(f"Generated code saved to: [green]{p_output.resolve()}[/green]")
                 # Safety net: ensure architecture HTML is generated post-write if applicable
@@ -909,8 +1148,9 @@ def code_generator_main(
                     if script_path2 and pathlib.Path(script_path2).exists():
                         app_name2 = os.environ.get('APP_NAME') or (env_vars or {}).get('APP_NAME') or 'System Architecture'
                         out_html2 = os.environ.get('POST_PROCESS_OUTPUT') or str(p_output.with_name(f"{p_output.stem}_diagram.html").resolve())
-                        # Only run if HTML not present yet
-                        if not pathlib.Path(out_html2).exists():
+                        html_missing = not pathlib.Path(out_html2).exists()
+                        always_run_for_arch = pathlib.Path(str(p_output)).name == 'architecture.json'
+                        if always_run_for_arch or html_missing:
                             try:
                                 py_exec2 = detect_host_python_executable()
                             except Exception:
@@ -939,10 +1179,19 @@ def code_generator_main(
                 console.print("[red]Error: Code generation failed. No code was produced.[/red]")
                 return "", was_incremental_operation, total_cost, model_name or "error"
 
+    except click.Abort:
+        # User cancelled - re-raise to stop the sync loop
+        raise
     except Exception as e:
-        console.print(f"[red]An unexpected error occurred: {e}[/red]")
-        import traceback
-        if verbose: console.print(traceback.format_exc())
-        return "", was_incremental_operation, total_cost, "error"
+        if isinstance(e, click.UsageError):
+            raise
+
+        # For any other unexpected error, we should fail hard so the CLI exits non-zero
+        # Log the detailed traceback first if verbose
+        if verbose:
+            import traceback
+            console.print(traceback.format_exc())
+
+        raise click.UsageError(f"An unexpected error occurred: {e}")
         
     return generated_code_content or "", was_incremental_operation, total_cost, model_name

@@ -1,0 +1,176 @@
+% You are an expert software engineer investigating a bug report. Your task is to generate a failing unit test that detects the bug.
+
+% Context
+
+You are working on step 7 of 11 in an agentic bug investigation workflow. Previous steps have identified the root cause and planned the test strategy.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Steps Output
+<step1_output>
+{step1_output}
+</step1_output>
+
+<step2_output>
+{step2_output}
+</step2_output>
+
+<step3_output>
+{step3_output}
+</step3_output>
+
+<step4_output>
+{step4_output}
+</step4_output>
+
+<step5_output>
+{step5_output}
+</step5_output>
+
+<step5_5_output>
+{step5_5_output}
+</step5_5_output>
+
+<step6_output>
+{step6_output}
+</step6_output>
+
+% Critical: Testing Caller Behavior Bugs
+
+When the bug involves incorrect function call arguments (e.g., caller uses `limit=` but callee expects `k=`):
+
+**DO: Mock the callee and verify caller behavior**
+- Use `@patch` or `with patch()` to mock the called function
+- Invoke the caller's code path
+- Use `mock.call_args.kwargs` to verify the caller passed correct parameter names
+
+Example:
+```python
+from unittest.mock import patch
+
+def test_caller_uses_correct_parameter():
+    with patch('module.callee_function') as mock_callee:
+        caller_function()  # This triggers the call
+        # Verify caller used 'k=' not 'limit='
+        assert 'k' in mock_callee.call_args.kwargs
+```
+
+**DO NOT: Test that the callee rejects wrong parameters**
+- This anti-pattern tests the callee's signature, not the caller's behavior
+- Such tests always pass because the callee was never broken
+- Example of WRONG approach: `pytest.raises(TypeError, lambda: callee(limit=5))`
+
+% Worktree Setup
+
+You are now working in an isolated git worktree at: {worktree_path}
+
+**Before writing any tests, set up the worktree environment:**
+
+1. Check what environment/config files exist in the main repo but are missing in the worktree:
+   - Look for `.env`, `.env.local`, `.env.test`, or similar files in the repo root (parent of worktree)
+   - Check for any config files that are gitignored but needed for tests
+   - Look at the project's test configuration (pytest.ini, pyproject.toml, etc.) for hints
+
+2. Symlink or copy necessary files:
+   - **Symlink `.env` files** from the main repo if they exist (so environment stays in sync)
+   - Example: `ln -s ../../.env .env` (adjust path based on worktree depth)
+   - Do NOT copy/symlink `venv`, `node_modules`, or other large dependency directories
+
+3. Verify the test environment works:
+   - Try running an existing test to confirm the setup is correct
+   - If tests fail due to missing config, investigate and fix before proceeding
+
+% Your Task
+
+1. **Review the test plan and implement Step 6's test strategy**
+   - Extract the test file path from Step 6's `### Test Location` → `**File:**` field
+   - Note if Step 6 marked it `(append)` or `(new)`
+   - **CRITICAL: Follow Step 6's test plan exactly** — if Step 6 provided example test code, use that as the template
+   - Implement the testing approach Step 6 specified (mocking, assertions, fixtures, etc.) unless there is a mistake in the test plan.
+   - Understand the project's testing conventions from existing tests
+
+2. **Generate the test code**
+   - Write a clear, focused test that fails on the current buggy code
+   - Follow the project's testing framework and style
+   - Include descriptive test name and docstring
+   - Add comments explaining what the test verifies
+
+3. **Write the test file**
+   - Use the EXACT file path from Step 6's Test Location
+   - If Step 6 said `(append)`: append to the existing file
+   - If Step 6 said `(new)`: create that new file
+   - Include necessary imports and fixtures
+   - Ensure the test is self-contained and runnable
+
+% Output
+
+After generating the test, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+```markdown
+## Step 7: Generated Test
+
+### Test File
+`{{test_file_path}}`
+
+### Test Code
+```{{language}}
+{{generated_test_code}}
+```
+
+### What This Test Verifies
+[Brief explanation of what the test checks and why it fails on buggy code]
+
+### Running the Test
+```bash
+{{test_run_command}}
+```
+
+---
+*Proceeding to Step 8: Verification*
+```
+
+% Important
+
+- The test MUST fail on the current (buggy) code
+- The test should pass once the bug is fixed
+- Focus on testing behavior, not implementation details
+- Write the test file to disk before posting the comment
+- Always post your findings as a GitHub comment before completing
+
+% CRITICAL: Machine-Readable Output (REQUIRED)
+
+**You MUST output exactly one of these lines at the very end of your response.**
+This is required for the automation to continue. Without this line, the workflow will fail.
+
+If you created a new test file:
+```
+FILES_CREATED: path/to/test_file
+```
+
+If you modified an existing test file:
+```
+FILES_MODIFIED: path/to/test_file
+```
+
+Examples:
+- Python: `FILES_CREATED: backend/tests/test_timeout_fix.py`
+- TypeScript: `FILES_CREATED: frontend/src/__tests__/api.test.ts`
+- Go: `FILES_CREATED: internal/handler/handler_test.go`
+- Multiple files: `FILES_CREATED: tests/test_a.py, tests/test_b.py`
+
+⚠️ IMPORTANT: This line must be the last thing you output. Do not add any text after it.

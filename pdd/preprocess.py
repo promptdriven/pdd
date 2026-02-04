@@ -1,15 +1,17 @@
 import os
 import re
+import base64
 import subprocess
 import time
 from typing import List, Optional, Tuple
 import traceback
+from pathlib import Path
 from rich.console import Console
 from rich.panel import Panel
 from rich.markup import escape
 from rich.traceback import install
 from .firecrawl_cache import get_firecrawl_cache
-from firecrawl import FirecrawlApp
+from pdd.path_resolution import get_default_resolver
 
 install()
 console = Console()
@@ -39,21 +41,48 @@ def _write_debug_report() -> None:
         console.print("[dim]Debug mode enabled but PDD_PREPROCESS_DEBUG_FILE not set (output shown in console only)[/dim]")
 
 def _extract_fence_spans(text: str) -> List[Tuple[int, int]]:
-    """Return list of (start, end) spans for fenced code blocks ```...```.
+    """Return list of (start, end) spans for fenced code blocks (``` or ~~~).
 
     The spans are [start, end) indices in the original text.
     """
     spans: List[Tuple[int, int]] = []
     try:
-        for m in re.finditer(r"```[\w\s]*\n[\s\S]*?```", text):
+        fence_re = re.compile(
+            r"(?m)^[ \t]*([`~]{3,})[^\n]*\n[\s\S]*?\n[ \t]*\1[ \t]*(?:\n|$)"
+        )
+        for m in fence_re.finditer(text):
             spans.append((m.start(), m.end()))
     except Exception:
         pass
     return spans
 
+
+def _extract_inline_code_spans(text: str) -> List[Tuple[int, int]]:
+    """Return list of (start, end) spans for inline code (backticks)."""
+    spans: List[Tuple[int, int]] = []
+    try:
+        for m in re.finditer(r"(?<!`)(`+)([^\n]*?)\1", text):
+            spans.append((m.start(), m.end()))
+    except Exception:
+        pass
+    return spans
+
+
+def _extract_code_spans(text: str) -> List[Tuple[int, int]]:
+    spans = _extract_fence_spans(text)
+    spans.extend(_extract_inline_code_spans(text))
+    return sorted(spans, key=lambda s: s[0])
+
 def _is_inside_any_span(idx: int, spans: List[Tuple[int, int]]) -> bool:
     for s, e in spans:
         if s <= idx < e:
+            return True
+    return False
+
+
+def _intersects_any_span(start: int, end: int, spans: List[Tuple[int, int]]) -> bool:
+    for s, e in spans:
+        if start < e and end > s:
             return True
     return False
 
@@ -105,7 +134,7 @@ def preprocess(prompt: str, recursive: bool = False, double_curly_brackets: bool
             for ln, frag in singles[:5]:
                 _dbg(f"  line {ln}: {frag}")
         if templates:
-            _dbg(f"INFO: Found {len(templates)} template literals ${'{...'} outside code fences (examples):")
+            _dbg(f"INFO: Found {len(templates)} template literals ${{...}} outside code fences (examples):")
             for ln, frag in templates[:5]:
                 _dbg(f"  line {ln}: {frag}")
         # Don't trim whitespace that might be significant for the tests
@@ -121,8 +150,11 @@ def preprocess(prompt: str, recursive: bool = False, double_curly_brackets: bool
         return prompt
 
 def get_file_path(file_name: str) -> str:
-    base_path = './'
-    return os.path.join(base_path, file_name)
+    resolver = get_default_resolver()
+    resolved = resolver.resolve_include(file_name)
+    if not Path(file_name).is_absolute() and resolved == resolver.cwd / file_name:
+        return os.path.join("./", file_name)
+    return str(resolved)
 
 def process_backtick_includes(text: str, recursive: bool) -> str:
     # More specific pattern that doesn't match nested > characters
@@ -169,13 +201,54 @@ def process_include_tags(text: str, recursive: bool) -> str:
         file_path = match.group(1).strip()
         try:
             full_path = get_file_path(file_path)
-            console.print(f"Processing XML include: [cyan]{full_path}[/cyan]")
-            with open(full_path, 'r', encoding='utf-8') as file:
-                content = file.read()
-                if recursive:
-                    content = preprocess(content, recursive=True, double_curly_brackets=False)
-                _dbg(f"Included via XML tag: {file_path} (len={len(content)})")
-                return content
+            ext = os.path.splitext(file_path)[1].lower()
+            image_extensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.heic']
+            
+            if ext in image_extensions:
+                console.print(f"Processing image include: [cyan]{full_path}[/cyan]")
+                from PIL import Image
+                import io
+                import pillow_heif
+                
+                pillow_heif.register_heif_opener()
+
+                MAX_DIMENSION = 1024
+                with open(full_path, 'rb') as file:
+                    img = Image.open(file)
+                    img.load() # Force loading the image data before the file closes
+                    
+                    if img.width > MAX_DIMENSION or img.height > MAX_DIMENSION:
+                        img.thumbnail((MAX_DIMENSION, MAX_DIMENSION))
+                        console.print(f"Image resized to {img.size}")
+
+                # Handle GIFs: convert to a static PNG of the first frame
+                if ext == '.gif':
+                    img.seek(0)
+                    img = img.convert("RGB")
+                    img_format = 'PNG'
+                    mime_type = 'image/png'
+                elif ext == '.heic':
+                    img_format = 'JPEG'
+                    mime_type = 'image/jpeg'
+                else:
+                    img_format = 'JPEG' if ext in ['.jpg', '.jpeg'] else 'PNG'
+                    mime_type = f'image/{img_format.lower()}'
+
+                # Save the (potentially resized and converted) image to an in-memory buffer
+                buffer = io.BytesIO()
+                img.save(buffer, format=img_format)
+                content = buffer.getvalue()
+
+                encoded_string = base64.b64encode(content).decode('utf-8')
+                return f"data:{mime_type};base64,{encoded_string}"
+            else:
+                console.print(f"Processing XML include: [cyan]{full_path}[/cyan]")
+                with open(full_path, 'r', encoding='utf-8') as file:
+                    content = file.read()
+                    if recursive:
+                        content = preprocess(content, recursive=True, double_curly_brackets=False)
+                    _dbg(f"Included via XML tag: {file_path} (len={len(content)})")
+                    return content
         except FileNotFoundError:
             console.print(f"[bold red]Warning:[/bold red] File not found: {file_path}")
             _dbg(f"Missing XML include: {file_path}")
@@ -190,7 +263,12 @@ def process_include_tags(text: str, recursive: bool) -> str:
     current_text = text
     while prev_text != current_text:
         prev_text = current_text
-        current_text = re.sub(pattern, replace_include, current_text, flags=re.DOTALL)
+        code_spans = _extract_code_spans(current_text)
+        def replace_include_with_spans(match):
+            if _intersects_any_span(match.start(), match.end(), code_spans):
+                return match.group(0)
+            return replace_include(match)
+        current_text = re.sub(pattern, replace_include_with_spans, current_text, flags=re.DOTALL)
     return current_text
 
 def process_pdd_tags(text: str) -> str:
@@ -223,7 +301,12 @@ def process_shell_tags(text: str, recursive: bool) -> str:
             console.print(f"[bold red]Error executing shell command:[/bold red] {str(e)}")
             _dbg(f"Shell execution exception: {e}")
             return f"[Shell execution error: {str(e)}]"
-    return re.sub(pattern, replace_shell, text, flags=re.DOTALL)
+    code_spans = _extract_code_spans(text)
+    def replace_shell_with_spans(match):
+        if _intersects_any_span(match.start(), match.end(), code_spans):
+            return match.group(0)
+        return replace_shell(match)
+    return re.sub(pattern, replace_shell_with_spans, text, flags=re.DOTALL)
 
 def process_web_tags(text: str, recursive: bool) -> str:
     pattern = r'<web>(.*?)</web>'
@@ -245,30 +328,38 @@ def process_web_tags(text: str, recursive: bool) -> str:
         console.print(f"Scraping web content from: [cyan]{url}[/cyan]")
         _dbg(f"Web tag URL: {url}")
         try:
+            try:
+                from firecrawl import Firecrawl
+            except ImportError:
+                _dbg("firecrawl import failed; package not installed")
+                return f"[Error: firecrawl-py package not installed. Cannot scrape {url}]"
+
             api_key = os.environ.get('FIRECRAWL_API_KEY')
             if not api_key:
                 console.print("[bold yellow]Warning:[/bold yellow] FIRECRAWL_API_KEY not found in environment")
                 _dbg("FIRECRAWL_API_KEY not set")
                 return f"[Error: FIRECRAWL_API_KEY not set. Cannot scrape {url}]"
-            
-            app = FirecrawlApp(api_key=api_key)
-            
+
+            app = Firecrawl(api_key=api_key)
+
             # Get cache TTL from environment or use default
             cache_ttl_hours = int(os.environ.get('FIRECRAWL_CACHE_TTL_HOURS', 24))
-            
-            # Use Firecrawl's built-in caching with maxAge parameter
-            # Convert hours to milliseconds for Firecrawl API
-            max_age_ms = cache_ttl_hours * 3600 * 1000
-            
-            response = app.scrape_url(url, formats=['markdown'], maxAge=max_age_ms)
-            
-            if hasattr(response, 'markdown'):
-                content = response.markdown
+
+            response = app.scrape(url, formats=['markdown'])
+
+            # Handle both dict response (new API) and object response (legacy)
+            content = None
+            if isinstance(response, dict) and 'markdown' in response:
+                _dbg(f"Web scrape returned markdown (len={len(response['markdown'])})")
+                content = response['markdown']
+            elif hasattr(response, 'markdown'):
                 _dbg(f"Web scrape returned markdown (len={len(response.markdown)})")
+                content = response.markdown
+
+            if content:
                 # Cache the result for future use
-                cache.set(url, content, ttl_hours=cache_ttl_hours, 
+                cache.set(url, content, ttl_hours=cache_ttl_hours,
                          metadata={'scraped_at': time.time(), 'url': url})
-                
                 return content
             else:
                 console.print(f"[bold yellow]Warning:[/bold yellow] No markdown content returned for {url}")
@@ -280,7 +371,12 @@ def process_web_tags(text: str, recursive: bool) -> str:
             console.print(f"[bold red]Error scraping web content:[/bold red] {str(e)}")
             _dbg(f"Web scraping exception: {e}")
             return f"[Web scraping error: {str(e)}]"
-    return re.sub(pattern, replace_web, text, flags=re.DOTALL)
+    code_spans = _extract_code_spans(text)
+    def replace_web_with_spans(match):
+        if _intersects_any_span(match.start(), match.end(), code_spans):
+            return match.group(0)
+        return replace_web(match)
+    return re.sub(pattern, replace_web_with_spans, text, flags=re.DOTALL)
 
 def process_include_many_tags(text: str, recursive: bool) -> str:
     """Process <include-many> blocks whose inner content is a comma- or newline-separated
@@ -311,7 +407,12 @@ def process_include_many_tags(text: str, recursive: bool) -> str:
                 _dbg(f"Error processing include-many {p}: {e}")
                 contents.append(f"[Error processing include: {p}]")
         return "\n".join(contents)
-    return re.sub(pattern, replace_many, text, flags=re.DOTALL)
+    code_spans = _extract_code_spans(text)
+    def replace_many_with_spans(match):
+        if _intersects_any_span(match.start(), match.end(), code_spans):
+            return match.group(0)
+        return replace_many(match)
+    return re.sub(pattern, replace_many_with_spans, text, flags=re.DOTALL)
 
 def double_curly(text: str, exclude_keys: Optional[List[str]] = None) -> str:
     if exclude_keys is None:
@@ -319,28 +420,6 @@ def double_curly(text: str, exclude_keys: Optional[List[str]] = None) -> str:
     
     console.print("Doubling curly brackets...")
     _dbg("double_curly invoked")
-    
-    # Special case handling for specific test patterns
-    if "Mix of {excluded{inner}} nesting" in text and "excluded" in exclude_keys:
-        return text.replace("{excluded{inner}}", "{excluded{{inner}}}")
-    if "This has {outer{inner}} nested brackets." in text:
-        return text.replace("{outer{inner}}", "{{outer{{inner}}}}")
-    if "Deep {first{second{third}}} nesting" in text:
-        return text.replace("{first{second{third}}}", "{{first{{second{{third}}}}}}") 
-    
-    # Special handling for multiline test case
-    if "This has a {\n        multiline\n        variable\n    } with brackets." in text:
-        return """This has a {{
-        multiline
-        variable
-    }} with brackets."""
-    
-    # Special handling for mock_db test case
-    if "    mock_db = {\n            \"1\": {\"id\": \"1\", \"name\": \"Resource One\"},\n            \"2\": {\"id\": \"2\", \"name\": \"Resource Two\"}\n        }" in text:
-        return """    mock_db = {{
-            "1": {{"id": "1", "name": "Resource One"}},
-            "2": {{"id": "2", "name": "Resource Two"}}
-        }}"""
     
     # Protect ${IDENT} placeholders so we can safely double braces, then restore
     # them as ${{IDENT}} to avoid PromptTemplate interpreting {IDENT}.
@@ -367,9 +446,7 @@ def double_curly(text: str, exclude_keys: Optional[List[str]] = None) -> str:
     # Restore already doubled brackets
     text = re.sub(r'__ALREADY_DOUBLED__(.*?)__END_ALREADY__', r'{{\1}}', text)
 
-    # Restore protected ${IDENT} placeholders as ${{IDENT}} so single braces
-    # don't leak into PromptTemplate formatting. This is safe for JS template
-    # literals and prevents missing-key errors in later formatting steps.
+    # Restore protected ${IDENT} placeholders as ${{IDENT}}
     def _restore_var(m):
         idx = int(m.group(1))
         if 0 <= idx < len(protected_vars):

@@ -64,8 +64,12 @@ def test_load_prompt_template_file_not_found(monkeypatch, capsys):
         # Assert that the function returns None
         assert result is None
         
-        # Assert that Path.exists was called for each candidate root (PDD_PATH, repo root, CWD)
-        assert mock_exists.call_count == 3
+        # Assert that Path.exists was called for each candidate location
+        # We now check 2 paths per candidate root (PDD_PATH, repo root, CWD):
+        # - <root>/prompts/<name>.prompt
+        # - <root>/pdd/prompts/<name>.prompt
+        # So total should be 3 roots * 2 paths = 6 calls
+        assert mock_exists.call_count == 6
         
         # Capture the printed error message and ensure it includes the PDD_PATH-based candidate
         captured = capsys.readouterr()
@@ -139,3 +143,70 @@ def test_load_prompt_template_non_string_prompt_name(monkeypatch, capsys):
         # Capture the printed error message
         captured = capsys.readouterr()
         assert "Unexpected error loading prompt template" in captured.out
+
+# Test Case: Simulates installed package scenario where prompts should be in pdd/prompts/
+def test_load_prompt_template_installed_package_location(monkeypatch, capsys, tmp_path):
+    """
+    Reproduces the issue where load_prompt_template fails to find prompts
+    in an installed package location. This happens because the function
+    doesn't check for prompts in the pdd/prompts/ subdirectory within
+    the installed package.
+    
+    Error scenario from the bug report:
+    - PDD_PATH is not set (user doesn't have local development setup)
+    - CWD doesn't contain prompts
+    - The package is installed at a location like:
+      /Users/user/.local/share/uv/tools/pdd-cli/lib/python3.13/site-packages/
+    - Prompts should be at:
+      site-packages/pdd/prompts/unfinished_prompt_LLM.prompt
+    - But the code looks for them at:
+      site-packages/prompts/unfinished_prompt_LLM.prompt
+    """
+    prompt_name = "unfinished_prompt_LLM"
+    expected_content = "This is the unfinished prompt template."
+    
+    # Simulate an installed package structure
+    # site-packages/
+    #   pdd/
+    #     prompts/
+    #       unfinished_prompt_LLM.prompt
+    site_packages = tmp_path / "site-packages"
+    pdd_package = site_packages / "pdd"
+    prompts_dir = pdd_package / "prompts"
+    prompts_dir.mkdir(parents=True)
+    
+    prompt_file = prompts_dir / f"{prompt_name}.prompt"
+    prompt_file.write_text(expected_content, encoding='utf-8')
+    
+    # Create a fake __file__ path that simulates the installed package location
+    fake_module_file = pdd_package / "path_resolution.py"
+    fake_module_file.touch()
+
+    # Ensure PDD_PATH is not set and CWD doesn't have prompts
+    monkeypatch.delenv("PDD_PATH", raising=False)
+    monkeypatch.setattr(Path, "cwd", lambda: tmp_path / "user_project")
+
+    # Mock __file__ in path_resolution module (where get_default_resolver reads package_root)
+    import pdd.path_resolution as pr_module
+    monkeypatch.setattr(pr_module, "__file__", str(fake_module_file))
+    
+    # Call load_prompt_template
+    result = load_prompt_template(prompt_name)
+    
+    # This test will FAIL with current implementation because it looks for:
+    # site-packages/prompts/unfinished_prompt_LLM.prompt
+    # instead of:
+    # site-packages/pdd/prompts/unfinished_prompt_LLM.prompt
+    
+    if result is None:
+        # Capture the error message to show the bug
+        captured = capsys.readouterr()
+        # The test is expected to fail initially, showing the bug exists
+        pytest.fail(
+            f"Bug reproduced: load_prompt_template failed to find prompt in installed package.\n"
+            f"Expected to find: {prompt_file}\n"
+            f"Error output:\n{captured.out}"
+        )
+    
+    # Once fixed, this assertion should pass
+    assert result == expected_content, f"Expected to load prompt from installed package location"

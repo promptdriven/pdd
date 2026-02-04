@@ -2,7 +2,7 @@
 
 This example shows you how to set up **Prompt-Driven Development (PDD)** with a free **Gemini API key** and run the built-in **Hello** example.
 
-> **Goal:** By the end, you’ll have PDD installed, Gemini configured, and `pdd generate` running on the Hello example.
+> **Goal:** By the end, you'll have PDD installed, Gemini configured, and `pdd sync` running on the Hello example.
 
 ---
 
@@ -82,10 +82,12 @@ cd pdd/examples/hello
 
 If you already pasted the key into `pdd setup`, you can skip this section. Otherwise:
 
-1. Go to [Google AI Studio](https://aistudio.google.com/app/apikey).  
-2. Log in with your Google account.  
-3. Click **Create API key**.  
+1. Go to [Google AI Studio](https://aistudio.google.com/app/apikey).
+2. Log in with your Google account.
+3. Click **Create API key**.
 4. Copy the key.
+
+> **Students:** The Gemini API is free for everyone, but university students get higher rate limits (60 requests/min, 300K tokens/day) extended through June 2026. You can also claim [1 year of Google AI Pro free](https://gemini.google/students/) (sign up by Jan 31, 2026) for additional perks like NotebookLM and 2TB storage.
 
 **macOS/Linux (bash/zsh)**
 ```bash
@@ -122,10 +124,9 @@ head -2 ~/.pdd/llm_model.csv
 
 ---
 
-## 6. Output locations (tests & examples)
+## 6. Output locations (optional, skip for this quickstart)
 
-By default, PDD writes generated files next to your source code.  
-To keep repos tidy, set these environment variables once (e.g., in `~/.zshrc` or `~/.bashrc`):
+By default, PDD writes generated files next to your source code. For real projects, you can set these environment variables to organize outputs:
 
 ```bash
 export PDD_TEST_OUTPUT_PATH=tests
@@ -136,36 +137,52 @@ With these set, PDD will place outputs like so:
 - Examples → `examples/<module>/...`
 - Tests → `tests/<module>/...`
 
+> **Note:** For the Hello example below, leave these unset so files generate in the current directory.
+
 ---
 
-## 7. Run the Hello Example
+## 7. Validate Your Setup
+
+Before using the main workflow, verify your configuration works by running a quick generate:
 
 From `pdd/examples/hello`:
 
 ```bash
-# generate code from the prompt
 pdd generate hello_python.prompt
+```
 
-# run the generated example if it has a main block
-python examples/hello/hello.py
+If this succeeds, your API key and model configuration are working correctly.
+
+---
+
+## 8. Use Sync (Primary Workflow)
+
+The `pdd sync` command is the primary way to work with PDD. It generates code, tests, and examples for a module, keeping everything in sync:
+
+```bash
+pdd sync hello
+```
+
+Use `--force` to regenerate even if files already exist:
+
+```bash
+pdd --force sync hello
+```
+
+After syncing, run the generated example:
+
+```bash
+python hello.py
 ```
 
 If the generated `hello.py` is minimal (no `__main__` block), run it interactively:
 
 ```bash
-python -i examples/hello/hello.py
+python -i hello.py
 >>> hello()
 hello
 ```
 
----
-## 8. (Optional) Sync
-
-After you’ve confirmed `generate` works:
-
-```bash
-pdd --force sync hello
-```
 ---
 
 ## 9. What if nothing prints?
@@ -181,7 +198,7 @@ In that case you have two options:
 
 ### Option A — Run interactively
 ```bash
-python -i examples/hello/hello.py
+python -i hello.py
 >>> hello()
 hello
 ```
@@ -194,10 +211,43 @@ if __name__ == "__main__":
 ```
 Then re-run:
 ```bash
-python examples/hello/hello.py
+python hello.py
 # output:
 hello
 ```
 
 
-✅ That’s it! You’ve installed PDD, configured Gemini, set up the model CSV, and generated your first working example.
+---
+
+## 10. Try the Web Interface with `pdd connect`
+
+PDD also provides a web-based interface for generating code and managing projects. Start the local server:
+
+```bash
+pdd connect
+```
+
+This launches a FastAPI server on `http://localhost:9876` and opens your browser automatically.
+
+From the web interface you can:
+- Generate code from prompts visually
+- Implement GitHub issues automatically
+- Manage PDD projects through a GUI
+
+Common options:
+
+```bash
+# Use a different port
+pdd connect --port 8000
+
+# Don't auto-open the browser
+pdd connect --no-browser
+
+# View API docs at http://localhost:9876/docs
+```
+
+Press `Ctrl+C` to stop the server when you're done.
+
+---
+
+✅ That's it! You've installed PDD, configured Gemini, and used `pdd sync` to generate your first module.

@@ -83,10 +83,20 @@ def test_successful_update_prompt(valid_inputs, mock_llm_invoke, mock_load_promp
     assert result[1] == 0.003  # Sum of both costs
     assert result[2] == 'gpt-3.5-turbo'
 
-def test_empty_input_strings():
-    """Test handling of empty input strings"""
-    with pytest.raises(ValueError, match="All input strings .* must be non-empty"):
-        update_prompt("", "code", "modified", 0.5, 0.5)
+def test_empty_input_strings(mock_llm_invoke, mock_load_prompt_template, mock_preprocess):
+    """
+    Test that an empty input_prompt is handled gracefully,
+    but an empty input_code in update mode raises an error.
+    """
+    # Scenario 1: Empty input_prompt should NOT raise an error.
+    try:
+        update_prompt(input_prompt="", input_code="code", modified_code="modified", strength=0.5, temperature=0.5)
+    except ValueError:
+        pytest.fail("update_prompt should NOT raise ValueError for an empty input_prompt.")
+
+    # Scenario 2: Empty input_code (when not in generation mode) SHOULD raise an error.
+    with pytest.raises(ValueError, match="For updating an existing prompt, input_code must be non-empty."):
+        update_prompt(input_prompt="a real prompt", input_code="", modified_code="modified", strength=0.5, temperature=0.5)
 
 def test_invalid_strength():
     """Test handling of invalid strength parameter"""
@@ -120,9 +130,54 @@ def test_verbose_output(valid_inputs, mock_llm_invoke, mock_load_prompt_template
     """Test verbose output functionality"""
     valid_inputs['verbose'] = True
     result = update_prompt(**valid_inputs)
-    
+
     captured = capsys.readouterr()
     assert "Running first LLM invocation" in captured.out
     assert "Running second LLM invocation" in captured.out
     assert "Modified Prompt" in captured.out
     assert "Total Cost" in captured.out
+
+
+def test_empty_modified_prompt_response(valid_inputs, mock_load_prompt_template, mock_preprocess, monkeypatch):
+    """Test that empty modified_prompt from LLM raises an error instead of silently returning empty string.
+
+    This catches the bug where vertex_ai/gemini-3-flash-preview returns {"modified_prompt": ""} which
+    previously passed validation and resulted in an empty output file.
+    """
+
+    # Mock LLM to return an empty modified_prompt (the bug scenario)
+    empty_prompt_response = {
+        'result': PromptUpdate.model_construct(modified_prompt=''),  # Empty string!
+        'cost': 0.002,
+        'model_name': 'vertex_ai/gemini-3-flash-preview'
+    }
+
+    def mock_llm(*args, **kwargs):
+        if 'output_pydantic' in kwargs:
+            return empty_prompt_response  # Second call returns empty
+        return MOCK_FIRST_RESPONSE  # First call succeeds
+
+    monkeypatch.setattr('pdd.update_prompt.llm_invoke', mock_llm)
+
+    with pytest.raises(RuntimeError, match="empty modified prompt"):
+        update_prompt(**valid_inputs)
+
+
+def test_whitespace_only_modified_prompt_response(valid_inputs, mock_load_prompt_template, mock_preprocess, monkeypatch):
+    """Test that whitespace-only modified_prompt from LLM raises an error."""
+
+    whitespace_prompt_response = {
+        'result': PromptUpdate.model_construct(modified_prompt='   \n\t  '),  # Only whitespace
+        'cost': 0.002,
+        'model_name': 'vertex_ai/gemini-3-flash-preview'
+    }
+
+    def mock_llm(*args, **kwargs):
+        if 'output_pydantic' in kwargs:
+            return whitespace_prompt_response
+        return MOCK_FIRST_RESPONSE
+
+    monkeypatch.setattr('pdd.update_prompt.llm_invoke', mock_llm)
+
+    with pytest.raises(RuntimeError, match="empty modified prompt"):
+        update_prompt(**valid_inputs)

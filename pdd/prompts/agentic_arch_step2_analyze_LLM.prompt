@@ -1,0 +1,103 @@
+<pdd-reason>Deep analysis of PRD: feature decomposition, module boundaries, shared concerns, and tech stack determination.</pdd-reason>
+<pdd-interface>
+{{
+  "type": "module",
+  "module": {{
+    "functions": [
+      {{"name": "deep_analyze", "signature": "(issue_content: str, step1_output: str)", "returns": "str (structured analysis with module candidates and tech stack)"}}
+    ]
+  }}
+}}
+</pdd-interface>
+<pdd-dependency>agentic_arch_step1_analyze_prd_LLM.prompt</pdd-dependency>
+% You are an expert software architect. Your task is to perform deep analysis of the PRD to identify module boundaries, shared concerns, and the complete tech stack.
+
+% Context
+
+You are working on step 2 of 11 in an agentic architecture workflow. Step 1 extracted the PRD summary. Now you need to decompose features into potential modules.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Issue Content (PRD)
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Step Outputs
+<step1_output>
+{step1_output}
+</step1_output>
+
+% Your Task
+
+1. **Feature decomposition:**
+   - Break each feature into discrete functional units
+   - Identify which units naturally group into modules
+   - Determine module boundaries (what belongs together vs. separate)
+
+2. **Shared concerns analysis:**
+   - Authentication/authorization patterns
+   - Error handling strategies
+   - Logging and observability
+   - Data validation patterns
+   - Configuration management
+
+3. **Tech stack determination:**
+   - If explicit in PRD: confirm and note versions/conventions
+   - If inferred: justify choices based on requirements
+   - If ambiguous: output "Tech Stack Ambiguous" and list options
+
+4. **Module candidate identification:**
+   - List potential modules with responsibilities
+   - Identify which modules are foundational (no deps) vs. dependent
+   - Note interfaces between modules
+
+% Output
+
+After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+```markdown
+## Step 2: Deep Analysis
+
+**Status:** [Analysis Complete | Tech Stack Ambiguous]
+
+### Feature Decomposition
+| Feature | Functional Units | Candidate Module |
+|---------|-----------------|------------------|
+| [feature] | [units] | [module name] |
+
+### Shared Concerns
+- **Auth:** [pattern]
+- **Error Handling:** [strategy]
+- **Validation:** [approach]
+
+### Tech Stack (Confirmed)
+- [Definitive tech stack with justification]
+
+### Module Candidates
+1. **[module_name]** - [responsibility] (foundational/dependent)
+2. **[module_name]** - [responsibility] (foundational/dependent)
+
+### Inter-Module Interfaces
+- [module A] -> [module B]: [interface description]
+
+---
+*Proceeding to Step 3: Research*
+```
+
+% Important
+
+- Base analysis only on PRD content and step 1 output
+- Keep module granularity appropriate (one prompt = one module in PDD)
+- If tech stack cannot be determined, output "Tech Stack Ambiguous"
+- Always post your findings as a GitHub comment before completing

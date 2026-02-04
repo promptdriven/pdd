@@ -1,7 +1,7 @@
 """Module to retrieve file extensions for programming languages."""
 
-import os
 import pandas as pd
+from pdd.path_resolution import get_default_resolver
 
 def get_extension(language: str) -> str:
     """
@@ -18,13 +18,12 @@ def get_extension(language: str) -> str:
         ValueError: If the PDD_PATH environment variable is not set.
         FileNotFoundError: If the language_format.csv file is not found.
     """
-    # Step 1: Load the environment variable PDD_PATH
-    pdd_path = os.getenv('PDD_PATH')
-    if not pdd_path:
-        raise ValueError("Environment variable PDD_PATH is not set.")
-    
-    # Construct the full path to the CSV file
-    csv_file_path = os.path.join(pdd_path, 'data', 'language_format.csv')
+    # Step 1: Resolve CSV path from PDD_PATH
+    resolver = get_default_resolver()
+    try:
+        csv_file_path = resolver.resolve_data_file("data/language_format.csv")
+    except ValueError as exc:
+        raise ValueError("Environment variable PDD_PATH is not set.") from exc
     
     # Step 2: Lower case the language string
     language_lower = language.lower()

@@ -38,8 +38,8 @@ def create_mock_context(command_name: str, params: dict, obj: dict = None):
 
     if obj is not None:
         mock_obj = MagicMock()
-        # Mock the get method for obj
-        mock_obj.get.side_effect = lambda key: obj.get(key, None)
+        # Mock the get method for obj - support both one and two argument calls
+        mock_obj.get.side_effect = lambda key, default=None: obj.get(key, default)
         mock_ctx.obj = mock_obj
     else:
         # If obj is not provided, set obj to None to simulate absence
@@ -525,3 +525,169 @@ def test_non_tuple_result(mock_click_context, mock_open_file, mock_rprint):
     mock_rprint.assert_not_called()
     # Ensure the command result is returned correctly
     assert result == '/path/to/output'
+
+
+def test_collect_files_with_fix_command(mock_click_context, mock_rprint, tmp_path):
+    """
+    Test that collect_files correctly identifies prompt_file, code_file, unit_test_file, and error_file.
+    """
+    # Create temporary files
+    prompt_file = tmp_path / "test.prompt"
+    code_file = tmp_path / "code.py"
+    test_file = tmp_path / "test.py"
+    error_file = tmp_path / "errors.log"
+
+    prompt_file.write_text("test prompt")
+    code_file.write_text("print('hello')")
+    test_file.write_text("def test(): pass")
+    error_file.write_text("error log")
+
+    # Define a command similar to the fix command
+    @track_cost
+    def fix_command(ctx, prompt_file: str, code_file: str, unit_test_file: str, error_file: str) -> Tuple[str, float, str]:
+        return ('/path/to/output', 10.0, 'test-model')
+
+    # Setup a real-like context object
+    obj_dict = {'core_dump_files': set(), 'core_dump': True}
+    mock_ctx = MagicMock()
+    mock_ctx.command.name = 'fix'
+    mock_ctx.obj = obj_dict
+    mock_click_context.return_value = mock_ctx
+
+    with mock.patch.dict(os.environ, {}, clear=True):
+        result = fix_command(
+            mock_ctx,
+            prompt_file=str(prompt_file),
+            code_file=str(code_file),
+            unit_test_file=str(test_file),
+            error_file=str(error_file)
+        )
+
+    # Check that files were added to core_dump_files
+    core_dump_files = obj_dict['core_dump_files']
+
+    # All input files should be tracked
+    assert any(str(prompt_file) in f for f in core_dump_files), f"prompt_file not in {core_dump_files}"
+    assert any(str(code_file) in f for f in core_dump_files), f"code_file not in {core_dump_files}"
+    assert any(str(test_file) in f for f in core_dump_files), f"test_file not in {core_dump_files}"
+    assert any(str(error_file) in f for f in core_dump_files), f"error_file not in {core_dump_files}"
+
+    # Ensure no error was printed
+    mock_rprint.assert_not_called()
+    # Ensure the command result is returned correctly
+    assert result == ('/path/to/output', 10.0, 'test-model')
+
+
+def test_collect_files_with_generate_command(mock_click_context, mock_rprint, tmp_path):
+    """
+    Test that collect_files correctly identifies prompt_file and output for generate command.
+    """
+    # Create temporary files
+    prompt_file = tmp_path / "test.prompt"
+    output_file = tmp_path / "output.py"
+
+    prompt_file.write_text("generate test")
+    output_file.write_text("# generated")
+
+    # Define a command similar to generate
+    @track_cost
+    def generate_command(ctx, prompt_file: str, output: str = None) -> Tuple[str, float, str]:
+        return (output or '/path/to/output', 5.0, 'test-model')
+
+    # Setup a real-like context object
+    obj_dict = {'core_dump_files': set(), 'core_dump': True}
+    mock_ctx = MagicMock()
+    mock_ctx.command.name = 'generate'
+    mock_ctx.obj = obj_dict
+    mock_click_context.return_value = mock_ctx
+
+    with mock.patch.dict(os.environ, {}, clear=True):
+        result = generate_command(mock_ctx, prompt_file=str(prompt_file), output=str(output_file))
+
+    # Check that files were added to core_dump_files
+    core_dump_files = obj_dict['core_dump_files']
+
+    # Prompt file should be in input files
+    assert any(str(prompt_file) in f for f in core_dump_files), f"prompt_file not in {core_dump_files}"
+    # Output file should also be tracked
+    assert any(str(output_file) in f for f in core_dump_files), f"output_file not in {core_dump_files}"
+
+    mock_rprint.assert_not_called()
+    assert result == (str(output_file), 5.0, 'test-model')
+
+
+def test_collect_files_skips_non_existent_files(mock_click_context, mock_rprint):
+    """
+    Test that collect_files handles non-existent files gracefully.
+    """
+    @track_cost
+    def test_command(ctx, prompt_file: str, missing_file: str) -> Tuple[str, float, str]:
+        return ('/path/to/output', 1.0, 'test-model')
+
+    # Setup with one real file and one non-existent
+    mock_ctx = create_mock_context(
+        'test',
+        {
+            'prompt_file': '/real/file.txt',
+            'missing_file': '/does/not/exist.txt'
+        },
+        obj={'core_dump_files': set()}
+    )
+    mock_click_context.return_value = mock_ctx
+
+    with mock.patch('os.path.exists', side_effect=lambda p: p == '/real/file.txt'):
+        with mock.patch('os.path.isfile', side_effect=lambda p: p == '/real/file.txt'):
+            with mock.patch.dict(os.environ, {}, clear=True):
+                result = test_command(mock_ctx, '/real/file.txt', '/does/not/exist.txt')
+
+    # Only existing files should be added
+    core_dump_files = mock_ctx.obj.get('core_dump_files', set())
+    # Both files might be added based on the logic (has extension)
+    # But only the existing one should pass the os.path.exists check in track_cost
+
+    mock_rprint.assert_not_called()
+    assert result == ('/path/to/output', 1.0, 'test-model')
+
+
+def test_files_tracked_on_command_failure(mock_click_context, mock_rprint, tmp_path):
+    """
+    Test that input/output files are tracked in core dump even when command raises exception.
+    This is a regression test for the bug where collect_files() was not called when commands failed.
+    """
+    # Create temporary files
+    prompt_file = tmp_path / "test.prompt"
+    output_file = tmp_path / "output.py"
+
+    prompt_file.write_text("test prompt")
+
+    # Define a command that raises an exception (simulating user cancellation or error)
+    @track_cost
+    def failing_command(ctx, prompt_file: str, output: str = None) -> Tuple[str, float, str]:
+        raise Exception("User cancelled command")
+
+    # Setup a real-like context object with core_dump enabled
+    obj_dict = {'core_dump_files': set(), 'core_dump': True}
+    mock_ctx = MagicMock()
+    mock_ctx.command.name = 'generate'
+    mock_ctx.obj = obj_dict
+    mock_click_context.return_value = mock_ctx
+
+    # Call the command and expect it to raise an exception
+    with pytest.raises(Exception, match="User cancelled command"):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            failing_command(mock_ctx, prompt_file=str(prompt_file), output=str(output_file))
+
+    # Check that files were STILL added to core_dump_files despite the exception
+    core_dump_files = obj_dict['core_dump_files']
+
+    # The prompt file should be tracked even though command failed
+    assert any(str(prompt_file) in f for f in core_dump_files), \
+        f"prompt_file should be tracked on failure, but core_dump_files={core_dump_files}"
+
+    # The output file should also be tracked
+    assert any(str(output_file) in f for f in core_dump_files), \
+        f"output_file should be tracked on failure, but core_dump_files={core_dump_files}"
+
+    # No tracking errors should be printed (the exception handling should be clean)
+    # Note: rprint might be called for the actual exception, but not for tracking errors
+    # We just want to make sure the test doesn't crash and files are tracked

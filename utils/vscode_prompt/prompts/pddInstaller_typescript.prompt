@@ -1,0 +1,194 @@
+# PDD CLI Installer for VS Code Extension
+
+Create a TypeScript class that handles the installation, detection, and management of the PDD (Prompt-Driven Development) CLI tool within a VS Code extension environment.
+
+## Class Structure
+
+### Class Name: PddInstaller
+
+### Properties
+- `context`: Optional `vscode.ExtensionContext` property (readonly, private)
+
+### Constructor
+- Accept optional `context` parameter of type `vscode.ExtensionContext`
+- Store context in private property
+
+## Core Methods
+
+### 1. isPddCliInstalled(): Promise<boolean>
+Detect if PDD CLI is installed through multiple detection strategies:
+
+**Detection Order:**
+1. Try standard PATH: `pdd --version`
+2. Try uv tool path: `~/.local/share/uv/tools/pdd-cli/bin/pdd --version`
+3. Try uv tool run: `uv tool run pdd-cli --version`
+4. Try conda run: `conda run -n pdd pdd --version`
+5. Try common installation paths (base anaconda/miniconda environments):
+   - `~/.local/bin/pdd`
+   - `/opt/anaconda3/bin/pdd`
+   - `/opt/miniconda3/bin/pdd`
+   - `~/anaconda3/bin/pdd`
+   - `~/miniconda3/bin/pdd`
+
+Return true if any detection succeeds, false otherwise.
+
+### 2. installPddCli(): Promise<void>
+Install PDD CLI using uv (the modern Python package manager):
+
+**User Consent Dialog:**
+- Show information message with title: "Install PDD CLI?"
+- Detail text: "PDD CLI will be installed using uv (the modern Python package manager). If uv is not installed, it will be installed first."
+- Options: "Install PDD CLI", "Cancel"
+
+**Installation Logic:**
+- If user cancels: Show information message and return
+- Log installation start
+- Show progress notification with title "Installing PDD CLI"
+
+**Installation Steps:**
+1. Check if uv exists: `uv --version`
+2. If uv exists:
+   - Use command: `uv tool install pdd-cli`
+   - Mark installation method as 'uv'
+3. If uv doesn't exist:
+   - Install uv first using platform-specific command:
+     - Windows: `powershell -c "irm https://astral.sh/uv/install.ps1 | iex"`
+     - Unix/macOS: `curl -LsSf https://astral.sh/uv/install.sh | sh`
+   - Update progress: "uv installed! Now installing PDD CLI..."
+   - Try `uv tool install pdd-cli`
+   - If uv not in PATH, use full path: `~/.cargo/bin/uv tool install pdd-cli` (Unix) or `%USERPROFILE%\.cargo\bin\uv tool install pdd-cli` (Windows)
+   - Mark installation method as 'uv-installed'
+
+**Progress reporting:**
+- 0%: "Installing PDD CLI..."
+- 10%: "Installing uv package manager..." (if needed)
+- 15%: "uv installed! Now installing PDD CLI..." (if uv was installed)
+- 25%: "Installing PDD CLI package..."
+- 100%: "PDD CLI installed successfully!"
+
+**Success Messages (based on installation method):**
+
+*For 'uv' method:*
+- Message: "PDD CLI has been installed successfully using uv! Run "pdd setup" in your terminal or use the "PDD: Run PDD Setup" command to configure API keys and install tab completion."
+- Buttons: "Open Terminal", "Run Setup", "View PDD Docs", "View uv Docs"
+- Actions:
+  - Open Terminal: Execute `workbench.action.terminal.new`
+  - Run Setup: Call `runPddSetup()`
+  - View PDD Docs: Open https://github.com/promptdriven/pdd#readme
+  - View uv Docs: Open https://docs.astral.sh/uv/
+
+*For 'uv-installed' method:*
+- Message: "PDD CLI has been installed successfully! We also installed uv (the modern Python package manager) for future use. Run "pdd setup" in your terminal or use the "PDD: Run PDD Setup" command to configure API keys and install tab completion."
+- Same buttons and actions as 'uv' method
+
+**Error Handling:**
+- Catch all errors during installation
+- Log error to console
+- Show error message: "Failed to install PDD CLI: [error message]. Please install manually: uv tool install pdd-cli"
+
+### 3. runPddSetup(): Promise<void>
+Execute PDD setup in a terminal:
+
+**Process:**
+1. Create new terminal named "PDD Setup"
+2. Show the terminal
+3. Try uv tool path: `~/.local/share/uv/tools/pdd-cli/bin/pdd --version`
+4. If uv tool path exists, use full path: `[path]/pdd setup && echo "Setup complete! Please reload your shell: source ~/.zshrc (or ~/.bashrc)"`
+5. Otherwise try: `uv tool run pdd-cli setup && echo "Setup complete! Please reload your shell: source ~/.zshrc (or ~/.bashrc)"`
+6. Fallback to: `pdd setup && echo "Setup complete! Please reload your shell: source ~/.zshrc (or ~/.bashrc)"`
+7. Show message: "PDD setup is running in the terminal. Follow the prompts to configure your API keys, then reload your shell for tab completion."
+
+**Error Handling:**
+- Catch errors and log to console
+- Show error message: "Failed to run PDD setup: [error message]"
+
+### 4. upgradeToUvInstallation(): Promise<void>
+Upgrade existing PDD installation to uv:
+
+**Process:**
+1. Check if PDD is installed using `isPddCliInstalled()`
+2. If not installed: Show warning "PDD CLI is not installed. Use "PDD: Install PDD CLI" command instead." and return
+3. Check if uv is available: `uv --version`
+4. If uv available:
+   - Check if PDD already installed via uv: `uv tool list | grep pdd-cli`
+   - If yes: Show message "PDD CLI is already installed via uv!" and return
+5. If uv not available:
+   - Show modal dialog: "To upgrade to uv installation, we first need to install uv (the modern Python package manager). This will give you access to the latest PDD CLI features and faster updates."
+   - Options: "Install uv and upgrade", "Cancel"
+   - If cancel selected, return
+
+6. Show upgrade confirmation modal:
+   - Title: "Upgrade PDD CLI to uv installation?"
+   - Body: "✅ Benefits:\n• Latest PDD CLI version\n• Faster updates\n• Better dependency management\n• Isolated installation\n\n⚠️ Your current PDD installation will be removed and reinstalled via uv."
+   - Options: "Yes, upgrade to uv", "No, keep current installation"
+
+7. If user confirms:
+   - Show progress notification "Upgrading PDD CLI to uv"
+   - Check uv availability (20% progress: "uv is available")
+   - If uv not available:
+     - Install uv (0% progress: "Installing uv...")
+     - Platform-specific command (same as installPddCli)
+     - Update progress (20%: "uv installed!")
+   - Remove old installation (20% progress: "Removing old PDD installation...")
+     - Try: `pip uninstall pdd-cli -y`
+     - Ignore errors if it fails
+   - Install via uv (30% progress: "Installing PDD CLI via uv...")
+     - Try: `uv tool install pdd-cli`
+     - If fails, try full path: `~/.cargo/bin/uv tool install pdd-cli` (Unix) or `%USERPROFILE%\.cargo\bin\uv tool install pdd-cli` (Windows)
+   - Complete (10% progress: "Upgrade complete!")
+
+8. Show success message:
+   - "PDD CLI has been successfully upgraded to uv installation! You now have access to the latest features and faster updates."
+   - Buttons: "View uv Docs", "OK"
+   - Action for "View uv Docs": Open https://docs.astral.sh/uv/
+
+**Error Handling:**
+- Catch errors and log to console
+- Show error message: "Failed to upgrade PDD CLI to uv: [error message]"
+
+### 5. checkAndPromptInstallation(): Promise<void>
+Check installation status and prompt user if needed:
+
+**Process:**
+1. Get workspace configuration: `vscode.workspace.getConfiguration('pdd')`
+2. Check if prompting is enabled: `config.get<boolean>('promptForInstallation', true)`
+3. Log checking status
+4. If prompting disabled, log and return
+5. Check if PDD installed using `isPddCliInstalled()`
+6. Log installation status
+7. If not installed:
+   - Show message: "PDD CLI is not installed. Would you like to install it automatically?"
+   - Options: "Install PDD CLI", "Not Now", "Don't Ask Again"
+   - If "Install PDD CLI": Call `installPddCli()`
+   - If "Don't Ask Again": Update config `promptForInstallation` to false (Global scope)
+
+**Error Handling:**
+- Catch errors and log to console
+- Don't show errors to user (silent failure for auto-check)
+
+## Technical Requirements
+
+### Imports
+- Import all from 'vscode'
+- Import child_process as 'cp'
+- Import promisify from 'util'
+
+### Utilities
+- Create promisified exec function: `const exec = promisify(cp.exec)`
+- Use exec for all shell command executions
+- Access home directory via `process.env.HOME`
+- Detect platform via `process.platform` (check for 'win32' for Windows)
+
+### Error Handling
+- Use try-catch blocks for all async operations
+- Log errors to console with descriptive messages
+- Provide user-friendly error messages in UI dialogs
+- Silently fail for background checks (checkAndPromptInstallation)
+
+### Logging
+- Log key steps with 'PDD:' prefix for easy filtering
+- Log installation methods, detected paths, and command outputs
+- Include stdout and stderr in logs where appropriate
+
+## Output Format
+Generate a TypeScript class with proper type annotations, comprehensive error handling, platform-specific logic, and clear separation of concerns following VS Code extension development best practices.

@@ -12,7 +12,7 @@ import click
 import pytest
 from click.testing import CliRunner
 
-from pdd.sync_main import sync_main
+from pdd.sync_main import sync_main, _normalize_prompts_root
 from pdd import DEFAULT_STRENGTH
 
 # Test Plan
@@ -66,7 +66,7 @@ from pdd import DEFAULT_STRENGTH
 #         exhausted.
 #       - Test handling of failures and exceptions from `sync_orchestration`.
 #     - **Special Modes**:
-#       - Test `--log` mode to ensure it calls the orchestrator with `log=True`
+#       - Test `--dry-run` mode to ensure it calls the orchestrator with `dry_run=True`
 #         and doesn't run a full sync.
 #       - Test `--quiet` mode to ensure no console output is produced.
 #     - **Configuration**:
@@ -110,17 +110,22 @@ def mock_sync_orchestration(mocker: MagicMock) -> MagicMock:
 @pytest.fixture
 def mock_construct_paths(mocker: MagicMock, mock_project_dir: Path) -> MagicMock:
     """Mocks the construct_paths function to return predictable paths."""
-    prompts_dir = mock_project_dir / "prompts"
-    
+    prompts_root_dir = mock_project_dir / "prompts"
+
     def side_effect_func(*args, **kwargs):
         input_paths = kwargs.get("input_file_paths", {})
         lang = kwargs.get("command_options", {}).get("language", "python")
         basename = kwargs.get("command_options", {}).get("basename", "test_basename")
+        context_override = kwargs.get("context_override")
+
+        resolved_prompts_dir = prompts_root_dir
+        if context_override == "backend":
+            resolved_prompts_dir = prompts_root_dir / "backend"
 
         # First call for initial setup
         if not input_paths:
             return (
-                {"prompts_dir": str(prompts_dir)},
+                {"prompts_dir": str(resolved_prompts_dir)},
                 {},
                 {
                     "generate_output_path": str(mock_project_dir / "src"),
@@ -181,7 +186,7 @@ def test_sync_success_single_language(mock_project_dir, mock_construct_paths, mo
     
     ctx = create_mock_context({})
     results, total_cost, model = sync_main(
-        ctx, "my_app", max_attempts=3, budget=10.0, skip_verify=False, skip_tests=False, target_coverage=90.0, log=False
+        ctx, "my_app", max_attempts=3, budget=10.0, skip_verify=False, skip_tests=False, target_coverage=90.0, dry_run=False
     )
 
     mock_sync_orchestration.assert_called_once()
@@ -208,7 +213,7 @@ def test_sync_success_multiple_languages(mock_project_dir, mock_construct_paths,
 
     ctx = create_mock_context({})
     results, total_cost, _ = sync_main(
-        ctx, "my_lib", max_attempts=3, budget=5.0, skip_verify=False, skip_tests=False, target_coverage=90.0, log=False
+        ctx, "my_lib", max_attempts=3, budget=5.0, skip_verify=False, skip_tests=False, target_coverage=90.0, dry_run=False
     )
 
     assert mock_sync_orchestration.call_count == 2
@@ -226,6 +231,7 @@ def test_sync_success_multiple_languages(mock_project_dir, mock_construct_paths,
     assert results["overall_success"] is True
     assert total_cost == pytest.approx(0.75 + 0.60)
     assert "python" in results["results_by_language"]
+
     assert "typescript" in results["results_by_language"]
 
 
@@ -234,27 +240,142 @@ def test_sync_no_prompt_files_found(mock_project_dir, mock_construct_paths):
     ctx = create_mock_context({})
     with pytest.raises(click.UsageError, match="No prompt files found for basename 'nonexistent'"):
         sync_main(
-            ctx, "nonexistent", max_attempts=3, budget=10.0, skip_verify=False, skip_tests=False, target_coverage=90.0, log=False
+            ctx, "nonexistent", max_attempts=3, budget=10.0, skip_verify=False, skip_tests=False, target_coverage=90.0, dry_run=False
         )
 
 
-@pytest.mark.parametrize("invalid_name", ["", "invalid/name", "bad!name", "name with space"])
+@pytest.mark.parametrize("invalid_name", ["", "bad!name", "name with space"])
 def test_sync_invalid_basename(invalid_name):
     """Tests that an error is raised for invalid basenames."""
     ctx = create_mock_context({})
     with pytest.raises(click.UsageError):
         sync_main(
-            ctx, invalid_name, max_attempts=3, budget=10.0, skip_verify=False, skip_tests=False, target_coverage=90.0, log=False
+            ctx, invalid_name, max_attempts=3, budget=10.0, skip_verify=False, skip_tests=False, target_coverage=90.0, dry_run=False
         )
 
 
-@pytest.mark.parametrize("budget, attempts", [(0, 3), (-5.0, 3), (10.0, 0), (10.0, -1)])
+def test_validate_basename_with_subdirectory(mock_project_dir, mock_construct_paths, mock_sync_orchestration):
+    """Should accept subdirectory basenames like 'core/cloud'.
+
+    Basenames with forward slashes representing subdirectory paths are valid.
+    """
+    # Create prompt file in subdirectory structure
+    (mock_project_dir / "prompts" / "core").mkdir(parents=True, exist_ok=True)
+    (mock_project_dir / "prompts" / "core" / "cloud_python.prompt").touch()
+
+    mock_sync_orchestration.return_value = {
+        "success": True,
+        "total_cost": 0.5,
+        "model_name": "gpt-4",
+        "summary": "All steps completed.",
+    }
+
+    ctx = create_mock_context({})
+
+    # This should NOT raise - subdirectory basenames should be valid
+    results, total_cost, model = sync_main(
+        ctx, "core/cloud", max_attempts=3, budget=10.0, skip_verify=False, skip_tests=False, target_coverage=90.0, dry_run=False
+    )
+
+    assert results["overall_success"] is True
+
+
+@pytest.mark.parametrize("invalid_path", [
+    "../escape",      # Path traversal attempt
+    "/absolute",      # Absolute path (leading slash)
+    "core/",          # Trailing slash
+    "core//double",   # Double slashes
+    "..",             # Just dotdot
+    "./relative",     # Dot slash
+])
+def test_validate_basename_rejects_path_traversal(invalid_path):
+    """Should reject path traversal attempts and malformed paths.
+
+    Security: Basenames with path traversal patterns should be rejected.
+    """
+    ctx = create_mock_context({})
+    with pytest.raises(click.UsageError):
+        sync_main(
+            ctx, invalid_path, max_attempts=3, budget=10.0, skip_verify=False, skip_tests=False, target_coverage=90.0, dry_run=False
+        )
+
+
+@pytest.mark.parametrize("budget, attempts", [(0, 3), (-5.0, 3), (10.0, -1)])
 def test_sync_invalid_budget_or_attempts(budget, attempts):
-    """Tests that an error is raised for non-positive budget or max_attempts."""
+    """Tests that an error is raised for non-positive budget or negative max_attempts.
+
+    Note: max_attempts=0 is valid - it skips normal LLM calls and goes straight to agentic fix.
+    """
     ctx = create_mock_context({})
     with pytest.raises(click.BadParameter):
         sync_main(
-            ctx, "any_name", max_attempts=attempts, budget=budget, skip_verify=False, skip_tests=False, target_coverage=90.0, log=False
+            ctx, "any_name", max_attempts=attempts, budget=budget, skip_verify=False, skip_tests=False, target_coverage=90.0, dry_run=False
+        )
+
+
+def test_sync_max_attempts_zero_is_valid(mock_project_dir, mock_construct_paths, mock_sync_orchestration):
+    """Tests that max_attempts=0 is accepted and skips normal LLM calls, going straight to agentic mode.
+
+    When max_attempts=0:
+    - Validation should NOT reject it (unlike negative values)
+    - Normal LLM fix loop should be skipped
+    - Agentic fallback should be triggered directly
+    """
+    (mock_project_dir / "prompts" / "agentic_test_python.prompt").touch()
+
+    mock_sync_orchestration.return_value = {
+        "success": True,
+        "total_cost": 0.5,
+        "model_name": "agentic-provider",
+        "summary": "Agentic fix succeeded.",
+    }
+
+    ctx = create_mock_context({})
+
+    # This should NOT raise an error - max_attempts=0 is valid
+    results, total_cost, model = sync_main(
+        ctx,
+        "agentic_test",
+        max_attempts=0,  # Should be valid - triggers agentic mode directly
+        budget=10.0,
+        skip_verify=False,
+        skip_tests=False,
+        target_coverage=90.0,
+        dry_run=False,
+    )
+
+    mock_sync_orchestration.assert_called_once()
+    call_args = mock_sync_orchestration.call_args[1]
+
+    # Verify max_attempts=0 was passed through correctly
+    assert call_args["max_attempts"] == 0, (
+        f"Expected max_attempts=0 to be passed to sync_orchestration, but got {call_args['max_attempts']}"
+    )
+
+    assert results["overall_success"] is True
+
+
+def test_sync_negative_max_attempts_still_rejected(mock_project_dir, mock_construct_paths):
+    """Tests that negative max_attempts values are still rejected.
+
+    Only max_attempts=0 should be valid (for agentic-only mode).
+    Negative values like -1 should still raise BadParameter.
+    """
+    (mock_project_dir / "prompts" / "negative_test_python.prompt").touch()
+
+    ctx = create_mock_context({})
+
+    # Negative max_attempts should still be rejected
+    with pytest.raises(click.BadParameter, match="non-negative"):
+        sync_main(
+            ctx,
+            "negative_test",
+            max_attempts=-1,  # Should be rejected
+            budget=10.0,
+            skip_verify=False,
+            skip_tests=False,
+            target_coverage=90.0,
+            dry_run=False,
         )
 
 
@@ -267,7 +388,7 @@ def test_sync_budget_exhausted(mock_project_dir, mock_construct_paths, mock_sync
 
     ctx = create_mock_context({})
     results, total_cost, _ = sync_main(
-        ctx, "app", max_attempts=3, budget=1.5, skip_verify=False, skip_tests=False, target_coverage=90.0, log=False
+        ctx, "app", max_attempts=3, budget=1.5, skip_verify=False, skip_tests=False, target_coverage=90.0, dry_run=False
     )
 
     mock_sync_orchestration.assert_called_once() # Should only be called for python
@@ -281,14 +402,14 @@ def test_sync_budget_exhausted(mock_project_dir, mock_construct_paths, mock_sync
     assert "Budget exhausted" in results["results_by_language"]["typescript"]["error"]
 
 
-def test_sync_log_mode(mock_project_dir, mock_construct_paths, mock_sync_orchestration):
-    """Tests that --log mode calls sync_orchestration correctly."""
+def test_sync_dry_run_mode(mock_project_dir, mock_construct_paths, mock_sync_orchestration):
+    """Tests that --dry-run mode calls sync_orchestration correctly."""
     (mock_project_dir / "prompts" / "log_test_python.prompt").touch()
     (mock_project_dir / "prompts" / "log_test_typescript.prompt").touch()
 
     ctx = create_mock_context({"verbose": True})
     results, total_cost, model = sync_main(
-        ctx, "log_test", max_attempts=3, budget=10.0, skip_verify=False, skip_tests=False, target_coverage=90.0, log=True
+        ctx, "log_test", max_attempts=3, budget=10.0, skip_verify=False, skip_tests=False, target_coverage=90.0, dry_run=True
     )
 
     assert mock_sync_orchestration.call_count == 2
@@ -300,10 +421,11 @@ def test_sync_log_mode(mock_project_dir, mock_construct_paths, mock_sync_orchest
             code_dir=str(mock_project_dir / 'src'),
             examples_dir=str(mock_project_dir / 'examples'),
             tests_dir=str(mock_project_dir / 'tests'),
-            log=True,
+            dry_run=True,
             verbose=True,
             quiet=False,
             context_override=None,
+            agentic_mode=False,
         ),
         call(
             basename='log_test',
@@ -312,10 +434,11 @@ def test_sync_log_mode(mock_project_dir, mock_construct_paths, mock_sync_orchest
             code_dir=str(mock_project_dir / 'src'),
             examples_dir=str(mock_project_dir / 'examples'),
             tests_dir=str(mock_project_dir / 'tests'),
-            log=True,
+            dry_run=True,
             verbose=True,
             quiet=False,
             context_override=None,
+            agentic_mode=False,
         ),
     ]
     mock_sync_orchestration.assert_has_calls(calls, any_order=True)
@@ -325,29 +448,29 @@ def test_sync_log_mode(mock_project_dir, mock_construct_paths, mock_sync_orchest
     assert results == {}
 
 
-def test_sync_log_mode_respects_force_flag(mock_project_dir, mock_construct_paths, mock_sync_orchestration):
-    """Tests that --log mode properly passes the force flag to construct_paths."""
+def test_sync_dry_run_mode_respects_force_flag(mock_project_dir, mock_construct_paths, mock_sync_orchestration):
+    """Tests that --dry-run mode properly passes the force flag to construct_paths."""
     (mock_project_dir / "prompts" / "force_test_python.prompt").touch()
 
     ctx = create_mock_context({"force": True, "verbose": False})
     results, total_cost, model = sync_main(
-        ctx, "force_test", max_attempts=3, budget=10.0, skip_verify=False, skip_tests=False, target_coverage=90.0, log=True
+        ctx, "force_test", max_attempts=3, budget=10.0, skip_verify=False, skip_tests=False, target_coverage=90.0, dry_run=True
     )
 
-    # Verify that construct_paths was called with force=True for log mode
+    # Verify that construct_paths was called with force=True for dry-run mode
     mock_construct_paths.assert_called()
     calls = mock_construct_paths.call_args_list
-    
-    # Find the call from log mode (should have force=True)
-    log_mode_call = None
+
+    # Find the call from dry-run mode (should have force=True)
+    dry_run_mode_call = None
     for call in calls:
         args, kwargs = call
         if kwargs.get('force') is True:
-            log_mode_call = call
+            dry_run_mode_call = call
             break
-    
-    assert log_mode_call is not None, "construct_paths should be called with force=True in log mode"
-    
+
+    assert dry_run_mode_call is not None, "construct_paths should be called with force=True in dry-run mode"
+
     assert total_cost == 0.0
     assert model == ""
     assert results == {}
@@ -382,7 +505,7 @@ def test_sync_cli_overrides_defaults(mock_project_dir, mock_construct_paths, moc
     ctx = create_mock_context({"strength": DEFAULT_STRENGTH, "temperature": 0.5, "_cli_set": ["strength", "temperature"]})
     
     sync_main(
-        ctx, "cli_app", max_attempts=5, budget=20.0, skip_verify=True, skip_tests=True, target_coverage=95.0, log=False
+        ctx, "cli_app", max_attempts=5, budget=20.0, skip_verify=True, skip_tests=True, target_coverage=95.0, dry_run=False
     )
 
     mock_sync_orchestration.assert_called_once()
@@ -454,7 +577,7 @@ def test_sync_normal_flow_threads_context_override(mock_project_dir, mock_constr
         skip_verify=False,
         skip_tests=False,
         target_coverage=90.0,
-        log=False,
+        dry_run=False,
     )
 
     # Verify sync_orchestration received the override
@@ -468,3 +591,314 @@ def test_sync_normal_flow_threads_context_override(mock_project_dir, mock_constr
 
     assert results["overall_success"] is True
     assert total_cost == 0.2
+
+
+# ============================================================================
+# Tests for .pddrc configuration priority (max_attempts and budget)
+# These tests verify that .pddrc values are used when CLI flags are not specified.
+# ============================================================================
+
+@pytest.fixture
+def mock_construct_paths_with_pddrc_config(mocker: MagicMock, mock_project_dir: Path) -> MagicMock:
+    """Mocks construct_paths to return .pddrc configuration values for max_attempts and budget."""
+    prompts_dir = mock_project_dir / "prompts"
+
+    def side_effect_func(*args, **kwargs):
+        input_paths = kwargs.get("input_file_paths", {})
+        lang = kwargs.get("command_options", {}).get("language", "python")
+        basename = kwargs.get("command_options", {}).get("basename", "test_basename")
+
+        # First call for initial setup
+        if not input_paths:
+            return (
+                {"prompts_dir": str(prompts_dir)},
+                {},
+                {
+                    "generate_output_path": str(mock_project_dir / "src"),
+                    "test_output_path": str(mock_project_dir / "tests"),
+                    "example_output_path": str(mock_project_dir / "examples"),
+                },
+                "",
+            )
+
+        # Subsequent calls for specific languages - return .pddrc values
+        return (
+            {
+                "code_dir": str(mock_project_dir / "src"),
+                "tests_dir": str(mock_project_dir / "tests"),
+                "examples_dir": str(mock_project_dir / "examples"),
+                # .pddrc configuration values that should override CLI defaults
+                "max_attempts": 5,  # .pddrc value (different from CLI default of 3)
+                "budget": 50.0,     # .pddrc value (different from CLI default of 20.0)
+            },
+            {"prompt_file": "prompt content"},
+            {
+                "generate_output_path": str(mock_project_dir / "src" / f"{basename}.{lang}"),
+                "test_output_path": str(mock_project_dir / "tests" / f"test_{basename}.{lang}"),
+                "example_output_path": str(mock_project_dir / "examples" / f"{basename}_example.{lang}"),
+            },
+            lang,
+        )
+
+    return mocker.patch("pdd.sync_main.construct_paths", side_effect=side_effect_func, autospec=True)
+
+
+def test_sync_pddrc_max_attempts_respected_when_cli_not_specified(
+    mock_project_dir, mock_construct_paths_with_pddrc_config, mock_sync_orchestration
+):
+    """Tests that max_attempts from .pddrc is used when CLI flag is not specified.
+
+    Bug: When --max-attempts is not specified on CLI, the hardcoded default (3) is used
+    instead of the value from .pddrc (5). This test verifies that .pddrc values take
+    precedence over CLI defaults.
+
+    Expected behavior after fix:
+    - CLI not specified: use .pddrc value (5)
+    - CLI specified: use CLI value
+    """
+    (mock_project_dir / "prompts" / "pddrc_test_python.prompt").touch()
+
+    mock_sync_orchestration.return_value = {
+        "success": True,
+        "total_cost": 0.5,
+        "model_name": "gpt-4",
+        "summary": "All steps completed.",
+    }
+
+    ctx = create_mock_context({})
+
+    # Pass None to simulate CLI flag not being specified
+    # (This is what will happen after the fix in maintenance.py)
+    results, total_cost, model = sync_main(
+        ctx,
+        "pddrc_test",
+        max_attempts=None,  # CLI not specified - should use .pddrc value of 5
+        budget=20.0,
+        skip_verify=False,
+        skip_tests=False,
+        target_coverage=90.0,
+        dry_run=False,
+    )
+
+    mock_sync_orchestration.assert_called_once()
+    call_args = mock_sync_orchestration.call_args[1]
+
+    # This should be 5 (from .pddrc), not 3 (CLI default)
+    assert call_args["max_attempts"] == 5, (
+        f"Expected max_attempts=5 from .pddrc, but got {call_args['max_attempts']}. "
+        "The CLI default is overriding the .pddrc value."
+    )
+
+    assert results["overall_success"] is True
+
+
+def test_sync_pddrc_budget_respected_when_cli_not_specified(
+    mock_project_dir, mock_construct_paths_with_pddrc_config, mock_sync_orchestration
+):
+    """Tests that budget from .pddrc is used when CLI flag is not specified.
+
+    Bug: When --budget is not specified on CLI, the hardcoded default (20.0) is used
+    instead of the value from .pddrc (50.0). This test verifies that .pddrc values take
+    precedence over CLI defaults.
+
+    Expected behavior after fix:
+    - CLI not specified: use .pddrc value (50.0)
+    - CLI specified: use CLI value
+    """
+    (mock_project_dir / "prompts" / "pddrc_budget_python.prompt").touch()
+
+    mock_sync_orchestration.return_value = {
+        "success": True,
+        "total_cost": 0.5,
+        "model_name": "gpt-4",
+        "summary": "All steps completed.",
+    }
+
+    ctx = create_mock_context({})
+
+    # Pass None to simulate CLI flag not being specified
+    # (This is what will happen after the fix in maintenance.py)
+    results, total_cost, model = sync_main(
+        ctx,
+        "pddrc_budget",
+        max_attempts=3,
+        budget=None,  # CLI not specified - should use .pddrc value of 50.0
+        skip_verify=False,
+        skip_tests=False,
+        target_coverage=90.0,
+        dry_run=False,
+    )
+
+    mock_sync_orchestration.assert_called_once()
+    call_args = mock_sync_orchestration.call_args[1]
+
+    # This should be 50.0 (from .pddrc), not 20.0 (CLI default)
+    # Note: budget passed to sync_orchestration is the remaining_budget, which starts at budget
+    # We need to check that the initial budget validation doesn't fail with None
+    assert call_args["budget"] == 50.0, (
+        f"Expected budget=50.0 from .pddrc, but got {call_args['budget']}. "
+        "The CLI default is overriding the .pddrc value."
+    )
+
+    assert results["overall_success"] is True
+
+
+def test_sync_cli_overrides_pddrc_when_explicitly_specified(
+    mock_project_dir, mock_construct_paths_with_pddrc_config, mock_sync_orchestration
+):
+    """Tests that CLI values override .pddrc when explicitly specified.
+
+    This ensures the fix doesn't break the expected behavior where CLI flags
+    should always take precedence over .pddrc values.
+    """
+    (mock_project_dir / "prompts" / "cli_override_python.prompt").touch()
+
+    mock_sync_orchestration.return_value = {
+        "success": True,
+        "total_cost": 0.5,
+        "model_name": "gpt-4",
+        "summary": "All steps completed.",
+    }
+
+    ctx = create_mock_context({})
+
+    # Explicitly specify CLI values (different from both default and .pddrc)
+    results, total_cost, model = sync_main(
+        ctx,
+        "cli_override",
+        max_attempts=10,  # Explicitly specified - should override .pddrc value of 5
+        budget=100.0,     # Explicitly specified - should override .pddrc value of 50.0
+        skip_verify=False,
+        skip_tests=False,
+        target_coverage=90.0,
+        dry_run=False,
+    )
+
+    mock_sync_orchestration.assert_called_once()
+    call_args = mock_sync_orchestration.call_args[1]
+
+    # CLI values should be used, not .pddrc values
+    assert call_args["max_attempts"] == 10, (
+        f"Expected max_attempts=10 from CLI, but got {call_args['max_attempts']}"
+    )
+    assert call_args["budget"] == 100.0, (
+        f"Expected budget=100.0 from CLI, but got {call_args['budget']}"
+    )
+
+    assert results["overall_success"] is True
+
+
+def test_sync_defaults_used_when_no_pddrc_and_no_cli(
+    mock_project_dir, mock_construct_paths, mock_sync_orchestration
+):
+    """Tests that hardcoded defaults are used when neither CLI nor .pddrc specifies values.
+
+    This test uses the original mock_construct_paths fixture which doesn't return
+    max_attempts or budget in resolved_config, simulating a scenario where .pddrc
+    doesn't specify these values.
+    """
+    (mock_project_dir / "prompts" / "no_config_python.prompt").touch()
+
+    mock_sync_orchestration.return_value = {
+        "success": True,
+        "total_cost": 0.5,
+        "model_name": "gpt-4",
+        "summary": "All steps completed.",
+    }
+
+    ctx = create_mock_context({})
+
+    # Pass None to simulate CLI flag not being specified
+    # With no .pddrc values either, should fall back to hardcoded defaults
+    results, total_cost, model = sync_main(
+        ctx,
+        "no_config",
+        max_attempts=None,  # CLI not specified
+        budget=None,        # CLI not specified
+        skip_verify=False,
+        skip_tests=False,
+        target_coverage=90.0,
+        dry_run=False,
+    )
+
+    mock_sync_orchestration.assert_called_once()
+    call_args = mock_sync_orchestration.call_args[1]
+
+    # Should use hardcoded defaults (3 for max_attempts, 20.0 for budget)
+    assert call_args["max_attempts"] == 3, (
+        f"Expected max_attempts=3 (default), but got {call_args['max_attempts']}"
+    )
+    assert call_args["budget"] == 20.0, (
+        f"Expected budget=20.0 (default), but got {call_args['budget']}"
+    )
+
+    assert results["overall_success"] is True
+
+def test_sync_finds_prompt_with_prompts_dir_only(tmp_path, monkeypatch):
+    """
+    Regression test: contexts with prompts_dir but no outputs.prompt.path.
+    The prompts_dir should be used as-is, not normalized.
+    """
+    pddrc = tmp_path / ".pddrc"
+    pddrc.write_text("""version: "1.0"
+contexts:
+  backend:
+    paths: ["backend/**"]
+    defaults:
+      prompts_dir: "prompts/backend"
+""")
+
+    (tmp_path / "prompts" / "backend").mkdir(parents=True)
+    (tmp_path / "prompts" / "backend" / "my_module_python.prompt").write_text("test")
+
+    monkeypatch.chdir(tmp_path)
+
+    from pdd.sync_main import _detect_languages_with_context
+    from pdd.construct_paths import construct_paths
+
+    config, _, _, _ = construct_paths(
+        input_file_paths={},
+        force=False,
+        quiet=True,
+        command="sync",
+        command_options={"basename": "my_module"},
+        context_override="backend",
+    )
+
+    # The prompts_dir from config should be used directly
+    from pdd.sync_main import _find_pddrc_file
+    prompts_dir_raw = config.get("prompts_dir", "prompts")
+    pddrc_path = _find_pddrc_file()
+    prompts_dir = pddrc_path.parent / prompts_dir_raw
+
+    languages = _detect_languages_with_context("my_module", prompts_dir)
+    assert "python" in languages
+
+
+def test_normalize_prompts_root_preserves_subdirectory_issue_253(tmp_path, monkeypatch):
+    """
+    Regression test for Issue #253 Bug 1.
+
+    Verifies that _normalize_prompts_root() preserves context-specific subdirectories
+    like "prompts/backend" instead of stripping to just "prompts".
+    """
+    # Setup: Create .pddrc in tmp_path
+    (tmp_path / ".pddrc").write_text('''version: "1.0"
+contexts:
+  default:
+    paths: ["**"]
+''')
+
+    monkeypatch.chdir(tmp_path)
+
+    # Test: _normalize_prompts_root should preserve the full path
+    input_path = Path("prompts/backend")
+    result = _normalize_prompts_root(input_path)
+    expected = tmp_path / "prompts" / "backend"
+
+    assert result == expected, (
+        f"Bug #253: _normalize_prompts_root strips context subdirectory.\n"
+        f"Input: {input_path}\n"
+        f"Expected: {expected}\n"
+        f"Got: {result}"
+    )

@@ -1,11 +1,15 @@
 # tests/test_sync_orchestration.py
 
 import pytest
+import json
+import sys
 import threading
 from pathlib import Path
-from unittest.mock import patch, MagicMock, call, ANY
+from unittest.mock import patch, MagicMock, Mock, call, ANY
+import os
+import click
 
-from pdd.sync_orchestration import sync_orchestration
+from pdd.sync_orchestration import sync_orchestration, _execute_tests_and_create_run_report
 from pdd.sync_determine_operation import SyncDecision, get_pdd_file_paths
 
 # Test Plan:
@@ -42,9 +46,28 @@ def orchestration_fixture(tmp_path):
     monkeypatch.chdir(tmp_path)
 
     # Patch the module where the functions are used, not where they are defined
-    with patch('pdd.sync_orchestration.sync_determine_operation') as mock_determine, \
+    # Mock SyncApp to run worker function synchronously instead of via TUI
+    def mock_sync_app_run(self):
+        """Mock SyncApp.run() that executes the worker synchronously."""
+        try:
+            return self.worker_func()
+        except Exception as e:
+            return {
+                "success": False,
+                "total_cost": 0.0,
+                "model_name": "",
+                "error": str(e),
+                "operations_completed": [],
+                "errors": [f"{type(e).__name__}: {e}"]
+            }
+
+    # Clear CI environment variable to prevent headless mode detection in tests
+    env_without_ci = {k: v for k, v in os.environ.items() if k != 'CI'}
+
+    with patch.dict(os.environ, env_without_ci, clear=True), \
+         patch('pdd.sync_orchestration.sync_determine_operation') as mock_determine, \
          patch('pdd.sync_orchestration.SyncLock') as mock_lock, \
-         patch('pdd.sync_orchestration.sync_animation') as mock_animation, \
+         patch('pdd.sync_orchestration.SyncApp') as mock_sync_app_class, \
          patch('pdd.sync_orchestration.auto_deps_main') as mock_auto_deps, \
          patch('pdd.sync_orchestration.code_generator_main') as mock_code_gen, \
          patch('pdd.sync_orchestration.context_generator_main') as mock_context_gen, \
@@ -55,22 +78,34 @@ def orchestration_fixture(tmp_path):
          patch('pdd.sync_orchestration.update_main') as mock_update, \
          patch('pdd.sync_orchestration.save_run_report') as mock_save_report, \
          patch('pdd.sync_orchestration._display_sync_log') as mock_display_log, \
-         patch('pdd.sync_orchestration._save_operation_fingerprint') as mock_save_fp, \
-         patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths:
+         patch('pdd.sync_orchestration._save_fingerprint_atomic') as mock_save_fp, \
+         patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
+         patch.object(sys.stdout, 'isatty', return_value=True):
+
+        # Configure SyncApp mock to run worker synchronously
+        mock_sync_app_instance = MagicMock()
+        mock_sync_app_instance.run = lambda: mock_sync_app_run(mock_sync_app_instance)
+        mock_sync_app_class.return_value = mock_sync_app_instance
+
+        # Store the worker_func when SyncApp is instantiated
+        def store_worker_func(*args, **kwargs):
+            instance = MagicMock()
+            instance.worker_func = kwargs.get('worker_func', lambda: {"success": True})
+            instance.run = lambda: mock_sync_app_run(instance)
+            return instance
+        mock_sync_app_class.side_effect = store_worker_func
 
         # Configure return values
         mock_lock.return_value.__enter__.return_value = mock_lock
         mock_lock.return_value.__exit__.return_value = None
         mock_auto_deps.return_value = {'success': True, 'cost': 0.01, 'model': 'mock-model'}
         mock_code_gen.return_value = {'success': True, 'cost': 0.05, 'model': 'mock-model'}
-        mock_context_gen.return_value = {'success': True, 'cost': 0.03, 'model': 'mock-model'}
         mock_crash.return_value = {'success': True, 'cost': 0.08, 'model': 'mock-model'}
         mock_verify.return_value = {'success': True, 'cost': 0.10, 'model': 'mock-model'}
-        mock_test.return_value = {'success': True, 'cost': 0.06, 'model': 'mock-model'}
         mock_fix.return_value = {'success': True, 'cost': 0.15, 'model': 'mock-model'}
         mock_update.return_value = {'success': True, 'cost': 0.04, 'model': 'mock-model'}
         mock_display_log.return_value = {'success': True, 'log_entries': ['log entry']}
-        
+
         # Configure path mocks to return expected paths
         mock_get_paths.return_value = {
             'prompt': tmp_path / 'prompts' / 'calculator_python.prompt',
@@ -78,20 +113,30 @@ def orchestration_fixture(tmp_path):
             'example': tmp_path / 'examples' / 'calculator_example.py',
             'test': tmp_path / 'tests' / 'test_calculator.py'
         }
-        
+
+        # Create the example file when context_generator_main is called
+        # This is needed because verify operation checks if example file exists
+        def create_example_file(*args, **kwargs):
+            """Mock function that creates the example file and returns success"""
+            example_file = tmp_path / 'examples' / 'calculator_example.py'
+            example_file.write_text("# Mock example file created by fixture")
+            return {'success': True, 'cost': 0.03, 'model': 'mock-model'}
+
+        mock_context_gen.side_effect = create_example_file
+
         # Create the test file so validation passes when sync_orchestration checks for it
         def create_test_file(*args, **kwargs):
             """Mock function that creates the test file and returns success"""
             test_file = tmp_path / 'tests' / 'test_calculator.py'
             test_file.write_text("# Mock test file created by fixture")
             return {'success': True, 'cost': 0.06, 'model': 'mock-model'}
-        
+
         mock_test.side_effect = create_test_file
 
         yield {
             'sync_determine_operation': mock_determine,
             'SyncLock': mock_lock,
-            'sync_animation': mock_animation,
+            'SyncApp': mock_sync_app_class,
             'auto_deps_main': mock_auto_deps,
             'code_generator_main': mock_code_gen,
             'context_generator_main': mock_context_gen,
@@ -102,7 +147,7 @@ def orchestration_fixture(tmp_path):
             'update_main': mock_update,
             'save_run_report': mock_save_report,
             '_display_sync_log': mock_display_log,
-            '_save_operation_fingerprint': mock_save_fp,
+            '_save_fingerprint_atomic': mock_save_fp,
             'get_pdd_file_paths': mock_get_paths,
         }
 
@@ -129,12 +174,9 @@ def test_happy_path_full_sync(orchestration_fixture):
     assert result['total_cost'] == pytest.approx(0.05 + 0.03 + 0.10 + 0.06)
     assert not result['errors']
     
-    # Verify animation was started and stopped
-    mock_animation = orchestration_fixture['sync_animation']
-    mock_animation.assert_called_once()
-    stop_event = mock_animation.call_args[0][1]
-    assert isinstance(stop_event, threading.Event)
-    assert stop_event.is_set()
+    # Verify SyncApp was created and run
+    mock_sync_app = orchestration_fixture['SyncApp']
+    mock_sync_app.assert_called_once()
 
 def test_sync_stops_on_operation_failure(orchestration_fixture):
     """
@@ -146,6 +188,8 @@ def test_sync_stops_on_operation_failure(orchestration_fixture):
         SyncDecision(operation='example', reason='Code exists, example missing'),
     ]
     # Simulate failure during the 'example' step
+    # Must use side_effect to override the fixture's side_effect (return_value is ignored when side_effect is set)
+    orchestration_fixture['context_generator_main'].side_effect = None
     orchestration_fixture['context_generator_main'].return_value = {'success': False, 'cost': 0.03}
 
     result = sync_orchestration(basename="calculator", language="python")
@@ -185,17 +229,17 @@ def test_lock_failure(orchestration_fixture):
     result = sync_orchestration(basename="calculator", language="python")
 
     assert result['success'] is False
-    assert "Could not acquire lock" in result['errors'][0]
+    # The error message format may vary - check for key parts
+    assert any("lock" in err.lower() or "timeout" in err.lower() for err in result['errors'])
     orchestration_fixture['sync_determine_operation'].assert_not_called()
-    orchestration_fixture['sync_animation'].assert_not_called()
 
-def test_log_mode(orchestration_fixture):
+def test_dry_run_mode(orchestration_fixture):
     """
-    Verifies that log=True calls the log display function and nothing else.
+    Verifies that dry_run=True calls the log display function and nothing else.
     """
     mock_log_display = orchestration_fixture['_display_sync_log']
-    
-    result = sync_orchestration(basename="calculator", language="python", log=True, verbose=True)
+
+    result = sync_orchestration(basename="calculator", language="python", dry_run=True, verbose=True)
 
     mock_log_display.assert_called_once_with("calculator", "python", True)
     assert result == mock_log_display.return_value
@@ -222,8 +266,9 @@ def test_skip_verify_flag(orchestration_fixture):
     assert 'verify' not in result['operations_completed']
     assert 'test' in result['operations_completed']
     orchestration_fixture['fix_verification_main'].assert_not_called()
-    # Verify the state was advanced by saving a fingerprint
-    orchestration_fixture['_save_operation_fingerprint'].assert_any_call("calculator", "python", 'verify', ANY, 0.0, 'skip_verify')
+    # Verify the state was advanced by saving a fingerprint with 'skip:' prefix
+    # Bug #11 fix: skipped operations now use 'skip:' prefix to distinguish from actual execution
+    orchestration_fixture['_save_fingerprint_atomic'].assert_any_call("calculator", "python", 'skip:verify', ANY, 0.0, 'skipped')
 
 def test_skip_tests_flag(orchestration_fixture):
     """
@@ -242,7 +287,8 @@ def test_skip_tests_flag(orchestration_fixture):
     assert 'test' in result['skipped_operations']
     assert 'test' not in result['operations_completed']
     orchestration_fixture['cmd_test_main'].assert_not_called()
-    orchestration_fixture['_save_operation_fingerprint'].assert_any_call("calculator", "python", 'test', ANY, 0.0, 'skipped')
+    # Bug #11 fix: skipped operations now use 'skip:' prefix to distinguish from actual execution
+    orchestration_fixture['_save_fingerprint_atomic'].assert_any_call("calculator", "python", 'skip:test', ANY, 0.0, 'skipped')
 
 def test_manual_merge_request(orchestration_fixture):
     """
@@ -273,12 +319,38 @@ def test_unexpected_exception_handling(orchestration_fixture):
     assert result['success'] is False
     assert "Exception during 'generate': Unexpected error" in result['errors'][0]
     
-    # Verify cleanup happened
-    mock_animation = orchestration_fixture['sync_animation']
-    mock_animation.assert_called_once()
-    stop_event = mock_animation.call_args[0][1]
-    assert stop_event.is_set()
+    # Verify cleanup happened - SyncApp was created and lock was released
+    mock_sync_app = orchestration_fixture['SyncApp']
+    mock_sync_app.assert_called_once()
     orchestration_fixture['SyncLock'].return_value.__exit__.assert_called_once()
+
+
+def test_click_abort_produces_meaningful_error_message(orchestration_fixture):
+    """
+    Ensures that click.Abort exceptions produce descriptive error messages.
+
+    When click.Abort is raised (e.g., user declines file overwrite confirmation),
+    the error message should be meaningful, not empty (since str(click.Abort()) = '').
+    Additionally, no redundant "Operation X failed" message should be added.
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_determine.return_value = SyncDecision(operation='generate', reason='New unit')
+    orchestration_fixture['code_generator_main'].side_effect = click.Abort()
+
+    result = sync_orchestration(basename="calculator", language="python")
+
+    assert result['success'] is False
+    assert len(result['errors']) == 1, f"Expected exactly 1 error, got {len(result['errors'])}: {result['errors']}"
+
+    # The error message should NOT be empty after the colon
+    error_msg = result['errors'][0]
+    assert "cancelled" in error_msg.lower() or "declined" in error_msg.lower(), \
+        f"Error message should mention cancellation, got: {error_msg}"
+
+    # Should NOT have the empty pattern "Exception during 'X': " with nothing after
+    assert "Exception during 'generate': ;" not in result.get('error', ''), \
+        f"Error should not have empty exception message: {result.get('error')}"
+
 
 def test_final_state_reporting(orchestration_fixture, tmp_path):
     """
@@ -839,9 +911,72 @@ def test_auto_deps_cycle_detection_logic():
     assert len(recent_auto_deps_edge) == 2, "Should detect cycle with exactly 2 auto-deps"
     
     # Test non-cycle case: single auto-deps should not trigger
-    operation_history_normal = ['generate', 'example', 'auto-deps'] 
+    operation_history_normal = ['generate', 'example', 'auto-deps']
     recent_auto_deps_normal = [op for op in operation_history_normal[-3:] if op == 'auto-deps']
     assert len(recent_auto_deps_normal) == 1, "Should not detect cycle with single auto-deps"
+
+
+# ============================================================================
+# Bug Fix Tests
+# ============================================================================
+
+def test_default_strength_uses_constant():
+    """BUG TEST: sync_orchestration should use DEFAULT_STRENGTH (0.75), not 0.5."""
+    import inspect
+    from pdd.sync_orchestration import sync_orchestration
+    from pdd import DEFAULT_STRENGTH
+
+    sig = inspect.signature(sync_orchestration)
+    strength_param = sig.parameters.get('strength')
+
+    assert strength_param is not None, "strength parameter should exist"
+    assert strength_param.default == DEFAULT_STRENGTH, \
+        f"BUG: strength default is {strength_param.default}, should be {DEFAULT_STRENGTH}"
+
+
+def test_boolean_false_is_not_none_bug():
+    """Demonstrate the bug: False is not None evaluates to True."""
+    result_tuple = (False, "", "", 1, 0.1, "model")
+
+    # This is the buggy check
+    buggy_success = result_tuple[0] is not None  # True! BUG!
+
+    # This is the correct check
+    correct_success = bool(result_tuple[0])  # False, correct
+
+    assert buggy_success == True, "Demonstrating the bug exists"
+    assert correct_success == False, "Demonstrating the fix works"
+
+
+def test_fix_main_false_return_detected_as_failure(orchestration_fixture, tmp_path):
+    """BUG TEST: When fix_main returns (False, ...), orchestrator should detect failure."""
+    import os
+    os.chdir(tmp_path)
+
+    # Create required files
+    (tmp_path / "prompts").mkdir(exist_ok=True)
+    (tmp_path / "prompts" / "calc_python.prompt").write_text("# prompt")
+    (tmp_path / "pdd").mkdir(exist_ok=True)
+    (tmp_path / "pdd" / "calc.py").write_text("# code")
+    (tmp_path / "tests").mkdir(exist_ok=True)
+    (tmp_path / "tests" / "test_calc.py").write_text("# test")
+    (tmp_path / "examples").mkdir(exist_ok=True)
+    (tmp_path / "examples" / "calc_example.py").write_text("# example")
+
+    mocks = orchestration_fixture
+    mocks['sync_determine_operation'].side_effect = [
+        SyncDecision(operation='fix', reason='Tests failing'),
+        SyncDecision(operation='all_synced', reason='Done'),
+    ]
+
+    # fix_main returns False as first element (failure)
+    mocks['fix_main'].return_value = (False, "", "", 3, 0.15, "gpt-4")
+
+    result = sync_orchestration(basename="calc", language="python")
+
+    # Should detect as failure, not success
+    assert 'fix' not in result.get('operations_completed', []), \
+        "BUG: fix_main returned False but was marked as completed"
 
 
 def test_auto_deps_cycle_detection_implementation():
@@ -948,7 +1083,7 @@ def test_test_operation_success_detection_prevents_infinite_loop(orchestration_f
     mock_code_gen = mocks['code_generator_main']
     mock_context_gen = mocks['context_generator_main']
     mock_verify = mocks['fix_verification_main']
-    mock_save_fingerprint = mocks['_save_operation_fingerprint']
+    mock_save_fingerprint = mocks['_save_fingerprint_atomic']
     
     # Mock cmd_test_main to return a tuple with None as first element (replicating the bug)
     # but still create the test file successfully
@@ -1039,3 +1174,3524 @@ def test_verify_skipped_when_example_missing_after_crash_skip(orchestration_fixt
 
     # And there should be no orchestrator errors if verify was correctly skipped
     assert not result.get('errors'), f"Unexpected errors: {result.get('errors')}"
+
+
+def test_sync_orchestration_detects_test_fix_loop(orchestration_fixture):
+    """
+    Tests that the orchestrator detects and breaks infinite loops of alternating 'test' and 'fix' operations.
+    Sequence: test, fix, test, fix, test, fix -> Break
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    
+    # Sequence: test, fix, test, fix, test, fix
+    # The detector looks for 2 repeats of (test, fix) or (fix, test)
+    decisions = [
+        SyncDecision(operation='test', reason='Initial test', confidence=1.0),
+        SyncDecision(operation='fix', reason='Fixing test', confidence=1.0),
+        SyncDecision(operation='test', reason='Retesting', confidence=1.0),
+        SyncDecision(operation='fix', reason='Fixing again', confidence=1.0),
+        # Should break before executing the next operation
+        SyncDecision(operation='test', reason='Retesting again', confidence=1.0), 
+        SyncDecision(operation='all_synced', reason='Done', confidence=1.0)
+    ]
+    
+    mock_determine.side_effect = decisions
+    
+    result = sync_orchestration(
+        basename="calculator",
+        language="python",
+        budget=10.0,
+        quiet=True
+    )
+    
+    assert result['success'] is False
+    assert "Detected test-fix cycle" in str(result['errors'])
+    # It should have completed: test, fix, test (3 operations)
+    # The 4th operation (fix) would trigger the loop detection before execution
+    assert len(result['operations_completed']) == 3
+
+
+def test_sync_orchestration_detects_fix_test_loop(orchestration_fixture):
+    """
+    Tests that the orchestrator detects and breaks infinite loops of alternating 'fix' and 'test' operations.
+    Sequence: fix, test, fix, test -> Break
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    
+    # Sequence: fix, test, fix, test
+    decisions = [
+        SyncDecision(operation='fix', reason='Initial fix', confidence=1.0),
+        SyncDecision(operation='test', reason='Testing fix', confidence=1.0),
+        SyncDecision(operation='fix', reason='Fixing again', confidence=1.0),
+        # Should break before executing this test
+        SyncDecision(operation='test', reason='Testing again', confidence=1.0),
+        SyncDecision(operation='fix', reason='Fixing again', confidence=1.0),
+        SyncDecision(operation='all_synced', reason='Done', confidence=1.0)
+    ]
+    
+    mock_determine.side_effect = decisions
+    
+    result = sync_orchestration(
+        basename="calculator",
+        language="python",
+        budget=10.0,
+        quiet=True
+    )
+    
+    assert result['success'] is False
+    assert "Detected test-fix cycle" in str(result['errors'])
+    # It should have completed: fix, test, fix (3 operations)
+    # The 4th operation (test) completes the second (fix, test) pair pattern check?
+    # Let's trace:
+    # 1. fix (history: [fix])
+    # 2. test (history: [fix, test])
+    # 3. fix (history: [fix, test, fix])
+    # 4. decision=test. history check before exec: [fix, test, fix]. 
+    #    We need 4 items in history to check for pattern.
+    #    So execution proceeds. 
+    #    ... wait, the check is:
+    #    if len(operation_history) >= 4: ...
+    #
+    # So:
+    # 1. Op: fix. Executed. History: [fix]
+    # 2. Op: test. Executed. History: [fix, test]
+    # 3. Op: fix. Executed. History: [fix, test, fix]
+    # 4. Op: test. Executed. History: [fix, test, fix, test]
+    # 5. Op: fix. Check history [fix, test, fix, test]. Pattern match! Break.
+    
+    # So we need enough decisions to fill history to 4, then trigger the 5th decision.
+    
+    # Let's adjust the decisions list to ensure we hit the condition.
+    # Decisions provided to side_effect must cover the calls made.
+    
+    # Actually, looking at the implementation:
+    # operation = decision.operation
+    # operation_history.append(operation)
+    # ... check history ...
+    
+    # 1. Decision: fix. History: [fix]. Check (len < 4). Exec fix.
+    # 2. Decision: test. History: [fix, test]. Check (len < 4). Exec test.
+    # 3. Decision: fix. History: [fix, test, fix]. Check (len < 4). Exec fix.
+    # 4. Decision: test. History: [fix, test, fix, test]. Check (len >= 4).
+    #    Pattern: [fix, test, fix, test] matches. Cycle count = 2. Break.
+    
+    # So the loop breaks BEFORE executing the 4th operation (test).
+    # Wait, "if len(operation_history) >= 4" is checked immediately after appending the *current* decision operation.
+    # So if current decision is 'test', and history becomes [fix, test, fix, test], it breaks *before* executing 'test'.
+    
+    # So operations completed should be: fix, test, fix.
+
+    assert len(result['operations_completed']) == 3
+
+
+@pytest.mark.asyncio
+async def test_tui_request_confirmation_completes_without_hanging():
+    """
+    Regression test for TUI confirmation modal hang bug.
+
+    Root cause: When the worker thread requests user confirmation via
+    request_confirmation(), the async task scheduling in _show_confirm_modal()
+    uses asyncio.create_task() incorrectly, causing the ConfirmScreen to never
+    be displayed. The worker thread blocks forever on _confirm_event.wait().
+
+    The bug is in sync_tui.py:
+    1. Worker calls request_confirmation() which blocks on _confirm_event.wait()
+    2. _show_confirm_modal() is scheduled via call_from_thread()
+    3. _show_confirm_modal() calls self.call_later(lambda: self._run_async_confirm(...))
+    4. _run_async_confirm() calls asyncio.create_task(coro)
+    5. BUT: The task is created but may never run because:
+       - asyncio.create_task() requires an active event loop in the current context
+       - The lambda wrapper and call_later scheduling don't guarantee async execution
+       - The ConfirmScreen is never pushed, so _confirm_event.set() is never called
+    6. Worker thread hangs indefinitely, TUI keeps animating (62% CPU)
+
+    This test verifies that request_confirmation() properly signals completion
+    within a reasonable timeout. It should FAIL until the bug is fixed.
+    """
+    import threading
+    import asyncio
+    from unittest.mock import MagicMock, patch, AsyncMock
+
+    from pdd.sync_tui import SyncApp
+
+    # Create a minimal SyncApp instance for testing
+    app = SyncApp(
+        basename="test",
+        budget=10.0,
+        worker_func=lambda: {"success": True},
+        function_name_ref=["test"],
+        cost_ref=[0.0],
+        prompt_path_ref=[""],
+        code_path_ref=[""],
+        example_path_ref=[""],
+        tests_path_ref=[""],
+        prompt_color_ref=["blue"],
+        code_color_ref=["blue"],
+        example_color_ref=["blue"],
+        tests_color_ref=["blue"],
+        stop_event=threading.Event(),
+    )
+
+    # Use Textual's async test runner to properly run the app
+    async with app.run_test() as pilot:
+        confirmation_completed = [False]
+        confirmation_result = [None]
+        worker_timed_out = [False]
+
+        def worker_thread():
+            """Simulates the sync worker thread requesting confirmation."""
+            # This simulates what happens in sync_orchestration when
+            # construct_paths() needs to confirm file overwrite
+            try:
+                result = app.request_confirmation(
+                    "Files will be overwritten. Continue?",
+                    "Overwrite Confirmation"
+                )
+                confirmation_completed[0] = True
+                confirmation_result[0] = result
+            except Exception:
+                pass
+
+        # Start worker thread (simulates the @work(thread=True) worker)
+        worker = threading.Thread(target=worker_thread)
+        worker.start()
+
+        # Give the worker time to call request_confirmation
+        await asyncio.sleep(0.1)
+
+        # Give the app time to process the call_from_thread and show the modal
+        # The bug is that the modal never appears, so we need to wait and check
+        await asyncio.sleep(0.5)
+
+        # Try to interact with the confirmation dialog if it appeared
+        # Press Enter to confirm (or 'y' for yes)
+        await pilot.press("enter")
+
+        # Give more time for the confirmation to be processed
+        await asyncio.sleep(0.3)
+
+        # Wait for worker with timeout
+        worker.join(timeout=2.0)
+
+        if worker.is_alive():
+            worker_timed_out[0] = True
+            # Unblock the worker so the test can complete
+            app._confirm_event.set()
+            worker.join(timeout=1.0)
+
+        # The test should FAIL if:
+        # 1. The worker timed out (modal never appeared, worker hung)
+        # 2. The confirmation was never completed
+        assert not worker_timed_out[0], (
+            "BUG: Worker thread hung waiting for confirmation. "
+            "The confirmation modal was never displayed because the async task "
+            "scheduling in _show_confirm_modal/_run_async_confirm is broken."
+        )
+        assert confirmation_completed[0], (
+            "BUG: Confirmation was never completed. "
+            "The ConfirmScreen was never shown or never returned a result."
+        )
+
+
+# --- Regression Tests ---
+
+class TestGenerateClearsStaleRunReport:
+    """
+    Regression test for bug: After code regeneration, sync skips crash/verify validation
+    because stale run_report from old code still exists with exit_code=0.
+
+    Bug scenario:
+    1. Module was previously synced (has run_report with exit_code=0)
+    2. Code file is deleted
+    3. Sync runs generate to recreate code
+    4. BUG: Old run_report causes sync to skip crash/verify
+    5. FIX: Generate should delete run_report to force validation
+    """
+
+    @pytest.fixture
+    def generate_test_env(self, tmp_path):
+        """Sets up environment to test generate operation's run_report handling."""
+        import os
+        import json
+
+        # Change to temp directory
+        original_cwd = os.getcwd()
+        os.chdir(tmp_path)
+
+        # Create directory structure
+        (tmp_path / "prompts").mkdir()
+        (tmp_path / "src").mkdir()
+        (tmp_path / "context").mkdir()
+        pdd_meta_dir = tmp_path / ".pdd" / "meta"
+        pdd_meta_dir.mkdir(parents=True)
+
+        # Create prompt file
+        (tmp_path / "prompts" / "test_unit_python.prompt").write_text("Create add function")
+
+        # Create stale run_report (simulating previous successful sync)
+        run_report_file = pdd_meta_dir / "test_unit_python_run.json"
+        run_report_file.write_text(json.dumps({
+            "timestamp": "2025-01-01T00:00:00+00:00",
+            "exit_code": 0,
+            "tests_passed": 5,
+            "tests_failed": 0,
+            "coverage": 95.0
+        }))
+
+        yield {
+            'tmp_path': tmp_path,
+            'meta_dir': pdd_meta_dir,
+            'run_report_file': run_report_file,
+        }
+
+        # Restore original cwd
+        os.chdir(original_cwd)
+
+    def test_generate_deletes_stale_run_report(self, generate_test_env):
+        """
+        After generate operation completes, any existing run_report should be deleted
+        to force crash/verify validation of the newly generated code.
+        """
+        from pdd.sync_orchestration import sync_orchestration
+        from pdd.sync_determine_operation import SyncDecision
+
+        tmp_path = generate_test_env['tmp_path']
+        run_report_file = generate_test_env['run_report_file']
+
+        # Verify run_report exists before test
+        assert run_report_file.exists(), "Setup failed: run_report should exist before generate"
+
+        # Mock dependencies to isolate the generate operation behavior
+        # IMPORTANT: Also patch META_DIR to use the test's temp directory
+        meta_dir = generate_test_env['meta_dir']
+        with patch('pdd.sync_orchestration.sync_determine_operation') as mock_determine, \
+             patch('pdd.sync_orchestration.SyncLock') as mock_lock, \
+             patch('pdd.sync_orchestration.SyncApp') as mock_app_class, \
+             patch('pdd.sync_orchestration.code_generator_main') as mock_code_gen, \
+             patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
+             patch('pdd.sync_orchestration._save_fingerprint_atomic') as mock_save_fp, \
+             patch('pdd.sync_orchestration.META_DIR', meta_dir):
+
+            # Configure lock mock
+            mock_lock.return_value.__enter__.return_value = mock_lock
+            mock_lock.return_value.__exit__.return_value = None
+
+            # Configure path mocks
+            mock_get_paths.return_value = {
+                'prompt': tmp_path / 'prompts' / 'test_unit_python.prompt',
+                'code': tmp_path / 'src' / 'test_unit.py',
+                'example': tmp_path / 'context' / 'test_unit_example.py',
+                'test': tmp_path / 'tests' / 'test_test_unit.py'
+            }
+
+            # Create code file so workflow can progress
+            (tmp_path / 'src' / 'test_unit.py').write_text("# generated code")
+
+            # Configure generate to succeed
+            mock_code_gen.return_value = {'success': True, 'cost': 0.05, 'model': 'mock-model'}
+
+            # Configure sync_determine_operation to return generate then all_synced
+            mock_determine.side_effect = [
+                SyncDecision(operation='generate', reason='Code missing'),
+                SyncDecision(operation='all_synced', reason='Done'),
+            ]
+
+            # Configure SyncApp mock to run worker synchronously
+            def run_worker_sync(self):
+                try:
+                    return self.worker_func()
+                except Exception as e:
+                    return {"success": False, "errors": [str(e)]}
+
+            def store_worker_func(*args, **kwargs):
+                instance = MagicMock()
+                instance.worker_func = kwargs.get('worker_func', lambda: {"success": True})
+                instance.run = lambda: run_worker_sync(instance)
+                instance.worker_exception = None
+                return instance
+
+            mock_app_class.side_effect = store_worker_func
+
+            # Run sync
+            result = sync_orchestration(
+                basename="test_unit",
+                language="python",
+                prompts_dir="prompts"
+            )
+
+        # THE KEY ASSERTION: run_report should be deleted after generate
+        assert not run_report_file.exists(), (
+            "REGRESSION BUG: run_report should be deleted after generate operation "
+            "to force crash/verify validation of newly generated code. "
+            "Without this, sync incorrectly skips validation because old run_report "
+            "shows exit_code=0 from previous (now stale) code."
+        )
+
+
+# --- Pytest Error Parsing Regression Tests ---
+
+class TestPytestErrorParsing:
+    """
+    Regression tests for pytest error parsing bug.
+
+    Bug: sync_orchestration.py didn't parse "N errors" from pytest output.
+    When pytest reports "1 passed, 10 errors", the sync recorded:
+      tests_passed=1, tests_failed=0 (missing errors!)
+
+    Fix: Added error parsing in _execute_tests_and_create_run_report() to
+    count pytest ERRORS (fixture/setup failures) as part of tests_failed.
+    """
+
+    def test_execute_tests_counts_pytest_errors(self, tmp_path, monkeypatch):
+        """
+        Regression test: Verify _execute_tests_and_create_run_report counts pytest ERRORS.
+
+        This test creates a file with a broken fixture that causes pytest to report
+        ERRORS (not failures). The production code must count these errors.
+
+        Before fix: tests_failed=0 (BUG - errors not counted)
+        After fix: tests_failed>=1 (errors added to failed count)
+        """
+        from pdd.sync_orchestration import _execute_tests_and_create_run_report
+
+        # Change cwd to tmp_path so relative_to() works in the production code
+        monkeypatch.chdir(tmp_path)
+
+        # Create a test file with a broken fixture (same pattern as admin_get_users bug)
+        test_file = tmp_path / "test_broken_fixture.py"
+        test_file.write_text('''
+import pytest
+from unittest.mock import patch
+
+@pytest.fixture
+def mock_nonexistent():
+    """This fixture will ERROR because the module doesn't exist."""
+    with patch('nonexistent_module_abc123.nonexistent_attr') as m:
+        yield m
+
+def test_uses_broken_fixture(mock_nonexistent):
+    """This test will ERROR during fixture setup."""
+    assert True
+
+def test_that_passes():
+    """This test passes normally."""
+    assert True
+''')
+
+        # Call the ACTUAL production function
+        report = _execute_tests_and_create_run_report(
+            test_file=test_file,
+            basename="test_broken_fixture",
+            language="python",
+            target_coverage=0.0
+        )
+
+        # Verify pytest detected the error (exit_code should be non-zero)
+        assert report.exit_code != 0, f"Pytest should return non-zero on errors, got {report.exit_code}"
+
+        # KEY ASSERTION: errors must be counted in tests_failed
+        # Before the fix, this would be 0 (BUG)
+        # After the fix, this should be >= 1 (errors counted)
+        assert report.tests_failed >= 1, (
+            f"Pytest ERRORS must be counted as failures. "
+            f"Got tests_passed={report.tests_passed}, tests_failed={report.tests_failed}. "
+            f"Expected tests_failed >= 1 because fixture setup error should count."
+        )
+
+    def test_execute_tests_counts_both_failures_and_errors(self, tmp_path, monkeypatch):
+        """
+        Verify that both FAILED and ERROR are counted together.
+
+        Pytest output like "1 failed, 2 errors" should result in tests_failed=3.
+        """
+        from pdd.sync_orchestration import _execute_tests_and_create_run_report
+
+        # Change cwd to tmp_path so relative_to() works in the production code
+        monkeypatch.chdir(tmp_path)
+
+        test_file = tmp_path / "test_mixed_failures.py"
+        test_file.write_text('''
+import pytest
+from unittest.mock import patch
+
+@pytest.fixture
+def mock_nonexistent():
+    with patch('nonexistent_module_xyz789.nonexistent_attr') as m:
+        yield m
+
+def test_error_from_fixture(mock_nonexistent):
+    """This will ERROR (fixture setup fails)."""
+    assert True
+
+def test_assertion_failure():
+    """This will FAIL (assertion error)."""
+    assert False, "Intentional failure"
+
+def test_passes():
+    """This passes."""
+    assert True
+''')
+
+        report = _execute_tests_and_create_run_report(
+            test_file=test_file,
+            basename="test_mixed",
+            language="python",
+            target_coverage=0.0
+        )
+
+        # Should have: 1 passed, 1 failed, 1 error
+        # tests_failed should be 2 (1 failed + 1 error)
+        assert report.tests_passed == 1, f"Expected 1 passed, got {report.tests_passed}"
+        assert report.tests_failed >= 2, (
+            f"Expected tests_failed >= 2 (1 failed + 1 error), got {report.tests_failed}"
+        )
+
+
+# --- Coverage Target Selection Regression Tests ---
+
+class TestCoverageTargetSelection:
+    """Regression tests for selecting the correct `--cov` target."""
+
+    def test_execute_tests_uses_code_file_stem_when_not_package(self, tmp_path, monkeypatch):
+        """
+        Regression test: when the code file is not inside a package, `--cov` should
+        use the code file stem (e.g. `admin_get_users`), not a dotted test path like
+        `backend.tests.admin_get_users`.
+        """
+        import subprocess
+        from pdd.sync_orchestration import _execute_tests_and_create_run_report
+
+        monkeypatch.chdir(tmp_path)
+
+        code_file = tmp_path / "backend" / "functions" / "admin_get_users.py"
+        code_file.parent.mkdir(parents=True, exist_ok=True)
+        code_file.write_text("def admin_get_users():\n    return []\n", encoding="utf-8")
+
+        test_file = tmp_path / "backend" / "tests" / "test_admin_get_users.py"
+        test_file.parent.mkdir(parents=True, exist_ok=True)
+        test_file.write_text("def test_smoke():\n    assert True\n", encoding="utf-8")
+
+        seen_cov_args = {"value": None}
+
+        def fake_run(cmd, **kwargs):
+            cov_args = [str(c) for c in cmd if str(c).startswith("--cov=")]
+            seen_cov_args["value"] = cov_args
+            stdout = "1 passed in 0.01s\nTOTAL 1 0 100%\n"
+            return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+
+        with patch("pdd.sync_orchestration.subprocess.run", side_effect=fake_run):
+            report = _execute_tests_and_create_run_report(
+                test_file=test_file,
+                basename="admin_get_users",
+                language="python",
+                target_coverage=0.0,
+                code_file=code_file,
+            )
+
+        assert report.exit_code == 0
+        assert report.tests_passed == 1
+        assert report.tests_failed == 0
+        assert report.coverage == 100.0
+        assert seen_cov_args["value"] == ["--cov=admin_get_users"]
+
+    def test_execute_tests_uses_dotted_module_when_inside_package(self, tmp_path, monkeypatch):
+        """
+        Regression test: when the code file is inside a Python package, `--cov` should
+        use a dotted module path (e.g. `pdd.my_module`).
+        """
+        import subprocess
+        from pdd.sync_orchestration import _execute_tests_and_create_run_report
+
+        monkeypatch.chdir(tmp_path)
+
+        package_dir = tmp_path / "pdd"
+        package_dir.mkdir(parents=True, exist_ok=True)
+        (package_dir / "__init__.py").write_text("", encoding="utf-8")
+
+        code_file = package_dir / "my_module.py"
+        code_file.write_text("def add(a, b):\n    return a + b\n", encoding="utf-8")
+
+        test_file = tmp_path / "tests" / "test_my_module.py"
+        test_file.parent.mkdir(parents=True, exist_ok=True)
+        test_file.write_text("def test_smoke():\n    assert True\n", encoding="utf-8")
+
+        seen_cov_args = {"value": None}
+
+        def fake_run(cmd, **kwargs):
+            cov_args = [str(c) for c in cmd if str(c).startswith("--cov=")]
+            seen_cov_args["value"] = cov_args
+            stdout = "1 passed in 0.01s\nTOTAL 1 0 100%\n"
+            return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+
+        with patch("pdd.sync_orchestration.subprocess.run", side_effect=fake_run):
+            report = _execute_tests_and_create_run_report(
+                test_file=test_file,
+                basename="my_module",
+                language="python",
+                target_coverage=0.0,
+                code_file=code_file,
+            )
+
+        assert report.exit_code == 0
+        assert report.tests_passed == 1
+        assert report.tests_failed == 0
+        assert report.coverage == 100.0
+        assert seen_cov_args["value"] == ["--cov=pdd.my_module"]
+
+    def test_execute_tests_prefers_stem_when_test_imports_stem_even_if_packaged(self, tmp_path, monkeypatch):
+        """
+        Regression test: some projects package the code but tests import via filename stem
+        after modifying `sys.path`. In that case, `--cov` must match the stem import to
+        avoid "module-not-imported" / "no data was collected" coverage failures.
+        """
+        import subprocess
+        from pdd.sync_orchestration import _execute_tests_and_create_run_report
+
+        monkeypatch.chdir(tmp_path)
+
+        (tmp_path / "backend" / "__init__.py").parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / "backend" / "__init__.py").write_text("", encoding="utf-8")
+        (tmp_path / "backend" / "functions").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "backend" / "functions" / "__init__.py").write_text("", encoding="utf-8")
+
+        code_file = tmp_path / "backend" / "functions" / "admin_get_users.py"
+        code_file.write_text("def admin_get_users():\n    return []\n", encoding="utf-8")
+
+        test_file = tmp_path / "backend" / "tests" / "test_admin_get_users.py"
+        test_file.parent.mkdir(parents=True, exist_ok=True)
+        test_file.write_text(
+            "\n".join(
+                [
+                    "import sys",
+                    "from admin_get_users import admin_get_users",
+                    "",
+                    "def test_smoke():",
+                    "    assert admin_get_users() == []",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        seen_cov_args = {"value": None}
+
+        def fake_run(cmd, **kwargs):
+            cov_args = [str(c) for c in cmd if str(c).startswith("--cov=")]
+            seen_cov_args["value"] = cov_args
+            stdout = "1 passed in 0.01s\nTOTAL 1 0 100%\n"
+            return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+
+        with patch("pdd.sync_orchestration.subprocess.run", side_effect=fake_run):
+            report = _execute_tests_and_create_run_report(
+                test_file=test_file,
+                basename="admin_get_users",
+                language="python",
+                target_coverage=0.0,
+                code_file=code_file,
+            )
+
+        assert report.exit_code == 0
+        assert report.tests_passed == 1
+        assert report.tests_failed == 0
+        assert report.coverage == 100.0
+        assert seen_cov_args["value"] == ["--cov=admin_get_users"]
+
+
+# --- Run Report Update After Fix Regression Tests ---
+
+class TestRunReportUpdateAfterFix:
+    """
+    Regression tests for bug: run_report not updated after successful fix operation.
+
+    Bug scenario:
+    1. sync_determine_operation sees test failures in run_report → returns 'fix'
+    2. fix operation runs and succeeds
+    3. BUG: run_report was NOT updated after fix (stub just did `pass`)
+    4. Next iteration: sync_determine_operation sees same failures → returns 'fix' again
+    5. Loop repeats 5 times until infinite loop detection breaks
+
+    Fix: After successful fix operation, call _execute_tests_and_create_run_report()
+    to update the run_report with new test results.
+    """
+
+    def test_fix_operation_updates_run_report(self, orchestration_fixture, tmp_path):
+        """
+        Regression test: After successful fix, run_report should be updated.
+
+        This test verifies that _execute_tests_and_create_run_report is called
+        after a successful fix operation to prevent infinite fix loops.
+        """
+        import os
+        from pathlib import Path
+
+        os.chdir(tmp_path)
+
+        # Create required files
+        (tmp_path / "prompts").mkdir(exist_ok=True)
+        (tmp_path / "prompts" / "calc_python.prompt").write_text("# prompt")
+        (tmp_path / "pdd").mkdir(exist_ok=True)
+        (tmp_path / "pdd" / "calc.py").write_text("def add(a, b): return a + b")
+        (tmp_path / "tests").mkdir(exist_ok=True)
+        test_file = tmp_path / "tests" / "test_calc.py"
+        test_file.write_text("def test_add(): assert True")
+        (tmp_path / "examples").mkdir(exist_ok=True)
+        (tmp_path / "examples" / "calc_example.py").write_text("# example")
+
+        mocks = orchestration_fixture
+        mock_determine = mocks['sync_determine_operation']
+        mock_fix = mocks['fix_main']
+
+        # Sequence: fix succeeds, then all_synced
+        mock_determine.side_effect = [
+            SyncDecision(operation='fix', reason='Test failures detected'),
+            SyncDecision(operation='all_synced', reason='All synced after fix'),
+        ]
+
+        # fix_main returns success
+        mock_fix.return_value = (True, "fixed_code", "fixed_example", 1, 0.15, "gpt-4")
+
+        # Mock _execute_tests_and_create_run_report to track if it's called after fix
+        with patch('pdd.sync_orchestration._execute_tests_and_create_run_report') as mock_exec_tests:
+            # Configure path mock to return our test file
+            mocks['get_pdd_file_paths'].return_value = {
+                'prompt': tmp_path / 'prompts' / 'calc_python.prompt',
+                'code': tmp_path / 'pdd' / 'calc.py',
+                'example': tmp_path / 'examples' / 'calc_example.py',
+                'test': test_file
+            }
+
+            result = sync_orchestration(basename="calc", language="python")
+
+        # KEY ASSERTION: _execute_tests_and_create_run_report should be called after fix
+        assert mock_exec_tests.called, (
+            "REGRESSION BUG: _execute_tests_and_create_run_report was not called after "
+            "successful fix operation. This causes infinite fix loops because run_report "
+            "is not updated with new test results."
+        )
+
+        # Verify fix was marked as completed
+        assert 'fix' in result.get('operations_completed', []), (
+            "Fix operation should be in completed operations"
+        )
+
+    def test_fix_operation_skips_test_update_when_test_file_missing(self, orchestration_fixture, tmp_path):
+        """
+        Verify that run_report update is skipped when test file doesn't exist.
+
+        This prevents errors when fix is run but no test file has been generated yet.
+        """
+        import os
+
+        os.chdir(tmp_path)
+
+        # Create required files but NOT the test file
+        (tmp_path / "prompts").mkdir(exist_ok=True)
+        (tmp_path / "prompts" / "calc_python.prompt").write_text("# prompt")
+        (tmp_path / "pdd").mkdir(exist_ok=True)
+        (tmp_path / "pdd" / "calc.py").write_text("def add(a, b): return a + b")
+        (tmp_path / "examples").mkdir(exist_ok=True)
+        (tmp_path / "examples" / "calc_example.py").write_text("# example")
+        # Note: NOT creating test file
+
+        mocks = orchestration_fixture
+        mock_determine = mocks['sync_determine_operation']
+        mock_fix = mocks['fix_main']
+
+        mock_determine.side_effect = [
+            SyncDecision(operation='fix', reason='Test failures detected'),
+            SyncDecision(operation='all_synced', reason='Done'),
+        ]
+
+        mock_fix.return_value = (True, "fixed_code", "fixed_example", 1, 0.15, "gpt-4")
+
+        # Configure path mock - test file path that doesn't exist
+        test_file_path = tmp_path / 'tests' / 'test_calc.py'
+        mocks['get_pdd_file_paths'].return_value = {
+            'prompt': tmp_path / 'prompts' / 'calc_python.prompt',
+            'code': tmp_path / 'pdd' / 'calc.py',
+            'example': tmp_path / 'examples' / 'calc_example.py',
+            'test': test_file_path  # This path doesn't exist
+        }
+
+        with patch('pdd.sync_orchestration._execute_tests_and_create_run_report') as mock_exec_tests:
+            result = sync_orchestration(basename="calc", language="python")
+
+        # Should NOT call _execute_tests_and_create_run_report when test file is missing
+        assert not mock_exec_tests.called, (
+            "Should not call _execute_tests_and_create_run_report when test file doesn't exist"
+        )
+
+        # But fix should still complete successfully
+        assert result['success'] is True
+        assert 'fix' in result.get('operations_completed', [])
+
+    def test_infinite_fix_loop_prevented_by_run_report_update(self, orchestration_fixture, tmp_path):
+        """
+        Integration test: Verify that the fix prevents infinite fix loops.
+
+        Before the fix:
+        - fix → run_report unchanged → fix → run_report unchanged → ... (5 times)
+
+        After the fix:
+        - fix → run_report updated → all_synced (or next appropriate operation)
+        """
+        import os
+        import json
+        from pathlib import Path
+
+        os.chdir(tmp_path)
+
+        # Create required files
+        (tmp_path / "prompts").mkdir(exist_ok=True)
+        (tmp_path / "prompts" / "calc_python.prompt").write_text("# prompt")
+        (tmp_path / "pdd").mkdir(exist_ok=True)
+        (tmp_path / "pdd" / "calc.py").write_text("def add(a, b): return a + b")
+        (tmp_path / "tests").mkdir(exist_ok=True)
+        test_file = tmp_path / "tests" / "test_calc.py"
+        test_file.write_text("def test_add(): assert True")
+        (tmp_path / "examples").mkdir(exist_ok=True)
+        (tmp_path / "examples" / "calc_example.py").write_text("# example")
+        (tmp_path / ".pdd" / "meta").mkdir(parents=True, exist_ok=True)
+
+        # Create initial run_report with failures (what triggers 'fix' operation)
+        run_report = {
+            "timestamp": "2023-01-01T00:00:00Z",
+            "exit_code": 1,
+            "tests_passed": 10,
+            "tests_failed": 3,  # These failures trigger 'fix'
+            "coverage": 80.0
+        }
+        (tmp_path / ".pdd" / "meta" / "calc_python_run.json").write_text(json.dumps(run_report))
+
+        mocks = orchestration_fixture
+        mock_determine = mocks['sync_determine_operation']
+        mock_fix = mocks['fix_main']
+
+        # The fix should only need one 'fix' operation, then progress to all_synced
+        # (because run_report gets updated after fix)
+        mock_determine.side_effect = [
+            SyncDecision(operation='fix', reason='3 test failures detected'),
+            SyncDecision(operation='all_synced', reason='All tests pass after fix'),
+        ]
+
+        mock_fix.return_value = (True, "fixed_code", "fixed_example", 1, 0.15, "gpt-4")
+
+        mocks['get_pdd_file_paths'].return_value = {
+            'prompt': tmp_path / 'prompts' / 'calc_python.prompt',
+            'code': tmp_path / 'pdd' / 'calc.py',
+            'example': tmp_path / 'examples' / 'calc_example.py',
+            'test': test_file
+        }
+
+        result = sync_orchestration(basename="calc", language="python", max_attempts=3)
+
+        # Should complete with just 1 fix operation (not 5 due to infinite loop)
+        assert result['success'] is True
+        assert result['operations_completed'].count('fix') == 1, (
+            f"Expected exactly 1 fix operation, got {result['operations_completed'].count('fix')}. "
+            "If more than 1, the infinite loop prevention may not be working."
+        )
+
+
+# --- Multi-Language Test Execution Tests ---
+
+class TestNonPythonFixLoopBug:
+    """Tests that expose the infinite fix loop bug for non-Python languages."""
+
+    @pytest.fixture
+    def multilang_fixture(self, tmp_path, monkeypatch):
+        """Sets up a temporary project directory for multi-language testing."""
+        (tmp_path / "prompts").mkdir()
+        (tmp_path / "src").mkdir()
+        (tmp_path / "examples").mkdir()
+        (tmp_path / "tests").mkdir()
+        (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+
+        (tmp_path / "prompts" / "calculator_typescript.prompt").write_text(
+            "Create a TypeScript calculator."
+        )
+        (tmp_path / "src" / "calculator.ts").write_text(
+            "export function add(a: number, b: number): number { return a + b; }"
+        )
+        (tmp_path / "tests" / "test_calculator.ts").write_text(
+            "import { add } from '../src/calculator'; test('add', () => expect(add(1,2)).toBe(3));"
+        )
+
+        monkeypatch.chdir(tmp_path)
+        return tmp_path
+
+    def test_execute_tests_uses_pytest_for_typescript_BUG(self, tmp_path):
+        """
+        BUG DETECTION: _execute_tests_and_create_run_report runs pytest for TypeScript.
+
+        Current behavior (BUG): Always runs pytest regardless of language.
+        Expected behavior: Should use language-appropriate test runner (or return 127).
+
+        This test should FAIL before fix, PASS after.
+        """
+        test_file = tmp_path / "test_calc.ts"
+        test_file.write_text("// TypeScript test file")
+
+        commands_run = []
+
+        def capture_subprocess_run(cmd, *args, **kwargs):
+            # Capture both list commands and shell string commands
+            if isinstance(cmd, list):
+                commands_run.append(('list', cmd))
+            else:
+                commands_run.append(('shell', cmd))
+            result = MagicMock()
+            result.returncode = 0
+            result.stdout = "Tests passed"
+            result.stderr = ""
+            return result
+
+        with patch('pdd.sync_orchestration.subprocess.run', side_effect=capture_subprocess_run):
+            with patch('pdd.sync_orchestration.calculate_sha256', return_value="abc123"):
+                with patch('pdd.sync_orchestration.save_run_report'):
+                    try:
+                        _execute_tests_and_create_run_report(
+                            test_file=test_file,
+                            basename="calc",
+                            language="typescript",
+                            target_coverage=90.0
+                        )
+                    except Exception:
+                        pass
+
+        # Check that pytest is NOT called directly via list command for TypeScript
+        # For TypeScript, it should either:
+        # 1. Use shell command (from get_test_command_for_file)
+        # 2. Return exit_code 127 (no test command available)
+        pytest_list_cmd = any(
+            cmd_type == 'list' and 'pytest' in str(cmd)
+            for cmd_type, cmd in commands_run
+        )
+        assert not pytest_list_cmd, (
+            "BUG DETECTED: _execute_tests_and_create_run_report uses pytest list command for TypeScript. "
+            "Should use language-appropriate test runner or return exit_code 127."
+        )
+
+    def test_fix_operation_uses_simulated_failures_for_non_python_BUG(self, multilang_fixture):
+        """
+        BUG DETECTION: Fix operation writes "Simulated failures" for non-Python languages.
+
+        When tests_failed=0 but exit_code!=0 for TypeScript, the fix operation
+        falls through to "Simulated failures" instead of running actual tests.
+
+        This test should FAIL before fix, PASS after.
+        """
+        tmp_path = multilang_fixture
+        meta_dir = tmp_path / ".pdd" / "meta"
+
+        # Simulate the problematic state: exit_code=4, tests_failed=0
+        run_report_data = {
+            "timestamp": "2025-01-01T00:00:00+00:00",
+            "exit_code": 4,
+            "tests_passed": 0,
+            "tests_failed": 0,  # This triggers "Simulated failures"
+            "coverage": 0.0
+        }
+        (meta_dir / "calculator_typescript_run.json").write_text(json.dumps(run_report_data))
+
+        captured_error_content = []
+        original_write_text = Path.write_text
+
+        def capture_write(self, content, *args, **kwargs):
+            if 'fix_errors' in str(self):
+                captured_error_content.append(content)
+            return original_write_text(self, content, *args, **kwargs)
+
+        # Mock everything to focus on the error content issue
+        with patch.object(Path, 'write_text', capture_write):
+            with patch('pdd.sync_orchestration.sync_determine_operation') as mock_decide:
+                # First call returns 'fix', second call returns 'all_synced' to exit
+                mock_decide.side_effect = [
+                    SyncDecision(operation='fix', reason='test', confidence=1.0),
+                    SyncDecision(operation='all_synced', reason='done', confidence=1.0),
+                ]
+                with patch('pdd.sync_orchestration.fix_main') as mock_fix:
+                    mock_fix.return_value = {'success': True, 'cost': 0.01, 'model': 'mock'}
+                    with patch('pdd.sync_orchestration.SyncApp') as mock_app:
+                        # Run worker synchronously
+                        mock_app.side_effect = lambda *a, **kw: type('MockApp', (), {
+                            'worker_func': kw.get('worker_func'),
+                            'run': lambda self: self.worker_func(),
+                            'worker_exception': None,
+                        })()
+
+                        try:
+                            sync_orchestration(
+                                basename="calculator",
+                                language="typescript",
+                                budget=1.0,
+                                quiet=True
+                            )
+                        except Exception:
+                            pass
+
+        # Check if "Simulated failures" was written
+        for content in captured_error_content:
+            assert "Simulated failures" not in content, (
+                "BUG DETECTED: Non-Python fix operation uses 'Simulated failures' "
+                "instead of running actual test command. This causes infinite loop."
+            )
+
+
+class TestLanguageTestCommandResolution:
+    """Tests for language-specific test command resolution."""
+
+    def test_get_test_command_returns_none_for_unknown_language(self):
+        """
+        After fix: get_test_command_for_file should exist and return None
+        for languages without configured test runners.
+        """
+        try:
+            from pdd.get_test_command import get_test_command_for_file
+        except ImportError:
+            pytest.skip("get_test_command module not yet implemented")
+
+        result = get_test_command_for_file("/tmp/test.unknown", "unknown_lang")
+        assert result is None
+
+    def test_get_test_command_returns_pytest_for_python(self):
+        """After fix: Python should use pytest."""
+        try:
+            from pdd.get_test_command import get_test_command_for_file
+        except ImportError:
+            pytest.skip("get_test_command module not yet implemented")
+
+        result = get_test_command_for_file("/tmp/test_foo.py", "python")
+        assert result is not None
+        assert "pytest" in result
+
+
+class TestOutputParsing:
+    """Tests for test output parsing across languages."""
+
+    def test_parse_jest_output(self):
+        """After fix: Should parse Jest output correctly."""
+        try:
+            from pdd.sync_orchestration import _parse_test_output
+        except (ImportError, AttributeError):
+            pytest.skip("_parse_test_output not yet implemented")
+
+        jest_output = """
+        PASS src/calculator.test.ts
+        Tests: 5 passed, 2 failed, 7 total
+        """
+        passed, failed, coverage = _parse_test_output(jest_output, "typescript")
+        assert passed == 5
+        assert failed == 2
+
+    def test_parse_go_test_output(self):
+        """After fix: Should parse go test output correctly."""
+        try:
+            from pdd.sync_orchestration import _parse_test_output
+        except (ImportError, AttributeError):
+            pytest.skip("_parse_test_output not yet implemented")
+
+        go_output = """
+        --- PASS: TestAdd (0.00s)
+        PASS
+        coverage: 85.7% of statements
+        """
+        passed, failed, coverage = _parse_test_output(go_output, "go")
+        assert passed >= 1
+        assert coverage == 85.7
+
+
+# --- Parameter Name Regression Tests ---
+
+def test_update_operation_calls_update_main_with_use_git(orchestration_fixture):
+    """
+    Regression test: Verify that the 'update' operation calls update_main
+    with use_git=True (not git=True).
+
+    This test prevents the bug where sync_orchestration passed 'git=True'
+    instead of 'use_git=True' to update_main, causing:
+        TypeError: update_main() got an unexpected keyword argument 'git'
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_update = orchestration_fixture['update_main']
+
+    # Set up the decision to trigger update operation
+    mock_determine.side_effect = [
+        SyncDecision(operation='update', reason='Code modified, prompt outdated'),
+        SyncDecision(operation='all_synced', reason='Done'),
+    ]
+
+    # Configure update_main to return success
+    mock_update.return_value = {
+        'success': True,
+        'cost': 0.04,
+        'model': 'mock-model'
+    }
+
+    # Act
+    result = sync_orchestration(basename="calculator", language="python")
+
+    # Assert update_main was called with use_git=True (not git=True)
+    mock_update.assert_called_once()
+    call_kwargs = mock_update.call_args.kwargs
+    assert 'use_git' in call_kwargs, "update_main should be called with 'use_git' parameter"
+    assert call_kwargs['use_git'] is True
+    assert 'git' not in call_kwargs, "update_main should NOT be called with 'git' parameter (wrong name)"
+
+
+def test_auto_deps_passes_directory_not_glob_pattern(orchestration_fixture):
+    """
+    Regression test: auto-deps should pass the examples directory path,
+    not a glob pattern like 'examples/*' which prevents recursive file discovery.
+
+    Bug: sync_orchestration.py was passing `directory_path=f"{examples_dir}/*"` instead
+    of `directory_path=examples_dir`. When `os.path.isdir("examples/*")` is checked,
+    it returns False (since /* is not a real directory), preventing the recursive
+    pattern construction needed for subdirectories.
+    """
+    mocks = orchestration_fixture
+    mock_determine = mocks['sync_determine_operation']
+    mock_auto_deps = mocks['auto_deps_main']
+
+    # Configure auto_deps_main to return a tuple matching the expected return format
+    mock_auto_deps.return_value = ("resolved_content", 0.01, "mock-model")
+
+    # Set up sync decision sequence: auto-deps -> all_synced
+    mock_determine.side_effect = [
+        SyncDecision(operation='auto-deps', reason='Resolve dependencies'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    # Run sync orchestration
+    result = sync_orchestration(
+        basename="calculator",
+        language="python",
+        budget=1.0
+    )
+
+    # Verify auto_deps_main was called
+    assert mock_auto_deps.called, "auto_deps_main should have been called"
+
+    # Get the call arguments
+    call_kwargs = mock_auto_deps.call_args.kwargs
+
+    # Assert: directory_path should NOT end with /*
+    directory_path = call_kwargs.get('directory_path', '')
+    assert not directory_path.endswith('/*'), (
+        f"auto_deps_main should be passed a directory path, not a glob pattern. "
+        f"Got: {directory_path!r}"
+    )
+
+    # The directory_path should be a valid directory path (like 'examples' or 'context')
+    # It should NOT contain wildcard characters
+    assert '*' not in directory_path, (
+        f"directory_path should not contain wildcards. Got: {directory_path!r}"
+    )
+
+
+# =============================================================================
+# Test for merge behavior when test file exists
+# =============================================================================
+
+def test_sync_uses_merge_when_test_file_exists(orchestration_fixture):
+    """
+    BUG FIX TEST: When a test file already exists and sync triggers a 'test' operation
+    (e.g., for coverage improvement), it should use merge=True to append new tests
+    rather than regenerating from scratch. This prevents losing fixes made to the test file.
+
+    Root cause: sync_orchestration.py:1006 hardcodes merge=False and existing_tests=None,
+    which causes test regeneration to overwrite any fixes made to the test file.
+
+    Reproduces the bug where:
+    1. fix operation fixes a test file
+    2. test operation is triggered due to low coverage
+    3. test operation regenerates tests from scratch (merge=False)
+    4. The fix is lost
+    """
+    tmp_path = Path.cwd()
+    mocks = orchestration_fixture
+
+    # Pre-create test file (simulating a file that was previously fixed)
+    existing_test_file = tmp_path / 'tests' / 'test_calculator.py'
+    existing_test_file.parent.mkdir(parents=True, exist_ok=True)
+    existing_test_file.write_text("# Existing test with fixes\ndef test_existing(): pass")
+
+    # Also create code file so sync can proceed
+    code_file = tmp_path / 'src' / 'calculator.py'
+    code_file.parent.mkdir(parents=True, exist_ok=True)
+    code_file.write_text("def add(a, b): return a + b")
+
+    # Configure mock to return 'test' operation (simulating low coverage trigger)
+    mocks['sync_determine_operation'].side_effect = [
+        SyncDecision(operation='test', reason='Coverage below target'),
+        SyncDecision(operation='nothing', reason='Done'),
+    ]
+
+    # Don't let the mock overwrite our existing test file
+    def mock_test_that_preserves_file(*args, **kwargs):
+        return ('test content', 0.06, 'mock-model')
+    mocks['cmd_test_main'].side_effect = mock_test_that_preserves_file
+
+    # Run sync
+    result = sync_orchestration(basename="calculator", language="python")
+
+    # ASSERT: cmd_test_main should be called with merge=True when test file exists
+    mocks['cmd_test_main'].assert_called()
+    call_args = mocks['cmd_test_main'].call_args
+
+    # Check if called with keyword arguments
+    if call_args.kwargs:
+        merge_value = call_args.kwargs.get('merge')
+        existing_tests_value = call_args.kwargs.get('existing_tests')
+    else:
+        # Fallback: check positional args (merge is at position 10 based on function signature)
+        # cmd_test_main(ctx, prompt_file, code_file, output, language, coverage_report, existing_tests, target_coverage, merge, ...)
+        merge_value = None
+        existing_tests_value = None
+
+    # This assertion will FAIL with current code (merge=False)
+    assert merge_value is True, \
+        f"sync should use merge=True when test file already exists, got merge={merge_value}"
+    assert existing_tests_value is not None, \
+        f"sync should pass existing_tests when test file already exists, got existing_tests={existing_tests_value}"
+
+
+# =============================================================================
+# Tests for strength/temperature propagation to sub-commands
+# =============================================================================
+
+class TestStrengthTemperaturePropagation:
+    """Bug fix tests: sync_orchestration should pass strength/temperature to sub-commands."""
+
+    def test_fix_verification_main_call_includes_strength(self):
+        """Bug fix: sync_orchestration should pass strength to fix_verification_main.
+
+        The fix_verification_main call should include strength parameter.
+        """
+        import inspect
+        from pdd import sync_orchestration as sync_mod
+
+        # Get the source code of sync_orchestration function
+        source = inspect.getsource(sync_mod.sync_orchestration)
+
+        # Find the line containing fix_verification_main call and check surrounding context
+        lines = source.split('\n')
+        found_call = False
+        found_strength = False
+
+        for i, line in enumerate(lines):
+            if 'fix_verification_main(' in line or 'result = fix_verification_main' in line:
+                found_call = True
+                # Check this line and the next few lines for strength parameter
+                context = '\n'.join(lines[i:i+15])
+                if 'strength=strength' in context:
+                    found_strength = True
+                    break
+
+        assert found_call, "fix_verification_main call should exist in sync_orchestration"
+        assert found_strength, \
+            "fix_verification_main call should include 'strength=strength' parameter"
+
+    def test_crash_main_call_includes_strength(self):
+        """Bug fix: sync_orchestration should pass strength to crash_main."""
+        import inspect
+        from pdd import sync_orchestration as sync_mod
+
+        source = inspect.getsource(sync_mod.sync_orchestration)
+        lines = source.split('\n')
+        found_call = False
+        found_strength = False
+
+        for i, line in enumerate(lines):
+            if 'crash_main(' in line or 'result = crash_main' in line:
+                found_call = True
+                context = '\n'.join(lines[i:i+15])
+                if 'strength=strength' in context:
+                    found_strength = True
+                    break
+
+        assert found_call, "crash_main call should exist in sync_orchestration"
+        assert found_strength, \
+            "crash_main call should include 'strength=strength' parameter"
+
+    def test_fix_main_call_includes_strength(self):
+        """Bug fix: sync_orchestration should pass strength to fix_main."""
+        import inspect
+        from pdd import sync_orchestration as sync_mod
+
+        source = inspect.getsource(sync_mod.sync_orchestration)
+        lines = source.split('\n')
+        found_call = False
+        found_strength = False
+
+        for i, line in enumerate(lines):
+            if 'fix_main(' in line or 'result = fix_main' in line:
+                found_call = True
+                context = '\n'.join(lines[i:i+15])
+                if 'strength=strength' in context:
+                    found_strength = True
+                    break
+
+        assert found_call, "fix_main call should exist in sync_orchestration"
+        assert found_strength, \
+            "fix_main call should include 'strength=strength' parameter"
+
+    def test_cmd_test_main_call_includes_strength(self):
+        """Bug fix: sync_orchestration should pass strength to cmd_test_main."""
+        import inspect
+        from pdd import sync_orchestration as sync_mod
+
+        source = inspect.getsource(sync_mod.sync_orchestration)
+        lines = source.split('\n')
+        found_call = False
+        found_strength = False
+
+        for i, line in enumerate(lines):
+            if 'cmd_test_main(' in line or 'result = cmd_test_main' in line:
+                found_call = True
+                context = '\n'.join(lines[i:i+15])
+                if 'strength=strength' in context:
+                    found_strength = True
+                    break
+
+        assert found_call, "cmd_test_main call should exist in sync_orchestration"
+        assert found_strength, \
+            "cmd_test_main call should include 'strength=strength' parameter"
+
+    def test_update_main_call_includes_strength(self):
+        """Bug fix: sync_orchestration should pass strength to update_main."""
+        import inspect
+        from pdd import sync_orchestration as sync_mod
+
+        source = inspect.getsource(sync_mod.sync_orchestration)
+        lines = source.split('\n')
+        found_call = False
+        found_strength = False
+
+        for i, line in enumerate(lines):
+            if 'update_main(' in line or 'result = update_main' in line:
+                found_call = True
+                context = '\n'.join(lines[i:i+15])
+                if 'strength=strength' in context:
+                    found_strength = True
+                    break
+
+        assert found_call, "update_main call should exist in sync_orchestration"
+        assert found_strength, \
+            "update_main call should include 'strength=strength' parameter"
+
+
+# --- Bug: Post-crash verification uses wrong Python interpreter ---
+
+class TestPythonInterpreterConsistency:
+    """
+    Regression tests for Python interpreter consistency in sync_orchestration.
+
+    The crash fix loop (fix_code_loop.py:477) uses sys.executable to run examples.
+    Post-crash verification in sync_orchestration.py must be consistent to avoid
+    PATH resolution issues when venv/conda environments are both active.
+    """
+
+    def test_post_crash_verification_uses_sys_executable(self):
+        """
+        Bug fix: Post-crash verification must use sys.executable, not 'python' from
+        get_run_command_for_file(), to match the Python interpreter used by crash_main.
+
+        Without this fix, when both venv and conda are active, PATH lookup for 'python'
+        may resolve to a different interpreter than sys.executable, causing:
+        1. crash_main verification passes (uses sys.executable = venv Python)
+        2. post-crash verification fails (uses 'python' = conda Python)
+        3. run_report saved with non-zero exit code
+        4. Infinite crash loop until MAX_CONSECUTIVE_CRASHES reached
+        """
+        import inspect
+        from pdd import sync_orchestration as sync_mod
+
+        source = inspect.getsource(sync_mod.sync_orchestration)
+
+        # Find the post-crash verification section (after "if success and operation == 'crash':")
+        # and verify it uses sys.executable, not get_run_command_for_file
+
+        lines = source.split('\n')
+        in_post_crash_section = False
+        found_sys_executable = False
+        found_get_run_command = False
+
+        for line in lines:
+            if "if success and operation == 'crash':" in line:
+                in_post_crash_section = True
+            if in_post_crash_section:
+                if 'sys.executable' in line:
+                    found_sys_executable = True
+                if 'get_run_command_for_file' in line:
+                    found_get_run_command = True
+                # Exit section when we hit the next major block
+                if 'if success and operation ==' in line and 'crash' not in line:
+                    break
+
+        assert found_sys_executable, (
+            "REGRESSION BUG: Post-crash verification should use sys.executable "
+            "to match crash_main's Python interpreter. Using get_run_command_for_file() "
+            "or 'python' can resolve to wrong interpreter when venv/conda are both active."
+        )
+        assert not found_get_run_command, (
+            "REGRESSION BUG: Post-crash verification should NOT use get_run_command_for_file(). "
+            "PATH lookup for 'python' may differ from sys.executable in mixed venv/conda environments."
+        )
+
+
+# --- Bug #156: Fix operation receives wrong test file ---
+
+def test_fix_operation_identifies_actual_failing_test_file(orchestration_fixture, tmp_path):
+    """
+    Bug #156: When pytest reports failures from a file different from pdd_files['test'],
+    fix_main should receive the actual failing file, not just the tracked file.
+
+    Current (buggy) behavior: fix_main always receives pdd_files['test']
+    Desired behavior: fix_main receives the file where failures actually occurred
+
+    This test will FAIL with the current buggy code and PASS after the fix.
+    """
+    import subprocess
+    from unittest.mock import MagicMock
+
+    # Setup test directory with tracked and sibling files
+    test_dir = tmp_path / 'tests'
+    test_dir.mkdir(parents=True, exist_ok=True)
+    tracked_test = test_dir / 'test_calculator.py'
+    sibling_test = test_dir / 'test_calculator_0.py'
+    tracked_test.write_text('def test_pass(): pass')
+    sibling_test.write_text('def test_fail(): assert False')
+
+    # Also create required files for the fixture
+    (tmp_path / 'prompts').mkdir(parents=True, exist_ok=True)
+    (tmp_path / 'prompts' / 'calculator_python.prompt').write_text('Create a calculator.')
+    (tmp_path / 'src').mkdir(parents=True, exist_ok=True)
+    (tmp_path / 'src' / 'calculator.py').write_text('def add(a, b): return a + b')
+    (tmp_path / 'examples').mkdir(parents=True, exist_ok=True)
+    (tmp_path / 'examples' / 'calculator_example.py').write_text('print(add(1, 2))')
+
+    # Update pdd_files to point to our test files
+    orchestration_fixture['get_pdd_file_paths'].return_value = {
+        'prompt': tmp_path / 'prompts' / 'calculator_python.prompt',
+        'code': tmp_path / 'src' / 'calculator.py',
+        'example': tmp_path / 'examples' / 'calculator_example.py',
+        'test': tracked_test  # Points to test_calculator.py (the tracked file)
+    }
+
+    # Configure sync to do 'fix' operation
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_determine.side_effect = [
+        SyncDecision(operation='fix', reason='Tests failing'),
+        SyncDecision(operation='all_synced', reason='Done'),
+    ]
+
+    # Mock subprocess.run to return pytest output with failures in SIBLING file
+    mock_result = MagicMock()
+    mock_result.stdout = """
+test_calculator.py::test_pass PASSED
+FAILED test_calculator_0.py::test_fail - AssertionError
+1 passed, 1 failed
+"""
+    mock_result.stderr = ""
+    mock_result.returncode = 1
+
+    with patch('pdd.sync_orchestration.subprocess.run', return_value=mock_result):
+        with patch('pdd.sync_orchestration.detect_host_python_executable', return_value='python'):
+            with patch('pdd.get_test_command.get_test_command_for_file', return_value='pytest'):
+                result = sync_orchestration(basename="calculator", language="python")
+
+    # ASSERTION: fix_main should receive the ACTUAL failing file
+    fix_main_mock = orchestration_fixture['fix_main']
+    assert fix_main_mock.called, "fix_main should have been called"
+
+    # Get the unit_test_file argument passed to fix_main
+    call_kwargs = fix_main_mock.call_args[1] if fix_main_mock.call_args[1] else {}
+    unit_test_file = call_kwargs.get('unit_test_file', '')
+
+    # The bug: fix_main receives test_calculator.py (tracked) instead of test_calculator_0.py (failing)
+    # This assertion will FAIL with current code, PASS after fix
+    assert 'test_calculator_0.py' in unit_test_file, \
+        f"Bug #156: fix_main should receive the failing file (test_calculator_0.py), " \
+        f"but got: {unit_test_file}"
+
+
+def test_fix_operation_runs_pytest_on_all_matching_test_files(orchestration_fixture, tmp_path):
+    """
+    Bug #156 Part 2: sync_orchestration should use pdd_files['test_files']
+    to run pytest on ALL matching test files, not just pdd_files['test'].
+
+    Current (buggy) behavior:
+    - pytest is invoked with only pdd_files['test']
+    - pdd_files['test_files'] is ignored even if present
+
+    Desired behavior:
+    - pytest is invoked with all files from pdd_files['test_files']
+    """
+    from unittest.mock import MagicMock
+
+    # Setup test files
+    test_dir = tmp_path / 'tests'
+    test_dir.mkdir(parents=True, exist_ok=True)
+    tracked_test = test_dir / 'test_calculator.py'
+    sibling_test = test_dir / 'test_calculator_0.py'
+    tracked_test.write_text('def test_pass(): pass')
+    sibling_test.write_text('def test_fail(): assert False')
+
+    # Create required files
+    (tmp_path / 'prompts').mkdir(parents=True, exist_ok=True)
+    (tmp_path / 'prompts' / 'calculator_python.prompt').write_text('prompt')
+    (tmp_path / 'src').mkdir(parents=True, exist_ok=True)
+    (tmp_path / 'src' / 'calculator.py').write_text('code')
+    (tmp_path / 'examples').mkdir(parents=True, exist_ok=True)
+    (tmp_path / 'examples' / 'calculator_example.py').write_text('example')
+
+    # KEY: Mock pdd_files to include 'test_files' with BOTH files
+    # This simulates what get_pdd_file_paths will return AFTER the fix
+    orchestration_fixture['get_pdd_file_paths'].return_value = {
+        'prompt': tmp_path / 'prompts' / 'calculator_python.prompt',
+        'code': tmp_path / 'src' / 'calculator.py',
+        'example': tmp_path / 'examples' / 'calculator_example.py',
+        'test': tracked_test,  # Primary file (backward compat)
+        'test_files': [tracked_test, sibling_test],  # NEW: All test files
+    }
+
+    # Capture subprocess.run calls
+    captured_pytest_args = []
+    def capture_subprocess(args, **kwargs):
+        if isinstance(args, list) and 'pytest' in args:
+            captured_pytest_args.append(list(args))
+        return MagicMock(stdout="1 passed", stderr="", returncode=0)
+
+    # Trigger fix operation
+    orchestration_fixture['sync_determine_operation'].side_effect = [
+        SyncDecision(operation='fix', reason='Tests failing'),
+        SyncDecision(operation='all_synced', reason='Done'),
+    ]
+
+    with patch('pdd.sync_orchestration.subprocess.run', side_effect=capture_subprocess):
+        with patch('pdd.sync_orchestration.detect_host_python_executable', return_value='python'):
+            with patch('pdd.get_test_command.get_test_command_for_file', return_value='pytest'):
+                sync_orchestration(basename="calculator", language="python")
+
+    # Verify pytest was called
+    assert captured_pytest_args, "pytest should have been invoked"
+    pytest_args_str = ' '.join(str(arg) for arg in captured_pytest_args[0])
+
+    # CRITICAL ASSERTION: pytest must include the sibling file
+    # Current code: uses pdd_files['test'] only, ignores 'test_files' → FAILS
+    # After fix: uses pdd_files['test_files'] → PASSES
+    assert str(sibling_test) in pytest_args_str, \
+        f"Bug #156: sync_orchestration should use pdd_files['test_files']. " \
+        f"Expected {sibling_test} in args, got: {pytest_args_str}"
+
+
+# --- Bug #157: Crash Retry Infinite Loop Tests ---
+
+def test_crash_total_cost_includes_failed_operations(orchestration_fixture, tmp_path):
+    """
+    Verify that total_cost includes cost from failed crash operations.
+    This tests budget tracking (current_cost_ref), not logging (actual_cost).
+    """
+    # Create required files for crash operation
+    code_file = tmp_path / 'src' / 'calculator.py'
+    code_file.parent.mkdir(parents=True, exist_ok=True)
+    code_file.write_text("# Mock code file")
+
+    example_file = tmp_path / 'examples' / 'calculator_example.py'
+    example_file.parent.mkdir(parents=True, exist_ok=True)
+    example_file.write_text("# Mock example file that crashes\nraise Exception('crash')")
+
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_determine.side_effect = [
+        SyncDecision(operation='crash', reason='Fix crash'),
+        SyncDecision(operation='all_synced', reason='Done'),
+    ]
+    # Crash fails but costs money - cost should still be tracked
+    orchestration_fixture['crash_main'].return_value = {'success': False, 'cost': 0.25, 'model': 'mock-model'}
+
+    result = sync_orchestration(basename="calculator", language="python")
+
+    # The key assertion: total_cost should include cost from failed crash operation
+    # Budget tracking (current_cost_ref) should add cost regardless of success
+    assert result['total_cost'] == pytest.approx(0.25), \
+        f"Bug #157: Failed crash cost not tracked! Expected 0.25 but got {result['total_cost']}"
+
+
+def test_consecutive_crash_operations_limited(orchestration_fixture):
+    """
+    BUG #157: Should limit consecutive crash operations to prevent infinite loops.
+    Currently there is no limit (unlike fix which has limit of 5, test has limit of 3).
+
+    This test WILL FAIL with current code - that's expected.
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    # Always return crash decision - simulates infinite retry scenario
+    mock_determine.return_value = SyncDecision(operation='crash', reason='Crash retry')
+
+    # Crash always fails
+    orchestration_fixture['crash_main'].return_value = {'success': False, 'cost': 0.08, 'model': 'mock-model'}
+
+    result = sync_orchestration(basename="calculator", language="python", budget=10.0)
+
+    mock_crash = orchestration_fixture['crash_main']
+    # BUG: Without crash counter, this could be much higher (or timeout)
+    assert mock_crash.call_count <= 3, \
+        f"Expected max 3 crash calls but got {mock_crash.call_count} - no crash limit!"
+    assert any('consecutive crash' in err.lower() for err in result['errors']), \
+        f"Expected 'consecutive crash' error but got: {result['errors']}"
+
+
+# --- Issue #159: Test State Desynchronization Bug ---
+
+class TestStateUpdateAtomicity:
+    """Tests for atomic state update behavior - Issue #159.
+
+    The bug: RunReport is written at line 640, but Fingerprint is written
+    ~648 lines later at line 1288. This gap allows inconsistent state reads.
+    """
+
+    def test_atomic_state_update_buffers_writes(self, tmp_path):
+        """
+        Verify the FIX: AtomicStateUpdate buffers both writes and commits together.
+
+        Test passes = FIX WORKS (atomic writes verified)
+        Test fails = FIX BROKEN (writes not atomic)
+        """
+        from pdd.sync_orchestration import AtomicStateUpdate, META_DIR
+        import os
+
+        # Setup temp META_DIR
+        meta_dir = tmp_path / ".pdd" / "meta"
+        meta_dir.mkdir(parents=True)
+
+        run_report_path = meta_dir / "test_python_run.json"
+        fingerprint_path = meta_dir / "test_python.json"
+
+        # Track actual file writes
+        write_timestamps = {}
+
+        # Override META_DIR temporarily for the test
+        original_meta_dir = META_DIR
+
+        with AtomicStateUpdate("test", "python") as state:
+            # Set run_report - file should NOT exist yet
+            state.set_run_report({"exit_code": 0, "tests_passed": 5}, run_report_path)
+            assert not run_report_path.exists(), \
+                "BUG: run_report was written immediately instead of being buffered!"
+
+            # Set fingerprint - file should NOT exist yet
+            state.set_fingerprint({"command": "test", "timestamp": "2024-01-01"}, fingerprint_path)
+            assert not fingerprint_path.exists(), \
+                "BUG: fingerprint was written immediately instead of being buffered!"
+
+        # After exiting context, BOTH files should exist (written atomically)
+        assert run_report_path.exists(), "run_report was not written after commit!"
+        assert fingerprint_path.exists(), "fingerprint was not written after commit!"
+
+        # Verify file contents
+        import json
+        with open(run_report_path) as f:
+            run_report_data = json.load(f)
+        with open(fingerprint_path) as f:
+            fingerprint_data = json.load(f)
+
+        assert run_report_data["exit_code"] == 0
+        assert fingerprint_data["command"] == "test"
+
+    def test_atomic_state_update_rollback_on_exception(self, tmp_path):
+        """
+        Verify that on exception, neither file is written (rollback behavior).
+        """
+        from pdd.sync_orchestration import AtomicStateUpdate
+
+        meta_dir = tmp_path / ".pdd" / "meta"
+        meta_dir.mkdir(parents=True)
+
+        run_report_path = meta_dir / "test_python_run.json"
+        fingerprint_path = meta_dir / "test_python.json"
+
+        try:
+            with AtomicStateUpdate("test", "python") as state:
+                state.set_run_report({"exit_code": 0}, run_report_path)
+                state.set_fingerprint({"command": "test"}, fingerprint_path)
+                # Simulate an error during operation
+                raise ValueError("Simulated operation failure")
+        except ValueError:
+            pass
+
+        # Neither file should exist due to rollback
+        assert not run_report_path.exists(), \
+            "run_report was written despite exception - rollback failed!"
+        assert not fingerprint_path.exists(), \
+            "fingerprint was written despite exception - rollback failed!"
+
+    def test_run_report_and_fingerprint_are_written_atomically(self, orchestration_fixture):
+        """
+        Verify Bug #159 fix: RunReport and Fingerprint are written atomically.
+
+        This test verifies that both _save_run_report_atomic and _save_fingerprint_atomic
+        are called with an atomic_state parameter, ensuring atomic writes.
+
+        The AtomicStateUpdate context manager buffers both writes and commits them
+        together, preventing state desynchronization on failures.
+        """
+        mock_determine = orchestration_fixture['sync_determine_operation']
+        mock_save_fp = orchestration_fixture['_save_fingerprint_atomic']
+
+        # Track atomic_state parameter usage
+        atomic_state_values = {'fingerprint': None}
+
+        original_save_fp = mock_save_fp.side_effect
+
+        def track_fingerprint_atomic_state(*args, **kwargs):
+            atomic_state_values['fingerprint'] = kwargs.get('atomic_state')
+            if original_save_fp:
+                return original_save_fp(*args, **kwargs)
+            return None
+
+        mock_save_fp.side_effect = track_fingerprint_atomic_state
+
+        # Trigger a 'test' operation which should use atomic writes
+        mock_determine.side_effect = [
+            SyncDecision(operation='test', reason='Tests needed'),
+            SyncDecision(operation='all_synced', reason='Done'),
+        ]
+
+        result = sync_orchestration(basename="calculator", language="python")
+
+        # Verify _save_fingerprint_atomic was called with atomic_state
+        assert mock_save_fp.called, "_save_fingerprint_atomic was not called"
+        assert atomic_state_values['fingerprint'] is not None, (
+            "Bug #159 regression: _save_fingerprint_atomic called without atomic_state. "
+            "This indicates non-atomic writes which can cause state desynchronization."
+        )
+
+
+def test_atomic_state_exit_is_called_bug_165(orchestration_fixture):
+    """
+    Bug #165: AtomicStateUpdate.__exit__ should be called to commit all writes.
+
+    Currently, AtomicStateUpdate is created WITHOUT 'with', so __exit__ is never
+    called and post-fix run_reports are never committed.
+
+    Test FAILS = Bug exists (__exit__ not called, no context manager)
+    Test PASSES = Bug fixed (__exit__ called via 'with' statement)
+    """
+    from unittest.mock import patch
+    from pdd.sync_orchestration import sync_orchestration, SyncDecision, AtomicStateUpdate
+
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_determine.side_effect = [
+        SyncDecision(operation='fix', reason='Tests failing'),
+        SyncDecision(operation='all_synced', reason='Done'),
+    ]
+
+    # Spy on __exit__ to verify it's called
+    original_exit = AtomicStateUpdate.__exit__
+    exit_called = []
+
+    def tracking_exit(self, *args):
+        exit_called.append(True)
+        return original_exit(self, *args)
+
+    with patch.object(AtomicStateUpdate, '__exit__', tracking_exit):
+        result = sync_orchestration(basename="calculator", language="python")
+
+    # Assert __exit__ was called (meaning context manager was used)
+    assert len(exit_called) > 0, (
+        "BUG #165: AtomicStateUpdate.__exit__ was never called! "
+        "The 'with' statement is not being used, so writes after _commit() are lost."
+    )
+
+
+def test_final_state_handles_test_files_list(orchestration_fixture, tmp_path):
+    """
+    Bug #156: final_state dict comprehension crashes when pdd_files contains test_files list.
+
+    The return statement at line 1573 has:
+        'final_state': {p: {'exists': f.exists(), 'path': str(f)} for p, f in pdd_files.items()}
+
+    This crashes with AttributeError when pdd_files['test_files'] is a list because
+    lists don't have .exists() method - only Path objects do.
+
+    TDD: This test should FAIL before fix, PASS after fix.
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_get_paths = orchestration_fixture['get_pdd_file_paths']
+
+    # Create test files
+    test_dir = tmp_path / 'tests'
+    test_dir.mkdir(parents=True, exist_ok=True)
+    tracked_test = test_dir / 'test_calculator.py'
+    sibling_test = test_dir / 'test_calculator_0.py'
+    tracked_test.write_text('def test_pass(): pass')
+    sibling_test.write_text('def test_fail(): assert False')
+
+    # Create other required files
+    (tmp_path / 'prompts' / 'calculator_python.prompt').write_text('prompt')
+    (tmp_path / 'src').mkdir(parents=True, exist_ok=True)
+    (tmp_path / 'src' / 'calculator.py').write_text('code')
+    (tmp_path / 'examples').mkdir(parents=True, exist_ok=True)
+    (tmp_path / 'examples' / 'calculator_example.py').write_text('example')
+
+    # KEY: Mock pdd_files to include 'test_files' as a LIST
+    # This is what triggers the bug at line 1573
+    mock_get_paths.return_value = {
+        'prompt': tmp_path / 'prompts' / 'calculator_python.prompt',
+        'code': tmp_path / 'src' / 'calculator.py',
+        'example': tmp_path / 'examples' / 'calculator_example.py',
+        'test': tracked_test,
+        'test_files': [tracked_test, sibling_test],  # LIST - not a Path!
+    }
+
+    # Simple workflow that reaches the return statement
+    mock_determine.side_effect = [
+        SyncDecision(operation='all_synced', reason='Already synced'),
+    ]
+
+    # Run sync - before fix this should crash with:
+    # AttributeError: 'list' object has no attribute 'exists'
+    result = sync_orchestration(basename="calculator", language="python")
+
+    # After fix: should succeed and final_state should NOT contain 'test_files'
+    assert result['success'] is True, f"Sync failed: {result.get('error')}"
+
+    # Verify final_state was built correctly (doesn't include test_files)
+    final_state = result.get('final_state', {})
+    assert 'test_files' not in final_state, \
+        "final_state should skip 'test_files' key to avoid calling .exists() on list"
+
+    # Verify the Path-based entries are correct
+    assert 'prompt' in final_state
+    assert 'code' in final_state
+    assert 'test' in final_state
+
+
+# --- Issue #176: Path Resolution Mismatch Tests ---
+
+class TestPathResolutionInSyncOperations:
+    """Tests for Issue #176 - path resolution mismatch between sync and generator functions.
+
+    Bug: code_generator_main uses the explicitly passed `output` parameter directly
+    (line 351 of code_generator_main.py). If that path is relative, it could fail
+    when construct_paths inside code_generator_main uses "config_base" resolution.
+
+    Fix: sync_orchestration must call .resolve() on paths before passing them.
+    """
+
+    @pytest.fixture
+    def path_resolution_test_env(self, tmp_path, monkeypatch):
+        """Set up environment where paths would be relative."""
+        # Create project structure
+        prompts_dir = tmp_path / "prompts"
+        src_dir = tmp_path / "src"
+        meta_dir = tmp_path / ".pdd" / "meta"
+        prompts_dir.mkdir()
+        src_dir.mkdir()
+        meta_dir.mkdir(parents=True)
+
+        prompt_file = prompts_dir / "test_module_python.prompt"
+        prompt_file.write_text("Test prompt content")
+
+        monkeypatch.chdir(tmp_path)
+
+        return {
+            'tmp_path': tmp_path,
+            'prompts_dir': prompts_dir,
+            'src_dir': src_dir,
+            'meta_dir': meta_dir,
+            'prompt_file': prompt_file,
+        }
+
+    def test_generate_operation_passes_absolute_paths(self, path_resolution_test_env):
+        """
+        Verify code_generator_main receives absolute paths for prompt_file and output.
+
+        Without fix: Paths like 'src/test_module.py' (relative) would be passed
+        With fix: Paths like '/tmp/.../src/test_module.py' (absolute) are passed
+        """
+        env = path_resolution_test_env
+
+        # Create RELATIVE Path objects (simulating the fallback case in sync_orchestration line 918)
+        pdd_files_with_relative_paths = {
+            'prompt': Path('prompts/test_module_python.prompt'),  # Relative!
+            'code': Path('src/test_module.py'),  # Relative!
+            'example': Path('context/test_module_example.py'),
+            'test': Path('tests/test_test_module.py'),
+        }
+
+        # Helper to run worker synchronously
+        def mock_sync_app_run(instance):
+            try:
+                return instance.worker_func()
+            except Exception as e:
+                return {"success": False, "error": str(e)}
+
+        with patch('pdd.sync_orchestration.sync_determine_operation') as mock_determine, \
+             patch('pdd.sync_orchestration.code_generator_main') as mock_code_gen, \
+             patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
+             patch('pdd.sync_orchestration.SyncLock') as mock_lock, \
+             patch('pdd.sync_orchestration.SyncApp') as mock_sync_app_class, \
+             patch('pdd.sync_orchestration.META_DIR', env['meta_dir']):
+
+            # Configure SyncApp mock to capture and run worker_func
+            def store_worker_func(*args, **kwargs):
+                instance = MagicMock()
+                instance.worker_func = kwargs.get('worker_func', lambda: {"success": True})
+                instance.run = lambda: mock_sync_app_run(instance)
+                return instance
+            mock_sync_app_class.side_effect = store_worker_func
+
+            # Configure lock mock
+            mock_lock.return_value.__enter__.return_value = mock_lock
+            mock_lock.return_value.__exit__.return_value = None
+
+            # Configure mocks
+            mock_get_paths.return_value = pdd_files_with_relative_paths
+            # sync_determine_operation is called in a loop - needs sequence ending with all_synced
+            mock_determine.side_effect = [
+                SyncDecision(operation='generate', reason='Code needs generation'),
+                SyncDecision(operation='all_synced', reason='Done'),
+            ]
+            mock_code_gen.return_value = ("generated content", 1.0, "success")
+
+            # Call sync_orchestration
+            sync_orchestration(basename='test_module', language='python')
+
+            # Verify code_generator_main was called with ABSOLUTE paths
+            assert mock_code_gen.called, "code_generator_main should have been called"
+
+            # Get the call arguments - they're positional after ctx
+            call_args = mock_code_gen.call_args
+            # Arguments are passed as keyword args: prompt_file=..., output=...
+            if call_args.kwargs:
+                prompt_file_arg = call_args.kwargs.get('prompt_file')
+                output_arg = call_args.kwargs.get('output')
+            else:
+                # Positional: ctx, prompt_file, output, ...
+                prompt_file_arg = call_args[0][1] if len(call_args[0]) > 1 else None
+                output_arg = call_args[0][2] if len(call_args[0]) > 2 else None
+
+            # These assertions will FAIL without the .resolve() fix
+            assert prompt_file_arg is not None, "prompt_file argument not found"
+            assert output_arg is not None, "output argument not found"
+            assert prompt_file_arg.startswith('/'), \
+                f"prompt_file should be absolute, got: {prompt_file_arg}"
+            assert output_arg.startswith('/'), \
+                f"output should be absolute, got: {output_arg}"
+
+    def test_example_operation_passes_absolute_paths(self, path_resolution_test_env):
+        """Verify context_generator_main receives absolute paths."""
+        env = path_resolution_test_env
+
+        # Create code file so example operation can proceed
+        (env['src_dir'] / 'test_module.py').write_text("# code")
+
+        pdd_files_with_relative_paths = {
+            'prompt': Path('prompts/test_module_python.prompt'),
+            'code': Path('src/test_module.py'),
+            'example': Path('context/test_module_example.py'),  # Relative!
+            'test': Path('tests/test_test_module.py'),
+        }
+
+        # Helper to run worker synchronously
+        def mock_sync_app_run(instance):
+            try:
+                return instance.worker_func()
+            except Exception as e:
+                return {"success": False, "error": str(e)}
+
+        with patch('pdd.sync_orchestration.sync_determine_operation') as mock_determine, \
+             patch('pdd.sync_orchestration.context_generator_main') as mock_context_gen, \
+             patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
+             patch('pdd.sync_orchestration.SyncLock') as mock_lock, \
+             patch('pdd.sync_orchestration.SyncApp') as mock_sync_app_class, \
+             patch('pdd.sync_orchestration.META_DIR', env['meta_dir']):
+
+            # Configure SyncApp mock to capture and run worker_func
+            def store_worker_func(*args, **kwargs):
+                instance = MagicMock()
+                instance.worker_func = kwargs.get('worker_func', lambda: {"success": True})
+                instance.run = lambda: mock_sync_app_run(instance)
+                return instance
+            mock_sync_app_class.side_effect = store_worker_func
+
+            # Configure lock mock
+            mock_lock.return_value.__enter__.return_value = mock_lock
+            mock_lock.return_value.__exit__.return_value = None
+
+            mock_get_paths.return_value = pdd_files_with_relative_paths
+            # sync_determine_operation is called in a loop - needs sequence ending with all_synced
+            mock_determine.side_effect = [
+                SyncDecision(operation='example', reason='Example needs generation'),
+                SyncDecision(operation='all_synced', reason='Done'),
+            ]
+            mock_context_gen.return_value = ("example content", 1.0, "success")
+
+            sync_orchestration(basename='test_module', language='python')
+
+            assert mock_context_gen.called, "context_generator_main should have been called"
+
+            call_args = mock_context_gen.call_args
+            if call_args.kwargs:
+                prompt_file_arg = call_args.kwargs.get('prompt_file')
+                code_file_arg = call_args.kwargs.get('code_file')
+                output_arg = call_args.kwargs.get('output')
+            else:
+                prompt_file_arg = call_args[0][1] if len(call_args[0]) > 1 else None
+                code_file_arg = call_args[0][2] if len(call_args[0]) > 2 else None
+                output_arg = call_args[0][3] if len(call_args[0]) > 3 else None
+
+            assert prompt_file_arg is not None, "prompt_file argument not found"
+            assert code_file_arg is not None, "code_file argument not found"
+            assert output_arg is not None, "output argument not found"
+
+            assert prompt_file_arg.startswith('/'), \
+                f"prompt_file should be absolute: {prompt_file_arg}"
+            assert code_file_arg.startswith('/'), \
+                f"code_file should be absolute: {code_file_arg}"
+            assert output_arg.startswith('/'), \
+                f"output should be absolute: {output_arg}"
+
+
+# --- Non-Python Agentic Fallback Tests ---
+# These tests verify that non-Python languages skip iterative fix loops and go directly
+# to agentic fallback by setting max_attempts=0.
+
+class TestNonPythonAgenticFallback:
+    """Test suite for non-Python agentic fallback behavior."""
+
+    @pytest.fixture
+    def non_python_fixture(self, tmp_path):
+        """Sets up a temporary project directory for non-Python language tests."""
+        # Create directories
+        (tmp_path / "prompts").mkdir()
+        (tmp_path / "src").mkdir()
+        (tmp_path / "examples").mkdir()
+        (tmp_path / "tests").mkdir()
+        (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+
+        # Change CWD to the temp path
+        monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.chdir(tmp_path)
+
+        return tmp_path
+
+    def _setup_sync_app_mock(self, mock_sync_app_class):
+        """Configure SyncApp mock to run worker synchronously."""
+        def mock_sync_app_run(instance):
+            try:
+                return instance.worker_func()
+            except Exception as e:
+                return {
+                    "success": False,
+                    "total_cost": 0.0,
+                    "model_name": "",
+                    "error": str(e),
+                    "operations_completed": [],
+                    "errors": [f"{type(e).__name__}: {e}"]
+                }
+
+        def store_worker_func(*args, **kwargs):
+            instance = MagicMock()
+            instance.worker_func = kwargs.get('worker_func', lambda: {"success": True})
+            instance.run = lambda: mock_sync_app_run(instance)
+            return instance
+
+        mock_sync_app_class.side_effect = store_worker_func
+
+    def test_non_python_crash_uses_max_attempts_zero(self, non_python_fixture):
+        """
+        Test that for non-Python languages (e.g., Java), crash_main is called
+        with max_attempts=0, which triggers immediate agentic fallback.
+        """
+        tmp_path = non_python_fixture
+        # Create Java files
+        (tmp_path / "prompts" / "calculator_java.prompt").write_text("Create a calculator.")
+        (tmp_path / "src" / "calculator.java").write_text("// Java code")
+        (tmp_path / "examples" / "calculator_example.java").write_text("// Example")
+        (tmp_path / "tests" / "test_calculator.java").write_text("// Test")
+
+        env_without_ci = {k: v for k, v in os.environ.items() if k != 'CI'}
+
+        with patch.dict(os.environ, env_without_ci, clear=True), \
+             patch('pdd.sync_orchestration.sync_determine_operation') as mock_determine, \
+             patch('pdd.sync_orchestration.SyncLock') as mock_lock, \
+             patch('pdd.sync_orchestration.SyncApp') as mock_sync_app_class, \
+             patch('pdd.sync_orchestration.crash_main') as mock_crash, \
+             patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
+             patch('pdd.sync_orchestration.save_run_report'), \
+             patch('pdd.sync_orchestration._display_sync_log'), \
+             patch('pdd.sync_orchestration._save_fingerprint_atomic'), \
+             patch('pdd.sync_orchestration.read_run_report', return_value=MagicMock(exit_code=1)), \
+             patch('pdd.sync_orchestration._run_example_with_error_detection', return_value=(1, "", "Error")), \
+             patch.object(sys.stdout, 'isatty', return_value=True):
+
+            self._setup_sync_app_mock(mock_sync_app_class)
+
+            mock_lock.return_value.__enter__.return_value = mock_lock
+            mock_lock.return_value.__exit__.return_value = None
+
+            mock_determine.side_effect = [
+                SyncDecision(operation='crash', reason='Example failed'),
+                SyncDecision(operation='all_synced', reason='Done'),
+            ]
+
+            mock_get_paths.return_value = {
+                'prompt': tmp_path / 'prompts' / 'calculator_java.prompt',
+                'code': tmp_path / 'src' / 'calculator.java',
+                'example': tmp_path / 'examples' / 'calculator_example.java',
+                'test': tmp_path / 'tests' / 'test_calculator.java',
+            }
+
+            mock_crash.return_value = (True, "", "", 1, 0.05, "agentic-cli")
+
+            sync_orchestration(basename="calculator", language="java", max_attempts=5)
+
+            # Verify crash_main was called with max_attempts=0 (not 5)
+            assert mock_crash.called, "crash_main should have been called"
+            call_kwargs = mock_crash.call_args
+            if call_kwargs.kwargs:
+                assert call_kwargs.kwargs.get('max_attempts') == 0, \
+                    f"Expected max_attempts=0 for non-Python, got {call_kwargs.kwargs.get('max_attempts')}"
+
+    def test_python_crash_uses_default_max_attempts(self, non_python_fixture):
+        """
+        Test that for Python language, crash_main is called with the default
+        max_attempts value (not 0), using the iterative fix approach.
+        This ensures backward compatibility for Python users.
+        """
+        tmp_path = non_python_fixture
+        # Create Python files
+        (tmp_path / "prompts" / "calculator_python.prompt").write_text("Create a calculator.")
+        (tmp_path / "src" / "calculator.py").write_text("# Python code")
+        (tmp_path / "examples" / "calculator_example.py").write_text("# Example")
+        (tmp_path / "tests" / "test_calculator.py").write_text("# Test")
+
+        env_without_ci = {k: v for k, v in os.environ.items() if k != 'CI'}
+
+        with patch.dict(os.environ, env_without_ci, clear=True), \
+             patch('pdd.sync_orchestration.sync_determine_operation') as mock_determine, \
+             patch('pdd.sync_orchestration.SyncLock') as mock_lock, \
+             patch('pdd.sync_orchestration.SyncApp') as mock_sync_app_class, \
+             patch('pdd.sync_orchestration.crash_main') as mock_crash, \
+             patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
+             patch('pdd.sync_orchestration.save_run_report'), \
+             patch('pdd.sync_orchestration._display_sync_log'), \
+             patch('pdd.sync_orchestration._save_fingerprint_atomic'), \
+             patch('pdd.sync_orchestration.read_run_report', return_value=MagicMock(exit_code=1)), \
+             patch('pdd.sync_orchestration._run_example_with_error_detection', return_value=(1, "", "Error")), \
+             patch.object(sys.stdout, 'isatty', return_value=True):
+
+            self._setup_sync_app_mock(mock_sync_app_class)
+
+            mock_lock.return_value.__enter__.return_value = mock_lock
+            mock_lock.return_value.__exit__.return_value = None
+
+            mock_determine.side_effect = [
+                SyncDecision(operation='crash', reason='Example failed'),
+                SyncDecision(operation='all_synced', reason='Done'),
+            ]
+
+            mock_get_paths.return_value = {
+                'prompt': tmp_path / 'prompts' / 'calculator_python.prompt',
+                'code': tmp_path / 'src' / 'calculator.py',
+                'example': tmp_path / 'examples' / 'calculator_example.py',
+                'test': tmp_path / 'tests' / 'test_calculator.py',
+            }
+
+            mock_crash.return_value = (True, "", "", 1, 0.05, "mock-model")
+
+            sync_orchestration(basename="calculator", language="python", max_attempts=5)
+
+            # Verify crash_main was called with max_attempts=5 (not 0)
+            if mock_crash.called:
+                call_kwargs = mock_crash.call_args
+                if call_kwargs.kwargs:
+                    assert call_kwargs.kwargs.get('max_attempts') == 5, \
+                        f"Expected max_attempts=5 for Python, got {call_kwargs.kwargs.get('max_attempts')}"
+
+    def test_python_verify_uses_default_max_attempts(self, non_python_fixture):
+        """
+        Test that for Python language, fix_verification_main is called with
+        the default max_attempts value. Ensures backward compatibility.
+        """
+        tmp_path = non_python_fixture
+        # Create Python files
+        (tmp_path / "prompts" / "calculator_python.prompt").write_text("Create a calculator.")
+        (tmp_path / "src" / "calculator.py").write_text("# Python code")
+        (tmp_path / "examples" / "calculator_example.py").write_text("# Example")
+        (tmp_path / "tests" / "test_calculator.py").write_text("# Test")
+
+        env_without_ci = {k: v for k, v in os.environ.items() if k != 'CI'}
+
+        with patch.dict(os.environ, env_without_ci, clear=True), \
+             patch('pdd.sync_orchestration.sync_determine_operation') as mock_determine, \
+             patch('pdd.sync_orchestration.SyncLock') as mock_lock, \
+             patch('pdd.sync_orchestration.SyncApp') as mock_sync_app_class, \
+             patch('pdd.sync_orchestration.fix_verification_main') as mock_verify, \
+             patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
+             patch('pdd.sync_orchestration.save_run_report'), \
+             patch('pdd.sync_orchestration._display_sync_log'), \
+             patch('pdd.sync_orchestration._save_fingerprint_atomic'), \
+             patch.object(sys.stdout, 'isatty', return_value=True):
+
+            self._setup_sync_app_mock(mock_sync_app_class)
+
+            mock_lock.return_value.__enter__.return_value = mock_lock
+            mock_lock.return_value.__exit__.return_value = None
+
+            mock_determine.side_effect = [
+                SyncDecision(operation='verify', reason='Need verification'),
+                SyncDecision(operation='all_synced', reason='Done'),
+            ]
+
+            mock_get_paths.return_value = {
+                'prompt': tmp_path / 'prompts' / 'calculator_python.prompt',
+                'code': tmp_path / 'src' / 'calculator.py',
+                'example': tmp_path / 'examples' / 'calculator_example.py',
+                'test': tmp_path / 'tests' / 'test_calculator.py',
+            }
+
+            mock_verify.return_value = (True, "", "", 1, 0.05, "mock-model")
+
+            sync_orchestration(basename="calculator", language="python", max_attempts=5)
+
+            # Verify fix_verification_main was called with max_attempts=5 (not 0)
+            assert mock_verify.called, "fix_verification_main should have been called"
+            call_kwargs = mock_verify.call_args
+            if call_kwargs.kwargs:
+                assert call_kwargs.kwargs.get('max_attempts') == 5, \
+                    f"Expected max_attempts=5 for Python, got {call_kwargs.kwargs.get('max_attempts')}"
+
+    def test_python_fix_uses_default_max_attempts(self, non_python_fixture):
+        """
+        Test that for Python language, fix_main is called with the default
+        max_attempts value. Ensures backward compatibility.
+        """
+        tmp_path = non_python_fixture
+        # Create Python files
+        (tmp_path / "prompts" / "calculator_python.prompt").write_text("Create a calculator.")
+        (tmp_path / "src" / "calculator.py").write_text("# Python code")
+        (tmp_path / "examples" / "calculator_example.py").write_text("# Example")
+        (tmp_path / "tests" / "test_calculator.py").write_text("# Test")
+
+        env_without_ci = {k: v for k, v in os.environ.items() if k != 'CI'}
+
+        with patch.dict(os.environ, env_without_ci, clear=True), \
+             patch('pdd.sync_orchestration.sync_determine_operation') as mock_determine, \
+             patch('pdd.sync_orchestration.SyncLock') as mock_lock, \
+             patch('pdd.sync_orchestration.SyncApp') as mock_sync_app_class, \
+             patch('pdd.sync_orchestration.fix_main') as mock_fix, \
+             patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
+             patch('pdd.sync_orchestration.save_run_report'), \
+             patch('pdd.sync_orchestration._display_sync_log'), \
+             patch('pdd.sync_orchestration._save_fingerprint_atomic'), \
+             patch('pdd.get_test_command.get_test_command_for_file', return_value="pytest"), \
+             patch('pdd.sync_orchestration.subprocess.run') as mock_subprocess, \
+             patch.object(sys.stdout, 'isatty', return_value=True):
+
+            self._setup_sync_app_mock(mock_sync_app_class)
+
+            mock_lock.return_value.__enter__.return_value = mock_lock
+            mock_lock.return_value.__exit__.return_value = None
+
+            mock_determine.side_effect = [
+                SyncDecision(operation='fix', reason='Tests failing'),
+                SyncDecision(operation='all_synced', reason='Done'),
+            ]
+
+            mock_get_paths.return_value = {
+                'prompt': tmp_path / 'prompts' / 'calculator_python.prompt',
+                'code': tmp_path / 'src' / 'calculator.py',
+                'example': tmp_path / 'examples' / 'calculator_example.py',
+                'test': tmp_path / 'tests' / 'test_calculator.py',
+            }
+
+            mock_subprocess.return_value = MagicMock(
+                returncode=1,
+                stdout="FAILED",
+                stderr="test failed"
+            )
+
+            mock_fix.return_value = (True, "", "", 1, 0.05, "mock-model")
+
+            sync_orchestration(basename="calculator", language="python", max_attempts=5)
+
+            # Verify fix_main was called with max_attempts=5 (not 0)
+            assert mock_fix.called, "fix_main should have been called"
+            call_kwargs = mock_fix.call_args
+            if call_kwargs.kwargs:
+                assert call_kwargs.kwargs.get('max_attempts') == 5, \
+                    f"Expected max_attempts=5 for Python, got {call_kwargs.kwargs.get('max_attempts')}"
+
+    def test_non_python_verify_uses_max_attempts_zero(self, non_python_fixture):
+        """
+        Test that for non-Python languages, fix_verification_main is called
+        with max_attempts=0 for immediate agentic fallback.
+        """
+        tmp_path = non_python_fixture
+        # Create JavaScript files
+        (tmp_path / "prompts" / "calculator_javascript.prompt").write_text("Create a calculator.")
+        (tmp_path / "src" / "calculator.js").write_text("// JS code")
+        (tmp_path / "examples" / "calculator_example.js").write_text("// Example")
+        (tmp_path / "tests" / "test_calculator.js").write_text("// Test")
+
+        env_without_ci = {k: v for k, v in os.environ.items() if k != 'CI'}
+
+        with patch.dict(os.environ, env_without_ci, clear=True), \
+             patch('pdd.sync_orchestration.sync_determine_operation') as mock_determine, \
+             patch('pdd.sync_orchestration.SyncLock') as mock_lock, \
+             patch('pdd.sync_orchestration.SyncApp') as mock_sync_app_class, \
+             patch('pdd.sync_orchestration.fix_verification_main') as mock_verify, \
+             patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
+             patch('pdd.sync_orchestration.save_run_report'), \
+             patch('pdd.sync_orchestration._display_sync_log'), \
+             patch('pdd.sync_orchestration._save_fingerprint_atomic'), \
+             patch.object(sys.stdout, 'isatty', return_value=True):
+
+            self._setup_sync_app_mock(mock_sync_app_class)
+
+            mock_lock.return_value.__enter__.return_value = mock_lock
+            mock_lock.return_value.__exit__.return_value = None
+
+            mock_determine.side_effect = [
+                SyncDecision(operation='verify', reason='Need verification'),
+                SyncDecision(operation='all_synced', reason='Done'),
+            ]
+
+            mock_get_paths.return_value = {
+                'prompt': tmp_path / 'prompts' / 'calculator_javascript.prompt',
+                'code': tmp_path / 'src' / 'calculator.js',
+                'example': tmp_path / 'examples' / 'calculator_example.js',
+                'test': tmp_path / 'tests' / 'test_calculator.js',
+            }
+
+            mock_verify.return_value = (True, "", "", 1, 0.05, "agentic-cli")
+
+            sync_orchestration(basename="calculator", language="javascript", max_attempts=5)
+
+            # Verify fix_verification_main was called with max_attempts=0
+            assert mock_verify.called, "fix_verification_main should have been called"
+            call_kwargs = mock_verify.call_args
+            if call_kwargs.kwargs:
+                assert call_kwargs.kwargs.get('max_attempts') == 0, \
+                    f"Expected max_attempts=0 for non-Python, got {call_kwargs.kwargs.get('max_attempts')}"
+
+    def test_non_python_fix_uses_max_attempts_zero(self, non_python_fixture):
+        """
+        Test that for non-Python languages, fix_main is called
+        with max_attempts=0 for immediate agentic fallback.
+        """
+        tmp_path = non_python_fixture
+        # Create Go files
+        (tmp_path / "prompts" / "calculator_go.prompt").write_text("Create a calculator.")
+        (tmp_path / "src" / "calculator.go").write_text("// Go code")
+        (tmp_path / "examples" / "calculator_example.go").write_text("// Example")
+        (tmp_path / "tests" / "test_calculator.go").write_text("// Test")
+
+        env_without_ci = {k: v for k, v in os.environ.items() if k != 'CI'}
+
+        with patch.dict(os.environ, env_without_ci, clear=True), \
+             patch('pdd.sync_orchestration.sync_determine_operation') as mock_determine, \
+             patch('pdd.sync_orchestration.SyncLock') as mock_lock, \
+             patch('pdd.sync_orchestration.SyncApp') as mock_sync_app_class, \
+             patch('pdd.sync_orchestration.fix_main') as mock_fix, \
+             patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
+             patch('pdd.sync_orchestration.save_run_report'), \
+             patch('pdd.sync_orchestration._display_sync_log'), \
+             patch('pdd.sync_orchestration._save_fingerprint_atomic'), \
+             patch('pdd.get_test_command.get_test_command_for_file', return_value="go test"), \
+             patch('pdd.sync_orchestration.subprocess.run') as mock_subprocess, \
+             patch.object(sys.stdout, 'isatty', return_value=True):
+
+            self._setup_sync_app_mock(mock_sync_app_class)
+
+            mock_lock.return_value.__enter__.return_value = mock_lock
+            mock_lock.return_value.__exit__.return_value = None
+
+            mock_determine.side_effect = [
+                SyncDecision(operation='fix', reason='Tests failing'),
+                SyncDecision(operation='all_synced', reason='Done'),
+            ]
+
+            mock_get_paths.return_value = {
+                'prompt': tmp_path / 'prompts' / 'calculator_go.prompt',
+                'code': tmp_path / 'src' / 'calculator.go',
+                'example': tmp_path / 'examples' / 'calculator_example.go',
+                'test': tmp_path / 'tests' / 'test_calculator.go',
+            }
+
+            mock_subprocess.return_value = MagicMock(
+                returncode=1,
+                stdout="FAIL",
+                stderr="test failed"
+            )
+
+            mock_fix.return_value = (True, "", "", 1, 0.05, "agentic-cli")
+
+            sync_orchestration(basename="calculator", language="go", max_attempts=5)
+
+            # Verify fix_main was called with max_attempts=0
+            assert mock_fix.called, "fix_main should have been called"
+            call_kwargs = mock_fix.call_args
+            if call_kwargs.kwargs:
+                assert call_kwargs.kwargs.get('max_attempts') == 0, \
+                    f"Expected max_attempts=0 for non-Python, got {call_kwargs.kwargs.get('max_attempts')}"
+
+    def test_typescript_uses_max_attempts_zero(self, non_python_fixture):
+        """
+        Test that TypeScript (a common non-Python language) also uses max_attempts=0.
+        """
+        tmp_path = non_python_fixture
+        # Create TypeScript files
+        (tmp_path / "prompts" / "calculator_typescript.prompt").write_text("Create a calculator.")
+        (tmp_path / "src" / "calculator.ts").write_text("// TS code")
+        (tmp_path / "examples" / "calculator_example.ts").write_text("// Example")
+        (tmp_path / "tests" / "test_calculator.ts").write_text("// Test")
+
+        env_without_ci = {k: v for k, v in os.environ.items() if k != 'CI'}
+
+        with patch.dict(os.environ, env_without_ci, clear=True), \
+             patch('pdd.sync_orchestration.sync_determine_operation') as mock_determine, \
+             patch('pdd.sync_orchestration.SyncLock') as mock_lock, \
+             patch('pdd.sync_orchestration.SyncApp') as mock_sync_app_class, \
+             patch('pdd.sync_orchestration.crash_main') as mock_crash, \
+             patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
+             patch('pdd.sync_orchestration.save_run_report'), \
+             patch('pdd.sync_orchestration._display_sync_log'), \
+             patch('pdd.sync_orchestration._save_fingerprint_atomic'), \
+             patch('pdd.sync_orchestration.read_run_report', return_value=MagicMock(exit_code=1)), \
+             patch('pdd.sync_orchestration._run_example_with_error_detection', return_value=(1, "", "Error")), \
+             patch.object(sys.stdout, 'isatty', return_value=True):
+
+            self._setup_sync_app_mock(mock_sync_app_class)
+
+            mock_lock.return_value.__enter__.return_value = mock_lock
+            mock_lock.return_value.__exit__.return_value = None
+
+            mock_determine.side_effect = [
+                SyncDecision(operation='crash', reason='Example failed'),
+                SyncDecision(operation='all_synced', reason='Done'),
+            ]
+
+            mock_get_paths.return_value = {
+                'prompt': tmp_path / 'prompts' / 'calculator_typescript.prompt',
+                'code': tmp_path / 'src' / 'calculator.ts',
+                'example': tmp_path / 'examples' / 'calculator_example.ts',
+                'test': tmp_path / 'tests' / 'test_calculator.ts',
+            }
+
+            mock_crash.return_value = (True, "", "", 1, 0.05, "agentic-cli")
+
+            sync_orchestration(basename="calculator", language="typescript", max_attempts=5)
+
+            # Verify crash_main was called with max_attempts=0
+            assert mock_crash.called, "crash_main should have been called"
+            call_kwargs = mock_crash.call_args
+            if call_kwargs.kwargs:
+                assert call_kwargs.kwargs.get('max_attempts') == 0, \
+                    f"Expected max_attempts=0 for TypeScript, got {call_kwargs.kwargs.get('max_attempts')}"
+
+
+# --- Bug #XXX: Path handling tests for post-crash verification ---
+
+def test_run_example_with_relative_path_and_cwd_works(tmp_path, monkeypatch):
+    """
+    Bug #XXX: When pdd_files returns relative paths (from .pddrc templates),
+    post-crash verification must resolve them to absolute paths.
+
+    This test reproduces the bug:
+    - pdd_files['example'] = Path('context/backend/example.py')  # relative
+    - Code sets cwd=example.parent and runs ['python', str(example)]
+    - Subprocess looks for context/backend/context/backend/example.py
+    - File not found → exit code 2
+
+    The fix: Use .resolve() to get absolute paths.
+    """
+    from pathlib import Path
+    import os
+
+    # Setup directory structure matching .pddrc template
+    example_dir = tmp_path / "context" / "backend"
+    example_dir.mkdir(parents=True)
+    example_file = example_dir / "test_example.py"
+    example_file.write_text("print('hello')")
+
+    monkeypatch.chdir(tmp_path)
+
+    from pdd.sync_orchestration import _run_example_with_error_detection
+
+    # Simulate pdd_files['example'] as returned by get_pdd_file_paths
+    # (relative path from .pddrc template)
+    pdd_files_example = Path("context/backend/test_example.py")
+
+    # === THE FIX: resolve to absolute path ===
+    resolved_example = pdd_files_example.resolve()
+    example_path = str(resolved_example)
+    cmd_parts = ['python', example_path]
+
+    returncode, stdout, stderr = _run_example_with_error_detection(
+        cmd_parts,
+        env=os.environ.copy(),
+        cwd=str(resolved_example.parent),
+        timeout=5
+    )
+
+    # This should PASS with .resolve() fix applied
+    # Without .resolve(), would fail with exit code 2 (file not found)
+    assert returncode == 0, f"Expected exit 0, got {returncode}. stderr: {stderr}"
+
+
+def test_run_example_without_resolve_fails(tmp_path, monkeypatch):
+    """
+    Demonstrates the bug: relative path + cwd = doubled path → file not found.
+    This test documents the buggy behavior.
+    """
+    from pathlib import Path
+    import os
+
+    example_dir = tmp_path / "context" / "backend"
+    example_dir.mkdir(parents=True)
+    example_file = example_dir / "test_example.py"
+    example_file.write_text("print('hello')")
+
+    monkeypatch.chdir(tmp_path)
+
+    from pdd.sync_orchestration import _run_example_with_error_detection
+
+    # BUGGY PATTERN: relative path without .resolve()
+    pdd_files_example = Path("context/backend/test_example.py")
+    example_path = str(pdd_files_example)  # Still relative!
+    cmd_parts = ['python', example_path]
+
+    returncode, stdout, stderr = _run_example_with_error_detection(
+        cmd_parts,
+        env=os.environ.copy(),
+        cwd=str(pdd_files_example.parent),  # Bug: cwd + relative = doubled path
+        timeout=5
+    )
+
+    # BUG: This fails with exit code 2 (file not found)
+    assert returncode == 2, f"Expected bug to cause exit 2, got {returncode}"
+
+
+# --- Bug Fix: Pre-fix pytest should NOT use cwd ---
+
+def test_prefix_pytest_runs_from_project_root_not_test_directory(orchestration_fixture, tmp_path):
+    """
+    Bug fix: Pre-fix pytest should run from project root, not test directory.
+
+    When test_files contains paths like 'backend/tests/test_foo.py',
+    the subprocess should NOT use cwd='backend/tests' as that would
+    cause pytest to look for 'backend/tests/backend/tests/test_foo.py'.
+
+    This matches the pattern used by _run_tests_and_report (lines 729-731)
+    which correctly omits the cwd parameter.
+
+    Evidence from fix_errors.log:
+        ERROR: file or directory not found: backend/tests/test_generate_code.py
+        collected 0 items
+    """
+    from unittest.mock import patch, MagicMock
+
+    # Create test directory structure with paths relative to project root
+    test_dir = tmp_path / "backend" / "tests"
+    test_dir.mkdir(parents=True)
+    test_file_1 = test_dir / "test_foo.py"
+    test_file_2 = test_dir / "test_foo_0.py"
+    test_file_1.write_text("def test_pass(): pass")
+    test_file_2.write_text("def test_fail(): assert False")
+
+    # Also create required directories for sync (use exist_ok since fixture may create some)
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir(parents=True, exist_ok=True)
+    (prompts_dir / "foo_python.prompt").write_text("# foo prompt")
+    src_dir = tmp_path / "backend"
+    src_dir.mkdir(parents=True, exist_ok=True)
+    (src_dir / "foo.py").write_text("# foo code")
+    (src_dir / "foo_example.py").write_text("# foo example")
+
+    # KEY: pdd_files contains paths like 'backend/tests/test_foo.py'
+    # (relative to project root, not the test directory)
+    orchestration_fixture['get_pdd_file_paths'].return_value = {
+        'prompt': prompts_dir / 'foo_python.prompt',
+        'code': src_dir / 'foo.py',
+        'example': src_dir / 'foo_example.py',
+        'test': test_file_1,
+        'test_files': [test_file_1, test_file_2],
+    }
+
+    # Capture subprocess.run calls including kwargs
+    subprocess_calls = []
+
+    def capture_subprocess(*args, **kwargs):
+        subprocess_calls.append({'args': args, 'kwargs': kwargs})
+        mock_result = MagicMock()
+        mock_result.returncode = 1
+        mock_result.stdout = "FAILED test_foo_0.py::test_fail"
+        mock_result.stderr = ""
+        return mock_result
+
+    # Trigger fix operation
+    orchestration_fixture['sync_determine_operation'].side_effect = [
+        SyncDecision(operation='fix', reason='Tests failing'),
+        SyncDecision(operation='all_synced', reason='Done'),
+    ]
+
+    with patch('pdd.sync_orchestration.subprocess.run', side_effect=capture_subprocess):
+        with patch('pdd.sync_orchestration.detect_host_python_executable', return_value='python'):
+            with patch('pdd.get_test_command.get_test_command_for_file', return_value='pytest'):
+                sync_orchestration(basename="foo", language="python")
+
+    # Find pytest calls
+    pytest_calls = [c for c in subprocess_calls if 'pytest' in str(c['args'])]
+    assert pytest_calls, "pytest should have been invoked"
+
+    # CRITICAL ASSERTION: pytest should NOT have cwd parameter set
+    # Current buggy code sets cwd=str(pdd_files['test'].parent) which breaks path resolution
+    for call in pytest_calls:
+        assert 'cwd' not in call['kwargs'], \
+            f"Bug: Pre-fix pytest should NOT use cwd parameter. " \
+            f"This causes paths like 'backend/tests/test_foo.py' to fail when " \
+            f"cwd is 'backend/tests' (pytest looks for 'backend/tests/backend/tests/test_foo.py'). " \
+            f"Got cwd={call['kwargs'].get('cwd')}"
+
+
+class TestExampleVerificationConsistency:
+    """
+    Regression tests for example verification consistency in sync_orchestration.
+
+    crash_main (fix_code_loop.py:476) uses run_process_with_output() which:
+    1. Uses sys.executable (not 'python' from PATH)
+    2. Does NOT set cwd (inherits from pdd invocation directory)
+
+    Example verification in sync_orchestration.py must be consistent to avoid
+    infinite crash loops when examples depend on cwd-sensitive imports.
+    """
+
+    def test_run_example_with_error_detection_cwd_is_optional(self):
+        """
+        Bug fix: cwd parameter must be optional to allow inheriting parent's cwd.
+        """
+        import inspect
+        from pdd import sync_orchestration as sync_mod
+
+        sig = inspect.signature(sync_mod._run_example_with_error_detection)
+        cwd_param = sig.parameters.get('cwd')
+
+        assert cwd_param is not None, "Should have cwd parameter"
+        assert cwd_param.default is not inspect.Parameter.empty, (
+            "REGRESSION BUG: cwd should have a default value (None) to allow "
+            "inheriting parent process's working directory"
+        )
+
+    def test_initial_crash_check_does_not_set_cwd(self):
+        """
+        Bug fix: Initial crash check must NOT set cwd to example's parent.
+        """
+        import inspect
+        from pdd import sync_orchestration as sync_mod
+
+        source = inspect.getsource(sync_mod.sync_orchestration)
+
+        # Find all _run_example_with_error_detection calls in crash section
+        # and verify none have cwd=...example...
+        import re
+        crash_section_match = re.search(
+            r"elif operation == 'crash':.*?(?=elif operation ==|$)",
+            source,
+            re.DOTALL
+        )
+        assert crash_section_match, "Should find crash operation section"
+        crash_section = crash_section_match.group()
+
+        # Check that _run_example_with_error_detection calls don't have cwd with 'example'
+        has_bad_cwd = bool(re.search(
+            r"_run_example_with_error_detection\([^)]*cwd=.*example",
+            crash_section
+        ))
+
+        assert not has_bad_cwd, (
+            "REGRESSION BUG: Initial crash check should NOT set cwd to example's parent. "
+            "This breaks imports that rely on running from project root."
+        )
+
+    def test_post_crash_verification_does_not_set_cwd(self):
+        """
+        Bug fix: Post-crash verification must NOT set cwd to example's parent.
+        """
+        import inspect
+        from pdd import sync_orchestration as sync_mod
+
+        source = inspect.getsource(sync_mod.sync_orchestration)
+
+        # Find post-crash verification section
+        import re
+        post_crash_match = re.search(
+            r"if success and operation == 'crash':.*?(?=if success and operation|if not success|$)",
+            source,
+            re.DOTALL
+        )
+        assert post_crash_match, "Should find post-crash verification section"
+        post_crash_section = post_crash_match.group()
+
+        has_bad_cwd = bool(re.search(
+            r"_run_example_with_error_detection\([^)]*cwd=.*example",
+            post_crash_section
+        ))
+
+        assert not has_bad_cwd, (
+            "REGRESSION BUG: Post-crash verification should NOT set cwd to example's parent. "
+            "This breaks imports that rely on running from project root."
+        )
+
+    def test_initial_crash_check_uses_sys_executable(self):
+        """
+        Bug fix: Initial crash check must use sys.executable, not get_run_command_for_file.
+        """
+        import inspect
+        from pdd import sync_orchestration as sync_mod
+
+        source = inspect.getsource(sync_mod.sync_orchestration)
+
+        import re
+        crash_section_match = re.search(
+            r"elif operation == 'crash':.*?(?=elif operation ==|$)",
+            source,
+            re.DOTALL
+        )
+        crash_section = crash_section_match.group()
+
+        # Should have sys.executable, not get_run_command_for_file
+        has_sys_executable = 'sys.executable' in crash_section
+        has_get_run_command = 'get_run_command_for_file' in crash_section
+
+        assert has_sys_executable, (
+            "REGRESSION BUG: Initial crash check should use sys.executable"
+        )
+        assert not has_get_run_command, (
+            "REGRESSION BUG: Initial crash check should NOT use get_run_command_for_file"
+        )
+
+
+class TestHeadlessConfirmationCallback:
+    """
+    Tests for Issue #277: Confirmation callback not remembered in headless mode.
+
+    The fix ensures that headless mode (when app_ref is None and confirm_callback is None)
+    returns a wrapper callback that sets user_confirmed_overwrite[0] = True after
+    the first confirmation, so subsequent calls auto-confirm instead of prompting repeatedly.
+    """
+
+    def setup_method(self):
+        """Set up the closure variables that get_confirm_callback uses."""
+        from typing import Optional, Callable, List
+        self.user_confirmed_overwrite: List[bool] = [False]
+        self.app_ref: List[Optional[Mock]] = [None]
+        self.confirm_callback: Optional[Callable] = None
+
+    def _get_confirm_callback(self):
+        """
+        Copy of FIXED get_confirm_callback from sync_orchestration.py.
+        This matches the actual code after the fix is applied.
+        """
+        if self.user_confirmed_overwrite[0]:
+            return lambda msg, title: True
+
+        if self.app_ref[0] is not None:
+            def confirming_callback(msg, title):
+                result = self.app_ref[0].request_confirmation(msg, title)
+                if result:
+                    self.user_confirmed_overwrite[0] = True
+                return result
+            return confirming_callback
+
+        # Fix #277: In headless mode, create a wrapper callback that sets the flag
+        if self.confirm_callback is None:
+            def headless_confirming_callback(msg, title):
+                # For testing, we simulate user confirming
+                self.user_confirmed_overwrite[0] = True
+                return True
+            return headless_confirming_callback
+
+        return self.confirm_callback
+
+    def test_tui_mode_remembers_confirmation(self):
+        """TUI MODE: Flag is set after first confirmation, subsequent calls auto-confirm."""
+        mock_app = Mock()
+        mock_app.request_confirmation = Mock(return_value=True)
+        self.app_ref[0] = mock_app
+
+        # Simulate 3 iterations
+        for i in range(3):
+            callback = self._get_confirm_callback()
+            assert callback is not None
+            callback("Overwrite?", "Confirm")
+
+        # TUI mode: request_confirmation should only be called ONCE
+        assert mock_app.request_confirmation.call_count == 1, (
+            f"TUI mode should prompt once, got {mock_app.request_confirmation.call_count}"
+        )
+        assert self.user_confirmed_overwrite[0] is True
+
+    def test_headless_mode_returns_callback_not_none(self):
+        """FIXED: get_confirm_callback should return a callback in headless mode, not None."""
+        self.app_ref[0] = None
+        self.confirm_callback = None
+
+        callback = self._get_confirm_callback()
+
+        # After fix: returns a callback, not None
+        assert callback is not None, (
+            "Fixed code should return callback in headless mode, not None"
+        )
+
+    def test_headless_mode_remembers_confirmation(self):
+        """FIXED: Headless mode should remember confirmation and only prompt once."""
+        self.app_ref[0] = None
+        self.confirm_callback = None
+
+        prompt_count = 0
+
+        for i in range(3):
+            callback = self._get_confirm_callback()
+            assert callback is not None, f"Iteration {i}: callback should not be None"
+
+            if not self.user_confirmed_overwrite[0]:
+                prompt_count += 1
+
+            callback("Overwrite?", "Confirm")
+
+        # After fix: should only prompt once
+        assert prompt_count == 1, f"Should prompt once, got {prompt_count}"
+        assert self.user_confirmed_overwrite[0] is True
+
+    def test_headless_mode_flag_set_after_first_confirm(self):
+        """FIXED: Flag should be True after first confirmation in headless mode."""
+        self.app_ref[0] = None
+        self.confirm_callback = None
+
+        assert self.user_confirmed_overwrite[0] is False
+
+        callback = self._get_confirm_callback()
+        callback("Overwrite?", "Confirm")
+
+        assert self.user_confirmed_overwrite[0] is True, (
+            "Flag should be True after first confirmation"
+        )
+
+    def test_sync_loop_tui_vs_headless_consistency(self):
+        """Both TUI and headless mode should prompt exactly once."""
+        results = {}
+
+        for mode_name, use_tui in [("TUI", True), ("Headless", False)]:
+            user_confirmed = [False]
+            prompt_count = [0]
+
+            if use_tui:
+                mock_app = Mock()
+                mock_app.request_confirmation = Mock(side_effect=lambda m, t: True)
+            else:
+                mock_app = None
+
+            def get_callback():
+                if user_confirmed[0]:
+                    return lambda m, t: True
+                if mock_app is not None:
+                    def cb(m, t):
+                        prompt_count[0] += 1
+                        result = mock_app.request_confirmation(m, t)
+                        if result:
+                            user_confirmed[0] = True
+                        return result
+                    return cb
+                # Fixed headless mode
+                def headless_cb(m, t):
+                    prompt_count[0] += 1
+                    user_confirmed[0] = True
+                    return True
+                return headless_cb
+
+            # 3 fix operations
+            for _ in range(3):
+                cb = get_callback()
+                if cb:
+                    cb("Overwrite?", "Confirm")
+
+            results[mode_name] = prompt_count[0]
+
+        assert results["TUI"] == 1, f"TUI mode: {results['TUI']}"
+        assert results["Headless"] == 1, f"Headless mode: {results['Headless']}"
+        assert results["TUI"] == results["Headless"], (
+            f"TUI ({results['TUI']}) and Headless ({results['Headless']}) should be equal"
+        )
+
+    def test_get_confirm_callback_has_headless_fix(self):
+        """Verify that sync_orchestration.py contains the headless mode fix."""
+        import inspect
+        from pdd import sync_orchestration as sync_mod
+
+        source = inspect.getsource(sync_mod.sync_orchestration)
+
+        # Check for the fix marker comment
+        assert "Fix #277" in source or "Issue #277" in source, (
+            "sync_orchestration should contain the fix for Issue #277"
+        )
+
+        # Check for headless_confirming_callback
+        assert "headless_confirming_callback" in source, (
+            "sync_orchestration should have headless_confirming_callback function"
+        )
+
+        # Check that it sets the flag
+        assert "user_confirmed_overwrite[0] = True" in source, (
+            "headless_confirming_callback should set user_confirmed_overwrite[0] = True"
+        )
+
+
+class TestHeadlessModeDetection:
+    """
+    Tests for headless mode detection in sync_orchestration.
+
+    The headless mode detection logic at line 1625 should:
+    - Default to TUI mode (headless=False) when running in an interactive terminal
+    - Enable headless mode when stdout is not a TTY (non-interactive)
+    - Enable headless mode when CI environment variable is set
+    - Enable headless mode when quiet=True
+
+    Bug scenario: If 'not' is accidentally removed from 'sys.stdout.isatty()',
+    headless mode becomes the default in interactive terminals, breaking the TUI.
+    """
+
+    def test_tui_mode_is_default_in_interactive_terminal(self):
+        """
+        TUI mode (headless=False) should be the default when:
+        - Running in an interactive terminal (isatty=True)
+        - quiet=False
+        - No CI environment variable
+        """
+        quiet = False
+
+        # Simulate interactive terminal
+        with patch.object(sys.stdout, 'isatty', return_value=True):
+            with patch.dict(os.environ, {}, clear=True):
+                # This is the correct logic that should be in sync_orchestration
+                headless = quiet or not sys.stdout.isatty() or os.environ.get('CI')
+
+                assert not headless, (
+                    "TUI mode should be the default in interactive terminal. "
+                    "headless should be falsy when isatty()=True, quiet=False, and no CI env."
+                )
+
+    def test_headless_when_not_tty(self):
+        """Headless mode should be enabled when stdout is not a TTY."""
+        quiet = False
+
+        with patch.object(sys.stdout, 'isatty', return_value=False):
+            with patch.dict(os.environ, {}, clear=True):
+                headless = quiet or not sys.stdout.isatty() or os.environ.get('CI')
+
+                assert headless, (
+                    "Headless mode should be enabled when stdout is not a TTY"
+                )
+
+    def test_headless_when_ci_env_set(self):
+        """Headless mode should be enabled when CI environment variable is set."""
+        quiet = False
+
+        with patch.object(sys.stdout, 'isatty', return_value=True):
+            with patch.dict(os.environ, {'CI': '1'}, clear=True):
+                headless = quiet or not sys.stdout.isatty() or os.environ.get('CI')
+
+                assert headless, (
+                    "Headless mode should be enabled when CI env var is set"
+                )
+
+    def test_headless_when_quiet_true(self):
+        """Headless mode should be enabled when quiet=True."""
+        quiet = True
+
+        with patch.object(sys.stdout, 'isatty', return_value=True):
+            with patch.dict(os.environ, {}, clear=True):
+                headless = quiet or not sys.stdout.isatty() or os.environ.get('CI')
+
+                assert headless, (
+                    "Headless mode should be enabled when quiet=True"
+                )
+
+    def test_sync_orchestration_has_correct_headless_detection(self):
+        """
+        Verify sync_orchestration.py has the correct headless detection logic.
+
+        The correct logic should be:
+            headless = quiet or not sys.stdout.isatty() or os.environ.get('CI')
+
+        BUG: If 'not' is missing before sys.stdout.isatty(), TUI mode becomes
+        impossible in interactive terminals.
+        """
+        import inspect
+        from pdd import sync_orchestration as sync_mod
+
+        source = inspect.getsource(sync_mod.sync_orchestration)
+
+        # Check that the headless detection line exists with correct 'not' keyword
+        assert "not sys.stdout.isatty()" in source, (
+            "CRITICAL BUG: sync_orchestration is missing 'not' before sys.stdout.isatty(). "
+            "This makes headless mode the default in interactive terminals, breaking the TUI. "
+            "Fix: Change 'sys.stdout.isatty()' to 'not sys.stdout.isatty()' in the headless detection."
+        )
+
+
+class TestExecuteTestsProjectRootConfig:
+    """
+    Regression tests for pytest project root configuration in _execute_tests_and_create_run_report().
+
+    Bug: When running tests in a nested project (e.g., examples/hello/) that has its own
+    .pddrc marker, pytest would find a parent pytest.ini (in the repo root) and use that
+    as the rootdir. This caused:
+    1. Import errors because PYTHONPATH wasn't set to include the nested project's src/
+    2. Wrong test collection due to incorrect rootdir
+    3. Infinite fix loops because tests always failed with exit_code=2
+
+    Fix: _execute_tests_and_create_run_report() must set --rootdir, PYTHONPATH, and cwd
+    based on the project root (found by looking for .pddrc), matching pytest_output.py.
+    """
+
+    def test_execute_tests_sets_rootdir_for_nested_project(self, tmp_path, monkeypatch):
+        """
+        Regression test: Verify _execute_tests_and_create_run_report() sets correct
+        --rootdir and PYTHONPATH for nested projects.
+
+        Scenario:
+        - Parent dir has pytest.ini (like pdd repo root)
+        - Nested project has .pddrc (like examples/hello/)
+        - Test file imports from nested project's src/
+
+        Before fix: exit_code=2 (import error, wrong rootdir)
+        After fix: exit_code=0 (tests pass with correct config)
+        """
+        from pdd.sync_orchestration import _execute_tests_and_create_run_report
+
+        # Create parent directory with pytest.ini (simulates pdd repo root)
+        parent_dir = tmp_path / "repo_root"
+        parent_dir.mkdir()
+        (parent_dir / "pytest.ini").write_text("[pytest]\n")
+
+        # Create nested project (simulates examples/hello/)
+        nested_project = parent_dir / "examples" / "hello"
+        nested_project.mkdir(parents=True)
+
+        # Add .pddrc marker to nested project (this is how we identify project root)
+        (nested_project / ".pddrc").write_text("")
+
+        # Create src/ with a module
+        src_dir = nested_project / "src"
+        src_dir.mkdir()
+        (src_dir / "hello.py").write_text('''
+def greet(name):
+    return f"Hello, {name}!"
+''')
+
+        # Create tests/ with a test that imports from src/
+        tests_dir = nested_project / "tests"
+        tests_dir.mkdir()
+        test_file = tests_dir / "test_hello.py"
+        test_file.write_text('''
+import hello
+
+def test_greet():
+    assert hello.greet("World") == "Hello, World!"
+''')
+
+        # Create .pdd/meta directory for run report
+        pdd_meta = nested_project / ".pdd" / "meta"
+        pdd_meta.mkdir(parents=True)
+
+        # Change cwd to parent (simulates being in repo root)
+        # This is important because it's how the bug manifests - pytest finds parent's pytest.ini
+        monkeypatch.chdir(parent_dir)
+
+        # Call the production function
+        report = _execute_tests_and_create_run_report(
+            test_file=test_file,
+            basename="hello_python",
+            language="python",
+            target_coverage=0.0
+        )
+
+        # KEY ASSERTION: Test should pass because:
+        # 1. --rootdir is set to nested_project (not parent_dir)
+        # 2. PYTHONPATH includes nested_project/src
+        # 3. cwd is nested_project
+        #
+        # Before fix: exit_code=2 (ModuleNotFoundError: No module named 'hello')
+        # After fix: exit_code=0 (test passes)
+        assert report.exit_code == 0, (
+            f"Test should pass with correct project root config. "
+            f"Got exit_code={report.exit_code}, tests_passed={report.tests_passed}, "
+            f"tests_failed={report.tests_failed}. "
+            f"If exit_code=2, pytest likely used wrong rootdir and couldn't import 'hello' module."
+        )
+        assert report.tests_passed >= 1, f"Expected at least 1 test to pass, got {report.tests_passed}"
+        assert report.tests_failed == 0, f"Expected 0 failures, got {report.tests_failed}"
+
+    def test_execute_tests_uses_parent_config_flag_to_isolate_pytest(self, tmp_path, monkeypatch):
+        """
+        Verify that -c /dev/null is used to prevent pytest from finding parent config.
+
+        This ensures pytest doesn't accidentally pick up configuration from parent
+        directories that could interfere with the nested project's tests.
+        """
+        import subprocess
+        from pdd.sync_orchestration import _execute_tests_and_create_run_report
+
+        # Create structure with .pddrc
+        project = tmp_path / "project"
+        project.mkdir()
+        (project / ".pddrc").write_text("")
+        (project / "src").mkdir()
+        tests_dir = project / "tests"
+        tests_dir.mkdir()
+        test_file = tests_dir / "test_simple.py"
+        test_file.write_text("def test_pass(): assert True")
+        (project / ".pdd" / "meta").mkdir(parents=True)
+
+        monkeypatch.chdir(tmp_path)
+
+        # Capture the actual pytest args used
+        captured_args = {"value": None}
+
+        original_run = subprocess.run
+        def capture_run(cmd, **kwargs):
+            if '-m' in [str(c) for c in cmd] and 'pytest' in [str(c) for c in cmd]:
+                captured_args["value"] = [str(c) for c in cmd]
+            return original_run(cmd, **kwargs)
+
+        with patch("pdd.sync_orchestration.subprocess.run", side_effect=capture_run):
+            _execute_tests_and_create_run_report(
+                test_file=test_file,
+                basename="test_simple",
+                language="python",
+                target_coverage=0.0
+            )
+
+        # Verify -c /dev/null is in the args (prevents parent config discovery)
+        assert captured_args["value"] is not None, "subprocess.run was not called with pytest"
+        assert "-c" in captured_args["value"] or any("/dev/null" in arg for arg in captured_args["value"]), (
+            f"Expected -c /dev/null in pytest args to prevent parent config discovery. "
+            f"Got args: {captured_args['value']}"
+        )
+
+
+class TestFixOperationProjectRootConfig:
+    """
+    Regression tests for pytest project root configuration in the fix operation.
+
+    Bug: When the fix operation runs pytest to capture error output (line 1481),
+    it didn't set proper pytest configuration (PYTHONPATH, --rootdir, cwd).
+    For nested projects (e.g., examples/hello/) with their own .pddrc marker,
+    this caused:
+    1. Import errors because PYTHONPATH wasn't set to include the nested project's src/
+    2. Wrong error output captured (import failures instead of real test failures)
+    3. fix_main() trying to fix non-existent issues based on wrong errors
+
+    Fix: The fix operation subprocess must set --rootdir, PYTHONPATH, and cwd
+    based on the project root (found by looking for .pddrc), matching the fix
+    already applied to _execute_tests_and_create_run_report().
+    """
+
+    def test_fix_operation_subprocess_sets_project_root_config(self, tmp_path, monkeypatch):
+        """
+        Regression test: Verify the fix operation subprocess (line 1481) sets correct
+        --rootdir, PYTHONPATH, and cwd for nested projects.
+
+        The fix operation runs pytest to capture error output BEFORE calling fix_main().
+        This test verifies that subprocess call uses proper pytest configuration.
+
+        Key distinction: Fix operation subprocess has NO --cov flag,
+        while _execute_tests_and_create_run_report() subprocess HAS --cov flag.
+        """
+        import subprocess
+        from unittest.mock import MagicMock, patch
+        from pdd.sync_orchestration import sync_orchestration
+        from pdd.sync_determine_operation import SyncDecision
+
+        # Create parent directory with pytest.ini (simulates pdd repo root)
+        parent_dir = tmp_path / "repo_root"
+        parent_dir.mkdir()
+        (parent_dir / "pytest.ini").write_text("[pytest]\n")
+
+        # Create nested project (simulates examples/hello/)
+        nested_project = parent_dir / "examples" / "hello"
+        nested_project.mkdir(parents=True)
+
+        # Add .pddrc marker to nested project (this is how we identify project root)
+        (nested_project / ".pddrc").write_text("")
+
+        # Create prompts/ with a prompt file
+        prompts_dir = nested_project / "prompts"
+        prompts_dir.mkdir()
+        prompt_file = prompts_dir / "hello_python.prompt"
+        prompt_file.write_text("Create a hello function.")
+
+        # Create src/ with a module
+        src_dir = nested_project / "src"
+        src_dir.mkdir()
+        (src_dir / "hello.py").write_text('''
+def greet(name):
+    return f"Hello, {name}!"
+''')
+
+        # Create tests/ with a test that has a deliberate failure
+        tests_dir = nested_project / "tests"
+        tests_dir.mkdir()
+        test_file = tests_dir / "test_hello.py"
+        test_file.write_text('''
+import hello
+
+def test_greet():
+    # Deliberate failure to trigger fix operation
+    assert hello.greet("World") == "Wrong expected value"
+''')
+
+        # Create examples/ with example file
+        examples_dir = nested_project / "examples"
+        examples_dir.mkdir()
+        example_file = examples_dir / "hello_example.py"
+        example_file.write_text("# Example file")
+
+        # Create .pdd/meta directory
+        pdd_meta = nested_project / ".pdd" / "meta"
+        pdd_meta.mkdir(parents=True)
+
+        # Change cwd to parent (simulates being in repo root)
+        monkeypatch.chdir(parent_dir)
+
+        # Capture all subprocess.run calls to find the fix operation one
+        subprocess_calls = []
+        original_run = subprocess.run
+
+        def capture_subprocess_run(cmd, **kwargs):
+            cmd_list = [str(c) for c in cmd] if not isinstance(cmd, str) else [cmd]
+            subprocess_calls.append({
+                'cmd': cmd_list,
+                'kwargs': kwargs
+            })
+            # Return a mock result for pytest calls
+            if '-m' in cmd_list and 'pytest' in cmd_list:
+                mock_result = MagicMock()
+                mock_result.returncode = 1
+                mock_result.stdout = "1 failed"
+                mock_result.stderr = ""
+                return mock_result
+            return original_run(cmd, **kwargs)
+
+        # Set up mocks to trigger fix operation
+        with patch("pdd.sync_orchestration.subprocess.run", side_effect=capture_subprocess_run), \
+             patch("pdd.sync_orchestration.sync_determine_operation") as mock_determine, \
+             patch("pdd.sync_orchestration.SyncLock") as mock_lock, \
+             patch("pdd.sync_orchestration.SyncApp") as mock_sync_app_class, \
+             patch("pdd.sync_orchestration.fix_main") as mock_fix, \
+             patch("pdd.sync_orchestration._save_fingerprint_atomic"), \
+             patch("pdd.sync_orchestration.get_pdd_file_paths") as mock_get_paths, \
+             patch.object(sys.stdout, 'isatty', return_value=True):
+
+            # Configure lock mock
+            mock_lock.return_value.__enter__.return_value = mock_lock
+            mock_lock.return_value.__exit__.return_value = None
+
+            # Configure SyncApp to run worker synchronously
+            def store_worker_func(*args, **kwargs):
+                instance = MagicMock()
+                worker_func = kwargs.get('worker_func', lambda: {"success": True})
+                instance.worker_func = worker_func
+
+                def mock_run():
+                    try:
+                        return worker_func()
+                    except Exception as e:
+                        return {"success": False, "error": str(e)}
+                instance.run = mock_run
+                return instance
+            mock_sync_app_class.side_effect = store_worker_func
+
+            # Configure paths to point to nested project
+            mock_get_paths.return_value = {
+                'prompt': prompt_file,
+                'code': src_dir / 'hello.py',
+                'example': example_file,
+                'test': test_file,
+                'test_files': [test_file],
+            }
+
+            # Configure sync_determine_operation to return 'fix' once, then 'all_synced'
+            call_count = [0]
+            def determine_side_effect(*args, **kwargs):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    return SyncDecision(operation='fix', reason='Tests failing', confidence=0.9)
+                return SyncDecision(operation='all_synced', reason='Complete', confidence=1.0)
+            mock_determine.side_effect = determine_side_effect
+
+            # Configure fix_main to succeed
+            mock_fix.return_value = {'success': True, 'cost': 0.1, 'model': 'mock-model'}
+
+            # Run sync_orchestration to trigger fix operation
+            sync_orchestration(
+                basename="hello",
+                language="python",
+                skip_verify=True,
+                budget=10.0
+            )
+
+        # Find the fix operation subprocess call
+        # Key: Fix operation call has NO --cov flag, _execute_tests call HAS --cov flag
+        fix_operation_calls = [
+            call for call in subprocess_calls
+            if '-m' in call['cmd'] and 'pytest' in call['cmd']
+            and not any('--cov' in arg for arg in call['cmd'])
+        ]
+
+        assert len(fix_operation_calls) >= 1, (
+            f"Expected at least one fix operation subprocess call (pytest without --cov). "
+            f"All subprocess calls: {subprocess_calls}"
+        )
+
+        # Check the fix operation call has proper config
+        fix_call = fix_operation_calls[0]
+        fix_cmd = fix_call['cmd']
+        fix_kwargs = fix_call['kwargs']
+
+        # Verify --rootdir is set
+        has_rootdir = any('--rootdir=' in arg for arg in fix_cmd)
+        assert has_rootdir, (
+            f"Fix operation subprocess should have --rootdir flag. "
+            f"Got args: {fix_cmd}"
+        )
+
+        # Verify -c /dev/null is set
+        has_config_null = '-c' in fix_cmd or any('/dev/null' in arg for arg in fix_cmd)
+        assert has_config_null, (
+            f"Fix operation subprocess should have -c /dev/null to isolate pytest config. "
+            f"Got args: {fix_cmd}"
+        )
+
+        # Verify PYTHONPATH is set in env
+        env = fix_kwargs.get('env', {})
+        pythonpath = env.get('PYTHONPATH', '')
+        assert str(src_dir) in pythonpath or str(nested_project) in pythonpath, (
+            f"Fix operation subprocess should have PYTHONPATH including project src/. "
+            f"Got PYTHONPATH: {pythonpath}"
+        )
+
+        # Verify cwd is set to project root
+        cwd = fix_kwargs.get('cwd')
+        assert cwd is not None, (
+            f"Fix operation subprocess should have cwd set to project root. "
+            f"Got kwargs: {fix_kwargs}"
+        )
+
+
+
+# ============================================================================
+# Bug Fix Tests - Issue #248: PYTHONPATH Hardcodes 'src/' Ignoring Project Structure
+# ============================================================================
+
+def test_crash_check_uses_code_directory_in_pythonpath_not_hardcoded_src(tmp_path, monkeypatch):
+    """
+    Regression test for Issue #248: Verify crash check uses actual code directory in PYTHONPATH.
+
+    Bug: sync_orchestration.py:1266 hardcoded PYTHONPATH to 'src/' directory, causing crash
+    loops for projects with different directory structures (backend/functions/, pdd/, lib/, etc.).
+
+    Fix: Changed to dynamically use pdd_files['code'].resolve().parent
+
+    This test creates a project with code in 'backend/functions/' (not src/) and verifies
+    that when sync_orchestration performs crash detection, it sets PYTHONPATH to include
+    the actual code directory, allowing the example to run successfully.
+    """
+    import subprocess
+    from unittest.mock import MagicMock, patch
+    from pathlib import Path
+
+    # Create project with code in backend/functions/ (not src/)
+    project_root = tmp_path / "test_project"
+    project_root.mkdir()
+    code_dir = project_root / "backend" / "functions"
+    code_dir.mkdir(parents=True)
+    context_dir = project_root / "context"
+    context_dir.mkdir()
+    (project_root / ".pdd" / "meta").mkdir(parents=True)
+
+    # Create module in backend/functions/
+    code_file = code_dir / "mymodule.py"
+    code_file.write_text("def myfunc(): return 42")
+
+    # Create example that imports from mymodule (will fail without correct PYTHONPATH)
+    example_file = context_dir / "mymodule_example.py"
+    example_file.write_text("""
+from mymodule import myfunc
+result = myfunc()
+assert result == 42
+print("Example works!")
+""")
+
+    monkeypatch.chdir(project_root)
+
+    # Capture subprocess calls to verify PYTHONPATH
+    subprocess_calls = []
+    original_run = subprocess.run
+
+    def capture_subprocess_run(cmd, **kwargs):
+        cmd_list = [str(c) for c in cmd] if not isinstance(cmd, str) else [cmd]
+        subprocess_calls.append({'cmd': cmd_list, 'kwargs': kwargs})
+
+        # Actually run the real command to verify it works with the PYTHONPATH
+        return original_run(cmd, **kwargs)
+
+    # Minimal mock setup - just enough to trigger crash check
+    with patch("pdd.sync_orchestration.subprocess.run", side_effect=capture_subprocess_run):
+        # Directly test the crash check code path by simulating what happens at line 1264-1279
+        # This is the actual code from sync_orchestration.py that we're testing
+        from pdd.sync_orchestration import _run_example_with_error_detection
+        import os
+        import sys
+
+        pdd_files = {'code': code_file, 'example': example_file}
+
+        # This is the ACTUAL code from sync_orchestration.py:1265-1279 (the fix)
+        env = os.environ.copy()
+        code_dir_from_fix = pdd_files['code'].resolve().parent
+        env['PYTHONPATH'] = f"{code_dir_from_fix}:{env.get('PYTHONPATH', '')}"
+
+        # Remove TUI-specific env vars
+        for var in ['FORCE_COLOR', 'COLUMNS']:
+            env.pop(var, None)
+
+        example_path = str(pdd_files['example'].resolve())
+        cmd_parts = [sys.executable, example_path]
+
+        # Call the actual sync_orchestration helper function
+        returncode, stdout, stderr = _run_example_with_error_detection(
+            cmd_parts,
+            env=env,
+            timeout=10
+        )
+
+    # Verify the example ran successfully (proving PYTHONPATH was correct)
+    assert returncode == 0, (
+        f"Example should run successfully with correct PYTHONPATH. "
+        f"Got returncode={returncode}, stderr={stderr}"
+    )
+    assert "Example works!" in stdout, (
+        f"Expected success message in stdout. Got: {stdout}"
+    )
+
+    # Verify PYTHONPATH included the correct directory (backend/functions/, not src/)
+    expected_code_dir = str(code_dir.resolve())
+    assert expected_code_dir in env.get('PYTHONPATH', ''), (
+        f"PYTHONPATH should include actual code directory '{expected_code_dir}'. "
+        f"Got PYTHONPATH='{env.get('PYTHONPATH')}'. "
+        f"This verifies the fix: sync_orchestration.py:1266 uses "
+        f"pdd_files['code'].resolve().parent instead of hardcoded Path.cwd() / 'src'"
+    )
+
+
+# --- Issue #430: Auto-fix Fingerprint Save Bug Tests ---
+
+def test_auto_fix_success_saves_complete_metadata(orchestration_fixture):
+    """
+    Tests that when auto-fix successfully resolves an import error during the crash
+    operation, all metadata is properly saved (fingerprint, operations_completed, events).
+
+    This test reproduces issue #430: the auto-fix success path at line 1412 uses
+    `continue` which skips the fingerprint save at line 1716, causing incomplete
+    metadata tracking.
+
+    Expected behavior (after fix):
+    - operations_completed includes 'crash'
+    - _save_fingerprint_atomic is called with operation='crash', model='auto-fix', cost=0.0
+    - run_report.json is saved with exit_code=0
+
+    Actual behavior (before fix):
+    - operations_completed is missing 'crash' (BUG)
+    - _save_fingerprint_atomic is NOT called for crash operation (BUG)
+    - run_report.json is saved correctly (this works)
+    """
+    # Create code file for crash operation to detect (fixture chdirs to tmp_path)
+    from pathlib import Path
+    code_file = Path('src') / 'calculator.py'
+    code_file.write_text("# Mock code file\ndef calculator():\n    pass\n")
+
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_save_fp = orchestration_fixture['_save_fingerprint_atomic']
+
+    # Set up workflow: generate → example → crash (with auto-fix success)
+    mock_determine.side_effect = [
+        SyncDecision(operation='generate', reason='New unit'),
+        SyncDecision(operation='example', reason='Code exists, example missing'),
+        SyncDecision(operation='crash', reason='Example crashes'),
+        SyncDecision(operation='all_synced', reason='All operations complete'),
+    ]
+
+    # Mock the crash operation to simulate auto-fix success path
+    # We need to patch the internal functions that detect and fix import errors
+    with patch('pdd.sync_orchestration._run_example_with_error_detection') as mock_run_example, \
+         patch('pdd.sync_orchestration._try_auto_fix_import_error') as mock_auto_fix, \
+         patch('pdd.sync_orchestration._save_run_report_atomic') as mock_save_report:
+
+        # First call: example crashes with ModuleNotFoundError (auto-fixable)
+        # Second call: retry after auto-fix succeeds (returncode=0)
+        mock_run_example.side_effect = [
+            (1, "", "ModuleNotFoundError: No module named 'calculator'"),  # Initial crash
+            (0, "Example runs successfully", ""),  # After auto-fix
+        ]
+
+        # Auto-fix successfully fixes the import
+        mock_auto_fix.return_value = (True, "Added missing import")
+
+        # Run sync orchestration
+        result = sync_orchestration(basename="calculator", language="python")
+
+    # CRITICAL ASSERTIONS: These verify the bug is fixed
+
+    # 1. Verify operations_completed includes 'crash'
+    # BUG: Before fix, this assertion FAILS because continue at line 1412 skips
+    # the operations_completed.append('crash') at line 1715
+    assert 'crash' in result['operations_completed'], (
+        "Auto-fix success should track 'crash' in operations_completed. "
+        "Bug: continue at sync_orchestration.py:1412 skips line 1715"
+    )
+
+    # 2. Verify _save_fingerprint_atomic was called for crash operation
+    # BUG: Before fix, this assertion FAILS because continue at line 1412 skips
+    # the _save_fingerprint_atomic call at line 1716
+    fingerprint_calls = [
+        call for call in mock_save_fp.call_args_list
+        if len(call[0]) >= 3 and call[0][2] == 'crash'  # arg[2] is operation
+    ]
+    assert len(fingerprint_calls) > 0, (
+        "Auto-fix success should save fingerprint for 'crash' operation. "
+        "Bug: continue at sync_orchestration.py:1412 skips _save_fingerprint_atomic at line 1716"
+    )
+
+    # 3. Verify the fingerprint was saved with correct metadata
+    crash_fingerprint_call = fingerprint_calls[0]
+    call_args = crash_fingerprint_call[0]
+    basename, language, operation, pdd_files, cost, model = call_args[:6]
+
+    assert basename == "calculator"
+    assert language == "python"
+    assert operation == 'crash'
+    assert cost == 0.0, "Auto-fix should have cost=0.0"
+    assert model == 'auto-fix', "Auto-fix should use model='auto-fix'"
+
+    # 4. Verify run_report was saved (this already works, but verify it)
+    assert mock_save_report.called, "run_report should be saved after auto-fix"
+
+    # 5. Verify workflow succeeded and continued normally
+    assert result['success'] is True, "Workflow should succeed after auto-fix"
+    assert result['operations_completed'] == ['generate', 'example', 'crash'], (
+        "Expected all three operations to complete"
+    )

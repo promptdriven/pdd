@@ -1,0 +1,39 @@
+You are fixing a failing test in a PDD (Prompt-Driven Development) project.
+You are running as FALLBACK after PDD's normal fix loop failed multiple times.
+
+## PDD Principle
+The PROMPT FILE is the source of truth. Code is a generated artifact.
+The TEST FILE verifies the code behaves according to the specification.
+
+## Files (you have full read/write access)
+- Code file: {code_abs}
+- Test file: {test_abs}
+- Project root: Current working directory
+
+## Test Protection Mode: {protect_tests}
+If "true", do NOT modify the test file - only fix the code.
+
+## Original Specification
+<prompt_content>
+{prompt_content}
+</prompt_content>
+
+## Error Log
+<error_log>
+{error_content}
+</error_log>
+
+## Your Task
+1. Read the code and test files to understand what's failing
+2. Analyze the error traceback to identify the root cause
+3. Explore related files if needed (imports, dependencies, etc.)
+4. Make the necessary changes to fix the failing test
+5. Run the test to verify: {verify_cmd}
+6. Repeat until tests pass
+7. Output JSON: {{"success": bool, "message": str, "changed_files": list[str]}}
+
+## Guidelines
+- Read actual source files before assuming what exists
+- Keep changes minimal and focused on the failure
+- You may modify multiple files if needed
+- You may install missing packages with pip

@@ -1,0 +1,65 @@
+# VS Code Extension Entry Point
+
+Create a TypeScript module that serves as the main entry point for a VS Code extension that integrates PDD (Prompt-Driven Development) CLI tooling.
+
+% Here is an example of how to use the PddInstaller class:
+<pdd-installer-example>
+    <include>../examples/pddInstaller_example.ts</include>
+</pdd-installer-example>
+
+
+## Requirements
+
+### Extension Activation
+- Export an `activate` function that is called when the extension is activated
+- Accept a `vscode.ExtensionContext` parameter
+- Log a message when the extension becomes active
+- Import and instantiate the `PddInstaller` class from './pddInstaller'
+
+### Command Registration
+Register the following VS Code commands:
+1. **pdd.installCli**: Triggers PDD CLI installation process
+2. **pdd.checkCli**: Checks if PDD CLI is installed and prompts user if not
+3. **pdd.runSetup**: Executes the PDD setup process for API key configuration
+4. **pdd.upgradeToUv**: Upgrades existing PDD installation to use uv package manager
+
+### Command Implementations
+
+#### Install Command
+- Call `installer.installPddCli()` asynchronously
+
+#### Check Command
+- Call `installer.isPddCliInstalled()` to check installation status
+- If installed: Show information message "PDD CLI is already installed and ready to use!"
+- If not installed: Show information message with two options:
+  - "Install PDD CLI" button - triggers installation
+  - "Not Now" button - dismisses the prompt
+
+#### Setup Command
+- Call `installer.runPddSetup()` asynchronously
+
+#### Upgrade Command
+- Call `installer.upgradeToUvInstallation()` asynchronously
+
+### Extension Lifecycle
+- Push all command disposables to `context.subscriptions`
+- After 2 seconds delay (to allow VS Code startup to complete), call `installer.checkAndPromptInstallation()`
+
+### Deactivation
+- Export a `deactivate` function that logs when the extension is deactivated
+
+## Technical Specifications
+
+### Imports
+- Import all from 'vscode' module
+- Import `PddInstaller` class from './pddInstaller'
+
+### Async/Await Pattern
+- Use async/await for all asynchronous operations
+- Handle command registrations synchronously but execute async operations inside
+
+### Timing
+- Use `setTimeout` with 2000ms delay for the initial installation check to avoid interfering with VS Code startup
+
+## Output Format
+Generate a TypeScript module with proper type annotations, clear function definitions, and appropriate error handling patterns following VS Code extension development best practices.

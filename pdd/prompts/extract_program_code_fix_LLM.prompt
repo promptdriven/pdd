@@ -21,3 +21,9 @@
     - 'update_code': Boolean indicating whether the code module needs to be updated.
     - 'fixed_program': The entire updated program code or empty String if no update is needed.
     - 'fixed_code': The entire updated code module or empty String if no update is needed.
+
+% IMPORTANT JSON formatting rules for code strings:
+    - Use standard JSON escaping for newlines: a single backslash-n (\n) represents an actual newline
+    - Do NOT double-escape newlines. Use \n not \\n for line breaks in code
+    - String literals in code that need to print newlines should use \n (which appears as \\n in JSON)
+    - Example: for code with two lines "def foo():\n    pass", the JSON should be: "def foo():\n    pass"

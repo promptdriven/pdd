@@ -58,9 +58,9 @@ variables:
 usage:
   generate:
     - name: Minimal (PRD only)
-      command: pdd generate -e PRD_FILE=docs/specs.md --output architecture.json pdd/templates/architecture/architecture_json.prompt
+      command: pdd generate --template architecture/architecture_json -e PRD_FILE=docs/specs.md --output architecture.json
     - name: With tech stack overview
-      command: pdd generate -e PRD_FILE=docs/specs.md -e TECH_STACK_FILE=docs/tech_stack.md --output architecture.json pdd/templates/architecture/architecture_json.prompt
+      command: pdd generate --template architecture/architecture_json -e PRD_FILE=docs/specs.md -e TECH_STACK_FILE=docs/tech_stack.md --output architecture.json
 
 discover:
   enabled: false
@@ -83,7 +83,7 @@ output_schema:
       interface:
         type: object
         properties:
-          type: { enum: [component, page, module, api, graphql, cli, job, message, config] }
+          type: { type: string, enum: [component, page, module, api, graphql, cli, job, message, config] }
           component: { type: object }
           page:
             type: object
@@ -104,7 +104,7 @@ output_schema:
                   type: object
                   required: [kind, source]
                   properties:
-                    kind: { enum: [api, query, stream, file, cache, message, job, other] }
+                    kind: { type: string, enum: [api, query, stream, file, cache, message, job, other] }
                     source: { type: string }
                     method: { type: string }
                     description: { type: string }
@@ -137,7 +137,7 @@ INSTRUCTIONS:
 - Output a single top-level JSON array of items. Each item must include:
   - reason (briefly explain why this code module needs to exist), description, dependencies (filenames), priority (1 = highest), filename, filepath, optional tags.
   - interface: include only the applicable sub-object (component, page, module, api, graphql, cli, job, message, or config). Omit all non-applicable sub-objects entirely.
-  - When interface.type is "page", each entry in `dataSources` must be an object with at least `kind` (e.g., api/query) and `source` (e.g., URL or identifier). Provide `method`, `description`, and any other useful metadata when known.
+  - When interface.type is "page", each entry in `dataSources` must be an object with at least `kind` and `source` (e.g., URL or identifier). The `kind` field MUST be exactly one of: `"api"`, `"query"`, `"stream"`, `"file"`, `"cache"`, `"message"`, `"job"`, or `"other"`. Do not invent new values like `"api/mutation"`; instead, use `"api"` (for any HTTP/REST/GraphQL endpoint) or `"other"` and describe details such as queries vs. mutations in `description` or `notes`. Provide `method`, `description`, and any other useful metadata when known.
 - Valid JSON only. No comments or trailing commas.
 
 OUTPUT FORMAT (authoritative):
@@ -158,7 +158,7 @@ OUTPUT FORMAT (authoritative):
       "interface": {
         "type": "object",
         "properties": {
-          "type": {"enum": ["component", "page", "module", "api", "graphql", "cli", "job", "message", "config"]},
+          "type": {"type": "string", "enum": ["component", "page", "module", "api", "graphql", "cli", "job", "message", "config"]},
           "component": {"type": "object"},
           "page": {
             "type": "object",

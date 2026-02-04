@@ -26,6 +26,15 @@ litellm_logger = logging.getLogger("litellm")
 litellm_log_level = os.getenv("LITELLM_LOG_LEVEL", "WARNING" if PRODUCTION_MODE else "INFO")
 litellm_logger.setLevel(getattr(logging, litellm_log_level, logging.WARNING))
 
+# Suppress LiteLLM debug messages and error info that includes "Give Feedback / Get Help"
+# This prevents LiteLLM from printing these messages before raising exceptions
+try:
+    litellm.set_verbose = False
+    litellm.suppress_debug_info = True
+except Exception:
+    # If these attributes don't exist in this LiteLLM version, continue silently
+    pass
+
 # Ensure LiteLLM drops provider-unsupported params instead of erroring
 # This prevents failures like UnsupportedParamsError for OpenAI gpt-5-* when
 # passing generic params (e.g., reasoning_effort) not accepted by that API path.
@@ -70,10 +79,34 @@ def setup_file_logging(log_file_path=None):
 # Function to set verbose logging
 def set_verbose_logging(verbose=False):
     """Set verbose logging based on flag or environment variable"""
-    if verbose or os.getenv("PDD_VERBOSE_LOGGING") == "1":
+    want_verbose = bool(verbose) or os.getenv("PDD_VERBOSE_LOGGING") == "1"
+
+    # Python logging levels
+    if want_verbose:
         logger.setLevel(logging.DEBUG)
         litellm_logger.setLevel(logging.DEBUG)
-        logger.debug("Verbose logging enabled")
+    else:
+        # Restore defaults
+        if PRODUCTION_MODE:
+            logger.setLevel(logging.WARNING)
+        else:
+            logger.setLevel(getattr(logging, PDD_LOG_LEVEL, logging.INFO))
+        litellm_logger.setLevel(getattr(logging, litellm_log_level, logging.WARNING))
+
+    # LiteLLM internal verbosity/debug info
+    # By default we suppress the noisy "Give Feedback / Get Help" debug banner.
+    # When PDD is run with --verbose, re-enable LiteLLM verbose+debug outputs.
+    try:
+        if hasattr(litellm, "set_verbose"):
+            litellm.set_verbose = want_verbose
+        if hasattr(litellm, "suppress_debug_info"):
+            litellm.suppress_debug_info = not want_verbose
+    except Exception:
+        # If these attributes don't exist in this LiteLLM version, ignore.
+        pass
+
+    if want_verbose:
+        logger.debug("Verbose logging enabled (including LiteLLM debug output)")
     
 # --- End Logging Configuration ---
 
@@ -84,11 +117,9 @@ from pathlib import Path
 from typing import Optional, Dict, List, Any, Type, Union, Tuple
 from pydantic import BaseModel, ValidationError
 import openai  # Import openai for exception handling as LiteLLM maps to its types
-from langchain_core.prompts import PromptTemplate
 import warnings
 import time as time_module # Alias to avoid conflict with 'time' parameter
-# Import the default model constant
-from pdd import DEFAULT_LLM_MODEL
+from pdd.path_resolution import get_default_resolver
 
 # Opt-in to future pandas behavior regarding downcasting
 try:
@@ -96,6 +127,321 @@ try:
 except pd._config.config.OptionError:
     # Skip if option doesn't exist in older pandas versions
     pass
+
+
+# --- Custom Exceptions ---
+
+class SchemaValidationError(Exception):
+    """Raised when LLM response fails Pydantic/JSON schema validation.
+
+    This exception triggers model fallback when caught at the outer exception
+    handler level, allowing the next candidate model to be tried.
+
+    Issue #168: Previously, validation errors only logged an error and continued
+    to the next batch item, never triggering model fallback.
+    """
+
+    def __init__(self, message: str, raw_response: Any = None, item_index: int = 0):
+        super().__init__(message)
+        self.raw_response = raw_response
+        self.item_index = item_index
+
+
+class CloudFallbackError(Exception):
+    """Raised when cloud execution fails and should fall back to local.
+
+    This exception is caught internally and triggers fallback to local execution
+    when cloud is unavailable (network errors, timeouts, auth failures).
+    """
+    pass
+
+
+class CloudInvocationError(Exception):
+    """Raised when cloud invocation fails with a non-recoverable error.
+
+    This exception indicates a cloud error that should not fall back to local,
+    such as validation errors returned by the cloud endpoint.
+    """
+    pass
+
+
+class InsufficientCreditsError(Exception):
+    """Raised when user has insufficient credits for cloud execution.
+
+    This exception is raised when the cloud returns 402 (Payment Required)
+    and should NOT fall back to local execution - the user needs to know.
+    """
+    pass
+
+
+# --- Cloud Execution Helpers ---
+
+def _ensure_all_properties_required(schema: Dict[str, Any]) -> Dict[str, Any]:
+    """Recursively ensure ALL properties are in the required array (OpenAI strict mode).
+
+    OpenAI's strict mode requires that all properties at ALL levels of a JSON schema
+    are listed in the 'required' array. Pydantic's model_json_schema() only includes
+    fields without default values in 'required', which causes OpenAI to reject the schema.
+
+    This function walks the entire schema tree and ensures every object type has all
+    its properties in the 'required' array.
+
+    Args:
+        schema: A JSON schema dictionary
+
+    Returns:
+        The schema with all properties added to 'required' at all nesting levels
+    """
+    if not isinstance(schema, dict):
+        return schema
+
+    # If this is an object with properties, make all properties required
+    if schema.get('type') == 'object' and 'properties' in schema:
+        schema['required'] = list(schema['properties'].keys())
+        # Recurse into each property
+        for prop_schema in schema['properties'].values():
+            _ensure_all_properties_required(prop_schema)
+
+    # Handle array items
+    if schema.get('type') == 'array' and 'items' in schema:
+        _ensure_all_properties_required(schema['items'])
+
+    # Handle anyOf/oneOf/allOf
+    for key in ('anyOf', 'oneOf', 'allOf'):
+        if key in schema:
+            for sub_schema in schema[key]:
+                _ensure_all_properties_required(sub_schema)
+
+    # Handle $defs
+    if '$defs' in schema:
+        for def_schema in schema['$defs'].values():
+            _ensure_all_properties_required(def_schema)
+
+    return schema
+
+
+def _add_additional_properties_false(schema: Dict[str, Any]) -> Dict[str, Any]:
+    """Recursively add additionalProperties: false to all object schemas.
+
+    OpenAI's strict mode requires additionalProperties: false on ALL object
+    schemas, including nested ones. This function walks the schema tree and
+    adds the property to every object type.
+
+    Args:
+        schema: A JSON schema dictionary
+
+    Returns:
+        The schema with additionalProperties: false on all objects
+    """
+    if not isinstance(schema, dict):
+        return schema
+
+    # If this is an object type, add additionalProperties: false
+    if schema.get('type') == 'object':
+        schema['additionalProperties'] = False
+        # Recursively process properties
+        if 'properties' in schema:
+            for prop_name, prop_schema in schema['properties'].items():
+                _add_additional_properties_false(prop_schema)
+
+    # Handle arrays - process items schema
+    if schema.get('type') == 'array' and 'items' in schema:
+        _add_additional_properties_false(schema['items'])
+
+    # Handle anyOf, oneOf, allOf
+    for key in ('anyOf', 'oneOf', 'allOf'):
+        if key in schema:
+            for sub_schema in schema[key]:
+                _add_additional_properties_false(sub_schema)
+
+    # Handle $defs (Pydantic's reference definitions)
+    if '$defs' in schema:
+        for def_name, def_schema in schema['$defs'].items():
+            _add_additional_properties_false(def_schema)
+
+    return schema
+
+
+def _pydantic_to_json_schema(pydantic_class: Type[BaseModel]) -> Dict[str, Any]:
+    """Convert a Pydantic model class to JSON Schema for cloud transport.
+
+    Args:
+        pydantic_class: A Pydantic BaseModel subclass
+
+    Returns:
+        JSON Schema dictionary that can be serialized and sent to cloud
+    """
+    schema = pydantic_class.model_json_schema()
+    # Ensure all properties are in required array (OpenAI strict mode requirement)
+    _ensure_all_properties_required(schema)
+    # Include class name for debugging/logging purposes
+    schema['__pydantic_class_name__'] = pydantic_class.__name__
+    return schema
+
+
+def _validate_with_pydantic(
+    result: Any,
+    pydantic_class: Type[BaseModel]
+) -> BaseModel:
+    """Validate cloud response using original Pydantic class.
+
+    Args:
+        result: The result from cloud (dict or JSON string)
+        pydantic_class: The Pydantic model to validate against
+
+    Returns:
+        Validated Pydantic model instance
+
+    Raises:
+        ValidationError: If validation fails
+    """
+    if isinstance(result, dict):
+        return pydantic_class.model_validate(result)
+    elif isinstance(result, str):
+        return pydantic_class.model_validate_json(result)
+    elif isinstance(result, pydantic_class):
+        # Already validated
+        return result
+    raise ValueError(f"Cannot validate result type {type(result)} with Pydantic model")
+
+
+def _llm_invoke_cloud(
+    prompt: Optional[str],
+    input_json: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]],
+    strength: float,
+    temperature: float,
+    verbose: bool,
+    output_pydantic: Optional[Type[BaseModel]],
+    output_schema: Optional[Dict[str, Any]],
+    time: float,
+    use_batch_mode: bool,
+    messages: Optional[Union[List[Dict[str, str]], List[List[Dict[str, str]]]]],
+    language: Optional[str],
+) -> Dict[str, Any]:
+    """Execute llm_invoke via cloud endpoint.
+
+    Args:
+        All parameters match llm_invoke signature
+
+    Returns:
+        Dictionary with 'result', 'cost', 'model_name', 'thinking_output'
+
+    Raises:
+        CloudFallbackError: For recoverable errors (network, timeout, auth)
+        InsufficientCreditsError: For 402 Payment Required
+        CloudInvocationError: For non-recoverable cloud errors
+    """
+    import requests
+    from rich.console import Console
+
+    # Lazy import to avoid circular dependency
+    from pdd.core.cloud import CloudConfig
+
+    console = Console()
+    CLOUD_TIMEOUT = 300  # 5 minutes
+
+    # Get JWT token
+    jwt_token = CloudConfig.get_jwt_token(verbose=verbose)
+    if not jwt_token:
+        raise CloudFallbackError("Could not authenticate with cloud")
+
+    # Prepare payload
+    payload: Dict[str, Any] = {
+        "strength": strength,
+        "temperature": temperature,
+        "time": time,
+        "verbose": verbose,
+        "useBatchMode": use_batch_mode,
+    }
+
+    if language:
+        payload["language"] = language
+
+    # Add prompt/messages
+    if messages:
+        payload["messages"] = messages
+    else:
+        payload["prompt"] = prompt
+        payload["inputJson"] = input_json
+
+    # Handle output schema
+    if output_pydantic:
+        payload["outputSchema"] = _pydantic_to_json_schema(output_pydantic)
+    elif output_schema:
+        payload["outputSchema"] = output_schema
+
+    # Make request
+    headers = {
+        "Authorization": f"Bearer {jwt_token}",
+        "Content-Type": "application/json"
+    }
+
+    cloud_url = CloudConfig.get_endpoint_url("llmInvoke")
+
+    if verbose:
+        logger.debug(f"Cloud llm_invoke request to: {cloud_url}")
+
+    try:
+        response = requests.post(
+            cloud_url,
+            json=payload,
+            headers=headers,
+            timeout=CLOUD_TIMEOUT
+        )
+
+        if response.status_code == 200:
+            data = response.json()
+            result = data.get("result")
+
+            # Validate with Pydantic if specified
+            if output_pydantic and result:
+                try:
+                    result = _validate_with_pydantic(result, output_pydantic)
+                except (ValidationError, ValueError) as e:
+                    logger.warning(f"Cloud response validation failed: {e}")
+                    # Return raw result if validation fails
+                    pass
+
+            return {
+                "result": result,
+                "cost": data.get("totalCost", 0.0),
+                "model_name": data.get("modelName", "cloud_model"),
+                "thinking_output": data.get("thinkingOutput"),
+            }
+
+        elif response.status_code == 402:
+            error_msg = response.json().get("error", "Insufficient credits")
+            raise InsufficientCreditsError(error_msg)
+
+        elif response.status_code in (401, 403):
+            # Clear stale JWT cache to prevent repeated failures
+            try:
+                from pdd.auth_service import clear_jwt_cache
+                clear_jwt_cache()
+            except Exception:
+                pass  # Don't fail if cache clearing fails
+
+            server_error = response.json().get("error", "")
+            error_msg = (
+                f"Authentication expired ({server_error or response.status_code}). "
+                "Please re-authenticate with: pdd auth logout && pdd auth login"
+            )
+            raise CloudFallbackError(error_msg)
+
+        elif response.status_code >= 500:
+            error_msg = response.json().get("error", f"Server error ({response.status_code})")
+            raise CloudFallbackError(error_msg)
+
+        else:
+            error_msg = response.json().get("error", f"HTTP {response.status_code}")
+            raise CloudInvocationError(f"Cloud llm_invoke failed: {error_msg}")
+
+    except requests.exceptions.Timeout:
+        raise CloudFallbackError("Cloud request timed out")
+    except requests.exceptions.ConnectionError as e:
+        raise CloudFallbackError(f"Cloud connection failed: {e}")
+    except requests.exceptions.RequestException as e:
+        raise CloudFallbackError(f"Cloud request failed: {e}")
 
 
 def _is_wsl_environment() -> bool:
@@ -170,49 +516,26 @@ def _get_environment_info() -> Dict[str, str]:
 
 # --- Constants and Configuration ---
 
-# Determine project root: 1. PDD_PATH env var, 2. Search upwards from script, 3. CWD
-PROJECT_ROOT = None
+# Determine project root: use PathResolver to ignore package-root PDD_PATH values.
 PDD_PATH_ENV = os.getenv("PDD_PATH")
-
 if PDD_PATH_ENV:
-    _path_from_env = Path(PDD_PATH_ENV)
-    if _path_from_env.is_dir():
-        PROJECT_ROOT = _path_from_env.resolve()
-        logger.debug(f"Using PROJECT_ROOT from PDD_PATH: {PROJECT_ROOT}")
-    else:
-        warnings.warn(f"PDD_PATH environment variable ('{PDD_PATH_ENV}') is set but not a valid directory. Attempting auto-detection.")
-
-if PROJECT_ROOT is None: # If PDD_PATH wasn't set or was invalid
     try:
-        # Start from the current working directory (where user is running PDD)
-        current_dir = Path.cwd().resolve()
-        # Look for project markers (e.g., .git, pyproject.toml, data/, .env)
-        # Go up a maximum of 5 levels to prevent infinite loops
-        for _ in range(5):
-            has_git = (current_dir / ".git").exists()
-            has_pyproject = (current_dir / "pyproject.toml").exists()
-            has_data = (current_dir / "data").is_dir()
-            has_dotenv = (current_dir / ".env").exists()
+        _path_from_env = Path(PDD_PATH_ENV).expanduser().resolve()
+        if not _path_from_env.is_dir():
+            warnings.warn(
+                f"PDD_PATH environment variable ('{PDD_PATH_ENV}') is set but not a valid directory. Attempting auto-detection."
+            )
+    except Exception as e:
+        warnings.warn(f"Error validating PDD_PATH environment variable: {e}")
 
-            if has_git or has_pyproject or has_data or has_dotenv:
-                PROJECT_ROOT = current_dir
-                logger.debug(f"Determined PROJECT_ROOT by marker search from CWD: {PROJECT_ROOT}")
-                break
-
-            parent_dir = current_dir.parent
-            if parent_dir == current_dir: # Reached filesystem root
-                break
-            current_dir = parent_dir
-
-    except Exception as e: # Catch potential permission errors etc.
-        warnings.warn(f"Error during project root auto-detection from current working directory: {e}")
-
-if PROJECT_ROOT is None: # Fallback to CWD if no method succeeded
-    PROJECT_ROOT = Path.cwd().resolve()
-    warnings.warn(f"Could not determine project root automatically. Using current working directory: {PROJECT_ROOT}. Ensure this is the intended root or set the PDD_PATH environment variable.")
+resolver = get_default_resolver()
+PROJECT_ROOT = resolver.resolve_project_root()
+PROJECT_ROOT_FROM_ENV = resolver.pdd_path_env is not None and PROJECT_ROOT == resolver.pdd_path_env
+logger.debug(f"Using PROJECT_ROOT: {PROJECT_ROOT}")
 
 
-ENV_PATH = PROJECT_ROOT / ".env"
+# ENV_PATH is set after _is_env_path_package_dir is defined (see below)
+
 # --- Determine LLM_MODEL_CSV_PATH ---
 # Prioritize ~/.pdd/llm_model.csv, then a project .pdd from the current CWD,
 # then PROJECT_ROOT (which may be set from PDD_PATH), else fall back to package.
@@ -272,11 +595,19 @@ def _is_env_path_package_dir(env_path: Path) -> bool:
     except Exception:
         return False
 
+# ENV_PATH: Use CWD-based project root when PDD_PATH points to package directory
+# This ensures .env is written to the user's project, not the installed package location
+if _is_env_path_package_dir(PROJECT_ROOT):
+    ENV_PATH = project_root_from_cwd / ".env"
+    logger.debug(f"PDD_PATH points to package; using ENV_PATH from CWD: {ENV_PATH}")
+else:
+    ENV_PATH = PROJECT_ROOT / ".env"
+
 # Selection order
 if user_model_csv_path.is_file():
     LLM_MODEL_CSV_PATH = user_model_csv_path
     logger.info(f"Using user-specific LLM model CSV: {LLM_MODEL_CSV_PATH}")
-elif (not _is_env_path_package_dir(PROJECT_ROOT)) and project_csv_from_env.is_file():
+elif PROJECT_ROOT_FROM_ENV and project_csv_from_env.is_file():
     # Honor an explicitly-set PDD_PATH pointing to a real project directory
     LLM_MODEL_CSV_PATH = project_csv_from_env
     logger.info(f"Using project-specific LLM model CSV (from PDD_PATH): {LLM_MODEL_CSV_PATH}")
@@ -300,8 +631,8 @@ else:
     logger.debug(f".env file not found at {ENV_PATH}. API keys might need to be provided manually.")
 
 # Default model if PDD_MODEL_DEFAULT is not set
-# Use the imported constant as the default
-DEFAULT_BASE_MODEL = os.getenv("PDD_MODEL_DEFAULT", DEFAULT_LLM_MODEL)
+# No hardcoded default - will use first available model from CSV if None
+DEFAULT_BASE_MODEL = os.getenv("PDD_MODEL_DEFAULT", None)
 
 # --- LiteLLM Cache Configuration (S3 compatible for GCS, with SQLite fallback) ---
 GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME")
@@ -494,6 +825,54 @@ def _set_model_rate_map(df: pd.DataFrame) -> None:
 
 # --- Helper Functions ---
 
+def _is_malformed_json_response(content: str, threshold: int = 100) -> bool:
+    """
+    Detect if a JSON response appears malformed due to excessive trailing newlines.
+
+    This can happen when Gemini generates thousands of \n characters in a JSON string value,
+    causing the response to be truncated and missing closing braces.
+
+    Args:
+        content: The raw response content string
+        threshold: Number of consecutive trailing \n sequences to consider malformed
+
+    Returns:
+        True if the response appears malformed, False otherwise
+    """
+    if not content or not isinstance(content, str):
+        return False
+
+    # Check if it starts like JSON but doesn't end properly
+    stripped = content.strip()
+    if not stripped.startswith('{'):
+        return False
+
+    # If it ends with }, it's probably fine
+    if stripped.endswith('}'):
+        return False
+
+    # Count trailing \n sequences (escaped newlines in JSON strings)
+    # The pattern \n in a JSON string appears as \\n in the raw content
+    trailing_newline_count = 0
+    check_content = stripped
+    while check_content.endswith('\\n'):
+        trailing_newline_count += 1
+        check_content = check_content[:-2]
+
+    # If there are many trailing \n sequences, it's likely malformed
+    if trailing_newline_count >= threshold:
+        return True
+
+    # Also check for response that looks truncated mid-string
+    # (ends with characters that suggest we're inside a JSON string value)
+    if not stripped.endswith('}') and not stripped.endswith(']') and not stripped.endswith('"'):
+        # Could be truncated in the middle of an escaped sequence
+        if stripped.endswith('\\'):
+            return True
+
+    return False
+
+
 def _load_model_data(csv_path: Optional[Path]) -> pd.DataFrame:
     """Loads and preprocesses the LLM model data from CSV.
     
@@ -609,11 +988,11 @@ def _select_model_candidates(
         # Strategy (simplified and deterministic): pick the first available model
         # from the CSV as the surrogate base. This mirrors typical CSV ordering
         # expectations and keeps behavior predictable across environments.
+        # Fix for issue #296: Don't warn when any base model (from env var or default) is not found in CSV
         try:
             base_model = available_df.iloc[0]
-            logger.warning(
-                f"Base model '{base_model_name}' not found in CSV. Falling back to surrogate base '{base_model['model']}' (Option A')."
-            )
+            # Silently use the first available model from user's CSV without warning
+            # Users who intentionally customize their CSV shouldn't see warnings about removed models
         except Exception:
             # If any unexpected error occurs during fallback, raise a clear error
             raise ValueError(
@@ -739,6 +1118,45 @@ def _sanitize_api_key(key_value: str) -> str:
     return sanitized
 
 
+def _save_key_to_env_file(key_name: str, value: str, env_path: Path) -> None:
+    """Save or update a key in the .env file.
+
+    - Replaces existing key in-place (no comment + append)
+    - Removes old commented versions of the same key (Issue #183)
+    - Preserves all other content
+    """
+    lines = []
+    if env_path.exists():
+        with open(env_path, 'r') as f:
+            lines = f.readlines()
+
+    new_lines = []
+    key_replaced = False
+    prefix = f"{key_name}="
+    prefix_spaced = f"{key_name} ="
+
+    for line in lines:
+        stripped = line.strip()
+        # Skip old commented versions of this key (cleanup accumulation)
+        if stripped.startswith(f"# {prefix}") or stripped.startswith(f"# {prefix_spaced}"):
+            continue
+        elif stripped.startswith(prefix) or stripped.startswith(prefix_spaced):
+            # Replace in-place
+            new_lines.append(f'{key_name}="{value}"\n')
+            key_replaced = True
+        else:
+            new_lines.append(line)
+
+    # Add key if not found
+    if not key_replaced:
+        if new_lines and not new_lines[-1].endswith('\n'):
+            new_lines.append('\n')
+        new_lines.append(f'{key_name}="{value}"\n')
+
+    with open(env_path, 'w') as f:
+        f.writelines(new_lines)
+
+
 def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, bool], verbose: bool) -> bool:
     """Checks for API key in env, prompts user if missing, and updates .env."""
     key_name = model_info.get('api_key')
@@ -759,6 +1177,12 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
         return True
     else:
         logger.warning(f"API key environment variable '{key_name}' for model '{model_info.get('model')}' is not set.")
+
+        # Skip prompting if --force flag is set (non-interactive mode)
+        if os.environ.get('PDD_FORCE'):
+            logger.error(f"API key '{key_name}' not set. In --force mode, skipping interactive prompt.")
+            return False
+
         try:
             # Interactive prompt
             user_provided_key = input(f"Please enter the API key for {key_name}: ").strip()
@@ -776,39 +1200,7 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
 
             # Update .env file
             try:
-                lines = []
-                if ENV_PATH.exists():
-                    with open(ENV_PATH, 'r') as f:
-                        lines = f.readlines()
-
-                new_lines = []
-                # key_updated = False
-                prefix = f"{key_name}="
-                prefix_spaced = f"{key_name} =" # Handle potential spaces
-
-                for line in lines:
-                    stripped_line = line.strip()
-                    if stripped_line.startswith(prefix) or stripped_line.startswith(prefix_spaced):
-                        # Comment out the old key
-                        new_lines.append(f"# {line}")
-                        # key_updated = True # Indicates we found an old line to comment
-                    elif stripped_line.startswith(f"# {prefix}") or stripped_line.startswith(f"# {prefix_spaced}"):
-                         # Keep already commented lines as they are
-                         new_lines.append(line)
-                    else:
-                        new_lines.append(line)
-
-                # Append the new key, ensuring quotes for robustness
-                new_key_line = f'{key_name}="{user_provided_key}"\n'
-                # Add newline before if file not empty and doesn't end with newline
-                if new_lines and not new_lines[-1].endswith('\n'):
-                     new_lines.append('\n')
-                new_lines.append(new_key_line)
-
-
-                with open(ENV_PATH, 'w') as f:
-                    f.writelines(new_lines)
-
+                _save_key_to_env_file(key_name, user_provided_key, ENV_PATH)
                 logger.info(f"API key '{key_name}' saved to {ENV_PATH}.")
                 logger.warning("SECURITY WARNING: The API key has been saved to your .env file. "
                        "Ensure this file is kept secure and is included in your .gitignore.")
@@ -830,7 +1222,6 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
 def _format_messages(prompt: str, input_data: Union[Dict[str, Any], List[Dict[str, Any]]], use_batch_mode: bool) -> Union[List[Dict[str, str]], List[List[Dict[str, str]]]]:
     """Formats prompt and input into LiteLLM message format."""
     try:
-        prompt_template = PromptTemplate.from_template(prompt)
         if use_batch_mode:
             if not isinstance(input_data, list):
                 raise ValueError("input_json must be a list of dictionaries when use_batch_mode is True.")
@@ -838,16 +1229,16 @@ def _format_messages(prompt: str, input_data: Union[Dict[str, Any], List[Dict[st
             for item in input_data:
                 if not isinstance(item, dict):
                      raise ValueError("Each item in input_json list must be a dictionary for batch mode.")
-                formatted_prompt = prompt_template.format(**item)
+                formatted_prompt = prompt.format(**item)
                 all_messages.append([{"role": "user", "content": formatted_prompt}])
             return all_messages
         else:
             if not isinstance(input_data, dict):
                 raise ValueError("input_json must be a dictionary when use_batch_mode is False.")
-            formatted_prompt = prompt_template.format(**input_data)
+            formatted_prompt = prompt.format(**input_data)
             return [{"role": "user", "content": formatted_prompt}]
     except KeyError as e:
-        raise ValueError(f"Prompt formatting error: Missing key {e} in input_json for prompt template.") from e
+        raise ValueError(f"Prompt formatting error: Missing key {e} in input_json for prompt string.") from e
     except Exception as e:
         raise ValueError(f"Error formatting prompt: {e}") from e
 
@@ -894,6 +1285,368 @@ def _extract_balanced_json_objects(text: str) -> List[str]:
                         start_idx = -1
     return results
 
+
+def _looks_like_python_code(s: str) -> bool:
+    """
+    Heuristic check if a string looks like Python code.
+
+    Used to determine if we should attempt Python syntax repair on a string field.
+    """
+    if not s or len(s) < 10:
+        return False
+    # Check for common Python patterns
+    code_indicators = ('def ', 'class ', 'import ', 'from ', 'if __name__', 'return ', 'print(')
+    return any(indicator in s for indicator in code_indicators)
+
+
+# Field names known to contain prose text, not Python code
+# These are skipped during syntax validation to avoid false positives
+_PROSE_FIELD_NAMES = frozenset({
+    'reasoning',           # PromptAnalysis - completeness reasoning
+    'explanation',         # TrimResultsOutput, FixerOutput - prose explanations
+    'analysis',            # DiffAnalysis, CodePatchResult - analysis text
+    'change_instructions', # ChangeInstruction, ConflictChange - instructions
+    'change_description',  # DiffAnalysis - description of changes
+    'planned_modifications', # CodePatchResult - modification plans
+    'details',             # VerificationOutput - issue details
+    'description',         # General prose descriptions
+    'focus',               # Focus descriptions
+    'file_summary',        # FileSummary - prose summaries of file contents
+})
+
+
+def _is_prose_field_name(field_name: str) -> bool:
+    """Check if a field name indicates it contains prose, not code.
+
+    Used to skip syntax validation on prose fields that may contain
+    Python keywords (like 'return' or 'import') but are not actual code.
+    """
+    return field_name.lower() in _PROSE_FIELD_NAMES
+
+
+def _repair_python_syntax(code: str) -> str:
+    """
+    Validate Python code syntax and attempt repairs if invalid.
+
+    Sometimes LLMs include spurious characters at string boundaries,
+    especially when the code contains quotes. This function attempts
+    to detect and repair such issues.
+
+    Args:
+        code: Python code string to validate/repair
+
+    Returns:
+        Repaired code if a fix was found, otherwise original code
+    """
+    import ast
+
+    if not code or not code.strip():
+        return code
+
+    # First, try to parse as-is
+    try:
+        ast.parse(code)
+        return code  # Valid, no repair needed
+    except SyntaxError:
+        pass
+
+    # Try common repairs
+    repaired = code
+
+    # Repair 1: Trailing spurious quote (the specific issue we've seen)
+    for quote in ['"', "'"]:
+        if repaired.rstrip().endswith(quote):
+            candidate = repaired.rstrip()[:-1]
+            try:
+                ast.parse(candidate)
+                logger.info(f"[INFO] Repaired code by removing trailing {quote!r}")
+                return candidate
+            except SyntaxError:
+                pass
+
+    # Repair 2: Leading spurious quote
+    for quote in ['"', "'"]:
+        if repaired.lstrip().startswith(quote):
+            candidate = repaired.lstrip()[1:]
+            try:
+                ast.parse(candidate)
+                logger.info(f"[INFO] Repaired code by removing leading {quote!r}")
+                return candidate
+            except SyntaxError:
+                pass
+
+    # Repair 3: Both leading and trailing spurious quotes
+    for quote in ['"', "'"]:
+        stripped = repaired.strip()
+        if stripped.startswith(quote) and stripped.endswith(quote):
+            candidate = stripped[1:-1]
+            try:
+                ast.parse(candidate)
+                logger.info(f"[INFO] Repaired code by removing surrounding {quote!r}")
+                return candidate
+            except SyntaxError:
+                pass
+
+    # If no repair worked, return original (let it fail downstream)
+    return code
+
+
+def _smart_unescape_code(code: str) -> str:
+    """
+    Unescape literal \\n sequences in code while preserving them inside string literals.
+
+    When LLMs return code as JSON, newlines get double-escaped. After JSON parsing,
+    we have literal backslash-n (2 chars) that should be actual newlines for code
+    structure, BUT escape sequences inside Python strings (like print("\\n")) should
+    remain as escape sequences.
+
+    Args:
+        code: Python code that may have literal \\n sequences
+
+    Returns:
+        Code with structural newlines unescaped but string literals preserved
+    """
+    LITERAL_BACKSLASH_N = '\\' + 'n'      # Literal \n (2 chars)
+
+    if LITERAL_BACKSLASH_N not in code:
+        return code
+
+    # First, check if the code already has actual newlines (mixed state)
+    # If it does, we need to be more careful
+    has_actual_newlines = '\n' in code
+
+    if not has_actual_newlines:
+        # All newlines are escaped - this is the double-escaped case
+        # We need to unescape them but preserve \n inside string literals
+
+        # Strategy: Use a placeholder for \n inside strings, unescape all, then restore
+        # We detect string literals by tracking quote state
+
+        result = []
+        i = 0
+        in_string = False
+        string_char = None
+        in_fstring = False
+
+        # Placeholder that won't appear in code
+        PLACEHOLDER = '\x00NEWLINE_ESCAPE\x00'
+
+        while i < len(code):
+            # Check for escape sequences (both actual and literal)
+            if i + 1 < len(code) and code[i] == '\\':
+                next_char = code[i + 1]
+
+                if in_string:
+                    # Inside a string - preserve escape sequences
+                    if next_char == 'n':
+                        result.append(PLACEHOLDER)
+                        i += 2
+                        continue
+                    elif next_char == 't':
+                        result.append('\\' + 't')  # Keep \t as-is in strings
+                        i += 2
+                        continue
+                    elif next_char == 'r':
+                        result.append('\\' + 'r')  # Keep \r as-is in strings
+                        i += 2
+                        continue
+                    elif next_char in ('"', "'", '\\'):
+                        # Keep escaped quotes and backslashes
+                        result.append(code[i:i+2])
+                        i += 2
+                        continue
+
+            # Check for string delimiters
+            if not in_string:
+                # Check for triple quotes first
+                if i + 2 < len(code) and code[i:i+3] in ('"""', "'''"):
+                    in_string = True
+                    string_char = code[i:i+3]
+                    # Check if preceded by 'f' for f-string
+                    in_fstring = i > 0 and code[i-1] == 'f'
+                    result.append(code[i:i+3])
+                    i += 3
+                    continue
+                elif code[i] in ('"', "'"):
+                    in_string = True
+                    string_char = code[i]
+                    in_fstring = i > 0 and code[i-1] == 'f'
+                    result.append(code[i])
+                    i += 1
+                    continue
+            else:
+                # Check for end of string
+                if len(string_char) == 3:  # Triple quote
+                    if i + 2 < len(code) and code[i:i+3] == string_char:
+                        in_string = False
+                        in_fstring = False
+                        result.append(code[i:i+3])
+                        i += 3
+                        continue
+                else:  # Single quote
+                    if code[i] == string_char:
+                        in_string = False
+                        in_fstring = False
+                        result.append(code[i])
+                        i += 1
+                        continue
+
+            result.append(code[i])
+            i += 1
+
+        intermediate = ''.join(result)
+
+        # Now unescape all remaining \n (these are structural)
+        LITERAL_BACKSLASH_R_N = '\\' + 'r' + '\\' + 'n'
+        LITERAL_BACKSLASH_T = '\\' + 't'
+
+        intermediate = intermediate.replace(LITERAL_BACKSLASH_R_N, '\r\n')
+        intermediate = intermediate.replace(LITERAL_BACKSLASH_N, '\n')
+        intermediate = intermediate.replace(LITERAL_BACKSLASH_T, '\t')
+
+        # Restore placeholders to \n (as escape sequences in strings)
+        result_code = intermediate.replace(PLACEHOLDER, '\\n')
+
+        return result_code
+    else:
+        # Mixed state - some actual newlines, some literal \n
+        # This means the JSON parsing already converted some, but not all
+        # The literal \n remaining are likely in strings, so leave them alone
+        return code
+
+
+def _unescape_code_newlines(obj: Any) -> Any:
+    """
+    Fix double-escaped newlines in Pydantic model string fields.
+
+    Some models (e.g., Gemini) return JSON with \\\\n instead of \\n in code strings,
+    resulting in literal backslash-n text instead of actual newlines after JSON parsing.
+    This function recursively unescapes these in string fields of Pydantic models.
+
+    Also repairs Python syntax errors in code-like string fields (e.g., trailing quotes).
+
+    The check uses literal backslash-n (2 chars) vs actual newline (1 char):
+    - '\\\\n' in Python source = literal backslash + n (2 chars) - needs fixing
+    - '\\n' in Python source = newline character (1 char) - already correct
+
+    Args:
+        obj: A Pydantic model, dict, list, or primitive value
+
+    Returns:
+        The same object with string fields unescaped and code fields repaired
+    """
+    if obj is None:
+        return obj
+
+    def _process_string(s: str) -> str:
+        """Process a string: unescape newlines and repair Python syntax if needed."""
+        result = s
+        # Smart unescape that preserves \n inside string literals
+        if _looks_like_python_code(result):
+            result = _smart_unescape_code(result)
+            result = _repair_python_syntax(result)
+        else:
+            # For non-code strings, do simple unescape
+            LITERAL_BACKSLASH_N = '\\' + 'n'
+            LITERAL_BACKSLASH_R_N = '\\' + 'r' + '\\' + 'n'
+            LITERAL_BACKSLASH_T = '\\' + 't'
+            if LITERAL_BACKSLASH_N in result:
+                result = result.replace(LITERAL_BACKSLASH_R_N, '\r\n')
+                result = result.replace(LITERAL_BACKSLASH_N, '\n')
+                result = result.replace(LITERAL_BACKSLASH_T, '\t')
+        return result
+
+    # Handle Pydantic models
+    if isinstance(obj, BaseModel):
+        # Get all field values and process strings
+        for field_name in obj.model_fields:
+            value = getattr(obj, field_name)
+            if isinstance(value, str):
+                processed = _process_string(value)
+                if processed != value:
+                    object.__setattr__(obj, field_name, processed)
+            elif isinstance(value, (dict, list, BaseModel)):
+                _unescape_code_newlines(value)
+        return obj
+
+    # Handle dicts
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if isinstance(value, str):
+                obj[key] = _process_string(value)
+            elif isinstance(value, (dict, list)):
+                _unescape_code_newlines(value)
+        return obj
+
+    # Handle lists
+    if isinstance(obj, list):
+        for i, item in enumerate(obj):
+            if isinstance(item, str):
+                obj[i] = _process_string(item)
+            elif isinstance(item, (dict, list, BaseModel)):
+                _unescape_code_newlines(item)
+        return obj
+
+    return obj
+
+
+def _has_invalid_python_code(obj: Any, field_name: str = "") -> bool:
+    """
+    Check if any code-like string fields have invalid Python syntax.
+
+    This is used after _unescape_code_newlines to detect if repair failed
+    and we should retry with cache disabled.
+
+    Skips fields in _PROSE_FIELD_NAMES to avoid false positives on prose
+    text that mentions code patterns (e.g., "ends on a return statement").
+
+    Args:
+        obj: A Pydantic model, dict, list, or primitive value
+        field_name: The name of the field being validated (used to skip prose)
+
+    Returns:
+        True if there are invalid code fields that couldn't be repaired
+    """
+    import ast
+
+    if obj is None:
+        return False
+
+    if isinstance(obj, str):
+        # Skip validation for known prose fields
+        if _is_prose_field_name(field_name):
+            return False
+        if _looks_like_python_code(obj):
+            try:
+                ast.parse(obj)
+                return False  # Valid
+            except SyntaxError:
+                return True  # Invalid
+        return False
+
+    if isinstance(obj, BaseModel):
+        for name in obj.model_fields:
+            value = getattr(obj, name)
+            if _has_invalid_python_code(value, field_name=name):
+                return True
+        return False
+
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            fname = key if isinstance(key, str) else ""
+            if _has_invalid_python_code(value, field_name=fname):
+                return True
+        return False
+
+    if isinstance(obj, list):
+        for item in obj:
+            if _has_invalid_python_code(item, field_name=field_name):
+                return True
+        return False
+
+    return False
+
+
 # --- Main Function ---
 
 def llm_invoke(
@@ -903,9 +1656,12 @@ def llm_invoke(
     temperature: float = 0.1,
     verbose: bool = False,
     output_pydantic: Optional[Type[BaseModel]] = None,
-    time: float = 0.25,
+    output_schema: Optional[Dict[str, Any]] = None,
+    time: Optional[float] = 0.25,
     use_batch_mode: bool = False,
     messages: Optional[Union[List[Dict[str, str]], List[List[Dict[str, str]]]]] = None,
+    language: Optional[str] = None,
+    use_cloud: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """
     Runs a prompt with given input using LiteLLM, handling model selection,
@@ -919,9 +1675,11 @@ def llm_invoke(
         temperature: LLM temperature.
         verbose: Print detailed logs.
         output_pydantic: Optional Pydantic model for structured output.
+        output_schema: Optional raw JSON schema dictionary for structured output (alternative to output_pydantic).
         time: Relative thinking time (0-1, default 0.25).
         use_batch_mode: Use batch completion if True.
         messages: Pre-formatted list of messages (or list of lists for batch). If provided, ignores prompt and input_json.
+        use_cloud: None=auto-detect (cloud if enabled, local if PDD_FORCE_LOCAL=1), True=force cloud, False=force local.
 
     Returns:
         Dictionary containing 'result', 'cost', 'model_name', 'thinking_output'.
@@ -930,6 +1688,7 @@ def llm_invoke(
         ValueError: For invalid inputs or prompt formatting errors.
         FileNotFoundError: If llm_model.csv is missing.
         RuntimeError: If all candidate models fail.
+        InsufficientCreditsError: If cloud execution fails due to insufficient credits.
         openai.*Error: If LiteLLM encounters API errors after retries.
     """
     # Set verbose logging if requested
@@ -946,6 +1705,58 @@ def llm_invoke(
         logger.debug(f"  time: {time}")
         logger.debug(f"  use_batch_mode: {use_batch_mode}")
         logger.debug(f"  messages: {'provided' if messages else 'None'}")
+        logger.debug(f"  use_cloud: {use_cloud}")
+
+    # --- 0. Cloud Execution Path ---
+    # Determine cloud usage: explicit param > environment > default (local)
+    if use_cloud is None:
+        # Check environment for cloud preference
+        # PDD_FORCE_LOCAL=1 forces local execution
+        force_local = os.environ.get("PDD_FORCE_LOCAL", "").lower() in ("1", "true", "yes")
+        if force_local:
+            use_cloud = False
+        else:
+            # Try to use cloud if credentials are configured
+            try:
+                from pdd.core.cloud import CloudConfig
+                use_cloud = CloudConfig.is_cloud_enabled()
+            except ImportError:
+                use_cloud = False
+
+    if use_cloud:
+        from rich.console import Console
+        console = Console()
+
+        if verbose:
+            logger.debug("Attempting cloud execution...")
+
+        try:
+            return _llm_invoke_cloud(
+                prompt=prompt,
+                input_json=input_json,
+                strength=strength,
+                temperature=temperature,
+                verbose=verbose,
+                output_pydantic=output_pydantic,
+                output_schema=output_schema,
+                time=time,
+                use_batch_mode=use_batch_mode,
+                messages=messages,
+                language=language,
+            )
+        except CloudFallbackError as e:
+            # Notify user and fall back to local execution
+            console.print(f"[yellow]Cloud execution failed ({e}), falling back to local execution...[/yellow]")
+            logger.warning(f"Cloud fallback: {e}")
+            # Continue to local execution below
+        except InsufficientCreditsError:
+            # Re-raise credit errors - user needs to know
+            raise
+        except CloudInvocationError as e:
+            # Non-recoverable cloud error - notify and fall back
+            console.print(f"[yellow]Cloud error ({e}), falling back to local execution...[/yellow]")
+            logger.warning(f"Cloud invocation error: {e}")
+            # Continue to local execution below
 
     # --- 1. Load Environment & Validate Inputs ---
     # .env loading happens at module level
@@ -969,6 +1780,10 @@ def llm_invoke(
          formatted_messages = _format_messages(prompt, input_json, use_batch_mode)
     else:
         raise ValueError("Either 'messages' or both 'prompt' and 'input_json' must be provided.")
+
+    # Handle None time (means "no reasoning requested")
+    if time is None:
+        time = 0.0
 
     if not (0.0 <= strength <= 1.0):
         raise ValueError("'strength' must be between 0.0 and 1.0.")
@@ -1075,6 +1890,8 @@ def llm_invoke(
                 "messages": formatted_messages,
                 # Use a local adjustable temperature to allow provider-specific fallbacks
                 "temperature": current_temperature,
+                # Retry on transient network errors (APIError, TimeoutError, ServiceUnavailableError)
+                "num_retries": 2,
             }
 
             api_key_name_from_csv = model_info.get('api_key') # From CSV
@@ -1087,7 +1904,14 @@ def llm_invoke(
             if is_vertex_model and api_key_name_from_csv == 'VERTEX_CREDENTIALS':
                 credentials_file_path = os.getenv("VERTEX_CREDENTIALS") # Path from env var
                 vertex_project_env = os.getenv("VERTEX_PROJECT")
-                vertex_location_env = os.getenv("VERTEX_LOCATION")
+                # Check for per-model location override, fall back to env var
+                model_location = model_info.get('location')
+                if pd.notna(model_location) and str(model_location).strip():
+                    vertex_location_env = str(model_location).strip()
+                    if verbose:
+                        logger.info(f"[INFO] Using per-model location override: '{vertex_location_env}' for model '{model_name_litellm}'")
+                else:
+                    vertex_location_env = os.getenv("VERTEX_LOCATION")
 
                 if credentials_file_path and vertex_project_env and vertex_location_env:
                     try:
@@ -1101,14 +1925,23 @@ def llm_invoke(
                         if verbose:
                             logger.info(f"[INFO] For Vertex AI: using vertex_credentials from '{credentials_file_path}', project '{vertex_project_env}', location '{vertex_location_env}'.")
                     except FileNotFoundError:
+                        # Still pass project and location so ADC can work
+                        litellm_kwargs["vertex_project"] = vertex_project_env
+                        litellm_kwargs["vertex_location"] = vertex_location_env
                         if verbose:
-                            logger.error(f"[ERROR] Vertex credentials file not found at path specified by VERTEX_CREDENTIALS env var: '{credentials_file_path}'. LiteLLM may try ADC or fail.")
+                            logger.warning(f"[WARN] Vertex credentials file not found at '{credentials_file_path}'. Using ADC with project '{vertex_project_env}', location '{vertex_location_env}'.")
                     except json.JSONDecodeError:
+                        # Still pass project and location so ADC can work
+                        litellm_kwargs["vertex_project"] = vertex_project_env
+                        litellm_kwargs["vertex_location"] = vertex_location_env
                         if verbose:
-                            logger.error(f"[ERROR] Failed to decode JSON from Vertex credentials file: '{credentials_file_path}'. Check file content. LiteLLM may try ADC or fail.")
+                            logger.error(f"[ERROR] Failed to decode JSON from Vertex credentials file: '{credentials_file_path}'. Using ADC with project '{vertex_project_env}', location '{vertex_location_env}'.")
                     except Exception as e:
+                        # Still pass project and location so ADC can work
+                        litellm_kwargs["vertex_project"] = vertex_project_env
+                        litellm_kwargs["vertex_location"] = vertex_location_env
                         if verbose:
-                            logger.error(f"[ERROR] Failed to load or process Vertex credentials from '{credentials_file_path}': {e}. LiteLLM may try ADC or fail.")
+                            logger.error(f"[ERROR] Failed to load Vertex credentials from '{credentials_file_path}': {e}. Using ADC with project '{vertex_project_env}', location '{vertex_location_env}'.")
                 else:
                     if verbose:
                         logger.warning(f"[WARN] For Vertex AI (using '{api_key_name_from_csv}'): One or more required environment variables (VERTEX_CREDENTIALS, VERTEX_PROJECT, VERTEX_LOCATION) are missing.")
@@ -1127,9 +1960,16 @@ def llm_invoke(
                     
                     # If this model is Vertex AI AND uses a direct API key string (not VERTEX_CREDENTIALS from CSV),
                     # also pass project and location from env vars.
-                    if is_vertex_model: 
+                    if is_vertex_model:
                         vertex_project_env = os.getenv("VERTEX_PROJECT")
-                        vertex_location_env = os.getenv("VERTEX_LOCATION")
+                        # Check for per-model location override, fall back to env var
+                        model_location = model_info.get('location')
+                        if pd.notna(model_location) and str(model_location).strip():
+                            vertex_location_env = str(model_location).strip()
+                            if verbose:
+                                logger.info(f"[INFO] Using per-model location override: '{vertex_location_env}' for model '{model_name_litellm}'")
+                        else:
+                            vertex_location_env = os.getenv("VERTEX_LOCATION")
                         if vertex_project_env and vertex_location_env:
                             litellm_kwargs["vertex_project"] = vertex_project_env
                             litellm_kwargs["vertex_location"] = vertex_location_env
@@ -1154,6 +1994,7 @@ def llm_invoke(
             model_name_lower = str(model_name_litellm).lower()
             provider_lower_for_model = provider.lower()
             is_lm_studio = model_name_lower.startswith('lm_studio/') or provider_lower_for_model == 'lm_studio'
+            is_groq = model_name_lower.startswith('groq/') or provider_lower_for_model == 'groq'
             if is_lm_studio:
                 # Ensure base_url is set (fallback to env LM_STUDIO_API_BASE or localhost)
                 if not litellm_kwargs.get("base_url"):
@@ -1170,8 +2011,8 @@ def llm_invoke(
                     if verbose:
                         logger.info("[INFO] Using LM Studio api_key placeholder (set LM_STUDIO_API_KEY to customize).")
 
-            # Handle Structured Output (JSON Mode / Pydantic)
-            if output_pydantic:
+            # Handle Structured Output (JSON Mode / Pydantic / JSON Schema)
+            if output_pydantic or output_schema:
                 # Check if model supports structured output based on CSV flag or LiteLLM check
                 supports_structured = model_info.get('structured_output', False)
                 # Optional: Add litellm.supports_response_schema check if CSV flag is unreliable
@@ -1180,19 +2021,100 @@ def llm_invoke(
                 #     except: pass # Ignore errors in supports_response_schema check
 
                 if supports_structured:
-                    if verbose:
-                        logger.info(f"[INFO] Requesting structured output (Pydantic: {output_pydantic.__name__}) for {model_name_litellm}")
-                    # Pass the Pydantic model directly if supported, else use json_object
-                    # LiteLLM handles passing Pydantic models for supported providers
-                    response_format = output_pydantic
+                    if output_pydantic:
+                        if verbose:
+                            logger.info(f"[INFO] Requesting structured output (Pydantic: {output_pydantic.__name__}) for {model_name_litellm}")
+                        # Use json_schema with strict=True to enforce ALL required fields are present
+                        # This prevents LLMs from omitting required fields when they think they're not needed
+                        schema = output_pydantic.model_json_schema()
+                        # Ensure all properties are in required array (OpenAI strict mode requirement)
+                        _ensure_all_properties_required(schema)
+                        # Add additionalProperties: false recursively for strict mode (required by OpenAI)
+                        _add_additional_properties_false(schema)
+                        response_format = {
+                            "type": "json_schema",
+                            "json_schema": {
+                                "name": output_pydantic.__name__,
+                                "schema": schema,
+                                "strict": True
+                            }
+                        }
+                    else: # output_schema is set
+                        if verbose:
+                            logger.info(f"[INFO] Requesting structured output (JSON Schema) for {model_name_litellm}")
+                        # LiteLLM expects {"type": "json_schema", "json_schema": {"name": "response", "schema": schema_dict, "strict": true}}
+                        # OR for some providers just the schema dict if type is json_object.
+                        # Best practice for broad compatibility via LiteLLM is usually the dict directly or wrapped.
+                        # For now, let's assume we pass the schema dict as 'response_format' which LiteLLM handles for many providers
+                        # or wrap it if needed. LiteLLM 1.40+ supports passing the dict directly for many.
+                        response_format = {
+                            "type": "json_schema",
+                            "json_schema": {
+                                "name": "response",
+                                "schema": output_schema,
+                                "strict": False
+                            }
+                        }
+                        # Ensure all properties are in required array (OpenAI strict mode requirement)
+                        _ensure_all_properties_required(response_format["json_schema"]["schema"])
+                        # Add additionalProperties: false recursively for strict mode (required by OpenAI)
+                        _add_additional_properties_false(response_format["json_schema"]["schema"])
+
                     litellm_kwargs["response_format"] = response_format
+
+                    # LM Studio requires "json_schema" format, not "json_object"
+                    # Use extra_body to bypass litellm.drop_params stripping the schema
+                    if is_lm_studio and response_format and response_format.get("type") == "json_object":
+                        schema = response_format.get("response_schema", {})
+                        lm_studio_response_format = {
+                            "type": "json_schema",
+                            "json_schema": {
+                                "name": "response",
+                                "strict": True,
+                                "schema": schema
+                            }
+                        }
+                        # Use extra_body to bypass drop_params - passes directly to API
+                        litellm_kwargs["extra_body"] = {"response_format": lm_studio_response_format}
+                        # Remove from regular response_format to avoid conflicts
+                        if "response_format" in litellm_kwargs:
+                            del litellm_kwargs["response_format"]
+                        if verbose:
+                            logger.info(f"[INFO] Using extra_body for LM Studio response_format to bypass drop_params")
+
+                    # Groq has issues with tool-based structured output - use JSON mode with schema in prompt
+                    if is_groq and response_format:
+                        # Get the schema to include in system prompt
+                        if output_pydantic:
+                            schema = output_pydantic.model_json_schema()
+                        else:
+                            schema = output_schema
+
+                        # Use simple json_object mode (Groq's tool_use often fails)
+                        litellm_kwargs["response_format"] = {"type": "json_object"}
+
+                        # Prepend schema instruction to messages (json module is imported at top of file)
+                        schema_instruction = f"You must respond with valid JSON matching this schema:\n```json\n{json.dumps(schema, indent=2)}\n```\nRespond ONLY with the JSON object, no other text."
+
+                        # Find or create system message to prepend schema
+                        messages_list = litellm_kwargs.get("messages", [])
+                        if messages_list and messages_list[0].get("role") == "system":
+                            messages_list[0]["content"] = schema_instruction + "\n\n" + messages_list[0]["content"]
+                        else:
+                            messages_list.insert(0, {"role": "system", "content": schema_instruction})
+                        litellm_kwargs["messages"] = messages_list
+
+                        if verbose:
+                            logger.info(f"[INFO] Using JSON object mode with schema in prompt for Groq (avoiding tool_use issues)")
+
                     # As a fallback, one could use:
                     # litellm_kwargs["response_format"] = {"type": "json_object"}
                     # And potentially enable client-side validation:
                     # litellm.enable_json_schema_validation = True # Enable globally if needed
                 else:
+                    schema_name = output_pydantic.__name__ if output_pydantic else "JSON Schema"
                     if verbose:
-                        logger.warning(f"[WARN] Model {model_name_litellm} does not support structured output via CSV flag. Output might not be valid {output_pydantic.__name__}.")
+                        logger.warning(f"[WARN] Model {model_name_litellm} does not support structured output via CSV flag. Output might not be valid {schema_name}.")
                     # Proceed without forcing JSON mode, parsing will be attempted later
 
             # --- NEW REASONING LOGIC ---
@@ -1279,6 +2201,10 @@ def llm_invoke(
                 # Only add if litellm.cache is configured
                 if litellm.cache is not None:
                     litellm_kwargs["caching"] = True
+                    # Workaround for litellm bug where metadata=None causes AttributeError
+                    # in caching.py when it tries kwargs.get("metadata", {}).get("redis_namespace")
+                    if litellm_kwargs.get("metadata") is None:
+                        litellm_kwargs["metadata"] = {}
                     logger.debug("Caching enabled for this request")
                 else:
                     logger.debug("NOT ENABLING CACHING: litellm.cache is None at call time")
@@ -1294,7 +2220,7 @@ def llm_invoke(
                     and model_lower_for_call.startswith('gpt-5')
                 ):
                     if verbose:
-                        logger.info(f"[INFO] Calling OpenAI Responses API for {model_name_litellm}...")
+                        logger.info(f"[INFO] Calling LiteLLM Responses API for {model_name_litellm}...")
                     try:
                         # Build input text from messages
                         if isinstance(formatted_messages, list) and formatted_messages and isinstance(formatted_messages[0], dict):
@@ -1306,11 +2232,41 @@ def llm_invoke(
                         # Derive effort mapping already computed in time_kwargs
                         reasoning_param = time_kwargs.get("reasoning")
 
-                        # Optional text settings; keep simple
+                        # Build text.format block for structured output
+                        # Default to plain text format
                         text_block = {"format": {"type": "text"}}
 
-                        # If structured output requested, attempt JSON schema via Pydantic
-                        # GPT-5 Responses API does not support temperature; omit it here.
+                        # If structured output requested, use text.format with json_schema
+                        # This is the correct way to enforce structured output via litellm.responses()
+                        if output_pydantic or output_schema:
+                            try:
+                                if output_pydantic:
+                                    schema = output_pydantic.model_json_schema()
+                                    name = output_pydantic.__name__
+                                else:
+                                    schema = output_schema
+                                    name = "response"
+
+                                # Ensure all properties are in required array (OpenAI strict mode requirement)
+                                _ensure_all_properties_required(schema)
+                                # Add additionalProperties: false recursively for strict mode (required by OpenAI)
+                                _add_additional_properties_false(schema)
+
+                                # Use text.format with json_schema for structured output
+                                text_block = {
+                                    "format": {
+                                        "type": "json_schema",
+                                        "name": name,
+                                        "strict": True,
+                                        "schema": schema,
+                                    }
+                                }
+                                if verbose:
+                                    logger.info(f"[INFO] Using structured output via text.format for Responses API")
+                            except Exception as schema_e:
+                                logger.warning(f"[WARN] Failed to derive JSON schema: {schema_e}. Proceeding with plain text format.")
+
+                        # Build kwargs for litellm.responses()
                         responses_kwargs = {
                             "model": model_name_litellm,
                             "input": input_text,
@@ -1321,67 +2277,27 @@ def llm_invoke(
                         if reasoning_param is not None:
                             responses_kwargs["reasoning"] = reasoning_param
 
-                        if output_pydantic:
-                            try:
-                                schema = output_pydantic.model_json_schema()
-                                if _openai_responses_supports_response_format():
-                                    responses_kwargs["response_format"] = {
-                                        "type": "json_schema",
-                                        "json_schema": {
-                                            "name": output_pydantic.__name__,
-                                            "schema": schema,
-                                            "strict": True,
-                                        },
-                                    }
-                                    # When enforcing JSON schema, omit text formatting
-                                    responses_kwargs.pop("text", None)
-                                else:
-                                    if verbose:
-                                        logger.info("[INFO] OpenAI SDK lacks Responses.response_format; will validate JSON client-side with Pydantic.")
-                            except Exception as schema_e:
-                                logger.warning(f"[WARN] Failed to derive JSON schema from Pydantic: {schema_e}. Proceeding without structured response_format.")
+                        # Call litellm.responses() which handles the API interaction
+                        resp = litellm.responses(**responses_kwargs)
 
-                        # Initialize OpenAI client with explicit key if provided
+                        # Extract text result from response
+                        result_text = None
                         try:
-                            from openai import OpenAI as _OpenAIClient
+                            # LiteLLM responses return output as a list of items
+                            for item in resp.output:
+                                if getattr(item, 'type', None) == 'message' and hasattr(item, 'content') and item.content:
+                                    for content_item in item.content:
+                                        if hasattr(content_item, 'text'):
+                                            result_text = content_item.text
+                                            break
+                                    if result_text:
+                                        break
                         except Exception:
-                            _OpenAIClient = None
-                        if _OpenAIClient is None:
-                            raise RuntimeError("OpenAI SDK not available to call Responses API.")
-
-                        api_key_to_use = litellm_kwargs.get("api_key") or os.getenv("OPENAI_API_KEY")
-                        client = _OpenAIClient(api_key=api_key_to_use) if api_key_to_use else _OpenAIClient()
-
-                        # Make the Responses API call, with graceful fallback if SDK
-                        # doesn't support certain newer kwargs (e.g., response_format)
-                        try:
-                            resp = client.responses.create(**responses_kwargs)
-                        except TypeError as te:
-                            msg = str(te)
-                            if 'response_format' in responses_kwargs and ('unexpected keyword argument' in msg or 'got an unexpected keyword argument' in msg):
-                                logger.warning("[WARN] OpenAI SDK doesn't support response_format; retrying without it.")
-                                responses_kwargs.pop('response_format', None)
-                                resp = client.responses.create(**responses_kwargs)
-                            else:
-                                raise
-
-                        # Extract text result
-                        result_text = getattr(resp, "output_text", None)
-                        if result_text is None:
-                            try:
-                                # Fallback parse
-                                outputs = getattr(resp, "output", []) or getattr(resp, "outputs", [])
-                                if outputs:
-                                    first = outputs[0]
-                                    content = getattr(first, "content", [])
-                                    if content and hasattr(content[0], "text"):
-                                        result_text = content[0].text
-                            except Exception:
-                                result_text = None
+                            result_text = None
 
                         # Calculate cost using usage + CSV rates
-                        usage = getattr(resp, "usage", None)
                         total_cost = 0.0
+                        usage = getattr(resp, "usage", None)
                         if usage is not None:
                             in_tok = getattr(usage, "input_tokens", 0) or 0
                             out_tok = getattr(usage, "output_tokens", 0) or 0
@@ -1389,13 +2305,49 @@ def llm_invoke(
                             out_rate = model_info.get('output', 0.0) or 0.0
                             total_cost = (in_tok * in_rate + out_tok * out_rate) / 1_000_000.0
 
+                        # Parse result if Pydantic output requested
                         final_result = None
                         if output_pydantic and result_text:
                             try:
                                 final_result = output_pydantic.model_validate_json(result_text)
                             except Exception as e:
-                                logger.error(f"[ERROR] Pydantic parse failed on Responses output: {e}")
-                                final_result = result_text
+                                # With structured output, parsing should succeed
+                                # But if it fails, try JSON repair as fallback
+                                logger.warning(f"[WARN] Pydantic parse failed on Responses output: {e}. Attempting JSON repair...")
+
+                                # Try extracting from fenced JSON blocks first
+                                fenced = _extract_fenced_json_block(result_text)
+                                candidates: List[str] = []
+                                if fenced:
+                                    candidates.append(fenced)
+                                else:
+                                    candidates.extend(_extract_balanced_json_objects(result_text))
+
+                                # Also try the raw text as-is after stripping fences
+                                cleaned = result_text.strip()
+                                if cleaned.startswith("```json"):
+                                    cleaned = cleaned[7:]
+                                elif cleaned.startswith("```"):
+                                    cleaned = cleaned[3:]
+                                if cleaned.endswith("```"):
+                                    cleaned = cleaned[:-3]
+                                cleaned = cleaned.strip()
+                                if cleaned and cleaned not in candidates:
+                                    candidates.append(cleaned)
+
+                                parse_succeeded = False
+                                for cand in candidates:
+                                    try:
+                                        final_result = output_pydantic.model_validate_json(cand)
+                                        parse_succeeded = True
+                                        logger.info(f"[SUCCESS] JSON repair succeeded for Responses output")
+                                        break
+                                    except Exception:
+                                        continue
+
+                                if not parse_succeeded:
+                                    logger.error(f"[ERROR] All JSON repair attempts failed for Responses output. Original error: {e}")
+                                    final_result = f"ERROR: Failed to parse structured output from Responses API. Raw: {repr(result_text)[:200]}"
                         else:
                             final_result = result_text
 
@@ -1445,6 +2397,12 @@ def llm_invoke(
 
                 if verbose:
                     logger.info(f"[SUCCESS] Invocation successful for {model_name_litellm} (took {end_time - start_time:.2f}s)")
+
+                # Build retry kwargs with provider credentials from litellm_kwargs
+                # Issue #185: Retry calls were missing vertex_location, vertex_project, etc.
+                retry_provider_kwargs = {k: v for k, v in litellm_kwargs.items()
+                                         if k in ('vertex_credentials', 'vertex_project', 'vertex_location',
+                                                  'api_key', 'base_url', 'api_base')}
 
                 # --- 7. Process Response ---
                 results = []
@@ -1496,7 +2454,8 @@ def llm_invoke(
                                         messages=retry_messages,
                                         temperature=current_temperature,
                                         response_format=response_format,
-                                        **time_kwargs
+                                        **time_kwargs,
+                                        **retry_provider_kwargs  # Issue #185: Pass Vertex AI credentials
                                     )
                                     # Re-enable cache - restore original configured cache (restore to original state, even if None)
                                     litellm.cache = configured_cache
@@ -1517,21 +2476,67 @@ def llm_invoke(
                                 logger.error(f"[ERROR] Cannot retry - batch mode or missing prompt/input_json")
                                 results.append("ERROR: LLM returned None content and cannot retry")
                                 continue
-                        
-                        if output_pydantic:
+
+                        # Check for malformed JSON response (excessive trailing newlines causing truncation)
+                        # This can happen when Gemini generates thousands of \n in JSON string values
+                        if isinstance(raw_result, str) and _is_malformed_json_response(raw_result):
+                            logger.warning(f"[WARNING] Detected malformed JSON response with excessive trailing newlines for item {i}. Retrying with cache bypass...")
+                            if not use_batch_mode and prompt and input_json is not None:
+                                # Add a small space to bypass cache
+                                modified_prompt = prompt + " "
+                                try:
+                                    retry_messages = _format_messages(modified_prompt, input_json, use_batch_mode)
+                                    # Disable cache for retry
+                                    original_cache = litellm.cache
+                                    litellm.cache = None
+                                    retry_response = litellm.completion(
+                                        model=model_name_litellm,
+                                        messages=retry_messages,
+                                        temperature=current_temperature,
+                                        response_format=response_format,
+                                        **time_kwargs,
+                                        **retry_provider_kwargs  # Issue #185: Pass Vertex AI credentials
+                                    )
+                                    # Re-enable cache
+                                    litellm.cache = original_cache
+                                    # Extract result from retry
+                                    retry_raw_result = retry_response.choices[0].message.content
+                                    if retry_raw_result is not None and not _is_malformed_json_response(retry_raw_result):
+                                        logger.info(f"[SUCCESS] Cache bypass retry for malformed JSON succeeded for item {i}")
+                                        raw_result = retry_raw_result
+                                    else:
+                                        # Retry also failed, but we'll continue with repair logic below
+                                        logger.warning(f"[WARNING] Cache bypass retry also returned malformed JSON for item {i}, attempting repair...")
+                                except Exception as retry_e:
+                                    logger.warning(f"[WARNING] Cache bypass retry for malformed JSON failed for item {i}: {retry_e}, attempting repair...")
+                            else:
+                                logger.warning(f"[WARNING] Cannot retry malformed JSON - batch mode or missing prompt/input_json, attempting repair...")
+
+                        if output_pydantic or output_schema:
                             parsed_result = None
                             json_string_to_parse = None
 
                             try:
-                                # Attempt 1: Check if LiteLLM already parsed it
-                                if isinstance(raw_result, output_pydantic):
+                                # Attempt 1: Check if LiteLLM already parsed it (only for Pydantic)
+                                if output_pydantic and isinstance(raw_result, output_pydantic):
                                     parsed_result = raw_result
                                     if verbose:
                                         logger.debug("[DEBUG] Pydantic object received directly from LiteLLM.")
 
                                 # Attempt 2: Check if raw_result is dict-like and validate
                                 elif isinstance(raw_result, dict):
-                                    parsed_result = output_pydantic.model_validate(raw_result)
+                                    if output_pydantic:
+                                        parsed_result = output_pydantic.model_validate(raw_result)
+                                    else:
+                                        # Validate against JSON schema
+                                        try:
+                                            import jsonschema
+                                            jsonschema.validate(instance=raw_result, schema=output_schema)
+                                            parsed_result = json.dumps(raw_result) # Return as JSON string for consistency
+                                        except ImportError:
+                                            logger.warning("jsonschema not installed, skipping validation")
+                                            parsed_result = json.dumps(raw_result)
+                                    
                                     if verbose:
                                         logger.debug("[DEBUG] Validated dictionary-like object directly.")
 
@@ -1556,19 +2561,39 @@ def llm_invoke(
                                             try:
                                                 if verbose:
                                                     logger.debug(f"[DEBUG] Attempting to parse candidate JSON block: {cand}")
-                                                parsed_result = output_pydantic.model_validate_json(cand)
+                                                
+                                                if output_pydantic:
+                                                    parsed_result = output_pydantic.model_validate_json(cand)
+                                                else:
+                                                    # Parse JSON and validate against schema
+                                                    loaded = json.loads(cand)
+                                                    try:
+                                                        import jsonschema
+                                                        jsonschema.validate(instance=loaded, schema=output_schema)
+                                                    except ImportError:
+                                                        pass # Skip validation if lib missing
+                                                    parsed_result = cand # Return string if valid
+
                                                 json_string_to_parse = cand
                                                 parse_err = None
                                                 break
                                             except (json.JSONDecodeError, ValidationError, ValueError) as pe:
+                                                # Also catch jsonschema.ValidationError if imported
                                                 parse_err = pe
+                                                try:
+                                                    import jsonschema
+                                                    if isinstance(pe, jsonschema.ValidationError):
+                                                        parse_err = pe
+                                                except ImportError:
+                                                    pass
 
                                         if parsed_result is None:
                                             # If none of the candidates parsed, raise last error
                                             if parse_err is not None:
                                                 raise parse_err
                                             raise ValueError("Unable to parse any JSON candidates")
-                                    except (json.JSONDecodeError, ValidationError, ValueError) as extraction_error:
+                                    except (json.JSONDecodeError, ValidationError, ValueError, Exception) as extraction_error:
+                                        # Catch generic Exception to handle jsonschema errors without explicit import here
                                         if verbose:
                                             logger.debug(f"[DEBUG] JSON extraction/validation failed ('{extraction_error}'). Trying fence cleaning.")
                                         # Last resort: strip any leading/trailing code fences and retry
@@ -1580,33 +2605,173 @@ def llm_invoke(
                                         if cleaned_result_str.endswith("```"):
                                             cleaned_result_str = cleaned_result_str[:-3]
                                         cleaned_result_str = cleaned_result_str.strip()
-                                        if cleaned_result_str.startswith('{') and cleaned_result_str.endswith('}'):
+                                        # Check for complete JSON object or array
+                                        is_complete_object = cleaned_result_str.startswith('{') and cleaned_result_str.endswith('}')
+                                        is_complete_array = cleaned_result_str.startswith('[') and cleaned_result_str.endswith(']')
+                                        if is_complete_object or is_complete_array:
                                             if verbose:
                                                 logger.debug(f"[DEBUG] Attempting parse after generic fence cleaning. Cleaned string: '{cleaned_result_str}'")
                                             json_string_to_parse = cleaned_result_str
-                                            parsed_result = output_pydantic.model_validate_json(json_string_to_parse)
+
+                                            if output_pydantic:
+                                                parsed_result = output_pydantic.model_validate_json(json_string_to_parse)
+                                            else:
+                                                loaded = json.loads(json_string_to_parse)
+                                                try:
+                                                    import jsonschema
+                                                    jsonschema.validate(instance=loaded, schema=output_schema)
+                                                except ImportError:
+                                                    pass
+                                                parsed_result = json_string_to_parse
+                                        elif cleaned_result_str.startswith('{') or cleaned_result_str.startswith('['):
+                                            # Attempt to repair truncated JSON (e.g., missing closing braces)
+                                            # This can happen when Gemini generates excessive trailing content
+                                            # that causes token limit truncation
+                                            if verbose:
+                                                logger.debug(f"[DEBUG] JSON appears truncated (missing closing brace). Attempting repair.")
+
+                                            # Try to find the last valid JSON structure
+                                            # For simple schemas like {"extracted_code": "..."}, we can try to close it
+                                            repaired = cleaned_result_str.rstrip()
+
+                                            # Strip trailing escaped newline sequences (\\n in the JSON string)
+                                            # These appear as literal backslash-n when Gemini generates excessive newlines
+                                            while repaired.endswith('\\n'):
+                                                repaired = repaired[:-2]
+                                            # Also strip trailing literal backslashes that might be orphaned
+                                            repaired = repaired.rstrip('\\')
+
+                                            # If we're in the middle of a string value, try to close it
+                                            # Count unescaped quotes to determine if we're inside a string
+                                            # Simple heuristic: if it ends without proper closure, add closing
+                                            is_array = cleaned_result_str.startswith('[')
+                                            expected_end = ']' if is_array else '}'
+                                            if not repaired.endswith(expected_end):
+                                                # Try adding various closures to repair
+                                                if is_array:
+                                                    repair_attempts = [
+                                                        repaired + '}]',  # Close object and array
+                                                        repaired + '"}]',  # Close string, object and array
+                                                        repaired + '"}}]',  # Close string, nested object and array
+                                                        repaired.rstrip(',') + ']',  # Remove trailing comma and close array
+                                                        repaired.rstrip('"') + '"}]',  # Handle partial string end
+                                                    ]
+                                                else:
+                                                    repair_attempts = [
+                                                        repaired + '"}',  # Close string and object
+                                                        repaired + '"}\n}',  # Close string and nested object
+                                                        repaired + '"}}}',  # Deeper nesting
+                                                        repaired.rstrip(',') + '}',  # Remove trailing comma
+                                                        repaired.rstrip('"') + '"}',  # Handle partial string end
+                                                    ]
+
+                                                for attempt in repair_attempts:
+                                                    try:
+                                                        if output_pydantic:
+                                                            parsed_result = output_pydantic.model_validate_json(attempt)
+                                                        else:
+                                                            loaded = json.loads(attempt)
+                                                            try:
+                                                                import jsonschema
+                                                                jsonschema.validate(instance=loaded, schema=output_schema)
+                                                            except ImportError:
+                                                                pass
+                                                            parsed_result = attempt
+
+                                                        if verbose:
+                                                            logger.info(f"[INFO] Successfully repaired truncated JSON response")
+                                                        json_string_to_parse = attempt
+                                                        break
+                                                    except (json.JSONDecodeError, ValidationError, ValueError):
+                                                        continue
+
+                                                if parsed_result is None:
+                                                    raise ValueError("Content after cleaning doesn't look like JSON (and repair attempts failed)")
                                         else:
                                             raise ValueError("Content after cleaning doesn't look like JSON")
 
 
                                 # Check if any parsing attempt succeeded
                                 if parsed_result is None:
+                                    target_name = output_pydantic.__name__ if output_pydantic else "JSON Schema"
                                     # This case should ideally be caught by exceptions above, but as a safeguard:
-                                    raise TypeError(f"Raw result type {type(raw_result)} or content could not be validated/parsed against {output_pydantic.__name__}.")
+                                    raise TypeError(f"Raw result type {type(raw_result)} or content could not be validated/parsed against {target_name}.")
 
-                            except (ValidationError, json.JSONDecodeError, TypeError, ValueError) as parse_error:
-                                logger.error(f"[ERROR] Failed to parse response into Pydantic model {output_pydantic.__name__} for item {i}: {parse_error}")
+                            except (ValidationError, json.JSONDecodeError, TypeError, ValueError, Exception) as parse_error:
+                                target_name = output_pydantic.__name__ if output_pydantic else "JSON Schema"
+                                logger.error(f"[ERROR] Failed to parse response into {target_name} for item {i}: {parse_error}")
                                 # Use the string that was last attempted for parsing in the error message
                                 error_content = json_string_to_parse if json_string_to_parse is not None else raw_result
-                                logger.error("[ERROR] Content attempted for parsing: %s", repr(error_content)) # CORRECTED (or use f-string)
-                                results.append(f"ERROR: Failed to parse Pydantic. Raw: {repr(raw_result)}")
-                                continue # Skip appending result below if parsing failed
+                                logger.error("[ERROR] Content attempted for parsing: %s", repr(error_content))
+                                # Issue #168: Raise SchemaValidationError to trigger model fallback
+                                # Previously this used `continue` which only skipped to the next batch item
+                                raise SchemaValidationError(
+                                    f"Failed to parse response into {target_name}: {parse_error}",
+                                    raw_response=raw_result,
+                                    item_index=i
+                                ) from parse_error
 
-                            # If parsing succeeded, append the parsed_result
+                            # Post-process: unescape newlines and repair Python syntax
+                            _unescape_code_newlines(parsed_result)
+
+                            # Check if code fields still have invalid Python syntax after repair
+                            # If so, retry without cache to get a fresh response
+                            # Skip validation for non-Python languages to avoid false positives
+                            if language in (None, "python") and _has_invalid_python_code(parsed_result):
+                                logger.warning(f"[WARNING] Detected invalid Python syntax in code fields for item {i} after repair. Retrying with cache bypass...")
+                                if not use_batch_mode and prompt and input_json is not None:
+                                    # Add a small variation to bypass cache
+                                    modified_prompt = prompt + "  "  # Two spaces to differentiate from other retries
+                                    try:
+                                        retry_messages = _format_messages(modified_prompt, input_json, use_batch_mode)
+                                        # Disable cache for retry
+                                        original_cache = litellm.cache
+                                        litellm.cache = None
+                                        retry_response = litellm.completion(
+                                            model=model_name_litellm,
+                                            messages=retry_messages,
+                                            temperature=current_temperature,
+                                            response_format=response_format,
+                                            **time_kwargs,
+                                            **retry_provider_kwargs  # Issue #185: Pass Vertex AI credentials
+                                        )
+                                        # Re-enable cache
+                                        litellm.cache = original_cache
+                                        # Extract and re-parse the retry result
+                                        retry_raw_result = retry_response.choices[0].message.content
+                                        if retry_raw_result is not None:
+                                            # Re-parse the retry result
+                                            retry_parsed = None
+                                            if output_pydantic:
+                                                if isinstance(retry_raw_result, output_pydantic):
+                                                    retry_parsed = retry_raw_result
+                                                elif isinstance(retry_raw_result, dict):
+                                                    retry_parsed = output_pydantic.model_validate(retry_raw_result)
+                                                elif isinstance(retry_raw_result, str):
+                                                    retry_parsed = output_pydantic.model_validate_json(retry_raw_result)
+                                            elif output_schema and isinstance(retry_raw_result, str):
+                                                retry_parsed = retry_raw_result  # Keep as string for schema validation
+
+                                            if retry_parsed is not None:
+                                                _unescape_code_newlines(retry_parsed)
+                                                if not _has_invalid_python_code(retry_parsed):
+                                                    logger.info(f"[SUCCESS] Cache bypass retry for invalid Python code succeeded for item {i}")
+                                                    parsed_result = retry_parsed
+                                                else:
+                                                    logger.warning(f"[WARNING] Cache bypass retry still has invalid Python code for item {i}, using original")
+                                            else:
+                                                logger.warning(f"[WARNING] Cache bypass retry returned unparseable result for item {i}")
+                                        else:
+                                            logger.warning(f"[WARNING] Cache bypass retry returned None for item {i}")
+                                    except Exception as retry_e:
+                                        logger.warning(f"[WARNING] Cache bypass retry for invalid Python code failed for item {i}: {retry_e}")
+                                else:
+                                    logger.warning(f"[WARNING] Cannot retry invalid Python code - batch mode or missing prompt/input_json")
+
                             results.append(parsed_result)
 
                         else:
-                            # If output_pydantic was not requested, append the raw result
+                            # If output_pydantic/schema was not requested, append the raw result
                             results.append(raw_result)
 
                     except (AttributeError, IndexError) as e:
@@ -1683,6 +2848,14 @@ def llm_invoke(
                 else:
                     logger.warning(f"[AUTH ERROR] Authentication failed for {model_name_litellm} using existing key '{api_key_name}'. Trying next model.")
                     break # Break inner loop, try next model candidate
+
+            except SchemaValidationError as e:
+                # Issue #168: Schema validation failures now trigger model fallback
+                last_exception = e
+                logger.warning(f"[SCHEMA ERROR] Validation failed for {model_name_litellm}: {e}. Trying next model.")
+                if verbose:
+                    logger.debug(f"Raw response that failed validation: {repr(e.raw_response)}")
+                break  # Break inner loop, try next model candidate
 
             except (openai.RateLimitError, openai.APITimeoutError, openai.APIConnectionError,
                     openai.APIStatusError, openai.BadRequestError, openai.InternalServerError,

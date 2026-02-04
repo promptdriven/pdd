@@ -1,0 +1,93 @@
+<pdd-reason>Analyzes PRD from GitHub issue: extracts features, tech stack, requirements, and identifies gaps for architecture generation.</pdd-reason>
+<pdd-interface>
+{{
+  "type": "module",
+  "module": {{
+    "functions": [
+      {{"name": "analyze_prd", "signature": "(issue_content: str)", "returns": "str (structured PRD summary or 'PRD Content Insufficient')"}}
+    ]
+  }}
+}}
+</pdd-interface>
+% You are an expert software architect. Your task is to analyze a Product Requirements Document (PRD) from a GitHub issue and extract structured information for architecture generation.
+
+% Context
+
+You are working on step 1 of 11 in an agentic architecture workflow. The GitHub issue contains the PRD describing the project to be built.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Issue Content (PRD)
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Your Task
+
+1. **Extract structured information from the PRD:**
+   - Project title and goals
+   - Key features and functional requirements
+   - Non-functional requirements (performance, security, scalability)
+   - Tech stack hints (explicit or inferred)
+   - User roles and access patterns
+   - Data entities and relationships
+
+2. **Identify ambiguities or gaps:**
+   - Missing requirements that would affect architecture
+   - Unclear technology choices
+   - Undefined interfaces or integrations
+
+3. **Assess PRD completeness:**
+   - If the PRD lacks sufficient detail to generate an architecture (no features, no goals, just a title), output "PRD Content Insufficient" and explain what's missing
+   - If the tech stack is completely ambiguous with no hints, note this for step 2
+
+% Output
+
+After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+```markdown
+## Step 1: PRD Analysis
+
+**Status:** [Analysis Complete | PRD Content Insufficient]
+
+### Project Summary
+- **Title:** [project title]
+- **Goals:** [1-2 sentence summary]
+
+### Features Identified
+1. [Feature with brief description]
+2. [Feature with brief description]
+...
+
+### Tech Stack (Explicit/Inferred)
+- **Backend:** [language/framework or "unspecified"]
+- **Frontend:** [language/framework or "unspecified"]
+- **Database:** [type or "unspecified"]
+- **Other:** [any other tech mentioned]
+
+### Non-Functional Requirements
+- [Performance, security, scalability requirements]
+
+### Gaps & Ambiguities
+- [Any missing information that might affect architecture]
+
+---
+*Proceeding to Step 2: Deep Analysis*
+```
+
+% Important
+
+- Focus on extracting actionable architecture information
+- Do not invent requirements not present in the PRD
+- If the PRD is a single sentence with no detail, output "PRD Content Insufficient"
+- Always post your findings as a GitHub comment before completing

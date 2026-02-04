@@ -13,4 +13,3 @@ Here is the coverage report: ```{coverage_report}```
     - The unit test should be in {language}. If Python, use pytest.
     - Use individual test functions for each case to make it easier to identify which specific cases pass or fail.
     - Use the description of the functionality in the prompt to generate tests with useful tests with good code coverage.
-<include>./context/test.prompt</include>

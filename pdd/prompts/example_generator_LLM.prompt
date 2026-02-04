@@ -4,7 +4,28 @@
 
 % The language of the example should be in: <language_for_example>{language}</language_for_example>
 
+% File path information:
+ - The code module file is located at: <code_module_file_path>{source_file_path}</code_module_file_path>
+ - The example file will be saved at: <example_file_path>{example_file_path}</example_file_path>
+ - The module name (without extension) is: <module_name>{module_name}</module_name>
+
+% IMPORT INSTRUCTIONS: Use the appropriate import mechanism for the target language
+ - CRITICAL: Use the exact module_name provided in the file path information above - DO NOT use generic names like "greetings" or "module"
+ - Avoid package-style imports unless the file is actually in a package structure
+ - Import the specific functions/classes that are defined in the code module
+ - CRITICAL: Do not assume module names - use the exact module_name provided
+ - CRITICAL: Import the appropriate functions/classes from the module (e.g., if module_name is "simple_math", import "add", "subtract", etc.)
+ - CRITICAL: Never include hardcoded absolute paths like "/Users/username/project/examples/" in comments or code
+    - Use only relative path descriptions in comments (e.g., "relative to project root" or "relative to this script")
+    - Make the example portable across different development environments
+    - Use dynamic path resolution with os.path.dirname(__file__) and relative path construction
+    - In comments, describe file structure using relative terms, not absolute paths
+ - CRITICAL: The 'extracted_code' field must preserve all newlines using proper JSON escaping (\\n). The output must be valid JSON where multi-line code is represented with \\n escape sequences for each line break.
+
 % Make sure the following happens:
     - Document in detail what the input and output parameters in the doc strings
-    - Someone needs to be able to fully understand how to use the module from the example.
+    - Someone needs to be able to fully understand how to use the module from the example.        
+    - Use correct import statements based on the actual file structure
+    - The example should be a complete, runnable script that imports from the actual module
+    - Include proper file path handling and module discovery if needed
 <include>./context/example.prompt</include>

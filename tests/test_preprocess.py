@@ -2,14 +2,20 @@ import os
 import io
 import sys
 import pytest
+import base64
+from PIL import Image
+import io
 from unittest.mock import patch, mock_open
-from pdd.preprocess import preprocess
+from pdd.preprocess import preprocess, get_file_path
 import subprocess
 import importlib
 from unittest.mock import MagicMock
 import z3
 from z3 import String, StringVal, If, And, Or, Not, BoolVal, Implies, Length, PrefixOf, SubString, IndexOf
 import re
+
+# Store the original PDD_PATH to restore after tests
+_original_pdd_path = os.environ.get('PDD_PATH')
 
 # Helper function to mock environment variable
 def set_pdd_path(path: str) -> None:
@@ -121,6 +127,97 @@ def test_shell_second_pass_executes_after_deferral() -> None:
     assert processed == "Check Ready\n"
     mock_run.assert_called_once()
 
+
+def test_shell_tag_ignored_in_fenced_code_block() -> None:
+    """Shell tags inside fenced code blocks should not execute."""
+    prompt = "Before\n```xml\n<shell>echo Hello</shell>\n```\nAfter"
+    with patch('subprocess.run') as mock_run:
+        mock_run.return_value.stdout = ""
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+    assert result == prompt
+    mock_run.assert_not_called()
+
+
+def test_shell_tag_ignored_in_inline_code() -> None:
+    """Shell tags inside inline code spans should not execute."""
+    prompt = "Use `<shell>echo Hello</shell>` as an example."
+    with patch('subprocess.run') as mock_run:
+        mock_run.return_value.stdout = ""
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+    assert result == prompt
+    mock_run.assert_not_called()
+
+
+def test_shell_tag_spanning_inline_code_is_ignored() -> None:
+    """Shell tags whose match spans into inline code should not execute."""
+    prompt = "Intro <shell>not a directive. Example: `<shell>noop</shell>` end."
+    with patch('subprocess.run') as mock_run:
+        mock_run.return_value.stdout = ""
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+    assert result == prompt
+    mock_run.assert_not_called()
+
+
+def test_include_tag_ignored_in_fenced_code_block() -> None:
+    """Include tags inside fenced code blocks should not execute."""
+    prompt = "```xml\n<include>file.txt</include>\n```"
+    with patch('builtins.open', mock_open(read_data="Included")) as mocked_open:
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+    assert result == prompt
+    mocked_open.assert_not_called()
+
+
+def test_include_tag_ignored_in_inline_code() -> None:
+    """Include tags inside inline code spans should not execute."""
+    prompt = "Example `<include>file.txt</include>` in docs."
+    with patch('builtins.open', mock_open(read_data="Included")) as mocked_open:
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+    assert result == prompt
+    mocked_open.assert_not_called()
+
+
+def test_include_many_tag_ignored_in_fenced_code_block() -> None:
+    """Include-many tags inside fenced code blocks should not execute."""
+    prompt = "```xml\n<include-many>one.txt, two.txt</include-many>\n```"
+    with patch('builtins.open', mock_open(read_data="Content")) as mocked_open:
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+    assert result == prompt
+    mocked_open.assert_not_called()
+
+
+def test_shell_tag_spanning_fence_is_ignored(tmp_path, monkeypatch) -> None:
+    """Shell tags that overlap fenced code should not execute."""
+    guide = (
+        "Intro <shell>not a directive.\n"
+        "```mermaid\n"
+        "P --> C\n"
+        "P --> E\n"
+        "P --> T\n"
+        "</shell>\n"
+        "```\n"
+    )
+    guide_path = tmp_path / "guide.md"
+    guide_path.write_text(guide)
+    monkeypatch.chdir(tmp_path)
+    prompt = "<include>guide.md</include>"
+
+    def fake_run(*_args, **_kwargs):
+        for name in ("C", "E", "T"):
+            (tmp_path / name).write_text("")
+        completed = MagicMock()
+        completed.stdout = ""
+        completed.returncode = 0
+        return completed
+
+    with patch('subprocess.run', side_effect=fake_run) as mock_run:
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    assert result == guide
+    assert not (tmp_path / "C").exists()
+    assert not (tmp_path / "E").exists()
+    assert not (tmp_path / "T").exists()
+    mock_run.assert_not_called()
+
 # Test for doubling curly brackets
 def test_double_curly_brackets() -> None:
     """Test doubling of curly brackets."""
@@ -231,9 +328,7 @@ def test_web_second_pass_executes_after_deferral() -> None:
     """Second pass without recursion should execute the deferred web scrape."""
     prompt = "Start <web>https://example.com</web> End"
     mock_firecrawl = MagicMock()
-    mock_response = MagicMock()
-    mock_response.markdown = "# Content"
-    mock_firecrawl.FirecrawlApp.return_value.scrape_url.return_value = mock_response
+    mock_firecrawl.Firecrawl.return_value.scrape.return_value = {'markdown': "# Content"}
 
     with patch.dict('sys.modules', {'firecrawl': mock_firecrawl}):
         with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'key'}):
@@ -243,8 +338,10 @@ def test_web_second_pass_executes_after_deferral() -> None:
 
 # Ensure to clean up the environment variable after tests
 def teardown_module(module) -> None:
-    """Clean up the environment variable after tests."""
-    if 'PDD_PATH' in os.environ:
+    """Restore the original PDD_PATH environment variable after tests."""
+    if _original_pdd_path is not None:
+        os.environ['PDD_PATH'] = _original_pdd_path
+    elif 'PDD_PATH' in os.environ:
         del os.environ['PDD_PATH']
 
 def test_double_curly_brackets_in_javascript() -> None:
@@ -449,17 +546,12 @@ def test_process_xml_web_tag() -> None:
     prompt = "This is a test <web>https://example.com</web>"
     expected_output = f"This is a test {mock_markdown_content}"
 
-    # Since FirecrawlApp is imported inside the function, we need to patch the module
-    # Create a mock module with a FirecrawlApp class
+    # Since Firecrawl is imported inside the function, we need to patch the module
     mock_firecrawl = MagicMock()
-    mock_response = MagicMock()
-    mock_response.markdown = mock_markdown_content  # This is what's accessed in the code
-    
-    # Setup the mock FirecrawlApp class
     mock_app = MagicMock()
-    mock_app.scrape_url.return_value = mock_response
-    mock_firecrawl.FirecrawlApp.return_value = mock_app
-    
+    mock_app.scrape.return_value = {'markdown': mock_markdown_content}
+    mock_firecrawl.Firecrawl.return_value = mock_app
+
     # Patch the import at the module level
     with patch.dict('sys.modules', {'firecrawl': mock_firecrawl}):
         # Mock the environment variable for API key
@@ -473,13 +565,13 @@ def test_process_xml_web_tag_missing_api_key() -> None:
     prompt = "This is a test <web>https://example.com</web>"
     expected_output = "This is a test [Error: FIRECRAWL_API_KEY not set. Cannot scrape https://example.com]"
 
-    # Create a mock FirecrawlApp class
-    mock_firecrawl_app = MagicMock()
-    
+    # Create a mock Firecrawl class
+    mock_firecrawl_class = MagicMock()
+
     # Patch the import
     with patch.dict('sys.modules', {'firecrawl': MagicMock()}):
-        with patch('builtins.__import__', side_effect=lambda name, *args: 
-              MagicMock(FirecrawlApp=mock_firecrawl_app) if name == 'firecrawl' else importlib.__import__(name, *args)):
+        with patch('builtins.__import__', side_effect=lambda name, *args:
+              MagicMock(Firecrawl=mock_firecrawl_class) if name == 'firecrawl' else importlib.__import__(name, *args)):
             # Ensure the API key environment variable is not set
             with patch.dict('os.environ', {}, clear=True):
                 result = preprocess(prompt, recursive=False, double_curly_brackets=False)
@@ -506,15 +598,15 @@ def test_process_xml_web_tag_empty_content() -> None:
     prompt = "This is a test <web>https://example.com</web>"
     expected_output = "This is a test [No content available for https://example.com]"
 
-    # Create a mock FirecrawlApp class that returns empty response
-    mock_firecrawl_app = MagicMock()
-    mock_instance = mock_firecrawl_app.return_value
-    mock_instance.scrape_url.return_value = {}  # No markdown key
-    
+    # Create a mock Firecrawl class that returns empty response
+    mock_firecrawl_class = MagicMock()
+    mock_instance = mock_firecrawl_class.return_value
+    mock_instance.scrape.return_value = {}  # No markdown key
+
     # Patch the import
     with patch.dict('sys.modules', {'firecrawl': MagicMock()}):
-        with patch('builtins.__import__', side_effect=lambda name, *args: 
-              MagicMock(FirecrawlApp=mock_firecrawl_app) if name == 'firecrawl' else importlib.__import__(name, *args)):
+        with patch('builtins.__import__', side_effect=lambda name, *args:
+              MagicMock(Firecrawl=mock_firecrawl_class) if name == 'firecrawl' else importlib.__import__(name, *args)):
             with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'fake_api_key'}):
                 result = preprocess(prompt, recursive=False, double_curly_brackets=False)
                 assert result == expected_output
@@ -526,15 +618,15 @@ def test_process_xml_web_tag_scraping_error() -> None:
     error_message = "API request failed"
     expected_output = f"This is a test [Web scraping error: {error_message}]"
 
-    # Create a mock FirecrawlApp class that raises an exception
-    mock_firecrawl_app = MagicMock()
-    mock_instance = mock_firecrawl_app.return_value
-    mock_instance.scrape_url.side_effect = Exception(error_message)
-    
+    # Create a mock Firecrawl class that raises an exception
+    mock_firecrawl_class = MagicMock()
+    mock_instance = mock_firecrawl_class.return_value
+    mock_instance.scrape.side_effect = Exception(error_message)
+
     # Patch the import
     with patch.dict('sys.modules', {'firecrawl': MagicMock()}):
-        with patch('builtins.__import__', side_effect=lambda name, *args: 
-              MagicMock(FirecrawlApp=mock_firecrawl_app) if name == 'firecrawl' else importlib.__import__(name, *args)):
+        with patch('builtins.__import__', side_effect=lambda name, *args:
+              MagicMock(Firecrawl=mock_firecrawl_class) if name == 'firecrawl' else importlib.__import__(name, *args)):
             with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'fake_api_key'}):
                 result = preprocess(prompt, recursive=False, double_curly_brackets=False)
                 assert result == expected_output
@@ -654,10 +746,16 @@ def test_circular_includes() -> None:
 
 # Test for mix of excluded and nested brackets
 def test_mixed_excluded_nested_brackets() -> None:
-    """Test mix of excluded and nested brackets."""
+    """Test mix of excluded and nested brackets.
+
+    exclude_keys protects exact {key} matches only. Nested patterns like
+    {excluded{inner}} don't match the {excluded} regex, so all braces
+    are doubled uniformly.
+    """
     prompt = "Mix of {excluded{inner}} nesting"
     result = preprocess(prompt, recursive=False, double_curly_brackets=True, exclude_keys=["excluded"])
-    assert result == "Mix of {excluded{{inner}}} nesting"
+    # {excluded{inner}} doesn't match \{(excluded)\} regex, so all braces double
+    assert result == "Mix of {{excluded{{inner}}}} nesting"
 
 # Z3 FORMAL VERIFICATION TESTS
 #############################
@@ -1477,6 +1575,31 @@ def test_issue_74_include_many_with_missing_optional_variable():
     assert len(matches) == 0
 
 
+def test_process_include_tag_with_image() -> None:
+    """Test processing of <include> tags with image files."""
+
+    # Create a real 1x1 pixel PNG in memory
+    img = Image.new('RGB', (1, 1))
+    buffer = io.BytesIO()
+    img.save(buffer, format='PNG')
+    dummy_image_content = buffer.getvalue()
+
+    image_path = "dummy_image.png"
+    prompt = f"This is a test with an image: <include>{image_path}</include>"
+    
+    encoded_string = base64.b64encode(dummy_image_content).decode('utf-8')
+    expected_output = f"This is a test with an image: data:image/png;base64,{encoded_string}"
+
+    # Use a more robust mock for open that returns a real file-like object
+    mock_file = io.BytesIO(dummy_image_content)
+    mock_opener = mock_open(read_data=dummy_image_content)
+    mock_opener.return_value.__enter__.return_value = mock_file
+
+    with patch('builtins.open', mock_opener):
+        # Mock os.path.splitext to control the extension
+        with patch('os.path.splitext', return_value=('dummy_image', '.png')):
+            assert preprocess(prompt, recursive=False, double_curly_brackets=False) == expected_output
+
 def test_issue_74_mixed_required_and_optional_variables():
     """
     Test template with both required and optional variables.
@@ -1500,3 +1623,416 @@ Optional Docs: {DOC_FILES}
     single_brace_pattern = r'(?<!\{)\{(MODULE|PRD_FILE|DOC_FILES)\}(?!\})'
     matches = re.findall(single_brace_pattern, preprocessed)
     assert len(matches) == 0, f"Found single-brace variables: {matches}"
+
+
+def test_get_file_path_repo_root_fallback(monkeypatch, tmp_path):
+    """
+    Verifies that get_file_path correctly falls back to the repository root
+    when run from a worktree where import shadowing occurs.
+
+    This test simulates the scenario where:
+    1. The CWD does not contain the target file.
+    2. The 'package_dir' (local pdd/pdd) does not contain the target file.
+    3. The file *does* exist in the repository root (parent of pdd/pdd).
+
+    Bug: https://github.com/gltanaka/pdd/issues/240
+    """
+    mock_file_name = "context/insert/1/prompt_to_update.prompt"
+
+    # Create a mock repository structure
+    # /tmp_path/mock_project/
+    # ├── pdd/                       <-- Mock repo root
+    # │   ├── pdd/                   <-- Mock Python package
+    # │   │   ├── preprocess.py
+    # │   │   └── __init__.py
+    # │   └── context/
+    # │       └── insert/
+    # │           └── 1/
+    # │               └── prompt_to_update.prompt
+    # └── other_files/
+
+    # Mock the location of path_resolution.py to simulate import shadowing
+    # This will make get_default_resolver() return paths inside our mock worktree.
+    mock_path_resolution_file = tmp_path / "mock_project" / "pdd" / "pdd" / "path_resolution.py"
+    mock_path_resolution_file.parent.mkdir(parents=True, exist_ok=True)
+    mock_path_resolution_file.write_text("...")  # Content doesn't matter for this test
+
+    # Create the mock context file in the repository root
+    mock_repo_root = tmp_path / "mock_project" / "pdd"
+    expected_file_path = mock_repo_root / mock_file_name
+    expected_file_path.parent.mkdir(parents=True, exist_ok=True)
+    expected_file_path.write_text("Mock context content")
+
+    # Change CWD to simulate running from the project root (not pdd/pdd)
+    # The CWD is 'tmp_path / "mock_project"' but the pdd source is in 'tmp_path / "mock_project" / "pdd"'
+    monkeypatch.chdir(tmp_path / "mock_project")
+
+    # Mock pdd.path_resolution.__file__ to return the path to our mock file
+    # This is crucial for simulating the 'package_root' calculation in get_default_resolver()
+    monkeypatch.setattr('pdd.path_resolution.__file__', str(mock_path_resolution_file))
+
+    # Expectation: get_file_path should find the file in the mock_repo_root
+    found_path = get_file_path(mock_file_name)
+
+    # Assert that the found path is the one in the mock repository root
+    assert found_path == str(expected_file_path)
+
+
+# ============================================================================
+# Tests for Issue #375: Malformed JSON in PDD metadata tags
+# https://github.com/gltanaka/pdd/issues/375
+#
+# Issue #410 fix: double_curly() must double ALL braces uniformly, including
+# inside PDD metadata tags (<pdd-interface>, <pdd-reason>, <pdd-dependency>).
+# architecture_sync.py reads raw files (never preprocessed), so PDD tags don't
+# need protection. The fallback parser in parse_prompt_tags() handles doubled
+# braces as a safety net. The critical requirement is that .format() succeeds.
+# ============================================================================
+
+def test_double_curly_doubles_pdd_interface_json() -> None:
+    """
+    Test that JSON in <pdd-interface> tags is doubled by double_curly(),
+    and that .format() correctly undoubles it back to valid JSON.
+
+    Issue #410: PDD tag protection caused .format() to raise KeyError
+    because single-braced JSON was interpreted as format placeholders.
+    """
+    import json
+
+    prompt = '''<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "fix_architecture", "signature": "(arch: str)", "returns": "str"}
+    ]
+  }
+}
+</pdd-interface>
+% This is a template with {variable} placeholder.'''
+
+    processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
+
+    # All braces should be doubled (including inside PDD tags)
+    assert "{{variable}}" in processed, "Template variables should be doubled"
+    assert '{{' in processed, "Braces inside PDD tags should also be doubled"
+    # JSON opening brace is on its own line, so check for {{ at start of line
+    assert '"type": "module"' not in processed or '{{' in processed, \
+        "JSON braces inside PDD tags should be doubled"
+
+    # After .format(**{}), the JSON should be valid again (undoubled back)
+    # In production, llm_invoke calls prompt.format(**input_data) where input_data={}
+    formatted = processed.format()
+    import re
+    interface_match = re.search(r'<pdd-interface>(.*?)</pdd-interface>', formatted, re.DOTALL)
+    assert interface_match is not None
+    parsed = json.loads(interface_match.group(1).strip())
+    assert parsed['type'] == 'module'
+    assert len(parsed['module']['functions']) == 1
+
+
+def test_double_curly_doubles_pdd_reason_braces() -> None:
+    """
+    Test that braces in <pdd-reason> tags are doubled like all other braces.
+
+    Issue #410: All braces must be doubled so .format() can undouble them.
+    """
+    prompt = '''<pdd-reason>Handles JSON objects like {"key": "value"}</pdd-reason>
+Normal text with {placeholder}.'''
+
+    processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
+
+    # All braces should be doubled
+    import re
+    reason_match = re.search(r'<pdd-reason>(.*?)</pdd-reason>', processed, re.DOTALL)
+    assert reason_match is not None
+    reason_content = reason_match.group(1)
+    assert '{{' in reason_content, "Braces in <pdd-reason> should be doubled"
+
+    assert "{{placeholder}}" in processed
+
+    # After .format(), content is undoubled back to original
+    formatted = processed.format()
+    reason_match2 = re.search(r'<pdd-reason>(.*?)</pdd-reason>', formatted, re.DOTALL)
+    assert '{"key": "value"}' in reason_match2.group(1)
+
+
+def test_double_curly_doubles_pdd_dependency_content() -> None:
+    """
+    Test that <pdd-dependency> content is processed by double_curly().
+
+    Dependencies typically contain filenames (no braces), so doubling
+    has no visible effect, but the tag structure is preserved.
+    """
+    prompt = '''<pdd-dependency>some_module.prompt</pdd-dependency>
+Text with {variable}.'''
+
+    processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
+
+    # Dependency tag content has no braces, so it's unchanged
+    assert '<pdd-dependency>some_module.prompt</pdd-dependency>' in processed
+
+    # Variable outside should be doubled
+    assert "{{variable}}" in processed
+
+
+def test_double_curly_doubles_multiple_pdd_tags() -> None:
+    """
+    Test that all PDD tags have their braces doubled uniformly.
+
+    Issue #410: All braces everywhere must be doubled for .format() safety.
+    """
+    prompt = '''<pdd-reason>Provides unified LLM invocation with {options}</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {"functions": [{"name": "invoke", "returns": "str"}]}
+}
+</pdd-interface>
+<pdd-dependency>base_module.prompt</pdd-dependency>
+% Template with {input} and {output} variables.'''
+
+    processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
+
+    # All braces doubled
+    import re
+    reason_match = re.search(r'<pdd-reason>(.*?)</pdd-reason>', processed, re.DOTALL)
+    assert reason_match is not None
+    assert '{{options}}' in reason_match.group(1), "Braces in <pdd-reason> should be doubled"
+
+    assert "{{input}}" in processed
+    assert "{{output}}" in processed
+
+    # After .format(), everything undoubles correctly
+    formatted = processed.format()
+    import json
+    interface_match = re.search(r'<pdd-interface>(.*?)</pdd-interface>', formatted, re.DOTALL)
+    assert interface_match is not None
+    parsed = json.loads(interface_match.group(1).strip())
+    assert parsed['type'] == 'module'
+
+
+def test_double_curly_doubles_nested_json_in_pdd_interface() -> None:
+    """
+    Test that deeply nested JSON in <pdd-interface> is doubled and
+    survives the .format() round-trip.
+
+    Issue #410: Nested JSON structures must survive double_curly → .format().
+    """
+    import json
+
+    nested_json = {
+        "type": "module",
+        "module": {
+            "functions": [
+                {
+                    "name": "process",
+                    "signature": "(data: Dict[str, Any])",
+                    "returns": "Dict[str, List[Dict[str, str]]]"
+                }
+            ],
+            "classes": [
+                {
+                    "name": "Handler",
+                    "methods": [{"name": "handle", "args": "{}"}]
+                }
+            ]
+        }
+    }
+
+    prompt = f'''<pdd-interface>
+{json.dumps(nested_json, indent=2)}
+</pdd-interface>
+% Use this with {{already_escaped}} and {{variable}}.'''
+
+    processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
+
+    # After .format(), nested JSON should be intact
+    formatted = processed.format()
+    import re
+    interface_match = re.search(r'<pdd-interface>(.*?)</pdd-interface>', formatted, re.DOTALL)
+    assert interface_match is not None
+    parsed = json.loads(interface_match.group(1).strip())
+    assert parsed == nested_json, "Nested JSON structure was altered after round-trip"
+
+
+def test_double_curly_still_doubles_outside_pdd_tags() -> None:
+    """
+    Regression test: Ensure normal brace doubling still works outside PDD tags.
+
+    double_curly() must escape all braces for safe use with .format().
+    """
+    prompt = '''<pdd-interface>{"valid": "json"}</pdd-interface>
+Normal text with {variable1} and {variable2}.
+Code example: const obj = {key: value};
+Template literal ${FOO} should become ${{FOO}}.'''
+
+    processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
+
+    # All braces doubled (including PDD tag content)
+    assert '{{"valid": "json"}}' in processed, "PDD tag JSON braces should be doubled"
+
+    # Variables outside should be doubled
+    assert "{{variable1}}" in processed
+    assert "{{variable2}}" in processed
+
+    # Code braces outside PDD tags should be doubled
+    assert "{{key: value}}" in processed
+
+    # Template literals should become ${{...}}
+    assert "${{FOO}}" in processed
+
+
+def test_double_curly_integration_with_parse_prompt_tags() -> None:
+    """
+    Integration test: parse_prompt_tags() can handle preprocessed content
+    via its fallback double-brace parser.
+
+    In production, architecture_sync.py reads raw files. But the fallback
+    parser (commit 6a1d77c4) can also handle doubled braces as a safety net.
+    """
+    from pdd.architecture_sync import parse_prompt_tags
+
+    prompt = '''<pdd-reason>Handles authentication flows</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "authenticate", "signature": "(user: str, pass: str)", "returns": "bool"},
+      {"name": "validate_token", "signature": "(token: str)", "returns": "Dict"}
+    ]
+  }
+}
+</pdd-interface>
+<pdd-dependency>base_auth.prompt</pdd-dependency>
+% Template with {user_input} placeholder.'''
+
+    # parse_prompt_tags on RAW content (the production path)
+    raw_result = parse_prompt_tags(prompt)
+    assert raw_result['interface']['type'] == 'module'
+    assert len(raw_result['interface']['module']['functions']) == 2
+
+    # parse_prompt_tags on PREPROCESSED content (safety net via fallback parser)
+    processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
+    processed_result = parse_prompt_tags(processed)
+    assert processed_result['interface'] is not None, \
+        f"Fallback parser should handle doubled braces: {processed_result.get('interface_parse_error')}"
+    assert processed_result['interface']['type'] == 'module'
+
+    # Verify dependencies were extracted in both cases
+    assert 'base_auth.prompt' in raw_result.get('dependencies', [])
+
+
+def test_double_curly_real_world_prompt_format_roundtrip() -> None:
+    """
+    Test with a real-world prompt: double_curly → .format() round-trip.
+
+    Issue #410: This is the exact flow that was broken. The prompt has PDD
+    metadata tags with JSON AND template variables. After preprocessing,
+    .format(**input_data) must work without KeyError.
+    """
+    import json
+
+    prompt = '''<pdd-reason>Fixes validation errors in architecture.json: resolves circular deps, priority violations, missing fields.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "fix_architecture", "signature": "(current_architecture: str, step7_output: str)", "returns": "str (corrected JSON array)"}
+    ]
+  }
+}
+</pdd-interface>
+<pdd-dependency>agentic_arch_step7_validate_LLM.prompt</pdd-dependency>
+% You are an expert software architect. Your task is to fix validation errors.
+
+% Inputs
+- Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Current Architecture
+<architecture_json>
+{current_architecture}
+</architecture_json>'''
+
+    processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
+
+    # Template variables outside PDD tags SHOULD be doubled
+    assert "{{issue_url}}" in processed
+    assert "{{repo_owner}}" in processed
+    assert "{{current_architecture}}" in processed
+
+    # .format(**{}) should succeed (issue #410) — this is the production call
+    # In production, llm_invoke calls prompt.format(**input_data) where
+    # input_data is typically {} for pdd sync. All {{...}} get undoubled to {...}.
+    formatted = processed.format()
+
+    # After formatting, PDD tags should contain valid JSON (undoubled back)
+    import re
+    interface_match = re.search(r'<pdd-interface>(.*?)</pdd-interface>', formatted, re.DOTALL)
+    assert interface_match is not None, "Lost <pdd-interface> tag"
+    interface_json = json.loads(interface_match.group(1).strip())
+    assert interface_json['type'] == 'module'
+    assert interface_json['module']['functions'][0]['name'] == 'fix_architecture'
+
+    # Template variables should be undoubled back to original single-brace form
+    assert "{issue_url}" in formatted
+    assert "{repo_owner}" in formatted
+    assert "{current_architecture}" in formatted
+
+
+# ============================================================================
+# Issue #410: Preprocessed prompts with PDD tags must survive str.format()
+# The double_curly() → .format() pipeline is how all prompts reach the LLM.
+# PDD tags containing JSON must be doubled so .format() undoubles them safely.
+# ============================================================================
+
+def test_pdd_tags_survive_format() -> None:
+    """
+    Regression test for issue #410: pdd sync fails with KeyError when prompts
+    contain <pdd-interface> tags with JSON.
+
+    The preprocessing pipeline is:
+      1. double_curly() doubles all { → {{
+      2. llm_invoke calls prompt.format(**input_data) which undoubles {{ → {
+
+    If PDD tag content is protected from doubling (step 1), .format() in step 2
+    interprets the single braces as format placeholders and raises KeyError.
+    """
+    prompt = '''<pdd-reason>Defines the User data model with Firestore serialization.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "User", "signature": "@dataclass class", "returns": "User"},
+      {"name": "User.to_dict", "signature": "(self) -> Dict[str, Any]", "returns": "Dict[str, Any]"},
+      {"name": "User.from_dict", "signature": "(cls, data: Dict[str, Any]) -> User", "returns": "User"}
+    ]
+  }
+}
+</pdd-interface>
+
+You are an expert Python engineer. Write the User data model.'''
+
+    processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
+
+    # This is the exact operation that llm_invoke.py:1238 performs.
+    # It must not raise KeyError.
+    try:
+        formatted = processed.format()
+    except KeyError as e:
+        pytest.fail(
+            f"Issue #410: preprocessed prompt with PDD tags failed .format(): {e}\n"
+            f"This means double_curly() did not escape braces inside PDD tags.\n"
+            f"Preprocessed content (first 500 chars):\n{processed[:500]}"
+        )
+
+    # After .format() undoubles {{ → {, the JSON should be valid
+    assert '"type": "module"' in formatted
+    assert '{"name": "User"' in formatted
+    assert '<pdd-interface>' in formatted
+    assert '</pdd-interface>' in formatted
