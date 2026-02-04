@@ -1,5 +1,5 @@
 """
-E2E Test (subprocess-based) for Issue #449: Auth logout shows success message
+E2E Test (Subprocess-based) for Issue #449: Auth logout shows success message
 when not authenticated (inconsistent with clear-cache).
 
 This is a true E2E test that uses subprocess to invoke the actual CLI binary,
@@ -53,35 +53,6 @@ def get_project_root() -> Path:
     raise RuntimeError("Could not find project root with pdd/ directory")
 
 
-def _run_pdd_command(
-    command_args: list,
-    home_dir: Path,
-    timeout: int = 30
-) -> Tuple[int, str, str]:
-    """
-    Run a pdd command with custom HOME directory.
-
-    Returns (return_code, stdout, stderr).
-    """
-    project_root = get_project_root()
-
-    env = os.environ.copy()
-    # Set HOME so JWT_CACHE_FILE (~/.pdd/jwt_cache) points to our test directory
-    env["HOME"] = str(home_dir)
-    env["PYTHONPATH"] = str(project_root)
-
-    result = subprocess.run(
-        [sys.executable, "-m", "pdd.cli"] + command_args,
-        capture_output=True,
-        text=True,
-        cwd=str(project_root),
-        env=env,
-        timeout=timeout
-    )
-
-    return result.returncode, result.stdout, result.stderr
-
-
 class TestIssue449E2ELogoutMessage:
     """
     E2E tests using subprocess to verify the auth logout message bug.
@@ -89,6 +60,35 @@ class TestIssue449E2ELogoutMessage:
     These tests exercise the full CLI path that users take when running
     `pdd auth logout` and `pdd auth clear-cache` when not authenticated.
     """
+
+    def _run_pdd_command(
+        self,
+        command_args: list,
+        home_dir: Path,
+        timeout: int = 30
+    ) -> Tuple[int, str, str]:
+        """
+        Run a pdd command with custom HOME directory.
+
+        Returns (return_code, stdout, stderr).
+        """
+        project_root = get_project_root()
+
+        env = os.environ.copy()
+        # Set HOME so JWT_CACHE_FILE (~/.pdd/jwt_cache) points to our test directory
+        env["HOME"] = str(home_dir)
+        env["PYTHONPATH"] = str(project_root)
+
+        result = subprocess.run(
+            [sys.executable, "-m", "pdd.cli"] + command_args,
+            capture_output=True,
+            text=True,
+            cwd=str(project_root),
+            env=env,
+            timeout=timeout
+        )
+
+        return result.returncode, result.stdout, result.stderr
 
     def test_logout_when_not_authenticated_should_display_appropriate_message(self, tmp_path: Path):
         """
@@ -120,7 +120,7 @@ class TestIssue449E2ELogoutMessage:
             jwt_cache.unlink()
 
         # Run the logout command
-        returncode, stdout, stderr = _run_pdd_command(
+        returncode, stdout, stderr = self._run_pdd_command(
             ["auth", "logout"],
             home_dir=home_dir
         )
@@ -182,7 +182,7 @@ class TestIssue449E2ELogoutMessage:
             jwt_cache.unlink()
 
         # Run the clear-cache command
-        returncode, stdout, stderr = _run_pdd_command(
+        returncode, stdout, stderr = self._run_pdd_command(
             ["auth", "clear-cache"],
             home_dir=home_dir
         )
@@ -236,7 +236,7 @@ class TestIssue449E2ELogoutMessage:
         jwt_cache.write_text(json.dumps(cache_data))
 
         # Run the logout command
-        returncode, stdout, stderr = _run_pdd_command(
+        returncode, stdout, stderr = self._run_pdd_command(
             ["auth", "logout"],
             home_dir=home_dir
         )
@@ -278,13 +278,13 @@ class TestIssue449E2ELogoutMessage:
             jwt_cache.unlink()
 
         # Run both commands
-        logout_returncode, logout_stdout, logout_stderr = _run_pdd_command(
+        logout_returncode, logout_stdout, logout_stderr = self._run_pdd_command(
             ["auth", "logout"],
             home_dir=home_dir
         )
         logout_output = logout_stdout + logout_stderr
 
-        clear_returncode, clear_stdout, clear_stderr = _run_pdd_command(
+        clear_returncode, clear_stdout, clear_stderr = self._run_pdd_command(
             ["auth", "clear-cache"],
             home_dir=home_dir
         )
@@ -327,6 +327,30 @@ class TestIssue449E2EStatusCommand:
     which shows what message would be appropriate for logout.
     """
 
+    def _run_pdd_command(
+        self,
+        command_args: list,
+        home_dir: Path,
+        timeout: int = 30
+    ) -> Tuple[int, str, str]:
+        """Run a pdd command with custom HOME directory."""
+        project_root = get_project_root()
+
+        env = os.environ.copy()
+        env["HOME"] = str(home_dir)
+        env["PYTHONPATH"] = str(project_root)
+
+        result = subprocess.run(
+            [sys.executable, "-m", "pdd.cli"] + command_args,
+            capture_output=True,
+            text=True,
+            cwd=str(project_root),
+            env=env,
+            timeout=timeout
+        )
+
+        return result.returncode, result.stdout, result.stderr
+
     def test_status_when_not_authenticated_shows_not_authenticated(self, tmp_path: Path):
         """
         E2E Test: Document that `pdd auth status` says "Not authenticated."
@@ -344,7 +368,7 @@ class TestIssue449E2EStatusCommand:
             jwt_cache.unlink()
 
         # Run the status command
-        returncode, stdout, stderr = _run_pdd_command(
+        returncode, stdout, stderr = self._run_pdd_command(
             ["auth", "status"],
             home_dir=home_dir
         )
