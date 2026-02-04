@@ -2036,3 +2036,150 @@ You are an expert Python engineer. Write the User data model.'''
     assert '{"name": "User"' in formatted
     assert '<pdd-interface>' in formatted
     assert '</pdd-interface>' in formatted
+
+
+# ============================================================================
+# Tests for Issue #452: O(n²) performance bug in _scan_risky_placeholders
+# ============================================================================
+
+def test_scan_risky_placeholders_performance_issue_452():
+    """
+    Test for Issue #452: Detect O(n²) complexity in _scan_risky_placeholders.
+
+    This test generates files of increasing size and measures the time taken
+    to scan for risky placeholders. The current implementation uses
+    text.count("\\n", 0, m.start()) inside loops, which causes O(n²) complexity.
+
+    Expected behavior:
+    - For linear O(n) algorithm: doubling file size should ~double execution time
+    - For quadratic O(n²) algorithm: doubling file size should ~4x execution time
+
+    This test will FAIL on the buggy code (showing >3x scaling) and PASS on
+    the fixed code (showing <2.5x scaling).
+    """
+    import time
+    from pdd.preprocess import _scan_risky_placeholders
+
+    def generate_test_text(num_lines: int) -> str:
+        """Generate text with placeholders distributed throughout."""
+        lines = []
+        for i in range(num_lines):
+            # Add a placeholder every 10 lines to ensure we have matches
+            if i % 10 == 0:
+                lines.append(f"Line {i}: {{placeholder_{i}}}")
+            else:
+                lines.append(f"Line {i}: regular text content here")
+        return "\n".join(lines)
+
+    def measure_time(num_lines: int, iterations: int = 3) -> float:
+        """Measure average time to scan placeholders."""
+        text = generate_test_text(num_lines)
+        times = []
+        for _ in range(iterations):
+            start = time.perf_counter()
+            _scan_risky_placeholders(text)
+            elapsed = time.perf_counter() - start
+            times.append(elapsed)
+        return sum(times) / len(times)
+
+    # Measure performance at different file sizes
+    # Using smaller sizes to keep test fast, but still detect quadratic behavior
+    time_2k = measure_time(2000)
+    time_4k = measure_time(4000)
+    time_8k = measure_time(8000)
+
+    # Calculate scaling ratios
+    ratio_2k_to_4k = time_4k / time_2k if time_2k > 0 else 0
+    ratio_4k_to_8k = time_8k / time_4k if time_4k > 0 else 0
+
+    # For O(n) algorithm: ratio should be ~2x (linear scaling)
+    # For O(n²) algorithm: ratio should be ~4x (quadratic scaling)
+    # We use 2.5x as the threshold: above this indicates quadratic behavior
+
+    # This assertion will FAIL on buggy code (ratio > 3.0)
+    # and PASS on fixed code (ratio < 2.5)
+    assert ratio_2k_to_4k < 2.5, (
+        f"Performance degradation detected! Doubling from 2k to 4k lines "
+        f"caused {ratio_2k_to_4k:.2f}x slowdown (expected <2.5x for linear). "
+        f"Times: 2k={time_2k:.4f}s, 4k={time_4k:.4f}s, 8k={time_8k:.4f}s"
+    )
+
+    assert ratio_4k_to_8k < 2.5, (
+        f"Performance degradation detected! Doubling from 4k to 8k lines "
+        f"caused {ratio_4k_to_8k:.2f}x slowdown (expected <2.5x for linear). "
+        f"Times: 2k={time_2k:.4f}s, 4k={time_4k:.4f}s, 8k={time_8k:.4f}s"
+    )
+
+
+def test_scan_risky_placeholders_correctness_large_file_issue_452():
+    """
+    Test for Issue #452: Verify line numbers are correct on large files.
+
+    This ensures that any performance fix maintains correctness of line
+    number calculation for placeholders in large files.
+    """
+    from pdd.preprocess import _scan_risky_placeholders
+
+    # Generate a large file with known placeholder positions
+    lines = []
+    expected_placeholders = []
+
+    for i in range(5000):  # 5000 lines (0-indexed loop, 1-indexed lines)
+        line_num = i + 1  # Convert to 1-indexed line number
+        if line_num % 100 == 0:  # Placeholder every 100 lines
+            lines.append(f"Line {line_num}: {{placeholder_{line_num}}}")
+            expected_placeholders.append((line_num, f"{{placeholder_{line_num}}}"))
+        else:
+            lines.append(f"Line {line_num}: regular content")
+
+    text = "\n".join(lines)
+    single_brace, template_brace = _scan_risky_placeholders(text)
+
+    # Verify we found all expected placeholders
+    assert len(single_brace) == len(expected_placeholders), (
+        f"Expected {len(expected_placeholders)} placeholders, found {len(single_brace)}"
+    )
+
+    # Verify line numbers are accurate
+    for (actual_line, actual_snippet), (expected_line, expected_snippet) in zip(
+        single_brace, expected_placeholders
+    ):
+        assert actual_line == expected_line, (
+            f"Placeholder at line {expected_line} was reported at line {actual_line}"
+        )
+        assert actual_snippet == expected_snippet, (
+            f"Expected snippet {expected_snippet}, got {actual_snippet}"
+        )
+
+
+def test_scan_risky_placeholders_edge_cases_issue_452():
+    """
+    Test for Issue #452: Verify edge cases still work correctly.
+
+    Tests empty files, files with no placeholders, and files with code fences.
+    """
+    from pdd.preprocess import _scan_risky_placeholders
+
+    # Test 1: Empty text
+    single_brace, template_brace = _scan_risky_placeholders("")
+    assert single_brace == []
+    assert template_brace == []
+
+    # Test 2: Large file with no placeholders
+    text_no_placeholders = "\n".join([f"Line {i}" for i in range(1000)])
+    single_brace, template_brace = _scan_risky_placeholders(text_no_placeholders)
+    assert single_brace == []
+    assert template_brace == []
+
+    # Test 3: Placeholders inside code fences should be ignored
+    text_with_fence = """Line 1
+Line 2
+```
+{ignored_placeholder}
+```
+Line 5: {detected_placeholder}
+"""
+    single_brace, template_brace = _scan_risky_placeholders(text_with_fence)
+    assert len(single_brace) == 1
+    assert single_brace[0][0] == 6  # Line 6
+    assert single_brace[0][1] == "{detected_placeholder}"
