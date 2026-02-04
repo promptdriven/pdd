@@ -3035,3 +3035,69 @@ def test_construct_paths_sync_mode_respects_env_prompts_dir(tmp_path, monkeypatc
     assert resolved_config["prompts_dir"] == "/custom/sync/prompts", \
         f"Expected prompts_dir='/custom/sync/prompts' from PDD_PROMPTS_DIR in sync mode, got '{resolved_config['prompts_dir']}'"
 
+
+# =============================================================================
+# Tests for default_language fallback from .pddrc (Issue #451)
+# =============================================================================
+
+def test_default_language_fallback_from_pddrc(tmp_path, monkeypatch):
+    """
+    Test that default_language from .pddrc is used as fallback when no language suffix exists.
+
+    Bug: The _determine_language() function checks command_options.get("language") but never
+    checks command_options.get("default_language") before raising an error. This causes
+    language detection to fail even when default_language is configured in .pddrc.
+
+    This test reproduces the exact bug reported in issue #451:
+    - .pddrc has default_language: python
+    - Prompt file has no language suffix (test.prompt instead of test_python.prompt)
+    - Expected: Should use default_language from .pddrc as fallback
+    - Actual (buggy): Raises ValueError("Could not determine language...")
+    """
+    from pdd.construct_paths import construct_paths
+
+    # Change to tmp_path so .pddrc is found
+    monkeypatch.chdir(tmp_path)
+
+    # Create .pddrc with default_language setting
+    (tmp_path / ".pddrc").write_text(
+        '\n'.join([
+            'version: "1.0"',
+            'contexts:',
+            '  default:',
+            '    paths:',
+            '      - "**"',
+            '    defaults:',
+            '      generate_output_path: src/',
+            '      default_language: python',
+        ]),
+        encoding="utf-8"
+    )
+
+    # Create prompt file WITHOUT language suffix
+    # This is the key: no _python.prompt suffix, so filename parsing won't find language
+    prompt_file = tmp_path / "test.prompt"
+    prompt_file.write_text("write a hello function", encoding="utf-8")
+
+    # Mock generate_output_paths to avoid needing actual output file logic
+    mock_output_path = tmp_path / 'src' / 'test.py'
+    mock_output_paths_dict = {'output': str(mock_output_path)}
+
+    # Call construct_paths - this should use default_language from .pddrc
+    with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict), \
+         patch('pdd.construct_paths.get_extension', return_value='.py'):
+
+        # BUG: This raises ValueError instead of using default_language from .pddrc
+        # After fix: This should succeed and return language='python'
+        _, _, _, language = construct_paths(
+            input_file_paths={'prompt_file': str(prompt_file)},
+            force=True,
+            quiet=True,
+            command='generate',
+            command_options={}
+        )
+
+    # Assert: Language should be 'python' from default_language fallback
+    assert language == 'python', \
+        f"Expected language='python' from .pddrc default_language, got '{language}'"
+
