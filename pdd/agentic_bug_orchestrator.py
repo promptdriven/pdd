@@ -16,6 +16,7 @@ from .agentic_common import (
     DEFAULT_MAX_RETRIES
 )
 from .load_prompt_template import load_prompt_template
+from .preprocess import preprocess
 
 # Initialize console
 console = Console()
@@ -285,9 +286,11 @@ def run_agentic_bug_orchestrator(
 
         # Restore context from step outputs
         # Escape curly braces to prevent format string injection (Issue #393)
+        # Transform step keys: "5.5" -> "5_5" to match template placeholders (Issue #279)
         for step_key, output in step_outputs.items():
+            fixed_key = str(step_key).replace(".", "_")  # "5.5" -> "5_5"
             escaped_output = output.replace("{", "{{").replace("}", "}}")
-            context[f"step{step_key}_output"] = escaped_output
+            context[f"step{fixed_key}_output"] = escaped_output
 
         # Restore files_to_stage if available
         if changed_files:
@@ -367,6 +370,11 @@ def run_agentic_bug_orchestrator(
         
         if not prompt_template:
             return False, f"Missing prompt template: {template_name}", total_cost, last_model_used, changed_files
+
+        # Preprocess to expand <include> tags and escape curly braces
+        # Exclude context keys from escaping so they can be substituted
+        exclude_keys = list(context.keys())
+        prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
 
         # Format prompt with accumulated context
         try:
