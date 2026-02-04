@@ -1509,3 +1509,52 @@ def test_template_preprocessing_double_curly_brackets_enabled(mock_dependencies,
         call_kwargs = mock_preprocess.call_args[1]
         assert call_kwargs.get("double_curly_brackets") == True, \
             "preprocess must be called with double_curly_brackets=True"
+
+
+def test_step5_5_real_template_formats_without_keyerror():
+    """
+    Integration test: Verify the REAL step 5.5 prompt template can be formatted.
+
+    Unlike other tests that mock load_prompt_template and preprocess, this test:
+    1. Loads the actual agentic_bug_step5_5_prompt_classification_LLM.prompt file
+    2. Calls the real preprocess() to expand <include>docs/prompting_guide.md</include>
+    3. Verifies .format() succeeds without KeyError from JSON braces
+
+    This catches issues that mocked tests miss, such as new JSON added to prompting_guide.md.
+    """
+    from pdd.load_prompt_template import load_prompt_template
+    from pdd.preprocess import preprocess
+
+    # Load the REAL step 5.5 template
+    template = load_prompt_template("agentic_bug_step5_5_prompt_classification_LLM")
+    assert template is not None, "Step 5.5 template should exist"
+
+    # Simulate context that would be passed during bug workflow
+    context = {
+        "issue_url": "https://github.com/test/repo/issues/1",
+        "issue_content": "Test issue",
+        "repo_owner": "test",
+        "repo_name": "repo",
+        "issue_number": 1,
+        "issue_author": "user",
+        "issue_title": "Test",
+        "step1_output": "ok",
+        "step2_output": "ok",
+        "step3_output": "ok",
+        "step4_output": "ok",
+        "step5_output": "ok",
+    }
+
+    # Apply preprocessing (the fix)
+    exclude_keys = list(context.keys())
+    processed = preprocess(template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
+
+    # This should NOT raise KeyError - the bug was JSON braces like {"url": ...}
+    # in prompting_guide.md being interpreted as format placeholders
+    try:
+        formatted = processed.format(**context)
+    except KeyError as e:
+        pytest.fail(f"KeyError during formatting: {e}. The preprocess fix may not be working.")
+
+    # Verify the formatted output is non-empty
+    assert len(formatted) > 0, "Formatted template should have content"
