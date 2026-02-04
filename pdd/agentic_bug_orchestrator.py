@@ -16,6 +16,7 @@ from .agentic_common import (
     DEFAULT_MAX_RETRIES
 )
 from .load_prompt_template import load_prompt_template
+from .preprocess import preprocess
 
 # Initialize console
 console = Console()
@@ -367,6 +368,11 @@ def run_agentic_bug_orchestrator(
         
         if not prompt_template:
             return False, f"Missing prompt template: {template_name}", total_cost, last_model_used, changed_files
+
+        # Preprocess to expand <include> tags and escape curly braces
+        # Exclude context keys from escaping so they can be substituted
+        exclude_keys = list(context.keys())
+        prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
 
         # Format prompt with accumulated context
         try:
