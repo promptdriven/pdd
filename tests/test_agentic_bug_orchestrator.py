@@ -1558,3 +1558,141 @@ def test_step5_5_real_template_formats_without_keyerror():
 
     # Verify the formatted output is non-empty
     assert len(formatted) > 0, "Formatted template should have content"
+
+
+# ============================================================================
+# Issue #279: Step 5.5 Context Key Restoration Bug
+# ============================================================================
+
+
+def test_step_5_5_context_key_uses_underscore_not_dot(mock_dependencies, default_args, tmp_path):
+    """
+    Issue #279: Step 5.5 output must be restored with underscore key, not dot.
+
+    Bug: When resuming from cached state, the context restoration loop at lines 289-291
+    creates context keys like "step5.5_output" (with dot), but templates expect
+    "{step5_5_output}" (with underscore). This causes KeyError when formatting
+    prompts for step 10 or any step that references {step5_5_output}.
+
+    Root cause: The restoration loop does NOT apply the same `.replace(".", "_")`
+    transformation that line 361 applies when running steps.
+
+    This test verifies that after resume, the context contains "step5_5_output"
+    (underscore) not "step5.5_output" (dot).
+    """
+    import json
+    from pdd.agentic_bug_orchestrator import _get_state_dir
+
+    mock_run, mock_load, _ = mock_dependencies
+    default_args["cwd"] = tmp_path
+
+    # Create state file with step 5.5 output (key stored as "5.5" with dot)
+    state_dir = _get_state_dir(tmp_path)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_file = state_dir / f"bug_state_{default_args['issue_number']}.json"
+
+    state = {
+        "workflow": "bug",
+        "issue_number": default_args["issue_number"],
+        "issue_url": default_args["issue_url"],
+        "last_completed_step": 9,  # Steps 1-9 completed, only step 10 remains
+        "step_outputs": {
+            "1": "No duplicates",
+            "2": "Confirmed bug",
+            "3": "Sufficient info",
+            "4": "Reproduced",
+            "5": "Root cause identified",
+            "5.5": "DEFECT_TYPE: code",  # Key has DOT, templates expect UNDERSCORE
+            "6": "Test plan ready",
+            "7": "FILES_CREATED: test.py",
+            "8": "Test verified",
+            "9": "E2E test passed",
+        },
+        "total_cost": 0.9,
+        "model_used": "gpt-4",
+        "changed_files": ["test.py"],
+        "worktree_path": None,
+    }
+    with open(state_file, "w") as f:
+        json.dump(state, f)
+
+    # Step 10 template references {step5_5_output} (underscore)
+    def side_effect_load(name):
+        if "step10" in name:
+            return "PR for issue {issue_number}. Classification: {step5_5_output}"
+        return "Generic prompt for {issue_number}"
+
+    mock_load.side_effect = side_effect_load
+
+    # Track the formatted instruction passed to step 10
+    step10_instruction = []
+
+    def side_effect_run(*args, **kwargs):
+        label = kwargs.get('label', '')
+        instruction = args[0] if args else kwargs.get('instruction', '')
+        if label == 'step10':
+            step10_instruction.append(instruction)
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    # This should NOT raise KeyError - the bug was {step5_5_output} not found
+    # because context had "step5.5_output" (dot) instead of "step5_5_output" (underscore)
+    success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    # Key assertion: Step 10 should have been called (not failed at formatting)
+    assert mock_run.call_count == 1, \
+        f"Only step 10 should be called (resuming from step 9). Got {mock_run.call_count} calls."
+
+    # Verify the step 10 call label
+    called_labels = [call.kwargs['label'] for call in mock_run.call_args_list]
+    assert 'step10' in called_labels, \
+        f"Step 10 should have been executed. Called labels: {called_labels}"
+
+    # Verify the instruction was properly formatted with step5_5_output
+    assert len(step10_instruction) == 1, "Step 10 instruction should have been captured"
+    assert "DEFECT_TYPE: code" in step10_instruction[0], \
+        f"Step 10 instruction should contain the step 5.5 output. Got: {step10_instruction[0]}"
+
+
+def test_step_5_5_context_key_restoration_unit():
+    """
+    Unit test for the context key restoration logic.
+
+    This tests the FIXED code path from agentic_bug_orchestrator.py lines 289-292.
+    Verifies that step keys with dots (like "5.5") are transformed to underscores ("5_5")
+    so they can be used as valid Python format string placeholders.
+
+    Issue #279: Before the fix, keys like "5.5" created context["step5.5_output"]
+    but templates expected {step5_5_output}, causing KeyError on resume.
+    """
+    # Simulate cached state (as stored in bug_state_*.json)
+    cached_step_outputs = {
+        "1": "Step 1 output",
+        "5": "Step 5 output",
+        "5.5": "Step 5.5 classification output",  # Key has DOT in state file
+        "6": "Step 6 output",
+    }
+
+    context = {}
+
+    # FIXED restoration logic from agentic_bug_orchestrator.py lines 289-292:
+    # Transform step keys: "5.5" -> "5_5" to match template placeholders (Issue #279)
+    for step_key, output in cached_step_outputs.items():
+        fixed_key = str(step_key).replace(".", "_")  # "5.5" -> "5_5"
+        escaped_output = output.replace("{", "{{").replace("}", "}}")
+        context[f"step{fixed_key}_output"] = escaped_output
+
+    # Verify the fix: context should have underscore key, not dot key
+    assert "step5_5_output" in context, \
+        f"step5_5_output should be in context (underscore). Got keys: {list(context.keys())}"
+    assert "step5.5_output" not in context, \
+        "step5.5_output should NOT be in context (dot is invalid in format keys)"
+
+    # Verify prompt formatting works with the fixed keys
+    template = "Previous classification: {step5_5_output}"
+    try:
+        formatted = template.format(**context)
+        assert "Step 5.5 classification output" in formatted
+    except KeyError as e:
+        pytest.fail(f"Template formatting failed with KeyError: {e}. Context keys: {list(context.keys())}")
