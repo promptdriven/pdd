@@ -286,9 +286,11 @@ def run_agentic_bug_orchestrator(
 
         # Restore context from step outputs
         # Escape curly braces to prevent format string injection (Issue #393)
+        # Transform step keys: "5.5" -> "5_5" to match template placeholders (Issue #279)
         for step_key, output in step_outputs.items():
+            fixed_key = str(step_key).replace(".", "_")  # "5.5" -> "5_5"
             escaped_output = output.replace("{", "{{").replace("}", "}}")
-            context[f"step{step_key}_output"] = escaped_output
+            context[f"step{fixed_key}_output"] = escaped_output
 
         # Restore files_to_stage if available
         if changed_files:
