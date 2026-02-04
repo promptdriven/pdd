@@ -2,7 +2,14 @@
 
 ### Fix
 
-- Cloud E2E tests skip gracefully for unapproved accounts
+- **agentic_bug_orchestrator**: Fix step 5.5 context key mismatch on resume (Issue #279). When resuming from cached state, step keys with dots (e.g., "5.5") are now transformed to underscores ("5_5") to match template placeholders like `{step5_5_output}`.
+- **agentic_bug_orchestrator**: Add `preprocess()` call before `.format()` to escape curly braces in included content (e.g., JSON from `docs/prompting_guide.md`), preventing `KeyError` during prompt formatting.
+- **test_cmd_test_main**: Cloud E2E tests skip gracefully for unapproved accounts instead of failing with unclear errors.
+- **test_operation_log**: Add test for deeply nested subdirectory basename sanitization (`a/b/c/d/e` → `a_b_c_d_e`).
+
+### Build
+
+- **copy_package_data_to_public**: Add `--sync-deletions` flag to delete files in destination that no longer exist in source. Prevents stale files from accumulating in public repos after deletions upstream.
 
 ## v0.0.137 (2026-02-02)
 
