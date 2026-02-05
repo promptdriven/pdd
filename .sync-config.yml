@@ -13,11 +13,8 @@ shared:
   - pdd/server/*.py
   - pdd/server/routes/*.py
 
-  # Tests (unit tests)
-  - tests/test_*.py
-  - tests/__init__.py
-  - tests/conftest.py
-  - tests/prompt_tester.py
+  # Tests (unit tests — recursive to include subdirectories)
+  - tests/**/*.py
   - tests/*regression*.sh
   - tests/fixtures/
 
