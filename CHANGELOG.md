@@ -1,3 +1,10 @@
+## v0.0.139 (2026-02-04)
+
+### Fix
+
+- validate JWT token expiry in cloud E2E test skip check (#402)
+- Resolve agentic orchestrator context key and prompt formatting issues, improve E2E test skipping, and add package data sync deletions.
+
 ## v0.0.138 (2026-02-03)
 
 ### Fix
