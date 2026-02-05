@@ -28,7 +28,7 @@ def reset_firecrawl_cache():
     """
     Reset the Firecrawl cache singleton before each test.
 
-    This ensures that when tests set FIRECRAWL_CACHE_DISABLE=1,
+    This ensures that when tests set FIRECRAWL_CACHE_ENABLE=false,
     a fresh cache instance is created that respects the env var.
     Without this, the singleton created by an earlier test would persist.
     """
@@ -348,7 +348,7 @@ def test_web_second_pass_executes_after_deferral(reset_firecrawl_cache) -> None:
     mock_firecrawl.Firecrawl.return_value.scrape.return_value = {'markdown': "# Content"}
 
     with patch.dict('sys.modules', {'firecrawl': mock_firecrawl}):
-        with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'key', 'FIRECRAWL_CACHE_DISABLE': '1'}):
+        with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'key', 'FIRECRAWL_CACHE_ENABLE': 'false'}):
             result = preprocess(prompt, recursive=False, double_curly_brackets=False)
 
     assert result == "Start # Content End"
@@ -572,7 +572,7 @@ def test_process_xml_web_tag(reset_firecrawl_cache) -> None:
     # Patch the import at the module level
     with patch.dict('sys.modules', {'firecrawl': mock_firecrawl}):
         # Mock the environment variable for API key and disable cache
-        with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'fake_api_key', 'FIRECRAWL_CACHE_DISABLE': '1'}):
+        with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'fake_api_key', 'FIRECRAWL_CACHE_ENABLE': 'false'}):
             result = preprocess(prompt, recursive=False, double_curly_brackets=False)
             assert result == expected_output
 
@@ -590,7 +590,7 @@ def test_process_xml_web_tag_missing_api_key(reset_firecrawl_cache) -> None:
         with patch('builtins.__import__', side_effect=lambda name, *args:
               MagicMock(Firecrawl=mock_firecrawl_class) if name == 'firecrawl' else importlib.__import__(name, *args)):
             # Ensure the API key environment variable is not set and disable cache
-            with patch.dict('os.environ', {'FIRECRAWL_CACHE_DISABLE': '1'}, clear=True):
+            with patch.dict('os.environ', {'FIRECRAWL_CACHE_ENABLE': 'false'}, clear=True):
                 result = preprocess(prompt, recursive=False, double_curly_brackets=False)
                 assert result == expected_output
 
@@ -601,7 +601,7 @@ def test_process_xml_web_tag_import_error(reset_firecrawl_cache) -> None:
     expected_output = "This is a test [Error: firecrawl-py package not installed. Cannot scrape https://example.com]"
 
     # Patch the import to raise ImportError and disable cache
-    with patch.dict('os.environ', {'FIRECRAWL_CACHE_DISABLE': '1'}):
+    with patch.dict('os.environ', {'FIRECRAWL_CACHE_ENABLE': 'false'}):
         with patch('builtins.__import__', side_effect=lambda name, *args:
               raise_import_error(name) if name == 'firecrawl' else importlib.__import__(name, *args)):
             result = preprocess(prompt, recursive=False, double_curly_brackets=False)
@@ -625,7 +625,7 @@ def test_process_xml_web_tag_empty_content(reset_firecrawl_cache) -> None:
     with patch.dict('sys.modules', {'firecrawl': MagicMock()}):
         with patch('builtins.__import__', side_effect=lambda name, *args:
               MagicMock(Firecrawl=mock_firecrawl_class) if name == 'firecrawl' else importlib.__import__(name, *args)):
-            with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'fake_api_key', 'FIRECRAWL_CACHE_DISABLE': '1'}):
+            with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'fake_api_key', 'FIRECRAWL_CACHE_ENABLE': 'false'}):
                 result = preprocess(prompt, recursive=False, double_curly_brackets=False)
                 assert result == expected_output
 
@@ -645,7 +645,7 @@ def test_process_xml_web_tag_scraping_error(reset_firecrawl_cache) -> None:
     with patch.dict('sys.modules', {'firecrawl': MagicMock()}):
         with patch('builtins.__import__', side_effect=lambda name, *args:
               MagicMock(Firecrawl=mock_firecrawl_class) if name == 'firecrawl' else importlib.__import__(name, *args)):
-            with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'fake_api_key', 'FIRECRAWL_CACHE_DISABLE': '1'}):
+            with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'fake_api_key', 'FIRECRAWL_CACHE_ENABLE': 'false'}):
                 result = preprocess(prompt, recursive=False, double_curly_brackets=False)
                 assert result == expected_output
 
