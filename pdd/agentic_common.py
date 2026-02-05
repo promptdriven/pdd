@@ -127,31 +127,31 @@ def _log_agentic_interaction(
     """
     global _AGENTIC_SESSION_ID
 
-    # Ensure log directory exists
-    log_dir = Path(cwd) / AGENTIC_LOG_DIR
-    log_dir.mkdir(parents=True, exist_ok=True)
-
-    # Initialize session ID on first call (one file per workflow run)
-    if _AGENTIC_SESSION_ID is None:
-        _AGENTIC_SESSION_ID = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-    log_file = log_dir / f"session_{_AGENTIC_SESSION_ID}.jsonl"
-
-    entry = {
-        "timestamp": datetime.now().isoformat(),
-        "label": label,
-        "cwd": str(cwd),
-        "provider": provider,
-        "success": success,
-        "cost_usd": cost,
-        "duration_seconds": round(duration, 2),
-        "prompt_length": len(prompt),
-        "response_length": len(response),
-        "prompt": prompt,
-        "response": response,
-    }
-
     try:
+        # Ensure log directory exists
+        log_dir = Path(cwd) / AGENTIC_LOG_DIR
+        log_dir.mkdir(parents=True, exist_ok=True)
+
+        # Initialize session ID on first call (one file per workflow run)
+        if _AGENTIC_SESSION_ID is None:
+            _AGENTIC_SESSION_ID = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        log_file = log_dir / f"session_{_AGENTIC_SESSION_ID}.jsonl"
+
+        entry = {
+            "timestamp": datetime.now().isoformat(),
+            "label": label,
+            "cwd": str(cwd),
+            "provider": provider,
+            "success": success,
+            "cost_usd": cost,
+            "duration_seconds": round(duration, 2),
+            "prompt_length": len(prompt),
+            "response_length": len(response),
+            "prompt": prompt,
+            "response": response,
+        }
+
         with open(log_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")
     except Exception:

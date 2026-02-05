@@ -10,9 +10,11 @@ from pdd.agentic_common import (
     _calculate_gemini_cost,
     _calculate_codex_cost,
     _find_cli_binary,
+    _log_agentic_interaction,
     GEMINI_PRICING_BY_FAMILY,
     CODEX_PRICING,
     DEFAULT_TIMEOUT_SECONDS,
+    AGENTIC_LOG_DIR,
 )
 
 # ---------------------------------------------------------------------------
@@ -1695,3 +1697,332 @@ contexts:
         # Should fall back to shutil.which result
         assert result == "/valid/path/claude", \
             f"Should fall back to PATH when .pddrc path is invalid, got: {result}"
+
+
+# ---------------------------------------------------------------------------
+# Agentic Debug Logging Tests
+# ---------------------------------------------------------------------------
+
+
+class TestAgenticDebugLogging:
+    """
+    Tests for the agentic debug logging feature.
+
+    The logging feature writes full prompt/response data to JSONL files
+    in .pdd/agentic-logs/ for debugging purposes. Logs are only written
+    when verbose mode is enabled.
+    """
+
+    def test_agentic_log_dir_constant_exists(self):
+        """Verify AGENTIC_LOG_DIR constant is defined."""
+        assert AGENTIC_LOG_DIR == ".pdd/agentic-logs"
+
+    def test_log_agentic_interaction_creates_log_directory(self, tmp_path):
+        """_log_agentic_interaction should create the log directory if it doesn't exist."""
+        import pdd.agentic_common
+
+        # Reset session ID to ensure fresh log file
+        pdd.agentic_common._AGENTIC_SESSION_ID = None
+
+        log_dir = tmp_path / AGENTIC_LOG_DIR
+        assert not log_dir.exists()
+
+        _log_agentic_interaction(
+            label="test_step",
+            prompt="Test prompt",
+            response="Test response",
+            cost=0.05,
+            provider="anthropic",
+            success=True,
+            duration=1.5,
+            cwd=tmp_path
+        )
+
+        assert log_dir.exists()
+        assert log_dir.is_dir()
+
+    def test_log_agentic_interaction_writes_jsonl(self, tmp_path):
+        """_log_agentic_interaction should write valid JSONL entries."""
+        import pdd.agentic_common
+
+        # Reset session ID
+        pdd.agentic_common._AGENTIC_SESSION_ID = None
+
+        _log_agentic_interaction(
+            label="step1",
+            prompt="What is 2+2?",
+            response="The answer is 4.",
+            cost=0.10,
+            provider="anthropic",
+            success=True,
+            duration=2.5,
+            cwd=tmp_path
+        )
+
+        log_dir = tmp_path / AGENTIC_LOG_DIR
+        log_files = list(log_dir.glob("session_*.jsonl"))
+        assert len(log_files) == 1
+
+        # Read and parse the JSONL entry
+        with open(log_files[0], "r", encoding="utf-8") as f:
+            content = f.read().strip()
+
+        entry = json.loads(content)
+
+        assert entry["label"] == "step1"
+        assert entry["prompt"] == "What is 2+2?"
+        assert entry["response"] == "The answer is 4."
+        assert entry["cost_usd"] == 0.10
+        assert entry["provider"] == "anthropic"
+        assert entry["success"] is True
+        assert entry["duration_seconds"] == 2.5
+        assert entry["prompt_length"] == len("What is 2+2?")
+        assert entry["response_length"] == len("The answer is 4.")
+        assert "timestamp" in entry
+        assert str(tmp_path) in entry["cwd"]
+
+    def test_log_agentic_interaction_appends_to_same_session(self, tmp_path):
+        """Multiple calls within same session should append to same file."""
+        import pdd.agentic_common
+
+        # Reset session ID
+        pdd.agentic_common._AGENTIC_SESSION_ID = None
+
+        # First log entry
+        _log_agentic_interaction(
+            label="step1",
+            prompt="First prompt",
+            response="First response",
+            cost=0.05,
+            provider="anthropic",
+            success=True,
+            duration=1.0,
+            cwd=tmp_path
+        )
+
+        # Second log entry (same session)
+        _log_agentic_interaction(
+            label="step2",
+            prompt="Second prompt",
+            response="Second response",
+            cost=0.10,
+            provider="google",
+            success=True,
+            duration=2.0,
+            cwd=tmp_path
+        )
+
+        log_dir = tmp_path / AGENTIC_LOG_DIR
+        log_files = list(log_dir.glob("session_*.jsonl"))
+
+        # Should be single file with two entries
+        assert len(log_files) == 1
+
+        with open(log_files[0], "r", encoding="utf-8") as f:
+            lines = f.read().strip().split("\n")
+
+        assert len(lines) == 2
+
+        entry1 = json.loads(lines[0])
+        entry2 = json.loads(lines[1])
+
+        assert entry1["label"] == "step1"
+        assert entry2["label"] == "step2"
+        assert entry1["provider"] == "anthropic"
+        assert entry2["provider"] == "google"
+
+    def test_log_agentic_interaction_records_failures(self, tmp_path):
+        """_log_agentic_interaction should correctly record failed interactions."""
+        import pdd.agentic_common
+
+        # Reset session ID
+        pdd.agentic_common._AGENTIC_SESSION_ID = None
+
+        _log_agentic_interaction(
+            label="step_failed",
+            prompt="Failing prompt",
+            response="Error: Something went wrong",
+            cost=0.0,
+            provider="openai",
+            success=False,
+            duration=0.5,
+            cwd=tmp_path
+        )
+
+        log_dir = tmp_path / AGENTIC_LOG_DIR
+        log_files = list(log_dir.glob("session_*.jsonl"))
+
+        with open(log_files[0], "r", encoding="utf-8") as f:
+            entry = json.loads(f.read().strip())
+
+        assert entry["success"] is False
+        assert entry["cost_usd"] == 0.0
+        assert entry["provider"] == "openai"
+        assert "Error:" in entry["response"]
+
+    def test_log_agentic_interaction_handles_write_errors_gracefully(self, tmp_path, monkeypatch):
+        """_log_agentic_interaction should not raise exceptions on write errors."""
+        import pdd.agentic_common
+
+        # Reset session ID
+        pdd.agentic_common._AGENTIC_SESSION_ID = None
+
+        # Make the log directory a file to cause write error
+        log_dir = tmp_path / AGENTIC_LOG_DIR
+        log_dir.parent.mkdir(parents=True, exist_ok=True)
+        log_dir.write_text("This is a file, not a directory")
+
+        # Should not raise, just silently fail
+        try:
+            _log_agentic_interaction(
+                label="test",
+                prompt="prompt",
+                response="response",
+                cost=0.0,
+                provider="anthropic",
+                success=True,
+                duration=1.0,
+                cwd=tmp_path
+            )
+        except Exception as e:
+            pytest.fail(f"_log_agentic_interaction raised an exception: {e}")
+
+    def test_run_agentic_task_logs_on_success_verbose(
+        self, mock_shutil_which, mock_subprocess_run, mock_console, tmp_path
+    ):
+        """run_agentic_task should log successful interactions when verbose=True."""
+        import pdd.agentic_common
+
+        # Reset session ID
+        pdd.agentic_common._AGENTIC_SESSION_ID = None
+
+        mock_shutil_which.return_value = "/bin/claude"
+        mock_subprocess_run.return_value.returncode = 0
+        mock_subprocess_run.return_value.stdout = json.dumps({
+            "result": "Task completed successfully. This is a sufficiently long response.",
+            "total_cost_usd": 0.15
+        })
+
+        success, msg, cost, provider = run_agentic_task(
+            "Fix the bug",
+            tmp_path,
+            verbose=True,
+            label="step7_fix"
+        )
+
+        assert success
+
+        # Check that log file was created
+        log_dir = tmp_path / AGENTIC_LOG_DIR
+        log_files = list(log_dir.glob("session_*.jsonl"))
+        assert len(log_files) == 1
+
+        with open(log_files[0], "r", encoding="utf-8") as f:
+            entry = json.loads(f.read().strip())
+
+        assert entry["label"] == "step7_fix"
+        assert entry["success"] is True
+        assert entry["cost_usd"] == 0.15
+        assert entry["provider"] == "anthropic"
+        assert "Fix the bug" in entry["prompt"]
+
+    def test_run_agentic_task_logs_on_failure_verbose(
+        self, mock_shutil_which, mock_subprocess_run, mock_env, mock_load_model_data, tmp_path
+    ):
+        """run_agentic_task should log failed interactions when verbose=True."""
+        import pdd.agentic_common
+
+        # Reset session ID
+        pdd.agentic_common._AGENTIC_SESSION_ID = None
+
+        # Only anthropic available, and it fails
+        mock_shutil_which.return_value = "/bin/claude"
+
+        mock_subprocess_run.return_value.returncode = 1
+        mock_subprocess_run.return_value.stdout = ""
+        mock_subprocess_run.return_value.stderr = "CLI error"
+
+        success, msg, cost, provider = run_agentic_task(
+            "Fix the bug",
+            tmp_path,
+            verbose=True,
+            label="step_failed"
+        )
+
+        assert not success
+
+        # Check that log file was created with failure entry
+        log_dir = tmp_path / AGENTIC_LOG_DIR
+        log_files = list(log_dir.glob("session_*.jsonl"))
+        assert len(log_files) == 1
+
+        with open(log_files[0], "r", encoding="utf-8") as f:
+            entry = json.loads(f.read().strip())
+
+        assert entry["label"] == "step_failed"
+        assert entry["success"] is False
+        assert entry["provider"] == "anthropic"
+
+    def test_run_agentic_task_no_log_when_not_verbose(
+        self, mock_shutil_which, mock_subprocess_run, tmp_path
+    ):
+        """run_agentic_task should NOT log when verbose=False."""
+        import pdd.agentic_common
+
+        # Reset session ID
+        pdd.agentic_common._AGENTIC_SESSION_ID = None
+
+        mock_shutil_which.return_value = "/bin/claude"
+        mock_subprocess_run.return_value.returncode = 0
+        mock_subprocess_run.return_value.stdout = json.dumps({
+            "result": "Task completed successfully with enough output characters.",
+            "total_cost_usd": 0.05
+        })
+
+        success, msg, cost, provider = run_agentic_task(
+            "Fix the bug",
+            tmp_path,
+            verbose=False,  # Not verbose
+            label="step_silent"
+        )
+
+        assert success
+
+        # Log directory should NOT be created when verbose=False
+        log_dir = tmp_path / AGENTIC_LOG_DIR
+        assert not log_dir.exists(), "Logs should not be written when verbose=False"
+
+    def test_session_id_format(self, tmp_path):
+        """Session ID should follow YYYYMMDD_HHMMSS format."""
+        import pdd.agentic_common
+        from datetime import datetime
+
+        # Reset session ID
+        pdd.agentic_common._AGENTIC_SESSION_ID = None
+
+        _log_agentic_interaction(
+            label="test",
+            prompt="prompt",
+            response="response",
+            cost=0.0,
+            provider="anthropic",
+            success=True,
+            duration=1.0,
+            cwd=tmp_path
+        )
+
+        log_dir = tmp_path / AGENTIC_LOG_DIR
+        log_files = list(log_dir.glob("session_*.jsonl"))
+
+        assert len(log_files) == 1
+        filename = log_files[0].name
+
+        # Extract session ID from filename (session_YYYYMMDD_HHMMSS.jsonl)
+        session_id = filename.replace("session_", "").replace(".jsonl", "")
+
+        # Validate format: should be parseable as datetime
+        try:
+            parsed = datetime.strptime(session_id, "%Y%m%d_%H%M%S")
+            assert parsed is not None
+        except ValueError:
+            pytest.fail(f"Session ID '{session_id}' does not match expected format YYYYMMDD_HHMMSS")
