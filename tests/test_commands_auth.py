@@ -251,7 +251,7 @@ class TestLogoutCommand:
     which is inconsistent with how pdd auth clear-cache handles the same scenario.
     """
 
-    def test_logout_when_not_authenticated_should_display_appropriate_message(self, tmp_path):
+    def test_logout_not_authenticated_displays_message(self, tmp_path):
         """
         Issue #449: Logout when not authenticated should display "Not authenticated."
         not "Logged out of PDD Cloud."
@@ -305,7 +305,7 @@ class TestLogoutCommand:
         # Exit code should be 0 (not an error, just a no-op)
         assert result.exit_code == 0, f"Expected exit code 0, got {result.exit_code}"
 
-    def test_logout_when_authenticated_with_valid_jwt_succeeds(self, tmp_path):
+    def test_logout_with_valid_jwt_succeeds(self, tmp_path):
         """
         Regression test: Logout when authenticated should work correctly.
 
@@ -348,7 +348,7 @@ class TestLogoutCommand:
         # Exit code should be 0
         assert result.exit_code == 0, f"Expected exit code 0, got {result.exit_code}"
 
-    def test_logout_when_authenticated_with_refresh_token_only_succeeds(self, tmp_path):
+    def test_logout_with_refresh_token_succeeds(self, tmp_path):
         """
         Regression test: Logout with expired JWT but valid refresh token should work.
 
