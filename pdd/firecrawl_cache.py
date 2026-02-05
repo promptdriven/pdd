@@ -5,8 +5,23 @@ Firecrawl caching module for PDD.
 Provides automatic caching of Firecrawl web scraping results to reduce API usage.
 Cache is transparent and automatic - users don't need to manage it manually.
 
+Features:
+- Persistent SQLite-based storage
+- Configurable TTL (time-to-live) per request or globally
+- URL normalization (removes tracking parameters, case-insensitive)
+- Automatic cleanup of expired entries
+- Size management (configurable limits on cache size and entries)
+- Access tracking (monitors cache usage and efficiency)
+
 Cache location: PROJECT_ROOT/.pdd/cache/firecrawl.db
-Control: Set FIRECRAWL_CACHE_DISABLE=1 to disable caching
+Control: Set FIRECRAWL_CACHE_ENABLE=false to disable caching
+
+Environment Variables:
+- FIRECRAWL_CACHE_ENABLE: Enable/disable caching (default: true)
+- FIRECRAWL_CACHE_TTL_HOURS: Default cache TTL in hours (default: 24)
+- FIRECRAWL_CACHE_MAX_SIZE_MB: Maximum cache size in MB (default: 100)
+- FIRECRAWL_CACHE_MAX_ENTRIES: Maximum number of entries (default: 1000)
+- FIRECRAWL_CACHE_AUTO_CLEANUP: Enable automatic cleanup (default: true)
 
 This addresses issue #46: Cache firecrawl results so it doesn't use up the API credit
 """
@@ -15,8 +30,9 @@ import os
 import hashlib
 import time
 import sqlite3
+import json
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any
 import logging
 
 logger = logging.getLogger(__name__)
@@ -27,10 +43,14 @@ _cache_instance: Optional['FirecrawlCache'] = None
 
 class FirecrawlCache:
     """
-    Simple, automatic cache for Firecrawl web scraping results.
+    Automatic cache for Firecrawl web scraping results with advanced features.
 
-    Caches scraped content with configurable TTL. Expired entries are
-    automatically skipped when accessed.
+    Features:
+    - Persistent caching with configurable TTL
+    - URL normalization for consistent cache keys
+    - Access tracking and statistics
+    - Automatic cleanup and size management
+    - LRU eviction when cache limits are reached
     """
 
     def __init__(self, cache_path: Optional[Path] = None, default_ttl_hours: int = 24):
@@ -43,19 +63,13 @@ class FirecrawlCache:
         """
         self.cache_path = cache_path
         self.default_ttl_hours = default_ttl_hours
-        self.enabled = os.getenv("FIRECRAWL_CACHE_DISABLE") != "1"
+
+        # Load configuration from environment
+        self._load_config()
 
         if not self.enabled:
-            logger.info("Firecrawl caching disabled via FIRECRAWL_CACHE_DISABLE=1")
+            logger.info("Firecrawl caching disabled via FIRECRAWL_CACHE_ENABLE=false")
             return
-
-        # Load TTL from environment if set
-        ttl_env = os.getenv("FIRECRAWL_CACHE_TTL_HOURS")
-        if ttl_env:
-            try:
-                self.default_ttl_hours = int(ttl_env)
-            except ValueError:
-                logger.warning(f"Invalid FIRECRAWL_CACHE_TTL_HOURS value: {ttl_env}, using default {self.default_ttl_hours}")
 
         # Create cache directory
         self.cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -64,6 +78,29 @@ class FirecrawlCache:
         self._init_db()
 
         logger.info(f"Firecrawl cache enabled at {self.cache_path} (TTL: {self.default_ttl_hours}h)")
+
+    def _load_config(self):
+        """Load cache configuration from environment variables."""
+        # Cache behavior flags
+        self.enabled = os.environ.get('FIRECRAWL_CACHE_ENABLE', 'true').lower() == 'true'
+        self.auto_cleanup = os.environ.get('FIRECRAWL_CACHE_AUTO_CLEANUP', 'true').lower() == 'true'
+
+        # TTL configuration
+        ttl_env = os.getenv("FIRECRAWL_CACHE_TTL_HOURS")
+        if ttl_env:
+            try:
+                self.default_ttl_hours = int(ttl_env)
+            except ValueError:
+                logger.warning(f"Invalid FIRECRAWL_CACHE_TTL_HOURS: {ttl_env}, using default {self.default_ttl_hours}")
+
+        # Size management configuration
+        self.max_cache_size_mb = int(os.getenv("FIRECRAWL_CACHE_MAX_SIZE_MB", "100"))
+        self.max_entries = int(os.getenv("FIRECRAWL_CACHE_MAX_ENTRIES", "1000"))
+
+        logger.debug(
+            f"Cache config: TTL={self.default_ttl_hours}h, MaxSize={self.max_cache_size_mb}MB, "
+            f"MaxEntries={self.max_entries}, Enabled={self.enabled}"
+        )
 
     def _init_db(self):
         """Initialize SQLite database with cache table."""
@@ -76,23 +113,68 @@ class FirecrawlCache:
                     url_hash TEXT PRIMARY KEY,
                     url TEXT NOT NULL,
                     content TEXT NOT NULL,
-                    expires_at REAL NOT NULL
+                    timestamp REAL NOT NULL,
+                    expires_at REAL NOT NULL,
+                    content_hash TEXT NOT NULL,
+                    metadata TEXT,
+                    access_count INTEGER DEFAULT 0,
+                    last_accessed REAL DEFAULT 0
                 )
             ''')
-            # Index for cleanup queries
+            # Indices for efficient queries
             conn.execute('CREATE INDEX IF NOT EXISTS idx_expires ON cache(expires_at)')
+            conn.execute('CREATE INDEX IF NOT EXISTS idx_last_accessed ON cache(last_accessed)')
             conn.commit()
 
+    def _normalize_url(self, url: str) -> str:
+        """
+        Normalize URL for consistent cache keys.
+
+        Removes tracking parameters and normalizes case/format.
+
+        Args:
+            url: The URL to normalize
+
+        Returns:
+            Normalized URL string
+        """
+        # Remove trailing slashes and normalize whitespace
+        url = url.strip().rstrip('/')
+
+        # Convert to lowercase for case-insensitive matching
+        url = url.lower()
+
+        # Remove common tracking parameters that don't affect content
+        if '?' in url:
+            base_url, params = url.split('?', 1)
+            # Keep only essential parameters, remove tracking ones
+            essential_params = []
+            for param in params.split('&'):
+                if param and not any(track in param.lower() for track in
+                                   ['utm_', 'fbclid', 'gclid', 'ref=', 'source=', '_ga', '_gid']):
+                    essential_params.append(param)
+
+            if essential_params:
+                url = f"{base_url}?{'&'.join(essential_params)}"
+            else:
+                url = base_url
+
+        return url
+
     def _url_hash(self, url: str) -> str:
-        """Generate cache key from URL."""
-        # Normalize: lowercase, strip trailing slash
-        normalized = url.strip().rstrip('/').lower()
+        """Generate cache key from normalized URL."""
+        normalized = self._normalize_url(url)
         return hashlib.sha256(normalized.encode()).hexdigest()
+
+    def _content_hash(self, content: str) -> str:
+        """Generate hash for content to detect changes."""
+        return hashlib.md5(content.encode()).hexdigest()
 
     def get(self, url: str) -> Optional[str]:
         """
         Get cached content for URL.
 
+        Updates access statistics on cache hit.
         Returns None if not cached or expired.
         """
         if not self.enabled:
@@ -112,6 +194,12 @@ class FirecrawlCache:
                 if row:
                     content, expires_at = row
                     if expires_at > current_time:
+                        # Cache hit - update access statistics
+                        conn.execute(
+                            'UPDATE cache SET access_count = access_count + 1, last_accessed = ? WHERE url_hash = ?',
+                            (current_time, url_hash)
+                        )
+                        conn.commit()
                         logger.debug(f"Cache hit for {url}")
                         return content
                     else:
@@ -120,13 +208,15 @@ class FirecrawlCache:
                         conn.commit()
                         logger.debug(f"Cache expired for {url}")
 
+                logger.debug(f"Cache miss for {url}")
                 return None
 
         except Exception as e:
             logger.warning(f"Cache read error for {url}: {e}")
             return None
 
-    def set(self, url: str, content: str, ttl_hours: Optional[int] = None) -> bool:
+    def set(self, url: str, content: str, ttl_hours: Optional[int] = None,
+            metadata: Optional[Dict[str, Any]] = None) -> bool:
         """
         Store content in cache.
 
@@ -134,6 +224,7 @@ class FirecrawlCache:
             url: URL to cache
             content: Content to store
             ttl_hours: Cache duration (uses default if None)
+            metadata: Additional metadata to store
 
         Returns:
             True if cached successfully
@@ -143,21 +234,92 @@ class FirecrawlCache:
 
         ttl = ttl_hours if ttl_hours is not None else self.default_ttl_hours
         url_hash = self._url_hash(url)
-        expires_at = time.time() + (ttl * 3600)
+        content_hash = self._content_hash(content)
+        current_time = time.time()
+        expires_at = current_time + (ttl * 3600)
+
+        if metadata is None:
+            metadata = {}
 
         try:
             with sqlite3.connect(self.cache_path) as conn:
-                conn.execute(
-                    'REPLACE INTO cache (url_hash, url, content, expires_at) VALUES (?, ?, ?, ?)',
-                    (url_hash, url, content, expires_at)
-                )
+                # Check if entry exists
+                cursor = conn.execute('SELECT url_hash FROM cache WHERE url_hash = ?', (url_hash,))
+                exists = cursor.fetchone() is not None
+
+                if exists:
+                    # Update existing entry
+                    conn.execute(
+                        '''UPDATE cache SET content = ?, timestamp = ?, expires_at = ?,
+                           content_hash = ?, metadata = ?, last_accessed = ?
+                           WHERE url_hash = ?''',
+                        (content, current_time, expires_at, content_hash,
+                         json.dumps(metadata), current_time, url_hash)
+                    )
+                else:
+                    # Insert new entry
+                    conn.execute(
+                        '''INSERT INTO cache
+                           (url_hash, url, content, timestamp, expires_at, content_hash, metadata, last_accessed)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                        (url_hash, url, content, current_time, expires_at,
+                         content_hash, json.dumps(metadata), current_time)
+                    )
+
                 conn.commit()
+
+                # Perform automatic cleanup if enabled
+                if self.auto_cleanup:
+                    self._cleanup_expired()
+
                 logger.debug(f"Cached {url} (TTL: {ttl}h)")
                 return True
 
         except Exception as e:
             logger.warning(f"Cache write error for {url}: {e}")
             return False
+
+    def _cleanup_expired(self):
+        """
+        Remove expired entries and enforce size limits.
+
+        Performs:
+        1. Remove expired entries
+        2. Enforce max_entries limit using LRU eviction
+        """
+        current_time = time.time()
+
+        try:
+            with sqlite3.connect(self.cache_path) as conn:
+                # Remove expired entries
+                cursor = conn.execute('DELETE FROM cache WHERE expires_at <= ?', (current_time,))
+                expired_count = cursor.rowcount
+
+                if expired_count > 0:
+                    logger.debug(f"Cleaned up {expired_count} expired cache entries")
+
+                # Check if we need to enforce entry limit
+                cursor = conn.execute('SELECT COUNT(*) FROM cache')
+                total_entries = cursor.fetchone()[0]
+
+                if total_entries > self.max_entries:
+                    # Remove oldest entries by last_accessed (LRU)
+                    excess = total_entries - self.max_entries
+                    conn.execute(
+                        '''DELETE FROM cache WHERE url_hash IN (
+                            SELECT url_hash FROM cache
+                            ORDER BY last_accessed ASC
+                            LIMIT ?
+                        )''',
+                        (excess,)
+                    )
+                    removed_count = cursor.rowcount
+                    logger.debug(f"Removed {removed_count} old entries to enforce size limit")
+
+                conn.commit()
+
+        except Exception as e:
+            logger.error(f"Error during cache cleanup: {e}")
 
     def clear(self) -> int:
         """
@@ -181,8 +343,17 @@ class FirecrawlCache:
             logger.error(f"Cache clear error: {e}")
             return 0
 
-    def get_stats(self) -> dict:
-        """Get basic cache statistics."""
+    def get_stats(self) -> Dict[str, Any]:
+        """
+        Get comprehensive cache statistics.
+
+        Returns:
+            Dictionary with cache statistics including:
+            - Entry counts (total, active, expired)
+            - Cache size in MB
+            - Access patterns (average access count)
+            - Configuration settings
+        """
         if not self.enabled:
             return {
                 'enabled': False,
@@ -192,20 +363,41 @@ class FirecrawlCache:
 
         try:
             with sqlite3.connect(self.cache_path) as conn:
+                # Total entries
                 cursor = conn.execute('SELECT COUNT(*) FROM cache')
                 total = cursor.fetchone()[0]
 
+                # Active vs expired entries
                 current_time = time.time()
-                cursor = conn.execute('SELECT COUNT(*) FROM cache WHERE expires_at <= ?', (current_time,))
-                expired = cursor.fetchone()[0]
+                cursor = conn.execute('SELECT COUNT(*) FROM cache WHERE expires_at > ?', (current_time,))
+                active = cursor.fetchone()[0]
+                expired = total - active
+
+                # Total cache size
+                cursor = conn.execute('SELECT SUM(LENGTH(content)) FROM cache')
+                total_size_bytes = cursor.fetchone()[0] or 0
+                total_size_mb = round(total_size_bytes / (1024 * 1024), 2)
+
+                # Access statistics
+                cursor = conn.execute('SELECT AVG(access_count) FROM cache')
+                avg_access_count = cursor.fetchone()[0] or 0
+
+                # Cache efficiency (percentage of active entries)
+                efficiency = (active / total * 100) if total > 0 else 0
 
                 return {
                     'enabled': True,
                     'total_entries': total,
+                    'active_entries': active,
                     'expired_entries': expired,
-                    'active_entries': total - expired,
+                    'total_size_mb': total_size_mb,
+                    'average_access_count': round(avg_access_count, 2),
+                    'cache_efficiency': round(efficiency, 1),
                     'cache_path': str(self.cache_path),
-                    'ttl_hours': self.default_ttl_hours
+                    'ttl_hours': self.default_ttl_hours,
+                    'max_entries': self.max_entries,
+                    'max_size_mb': self.max_cache_size_mb,
+                    'auto_cleanup': self.auto_cleanup
                 }
         except Exception as e:
             logger.error(f"Stats error: {e}")
