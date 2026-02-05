@@ -2467,50 +2467,28 @@ pdd sessions cleanup --all --force
 
 **When to use**: Use `sessions list` to discover available remote sessions, `sessions info` to check session details, and `sessions cleanup` to remove stale or orphaned sessions.
 
-### 20. `firecrawl-cache` - Manage Web Scraping Cache
+### 20. Firecrawl Web Scraping Cache
 
-The `firecrawl-cache` command group manages the local cache for Firecrawl web scraping results. Caching reduces API credit usage by storing scraped content locally and serving cached results for subsequent requests to the same URLs.
+**Automatic caching** for web content scraped via `<web>` tags in prompts. Reduces API credit usage by caching results for 24 hours by default.
 
-#### View Cache Statistics
+**How it works:**
+- Transparent and automatic - no manual management needed
+- Cached content stored in `PROJECT_ROOT/.pdd/cache/firecrawl.db`
+- Expired entries automatically skipped when accessed
 
+**Configuration (optional):**
 ```bash
-pdd firecrawl-cache stats
+export FIRECRAWL_CACHE_DISABLE=1      # Disable caching entirely
+export FIRECRAWL_CACHE_TTL_HOURS=48   # Cache for 48 hours (default: 24)
 ```
 
-Displays cache statistics including total entries, active/expired entries, cache size, efficiency, and configuration.
-
-#### Clear Cache
-
+**Debugging commands (rarely needed):**
 ```bash
-pdd firecrawl-cache clear
+pdd firecrawl-cache stats    # View cache statistics
+pdd firecrawl-cache clear    # Clear all cached entries
 ```
 
-Removes all cached Firecrawl entries. Prompts for confirmation before clearing.
-
-#### Show Configuration
-
-```bash
-pdd firecrawl-cache info
-```
-
-Displays cache configuration including environment variables, cache directory location, and current settings.
-
-#### Check Cached URL
-
-```bash
-pdd firecrawl-cache check <url>
-```
-
-Checks if a specific URL is cached and displays a preview of the cached content.
-
-**Configuration via Environment Variables:**
-- `FIRECRAWL_CACHE_ENABLE` (default: `true`) - Enable/disable caching
-- `FIRECRAWL_CACHE_TTL_HOURS` (default: `24`) - Cache duration in hours
-- `FIRECRAWL_CACHE_MAX_SIZE_MB` (default: `100`) - Maximum cache size
-- `FIRECRAWL_CACHE_MAX_ENTRIES` (default: `1000`) - Maximum number of cached entries
-- `FIRECRAWL_API_KEY` (required) - Firecrawl API key for scraping
-
-**When to use**: The cache works automatically with `<web>` tags in prompts. Use these commands to monitor cache usage, clear old entries, or troubleshoot caching issues.
+**When to use**: Caching is automatic. Use `stats` to check cache status or `clear` to force re-scraping all URLs.
 
 ## Example Review Process
 

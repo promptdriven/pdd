@@ -1,11 +1,10 @@
-# Example: Using Firecrawl with caching for web scraping
+# Example: Using Firecrawl for web scraping in PDD
 # Install with: pip install firecrawl-py
 
 from firecrawl import Firecrawl
-from pdd.firecrawl_cache import get_firecrawl_cache
 import os
 
-# Example 1: Direct Firecrawl usage (main's API)
+# Example 1: Direct Firecrawl usage (standard API)
 api_key = os.environ.get('FIRECRAWL_API_KEY', 'YOUR_API_KEY')
 app = Firecrawl(api_key=api_key)
 
@@ -21,12 +20,27 @@ else:
 
 print(markdown_content)
 
-# Example 2: Using Firecrawl with caching (PR #151 feature)
+# Example 2: Caching is automatic in PDD
+# When you use <web>URL</web> tags in prompts, PDD automatically:
+# 1. Checks cache first
+# 2. Scrapes if not cached or expired
+# 3. Caches the result for future use (24h default TTL)
+#
+# No manual cache management needed.
+#
+# Optional: Control caching via environment variables:
+# export FIRECRAWL_CACHE_DISABLE=1      # Disable caching
+# export FIRECRAWL_CACHE_TTL_HOURS=48   # Cache for 48 hours
+
+# Example 3: Manual cache usage (advanced - rarely needed)
+# Most users don't need this - caching is automatic via <web> tags
+from pdd.firecrawl_cache import get_firecrawl_cache
+
 cache = get_firecrawl_cache()
 
 url = 'https://www.example.com'
 
-# Check cache first
+# Check cache first (automatic in normal usage)
 cached_content = cache.get(url)
 if cached_content:
     print(f"Using cached content for {url}")
@@ -43,13 +57,6 @@ else:
         content = None
 
     if content:
-        # Cache for 24 hours
-        cache.set(url, content, ttl_hours=24, metadata={'scraped_at': 'now'})
+        # Cache for 24 hours (automatic in normal usage)
+        cache.set(url, content, ttl_hours=24)
         print(content)
-
-# Example 3: Cache management
-cache_stats = cache.get_stats()
-print(f"Cache has {cache_stats.get('total_entries', 0)} entries")
-
-# Clear expired entries
-# cache.clear()

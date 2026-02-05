@@ -358,8 +358,7 @@ def process_web_tags(text: str, recursive: bool) -> str:
 
             if content:
                 # Cache the result for future use
-                cache.set(url, content, ttl_hours=cache_ttl_hours,
-                         metadata={'scraped_at': time.time(), 'url': url})
+                cache.set(url, content, ttl_hours=cache_ttl_hours)
                 return content
             else:
                 console.print(f"[bold yellow]Warning:[/bold yellow] No markdown content returned for {url}")
