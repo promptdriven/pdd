@@ -97,7 +97,7 @@ Because even though each patch is faster, every patch still leaves *residue*. Te
 [PAUSE: 1.5s]
 
 [TONE: stark, data-driven]
-GitHub measured a **fifty-five percent** speedup on individual coding tasks. But when researchers tracked overall developer throughput? **No significant change**. The debt ate the rest.
+GitHub measured a **fifty-five percent** speedup on individual coding tasks. But when Uplevel tracked **eight hundred** developers over a year? No change in throughput—and **forty-one percent** more bugs. The debt ate the gains.
 
 [PAUSE: 2s]
 
@@ -129,13 +129,28 @@ The code it *needs* is outside the window. The code *inside*? [PAUSE: 0.3s] Some
 
 [PAUSE: 1.5s]
 
-[TONE: explanatory, empathetic]
-This is why AI-assisted patching feels *great* at first... and **frustrating** later. It's not the model getting *dumber*. It's the **ratio** getting worse. Every patch makes the codebase bigger. Every patch shrinks what the AI can see.
+[TONE: pivoting, analytical]
+This is why AI-assisted patching is really **two** stories.
+
+[PAUSE: 1s]
+
+[TONE: validating]
+On a *small* codebase—a few thousand lines—patching with AI is genuinely transformative. Fifty-five percent faster. The context window covers everything. That's **real**.
+
+[PAUSE: 1s]
+
+[TONE: contrasting, serious]
+But on a *large* codebase—the kind you get after years of patching—experienced developers are actually **nineteen percent** *slower* with AI tools. The context window can't keep up. The model guesses wrong. You spend more time fixing its suggestions than writing the code yourself.
+
+[PAUSE: 1.5s]
+
+[TONE: the trap revealed]
+And here's the catch: every patch makes the codebase **bigger**. So patching pushes you from the world where AI *helps*... into the world where it **doesn't**.
 
 [PAUSE: 2s]
 
 [TONE: solution emerging]
-Regeneration doesn't have this problem. A single module with a clear prompt? [PAUSE: 0.5s] That **fits** in the window. [PAUSE: 0.3s] *Every* time.
+Regeneration doesn't have this problem. A single module with a clear prompt? [PAUSE: 0.5s] That **fits** in the window. [PAUSE: 0.3s] *Every* time. And research confirms: modules in the two-hundred to four-hundred line range have the **lowest** defect density. That's exactly the size you get from a focused prompt.
 
 [PAUSE: 1.5s]
 
