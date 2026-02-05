@@ -3,6 +3,23 @@ name: Package Install Test
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '*.md'
+      - 'docs/**'
+      - 'scripts/**'
+      - '.github/**'
+      - '.vscode/**'
+      - '.cursor/**'
+      - '.claude/**'
+      - 'Makefile'
+      - '.env.example'
+      - '.gitattributes'
+      - 'example_prompts/**'
+      - 'example_project/**'
+      - 'example_workspace/**'
+      - 'staging/**'
+      - '*.log'
+      - 'LICENSE'
   pull_request:
     branches: [main]
 
