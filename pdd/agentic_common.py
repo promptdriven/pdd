@@ -9,6 +9,7 @@ import tempfile
 import time
 import uuid
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Any, Union
 from dataclasses import dataclass
@@ -88,6 +89,73 @@ GEMINI_PRICING_BY_FAMILY = {
 CODEX_PRICING = Pricing(1.50, 6.00, 0.25)
 
 console = Console()
+
+
+# ---------------------------------------------------------------------------
+# Agentic Debug Logging
+# ---------------------------------------------------------------------------
+
+AGENTIC_LOG_DIR = ".pdd/agentic-logs"
+_AGENTIC_SESSION_ID: Optional[str] = None
+
+
+def _log_agentic_interaction(
+    label: str,
+    prompt: str,
+    response: str,
+    cost: float,
+    provider: str,
+    success: bool,
+    duration: float,
+    cwd: Path
+) -> None:
+    """
+    Log full prompt and response to JSONL file in .pdd/agentic-logs/.
+
+    Each workflow run generates a single session file with all step interactions.
+    Logs are only written when --verbose flag is enabled.
+
+    Args:
+        label: Step identifier (e.g., "step1", "step5_5")
+        prompt: Full prompt text sent to the agent
+        response: Full response text from the agent
+        cost: Cost in USD for this interaction
+        provider: Provider name (anthropic, google, openai)
+        success: Whether the interaction succeeded
+        duration: Duration in seconds
+        cwd: Working directory for the task
+    """
+    global _AGENTIC_SESSION_ID
+
+    # Ensure log directory exists
+    log_dir = Path(cwd) / AGENTIC_LOG_DIR
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    # Initialize session ID on first call (one file per workflow run)
+    if _AGENTIC_SESSION_ID is None:
+        _AGENTIC_SESSION_ID = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    log_file = log_dir / f"session_{_AGENTIC_SESSION_ID}.jsonl"
+
+    entry = {
+        "timestamp": datetime.now().isoformat(),
+        "label": label,
+        "cwd": str(cwd),
+        "provider": provider,
+        "success": success,
+        "cost_usd": cost,
+        "duration_seconds": round(duration, 2),
+        "prompt_length": len(prompt),
+        "response_length": len(response),
+        "prompt": prompt,
+        "response": response,
+    }
+
+    try:
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception:
+        pass  # Don't break workflow for logging errors
 
 
 # ---------------------------------------------------------------------------
@@ -345,6 +413,7 @@ def run_agentic_task(
         return False, msg, 0.0, ""
 
     effective_timeout = timeout if timeout is not None else DEFAULT_TIMEOUT_SECONDS
+    task_start_time = time.time()
 
     # Create a unique temp file for the prompt
     prompt_filename = f".agentic_prompt_{uuid.uuid4().hex[:8]}.txt"
@@ -401,6 +470,17 @@ def run_agentic_task(
                             console.print(f"[bold red]SUSPICIOUS FILES DETECTED: {', '.join(['- ' + s for s in suspicious])}[/bold red]")
 
                         # Real success
+                        if verbose:
+                            _log_agentic_interaction(
+                                label=label,
+                                prompt=full_instruction,
+                                response=output,
+                                cost=cost,
+                                provider=provider,
+                                success=True,
+                                duration=time.time() - task_start_time,
+                                cwd=cwd
+                            )
                         return True, output, cost, provider
 
                 # Failed - retry with backoff if attempts remain
@@ -413,6 +493,16 @@ def run_agentic_task(
             # All retries exhausted for this provider
             if verbose:
                 console.print(f"[yellow]Provider {provider} failed after {max_retries} attempts: {last_output}[/yellow]")
+                _log_agentic_interaction(
+                    label=label,
+                    prompt=full_instruction,
+                    response=last_output,
+                    cost=0.0,
+                    provider=provider,
+                    success=False,
+                    duration=time.time() - task_start_time,
+                    cwd=cwd
+                )
 
         return False, "All agent providers failed", 0.0, ""
 
