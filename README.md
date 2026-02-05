@@ -2475,20 +2475,27 @@ pdd sessions cleanup --all --force
 - Transparent and automatic - no manual management needed
 - Cached content stored in `PROJECT_ROOT/.pdd/cache/firecrawl.db`
 - Expired entries automatically skipped when accessed
+- URL normalization (removes tracking parameters, case-insensitive matching)
+- Access tracking for LRU eviction when cache is full
 
 **Configuration (optional):**
 ```bash
-export FIRECRAWL_CACHE_DISABLE=1      # Disable caching entirely
-export FIRECRAWL_CACHE_TTL_HOURS=48   # Cache for 48 hours (default: 24)
+export FIRECRAWL_CACHE_ENABLE=false          # Disable caching (default: true)
+export FIRECRAWL_CACHE_TTL_HOURS=48          # Cache for 48 hours (default: 24)
+export FIRECRAWL_CACHE_MAX_SIZE_MB=200       # Max cache size in MB (default: 100)
+export FIRECRAWL_CACHE_MAX_ENTRIES=2000      # Max number of entries (default: 1000)
+export FIRECRAWL_CACHE_AUTO_CLEANUP=false    # Disable auto cleanup (default: true)
 ```
 
-**Debugging commands (rarely needed):**
+**Cache management commands:**
 ```bash
-pdd firecrawl-cache stats    # View cache statistics
-pdd firecrawl-cache clear    # Clear all cached entries
+pdd firecrawl-cache stats              # View cache statistics
+pdd firecrawl-cache clear              # Clear all cached entries
+pdd firecrawl-cache info               # View cache configuration
+pdd firecrawl-cache check <url>        # Check if a URL is cached
 ```
 
-**When to use**: Caching is automatic. Use `stats` to check cache status or `clear` to force re-scraping all URLs.
+**When to use**: Caching is automatic. Use `stats` to check cache status, `info` to view configuration, `check` to verify if a URL is cached, or `clear` to force re-scraping all URLs.
 
 ## Example Review Process
 
