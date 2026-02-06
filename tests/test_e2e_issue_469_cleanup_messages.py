@@ -14,9 +14,11 @@ Only the network layer (auth + remote API) is mocked.
 See: https://github.com/promptdriven/pdd/issues/469
 """
 
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -228,12 +230,19 @@ class TestIssue469CleanupMessagesE2E:
             f.write(wrapper_code)
             wrapper_path = f.name
 
+        # Ensure the subprocess imports the local worktree code, not the installed package
+        project_root = str(Path(__file__).resolve().parent.parent)
+        env = os.environ.copy()
+        env["PYTHONPATH"] = project_root
+
         try:
             proc = subprocess.run(
                 [sys.executable, wrapper_path],
                 capture_output=True,
                 text=True,
                 timeout=30,
+                cwd=project_root,
+                env=env,
             )
 
             # Current buggy behavior: exits with 0

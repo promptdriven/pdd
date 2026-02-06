@@ -279,6 +279,10 @@ def cleanup_sessions(cleanup_all: bool, cleanup_stale: bool, force: bool) -> Non
             else:
                 fail_count += 1
 
-    console.print(f"\n[bold green]✓[/bold green] Successfully cleaned up {success_count} session(s)")
+    if success_count > 0:
+        console.print(f"\n[bold green]✓[/bold green] Successfully cleaned up {success_count} session(s)")
     if fail_count > 0:
         console.print(f"[bold red]✗[/bold red] Failed to cleanup {fail_count} session(s)")
+        raise click.exceptions.Exit(1)
+    if success_count == 0 and fail_count == 0:
+        console.print("[yellow]No sessions were cleaned up.[/yellow]")
