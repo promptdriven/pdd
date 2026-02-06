@@ -9,9 +9,12 @@ import {
 } from "remotion";
 import { BEATS, VISUAL_SEQUENCE, Part4PrecisionTradeoffPropsType } from "./constants";
 import { BothGenerateFinal, defaultBothGenerateFinalProps } from "../45-BothGenerateFinal";
-import { CrossSectionIntro, defaultCrossSectionIntroProps } from "../21-CrossSectionIntro";
 import { GraphAnimateCurve, defaultGraphAnimateCurveProps } from "../42-GraphAnimateCurve";
-import { PromptGovernsCode, defaultPromptGovernsCodeProps } from "../33-PromptGovernsCode";
+import { LongPrompt, defaultLongPromptProps } from "../43-LongPrompt";
+import { MoldFlowFocus, defaultMoldFlowFocusProps } from "../40-MoldFlowFocus";
+import { PrecisionGraph, defaultPrecisionGraphProps } from "../41-PrecisionGraph";
+import { PrinterFocus, defaultPrinterFocusProps } from "../39-3DPrinterFocus";
+import { ShortPromptTests, defaultShortPromptTestsProps } from "../44-ShortPromptTests";
 
 export const Part4PrecisionTradeoff: React.FC<Part4PrecisionTradeoffPropsType> = () => {
   const frame = useCurrentFrame();
@@ -32,41 +35,62 @@ export const Part4PrecisionTradeoff: React.FC<Part4PrecisionTradeoffPropsType> =
 
       {/* Visual compositions sequenced by BEATS */}
       
-      {/* Visual 0: Veo clip - Grandmother: not stupid → economics rational */}
+      {/* Visual 0: Veo clip - Something subtle about prompts */}
       {activeVisual === 0 && (
         <AbsoluteFill>
           <OffthreadVideo
-            src={staticFile("07_split_screen_sepia.mp4")}
+            src={staticFile("split_3d_vs_mold.mp4")}
             style={{ width: "100%", height: "100%" }}
           />
         </AbsoluteFill>
       )}
 
-      {/* Visual 1: GraphAnimateCurve - You: not stupid → economics changed → became darni */}
+      {/* Visual 1: PrinterFocus - 3D printing: no mold, every point, precise */}
       {activeVisual === 1 && (
         <Sequence from={BEATS.VISUAL_01_START} durationInFrames={BEATS.VISUAL_01_END - BEATS.VISUAL_01_START}>
+          <PrinterFocus {...defaultPrinterFocusProps} />
+        </Sequence>
+      )}
+
+      {/* Visual 2: MoldFlowFocus - Injection molding: walls constrain the flow */}
+      {activeVisual === 2 && (
+        <Sequence from={BEATS.VISUAL_02_START} durationInFrames={BEATS.VISUAL_02_END - BEATS.VISUAL_02_START}>
+          <MoldFlowFocus {...defaultMoldFlowFocusProps} />
+        </Sequence>
+      )}
+
+      {/* Visual 3: PrecisionGraph - This maps directly to PDD */}
+      {activeVisual === 3 && (
+        <Sequence from={BEATS.VISUAL_03_START} durationInFrames={BEATS.VISUAL_03_END - BEATS.VISUAL_03_START}>
+          <PrecisionGraph {...defaultPrecisionGraphProps} />
+        </Sequence>
+      )}
+
+      {/* Visual 4: LongPrompt - Few tests: specify everything */}
+      {activeVisual === 4 && (
+        <Sequence from={BEATS.VISUAL_04_START} durationInFrames={BEATS.VISUAL_04_END - BEATS.VISUAL_04_START}>
+          <LongPrompt {...defaultLongPromptProps} />
+        </Sequence>
+      )}
+
+      {/* Visual 5: ShortPromptTests - Many tests: specify intent only */}
+      {activeVisual === 5 && (
+        <Sequence from={BEATS.VISUAL_05_START} durationInFrames={BEATS.VISUAL_05_END - BEATS.VISUAL_05_START}>
+          <ShortPromptTests {...defaultShortPromptTestsProps} />
+        </Sequence>
+      )}
+
+      {/* Visual 6: GraphAnimateCurve - Test accumulation makes prompts simpler */}
+      {activeVisual === 6 && (
+        <Sequence from={BEATS.VISUAL_06_START} durationInFrames={BEATS.VISUAL_06_END - BEATS.VISUAL_06_START}>
           <GraphAnimateCurve {...defaultGraphAnimateCurveProps} />
         </Sequence>
       )}
 
-      {/* Visual 2: BothGenerateFinal - Transition beat */}
-      {activeVisual === 2 && (
-        <Sequence from={BEATS.VISUAL_02_START} durationInFrames={BEATS.VISUAL_02_END - BEATS.VISUAL_02_START}>
+      {/* Visual 7: BothGenerateFinal - More tests less prompt, walls do precision */}
+      {activeVisual === 7 && (
+        <Sequence from={BEATS.VISUAL_07_START} durationInFrames={BEATS.VISUAL_07_END - BEATS.VISUAL_07_START}>
           <BothGenerateFinal {...defaultBothGenerateFinalProps} />
-        </Sequence>
-      )}
-
-      {/* Visual 3: CrossSectionIntro - Doesn't eliminate → elevates → mold designers → ma */}
-      {activeVisual === 3 && (
-        <Sequence from={BEATS.VISUAL_03_START} durationInFrames={BEATS.VISUAL_03_END - BEATS.VISUAL_03_START}>
-          <CrossSectionIntro {...defaultCrossSectionIntroProps} />
-        </Sequence>
-      )}
-
-      {/* Visual 4: PromptGovernsCode - PDD developers → specification level → not writing */}
-      {activeVisual === 4 && (
-        <Sequence from={BEATS.VISUAL_04_START} durationInFrames={BEATS.VISUAL_04_END - BEATS.VISUAL_04_START}>
-          <PromptGovernsCode {...defaultPromptGovernsCodeProps} />
         </Sequence>
       )}
     </AbsoluteFill>

@@ -8,12 +8,12 @@ import {
   useCurrentFrame,
 } from "remotion";
 import { BEATS, VISUAL_SEQUENCE, Part2ParadigmShiftPropsType } from "./constants";
-import { AddTestWall, defaultAddTestWallProps } from "../26-AddTestWall";
-import { CrossSectionIntro, defaultCrossSectionIntroProps } from "../21-CrossSectionIntro";
+import { DefectDiscovered, defaultDefectDiscoveredProps } from "../15-DefectDiscovered";
 import { MoldToPrompt, defaultMoldToPromptProps } from "../19-MoldToPrompt";
-import { PromptGeneratesCode, defaultPromptGeneratesCodeProps } from "../20-PromptGeneratesCode";
-import { RatchetTimelapse, defaultRatchetTimelapseProps } from "../28-RatchetTimelapse";
-import { TraditionalVsPdd, defaultTraditionalVsPddProps } from "../29-TraditionalVsPdd";
+import { PartsEject, defaultPartsEjectProps } from "../14-PartsEject";
+import { PerfectParts, defaultPerfectPartsProps } from "../16-PerfectParts";
+import { PlasticRegenerates, defaultPlasticRegeneratesProps } from "../18-PlasticRegenerates";
+import { ValueAura, defaultValueAuraProps } from "../17-ValueAura";
 
 export const Part2ParadigmShift: React.FC<Part2ParadigmShiftPropsType> = () => {
   const frame = useCurrentFrame();
@@ -34,7 +34,7 @@ export const Part2ParadigmShift: React.FC<Part2ParadigmShiftPropsType> = () => {
 
       {/* Visual compositions sequenced by BEATS */}
       
-      {/* Visual 0: Veo clip - Crafting vs molding: value in object vs specificat */}
+      {/* Visual 0: Veo clip - What changed with clothes, paradigm shift */}
       {activeVisual === 0 && (
         <AbsoluteFill>
           <OffthreadVideo
@@ -44,45 +44,65 @@ export const Part2ParadigmShift: React.FC<Part2ParadigmShiftPropsType> = () => {
         </AbsoluteFill>
       )}
 
-      {/* Visual 1: MoldToPrompt - PDD: prompt is your mold, code is plastic */}
+      {/* Visual 1: Veo clip - Manufacturing: crafting to designing molds */}
       {activeVisual === 1 && (
-        <Sequence from={BEATS.VISUAL_01_START} durationInFrames={BEATS.VISUAL_01_END - BEATS.VISUAL_01_START}>
-          <MoldToPrompt {...defaultMoldToPromptProps} />
-        </Sequence>
+        <AbsoluteFill>
+          <OffthreadVideo
+            src={staticFile("02_mold_closeup.mp4")}
+            style={{ width: "100%", height: "100%" }}
+          />
+        </AbsoluteFill>
       )}
 
-      {/* Visual 2: PromptGeneratesCode - Three components intro: precise → mold has three p */}
+      {/* Visual 2: PartsEject - Make mold once, unlimited identical parts */}
       {activeVisual === 2 && (
         <Sequence from={BEATS.VISUAL_02_START} durationInFrames={BEATS.VISUAL_02_END - BEATS.VISUAL_02_START}>
-          <PromptGeneratesCode {...defaultPromptGeneratesCodeProps} />
+          <PartsEject {...defaultPartsEjectProps} />
         </Sequence>
       )}
 
-      {/* Visual 3: CrossSectionIntro - Test capital: tests are walls → constraint → sees  */}
+      {/* Visual 3: DefectDiscovered - Defect: don't patch parts */}
       {activeVisual === 3 && (
         <Sequence from={BEATS.VISUAL_03_START} durationInFrames={BEATS.VISUAL_03_END - BEATS.VISUAL_03_START}>
-          <CrossSectionIntro {...defaultCrossSectionIntroProps} />
+          <DefectDiscovered {...defaultDefectDiscoveredProps} />
         </Sequence>
       )}
 
-      {/* Visual 4: AddTestWall - Bug found: don't patch → add wall → permanent */}
+      {/* Visual 4: PerfectParts - Fix the mold, applies to every future part */}
       {activeVisual === 4 && (
         <Sequence from={BEATS.VISUAL_04_START} durationInFrames={BEATS.VISUAL_04_END - BEATS.VISUAL_04_START}>
-          <AddTestWall {...defaultAddTestWallProps} />
+          <PerfectParts {...defaultPerfectPartsProps} />
         </Sequence>
       )}
 
-      {/* Visual 5: RatchetTimelapse - Ratchet effect: tests accumulate → constrains all  */}
+      {/* Visual 5: ValueAura - Real shift: migration of where value lives */}
       {activeVisual === 5 && (
         <Sequence from={BEATS.VISUAL_05_START} durationInFrames={BEATS.VISUAL_05_END - BEATS.VISUAL_05_START}>
-          <RatchetTimelapse {...defaultRatchetTimelapseProps} />
+          <ValueAura {...defaultValueAuraProps} />
         </Sequence>
       )}
 
-      {/* Visual 6: TraditionalVsPdd - Traditional vs PDD: bug fix one place vs everywher */}
+      {/* Visual 6: Veo clip - Crafting: value in object, protect it */}
       {activeVisual === 6 && (
-        <Sequence from={BEATS.VISUAL_06_START} durationInFrames={BEATS.VISUAL_06_END - BEATS.VISUAL_06_START}>
-          <TraditionalVsPdd {...defaultTraditionalVsPddProps} />
+        <AbsoluteFill>
+          <OffthreadVideo
+            src={staticFile("07_craftsman_vs_mold.mp4")}
+            style={{ width: "100%", height: "100%" }}
+          />
+        </AbsoluteFill>
+      )}
+
+      {/* Visual 7: PlasticRegenerates - Molding: value in specification, disposable */}
+      {activeVisual === 7 && (
+        <Sequence from={BEATS.VISUAL_07_START} durationInFrames={BEATS.VISUAL_07_END - BEATS.VISUAL_07_START}>
+          <PlasticRegenerates {...defaultPlasticRegeneratesProps} />
+        </Sequence>
+      )}
+
+      {/* Visual 8: MoldToPrompt - This is PDD: prompt is mold, code is plastic */}
+      {activeVisual === 8 && (
+        <Sequence from={BEATS.VISUAL_08_START} durationInFrames={BEATS.VISUAL_08_END - BEATS.VISUAL_08_START}>
+          <MoldToPrompt {...defaultMoldToPromptProps} />
         </Sequence>
       )}
     </AbsoluteFill>

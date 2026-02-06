@@ -35,46 +35,49 @@ SAMPLE_RATE = 24000  # Qwen3-TTS output rate
 
 
 # Section definitions: name, segment range, output prefix, remotion folder mapping
+# NOTE: TTS was generated from an earlier script version. Segment ranges determined
+# by Whisper transcription of individual WAV files. Filler/separator segments
+# (23, 34, 54, 63, 73, 79, 89) and removed content (74-78) are excluded.
 SECTIONS = {
     "part1": {
         "name": "Part 1: Economics of Darning",
         "seg_start": 0,
-        "seg_end": 29,
+        "seg_end": 22,
         "output_prefix": "part1_economics",
         "output_dir": "01-economics",
     },
     "part2": {
         "name": "Part 2: Paradigm Shift",
-        "seg_start": 30,
-        "seg_end": 44,
+        "seg_start": 24,
+        "seg_end": 33,
         "output_prefix": "part2_paradigm_shift",
         "output_dir": "02-paradigm-shift",
     },
     "part3": {
         "name": "Part 3: Mold Has Three Parts",
-        "seg_start": 45,
-        "seg_end": 69,
+        "seg_start": 35,
+        "seg_end": 53,
         "output_prefix": "part3_mold",
         "output_dir": "03-mold-has-three-parts",
     },
     "part4": {
         "name": "Part 4: Precision Tradeoff",
-        "seg_start": 70,
-        "seg_end": 77,
+        "seg_start": 55,
+        "seg_end": 62,
         "output_prefix": "part4_precision",
         "output_dir": "04-precision-tradeoff",
     },
     "part5": {
         "name": "Part 5: Compound Returns",
-        "seg_start": 78,
-        "seg_end": 86,
+        "seg_start": 64,
+        "seg_end": 72,
         "output_prefix": "part5_compound",
         "output_dir": "05-compound-returns",
     },
     "closing": {
         "name": "Closing",
-        "seg_start": 87,
-        "seg_end": 89,  # Only 87-89 available
+        "seg_start": 80,
+        "seg_end": 88,
         "output_prefix": "closing",
         "output_dir": "06-closing",
     },

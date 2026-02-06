@@ -29,24 +29,24 @@ export const ClosingSection: React.FC<ClosingSectionPropsType> = () => {
 
       {/* Visual compositions sequenced by BEATS */}
       
-      {/* Visual 0: CodeOutputMoldGlows - The code is just plastic */}
+      {/* Visual 0: CodeOutputMoldGlows - Mental shift: socks cheap, code cheap */}
       {activeVisual === 0 && (
         <Sequence from={BEATS.VISUAL_00_START} durationInFrames={BEATS.VISUAL_00_END - BEATS.VISUAL_00_START}>
           <CodeOutputMoldGlows {...defaultCodeOutputMoldGlowsProps} />
         </Sequence>
       )}
 
-      {/* Visual 1: ThreeComponents - The mold is what matters */}
+      {/* Visual 1: ThreeComponents - Prompts encode intent, tests, grounding */}
       {activeVisual === 1 && (
         <Sequence from={BEATS.VISUAL_01_START} durationInFrames={BEATS.VISUAL_01_END - BEATS.VISUAL_01_START}>
           <ThreeComponents {...defaultThreeComponentsProps} />
         </Sequence>
       )}
 
-      {/* Visual 2: ThreeComponents - Hold */}
+      {/* Visual 2: CodeOutputMoldGlows - Code disposable, mold is what matters */}
       {activeVisual === 2 && (
         <Sequence from={BEATS.VISUAL_02_START} durationInFrames={BEATS.VISUAL_02_END - BEATS.VISUAL_02_START}>
-          <ThreeComponents {...defaultThreeComponentsProps} />
+          <CodeOutputMoldGlows {...defaultCodeOutputMoldGlowsProps} />
         </Sequence>
       )}
     </AbsoluteFill>
