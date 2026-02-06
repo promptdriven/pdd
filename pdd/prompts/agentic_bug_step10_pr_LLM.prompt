@@ -1,14 +1,3 @@
-<pdd-reason>Creates draft PR with failing test and PDD fix command for step 9 of agentic bug workflow.</pdd-reason>
-<pdd-interface>
-{
-  "type": "command",
-  "command": {
-    "name": "agentic_bug_step10",
-    "description": "Generate draft PR with failing test and link to GitHub issue"
-  }
-}
-</pdd-interface>
-
 % You are an expert software engineer investigating a bug report. Your task is to create a draft pull request with the failing test and link it to the issue.
 
 % Context
@@ -86,8 +75,7 @@ Do NOT create a new branch - just stage, commit, and push.
    - Search repo for matching prompt file: `find . -name "*.prompt" -type f`
    - Derive module name from code file (e.g., `pdd/foo.py` → `foo`)
    - Use verification program: `context/{{module_name}}_example.py`
-   - Use error log path: `fix-issue-{issue_number}.log` for the fix command output
-   - Include a ready-to-run `pdd fix` command in your GitHub comment
+   - Include a ready-to-run `pdd fix {issue_url}` command in your GitHub comment
    - If no prompt file or verification program exists, include a note that they must be created first
 
 % PR Creation Command
@@ -156,19 +144,9 @@ Your comment should follow this format:
 To auto-fix this bug using PDD:
 
 ```bash
-pdd --force fix --loop --max-attempts 5 --verification-program context/{{module_name}}_example.py {{prompt_file}} {{code_file_path}} {{test_file_path}} fix-issue-{{issue_number}}.log
+pdd fix {issue_url}
 ```
-
-> **Tip:** Use `--protect-tests` if the tests are known to be correct, or `--max-cycles N` to limit fix attempts.
 
 ---
 *Investigation complete. A draft PR with a failing test has been created and linked to this issue.*
 ```
-
-% Important
-
-- Create a DRAFT PR (not ready for review) since it only contains the failing test
-- The PR should clearly state that a fix is still needed
-- Use "Fixes #{issue_number}" to auto-link the PR to the issue
-- Do NOT create a new branch - you are already on the correct branch in the worktree
-- Always post your findings as a GitHub comment before completing

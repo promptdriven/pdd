@@ -18,11 +18,23 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Dict, List, Any
 
 import pytest
+
+
+# Shared helper for subprocess-based tests
+def get_project_root() -> Path:
+    """Get the project root directory."""
+    current = Path(__file__).parent
+    while current != current.parent:
+        if (current / "prompts").is_dir():
+            return current
+        current = current.parent
+    raise RuntimeError("Could not find project root with prompts/ directory")
 
 
 # Mark all tests in this module as e2e (slow, uses real LLM)
@@ -81,12 +93,18 @@ class TestOperationLoggingE2E:
     ) -> subprocess.CompletedProcess:
         """Run a pdd command and return the result."""
         result = subprocess.run(
-            ["pdd"] + args,
+            [sys.executable, "-m", "pdd.cli"] + args,
             cwd=cwd,
             capture_output=True,
             text=True,
             timeout=timeout,
-            env={**os.environ, "PDD_FORCE": "1"}  # Skip interactive prompts
+            env={
+                **os.environ,
+                "PDD_FORCE": "1",  # Skip interactive prompts
+                "PYTHONPATH": os.pathsep.join(
+                    [str(get_project_root()), os.environ.get("PYTHONPATH", "")]
+                ).strip(os.pathsep),
+            },
         )
         return result
 
@@ -366,7 +384,8 @@ class TestOperationLoggingE2E:
         # Run update on single file
         result = self.run_pdd_command(
             ["update", str(code_file)],
-            cwd=project_dir
+            cwd=project_dir,
+            timeout=300,
         )
 
         # Command should complete (may succeed or fail, but not crash)
@@ -433,12 +452,18 @@ class TestSyncLogsWithSyncMode:
 
         # Run sync (this will trigger generate internally)
         result = subprocess.run(
-            ["pdd", "sync", "counter", "--skip-tests", "--skip-verify", "--budget", "2.0"],
+            [sys.executable, "-m", "pdd.cli", "sync", "counter", "--skip-tests", "--skip-verify", "--budget", "2.0"],
             cwd=project_dir,
             capture_output=True,
             text=True,
             timeout=180,
-            env={**os.environ, "PDD_FORCE": "1"}
+            env={
+                **os.environ,
+                "PDD_FORCE": "1",
+                "PYTHONPATH": os.pathsep.join(
+                    [str(get_project_root()), os.environ.get("PYTHONPATH", "")]
+                ).strip(os.pathsep),
+            },
         )
 
         # Check log entries - sync-initiated operations should have invocation_mode='sync'
