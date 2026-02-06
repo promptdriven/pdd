@@ -1,6 +1,6 @@
 # PDD (Prompt-Driven Development) Command Line Interface
 
-![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.139-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
+![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.140-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
 
 ## Introduction
 
@@ -367,7 +367,7 @@ export PDD_TEST_OUTPUT_PATH=/path/to/tests/
 
 ## Version
 
-Current version: 0.0.139
+Current version: 0.0.140
 
 To check your installed version, run:
 ```
@@ -796,8 +796,6 @@ Options:
 - `--skip-tests`: Skip unit test generation and fixing
 - `--target-coverage FLOAT`: Desired code coverage percentage (default is 90.0)
 - `--dry-run`: Display real-time sync analysis for this basename instead of running sync operations. This performs the same state analysis as a normal sync run but without acquiring exclusive locks or executing any operations, allowing inspection even when another sync process is active.
-- `--no-steer`: Disable interactive steering during the sync process. By default, PDD may pause at key decision points (e.g., choosing the next operation) and allow you to select between multiple valid options instead of automatically choosing one. Use this flag to disable steering and rely solely on automatic heuristics.
-- `--steer-timeout FLOAT`: Timeout in seconds for steering prompts (default: 8.0). When steering is enabled, this controls how long to wait for user input before selecting the recommended option.
 
 **Real-time Progress Animation**:
 The sync command provides live visual feedback showing:
@@ -809,8 +807,6 @@ The sync command provides live visual feedback showing:
   - Blue: File analysis in progress
 - Running cost totals and time elapsed
 - Progress through the workflow steps
-
-By default, the animation may temporarily pause to present interactive choices (such as selecting which operation to run next). Your selection immediately influences the remaining workflow and the animation resumes with the chosen path. Use `--no-steer` to disable this behavior.
 
 **Language Detection**:
 The sync command automatically detects the programming language by scanning for existing prompt files matching the pattern `{basename}_{language}.prompt` in the prompts directory. For example:
@@ -841,8 +837,6 @@ The sync command automatically detects what files exist and executes the appropr
 6. **test**: Generate comprehensive unit tests if they don't exist (unless --skip-tests)
 7. **fix**: Resolve any bugs found by unit tests
 8. **update**: Back-propagate any learnings to the prompt file
-
-By default, PDD will surface multiple viable workflow paths when they exist and let you steer the execution interactively rather than relying solely on automatic heuristics. Use `--no-steer` to disable interactive steering.
 
 **Advanced Decision Making**:
 - **Fingerprint-based Change Detection**: Uses content hashes and timestamps to precisely detect what changed
@@ -919,12 +913,6 @@ pdd --verbose sync --dry-run factorial_calculator
 
 # Monitor what sync would do without executing (with state analysis)
 pdd sync --dry-run calculator
-
-# Interactive sync with manual steering at decision points (steering enabled by default)
-pdd sync calculator
-
-# Disable interactive steering to rely solely on automatic heuristics
-pdd sync --no-steer calculator
 
 # Context-aware examples with automatic configuration detection
 cd backend && pdd --force sync calculator     # Uses backend context settings with animation
