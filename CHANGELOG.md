@@ -1,9 +1,29 @@
+## v0.0.140 (2026-02-05)
+
+### Feat
+
+- Add comprehensive agentic workflow logging
+
+### Fix
+
+- Correct docstring to reference Step 10 instead of Step 5.5
+- Step 10 prompt now stages all files from files_to_stage, not just test files (#429)
+- Address Copilot review feedback on agentic logging tests
+- Auth logout shows success message when not authenticated (inconsistent with clear-cache)
+
+### Refactor
+
+- Address Copilot PR review comments
+
 ## v0.0.139 (2026-02-04)
 
 ### Fix
 
-- validate JWT token expiry in cloud E2E test skip check (#402)
-- Resolve agentic orchestrator context key and prompt formatting issues, improve E2E test skipping, and add package data sync deletions.
+- **test_cmd_test_main, test_fix_main**: Validate JWT token expiry when checking cloud credentials for E2E test skipping. Previously checked only for file existence; now uses `_get_cached_jwt()` to verify the token is not expired, preventing test failures with stale tokens.
+
+### Build
+
+- **.sync-config.yml**: Simplify test file patterns from 4 specific patterns to one recursive glob (`tests/**/*.py`). Ensures test subdirectories are included in package data sync. 3088 tests in public vs. 2,483.
 
 ## v0.0.138 (2026-02-03)
 
