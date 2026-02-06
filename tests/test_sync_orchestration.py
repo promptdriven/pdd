@@ -1311,9 +1311,9 @@ async def test_tui_request_confirmation_completes_without_hanging():
     import threading
     import asyncio
     from unittest.mock import MagicMock, patch, AsyncMock
-
+    
+    from textual.widgets import RichLog, Static # Added import
     from pdd.sync_tui import SyncApp
-
     # Create a minimal SyncApp instance for testing
     app = SyncApp(
         basename="test",
@@ -1331,6 +1331,10 @@ async def test_tui_request_confirmation_completes_without_hanging():
         tests_color_ref=["blue"],
         stop_event=threading.Event(),
     )
+
+    # Mock Textual UI components to avoid full rendering and focus on resize logic
+    app.log_widget = MagicMock(spec=RichLog)
+    app.animation_view = MagicMock(spec=Static)
 
     # Use Textual's async test runner to properly run the app
     async with app.run_test() as pilot:
@@ -2358,6 +2362,27 @@ def test_sync_uses_merge_when_test_file_exists(orchestration_fixture):
 # =============================================================================
 # Tests for strength/temperature propagation to sub-commands
 # =============================================================================
+
+def test_all_synced_decision_completes(orchestration_fixture):
+    """Verify that an all_synced decision completes the workflow."""
+    mocks = orchestration_fixture
+    mock_determine = mocks['sync_determine_operation']
+
+    # Return a final all_synced decision instead of exhausting an iterator.
+    mock_determine.side_effect = [
+        SyncDecision(
+            operation="all_synced",
+            reason="Test: sequence complete",
+            confidence=1.0,
+            estimated_cost=0.0,
+            details={"decision_type": "mock"},
+        )
+    ]
+
+    result = sync_orchestration(basename="calculator", language="python")
+
+    assert result['success'] is True
+
 
 class TestStrengthTemperaturePropagation:
     """Bug fix tests: sync_orchestration should pass strength/temperature to sub-commands."""
