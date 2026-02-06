@@ -21,7 +21,7 @@ The orchestrator code (lines 446-454) correctly:
 But the Step 10 prompt contradicted this by saying to stage ONLY test files,
 resulting in prompt files being excluded from the PR.
 
-The fix (applied in the Step 10 prompt template) changes the instruction to:
+The fix (applied in Step 5.5) changes the instruction to:
   "CRITICAL: Stage ONLY the files listed in `files_to_stage` above"
 
 This test verifies the FULL workflow:
