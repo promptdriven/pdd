@@ -7,6 +7,7 @@ to verify .splitlines() correctly handles cross-platform line endings.
 See: https://github.com/promptdriven/pdd/issues/471
 """
 
+import shutil
 import subprocess
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -20,10 +21,21 @@ class TestIssue471WindowsCRLFE2E:
 
     def test_fix_orchestrator_with_crlf_git_output(self, tmp_path):
         """Test _get_modified_and_untracked with real git repo + injected CRLF."""
+        # Skip if git is not available
+        if not shutil.which("git"):
+            pytest.skip("git is not installed")
+
         repo_dir = tmp_path / "repo"
         repo_dir.mkdir()
 
-        subprocess.run(["git", "init", "-b", "main"], cwd=repo_dir, check=True, capture_output=True)
+        # Try git init with -b flag, fall back to older syntax if not supported
+        try:
+            subprocess.run(["git", "init", "-b", "main"], cwd=repo_dir, check=True, capture_output=True)
+        except subprocess.CalledProcessError:
+            # Older git versions don't support -b flag
+            subprocess.run(["git", "init"], cwd=repo_dir, check=True, capture_output=True)
+            subprocess.run(["git", "checkout", "-b", "main"], cwd=repo_dir, check=True, capture_output=True)
+
         subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=repo_dir, check=True)
         subprocess.run(["git", "config", "user.name", "Test"], cwd=repo_dir, check=True)
 
@@ -51,7 +63,14 @@ class TestIssue471WindowsCRLFE2E:
                     if result.returncode == 0 and result.stdout:
                         mock = MagicMock()
                         mock.returncode = 0
-                        mock.stdout = result.stdout.replace("\n", "\r\n")
+                        # Normalize existing CRLF to LF first, then convert LF to CRLF
+                        # This prevents double-\r when running on Windows where git might already output CRLF
+                        stdout = result.stdout
+                        if isinstance(stdout, bytes):
+                            normalized_stdout = stdout.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+                        else:
+                            normalized_stdout = stdout.replace("\r\n", "\n").replace("\n", "\r\n")
+                        mock.stdout = normalized_stdout
                         mock.stderr = result.stderr
                         return mock
             return result
@@ -94,9 +113,10 @@ class TestIssue471WindowsCRLFE2E:
         pattern = re.compile(r"\.strip\(\)\.split\(['\"]\\n['\"]\)")
 
         found = []
+        failed_reads = []
         for py_file in project_root.glob("pdd/**/*.py"):
             try:
-                content = py_file.read_text()
+                content = py_file.read_text(encoding='utf-8')
                 for line_num, line in enumerate(content.splitlines(), start=1):
                     if pattern.search(line):
                         stripped = line.strip()
@@ -104,8 +124,19 @@ class TestIssue471WindowsCRLFE2E:
                             continue
                         rel = py_file.relative_to(project_root)
                         found.append(f"{rel}:{line_num}")
-            except Exception:
+            except UnicodeDecodeError:
+                # Skip binary files or files with encoding issues
                 continue
+            except Exception as e:
+                # Track unexpected read failures for debugging
+                rel = py_file.relative_to(project_root)
+                failed_reads.append(f"{rel}: {type(e).__name__}: {e}")
+
+        if failed_reads:
+            pytest.fail(
+                f"Failed to read {len(failed_reads)} file(s) during static analysis:\n"
+                + "\n".join(f"  - {err}" for err in failed_reads)
+            )
 
         if found:
             pytest.fail(
