@@ -1,7 +1,7 @@
 # Prompt-Driven Development: A 3Blue1Brown Style Video Script
 
 **Working Title:** "Why You're Still Darning Socks"
-**Duration:** ~19-21 minutes
+**Duration:** ~22-25 minutes
 **Visual Style:** Manim animations, clean geometric representations, smooth transitions
 
 ---
@@ -39,7 +39,7 @@ So why are we still patching?
 
 ---
 
-## PART 1: THE ECONOMICS OF DARNING (2:00 - 5:45)
+## PART 1: THE ECONOMICS OF DARNING (2:00 - 6:30)
 
 **[VISUAL: Price chart animation. 1950: A pair of quality wool socks costs about an hour of wages. Graph shows labor cost vs garment cost over time. The lines cross around 1960-65.]**
 
@@ -76,9 +76,15 @@ But watch the dashed line. The total cost. It's barely moving.
 
 Because even though each patch is faster, every patch still leaves residue. Technical debt. And that debt accumulates—faster now, because you're patching faster.
 
-**[VISUAL: Annotation appears: "Individual task: -55% (GitHub, 2022)" pointing to the dropping solid line. Another annotation: "Overall throughput: ~0% (Uplevel, 2024)" pointing to the nearly-flat dashed line. The contrast is stark.]**
+**[VISUAL: Annotation appears: "Individual task: -55% (GitHub, 2022)" pointing to the dropping solid line. Fine print below: "95 developers, one greenfield task". Another annotation: "Overall throughput: ~0% (Uplevel, 2024)" pointing to the nearly-flat dashed line. Fine print: "785 developers, one year". The contrast is stark.]**
 
-GitHub measured a fifty-five percent speedup on individual coding tasks. But when Uplevel tracked eight hundred developers over a year? No change in throughput—and forty-one percent more bugs. The debt ate the gains.
+GitHub measured a fifty-five percent speedup on individual coding tasks. But that was ninety-five developers writing one HTTP server from scratch. A greenfield task—exactly where AI shines.
+
+When Uplevel tracked almost eight hundred developers across real enterprise work for a full year? No change in throughput. Forty-one percent more bugs. The Uplevel team themselves expected to see gains. Their own product manager said: *"People are ending up being more reviewers for this code than in the past, and you might have some false faith that the code is doing what you expect."*
+
+**[VISUAL: New annotation materializes: "Code churn: +44% (GitClear, 2025, 211M lines analyzed)" pointing to the debt area. Another: "Refactoring: -60%" pointing to the widening gap. The picture is getting worse, not better.]**
+
+And GitClear confirmed it across two hundred eleven million lines of code. Since AI coding assistants arrived, code churn is up forty-four percent—new code getting revised within two weeks. Meanwhile, refactoring collapsed by sixty percent. Developers aren't cleaning up. They're piling on.
 
 **[VISUAL: Zoom into the shaded debt area. It separates into two distinct layers: a darker "Code Complexity" layer and a lighter "Context Rot" layer with a subtle static/noise texture.]**
 
@@ -90,11 +96,15 @@ When your codebase is small, AI tools are brilliant. The context window—what t
 
 **[VISUAL: The codebase grid grows: 4x4 → 8x8 → 16x16 → 32x32. The context window stays the SAME SIZE. A counter shows: "Context coverage: 80% → 40% → 10% → 2%". The window becomes a tiny rectangle over a massive grid.]**
 
-But codebases grow. And that window? It stays the same size.
+But codebases grow. And that window? It stays the same size. A typical enterprise codebase spans millions of tokens. Even the largest context windows hold a fraction of that.
 
 **[VISUAL: Inside the tiny window, some blocks are highlighted red—irrelevant code that the AI grabbed. Outside the window, green-highlighted blocks show the code that was actually needed but couldn't be seen.]**
 
-Now the AI is looking through a keyhole. It has to guess what's relevant. And increasingly, it guesses wrong. The code it needs is outside the window. The code inside? Something else entirely.
+So now the AI has to guess what's relevant. Tools like Cursor use embeddings. Claude Code uses agentic search—grep, file by file. When Jolt AI benchmarked these tools on real codebases like Django and Kubernetes, pure vector search failed to find the right files. Agentic search found more—but took three to five minutes per query.
+
+**[VISUAL: A subtle graph inset: "Performance vs. Context Length". Line drops steadily. Label: "Even with perfect retrieval, performance degrades 14-85% as context grows (EMNLP, 2025)".]**
+
+And here's what makes it worse. A 2025 study proved that even when the model retrieves the *right* information, performance still degrades—fourteen to eighty-five percent—just from the sheer length of the input. It's not about finding the right code. The extra tokens themselves hurt the model's ability to reason. Chroma's research team calls this *context rot*.
 
 **[VISUAL: Return to the chart. The "Context Rot" layer in the debt area pulses. Annotation: "Faster patching → faster growth → faster rot".]**
 
@@ -102,11 +112,11 @@ This is why AI-assisted patching is really two stories.
 
 **[VISUAL: Return to the chart. The immediate patch cost line FORKS into two paths at 2020. Lower path labeled "Small codebase" plunges down. Upper path labeled "Large codebase" stays flat. Annotation: "Same tools. Different codebase sizes."]**
 
-On a small codebase—a few thousand lines—patching with AI is genuinely transformative. Fifty-five percent faster. The context window covers everything. That's real.
+On a small codebase—a few thousand lines—patching with AI is genuinely transformative. The context window covers everything. That's real.
 
-**[VISUAL: Focus on the upper fork. The large-codebase line stays flat at ~10-12 hours. Small annotation: "METR, 2025: experienced devs 19% slower on mature repos".]**
+**[VISUAL: Focus on the upper fork. The large-codebase line stays flat at ~10-12 hours. Small annotation: "METR, 2025: experienced devs 19% slower on mature repos". Then a second annotation fades in: "Developers believed AI saved 20%. It cost 19%."]**
 
-But on a large codebase—the kind you get after years of patching—experienced developers are actually nineteen percent *slower* with AI tools. The context window can't keep up. The model guesses wrong. You spend more time fixing its suggestions than writing the code yourself.
+But on a large codebase—the kind you get after years of patching—experienced developers are actually nineteen percent *slower* with AI tools. And here's the devastating part: those same developers *believed* AI was making them twenty percent *faster*. That's a thirty-nine point gap between what it felt like and what happened. The context window can't keep up. The model guesses wrong. But it guesses confidently—so you don't notice until the bugs hit production.
 
 **[VISUAL: Arrow from small-codebase fork curving upward toward large-codebase fork. Label: "Every patch adds code."]**
 
@@ -114,11 +124,17 @@ And here's the catch: every patch makes the codebase bigger. So patching pushes 
 
 **[VISUAL: The "Generate" line pulses with emphasis. Small annotation: "Small modules. Clear prompts. Always fits in context."]**
 
-Regeneration doesn't have this problem. A single module with a clear prompt? That fits in the window. Every time. And research confirms: modules in the two-hundred to four-hundred line range have the *lowest* defect density. That's exactly the size you get from a focused prompt.
+Regeneration doesn't have this problem. A prompt is a fifth to a tenth the size of the code it governs. So where raw code overwhelms the context window, the *prompts* for ten modules fit comfortably. And the prompt defines its own context—the developer declares exactly what the model needs to see, instead of an agentic tool guessing at what's relevant. No retrieval. No search. No rot.
+
+**[VISUAL: Side-by-side comparison. LEFT: "Agentic patching" — context window filled with 15,000 tokens of code, red highlights on irrelevant sections, tiny green section with relevant code. RIGHT: "PDD regeneration" — context window with a 300-token prompt, 2,000 tokens of tests, small grounding example. Clean. Focused. Room to think.]**
+
+And there's something else. These models are trained on thirty times more natural language than code. Natural language is their deepest fluency. MIT showed that giving models natural language context for coding tasks improved performance by up to eighty-nine percent. A prompt *is* natural language. You're speaking the model's strongest language and giving it room to think.
+
+Research also confirms: modules around two hundred fifty lines have the *lowest* defect density—a U-shaped curve where too small fragments logic and too large explodes complexity. That's exactly the size a focused prompt produces.
 
 **[VISUAL: The blue "generate" line crosses below the dashed "total cost" line. Then keeps going, crossing below even the solid "immediate" line. Label: "We are here."]**
 
-Meanwhile, generation just crossed below both lines. And it comes with no debt. No rot.
+Meanwhile, generation just crossed below both lines. The debt doesn't just slow down—it resets. Each regeneration starts clean.
 
 **[VISUAL: Split screen. Developer with Cursor / Grandma with needle. Both are working efficiently—this isn't dismissive of their tools.]**
 
@@ -130,19 +146,19 @@ But they're still darning needles. And the fundamental problem with darning isn'
 
 **[VISUAL: Time-lapse of the codebase. Even with AI-assisted patches, complexity grows. Faster patching just means faster accumulation.]**
 
-This is the part of software economics nobody talks about. 80 to 90 percent of software cost isn't building the initial system.
+This is the part of software economics nobody talks about. Eighty to ninety percent of software cost isn't building the initial system.
 
 **[VISUAL: Pie chart materializes. "Initial Development: 10-20%". "Maintenance: 80-90%".]**
 
-It's maintaining it. Navigating around all the previous patches. Understanding what the last ten developers did and why.
+It's maintaining it. McKinsey found that organizations with high technical debt spend forty percent more on maintenance and deliver features twenty-five to fifty percent slower. Stripe measured developers wasting a third of their entire work week just navigating around previous patches.
 
-**[VISUAL: The pie chart morphs into an exponentially growing cost curve. A second, flat line appears: "Regeneration cost (no debt)".]**
+**[VISUAL: The pie chart morphs into an exponentially growing cost curve labeled "Technical debt follows compound interest: Debt × (1 + Rate)^Time". A second, flat line appears: "Regeneration cost (debt resets each cycle)".]**
 
-And those costs compound. Unless you regenerate. Then they reset to zero.
+And those costs compound—literally. Technical debt follows a compound interest curve. Unless you regenerate. Then the debt resets.
 
 ---
 
-## PART 2: THE PARADIGM SHIFT (5:45 - 8:45)
+## PART 2: THE PARADIGM SHIFT (6:30 - 10:30)
 
 **[VISUAL: A factory floor. Industrial. An injection molding machine dominates the frame.]**
 
@@ -179,17 +195,37 @@ In molding, value lives in the specification—the mold. The plastic part? Dispo
 
 **[VISUAL: The plastic part dissolves. A new one instantly appears, identical.]**
 
-**[VISUAL: Transition. The injection mold morphs into a glowing document labeled "PROMPT". The plastic part morphs into lines of code.]**
+**[VISUAL: Transition from factory floor to a different scene: a 1980s electronics lab. An engineer hunches over a desk, drawing circuits by hand on a schematic. Wires everywhere. Transistor symbols fill the page.]**
 
-This is Prompt-Driven Development.
+And it's not just plastics. The chip industry hit this exact wall.
+
+**[VISUAL: The hand-drawn schematic zooms out. Hundreds of transistors. Then thousands. The engineer's hand slows down. The schematic becomes impossibly dense.]**
+
+In the 1980s, chip designers drew every gate by hand. When transistor counts hit tens of thousands, they couldn't keep up. So in 1985, they moved up—from schematics to Verilog. A hardware description language. You described what you wanted the chip to *do*, and a synthesis tool generated the gates.
+
+**[VISUAL: The hand-drawn schematic dissolves. In its place, clean Verilog code appears. Below it, a Synopsys Design Compiler icon processes the code. A gate-level netlist flows out—automatically.]**
+
+But here's the thing: synthesis was non-deterministic. Run it twice, get different gates. Different wiring. Different layout. The output varied every single time.
+
+**[VISUAL: Same Verilog code runs through synthesis three times. Three visibly different gate-level netlists appear side by side. All different. Then a green checkmark appears over each: "Functionally equivalent".]**
+
+What Synopsys did was wrap a verification toolchain around the generator. Formal equivalence checking—mathematical proof that the output, whatever it looked like, behaved identically to the spec. The gates were different every time. The function was the same every time.
+
+**[VISUAL: Timeline showing chip design abstraction levels rising: Transistors (1970s) → Schematics (1980s) → RTL/Verilog (1990s) → Behavioral/HLS (2010s). At each transition, an arrow labeled "Couldn't scale" pushes to the next level. A new level appears at the end, pulsing: "Natural language → Code (2020s)".]**
+
+By 1990, most designs were still schematic-based. By the mid-1990s, half had switched. Today, all but the most trivial chips use HDL. Every time component counts exceeded what the current abstraction could handle, the industry moved up a level. The designer stopped specifying *how* and started specifying *what*.
+
+**[VISUAL: The Verilog code morphs into a glowing document labeled "PROMPT". The gate-level netlist morphs into lines of software code. The Synopsys verification checkmark morphs into a test suite with green checkmarks.]**
+
+This is that same transition. For software.
 
 **[VISUAL: The prompt document pulses. Code flows out of it, filling a defined shape. Tests appear as walls around the code, constraining it.]**
 
-The prompt is your mold. The code is just plastic.
+The prompt is your mold. The code is just plastic. And just like chip synthesis—the code is different every generation. But the tests lock the behavior. The process is deterministic.
 
 ---
 
-## PART 3: THE MOLD HAS THREE PARTS (8:45 - 13:45)
+## PART 3: THE MOLD HAS THREE PARTS (10:30 - 16:00)
 
 **[VISUAL: Cross-section of an injection mold. Technical, precise. Three regions highlight one by one.]**
 
@@ -210,7 +246,11 @@ Each test is a constraint. A boundary the generated code cannot cross.
 
 **[VISUAL: Focus on one wall labeled "null → None". The liquid tries to flow past it, hits the wall, stops. The wall holds firm.]**
 
-When the model generates code, it sees these tests. The code it produces must pass them. It literally cannot generate code that violates these walls.
+And these walls matter more than you'd think. CodeRabbit analyzed hundreds of pull requests and found AI-generated code produces one-point-seven times more issues than human code—seventy-five percent more logic errors, eight times more performance problems. The 2025 DORA report confirmed it: AI without strong tests increases instability. AI *with* strong tests amplifies delivery.
+
+**[VISUAL: Annotation: "AI code: 1.7× more issues (CodeRabbit, 2025)" next to the mold walls. Then: "AI + strong tests = amplified delivery (DORA, 2025)". The walls glow brighter.]**
+
+The walls aren't optional. They're what make regeneration safe. When the model generates code, it sees these tests. The code it produces must pass them. It literally cannot generate code that violates these walls.
 
 **[VISUAL: A bug is discovered. Red alert on a piece of code. The word "BUG" appears.]**
 
@@ -234,6 +274,10 @@ RIGHT: "PDD" - Bug found → Add test (`pdd bug`) → Regenerate (`pdd fix`) →
 
 In traditional development, a bug fix helps one place. In PDD, a test prevents that bug everywhere, forever.
 
+**[VISUAL: Brief sidebar. The Synopsys Formality logo from Part 2 reappears. Text: "Hardware: mathematical proof of equivalence. Software: tests are samples, not proofs. But every wall you add narrows the gap."]**
+
+Now—a quick honest note. In chip design, equivalence checking is a mathematical proof. It covers every possible input. Software tests aren't proofs—they're samples. But each test you add narrows what the generator can get wrong. And the ratchet only turns one way.
+
 ### PROMPT CAPITAL: THE SPECIFICATION
 
 **[VISUAL: The injection nozzle of the mold highlights. Labels appear: "intent", "requirements", "constraints".]**
@@ -248,9 +292,15 @@ The prompt doesn't define the walls—tests do that. The prompt defines what you
 
 And here's something subtle: the exact implementation can vary. What's locked is the *behavior*. The code is flexible; the contract is fixed.
 
-**[VISUAL: The prompt glows. It's small—maybe 10-15 lines. But it governs a 200-line code file.]**
+**[VISUAL: The prompt glows. It's small—maybe 10-15 lines. But it governs a 200-line code file. A ratio appears: "1:5 to 1:10".]**
 
-A good prompt is much smaller than the code it generates. You're specifying *what* and *why*, not *how*.
+A good prompt is a fifth to a tenth the size of the code it generates. You're specifying *what* and *why*, not *how*. And that compression matters.
+
+**[VISUAL: Two context windows side by side. LEFT: filled with 15,000 tokens of raw code—dense, hard to parse. RIGHT: filled with prompts for ten modules—clean natural language, clear intent. Both windows are the same size, but the right one represents ten times more system knowledge.]**
+
+Remember the context window problem? Code is token-expensive. But prompts are natural language—and these models were trained on thirty times more natural language than code. Researchers found that just adding natural language comments to code training data improved generation quality by forty-one percent. The prompt isn't fighting the model's strengths. It's leveraging them.
+
+And unlike agentic tools that dynamically guess which code to load into context—and increasingly guess wrong—each prompt declares its own dependencies. The context is author-defined, not machine-assembled.
 
 ### GROUNDING CAPITAL: THE MATERIAL
 
@@ -278,7 +328,7 @@ The code is output. The mold is what matters.
 
 ---
 
-## PART 4: THE PRECISION TRADEOFF (13:45 - 15:45)
+## PART 4: THE PRECISION TRADEOFF (16:00 - 18:00)
 
 **[VISUAL: Split screen. LEFT: A 3D printer depositing material precisely, layer by layer. RIGHT: Injection mold with liquid flowing until it hits walls.]**
 
@@ -317,7 +367,7 @@ The more walls you have, the less you need to specify. The mold does the precisi
 
 ---
 
-## PART 5: COMPOUND RETURNS (15:45 - 17:45)
+## PART 5: COMPOUND RETURNS (18:00 - 20:15)
 
 **[VISUAL: A graph with two curves. One labeled "Patching", one labeled "PDD". X-axis is time. Y-axis is "Cumulative Value of Investment".]**
 
@@ -326,11 +376,11 @@ Let's talk about compound returns.
 
 **[VISUAL: The "Patching" curve. Each patch is a point of investment. The return is local—one bug fixed. The curve grows linearly, then starts to flatten as patches interact badly.]**
 
-When you patch code, each fix has local returns. You fixed one bug in one place. Similar bugs can still occur elsewhere. And sometimes your patch introduces new bugs.
+When you patch code, each fix has local returns. You fixed one bug in one place. Similar bugs can still occur elsewhere. And sometimes your patch introduces new bugs—CodeRabbit found AI patches carry one-point-seven times more issues than human code. So each patch risks creating more patches.
 
-**[VISUAL: The patching curve wobbles, occasionally dips as patches conflict.]**
+**[VISUAL: The patching curve wobbles, occasionally dips as patches conflict. Small annotations at the dips: "new bug from patch", "regression", "merge conflict".]**
 
-The returns are linear at best. Often sublinear.
+The returns are linear at best. Often sublinear. And the cost keeps compounding—CISQ estimates technical debt costs US companies one-point-five *trillion* dollars annually.
 
 **[VISUAL: The "PDD" curve. Each test added is a point of investment. The return compounds—that test constrains all future generations.]**
 
@@ -364,7 +414,7 @@ But the economics changed. And when economics change, behavior that was rational
 
 ---
 
-## PART 6: THE SKILL SHIFT (17:45 - 19:15)
+## PART 6: THE SKILL SHIFT (20:15 - 22:15)
 
 **[VISUAL: A craftsman looking at an injection molding machine, uncertain. Then sitting at a CAD workstation, designing molds. Their expression shifts from uncertainty to engagement.]**
 
@@ -387,13 +437,19 @@ PDD developers work at the level of specification. You're not writing the defens
 
 The shift: from implementation craft to specification craft.
 
+**[VISUAL: Logos appear in sequence: Thoughtworks, GitHub (spec-kit), Martin Fowler's blog, InfoQ, The New Stack. Each with a headline about spec-driven development.]**
+
+And this isn't just one tool's philosophy. In 2025, Thoughtworks published on *Spec-Driven Development*. GitHub released an open-source CLI called spec-kit. Martin Fowler's site analyzed the emerging tooling. The core principle across all of them: *generated code is disposable. The specification is the asset.*
+
+The industry is converging on this independently. Different names, same insight.
+
 **[VISUAL: Two developers side by side. One is deep in a complex codebase, tracing through patches. The other is looking at a clean prompt and a comprehensive test suite. Both are working hard, but the nature of the work is different.]**
 
 The code is still there. It's still complex. But you don't live in it anymore. You live in the specification. The code is generated, verified, and—if needed—regenerated.
 
 ---
 
-## CLOSING (19:15 - 20:45)
+## CLOSING (22:15 - 23:45)
 
 **[VISUAL: Pull back to show a complete system. Multiple modules, each with a prompt, tests, and generated code. The prompts and tests glow steadily. The code is present but not highlighted—it's output.]**
 
@@ -441,6 +497,11 @@ The mold is what matters.
 - **Cursor/Claude Code UI:** Accurate to real products, slightly desaturated
 - **Terminal/Commands:** Monospace, subtle gray background, not attention-grabbing
 
+### Color Palette Additions
+- **Chip Design/Verilog:** Teal (#2AA198) for Verilog code, darker teal for gate-level netlists
+- **Research Citations:** Muted white text, smaller font, bottom of frame—visible but not distracting
+- **SDD Logos:** Desaturated versions of Thoughtworks, GitHub, etc.—recognition without endorsement
+
 ### Key Visual Motifs
 
 1. **The Split Screen** - Sock darning / code patching parallel. Use at open, at economic crossing point, at close.
@@ -455,6 +516,10 @@ The mold is what matters.
 
 6. **The Subtle Terminal** - Commands appear in corner/background, never center frame. They're discoverable, not advertised.
 
+7. **The Abstraction Staircase** - Chip design history: transistors → schematics → RTL → behavioral → natural language. Each step up accompanied by a "couldn't scale" arrow. Reused briefly when introducing prompt capital.
+
+8. **The Context Window Comparison** - Split context windows showing code-filled (noisy, red highlights) vs. prompt-filled (clean, focused). Used in Part 1 and referenced again in Part 3.
+
 ### PDD Commands Visual Placement
 
 Commands appear as subtle terminal snippets in the corner or background. They should be:
@@ -466,16 +531,16 @@ Commands appear as subtle terminal snippets in the corner or background. They sh
 | Timestamp | Section | Command Shown |
 |-----------|---------|---------------|
 | 0:38 | Cold open regeneration | `pdd generate` |
-| 9:45 | Bug discovered, add test | `pdd bug user_parser` |
-| 10:02 | Regenerate after test | `pdd fix user_parser` |
-| 10:30 | Test accumulation | `pdd test` (scrolling output) |
-| 10:55 | Split screen comparison | `pdd bug` → `pdd fix` |
-| 11:20 | Prompt file | `user_parser.prompt` visible |
-| 11:45 | Generate variations | `pdd generate` (twice) |
-| 12:30 | Grounding feedback | Arrow to cloud after `pdd fix` |
-| 14:15 | Many tests | `pdd test parser` (47 passing) |
-| 19:15 | Final workflow | `pdd bug → pdd fix → ✓` |
-| 19:45 | End card | `uv tool install pdd-cli` |
+| 11:45 | Bug discovered, add test | `pdd bug user_parser` |
+| 12:02 | Regenerate after test | `pdd fix user_parser` |
+| 12:30 | Test accumulation | `pdd test` (scrolling output) |
+| 12:55 | Split screen comparison | `pdd bug` → `pdd fix` |
+| 13:40 | Prompt file | `user_parser.prompt` visible |
+| 13:55 | Generate variations | `pdd generate` (twice) |
+| 14:45 | Grounding feedback | Arrow to cloud after `pdd fix` |
+| 17:00 | Many tests | `pdd test parser` (47 passing) |
+| 22:15 | Final workflow | `pdd bug → pdd fix → ✓` |
+| 23:30 | End card | `uv tool install pdd-cli` |
 
 ### Animation Principles
 - Smooth easing on all transitions (3B1B signature style)
@@ -495,6 +560,31 @@ Commands appear as subtle terminal snippets in the corner or background. They sh
 
 ---
 
+## RESEARCH CITATIONS
+
+All statistics cited in the script with their sources, for fact-checking and video description:
+
+| Claim | Source | Year |
+|-------|--------|------|
+| 55% speedup on individual tasks (95 devs, one greenfield task) | GitHub/Microsoft: "The Impact of AI on Developer Productivity" (arXiv:2302.06590) | 2022 |
+| 0% throughput change, 41% more bugs (785 devs, 1 year) | Uplevel Data Labs: "Can Generative AI Improve Developer Productivity?" | 2024 |
+| Code churn +44%, refactoring -60% (211M lines analyzed) | GitClear: "AI Copilot Code Quality: 2025 Data" | 2025 |
+| AI-generated code: 1.7× more issues, 75% more logic errors | CodeRabbit: "State of AI vs Human Code Generation" | 2025 |
+| Devs believed AI saved 20%; it cost 19% (39-point perception gap) | METR: "Measuring the Impact of Early-2025 AI on Experienced OS Dev Productivity" | 2025 |
+| Performance degrades 14-85% as context grows, even with perfect retrieval | "Context Length Alone Hurts LLM Performance" (EMNLP 2025, arXiv:2510.05381) | 2025 |
+| Context rot across 18 SOTA models | Chroma Research: "Context Rot" technical report | 2025 |
+| AI without tests = instability; AI with tests = amplified delivery | Google DORA: "State of AI-assisted Software Development 2025" | 2025 |
+| NL context improves coding task accuracy by 59-89% | MIT CSAIL: "Natural Language Boosts LLM Performance" (ICLR 2024) | 2024 |
+| Adding NL comments to code training: +41% HumanEval | "Code Needs Comments: Enhancing Code LLMs with Comment Augmentation" (ACL 2024) | 2024 |
+| Modules ~250 lines have lowest defect density (U-shaped curve) | Verma et al: "Reduction of Defect Density Using Optimal Module Sizes" (Hindawi) | 2014 |
+| 80-90% of software cost is maintenance | Multiple sources (IEEE, CISQ, Floris & Harald) | Various |
+| Tech debt costs US companies $1.52T annually | CISQ: "Cost of Poor Software Quality" | 2024 |
+| Organizations with high tech debt: +40% maintenance cost, -25-50% feature velocity | McKinsey Digital | 2024 |
+| Developers waste 33% of time on technical debt | Stripe: "Developer Coefficient" | 2023 |
+| Verilog introduced 1985; by mid-1990s half of chip designs used HDL | IEEE 1364-1995; EDA history sources | 1985-1995 |
+| ST Micro: 90% of digital IP starts at behavioral level | Accellera: "The Next IC Design Methodology Transition" | 2010 |
+| SDD emerging as industry category | Thoughtworks, GitHub spec-kit, Martin Fowler, InfoQ | 2025 |
+
 ## POTENTIAL FOLLOW-UP VIDEOS
 
 1. **"The Context Window Problem"** - Why agentic tools degrade over long sessions (15 min)
@@ -502,3 +592,4 @@ Commands appear as subtle terminal snippets in the corner or background. They sh
 3. **"The Grounding Deep Dive"** - How few-shot learning creates consistency (10 min)
 4. **"When to Patch vs Regenerate"** - Practical decision framework (8 min)
 5. **"Building Your First Mold"** - Hands-on PDD tutorial (20 min)
+6. **"From Schematics to Verilog to Prompts"** - The full chip design parallel (12 min)
