@@ -800,7 +800,8 @@ async def list_changed_prompt_files(
 
         # Parse committed changes
         for line in diff_result.stdout.splitlines():
-            if line.strip() and line.endswith(".prompt"):
+            line = line.strip()
+            if line and line.endswith(".prompt"):
                 changed_files.add(line)
 
         # Parse uncommitted changes (staged and unstaged)
