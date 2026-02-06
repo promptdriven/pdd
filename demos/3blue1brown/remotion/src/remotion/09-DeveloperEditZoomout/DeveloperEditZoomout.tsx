@@ -4,6 +4,8 @@ import {
   interpolate,
   useCurrentFrame,
   Easing,
+  OffthreadVideo,
+  staticFile,
 } from "remotion";
 import { CodeView } from "./CodeView";
 import { FileGrid } from "./FileGrid";
@@ -70,6 +72,14 @@ export const DeveloperEditZoomout: React.FC<DeveloperEditZoomoutPropsType> = ({
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
 
+  // Video overlay opacity: full for first 2s, fades out during transition
+  const videoOpacity = interpolate(
+    frame,
+    [60, 120],
+    [1, 0],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+  );
+
   // Narration
   const narrationOpacity = showNarration
     ? interpolate(
@@ -113,6 +123,16 @@ export const DeveloperEditZoomout: React.FC<DeveloperEditZoomoutPropsType> = ({
         {/* New bug indicator */}
         <BugIndicator frame={frame} />
       </svg>
+
+      {/* Veo video overlay — fades out to reveal SVG animation beneath */}
+      {videoOpacity > 0 && (
+        <AbsoluteFill style={{ opacity: videoOpacity }}>
+          <OffthreadVideo
+            src={staticFile("veo_developer_edit.mp4")}
+            style={{ width: "100%", height: "100%", objectFit: "cover" }}
+          />
+        </AbsoluteFill>
+      )}
 
       {/* Narration overlay (rendered in screen-space, not world-space) */}
       {narrationOpacity > 0 && (
