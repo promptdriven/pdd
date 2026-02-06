@@ -13,13 +13,13 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from rich.console import Console
 
 # We assume standard paths relative to the project root
-PDD_DIR = ".pdd"
-META_DIR = os.path.join(PDD_DIR, "meta")
+PDD_DIR = Path(".pdd")
+META_DIR = PDD_DIR / "meta"
 
 
 def ensure_meta_dir() -> None:
     """Ensure the .pdd/meta directory exists."""
-    os.makedirs(META_DIR, exist_ok=True)
+    META_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _safe_basename(basename: str) -> str:
@@ -34,19 +34,19 @@ def _safe_basename(basename: str) -> str:
 def get_log_path(basename: str, language: str) -> Path:
     """Get the path to the sync log for a specific module."""
     ensure_meta_dir()
-    return Path(META_DIR) / f"{_safe_basename(basename)}_{language}_sync.log"
+    return META_DIR / f"{_safe_basename(basename)}_{language}_sync.log"
 
 
 def get_fingerprint_path(basename: str, language: str) -> Path:
     """Get the path to the fingerprint JSON file for a specific module."""
     ensure_meta_dir()
-    return Path(META_DIR) / f"{_safe_basename(basename)}_{language}.json"
+    return META_DIR / f"{_safe_basename(basename)}_{language}.json"
 
 
 def get_run_report_path(basename: str, language: str) -> Path:
     """Get the path to the run report file for a specific module."""
     ensure_meta_dir()
-    return Path(META_DIR) / f"{_safe_basename(basename)}_{language}_run.json"
+    return META_DIR / f"{_safe_basename(basename)}_{language}_run.json"
 
 
 def infer_module_identity(prompt_file_path: Union[str, Path]) -> Tuple[Optional[str], Optional[str]]:
