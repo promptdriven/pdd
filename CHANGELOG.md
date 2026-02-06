@@ -2,18 +2,22 @@
 
 ### Feat
 
-- Add comprehensive agentic workflow logging
+- **agentic_common**: Add debug logging for agentic workflows. When `--verbose` is enabled, full prompt/response pairs are written to `.pdd/agentic-logs/` as JSONL session files. Logs include cost, duration, provider, and success status per step. Silent when verbose is off; never crashes the workflow on write errors.
+- **agentic_common_python.prompt**: Add prompt specification for the new agentic debug logging feature, documenting the JSONL entry format and `run_agentic_task()` integration.
 
 ### Fix
 
-- Correct docstring to reference Step 10 instead of Step 5.5
-- Step 10 prompt now stages all files from files_to_stage, not just test files (#429)
-- Address Copilot review feedback on agentic logging tests
-- Auth logout shows success message when not authenticated (inconsistent with clear-cache)
+- **agentic_bug_step10_pr_LLM.prompt**: Step 10 now stages all files from `files_to_stage` instead of only test files from Steps 7 and 9. Previously, prompt files fixed in Step 5.5 were excluded from generated PRs even though the orchestrator correctly passed them (#429).
+- **auth**: Logout command now checks authentication state first and displays "Not authenticated." instead of the misleading "Logged out of PDD Cloud." when the user is already logged out (#449). Thanks Serhan Asad!
+- **agentic_bug_step10_pr_LLM.prompt**: PR template now includes a "Prompt Files" section acknowledging prompt file changes from Step 5.5.
+
+### Build
+
+- **package-test.yml**: Add `paths-ignore` to CI workflow so documentation-only changes (markdown, scripts, config files) skip the package install test.
 
 ### Refactor
 
-- Address Copilot PR review comments
+- **pdd/prompts/commands/auth_python.prompt**: Delete unused auth prompt file.
 
 ## v0.0.139 (2026-02-04)
 
