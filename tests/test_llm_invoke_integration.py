@@ -71,22 +71,15 @@ def test_vertex_ai_claude_opus_structured_output_integration():
         # Use unique prompt to avoid any caching
         unique_id = str(uuid.uuid4())[:8]
         with patch('pdd.llm_invoke._load_model_data', return_value=opus_data):
-            try:
-                response = llm_invoke(
-                    prompt=f"Test {unique_id}: What is 2 + 2? Respond with the answer and your confidence level (0-100).",
-                    input_json={"question": "2 + 2", "test_id": unique_id},
-                    strength=0.5,
-                    temperature=0.1,
-                    output_pydantic=SimpleOutput,
-                    verbose=True,
-                    use_cloud=False,  # Force local execution to test Vertex AI directly
-                )
-            except RuntimeError as e:
-                if "All candidate models failed" in str(e):
-                    pytest.skip(
-                        f"Vertex AI API unavailable (rate limit or model not found): {e}"
-                    )
-                raise
+            response = llm_invoke(
+                prompt=f"Test {unique_id}: What is 2 + 2? Respond with the answer and your confidence level (0-100).",
+                input_json={"question": "2 + 2", "test_id": unique_id},
+                strength=0.5,
+                temperature=0.1,
+                output_pydantic=SimpleOutput,
+                verbose=True,
+                use_cloud=False,  # Force local execution to test Vertex AI directly
+            )
     finally:
         # Restore cache
         litellm.cache = original_cache
@@ -221,29 +214,22 @@ def test_opus_validation_failure_triggers_fallback_integration():
 
         # Use a complex prompt that's similar to real fix_code_module_errors usage
         with patch('pdd.llm_invoke._load_model_data', return_value=opus_and_sonnet):
-            try:
-                response = llm_invoke(
-                    prompt=f"""Test {unique_id}: You are a code fixing assistant.
+            response = llm_invoke(
+                prompt=f"""Test {unique_id}: You are a code fixing assistant.
                 Analyze the following code that has errors and provide fixes.
                 You MUST return all required fields: update_program, update_code, fixed_program, fixed_code.""",
-                    input_json={
-                        "program": "def main():\n    print(greet())\n\nif __name__ == '__main__':\n    main()",
-                        "prompt": "A program that greets the user",
-                        "code": "def greet():\n    return 'Hello, ' + name  # NameError: name not defined",
-                        "errors": "NameError: name 'name' is not defined"
-                    },
-                    strength=1.0,  # Highest strength = most expensive model first (Opus)
-                    temperature=0.1,
-                    output_pydantic=CodeFix,
-                    verbose=True,
-                    use_cloud=False,  # Force local execution to test Vertex AI directly
-                )
-            except RuntimeError as e:
-                if "All candidate models failed" in str(e):
-                    pytest.skip(
-                        f"Vertex AI API unavailable (rate limit or model not found): {e}"
-                    )
-                raise
+                input_json={
+                    "program": "def main():\n    print(greet())\n\nif __name__ == '__main__':\n    main()",
+                    "prompt": "A program that greets the user",
+                    "code": "def greet():\n    return 'Hello, ' + name  # NameError: name not defined",
+                    "errors": "NameError: name 'name' is not defined"
+                },
+                strength=1.0,  # Highest strength = most expensive model first (Opus)
+                temperature=0.1,
+                output_pydantic=CodeFix,
+                verbose=True,
+                use_cloud=False,  # Force local execution to test Vertex AI directly
+            )
     finally:
         # Restore cache
         litellm.cache = original_cache
