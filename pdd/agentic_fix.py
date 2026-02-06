@@ -1020,7 +1020,7 @@ def run_agentic_fix(
             if has_cli_auth or has_api_key:
                 if has_cli_auth:
                     present_keys.append("claude-cli-auth")
-                else:
+                if has_api_key:
                     present_keys.append(api_key_name or ("GEMINI_API_KEY" if provider == "google" else ""))
                 if provider not in seen:
                     available_agents.append(provider)
@@ -1183,8 +1183,8 @@ def run_agentic_fix(
             else:
                 verify_enabled = (env_verify != "0")
         else:
-            # Default: run verification when a command is available
-            verify_enabled = True if verify_cmd else True
+            # Default: verification enabled (unless explicitly overridden)
+            verify_enabled = True
 
         # Allow creating new support files when the agent emits them (kept for compatibility)
         allow_new = True  # noqa: F841
