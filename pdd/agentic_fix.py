@@ -143,10 +143,11 @@ def get_agent_command(provider: str, instruction_file: Path) -> List[str]:
         return ["codex", "exec", "--skip-git-repo-check"]
     return []
 
-def find_llm_csv_path() -> Optional[Path]:
-    """Look for .pdd/llm_model.csv in $HOME first, then in project cwd."""
+def find_llm_csv_path(base_dir: Optional[Path] = None) -> Optional[Path]:
+    """Look for .pdd/llm_model.csv in $HOME first, then in project base_dir/cwd."""
     home_path = Path.home() / ".pdd" / "llm_model.csv"
-    project_path = Path.cwd() / ".pdd" / "llm_model.csv"
+    project_root = base_dir or Path.cwd()
+    project_path = project_root / ".pdd" / "llm_model.csv"
     if home_path.is_file():
         return home_path
     if project_path.is_file():
@@ -998,7 +999,7 @@ def run_agentic_fix(
         _info(f"[cyan]Project root (cwd): {working_dir}[/cyan]")
 
         # Load provider table and filter to those with API keys present in the environment
-        csv_path = find_llm_csv_path()
+        csv_path = find_llm_csv_path(working_dir)
         model_df = _load_model_data(csv_path)
 
         available_agents: List[str] = []
@@ -1063,7 +1064,11 @@ def run_agentic_fix(
         test_content = orig_test  # Alias for prompt template compatibility
 
         # Read error log if it exists, otherwise we'll populate it via preflight
-        error_log_path = Path(error_log_file)
+        error_log_path_input = Path(error_log_file)
+        if not error_log_path_input.is_absolute():
+            error_log_path = (working_dir / error_log_path_input).resolve()
+        else:
+            error_log_path = error_log_path_input.resolve()
         error_content = error_log_path.read_text(encoding="utf-8") if error_log_path.exists() else ""
 
         # --- Preflight: populate error_content if empty so the agent sees fresh failures ---
@@ -1122,7 +1127,7 @@ def run_agentic_fix(
                         )
                 error_content = (pre.stdout or "") + "\n" + (pre.stderr or "")
                 try:
-                    Path(error_log_file).write_text(error_content, encoding="utf-8")
+                    error_log_path.write_text(error_content, encoding="utf-8")
                 except Exception:
                     pass
                 _print_head("preflight verify stdout", pre.stdout or "")
@@ -1172,17 +1177,14 @@ def run_agentic_fix(
         # Decide verification enablement
         if verify_force:
             verify_enabled = True
-        # If a verification command is present (from user or defaults), ALWAYS enable verification.
-        elif verify_cmd:
-            verify_enabled = True
-        else:
-            if env_verify is None:
-                # AUTO mode: if not explicitly disabled, allow agent-supplied TESTCMD
-                verify_enabled = True
-            elif env_verify.lower() == "auto":
+        elif env_verify is not None:
+            if env_verify.lower() == "auto":
                 verify_enabled = False
             else:
                 verify_enabled = (env_verify != "0")
+        else:
+            # Default: run verification when a command is available
+            verify_enabled = True if verify_cmd else True
 
         # Allow creating new support files when the agent emits them (kept for compatibility)
         allow_new = True  # noqa: F841
