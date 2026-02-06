@@ -214,7 +214,12 @@ class TestIssue471LineEndingParsing:
         """
         DOCUMENTATION TEST: Demonstrates the correct pattern for parsing subprocess output.
 
-        This test shows the recommended approach for all subprocess output parsing.
+        IMPORTANT EDGE CASE: The buggy pattern has subtle behavior:
+        - All lines EXCEPT the last have trailing \r
+        - The last line loses its \r due to the initial .strip()
+
+        This makes the bug intermittent - the last file works, others fail!
+        This can make debugging harder since behavior varies by file position.
         """
         # Create test files
         (tmp_path / "src").mkdir()
@@ -227,29 +232,44 @@ class TestIssue471LineEndingParsing:
 
         # ❌ ANTI-PATTERN (current buggy code)
         buggy_pattern = [f for f in git_output.strip().split("\n") if f]
-        # Result: ['src/main.py\r', 'tests/test_main.py\r'] - BROKEN!
+        # Result: ['src/main.py\r', 'tests/test_main.py']
+        # First has \r, last doesn't (due to .strip() removing trailing \r\n)
 
         # ✅ CORRECT PATTERN (recommended fix)
         correct_pattern = [f for f in git_output.splitlines() if f.strip()]
-        # Result: ['src/main.py', 'tests/test_main.py'] - WORKS!
+        # Result: ['src/main.py', 'tests/test_main.py'] - BOTH clean!
 
         # Verify the difference
         assert len(buggy_pattern) == 2
         assert len(correct_pattern) == 2
 
-        # Buggy pattern has \r
-        assert buggy_pattern[0].endswith('\r')
-        assert buggy_pattern[1].endswith('\r')
+        # CRITICAL: Only FIRST file has \r, not the last!
+        # This is the insidious edge case - .strip() removes trailing \r\n from entire string
+        assert buggy_pattern[0].endswith('\r'), "First file has \\r - breaks file operations!"
+        assert not buggy_pattern[1].endswith('\r'), "Last file loses \\r due to .strip() - works by accident!"
 
-        # Correct pattern is clean
+        # This makes the bug intermittent:
+        # - If you process 3 files, the first 2 fail, the last one works
+        # - Single file operations work fine (only file is also last file)
+        # - Very confusing for debugging!
+
+        # Correct pattern is clean for ALL files
         assert not correct_pattern[0].endswith('\r')
         assert not correct_pattern[1].endswith('\r')
 
-        # File operations work with correct pattern
-        for filepath in correct_pattern:
-            # These would fail with buggy pattern on Windows
-            assert '\r' not in filepath
-            assert '\n' not in filepath
+        # Demonstrate the real-world impact
+        first_file_buggy = tmp_path / buggy_pattern[0]  # Path('src/main.py\r')
+        last_file_buggy = tmp_path / buggy_pattern[1]   # Path('tests/test_main.py')
+
+        assert not first_file_buggy.exists(), "First file lookup FAILS due to \\r"
+        assert last_file_buggy.exists(), "Last file lookup WORKS (no \\r) - confusing!"
+
+        # With fixed approach, BOTH work
+        first_file_fixed = tmp_path / correct_pattern[0]
+        last_file_fixed = tmp_path / correct_pattern[1]
+
+        assert first_file_fixed.exists(), "First file found with fix"
+        assert last_file_fixed.exists(), "Last file found with fix"
 
 
 class TestIssue471RegressionTests:
