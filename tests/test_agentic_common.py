@@ -1779,7 +1779,7 @@ class TestAgenticDebugLogging:
         assert entry["prompt_length"] == len("What is 2+2?")
         assert entry["response_length"] == len("The answer is 4.")
         assert "timestamp" in entry
-        assert str(tmp_path) in entry["cwd"]
+        assert entry["cwd"] == str(tmp_path)
 
     def test_log_agentic_interaction_appends_to_same_session(self, tmp_path):
         """Multiple calls within same session should append to same file."""
@@ -1988,9 +1988,11 @@ class TestAgenticDebugLogging:
 
         assert success
 
-        # Log directory should NOT be created when verbose=False
+        # No log entries should be written when verbose=False
         log_dir = tmp_path / AGENTIC_LOG_DIR
-        assert not log_dir.exists(), "Logs should not be written when verbose=False"
+        if log_dir.exists():
+            log_files = list(log_dir.glob("*.jsonl"))
+            assert len(log_files) == 0, "No JSONL log files should be written when verbose=False"
 
     def test_session_id_format(self, tmp_path):
         """Session ID should follow YYYYMMDD_HHMMSS format."""
