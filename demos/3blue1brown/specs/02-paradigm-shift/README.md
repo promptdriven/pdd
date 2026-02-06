@@ -1,8 +1,8 @@
-# Part 2: The Paradigm Shift (5:00 - 8:00)
+# Part 2: The Paradigm Shift (6:30 - 10:30)
 
 This section introduces the injection molding metaphor - the key conceptual framework for understanding PDD. The shift from "crafting objects" to "designing molds" mirrors the shift from "writing code" to "writing specifications."
 
-Total runtime: ~3 minutes.
+Total runtime: ~4 minutes.
 
 ## Section Breakdown
 
@@ -39,9 +39,9 @@ Total runtime: ~3 minutes.
 
 ## Narration Text (Part 2)
 
-> So what actually changed with clothes? It wasn't just that fabric got cheaper.
+> There's a pattern here that shows up across industries. Not just cheaper materials--a deeper shift in *how things are made*.
 >
-> It was a paradigm shift in manufacturing. From crafting individual objects... to designing molds.
+> Consider injection molding. Before it existed, you crafted individual objects. After it? You designed molds.
 >
 > Make the mold once, produce unlimited identical parts. Refine the mold once, every future part improves automatically.
 >
@@ -51,11 +51,21 @@ Total runtime: ~3 minutes.
 >
 > In crafting, value lives in the object. You protect the object. Losing the chair is losing everything.
 >
-> In molding, value lives in the specification—the mold. The plastic part? Disposable. Regenerate it at will.
+> In molding, value lives in the specification--the mold. The plastic part? Disposable. Regenerate it at will.
 >
-> This is Prompt-Driven Development.
+> And it's not just plastics. The chip industry hit this exact wall.
 >
-> The prompt is your mold. The code is just plastic.
+> In the 1980s, chip designers drew every gate by hand. When transistor counts hit tens of thousands, they couldn't keep up. So in 1985, they moved up--from schematics to Verilog. A hardware description language. You described what you wanted the chip to *do*, and a synthesis tool generated the gates.
+>
+> But here's the thing: synthesis was non-deterministic. Run it twice, get different gates. Different wiring. Different layout. The output varied every single time.
+>
+> What Synopsys did was wrap a verification toolchain around the generator. Formal equivalence checking--using SAT and SMT solvers to produce mathematical proof that the output, whatever it looked like, behaved identically to the spec. The gates were different every time. The function was the same every time.
+>
+> By 1990, most designs were still schematic-based. By the mid-1990s, half had switched. Today, all but the most trivial chips use HDL. Every time component counts exceeded what the current abstraction could handle, the industry moved up a level. The designer stopped specifying *how* and started specifying *what*.
+>
+> This is that same transition. For software.
+>
+> The prompt is your mold. The code is just plastic. And just like chip synthesis--the code is different every generation. But the tests lock the behavior. The process is deterministic.
 
 ## Color Palette (Part 2 Specific)
 
@@ -64,3 +74,9 @@ Total runtime: ~3 minutes.
 - **Prompt Glow:** Cool blue (#4A90D9)
 - **Value Aura:** White/gold gradient
 - **Defect Highlight:** Red (#D94A4A)
+
+## Missing Spec Coverage
+
+The following main script content in Part 2 does not yet have corresponding spec files:
+- **Chip Design History (lines 198-216):** 1980s electronics lab, hand-drawn schematics, Verilog introduction (1985), Synopsys synthesis non-determinism, formal equivalence checking, abstraction timeline (transistors -> schematics -> RTL -> behavioral -> natural language)
+- **Transition to Software (lines 218-225):** Verilog morphs to PROMPT document, gate-level netlist morphs to code, Synopsys checkmark morphs to test suite

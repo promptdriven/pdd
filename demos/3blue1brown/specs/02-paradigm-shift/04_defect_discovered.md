@@ -2,7 +2,7 @@
 
 **Tool:** Hybrid (Veo 3.1 + Remotion overlay)
 **Duration:** ~10 seconds
-**Timestamp:** 5:50 - 6:00
+**Timestamp:** 7:37 - 7:50
 
 ## Visual Description
 

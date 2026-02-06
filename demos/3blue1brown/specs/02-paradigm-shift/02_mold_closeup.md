@@ -2,7 +2,7 @@
 
 **Tool:** Veo 3.1 (Video Generation)
 **Duration:** ~15 seconds
-**Timestamp:** 5:15 - 5:30
+**Timestamp:** 6:50 - 7:10
 
 ## Visual Description
 
@@ -86,7 +86,7 @@ Real injection molding details:
 
 ## Narration Sync
 
-> "It was a paradigm shift in manufacturing. From crafting individual objects... to designing molds."
+> "Consider injection molding. Before it existed, you crafted individual objects. After it? You designed molds."
 
 ## Color Palette
 

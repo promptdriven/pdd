@@ -2,7 +2,7 @@
 
 **Tool:** Remotion (overlay on Veo footage or fully animated)
 **Duration:** ~15 seconds
-**Timestamp:** 6:40 - 6:55
+**Timestamp:** 8:43 - 9:03
 
 ## Visual Description
 

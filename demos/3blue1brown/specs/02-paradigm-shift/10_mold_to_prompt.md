@@ -2,7 +2,7 @@
 
 **Tool:** Remotion
 **Duration:** ~20 seconds
-**Timestamp:** 7:05 - 7:25
+**Timestamp:** 9:16 - 9:43
 
 ## Visual Description
 
@@ -162,7 +162,7 @@ const MoldToPromptMorph = ({ progress }) => {
 
 ## Narration Sync
 
-> "This is Prompt-Driven Development."
+> "This is that same transition. For software."
 
 This single line lands as the transformation completes and "PROMPT" is clearly visible.
 

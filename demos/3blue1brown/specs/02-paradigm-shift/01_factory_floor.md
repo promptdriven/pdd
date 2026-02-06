@@ -2,7 +2,7 @@
 
 **Tool:** Veo 3.1 (Video Generation)
 **Duration:** ~15 seconds
-**Timestamp:** 5:00 - 5:15
+**Timestamp:** 6:30 - 6:50
 
 ## Visual Description
 
@@ -79,7 +79,7 @@ NO TEXT OVERLAYS
 
 ## Narration Sync
 
-> "So what actually changed with clothes? It wasn't just that fabric got cheaper."
+> "There's a pattern here that shows up across industries. Not just cheaper materials--a deeper shift in *how things are made*."
 
 ## Visual Tone
 

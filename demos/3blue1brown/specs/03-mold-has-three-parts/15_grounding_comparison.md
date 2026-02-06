@@ -2,7 +2,7 @@
 
 **Tool:** Remotion
 **Duration:** ~20 seconds
-**Timestamp:** 12:25 - 12:45
+**Timestamp:** 14:30 - 14:55
 
 ## Visual Description
 

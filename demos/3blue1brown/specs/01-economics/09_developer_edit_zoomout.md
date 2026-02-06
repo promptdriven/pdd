@@ -2,7 +2,7 @@
 
 **Tool:** Veo 3.1 + Remotion (Composite)
 **Duration:** ~20 seconds
-**Timestamp:** 3:45 - 4:05
+**Timestamp:** 4:15 - 4:41
 
 ## Visual Description
 

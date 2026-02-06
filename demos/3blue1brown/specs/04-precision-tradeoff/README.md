@@ -1,4 +1,4 @@
-# Part 4: The Precision Tradeoff (13:45 - 15:45)
+# Part 4: The Precision Tradeoff (16:00 - 18:00)
 
 This section explains the inverse relationship between test coverage and required prompt precision. More tests means simpler prompts because the walls do the precision work.
 
@@ -12,14 +12,14 @@ Total runtime: ~2 minutes (120 seconds).
 
 | Section | File | Tool | Duration | Timestamp | Description |
 |---------|------|------|----------|-----------|-------------|
-| 4.1 | `01_split_3d_vs_mold.md` | Veo 3.1 | ~15s | 13:45-14:00 | Split: 3D printer vs injection mold |
-| 4.2 | `02_3d_printer_focus.md` | Hybrid | ~15s | 14:00-14:15 | 3D printer with coordinate grid overlay |
-| 4.3 | `03_mold_flow_focus.md` | Hybrid | ~15s | 14:15-14:30 | Liquid flowing until walls constrain |
-| 4.4 | `04_precision_graph.md` | Remotion | ~15s | 14:30-14:45 | Graph: Tests vs Required Prompt Precision |
-| 4.5 | `05_graph_animate_curve.md` | Remotion | ~15s | 14:45-15:00 | Marker animates along inverse curve |
-| 4.6 | `06_long_prompt.md` | Remotion | ~15s | 15:00-15:15 | Dense 50-line `parser_v1.prompt` |
-| 4.7 | `07_short_prompt_tests.md` | Remotion | ~15s | 15:15-15:30 | 10-line prompt + terminal: 47 tests |
-| 4.8 | `08_both_generate_final.md` | Remotion | ~15s | 15:30-15:45 | Split comparison + final message |
+| 4.1 | `01_split_3d_vs_mold.md` | Veo 3.1 | ~15s | 16:00-16:15 | Split: 3D printer vs injection mold |
+| 4.2 | `02_3d_printer_focus.md` | Hybrid | ~15s | 16:15-16:30 | 3D printer with coordinate grid overlay |
+| 4.3 | `03_mold_flow_focus.md` | Hybrid | ~15s | 16:30-16:45 | Liquid flowing until walls constrain |
+| 4.4 | `04_precision_graph.md` | Remotion | ~15s | 16:45-17:00 | Graph: Tests vs Required Prompt Precision |
+| 4.5 | `05_graph_animate_curve.md` | Remotion | ~15s | 17:00-17:15 | Marker animates along inverse curve |
+| 4.6 | `06_long_prompt.md` | Remotion | ~15s | 17:15-17:30 | Dense 50-line `parser_v1.prompt` |
+| 4.7 | `07_short_prompt_tests.md` | Remotion | ~15s | 17:30-17:45 | 10-line prompt + terminal: 47 tests |
+| 4.8 | `08_both_generate_final.md` | Remotion | ~15s | 17:45-18:00 | Split comparison + final message |
 
 ## Tool Distribution
 
@@ -76,7 +76,7 @@ Total runtime: ~2 minutes (120 seconds).
 
 | Timestamp | Section | Command Shown |
 |-----------|---------|---------------|
-| ~15:20 | 07 - Short prompt | `pdd test parser` with 47 tests passing |
+| ~17:35 | 07 - Short prompt | `pdd test parser` with 47 tests passing |
 
 ## Visual Style Notes
 

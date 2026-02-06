@@ -2,7 +2,7 @@
 
 **Tool:** Remotion
 **Duration:** ~15 seconds
-**Timestamp:** 15:30 - 15:45
+**Timestamp:** 17:45 - 18:00
 
 ## Visual Description
 
@@ -438,4 +438,4 @@ The final message appears as "mold does the precision work" is spoken, landing t
 
 ## Transition
 
-Transitions to Part 5: Compound Returns (15:45). The precision tradeoff concept is now established.
+Transitions to Part 5: Compound Returns (18:00). The precision tradeoff concept is now established.

@@ -2,7 +2,7 @@
 
 **Tool:** Veo 3.1 (Video Generation)
 **Duration:** ~15 seconds
-**Timestamp:** 6:25 - 6:40
+**Timestamp:** 8:23 - 8:43
 
 ## Visual Description
 

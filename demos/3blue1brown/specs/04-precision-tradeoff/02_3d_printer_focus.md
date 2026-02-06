@@ -2,7 +2,7 @@
 
 **Tool:** Hybrid (Video + Remotion overlay)
 **Duration:** ~15 seconds
-**Timestamp:** 14:00 - 14:15
+**Timestamp:** 16:15 - 16:30
 
 ## Visual Description
 

@@ -2,7 +2,7 @@
 
 **Tool:** Remotion
 **Duration:** ~15 seconds
-**Timestamp:** 7:25 - 7:40
+**Timestamp:** 9:43 - 10:03
 
 ## Visual Description
 
@@ -129,7 +129,7 @@ This reinforces: value is in the specification (prompt + tests), not the output 
 
 ## Narration Sync
 
-> "The prompt is your mold. The code is just plastic."
+> "The prompt is your mold. The code is just plastic. And just like chip synthesis--the code is different every generation. But the tests lock the behavior. The process is deterministic."
 
 These closing lines of Part 2 land as the visual completes.
 
