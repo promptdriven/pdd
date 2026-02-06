@@ -572,6 +572,10 @@ def _run_with_provider(
             "--dangerously-skip-permissions",
             "--output-format", "json",
         ]
+        # Allow model override via CLAUDE_MODEL env var (Issue #318)
+        claude_model = env.get("CLAUDE_MODEL")
+        if claude_model:
+            cmd.extend(["--model", claude_model])
     elif provider == "google":
         # Do NOT use -p flag for Gemini. The -p flag passes text literally,
         # so passing a file path gives Gemini the path string instead of content.
