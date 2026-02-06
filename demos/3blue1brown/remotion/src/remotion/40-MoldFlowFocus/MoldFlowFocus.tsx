@@ -1,5 +1,5 @@
 import React from "react";
-import { AbsoluteFill, interpolate, useCurrentFrame, Easing } from "remotion";
+import { AbsoluteFill, interpolate, useCurrentFrame, Easing, OffthreadVideo, staticFile } from "remotion";
 import { COLORS, BEATS, CONTACT_POINTS, MoldFlowFocusPropsType } from "./constants";
 
 interface ContactPoint {
@@ -287,42 +287,11 @@ export const MoldFlowFocus: React.FC<MoldFlowFocusPropsType> = ({
 
   return (
     <AbsoluteFill style={{ backgroundColor: COLORS.BACKGROUND }}>
-      {/* Mold cavity visualization (static background) */}
-      <svg
-        style={{
-          position: "absolute",
-          width: "100%",
-          height: "100%",
-          pointerEvents: "none",
-        }}
-      >
-        {/* Mold cavity background */}
-        <rect
-          x={440}
-          y={250}
-          width={1040}
-          height={360}
-          fill="rgba(30, 30, 50, 0.8)"
-          stroke="#333"
-          strokeWidth={2}
-        />
-        {/* Injection point arrow */}
-        <polygon
-          points="960,100 940,180 980,180"
-          fill={COLORS.LIQUID_BLUE}
-          opacity={0.6}
-        />
-        <text
-          x={960}
-          y={80}
-          textAnchor="middle"
-          fill={COLORS.LABEL_GRAY}
-          fontSize={16}
-          fontFamily="sans-serif"
-        >
-          Injection Point
-        </text>
-      </svg>
+      {/* Veo video background */}
+      <OffthreadVideo
+        src={staticFile("veo_mold_flow_focus.mp4")}
+        style={{ width: "100%", height: "100%", objectFit: "cover" }}
+      />
 
       {/* Liquid flow animation */}
       <LiquidFlow progress={flowProgress} color={COLORS.LIQUID_BLUE} />

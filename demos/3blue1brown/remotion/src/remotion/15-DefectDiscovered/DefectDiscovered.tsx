@@ -1,5 +1,5 @@
 import React from "react";
-import { AbsoluteFill, interpolate, useCurrentFrame, Easing } from "remotion";
+import { AbsoluteFill, interpolate, useCurrentFrame, Easing, OffthreadVideo, staticFile } from "remotion";
 import { MoldScene } from "./MoldScene";
 import { DefectHighlight } from "./DefectHighlight";
 import { COLORS, BEATS, MOLD, DefectDiscoveredPropsType } from "./constants";
@@ -93,6 +93,20 @@ export const DefectDiscovered: React.FC<DefectDiscoveredPropsType> = ({
           transformOrigin: "0 0",
         }}
       >
+        <OffthreadVideo
+          src={staticFile("veo_defect_discovered.mp4")}
+          style={{ width: 1920, height: 1080, objectFit: "cover" }}
+        />
+        <div
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            width: 1920,
+            height: 1080,
+            background: "rgba(10, 10, 26, 0.4)",
+          }}
+        />
         <MoldScene />
         <DefectHighlight />
       </div>

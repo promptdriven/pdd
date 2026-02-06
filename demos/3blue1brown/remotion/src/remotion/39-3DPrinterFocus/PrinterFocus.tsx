@@ -1,5 +1,5 @@
 import React from "react";
-import { AbsoluteFill, interpolate, useCurrentFrame, Easing } from "remotion";
+import { AbsoluteFill, interpolate, useCurrentFrame, Easing, OffthreadVideo, staticFile } from "remotion";
 import { COLORS, BEATS, PrinterFocusPropsType } from "./constants";
 
 // 3D Perspective Coordinate Grid Component
@@ -279,30 +279,10 @@ export const PrinterFocus: React.FC<PrinterFocusPropsType> = ({
 
   return (
     <AbsoluteFill style={{ backgroundColor: COLORS.BACKGROUND }}>
-      {/* Simulated video background placeholder - dark with grid pattern */}
-      <div
-        style={{
-          position: "absolute",
-          width: "100%",
-          height: "100%",
-          background: `
-            radial-gradient(ellipse at 50% 50%, rgba(30, 35, 50, 1) 0%, rgba(26, 26, 46, 1) 100%)
-          `,
-        }}
-      />
-
-      {/* Simulated 3D printer nozzle area */}
-      <div
-        style={{
-          position: "absolute",
-          left: "30%",
-          top: "35%",
-          width: 400,
-          height: 300,
-          background: "rgba(40, 45, 60, 0.6)",
-          borderRadius: 8,
-          border: "1px solid rgba(90, 159, 233, 0.2)",
-        }}
+      {/* Veo video background */}
+      <OffthreadVideo
+        src={staticFile("veo_3d_printer_focus.mp4")}
+        style={{ width: "100%", height: "100%", objectFit: "cover" }}
       />
 
       {/* Coordinate grid overlay */}
