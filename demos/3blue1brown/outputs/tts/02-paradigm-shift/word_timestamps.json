@@ -1,0 +1,1403 @@
+{
+  "section": "Part 2: Paradigm Shift",
+  "audio_file": "part2_paradigm_shift_narration.wav",
+  "duration": 112.17,
+  "language": "en",
+  "words": [
+    {
+      "word": "In",
+      "start": 0.0,
+      "end": 0.16,
+      "probability": 0.466
+    },
+    {
+      "word": "crafting,",
+      "start": 0.16,
+      "end": 0.66,
+      "probability": 0.983
+    },
+    {
+      "word": "value",
+      "start": 1.32,
+      "end": 1.82,
+      "probability": 0.935
+    },
+    {
+      "word": "lives",
+      "start": 1.82,
+      "end": 2.3,
+      "probability": 0.954
+    },
+    {
+      "word": "in",
+      "start": 2.3,
+      "end": 2.58,
+      "probability": 0.999
+    },
+    {
+      "word": "the",
+      "start": 2.58,
+      "end": 2.68,
+      "probability": 0.998
+    },
+    {
+      "word": "object,",
+      "start": 2.68,
+      "end": 3.02,
+      "probability": 0.993
+    },
+    {
+      "word": "you",
+      "start": 3.54,
+      "end": 3.78,
+      "probability": 0.955
+    },
+    {
+      "word": "protect",
+      "start": 3.78,
+      "end": 4.14,
+      "probability": 0.993
+    },
+    {
+      "word": "the",
+      "start": 4.14,
+      "end": 4.44,
+      "probability": 0.998
+    },
+    {
+      "word": "object,",
+      "start": 4.44,
+      "end": 4.96,
+      "probability": 0.999
+    },
+    {
+      "word": "losing",
+      "start": 5.52,
+      "end": 5.78,
+      "probability": 0.987
+    },
+    {
+      "word": "the",
+      "start": 5.78,
+      "end": 6.0,
+      "probability": 0.998
+    },
+    {
+      "word": "chair",
+      "start": 6.0,
+      "end": 6.26,
+      "probability": 0.683
+    },
+    {
+      "word": "is",
+      "start": 6.26,
+      "end": 6.5,
+      "probability": 0.816
+    },
+    {
+      "word": "losing",
+      "start": 6.5,
+      "end": 6.74,
+      "probability": 0.974
+    },
+    {
+      "word": "everything.",
+      "start": 6.74,
+      "end": 7.34,
+      "probability": 0.998
+    },
+    {
+      "word": "In",
+      "start": 8.8,
+      "end": 9.48,
+      "probability": 0.98
+    },
+    {
+      "word": "molding,",
+      "start": 9.48,
+      "end": 9.9,
+      "probability": 0.927
+    },
+    {
+      "word": "value",
+      "start": 10.0,
+      "end": 10.24,
+      "probability": 0.995
+    },
+    {
+      "word": "lives",
+      "start": 10.24,
+      "end": 10.58,
+      "probability": 0.996
+    },
+    {
+      "word": "in",
+      "start": 10.58,
+      "end": 10.94,
+      "probability": 0.992
+    },
+    {
+      "word": "the",
+      "start": 10.94,
+      "end": 11.12,
+      "probability": 0.993
+    },
+    {
+      "word": "specification,",
+      "start": 11.12,
+      "end": 11.8,
+      "probability": 0.992
+    },
+    {
+      "word": "the",
+      "start": 12.32,
+      "end": 12.4,
+      "probability": 0.976
+    },
+    {
+      "word": "mold,",
+      "start": 12.4,
+      "end": 12.72,
+      "probability": 0.973
+    },
+    {
+      "word": "the",
+      "start": 13.24,
+      "end": 13.4,
+      "probability": 0.994
+    },
+    {
+      "word": "plastic",
+      "start": 13.4,
+      "end": 13.74,
+      "probability": 0.994
+    },
+    {
+      "word": "part,",
+      "start": 13.74,
+      "end": 14.04,
+      "probability": 0.997
+    },
+    {
+      "word": "disposable,",
+      "start": 14.6,
+      "end": 15.46,
+      "probability": 0.947
+    },
+    {
+      "word": "regenerated",
+      "start": 16.16,
+      "end": 16.76,
+      "probability": 0.989
+    },
+    {
+      "word": "at",
+      "start": 16.76,
+      "end": 16.94,
+      "probability": 0.955
+    },
+    {
+      "word": "will.",
+      "start": 16.94,
+      "end": 17.18,
+      "probability": 0.993
+    },
+    {
+      "word": "This",
+      "start": 18.46,
+      "end": 19.14,
+      "probability": 0.96
+    },
+    {
+      "word": "is",
+      "start": 19.14,
+      "end": 19.5,
+      "probability": 0.997
+    },
+    {
+      "word": "prompt",
+      "start": 19.5,
+      "end": 19.84,
+      "probability": 0.824
+    },
+    {
+      "word": "-driven",
+      "start": 19.84,
+      "end": 20.1,
+      "probability": 0.852
+    },
+    {
+      "word": "development.",
+      "start": 20.1,
+      "end": 20.78,
+      "probability": 0.999
+    },
+    {
+      "word": "The",
+      "start": 21.82,
+      "end": 22.5,
+      "probability": 0.964
+    },
+    {
+      "word": "prompt",
+      "start": 22.5,
+      "end": 22.82,
+      "probability": 0.998
+    },
+    {
+      "word": "is",
+      "start": 22.82,
+      "end": 22.98,
+      "probability": 0.994
+    },
+    {
+      "word": "your",
+      "start": 22.98,
+      "end": 23.16,
+      "probability": 0.987
+    },
+    {
+      "word": "mold,",
+      "start": 23.16,
+      "end": 23.52,
+      "probability": 0.984
+    },
+    {
+      "word": "the",
+      "start": 23.8,
+      "end": 23.88,
+      "probability": 0.993
+    },
+    {
+      "word": "code",
+      "start": 23.88,
+      "end": 24.14,
+      "probability": 0.964
+    },
+    {
+      "word": "is",
+      "start": 24.14,
+      "end": 24.36,
+      "probability": 0.999
+    },
+    {
+      "word": "just",
+      "start": 24.36,
+      "end": 24.68,
+      "probability": 0.987
+    },
+    {
+      "word": "plastic.",
+      "start": 24.68,
+      "end": 25.68,
+      "probability": 0.833
+    },
+    {
+      "word": "No",
+      "start": 26.88,
+      "end": 27.52,
+      "probability": 0.121
+    },
+    {
+      "word": "one",
+      "start": 27.52,
+      "end": 27.74,
+      "probability": 0.315
+    },
+    {
+      "word": "nay,",
+      "start": 27.74,
+      "end": 27.98,
+      "probability": 0.141
+    },
+    {
+      "word": "ninety",
+      "start": 28.3,
+      "end": 28.58,
+      "probability": 0.426
+    },
+    {
+      "word": "-sil,",
+      "start": 28.58,
+      "end": 29.06,
+      "probability": 0.359
+    },
+    {
+      "word": "hum,",
+      "start": 29.4,
+      "end": 29.56,
+      "probability": 0.859
+    },
+    {
+      "word": "no",
+      "start": 30.2,
+      "end": 30.52,
+      "probability": 0.966
+    },
+    {
+      "word": "one",
+      "start": 30.52,
+      "end": 30.7,
+      "probability": 0.921
+    },
+    {
+      "word": "nay,",
+      "start": 30.7,
+      "end": 30.9,
+      "probability": 0.981
+    },
+    {
+      "word": "no",
+      "start": 31.34,
+      "end": 31.6,
+      "probability": 0.972
+    },
+    {
+      "word": "one",
+      "start": 31.6,
+      "end": 31.8,
+      "probability": 0.939
+    },
+    {
+      "word": "nay,",
+      "start": 31.8,
+      "end": 31.96,
+      "probability": 0.497
+    },
+    {
+      "word": "the",
+      "start": 32.2,
+      "end": 33.2,
+      "probability": 0.432
+    },
+    {
+      "word": "Bruce",
+      "start": 33.2,
+      "end": 33.78,
+      "probability": 0.71
+    },
+    {
+      "word": "is",
+      "start": 33.78,
+      "end": 34.02,
+      "probability": 0.483
+    },
+    {
+      "word": "bearer.",
+      "start": 34.02,
+      "end": 34.5,
+      "probability": 0.548
+    },
+    {
+      "word": "Now,",
+      "start": 35.38,
+      "end": 35.84,
+      "probability": 0.928
+    },
+    {
+      "word": "let's",
+      "start": 35.96,
+      "end": 36.26,
+      "probability": 0.974
+    },
+    {
+      "word": "get",
+      "start": 36.26,
+      "end": 36.36,
+      "probability": 0.998
+    },
+    {
+      "word": "precise,",
+      "start": 36.36,
+      "end": 36.8,
+      "probability": 0.992
+    },
+    {
+      "word": "because",
+      "start": 37.4,
+      "end": 37.74,
+      "probability": 0.981
+    },
+    {
+      "word": "prompt",
+      "start": 37.74,
+      "end": 38.08,
+      "probability": 0.896
+    },
+    {
+      "word": "is",
+      "start": 38.08,
+      "end": 38.36,
+      "probability": 0.986
+    },
+    {
+      "word": "the",
+      "start": 38.36,
+      "end": 38.5,
+      "probability": 0.98
+    },
+    {
+      "word": "mold",
+      "start": 38.5,
+      "end": 38.78,
+      "probability": 0.915
+    },
+    {
+      "word": "is",
+      "start": 38.78,
+      "end": 39.1,
+      "probability": 0.421
+    },
+    {
+      "word": "a",
+      "start": 39.1,
+      "end": 39.2,
+      "probability": 0.97
+    },
+    {
+      "word": "nice",
+      "start": 39.2,
+      "end": 39.36,
+      "probability": 0.997
+    },
+    {
+      "word": "metaphor,",
+      "start": 39.36,
+      "end": 39.8,
+      "probability": 0.997
+    },
+    {
+      "word": "but",
+      "start": 40.34,
+      "end": 40.44,
+      "probability": 0.995
+    },
+    {
+      "word": "it's",
+      "start": 40.44,
+      "end": 40.64,
+      "probability": 0.982
+    },
+    {
+      "word": "incomplete.",
+      "start": 40.64,
+      "end": 41.12,
+      "probability": 0.986
+    },
+    {
+      "word": "In",
+      "start": 43.32,
+      "end": 43.44,
+      "probability": 0.483
+    },
+    {
+      "word": "PDD,",
+      "start": 43.44,
+      "end": 44.32,
+      "probability": 0.942
+    },
+    {
+      "word": "the",
+      "start": 44.7,
+      "end": 44.78,
+      "probability": 0.975
+    },
+    {
+      "word": "mold",
+      "start": 44.78,
+      "end": 45.1,
+      "probability": 0.99
+    },
+    {
+      "word": "has",
+      "start": 45.1,
+      "end": 45.32,
+      "probability": 0.998
+    },
+    {
+      "word": "three",
+      "start": 45.32,
+      "end": 45.68,
+      "probability": 0.936
+    },
+    {
+      "word": "components,",
+      "start": 45.68,
+      "end": 46.24,
+      "probability": 0.998
+    },
+    {
+      "word": "three",
+      "start": 46.78,
+      "end": 47.1,
+      "probability": 0.98
+    },
+    {
+      "word": "types",
+      "start": 47.1,
+      "end": 47.5,
+      "probability": 0.998
+    },
+    {
+      "word": "of",
+      "start": 47.5,
+      "end": 47.7,
+      "probability": 0.998
+    },
+    {
+      "word": "capital",
+      "start": 47.7,
+      "end": 48.06,
+      "probability": 0.956
+    },
+    {
+      "word": "you're",
+      "start": 48.06,
+      "end": 48.32,
+      "probability": 0.937
+    },
+    {
+      "word": "accumulating.",
+      "start": 48.32,
+      "end": 49.22,
+      "probability": 0.969
+    },
+    {
+      "word": "First",
+      "start": 50.56,
+      "end": 51.2,
+      "probability": 0.815
+    },
+    {
+      "word": "tests,",
+      "start": 51.2,
+      "end": 51.84,
+      "probability": 0.453
+    },
+    {
+      "word": "tests",
+      "start": 52.42,
+      "end": 52.9,
+      "probability": 0.972
+    },
+    {
+      "word": "are",
+      "start": 52.9,
+      "end": 53.02,
+      "probability": 0.998
+    },
+    {
+      "word": "the",
+      "start": 53.02,
+      "end": 53.16,
+      "probability": 0.995
+    },
+    {
+      "word": "walls",
+      "start": 53.16,
+      "end": 53.4,
+      "probability": 0.961
+    },
+    {
+      "word": "of",
+      "start": 53.4,
+      "end": 53.58,
+      "probability": 0.997
+    },
+    {
+      "word": "your",
+      "start": 53.58,
+      "end": 53.68,
+      "probability": 0.993
+    },
+    {
+      "word": "mold.",
+      "start": 53.68,
+      "end": 54.02,
+      "probability": 0.993
+    },
+    {
+      "word": "Each",
+      "start": 54.8,
+      "end": 55.48,
+      "probability": 0.48
+    },
+    {
+      "word": "test",
+      "start": 55.48,
+      "end": 55.76,
+      "probability": 0.983
+    },
+    {
+      "word": "is",
+      "start": 55.76,
+      "end": 55.98,
+      "probability": 0.994
+    },
+    {
+      "word": "a",
+      "start": 55.98,
+      "end": 56.08,
+      "probability": 0.995
+    },
+    {
+      "word": "constraint,",
+      "start": 56.08,
+      "end": 56.48,
+      "probability": 0.997
+    },
+    {
+      "word": "a",
+      "start": 56.92,
+      "end": 57.1,
+      "probability": 0.972
+    },
+    {
+      "word": "boundary",
+      "start": 57.1,
+      "end": 57.44,
+      "probability": 0.994
+    },
+    {
+      "word": "the",
+      "start": 57.44,
+      "end": 57.66,
+      "probability": 0.903
+    },
+    {
+      "word": "generated",
+      "start": 57.66,
+      "end": 58.06,
+      "probability": 0.991
+    },
+    {
+      "word": "code",
+      "start": 58.06,
+      "end": 58.4,
+      "probability": 0.994
+    },
+    {
+      "word": "cannot",
+      "start": 58.4,
+      "end": 58.72,
+      "probability": 0.976
+    },
+    {
+      "word": "cross.",
+      "start": 58.72,
+      "end": 59.24,
+      "probability": 0.997
+    },
+    {
+      "word": "When",
+      "start": 60.82,
+      "end": 61.5,
+      "probability": 0.986
+    },
+    {
+      "word": "the",
+      "start": 61.5,
+      "end": 61.64,
+      "probability": 0.993
+    },
+    {
+      "word": "model",
+      "start": 61.64,
+      "end": 61.9,
+      "probability": 0.956
+    },
+    {
+      "word": "generates",
+      "start": 61.9,
+      "end": 62.42,
+      "probability": 0.992
+    },
+    {
+      "word": "code,",
+      "start": 62.42,
+      "end": 62.84,
+      "probability": 0.991
+    },
+    {
+      "word": "it",
+      "start": 63.22,
+      "end": 63.46,
+      "probability": 0.987
+    },
+    {
+      "word": "sees",
+      "start": 63.46,
+      "end": 63.8,
+      "probability": 0.981
+    },
+    {
+      "word": "these",
+      "start": 63.8,
+      "end": 64.2,
+      "probability": 0.994
+    },
+    {
+      "word": "tests,",
+      "start": 64.2,
+      "end": 64.76,
+      "probability": 0.984
+    },
+    {
+      "word": "the",
+      "start": 65.2,
+      "end": 65.3,
+      "probability": 0.979
+    },
+    {
+      "word": "code",
+      "start": 65.3,
+      "end": 65.5,
+      "probability": 0.989
+    },
+    {
+      "word": "it",
+      "start": 65.5,
+      "end": 65.66,
+      "probability": 0.991
+    },
+    {
+      "word": "produces",
+      "start": 65.66,
+      "end": 66.12,
+      "probability": 0.999
+    },
+    {
+      "word": "must",
+      "start": 66.12,
+      "end": 66.66,
+      "probability": 0.978
+    },
+    {
+      "word": "pass",
+      "start": 66.66,
+      "end": 66.98,
+      "probability": 0.989
+    },
+    {
+      "word": "them,",
+      "start": 66.98,
+      "end": 67.24,
+      "probability": 0.996
+    },
+    {
+      "word": "it",
+      "start": 67.6,
+      "end": 67.7,
+      "probability": 0.966
+    },
+    {
+      "word": "literally",
+      "start": 67.7,
+      "end": 68.1,
+      "probability": 0.997
+    },
+    {
+      "word": "cannot",
+      "start": 68.1,
+      "end": 68.58,
+      "probability": 0.979
+    },
+    {
+      "word": "generate",
+      "start": 68.58,
+      "end": 69.0,
+      "probability": 0.998
+    },
+    {
+      "word": "code",
+      "start": 69.0,
+      "end": 69.4,
+      "probability": 0.997
+    },
+    {
+      "word": "that",
+      "start": 69.4,
+      "end": 69.66,
+      "probability": 0.994
+    },
+    {
+      "word": "violates",
+      "start": 69.66,
+      "end": 70.2,
+      "probability": 0.996
+    },
+    {
+      "word": "these",
+      "start": 70.2,
+      "end": 70.42,
+      "probability": 0.992
+    },
+    {
+      "word": "walls.",
+      "start": 70.42,
+      "end": 70.7,
+      "probability": 0.981
+    },
+    {
+      "word": "Now,",
+      "start": 72.06,
+      "end": 72.74,
+      "probability": 0.988
+    },
+    {
+      "word": "here's",
+      "start": 73.06,
+      "end": 73.56,
+      "probability": 0.976
+    },
+    {
+      "word": "where",
+      "start": 73.56,
+      "end": 73.68,
+      "probability": 0.994
+    },
+    {
+      "word": "it",
+      "start": 73.68,
+      "end": 73.8,
+      "probability": 0.994
+    },
+    {
+      "word": "gets",
+      "start": 73.8,
+      "end": 73.94,
+      "probability": 0.994
+    },
+    {
+      "word": "interesting,",
+      "start": 73.94,
+      "end": 74.38,
+      "probability": 0.998
+    },
+    {
+      "word": "when",
+      "start": 74.8,
+      "end": 74.98,
+      "probability": 0.981
+    },
+    {
+      "word": "you",
+      "start": 74.98,
+      "end": 75.1,
+      "probability": 0.999
+    },
+    {
+      "word": "find",
+      "start": 75.1,
+      "end": 75.4,
+      "probability": 0.998
+    },
+    {
+      "word": "a",
+      "start": 75.4,
+      "end": 75.56,
+      "probability": 0.992
+    },
+    {
+      "word": "bug,",
+      "start": 75.56,
+      "end": 75.94,
+      "probability": 0.991
+    },
+    {
+      "word": "you",
+      "start": 77.02,
+      "end": 77.7,
+      "probability": 0.933
+    },
+    {
+      "word": "don't",
+      "start": 77.7,
+      "end": 77.84,
+      "probability": 0.998
+    },
+    {
+      "word": "patch",
+      "start": 77.84,
+      "end": 78.14,
+      "probability": 0.985
+    },
+    {
+      "word": "the",
+      "start": 78.14,
+      "end": 78.36,
+      "probability": 0.997
+    },
+    {
+      "word": "code,",
+      "start": 78.36,
+      "end": 78.7,
+      "probability": 0.998
+    },
+    {
+      "word": "you",
+      "start": 79.24,
+      "end": 79.5,
+      "probability": 0.987
+    },
+    {
+      "word": "add",
+      "start": 79.5,
+      "end": 79.82,
+      "probability": 0.989
+    },
+    {
+      "word": "a",
+      "start": 79.82,
+      "end": 79.96,
+      "probability": 0.998
+    },
+    {
+      "word": "wall.",
+      "start": 79.96,
+      "end": 80.28,
+      "probability": 0.975
+    },
+    {
+      "word": "That",
+      "start": 81.46,
+      "end": 82.18,
+      "probability": 0.192
+    },
+    {
+      "word": "wall",
+      "start": 82.18,
+      "end": 82.54,
+      "probability": 0.713
+    },
+    {
+      "word": "is",
+      "start": 82.54,
+      "end": 83.02,
+      "probability": 0.946
+    },
+    {
+      "word": "permanent,",
+      "start": 83.02,
+      "end": 83.54,
+      "probability": 0.982
+    },
+    {
+      "word": "that",
+      "start": 84.06,
+      "end": 84.44,
+      "probability": 0.91
+    },
+    {
+      "word": "bug",
+      "start": 84.44,
+      "end": 84.78,
+      "probability": 0.961
+    },
+    {
+      "word": "can",
+      "start": 84.78,
+      "end": 85.1,
+      "probability": 0.985
+    },
+    {
+      "word": "never",
+      "start": 85.1,
+      "end": 85.62,
+      "probability": 0.983
+    },
+    {
+      "word": "occur",
+      "start": 85.62,
+      "end": 85.96,
+      "probability": 0.999
+    },
+    {
+      "word": "again,",
+      "start": 85.96,
+      "end": 86.42,
+      "probability": 0.991
+    },
+    {
+      "word": "not",
+      "start": 86.9,
+      "end": 87.1,
+      "probability": 0.982
+    },
+    {
+      "word": "in",
+      "start": 87.1,
+      "end": 87.36,
+      "probability": 0.988
+    },
+    {
+      "word": "this",
+      "start": 87.36,
+      "end": 87.68,
+      "probability": 0.646
+    },
+    {
+      "word": "generation,",
+      "start": 87.68,
+      "end": 88.42,
+      "probability": 0.991
+    },
+    {
+      "word": "not",
+      "start": 88.9,
+      "end": 89.2,
+      "probability": 0.98
+    },
+    {
+      "word": "in",
+      "start": 89.2,
+      "end": 89.42,
+      "probability": 0.991
+    },
+    {
+      "word": "any",
+      "start": 89.42,
+      "end": 89.72,
+      "probability": 0.996
+    },
+    {
+      "word": "future",
+      "start": 89.72,
+      "end": 90.06,
+      "probability": 0.997
+    },
+    {
+      "word": "generation.",
+      "start": 90.06,
+      "end": 90.8,
+      "probability": 0.996
+    },
+    {
+      "word": "This",
+      "start": 92.5,
+      "end": 93.22,
+      "probability": 0.943
+    },
+    {
+      "word": "is",
+      "start": 93.22,
+      "end": 93.48,
+      "probability": 0.996
+    },
+    {
+      "word": "the",
+      "start": 93.48,
+      "end": 93.68,
+      "probability": 0.988
+    },
+    {
+      "word": "ratchet",
+      "start": 93.68,
+      "end": 94.02,
+      "probability": 0.891
+    },
+    {
+      "word": "effect,",
+      "start": 94.02,
+      "end": 94.4,
+      "probability": 0.986
+    },
+    {
+      "word": "tests",
+      "start": 94.98,
+      "end": 95.18,
+      "probability": 0.904
+    },
+    {
+      "word": "only",
+      "start": 95.18,
+      "end": 95.6,
+      "probability": 0.998
+    },
+    {
+      "word": "accumulate,",
+      "start": 95.6,
+      "end": 96.16,
+      "probability": 0.992
+    },
+    {
+      "word": "the",
+      "start": 96.72,
+      "end": 96.84,
+      "probability": 0.983
+    },
+    {
+      "word": "mold",
+      "start": 96.84,
+      "end": 97.12,
+      "probability": 0.928
+    },
+    {
+      "word": "only",
+      "start": 97.12,
+      "end": 97.58,
+      "probability": 0.992
+    },
+    {
+      "word": "gets",
+      "start": 97.58,
+      "end": 97.76,
+      "probability": 0.991
+    },
+    {
+      "word": "more",
+      "start": 97.76,
+      "end": 98.04,
+      "probability": 0.999
+    },
+    {
+      "word": "precise,",
+      "start": 98.04,
+      "end": 98.48,
+      "probability": 0.999
+    },
+    {
+      "word": "each",
+      "start": 99.06,
+      "end": 99.28,
+      "probability": 0.995
+    },
+    {
+      "word": "wall",
+      "start": 99.28,
+      "end": 99.54,
+      "probability": 0.999
+    },
+    {
+      "word": "you",
+      "start": 99.54,
+      "end": 99.78,
+      "probability": 0.99
+    },
+    {
+      "word": "add",
+      "start": 99.78,
+      "end": 100.06,
+      "probability": 0.996
+    },
+    {
+      "word": "constrains",
+      "start": 100.06,
+      "end": 100.72,
+      "probability": 0.854
+    },
+    {
+      "word": "all",
+      "start": 100.72,
+      "end": 101.0,
+      "probability": 0.992
+    },
+    {
+      "word": "future",
+      "start": 101.0,
+      "end": 101.36,
+      "probability": 0.997
+    },
+    {
+      "word": "generations.",
+      "start": 101.36,
+      "end": 101.98,
+      "probability": 0.992
+    },
+    {
+      "word": "In",
+      "start": 104.04,
+      "end": 104.4,
+      "probability": 0.965
+    },
+    {
+      "word": "traditional",
+      "start": 104.4,
+      "end": 104.82,
+      "probability": 0.99
+    },
+    {
+      "word": "development,",
+      "start": 104.82,
+      "end": 105.44,
+      "probability": 0.998
+    },
+    {
+      "word": "a",
+      "start": 105.92,
+      "end": 105.98,
+      "probability": 0.967
+    },
+    {
+      "word": "bug",
+      "start": 105.98,
+      "end": 106.26,
+      "probability": 0.992
+    },
+    {
+      "word": "fix",
+      "start": 106.26,
+      "end": 106.54,
+      "probability": 0.871
+    },
+    {
+      "word": "helps",
+      "start": 106.54,
+      "end": 106.86,
+      "probability": 0.996
+    },
+    {
+      "word": "one",
+      "start": 106.86,
+      "end": 107.14,
+      "probability": 0.982
+    },
+    {
+      "word": "place.",
+      "start": 107.14,
+      "end": 107.5,
+      "probability": 0.993
+    },
+    {
+      "word": "In",
+      "start": 107.5,
+      "end": 108.12,
+      "probability": 0.661
+    },
+    {
+      "word": "PDD,",
+      "start": 108.12,
+      "end": 108.66,
+      "probability": 0.979
+    },
+    {
+      "word": "a",
+      "start": 109.18,
+      "end": 109.3,
+      "probability": 0.991
+    },
+    {
+      "word": "test",
+      "start": 109.3,
+      "end": 109.56,
+      "probability": 0.997
+    },
+    {
+      "word": "prevents",
+      "start": 109.56,
+      "end": 110.0,
+      "probability": 0.985
+    },
+    {
+      "word": "that",
+      "start": 110.0,
+      "end": 110.32,
+      "probability": 0.989
+    },
+    {
+      "word": "bug",
+      "start": 110.32,
+      "end": 110.66,
+      "probability": 0.961
+    },
+    {
+      "word": "everywhere,",
+      "start": 110.66,
+      "end": 111.34,
+      "probability": 0.992
+    },
+    {
+      "word": "forever.",
+      "start": 111.72,
+      "end": 111.94,
+      "probability": 0.968
+    }
+  ],
+  "segments": [
+    {
+      "start": 0.0,
+      "end": 7.34,
+      "text": "In crafting, value lives in the object, you protect the object, losing the chair is losing everything."
+    },
+    {
+      "start": 8.8,
+      "end": 17.18,
+      "text": "In molding, value lives in the specification, the mold, the plastic part, disposable, regenerated at will."
+    },
+    {
+      "start": 18.46,
+      "end": 25.68,
+      "text": "This is prompt-driven development. The prompt is your mold, the code is just plastic."
+    },
+    {
+      "start": 26.88,
+      "end": 34.5,
+      "text": "No one nay, ninety-sil, hum, no one nay, no one nay, the Bruce is bearer."
+    },
+    {
+      "start": 35.38,
+      "end": 41.12,
+      "text": "Now, let's get precise, because prompt is the mold is a nice metaphor, but it's incomplete."
+    },
+    {
+      "start": 43.32,
+      "end": 49.22,
+      "text": "In PDD, the mold has three components, three types of capital you're accumulating."
+    },
+    {
+      "start": 50.56,
+      "end": 54.02,
+      "text": "First tests, tests are the walls of your mold."
+    },
+    {
+      "start": 54.8,
+      "end": 59.24,
+      "text": "Each test is a constraint, a boundary the generated code cannot cross."
+    },
+    {
+      "start": 60.82,
+      "end": 67.24,
+      "text": "When the model generates code, it sees these tests, the code it produces must pass them,"
+    },
+    {
+      "start": 67.6,
+      "end": 70.7,
+      "text": "it literally cannot generate code that violates these walls."
+    },
+    {
+      "start": 72.06,
+      "end": 75.94,
+      "text": "Now, here's where it gets interesting, when you find a bug,"
+    },
+    {
+      "start": 77.02,
+      "end": 80.28,
+      "text": "you don't patch the code, you add a wall."
+    },
+    {
+      "start": 81.46,
+      "end": 90.8,
+      "text": "That wall is permanent, that bug can never occur again, not in this generation, not in any future generation."
+    },
+    {
+      "start": 92.5,
+      "end": 98.48,
+      "text": "This is the ratchet effect, tests only accumulate, the mold only gets more precise,"
+    },
+    {
+      "start": 99.06,
+      "end": 101.98,
+      "text": "each wall you add constrains all future generations."
+    },
+    {
+      "start": 104.2,
+      "end": 107.5,
+      "text": "In traditional development, a bug fix helps one place."
+    },
+    {
+      "start": 107.5,
+      "end": 111.94,
+      "text": "In PDD, a test prevents that bug everywhere, forever."
+    }
+  ]
+}

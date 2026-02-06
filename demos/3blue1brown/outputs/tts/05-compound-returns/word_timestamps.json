@@ -1,0 +1,487 @@
+{
+  "section": "Part 5: Compound Returns",
+  "audio_file": "part5_compound_narration.wav",
+  "duration": 38.19,
+  "language": "en",
+  "words": [
+    {
+      "word": "The",
+      "start": 0.0,
+      "end": 0.12,
+      "probability": 0.397
+    },
+    {
+      "word": "code",
+      "start": 0.12,
+      "end": 0.34,
+      "probability": 0.957
+    },
+    {
+      "word": "is",
+      "start": 0.34,
+      "end": 0.52,
+      "probability": 0.991
+    },
+    {
+      "word": "still",
+      "start": 0.52,
+      "end": 0.8,
+      "probability": 0.99
+    },
+    {
+      "word": "there.",
+      "start": 0.8,
+      "end": 1.08,
+      "probability": 0.997
+    },
+    {
+      "word": "It's",
+      "start": 1.46,
+      "end": 1.76,
+      "probability": 0.978
+    },
+    {
+      "word": "still",
+      "start": 1.76,
+      "end": 1.9,
+      "probability": 0.996
+    },
+    {
+      "word": "complex,",
+      "start": 1.9,
+      "end": 2.42,
+      "probability": 0.997
+    },
+    {
+      "word": "but",
+      "start": 2.8,
+      "end": 3.02,
+      "probability": 0.992
+    },
+    {
+      "word": "you",
+      "start": 3.02,
+      "end": 3.18,
+      "probability": 0.998
+    },
+    {
+      "word": "don't",
+      "start": 3.18,
+      "end": 3.42,
+      "probability": 0.998
+    },
+    {
+      "word": "live",
+      "start": 3.42,
+      "end": 3.66,
+      "probability": 0.997
+    },
+    {
+      "word": "in",
+      "start": 3.66,
+      "end": 3.98,
+      "probability": 0.992
+    },
+    {
+      "word": "it",
+      "start": 3.98,
+      "end": 4.08,
+      "probability": 0.997
+    },
+    {
+      "word": "anymore.",
+      "start": 4.08,
+      "end": 4.48,
+      "probability": 0.873
+    },
+    {
+      "word": "You",
+      "start": 5.14,
+      "end": 5.22,
+      "probability": 0.926
+    },
+    {
+      "word": "live",
+      "start": 5.22,
+      "end": 5.48,
+      "probability": 0.996
+    },
+    {
+      "word": "in",
+      "start": 5.48,
+      "end": 5.78,
+      "probability": 0.997
+    },
+    {
+      "word": "the",
+      "start": 5.78,
+      "end": 5.88,
+      "probability": 0.991
+    },
+    {
+      "word": "specification.",
+      "start": 5.88,
+      "end": 6.48,
+      "probability": 0.992
+    },
+    {
+      "word": "The",
+      "start": 7.26,
+      "end": 7.34,
+      "probability": 0.989
+    },
+    {
+      "word": "code",
+      "start": 7.34,
+      "end": 7.64,
+      "probability": 0.997
+    },
+    {
+      "word": "is",
+      "start": 7.64,
+      "end": 7.82,
+      "probability": 0.995
+    },
+    {
+      "word": "generated,",
+      "start": 7.82,
+      "end": 8.36,
+      "probability": 0.995
+    },
+    {
+      "word": "verified,",
+      "start": 8.76,
+      "end": 9.16,
+      "probability": 0.995
+    },
+    {
+      "word": "and",
+      "start": 9.5,
+      "end": 9.88,
+      "probability": 0.996
+    },
+    {
+      "word": "if",
+      "start": 9.88,
+      "end": 10.16,
+      "probability": 0.925
+    },
+    {
+      "word": "needed,",
+      "start": 10.16,
+      "end": 10.48,
+      "probability": 0.994
+    },
+    {
+      "word": "regenerated.",
+      "start": 10.98,
+      "end": 11.76,
+      "probability": 0.973
+    },
+    {
+      "word": "Heather",
+      "start": 13.36,
+      "end": 13.64,
+      "probability": 0.349
+    },
+    {
+      "word": "just",
+      "start": 13.64,
+      "end": 13.9,
+      "probability": 0.272
+    },
+    {
+      "word": "spread",
+      "start": 13.9,
+      "end": 14.44,
+      "probability": 0.714
+    },
+    {
+      "word": "case.",
+      "start": 14.44,
+      "end": 14.8,
+      "probability": 0.667
+    },
+    {
+      "word": "So",
+      "start": 15.68,
+      "end": 16.22,
+      "probability": 0.983
+    },
+    {
+      "word": "here's",
+      "start": 16.22,
+      "end": 16.5,
+      "probability": 0.982
+    },
+    {
+      "word": "the",
+      "start": 16.5,
+      "end": 16.58,
+      "probability": 0.997
+    },
+    {
+      "word": "mental",
+      "start": 16.58,
+      "end": 16.84,
+      "probability": 0.79
+    },
+    {
+      "word": "shit.",
+      "start": 16.84,
+      "end": 17.12,
+      "probability": 0.463
+    },
+    {
+      "word": "You",
+      "start": 17.34,
+      "end": 17.38,
+      "probability": 0.974
+    },
+    {
+      "word": "don't",
+      "start": 17.38,
+      "end": 17.56,
+      "probability": 0.999
+    },
+    {
+      "word": "patch",
+      "start": 17.56,
+      "end": 17.84,
+      "probability": 0.993
+    },
+    {
+      "word": "socks",
+      "start": 17.84,
+      "end": 18.26,
+      "probability": 0.923
+    },
+    {
+      "word": "because",
+      "start": 18.26,
+      "end": 18.66,
+      "probability": 0.89
+    },
+    {
+      "word": "socks",
+      "start": 18.66,
+      "end": 19.0,
+      "probability": 0.991
+    },
+    {
+      "word": "got",
+      "start": 19.0,
+      "end": 19.36,
+      "probability": 0.997
+    },
+    {
+      "word": "cheap.",
+      "start": 19.36,
+      "end": 19.7,
+      "probability": 0.997
+    },
+    {
+      "word": "The",
+      "start": 20.32,
+      "end": 20.4,
+      "probability": 0.997
+    },
+    {
+      "word": "economics",
+      "start": 20.4,
+      "end": 20.84,
+      "probability": 0.994
+    },
+    {
+      "word": "made",
+      "start": 20.84,
+      "end": 21.22,
+      "probability": 0.996
+    },
+    {
+      "word": "patching",
+      "start": 21.22,
+      "end": 21.86,
+      "probability": 0.975
+    },
+    {
+      "word": "irrational.",
+      "start": 21.86,
+      "end": 22.4,
+      "probability": 0.873
+    },
+    {
+      "word": "Code",
+      "start": 24.58,
+      "end": 24.84,
+      "probability": 0.823
+    },
+    {
+      "word": "just",
+      "start": 24.84,
+      "end": 25.04,
+      "probability": 0.982
+    },
+    {
+      "word": "got",
+      "start": 25.04,
+      "end": 25.22,
+      "probability": 0.998
+    },
+    {
+      "word": "that",
+      "start": 25.22,
+      "end": 25.44,
+      "probability": 0.997
+    },
+    {
+      "word": "cheap",
+      "start": 25.44,
+      "end": 25.72,
+      "probability": 0.988
+    },
+    {
+      "word": "prompts",
+      "start": 25.72,
+      "end": 27.26,
+      "probability": 0.015
+    },
+    {
+      "word": "in",
+      "start": 27.26,
+      "end": 27.54,
+      "probability": 0.874
+    },
+    {
+      "word": "code",
+      "start": 27.54,
+      "end": 27.88,
+      "probability": 0.966
+    },
+    {
+      "word": "intent.",
+      "start": 27.88,
+      "end": 28.34,
+      "probability": 0.91
+    },
+    {
+      "word": "Tests",
+      "start": 29.2,
+      "end": 29.72,
+      "probability": 0.501
+    },
+    {
+      "word": "preserve",
+      "start": 29.72,
+      "end": 30.14,
+      "probability": 0.038
+    },
+    {
+      "word": "behavior.",
+      "start": 30.14,
+      "end": 30.82,
+      "probability": 0.87
+    },
+    {
+      "word": "Grounding",
+      "start": 32.28,
+      "end": 32.8,
+      "probability": 0.693
+    },
+    {
+      "word": "maintained",
+      "start": 32.8,
+      "end": 33.26,
+      "probability": 0.159
+    },
+    {
+      "word": "style.",
+      "start": 33.26,
+      "end": 33.94,
+      "probability": 0.974
+    },
+    {
+      "word": "Code",
+      "start": 34.78,
+      "end": 35.3,
+      "probability": 0.91
+    },
+    {
+      "word": "is",
+      "start": 35.3,
+      "end": 35.46,
+      "probability": 0.991
+    },
+    {
+      "word": "generated,",
+      "start": 35.46,
+      "end": 35.98,
+      "probability": 0.996
+    },
+    {
+      "word": "verified,",
+      "start": 36.36,
+      "end": 36.76,
+      "probability": 0.975
+    },
+    {
+      "word": "and",
+      "start": 37.14,
+      "end": 37.32,
+      "probability": 0.957
+    },
+    {
+      "word": "disposable.",
+      "start": 37.32,
+      "end": 37.9,
+      "probability": 0.912
+    }
+  ],
+  "segments": [
+    {
+      "start": 0.0,
+      "end": 4.48,
+      "text": "The code is still there. It's still complex, but you don't live in it anymore."
+    },
+    {
+      "start": 5.14,
+      "end": 11.76,
+      "text": "You live in the specification. The code is generated, verified, and if needed, regenerated."
+    },
+    {
+      "start": 13.36,
+      "end": 14.8,
+      "text": "Heather just spread case."
+    },
+    {
+      "start": 15.68,
+      "end": 19.7,
+      "text": "So here's the mental shit. You don't patch socks because socks got cheap."
+    },
+    {
+      "start": 20.32,
+      "end": 22.4,
+      "text": "The economics made patching irrational."
+    },
+    {
+      "start": 24.58,
+      "end": 28.34,
+      "text": "Code just got that cheap prompts in code intent."
+    },
+    {
+      "start": 29.3,
+      "end": 30.82,
+      "text": "Tests preserve behavior."
+    },
+    {
+      "start": 32.46,
+      "end": 33.94,
+      "text": "Grounding maintained style."
+    },
+    {
+      "start": 35.06,
+      "end": 37.9,
+      "text": "Code is generated, verified, and disposable."
+    }
+  ]
+}

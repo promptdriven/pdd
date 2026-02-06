@@ -361,6 +361,54 @@ import {
   BOTH_GENERATE_HEIGHT,
   defaultBothGenerateFinalProps,
 } from "./45-BothGenerateFinal";
+import {
+  Part1Economics,
+  PART1_FPS,
+  PART1_DURATION_FRAMES,
+  PART1_WIDTH,
+  PART1_HEIGHT,
+  defaultPart1EconomicsProps,
+} from "./S01-Economics";
+import {
+  Part2ParadigmShift,
+  PART2_FPS,
+  PART2_DURATION_FRAMES,
+  PART2_WIDTH,
+  PART2_HEIGHT,
+  defaultPart2ParadigmShiftProps,
+} from "./S02-ParadigmShift";
+import {
+  Part3MoldThreeParts,
+  PART3_FPS,
+  PART3_DURATION_FRAMES,
+  PART3_WIDTH,
+  PART3_HEIGHT,
+  defaultPart3MoldThreePartsProps,
+} from "./S03-MoldThreeParts";
+import {
+  Part4PrecisionTradeoff,
+  PART4_FPS,
+  PART4_DURATION_FRAMES,
+  PART4_WIDTH,
+  PART4_HEIGHT,
+  defaultPart4PrecisionTradeoffProps,
+} from "./S04-PrecisionTradeoff";
+import {
+  Part5CompoundReturns,
+  PART5_FPS,
+  PART5_DURATION_FRAMES,
+  PART5_WIDTH,
+  PART5_HEIGHT,
+  defaultPart5CompoundReturnsProps,
+} from "./S05-CompoundReturns";
+import {
+  ClosingSection,
+  CLOSING_FPS,
+  CLOSING_DURATION_FRAMES,
+  CLOSING_WIDTH,
+  CLOSING_HEIGHT,
+  defaultClosingSectionProps,
+} from "./S06-Closing";
 
 export const RemotionRoot: React.FC = () => {
   return (
@@ -847,6 +895,72 @@ export const RemotionRoot: React.FC = () => {
           width={BOTH_GENERATE_WIDTH}
           height={BOTH_GENERATE_HEIGHT}
           defaultProps={defaultBothGenerateFinalProps}
+        />
+      </Folder>
+      <Folder name="S01-Economics">
+        <Composition
+          id="Part1Economics"
+          component={Part1Economics}
+          durationInFrames={PART1_DURATION_FRAMES}
+          fps={PART1_FPS}
+          width={PART1_WIDTH}
+          height={PART1_HEIGHT}
+          defaultProps={defaultPart1EconomicsProps}
+        />
+      </Folder>
+      <Folder name="S02-ParadigmShift">
+        <Composition
+          id="Part2ParadigmShift"
+          component={Part2ParadigmShift}
+          durationInFrames={PART2_DURATION_FRAMES}
+          fps={PART2_FPS}
+          width={PART2_WIDTH}
+          height={PART2_HEIGHT}
+          defaultProps={defaultPart2ParadigmShiftProps}
+        />
+      </Folder>
+      <Folder name="S03-MoldThreeParts">
+        <Composition
+          id="Part3MoldThreeParts"
+          component={Part3MoldThreeParts}
+          durationInFrames={PART3_DURATION_FRAMES}
+          fps={PART3_FPS}
+          width={PART3_WIDTH}
+          height={PART3_HEIGHT}
+          defaultProps={defaultPart3MoldThreePartsProps}
+        />
+      </Folder>
+      <Folder name="S04-PrecisionTradeoff">
+        <Composition
+          id="Part4PrecisionTradeoff"
+          component={Part4PrecisionTradeoff}
+          durationInFrames={PART4_DURATION_FRAMES}
+          fps={PART4_FPS}
+          width={PART4_WIDTH}
+          height={PART4_HEIGHT}
+          defaultProps={defaultPart4PrecisionTradeoffProps}
+        />
+      </Folder>
+      <Folder name="S05-CompoundReturns">
+        <Composition
+          id="Part5CompoundReturns"
+          component={Part5CompoundReturns}
+          durationInFrames={PART5_DURATION_FRAMES}
+          fps={PART5_FPS}
+          width={PART5_WIDTH}
+          height={PART5_HEIGHT}
+          defaultProps={defaultPart5CompoundReturnsProps}
+        />
+      </Folder>
+      <Folder name="S06-Closing">
+        <Composition
+          id="ClosingSection"
+          component={ClosingSection}
+          durationInFrames={CLOSING_DURATION_FRAMES}
+          fps={CLOSING_FPS}
+          width={CLOSING_WIDTH}
+          height={CLOSING_HEIGHT}
+          defaultProps={defaultClosingSectionProps}
         />
       </Folder>
       <Folder name="Examples">

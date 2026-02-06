@@ -1,0 +1,91 @@
+{
+  "section": "Closing",
+  "audio_file": "closing_narration.wav",
+  "duration": 6.97,
+  "language": "en",
+  "words": [
+    {
+      "word": "The",
+      "start": 0.0,
+      "end": 0.14,
+      "probability": 0.834
+    },
+    {
+      "word": "code",
+      "start": 0.14,
+      "end": 0.42,
+      "probability": 0.962
+    },
+    {
+      "word": "is",
+      "start": 0.42,
+      "end": 0.64,
+      "probability": 0.997
+    },
+    {
+      "word": "just",
+      "start": 0.64,
+      "end": 0.98,
+      "probability": 0.979
+    },
+    {
+      "word": "plastic.",
+      "start": 0.98,
+      "end": 1.68,
+      "probability": 0.985
+    },
+    {
+      "word": "The",
+      "start": 3.62,
+      "end": 3.98,
+      "probability": 0.788
+    },
+    {
+      "word": "mold",
+      "start": 3.98,
+      "end": 4.4,
+      "probability": 0.906
+    },
+    {
+      "word": "is",
+      "start": 4.4,
+      "end": 4.86,
+      "probability": 0.849
+    },
+    {
+      "word": "what",
+      "start": 4.86,
+      "end": 5.06,
+      "probability": 0.997
+    },
+    {
+      "word": "matters.",
+      "start": 5.06,
+      "end": 5.44,
+      "probability": 0.999
+    },
+    {
+      "word": "Hmm.",
+      "start": 6.44,
+      "end": 6.76,
+      "probability": 0.334
+    }
+  ],
+  "segments": [
+    {
+      "start": 0.0,
+      "end": 1.68,
+      "text": "The code is just plastic."
+    },
+    {
+      "start": 3.8,
+      "end": 5.44,
+      "text": "The mold is what matters."
+    },
+    {
+      "start": 6.44,
+      "end": 6.76,
+      "text": "Hmm."
+    }
+  ]
+}

@@ -1,0 +1,799 @@
+{
+  "section": "Part 4: Precision Tradeoff",
+  "audio_file": "part4_precision_narration.wav",
+  "duration": 60.38,
+  "language": "en",
+  "words": [
+    {
+      "word": "Your",
+      "start": 0.0,
+      "end": 0.18,
+      "probability": 0.878
+    },
+    {
+      "word": "great",
+      "start": 0.18,
+      "end": 0.54,
+      "probability": 0.969
+    },
+    {
+      "word": "-grandmother",
+      "start": 0.54,
+      "end": 1.1,
+      "probability": 0.878
+    },
+    {
+      "word": "wasn't",
+      "start": 1.1,
+      "end": 1.48,
+      "probability": 0.989
+    },
+    {
+      "word": "stupid",
+      "start": 1.48,
+      "end": 2.08,
+      "probability": 0.992
+    },
+    {
+      "word": "for",
+      "start": 2.08,
+      "end": 2.36,
+      "probability": 0.995
+    },
+    {
+      "word": "darning",
+      "start": 2.36,
+      "end": 2.78,
+      "probability": 0.55
+    },
+    {
+      "word": "socks.",
+      "start": 2.78,
+      "end": 3.2,
+      "probability": 0.876
+    },
+    {
+      "word": "The",
+      "start": 4.08,
+      "end": 4.2,
+      "probability": 0.991
+    },
+    {
+      "word": "economics",
+      "start": 4.2,
+      "end": 4.62,
+      "probability": 0.974
+    },
+    {
+      "word": "made",
+      "start": 4.62,
+      "end": 5.04,
+      "probability": 0.996
+    },
+    {
+      "word": "it",
+      "start": 5.04,
+      "end": 5.18,
+      "probability": 0.999
+    },
+    {
+      "word": "rational.",
+      "start": 5.18,
+      "end": 5.66,
+      "probability": 0.99
+    },
+    {
+      "word": "And",
+      "start": 6.94,
+      "end": 7.54,
+      "probability": 0.982
+    },
+    {
+      "word": "you're",
+      "start": 7.54,
+      "end": 7.68,
+      "probability": 0.992
+    },
+    {
+      "word": "not",
+      "start": 7.68,
+      "end": 7.86,
+      "probability": 0.962
+    },
+    {
+      "word": "stupid",
+      "start": 7.86,
+      "end": 8.32,
+      "probability": 0.999
+    },
+    {
+      "word": "for",
+      "start": 8.32,
+      "end": 8.54,
+      "probability": 0.999
+    },
+    {
+      "word": "patching",
+      "start": 8.54,
+      "end": 8.96,
+      "probability": 0.992
+    },
+    {
+      "word": "code.",
+      "start": 8.96,
+      "end": 9.38,
+      "probability": 0.996
+    },
+    {
+      "word": "Until",
+      "start": 10.04,
+      "end": 10.4,
+      "probability": 0.983
+    },
+    {
+      "word": "now,",
+      "start": 10.4,
+      "end": 10.68,
+      "probability": 0.997
+    },
+    {
+      "word": "the",
+      "start": 11.18,
+      "end": 11.24,
+      "probability": 0.995
+    },
+    {
+      "word": "economics",
+      "start": 11.24,
+      "end": 11.64,
+      "probability": 0.998
+    },
+    {
+      "word": "made",
+      "start": 11.64,
+      "end": 11.98,
+      "probability": 0.998
+    },
+    {
+      "word": "it",
+      "start": 11.98,
+      "end": 12.14,
+      "probability": 0.999
+    },
+    {
+      "word": "rational,",
+      "start": 12.14,
+      "end": 12.64,
+      "probability": 0.996
+    },
+    {
+      "word": "but",
+      "start": 12.86,
+      "end": 12.92,
+      "probability": 0.993
+    },
+    {
+      "word": "the",
+      "start": 12.92,
+      "end": 13.06,
+      "probability": 0.998
+    },
+    {
+      "word": "economics",
+      "start": 13.06,
+      "end": 13.48,
+      "probability": 0.998
+    },
+    {
+      "word": "changed.",
+      "start": 13.48,
+      "end": 14.06,
+      "probability": 0.995
+    },
+    {
+      "word": "And",
+      "start": 14.54,
+      "end": 14.68,
+      "probability": 0.993
+    },
+    {
+      "word": "when",
+      "start": 14.68,
+      "end": 14.84,
+      "probability": 0.992
+    },
+    {
+      "word": "economics",
+      "start": 14.84,
+      "end": 15.44,
+      "probability": 0.996
+    },
+    {
+      "word": "change,",
+      "start": 15.44,
+      "end": 15.96,
+      "probability": 0.591
+    },
+    {
+      "word": "behavior",
+      "start": 16.4,
+      "end": 16.68,
+      "probability": 0.946
+    },
+    {
+      "word": "that",
+      "start": 16.68,
+      "end": 16.92,
+      "probability": 0.995
+    },
+    {
+      "word": "was",
+      "start": 16.92,
+      "end": 17.1,
+      "probability": 0.999
+    },
+    {
+      "word": "rational",
+      "start": 17.1,
+      "end": 17.62,
+      "probability": 0.997
+    },
+    {
+      "word": "becomes...",
+      "start": 17.62,
+      "end": 19.28,
+      "probability": 0.749
+    },
+    {
+      "word": "Darning",
+      "start": 19.28,
+      "end": 19.56,
+      "probability": 0.616
+    },
+    {
+      "word": "socks.",
+      "start": 19.56,
+      "end": 20.16,
+      "probability": 0.815
+    },
+    {
+      "word": "Almana.",
+      "start": 22.26,
+      "end": 23.04,
+      "probability": 0.358
+    },
+    {
+      "word": "Ugh.",
+      "start": 23.54,
+      "end": 23.82,
+      "probability": 0.011
+    },
+    {
+      "word": "One",
+      "start": 25.02,
+      "end": 25.32,
+      "probability": 0.992
+    },
+    {
+      "word": "more",
+      "start": 25.32,
+      "end": 25.46,
+      "probability": 0.999
+    },
+    {
+      "word": "thing.",
+      "start": 25.46,
+      "end": 25.66,
+      "probability": 0.999
+    },
+    {
+      "word": "This",
+      "start": 26.38,
+      "end": 26.48,
+      "probability": 0.993
+    },
+    {
+      "word": "transition",
+      "start": 26.48,
+      "end": 27.04,
+      "probability": 0.998
+    },
+    {
+      "word": "doesn't",
+      "start": 27.04,
+      "end": 27.44,
+      "probability": 0.998
+    },
+    {
+      "word": "eliminate",
+      "start": 27.44,
+      "end": 27.8,
+      "probability": 0.989
+    },
+    {
+      "word": "developers.",
+      "start": 27.8,
+      "end": 28.36,
+      "probability": 0.986
+    },
+    {
+      "word": "It",
+      "start": 28.36,
+      "end": 28.9,
+      "probability": 0.059
+    },
+    {
+      "word": "elevates",
+      "start": 28.9,
+      "end": 29.58,
+      "probability": 0.872
+    },
+    {
+      "word": "them.",
+      "start": 29.58,
+      "end": 29.9,
+      "probability": 0.994
+    },
+    {
+      "word": "Mole",
+      "start": 31.18,
+      "end": 31.2,
+      "probability": 0.143
+    },
+    {
+      "word": "designers",
+      "start": 31.2,
+      "end": 31.78,
+      "probability": 0.966
+    },
+    {
+      "word": "need",
+      "start": 31.78,
+      "end": 32.14,
+      "probability": 0.994
+    },
+    {
+      "word": "deeper",
+      "start": 32.14,
+      "end": 32.76,
+      "probability": 0.934
+    },
+    {
+      "word": "understanding",
+      "start": 32.76,
+      "end": 33.34,
+      "probability": 0.996
+    },
+    {
+      "word": "than",
+      "start": 33.34,
+      "end": 33.74,
+      "probability": 0.936
+    },
+    {
+      "word": "wood",
+      "start": 33.74,
+      "end": 34.06,
+      "probability": 0.993
+    },
+    {
+      "word": "carvers.",
+      "start": 34.06,
+      "end": 34.58,
+      "probability": 0.851
+    },
+    {
+      "word": "They",
+      "start": 34.96,
+      "end": 35.18,
+      "probability": 0.992
+    },
+    {
+      "word": "need",
+      "start": 35.18,
+      "end": 35.34,
+      "probability": 0.999
+    },
+    {
+      "word": "to",
+      "start": 35.34,
+      "end": 35.48,
+      "probability": 0.996
+    },
+    {
+      "word": "understand",
+      "start": 35.48,
+      "end": 36.04,
+      "probability": 0.998
+    },
+    {
+      "word": "materials,",
+      "start": 36.04,
+      "end": 36.74,
+      "probability": 0.984
+    },
+    {
+      "word": "physics,",
+      "start": 37.3,
+      "end": 37.52,
+      "probability": 0.971
+    },
+    {
+      "word": "tolerances,",
+      "start": 37.98,
+      "end": 38.52,
+      "probability": 0.99
+    },
+    {
+      "word": "failure",
+      "start": 39.0,
+      "end": 39.26,
+      "probability": 0.909
+    },
+    {
+      "word": "modes.",
+      "start": 39.26,
+      "end": 39.72,
+      "probability": 0.994
+    },
+    {
+      "word": "PDD",
+      "start": 41.38,
+      "end": 41.74,
+      "probability": 0.862
+    },
+    {
+      "word": "developers",
+      "start": 41.74,
+      "end": 42.26,
+      "probability": 0.9
+    },
+    {
+      "word": "work",
+      "start": 42.26,
+      "end": 42.6,
+      "probability": 0.991
+    },
+    {
+      "word": "at",
+      "start": 42.6,
+      "end": 42.8,
+      "probability": 0.996
+    },
+    {
+      "word": "the",
+      "start": 42.8,
+      "end": 42.92,
+      "probability": 0.986
+    },
+    {
+      "word": "level",
+      "start": 42.92,
+      "end": 43.14,
+      "probability": 0.999
+    },
+    {
+      "word": "of",
+      "start": 43.14,
+      "end": 43.32,
+      "probability": 0.999
+    },
+    {
+      "word": "specification.",
+      "start": 43.32,
+      "end": 43.92,
+      "probability": 0.987
+    },
+    {
+      "word": "You're",
+      "start": 44.66,
+      "end": 44.86,
+      "probability": 0.968
+    },
+    {
+      "word": "not",
+      "start": 44.86,
+      "end": 44.98,
+      "probability": 0.999
+    },
+    {
+      "word": "writing",
+      "start": 44.98,
+      "end": 45.24,
+      "probability": 0.988
+    },
+    {
+      "word": "the",
+      "start": 45.24,
+      "end": 45.42,
+      "probability": 0.989
+    },
+    {
+      "word": "defensive",
+      "start": 45.42,
+      "end": 45.68,
+      "probability": 0.977
+    },
+    {
+      "word": "code.",
+      "start": 45.68,
+      "end": 46.22,
+      "probability": 0.999
+    },
+    {
+      "word": "You're",
+      "start": 46.68,
+      "end": 46.9,
+      "probability": 0.994
+    },
+    {
+      "word": "specifying",
+      "start": 46.9,
+      "end": 47.5,
+      "probability": 0.997
+    },
+    {
+      "word": "what",
+      "start": 47.5,
+      "end": 47.8,
+      "probability": 0.995
+    },
+    {
+      "word": "defensive",
+      "start": 47.8,
+      "end": 48.42,
+      "probability": 0.994
+    },
+    {
+      "word": "behavior",
+      "start": 48.42,
+      "end": 48.88,
+      "probability": 0.972
+    },
+    {
+      "word": "looks",
+      "start": 48.88,
+      "end": 49.24,
+      "probability": 0.997
+    },
+    {
+      "word": "like.",
+      "start": 49.24,
+      "end": 49.52,
+      "probability": 0.999
+    },
+    {
+      "word": "You're",
+      "start": 50.0,
+      "end": 50.26,
+      "probability": 0.995
+    },
+    {
+      "word": "not",
+      "start": 50.26,
+      "end": 50.52,
+      "probability": 0.996
+    },
+    {
+      "word": "implementing",
+      "start": 50.52,
+      "end": 51.18,
+      "probability": 0.992
+    },
+    {
+      "word": "the",
+      "start": 51.18,
+      "end": 51.46,
+      "probability": 0.985
+    },
+    {
+      "word": "error",
+      "start": 51.46,
+      "end": 51.66,
+      "probability": 0.993
+    },
+    {
+      "word": "handling.",
+      "start": 51.66,
+      "end": 52.1,
+      "probability": 0.966
+    },
+    {
+      "word": "You're",
+      "start": 52.56,
+      "end": 52.76,
+      "probability": 0.996
+    },
+    {
+      "word": "defining",
+      "start": 52.76,
+      "end": 53.06,
+      "probability": 0.995
+    },
+    {
+      "word": "the",
+      "start": 53.06,
+      "end": 53.26,
+      "probability": 0.995
+    },
+    {
+      "word": "contract",
+      "start": 53.26,
+      "end": 53.72,
+      "probability": 0.99
+    },
+    {
+      "word": "it",
+      "start": 53.72,
+      "end": 53.96,
+      "probability": 0.914
+    },
+    {
+      "word": "must",
+      "start": 53.96,
+      "end": 54.18,
+      "probability": 0.999
+    },
+    {
+      "word": "satisfy.",
+      "start": 54.18,
+      "end": 54.82,
+      "probability": 0.995
+    },
+    {
+      "word": "The",
+      "start": 54.82,
+      "end": 56.16,
+      "probability": 0.626
+    },
+    {
+      "word": "shift",
+      "start": 56.16,
+      "end": 56.44,
+      "probability": 0.827
+    },
+    {
+      "word": "from",
+      "start": 56.44,
+      "end": 57.08,
+      "probability": 0.976
+    },
+    {
+      "word": "implementation",
+      "start": 57.08,
+      "end": 57.78,
+      "probability": 0.632
+    },
+    {
+      "word": "craft",
+      "start": 57.78,
+      "end": 58.34,
+      "probability": 0.95
+    },
+    {
+      "word": "to",
+      "start": 58.34,
+      "end": 59.04,
+      "probability": 0.969
+    },
+    {
+      "word": "specification",
+      "start": 59.04,
+      "end": 59.68,
+      "probability": 0.978
+    },
+    {
+      "word": "craft.",
+      "start": 59.68,
+      "end": 60.28,
+      "probability": 0.842
+    }
+  ],
+  "segments": [
+    {
+      "start": 0.0,
+      "end": 3.2,
+      "text": "Your great-grandmother wasn't stupid for darning socks."
+    },
+    {
+      "start": 4.08,
+      "end": 5.66,
+      "text": "The economics made it rational."
+    },
+    {
+      "start": 6.94,
+      "end": 9.38,
+      "text": "And you're not stupid for patching code."
+    },
+    {
+      "start": 10.04,
+      "end": 12.64,
+      "text": "Until now, the economics made it rational,"
+    },
+    {
+      "start": 12.86,
+      "end": 14.06,
+      "text": "but the economics changed."
+    },
+    {
+      "start": 14.54,
+      "end": 19.28,
+      "text": "And when economics change, behavior that was rational becomes..."
+    },
+    {
+      "start": 19.28,
+      "end": 20.16,
+      "text": "Darning socks."
+    },
+    {
+      "start": 22.26,
+      "end": 23.04,
+      "text": "Almana."
+    },
+    {
+      "start": 23.54,
+      "end": 23.82,
+      "text": "Ugh."
+    },
+    {
+      "start": 25.02,
+      "end": 25.66,
+      "text": "One more thing."
+    },
+    {
+      "start": 26.38,
+      "end": 28.36,
+      "text": "This transition doesn't eliminate developers."
+    },
+    {
+      "start": 28.36,
+      "end": 29.9,
+      "text": "It elevates them."
+    },
+    {
+      "start": 31.18,
+      "end": 34.58,
+      "text": "Mole designers need deeper understanding than wood carvers."
+    },
+    {
+      "start": 34.96,
+      "end": 36.74,
+      "text": "They need to understand materials,"
+    },
+    {
+      "start": 37.3,
+      "end": 39.72,
+      "text": "physics, tolerances, failure modes."
+    },
+    {
+      "start": 41.38,
+      "end": 43.92,
+      "text": "PDD developers work at the level of specification."
+    },
+    {
+      "start": 44.66,
+      "end": 46.22,
+      "text": "You're not writing the defensive code."
+    },
+    {
+      "start": 46.68,
+      "end": 49.52,
+      "text": "You're specifying what defensive behavior looks like."
+    },
+    {
+      "start": 50.0,
+      "end": 52.1,
+      "text": "You're not implementing the error handling."
+    },
+    {
+      "start": 52.56,
+      "end": 54.82,
+      "text": "You're defining the contract it must satisfy."
+    },
+    {
+      "start": 54.82,
+      "end": 60.28,
+      "text": "The shift from implementation craft to specification craft."
+    }
+  ]
+}

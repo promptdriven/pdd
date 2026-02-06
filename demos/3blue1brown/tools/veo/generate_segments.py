@@ -518,31 +518,28 @@ def main():
         print(f"Duration: {segment['duration']}s")
         print(f"{'='*60}")
 
-        # Read the markdown file
-        if not md_path.exists():
-            print(f"  Error: {md_path} not found")
-            results[segment_id] = False
-            continue
-
-        md_content = md_path.read_text()
-
         if args.separate_sides:
             # Try to load from dedicated prompt files first
             left_prompt = load_side_prompt(script_dir, segment, "left")
             right_prompt = load_side_prompt(script_dir, segment, "right")
 
             # Fall back to legacy shared file extraction
-            if not left_prompt:
-                left_prompt = extract_left_prompt(md_content)
-                # Enhance legacy prompts with character details
-                if (args.use_references or args.sequential) and not args.no_enhance:
-                    left_prompt = enhance_prompt(left_prompt, "left")
+            if not left_prompt or not right_prompt:
+                if not md_path.exists():
+                    print(f"  Error: No dedicated prompt files and {md_path} not found")
+                    results[segment_id] = False
+                    continue
+                md_content = md_path.read_text()
 
-            if not right_prompt:
-                right_prompt = extract_right_prompt(md_content)
-                # Enhance legacy prompts with character details
-                if (args.use_references or args.sequential) and not args.no_enhance:
-                    right_prompt = enhance_prompt(right_prompt, "right")
+                if not left_prompt:
+                    left_prompt = extract_left_prompt(md_content)
+                    if (args.use_references or args.sequential) and not args.no_enhance:
+                        left_prompt = enhance_prompt(left_prompt, "left")
+
+                if not right_prompt:
+                    right_prompt = extract_right_prompt(md_content)
+                    if (args.use_references or args.sequential) and not args.no_enhance:
+                        right_prompt = enhance_prompt(right_prompt, "right")
 
             if not left_prompt or not right_prompt:
                 print(f"  Error: Could not extract left/right prompts")
@@ -608,6 +605,12 @@ def main():
 
             results[segment_id] = left_success and right_success
         else:
+            # Read the legacy markdown file for combined mode
+            if not md_path.exists():
+                print(f"  Error: {md_path} not found")
+                results[segment_id] = False
+                continue
+            md_content = md_path.read_text()
             # Generate combined split-screen video
             prompt = extract_prompt(md_content)
 

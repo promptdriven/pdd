@@ -1,0 +1,5 @@
+segment_087.wav
+silence_2.0s
+segment_088.wav
+silence_0.8s
+segment_089.wav
