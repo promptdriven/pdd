@@ -193,7 +193,7 @@ class SyncLock:
             self.fd.write(str(self.current_pid))
             self.fd.flush()
             
-        except Exception as e:
+        except (IOError, OSError) as e:
             # Ensure file descriptor is closed and lock file removed on ANY failure
             try:
                 if self.fd:

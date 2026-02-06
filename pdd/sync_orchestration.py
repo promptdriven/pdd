@@ -1935,7 +1935,7 @@ def sync_orchestration(
         worker_exception = app.worker_exception
 
     # Check for worker exception that might have caused a crash (TUI mode only)
-    if not headless and isinstance(worker_exception, BaseException):
+    if not headless and worker_exception is not None:
         print(f"\n[Error] Worker thread crashed with exception: {worker_exception}", file=sys.stderr)
 
         if hasattr(app, 'captured_logs') and app.captured_logs:
