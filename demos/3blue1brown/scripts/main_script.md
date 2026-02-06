@@ -104,7 +104,7 @@ So now the AI has to guess what's relevant. Tools like Cursor use embeddings. Cl
 
 **[VISUAL: A subtle graph inset: "Performance vs. Context Length". Line drops steadily. Label: "Even with perfect retrieval, performance degrades 14-85% as context grows (EMNLP, 2025)".]**
 
-And here's what makes it worse. A 2025 study proved that even when the model retrieves the *right* information, performance still degrades—fourteen to eighty-five percent—just from the sheer length of the input. It's not about finding the right code. The extra tokens themselves hurt the model's ability to reason. Chroma's research team calls this *context rot*.
+And here's what makes it worse. A 2025 EMNLP study proved that even when the model retrieves the *right* information, performance still degrades—fourteen to eighty-five percent—just from the sheer length of the input. It's not about finding the right code. The extra tokens themselves hurt the model's ability to reason. A separate Chroma study across eighteen state-of-the-art models confirmed the pattern—they call it *context rot*.
 
 **[VISUAL: Return to the chart. The "Context Rot" layer in the debt area pulses. Annotation: "Faster patching → faster growth → faster rot".]**
 
@@ -128,7 +128,7 @@ Regeneration doesn't have this problem. A prompt is a fifth to a tenth the size 
 
 **[VISUAL: Side-by-side comparison. LEFT: "Agentic patching" — context window filled with 15,000 tokens of code, red highlights on irrelevant sections, tiny green section with relevant code. RIGHT: "PDD regeneration" — context window with a 300-token prompt, 2,000 tokens of tests, small grounding example. Clean. Focused. Room to think.]**
 
-And there's something else. These models are trained on thirty times more natural language than code. Natural language is their deepest fluency. MIT showed that giving models natural language context for coding tasks improved performance by up to eighty-nine percent. A prompt *is* natural language. You're speaking the model's strongest language and giving it room to think.
+And there's something else. These models are trained on up to thirty times more natural language than code. Natural language is their deepest fluency. MIT showed that giving models natural language context for coding tasks improved performance by up to eighty-nine percent. A prompt *is* natural language. You're speaking the model's strongest language and giving it room to think.
 
 Research also confirms: modules around two hundred fifty lines have the *lowest* defect density—a U-shaped curve where too small fragments logic and too large explodes complexity. That's exactly the size a focused prompt produces.
 
@@ -150,7 +150,7 @@ This is the part of software economics nobody talks about. Eighty to ninety perc
 
 **[VISUAL: Pie chart materializes. "Initial Development: 10-20%". "Maintenance: 80-90%".]**
 
-It's maintaining it. McKinsey found that organizations with high technical debt spend forty percent more on maintenance and deliver features twenty-five to fifty percent slower. Stripe measured developers wasting a third of their entire work week just navigating around previous patches.
+It's maintaining it. McKinsey found that organizations with high technical debt spend forty percent more on maintenance and deliver features twenty-five to fifty percent slower. Stripe measured developers wasting a third of their entire work week on technical debt and maintenance.
 
 **[VISUAL: The pie chart morphs into an exponentially growing cost curve labeled "Technical debt follows compound interest: Debt × (1 + Rate)^Time". A second, flat line appears: "Regeneration cost (debt resets each cycle)".]**
 
@@ -209,7 +209,7 @@ But here's the thing: synthesis was non-deterministic. Run it twice, get differe
 
 **[VISUAL: Same Verilog code runs through synthesis three times. Three visibly different gate-level netlists appear side by side. All different. Then a green checkmark appears over each: "Functionally equivalent".]**
 
-What Synopsys did was wrap a verification toolchain around the generator. Formal equivalence checking—mathematical proof that the output, whatever it looked like, behaved identically to the spec. The gates were different every time. The function was the same every time.
+What Synopsys did was wrap a verification toolchain around the generator. Formal equivalence checking—using SAT and SMT solvers to produce mathematical proof that the output, whatever it looked like, behaved identically to the spec. The gates were different every time. The function was the same every time.
 
 **[VISUAL: Timeline showing chip design abstraction levels rising: Transistors (1970s) → Schematics (1980s) → RTL/Verilog (1990s) → Behavioral/HLS (2010s). At each transition, an arrow labeled "Couldn't scale" pushes to the next level. A new level appears at the end, pulsing: "Natural language → Code (2020s)".]**
 
@@ -274,9 +274,15 @@ RIGHT: "PDD" - Bug found → Add test (`pdd bug`) → Regenerate (`pdd fix`) →
 
 In traditional development, a bug fix helps one place. In PDD, a test prevents that bug everywhere, forever.
 
-**[VISUAL: Brief sidebar. The Synopsys Formality logo from Part 2 reappears. Text: "Hardware: mathematical proof of equivalence. Software: tests are samples, not proofs. But every wall you add narrows the gap."]**
+**[VISUAL: Brief sidebar. The Synopsys Formality logo from Part 2 reappears alongside the Z3 logo. Text: "Hardware: SMT-based formal proof. PDD: SMT-based formal proof. Same math."]**
 
-Now—a quick honest note. In chip design, equivalence checking is a mathematical proof. It covers every possible input. Software tests aren't proofs—they're samples. But each test you add narrows what the generator can get wrong. And the ratchet only turns one way.
+Now—here's something most people don't know. In chip design, Synopsys Formality uses SAT and SMT solvers to mathematically prove equivalence. PDD uses Z3—the same class of SMT solver—to formally verify properties of generated code. Not sampling. Not "run a bunch of inputs and hope." Mathematical proof that a property holds for *every possible input*.
+
+**[VISUAL: Side-by-side. LEFT: "Synopsys Formality: SMT solver proves RTL ≡ gates for all inputs." RIGHT: "PDD + Z3: SMT solver proves code satisfies spec for all inputs." Both labeled: "Mathematical proof, not testing."]**
+
+When Z3 proves that a function never returns null for any 32-bit integer input, it hasn't tried every input—it's reasoned symbolically over the entire space. The same math. The same certainty. The same category of guarantee the semiconductor industry relies on for billion-dollar tapeouts.
+
+Traditional unit tests are still samples—and PDD uses those too. But Z3 gives you walls that are *proven*, not just tested. And in that sense, the chip design analogy isn't a metaphor. It's the same technology.
 
 ### PROMPT CAPITAL: THE SPECIFICATION
 
@@ -298,7 +304,7 @@ A good prompt is a fifth to a tenth the size of the code it generates. You're sp
 
 **[VISUAL: Two context windows side by side. LEFT: filled with 15,000 tokens of raw code—dense, hard to parse. RIGHT: filled with prompts for ten modules—clean natural language, clear intent. Both windows are the same size, but the right one represents ten times more system knowledge.]**
 
-Remember the context window problem? Code is token-expensive. But prompts are natural language—and these models were trained on thirty times more natural language than code. Researchers found that just adding natural language comments to code training data improved generation quality by forty-one percent. The prompt isn't fighting the model's strengths. It's leveraging them.
+Remember the context window problem? Code is token-expensive. But prompts are natural language—and these models were trained on up to thirty times more natural language than code. Researchers found that just adding natural language comments to code training data improved generation quality by forty-one percent. The prompt isn't fighting the model's strengths. It's leveraging them.
 
 And unlike agentic tools that dynamically guess which code to load into context—and increasingly guess wrong—each prompt declares its own dependencies. The context is author-defined, not machine-assembled.
 
@@ -380,7 +386,7 @@ When you patch code, each fix has local returns. You fixed one bug in one place.
 
 **[VISUAL: The patching curve wobbles, occasionally dips as patches conflict. Small annotations at the dips: "new bug from patch", "regression", "merge conflict".]**
 
-The returns are linear at best. Often sublinear. And the cost keeps compounding—CISQ estimates technical debt costs US companies one-point-five *trillion* dollars annually.
+The returns are linear at best. Often sublinear. And the cost keeps compounding—CISQ estimates technical debt costs US companies one-point-five-two *trillion* dollars annually.
 
 **[VISUAL: The "PDD" curve. Each test added is a point of investment. The return compounds—that test constrains all future generations.]**
 
@@ -569,7 +575,7 @@ All statistics cited in the script with their sources, for fact-checking and vid
 | 55% speedup on individual tasks (95 devs, one greenfield task) | GitHub/Microsoft: "The Impact of AI on Developer Productivity" (arXiv:2302.06590) | 2022 |
 | 0% throughput change, 41% more bugs (785 devs, 1 year) | Uplevel Data Labs: "Can Generative AI Improve Developer Productivity?" | 2024 |
 | Code churn +44%, refactoring -60% (211M lines analyzed) | GitClear: "AI Copilot Code Quality: 2025 Data" | 2025 |
-| AI-generated code: 1.7× more issues, 75% more logic errors | CodeRabbit: "State of AI vs Human Code Generation" | 2025 |
+| AI-generated code: 1.7× more issues, 75% more logic errors, 8× more performance issues | CodeRabbit: "State of AI vs Human Code Generation" | 2025 |
 | Devs believed AI saved 20%; it cost 19% (39-point perception gap) | METR: "Measuring the Impact of Early-2025 AI on Experienced OS Dev Productivity" | 2025 |
 | Performance degrades 14-85% as context grows, even with perfect retrieval | "Context Length Alone Hurts LLM Performance" (EMNLP 2025, arXiv:2510.05381) | 2025 |
 | Context rot across 18 SOTA models | Chroma Research: "Context Rot" technical report | 2025 |
@@ -578,11 +584,12 @@ All statistics cited in the script with their sources, for fact-checking and vid
 | Adding NL comments to code training: +41% HumanEval | "Code Needs Comments: Enhancing Code LLMs with Comment Augmentation" (ACL 2024) | 2024 |
 | Modules ~250 lines have lowest defect density (U-shaped curve) | Verma et al: "Reduction of Defect Density Using Optimal Module Sizes" (Hindawi) | 2014 |
 | 80-90% of software cost is maintenance | Multiple sources (IEEE, CISQ, Floris & Harald) | Various |
-| Tech debt costs US companies $1.52T annually | CISQ: "Cost of Poor Software Quality" | 2024 |
+| Tech debt costs US companies $1.52T annually | CISQ: "Cost of Poor Software Quality in the US" | 2022 |
 | Organizations with high tech debt: +40% maintenance cost, -25-50% feature velocity | McKinsey Digital | 2024 |
-| Developers waste 33% of time on technical debt | Stripe: "Developer Coefficient" | 2023 |
+| Developers spend 42% of time on tech debt and bad code (~33% on debt alone) | Stripe: "The Developer Coefficient" | 2018 |
 | Verilog introduced 1985; by mid-1990s half of chip designs used HDL | IEEE 1364-1995; EDA history sources | 1985-1995 |
 | ST Micro: 90% of digital IP starts at behavioral level | Accellera: "The Next IC Design Methodology Transition" | 2010 |
+| Z3 SMT solver: mathematical proof over all inputs, same foundation as hardware FEC | Microsoft Research: Z3 Theorem Prover | 2007+ |
 | SDD emerging as industry category | Thoughtworks, GitHub spec-kit, Martin Fowler, InfoQ | 2025 |
 
 ## POTENTIAL FOLLOW-UP VIDEOS
@@ -593,3 +600,4 @@ All statistics cited in the script with their sources, for fact-checking and vid
 4. **"When to Patch vs Regenerate"** - Practical decision framework (8 min)
 5. **"Building Your First Mold"** - Hands-on PDD tutorial (20 min)
 6. **"From Schematics to Verilog to Prompts"** - The full chip design parallel (12 min)
+7. **"Z3, TLA+, and the Formal Verification Stack"** - How SMT solvers and model checking bring hardware-grade guarantees to generated code (15 min)

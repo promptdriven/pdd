@@ -393,6 +393,36 @@ Research sources for claims made in the 3Blue1Brown-style PDD video.
   https://www.cadence.com/en_US/home/explore/logic-equivalence-checking.html
   *Key context: LEC ensures gate-level netlist is functionally equivalent to RTL. Essential to confirm optimization and synthesis did not introduce errors.*
 
+### Z3 SMT Solver and Formal Verification in Software
+
+- **Microsoft Research** — "Z3: An Efficient SMT Solver"
+  https://github.com/Z3Prover/z3
+  https://www.microsoft.com/en-us/research/project/z3-3/
+  *Key facts (cited in script): Z3 is an SMT (Satisfiability Modulo Theories) solver developed by Microsoft Research. It proves properties for ALL possible inputs by asking "can you find a counterexample?" — if no counterexample exists (UNSAT), the property is mathematically proven. Supports integer/real arithmetic, bit-vectors, arrays, strings, floating-point. Used by AWS (IAM policy verification via Zelkova), Ethereum (Solidity SMTChecker), Microsoft (Windows driver verification), and 12,000+ academic papers.*
+
+- **Z3 and Hardware Verification Equivalence**
+  *Key argument (cited in script): Modern hardware formal equivalence checking (Synopsys Formality, Cadence LEC) increasingly uses SAT/SMT solvers internally — the same mathematical foundation as Z3. When Z3 proves a software property, it provides the same category of mathematical guarantee that chip designers rely on for billion-dollar tapeouts. The difference is industry adoption, not mathematical rigor.*
+
+- **AWS** — "Formal Reasoning About the Security of Amazon Web Services" (CAV 2018)
+  https://www.cs.utexas.edu/~isil/cav2018.pdf
+  *Key context: AWS uses Z3-backed Zelkova to prove IAM policy properties like "this S3 bucket is never publicly accessible" across all possible principals, actions, and conditions.*
+
+- **Wikipedia** — "Z3 Theorem Prover"
+  https://en.wikipedia.org/wiki/Z3_Theorem_Prover
+  *Key context: Z3 won multiple SMT-COMP competitions. Available under MIT license. Widely used as backend for KLEE, Dafny, F*, and other verification tools.*
+
+### TLA+ for Behavioral Verification (PLANNED — not yet implemented)
+
+- **Lamport** — "TLA+ Home Page"
+  https://lamport.azurewebsites.net/tla/tla.html
+  *What it is: TLA+ is a formal specification language for modeling and verifying concurrent/distributed systems, created by Leslie Lamport. It exhaustively explores all reachable states of a system model to prove safety ("bad things never happen") and liveness ("good things eventually happen") properties.*
+
+- **AWS** — "How Amazon Web Services Uses Formal Methods" (CACM 2015)
+  https://cacm.acm.org/research/how-amazon-web-services-uses-formal-methods/
+  *Key context: AWS uses TLA+ to verify designs of S3, DynamoDB, EBS, and other critical services. Found subtle bugs that would not have been caught by any amount of testing. TLA+ verifies system-level behavioral properties — complementary to Z3's function-level property proofs.*
+
+- **PDD integration status:** Planned. Would enable formal verification of module interaction and system-level behavioral properties (e.g., "no deadlock across these three modules," "eventual consistency holds"). Z3 verifies individual module properties; TLA+ would verify cross-module behavioral guarantees.
+
 ---
 
 ## Spec-Driven Development: Industry Convergence (2025)
