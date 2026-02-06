@@ -50,6 +50,14 @@ import {
   defaultCodeCostChartProps,
 } from "./05-CodeCostChart";
 import {
+  CodeCostChartMini,
+  MINI_FPS,
+  MINI_DURATION_FRAMES,
+  MINI_WIDTH,
+  MINI_HEIGHT,
+  defaultCodeCostChartMiniProps,
+} from "./05a-CodeCostChartMini";
+import {
   AIMilestones,
   AI_MILESTONES_FPS,
   AI_MILESTONES_DURATION_FRAMES,
@@ -410,6 +418,17 @@ export const RemotionRoot: React.FC = () => {
           width={CODE_CHART_WIDTH}
           height={CODE_CHART_HEIGHT}
           defaultProps={defaultCodeCostChartProps}
+        />
+      </Folder>
+      <Folder name="05a-CodeCostChartMini">
+        <Composition
+          id="CodeCostChartMini"
+          component={CodeCostChartMini}
+          durationInFrames={MINI_DURATION_FRAMES}
+          fps={MINI_FPS}
+          width={MINI_WIDTH}
+          height={MINI_HEIGHT}
+          defaultProps={defaultCodeCostChartMiniProps}
         />
       </Folder>
       <Folder name="06-AIMilestones">
