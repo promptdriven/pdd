@@ -1277,7 +1277,7 @@ class TestIssue470AuthCommandReferences:
 
             assert result is False
             # Check that at least one console.print call contains 'pdd auth login'
-            printed = " ".join(str(c) for c in mock_console.print.call_args_list)
+            printed = " ".join(str(call[0][0]) for call in mock_console.print.call_args_list if call[0])
             assert "pdd auth login" in printed, (
                 "refresh_token error should reference 'pdd auth login', "
                 f"not 'pdd login'. Got: {printed}"
@@ -1303,17 +1303,23 @@ class TestIssue470AuthCommandReferences:
 
         manager._refresh_token = mock_refresh_fail
 
-        # Set up stop event so heartbeat exits after one iteration
+        # Set up stop event so heartbeat exits deterministically
         manager._stop_event = asyncio.Event()
 
         with patch("pdd.remote_session.console") as mock_console:
-            # Run heartbeat in a task with a timeout
-            try:
-                await asyncio.wait_for(manager._heartbeat_loop(), timeout=5.0)
-            except (asyncio.TimeoutError, Exception):
-                pass
+            # Run heartbeat with deterministic stop after first failure
+            async def run_heartbeat_briefly():
+                task = asyncio.create_task(manager._heartbeat_loop())
+                await asyncio.sleep(0.1)  # Let it run one iteration
+                manager._stop_event.set()
+                try:
+                    await asyncio.wait_for(task, timeout=1.0)
+                except asyncio.TimeoutError:
+                    task.cancel()
 
-            printed = " ".join(str(c) for c in mock_console.print.call_args_list)
+            await run_heartbeat_briefly()
+
+            printed = " ".join(str(call[0][0]) for call in mock_console.print.call_args_list if call[0])
             assert "pdd auth login" in printed, (
                 "Heartbeat token refresh failure should reference 'pdd auth login', "
                 f"not 'pdd login'. Got: {printed}"
@@ -1343,7 +1349,7 @@ class TestIssue470AuthCommandReferences:
             with pytest.raises(RuntimeError):
                 await manager.update_command("cmd-123", status="completed")
 
-            printed = " ".join(str(c) for c in mock_console.print.call_args_list)
+            printed = " ".join(str(call[0][0]) for call in mock_console.print.call_args_list if call[0])
             assert "pdd auth login" in printed, (
                 "update_command token refresh failure should reference 'pdd auth login', "
                 f"not 'pdd login'. Got: {printed}"

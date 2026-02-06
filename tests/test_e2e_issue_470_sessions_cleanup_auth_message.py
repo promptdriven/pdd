@@ -47,7 +47,7 @@ class TestIssue470AuthCommandReferences:
 
         violations = []
         for py_file in pdd_source.rglob("*.py"):
-            content = py_file.read_text()
+            content = py_file.read_text(encoding="utf-8")
             for i, line in enumerate(content.splitlines(), 1):
                 if wrong_command_pattern.search(line):
                     violations.append(f"{py_file.relative_to(project_root)}:{i}: {line.strip()}")
