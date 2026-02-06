@@ -66,6 +66,41 @@ Export `DEFAULT_RETRY_DELAY: float = 5.0` as base delay for exponential backoff.
 
 All orchestrators should import and use these constants for consistent retry behavior.
 
+% Agentic Debug Logging
+
+Export `AGENTIC_LOG_DIR = ".pdd/agentic-logs"` - directory for storing debug logs.
+
+Internal module-level variable `_AGENTIC_SESSION_ID: Optional[str] = None` - initialized on first log call per workflow run.
+
+`_log_agentic_interaction(label: str, prompt: str, response: str, cost: float, provider: str, success: bool, duration: float, cwd: Path) -> None`
+- Logs full prompt and response to JSONL file in `.pdd/agentic-logs/`
+- Creates log directory if it doesn't exist
+- Each workflow run generates a single session file: `session_YYYYMMDD_HHMMSS.jsonl`
+- Session ID is initialized on first call (using `datetime.now().strftime("%Y%m%d_%H%M%S")`)
+- Silently handles write errors (never crashes workflow for logging failures)
+
+JSONL Entry Format:
+```json
+{
+  "timestamp": "ISO8601 timestamp",
+  "label": "step identifier (e.g., step1, step5_5)",
+  "cwd": "working directory path",
+  "provider": "anthropic|google|openai",
+  "success": true|false,
+  "cost_usd": 0.05,
+  "duration_seconds": 2.5,
+  "prompt_length": 1234,
+  "response_length": 567,
+  "prompt": "full prompt text",
+  "response": "full response text"
+}
+```
+
+Integration with `run_agentic_task()`:
+- On successful completion with `verbose=True`: log the interaction with `success=True`
+- On provider failure with `verbose=True`: log the failed attempt with `success=False`, `cost=0.0`
+- When `verbose=False`: no logging occurs (preserves default quiet behavior)
+
 % False Positive Detection (Issue #261)
 Export `MIN_VALID_OUTPUT_LENGTH: int = 50`
 
