@@ -134,7 +134,7 @@ def test_run_agentic_fix_real_call_when_available(provider, env_key, cli, tmp_pa
     # Only run if API key (or Gemini alias for Google) + CLI are present
     detected_key = os.getenv(env_key)
     if provider == "google" and not detected_key:
-        detected_key = os.getenv("GEMINI_API_KEY")
+        pytest.skip("Google API key not available.")
 
     if not detected_key or not _has_cli(cli):
         pytest.skip(f"{provider} not available (missing API key and/or '{cli}' CLI).")
