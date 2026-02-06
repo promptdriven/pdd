@@ -148,7 +148,8 @@ def session_info(session_id: str) -> None:
 @click.option("--all", "cleanup_all", is_flag=True, help="Cleanup all sessions (including active).")
 @click.option("--stale", "cleanup_stale", is_flag=True, help="Cleanup only stale sessions.")
 @click.option("--force", is_flag=True, help="Skip confirmation prompt.")
-def cleanup_sessions(cleanup_all: bool, cleanup_stale: bool, force: bool) -> None:
+@click.pass_context
+def cleanup_sessions(ctx: click.Context, cleanup_all: bool, cleanup_stale: bool, force: bool) -> None:
     """Cleanup (deregister) remote sessions.
 
     By default, lists sessions and prompts for cleanup.
@@ -278,6 +279,6 @@ def cleanup_sessions(cleanup_all: bool, cleanup_stale: bool, force: bool) -> Non
         console.print(f"\n[bold green]✓[/bold green] Successfully cleaned up {success_count} session(s)")
     if fail_count > 0:
         console.print(f"[bold red]✗[/bold red] Failed to cleanup {fail_count} session(s)")
-        raise click.exceptions.Exit(1)
+        ctx.exit(1)
     if success_count == 0 and fail_count == 0:
         console.print("[yellow]No sessions were cleaned up.[/yellow]")
