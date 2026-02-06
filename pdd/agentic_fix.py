@@ -112,7 +112,8 @@ def _detect_suspicious_files(cwd: Path, context: str = "") -> List[Path]:
                 # Log stack trace to help identify caller
                 import traceback
                 lf.write("Stack trace:\n")
-                lf.write(traceback.format_stack()[-10:][0] if traceback.format_stack() else "N/A")
+                stack = traceback.format_stack()
+                lf.write(stack[-1] if stack else "N/A")
                 lf.write("\n")
     except Exception as e:
         _verbose(f"[yellow]Could not scan for suspicious files: {e}[/yellow]")
