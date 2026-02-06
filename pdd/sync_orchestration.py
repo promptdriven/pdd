@@ -1085,6 +1085,17 @@ def sync_orchestration(
         last_model_name: str = ""
         operation_history: List[str] = []
         MAX_CYCLE_REPEATS = 2
+        try:
+            log_event(
+                basename,
+                language,
+                "sync_start",
+                {"pid": os.getpid()},
+                invocation_mode="sync",
+            )
+        except Exception:
+            # Best-effort logging; sync should proceed even if log setup fails.
+            pass
         
         # Helper function to print inside worker (goes to RichLog via redirection)
         # print() will work if sys.stdout is redirected.
