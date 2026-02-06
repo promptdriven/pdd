@@ -82,13 +82,15 @@ Do NOT create a new branch - just stage, commit, and push.
 
 1. **Prepare the commit**
    - You are already on branch `fix/issue-{issue_number}` in an isolated worktree
-   - **CRITICAL: Stage ONLY the test file(s) created in Steps 7 and 9**
+   - **CRITICAL: Stage ONLY the files listed in `files_to_stage` above**
+   - This includes test files from Steps 7 and 9, AND any prompt files fixed in Step 5.5
    - Get the exact file paths from:
+     - Step 5.5's `PROMPT_FIXED:` output (prompt files)
      - Step 7's `FILES_CREATED:` or `FILES_MODIFIED:` output (unit tests)
      - Step 9's `E2E_FILES_CREATED:` or `E2E_FILES_MODIFIED:` output (E2E tests)
    - Stage each file individually: `git add <exact_file_path>`
    - **DO NOT use `git add .` or `git add -A`** - these will stage unrelated files and pollute the PR
-   - Verify only the intended files are staged: `git status --short` (should show only the test file(s))
+   - Verify only the intended files are staged: `git status --short`
    - Commit with a descriptive message referencing the issue
 
 2. **Create the draft PR**
@@ -114,9 +116,13 @@ Adds failing tests that detect the bug reported in #{issue_number}.
 - Unit test: `{{unit_test_file_path}}`
 - E2E test: `{{e2e_test_file_path}}` (if applicable)
 
+## Prompt Files
+- Prompt file fixed in Step 5.5: `{{prompt_file_path}}` (if applicable)
+
 ## What This PR Contains
 - Failing unit test that reproduces the reported bug
 - Failing E2E test that verifies the bug at integration level (if applicable)
+- Prompt file fixes from Step 5.5 (if applicable)
 - Tests are verified to fail on current code and will pass once the bug is fixed
 
 ## Root Cause
@@ -159,6 +165,7 @@ Your comment should follow this format:
 ### What's Included
 - Failing unit test at `{{unit_test_file_path}}`
 - Failing E2E test at `{{e2e_test_file_path}}` (if applicable)
+- Prompt file fix from Step 5.5: `{{prompt_file_path}}` (if applicable)
 - Commits: {{commit_count}}
 
 ### Next Steps for Maintainers
