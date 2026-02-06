@@ -196,7 +196,7 @@ class RemoteSessionManager:
                 refresh_token = firebase_auth._get_stored_refresh_token()
 
                 if not refresh_token:
-                    console.print("[yellow]Cannot refresh token: no refresh token stored. Please run 'pdd login' again.[/yellow]")
+                    console.print("[yellow]Cannot refresh token: no refresh token stored. Please run 'pdd auth login' again.[/yellow]")
                     return False
 
                 # Refresh the token
@@ -314,7 +314,7 @@ class RemoteSessionManager:
                                         token_refreshed = True
                                         continue  # Retry with new token
                                     else:
-                                        console.print("[red]Token refresh failed. Please run 'pdd login' to re-authenticate.[/red]")
+                                        console.print("[red]Token refresh failed. Please run 'pdd auth login' to re-authenticate.[/red]")
                                         break
                                 else:
                                     console.print("[red]Heartbeat still failing after token refresh (Status: 401)[/red]")
@@ -513,7 +513,7 @@ class RemoteSessionManager:
                                 token_refreshed = True
                                 continue  # Retry with new token
                             else:
-                                console.print("[red]Token refresh failed. Please run 'pdd login' to re-authenticate.[/red]")
+                                console.print("[red]Token refresh failed. Please run 'pdd auth login' to re-authenticate.[/red]")
                                 raise RuntimeError("Authentication failed: token expired and refresh failed")
                         else:
                             console.print("[red]Command update still failing after token refresh (Status: 401)[/red]")
