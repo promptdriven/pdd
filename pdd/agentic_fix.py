@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import datetime
+import difflib
 import os
 import re
 import shutil
 import subprocess
 import sys
-import difflib
 import tempfile
+import traceback
 from pathlib import Path
 from typing import Tuple, List, Optional, Dict
 from rich.console import Console
@@ -81,9 +83,8 @@ def _detect_suspicious_files(cwd: Path, context: str = "") -> List[Path]:
                 suspicious.append(f)
 
         if suspicious:
-            import datetime
             timestamp = datetime.datetime.now().isoformat()
-            _always(f"[bold red]⚠️  SUSPICIOUS FILES DETECTED (Issue #186)[/bold red]")
+            _always("[bold red]⚠️  SUSPICIOUS FILES DETECTED (Issue #186)[/bold red]")
             _always(f"[red]Timestamp: {timestamp}[/red]")
             _always(f"[red]Context: {context}[/red]")
             _always(f"[red]Directory: {cwd}[/red]")
@@ -97,7 +98,7 @@ def _detect_suspicious_files(cwd: Path, context: str = "") -> List[Path]:
             # Also log to a file for persistence
             log_file = Path.home() / ".pdd" / "suspicious_files.log"
             log_file.parent.mkdir(parents=True, exist_ok=True)
-            with open(log_file, "a") as lf:
+            with open(log_file, "a", encoding="utf-8") as lf:
                 lf.write(f"\n{'='*60}\n")
                 lf.write(f"Timestamp: {timestamp}\n")
                 lf.write(f"Context: {context}\n")
@@ -110,7 +111,6 @@ def _detect_suspicious_files(cwd: Path, context: str = "") -> List[Path]:
                     except Exception as e:
                         lf.write(f"  - {sf.name} (error: {e})\n")
                 # Log stack trace to help identify caller
-                import traceback
                 lf.write("Stack trace:\n")
                 stack = traceback.format_stack()
                 lf.write(stack[-1] if stack else "N/A")
@@ -129,7 +129,7 @@ def _end_marker(path: Path) -> str:
     """Marker that must wrap the END of a corrected file block emitted by the agent."""
     return f"<<<END_FILE:{path}>>>"
 
-def get_agent_command(provider: str, instruction_file: Path) -> List[str]:
+def get_agent_command(provider: str, _instruction_file: Path) -> List[str]:
     """
     Return a base CLI command for a provider when using the generic runner.
     Note: Anthropic/Google are handled by specialized variant runners, so this often returns [].
@@ -394,7 +394,7 @@ def _run_cli_args_openai(args: List[str], cwd: Path, timeout: int) -> subprocess
         env=_sanitized_env_for_openai(),
     )
 
-def _run_openai_variants(prompt_text: str, cwd: Path, total_timeout: int, label: str) -> subprocess.CompletedProcess:
+def _run_openai_variants(prompt_text: str, cwd: Path, _total_timeout: int, label: str) -> subprocess.CompletedProcess:
     """
     Try several OpenAI CLI variants to improve robustness.
     Returns the first attempt that yields output or succeeds.
@@ -455,7 +455,7 @@ def _run_cli_args_anthropic(args: List[str], cwd: Path, timeout: int) -> subproc
         env=_sanitized_env_for_anthropic(use_cli_auth=True),
     )
 
-def _run_anthropic_variants(prompt_text: str, cwd: Path, total_timeout: int, label: str) -> subprocess.CompletedProcess:
+def _run_anthropic_variants(prompt_text: str, cwd: Path, _total_timeout: int, label: str) -> subprocess.CompletedProcess:
     """
     Anthropic CLI runner in agentic mode (without -p flag).
 
@@ -522,7 +522,7 @@ def _run_cli_args_google(args: List[str], cwd: Path, timeout: int) -> subprocess
         env=_sanitized_env_common(),
     )
 
-def _run_google_variants(prompt_text: str, cwd: Path, total_timeout: int, label: str) -> subprocess.CompletedProcess:
+def _run_google_variants(prompt_text: str, cwd: Path, _total_timeout: int, label: str) -> subprocess.CompletedProcess:
     """
     Google CLI runner in agentic mode (without -p flag).
 
@@ -727,7 +727,7 @@ def _apply_file_map(
     return applied
 
 def _post_apply_verify_or_testcmd(
-    provider: str,
+    _provider: str,
     unit_test_file: str,
     cwd: Path,
     *,
@@ -897,7 +897,7 @@ def _try_harvest_then_verify(
                 except Exception:
                     pass
                 return ok
-        
+
         # If no output blocks, but direct changes occurred, we should verify
         if direct_changes:
             _info("[cyan]No output markers found, but detected file changes. Verifying...[/cyan]")
@@ -1080,7 +1080,6 @@ def run_agentic_fix(
             if not stripped:
                 return True
             # Detect empty XML-like tags with no actual error content
-            import re
             # Remove all XML-like empty tags and whitespace
             cleaned = re.sub(r"<[^>]+>\s*</[^>]+>", "", stripped).strip()
             if not cleaned:
@@ -1137,18 +1136,12 @@ def run_agentic_fix(
         # --- End preflight ---
 
         # Compute verification policy and command
-        ext = code_path.suffix.lower()
-        is_python = ext == ".py"
-
-        env_verify = os.getenv("PDD_AGENTIC_VERIFY", None)               # "auto"/"0"/"1"/None
-        verify_force = os.getenv("PDD_AGENTIC_VERIFY_FORCE", "0") == "1"
-        
         # If verify_cmd arg is provided, it overrides env var and default
         if verify_cmd is None:
             verify_cmd = os.getenv("PDD_AGENTIC_VERIFY_CMD", None)
-        
+
         if verify_cmd is None:
-             verify_cmd = default_verify_cmd_for(get_language(os.path.splitext(code_path)[1]), unit_test_file)
+            verify_cmd = default_verify_cmd_for(get_language(os.path.splitext(code_path)[1]), unit_test_file)
 
         # Load primary prompt template
         primary_prompt_template = load_prompt_template("agentic_fix_primary_LLM")
@@ -1173,21 +1166,6 @@ def run_agentic_fix(
         instruction_file.write_text(primary_instr, encoding="utf-8")
         _info(f"[cyan]Instruction file: {instruction_file.resolve()} ({instruction_file.stat().st_size} bytes)[/cyan]")
         _print_head("Instruction preview", primary_instr)
-
-        # Decide verification enablement
-        if verify_force:
-            verify_enabled = True
-        elif env_verify is not None:
-            if env_verify.lower() == "auto":
-                verify_enabled = False
-            else:
-                verify_enabled = (env_verify != "0")
-        else:
-            # Default: verification enabled (unless explicitly overridden)
-            verify_enabled = True
-
-        # Allow creating new support files when the agent emits them (kept for compatibility)
-        allow_new = True  # noqa: F841
 
         # Snapshot mtimes before running the generic agentic task
         before_snapshot = _snapshot_mtimes(working_dir)
