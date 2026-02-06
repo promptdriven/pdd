@@ -1,3 +1,4 @@
+import os
 import pytest
 import asyncio
 import datetime
@@ -1222,3 +1223,105 @@ class TestUpdateCommand401Handling:
             await manager.update_command("cmd-123", status="completed")
 
         assert refresh_count[0] == 1
+
+
+# --- Bug #470: Incorrect auth command reference in error messages ---
+
+class TestIssue470AuthCommandReferences:
+    """
+    Tests for Issue #470: Verify all auth error messages in remote_session.py
+    reference 'pdd auth login', not the non-existent 'pdd login'.
+    """
+
+    @pytest.mark.asyncio
+    async def test_refresh_token_no_refresh_token_shows_correct_command(
+        self, manager
+    ):
+        """
+        Test that _refresh_token references 'pdd auth login' when no refresh token
+        is stored. This covers remote_session.py line 199.
+        """
+        with patch("pdd.remote_session._get_cached_jwt", return_value=None), \
+             patch.dict(os.environ, {"NEXT_PUBLIC_FIREBASE_API_KEY": "test-key"}), \
+             patch("pdd.remote_session.KEYRING_AVAILABLE", True), \
+             patch("pdd.remote_session.FirebaseAuthenticator") as mock_auth, \
+             patch("pdd.remote_session.console") as mock_console:
+            mock_instance = MagicMock()
+            mock_instance._get_stored_refresh_token.return_value = None
+            mock_auth.return_value = mock_instance
+
+            result = await manager._refresh_token()
+
+            assert result is False
+            # Check that at least one console.print call contains 'pdd auth login'
+            printed = " ".join(str(c) for c in mock_console.print.call_args_list)
+            assert "pdd auth login" in printed, (
+                "refresh_token error should reference 'pdd auth login', "
+                f"not 'pdd login'. Got: {printed}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_token_refresh_failure_shows_correct_command(
+        self, manager, mock_cloud_config, mock_httpx_client
+    ):
+        """
+        Test that heartbeat loop references 'pdd auth login' when token refresh
+        fails. This covers remote_session.py line 317.
+        """
+        manager.session_id = "sess-1"
+
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+        mock_response.text = "Unauthorized"
+        mock_httpx_client.post = AsyncMock(return_value=mock_response)
+
+        async def mock_refresh_fail():
+            return False
+
+        manager._refresh_token = mock_refresh_fail
+
+        # Set up stop event so heartbeat exits after one iteration
+        manager._stop_event = asyncio.Event()
+
+        with patch("pdd.remote_session.console") as mock_console:
+            # Run heartbeat in a task with a timeout
+            try:
+                await asyncio.wait_for(manager._heartbeat_loop(), timeout=5.0)
+            except (asyncio.TimeoutError, Exception):
+                pass
+
+            printed = " ".join(str(c) for c in mock_console.print.call_args_list)
+            assert "pdd auth login" in printed, (
+                "Heartbeat token refresh failure should reference 'pdd auth login', "
+                f"not 'pdd login'. Got: {printed}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_update_command_token_refresh_failure_shows_correct_command(
+        self, manager, mock_cloud_config, mock_httpx_client
+    ):
+        """
+        Test that update_command references 'pdd auth login' when token refresh
+        fails. This covers remote_session.py line 509.
+        """
+        manager.session_id = "sess-1"
+
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+        mock_response.text = "Unauthorized"
+        mock_httpx_client.post = AsyncMock(return_value=mock_response)
+
+        async def mock_refresh_fail():
+            return False
+
+        manager._refresh_token = mock_refresh_fail
+
+        with patch("pdd.remote_session.console") as mock_console:
+            with pytest.raises(RuntimeError):
+                await manager.update_command("cmd-123", status="completed")
+
+            printed = " ".join(str(c) for c in mock_console.print.call_args_list)
+            assert "pdd auth login" in printed, (
+                "update_command token refresh failure should reference 'pdd auth login', "
+                f"not 'pdd login'. Got: {printed}"
+            )
