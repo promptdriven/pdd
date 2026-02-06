@@ -1,3 +1,20 @@
+## v0.0.140 (2026-02-05)
+
+### Feat
+
+- Add comprehensive agentic workflow logging
+
+### Fix
+
+- Correct docstring to reference Step 10 instead of Step 5.5
+- Step 10 prompt now stages all files from files_to_stage, not just test files (#429)
+- Address Copilot review feedback on agentic logging tests
+- Auth logout shows success message when not authenticated (inconsistent with clear-cache)
+
+### Refactor
+
+- Address Copilot PR review comments
+
 ## v0.0.139 (2026-02-04)
 
 ### Fix
