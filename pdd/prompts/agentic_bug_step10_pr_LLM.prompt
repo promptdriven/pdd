@@ -1,8 +1,19 @@
-% You are an expert software engineer investigating a bug report. Your task is to create a draft pull request with the failing test and link it to the issue.
+<pdd-reason>Creates draft PR with failing tests and PDD fix command for step 10 of agentic bug workflow.</pdd-reason>
+<pdd-interface>
+{
+  "type": "command",
+  "command": {
+    "name": "agentic_bug_step10",
+    "description": "Generate draft PR with failing tests and link to GitHub issue"
+  }
+}
+</pdd-interface>
+
+% You are an expert software engineer investigating a bug report. Your task is to create a draft pull request with the failing tests and link it to the issue.
 
 % Context
 
-You are working on step 9 of 9 (final step) in an agentic bug investigation workflow. Previous steps have generated and verified a failing test that detects the bug.
+You are working on step 10 of 11 (final step) in an agentic bug investigation workflow. Previous steps have generated and verified both unit tests and E2E tests that detect the bug.
 
 % Inputs
 
@@ -36,6 +47,10 @@ You are working on step 9 of 9 (final step) in an agentic bug investigation work
 {step5_output}
 </step5_output>
 
+<step5_5_output>
+{step5_5_output}
+</step5_5_output>
+
 <step6_output>
 {step6_output}
 </step6_output>
@@ -48,17 +63,34 @@ You are working on step 9 of 9 (final step) in an agentic bug investigation work
 {step8_output}
 </step8_output>
 
+<step9_output>
+{step9_output}
+</step9_output>
+
 % Worktree Information
 
 You are operating in an isolated git worktree at: {worktree_path}
 This worktree is already checked out to branch `fix/issue-{issue_number}`.
 Do NOT create a new branch - just stage, commit, and push.
 
+% Files to Stage
+
+**IMPORTANT: Only stage these specific files:**
+{files_to_stage}
+
 % Your Task
 
 1. **Prepare the commit**
    - You are already on branch `fix/issue-{issue_number}` in an isolated worktree
-   - Stage the generated test file(s)
+   - **CRITICAL: Stage ONLY the files listed in `files_to_stage` above**
+   - This includes test files from Steps 7 and 9, AND any prompt files fixed in Step 5.5
+   - Get the exact file paths from:
+     - Step 5.5's `PROMPT_FIXED:` output (prompt files)
+     - Step 7's `FILES_CREATED:` or `FILES_MODIFIED:` output (unit tests)
+     - Step 9's `E2E_FILES_CREATED:` or `E2E_FILES_MODIFIED:` output (E2E tests)
+   - Stage each file individually: `git add <exact_file_path>`
+   - **DO NOT use `git add .` or `git add -A`** - these will stage unrelated files and pollute the PR
+   - Verify only the intended files are staged: `git status --short`
    - Commit with a descriptive message referencing the issue
 
 2. **Create the draft PR**
@@ -70,36 +102,38 @@ Do NOT create a new branch - just stage, commit, and push.
    - Comment on the issue with PR link and next steps for the fix
 
 4. **Include PDD fix command**
-   - Extract code file path from Step 5's `**Location:**` field (strip the `:line_number` suffix)
-   - Use test file path from Step 7's `FILES_CREATED:` or test file section
-   - Search repo for matching prompt file: `find . -name "*.prompt" -type f`
-   - Derive module name from code file (e.g., `pdd/foo.py` → `foo`)
-   - Use verification program: `context/{{module_name}}_example.py`
-   - Include a ready-to-run `pdd fix {issue_url}` command in your GitHub comment
-   - If no prompt file or verification program exists, include a note that they must be created first
+   - Include the agentic `pdd fix` command using the GitHub issue URL
+   - The agentic fix command automatically detects prompt files, code files, and test files from the issue context
 
 % PR Creation Command
 
 ```bash
-gh pr create --draft --title "Add failing test for #{issue_number}" --body "$(cat <<'EOF'
+gh pr create --draft --title "Add failing tests for #{issue_number}" --body "$(cat <<'EOF'
 ## Summary
-Adds a failing test that detects the bug reported in #{issue_number}.
+Adds failing tests that detect the bug reported in #{issue_number}.
 
-## Test File
-`{{test_file_path}}`
+## Test Files
+- Unit test: `{{unit_test_file_path}}`
+- E2E test: `{{e2e_test_file_path}}` (if applicable)
+
+## Prompt Files
+- Prompt file fixed in Step 5.5: `{{prompt_file_path}}` (if applicable)
 
 ## What This PR Contains
 - Failing unit test that reproduces the reported bug
-- Test is verified to fail on current code and will pass once the bug is fixed
+- Failing E2E test that verifies the bug at integration level (if applicable)
+- Prompt file fixes from Step 5.5 (if applicable)
+- Tests are verified to fail on current code and will pass once the bug is fixed
 
 ## Root Cause
 {{root_cause_summary}}
 
 ## Next Steps
 1. [ ] Implement the fix at the identified location
-2. [ ] Verify the test passes
-3. [ ] Run full test suite
-4. [ ] Mark PR as ready for review
+2. [ ] Verify the unit test passes
+3. [ ] Verify the E2E test passes
+4. [ ] Run full test suite
+5. [ ] Mark PR as ready for review
 
 Fixes #{issue_number}
 
@@ -120,7 +154,7 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 Your comment should follow this format:
 
 ```markdown
-## Step 9: Draft PR Created
+## Step 10: Draft PR Created
 
 ### Pull Request
 **PR #{{pr_number}}:** [{{pr_title}}]({{pr_url}})
@@ -129,13 +163,15 @@ Your comment should follow this format:
 `fix/issue-{issue_number}`
 
 ### What's Included
-- Failing test at `{{test_file_path}}`
+- Failing unit test at `{{unit_test_file_path}}`
+- Failing E2E test at `{{e2e_test_file_path}}` (if applicable)
+- Prompt file fix from Step 5.5: `{{prompt_file_path}}` (if applicable)
 - Commits: {{commit_count}}
 
 ### Next Steps for Maintainers
-1. Review the failing test to understand the expected behavior
+1. Review the failing tests to understand the expected behavior
 2. Implement the fix at the identified location
-3. Verify the test passes with your fix
+3. Verify both unit and E2E tests pass with your fix
 4. Run full test suite to check for regressions
 5. Mark the PR as ready for review
 
@@ -147,6 +183,17 @@ To auto-fix this bug using PDD:
 pdd fix {issue_url}
 ```
 
+> **Tip:** Use `--protect-tests` if the tests are known to be correct, or `--max-cycles N` to limit fix attempts.
+
 ---
-*Investigation complete. A draft PR with a failing test has been created and linked to this issue.*
+*Investigation complete. A draft PR with failing tests has been created and linked to this issue.*
 ```
+
+% Important
+
+- Create a DRAFT PR (not ready for review) since it only contains the failing tests
+- The PR should clearly state that a fix is still needed
+- Use "Fixes #{issue_number}" to auto-link the PR to the issue
+- Do NOT create a new branch - you are already on the correct branch in the worktree
+- Include both unit test files (Step 7) and E2E test files (Step 9) if both exist
+- Always post your findings as a GitHub comment before completing

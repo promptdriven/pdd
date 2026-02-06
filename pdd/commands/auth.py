@@ -267,6 +267,14 @@ def status(verify: bool):
 @auth_group.command("logout")
 def logout_cmd():
     """Log out of PDD Cloud."""
+    # Check if user is actually logged in first
+    auth_status = get_auth_status()
+
+    if not auth_status.get("authenticated"):
+        console.print("[yellow]Not authenticated.[/yellow]")
+        return
+
+    # User is authenticated, proceed with logout
     success, error = service_logout()
     if success:
         console.print("Logged out of PDD Cloud.")
