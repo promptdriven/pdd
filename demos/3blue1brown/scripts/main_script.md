@@ -1,7 +1,7 @@
 # Prompt-Driven Development: A 3Blue1Brown Style Video Script
 
 **Working Title:** "Why You're Still Darning Socks"
-**Duration:** ~22-25 minutes
+**Duration:** ~20-22 minutes
 **Visual Style:** Manim animations, clean geometric representations, smooth transitions
 
 ---
@@ -420,42 +420,7 @@ But the economics changed. And when economics change, behavior that was rational
 
 ---
 
-## PART 6: THE SKILL SHIFT (20:15 - 22:15)
-
-**[VISUAL: A craftsman looking at an injection molding machine, uncertain. Then sitting at a CAD workstation, designing molds. Their expression shifts from uncertainty to engagement.]**
-
-**NARRATOR:**
-One more thing. This transition doesn't eliminate developers. It elevates them.
-
-**[VISUAL: Skill mapping animation:
-- "Writing code" morphs into "Writing tests"
-- "Debugging" morphs into "Specifying constraints"
-- "Refactoring" morphs into "Refining prompts"
-- "Reading legacy code" morphs into "Reading specifications"]**
-
-Mold designers need deeper understanding than woodcarvers. They need to understand materials, physics, tolerances, failure modes.
-
-**[VISUAL: A developer writing a test. Then refining a prompt. Reviewing generated code with a critical eye. Working at a higher level of abstraction.]**
-
-PDD developers work at the level of specification. You're not writing the defensive code—you're specifying what defensive behavior looks like. You're not implementing the error handling—you're defining the contract it must satisfy.
-
-**[VISUAL: Text appears: "From implementation craft → specification craft"]**
-
-The shift: from implementation craft to specification craft.
-
-**[VISUAL: Logos appear in sequence: Thoughtworks, GitHub (spec-kit), Martin Fowler's blog, InfoQ, The New Stack. Each with a headline about spec-driven development.]**
-
-And this isn't just one tool's philosophy. In 2025, Thoughtworks published on *Spec-Driven Development*. GitHub released an open-source CLI called spec-kit. Martin Fowler's site analyzed the emerging tooling. The core principle across all of them: *generated code is disposable. The specification is the asset.*
-
-The industry is converging on this independently. Different names, same insight.
-
-**[VISUAL: Two developers side by side. One is deep in a complex codebase, tracing through patches. The other is looking at a clean prompt and a comprehensive test suite. Both are working hard, but the nature of the work is different.]**
-
-The code is still there. It's still complex. But you don't live in it anymore. You live in the specification. The code is generated, verified, and—if needed—regenerated.
-
----
-
-## CLOSING (22:15 - 23:45)
+## CLOSING (20:15 - 21:30)
 
 **[VISUAL: Pull back to show a complete system. Multiple modules, each with a prompt, tests, and generated code. The prompts and tests glow steadily. The code is present but not highlighted—it's output.]**
 
@@ -488,7 +453,7 @@ The code is just plastic.
 
 The mold is what matters.
 
-**[VISUAL: Fade to black. Title card: "Prompt-Driven Development" with URL. Below, subtle: `uv tool install pdd-cli`]**
+**[VISUAL: Fade to black. Title card: "Prompt-Driven Development" with URL. Below, subtle: `uv tool install pdd-cli`.]**
 
 ---
 
@@ -506,8 +471,6 @@ The mold is what matters.
 ### Color Palette Additions
 - **Chip Design/Verilog:** Teal (#2AA198) for Verilog code, darker teal for gate-level netlists
 - **Research Citations:** Muted white text, smaller font, bottom of frame—visible but not distracting
-- **SDD Logos:** Desaturated versions of Thoughtworks, GitHub, etc.—recognition without endorsement
-
 ### Key Visual Motifs
 
 1. **The Split Screen** - Sock darning / code patching parallel. Use at open, at economic crossing point, at close.
@@ -545,8 +508,8 @@ Commands appear as subtle terminal snippets in the corner or background. They sh
 | 13:55 | Generate variations | `pdd generate` (twice) |
 | 14:45 | Grounding feedback | Arrow to cloud after `pdd fix` |
 | 17:00 | Many tests | `pdd test parser` (47 passing) |
-| 22:15 | Final workflow | `pdd bug → pdd fix → ✓` |
-| 23:30 | End card | `uv tool install pdd-cli` |
+| 20:15 | Final workflow | `pdd bug → pdd fix → ✓` |
+| 21:15 | End card | `uv tool install pdd-cli` |
 
 ### Animation Principles
 - Smooth easing on all transitions (3B1B signature style)
