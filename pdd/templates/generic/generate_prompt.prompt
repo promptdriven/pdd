@@ -124,13 +124,18 @@ IMPORTANT: Your reply MUST begin with `<prompt>` on the very first line and end 
 5) A clear "Deliverable" section describing the expected code artifacts and entry points.
 
 % Dependencies format and conventions:
-- Represent each dependency using an XML tag with the dependency name, and put the file path inside an <include> tag, e.g.:
-  <orders_service>
-    <include>context/orders_service_example.${DEP_EXAMPLE_EXT}</include>
-  </orders_service>
-- Prefer real example files available in the provided context (use <include-many> when listing multiple). If examples are not provided, assume dependency examples live under context/ using the pattern context/[dependency_name]_example.${DEP_EXAMPLE_EXT}.
-- Include all necessary dependencies for the module/component (based on the provided context and references).
-- The ARCHITECTURE_FILE lists `dependencies` referencing other prompt filenames. Convert each dependency prompt filename into a sensible dependency name (strip language suffix and `_prompt`), and map to context files with the `${DEP_EXAMPLE_EXT}` extension if present; otherwise, list the prompt filename explicitly in a "Prompt Dependencies" subsection.
+- CRITICAL: Do NOT fabricate file paths or assume files exist. The context/ directory does NOT contain example files unless they are explicitly shown in the context sections above.
+- You may ONLY use <include> tags when ALL of these conditions are met:
+  1. The file content was explicitly provided in one of the context sections above (<prd>, <architecture>, <existing_backend_prompts>, etc.)
+  2. You can see the actual file path in that context section
+  3. The file is NOT just referenced by name in ARCHITECTURE_FILE dependencies
+- For dependencies listed in ARCHITECTURE_FILE: These are OTHER PROMPTS that will generate code, NOT example files. Do NOT create <include> tags for them. Instead, list them in a "Prompt Dependencies" subsection with a description of the expected interface.
+- When no example file is available (which is the common case), use this format:
+  <dependency_name>
+    <!-- Expected interface: describe the functions/classes/types this dependency should provide -->
+  </dependency_name>
+- WRONG (do not do this): <include>context/some_module_example.py</include> when no such file was provided in the context
+- RIGHT: Describe the interface inline or list in Prompt Dependencies section
 
 % Architecture awareness (ARCHITECTURE_FILE is required):
 - Align the "Requirements" and "Instructions" with the selected item’s `interface.type` (e.g., page, component, module, api, graphql, cli, job, message, config).

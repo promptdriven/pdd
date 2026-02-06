@@ -22,6 +22,7 @@ from .code_generator import code_generator as local_code_generator_func
 from .incremental_code_generator import incremental_code_generator as incremental_code_generator_func
 from .core.cloud import CloudConfig, get_cloud_timeout
 from .python_env_detector import detect_host_python_executable
+from .validate_prompt_includes import validate_prompt_includes
 from .architecture_sync import (
     get_architecture_entry_for_prompt,
     has_pdd_tags,
@@ -1107,9 +1108,10 @@ def code_generator_main(
                 p_output = pathlib.Path(output_path)
                 p_output.parent.mkdir(parents=True, exist_ok=True)
 
-                # Inject architecture metadata tags for .prompt files (reverse sync)
+                # Process .prompt files: inject architecture tags and validate includes
                 final_content = generated_code_content
                 if p_output.suffix == '.prompt':
+                    # Step 1: Inject architecture metadata tags (reverse sync)
                     try:
                         # Check if this prompt has an architecture entry
                         arch_entry = get_architecture_entry_for_prompt(p_output.name)
@@ -1117,17 +1119,39 @@ def code_generator_main(
                         # Only inject tags if:
                         # 1. Architecture entry exists
                         # 2. Content doesn't already have PDD tags (preserve manual edits)
-                        if arch_entry and not has_pdd_tags(generated_code_content):
+                        if arch_entry and not has_pdd_tags(final_content):
                             tags = generate_tags_from_architecture(arch_entry)
                             if tags:
                                 # Prepend tags to the generated content
-                                final_content = tags + '\n\n' + generated_code_content
+                                final_content = tags + '\n\n' + final_content
                                 if verbose:
                                     console.print("[info]Injected architecture metadata tags from architecture.json[/info]")
                     except Exception as e:
                         # Don't fail generation if tag injection fails
                         if verbose:
                             console.print(f"[yellow]Warning: Could not inject architecture tags: {e}[/yellow]")
+
+                    # Step 2: Validate <include> tags (Issue #225)
+                    # Ensure all <include> tags reference existing files
+                    try:
+                        validated_content, invalid_includes = validate_prompt_includes(
+                            final_content,
+                            base_dir=str(p_output.parent),
+                            remove_invalid=False  # Replace with comments instead of removing
+                        )
+                        if invalid_includes:
+                            if verbose or not quiet:
+                                console.print(
+                                    f"[yellow]Warning: Found {len(invalid_includes)} invalid <include> tag(s) "
+                                    f"referencing non-existent files. Replaced with comments.[/yellow]"
+                                )
+                                for inv_path in invalid_includes:
+                                    console.print(f"  [dim]- {inv_path}[/dim]")
+                            final_content = validated_content
+                    except Exception as e:
+                        # Don't fail generation if validation fails
+                        if verbose:
+                            console.print(f"[yellow]Warning: Could not validate include tags: {e}[/yellow]")
 
                 p_output.write_text(final_content, encoding="utf-8")
                 if verbose or not quiet:

@@ -3152,6 +3152,464 @@ def test_prompt_change_detected_even_after_crash_workflow(pdd_test_environment):
         f"Reason should mention prompt change: {decision.reason}"
 
 
+# =============================================================================
+# Issue #225: Tests for pdd sync respecting filepath from architecture.json
+# =============================================================================
+#
+# Problem:
+# When architecture.json specifies a filepath like "src/backend/models/findings.py",
+# pdd sync should use that path. Instead, it always uses .pddrc paths and generates
+# files at "src/findings.py" (ignoring the full path from architecture.json).
+#
+# Root cause:
+# pdd sync did not read architecture.json at all. The filepath field was completely
+# ignored during sync operations.
+# =============================================================================
+
+
+class TestSyncArchitecturePaths:
+    """Tests for sync command respecting architecture.json filepath (Issue #225)."""
+
+    @pytest.fixture
+    def temp_project(self, tmp_path):
+        """Create a temporary project with architecture.json and prompts."""
+        architecture = {
+            "modules": [
+                {
+                    "filename": "models_findings_Python.prompt",
+                    "filepath": "src/backend/models/findings.py",
+                    "description": "Findings data model",
+                    "dependencies": [],
+                },
+                {
+                    "filename": "api_orders_Python.prompt",
+                    "filepath": "src/api/orders.py",
+                    "description": "Orders API endpoint",
+                    "dependencies": ["models_findings_Python.prompt"],
+                },
+                {
+                    "filename": "cli_main_Python.prompt",
+                    "filepath": "src/cli/main.py",
+                    "description": "CLI entry point",
+                    "dependencies": [],
+                },
+            ]
+        }
+
+        arch_file = tmp_path / "architecture.json"
+        arch_file.write_text(json.dumps(architecture, indent=2))
+
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+
+        for module in architecture["modules"]:
+            prompt_file = prompts_dir / module["filename"]
+            prompt_file.write_text(f"% Prompt for {module['description']}\n")
+
+        pddrc = tmp_path / ".pddrc"
+        pddrc.write_text("""
+version: "1.0"
+
+contexts:
+  default:
+    defaults:
+      generate_output_path: "src/"
+      test_output_path: "tests/"
+      example_output_path: "examples/"
+""")
+
+        (tmp_path / "src").mkdir()
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "examples").mkdir()
+
+        return tmp_path
+
+    def test_get_filepath_from_architecture_json(self, temp_project):
+        """Test that filepath can be extracted from architecture.json."""
+        architecture_file = temp_project / "architecture.json"
+        architecture = json.loads(architecture_file.read_text())
+
+        def get_filepath_from_architecture(
+            architecture_json_path: Path,
+            prompt_filename: str
+        ) -> str | None:
+            try:
+                with open(architecture_json_path) as f:
+                    arch = json.load(f)
+                modules = arch.get("modules", arch) if isinstance(arch, dict) else arch
+                for module in modules:
+                    if module.get("filename") == prompt_filename:
+                        return module.get("filepath")
+                return None
+            except (FileNotFoundError, json.JSONDecodeError):
+                return None
+
+        filepath = get_filepath_from_architecture(
+            architecture_file,
+            "models_findings_Python.prompt"
+        )
+
+        assert filepath == "src/backend/models/findings.py", (
+            "Should extract filepath from architecture.json"
+        )
+
+    def test_sync_should_use_architecture_filepath(self, temp_project):
+        """Test that sync uses filepath from architecture.json (Issue #225)."""
+        architecture_file = temp_project / "architecture.json"
+        architecture = json.loads(architecture_file.read_text())
+
+        modules = architecture.get("modules", [])
+        for module in modules:
+            assert "filepath" in module, (
+                f"Module {module.get('filename')} should have filepath field"
+            )
+            assert "filename" in module, (
+                f"Module should have filename field"
+            )
+
+    def test_sync_path_resolution_priority(self, temp_project):
+        """Test the expected priority order for path resolution."""
+        priority_order = [
+            "user_specified_output",
+            "architecture_json_filepath",
+            "pddrc_context_config",
+            "default_naming",
+        ]
+
+        assert "architecture_json_filepath" in priority_order, (
+            "architecture.json filepath should be in the priority order"
+        )
+
+    def test_architecture_json_structure_parsing(self, temp_project):
+        """Test that architecture.json can be parsed correctly."""
+        architecture_file = temp_project / "architecture.json"
+
+        # Test nested structure
+        nested = {"modules": [{"filename": "a.prompt", "filepath": "src/a.py"}]}
+        architecture_file.write_text(json.dumps(nested))
+
+        with open(architecture_file) as f:
+            arch = json.load(f)
+
+        modules = arch.get("modules", arch) if isinstance(arch, dict) else arch
+        assert len(modules) == 1
+        assert modules[0]["filepath"] == "src/a.py"
+
+        # Test flat structure
+        flat = [{"filename": "b.prompt", "filepath": "src/b.py"}]
+        architecture_file.write_text(json.dumps(flat))
+
+        with open(architecture_file) as f:
+            arch = json.load(f)
+
+        modules = arch.get("modules", arch) if isinstance(arch, dict) else arch
+        assert len(modules) == 1
+        assert modules[0]["filepath"] == "src/b.py"
+
+
+class TestSyncArchitecturePathIntegration:
+    """Integration tests for sync with architecture.json paths (Issue #225)."""
+
+    @pytest.fixture
+    def mock_project(self, tmp_path):
+        """Create a mock project structure matching the issue example."""
+        (tmp_path / "prompts").mkdir()
+        (tmp_path / "src" / "backend" / "models").mkdir(parents=True)
+        (tmp_path / "src" / "backend" / "rules").mkdir(parents=True)
+        (tmp_path / "examples").mkdir()
+        (tmp_path / "tests").mkdir()
+
+        architecture = {
+            "modules": [
+                {
+                    "filename": "models_findings_Python.prompt",
+                    "filepath": "src/backend/models/findings.py",
+                    "description": "Findings model",
+                    "dependencies": [],
+                },
+                {
+                    "filename": "rules_engine_Python.prompt",
+                    "filepath": "src/backend/rules/engine.py",
+                    "description": "Rules engine",
+                    "dependencies": ["models_findings_Python.prompt"],
+                },
+            ]
+        }
+
+        (tmp_path / "architecture.json").write_text(json.dumps(architecture, indent=2))
+
+        pddrc_content = """
+version: "1.0"
+
+contexts:
+  default:
+    defaults:
+      generate_output_path: "src/"
+      test_output_path: "tests/"
+      example_output_path: "examples/"
+"""
+        (tmp_path / ".pddrc").write_text(pddrc_content)
+
+        for module in architecture["modules"]:
+            prompt_path = tmp_path / "prompts" / module["filename"]
+            prompt_path.write_text(f"% Generate {module['description']}\n")
+
+        return tmp_path
+
+    def test_get_pdd_file_paths_should_check_architecture(self, mock_project):
+        """Test that get_pdd_file_paths checks architecture.json for filepath."""
+        architecture_file = mock_project / "architecture.json"
+        assert architecture_file.exists(), "architecture.json should exist"
+
+        with open(architecture_file) as f:
+            arch = json.load(f)
+
+        for module in arch["modules"]:
+            assert "filepath" in module, f"Module should have filepath"
+            assert "/" in module["filepath"], (
+                f"filepath '{module['filepath']}' should contain subdirectories"
+            )
+
+    def test_issue_225_reproduction(self, mock_project):
+        """Reproduce the exact issue from GitHub Issue #225."""
+        architecture_file = mock_project / "architecture.json"
+        pddrc_file = mock_project / ".pddrc"
+
+        with open(architecture_file) as f:
+            arch = json.load(f)
+
+        findings_module = next(
+            m for m in arch["modules"]
+            if "findings" in m["filename"].lower()
+        )
+
+        assert findings_module["filepath"] == "src/backend/models/findings.py", (
+            "architecture.json should specify the full path"
+        )
+
+        pddrc_content = pddrc_file.read_text()
+        assert 'generate_output_path: "src/"' in pddrc_content, (
+            ".pddrc should have simple src/ path"
+        )
+
+
+class TestArchitectureJsonLookup:
+    """Tests for architecture.json lookup functionality (Issue #225)."""
+
+    def test_find_architecture_json_in_project_root(self, tmp_path):
+        """Test that architecture.json can be found in project root."""
+        from pdd.sync_determine_operation import _find_architecture_json
+
+        subdir = tmp_path / "prompts" / "backend"
+        subdir.mkdir(parents=True)
+
+        arch_file = tmp_path / "architecture.json"
+        arch_file.write_text('{"modules": []}')
+
+        found = _find_architecture_json(subdir)
+        assert found == arch_file, (
+            "Should find architecture.json in parent directory"
+        )
+
+    def test_match_prompt_to_architecture_module(self, tmp_path):
+        """Test matching a prompt filename to its architecture.json module."""
+        from pdd.sync_determine_operation import _get_filepath_from_architecture
+
+        architecture = {
+            "modules": [
+                {
+                    "filename": "models_findings_Python.prompt",
+                    "filepath": "src/backend/models/findings.py",
+                },
+                {
+                    "filename": "api_orders_Python.prompt",
+                    "filepath": "src/api/orders.py",
+                },
+            ]
+        }
+
+        arch_file = tmp_path / "architecture.json"
+        arch_file.write_text(json.dumps(architecture))
+
+        # Test finding module by basename and language
+        filepath = _get_filepath_from_architecture(
+            arch_file, "models_findings_Python.prompt",
+            basename="models_findings", language="python"
+        )
+        assert filepath is not None, "Should find module by basename and language"
+        assert filepath == "src/backend/models/findings.py"
+
+        # Test handling case variations
+        filepath = _get_filepath_from_architecture(
+            arch_file, "api_orders_Python.prompt",
+            basename="api_orders", language="Python"
+        )
+        assert filepath is not None, "Should handle case variations"
+        assert filepath == "src/api/orders.py"
+
+
+class TestGetPddFilePathsWithArchitecture:
+    """Tests for get_pdd_file_paths with architecture.json (Issue #225)."""
+
+    @pytest.fixture
+    def project_with_architecture(self, tmp_path):
+        """Create a project with architecture.json specifying complex paths."""
+        architecture = {
+            "modules": [
+                {
+                    "filename": "models_findings_Python.prompt",
+                    "filepath": "src/backend/models/findings.py",
+                    "description": "Findings data model",
+                    "dependencies": [],
+                },
+            ]
+        }
+
+        arch_file = tmp_path / "architecture.json"
+        arch_file.write_text(json.dumps(architecture, indent=2))
+
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        prompt_file = prompts_dir / "models_findings_Python.prompt"
+        prompt_file.write_text("% Generate findings model\n")
+
+        pddrc = tmp_path / ".pddrc"
+        pddrc.write_text("""
+version: "1.0"
+
+contexts:
+  default:
+    defaults:
+      generate_output_path: "src/"
+      test_output_path: "tests/"
+      example_output_path: "examples/"
+""")
+
+        (tmp_path / "src" / "backend" / "models").mkdir(parents=True)
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "examples").mkdir()
+
+        return tmp_path
+
+    def test_get_pdd_file_paths_uses_architecture_filepath(self, project_with_architecture):
+        """
+        Test that get_pdd_file_paths uses architecture.json filepath (Issue #225).
+
+        Expected: absolute path ending with "src/backend/models/findings.py"
+        Note: get_pdd_file_paths returns absolute paths for consistency.
+        """
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(project_with_architecture)
+
+            paths = get_pdd_file_paths(
+                basename="models_findings",
+                language="Python",
+                prompts_dir="prompts"
+            )
+
+            code_path = paths.get("code")
+            expected_path = project_with_architecture / "src/backend/models/findings.py"
+
+            assert code_path == expected_path, (
+                f"get_pdd_file_paths should use filepath from architecture.json.\n"
+                f"Expected: {expected_path}\n"
+                f"Actual:   {code_path}"
+            )
+        finally:
+            os.chdir(original_cwd)
+
+    def test_get_pdd_file_paths_resolves_relative_to_architecture_json(self, tmp_path):
+        """Test that filepath is resolved relative to architecture.json location."""
+        architecture = {
+            "modules": [
+                {
+                    "filename": "models_findings_Python.prompt",
+                    "filepath": "src/backend/models/findings.py",
+                    "description": "Findings model",
+                },
+            ]
+        }
+
+        arch_file = tmp_path / "architecture.json"
+        arch_file.write_text(json.dumps(architecture, indent=2))
+
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        prompt_file = prompts_dir / "models_findings_Python.prompt"
+        prompt_file.write_text("% Generate findings model\n")
+
+        subdir = tmp_path / "subdir"
+        subdir.mkdir()
+
+        pddrc = tmp_path / ".pddrc"
+        pddrc.write_text("""
+version: "1.0"
+contexts:
+  default:
+    defaults:
+      generate_output_path: "src/"
+""")
+
+        (tmp_path / "src" / "backend" / "models").mkdir(parents=True)
+
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(subdir)
+
+            paths = get_pdd_file_paths(
+                basename="models_findings",
+                language="Python",
+                prompts_dir=str(prompts_dir)
+            )
+
+            code_path = paths.get("code")
+            expected_path = tmp_path / "src/backend/models/findings.py"
+
+            assert code_path == expected_path, (
+                f"filepath should be resolved relative to architecture.json location.\n"
+                f"Expected: {expected_path}\n"
+                f"Actual:   {code_path}"
+            )
+        finally:
+            os.chdir(original_cwd)
+
+    def test_get_pdd_file_paths_falls_back_without_architecture(self, tmp_path):
+        """Test that get_pdd_file_paths works without architecture.json."""
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        prompt_file = prompts_dir / "mymodule_Python.prompt"
+        prompt_file.write_text("% Generate mymodule\n")
+
+        pddrc = tmp_path / ".pddrc"
+        pddrc.write_text("""
+version: "1.0"
+
+contexts:
+  default:
+    defaults:
+      generate_output_path: "src/"
+""")
+
+        (tmp_path / "src").mkdir()
+
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+
+            paths = get_pdd_file_paths(
+                basename="mymodule",
+                language="Python",
+                prompts_dir="prompts"
+            )
+
+            code_path = paths.get("code")
+
+            assert "mymodule.py" in str(code_path), (
+                f"Without architecture.json, should use .pddrc defaults. Got: {code_path}"
+            )
+        finally:
+            os.chdir(original_cwd)
 # --- GitHub Issue #349: Infinite Loop Bug Tests ---
 
 class TestInfiniteLoopBugIssue349:
