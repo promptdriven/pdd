@@ -493,3 +493,134 @@ class TestGetCachedJWTExpiresAtNull:
 
         finally:
             jwt_module.JWT_CACHE_FILE = original_cache_file
+
+
+# --- Issue #466: OAuth scope requests access to ALL repos instead of selective ---
+
+class TestOAuthScopeRepositoryAccess:
+    """
+    Tests for Issue #466: PDD CLI requests access to ALL repositories instead of allowing
+    selective repository access.
+
+    Bug: DeviceFlow class hardcodes OAuth scope "repo,user" which grants access to all
+    repositories. This is a fundamental limitation of GitHub OAuth Apps - they cannot
+    provide repository-level granularity.
+
+    Expected fix: Migrate from OAuth App to GitHub App authentication, which supports
+    installation on specific repositories.
+
+    Issue: https://github.com/promptdriven/pdd/issues/466
+    """
+
+    def test_device_flow_requests_all_repo_access(self):
+        """
+        REPRODUCES BUG: DeviceFlow uses OAuth scope 'repo' which grants ALL repository access.
+
+        Current behavior: OAuth scope is hardcoded to "repo,user" at pdd/get_jwt_token.py:251
+        The 'repo' scope grants access to ALL repositories - there's no way to restrict this
+        with GitHub OAuth Apps.
+
+        Expected behavior after fix: Should use GitHub App authentication instead, which allows
+        users to select specific repositories during installation.
+
+        User complaint from hackathon feedback:
+        - "PDD cloud is asking for access to all their repo and some of the developers
+           are not happy about that"
+        - Users should have the option to select specific repos
+
+        This test FAILS after migrating to GitHub Apps (scope should not be "repo,user").
+        """
+        from pdd.get_jwt_token import DeviceFlow
+
+        # Initialize DeviceFlow with a test client ID
+        device_flow = DeviceFlow(client_id="test_client_id")
+
+        # BUG: The scope is hardcoded to "repo,user" which grants ALL repository access
+        # After migrating to GitHub Apps, this scope should NOT be used
+        assert device_flow.scope == "repo,user", (
+            "DeviceFlow is using OAuth scope 'repo,user' which grants access to ALL repositories. "
+            "This is the root cause of Issue #466. Users want selective repository access. "
+            "OAuth Apps cannot provide this - must migrate to GitHub App authentication. "
+            "After migration, this test should fail because GitHub Apps don't use OAuth scopes."
+        )
+
+    @pytest.mark.asyncio
+    @patch("pdd.get_jwt_token.requests.post")
+    async def test_device_flow_sends_all_repo_scope_in_request(self, mock_post):
+        """
+        REPRODUCES BUG: Verify that the OAuth scope requesting all-repo access is actually
+        sent to GitHub in the device code request.
+
+        Current behavior: The scope "repo,user" is sent to GitHub's device flow endpoint,
+        which will prompt users to grant access to ALL their repositories.
+
+        Expected behavior after fix: Should use GitHub App installation flow instead of
+        OAuth device flow, allowing repository selection.
+
+        This test documents the actual API call being made and will fail after migration.
+        """
+        from pdd.get_jwt_token import DeviceFlow
+
+        # Mock GitHub's response to device code request
+        mock_post.return_value = MagicMock(
+            status_code=200,
+            json=MagicMock(return_value={
+                "device_code": "test_device_code",
+                "user_code": "TEST-CODE",
+                "verification_uri": "https://github.com/login/device",
+                "interval": 5,
+                "expires_in": 900
+            })
+        )
+
+        device_flow = DeviceFlow(client_id="test_client_id")
+        await device_flow.request_device_code()
+
+        # Verify the request was made to GitHub
+        mock_post.assert_called_once()
+
+        # Extract the actual scope sent to GitHub
+        call_kwargs = mock_post.call_args.kwargs
+        call_data = call_kwargs.get('data', {})
+        actual_scope = call_data.get('scope')
+
+        # BUG: This is sending "repo,user" which means ALL repositories
+        # After fix (GitHub App migration), this test should fail because
+        # GitHub Apps don't use OAuth device flow with scopes
+        assert actual_scope == "repo,user", (
+            f"OAuth device flow is sending scope '{actual_scope}' which requests ALL repository access. "
+            "This is Issue #466: users cannot select specific repositories with OAuth Apps. "
+            "The fix requires migrating to GitHub App authentication. "
+            "After migration, device flow should not be used at all."
+        )
+
+        # Verify the 'repo' scope is present (grants all-repo access)
+        assert "repo" in actual_scope, (
+            "The 'repo' OAuth scope grants access to ALL repositories the user can access. "
+            "There is no OAuth scope that provides selective repository access. "
+            "This is a fundamental limitation of GitHub OAuth Apps."
+        )
+
+    @pytest.mark.skip(reason="Pending migration from OAuth App to GitHub App (Issue #466)")
+    @pytest.mark.asyncio
+    async def test_github_app_supports_selective_repository_access(self):
+        """
+        FORWARD-LOOKING TEST: After migrating to GitHub Apps, verify that authentication
+        supports selective repository access.
+
+        This test is currently skipped because GitHub App authentication is not yet implemented.
+
+        After migration:
+        1. Remove the @pytest.mark.skip decorator
+        2. Implement GitHub App installation flow
+        3. Mock the installation API to verify repository selection is supported
+        4. Ensure users can choose specific repositories during authorization
+
+        Expected: GitHub App installation allows repository-level permissions, not all-or-nothing.
+        """
+        # TODO: Implement after GitHub App migration
+        # Should verify that:
+        # - Installation flow supports repository selection
+        # - Generated tokens are scoped to selected repositories only
+        # - No "repo,user" OAuth scope is used
+        pass
