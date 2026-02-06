@@ -1,0 +1,12 @@
+Script starting...
+Basic imports done
+Numpy imported
+Torch imported
+Soundfile imported
+
+********
+Warning: flash-attn is not installed. Will only run the manual PyTorch version. Please install flash-attn for faster inference.
+********
+ 
+Qwen3TTSModel imported
+Parsing TTS script...
