@@ -264,12 +264,7 @@ def cleanup_sessions(cleanup_all: bool, cleanup_stale: bool, force: bool) -> Non
         from pathlib import Path
         manager = RemoteSessionManager(jwt_token, project_path=Path.cwd())
         manager.session_id = session_id
-        try:
-            await manager.deregister()
-            return True
-        except Exception as e:
-            console.print(f"[red]Failed to cleanup {session_id[:8]}: {e}[/red]")
-            return False
+        return await manager.deregister()
 
     with console.status("[bold green]Cleaning up sessions..."):
         for session in sessions_to_cleanup:

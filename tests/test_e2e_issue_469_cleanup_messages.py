@@ -81,11 +81,9 @@ class TestIssue469CleanupMessagesE2E:
             mock_cloud.get_jwt_token.return_value = "e2e-test-jwt-token"
             mock_manager_class.list_sessions = AsyncMock(return_value=mock_sessions)
 
-            # All deregister calls fail (simulating network errors)
+            # All deregister calls fail (returning False)
             mock_instance = MagicMock()
-            mock_instance.deregister = AsyncMock(
-                side_effect=Exception("E2E simulated network timeout")
-            )
+            mock_instance.deregister = AsyncMock(return_value=False)
             mock_manager_class.return_value = mock_instance
 
             # Import the full CLI entry point (not just the sessions group)
@@ -144,8 +142,7 @@ class TestIssue469CleanupMessagesE2E:
         async def mock_deregister():
             nonlocal call_count
             call_count += 1
-            if call_count == 2:
-                raise Exception("E2E simulated auth failure")
+            return call_count != 2
 
         with patch("pdd.commands.sessions.CloudConfig") as mock_cloud, \
              patch("pdd.commands.sessions.RemoteSessionManager") as mock_manager_class:
@@ -219,7 +216,7 @@ class TestIssue469CleanupMessagesE2E:
                 mc.get_jwt_token.return_value = "fake-jwt"
                 mm.list_sessions = AsyncMock(return_value=[FakeSession()])
                 inst = MagicMock()
-                inst.deregister = AsyncMock(side_effect=Exception("subprocess simulated failure"))
+                inst.deregister = AsyncMock(return_value=False)
                 mm.return_value = inst
 
                 from pdd.cli import cli
