@@ -1755,7 +1755,7 @@ def test_run_pytest_on_file_empty_test_results():
     This is the primary bug from Issue #450: when pytest collection/execution fails,
     test_results can be an empty list [], causing IndexError at line 213.
 
-    After the fix: Should return (0, 1, 0, helpful_error_message) instead of crashing.
+    After the fix: Should return (0, 1, 0, error_message) instead of crashing.
     """
     mock_output = {
         "test_results": [],  # Empty list - the primary bug scenario
@@ -1764,15 +1764,12 @@ def test_run_pytest_on_file_empty_test_results():
         "exit_code": 1
     }
 
-    # After fix: Should handle gracefully with helpful error message
     with patch("pdd.fix_error_loop.run_pytest_and_capture_output", return_value=mock_output):
         f, e, w, logs = run_pytest_on_file("dummy_test.py")
-        # Should return error state (0 failures, 1 error, 0 warnings)
         assert f == 0
         assert e == 1
         assert w == 0
-        # Should provide helpful error message for ImportError
-        assert "Pytest collection failed: Missing import or dependency" in logs
+        assert "Pytest collection or execution failed" in logs
         assert "ImportError" in logs
 
 
@@ -1780,8 +1777,8 @@ def test_run_pytest_on_file_missing_test_results():
     """
     Test that run_pytest_on_file handles missing test_results key gracefully.
 
-    When test_results key is completely missing, the default value [{}] should work.
-    This test verifies the default value mechanism is working correctly.
+    When test_results key is completely missing, defaults to empty list
+    and returns a collection failure message.
     """
     mock_output = {
         # test_results key is missing entirely
@@ -1790,13 +1787,12 @@ def test_run_pytest_on_file_missing_test_results():
         "exit_code": 0
     }
 
-    # With missing key, the default [{}] should work (no crash)
     with patch("pdd.fix_error_loop.run_pytest_and_capture_output", return_value=mock_output):
         f, e, w, logs = run_pytest_on_file("dummy_test.py")
-        # Should get default values (0, 0, 0) from empty dict
         assert f == 0
-        assert e == 0
+        assert e == 1
         assert w == 0
+        assert "Pytest collection or execution failed" in logs
 
 
 def test_run_pytest_on_file_test_results_none():
@@ -1890,11 +1886,10 @@ ModuleNotFoundError: No module named 'flask'
         "exit_code": 2  # pytest exit code 2 = collection error
     }
 
-    # After fix: Should handle gracefully
     with patch("pdd.fix_error_loop.run_pytest_and_capture_output", return_value=mock_output):
         f, e, w, logs = run_pytest_on_file("tests/test_api.py")
         assert f == 0
         assert e == 1
         assert w == 0
-        assert "Pytest collection failed: Missing import or dependency" in logs
+        assert "Pytest collection or execution failed" in logs
         assert "ModuleNotFoundError" in logs

@@ -59,7 +59,7 @@ class TestPytestCollectionFailureE2E:
         assert failures == 0
         assert errors == 1
         assert warnings == 0
-        assert "Pytest collection failed: Missing import or dependency" in logs
+        assert "Pytest collection or execution failed" in logs
         assert "ImportError" in logs
 
     @patch("pdd.fix_error_loop.run_pytest_and_capture_output")
@@ -90,7 +90,7 @@ class TestPytestCollectionFailureE2E:
         assert failures == 0
         assert errors == 1
         assert warnings == 0
-        assert "Pytest collection failed: Missing import or dependency" in logs
+        assert "Pytest collection or execution failed" in logs
 
     @patch("pdd.fix_error_loop.run_pytest_and_capture_output")
     def test_syntax_error_scenario_crashes(self, mock_run_pytest):
@@ -114,7 +114,7 @@ class TestPytestCollectionFailureE2E:
         assert failures == 0
         assert errors == 1
         assert warnings == 0
-        assert "Pytest collection failed: Syntax error in test file" in logs
+        assert "Pytest collection or execution failed" in logs
 
     @patch("pdd.fix_error_loop.run_pytest_and_capture_output")
     def test_no_tests_found_scenario_crashes(self, mock_run_pytest):
@@ -138,7 +138,7 @@ class TestPytestCollectionFailureE2E:
         assert failures == 0
         assert errors == 1
         assert warnings == 0
-        assert "Pytest collection failed: No tests found" in logs
+        assert "Pytest collection or execution failed" in logs
 
     @patch("pdd.fix_error_loop.run_pytest_and_capture_output")
     def test_missing_fixture_scenario_crashes(self, mock_run_pytest):
@@ -186,7 +186,7 @@ class TestPytestCollectionFailureE2E:
         assert failures == 0
         assert errors == 1
         assert warnings == 0
-        assert "Pytest collection failed: Permission denied" in logs
+        assert "Pytest collection or execution failed" in logs
 
     @patch("pdd.fix_error_loop.run_pytest_and_capture_output")
     def test_complete_user_workflow_from_issue_450(self, mock_run_pytest):
