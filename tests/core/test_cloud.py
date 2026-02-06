@@ -560,7 +560,15 @@ def test_async_context_auth_error_references_correct_command(clean_env):
     }):
         # Simulate being in a running event loop and no cached token
         with patch("pdd.core.cloud.asyncio.get_running_loop", return_value=MagicMock()), \
-             patch("pdd.core.cloud._get_cached_jwt", return_value=None):
+             patch("pdd.core.cloud._get_cached_jwt", return_value=None), \
+             patch("pdd.core.cloud.console") as mock_console:
             token = CloudConfig.get_jwt_token()
             # get_jwt_token catches AuthError and returns None
             assert token is None
+
+            # Verify the error message references 'pdd auth login'
+            printed = " ".join(str(call[0][0]) for call in mock_console.print.call_args_list if call[0])
+            assert "pdd auth login" in printed, (
+                "AuthError in async context should reference 'pdd auth login', "
+                f"not 'pdd login'. Got: {printed}"
+            )
