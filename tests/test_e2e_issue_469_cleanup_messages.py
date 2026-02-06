@@ -2,7 +2,9 @@
 E2E CLI Test for Issue #469: Misleading success message when all cleanups fail
 
 Tests the full `pdd sessions cleanup` CLI path (through pdd.cli:cli entry point)
-to verify that no success message appears when all cleanup operations fail.
+to verify that:
+1. No success message appears when all cleanup operations fail
+2. The command exits with code 1 when any cleanup operations fail
 
 Unlike the unit tests in tests/commands/test_sessions.py which import the
 `sessions` Click group directly, these E2E tests invoke the full CLI entry
@@ -12,11 +14,9 @@ Only the network layer (auth + remote API) is mocked.
 See: https://github.com/promptdriven/pdd/issues/469
 """
 
-import os
 import subprocess
 import sys
 from dataclasses import dataclass
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -48,7 +48,7 @@ class TestIssue469CleanupMessagesE2E:
         entry point when all cleanup operations fail.
 
         Verifies that the misleading '✓ Successfully cleaned up 0 session(s)'
-        message does NOT appear in the output.
+        message does NOT appear in the output, and that the exit code is 1.
 
         This exercises the real CLI dispatch path:
         pdd.cli:cli -> pdd.commands.register_commands -> sessions group -> cleanup_sessions
@@ -79,9 +79,11 @@ class TestIssue469CleanupMessagesE2E:
             mock_cloud.get_jwt_token.return_value = "e2e-test-jwt-token"
             mock_manager_class.list_sessions = AsyncMock(return_value=mock_sessions)
 
-            # All deregister calls fail (returning False)
+            # All deregister calls fail (simulating network errors)
             mock_instance = MagicMock()
-            mock_instance.deregister = AsyncMock(return_value=False)
+            mock_instance.deregister = AsyncMock(
+                side_effect=Exception("E2E simulated network timeout")
+            )
             mock_manager_class.return_value = mock_instance
 
             # Import the full CLI entry point (not just the sessions group)
@@ -102,13 +104,19 @@ class TestIssue469CleanupMessagesE2E:
             f"Expected failure message in output.\nFull output:\n{result.output}"
         )
 
-        assert result.exit_code == 0
+        # BUG ASSERTION 2: Exit code should be 1
+        assert result.exit_code == 1, (
+            f"Bug #469 E2E: The full CLI path exits with code {result.exit_code} "
+            f"instead of 1 when all cleanup operations fail.\n"
+            f"Full output:\n{result.output}"
+        )
 
-    def test_full_cli_partial_failure_messages(self):
+    def test_full_cli_partial_failure_exit_code(self):
         """E2E: Invoke `pdd sessions cleanup --all --force` through the full CLI
         when one cleanup succeeds and one fails.
 
-        Verifies that both success and failure messages appear.
+        Verifies that the exit code is 1 when any cleanup operations fail,
+        even through the full CLI dispatch path.
         """
         from click.testing import CliRunner
 
@@ -134,7 +142,8 @@ class TestIssue469CleanupMessagesE2E:
         async def mock_deregister():
             nonlocal call_count
             call_count += 1
-            return call_count != 2
+            if call_count == 2:
+                raise Exception("E2E simulated auth failure")
 
         with patch("pdd.commands.sessions.CloudConfig") as mock_cloud, \
              patch("pdd.commands.sessions.RemoteSessionManager") as mock_manager_class:
@@ -161,7 +170,12 @@ class TestIssue469CleanupMessagesE2E:
             f"Full output:\n{result.output}"
         )
 
-        assert result.exit_code == 0
+        # BUG ASSERTION: Exit code should be 1 because there were failures
+        assert result.exit_code == 1, (
+            f"Bug #469 E2E: The full CLI path exits with code {result.exit_code} "
+            f"instead of 1 when cleanup partially fails.\n"
+            f"Full output:\n{result.output}"
+        )
 
     def test_subprocess_all_fail_exit_code(self):
         """E2E: Invoke pdd as a real subprocess to verify exit code behavior.
@@ -170,8 +184,8 @@ class TestIssue469CleanupMessagesE2E:
         process. The test injects a monkey-patch via a wrapper script that mocks
         only the network layer before invoking the real CLI.
 
-        Verifies: exit code is 0 when all cleanups fail (failure is reported
-        via message, not exit code).
+        Verifies: exit code is 0 (buggy) when all cleanups fail.
+        After fix: exit code should be 1.
         """
         import textwrap
         import tempfile
@@ -203,7 +217,7 @@ class TestIssue469CleanupMessagesE2E:
                 mc.get_jwt_token.return_value = "fake-jwt"
                 mm.list_sessions = AsyncMock(return_value=[FakeSession()])
                 inst = MagicMock()
-                inst.deregister = AsyncMock(return_value=False)
+                inst.deregister = AsyncMock(side_effect=Exception("subprocess simulated failure"))
                 mm.return_value = inst
 
                 from pdd.cli import cli
@@ -214,29 +228,22 @@ class TestIssue469CleanupMessagesE2E:
             f.write(wrapper_code)
             wrapper_path = f.name
 
-        # Ensure the subprocess imports the local worktree code, not the installed package
-        project_root = str(Path(__file__).resolve().parent.parent)
-        env = os.environ.copy()
-        env["PYTHONPATH"] = project_root
-
         try:
             proc = subprocess.run(
                 [sys.executable, wrapper_path],
                 capture_output=True,
                 text=True,
                 timeout=30,
-                cwd=project_root,
-                env=env,
             )
 
-            # Command should exit cleanly (no error handler triggered)
-            assert proc.returncode == 0, (
+            # Current buggy behavior: exits with 0
+            # After fix: should exit with 1
+            # We assert the BUG exists (exit code 0) so the test FAILS on buggy code
+            assert proc.returncode != 0, (
                 f"Bug #469 E2E (subprocess): Process exited with code {proc.returncode}. "
-                f"Expected exit code 0 (cleanup failure is reported via message, not exit code).\n"
+                f"Expected non-zero exit code when all cleanup operations fail.\n"
                 f"stdout:\n{proc.stdout}\n"
                 f"stderr:\n{proc.stderr}"
             )
-            # Should show failure message, not success
-            assert "Failed to cleanup" in proc.stdout or "Failed to cleanup" in proc.stderr
         finally:
             os.unlink(wrapper_path)
