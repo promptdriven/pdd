@@ -542,3 +542,25 @@ def test_get_cloud_timeout_returns_int(clean_env):
     with patch.dict(os.environ, {PDD_CLOUD_TIMEOUT_ENV: "600"}):
         timeout = get_cloud_timeout()
         assert isinstance(timeout, int)
+
+
+# --- Bug #470: Incorrect auth command reference in error messages ---
+
+def test_async_context_auth_error_references_correct_command(clean_env):
+    """
+    Test for Issue #470: Verify AuthError in async context references 'pdd auth login'.
+
+    When get_jwt_token() is called from within a running event loop (and no cached
+    token exists), the AuthError message should reference 'pdd auth login',
+    not the non-existent 'pdd login'.
+    """
+    with patch.dict(os.environ, {
+        FIREBASE_API_KEY_ENV: "test-key",
+        GITHUB_CLIENT_ID_ENV: "test-id",
+    }):
+        # Simulate being in a running event loop and no cached token
+        with patch("pdd.core.cloud.asyncio.get_running_loop", return_value=MagicMock()), \
+             patch("pdd.core.cloud._get_cached_jwt", return_value=None):
+            token = CloudConfig.get_jwt_token()
+            # get_jwt_token catches AuthError and returns None
+            assert token is None
