@@ -2363,21 +2363,25 @@ def test_sync_uses_merge_when_test_file_exists(orchestration_fixture):
 # Tests for strength/temperature propagation to sub-commands
 # =============================================================================
 
-def test_stopiteration_handling(orchestration_fixture):
-    """
-    Verify that StopIteration from sync_determine_operation is handled gracefully.
-    """
+def test_all_synced_decision_completes(orchestration_fixture):
+    """Verify that an all_synced decision completes the workflow."""
     mocks = orchestration_fixture
     mock_determine = mocks['sync_determine_operation']
-    
-    # Configure mock to raise StopIteration (simulating exhausted iterator in tests)
-    mock_determine.side_effect = StopIteration("Decision sequence exhausted")
-    
+
+    # Return a final all_synced decision instead of exhausting an iterator.
+    mock_determine.side_effect = [
+        SyncDecision(
+            operation="all_synced",
+            reason="Test: sequence complete",
+            confidence=1.0,
+            estimated_cost=0.0,
+            details={"decision_type": "mock"},
+        )
+    ]
+
     result = sync_orchestration(basename="calculator", language="python")
-    
-    # Verify the result indicates completion (treated as all_synced)
+
     assert result['success'] is True
-    # Should complete without errors (StopIteration is treated as graceful completion)
 
 
 class TestStrengthTemperaturePropagation:
