@@ -162,7 +162,7 @@ def _get_modified_and_untracked(cwd: Path) -> Set[str]:
         text=True
     )
     if result.returncode == 0:
-        files.update(f for f in result.stdout.strip().split("\n") if f)
+        files.update(f for f in result.stdout.splitlines() if f.strip())
 
     # Get untracked files
     result = subprocess.run(
@@ -172,7 +172,7 @@ def _get_modified_and_untracked(cwd: Path) -> Set[str]:
         text=True
     )
     if result.returncode == 0:
-        files.update(f for f in result.stdout.strip().split("\n") if f)
+        files.update(f for f in result.stdout.splitlines() if f.strip())
 
     return files
 

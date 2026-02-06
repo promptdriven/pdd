@@ -1034,8 +1034,8 @@ def _get_git_log(file_path: str, limit: int = 10) -> List[dict]:
             return []
 
         commits = []
-        for line in result.stdout.strip().split('\n'):
-            if not line:
+        for line in result.stdout.splitlines():
+            if not line.strip():
                 continue
             parts = line.split('|', 3)
             if len(parts) >= 4:
