@@ -33,6 +33,15 @@ _ACTIVE_SYNC_APP = None  # set by SyncApp when running interactively
 DEFAULT_STEER_TIMEOUT_S = 8.0
 
 
+def _debug_swallow(context: str, exc: Exception) -> None:
+    """Best-effort debug for swallowed exceptions in non-critical UI paths."""
+    try:
+        print(f"[sync_tui] {context}: {exc}", file=sys.__stderr__)
+    except Exception:
+        # Avoid cascading failures in error paths.
+        pass
+
+
 def _is_headless_environment() -> bool:
     """Best-effort check for whether we're in a headless / CI / non-interactive run."""
 
@@ -142,7 +151,8 @@ class ChoiceScreen(ModalScreen[str]):
     async def _auto_default(self) -> None:
         try:
             await asyncio.sleep(self.timeout_s)
-        except Exception:
+        except Exception as exc:
+            _debug_swallow("choice_screen_auto_default_sleep_failed", exc)
             return
         if not self._dismissed:
             self._dismissed = True
@@ -171,7 +181,8 @@ class ChoiceScreen(ModalScreen[str]):
                 if 1 <= idx <= 9 and idx <= len(self.choices):
                     self._dismissed = True
                     self.dismiss(self.choices[idx - 1])
-        except Exception:
+        except Exception as exc:
+            _debug_swallow("choice_screen_numeric_shortcut_failed", exc)
             pass
 
     def action_cancel(self) -> None:
@@ -509,7 +520,8 @@ class SyncApp(App):
         # Clear and replay.
         try:
             self.log_widget.clear()
-        except Exception:
+        except Exception as exc:
+            _debug_swallow("log_widget_clear_failed", exc)
             # If clear isn't available, do nothing.
             return
 
@@ -525,7 +537,7 @@ class SyncApp(App):
                 try:
                     self.log_widget.write(str(line))
                 except Exception:
-                    pass
+                    _debug_swallow("log_widget_write_raw_failed", Exception("write failed"))
     """Textual App for PDD Sync."""
 
     CSS = """
@@ -766,7 +778,8 @@ class SyncApp(App):
             # Force the log widget to repaint at its new viewport size.
             if hasattr(self, "log_widget") and self.log_widget is not None:
                 self.log_widget.refresh()
-        except Exception:
+        except Exception as exc:
+            _debug_swallow("sync_tui_resize_refresh_failed", exc)
             return
 
     @work(thread=True)
@@ -885,7 +898,7 @@ class SyncApp(App):
                     if hasattr(self.redirector, 'flush'):
                         self.redirector.flush()
                 except Exception:
-                    pass
+                    _debug_swallow("sync_tui_redirector_flush_failed", Exception("flush failed"))
             try:
                 self.call_from_thread(self.exit, result=self.worker_result)
             except RuntimeError:
@@ -893,8 +906,8 @@ class SyncApp(App):
                 # Fall back to calling exit directly so worker cleanup doesn't crash.
                 try:
                     self.exit(result=self.worker_result)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _debug_swallow("sync_tui_exit_fallback_failed", exc)
 
     def update_animation(self) -> None:
         """Updates the animation frame based on current shared state."""
