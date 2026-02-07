@@ -208,17 +208,29 @@ def run_pytest_on_file(test_file: str, extra_files: list[str] | None = None) -> 
     """
     # Use the subprocess-based runner to avoid module caching issues
     output_data = run_pytest_and_capture_output(test_file, extra_files=extra_files)
-    
-    # Extract results
-    results = output_data.get("test_results", [{}])[0]
-    
+
+    # Validate test_results (Issue #450: empty list causes IndexError)
+    test_results_list = output_data.get("test_results", [])
+
+    if not isinstance(test_results_list, list):
+        error_msg = output_data.get("stdout", "") or output_data.get("stderr", "")
+        return 0, 1, 0, f"Pytest returned invalid data: {error_msg}"
+
+    if not test_results_list:
+        error_msg = output_data.get("stdout", "") or output_data.get("stderr", "")
+        return 0, 1, 0, f"Pytest collection or execution failed\n\n{error_msg}"
+
+    results = test_results_list[0]
+    if not isinstance(results, dict):
+        return 0, 1, 0, "Pytest returned invalid result format"
+
     failures = results.get("failures", 0)
     errors = results.get("errors", 0)
     warnings = results.get("warnings", 0)
-    
+
     # Combine stdout/stderr for the log
     logs = (results.get("standard_output", "") or "") + "\n" + (results.get("standard_error", "") or "")
-    
+
     return failures, errors, warnings, logs
 
 def format_log_for_output(log_structure):

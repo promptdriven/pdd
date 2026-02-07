@@ -1742,3 +1742,154 @@ def test_protect_tests_prevents_unit_test_write(mock_subprocess, mock_fix, mock_
     with open(test, 'r') as f:
         assert f.read() == original_test_content, \
             "Test file should NOT be modified when protect_tests=True"
+
+
+# ============================================================================
+# Tests for Issue #450: IndexError when test_results is empty
+# ============================================================================
+
+def test_run_pytest_on_file_empty_test_results():
+    """
+    Test that run_pytest_on_file handles empty test_results list gracefully.
+
+    This is the primary bug from Issue #450: when pytest collection/execution fails,
+    test_results can be an empty list [], causing IndexError at line 213.
+
+    After the fix: Should return (0, 1, 0, error_message) instead of crashing.
+    """
+    mock_output = {
+        "test_results": [],  # Empty list - the primary bug scenario
+        "stdout": "ERROR: ImportError: No module named 'flask'",
+        "stderr": "",
+        "exit_code": 1
+    }
+
+    with patch("pdd.fix_error_loop.run_pytest_and_capture_output", return_value=mock_output):
+        f, e, w, logs = run_pytest_on_file("dummy_test.py")
+        assert f == 0
+        assert e == 1
+        assert w == 0
+        assert "Pytest collection or execution failed" in logs
+        assert "ImportError" in logs
+
+
+def test_run_pytest_on_file_missing_test_results():
+    """
+    Test that run_pytest_on_file handles missing test_results key gracefully.
+
+    When test_results key is completely missing, defaults to empty list
+    and returns a collection failure message.
+    """
+    mock_output = {
+        # test_results key is missing entirely
+        "stdout": "Some output",
+        "stderr": "",
+        "exit_code": 0
+    }
+
+    with patch("pdd.fix_error_loop.run_pytest_and_capture_output", return_value=mock_output):
+        f, e, w, logs = run_pytest_on_file("dummy_test.py")
+        assert f == 0
+        assert e == 1
+        assert w == 0
+        assert "Pytest collection or execution failed" in logs
+
+
+def test_run_pytest_on_file_test_results_none():
+    """
+    Test that run_pytest_on_file handles test_results: None gracefully.
+
+    When test_results is None instead of a list, the fix should handle it with type validation.
+    """
+    mock_output = {
+        "test_results": None,  # Type mismatch - not a list
+        "stdout": "ERROR: pytest crashed",
+        "stderr": "Segmentation fault",
+        "exit_code": 139
+    }
+
+    # After fix: Should handle with type validation
+    with patch("pdd.fix_error_loop.run_pytest_and_capture_output", return_value=mock_output):
+        f, e, w, logs = run_pytest_on_file("dummy_test.py")
+        assert f == 0
+        assert e == 1
+        assert w == 0
+        assert "Pytest returned invalid data" in logs
+
+
+def test_run_pytest_on_file_test_results_string():
+    """
+    Test that run_pytest_on_file handles test_results as string gracefully.
+
+    When test_results is a string instead of a list, the fix should handle it with type validation.
+    """
+    mock_output = {
+        "test_results": "error",  # Type mismatch - string not list
+        "stdout": "ERROR: Invalid JSON output",
+        "stderr": "",
+        "exit_code": 1
+    }
+
+    # After fix: Should handle with type validation
+    with patch("pdd.fix_error_loop.run_pytest_and_capture_output", return_value=mock_output):
+        f, e, w, logs = run_pytest_on_file("dummy_test.py")
+        assert f == 0
+        assert e == 1
+        assert w == 0
+        assert "Pytest returned invalid data" in logs
+
+
+def test_run_pytest_on_file_invalid_dict_in_list():
+    """
+    Test that run_pytest_on_file handles invalid dict structure gracefully.
+
+    When test_results contains None or invalid data in the list,
+    the code should handle it gracefully instead of crashing.
+    """
+    mock_output = {
+        "test_results": [None],  # List with None - invalid structure
+        "stdout": "ERROR: Test execution failed",
+        "stderr": "",
+        "exit_code": 1
+    }
+
+    # After fix: Should validate dict structure
+    with patch("pdd.fix_error_loop.run_pytest_and_capture_output", return_value=mock_output):
+        f, e, w, logs = run_pytest_on_file("dummy_test.py")
+        assert f == 0
+        assert e == 1
+        assert w == 0
+        assert "Pytest returned invalid result format" in logs
+
+
+def test_run_pytest_on_file_collection_failure_integration():
+    """
+    Integration test simulating a real pytest collection failure scenario.
+
+    This test simulates what happens when pytest fails to collect tests due to:
+    - Import errors
+    - Syntax errors
+    - Missing fixtures
+    - File not found
+
+    In all these cases, pytest returns empty test_results with error in stdout/stderr.
+    """
+    # Simulate ImportError during collection
+    mock_output = {
+        "test_results": [],  # Empty - collection failed
+        "stdout": """
+============================= test session starts ==============================
+ERROR: ImportError while importing test module 'tests/test_api.py'
+ModuleNotFoundError: No module named 'flask'
+        """,
+        "stderr": "",
+        "exit_code": 2  # pytest exit code 2 = collection error
+    }
+
+    with patch("pdd.fix_error_loop.run_pytest_and_capture_output", return_value=mock_output):
+        f, e, w, logs = run_pytest_on_file("tests/test_api.py")
+        assert f == 0
+        assert e == 1
+        assert w == 0
+        assert "Pytest collection or execution failed" in logs
+        assert "ModuleNotFoundError" in logs
