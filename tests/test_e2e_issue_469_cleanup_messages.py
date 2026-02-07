@@ -2,9 +2,7 @@
 E2E CLI Test for Issue #469: Misleading success message when all cleanups fail
 
 Tests the full `pdd sessions cleanup` CLI path (through pdd.cli:cli entry point)
-to verify that:
-1. No success message appears when all cleanup operations fail
-2. The command exits with code 1 when any cleanup operations fail
+to verify that no success message appears when all cleanup operations fail.
 
 Unlike the unit tests in tests/commands/test_sessions.py which import the
 `sessions` Click group directly, these E2E tests invoke the full CLI entry
@@ -50,7 +48,7 @@ class TestIssue469CleanupMessagesE2E:
         entry point when all cleanup operations fail.
 
         Verifies that the misleading '✓ Successfully cleaned up 0 session(s)'
-        message does NOT appear in the output, and that the exit code is 1.
+        message does NOT appear in the output.
 
         This exercises the real CLI dispatch path:
         pdd.cli:cli -> pdd.commands.register_commands -> sessions group -> cleanup_sessions
@@ -172,8 +170,8 @@ class TestIssue469CleanupMessagesE2E:
         process. The test injects a monkey-patch via a wrapper script that mocks
         only the network layer before invoking the real CLI.
 
-        Verifies: exit code is 0 (buggy) when all cleanups fail.
-        After fix: exit code should be 1.
+        Verifies: exit code is 0 when all cleanups fail (failure is reported
+        via message, not exit code).
         """
         import textwrap
         import tempfile
