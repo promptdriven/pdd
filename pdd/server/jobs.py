@@ -551,7 +551,7 @@ class JobManager:
 
             # Try to find actual error lines (not INFO/DEBUG logs)
             error_lines = []
-            for line in all_output.split('\n'):
+            for line in all_output.splitlines():
                 line_stripped = line.strip()
                 if not line_stripped:
                     continue

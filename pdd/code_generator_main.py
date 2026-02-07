@@ -558,7 +558,7 @@ def code_generator_main(
                             log_rc, log_stdout, log_stderr = _run_git_command(log_cmd, cwd=str(git_root_path_obj))
 
                             if log_rc == 0 and log_stdout.strip():
-                                shas = log_stdout.strip().split('\\n')
+                                shas = log_stdout.splitlines()
                                 if verbose:
                                      console.print(f"Found {len(shas)} commits for [cyan]{prompt_file_rel_to_root_str}[/cyan] in recent history (up to {MAX_COMMITS_TO_SEARCH}).")
 
