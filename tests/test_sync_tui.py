@@ -204,6 +204,8 @@ def test_sync_app_env_isolation():
     assert os.environ.get("FORCE_COLOR") == original_force_color
     assert os.environ.get("TERM") == original_term
     assert os.environ.get("COLUMNS") == original_columns
+
+
 def test_progress_callback_thread_safety():
     """Verify _update_progress schedules a UI update."""
     # Setup shared refs (10 positional ref arguments)

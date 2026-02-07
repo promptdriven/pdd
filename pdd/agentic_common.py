@@ -419,8 +419,19 @@ def run_agentic_task(
     prompt_filename = f".agentic_prompt_{uuid.uuid4().hex[:8]}.txt"
     prompt_path = cwd / prompt_filename
 
+    # Inject user feedback from GitHub issue comments (set by GitHub App executor)
+    user_feedback = os.environ.get("PDD_USER_FEEDBACK")
+    feedback_section = ""
+    if user_feedback:
+        feedback_section = (
+            "\n\n## User Feedback\n"
+            "The user provided the following feedback from a previous execution attempt. "
+            "Factor this into your response:\n"
+            f"{user_feedback}\n"
+        )
+
     full_instruction = (
-        f"{instruction}\n\n"
+        f"{instruction}{feedback_section}\n\n"
         f"Read the file {prompt_filename} for instructions. "
         "You have full file access to explore and modify files as needed."
     )
@@ -542,6 +553,7 @@ def _run_with_provider(
     env["TERM"] = "dumb"
     env["NO_COLOR"] = "1"
     env["CI"] = "1"
+    env.pop("PDD_OUTPUT_COST_PATH", None)
 
     # Get CLI binary name for this provider
     cli_name = CLI_COMMANDS.get(provider)
@@ -572,6 +584,10 @@ def _run_with_provider(
             "--dangerously-skip-permissions",
             "--output-format", "json",
         ]
+        # Allow model override via CLAUDE_MODEL env var (Issue #318)
+        claude_model = env.get("CLAUDE_MODEL")
+        if claude_model:
+            cmd.extend(["--model", claude_model])
     elif provider == "google":
         # Do NOT use -p flag for Gemini. The -p flag passes text literally,
         # so passing a file path gives Gemini the path string instead of content.
