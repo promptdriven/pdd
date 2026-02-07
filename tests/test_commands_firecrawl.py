@@ -328,8 +328,13 @@ class TestClearCommand:
         result = runner.invoke(cli, ["firecrawl-cache", "clear"])
 
         assert result.exit_code == 0
-        mock_confirm.assert_called_once_with("Clear 1 cached entries?")  # Note: grammar issue in original
+        mock_confirm.assert_called_once_with("Clear 1 cached entry?")  # Correct grammar
         mock_clear.assert_called_once()
+
+        # Should print success message with singular "entry"
+        print_calls = [str(call) for call in mock_print.call_args_list]
+        assert any('Cleared' in str(call) and '1' in str(call) and 'entry' in str(call).lower()
+                   for call in print_calls), "Should show success message with singular 'entry'"
 
     @patch('pdd.commands.firecrawl.clear_firecrawl_cache')
     @patch('pdd.commands.firecrawl.get_firecrawl_cache_stats')
@@ -352,9 +357,10 @@ class TestClearCommand:
         mock_confirm.assert_called_once_with("Clear 1000 cached entries?")
         mock_clear.assert_called_once()
 
-        # Should show correct count in success message
+        # Should show correct count and plural "entries" in success message
         print_calls = [str(call) for call in mock_print.call_args_list]
-        assert any('1000' in str(call) for call in print_calls)
+        assert any('Cleared' in str(call) and '1000' in str(call) and 'entries' in str(call).lower()
+                   for call in print_calls), "Should show success message with count and plural 'entries'"
 
     @patch('pdd.commands.firecrawl.clear_firecrawl_cache')
     @patch('pdd.commands.firecrawl.get_firecrawl_cache_stats')

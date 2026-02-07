@@ -114,19 +114,23 @@ class TestFirecrawlCache:
         cached_content = self.cache.get(url)
         assert cached_content == content
 
-    def test_cache_expiration(self):
+    @patch('pdd.firecrawl_cache.time.time')
+    def test_cache_expiration(self, mock_time):
         """Test cache expiration based on TTL."""
         url = "https://example.com"
         content = "Test content"
 
+        # Mock time to start at 1000.0
+        mock_time.return_value = 1000.0
+
         # Set with very short TTL
         self.cache.set(url, content, ttl_hours=0.001)  # ~3.6 seconds
 
-        # Should be available immediately
+        # Should be available immediately (same time as when we set it)
         assert self.cache.get(url) == content
 
-        # Wait for expiration
-        time.sleep(4)
+        # Advance mocked time past expiration (1000.0 + 3.6 + buffer)
+        mock_time.return_value = 1010.0
 
         # Should now be expired
         assert self.cache.get(url) is None
@@ -175,18 +179,22 @@ class TestFirecrawlCache:
             # First set counts as 1 access, then 3 more gets
             assert row[0] >= 3
 
-    def test_cache_cleanup_expired(self):
+    @patch('pdd.firecrawl_cache.time.time')
+    def test_cache_cleanup_expired(self, mock_time):
         """Test automatic cleanup of expired entries."""
         url1 = "https://example1.com"
         url2 = "https://example2.com"
         content = "Test content"
 
+        # Mock time to start at 1000.0
+        mock_time.return_value = 1000.0
+
         # Set one with short TTL, one with long TTL
         self.cache.set(url1, content, ttl_hours=0.001)  # Expires quickly
         self.cache.set(url2, content, ttl_hours=24)     # Long TTL
 
-        # Wait for first to expire
-        time.sleep(4.5)
+        # Advance mocked time past first URL's expiration
+        mock_time.return_value = 1010.0
 
         # Trigger cleanup
         self.cache._cleanup_expired()
@@ -195,8 +203,57 @@ class TestFirecrawlCache:
         assert self.cache.get(url1) is None
         assert self.cache.get(url2) == content
 
+    def test_cache_max_entries_enforcement(self):
+        """Test that max_entries limit is enforced via LRU eviction."""
+        # Set a small max entries limit
+        self.cache.max_entries = 2
+
+        # Add more entries than the limit
+        for i in range(4):
+            url = f"https://example{i}.com"
+            content = f"Content {i}"
+            self.cache.set(url, content)
+            time.sleep(0.01)  # Ensure different timestamps
+
+        # Should only have max_entries in cache
+        with sqlite3.connect(self.cache.cache_path) as conn:
+            cursor = conn.execute('SELECT COUNT(*) FROM cache')
+            count = cursor.fetchone()[0]
+            assert count == self.cache.max_entries
+
+        # First entries should be evicted (LRU)
+        assert self.cache.get("https://example0.com") is None
+        assert self.cache.get("https://example1.com") is None
+        # Last entries should still be there
+        assert self.cache.get("https://example2.com") is not None
+        assert self.cache.get("https://example3.com") is not None
+
+    def test_cache_max_size_enforcement(self):
+        """Test that max_cache_size_mb limit is enforced via LRU eviction."""
+        # Set a very small size limit (e.g., 1 KB = 0.001 MB)
+        self.cache.max_cache_size_mb = 0.001  # ~1 KB
+
+        # Add several entries that together exceed the limit
+        large_content = "X" * 500  # 500 bytes per entry
+        for i in range(5):
+            url = f"https://example{i}.com"
+            self.cache.set(url, large_content)
+            time.sleep(0.01)  # Ensure different timestamps
+
+        # Total content is ~2.5 KB, but limit is 1 KB
+        # After cleanup, size should be under limit
+        with sqlite3.connect(self.cache.cache_path) as conn:
+            cursor = conn.execute('SELECT SUM(LENGTH(content)) FROM cache')
+            total_size_bytes = cursor.fetchone()[0] or 0
+            total_size_mb = total_size_bytes / (1024 * 1024)
+            assert total_size_mb <= self.cache.max_cache_size_mb
+
+        # Oldest entries should be evicted, newest should remain
+        assert self.cache.get("https://example0.com") is None
+        assert self.cache.get("https://example4.com") is not None
+
     def test_cache_size_limits(self):
-        """Test cache size limit enforcement."""
+        """Test cache size limit enforcement (deprecated - use test_cache_max_size_enforcement)."""
         # Set a very small max entries limit
         self.cache.max_entries = 2
 
@@ -211,6 +268,171 @@ class TestFirecrawlCache:
             cursor = conn.execute('SELECT COUNT(*) FROM cache')
             count = cursor.fetchone()[0]
             assert count <= self.cache.max_entries
+
+    def test_auto_cleanup_triggers_during_set(self):
+        """Test that auto_cleanup actually triggers when cache.set() is called."""
+        # Enable auto cleanup (it's enabled by default, but be explicit)
+        self.cache.auto_cleanup = True
+        self.cache.max_entries = 2
+
+        # Add 3 entries - auto_cleanup should trigger after the 3rd set
+        for i in range(3):
+            url = f"https://example{i}.com"
+            self.cache.set(url, f"Content {i}")
+            time.sleep(0.01)
+
+        # Count after adds - should have max_entries due to auto_cleanup
+        with sqlite3.connect(self.cache.cache_path) as conn:
+            cursor = conn.execute('SELECT COUNT(*) FROM cache')
+            count = cursor.fetchone()[0]
+
+        # Auto cleanup should have removed entries, leaving only max_entries
+        assert count == self.cache.max_entries, \
+            f"Auto cleanup should have triggered, expected {self.cache.max_entries} entries, got {count}"
+
+    def test_cleanup_entry_removal_count_verification(self):
+        """Test entry removal by verifying database state (catches cursor.rowcount bugs)."""
+        # Disable auto cleanup so we can control when it runs and test the cleanup logic directly
+        self.cache.auto_cleanup = False
+        self.cache.max_entries = 2
+
+        # Add 5 entries
+        for i in range(5):
+            url = f"https://example{i}.com"
+            self.cache.set(url, f"Content {i}")
+            time.sleep(0.01)
+
+        # Count before cleanup
+        with sqlite3.connect(self.cache.cache_path) as conn:
+            cursor = conn.execute('SELECT COUNT(*) FROM cache')
+            count_before = cursor.fetchone()[0]
+            assert count_before == 5, "Should have 5 entries before cleanup"
+
+        # Run cleanup manually
+        self.cache._cleanup_expired()
+
+        # Count after cleanup
+        with sqlite3.connect(self.cache.cache_path) as conn:
+            cursor = conn.execute('SELECT COUNT(*) FROM cache')
+            count_after = cursor.fetchone()[0]
+
+        # Should have removed exactly 3 entries (5 - 2 = 3)
+        assert count_after == 2, f"Should have 2 entries after cleanup, got {count_after}"
+        assert count_before - count_after == 3, \
+            f"Should have removed exactly 3 entries, removed {count_before - count_after}"
+
+    def test_cleanup_size_removal_verification(self):
+        """Test size-based removal by verifying database state (catches cursor.rowcount bugs)."""
+        # Disable auto cleanup to test cleanup logic directly
+        self.cache.auto_cleanup = False
+        self.cache.max_cache_size_mb = 0.001
+
+        # Add 5 entries of 500 bytes each (~2.5 KB total)
+        large_content = "X" * 500
+        for i in range(5):
+            url = f"https://example{i}.com"
+            self.cache.set(url, large_content)
+            time.sleep(0.01)
+
+        # Check size before cleanup
+        with sqlite3.connect(self.cache.cache_path) as conn:
+            cursor = conn.execute('SELECT COUNT(*) FROM cache')
+            count_before = cursor.fetchone()[0]
+            assert count_before == 5, "Should have 5 entries before cleanup"
+
+        # Run cleanup manually
+        self.cache._cleanup_expired()
+
+        # Check size after cleanup
+        with sqlite3.connect(self.cache.cache_path) as conn:
+            cursor = conn.execute('SELECT COUNT(*) FROM cache')
+            count_after = cursor.fetchone()[0]
+            cursor = conn.execute('SELECT SUM(LENGTH(content)) FROM cache')
+            size_after = cursor.fetchone()[0] or 0
+
+        # Size should be under the limit
+        size_after_mb = size_after / (1024 * 1024)
+        assert size_after_mb <= self.cache.max_cache_size_mb, \
+            f"Size {size_after_mb}MB exceeds limit {self.cache.max_cache_size_mb}MB"
+        # Should have removed some entries
+        assert count_before > count_after, \
+            f"Should have removed entries to enforce size limit: {count_before} -> {count_after}"
+
+    def test_cleanup_entry_removal_rowcount_accuracy(self):
+        """Test that the actual number of deleted rows matches what's expected (db-level verification)."""
+        # Disable auto cleanup to test cleanup logic directly
+        self.cache.auto_cleanup = False
+        self.cache.max_entries = 1
+
+        # Add 3 entries
+        for i in range(3):
+            url = f"https://example{i}.com"
+            self.cache.set(url, f"Content {i}")
+            time.sleep(0.01)
+
+        # Count before cleanup
+        with sqlite3.connect(self.cache.cache_path) as conn:
+            cursor = conn.execute('SELECT COUNT(*) FROM cache')
+            count_before = cursor.fetchone()[0]
+
+        # Run cleanup
+        self.cache._cleanup_expired()
+
+        # Count after cleanup
+        with sqlite3.connect(self.cache.cache_path) as conn:
+            cursor = conn.execute('SELECT COUNT(*) FROM cache')
+            count_after = cursor.fetchone()[0]
+
+        # Should have exactly max_entries remaining
+        assert count_after == self.cache.max_entries, \
+            f"After cleanup: expected {self.cache.max_entries} entries, got {count_after}"
+        # Should have removed entries
+        assert count_before > count_after, \
+            f"Cleanup should have removed entries: {count_before} -> {count_after}"
+        assert count_before - count_after == 2, \
+            f"Should have removed exactly 2 entries, removed {count_before - count_after}"
+
+    def test_cleanup_size_removal_rowcount_accuracy(self):
+        """Test that size-based removal deletes the correct number of entries."""
+        # Disable auto cleanup to test cleanup logic directly
+        self.cache.auto_cleanup = False
+        self.cache.max_cache_size_mb = 0.001
+
+        # Add 5 entries of 500 bytes each
+        large_content = "X" * 500
+        for i in range(5):
+            url = f"https://example{i}.com"
+            self.cache.set(url, large_content)
+            time.sleep(0.01)
+
+        # Count before cleanup
+        with sqlite3.connect(self.cache.cache_path) as conn:
+            cursor = conn.execute('SELECT COUNT(*) FROM cache')
+            count_before = cursor.fetchone()[0]
+            cursor = conn.execute('SELECT SUM(LENGTH(content)) FROM cache')
+            size_before = cursor.fetchone()[0] or 0
+
+        # Run cleanup
+        self.cache._cleanup_expired()
+
+        # Count and size after cleanup
+        with sqlite3.connect(self.cache.cache_path) as conn:
+            cursor = conn.execute('SELECT COUNT(*) FROM cache')
+            count_after = cursor.fetchone()[0]
+            cursor = conn.execute('SELECT SUM(LENGTH(content)) FROM cache')
+            size_after = cursor.fetchone()[0] or 0
+
+        # Size should be under the limit
+        size_after_mb = size_after / (1024 * 1024)
+        assert size_after_mb <= self.cache.max_cache_size_mb, \
+            f"Size {size_after_mb}MB exceeds limit {self.cache.max_cache_size_mb}MB"
+
+        # Should have removed some entries
+        assert count_before > count_after, \
+            f"Should have removed entries: {count_before} -> {count_after}"
+        # Size should have decreased
+        assert size_before > size_after, \
+            f"Should have freed space: {size_before} -> {size_after} bytes"
 
     def test_cache_clear(self):
         """Test cache clearing functionality."""

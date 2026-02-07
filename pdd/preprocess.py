@@ -2,7 +2,6 @@ import os
 import re
 import base64
 import subprocess
-import time
 from typing import List, Optional, Tuple
 import traceback
 from pathlib import Path
@@ -364,8 +363,6 @@ def process_web_tags(text: str, recursive: bool) -> str:
                 console.print(f"[bold yellow]Warning:[/bold yellow] No markdown content returned for {url}")
                 _dbg("Web scrape returned no markdown content")
                 return f"[No content available for {url}]"
-        except ImportError:
-            return f"[Error: firecrawl-py package not installed. Cannot scrape {url}]"
         except Exception as e:
             console.print(f"[bold red]Error scraping web content:[/bold red] {str(e)}")
             _dbg(f"Web scraping exception: {e}")

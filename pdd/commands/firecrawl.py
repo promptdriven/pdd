@@ -90,12 +90,14 @@ def clear():
             console.print("[yellow]Cache is already empty.[/yellow]")
             return
 
-        if not click.confirm(f"Clear {total} cached entries?"):
+        entry_word = "entry" if total == 1 else "entries"
+        if not click.confirm(f"Clear {total} cached {entry_word}?"):
             console.print("Cancelled.")
             return
 
         cleared = clear_firecrawl_cache()
-        console.print(f"[bold green]✓[/bold green] Cleared {cleared} entries")
+        cleared_word = "entry" if cleared == 1 else "entries"
+        console.print(f"[bold green]✓[/bold green] Cleared {cleared} {cleared_word}")
 
     except Exception as e:
         console.print(f"[bold red]Error:[/bold red] {e}")

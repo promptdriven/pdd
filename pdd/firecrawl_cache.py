@@ -141,18 +141,23 @@ class FirecrawlCache:
         # Remove trailing slashes and normalize whitespace
         url = url.strip().rstrip('/')
 
-        # Convert to lowercase for case-insensitive matching
-        url = url.lower()
+        # Convert to lowercase for case-insensitive matching (only the scheme and host)
+        from urllib.parse import urlparse, urlunparse
+        parsed = urlparse(url)
+        url = urlunparse(parsed._replace(scheme=parsed.scheme.lower(), netloc=parsed.netloc.lower()))
 
         # Remove common tracking parameters that don't affect content
         if '?' in url:
             base_url, params = url.split('?', 1)
             # Keep only essential parameters, remove tracking ones
             essential_params = []
+            tracking_prefixes = {'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
+                               'fbclid', 'gclid', 'ref', 'source', '_ga', '_gid'}
             for param in params.split('&'):
-                if param and not any(track in param.lower() for track in
-                                   ['utm_', 'fbclid', 'gclid', 'ref=', 'source=', '_ga', '_gid']):
-                    essential_params.append(param)
+                if param:
+                    param_name = param.split('=')[0].lower()
+                    if param_name not in tracking_prefixes:
+                        essential_params.append(param)
 
             if essential_params:
                 url = f"{base_url}?{'&'.join(essential_params)}"
@@ -286,6 +291,7 @@ class FirecrawlCache:
         Performs:
         1. Remove expired entries
         2. Enforce max_entries limit using LRU eviction
+        3. Enforce max_size_mb limit using LRU eviction
         """
         current_time = time.time()
 
@@ -305,7 +311,7 @@ class FirecrawlCache:
                 if total_entries > self.max_entries:
                     # Remove oldest entries by last_accessed (LRU)
                     excess = total_entries - self.max_entries
-                    conn.execute(
+                    delete_cursor = conn.execute(
                         '''DELETE FROM cache WHERE url_hash IN (
                             SELECT url_hash FROM cache
                             ORDER BY last_accessed ASC
@@ -313,8 +319,39 @@ class FirecrawlCache:
                         )''',
                         (excess,)
                     )
-                    removed_count = cursor.rowcount
-                    logger.debug(f"Removed {removed_count} old entries to enforce size limit")
+                    removed_count = delete_cursor.rowcount
+                    logger.debug(f"Removed {removed_count} old entries to enforce entry limit")
+
+                # Check if we need to enforce size limit
+                cursor = conn.execute('SELECT SUM(LENGTH(content)) FROM cache')
+                total_size_bytes = cursor.fetchone()[0] or 0
+                total_size_mb = total_size_bytes / (1024 * 1024)
+                max_size_bytes = self.max_cache_size_mb * 1024 * 1024
+
+                if total_size_mb > self.max_cache_size_mb:
+                    space_to_free = total_size_bytes - max_size_bytes
+                    urls_to_delete = []
+                    freed = 0
+
+                    # Get entries sorted by last_accessed (LRU)
+                    cursor = conn.execute(
+                        'SELECT url_hash, LENGTH(content) as size FROM cache ORDER BY last_accessed ASC'
+                    )
+                    for url_hash, size in cursor.fetchall():
+                        if freed >= space_to_free:
+                            break
+                        urls_to_delete.append(url_hash)
+                        freed += size
+
+                    if urls_to_delete:
+                        placeholders = ','.join('?' * len(urls_to_delete))
+                        size_delete_cursor = conn.execute(f'DELETE FROM cache WHERE url_hash IN ({placeholders})', urls_to_delete)
+                        new_size_mb = (total_size_bytes - freed) / (1024 * 1024)
+                        removed_count = size_delete_cursor.rowcount
+                        logger.debug(
+                            f"Removed {removed_count} entries to enforce size limit "
+                            f"({total_size_mb:.2f}MB -> {new_size_mb:.2f}MB)"
+                        )
 
                 conn.commit()
 
