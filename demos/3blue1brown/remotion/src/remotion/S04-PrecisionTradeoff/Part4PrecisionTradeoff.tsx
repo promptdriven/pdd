@@ -35,7 +35,7 @@ export const Part4PrecisionTradeoff: React.FC<Part4PrecisionTradeoffPropsType> =
 
       {/* Visual compositions sequenced by BEATS */}
       
-      {/* Visual 0: Veo clip - Something subtle about prompts */}
+      {/* Visual 0: Veo clip - Something subtle that changes how you think about  */}
       {activeVisual === 0 && (
         <AbsoluteFill>
           <OffthreadVideo
@@ -45,14 +45,14 @@ export const Part4PrecisionTradeoff: React.FC<Part4PrecisionTradeoffPropsType> =
         </AbsoluteFill>
       )}
 
-      {/* Visual 1: PrinterFocus - 3D printing: no mold, every point, precise */}
+      {/* Visual 1: PrinterFocus - 3D printing no mold, every point precise, specific */}
       {activeVisual === 1 && (
         <Sequence from={BEATS.VISUAL_01_START} durationInFrames={BEATS.VISUAL_01_END - BEATS.VISUAL_01_START}>
           <PrinterFocus {...defaultPrinterFocusProps} />
         </Sequence>
       )}
 
-      {/* Visual 2: MoldFlowFocus - Injection molding: walls constrain the flow */}
+      {/* Visual 2: MoldFlowFocus - Injection molding precision comes from walls, flow */}
       {activeVisual === 2 && (
         <Sequence from={BEATS.VISUAL_02_START} durationInFrames={BEATS.VISUAL_02_END - BEATS.VISUAL_02_START}>
           <MoldFlowFocus {...defaultMoldFlowFocusProps} />
@@ -66,28 +66,28 @@ export const Part4PrecisionTradeoff: React.FC<Part4PrecisionTradeoffPropsType> =
         </Sequence>
       )}
 
-      {/* Visual 4: LongPrompt - Few tests: specify everything */}
+      {/* Visual 4: LongPrompt - Few tests prompt specifies everything, edge cases, */}
       {activeVisual === 4 && (
         <Sequence from={BEATS.VISUAL_04_START} durationInFrames={BEATS.VISUAL_04_END - BEATS.VISUAL_04_START}>
           <LongPrompt {...defaultLongPromptProps} />
         </Sequence>
       )}
 
-      {/* Visual 5: ShortPromptTests - Many tests: specify intent only */}
+      {/* Visual 5: ShortPromptTests - Many tests prompt only needs intent, tests handle  */}
       {activeVisual === 5 && (
         <Sequence from={BEATS.VISUAL_05_START} durationInFrames={BEATS.VISUAL_05_END - BEATS.VISUAL_05_START}>
           <ShortPromptTests {...defaultShortPromptTestsProps} />
         </Sequence>
       )}
 
-      {/* Visual 6: GraphAnimateCurve - Test accumulation makes prompts simpler */}
+      {/* Visual 6: GraphAnimateCurve - Test accumulation not just catching bugs, simpler  */}
       {activeVisual === 6 && (
         <Sequence from={BEATS.VISUAL_06_START} durationInFrames={BEATS.VISUAL_06_END - BEATS.VISUAL_06_START}>
           <GraphAnimateCurve {...defaultGraphAnimateCurveProps} />
         </Sequence>
       )}
 
-      {/* Visual 7: BothGenerateFinal - More tests less prompt, walls do precision */}
+      {/* Visual 7: BothGenerateFinal - More walls less to specify, mold does precision wo */}
       {activeVisual === 7 && (
         <Sequence from={BEATS.VISUAL_07_START} durationInFrames={BEATS.VISUAL_07_END - BEATS.VISUAL_07_START}>
           <BothGenerateFinal {...defaultBothGenerateFinalProps} />

@@ -35,49 +35,49 @@ SAMPLE_RATE = 24000  # Qwen3-TTS output rate
 
 
 # Section definitions: name, segment range, output prefix, remotion folder mapping
-# NOTE: TTS was generated from an earlier script version. Segment ranges determined
-# by Whisper transcription of individual WAV files. Filler/separator segments
-# (23, 34, 54, 63, 73, 79, 89) and removed content (74-78) are excluded.
+# Segment ranges from TTS generation of tts_script.md (103 segments total).
+# Separator segments (30, 46, 72, 81, 91) contain "---" text and are excluded.
+# Segments 101-102 are junk ("---" and "Total runtime" text).
 SECTIONS = {
     "part1": {
         "name": "Part 1: Economics of Darning",
         "seg_start": 0,
-        "seg_end": 22,
+        "seg_end": 29,
         "output_prefix": "part1_economics",
         "output_dir": "01-economics",
     },
     "part2": {
         "name": "Part 2: Paradigm Shift",
-        "seg_start": 24,
-        "seg_end": 33,
+        "seg_start": 31,
+        "seg_end": 45,
         "output_prefix": "part2_paradigm_shift",
         "output_dir": "02-paradigm-shift",
     },
     "part3": {
         "name": "Part 3: Mold Has Three Parts",
-        "seg_start": 35,
-        "seg_end": 53,
+        "seg_start": 47,
+        "seg_end": 71,
         "output_prefix": "part3_mold",
         "output_dir": "03-mold-has-three-parts",
     },
     "part4": {
         "name": "Part 4: Precision Tradeoff",
-        "seg_start": 55,
-        "seg_end": 62,
+        "seg_start": 73,
+        "seg_end": 80,
         "output_prefix": "part4_precision",
         "output_dir": "04-precision-tradeoff",
     },
     "part5": {
         "name": "Part 5: Compound Returns",
-        "seg_start": 64,
-        "seg_end": 72,
+        "seg_start": 82,
+        "seg_end": 90,
         "output_prefix": "part5_compound",
         "output_dir": "05-compound-returns",
     },
     "closing": {
         "name": "Closing",
-        "seg_start": 80,
-        "seg_end": 88,
+        "seg_start": 92,
+        "seg_end": 100,
         "output_prefix": "closing",
         "output_dir": "06-closing",
     },

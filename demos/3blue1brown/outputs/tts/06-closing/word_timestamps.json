@@ -1,353 +1,353 @@
 {
   "section": "Closing",
   "audio_file": "closing_narration.wav",
-  "duration": 29.27,
+  "duration": 33.53,
   "language": "en",
   "words": [
     {
       "word": "So",
       "start": 0.0,
       "end": 0.16,
-      "probability": 0.926
+      "probability": 0.922
     },
     {
       "word": "here's",
       "start": 0.16,
-      "end": 0.44,
-      "probability": 0.962
+      "end": 0.42,
+      "probability": 0.889
     },
     {
       "word": "the",
-      "start": 0.44,
-      "end": 0.54,
-      "probability": 0.998
+      "start": 0.42,
+      "end": 0.52,
+      "probability": 0.999
     },
     {
       "word": "mental",
-      "start": 0.54,
-      "end": 0.78,
-      "probability": 0.791
+      "start": 0.52,
+      "end": 0.76,
+      "probability": 0.942
     },
     {
-      "word": "shit.",
-      "start": 0.78,
-      "end": 1.06,
-      "probability": 0.371
+      "word": "shift.",
+      "start": 0.76,
+      "end": 1.16,
+      "probability": 0.992
     },
     {
       "word": "You",
-      "start": 1.32,
-      "end": 1.32,
-      "probability": 0.934
+      "start": 2.4,
+      "end": 2.8,
+      "probability": 0.875
     },
     {
       "word": "don't",
-      "start": 1.32,
-      "end": 1.48,
+      "start": 2.8,
+      "end": 2.98,
       "probability": 0.998
     },
     {
       "word": "patch",
-      "start": 1.48,
-      "end": 1.84,
-      "probability": 0.989
+      "start": 2.98,
+      "end": 3.24,
+      "probability": 0.99
     },
     {
       "word": "socks",
-      "start": 1.84,
-      "end": 2.18,
-      "probability": 0.902
+      "start": 3.24,
+      "end": 3.6,
+      "probability": 0.875
     },
     {
       "word": "because",
-      "start": 2.18,
-      "end": 2.6,
-      "probability": 0.931
+      "start": 3.6,
+      "end": 4.02,
+      "probability": 0.955
     },
     {
       "word": "socks",
-      "start": 2.6,
-      "end": 2.94,
-      "probability": 0.994
+      "start": 4.02,
+      "end": 4.38,
+      "probability": 0.987
     },
     {
       "word": "got",
-      "start": 2.94,
-      "end": 3.28,
-      "probability": 0.997
+      "start": 4.38,
+      "end": 4.72,
+      "probability": 0.996
     },
     {
       "word": "cheap.",
-      "start": 3.28,
-      "end": 3.64,
-      "probability": 0.993
+      "start": 4.72,
+      "end": 5.06,
+      "probability": 0.995
     },
     {
       "word": "The",
-      "start": 4.28,
-      "end": 4.36,
-      "probability": 0.993
+      "start": 5.64,
+      "end": 5.72,
+      "probability": 0.994
     },
     {
       "word": "economics",
-      "start": 4.36,
-      "end": 4.78,
-      "probability": 0.988
+      "start": 5.72,
+      "end": 6.12,
+      "probability": 0.984
     },
     {
       "word": "made",
-      "start": 4.78,
-      "end": 5.18,
-      "probability": 0.997
+      "start": 6.12,
+      "end": 6.52,
+      "probability": 0.985
     },
     {
       "word": "patching",
-      "start": 5.18,
-      "end": 5.78,
-      "probability": 0.986
+      "start": 6.52,
+      "end": 7.08,
+      "probability": 0.983
     },
     {
       "word": "irrational.",
-      "start": 5.78,
-      "end": 6.36,
-      "probability": 0.812
+      "start": 7.08,
+      "end": 7.62,
+      "probability": 0.932
     },
     {
       "word": "Code",
-      "start": 8.64,
-      "end": 8.78,
-      "probability": 0.7
+      "start": 9.36,
+      "end": 9.7,
+      "probability": 0.927
     },
     {
       "word": "just",
-      "start": 8.78,
-      "end": 8.98,
-      "probability": 0.925
+      "start": 9.7,
+      "end": 10.0,
+      "probability": 0.962
     },
     {
       "word": "got",
-      "start": 8.98,
-      "end": 9.16,
+      "start": 10.0,
+      "end": 10.18,
       "probability": 0.997
     },
     {
       "word": "that",
-      "start": 9.16,
-      "end": 9.38,
-      "probability": 0.999
+      "start": 10.18,
+      "end": 10.4,
+      "probability": 0.997
     },
     {
       "word": "cheap.",
-      "start": 9.38,
-      "end": 9.66,
-      "probability": 0.995
-    },
-    {
-      "word": "Prompts",
-      "start": 11.02,
-      "end": 11.24,
-      "probability": 0.415
-    },
-    {
-      "word": "in",
-      "start": 11.24,
-      "end": 11.5,
-      "probability": 0.973
-    },
-    {
-      "word": "code",
-      "start": 11.5,
-      "end": 11.8,
-      "probability": 0.656
-    },
-    {
-      "word": "intent.",
-      "start": 11.8,
-      "end": 12.22,
-      "probability": 0.913
-    },
-    {
-      "word": "Tests",
-      "start": 13.28,
-      "end": 13.66,
-      "probability": 0.935
-    },
-    {
-      "word": "preserve",
-      "start": 13.66,
-      "end": 14.08,
-      "probability": 0.762
-    },
-    {
-      "word": "behavior.",
-      "start": 14.08,
-      "end": 14.74,
-      "probability": 0.937
-    },
-    {
-      "word": "Grounding",
-      "start": 16.16,
-      "end": 16.84,
-      "probability": 0.677
-    },
-    {
-      "word": "maintained",
-      "start": 16.84,
-      "end": 17.24,
-      "probability": 0.299
-    },
-    {
-      "word": "style.",
-      "start": 17.24,
-      "end": 17.82,
-      "probability": 0.996
-    },
-    {
-      "word": "Code",
-      "start": 18.92,
-      "end": 19.22,
-      "probability": 0.992
-    },
-    {
-      "word": "is",
-      "start": 19.22,
-      "end": 19.4,
-      "probability": 0.987
-    },
-    {
-      "word": "generated,",
-      "start": 19.4,
-      "end": 19.92,
-      "probability": 0.998
-    },
-    {
-      "word": "verified",
-      "start": 20.32,
-      "end": 20.68,
+      "start": 10.4,
+      "end": 10.74,
       "probability": 0.993
     },
     {
-      "word": "and",
-      "start": 20.68,
-      "end": 21.24,
-      "probability": 0.716
+      "word": "Prompts",
+      "start": 13.02,
+      "end": 13.34,
+      "probability": 0.717
     },
     {
-      "word": "disposable.",
-      "start": 21.24,
-      "end": 21.88,
-      "probability": 0.919
-    },
-    {
-      "word": "The",
-      "start": 23.4,
-      "end": 23.76,
-      "probability": 0.981
+      "word": "in",
+      "start": 13.34,
+      "end": 13.5,
+      "probability": 0.982
     },
     {
       "word": "code",
-      "start": 23.76,
-      "end": 24.06,
-      "probability": 0.977
+      "start": 13.5,
+      "end": 13.84,
+      "probability": 0.795
+    },
+    {
+      "word": "intent.",
+      "start": 13.84,
+      "end": 14.46,
+      "probability": 0.983
+    },
+    {
+      "word": "Tests",
+      "start": 15.28,
+      "end": 15.62,
+      "probability": 0.956
+    },
+    {
+      "word": "preserve",
+      "start": 15.62,
+      "end": 16.0,
+      "probability": 0.765
+    },
+    {
+      "word": "behavior.",
+      "start": 16.0,
+      "end": 16.66,
+      "probability": 0.936
+    },
+    {
+      "word": "Grounding",
+      "start": 17.4,
+      "end": 17.74,
+      "probability": 0.745
+    },
+    {
+      "word": "maintains",
+      "start": 17.74,
+      "end": 18.32,
+      "probability": 0.492
+    },
+    {
+      "word": "style.",
+      "start": 18.32,
+      "end": 19.06,
+      "probability": 0.985
+    },
+    {
+      "word": "Code",
+      "start": 20.66,
+      "end": 21.0,
+      "probability": 0.989
     },
     {
       "word": "is",
-      "start": 24.06,
-      "end": 24.26,
+      "start": 21.0,
+      "end": 21.4,
+      "probability": 0.998
+    },
+    {
+      "word": "generated,",
+      "start": 21.4,
+      "end": 22.08,
+      "probability": 0.996
+    },
+    {
+      "word": "verified,",
+      "start": 22.58,
+      "end": 22.96,
+      "probability": 0.994
+    },
+    {
+      "word": "and",
+      "start": 23.42,
+      "end": 24.0,
+      "probability": 0.996
+    },
+    {
+      "word": "disposable.",
+      "start": 24.0,
+      "end": 24.66,
+      "probability": 0.915
+    },
+    {
+      "word": "The",
+      "start": 26.58,
+      "end": 26.98,
+      "probability": 0.98
+    },
+    {
+      "word": "code",
+      "start": 26.98,
+      "end": 27.38,
+      "probability": 0.988
+    },
+    {
+      "word": "is",
+      "start": 27.38,
+      "end": 27.62,
       "probability": 0.999
     },
     {
       "word": "just",
-      "start": 24.26,
-      "end": 24.6,
+      "start": 27.62,
+      "end": 28.04,
       "probability": 0.996
     },
     {
       "word": "plastic.",
-      "start": 24.6,
-      "end": 25.28,
-      "probability": 0.995
+      "start": 28.04,
+      "end": 29.0,
+      "probability": 0.98
     },
     {
       "word": "The",
-      "start": 27.02,
-      "end": 27.62,
-      "probability": 0.991
+      "start": 30.48,
+      "end": 31.38,
+      "probability": 0.839
     },
     {
       "word": "mold",
-      "start": 27.62,
-      "end": 28.0,
-      "probability": 0.965
+      "start": 31.38,
+      "end": 31.86,
+      "probability": 0.892
     },
     {
       "word": "is",
-      "start": 28.0,
-      "end": 28.5,
-      "probability": 0.976
+      "start": 31.86,
+      "end": 32.58,
+      "probability": 0.73
     },
     {
       "word": "what",
-      "start": 28.5,
-      "end": 28.7,
-      "probability": 0.997
+      "start": 32.58,
+      "end": 32.8,
+      "probability": 0.988
     },
     {
       "word": "matters.",
-      "start": 28.7,
-      "end": 29.04,
-      "probability": 1.0
+      "start": 32.8,
+      "end": 33.22,
+      "probability": 0.999
     }
   ],
   "segments": [
     {
       "start": 0.0,
-      "end": 1.06,
-      "text": "So here's the mental shit."
+      "end": 1.16,
+      "text": "So here's the mental shift."
     },
     {
-      "start": 1.32,
-      "end": 3.64,
+      "start": 2.7,
+      "end": 5.06,
       "text": "You don't patch socks because socks got cheap."
     },
     {
-      "start": 4.28,
-      "end": 6.36,
+      "start": 5.64,
+      "end": 7.62,
       "text": "The economics made patching irrational."
     },
     {
-      "start": 8.64,
-      "end": 9.66,
+      "start": 9.36,
+      "end": 10.74,
       "text": "Code just got that cheap."
     },
     {
-      "start": 11.02,
-      "end": 12.22,
+      "start": 13.02,
+      "end": 14.46,
       "text": "Prompts in code intent."
     },
     {
-      "start": 13.28,
-      "end": 14.74,
+      "start": 15.28,
+      "end": 16.66,
       "text": "Tests preserve behavior."
     },
     {
-      "start": 16.16,
-      "end": 17.82,
-      "text": "Grounding maintained style."
+      "start": 17.4,
+      "end": 19.06,
+      "text": "Grounding maintains style."
     },
     {
-      "start": 18.92,
-      "end": 21.88,
-      "text": "Code is generated, verified and disposable."
+      "start": 20.66,
+      "end": 24.66,
+      "text": "Code is generated, verified, and disposable."
     },
     {
-      "start": 23.6,
-      "end": 25.28,
+      "start": 26.9,
+      "end": 29.0,
       "text": "The code is just plastic."
     },
     {
-      "start": 27.02,
-      "end": 29.04,
+      "start": 30.48,
+      "end": 33.22,
       "text": "The mold is what matters."
     }
   ]

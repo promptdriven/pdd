@@ -34,18 +34,58 @@ SECTIONS = {
         "prefix": "PART1",
         "audio_file": "part1_economics_narration.wav",
         "tts_dir": "01-economics",
-        # 63 Whisper segments, 212s
+        # 117 Whisper segments, 432.9s
         # Spec: 1.1-1.13 (SockPriceChart → PieToCurve)
+        # Script: PART 1: THE ECONOMICS OF DARNING (2:00 - 6:30)
         "visual_sequence": [
-            (0, 5, "SockPriceChart", "Sock economics: cost, labor, darning, flipped, irrational"),
-            (6, 9, "CodeCostChart", "Code cost: expensive, scratch, patched, rational"),
-            (10, 19, "CodeCostChart", "AI enters: patching faster, tools, feel it"),
-            (20, 25, "CrossingPoint", "Dashed line, debt accumulates, 60% speedup"),
-            (26, 45, "ContextRot", "Context rot: AI debt, keyhole, guesses wrong"),
-            (46, 51, "DeveloperEditZoomout", "Regeneration: no debt, no rot, crossed lines"),
-            (52, 56, "veo:07_split_screen_sepia", "Best darning needles, still accumulation"),
-            (57, 60, "PieChart", "80-90% maintenance costs"),
-            (61, 62, "PieToCurve", "Costs compound, regenerate resets to zero"),
+            # [VISUAL: Price chart animation. 1950: wool sock costs about an hour of wages]
+            (0, 0, "SockPriceChart", "This isn't nostalgia, it's economics"),
+            # [VISUAL: Crossing point highlights. Label: The Threshold]
+            (1, 2, "ThresholdHighlight", "In 1950 wool sock cost real money, darning made sense"),
+            # [VISUAL: Lines diverge dramatically. By 2020, socks essentially free]
+            (3, 5, "LinesDiverge", "Mid-1960s math flipped, darning became irrational"),
+            # [VISUAL: Transition to similar chart for code]
+            (6, 6, "CodeCostChart", "Now look at code"),
+            # [VISUAL: Key dates on falling generate line: Codex, GPT-4, Claude]
+            (7, 10, "AIMilestones", "For decades generating expensive, you patched, rational"),
+            # [VISUAL: Post-2020, amber patch line drops; AI made patching faster]
+            (11, 16, "CodeCostChart", "AI made patching faster too, Cursor Claude Copilot"),
+            # [VISUAL: Focus on immediate patch line dropping]
+            (17, 18, "CodeCostChartMini", "Each patch getting faster, that's real, you feel it"),
+            # [VISUAL: Camera pulls back, debt EXPANDS, dashed total cost barely moves]
+            (19, 22, "CrossingPoint", "But watch dashed line, debt accumulates faster"),
+            # [VISUAL: Annotations: GitHub 55%, Uplevel 0%, 41% more bugs]
+            (23, 33, "CrossingPoint", "GitHub 55% speedup, Uplevel 800 devs no change"),
+            # [VISUAL: Annotations: GitClear +44% churn, -60% refactoring]
+            (34, 39, "CrossingPoint", "GitClear 44% churn, refactoring -60%, piling on"),
+            # [VISUAL: Zoom into debt area: Code Complexity + Context Rot layers]
+            (40, 41, "ContextRot", "Something else hiding in debt, AI-specific"),
+            # [VISUAL: Context window over small codebase, covers ~80%]
+            (42, 47, "ContextRot", "Small codebase AI brilliant, context covers everything"),
+            # [VISUAL: Codebase grid grows, context window stays same size]
+            (48, 51, "ContextRot", "Codebases grow, window stays same, millions of tokens"),
+            # [VISUAL: Red/green blocks: irrelevant inside, needed outside window]
+            (52, 59, "ContextRot", "AI guesses relevance, vector search fails, agentic slow"),
+            # [VISUAL: Performance vs Context Length graph, degrades 14-85%]
+            (60, 68, "ContextRot", "EMNLP: performance degrades with length, context rot"),
+            # [VISUAL: Patch line FORKS: small codebase down, large stays flat]
+            (69, 72, "CrossingPoint", "AI patching two stories, small codebase transformative"),
+            # [VISUAL: Large-codebase flat, METR 19% slower, 39-point gap]
+            (73, 80, "CrossingPoint", "Large codebase 19% slower, 39-point perception gap"),
+            # [VISUAL: Arrow from small fork to large: every patch adds code]
+            (81, 83, "CrossingPoint", "Every patch makes codebase bigger, pushes to worse world"),
+            # [VISUAL: Generate line pulses: small modules, clear prompts]
+            (84, 90, "DeveloperEditZoomout", "Regeneration no problem, prompt fits, no retrieval no rot"),
+            # [VISUAL: Side-by-side: agentic patching (noisy) vs PDD (clean)]
+            (91, 99, "DeveloperEditZoomout", "NL is models deepest fluency, 250 lines lowest defects"),
+            # [VISUAL: Generate line crosses below both lines. "We are here."]
+            (100, 103, "CrossingPoint", "Generation crossed below both lines, debt resets"),
+            # [VISUAL: Split screen: Developer with Cursor / Grandma with needle]
+            (104, 107, "veo:07_split_screen_sepia", "Best darning needles ever, still accumulation"),
+            # [VISUAL: Pie chart: Initial Dev 10-20%, Maintenance 80-90%]
+            (108, 113, "PieChart", "80-90% cost is maintenance, McKinsey Stripe tech debt"),
+            # [VISUAL: Pie morphs to compound interest curve, regeneration flat]
+            (114, 116, "PieToCurve", "Costs compound literally, unless you regenerate"),
         ],
     },
     "part2": {
@@ -54,18 +94,36 @@ SECTIONS = {
         "prefix": "PART2",
         "audio_file": "part2_paradigm_shift_narration.wav",
         "tts_dir": "02-paradigm-shift",
-        # 17 Whisper segments, 67s
+        # 31 Whisper segments, 177.1s
         # Spec: 2.1-2.11 (factory floor → prompt generates code)
+        # Script: PART 2: THE PARADIGM SHIFT (6:30 - 10:30)
         "visual_sequence": [
-            (0, 1, "veo:01_factory_floor", "What changed with clothes, paradigm shift"),
-            (2, 3, "veo:02_mold_closeup", "Manufacturing: crafting to designing molds"),
-            (4, 5, "PartsEject", "Make mold once, unlimited identical parts"),
-            (6, 6, "DefectDiscovered", "Defect: don't patch parts"),
-            (7, 7, "PerfectParts", "Fix the mold, applies to every future part"),
+            # [VISUAL: Factory floor. Industrial. Injection molding machine.]
+            (0, 1, "veo:01_factory_floor", "Pattern across industries, deeper shift in how things made"),
+            # [VISUAL: Close-up injection mold. Liquid plastic flows into mold.]
+            (2, 3, "veo:02_mold_closeup", "Consider injection molding, crafted to designed molds"),
+            # [VISUAL: Mold opens, perfect parts eject. Counter: 1...10...10000]
+            (4, 5, "PartsEject", "Make mold once, unlimited parts, refine once all improve"),
+            # [VISUAL: Defect in molded part]
+            (6, 6, "DefectDiscovered", "When there's a defect, don't patch individual parts"),
+            # [VISUAL: Engineer adjusts mold. New parts all perfect.]
+            (7, 7, "PerfectParts", "Fix the mold, fix applies to every future part"),
+            # [VISUAL: Split craftsman/mold. Glowing aura on mold/chair.]
             (8, 9, "ValueAura", "Real shift: migration of where value lives"),
-            (10, 11, "veo:07_craftsman_vs_mold", "Crafting: value in object, protect it"),
-            (12, 14, "PlasticRegenerates", "Molding: value in specification, disposable"),
-            (15, 16, "MoldToPrompt", "This is PDD: prompt is mold, code is plastic"),
+            # [VISUAL: In molding, value in specification. Part disposable.]
+            (10, 11, "PlasticRegenerates", "Molding value in specification, disposable, regenerate"),
+            # [VISUAL: 1980s electronics lab, hand-drawn circuits]
+            (12, 12, "veo:07_craftsman_vs_mold", "Not just plastics, chip industry hit this exact wall"),
+            # [VISUAL: Hand-drawn schematic zooms out, impossibly dense]
+            (13, 16, "MoldToPrompt", "1980s drew gates by hand, moved to Verilog in 1985"),
+            # [VISUAL: Schematic dissolves, Verilog code, Synopsys processes]
+            (17, 19, "MoldToPrompt", "Synthesis non-deterministic, different gates every time"),
+            # [VISUAL: Verification toolchain, formal equivalence checking]
+            (20, 23, "MoldToPrompt", "Synopsys wrapped verification, SAT/SMT proof, same function"),
+            # [VISUAL: Timeline: Transistors→Schematics→RTL→Behavioral→NL]
+            (24, 27, "MoldToPrompt", "By 1990 schematic, mid-90s half switched, all use HDL now"),
+            # [VISUAL: Verilog morphs to PROMPT, netlist to code, tests appear]
+            (28, 30, "PromptGeneratesCode", "Same transition for software, prompt is mold, tests lock"),
         ],
     },
     "part3": {
@@ -74,21 +132,50 @@ SECTIONS = {
         "prefix": "PART3",
         "audio_file": "part3_mold_narration.wav",
         "tts_dir": "03-mold-has-three-parts",
-        # 22 Whisper segments, 146s
+        # 40 Whisper segments, 292.1s
         # Spec: 3.1-3.18 (cross section → code output mold glows)
+        # Script: PART 3: THE MOLD HAS THREE PARTS (10:30 - 16:00)
         "visual_sequence": [
-            (0, 1, "CrossSectionIntro", "Intro: three components, three types of capital"),
-            (2, 3, "WallsIlluminate", "Tests are walls, constraint, boundary"),
-            (4, 5, "LiquidInjection", "Model sees tests, cannot violate walls"),
-            (6, 8, "AddTestWall", "Bug: add wall, permanent, never again"),
-            (9, 10, "RatchetTimelapse", "Ratchet effect: tests accumulate"),
-            (11, 11, "TraditionalVsPdd", "Traditional vs PDD comparison"),
-            (12, 13, "PromptTextFlows", "Second: prompt, specification of what you want"),
-            (14, 14, "PromptVariations", "Implementation varies, behavior locked"),
-            (15, 15, "PromptGovernsCode", "Good prompt smaller than code"),
-            (16, 19, "GroundingPanel", "Third: grounding, style, patterns, conventions"),
-            (20, 20, "ThreeComponents", "Prompt+tests+grounding, complete specification"),
-            (21, 21, "CodeOutputMoldGlows", "Code is output, mold is what matters"),
+            # [VISUAL: Cross-section of injection mold. Three regions highlight.]
+            (0, 1, "CrossSectionIntro", "Get precise, mold has three components, three capitals"),
+            # [VISUAL: Walls illuminate with labels: null->None, empty string, etc]
+            (2, 3, "WallsIlluminate", "First tests, tests are walls, constraint, boundary"),
+            # [VISUAL: Liquid injected, hits walls, stops. Walls matter.]
+            (4, 7, "LiquidInjection", "Walls matter, CodeRabbit 1.7x issues, DORA confirms"),
+            # [VISUAL: Focus single wall "null->None", liquid stops]
+            (8, 9, "FocusSingleWall", "Walls not optional, model sees tests, cannot violate"),
+            # [VISUAL: Bug discovered! Red alert.]
+            (10, 10, "BugDiscovered", "Bug found, you don't patch the code"),
+            # [VISUAL: New wall materializes for bug condition. Code regenerates.]
+            (11, 12, "AddTestWall", "Add a wall, permanent, bug can never occur again"),
+            # [VISUAL: Time-lapse: more bugs, more walls, mold gets precise]
+            (13, 13, "RatchetTimelapse", "Ratchet effect, tests only accumulate, mold more precise"),
+            # [VISUAL: Split: Traditional (patch cycle) vs PDD (add test, regen)]
+            (14, 14, "TraditionalVsPdd", "Traditional fix one place, PDD prevents bug everywhere"),
+            # [VISUAL: Synopsys Formality + Z3 logos, same math]
+            (15, 17, "TraditionalVsPdd", "Synopsys uses SAT/SMT, PDD uses Z3, same class solver"),
+            # [VISUAL: Side-by-side: Synopsys FEC vs PDD+Z3, mathematical proof]
+            (18, 22, "TraditionalVsPdd", "Z3 proves for all inputs, symbolic reasoning, same math"),
+            # [VISUAL: Injection nozzle highlights: intent, requirements, constraints]
+            (23, 24, "InjectionNozzle", "Second the prompt, specification of what you want"),
+            # [VISUAL: Text flows into mold: Parse user IDs...]
+            (25, 25, "PromptTextFlows", "Prompt defines what and why, implementation can vary"),
+            # [VISUAL: Same prompt generates code twice, different but both pass]
+            (26, 26, "PromptVariations", "Behavior locked, code flexible, contract fixed"),
+            # [VISUAL: Prompt glows, small (10-15 lines) governs 200-line file]
+            (27, 27, "PromptGovernsCode", "Good prompt 1/5 to 1/10 size, what and why not how"),
+            # [VISUAL: Two context windows: code-filled vs prompt-filled]
+            (28, 33, "PromptGovernsCode", "Context window: prompts are NL, 30x more training data"),
+            # [VISUAL: Grounding panel: OOP, Functional, Your Team's Style]
+            (34, 34, "GroundingPanel", "Third grounding, determines properties of what fills mold"),
+            # [VISUAL: Same prompt, different grounding: OOP vs functional output]
+            (35, 35, "GroundingComparison", "Grounding learned from past generations"),
+            # [VISUAL: Successful gen flows into Grounding Database]
+            (36, 37, "GroundingDatabase", "Style patterns conventions, feeds back into system"),
+            # [VISUAL: All three working together: prompt+grounding+tests->code]
+            (38, 38, "ThreeComponents", "Prompt+tests+grounding, complete specification"),
+            # [VISUAL: Code emerges clean. Code fades. Mold continues to glow.]
+            (39, 39, "CodeOutputMoldGlows", "Code is output, mold is what matters"),
         ],
     },
     "part4": {
@@ -97,17 +184,26 @@ SECTIONS = {
         "prefix": "PART4",
         "audio_file": "part4_precision_narration.wav",
         "tts_dir": "04-precision-tradeoff",
-        # 16 Whisper segments, 62s
+        # 16 Whisper segments, 58.8s
         # Spec: 4.1-4.8 (split 3D vs mold → both generate final)
+        # Script: PART 4: THE PRECISION TRADEOFF (16:00 - 18:00)
         "visual_sequence": [
-            (0, 0, "veo:split_3d_vs_mold", "Something subtle about prompts"),
-            (1, 3, "PrinterFocus", "3D printing: no mold, every point, precise"),
-            (4, 5, "MoldFlowFocus", "Injection molding: walls constrain the flow"),
+            # [VISUAL: Split screen. LEFT: 3D printer. RIGHT: Injection mold.]
+            (0, 0, "veo:split_3d_vs_mold", "Something subtle that changes how you think about prompts"),
+            # [VISUAL: Focus on 3D printer, coordinate grid, every point specified]
+            (1, 3, "PrinterFocus", "3D printing no mold, every point precise, specification precise"),
+            # [VISUAL: Focus on injection mold, liquid flows until walls constrain]
+            (4, 5, "MoldFlowFocus", "Injection molding precision comes from walls, flows constrained"),
+            # [VISUAL: Graph: X=Number of Tests, Y=Required Prompt Precision]
             (6, 6, "PrecisionGraph", "This maps directly to PDD"),
-            (7, 8, "LongPrompt", "Few tests: specify everything"),
-            (9, 10, "ShortPromptTests", "Many tests: specify intent only"),
-            (11, 13, "GraphAnimateCurve", "Test accumulation makes prompts simpler"),
-            (14, 15, "BothGenerateFinal", "More tests less prompt, walls do precision"),
+            # [VISUAL: Animate along curve: few tests = detailed prompt]
+            (7, 8, "LongPrompt", "Few tests prompt specifies everything, edge cases, errors"),
+            # [VISUAL: Many tests = minimal prompt, surrounded by test walls]
+            (9, 10, "ShortPromptTests", "Many tests prompt only needs intent, tests handle constraints"),
+            # [VISUAL: Both scenarios generate correct output]
+            (11, 13, "GraphAnimateCurve", "Test accumulation not just catching bugs, simpler prompts"),
+            # [VISUAL: "More tests, less prompt. The walls do the precision work."]
+            (14, 15, "BothGenerateFinal", "More walls less to specify, mold does precision work"),
         ],
     },
     "part5": {
@@ -116,14 +212,25 @@ SECTIONS = {
         "prefix": "PART5",
         "audio_file": "part5_compound_narration.wav",
         "tts_dir": "05-compound-returns",
-        # 21 Whisper segments, 64s
-        # Narration: compound returns, patch vs PDD, grandmother, economics changed
+        # 23 Whisper segments, 84.9s
+        # Script: PART 5: COMPOUND RETURNS (18:00 - 20:15)
         "visual_sequence": [
-            (0, 6, "GraphAnimateCurve", "Patch returns: local, linear, sub-linear"),
-            (7, 11, "ShortPromptTests", "PDD returns: test constrains all future, permanent"),
-            (12, 13, "BothGenerateFinal", "Compound vs diminishing returns"),
-            (14, 17, "veo:07_split_screen_sepia", "Great-grandmother/you: economics was rational"),
-            (18, 20, "CodeOutputMoldGlows", "Economics changed, darning socks"),
+            # [VISUAL: Graph with two curves: Patching vs PDD]
+            (0, 0, "GraphAnimateCurve", "Let's talk about compound returns"),
+            # [VISUAL: Patching curve: local returns, linear then flatten]
+            (1, 7, "GraphAnimateCurve", "Patch code local returns, 1.7x issues, risks more patches"),
+            # [VISUAL: Patching curve wobbles, dips at conflicts]
+            (8, 10, "GraphAnimateCurve", "Returns linear at best, cost compounding, 1.52T annually"),
+            # [VISUAL: PDD curve: each test compounds, constrains all future]
+            (11, 13, "ShortPromptTests", "PDD test returns compound, constrains future, permanent wall"),
+            # [VISUAL: Investment table: Patching vs PDD returns]
+            (14, 15, "BothGenerateFinal", "Every mold investment compounds, patching diminishes"),
+            # [VISUAL: Return to grandmother and modern person with socks]
+            (16, 17, "veo:07_split_screen_sepia", "Great-grandmother rational for darning, economics made sense"),
+            # [VISUAL: Return to developer with Cursor]
+            (18, 19, "veo:07_split_screen_sepia", "Not stupid for patching, economics made it rational"),
+            # [VISUAL: Economics chart. Crossing point pulses.]
+            (20, 22, "CrossingPoint", "Economics changed, rational becomes darning socks"),
         ],
     },
     "closing": {
@@ -132,12 +239,21 @@ SECTIONS = {
         "prefix": "CLOSING",
         "audio_file": "closing_narration.wav",
         "tts_dir": "06-closing",
-        # 10 Whisper segments, 29s
-        # Narration: mental shift, prompts/tests/grounding, mold matters
+        # 10 Whisper segments, 33.5s
+        # Script: CLOSING (20:15 - 21:30)
         "visual_sequence": [
-            (0, 3, "CodeOutputMoldGlows", "Mental shift: socks cheap, code cheap"),
-            (4, 6, "ThreeComponents", "Prompts encode intent, tests, grounding"),
-            (7, 9, "CodeOutputMoldGlows", "Code disposable, mold is what matters"),
+            # [VISUAL: Complete system, prompts+tests glow, code is output]
+            (0, 0, "CodeOutputMoldGlows", "So here's the mental shift"),
+            # [VISUAL: Sock metaphor returns. Holey sock discarded, fresh pair.]
+            (1, 2, "veo:07_split_screen_sepia", "Don't patch socks, socks got cheap, irrational"),
+            # [VISUAL: Code with bug, add test, regenerate. pdd bug -> pdd fix]
+            (3, 3, "CodeOutputMoldGlows", "Code just got that cheap"),
+            # [VISUAL: Triangle: PROMPT (top), TESTS (left), GROUNDING (right)]
+            (4, 6, "ThreeComponents", "Prompts encode intent, tests preserve, grounding maintains"),
+            # [VISUAL: Code dissolves and regenerates repeatedly, always passes]
+            (7, 7, "CodeOutputMoldGlows", "Code is generated verified and disposable"),
+            # [VISUAL: Final frame. Mold glows. Plastic part unremarkable.]
+            (8, 9, "CodeOutputMoldGlows", "The code is just plastic, the mold is what matters"),
         ],
     },
 }
@@ -145,6 +261,7 @@ SECTIONS = {
 # Composition import info: (folder_name, component_name, default_props_name)
 COMPOSITION_IMPORTS = {
     "SockPriceChart": ("02-SockPriceChart", "SockPriceChart", "defaultSockPriceChartProps"),
+    "CodeCostChartMini": ("05a-CodeCostChartMini", "CodeCostChartMini", "defaultCodeCostChartMiniProps"),
     "ThresholdHighlight": ("03-ThresholdHighlight", "ThresholdHighlight", "defaultThresholdHighlightProps"),
     "LinesDiverge": ("04-LinesDiverge", "LinesDiverge", "defaultLinesDivergeProps"),
     "CodeCostChart": ("05-CodeCostChart", "CodeCostChart", "defaultCodeCostChartProps"),
