@@ -1,3 +1,19 @@
+## v0.0.141 (2026-02-06)
+
+### Feat
+
+- Update demo narration and audio synchronization, add new video assets, and re-render all sections.
+
+### Fix
+
+- Address Copilot review feedback on track_cost pytest guard
+- Prevent `PDD_ENV` environment variable pollution in e2e tests to avoid incorrect JWT audience validation.
+- correct misleading docstrings about exit code behavior
+- remove exit code 1 to avoid CLI error handler
+- use ctx.exit(1) instead of raise click.exceptions.Exit(1)
+- deregister() returns bool so cleanup tracks real failures
+- pdd sessions cleanup shows misleading success message when all cleanups fail
+
 ## v0.0.140 (2026-02-05)
 
 ### Feat
