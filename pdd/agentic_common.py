@@ -542,6 +542,7 @@ def _run_with_provider(
     env["TERM"] = "dumb"
     env["NO_COLOR"] = "1"
     env["CI"] = "1"
+    env.pop("PDD_OUTPUT_COST_PATH", None)
 
     # Get CLI binary name for this provider
     cli_name = CLI_COMMANDS.get(provider)

@@ -75,6 +75,24 @@ def mock_rprint():
         yield mocked_rprint
 
 
+@pytest.fixture(autouse=True)
+def clear_pytest_env_for_cost_tests():
+    """
+    Patch os.environ.get so that PYTEST_CURRENT_TEST returns None inside
+    the track_cost decorator, allowing CSV-writing tests to exercise that
+    code path while running under pytest.
+    """
+    original_get = os.environ.get
+
+    def _patched_get(key, *args):
+        if key == 'PYTEST_CURRENT_TEST':
+            return None
+        return original_get(key, *args)
+
+    with mock.patch.object(os.environ, 'get', side_effect=_patched_get):
+        yield
+
+
 def test_csv_row_appended_if_file_exists(mock_click_context, mock_open_file, mock_rprint):
     mock_ctx = create_mock_context(
         'generate',
