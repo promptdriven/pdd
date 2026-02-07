@@ -18,6 +18,9 @@ litellm_cache.sqlite/
 # Auto-deps lock files (created by filelock for concurrent access prevention)
 *.csv.lock
 
+# Cost tracking CSV (generated at runtime, should not be committed)
+pdd_cost.csv
+
 # Claude folder
 .claude/
 
