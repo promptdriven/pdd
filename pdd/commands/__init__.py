@@ -16,6 +16,7 @@ from .report import report_core
 from .templates import templates_group
 from .utility import install_completion_cmd, verify
 from .which import which
+from .firecrawl import firecrawl_cache
 
 def register_commands(cli: click.Group) -> None:
     """Register all subcommands with the main CLI group."""
@@ -48,3 +49,4 @@ def register_commands(cli: click.Group) -> None:
     cli.add_command(connect)
     cli.add_command(auth_group)
     cli.add_command(sessions)
+    cli.add_command(firecrawl_cache)
