@@ -53,12 +53,11 @@ def test_spawn_terminal_uses_configured_port():
     app = create_app(Path.cwd(), config=config)
     client = TestClient(app)
 
-    # Patch TerminalSpawner via app.py's own module reference to avoid
-    # sys.modules identity issues when server conftest cleans pdd.server.* modules
-    import pdd.server.app as app_mod
-    with patch.object(app_mod.commands, 'TerminalSpawner') as mock_spawner:
-        mock_spawner.spawn.return_value = True
-
+    # Patch TerminalSpawner.spawn directly on the class (not through the
+    # commands module attribute) to avoid sys.modules identity issues when
+    # server conftest cleans pdd.server.* modules during full-suite runs.
+    from pdd.server.terminal_spawner import TerminalSpawner
+    with patch.object(TerminalSpawner, 'spawn', return_value=True) as mock_spawn:
         response = client.post("/api/v1/commands/spawn-terminal", json={
             "command": "sync",
             "args": {"basename": "test"},
@@ -66,8 +65,8 @@ def test_spawn_terminal_uses_configured_port():
         })
 
         # Verify spawn was called with the correct port
-        assert mock_spawner.spawn.called, "TerminalSpawner.spawn should have been called"
-        call_kwargs = mock_spawner.spawn.call_args[1]
+        assert mock_spawn.called, "TerminalSpawner.spawn should have been called"
+        call_kwargs = mock_spawn.call_args[1]
         assert call_kwargs.get('server_port') == custom_port, \
             f"Expected server_port={custom_port}, got {call_kwargs.get('server_port')}"
 
