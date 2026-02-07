@@ -36,7 +36,7 @@ Shared infrastructure for agentic CLI invocations (Claude Code, Gemini, Codex). 
    - Exception: Anthropic is available if Claude CLI exists, even without API key (supports subscription auth)
 4. Run agents in **headless mode** with JSON output for structured response parsing and real cost tracking. Each provider requires specific flags for auto-approval of file operations.
 5. Write prompt to unique temp file (`.agentic_prompt_<random>.txt`), invoke CLI with agentic instruction, clean up
-6. Sanitize environment for non-interactive subprocess execution (TERM=dumb, NO_COLOR=1, CI=1). For Anthropic, remove ANTHROPIC_API_KEY from env to force subscription auth.
+6. Sanitize environment for non-interactive subprocess execution (TERM=dumb, NO_COLOR=1, CI=1). Strip `PDD_OUTPUT_COST_PATH` from the subprocess env so child processes don't write to the parent's cost CSV. For Anthropic, remove ANTHROPIC_API_KEY from env to force subscription auth.
 7. Parse JSON output to extract actual cost:
    - Anthropic: `data["total_cost_usd"]` (USD directly); extract response from `data["result"]` or `data["response"]`
    - Google: Calculate from `data["stats"]["models"][model]["tokens"]` fields (prompt, candidates, cached)

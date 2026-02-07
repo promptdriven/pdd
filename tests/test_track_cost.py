@@ -75,6 +75,24 @@ def mock_rprint():
         yield mocked_rprint
 
 
+@pytest.fixture(autouse=True)
+def clear_pytest_env_for_cost_tests():
+    """
+    Patch os.environ.get so that PYTEST_CURRENT_TEST returns None inside
+    the track_cost decorator, allowing CSV-writing tests to exercise that
+    code path while running under pytest.
+    """
+    original_get = os.environ.get
+
+    def _patched_get(key, *args, **kwargs):
+        if key == 'PYTEST_CURRENT_TEST':
+            return None
+        return original_get(key, *args, **kwargs)
+
+    with mock.patch.object(os.environ, 'get', side_effect=_patched_get):
+        yield
+
+
 def test_csv_row_appended_if_file_exists(mock_click_context, mock_open_file, mock_rprint):
     mock_ctx = create_mock_context(
         'generate',
@@ -691,3 +709,25 @@ def test_files_tracked_on_command_failure(mock_click_context, mock_rprint, tmp_p
     # No tracking errors should be printed (the exception handling should be clean)
     # Note: rprint might be called for the actual exception, but not for tracking errors
     # We just want to make sure the test doesn't crash and files are tracked
+
+
+def test_csv_write_skipped_when_pytest_current_test_set(mock_click_context, mock_rprint):
+    """CSV writing should be skipped when PYTEST_CURRENT_TEST is set."""
+    mock_ctx = create_mock_context(
+        'generate',
+        {
+            'prompt_file': '/path/to/prompt',
+            'output': '/path/to/output',
+        },
+        obj={'output_cost': '/path/to/cost.csv'},
+    )
+
+    # Override the autouse fixture by restoring real os.environ.get,
+    # then set PYTEST_CURRENT_TEST so the guard skips CSV writing.
+    real_get = os.environ.__class__.get
+
+    with mock.patch.object(os.environ, 'get', side_effect=lambda k, *a, **kw: real_get(os.environ, k, *a, **kw)):
+        with mock.patch.dict(os.environ, {'PYTEST_CURRENT_TEST': 'tests/test_foo.py::test_bar (call)'}):
+            with mock.patch('builtins.open', mock_open()) as mocked_file:
+                sample_command(mock_ctx, prompt_file='/path/to/prompt', output='/path/to/output')
+                mocked_file.assert_not_called()

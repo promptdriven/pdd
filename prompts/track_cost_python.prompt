@@ -15,6 +15,7 @@
 - Extract the cost and model name from the command function's result if available. Generally, the second to the last element of the result tuple will be the cost and the last element will be the model name.
 - Collect input and output file paths from the command arguments using `kwargs`. Input file paths should be validated to ensure they exist, and output file paths should be identified by their parameter names starting with 'output'.
 7. **Append Cost Data to CSV File:**
+- Skip CSV writing entirely when running under pytest (`PYTEST_CURRENT_TEST` environment variable is set). This prevents mock return values from polluting the cost CSV during test runs.
 - If the output cost file does not exist, create it and write the header row.
 - If the file exists, append the cost data to the end of the file.
 - Ensure all columns are included in the CSV file: timestamp, model, command, cost, input files, and output files.
