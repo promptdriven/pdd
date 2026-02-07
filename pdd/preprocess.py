@@ -9,6 +9,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.markup import escape
 from rich.traceback import install
+from .firecrawl_cache import get_firecrawl_cache
 from pdd.path_resolution import get_default_resolver
 
 install()
@@ -313,6 +314,16 @@ def process_web_tags(text: str, recursive: bool) -> str:
         if recursive:
             # Defer network operations until after env var expansion
             return match.group(0)
+        
+        # Get cache instance
+        cache = get_firecrawl_cache()
+        
+        # Check cache first
+        cached_content = cache.get(url)
+        if cached_content is not None:
+            console.print(f"Using cached content for: [cyan]{url}[/cyan]")
+            return cached_content
+        
         console.print(f"Scraping web content from: [cyan]{url}[/cyan]")
         _dbg(f"Web tag URL: {url}")
         try:
@@ -321,20 +332,33 @@ def process_web_tags(text: str, recursive: bool) -> str:
             except ImportError:
                 _dbg("firecrawl import failed; package not installed")
                 return f"[Error: firecrawl-py package not installed. Cannot scrape {url}]"
+
             api_key = os.environ.get('FIRECRAWL_API_KEY')
             if not api_key:
                 console.print("[bold yellow]Warning:[/bold yellow] FIRECRAWL_API_KEY not found in environment")
                 _dbg("FIRECRAWL_API_KEY not set")
                 return f"[Error: FIRECRAWL_API_KEY not set. Cannot scrape {url}]"
+
             app = Firecrawl(api_key=api_key)
+
+            # Get cache TTL from environment or use default
+            cache_ttl_hours = int(os.environ.get('FIRECRAWL_CACHE_TTL_HOURS', 24))
+
             response = app.scrape(url, formats=['markdown'])
+
             # Handle both dict response (new API) and object response (legacy)
+            content = None
             if isinstance(response, dict) and 'markdown' in response:
                 _dbg(f"Web scrape returned markdown (len={len(response['markdown'])})")
-                return response['markdown']
+                content = response['markdown']
             elif hasattr(response, 'markdown'):
                 _dbg(f"Web scrape returned markdown (len={len(response.markdown)})")
-                return response.markdown
+                content = response.markdown
+
+            if content:
+                # Cache the result for future use
+                cache.set(url, content, ttl_hours=cache_ttl_hours)
+                return content
             else:
                 console.print(f"[bold yellow]Warning:[/bold yellow] No markdown content returned for {url}")
                 _dbg("Web scrape returned no markdown content")
