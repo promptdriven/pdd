@@ -156,7 +156,7 @@ def cleanup_sessions(cleanup_all: bool, cleanup_stale: bool, force: bool) -> Non
     """
     jwt_token = CloudConfig.get_jwt_token()
     if not jwt_token:
-        console.print("[red]Error: Not authenticated. Please run 'pdd login'.[/red]")
+        console.print("[red]Error: Not authenticated. Please run 'pdd auth login'.[/red]")
         return
 
     try:
