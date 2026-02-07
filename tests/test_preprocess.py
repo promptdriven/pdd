@@ -649,6 +649,31 @@ def test_process_xml_web_tag_scraping_error(reset_firecrawl_cache) -> None:
                 result = preprocess(prompt, recursive=False, double_curly_brackets=False)
                 assert result == expected_output
 
+def test_process_web_tag_invalid_ttl_env_no_crash(reset_firecrawl_cache) -> None:
+    """Regression: invalid FIRECRAWL_CACHE_TTL_HOURS should not crash process_web_tags.
+
+    The cache module handles TTL parsing internally with proper error handling.
+    preprocess.py should not duplicate this parsing with a bare int() call.
+    """
+    mock_markdown_content = "# Test Content"
+    prompt = "Test <web>https://example.com</web>"
+
+    mock_firecrawl = MagicMock()
+    mock_app = MagicMock()
+    mock_app.scrape.return_value = {'markdown': mock_markdown_content}
+    mock_firecrawl.Firecrawl.return_value = mock_app
+
+    with patch.dict('sys.modules', {'firecrawl': mock_firecrawl}):
+        with patch.dict('os.environ', {
+            'FIRECRAWL_API_KEY': 'fake_api_key',
+            'FIRECRAWL_CACHE_TTL_HOURS': 'not_a_number',
+            'FIRECRAWL_CACHE_ENABLE': 'false',
+        }):
+            # Should NOT raise ValueError
+            result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+            assert mock_markdown_content in result
+
+
 # NEW TESTS FROM test_preprocess2.py
 
 # Test for already doubled brackets
