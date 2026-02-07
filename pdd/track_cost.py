@@ -66,7 +66,7 @@ def track_cost(func):
                     else:
                         output_cost_path = os.getenv('PDD_OUTPUT_COST_PATH')
 
-                    if output_cost_path:
+                    if output_cost_path and os.environ.get('PYTEST_CURRENT_TEST') is None:
                         command_name = ctx.command.name
                         cost, model_name = extract_cost_and_model(result)
 

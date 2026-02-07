@@ -473,3 +473,68 @@ def test_unfinished_prompt_llm_returns_none_result(
 
         # Should raise some kind of error, not silently fail
         assert exc_info.value is not None
+
+
+# --- TDD tests for fence stripping and indented code handling ---
+
+
+def test_fence_stripped_before_syntactic_check(
+    mock_load_prompt_template_success,
+    mock_llm_invoke_success,
+):
+    """Code fence should be stripped; indented return inside fence should be
+    caught by the syntactic check, not the LLM."""
+    sample = "    return a + b\n```\n"
+    reasoning, is_finished, cost, model = unfinished_prompt(
+        prompt_text=sample,
+        strength=0.5,
+        temperature=0.0,
+        time=0.0,
+        language="python",
+        verbose=False,
+    )
+    assert is_finished is True, f"Expected finished, got {is_finished}. Reason: {reasoning}"
+    assert model == "syntactic_check", (
+        f"Should be caught by ast.parse syntactic check, not LLM. Got model: {model}"
+    )
+
+
+def test_indented_python_tail_without_fence_is_finished(
+    mock_load_prompt_template_success,
+    mock_llm_invoke_success,
+):
+    """An indented return statement (function body fragment) should parse as
+    finished via the syntactic check."""
+    sample = "    return a + b\n"
+    reasoning, is_finished, cost, model = unfinished_prompt(
+        prompt_text=sample,
+        strength=0.5,
+        temperature=0.0,
+        time=0.0,
+        language="python",
+        verbose=False,
+    )
+    assert is_finished is True, f"Expected finished, got {is_finished}. Reason: {reasoning}"
+    assert model == "syntactic_check", (
+        f"Should be caught by ast.parse syntactic check, not LLM. Got model: {model}"
+    )
+
+
+def test_fence_stripping_does_not_affect_incomplete_code(
+    mock_load_prompt_template_success,
+    mock_llm_invoke_success,
+):
+    """Incomplete code with a fence should still fall through to the LLM."""
+    sample = "    for i in range(10):\n```\n"
+    reasoning, is_finished, cost, model = unfinished_prompt(
+        prompt_text=sample,
+        strength=0.5,
+        temperature=0.0,
+        time=0.0,
+        language="python",
+        verbose=False,
+    )
+    # ast.parse should fail (missing loop body even when wrapped), falls through to LLM
+    assert model != "syntactic_check", (
+        f"Incomplete code should NOT be caught by syntactic check. Got model: {model}"
+    )

@@ -128,6 +128,11 @@ class TestIssue399E2ESubprocess:
         env["HOME"] = str(home_dir)
         env["PYTHONPATH"] = str(project_root)
 
+        # Prevent env pollution from other tests in the suite:
+        # PDD_ENV=prod would trigger JWT audience validation, rejecting the
+        # test JWT (which has no `aud` claim) and falling through to device flow.
+        env.pop("PDD_ENV", None)
+
         # Set SSH_CONNECTION to simulate an SSH session
         if with_ssh_connection:
             env["SSH_CONNECTION"] = "192.168.1.1 22 192.168.1.2 12345"

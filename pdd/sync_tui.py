@@ -27,8 +27,6 @@ from rich.style import Style
 
 # --- Sync steering (used by sync_orchestration.py) ---
 
-_ACTIVE_SYNC_APP = None  # set by SyncApp when running interactively
-
 # Default steering timeout (seconds).
 DEFAULT_STEER_TIMEOUT_S = 8.0
 
@@ -168,7 +166,8 @@ class ChoiceScreen(ModalScreen[str]):
                     choice = self.choices[idx - 1]
                 else:
                     choice = self.default
-            except Exception:
+            except Exception as e:
+                _debug_swallow("choice_button_parse", e)
                 choice = self.default
             self._dismissed = True
             self.dismiss(choice)
@@ -1244,7 +1243,7 @@ def maybe_steer_operation(
     if skip_verify:
         disallowed.add("verify")
 
-    active_app = app or _ACTIVE_SYNC_APP
+    active_app = app
     if active_app is None:
         return operation, False
 
