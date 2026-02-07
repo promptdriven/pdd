@@ -14,7 +14,7 @@
     - 'path_resolution_mode' (string, optional) - "cwd" or "config_base"; defaults to "cwd" for sync, "config_base" otherwise.
 
 % Outputs: Tuple of (resolved_config, input_strings, output_file_paths, language)
-    - 'resolved_config' (Dict[str, Any]) - Fully resolved configuration including prompts_dir, code_dir, tests_dir, examples_dir.
+    - 'resolved_config' (Dict[str, Any]) - Fully resolved configuration including prompts_dir (final resolved after precedence rules), code_dir, tests_dir, examples_dir.
     - 'input_strings' (dict) - Loaded file contents keyed by input_file_paths keys.
     - 'output_file_paths' (dict[str, str]) - Output paths from generate_output_paths.
     - 'language' (string) - Detected language.
@@ -31,6 +31,9 @@
 % Requirements:
 
 1. Configuration Hierarchy: CLI options > .pddrc context > environment variables > defaults.
+   - Environment variables: PDD_PROMPT_PATH takes precedence over PDD_PROMPTS_DIR.
+   - .pddrc supports 'prompt_path' as an alias for the prompt directory.
+   - CLI 'prompts_dir' overrides CLI 'prompt_path' if both are provided.
    - Implement helpers: _find_pddrc_file, _load_pddrc_config, _detect_context, _get_context_config.
    - Provide utilities: list_available_contexts, detect_context_for_file, get_tests_dir_from_config.
    - Pass 'outputs' config through for template-based path generation.
@@ -38,6 +41,7 @@
 2. Sync Discovery Mode: When command='sync' and input_file_paths is empty:
    - Require basename in command_options (raise ValueError if missing).
    - Use generate_output_paths to infer directory paths (prompts_dir, code_dir, tests_dir, examples_dir).
+   - Prompt discovery must respect PDD_PROMPT_PATH / prompt_path resolution rules before falling back to other context-aware logic.
    - Check CWD for matching prompt files first; otherwise use context-aware logic.
    - Return early with empty input_strings and output_file_paths.
 
