@@ -2086,3 +2086,62 @@ def test_claude_no_model_env_var_omits_model_flag(mock_cwd, mock_env, mock_load_
     args, kwargs = mock_subprocess.call_args
     cmd = args[0]
     assert "--model" not in cmd, f"Did not expect --model in command, got: {cmd}"
+
+
+# ---------------------------------------------------------------------------
+# PDD_USER_FEEDBACK Injection Tests
+# ---------------------------------------------------------------------------
+
+
+def test_pdd_user_feedback_injected_into_prompt(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """Test that PDD_USER_FEEDBACK env var is included in the agentic prompt."""
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+    os.environ["PDD_USER_FEEDBACK"] = "@alice (2025-01-15): Try a different approach"
+
+    mock_output = {
+        "result": "Done.",
+        "total_cost_usd": 0.01,
+        "is_error": False,
+    }
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps(mock_output)
+    mock_subprocess.return_value.stderr = ""
+
+    try:
+        success, msg, cost, provider = run_agentic_task("Fix the bug", mock_cwd)
+
+        assert success
+
+        # The prompt piped via stdin should contain the user feedback
+        args, kwargs = mock_subprocess.call_args
+        prompt_input = kwargs.get("input", "")
+        assert "User Feedback" in prompt_input
+        assert "@alice" in prompt_input
+        assert "Try a different approach" in prompt_input
+    finally:
+        os.environ.pop("PDD_USER_FEEDBACK", None)
+
+
+def test_pdd_user_feedback_not_injected_when_absent(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """Test that prompt is unchanged when PDD_USER_FEEDBACK is not set."""
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+    os.environ.pop("PDD_USER_FEEDBACK", None)
+
+    mock_output = {
+        "result": "Done.",
+        "total_cost_usd": 0.01,
+        "is_error": False,
+    }
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps(mock_output)
+    mock_subprocess.return_value.stderr = ""
+
+    success, msg, cost, provider = run_agentic_task("Fix the bug", mock_cwd)
+
+    assert success
+
+    args, kwargs = mock_subprocess.call_args
+    prompt_input = kwargs.get("input", "")
+    assert "User Feedback" not in prompt_input

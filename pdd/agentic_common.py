@@ -419,8 +419,19 @@ def run_agentic_task(
     prompt_filename = f".agentic_prompt_{uuid.uuid4().hex[:8]}.txt"
     prompt_path = cwd / prompt_filename
 
+    # Inject user feedback from GitHub issue comments (set by GitHub App executor)
+    user_feedback = os.environ.get("PDD_USER_FEEDBACK")
+    feedback_section = ""
+    if user_feedback:
+        feedback_section = (
+            "\n\n## User Feedback\n"
+            "The user provided the following feedback from a previous execution attempt. "
+            "Factor this into your response:\n"
+            f"{user_feedback}\n"
+        )
+
     full_instruction = (
-        f"{instruction}\n\n"
+        f"{instruction}{feedback_section}\n\n"
         f"Read the file {prompt_filename} for instructions. "
         "You have full file access to explore and modify files as needed."
     )

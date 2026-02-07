@@ -224,6 +224,9 @@ High-Level Wrapper Functions (used by orchestrators):
 - Return False if `PDD_NO_GITHUB_STATE=1` environment variable is set
 - Return True otherwise
 
+% User Feedback Injection
+In `run_agentic_task()`, read the `PDD_USER_FEEDBACK` environment variable. If set, append a "User Feedback" section to the agentic instruction before the prompt file reference. This injects user comments from a previous execution attempt into the LLM prompt so the agent factors in the user's corrections.
+
 % Dependencies
 <pdd.llm_invoke><include>context/llm_invoke_example.py</include></pdd.llm_invoke>
 
