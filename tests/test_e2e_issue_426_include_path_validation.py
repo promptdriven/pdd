@@ -29,7 +29,7 @@ buggy code (Step 11 doesn't validate include paths).
 import pytest
 import json
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 from pdd.agentic_architecture_orchestrator import run_agentic_architecture_orchestrator
 
@@ -103,16 +103,19 @@ Build a simple Python data model system with examples.
             elif "step5" in label:
                 return (True, "Dependencies: No external dependencies needed", 0.001, "mock-model")
             elif "step6" in label:
-                # Create architecture.json (array format matching orchestrator expectations)
-                architecture = [
-                    {
-                        "filename": "user_model_Python.prompt",
-                        "filepath": "src/models/user.py",
-                        "priority": 1,
-                        "dependencies": [],
-                        "description": "User data model"
-                    }
-                ]
+                # Create architecture.json
+                architecture = {
+                    "project_name": "data_models",
+                    "modules": [
+                        {
+                            "name": "user_model",
+                            "path": "prompts/user_model.prompt",
+                            "output": "src/models/user.py",
+                            "priority": 1,
+                            "description": "User data model"
+                        }
+                    ]
+                }
                 arch_file = cwd / "architecture.json"
                 arch_file.write_text(json.dumps(architecture, indent=2))
 
@@ -123,15 +126,18 @@ Build a simple Python data model system with examples.
                 return (True, f"FILES_CREATED: architecture.json", 0.001, "mock-model")
 
             elif "step7" in label:
-                # Generate .pddrc in YAML format (matching production format)
-                pddrc_yaml = """prompts_dir: prompts
-contexts:
-  models:
-    defaults:
-      example_output_path: context/
-"""
+                # Generate .pddrc with example_output_path as "context/"
+                pddrc_content = {
+                    "contexts": [
+                        {
+                            "name": "models",
+                            "description": "Data model examples",
+                            "example_output_path": "context/"
+                        }
+                    ]
+                }
                 pddrc_file = cwd / ".pddrc"
-                pddrc_file.write_text(pddrc_yaml)
+                pddrc_file.write_text(json.dumps(pddrc_content, indent=2))
 
                 # Create the context directory
                 (cwd / "context").mkdir(exist_ok=True)
@@ -160,20 +166,42 @@ Create a User data model class.
                 # Validate sync (dry-run) - pass immediately
                 return (True, "VALIDATION_RESULT: VALID\nDry-run successful", 0.001, "mock-model")
 
-            elif "step11_attempt1" in label:
-                # First attempt: detect the wrong include path and return INVALID
-                return (
-                    True,
-                    "VALIDATION_RESULT: INVALID\n\n"
-                    "INCLUDE PATH ERROR in user_model_Python.prompt: "
-                    "'src/models_example.py' does not start with any "
-                    "example_output_path from .pddrc. Expected prefixes: ['context']",
-                    0.001,
-                    "mock-model"
-                )
-
             elif "step11_attempt" in label:
-                # Subsequent attempts after fix: paths are now correct
+                # THIS IS THE KEY STEP: Validate dependencies
+                # After the fix, Step 11 should detect the wrong include path
+
+                # Read the generated prompt
+                prompt_file = cwd / "prompts" / "user_model.prompt"
+                if not prompt_file.exists():
+                    return (False, "Prompt file not found", 0.001, "mock-model")
+
+                prompt_text = prompt_file.read_text()
+
+                # Read .pddrc to check expected paths
+                pddrc_file = cwd / ".pddrc"
+                if not pddrc_file.exists():
+                    return (False, ".pddrc file not found", 0.001, "mock-model")
+
+                pddrc_data = json.loads(pddrc_file.read_text())
+                expected_path = pddrc_data["contexts"][0]["example_output_path"]
+
+                # Check if prompt has includes with wrong paths
+                if "<include>src/" in prompt_text and expected_path == "context/":
+                    # BUG DETECTED: Include path doesn't match .pddrc
+                    return (
+                        True,
+                        "VALIDATION_RESULT: INVALID\n\n"
+                        "Include path validation failed:\n"
+                        "- Found: <include>src/models_example.py</include>\n"
+                        f"- Expected path prefix: {expected_path}\n"
+                        "- File: prompts/user_model.prompt\n\n"
+                        "Validation Error: Include paths in generated prompts must match "
+                        "the example_output_path specified in .pddrc contexts.",
+                        0.001,
+                        "mock-model"
+                    )
+
+                # If paths are correct, validation passes
                 return (True, "VALIDATION_RESULT: VALID\nAll dependencies valid", 0.001, "mock-model")
 
             elif "step11_fix" in label:

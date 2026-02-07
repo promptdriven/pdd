@@ -797,3 +797,252 @@ class TestProgrammaticJSONValidation:
 
         # Fix step should have been called at least once
         assert step9_fix_count["value"] >= 1, "Fix step should be called to convert JSON object to array"
+
+
+class TestIncludePathValidation:
+    """Tests for include path validation in Step 11 (issue #426)."""
+
+    def test_step11_detects_wrong_include_paths(self, mock_dependencies, base_args):
+        """
+        Test that Step 11 validation detects when generated prompts use wrong include paths.
+
+        Bug reproduction for issue #426:
+        - .pddrc specifies examples should be in context/
+        - Generated prompts incorrectly use src/models_example.py
+        - Step 11 should catch this and return VALIDATION_RESULT: INVALID
+        """
+        mocks = mock_dependencies
+        cwd = base_args["cwd"]
+
+        # Create architecture.json
+        architecture = [
+            {
+                "priority": 1,
+                "filename": "models_Python.prompt",
+                "dependencies": []
+            }
+        ]
+
+        # Create .pddrc with example_output_path specifying context/
+        pddrc_content = """
+prompts_dir: prompts
+contexts:
+  python:
+    defaults:
+      example_output_path: context/
+"""
+
+        # Create prompt file with WRONG include path
+        prompt_content = """<pdd-reason>Generate Python models</pdd-reason>
+<include>src/models_example.py</include>
+
+% Task: Generate models
+"""
+
+        step11_validation_count = {"value": 0}
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+
+            if "step6" in label:
+                # Step 6 writes architecture.json
+                (cwd / "architecture.json").write_text(json.dumps(architecture))
+                return (True, 'FILES_CREATED: architecture.json', 0.1, "gpt-4")
+
+            if "step7" in label:
+                # Step 7 creates .pddrc
+                (cwd / ".pddrc").write_text(pddrc_content)
+                return (True, 'FILES_CREATED: .pddrc', 0.1, "gpt-4")
+
+            if "step8" in label:
+                # Step 8 creates prompt files
+                prompts_dir = cwd / "prompts"
+                prompts_dir.mkdir(exist_ok=True)
+                (prompts_dir / "models_Python.prompt").write_text(prompt_content)
+                return (True, 'FILES_CREATED: prompts/models_Python.prompt', 0.1, "gpt-4")
+
+            # Steps 9-10 pass
+            if "step9" in label or "step10" in label:
+                return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+
+            # Step 11 should detect the wrong include path
+            if "step11_attempt1" in label:
+                step11_validation_count["value"] += 1
+                # The LLM would detect the wrong path and return INVALID
+                return (True, "VALIDATION_RESULT: INVALID\n\nINCLUDE PATH ERROR in prompts/models_Python.prompt: 'src/models_example.py' does not match any example_output_path in .pddrc. Expected paths: ['context/']", 0.1, "gpt-4")
+
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mocks["run"].side_effect = side_effect
+
+        success, msg, cost, model, files = run_agentic_architecture_orchestrator(**base_args)
+
+        # Should complete but Step 11 validation should have failed at least once
+        assert step11_validation_count["value"] >= 1, "Step 11 validation should have been called"
+
+    def test_step11_passes_with_correct_include_paths(self, mock_dependencies, base_args):
+        """
+        Test that Step 11 validation passes when include paths correctly match .pddrc.
+
+        Happy path for issue #426:
+        - .pddrc specifies examples should be in context/
+        - Generated prompts correctly use context/models_example.py
+        - Step 11 should return VALIDATION_RESULT: VALID
+        """
+        mocks = mock_dependencies
+        cwd = base_args["cwd"]
+
+        # Create architecture.json
+        architecture = [
+            {
+                "priority": 1,
+                "filename": "models_Python.prompt",
+                "dependencies": []
+            }
+        ]
+
+        # Create .pddrc with example_output_path specifying context/
+        pddrc_content = """
+prompts_dir: prompts
+contexts:
+  python:
+    defaults:
+      example_output_path: context/
+"""
+
+        # Create prompt file with CORRECT include path
+        prompt_content = """<pdd-reason>Generate Python models</pdd-reason>
+<include>context/models_example.py</include>
+
+% Task: Generate models
+"""
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+
+            if "step6" in label:
+                # Step 6 writes architecture.json
+                (cwd / "architecture.json").write_text(json.dumps(architecture))
+                return (True, 'FILES_CREATED: architecture.json', 0.1, "gpt-4")
+
+            if "step7" in label:
+                # Step 7 creates .pddrc
+                (cwd / ".pddrc").write_text(pddrc_content)
+                return (True, 'FILES_CREATED: .pddrc', 0.1, "gpt-4")
+
+            if "step8" in label:
+                # Step 8 creates prompt files
+                prompts_dir = cwd / "prompts"
+                prompts_dir.mkdir(exist_ok=True)
+                (prompts_dir / "models_Python.prompt").write_text(prompt_content)
+                return (True, 'FILES_CREATED: prompts/models_Python.prompt', 0.1, "gpt-4")
+
+            # All validation steps pass
+            if "step9" in label or "step10" in label or "step11" in label:
+                return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mocks["run"].side_effect = side_effect
+
+        success, msg, cost, model, files = run_agentic_architecture_orchestrator(**base_args)
+
+        # Should succeed
+        assert success is True
+
+        # All 11 steps should have run (no retries needed)
+        assert mocks["run"].call_count == 11
+
+    def test_step11_handles_multiple_wrong_include_paths(self, mock_dependencies, base_args):
+        """
+        Test that Step 11 detects multiple wrong include paths across different prompt files.
+
+        Edge case for issue #426:
+        - Multiple contexts with different example_output_path values
+        - Multiple prompts with wrong paths
+        - Step 11 should catch all of them
+        """
+        mocks = mock_dependencies
+        cwd = base_args["cwd"]
+
+        # Create architecture.json with multiple modules
+        architecture = [
+            {
+                "priority": 1,
+                "filename": "models_Python.prompt",
+                "dependencies": []
+            },
+            {
+                "priority": 2,
+                "filename": "routes_Python.prompt",
+                "dependencies": ["models_Python.prompt"]
+            }
+        ]
+
+        # Create .pddrc with example_output_path specifying context/
+        pddrc_content = """
+prompts_dir: prompts
+contexts:
+  python:
+    defaults:
+      example_output_path: context/
+"""
+
+        # Create prompt files with WRONG include paths
+        models_prompt = """<pdd-reason>Generate Python models</pdd-reason>
+<include>src/models_example.py</include>
+
+% Task: Generate models
+"""
+
+        routes_prompt = """<pdd-reason>Generate Python routes</pdd-reason>
+<include>src/context/routes_example.py</include>
+<include>context/models_example.py</include>
+
+% Task: Generate routes
+"""
+
+        step11_validation_count = {"value": 0}
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+
+            if "step6" in label:
+                # Step 6 writes architecture.json
+                (cwd / "architecture.json").write_text(json.dumps(architecture))
+                return (True, 'FILES_CREATED: architecture.json', 0.1, "gpt-4")
+
+            if "step7" in label:
+                # Step 7 creates .pddrc
+                (cwd / ".pddrc").write_text(pddrc_content)
+                return (True, 'FILES_CREATED: .pddrc', 0.1, "gpt-4")
+
+            if "step8" in label:
+                # Step 8 creates prompt files
+                prompts_dir = cwd / "prompts"
+                prompts_dir.mkdir(exist_ok=True)
+                (prompts_dir / "models_Python.prompt").write_text(models_prompt)
+                (prompts_dir / "routes_Python.prompt").write_text(routes_prompt)
+                return (True, 'FILES_CREATED: prompts/models_Python.prompt, prompts/routes_Python.prompt', 0.1, "gpt-4")
+
+            # Steps 9-10 pass
+            if "step9" in label or "step10" in label:
+                return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+
+            # Step 11 should detect multiple wrong include paths
+            if "step11_attempt1" in label:
+                step11_validation_count["value"] += 1
+                # The LLM would detect both wrong paths
+                return (True, """VALIDATION_RESULT: INVALID
+
+INCLUDE PATH ERROR in prompts/models_Python.prompt: 'src/models_example.py' does not match any example_output_path in .pddrc. Expected paths: ['context/']
+INCLUDE PATH ERROR in prompts/routes_Python.prompt: 'src/context/routes_example.py' does not match any example_output_path in .pddrc. Expected paths: ['context/']""", 0.1, "gpt-4")
+
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mocks["run"].side_effect = side_effect
+
+        success, msg, cost, model, files = run_agentic_architecture_orchestrator(**base_args)
+
+        # Should complete but Step 11 validation should have failed
+        assert step11_validation_count["value"] >= 1, "Step 11 validation should have been called and detected errors"
