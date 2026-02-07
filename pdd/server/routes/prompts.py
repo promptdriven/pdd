@@ -729,8 +729,8 @@ async def analyze_diff(request: DiffAnalysisRequest):
             )
 
         # Add line numbers to content (use analysis_prompt which includes tests)
-        prompt_lines = analysis_prompt.split('\n')
-        code_lines = request.code_content.split('\n')
+        prompt_lines = analysis_prompt.splitlines()
+        code_lines = request.code_content.splitlines()
 
         prompt_numbered = '\n'.join(
             f"{i+1}: {line}" for i, line in enumerate(prompt_lines)

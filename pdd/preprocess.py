@@ -360,7 +360,7 @@ def process_include_many_tags(text: str, recursive: bool) -> str:
             # Wait for env expansion to materialize the list
             return match.group(0)
         # Split by newlines or commas
-        raw_items = [s.strip() for part in inner.split('\n') for s in part.split(',')]
+        raw_items = [s.strip() for part in inner.splitlines() for s in part.split(',')]
         paths = [p for p in raw_items if p]
         contents: list[str] = []
         for p in paths:
