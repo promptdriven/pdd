@@ -53,8 +53,10 @@ def test_spawn_terminal_uses_configured_port():
     app = create_app(Path.cwd(), config=config)
     client = TestClient(app)
 
-    # Mock the TerminalSpawner to capture the server_port argument
-    with patch('pdd.server.routes.commands.TerminalSpawner') as mock_spawner:
+    # Patch TerminalSpawner via app.py's own module reference to avoid
+    # sys.modules identity issues when server conftest cleans pdd.server.* modules
+    import pdd.server.app as app_mod
+    with patch.object(app_mod.commands, 'TerminalSpawner') as mock_spawner:
         mock_spawner.spawn.return_value = True
 
         response = client.post("/api/v1/commands/spawn-terminal", json={
