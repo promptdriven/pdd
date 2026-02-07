@@ -1,0 +1,63 @@
+<pdd-reason>Transparent SQLite-based cache for Firecrawl API responses to reduce API costs.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "module",
+  "module": {{
+    "functions": [
+      {{"name": "get_firecrawl_cache", "signature": "()", "returns": "FirecrawlCache"}},
+      {{"name": "clear_firecrawl_cache", "signature": "()", "returns": "int"}},
+      {{"name": "get_firecrawl_cache_stats", "signature": "()", "returns": "dict"}}
+    ]
+  }}
+}}
+</pdd-interface>
+
+<pdd-dependency>path_resolution_python.prompt</pdd-dependency>
+
+<include>context/python_preamble.prompt</include>
+
+% You are an expert Python engineer. Create a Firecrawl caching module that provides automatic, persistent caching of web scraping results to reduce API usage.
+
+% Role & Scope
+SQLite-based persistent cache for Firecrawl API responses (issue #46). Automatically stores and retrieves web content, reducing redundant API calls while handling expiration, size limits, and access tracking transparently.
+
+% Requirements
+
+1. **Core Operations**: Implement `get(url)`, `set(url, content, ttl_hours=None, metadata=None)`, `clear()`, and `get_stats()` methods on a `FirecrawlCache` class.
+
+2. **Persistent Storage**: Store cache in SQLite at PROJECT_ROOT/.pdd/cache/firecrawl.db with URL hash as primary key, full URL, content, timestamps, expiration, metadata, and access tracking; maintain indices for efficient queries.
+
+3. **URL Normalization**: Normalize URLs (lowercase scheme/host, no trailing slash) and strip well-known tracking parameters (utm_*, fbclid, gclid, _ga, _gid) so identical content from different tracking variants hits the cache.
+
+4. **TTL & Auto-Expiration**: Support configurable default TTL (24h default) with per-request overrides; expired entries return None and are removed automatically during cleanup.
+
+5. **Access Tracking**: Increment access_count and update last_accessed timestamp on cache hit to support usage analytics and LRU eviction.
+
+6. **Size Management**: Enforce max_entries limit (1000 default) and max_size_mb (100 default) via least-recently-used eviction; always expire stale entries before applying size limits.
+
+7. **Configuration**: Read FIRECRAWL_CACHE_ENABLE, FIRECRAWL_CACHE_TTL_HOURS, FIRECRAWL_CACHE_MAX_SIZE_MB, FIRECRAWL_CACHE_MAX_ENTRIES, FIRECRAWL_CACHE_AUTO_CLEANUP from environment with sensible defaults; gracefully handle invalid values by falling back to defaults.
+
+8. **Statistics**: Provide stats including entry counts, cache size, access frequency, and efficiency metrics.
+
+9. **Global Singleton Interface**: Expose `get_firecrawl_cache()`, `clear_firecrawl_cache()`, and `get_firecrawl_cache_stats()` functions for module-level access.
+
+10. **Resilient Error Handling**: Log warnings and return None/False on cache failures without raising exceptions; disable caching gracefully when explicitly disabled or on initialization errors.
+
+% Dependencies
+
+<path_resolution>
+<include>context/path_resolution_example.py</include>
+</path_resolution>
+
+<firecrawl_usage>
+<include>context/firecrawl_example.py</include>
+</firecrawl_usage>
+
+% Instructions
+
+- Use context managers (with sqlite3.connect) for all database operations
+- Include module docstring explaining cache location, environment variables, and key features
+- Singleton pattern: guard _cache_instance to prevent multiple instances
+- Cleanup strategy: expire stale entries before enforcing limits via access-time ordering
+- Use atomic upsert (INSERT ON CONFLICT) for cache set operations
