@@ -28,6 +28,27 @@ def s2f(seconds: float) -> int:
 # NOTE: TTS was generated from an earlier script version; some spec narration
 # lines are missing from the actual audio. Visuals match what audio says.
 SECTIONS = {
+    "cold_open": {
+        "folder": "S00-ColdOpen",
+        "component": "ColdOpenSection",
+        "prefix": "COLD_OPEN",
+        "audio_file": "cold_open_narration.wav",
+        "tts_dir": "00-cold-open",
+        # 5 Whisper segments, 16.1s
+        # Script: COLD OPEN: THE SOCK HOOK (0:00 - 2:00)
+        "visual_sequence": [
+            # [VISUAL: Split screen. Developer/Cursor + Grandmother darning]
+            (0, 0, "ColdOpenSplitScreen", "If you use Cursor, Claude Code, Copilot, getting good"),
+            # [VISUAL: Zoom out on both sides, accumulated weight of repair]
+            (1, 1, "ColdOpenSplitScreen", "Great-grandmother figured out sixty years ago"),
+            # [VISUAL: Hard cut modern day. Toss sock, grab fresh pair.]
+            (2, 2, "ColdOpenSplitScreen", "When socks got cheap enough she stopped"),
+            # [VISUAL: Code function deletes and regenerates clean]
+            (3, 3, "ColdOpenSplitScreen", "Code just got that cheap"),
+            # [VISUAL: Title card: Prompt-Driven Development]
+            (4, 4, "ColdOpenSplitScreen", "So why are we still patching"),
+        ],
+    },
     "part1": {
         "folder": "S01-Economics",
         "component": "Part1Economics",
@@ -260,6 +281,7 @@ SECTIONS = {
 
 # Composition import info: (folder_name, component_name, default_props_name)
 COMPOSITION_IMPORTS = {
+    "ColdOpenSplitScreen": ("01-ColdOpen", "ColdOpenSplitScreen", "defaultColdOpenProps"),
     "SockPriceChart": ("02-SockPriceChart", "SockPriceChart", "defaultSockPriceChartProps"),
     "CodeCostChartMini": ("05a-CodeCostChartMini", "CodeCostChartMini", "defaultCodeCostChartMiniProps"),
     "ThresholdHighlight": ("03-ThresholdHighlight", "ThresholdHighlight", "defaultThresholdHighlightProps"),

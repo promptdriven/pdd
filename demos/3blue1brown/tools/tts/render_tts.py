@@ -43,7 +43,7 @@ def parse_tts_script(script_path: str) -> list[Segment]:
     # Skip the header/key section - start after the first ---
     parts = content.split('---')
     if len(parts) > 2:
-        content = '---'.join(parts[2:])  # Skip header and annotations key
+        content = '---'.join(parts[1:])  # Skip header/annotations key, keep Cold Open
 
     segments = []
     current_tone = ""
@@ -251,8 +251,14 @@ def generate_silence(duration: float, sample_rate: int = 24000):
 
 def main():
     global _LOG_FILE
+    import argparse
+    parser = argparse.ArgumentParser(description="Render TTS from annotated script")
+    parser.add_argument("--script", help="Path to TTS script (default: scripts/tts_script.md)")
+    parser.add_argument("--start-segment", type=int, default=0, help="Starting segment number for output files")
+    args = parser.parse_args()
+
     project_root = Path(__file__).resolve().parent.parent.parent
-    script_path = project_root / "scripts" / "tts_script.md"
+    script_path = Path(args.script) if args.script else project_root / "scripts" / "tts_script.md"
     output_dir = project_root / "outputs" / "tts"
     output_dir.mkdir(exist_ok=True)
 
@@ -339,7 +345,8 @@ def main():
                 all_audio.append(silence)
 
             # Save individual segment
-            segment_file = output_dir / f"segment_{i:03d}.wav"
+            seg_num = i + args.start_segment
+            segment_file = output_dir / f"segment_{seg_num:03d}.wav"
             sf.write(str(segment_file), wavs[0], sr)
             log(f"  Done: {elapsed:.1f}s -> {audio_dur:.1f}s audio | {segment_file.name}")
 

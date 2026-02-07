@@ -39,6 +39,13 @@ SAMPLE_RATE = 24000  # Qwen3-TTS output rate
 # Separator segments (30, 46, 72, 81, 91) contain "---" text and are excluded.
 # Segments 101-102 are junk ("---" and "Total runtime" text).
 SECTIONS = {
+    "cold_open": {
+        "name": "Cold Open: The Sock Hook",
+        "seg_start": 105,
+        "seg_end": 110,
+        "output_prefix": "cold_open",
+        "output_dir": "00-cold-open",
+    },
     "part1": {
         "name": "Part 1: Economics of Darning",
         "seg_start": 0,

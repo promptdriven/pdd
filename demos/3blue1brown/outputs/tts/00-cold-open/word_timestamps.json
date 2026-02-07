@@ -1,0 +1,299 @@
+{
+  "section": "Cold Open: The Sock Hook",
+  "audio_file": "cold_open_narration.wav",
+  "duration": 16.1,
+  "language": "en",
+  "words": [
+    {
+      "word": "If",
+      "start": 0.0,
+      "end": 0.18,
+      "probability": 0.845
+    },
+    {
+      "word": "you",
+      "start": 0.18,
+      "end": 0.28,
+      "probability": 0.999
+    },
+    {
+      "word": "use",
+      "start": 0.28,
+      "end": 0.54,
+      "probability": 0.964
+    },
+    {
+      "word": "cursor",
+      "start": 0.54,
+      "end": 0.86,
+      "probability": 0.623
+    },
+    {
+      "word": "or",
+      "start": 0.86,
+      "end": 1.28,
+      "probability": 0.806
+    },
+    {
+      "word": "clawed",
+      "start": 1.28,
+      "end": 1.78,
+      "probability": 0.737
+    },
+    {
+      "word": "code",
+      "start": 1.78,
+      "end": 2.02,
+      "probability": 0.981
+    },
+    {
+      "word": "or",
+      "start": 2.02,
+      "end": 2.44,
+      "probability": 0.896
+    },
+    {
+      "word": "copilot,",
+      "start": 2.44,
+      "end": 3.22,
+      "probability": 0.702
+    },
+    {
+      "word": "you're",
+      "start": 3.42,
+      "end": 3.5,
+      "probability": 0.977
+    },
+    {
+      "word": "getting",
+      "start": 3.5,
+      "end": 3.68,
+      "probability": 0.992
+    },
+    {
+      "word": "really",
+      "start": 3.68,
+      "end": 4.16,
+      "probability": 0.956
+    },
+    {
+      "word": "good",
+      "start": 4.16,
+      "end": 4.54,
+      "probability": 0.996
+    },
+    {
+      "word": "at",
+      "start": 4.54,
+      "end": 4.68,
+      "probability": 0.992
+    },
+    {
+      "word": "this.",
+      "start": 4.68,
+      "end": 4.92,
+      "probability": 0.999
+    },
+    {
+      "word": "But",
+      "start": 5.24,
+      "end": 5.38,
+      "probability": 0.987
+    },
+    {
+      "word": "here's",
+      "start": 5.38,
+      "end": 5.78,
+      "probability": 0.984
+    },
+    {
+      "word": "what",
+      "start": 5.78,
+      "end": 5.88,
+      "probability": 0.932
+    },
+    {
+      "word": "your",
+      "start": 5.88,
+      "end": 6.02,
+      "probability": 0.941
+    },
+    {
+      "word": "great",
+      "start": 6.02,
+      "end": 6.38,
+      "probability": 0.974
+    },
+    {
+      "word": "-grandmother",
+      "start": 6.38,
+      "end": 7.06,
+      "probability": 0.858
+    },
+    {
+      "word": "figured",
+      "start": 7.06,
+      "end": 7.42,
+      "probability": 0.996
+    },
+    {
+      "word": "out.",
+      "start": 7.42,
+      "end": 7.72,
+      "probability": 0.996
+    },
+    {
+      "word": "60",
+      "start": 8.26,
+      "end": 8.84,
+      "probability": 0.718
+    },
+    {
+      "word": "years",
+      "start": 8.84,
+      "end": 9.34,
+      "probability": 0.99
+    },
+    {
+      "word": "ago,",
+      "start": 9.34,
+      "end": 9.76,
+      "probability": 0.999
+    },
+    {
+      "word": "when",
+      "start": 10.06,
+      "end": 10.2,
+      "probability": 0.963
+    },
+    {
+      "word": "Sox",
+      "start": 10.2,
+      "end": 10.58,
+      "probability": 0.606
+    },
+    {
+      "word": "got",
+      "start": 10.58,
+      "end": 10.8,
+      "probability": 0.964
+    },
+    {
+      "word": "cheap",
+      "start": 10.8,
+      "end": 11.04,
+      "probability": 0.986
+    },
+    {
+      "word": "enough,",
+      "start": 11.04,
+      "end": 11.32,
+      "probability": 0.998
+    },
+    {
+      "word": "she",
+      "start": 12.0,
+      "end": 12.2,
+      "probability": 0.973
+    },
+    {
+      "word": "stopped.",
+      "start": 12.2,
+      "end": 12.5,
+      "probability": 0.933
+    },
+    {
+      "word": "Code",
+      "start": 12.78,
+      "end": 12.9,
+      "probability": 0.289
+    },
+    {
+      "word": "just",
+      "start": 12.9,
+      "end": 13.08,
+      "probability": 0.989
+    },
+    {
+      "word": "got",
+      "start": 13.08,
+      "end": 13.24,
+      "probability": 0.999
+    },
+    {
+      "word": "that",
+      "start": 13.24,
+      "end": 13.4,
+      "probability": 0.991
+    },
+    {
+      "word": "cheap.",
+      "start": 13.4,
+      "end": 13.76,
+      "probability": 0.993
+    },
+    {
+      "word": "So",
+      "start": 14.1,
+      "end": 14.22,
+      "probability": 0.989
+    },
+    {
+      "word": "why",
+      "start": 14.22,
+      "end": 14.56,
+      "probability": 0.93
+    },
+    {
+      "word": "are",
+      "start": 14.56,
+      "end": 14.74,
+      "probability": 0.996
+    },
+    {
+      "word": "we",
+      "start": 14.74,
+      "end": 14.96,
+      "probability": 0.997
+    },
+    {
+      "word": "still",
+      "start": 14.96,
+      "end": 15.36,
+      "probability": 0.996
+    },
+    {
+      "word": "patching?",
+      "start": 15.36,
+      "end": 15.96,
+      "probability": 0.987
+    }
+  ],
+  "segments": [
+    {
+      "start": 0.0,
+      "end": 4.92,
+      "text": "If you use cursor or clawed code or copilot, you're getting really good at this."
+    },
+    {
+      "start": 5.24,
+      "end": 7.72,
+      "text": "But here's what your great-grandmother figured out."
+    },
+    {
+      "start": 8.26,
+      "end": 12.5,
+      "text": "60 years ago, when Sox got cheap enough, she stopped."
+    },
+    {
+      "start": 12.78,
+      "end": 13.76,
+      "text": "Code just got that cheap."
+    },
+    {
+      "start": 14.1,
+      "end": 15.96,
+      "text": "So why are we still patching?"
+    }
+  ]
+}

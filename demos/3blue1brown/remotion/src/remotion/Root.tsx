@@ -409,6 +409,14 @@ import {
   CLOSING_HEIGHT,
   defaultClosingSectionProps,
 } from "./S06-Closing";
+import {
+  ColdOpenSection,
+  COLD_OPEN_FPS as COLD_OPEN_SECTION_FPS,
+  COLD_OPEN_DURATION_FRAMES as COLD_OPEN_SECTION_DURATION_FRAMES,
+  COLD_OPEN_WIDTH as COLD_OPEN_SECTION_WIDTH,
+  COLD_OPEN_HEIGHT as COLD_OPEN_SECTION_HEIGHT,
+  defaultColdOpenSectionProps,
+} from "./S00-ColdOpen";
 
 export const RemotionRoot: React.FC = () => {
   return (
@@ -895,6 +903,17 @@ export const RemotionRoot: React.FC = () => {
           width={BOTH_GENERATE_WIDTH}
           height={BOTH_GENERATE_HEIGHT}
           defaultProps={defaultBothGenerateFinalProps}
+        />
+      </Folder>
+      <Folder name="S00-ColdOpen">
+        <Composition
+          id="ColdOpenSection"
+          component={ColdOpenSection}
+          durationInFrames={COLD_OPEN_SECTION_DURATION_FRAMES}
+          fps={COLD_OPEN_SECTION_FPS}
+          width={COLD_OPEN_SECTION_WIDTH}
+          height={COLD_OPEN_SECTION_HEIGHT}
+          defaultProps={defaultColdOpenSectionProps}
         />
       </Folder>
       <Folder name="S01-Economics">
