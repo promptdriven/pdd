@@ -610,7 +610,7 @@ def main():
                 summary_file.write_text(summary)
                 
                 # Display summary with colors
-                lines = summary.split('\n')
+                lines = summary.splitlines()
                 for line in lines:
                     if line == create_fat_divider():
                         print_colored(line, YELLOW, bold=True)

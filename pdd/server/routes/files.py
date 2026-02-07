@@ -799,13 +799,13 @@ async def list_changed_prompt_files(
         changed_files = set()
 
         # Parse committed changes
-        for line in diff_result.stdout.strip().split("\n"):
+        for line in diff_result.stdout.splitlines():
             if line and line.endswith(".prompt"):
                 changed_files.add(line)
 
         # Parse uncommitted changes (staged and unstaged)
         if status_result.returncode == 0:
-            for line in status_result.stdout.strip().split("\n"):
+            for line in status_result.stdout.splitlines():
                 if line and len(line) > 3:
                     # Format: XY filename (X=staged, Y=unstaged)
                     file_path = line[3:].strip()

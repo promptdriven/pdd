@@ -742,7 +742,7 @@ if __name__ == "__main__":
         try:
             output = result.stdout.strip()
             # Find the last line that might be JSON (in case there's logging output)
-            for line in reversed(output.split('\n')):
+            for line in reversed(output.splitlines()):
                 try:
                     result_data = json.loads(line)
                     return result_data["success"], result_data["error_message"]
