@@ -94,17 +94,8 @@ class FirecrawlCache:
                 logger.warning(f"Invalid FIRECRAWL_CACHE_TTL_HOURS: {ttl_env}, using default {self.default_ttl_hours}")
 
         # Size management configuration
-        try:
-            self.max_cache_size_mb = int(os.getenv("FIRECRAWL_CACHE_MAX_SIZE_MB", "100"))
-        except ValueError:
-            self.max_cache_size_mb = 100
-            logger.warning(f"Invalid FIRECRAWL_CACHE_MAX_SIZE_MB: {os.getenv('FIRECRAWL_CACHE_MAX_SIZE_MB')}, using default 100")
-
-        try:
-            self.max_entries = int(os.getenv("FIRECRAWL_CACHE_MAX_ENTRIES", "1000"))
-        except ValueError:
-            self.max_entries = 1000
-            logger.warning(f"Invalid FIRECRAWL_CACHE_MAX_ENTRIES: {os.getenv('FIRECRAWL_CACHE_MAX_ENTRIES')}, using default 1000")
+        self.max_cache_size_mb = int(os.getenv("FIRECRAWL_CACHE_MAX_SIZE_MB", "100"))
+        self.max_entries = int(os.getenv("FIRECRAWL_CACHE_MAX_ENTRIES", "1000"))
 
         logger.debug(
             f"Cache config: TTL={self.default_ttl_hours}h, MaxSize={self.max_cache_size_mb}MB, "
@@ -161,7 +152,7 @@ class FirecrawlCache:
             # Keep only essential parameters, remove tracking ones
             essential_params = []
             tracking_prefixes = {'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
-                               'fbclid', 'gclid', '_ga', '_gid'}
+                               'fbclid', 'gclid', 'ref', 'source', '_ga', '_gid'}
             for param in params.split('&'):
                 if param:
                     param_name = param.split('=')[0].lower()
@@ -257,20 +248,28 @@ class FirecrawlCache:
 
         try:
             with sqlite3.connect(self.cache_path) as conn:
-                conn.execute(
-                    '''INSERT INTO cache
-                       (url_hash, url, content, timestamp, expires_at, content_hash, metadata, access_count, last_accessed)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
-                       ON CONFLICT(url_hash) DO UPDATE SET
-                           content = excluded.content,
-                           timestamp = excluded.timestamp,
-                           expires_at = excluded.expires_at,
-                           content_hash = excluded.content_hash,
-                           metadata = excluded.metadata,
-                           last_accessed = excluded.last_accessed''',
-                    (url_hash, url, content, current_time, expires_at,
-                     content_hash, json.dumps(metadata), current_time)
-                )
+                # Check if entry exists
+                cursor = conn.execute('SELECT url_hash FROM cache WHERE url_hash = ?', (url_hash,))
+                exists = cursor.fetchone() is not None
+
+                if exists:
+                    # Update existing entry
+                    conn.execute(
+                        '''UPDATE cache SET content = ?, timestamp = ?, expires_at = ?,
+                           content_hash = ?, metadata = ?, last_accessed = ?
+                           WHERE url_hash = ?''',
+                        (content, current_time, expires_at, content_hash,
+                         json.dumps(metadata), current_time, url_hash)
+                    )
+                else:
+                    # Insert new entry
+                    conn.execute(
+                        '''INSERT INTO cache
+                           (url_hash, url, content, timestamp, expires_at, content_hash, metadata, last_accessed)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                        (url_hash, url, content, current_time, expires_at,
+                         content_hash, json.dumps(metadata), current_time)
+                    )
 
                 conn.commit()
 
