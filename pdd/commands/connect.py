@@ -244,7 +244,7 @@ def connect(
                     dim=True
                 ))
                 click.echo(click.style(
-                    "Run 'pdd login' to enable remote access via cloud.",
+                    "Run 'pdd auth login' to enable remote access via cloud.",
                     dim=True
                 ))
             else:

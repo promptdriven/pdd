@@ -190,7 +190,7 @@ class CloudConfig:
 
         # Standard device flow authentication (requires asyncio.run)
         # Note: This will fail if called from within a running event loop
-        # In that case, the cached JWT should be used (user should run pdd login first)
+        # In that case, the cached JWT should be used (user should run pdd auth login first)
         try:
             firebase_api_key = os.environ.get(FIREBASE_API_KEY_ENV)
             github_client_id = os.environ.get(GITHUB_CLIENT_ID_ENV)
@@ -204,10 +204,10 @@ class CloudConfig:
             try:
                 loop = asyncio.get_running_loop()
                 # We're in an async context - can't use asyncio.run()
-                # User needs to run 'pdd login' first to cache credentials
+                # User needs to run 'pdd auth login' first to cache credentials
                 raise AuthError(
                     "Cannot authenticate interactively from async context. "
-                    "Please run 'pdd login' first to cache credentials."
+                    "Please run 'pdd auth login' first to cache credentials."
                 )
             except RuntimeError:
                 # No running event loop - safe to use asyncio.run()
