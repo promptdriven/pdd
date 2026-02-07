@@ -299,7 +299,7 @@ async def test_heartbeat_error_handling(manager, mock_cloud_config, mock_httpx_c
 
 @pytest.mark.asyncio
 async def test_deregister_success(manager, mock_cloud_config, mock_httpx_client):
-    """Test successful deregistration."""
+    """Test successful deregistration returns True."""
     manager.session_id = "sess-1"
     manager.start_heartbeat() # Start it so we can verify it stops
 
@@ -307,8 +307,9 @@ async def test_deregister_success(manager, mock_cloud_config, mock_httpx_client)
     mock_response.status_code = 200
     mock_httpx_client.post.return_value = mock_response
 
-    await manager.deregister()
+    result = await manager.deregister()
 
+    assert result is True
     assert manager.session_id is None
     assert manager._heartbeat_task is None # Should be stopped
 
@@ -318,24 +319,46 @@ async def test_deregister_success(manager, mock_cloud_config, mock_httpx_client)
     assert kwargs["json"]["sessionId"] == "sess-1"
 
 @pytest.mark.asyncio
-async def test_deregister_idempotent(manager, mock_cloud_config, mock_httpx_client):
-    """Test deregister handles errors gracefully (idempotency)."""
+async def test_deregister_http_error_returns_false(manager, mock_cloud_config, mock_httpx_client):
+    """Test deregister returns False on HTTP error status (e.g. 500).
+
+    See: https://github.com/promptdriven/pdd/issues/469
+    """
     manager.session_id = "sess-1"
 
-    # Simulate API error
     mock_response = MagicMock()
     mock_response.status_code = 500
     mock_httpx_client.post.return_value = mock_response
 
-    # Should not raise exception
-    await manager.deregister()
+    result = await manager.deregister()
 
-    assert manager.session_id is None # Should still clear local ID
+    assert result is False
+    assert manager.session_id is None  # Still clears local ID
 
-    # Test when session_id is already None
+@pytest.mark.asyncio
+async def test_deregister_network_exception_returns_false(manager, mock_cloud_config, mock_httpx_client):
+    """Test deregister returns False on network exception without raising.
+
+    See: https://github.com/promptdriven/pdd/issues/469
+    """
+    manager.session_id = "sess-1"
+
+    mock_httpx_client.post.side_effect = Exception("Connection refused")
+
+    result = await manager.deregister()
+
+    assert result is False
+    assert manager.session_id is None  # Still clears local ID
+
+@pytest.mark.asyncio
+async def test_deregister_no_session_returns_true(manager, mock_cloud_config, mock_httpx_client):
+    """Test deregister returns True when no session_id is set (no-op)."""
     manager.session_id = None
     mock_httpx_client.post.reset_mock()
-    await manager.deregister()
+
+    result = await manager.deregister()
+
+    assert result is True
     mock_httpx_client.post.assert_not_called()
 
 # --- RemoteSessionManager List Sessions Tests ---

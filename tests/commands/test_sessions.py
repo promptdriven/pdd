@@ -251,7 +251,7 @@ def test_cleanup_all_force(mock_cloud_config, mock_manager_class, runner, mock_s
 
     # Mock the instance created for deregister
     mock_instance = MagicMock()
-    mock_instance.deregister = AsyncMock(return_value=None)
+    mock_instance.deregister = AsyncMock(return_value=True)
     mock_manager_class.return_value = mock_instance
 
     result = runner.invoke(sessions, ["cleanup", "--all", "--force"])
@@ -270,7 +270,7 @@ def test_cleanup_stale_only(mock_cloud_config, mock_manager_class, runner, mock_
 
     # Mock the instance created for deregister
     mock_instance = MagicMock()
-    mock_instance.deregister = AsyncMock(return_value=None)
+    mock_instance.deregister = AsyncMock(return_value=True)
     mock_manager_class.return_value = mock_instance
 
     result = runner.invoke(sessions, ["cleanup", "--stale", "--force"])
@@ -310,14 +310,13 @@ def test_cleanup_partial_failure(mock_cloud_config, mock_manager_class, runner, 
     mock_cloud_config.get_jwt_token.return_value = "test-jwt-token"
     mock_manager_class.list_sessions = AsyncMock(return_value=mock_sessions)
 
-    # Mock deregister to fail for second session
+    # Mock deregister: first succeeds, second fails
     call_count = 0
 
     async def mock_deregister():
         nonlocal call_count
         call_count += 1
-        if call_count == 2:
-            raise Exception("Failed to deregister")
+        return call_count != 2
 
     mock_instance = MagicMock()
     mock_instance.deregister = mock_deregister
@@ -342,3 +341,79 @@ def test_cleanup_interactive_cancel(mock_cloud_config, mock_manager, runner, moc
 
     assert result.exit_code == 0
     assert "Cancelled" in result.output
+
+
+# --- Issue #469: Misleading success message when all cleanups fail ---
+
+
+@patch("pdd.commands.sessions.RemoteSessionManager")
+@patch("pdd.commands.sessions.CloudConfig")
+def test_cleanup_all_fail(mock_cloud_config, mock_manager_class, runner, mock_sessions):
+    """When ALL cleanup operations fail: no success message, failure message shown.
+
+    See: https://github.com/promptdriven/pdd/issues/469
+    """
+    mock_cloud_config.get_jwt_token.return_value = "test-jwt-token"
+    mock_manager_class.list_sessions = AsyncMock(return_value=mock_sessions)
+
+    mock_instance = MagicMock()
+    mock_instance.deregister = AsyncMock(return_value=False)
+    mock_manager_class.return_value = mock_instance
+
+    result = runner.invoke(sessions, ["cleanup", "--all", "--force"])
+
+    assert "Successfully cleaned up" not in result.output, (
+        "Bug #469: Success message should not appear when all cleanup operations fail. "
+        f"Got output: {result.output!r}"
+    )
+    assert "Failed to cleanup" in result.output
+    assert result.exit_code == 0
+
+
+@patch("pdd.commands.sessions.RemoteSessionManager")
+@patch("pdd.commands.sessions.CloudConfig")
+def test_cleanup_partial_failure_469(mock_cloud_config, mock_manager_class, runner, mock_sessions):
+    """When some cleanups succeed and some fail: both messages shown.
+
+    See: https://github.com/promptdriven/pdd/issues/469
+    """
+    mock_cloud_config.get_jwt_token.return_value = "test-jwt-token"
+    mock_manager_class.list_sessions = AsyncMock(return_value=mock_sessions)
+
+    call_count = 0
+
+    async def mock_deregister():
+        nonlocal call_count
+        call_count += 1
+        return call_count != 2
+
+    mock_instance = MagicMock()
+    mock_instance.deregister = mock_deregister
+    mock_manager_class.return_value = mock_instance
+
+    result = runner.invoke(sessions, ["cleanup", "--all", "--force"])
+
+    assert "Successfully cleaned up" in result.output
+    assert "Failed to cleanup" in result.output
+    assert result.exit_code == 0
+
+
+@patch("pdd.commands.sessions.RemoteSessionManager")
+@patch("pdd.commands.sessions.CloudConfig")
+def test_cleanup_all_success(mock_cloud_config, mock_manager_class, runner, mock_sessions):
+    """When all cleanups succeed: success message shown, no failure message, exit code 0.
+
+    Regression guard for #469.
+    """
+    mock_cloud_config.get_jwt_token.return_value = "test-jwt-token"
+    mock_manager_class.list_sessions = AsyncMock(return_value=mock_sessions)
+
+    mock_instance = MagicMock()
+    mock_instance.deregister = AsyncMock(return_value=True)
+    mock_manager_class.return_value = mock_instance
+
+    result = runner.invoke(sessions, ["cleanup", "--all", "--force"])
+
+    assert "Successfully cleaned up" in result.output
+    assert "Failed to cleanup" not in result.output
+    assert result.exit_code == 0
