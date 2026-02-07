@@ -733,6 +733,10 @@ def _litellm_success_callback(
     """
     LiteLLM success callback to capture usage and finish reason.
     Stores data in a module-level variable for potential retrieval.
+    Note: _LAST_CALLBACK_DATA is a shared global dict and is NOT thread-safe
+    for concurrent use. The primary cost read path in llm_invoke() reads cost
+    directly from the response object (see _get_response_cost). This callback
+    exists for backward compatibility and single-threaded CLI usage only.
     """
     global _LAST_CALLBACK_DATA
     usage = getattr(completion_response, 'usage', None)
@@ -740,71 +744,79 @@ def _litellm_success_callback(
     output_tokens = getattr(usage, 'completion_tokens', 0)
     finish_reason = getattr(completion_response.choices[0], 'finish_reason', None)
 
-    calculated_cost = 0.0
-    try:
-        # Attempt 1: Use the response object directly (works for most single calls)
-        cost_val = litellm.completion_cost(completion_response=completion_response)
-        calculated_cost = cost_val if cost_val is not None else 0.0
-    except Exception as e1:
-        # Attempt 2: Compute via tokens and model mapping. If LiteLLM mapping is
-        # missing or API differs, fall back to CSV rates in _MODEL_RATE_MAP.
-        logger.debug(f"Attempting cost calculation with fallback method: {e1}")
-        try:
-            model_name = kwargs.get("model")
-            if model_name and usage:
-                in_tok = getattr(usage, 'prompt_tokens', None)
-                out_tok = getattr(usage, 'completion_tokens', None)
-                # Some providers may use 'input_tokens'/'output_tokens'
-                if in_tok is None:
-                    in_tok = getattr(usage, 'input_tokens', 0)
-                if out_tok is None:
-                    out_tok = getattr(usage, 'output_tokens', 0)
-
-                # Try LiteLLM helper (arg names vary across versions)
-                try:
-                    cost_val = litellm.completion_cost(
-                        model=model_name,
-                        prompt_tokens=in_tok,
-                        completion_tokens=out_tok,
-                    )
-                    calculated_cost = cost_val if cost_val is not None else 0.0
-                except TypeError:
-                    # Older/newer versions may require input/output token names
-                    try:
-                        cost_val = litellm.completion_cost(
-                            model=model_name,
-                            input_tokens=in_tok,
-                            output_tokens=out_tok,
-                        )
-                        calculated_cost = cost_val if cost_val is not None else 0.0
-                    except Exception as e3:
-                        # Final fallback: compute using CSV rates
-                        rates = _MODEL_RATE_MAP.get(str(model_name))
-                        if rates is not None:
-                            in_rate, out_rate = rates
-                            calculated_cost = (float(in_tok or 0) * in_rate + float(out_tok or 0) * out_rate) / 1_000_000.0
-                        else:
-                            calculated_cost = 0.0
-                        logger.debug(f"Cost calculation failed with LiteLLM token API; used CSV rates if available. Detail: {e3}")
-            else:
-                calculated_cost = 0.0
-        except Exception as e2:
-            calculated_cost = 0.0 # Default to 0 on any error
-            logger.debug(f"Cost calculation failed with fallback method: {e2}")
+    calculated_cost = _calculate_completion_cost(
+        completion_response, model_name=kwargs.get("model")
+    )
 
     _LAST_CALLBACK_DATA["input_tokens"] = input_tokens
     _LAST_CALLBACK_DATA["output_tokens"] = output_tokens
     _LAST_CALLBACK_DATA["finish_reason"] = finish_reason
-    _LAST_CALLBACK_DATA["cost"] = calculated_cost # Store the calculated cost
-
-    # Callback doesn't need to return a value now
-    # return calculated_cost
-
-    # Example of logging within the callback (can be expanded)
-    # logger.info(f"[Callback] Tokens: In={input_tokens}, Out={output_tokens}. Reason: {finish_reason}. Cost: ${calculated_cost:.6f}")
+    _LAST_CALLBACK_DATA["cost"] = calculated_cost
 
 # Register the callback with LiteLLM
 litellm.success_callback = [_litellm_success_callback]
+
+
+def _calculate_completion_cost(completion_response, model_name=None):
+    """
+    Calculate cost from a LiteLLM completion response using a 3-tier fallback:
+      1. litellm.completion_cost(completion_response=...)
+      2. litellm.completion_cost(model=..., prompt_tokens=..., completion_tokens=...)
+      3. Manual CSV rates from _MODEL_RATE_MAP
+    Thread-safe: operates only on the passed response object, no shared state.
+    """
+    try:
+        cost_val = litellm.completion_cost(completion_response=completion_response)
+        return cost_val if cost_val is not None else 0.0
+    except Exception as e1:
+        logger.debug(f"_calculate_completion_cost tier-1 failed: {e1}")
+        usage = getattr(completion_response, 'usage', None)
+        if not model_name or not usage:
+            return 0.0
+        in_tok = getattr(usage, 'prompt_tokens', None)
+        if in_tok is None:
+            in_tok = getattr(usage, 'input_tokens', 0)
+        out_tok = getattr(usage, 'completion_tokens', None)
+        if out_tok is None:
+            out_tok = getattr(usage, 'output_tokens', 0)
+        try:
+            cost_val = litellm.completion_cost(
+                model=model_name, prompt_tokens=in_tok, completion_tokens=out_tok,
+            )
+            return cost_val if cost_val is not None else 0.0
+        except TypeError:
+            try:
+                cost_val = litellm.completion_cost(
+                    model=model_name, input_tokens=in_tok, output_tokens=out_tok,
+                )
+                return cost_val if cost_val is not None else 0.0
+            except Exception as e3:
+                rates = _MODEL_RATE_MAP.get(str(model_name))
+                if rates is not None:
+                    in_rate, out_rate = rates
+                    return (float(in_tok or 0) * in_rate + float(out_tok or 0) * out_rate) / 1_000_000.0
+                logger.debug(f"_calculate_completion_cost all tiers failed: {e3}")
+                return 0.0
+        except Exception as e2:
+            logger.debug(f"_calculate_completion_cost tier-2 failed: {e2}")
+            return 0.0
+
+
+def _get_response_cost(response, model_name=None):
+    """
+    Extract cost from a single LiteLLM response object (thread-safe).
+
+    Prefers response._hidden_params['response_cost'] (pre-computed by LiteLLM),
+    falls back to _calculate_completion_cost() (public API).
+
+    This is the primary cost read path for llm_invoke(), replacing the old
+    pattern of reading from the shared _LAST_CALLBACK_DATA dict which was
+    subject to race conditions in concurrent server mode (issue #375).
+    """
+    hp = getattr(response, '_hidden_params', None)
+    if hp and 'response_cost' in hp and hp['response_cost'] is not None:
+        return float(hp['response_cost'])
+    return _calculate_completion_cost(response, model_name)
 
 # --- Cost Mapping Support (CSV Rates) ---
 # Populate from CSV inside llm_invoke; used by callback fallback
@@ -2778,10 +2790,15 @@ def llm_invoke(
                          logger.error(f"[ERROR] Could not extract result content from response item {i}: {e}")
                          results.append(f"ERROR: Could not extract result content. Response: {resp_item}")
 
-                # --- Retrieve Cost from Callback Data --- (Reinstated)
-                # For batch, this will reflect the cost associated with the *last* item processed by the callback.
-                # A fully accurate batch total would require a more complex callback class to aggregate.
-                total_cost = _LAST_CALLBACK_DATA.get("cost", 0.0)
+                # --- Compute cost directly from response (thread-safe, issue #375) ---
+                # Read cost from each response object instead of the shared
+                # _LAST_CALLBACK_DATA dict to avoid race conditions in concurrent
+                # server mode. Uses _hidden_params when available (pre-computed by
+                # LiteLLM), falls back to _calculate_completion_cost (public API).
+                total_cost = sum(
+                    _get_response_cost(r, model_name_litellm)
+                    for r in response_list
+                )
                 # ----------------------------------------
 
                 final_result = results if use_batch_mode else results[0]
@@ -2789,9 +2806,10 @@ def llm_invoke(
 
                 # --- Verbose Output for Success ---
                 if verbose:
-                    # Get token usage from the *last* callback data (might not be accurate for batch)
-                    input_tokens = _LAST_CALLBACK_DATA.get("input_tokens", 0)
-                    output_tokens = _LAST_CALLBACK_DATA.get("output_tokens", 0)
+                    # Extract tokens directly from last response (thread-safe)
+                    last_usage = getattr(response_list[-1], 'usage', None) if response_list else None
+                    input_tokens = getattr(last_usage, 'prompt_tokens', 0) or 0
+                    output_tokens = getattr(last_usage, 'completion_tokens', 0) or 0
 
                     cost_input_pm = model_info.get('input', 0.0) if pd.notna(model_info.get('input')) else 0.0
                     cost_output_pm = model_info.get('output', 0.0) if pd.notna(model_info.get('output')) else 0.0
@@ -2801,8 +2819,7 @@ def llm_invoke(
                     logger.info(f"[RESULT] Cost (Output): ${cost_output_pm:.2f}/M tokens")
                     logger.info(f"[RESULT] Tokens (Prompt): {input_tokens}")
                     logger.info(f"[RESULT] Tokens (Completion): {output_tokens}")
-                    # Display the cost captured by the callback
-                    logger.info(f"[RESULT] Total Cost (from callback): ${total_cost:.6g}") # Renamed label for clarity
+                    logger.info(f"[RESULT] Total Cost: ${total_cost:.6g}")
                     logger.info("[RESULT] Max Completion Tokens: Provider Default") # Indicate default limit
                     if final_thinking:
                         logger.info("[RESULT] Thinking Output:")
