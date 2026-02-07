@@ -2,12 +2,12 @@ import React from "react";
 import {
   AbsoluteFill,
   Audio,
-  Sequence,
+  OffthreadVideo,
   staticFile,
   useCurrentFrame,
 } from "remotion";
-import { BEATS, VISUAL_SEQUENCE, ColdOpenSectionPropsType } from "./constants";
-import { ColdOpenSplitScreen, defaultColdOpenProps } from "../01-ColdOpen";
+import { VISUAL_SEQUENCE, ColdOpenSectionPropsType } from "./constants";
+
 
 export const ColdOpenSection: React.FC<ColdOpenSectionPropsType> = () => {
   const frame = useCurrentFrame();
@@ -28,39 +28,54 @@ export const ColdOpenSection: React.FC<ColdOpenSectionPropsType> = () => {
 
       {/* Visual compositions sequenced by BEATS */}
       
-      {/* Visual 0: ColdOpenSplitScreen - If you use Cursor, Claude Code, Copilot, getting g */}
+      {/* Visual 0: Veo clip - If you use Cursor, Claude Code, Copilot, getting g */}
       {activeVisual === 0 && (
-        <Sequence from={BEATS.VISUAL_00_START} durationInFrames={BEATS.VISUAL_00_END - BEATS.VISUAL_00_START}>
-          <ColdOpenSplitScreen {...defaultColdOpenProps} />
-        </Sequence>
+        <AbsoluteFill>
+          <OffthreadVideo
+            src={staticFile("07_split_screen_sepia.mp4")}
+            style={{ width: "100%", height: "100%" }}
+          />
+        </AbsoluteFill>
       )}
 
-      {/* Visual 1: ColdOpenSplitScreen - Great-grandmother figured out sixty years ago */}
+      {/* Visual 1: Veo clip - Great-grandmother figured out sixty years ago */}
       {activeVisual === 1 && (
-        <Sequence from={BEATS.VISUAL_01_START} durationInFrames={BEATS.VISUAL_01_END - BEATS.VISUAL_01_START}>
-          <ColdOpenSplitScreen {...defaultColdOpenProps} />
-        </Sequence>
+        <AbsoluteFill>
+          <OffthreadVideo
+            src={staticFile("07_split_screen_sepia.mp4")}
+            style={{ width: "100%", height: "100%" }}
+          />
+        </AbsoluteFill>
       )}
 
-      {/* Visual 2: ColdOpenSplitScreen - When socks got cheap enough she stopped */}
+      {/* Visual 2: Veo clip - When socks got cheap enough she stopped */}
       {activeVisual === 2 && (
-        <Sequence from={BEATS.VISUAL_02_START} durationInFrames={BEATS.VISUAL_02_END - BEATS.VISUAL_02_START}>
-          <ColdOpenSplitScreen {...defaultColdOpenProps} />
-        </Sequence>
+        <AbsoluteFill>
+          <OffthreadVideo
+            src={staticFile("07_split_screen_sepia.mp4")}
+            style={{ width: "100%", height: "100%" }}
+          />
+        </AbsoluteFill>
       )}
 
-      {/* Visual 3: ColdOpenSplitScreen - Code just got that cheap */}
+      {/* Visual 3: Veo clip - Code just got that cheap */}
       {activeVisual === 3 && (
-        <Sequence from={BEATS.VISUAL_03_START} durationInFrames={BEATS.VISUAL_03_END - BEATS.VISUAL_03_START}>
-          <ColdOpenSplitScreen {...defaultColdOpenProps} />
-        </Sequence>
+        <AbsoluteFill>
+          <OffthreadVideo
+            src={staticFile("07_split_screen_sepia.mp4")}
+            style={{ width: "100%", height: "100%" }}
+          />
+        </AbsoluteFill>
       )}
 
-      {/* Visual 4: ColdOpenSplitScreen - So why are we still patching */}
+      {/* Visual 4: Veo clip - So why are we still patching */}
       {activeVisual === 4 && (
-        <Sequence from={BEATS.VISUAL_04_START} durationInFrames={BEATS.VISUAL_04_END - BEATS.VISUAL_04_START}>
-          <ColdOpenSplitScreen {...defaultColdOpenProps} />
-        </Sequence>
+        <AbsoluteFill>
+          <OffthreadVideo
+            src={staticFile("07_split_screen_sepia.mp4")}
+            style={{ width: "100%", height: "100%" }}
+          />
+        </AbsoluteFill>
       )}
     </AbsoluteFill>
   );

@@ -60,7 +60,7 @@ export const BEATS = {
   VISUAL_02_START: s2f(19.58),  // 587 frames
   VISUAL_02_END: s2f(27.82),  // 835 frames
 
-  // Visual 3: DefectDiscovered — "And when there's a defect, you don't patch individ..."
+  // Visual 3: veo:veo_defect_discovered — "And when there's a defect, you don't patch individ..."
   VISUAL_03_START: s2f(29.02),  // 871 frames
   VISUAL_03_END: s2f(33.24),  // 997 frames
 
@@ -106,7 +106,7 @@ export const VISUAL_SEQUENCE = [
   { start: BEATS.VISUAL_00_START, end: BEATS.VISUAL_00_END, id: "veo:01_factory_floor", desc: "Pattern across industries, deeper shift in how things made" },
   { start: BEATS.VISUAL_01_START, end: BEATS.VISUAL_01_END, id: "veo:02_mold_closeup", desc: "Consider injection molding, crafted to designed molds" },
   { start: BEATS.VISUAL_02_START, end: BEATS.VISUAL_02_END, id: "PartsEject", desc: "Make mold once, unlimited parts, refine once all improve" },
-  { start: BEATS.VISUAL_03_START, end: BEATS.VISUAL_03_END, id: "DefectDiscovered", desc: "When there's a defect, don't patch individual parts" },
+  { start: BEATS.VISUAL_03_START, end: BEATS.VISUAL_03_END, id: "veo:veo_defect_discovered", desc: "When there's a defect, don't patch individual parts" },
   { start: BEATS.VISUAL_04_START, end: BEATS.VISUAL_04_END, id: "PerfectParts", desc: "Fix the mold, fix applies to every future part" },
   { start: BEATS.VISUAL_05_START, end: BEATS.VISUAL_05_END, id: "ValueAura", desc: "Real shift: migration of where value lives" },
   { start: BEATS.VISUAL_06_START, end: BEATS.VISUAL_06_END, id: "PlasticRegenerates", desc: "Molding value in specification, disposable, regenerate" },

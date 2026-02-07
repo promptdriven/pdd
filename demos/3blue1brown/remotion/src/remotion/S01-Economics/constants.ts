@@ -206,11 +206,11 @@ export const BEATS = {
   VISUAL_17_START: s2f(280.16),  // 8405 frames
   VISUAL_17_END: s2f(290.38),  // 8711 frames
 
-  // Visual 18: DeveloperEditZoomout — "Regeneration doesn't have this problem...."
+  // Visual 18: veo:veo_developer_edit — "Regeneration doesn't have this problem...."
   VISUAL_18_START: s2f(292.48),  // 8774 frames
   VISUAL_18_END: s2f(319.86),  // 9596 frames
 
-  // Visual 19: DeveloperEditZoomout — "And there's something else...."
+  // Visual 19: veo:veo_developer_edit — "And there's something else...."
   VISUAL_19_START: s2f(320.92),  // 9628 frames
   VISUAL_19_END: s2f(365.0),  // 10950 frames
 
@@ -251,8 +251,8 @@ export const VISUAL_SEQUENCE = [
   { start: BEATS.VISUAL_15_START, end: BEATS.VISUAL_15_END, id: "CrossingPoint", desc: "AI patching two stories, small codebase transformative" },
   { start: BEATS.VISUAL_16_START, end: BEATS.VISUAL_16_END, id: "CrossingPoint", desc: "Large codebase 19% slower, 39-point perception gap" },
   { start: BEATS.VISUAL_17_START, end: BEATS.VISUAL_17_END, id: "CrossingPoint", desc: "Every patch makes codebase bigger, pushes to worse world" },
-  { start: BEATS.VISUAL_18_START, end: BEATS.VISUAL_18_END, id: "DeveloperEditZoomout", desc: "Regeneration no problem, prompt fits, no retrieval no rot" },
-  { start: BEATS.VISUAL_19_START, end: BEATS.VISUAL_19_END, id: "DeveloperEditZoomout", desc: "NL is models deepest fluency, 250 lines lowest defects" },
+  { start: BEATS.VISUAL_18_START, end: BEATS.VISUAL_18_END, id: "veo:veo_developer_edit", desc: "Regeneration no problem, prompt fits, no retrieval no rot" },
+  { start: BEATS.VISUAL_19_START, end: BEATS.VISUAL_19_END, id: "veo:veo_developer_edit", desc: "NL is models deepest fluency, 250 lines lowest defects" },
   { start: BEATS.VISUAL_20_START, end: BEATS.VISUAL_20_END, id: "CrossingPoint", desc: "Generation crossed below both lines, debt resets" },
   { start: BEATS.VISUAL_21_START, end: BEATS.VISUAL_21_END, id: "veo:07_split_screen_sepia", desc: "Best darning needles ever, still accumulation" },
   { start: BEATS.VISUAL_22_START, end: BEATS.VISUAL_22_END, id: "PieChart", desc: "80-90% cost is maintenance, McKinsey Stripe tech debt" },

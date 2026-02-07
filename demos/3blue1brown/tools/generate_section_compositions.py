@@ -38,15 +38,15 @@ SECTIONS = {
         # Script: COLD OPEN: THE SOCK HOOK (0:00 - 2:00)
         "visual_sequence": [
             # [VISUAL: Split screen. Developer/Cursor + Grandmother darning]
-            (0, 0, "ColdOpenSplitScreen", "If you use Cursor, Claude Code, Copilot, getting good"),
+            (0, 0, "veo:07_split_screen_sepia", "If you use Cursor, Claude Code, Copilot, getting good"),
             # [VISUAL: Zoom out on both sides, accumulated weight of repair]
-            (1, 1, "ColdOpenSplitScreen", "Great-grandmother figured out sixty years ago"),
+            (1, 1, "veo:07_split_screen_sepia", "Great-grandmother figured out sixty years ago"),
             # [VISUAL: Hard cut modern day. Toss sock, grab fresh pair.]
-            (2, 2, "ColdOpenSplitScreen", "When socks got cheap enough she stopped"),
+            (2, 2, "veo:07_split_screen_sepia", "When socks got cheap enough she stopped"),
             # [VISUAL: Code function deletes and regenerates clean]
-            (3, 3, "ColdOpenSplitScreen", "Code just got that cheap"),
+            (3, 3, "veo:07_split_screen_sepia", "Code just got that cheap"),
             # [VISUAL: Title card: Prompt-Driven Development]
-            (4, 4, "ColdOpenSplitScreen", "So why are we still patching"),
+            (4, 4, "veo:07_split_screen_sepia", "So why are we still patching"),
         ],
     },
     "part1": {
@@ -96,9 +96,9 @@ SECTIONS = {
             # [VISUAL: Arrow from small fork to large: every patch adds code]
             (81, 83, "CrossingPoint", "Every patch makes codebase bigger, pushes to worse world"),
             # [VISUAL: Generate line pulses: small modules, clear prompts]
-            (84, 90, "DeveloperEditZoomout", "Regeneration no problem, prompt fits, no retrieval no rot"),
+            (84, 90, "veo:veo_developer_edit", "Regeneration no problem, prompt fits, no retrieval no rot"),
             # [VISUAL: Side-by-side: agentic patching (noisy) vs PDD (clean)]
-            (91, 99, "DeveloperEditZoomout", "NL is models deepest fluency, 250 lines lowest defects"),
+            (91, 99, "veo:veo_developer_edit", "NL is models deepest fluency, 250 lines lowest defects"),
             # [VISUAL: Generate line crosses below both lines. "We are here."]
             (100, 103, "CrossingPoint", "Generation crossed below both lines, debt resets"),
             # [VISUAL: Split screen: Developer with Cursor / Grandma with needle]
@@ -126,7 +126,7 @@ SECTIONS = {
             # [VISUAL: Mold opens, perfect parts eject. Counter: 1...10...10000]
             (4, 5, "PartsEject", "Make mold once, unlimited parts, refine once all improve"),
             # [VISUAL: Defect in molded part]
-            (6, 6, "DefectDiscovered", "When there's a defect, don't patch individual parts"),
+            (6, 6, "veo:veo_defect_discovered", "When there's a defect, don't patch individual parts"),
             # [VISUAL: Engineer adjusts mold. New parts all perfect.]
             (7, 7, "PerfectParts", "Fix the mold, fix applies to every future part"),
             # [VISUAL: Split craftsman/mold. Glowing aura on mold/chair.]
@@ -212,9 +212,9 @@ SECTIONS = {
             # [VISUAL: Split screen. LEFT: 3D printer. RIGHT: Injection mold.]
             (0, 0, "veo:split_3d_vs_mold", "Something subtle that changes how you think about prompts"),
             # [VISUAL: Focus on 3D printer, coordinate grid, every point specified]
-            (1, 3, "PrinterFocus", "3D printing no mold, every point precise, specification precise"),
+            (1, 3, "veo:veo_3d_printer_focus", "3D printing no mold, every point precise, specification precise"),
             # [VISUAL: Focus on injection mold, liquid flows until walls constrain]
-            (4, 5, "MoldFlowFocus", "Injection molding precision comes from walls, flows constrained"),
+            (4, 5, "veo:veo_mold_flow_focus", "Injection molding precision comes from walls, flows constrained"),
             # [VISUAL: Graph: X=Number of Tests, Y=Required Prompt Precision]
             (6, 6, "PrecisionGraph", "This maps directly to PDD"),
             # [VISUAL: Animate along curve: few tests = detailed prompt]

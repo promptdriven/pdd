@@ -13,7 +13,6 @@ import { CodeCostChart, defaultCodeCostChartProps } from "../05-CodeCostChart";
 import { CodeCostChartMini, defaultCodeCostChartMiniProps } from "../05a-CodeCostChartMini";
 import { ContextRot, defaultContextRotProps } from "../07-ContextRot";
 import { CrossingPoint, defaultCrossingPointProps } from "../08-CrossingPoint";
-import { DeveloperEditZoomout, defaultDeveloperEditZoomoutProps } from "../09-DeveloperEditZoomout";
 import { LinesDiverge, defaultLinesDivergeProps } from "../04-LinesDiverge";
 import { PieChart, defaultPieChartProps } from "../12-PieChart";
 import { PieToCurve, defaultPieToCurveProps } from "../13-PieToCurve";
@@ -165,18 +164,24 @@ export const Part1Economics: React.FC<Part1EconomicsPropsType> = () => {
         </Sequence>
       )}
 
-      {/* Visual 18: DeveloperEditZoomout - Regeneration no problem, prompt fits, no retrieval */}
+      {/* Visual 18: Veo clip - Regeneration no problem, prompt fits, no retrieval */}
       {activeVisual === 18 && (
-        <Sequence from={BEATS.VISUAL_18_START} durationInFrames={BEATS.VISUAL_18_END - BEATS.VISUAL_18_START}>
-          <DeveloperEditZoomout {...defaultDeveloperEditZoomoutProps} />
-        </Sequence>
+        <AbsoluteFill>
+          <OffthreadVideo
+            src={staticFile("veo_developer_edit.mp4")}
+            style={{ width: "100%", height: "100%" }}
+          />
+        </AbsoluteFill>
       )}
 
-      {/* Visual 19: DeveloperEditZoomout - NL is models deepest fluency, 250 lines lowest def */}
+      {/* Visual 19: Veo clip - NL is models deepest fluency, 250 lines lowest def */}
       {activeVisual === 19 && (
-        <Sequence from={BEATS.VISUAL_19_START} durationInFrames={BEATS.VISUAL_19_END - BEATS.VISUAL_19_START}>
-          <DeveloperEditZoomout {...defaultDeveloperEditZoomoutProps} />
-        </Sequence>
+        <AbsoluteFill>
+          <OffthreadVideo
+            src={staticFile("veo_developer_edit.mp4")}
+            style={{ width: "100%", height: "100%" }}
+          />
+        </AbsoluteFill>
       )}
 
       {/* Visual 20: CrossingPoint - Generation crossed below both lines, debt resets */}

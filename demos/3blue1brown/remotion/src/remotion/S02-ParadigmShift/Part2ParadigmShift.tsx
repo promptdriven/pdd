@@ -8,7 +8,6 @@ import {
   useCurrentFrame,
 } from "remotion";
 import { BEATS, VISUAL_SEQUENCE, Part2ParadigmShiftPropsType } from "./constants";
-import { DefectDiscovered, defaultDefectDiscoveredProps } from "../15-DefectDiscovered";
 import { MoldToPrompt, defaultMoldToPromptProps } from "../19-MoldToPrompt";
 import { PartsEject, defaultPartsEjectProps } from "../14-PartsEject";
 import { PerfectParts, defaultPerfectPartsProps } from "../16-PerfectParts";
@@ -62,11 +61,14 @@ export const Part2ParadigmShift: React.FC<Part2ParadigmShiftPropsType> = () => {
         </Sequence>
       )}
 
-      {/* Visual 3: DefectDiscovered - When there's a defect, don't patch individual part */}
+      {/* Visual 3: Veo clip - When there's a defect, don't patch individual part */}
       {activeVisual === 3 && (
-        <Sequence from={BEATS.VISUAL_03_START} durationInFrames={BEATS.VISUAL_03_END - BEATS.VISUAL_03_START}>
-          <DefectDiscovered {...defaultDefectDiscoveredProps} />
-        </Sequence>
+        <AbsoluteFill>
+          <OffthreadVideo
+            src={staticFile("veo_defect_discovered.mp4")}
+            style={{ width: "100%", height: "100%" }}
+          />
+        </AbsoluteFill>
       )}
 
       {/* Visual 4: PerfectParts - Fix the mold, fix applies to every future part */}

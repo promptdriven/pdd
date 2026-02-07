@@ -11,9 +11,7 @@ import { BEATS, VISUAL_SEQUENCE, Part4PrecisionTradeoffPropsType } from "./const
 import { BothGenerateFinal, defaultBothGenerateFinalProps } from "../45-BothGenerateFinal";
 import { GraphAnimateCurve, defaultGraphAnimateCurveProps } from "../42-GraphAnimateCurve";
 import { LongPrompt, defaultLongPromptProps } from "../43-LongPrompt";
-import { MoldFlowFocus, defaultMoldFlowFocusProps } from "../40-MoldFlowFocus";
 import { PrecisionGraph, defaultPrecisionGraphProps } from "../41-PrecisionGraph";
-import { PrinterFocus, defaultPrinterFocusProps } from "../39-3DPrinterFocus";
 import { ShortPromptTests, defaultShortPromptTestsProps } from "../44-ShortPromptTests";
 
 export const Part4PrecisionTradeoff: React.FC<Part4PrecisionTradeoffPropsType> = () => {
@@ -45,18 +43,24 @@ export const Part4PrecisionTradeoff: React.FC<Part4PrecisionTradeoffPropsType> =
         </AbsoluteFill>
       )}
 
-      {/* Visual 1: PrinterFocus - 3D printing no mold, every point precise, specific */}
+      {/* Visual 1: Veo clip - 3D printing no mold, every point precise, specific */}
       {activeVisual === 1 && (
-        <Sequence from={BEATS.VISUAL_01_START} durationInFrames={BEATS.VISUAL_01_END - BEATS.VISUAL_01_START}>
-          <PrinterFocus {...defaultPrinterFocusProps} />
-        </Sequence>
+        <AbsoluteFill>
+          <OffthreadVideo
+            src={staticFile("veo_3d_printer_focus.mp4")}
+            style={{ width: "100%", height: "100%" }}
+          />
+        </AbsoluteFill>
       )}
 
-      {/* Visual 2: MoldFlowFocus - Injection molding precision comes from walls, flow */}
+      {/* Visual 2: Veo clip - Injection molding precision comes from walls, flow */}
       {activeVisual === 2 && (
-        <Sequence from={BEATS.VISUAL_02_START} durationInFrames={BEATS.VISUAL_02_END - BEATS.VISUAL_02_START}>
-          <MoldFlowFocus {...defaultMoldFlowFocusProps} />
-        </Sequence>
+        <AbsoluteFill>
+          <OffthreadVideo
+            src={staticFile("veo_mold_flow_focus.mp4")}
+            style={{ width: "100%", height: "100%" }}
+          />
+        </AbsoluteFill>
       )}
 
       {/* Visual 3: PrecisionGraph - This maps directly to PDD */}
