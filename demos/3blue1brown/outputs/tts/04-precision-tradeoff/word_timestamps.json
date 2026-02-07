@@ -1,810 +1,852 @@
 {
   "section": "Part 4: Precision Tradeoff",
   "audio_file": "part4_precision_narration.wav",
-  "duration": 61.53,
+  "duration": 58.77,
   "language": "en",
   "words": [
     {
       "word": "Here's",
       "start": 0.0,
-      "end": 0.32,
-      "probability": 0.923
+      "end": 0.34,
+      "probability": 0.87
     },
     {
       "word": "something",
-      "start": 0.32,
-      "end": 0.58,
-      "probability": 0.981
+      "start": 0.34,
+      "end": 0.66,
+      "probability": 0.991
     },
     {
       "word": "subtle",
-      "start": 0.58,
-      "end": 1.04,
-      "probability": 0.978
+      "start": 0.66,
+      "end": 1.08,
+      "probability": 0.991
     },
     {
       "word": "that",
-      "start": 1.04,
-      "end": 1.3,
-      "probability": 0.99
+      "start": 1.08,
+      "end": 1.34,
+      "probability": 0.983
     },
     {
       "word": "changes",
-      "start": 1.3,
-      "end": 1.78,
-      "probability": 0.997
+      "start": 1.34,
+      "end": 1.72,
+      "probability": 0.998
     },
     {
       "word": "how",
-      "start": 1.78,
-      "end": 2.08,
-      "probability": 0.993
+      "start": 1.72,
+      "end": 2.0,
+      "probability": 0.994
     },
     {
       "word": "you",
-      "start": 2.08,
-      "end": 2.24,
+      "start": 2.0,
+      "end": 2.16,
       "probability": 0.997
     },
     {
       "word": "think",
-      "start": 2.24,
-      "end": 2.58,
-      "probability": 0.991
+      "start": 2.16,
+      "end": 2.38,
+      "probability": 0.996
     },
     {
       "word": "about",
-      "start": 2.58,
-      "end": 2.88,
-      "probability": 0.998
+      "start": 2.38,
+      "end": 2.7,
+      "probability": 0.999
     },
     {
       "word": "prompts.",
-      "start": 2.88,
-      "end": 3.24,
-      "probability": 0.9
+      "start": 2.7,
+      "end": 3.02,
+      "probability": 0.887
     },
     {
       "word": "In",
-      "start": 5.04,
-      "end": 5.12,
-      "probability": 0.941
+      "start": 4.4,
+      "end": 4.48,
+      "probability": 0.978
     },
     {
       "word": "3D",
-      "start": 5.12,
-      "end": 5.52,
-      "probability": 0.946
+      "start": 4.48,
+      "end": 4.86,
+      "probability": 0.95
     },
     {
       "word": "printing,",
-      "start": 5.52,
-      "end": 5.9,
-      "probability": 0.975
+      "start": 4.86,
+      "end": 5.2,
+      "probability": 0.977
     },
     {
       "word": "there's",
-      "start": 6.14,
-      "end": 6.34,
-      "probability": 0.869
+      "start": 5.6,
+      "end": 5.84,
+      "probability": 0.936
     },
     {
       "word": "no",
-      "start": 6.34,
-      "end": 6.46,
-      "probability": 0.999
+      "start": 5.84,
+      "end": 6.0,
+      "probability": 0.996
     },
     {
       "word": "mold.",
-      "start": 6.46,
-      "end": 6.74,
-      "probability": 0.904
+      "start": 6.0,
+      "end": 6.28,
+      "probability": 0.913
     },
     {
       "word": "The",
-      "start": 7.32,
-      "end": 7.44,
-      "probability": 0.995
-    },
-    {
-      "word": "machine",
-      "start": 7.44,
-      "end": 7.72,
+      "start": 6.84,
+      "end": 6.96,
       "probability": 0.997
     },
     {
-      "word": "must",
-      "start": 7.72,
-      "end": 8.02,
+      "word": "machine",
+      "start": 6.96,
+      "end": 7.2,
       "probability": 0.998
     },
     {
-      "word": "know",
-      "start": 8.02,
-      "end": 8.24,
-      "probability": 0.979
-    },
-    {
-      "word": "exactly",
-      "start": 8.24,
-      "end": 8.64,
-      "probability": 0.993
-    },
-    {
-      "word": "where",
-      "start": 8.64,
-      "end": 9.04,
+      "word": "must",
+      "start": 7.2,
+      "end": 7.44,
       "probability": 0.999
     },
     {
-      "word": "to",
-      "start": 9.04,
-      "end": 9.16,
+      "word": "know",
+      "start": 7.44,
+      "end": 7.7,
       "probability": 0.998
+    },
+    {
+      "word": "exactly",
+      "start": 7.7,
+      "end": 8.36,
+      "probability": 0.995
+    },
+    {
+      "word": "where",
+      "start": 8.36,
+      "end": 8.76,
+      "probability": 0.998
+    },
+    {
+      "word": "to",
+      "start": 8.76,
+      "end": 8.86,
+      "probability": 0.999
     },
     {
       "word": "place",
-      "start": 9.16,
-      "end": 9.36,
-      "probability": 0.994
+      "start": 8.86,
+      "end": 9.1,
+      "probability": 0.997
     },
     {
       "word": "every",
-      "start": 9.36,
-      "end": 10.0,
-      "probability": 0.964
+      "start": 9.1,
+      "end": 9.6,
+      "probability": 0.991
     },
     {
       "word": "single",
-      "start": 10.0,
-      "end": 10.32,
-      "probability": 0.998
+      "start": 9.6,
+      "end": 9.98,
+      "probability": 0.997
     },
     {
       "word": "point",
-      "start": 10.32,
-      "end": 10.62,
+      "start": 9.98,
+      "end": 10.26,
       "probability": 0.996
     },
     {
       "word": "of",
-      "start": 10.62,
-      "end": 10.8,
-      "probability": 0.998
+      "start": 10.26,
+      "end": 10.44,
+      "probability": 0.997
     },
     {
       "word": "material.",
-      "start": 10.8,
-      "end": 11.22,
-      "probability": 0.992
-    },
-    {
-      "word": "The",
-      "start": 11.78,
-      "end": 11.9,
-      "probability": 0.795
-    },
-    {
-      "word": "specification",
-      "start": 11.9,
-      "end": 12.38,
-      "probability": 0.991
-    },
-    {
-      "word": "must",
-      "start": 12.38,
-      "end": 12.8,
-      "probability": 0.999
-    },
-    {
-      "word": "be",
-      "start": 12.8,
-      "end": 13.02,
-      "probability": 0.996
-    },
-    {
-      "word": "extremely",
-      "start": 13.02,
-      "end": 13.68,
+      "start": 10.44,
+      "end": 10.9,
       "probability": 0.994
     },
     {
+      "word": "The",
+      "start": 11.5,
+      "end": 11.78,
+      "probability": 0.995
+    },
+    {
+      "word": "specification",
+      "start": 11.78,
+      "end": 12.3,
+      "probability": 0.992
+    },
+    {
+      "word": "must",
+      "start": 12.3,
+      "end": 12.88,
+      "probability": 0.996
+    },
+    {
+      "word": "be",
+      "start": 12.88,
+      "end": 13.14,
+      "probability": 0.995
+    },
+    {
+      "word": "extremely",
+      "start": 13.14,
+      "end": 13.98,
+      "probability": 0.992
+    },
+    {
       "word": "precise.",
-      "start": 13.68,
-      "end": 14.24,
+      "start": 13.98,
+      "end": 14.46,
       "probability": 1.0
     },
     {
       "word": "In",
-      "start": 15.84,
-      "end": 16.06,
-      "probability": 0.965
+      "start": 15.68,
+      "end": 15.88,
+      "probability": 0.987
     },
     {
       "word": "injection",
-      "start": 16.06,
-      "end": 16.52,
-      "probability": 0.944
+      "start": 15.88,
+      "end": 16.3,
+      "probability": 0.921
     },
     {
       "word": "molding,",
-      "start": 16.52,
-      "end": 17.04,
-      "probability": 0.977
+      "start": 16.3,
+      "end": 16.9,
+      "probability": 0.976
     },
     {
       "word": "precision",
-      "start": 17.24,
-      "end": 17.58,
-      "probability": 0.994
+      "start": 17.34,
+      "end": 17.84,
+      "probability": 0.988
     },
     {
       "word": "comes",
-      "start": 17.58,
-      "end": 17.9,
-      "probability": 0.998
-    },
-    {
-      "word": "from",
-      "start": 17.9,
-      "end": 18.22,
-      "probability": 0.998
-    },
-    {
-      "word": "the",
-      "start": 18.22,
-      "end": 18.4,
-      "probability": 0.998
-    },
-    {
-      "word": "walls.",
-      "start": 18.4,
-      "end": 18.64,
-      "probability": 0.982
-    },
-    {
-      "word": "The",
-      "start": 19.26,
-      "end": 19.34,
+      "start": 17.84,
+      "end": 18.14,
       "probability": 0.997
     },
     {
+      "word": "from",
+      "start": 18.14,
+      "end": 18.44,
+      "probability": 0.999
+    },
+    {
+      "word": "the",
+      "start": 18.44,
+      "end": 18.6,
+      "probability": 0.997
+    },
+    {
+      "word": "walls.",
+      "start": 18.6,
+      "end": 18.88,
+      "probability": 0.991
+    },
+    {
+      "word": "The",
+      "start": 19.58,
+      "end": 19.72,
+      "probability": 0.996
+    },
+    {
       "word": "material",
-      "start": 19.34,
-      "end": 19.74,
-      "probability": 0.995
+      "start": 19.72,
+      "end": 20.18,
+      "probability": 0.997
     },
     {
       "word": "just",
-      "start": 19.74,
-      "end": 20.0,
-      "probability": 0.998
+      "start": 20.18,
+      "end": 20.48,
+      "probability": 0.997
     },
     {
       "word": "flows",
-      "start": 20.0,
-      "end": 20.3,
+      "start": 20.48,
+      "end": 20.86,
       "probability": 0.994
     },
     {
       "word": "until",
-      "start": 20.3,
-      "end": 20.78,
-      "probability": 0.991
+      "start": 20.86,
+      "end": 21.36,
+      "probability": 0.992
     },
     {
       "word": "it's",
-      "start": 20.78,
-      "end": 21.0,
-      "probability": 0.98
+      "start": 21.36,
+      "end": 21.62,
+      "probability": 0.976
     },
     {
       "word": "constrained.",
-      "start": 21.0,
-      "end": 21.44,
-      "probability": 0.994
-    },
-    {
-      "word": "This",
-      "start": 23.8,
-      "end": 24.44,
-      "probability": 0.994
-    },
-    {
-      "word": "maps",
-      "start": 24.44,
-      "end": 24.64,
-      "probability": 0.978
-    },
-    {
-      "word": "directly",
-      "start": 24.64,
-      "end": 25.28,
+      "start": 21.62,
+      "end": 22.12,
       "probability": 0.997
     },
     {
+      "word": "This",
+      "start": 23.42,
+      "end": 24.14,
+      "probability": 0.996
+    },
+    {
+      "word": "maps",
+      "start": 24.14,
+      "end": 24.32,
+      "probability": 0.985
+    },
+    {
+      "word": "directly",
+      "start": 24.32,
+      "end": 24.82,
+      "probability": 0.999
+    },
+    {
       "word": "to",
-      "start": 25.28,
-      "end": 25.5,
+      "start": 24.82,
+      "end": 25.22,
       "probability": 0.999
     },
     {
       "word": "PDD.",
-      "start": 25.5,
-      "end": 26.02,
-      "probability": 0.973
+      "start": 25.22,
+      "end": 25.76,
+      "probability": 0.984
     },
     {
       "word": "With",
-      "start": 26.96,
-      "end": 27.8,
-      "probability": 0.204
+      "start": 26.64,
+      "end": 27.02,
+      "probability": 0.294
     },
     {
       "word": "few",
-      "start": 27.8,
-      "end": 28.16,
-      "probability": 0.772
+      "start": 27.02,
+      "end": 27.24,
+      "probability": 0.919
     },
     {
       "word": "tests,",
-      "start": 28.16,
-      "end": 28.58,
-      "probability": 0.99
+      "start": 27.24,
+      "end": 27.66,
+      "probability": 0.992
     },
     {
       "word": "your",
-      "start": 29.0,
-      "end": 29.22,
-      "probability": 0.986
+      "start": 28.04,
+      "end": 28.12,
+      "probability": 0.988
     },
     {
       "word": "prompt",
-      "start": 29.22,
-      "end": 29.54,
-      "probability": 0.997
+      "start": 28.12,
+      "end": 28.36,
+      "probability": 0.998
     },
     {
       "word": "needs",
-      "start": 29.54,
-      "end": 29.9,
+      "start": 28.36,
+      "end": 28.72,
       "probability": 0.994
     },
     {
       "word": "to",
-      "start": 29.9,
-      "end": 30.14,
-      "probability": 0.999
+      "start": 28.72,
+      "end": 28.96,
+      "probability": 0.998
     },
     {
       "word": "specify",
-      "start": 30.14,
+      "start": 28.96,
+      "end": 29.34,
+      "probability": 0.988
+    },
+    {
+      "word": "everything,",
+      "start": 29.34,
+      "end": 29.92,
+      "probability": 0.995
+    },
+    {
+      "word": "edge",
+      "start": 30.44,
       "end": 30.66,
-      "probability": 0.982
-    },
-    {
-      "word": "everything.",
-      "start": 30.66,
-      "end": 31.44,
-      "probability": 0.99
-    },
-    {
-      "word": "Edge",
-      "start": 32.22,
-      "end": 32.44,
-      "probability": 0.812
+      "probability": 0.955
     },
     {
       "word": "cases,",
-      "start": 32.44,
-      "end": 32.84,
-      "probability": 0.822
+      "start": 30.66,
+      "end": 31.04,
+      "probability": 0.977
     },
     {
       "word": "error",
-      "start": 33.36,
-      "end": 33.6,
-      "probability": 0.995
+      "start": 31.48,
+      "end": 31.64,
+      "probability": 0.998
     },
     {
       "word": "handling,",
-      "start": 33.6,
-      "end": 34.04,
-      "probability": 0.973
+      "start": 31.64,
+      "end": 32.06,
+      "probability": 0.984
     },
     {
       "word": "exact",
-      "start": 34.68,
-      "end": 35.08,
-      "probability": 0.993
+      "start": 32.62,
+      "end": 32.96,
+      "probability": 0.989
     },
     {
       "word": "behavior",
-      "start": 35.08,
-      "end": 35.78,
-      "probability": 0.962
+      "start": 32.96,
+      "end": 33.5,
+      "probability": 0.937
     },
     {
       "word": "in",
-      "start": 35.78,
-      "end": 36.1,
-      "probability": 0.921
+      "start": 33.5,
+      "end": 33.7,
+      "probability": 0.957
     },
     {
       "word": "every",
-      "start": 36.1,
-      "end": 36.56,
-      "probability": 0.995
+      "start": 33.7,
+      "end": 34.0,
+      "probability": 0.998
     },
     {
       "word": "situation.",
-      "start": 36.56,
-      "end": 37.22,
+      "start": 34.0,
+      "end": 34.64,
       "probability": 0.998
     },
     {
       "word": "With",
-      "start": 37.98,
-      "end": 38.56,
-      "probability": 0.975
+      "start": 35.28,
+      "end": 35.96,
+      "probability": 0.98
     },
     {
       "word": "many",
-      "start": 38.56,
-      "end": 38.82,
+      "start": 35.96,
+      "end": 36.18,
       "probability": 0.997
     },
     {
       "word": "tests,",
-      "start": 38.82,
-      "end": 39.34,
-      "probability": 0.998
-    },
-    {
-      "word": "the",
-      "start": 39.9,
-      "end": 39.98,
+      "start": 36.18,
+      "end": 36.58,
       "probability": 0.997
     },
     {
+      "word": "the",
+      "start": 37.04,
+      "end": 37.1,
+      "probability": 0.996
+    },
+    {
       "word": "prompt",
-      "start": 39.98,
-      "end": 40.22,
+      "start": 37.1,
+      "end": 37.3,
       "probability": 0.999
     },
     {
       "word": "only",
-      "start": 40.22,
-      "end": 40.62,
-      "probability": 0.997
+      "start": 37.3,
+      "end": 37.82,
+      "probability": 0.983
     },
     {
       "word": "needs",
-      "start": 40.62,
-      "end": 40.84,
-      "probability": 0.997
+      "start": 37.82,
+      "end": 38.06,
+      "probability": 0.998
     },
     {
       "word": "to",
-      "start": 40.84,
-      "end": 41.08,
+      "start": 38.06,
+      "end": 38.28,
       "probability": 0.999
     },
     {
       "word": "specify",
-      "start": 41.08,
-      "end": 41.44,
-      "probability": 0.997
+      "start": 38.28,
+      "end": 38.68,
+      "probability": 0.996
     },
     {
       "word": "intent.",
-      "start": 41.44,
-      "end": 42.06,
-      "probability": 0.986
+      "start": 38.68,
+      "end": 39.22,
+      "probability": 0.926
     },
     {
       "word": "The",
-      "start": 42.68,
-      "end": 42.76,
-      "probability": 0.991
+      "start": 39.98,
+      "end": 40.16,
+      "probability": 0.975
     },
     {
       "word": "tests",
-      "start": 42.76,
-      "end": 43.18,
-      "probability": 0.806
+      "start": 40.16,
+      "end": 40.74,
+      "probability": 0.723
     },
     {
       "word": "handle",
-      "start": 43.18,
-      "end": 43.6,
+      "start": 40.74,
+      "end": 41.32,
       "probability": 0.985
     },
     {
       "word": "the",
-      "start": 43.6,
-      "end": 43.78,
-      "probability": 0.998
+      "start": 41.32,
+      "end": 41.5,
+      "probability": 0.996
     },
     {
       "word": "constraints.",
-      "start": 43.78,
-      "end": 44.22,
-      "probability": 0.999
+      "start": 41.5,
+      "end": 42.0,
+      "probability": 0.993
     },
     {
       "word": "This",
-      "start": 45.9,
-      "end": 46.74,
-      "probability": 0.986
+      "start": 43.14,
+      "end": 43.9,
+      "probability": 0.985
     },
     {
       "word": "is",
-      "start": 46.74,
-      "end": 46.98,
+      "start": 43.9,
+      "end": 44.02,
       "probability": 0.997
     },
     {
       "word": "why",
-      "start": 46.98,
-      "end": 47.36,
+      "start": 44.02,
+      "end": 44.22,
       "probability": 0.998
     },
     {
       "word": "test",
-      "start": 47.36,
-      "end": 47.76,
-      "probability": 0.779
+      "start": 44.22,
+      "end": 44.46,
+      "probability": 0.917
     },
     {
       "word": "accumulation",
-      "start": 47.76,
-      "end": 48.28,
-      "probability": 0.988
+      "start": 44.46,
+      "end": 44.8,
+      "probability": 0.99
     },
     {
       "word": "matters.",
-      "start": 48.28,
-      "end": 48.94,
+      "start": 44.8,
+      "end": 45.46,
       "probability": 0.999
     },
     {
       "word": "It's",
-      "start": 49.58,
-      "end": 49.86,
-      "probability": 0.99
+      "start": 45.98,
+      "end": 46.32,
+      "probability": 0.987
     },
     {
       "word": "not",
-      "start": 49.86,
-      "end": 50.02,
-      "probability": 0.997
+      "start": 46.32,
+      "end": 46.46,
+      "probability": 0.995
     },
     {
       "word": "just",
-      "start": 50.02,
-      "end": 50.3,
-      "probability": 0.997
+      "start": 46.46,
+      "end": 46.66,
+      "probability": 0.999
     },
     {
       "word": "about",
-      "start": 50.3,
-      "end": 50.52,
+      "start": 46.66,
+      "end": 46.92,
       "probability": 0.999
     },
     {
       "word": "catching",
-      "start": 50.52,
-      "end": 50.96,
-      "probability": 0.993
+      "start": 46.92,
+      "end": 47.24,
+      "probability": 0.994
     },
     {
       "word": "bugs.",
-      "start": 50.96,
-      "end": 51.36,
-      "probability": 0.992
+      "start": 47.24,
+      "end": 47.58,
+      "probability": 0.994
     },
     {
       "word": "It's",
-      "start": 51.36,
-      "end": 52.26,
-      "probability": 0.693
+      "start": 48.2,
+      "end": 48.46,
+      "probability": 0.995
     },
     {
       "word": "about",
-      "start": 52.26,
-      "end": 52.42,
-      "probability": 0.998
+      "start": 48.46,
+      "end": 48.62,
+      "probability": 0.999
     },
     {
       "word": "making",
-      "start": 52.42,
-      "end": 52.78,
+      "start": 48.62,
+      "end": 48.94,
       "probability": 0.996
     },
     {
       "word": "prompts",
-      "start": 52.78,
-      "end": 53.14,
-      "probability": 0.3
+      "start": 48.94,
+      "end": 49.32,
+      "probability": 0.216
     },
     {
       "word": "simpler",
-      "start": 53.14,
-      "end": 53.76,
-      "probability": 0.997
-    },
-    {
-      "word": "and",
-      "start": 53.76,
-      "end": 54.18,
-      "probability": 0.944
-    },
-    {
-      "word": "regeneration",
-      "start": 54.18,
-      "end": 54.8,
-      "probability": 0.939
-    },
-    {
-      "word": "safer",
-      "start": 54.8,
-      "end": 55.6,
+      "start": 49.32,
+      "end": 49.9,
       "probability": 0.998
     },
     {
+      "word": "and",
+      "start": 49.9,
+      "end": 50.12,
+      "probability": 0.987
+    },
+    {
+      "word": "regeneration",
+      "start": 50.12,
+      "end": 50.62,
+      "probability": 0.931
+    },
+    {
+      "word": "safer",
+      "start": 50.62,
+      "end": 51.32,
+      "probability": 0.997
+    },
+    {
       "word": "over",
-      "start": 55.6,
-      "end": 55.92,
-      "probability": 0.981
+      "start": 51.32,
+      "end": 51.64,
+      "probability": 0.991
     },
     {
       "word": "time.",
-      "start": 55.92,
-      "end": 56.38,
+      "start": 51.64,
+      "end": 52.02,
       "probability": 0.999
     },
     {
-      "word": "More",
-      "start": 57.2,
-      "end": 57.7,
-      "probability": 0.975
-    },
-    {
-      "word": "tests,",
-      "start": 57.7,
-      "end": 58.16,
-      "probability": 0.991
-    },
-    {
-      "word": "less",
-      "start": 58.6,
-      "end": 58.72,
-      "probability": 0.991
-    },
-    {
-      "word": "prompt.",
-      "start": 58.72,
-      "end": 59.06,
-      "probability": 0.994
-    },
-    {
       "word": "The",
-      "start": 59.6,
-      "end": 59.74,
-      "probability": 0.985
+      "start": 52.8,
+      "end": 53.32,
+      "probability": 0.356
+    },
+    {
+      "word": "more",
+      "start": 53.32,
+      "end": 53.5,
+      "probability": 0.993
     },
     {
       "word": "walls",
-      "start": 59.74,
-      "end": 60.0,
-      "probability": 0.965
+      "start": 53.5,
+      "end": 53.84,
+      "probability": 0.969
     },
     {
-      "word": "do",
-      "start": 60.0,
-      "end": 60.58,
-      "probability": 0.765
+      "word": "you",
+      "start": 53.84,
+      "end": 54.06,
+      "probability": 0.992
+    },
+    {
+      "word": "have,",
+      "start": 54.06,
+      "end": 54.34,
+      "probability": 0.998
     },
     {
       "word": "the",
-      "start": 60.58,
-      "end": 60.72,
+      "start": 54.88,
+      "end": 54.9,
+      "probability": 0.996
+    },
+    {
+      "word": "less",
+      "start": 54.9,
+      "end": 55.1,
+      "probability": 0.994
+    },
+    {
+      "word": "you",
+      "start": 55.1,
+      "end": 55.3,
       "probability": 0.989
     },
     {
+      "word": "need",
+      "start": 55.3,
+      "end": 55.5,
+      "probability": 0.997
+    },
+    {
+      "word": "to",
+      "start": 55.5,
+      "end": 55.68,
+      "probability": 0.998
+    },
+    {
+      "word": "specify.",
+      "start": 55.68,
+      "end": 56.14,
+      "probability": 0.991
+    },
+    {
+      "word": "The",
+      "start": 56.88,
+      "end": 57.08,
+      "probability": 0.981
+    },
+    {
+      "word": "mold",
+      "start": 57.08,
+      "end": 57.38,
+      "probability": 0.954
+    },
+    {
+      "word": "does",
+      "start": 57.38,
+      "end": 57.64,
+      "probability": 0.98
+    },
+    {
+      "word": "the",
+      "start": 57.64,
+      "end": 57.9,
+      "probability": 0.998
+    },
+    {
       "word": "precision",
-      "start": 60.72,
-      "end": 61.14,
-      "probability": 0.979
+      "start": 57.9,
+      "end": 58.32,
+      "probability": 0.968
     },
     {
       "word": "work.",
-      "start": 61.14,
-      "end": 61.38,
-      "probability": 0.997
+      "start": 58.32,
+      "end": 58.58,
+      "probability": 0.998
     }
   ],
   "segments": [
     {
       "start": 0.0,
-      "end": 3.24,
+      "end": 3.02,
       "text": "Here's something subtle that changes how you think about prompts."
     },
     {
-      "start": 5.04,
-      "end": 6.74,
+      "start": 4.4,
+      "end": 6.28,
       "text": "In 3D printing, there's no mold."
     },
     {
-      "start": 7.32,
-      "end": 11.22,
+      "start": 6.84,
+      "end": 10.9,
       "text": "The machine must know exactly where to place every single point of material."
     },
     {
-      "start": 11.78,
-      "end": 14.24,
+      "start": 11.5,
+      "end": 14.46,
       "text": "The specification must be extremely precise."
     },
     {
-      "start": 15.84,
-      "end": 18.64,
+      "start": 15.68,
+      "end": 18.88,
       "text": "In injection molding, precision comes from the walls."
     },
     {
-      "start": 19.26,
-      "end": 21.44,
+      "start": 19.58,
+      "end": 22.12,
       "text": "The material just flows until it's constrained."
     },
     {
-      "start": 23.8,
-      "end": 26.02,
+      "start": 23.42,
+      "end": 25.76,
       "text": "This maps directly to PDD."
     },
     {
-      "start": 26.96,
-      "end": 31.44,
-      "text": "With few tests, your prompt needs to specify everything."
+      "start": 26.72,
+      "end": 29.92,
+      "text": "With few tests, your prompt needs to specify everything,"
     },
     {
-      "start": 32.22,
-      "end": 37.22,
-      "text": "Edge cases, error handling, exact behavior in every situation."
+      "start": 30.44,
+      "end": 34.64,
+      "text": "edge cases, error handling, exact behavior in every situation."
     },
     {
-      "start": 37.98,
-      "end": 42.06,
+      "start": 35.28,
+      "end": 39.22,
       "text": "With many tests, the prompt only needs to specify intent."
     },
     {
-      "start": 42.68,
-      "end": 44.22,
+      "start": 39.98,
+      "end": 42.0,
       "text": "The tests handle the constraints."
     },
     {
-      "start": 45.9,
-      "end": 48.94,
+      "start": 43.14,
+      "end": 45.46,
       "text": "This is why test accumulation matters."
     },
     {
-      "start": 49.58,
-      "end": 51.36,
+      "start": 45.98,
+      "end": 47.58,
       "text": "It's not just about catching bugs."
     },
     {
-      "start": 51.36,
-      "end": 56.38,
+      "start": 48.2,
+      "end": 52.02,
       "text": "It's about making prompts simpler and regeneration safer over time."
     },
     {
-      "start": 57.2,
-      "end": 59.06,
-      "text": "More tests, less prompt."
+      "start": 52.8,
+      "end": 56.14,
+      "text": "The more walls you have, the less you need to specify."
     },
     {
-      "start": 59.6,
-      "end": 61.38,
-      "text": "The walls do the precision work."
+      "start": 56.88,
+      "end": 58.58,
+      "text": "The mold does the precision work."
     }
   ]
 }

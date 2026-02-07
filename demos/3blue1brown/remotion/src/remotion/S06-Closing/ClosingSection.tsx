@@ -3,6 +3,7 @@ import {
   AbsoluteFill,
   Audio,
   Sequence,
+  OffthreadVideo,
   staticFile,
   useCurrentFrame,
 } from "remotion";
@@ -29,23 +30,47 @@ export const ClosingSection: React.FC<ClosingSectionPropsType> = () => {
 
       {/* Visual compositions sequenced by BEATS */}
       
-      {/* Visual 0: CodeOutputMoldGlows - Mental shift: socks cheap, code cheap */}
+      {/* Visual 0: CodeOutputMoldGlows - So here's the mental shift */}
       {activeVisual === 0 && (
         <Sequence from={BEATS.VISUAL_00_START} durationInFrames={BEATS.VISUAL_00_END - BEATS.VISUAL_00_START}>
           <CodeOutputMoldGlows {...defaultCodeOutputMoldGlowsProps} />
         </Sequence>
       )}
 
-      {/* Visual 1: ThreeComponents - Prompts encode intent, tests, grounding */}
+      {/* Visual 1: Veo clip - Don't patch socks, socks got cheap, irrational */}
       {activeVisual === 1 && (
-        <Sequence from={BEATS.VISUAL_01_START} durationInFrames={BEATS.VISUAL_01_END - BEATS.VISUAL_01_START}>
+        <AbsoluteFill>
+          <OffthreadVideo
+            src={staticFile("07_split_screen_sepia.mp4")}
+            style={{ width: "100%", height: "100%" }}
+          />
+        </AbsoluteFill>
+      )}
+
+      {/* Visual 2: CodeOutputMoldGlows - Code just got that cheap */}
+      {activeVisual === 2 && (
+        <Sequence from={BEATS.VISUAL_02_START} durationInFrames={BEATS.VISUAL_02_END - BEATS.VISUAL_02_START}>
+          <CodeOutputMoldGlows {...defaultCodeOutputMoldGlowsProps} />
+        </Sequence>
+      )}
+
+      {/* Visual 3: ThreeComponents - Prompts encode intent, tests preserve, grounding m */}
+      {activeVisual === 3 && (
+        <Sequence from={BEATS.VISUAL_03_START} durationInFrames={BEATS.VISUAL_03_END - BEATS.VISUAL_03_START}>
           <ThreeComponents {...defaultThreeComponentsProps} />
         </Sequence>
       )}
 
-      {/* Visual 2: CodeOutputMoldGlows - Code disposable, mold is what matters */}
-      {activeVisual === 2 && (
-        <Sequence from={BEATS.VISUAL_02_START} durationInFrames={BEATS.VISUAL_02_END - BEATS.VISUAL_02_START}>
+      {/* Visual 4: CodeOutputMoldGlows - Code is generated verified and disposable */}
+      {activeVisual === 4 && (
+        <Sequence from={BEATS.VISUAL_04_START} durationInFrames={BEATS.VISUAL_04_END - BEATS.VISUAL_04_START}>
+          <CodeOutputMoldGlows {...defaultCodeOutputMoldGlowsProps} />
+        </Sequence>
+      )}
+
+      {/* Visual 5: CodeOutputMoldGlows - The code is just plastic, the mold is what matters */}
+      {activeVisual === 5 && (
+        <Sequence from={BEATS.VISUAL_05_START} durationInFrames={BEATS.VISUAL_05_END - BEATS.VISUAL_05_START}>
           <CodeOutputMoldGlows {...defaultCodeOutputMoldGlowsProps} />
         </Sequence>
       )}

@@ -43,3 +43,17 @@ silence_2.0s
 segment_021.wav
 silence_1.5s
 segment_022.wav
+silence_1.0s
+segment_023.wav
+silence_1.5s
+segment_024.wav
+silence_2.0s
+segment_025.wav
+silence_1.0s
+segment_026.wav
+silence_1.5s
+segment_027.wav
+silence_1.0s
+segment_028.wav
+silence_1.8s
+segment_029.wav
