@@ -21,10 +21,6 @@ import time
 import sqlite3
 from pathlib import Path
 from unittest.mock import patch, MagicMock
-import sys
-
-# Add the pdd directory to the path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from pdd.firecrawl_cache import FirecrawlCache, get_firecrawl_cache, clear_firecrawl_cache, get_firecrawl_cache_stats
 
@@ -57,6 +53,18 @@ class TestFirecrawlCache:
         assert self.cache.default_ttl_hours == 1
         assert self.cache.enabled is True
 
+    def test_invalid_max_size_env_uses_default(self):
+        """Invalid FIRECRAWL_CACHE_MAX_SIZE_MB should fall back to default, not crash."""
+        with patch.dict(os.environ, {'FIRECRAWL_CACHE_MAX_SIZE_MB': 'abc'}):
+            cache = FirecrawlCache(cache_path=self.cache_path)
+            assert cache.max_cache_size_mb == 100
+
+    def test_invalid_max_entries_env_uses_default(self):
+        """Invalid FIRECRAWL_CACHE_MAX_ENTRIES should fall back to default, not crash."""
+        with patch.dict(os.environ, {'FIRECRAWL_CACHE_MAX_ENTRIES': 'xyz'}):
+            cache = FirecrawlCache(cache_path=self.cache_path)
+            assert cache.max_entries == 1000
+
     def test_url_normalization(self):
         """Test URL normalization for consistent cache keys."""
         # Test basic normalization
@@ -76,6 +84,15 @@ class TestFirecrawlCache:
         normalized5 = self.cache._normalize_url(url5)
         assert "utm_source" not in normalized4
         assert "id=123" in normalized4
+
+    def test_url_normalization_preserves_ref_and_source_params(self):
+        """ref and source are legitimate query params and should not be stripped."""
+        url_with_ref = "https://github.com/org/repo?ref=main"
+        url_with_source = "https://api.example.com/data?source=internal"
+        assert self.cache._normalize_url(url_with_ref) != "https://github.com/org/repo"
+        assert "ref=main" in self.cache._normalize_url(url_with_ref)
+        assert self.cache._normalize_url(url_with_source) != "https://api.example.com/data"
+        assert "source=internal" in self.cache._normalize_url(url_with_source)
 
     def test_url_hash_generation(self):
         """Test URL hash generation for cache keys."""
@@ -113,6 +130,21 @@ class TestFirecrawlCache:
         # Should now be retrievable
         cached_content = self.cache.get(url)
         assert cached_content == content
+
+    def test_set_preserves_access_count_on_update(self):
+        """Updating cached content should preserve the access_count, not reset it."""
+        url = "https://example.com"
+        self.cache.set(url, "v1")
+        # Simulate accesses
+        self.cache.get(url)
+        self.cache.get(url)
+        # Update the content
+        self.cache.set(url, "v2")
+        # access_count should be preserved (not reset to 0)
+        with sqlite3.connect(self.cache.cache_path) as conn:
+            cursor = conn.execute('SELECT access_count FROM cache')
+            count = cursor.fetchone()[0]
+            assert count >= 2, f"access_count was {count}, expected >= 2"
 
     @patch('pdd.firecrawl_cache.time.time')
     def test_cache_expiration(self, mock_time):
@@ -251,23 +283,6 @@ class TestFirecrawlCache:
         # Oldest entries should be evicted, newest should remain
         assert self.cache.get("https://example0.com") is None
         assert self.cache.get("https://example4.com") is not None
-
-    def test_cache_size_limits(self):
-        """Test cache size limit enforcement (deprecated - use test_cache_max_size_enforcement)."""
-        # Set a very small max entries limit
-        self.cache.max_entries = 2
-
-        # Add more entries than the limit
-        for i in range(4):
-            url = f"https://example{i}.com"
-            content = f"Content {i}"
-            self.cache.set(url, content)
-
-        # Should only have max_entries in cache
-        with sqlite3.connect(self.cache.cache_path) as conn:
-            cursor = conn.execute('SELECT COUNT(*) FROM cache')
-            count = cursor.fetchone()[0]
-            assert count <= self.cache.max_entries
 
     def test_auto_cleanup_triggers_during_set(self):
         """Test that auto_cleanup actually triggers when cache.set() is called."""
