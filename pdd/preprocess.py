@@ -314,16 +314,17 @@ def process_web_tags(text: str, recursive: bool) -> str:
         if recursive:
             # Defer network operations until after env var expansion
             return match.group(0)
-        
+
         # Get cache instance
         cache = get_firecrawl_cache()
-        
+
         # Check cache first
         cached_content = cache.get(url)
         if cached_content is not None:
             console.print(f"Using cached content for: [cyan]{url}[/cyan]")
             return cached_content
-        
+
+
         console.print(f"Scraping web content from: [cyan]{url}[/cyan]")
         _dbg(f"Web tag URL: {url}")
         try:
@@ -341,9 +342,6 @@ def process_web_tags(text: str, recursive: bool) -> str:
 
             app = Firecrawl(api_key=api_key)
 
-            # Get cache TTL from environment or use default
-            cache_ttl_hours = int(os.environ.get('FIRECRAWL_CACHE_TTL_HOURS', 24))
-
             response = app.scrape(url, formats=['markdown'])
 
             # Handle both dict response (new API) and object response (legacy)
@@ -357,7 +355,7 @@ def process_web_tags(text: str, recursive: bool) -> str:
 
             if content:
                 # Cache the result for future use
-                cache.set(url, content, ttl_hours=cache_ttl_hours)
+                cache.set(url, content)
                 return content
             else:
                 console.print(f"[bold yellow]Warning:[/bold yellow] No markdown content returned for {url}")
