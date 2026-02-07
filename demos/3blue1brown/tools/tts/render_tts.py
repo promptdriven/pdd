@@ -6,29 +6,23 @@ Parses the annotated markdown script and generates audio segments
 with appropriate voice instructions.
 """
 
-import sys
-sys.stdout.reconfigure(line_buffering=True)
-print("Script starting...", flush=True)
-
 import re
-import os
+import sys
+import time
 from pathlib import Path
 from dataclasses import dataclass
-from typing import Optional
-print("Basic imports done", flush=True)
 
-import numpy as np
-print("Numpy imported", flush=True)
+# Log file for monitoring progress when running in background
+_LOG_FILE = None
 
-# TTS imports
-import torch
-print("Torch imported", flush=True)
-
-import soundfile as sf
-print("Soundfile imported", flush=True)
-
-from qwen_tts import Qwen3TTSModel
-print("Qwen3TTSModel imported", flush=True)
+def log(msg):
+    """Print and write to log file for reliable progress monitoring."""
+    ts = time.strftime("%H:%M:%S")
+    line = f"[{ts}] {msg}"
+    print(line, flush=True)
+    if _LOG_FILE:
+        with open(_LOG_FILE, "a") as f:
+            f.write(line + "\n")
 
 
 @dataclass
@@ -135,6 +129,8 @@ def parse_tts_script(script_path: str) -> list[Segment]:
                 emotion=current_emotion,
                 pause_after=pause_after
             ))
+
+        i += 1
 
     return segments
 
@@ -246,28 +242,43 @@ def build_instruction(segment: Segment) -> str:
         return f"{base}."
 
 
-def generate_silence(duration: float, sample_rate: int = 24000) -> np.ndarray:
+def generate_silence(duration: float, sample_rate: int = 24000):
     """Generate silence of specified duration."""
+    import numpy as np
     num_samples = int(duration * sample_rate)
     return np.zeros(num_samples, dtype=np.float32)
 
 
 def main():
+    global _LOG_FILE
     project_root = Path(__file__).resolve().parent.parent.parent
     script_path = project_root / "scripts" / "tts_script.md"
     output_dir = project_root / "outputs" / "tts"
     output_dir.mkdir(exist_ok=True)
 
-    print("Parsing TTS script...", flush=True)
+    # Set up log file for monitoring in background mode
+    _LOG_FILE = str(output_dir / "render_log.txt")
+    with open(_LOG_FILE, "w") as f:
+        f.write("")  # Clear log
+
+    log("Parsing TTS script...")
     segments = parse_tts_script(str(script_path))
-    print(f"Found {len(segments)} speech segments", flush=True)
+    log(f"Found {len(segments)} speech segments")
 
     # Print first few segments for verification
-    print("\nFirst 5 segments:", flush=True)
+    log("First 5 segments:")
     for i, seg in enumerate(segments[:5]):
-        print(f"  {i+1}. [{seg.tone[:30] if seg.tone else 'no tone'}...] {seg.text[:50]}...", flush=True)
+        log(f"  {i+1}. [{seg.tone[:30] if seg.tone else 'no tone'}...] {seg.text[:50]}...")
 
-    print("\nLoading Qwen3-TTS model...", flush=True)
+    # Import heavy dependencies inside main
+    log("Importing torch and model...")
+    import numpy as np
+    import torch
+    import soundfile as sf
+    from qwen_tts import Qwen3TTSModel
+    log("Imports done")
+
+    log("Loading Qwen3-TTS model...")
 
     # Determine device
     # Force CPU on Mac - MPS has long compilation times for this model
@@ -281,18 +292,18 @@ def main():
         dtype = torch.float32
         attn_impl = "sdpa"
 
-    print(f"Using device: {device}, dtype: {dtype}", flush=True)
+    log(f"Using device: {device}, dtype: {dtype}")
 
     model_path = project_root / "models" / "Qwen3-TTS-12Hz-1.7B-CustomVoice"
 
+    t0 = time.time()
     model = Qwen3TTSModel.from_pretrained(
         str(model_path),
         device_map=device,
         torch_dtype=dtype,
         attn_implementation=attn_impl,
     )
-
-    print("Model loaded successfully!", flush=True)
+    log(f"Model loaded in {time.time()-t0:.1f}s")
 
     # Voice selection - using Aiden for authoritative American male voice
     speaker = "Aiden"
@@ -300,44 +311,47 @@ def main():
     all_audio = []
     sample_rate = 24000  # Qwen3-TTS uses 24kHz
 
-    print(f"\nGenerating audio with speaker: {speaker}", flush=True)
-    print("-" * 60, flush=True)
+    log(f"Generating audio with speaker: {speaker}")
+    log("-" * 60)
 
     for i, segment in enumerate(segments):
         instruction = build_instruction(segment)
 
-        print(f"\n[{i+1}/{len(segments)}] Generating: {segment.text[:60]}...", flush=True)
-        print(f"  Instruction: {instruction[:80]}...", flush=True)
+        log(f"[{i+1}/{len(segments)}] Generating: {segment.text[:60]}...")
 
         try:
+            t0 = time.time()
             wavs, sr = model.generate_custom_voice(
                 text=segment.text,
                 language="English",
                 speaker=speaker,
                 instruct=instruction,
             )
+            elapsed = time.time() - t0
 
             sample_rate = sr
+            audio_dur = len(wavs[0]) / sr
             all_audio.append(wavs[0])
 
             # Add pause if specified
             if segment.pause_after > 0:
                 silence = generate_silence(segment.pause_after, sample_rate)
                 all_audio.append(silence)
-                print(f"  Added {segment.pause_after}s pause", flush=True)
 
-            # Save individual segment for debugging
+            # Save individual segment
             segment_file = output_dir / f"segment_{i:03d}.wav"
             sf.write(str(segment_file), wavs[0], sr)
-            print(f"  Saved: {segment_file.name}", flush=True)
+            log(f"  Done: {elapsed:.1f}s -> {audio_dur:.1f}s audio | {segment_file.name}")
 
         except Exception as e:
-            print(f"  ERROR: {e}", flush=True)
+            log(f"  ERROR: {e}")
+            import traceback
+            log(f"  {traceback.format_exc()}")
             # Add a small silence as placeholder
             all_audio.append(generate_silence(0.5, sample_rate))
 
     # Concatenate all audio
-    print("\nConcatenating all segments...", flush=True)
+    log("Concatenating all segments...")
     final_audio = np.concatenate(all_audio)
 
     # Save final output
@@ -345,8 +359,8 @@ def main():
     sf.write(str(output_file), final_audio, sample_rate)
 
     duration_minutes = len(final_audio) / sample_rate / 60
-    print(f"\nDone! Output saved to: {output_file}", flush=True)
-    print(f"Total duration: {duration_minutes:.1f} minutes", flush=True)
+    log(f"Done! Output saved to: {output_file}")
+    log(f"Total duration: {duration_minutes:.1f} minutes")
 
 
 if __name__ == "__main__":
