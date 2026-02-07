@@ -1,9 +1,49 @@
+## v0.0.141 (2026-02-06)
+
+### Feat
+
+- Update demo narration and audio synchronization, add new video assets, and re-render all sections.
+
+### Fix
+
+- Address Copilot review feedback on track_cost pytest guard
+- Prevent `PDD_ENV` environment variable pollution in e2e tests to avoid incorrect JWT audience validation.
+- correct misleading docstrings about exit code behavior
+- remove exit code 1 to avoid CLI error handler
+- use ctx.exit(1) instead of raise click.exceptions.Exit(1)
+- deregister() returns bool so cleanup tracks real failures
+- pdd sessions cleanup shows misleading success message when all cleanups fail
+
+## v0.0.140 (2026-02-05)
+
+### Feat
+
+- **agentic_common**: Add debug logging for agentic workflows. When `--verbose` is enabled, full prompt/response pairs are written to `.pdd/agentic-logs/` as JSONL session files. Logs include cost, duration, provider, and success status per step. Silent when verbose is off; never crashes the workflow on write errors.
+- **agentic_common_python.prompt**: Add prompt specification for the new agentic debug logging feature, documenting the JSONL entry format and `run_agentic_task()` integration.
+
+### Fix
+
+- **agentic_bug_step10_pr_LLM.prompt**: Step 10 now stages all files from `files_to_stage` instead of only test files from Steps 7 and 9. Previously, prompt files fixed in Step 5.5 were excluded from generated PRs even though the orchestrator correctly passed them (#429).
+- **auth**: Logout command now checks authentication state first and displays "Not authenticated." instead of the misleading "Logged out of PDD Cloud." when the user is already logged out (#449). Thanks Serhan Asad!
+- **agentic_bug_step10_pr_LLM.prompt**: PR template now includes a "Prompt Files" section acknowledging prompt file changes from Step 5.5.
+
+### Build
+
+- **package-test.yml**: Add `paths-ignore` to CI workflow so documentation-only changes (markdown, scripts, config files) skip the package install test.
+
+### Refactor
+
+- **pdd/prompts/commands/auth_python.prompt**: Delete unused auth prompt file.
+
 ## v0.0.139 (2026-02-04)
 
 ### Fix
 
-- validate JWT token expiry in cloud E2E test skip check (#402)
-- Resolve agentic orchestrator context key and prompt formatting issues, improve E2E test skipping, and add package data sync deletions.
+- **test_cmd_test_main, test_fix_main**: Validate JWT token expiry when checking cloud credentials for E2E test skipping. Previously checked only for file existence; now uses `_get_cached_jwt()` to verify the token is not expired, preventing test failures with stale tokens.
+
+### Build
+
+- **.sync-config.yml**: Simplify test file patterns from 4 specific patterns to one recursive glob (`tests/**/*.py`). Ensures test subdirectories are included in package data sync. 3088 tests in public vs. 2,483.
 
 ## v0.0.138 (2026-02-03)
 
