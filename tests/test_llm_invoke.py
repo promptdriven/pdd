@@ -15,6 +15,8 @@ from pdd.llm_invoke import (
     InsufficientCreditsError,
     _pydantic_to_json_schema,
     _validate_with_pydantic,
+    _get_response_cost,
+    _calculate_completion_cost,
 )
 import openai # Import openai for exception types used by LiteLLM
 import httpx # Import httpx for mocking request/response
@@ -120,7 +122,7 @@ def mock_set_llm_cache():
                 yield mock_cache_class
 
 # --- Helper Function to Create Mock LiteLLM Response ---
-def create_mock_litellm_response(content, model_name="test-model", prompt_tokens=10, completion_tokens=10, finish_reason="stop", thinking_output=None):
+def create_mock_litellm_response(content, model_name="test-model", prompt_tokens=10, completion_tokens=10, finish_reason="stop", thinking_output=None, cost=None):
     mock_response = MagicMock()
     mock_choice = MagicMock()
     mock_message = MagicMock()
@@ -129,7 +131,7 @@ def create_mock_litellm_response(content, model_name="test-model", prompt_tokens
     mock_message.get.side_effect = lambda key, default=None: getattr(mock_message, key, default)
     mock_message.content = content
     if thinking_output:
-        mock_message.reasoning_content = thinking_output 
+        mock_message.reasoning_content = thinking_output
         # This makes it accessible via .get('reasoning_content') due to side_effect
 
     mock_choice.message = mock_message
@@ -142,9 +144,11 @@ def create_mock_litellm_response(content, model_name="test-model", prompt_tokens
     mock_response.usage = mock_usage
 
     mock_response.model = model_name
-    mock_response._hidden_params = {} 
+    mock_response._hidden_params = {}
     if thinking_output:
          mock_response._hidden_params['thinking'] = thinking_output
+    if cost is not None:
+         mock_response._hidden_params['response_cost'] = cost
 
     return mock_response
 
@@ -203,14 +207,14 @@ def test_llm_invoke_valid_input(mock_load_models, mock_set_llm_cache):
     with patch.dict(os.environ, {first_model_key_name: "fake_key_value"}):
         with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
             mock_response_content = "Mocked LLM response"
-            mock_response = create_mock_litellm_response(mock_response_content, model_name='gpt-5-nano')
-            mock_completion.return_value = mock_response
             mock_cost = 0.0001
+            mock_response = create_mock_litellm_response(mock_response_content, model_name='gpt-5-nano', cost=mock_cost)
+            mock_completion.return_value = mock_response
             with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 10}):
                  response = llm_invoke(
-                     "Valid prompt about {topic}", 
+                     "Valid prompt about {topic}",
                      {"topic": "cats"},
-                     0.5, 
+                     0.5,
                      0.7, False
                  )
                  assert response['model_name'] == 'gpt-5-nano'
@@ -255,13 +259,13 @@ def test_llm_invoke_strength_less_than_half(mock_load_models, mock_set_llm_cache
     with patch.dict(os.environ, {selected_model_key_name: "fake_key_value"}):
         with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
             mock_response_content = "Mocked gemini response"
-            mock_response = create_mock_litellm_response(mock_response_content, model_name='gemini-pro')
+            mock_cost = 0.00002
+            mock_response = create_mock_litellm_response(mock_response_content, model_name='gemini-pro', cost=mock_cost)
             mock_completion.return_value = mock_response
-            mock_cost = 0.00002 
             with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 5, "output_tokens": 5}):
                 response = llm_invoke(
                     "Test prompt", {"topic": "test"},
-                    strength=0.3, 
+                    strength=0.3,
                     temperature=0.7, verbose=False
                 )
                 assert response['model_name'] == 'gemini-pro'
@@ -356,6 +360,7 @@ def test_e2e_include_preprocess_llm_no_missing_key(tmp_path, monkeypatch):
         mock_usage.completion_tokens = 5
         mock_response.usage = mock_usage
         mock_response.model = model_name
+        mock_response._hidden_params = {}
         return mock_response
 
     with patch("pdd.llm_invoke._load_model_data", return_value=_mock_models_df()):
@@ -372,13 +377,13 @@ def test_llm_invoke_strength_greater_than_half(mock_load_models, mock_set_llm_ca
     with patch.dict(os.environ, {selected_model_key_name: "fake_key_value"}):
         with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
             mock_response_content = "Mocked gemini response"
-            mock_response = create_mock_litellm_response(mock_response_content, model_name='gemini-pro')
+            mock_cost = 0.00009
+            mock_response = create_mock_litellm_response(mock_response_content, model_name='gemini-pro', cost=mock_cost)
             mock_completion.return_value = mock_response
-            mock_cost = 0.00009 
             with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 8, "output_tokens": 8}):
                 response = llm_invoke(
                     "Test prompt", {"topic": "test"},
-                    strength=0.7, 
+                    strength=0.7,
                     temperature=0.7, verbose=False
                 )
                 assert response['model_name'] == 'gemini-pro'
@@ -393,13 +398,13 @@ def test_llm_invoke_output_pydantic_supported(mock_load_models, mock_set_llm_cac
     with patch.dict(os.environ, {model_key_name: "fake_key_value"}):
         with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
             expected_result = SampleOutputModel(field1="value1", field2=123)
-            mock_response = create_mock_litellm_response(expected_result, model_name='gpt-5-nano')
-            mock_completion.return_value = mock_response
             mock_cost = 0.00015
+            mock_response = create_mock_litellm_response(expected_result, model_name='gpt-5-nano', cost=mock_cost)
+            mock_completion.return_value = mock_response
             with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 5}):
                 response = llm_invoke(
                     prompt="Provide data.", input_json={"query": "Provide data."},
-                    strength=0.5, 
+                    strength=0.5,
                     temperature=0.7, verbose=False,
                     output_pydantic=SampleOutputModel
                 )
@@ -424,9 +429,9 @@ def test_llm_invoke_output_pydantic_unsupported_parses(mock_load_models, mock_se
     with patch.dict(os.environ, {model_key_name: "fake_key_value"}):
         with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
             json_response_str = '{"field1": "value1", "field2": 123}'
-            mock_response = create_mock_litellm_response(json_response_str, model_name='gemini-pro')
-            mock_completion.return_value = mock_response
             mock_cost = 0.00008
+            mock_response = create_mock_litellm_response(json_response_str, model_name='gemini-pro', cost=mock_cost)
+            mock_completion.return_value = mock_response
             with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 15}):
                 response = llm_invoke(
                     prompt="Provide data.", input_json={"query": "Provide data."},
@@ -547,13 +552,14 @@ def test_llm_invoke_verbose(mock_load_models, mock_set_llm_cache, caplog): # Cha
         with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
             time_value = 0.25 
             mock_thinking_output = "This is a mock thinking process."
+            mock_cost = 0.00005
             mock_response = create_mock_litellm_response(
                 "Mocked LLM response", model_name='gpt-5-nano',
                 prompt_tokens=15, completion_tokens=25,
-                thinking_output=mock_thinking_output
+                thinking_output=mock_thinking_output,
+                cost=mock_cost
             )
             mock_completion.return_value = mock_response
-            mock_cost = 0.00005
             with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 15, "output_tokens": 25}):
                 prompt = "Tell me a joke about {topic}."
                 input_json = {"topic": "cats"}
@@ -582,7 +588,7 @@ def test_llm_invoke_verbose(mock_load_models, mock_set_llm_cache, caplog): # Cha
             assert "[RESULT] Cost (Output): $0.03/M tokens" in log_output 
             assert "[RESULT] Tokens (Prompt): 15" in log_output 
             assert "[RESULT] Tokens (Completion): 25" in log_output 
-            assert f"[RESULT] Total Cost (from callback): ${mock_cost:.6g}" in log_output
+            assert f"[RESULT] Total Cost: ${mock_cost:.6g}" in log_output
             assert "[RESULT] Max Completion Tokens: Provider Default" in log_output
             assert "[RESULT] Thinking Output:" in log_output
             assert mock_thinking_output in log_output
@@ -596,13 +602,13 @@ def test_llm_invoke_with_env_variables(mock_load_models, mock_set_llm_cache):
         target_model_key_name: 'fake_key_value' 
     }):
         with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
-            mock_response = create_mock_litellm_response("Mocked LLM response", model_name='gpt-5-nano')
-            mock_completion.return_value = mock_response
             mock_cost = 0.0001
+            mock_response = create_mock_litellm_response("Mocked LLM response", model_name='gpt-5-nano', cost=mock_cost)
+            mock_completion.return_value = mock_response
             with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 5}):
                 prompt = "Tell me a joke about cats."
                 input_json = {"topic": "cats"}
-                response = llm_invoke(prompt=prompt, input_json=input_json) 
+                response = llm_invoke(prompt=prompt, input_json=input_json)
                 mock_load_models.assert_called_once()
                 assert response['result'] == "Mocked LLM response"
                 assert response['model_name'] == 'gpt-5-nano'
@@ -2885,3 +2891,122 @@ def test_default_base_model_can_be_none():
         os.environ.clear()
         os.environ.update(original_env)
         importlib.reload(llm_invoke_module)
+
+
+# ==============================================================================
+# Issue #375: Thread-safe cost extraction tests
+# ==============================================================================
+
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+
+def test_get_response_cost_reads_hidden_params():
+    """Issue #375: _get_response_cost should read cost from response._hidden_params."""
+    mock_response = MagicMock()
+    mock_response._hidden_params = {'response_cost': 0.0042}
+    mock_response.usage.prompt_tokens = 100
+    mock_response.usage.completion_tokens = 50
+
+    cost = _get_response_cost(mock_response, model_name="gpt-4o-mini")
+    assert cost == 0.0042, f"Expected 0.0042, got {cost}"
+
+
+def test_get_response_cost_fallback_to_calculate():
+    """Issue #375: _get_response_cost falls back to _calculate_completion_cost
+    when _hidden_params has no response_cost."""
+    mock_response = MagicMock()
+    mock_response._hidden_params = {}  # No response_cost
+    mock_response.usage.prompt_tokens = 100
+    mock_response.usage.completion_tokens = 50
+    mock_response.model = "gpt-4o-mini"
+
+    with patch('pdd.llm_invoke.litellm.completion_cost', return_value=0.0033):
+        cost = _get_response_cost(mock_response, model_name="gpt-4o-mini")
+        assert cost == 0.0033, f"Expected 0.0033, got {cost}"
+
+
+def test_get_response_cost_no_hidden_params():
+    """Issue #375: _get_response_cost handles response without _hidden_params attr."""
+    mock_response = MagicMock(spec=[])  # No auto-attributes
+    mock_response.usage = MagicMock()
+    mock_response.usage.prompt_tokens = 100
+    mock_response.usage.completion_tokens = 50
+    mock_response.model = "gpt-4o-mini"
+
+    with patch('pdd.llm_invoke.litellm.completion_cost', return_value=0.0025):
+        cost = _get_response_cost(mock_response, model_name="gpt-4o-mini")
+        assert cost == 0.0025, f"Expected 0.0025, got {cost}"
+
+
+def test_get_response_cost_thread_safety():
+    """Issue #375: _get_response_cost is thread-safe — each thread gets its own cost
+    from its own response object, not from shared global state.
+
+    This test verifies the fix for the race condition where concurrent LLM calls
+    would overwrite each other's cost data in the shared _LAST_CALLBACK_DATA dict.
+    """
+    NUM_THREADS = 10
+    results = {}
+    errors = []
+
+    def worker(thread_id, expected_cost):
+        """Each thread creates its own response with a unique cost."""
+        mock_response = MagicMock()
+        mock_response._hidden_params = {'response_cost': expected_cost}
+        mock_response.usage.prompt_tokens = 100 * (thread_id + 1)
+        mock_response.usage.completion_tokens = 50 * (thread_id + 1)
+
+        # Simulate race: sleep to let other threads run
+        import time
+        time.sleep(0.01)
+
+        cost = _get_response_cost(mock_response, model_name="gpt-4o-mini")
+        return thread_id, cost, expected_cost
+
+    expected_costs = [0.001 * (i + 1) for i in range(NUM_THREADS)]
+
+    with ThreadPoolExecutor(max_workers=NUM_THREADS) as pool:
+        futures = {pool.submit(worker, i, c): i for i, c in enumerate(expected_costs)}
+        for future in as_completed(futures):
+            tid, got, expected = future.result()
+            results[tid] = (got, expected)
+
+    # Verify each thread got its own cost
+    for tid in range(NUM_THREADS):
+        got, expected = results[tid]
+        assert abs(got - expected) < 1e-10, \
+            f"Thread {tid}: expected {expected}, got {got} — race condition detected!"
+
+
+def test_get_response_cost_empty_response_list():
+    """Issue #375: Empty response list should yield zero cost, not stale global data."""
+    # With the old code, empty response_list would read from _LAST_CALLBACK_DATA
+    # which could contain stale cost from a previous call
+    response_list = []
+    total_cost = sum(_get_response_cost(r, "gpt-4o-mini") for r in response_list)
+    assert total_cost == 0.0, f"Empty response list should have zero cost, got {total_cost}"
+
+
+def test_get_response_cost_batch_mode():
+    """Issue #375: Batch mode (multiple responses) should sum per-response costs."""
+    responses = [
+        MagicMock(_hidden_params={'response_cost': 0.001}),
+        MagicMock(_hidden_params={'response_cost': 0.002}),
+        MagicMock(_hidden_params={'response_cost': 0.003}),
+    ]
+    total = sum(_get_response_cost(r, "gpt-4o-mini") for r in responses)
+    expected = 0.006
+    assert abs(total - expected) < 1e-10, \
+        f"Batch total should be {expected}, got {total}"
+
+
+def test_calculate_completion_cost_handles_exceptions():
+    """Issue #375: _calculate_completion_cost should handle litellm exceptions gracefully."""
+    mock_response = MagicMock()
+    mock_response.usage.prompt_tokens = 100
+    mock_response.usage.completion_tokens = 50
+
+    with patch('pdd.llm_invoke.litellm.completion_cost', side_effect=Exception("broken")):
+        cost = _calculate_completion_cost(mock_response, model_name="unknown-model-xyz")
+        assert cost == 0.0, f"Expected 0.0 on exception, got {cost}"
