@@ -493,50 +493,6 @@ class ThreadSafeRedirector(io.TextIOBase):
 
 
 class SyncApp(App):
-    def _reflow_log_widget(self, *, max_lines: int = 2000) -> None:
-        """Reflow historical log lines so wrapping matches the current width.
-
-        Textual/RichLog will repaint on resize, but it may not re-wrap already-added
-        renderables. We keep a plain-text log buffer via redirector wrappers; on
-        resize, clear and replay those lines.
-        """
-        if not hasattr(self, "log_widget") or self.log_widget is None:
-            return
-
-        # Prefer the redirector's captured logs when available; fall back to app property.
-        try:
-            lines = list(self.captured_logs)
-        except Exception:
-            lines = []
-
-        if not lines:
-            return
-
-        # Bound replay to avoid excessive work on huge logs.
-        if max_lines and len(lines) > max_lines:
-            lines = lines[-max_lines:]
-
-        # Clear and replay.
-        try:
-            self.log_widget.clear()
-        except Exception as exc:
-            _debug_swallow("log_widget_clear_failed", exc)
-            # If clear isn't available, do nothing.
-            return
-
-        log_pattern = re.compile(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}')
-        for line in lines:
-            try:
-                text = Text.from_ansi(line)
-                if log_pattern.match(text.plain):
-                    text.style = Style(dim=True)
-                self.log_widget.write(text)
-            except Exception:
-                # Last resort: write raw.
-                try:
-                    self.log_widget.write(str(line))
-                except Exception:
-                    _debug_swallow("log_widget_write_raw_failed", Exception("write failed"))
     """Textual App for PDD Sync."""
 
     CSS = """
@@ -709,9 +665,6 @@ class SyncApp(App):
         yield Container(RichLog(highlight=True, markup=True, wrap=True, id="log"), id="log-container")
 
     def on_mount(self) -> None:
-        global _ACTIVE_SYNC_APP
-        _ACTIVE_SYNC_APP = self
-
         self.log_widget = self.query_one("#log", RichLog)
         self.progress_bar = self.query_one("#progress-bar", ProgressBar)
         self.progress_container = self.query_one("#progress-container", Container)

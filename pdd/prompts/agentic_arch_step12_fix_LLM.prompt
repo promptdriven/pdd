@@ -136,6 +136,14 @@ Fix dependency graph issues in architecture.json:
    - Create the prompt file in the prompts/ directory
    - Or remove the module from architecture.json if not needed
 
+5. **Wrong Include Paths:**
+   If `<include>` paths in prompt files don't match .pddrc `example_output_path`:
+   - Read `.pddrc` to find the correct `example_output_path` for each context
+   - In each affected prompt file, replace the wrong path prefix in `<include>` tags
+   - Only fix the prefix, keep the filename unchanged
+   - Example: if `example_output_path` is `context/` and prompt has `<include>src/models_example.py</include>`, change to `<include>context/models_example.py</include>`
+   - Skip URLs (`http://`, `https://`), template variables (`${{...}}`), and `pdd/` internal paths
+
 % ============================================================================
 % CLEANUP: FILES AND METADATA WITH WRONG LOCATIONS OR NAMING
 % ============================================================================
