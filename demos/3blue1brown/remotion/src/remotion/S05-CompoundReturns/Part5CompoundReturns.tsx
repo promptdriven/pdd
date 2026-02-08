@@ -72,6 +72,7 @@ export const Part5CompoundReturns: React.FC<Part5CompoundReturnsPropsType> = () 
         <Sequence from={BEATS.VISUAL_05_START}>
           <AbsoluteFill>
             <OffthreadVideo
+              loop
               src={staticFile("07_split_screen_sepia.mp4")}
               style={{ width: "100%", height: "100%" }}
             />
@@ -84,6 +85,7 @@ export const Part5CompoundReturns: React.FC<Part5CompoundReturnsPropsType> = () 
         <Sequence from={BEATS.VISUAL_06_START}>
           <AbsoluteFill>
             <OffthreadVideo
+              loop
               src={staticFile("07_split_screen_sepia.mp4")}
               style={{ width: "100%", height: "100%" }}
             />

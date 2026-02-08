@@ -35,6 +35,7 @@ export const ColdOpenSection: React.FC<ColdOpenSectionPropsType> = () => {
         <Sequence from={BEATS.VISUAL_00_START}>
           <AbsoluteFill>
             <OffthreadVideo
+              loop
               src={staticFile("cold_open_01a_establish.mp4")}
               style={{ width: "100%", height: "100%" }}
             />
@@ -47,6 +48,7 @@ export const ColdOpenSection: React.FC<ColdOpenSectionPropsType> = () => {
         <Sequence from={BEATS.VISUAL_01_START}>
           <AbsoluteFill>
             <OffthreadVideo
+              loop
               src={staticFile("cold_open_01d_zoom_out.mp4")}
               style={{ width: "100%", height: "100%" }}
             />
@@ -59,6 +61,7 @@ export const ColdOpenSection: React.FC<ColdOpenSectionPropsType> = () => {
         <Sequence from={BEATS.VISUAL_02_START}>
           <AbsoluteFill>
             <OffthreadVideo
+              loop
               src={staticFile("cold_open_01f_modern_sock_toss.mp4")}
               style={{ width: "100%", height: "100%" }}
             />

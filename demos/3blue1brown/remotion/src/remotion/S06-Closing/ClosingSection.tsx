@@ -42,6 +42,7 @@ export const ClosingSection: React.FC<ClosingSectionPropsType> = () => {
         <Sequence from={BEATS.VISUAL_01_START}>
           <AbsoluteFill>
             <OffthreadVideo
+              loop
               src={staticFile("07_split_screen_sepia.mp4")}
               style={{ width: "100%", height: "100%" }}
             />

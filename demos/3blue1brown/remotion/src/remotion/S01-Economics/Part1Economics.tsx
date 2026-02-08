@@ -78,7 +78,7 @@ export const Part1Economics: React.FC<Part1EconomicsPropsType> = () => {
       {/* Visual 5: CodeCostChart - AI made patching faster too, Cursor Claude Copilot */}
       {activeVisual === 5 && (
         <Sequence from={BEATS.VISUAL_05_START}>
-          <Sequence from={-2280}>
+          <Sequence from={-1800}>
             <CodeCostChart {...defaultCodeCostChartProps} />
           </Sequence>
         </Sequence>
@@ -103,14 +103,14 @@ export const Part1Economics: React.FC<Part1EconomicsPropsType> = () => {
       {/* Visual 8: CrossingPoint - GitHub 55% speedup, Uplevel 800 devs no change */}
       {activeVisual === 8 && (
         <Sequence from={BEATS.VISUAL_08_START}>
-          <CrossingPoint {...defaultCrossingPointProps} />
+          <CrossingPoint {...defaultCrossingPointProps} startAtFullView={true} />
         </Sequence>
       )}
 
       {/* Visual 9: CrossingPoint - GitClear 44% churn, refactoring -60%, piling on */}
       {activeVisual === 9 && (
         <Sequence from={BEATS.VISUAL_09_START}>
-          <CrossingPoint {...defaultCrossingPointProps} />
+          <CrossingPoint {...defaultCrossingPointProps} startAtFullView={true} />
         </Sequence>
       )}
 
@@ -142,7 +142,7 @@ export const Part1Economics: React.FC<Part1EconomicsPropsType> = () => {
       {/* Visual 13: ContextRot - AI guesses relevance, vector search fails, agentic */}
       {activeVisual === 13 && (
         <Sequence from={BEATS.VISUAL_13_START}>
-          <Sequence from={-1020}>
+          <Sequence from={-870}>
             <ContextRot {...defaultContextRotProps} />
           </Sequence>
         </Sequence>
@@ -167,14 +167,14 @@ export const Part1Economics: React.FC<Part1EconomicsPropsType> = () => {
       {/* Visual 16: CrossingPoint - Large codebase 19% slower, 39-point perception gap */}
       {activeVisual === 16 && (
         <Sequence from={BEATS.VISUAL_16_START}>
-          <CrossingPoint {...defaultCrossingPointProps} />
+          <CrossingPoint {...defaultCrossingPointProps} startAtFullView={true} />
         </Sequence>
       )}
 
       {/* Visual 17: CrossingPoint - Every patch makes codebase bigger, pushes to worse */}
       {activeVisual === 17 && (
         <Sequence from={BEATS.VISUAL_17_START}>
-          <CrossingPoint {...defaultCrossingPointProps} />
+          <CrossingPoint {...defaultCrossingPointProps} startAtFullView={true} />
         </Sequence>
       )}
 
@@ -183,6 +183,7 @@ export const Part1Economics: React.FC<Part1EconomicsPropsType> = () => {
         <Sequence from={BEATS.VISUAL_18_START}>
           <AbsoluteFill>
             <OffthreadVideo
+              loop
               src={staticFile("veo_developer_edit.mp4")}
               style={{ width: "100%", height: "100%" }}
             />
@@ -195,6 +196,7 @@ export const Part1Economics: React.FC<Part1EconomicsPropsType> = () => {
         <Sequence from={BEATS.VISUAL_19_START}>
           <AbsoluteFill>
             <OffthreadVideo
+              loop
               src={staticFile("veo_developer_edit.mp4")}
               style={{ width: "100%", height: "100%" }}
             />
@@ -205,7 +207,7 @@ export const Part1Economics: React.FC<Part1EconomicsPropsType> = () => {
       {/* Visual 20: CrossingPoint - Generation crossed below both lines, debt resets */}
       {activeVisual === 20 && (
         <Sequence from={BEATS.VISUAL_20_START}>
-          <CrossingPoint {...defaultCrossingPointProps} />
+          <CrossingPoint {...defaultCrossingPointProps} showOverlayText={true} />
         </Sequence>
       )}
 
@@ -214,6 +216,7 @@ export const Part1Economics: React.FC<Part1EconomicsPropsType> = () => {
         <Sequence from={BEATS.VISUAL_21_START}>
           <AbsoluteFill>
             <OffthreadVideo
+              loop
               src={staticFile("07_split_screen_sepia.mp4")}
               style={{ width: "100%", height: "100%" }}
             />
@@ -224,7 +227,7 @@ export const Part1Economics: React.FC<Part1EconomicsPropsType> = () => {
       {/* Visual 22: PieChart - 80-90% cost is maintenance, McKinsey Stripe tech d */}
       {activeVisual === 22 && (
         <Sequence from={BEATS.VISUAL_22_START}>
-          <Sequence from={-60}>
+          <Sequence from={-120}>
             <PieChart {...defaultPieChartProps} />
           </Sequence>
         </Sequence>
@@ -233,7 +236,9 @@ export const Part1Economics: React.FC<Part1EconomicsPropsType> = () => {
       {/* Visual 23: PieToCurve - Costs compound literally, unless you regenerate */}
       {activeVisual === 23 && (
         <Sequence from={BEATS.VISUAL_23_START}>
-          <PieToCurve {...defaultPieToCurveProps} />
+          <Sequence from={-90}>
+            <PieToCurve {...defaultPieToCurveProps} />
+          </Sequence>
         </Sequence>
       )}
     </AbsoluteFill>

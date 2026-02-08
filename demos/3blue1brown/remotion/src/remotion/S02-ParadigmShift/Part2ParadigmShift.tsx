@@ -39,6 +39,7 @@ export const Part2ParadigmShift: React.FC<Part2ParadigmShiftPropsType> = () => {
         <Sequence from={BEATS.VISUAL_00_START}>
           <AbsoluteFill>
             <OffthreadVideo
+              loop
               src={staticFile("01_factory_floor.mp4")}
               style={{ width: "100%", height: "100%" }}
             />
@@ -51,6 +52,7 @@ export const Part2ParadigmShift: React.FC<Part2ParadigmShiftPropsType> = () => {
         <Sequence from={BEATS.VISUAL_01_START}>
           <AbsoluteFill>
             <OffthreadVideo
+              loop
               src={staticFile("02_mold_closeup.mp4")}
               style={{ width: "100%", height: "100%" }}
             />
@@ -70,6 +72,7 @@ export const Part2ParadigmShift: React.FC<Part2ParadigmShiftPropsType> = () => {
         <Sequence from={BEATS.VISUAL_03_START}>
           <AbsoluteFill>
             <OffthreadVideo
+              loop
               src={staticFile("veo_defect_discovered.mp4")}
               style={{ width: "100%", height: "100%" }}
             />
@@ -103,6 +106,7 @@ export const Part2ParadigmShift: React.FC<Part2ParadigmShiftPropsType> = () => {
         <Sequence from={BEATS.VISUAL_07_START}>
           <AbsoluteFill>
             <OffthreadVideo
+              loop
               src={staticFile("07_craftsman_vs_mold.mp4")}
               style={{ width: "100%", height: "100%" }}
             />

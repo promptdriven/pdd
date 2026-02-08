@@ -8,12 +8,12 @@
 
 ## Summary of Issues Found
 
-| Severity | Count | Description |
-|----------|-------|-------------|
-| CRITICAL | 2 | Veo clip frozen 65s; CrossingPoint replays same generic animation 6 times |
-| MAJOR | 7 | Wrong annotations on charts, black frames, missing script-specific data |
-| MODERATE | 5 | Static charts, incorrect coverage %, early annotations |
-| MINOR | 3 | Brief black flashes at transitions, missing secondary elements |
+| Severity | Count | Fixed | Description |
+|----------|-------|-------|-------------|
+| CRITICAL | 2 | 1.5 | Veo clip frozen 65s (FIXED: loop); CrossingPoint overlay text (PARTIALLY FIXED: overlay hidden, zoom skipped; annotations still missing) |
+| MAJOR | 7 | 3 | CodeCostChart V5 offset (FIXED); PieChart V22 offset (FIXED); PieToCurve V23 offset (FIXED); remaining: missing per-segment annotations |
+| MODERATE | 5 | 1 | ContextRot V13 offset (FIXED); remaining: static charts, incorrect coverage % |
+| MINOR | 3 | 0 | Brief black flashes at transitions, missing secondary elements |
 
 ---
 
@@ -396,55 +396,45 @@
 
 ## Systemic Issues
 
-### 1. CrossingPoint Component Replays (CRITICAL)
+### 1. CrossingPoint Component Replays (CRITICAL) — PARTIALLY FIXED
 **Affects:** V7, V8, V9, V15, V16, V17, V20 — 7 segments totaling ~160s (37% of video)
 
-The CrossingPoint component has a single 10s internal animation that plays the same way every time. When used across 7 different segments covering different narration contexts, it:
-- Restarts from empty axes each time (2-4s of zoomed/clipped chart)
-- Builds to the same "We are here." annotation with the same text overlay
-- Has NO mechanism for segment-specific annotations
+**Fixes applied:**
+- [x] Added `showOverlayText` prop (default false) — text overlay only shows for V20
+- [x] Added `startAtFullView` prop — V8, V9, V16, V17 skip 2s zoom-out animation
+- [x] Generator passes per-entry extra props via 6th tuple element
 
-**Script expects** different annotations per segment:
-- V7: Dashed line reveal, debt area expanding
-- V8: "Individual task: -55% (GitHub, 2022)", "Overall throughput: ~0% (Uplevel, 2024)"
-- V9: "Code churn: +44% (GitClear, 2025)", "Refactoring: -60%"
-- V15: Fork into "Small codebase" vs "Large codebase" paths
-- V16: "METR, 2025: experienced devs 19% slower", "39-point perception gap"
-- V17: Arrow from small→large fork, "Every patch adds code"
-- V20: Blue line crossing below both lines, "We are here" (only segment where it matches!)
+**Remaining (not yet addressed):**
+- Per-segment annotations (GitHub -55%, Uplevel 0%, GitClear +44%, METR -19%) still missing
+- Fork highlighting and arrow annotations not implemented
+- Would require new sub-components or a more complex variant system
 
-**Fix:** CrossingPoint needs a `phase` or `variant` prop to display different annotations and start states per segment. Alternatively, create separate components for each distinct chart state.
-
-### 2. Veo Clip Freeze (CRITICAL)
+### 2. Veo Clip Freeze (CRITICAL) — FIXED
 **Affects:** V18+V19 — 71.5s (16% of video)
 
-The `veo_developer_edit.mp4` file is ~8s long but used for 71.5s across two segments. After the clip ends at ~t=300s, it freezes on the last frame for 65+ seconds.
+**Fix applied:**
+- [x] Added `loop` prop to all `<OffthreadVideo>` elements in generator
+- Veo clips now loop instead of freezing on last frame
 
-**Script expects:**
-- V18: Chart annotations about regeneration and prompt size (or developer footage is acceptable)
-- V19: Side-by-side "Agentic patching" vs "PDD regeneration" comparison visualization
+**Remaining:** V19 still uses the same `veo_developer_edit.mp4` clip as V18. Script calls for a side-by-side comparison visualization. Would need a dedicated Remotion component.
 
-**Fix:** Either (a) obtain longer Veo footage, (b) loop the clip, or (c) replace V19 with a dedicated Remotion animation showing the side-by-side comparison.
-
-### 3. CodeCostChart V5 Shows End State (MAJOR)
+### 3. CodeCostChart V5 Shows End State (MAJOR) — FIXED
 **Affects:** V5 — 13.9s
 
-The frameOffset=2280 jumps to the COMPLETED state of the 120s animation, showing all annotations including ones that belong 200s later in the narration. The chart is completely static for 14s.
+**Fix applied:**
+- [x] Reduced frameOffset from 2280 to 1800
+- Now starts mid-fork drawing phase, showing visible animation progression over the 14s segment
 
-**Fix:** Reduce the offset to show the fork BEGINNING to form (~frame 1700-1800), so the viewer sees animated progression. Or add a `maxFrame` prop to cap the animation at a specific point.
-
-### 4. ContextRot Consequence Phase Too Early (MODERATE)
+### 4. ContextRot Consequence Phase Too Early (MODERATE) — FIXED
 **Affects:** V13 — 24.8s
 
-The ContextRot offset=1020 reaches "The Consequence" phase by the time V13 starts, but the narration is still describing the mechanism (vector search, embeddings). The consequence annotations appear ~15s before the narration discusses consequences.
+**Fix applied:**
+- [x] Reduced V13 offset from 1020 to 870
+- Keeps the mechanism visualization active longer before transitioning to consequences
 
-**Fix:** Reduce V13 offset to ~900 to keep the grid visualization phase active during mechanism narration. Move "The Consequence" chart to V14 only.
-
-### 5. PieChart/PieToCurve Late Animations (MAJOR)
+### 5. PieChart/PieToCurve Late Animations (MAJOR) — FIXED
 **Affects:** V22 first 4s, V23 first 6s
 
-Both components have animation intro phases that result in near-black or empty frames at the start of their segments:
-- PieChart shows empty circle for ~4s (offset=60 is too low)
-- PieToCurve shows near-black for ~6s
-
-**Fix:** Increase PieChart offset to ~120-150 (4-5s). Add offset to PieToCurve (~90 frames / 3s) to skip the morphing intro.
+**Fixes applied:**
+- [x] PieChart offset increased from 60 to 120 — skips FADE_OUT + BASE_APPEAR, starts with blue segment visible
+- [x] PieToCurve offset added at 90 — skips MORPH phase (pie shrinks to nothing), starts at AXES phase

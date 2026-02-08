@@ -16,6 +16,8 @@ import { Easing } from "remotion";
 
 export const CrossingPoint: React.FC<CrossingPointPropsType> = ({
   showTitle = true,
+  showOverlayText = false,
+  startAtFullView = false,
 }) => {
   const frame = useCurrentFrame();
   const { width, height } = useVideoConfig();
@@ -98,7 +100,7 @@ export const CrossingPoint: React.FC<CrossingPointPropsType> = ({
       )}
 
       {/* Chart with zoom animation */}
-      <CodeCostChart />
+      <CodeCostChart startAtFullView={startAtFullView} />
 
       {/* Crossing point marker with pulse effects */}
       <WeAreHereMarker x={crossingX} y={crossingY} />
@@ -246,7 +248,7 @@ export const CrossingPoint: React.FC<CrossingPointPropsType> = ({
       </div>
 
       {/* Narration text overlay - shown during hold phase */}
-      {frame >= BEATS.HOLD_START + 30 && (
+      {showOverlayText && frame >= BEATS.HOLD_START + 30 && (
         <div
           style={{
             position: "absolute",

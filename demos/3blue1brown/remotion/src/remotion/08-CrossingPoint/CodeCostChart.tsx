@@ -11,7 +11,7 @@ import {
   DataPoint,
 } from "./constants";
 
-export const CodeCostChart: React.FC = () => {
+export const CodeCostChart: React.FC<{ startAtFullView?: boolean }> = ({ startAtFullView = false }) => {
   const frame = useCurrentFrame();
   const { width, height } = useVideoConfig();
 
@@ -19,21 +19,21 @@ export const CodeCostChart: React.FC = () => {
   const chartHeight = height - CHART_MARGINS.top - CHART_MARGINS.bottom;
 
   // Zoom out effect: start zoomed in on right side, zoom out to full view
-  const zoomScale = interpolate(
+  const zoomScale = startAtFullView ? 1 : interpolate(
     frame,
     [BEATS.ZOOM_OUT_START, BEATS.ZOOM_OUT_END],
     [1.5, 1],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
 
-  const zoomOffsetX = interpolate(
+  const zoomOffsetX = startAtFullView ? 0 : interpolate(
     frame,
     [BEATS.ZOOM_OUT_START, BEATS.ZOOM_OUT_END],
     [-300, 0],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
 
-  const zoomOffsetY = interpolate(
+  const zoomOffsetY = startAtFullView ? 0 : interpolate(
     frame,
     [BEATS.ZOOM_OUT_START, BEATS.ZOOM_OUT_END],
     [-100, 0],

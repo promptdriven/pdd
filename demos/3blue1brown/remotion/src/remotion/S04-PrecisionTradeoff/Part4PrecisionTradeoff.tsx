@@ -38,6 +38,7 @@ export const Part4PrecisionTradeoff: React.FC<Part4PrecisionTradeoffPropsType> =
         <Sequence from={BEATS.VISUAL_00_START}>
           <AbsoluteFill>
             <OffthreadVideo
+              loop
               src={staticFile("split_3d_vs_mold.mp4")}
               style={{ width: "100%", height: "100%" }}
             />
@@ -50,6 +51,7 @@ export const Part4PrecisionTradeoff: React.FC<Part4PrecisionTradeoffPropsType> =
         <Sequence from={BEATS.VISUAL_01_START}>
           <AbsoluteFill>
             <OffthreadVideo
+              loop
               src={staticFile("veo_3d_printer_focus.mp4")}
               style={{ width: "100%", height: "100%" }}
             />
@@ -62,6 +64,7 @@ export const Part4PrecisionTradeoff: React.FC<Part4PrecisionTradeoffPropsType> =
         <Sequence from={BEATS.VISUAL_02_START}>
           <AbsoluteFill>
             <OffthreadVideo
+              loop
               src={staticFile("veo_mold_flow_focus.mp4")}
               style={{ width: "100%", height: "100%" }}
             />

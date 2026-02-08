@@ -71,18 +71,18 @@ SECTIONS = {
             # [VISUAL: Key dates on falling generate line: Codex, GPT-4, Claude]
             (7, 10, "AIMilestones", "For decades generating expensive, you patched, rational"),
             # [VISUAL: Post-2020, amber patch line drops; AI made patching faster]
-            # frameOffset=2280: skip to last 14s of fork drawing where cubic easing
-            # shows visible motion (fork ~65% → 100% complete in available window)
-            (11, 16, "CodeCostChart", "AI made patching faster too, Cursor Claude Copilot", 2280),
+            # frameOffset=1800: start in the middle of fork drawing (25% → 85% visual
+            # progress over the ~15s segment via inOut cubic easing)
+            (11, 16, "CodeCostChart", "AI made patching faster too, Cursor Claude Copilot", 1800),
             # [VISUAL: Focus on immediate patch line dropping]
             # frameOffset=938: skip to HIGHLIGHT_PATCH phase where patch line drops are visible
             (17, 18, "CodeCostChartMini", "Each patch getting faster, that's real, you feel it", 938),
             # [VISUAL: Camera pulls back, debt EXPANDS, dashed total cost barely moves]
             (19, 22, "CrossingPoint", "But watch dashed line, debt accumulates faster"),
             # [VISUAL: Annotations: GitHub 55%, Uplevel 0%, 41% more bugs]
-            (23, 33, "CrossingPoint", "GitHub 55% speedup, Uplevel 800 devs no change"),
+            (23, 33, "CrossingPoint", "GitHub 55% speedup, Uplevel 800 devs no change", 0, " startAtFullView={true}"),
             # [VISUAL: Annotations: GitClear +44% churn, -60% refactoring]
-            (34, 39, "CrossingPoint", "GitClear 44% churn, refactoring -60%, piling on"),
+            (34, 39, "CrossingPoint", "GitClear 44% churn, refactoring -60%, piling on", 0, " startAtFullView={true}"),
             # [VISUAL: Zoom into debt area: Code Complexity + Context Rot layers]
             # ContextRot is 45s (1350 frames). Progressive offsets create continuous
             # animation across 5 segments instead of restarting each time.
@@ -94,30 +94,31 @@ SECTIONS = {
             # offset=630: continues into codebase growth animation (grid expanding)
             (48, 51, "ContextRot", "Codebases grow, window stays same, millions of tokens", 630),
             # [VISUAL: Red/green blocks: irrelevant inside, needed outside window]
-            # offset=1020: consequence section (split view, mismatch visualization)
-            (52, 59, "ContextRot", "AI guesses relevance, vector search fails, agentic slow", 1020),
+            # offset=870: mechanism section (mismatch visualization, failure modes)
+            (52, 59, "ContextRot", "AI guesses relevance, vector search fails, agentic slow", 870),
             # [VISUAL: Performance vs Context Length graph, degrades 14-85%]
             # offset=1350: final resolved state (holds consequence view)
             (60, 68, "ContextRot", "EMNLP: performance degrades with length, context rot", 1350),
             # [VISUAL: Patch line FORKS: small codebase down, large stays flat]
             (69, 72, "CrossingPoint", "AI patching two stories, small codebase transformative"),
             # [VISUAL: Large-codebase flat, METR 19% slower, 39-point gap]
-            (73, 80, "CrossingPoint", "Large codebase 19% slower, 39-point perception gap"),
+            (73, 80, "CrossingPoint", "Large codebase 19% slower, 39-point perception gap", 0, " startAtFullView={true}"),
             # [VISUAL: Arrow from small fork to large: every patch adds code]
-            (81, 83, "CrossingPoint", "Every patch makes codebase bigger, pushes to worse world"),
+            (81, 83, "CrossingPoint", "Every patch makes codebase bigger, pushes to worse world", 0, " startAtFullView={true}"),
             # [VISUAL: Generate line pulses: small modules, clear prompts]
             (84, 90, "veo:veo_developer_edit", "Regeneration no problem, prompt fits, no retrieval no rot"),
             # [VISUAL: Side-by-side: agentic patching (noisy) vs PDD (clean)]
             (91, 99, "veo:veo_developer_edit", "NL is models deepest fluency, 250 lines lowest defects"),
             # [VISUAL: Generate line crosses below both lines. "We are here."]
-            (100, 103, "CrossingPoint", "Generation crossed below both lines, debt resets"),
+            (100, 103, "CrossingPoint", "Generation crossed below both lines, debt resets", 0, " showOverlayText={true}"),
             # [VISUAL: Split screen: Developer with Cursor / Grandma with needle]
             (104, 107, "veo:07_split_screen_sepia", "Best darning needles ever, still accumulation"),
             # [VISUAL: Pie chart: Initial Dev 10-20%, Maintenance 80-90%]
-            # frameOffset=60: skip 2s FADE_OUT intro that shows black
-            (108, 113, "PieChart", "80-90% cost is maintenance, McKinsey Stripe tech debt", 60),
+            # frameOffset=120: skip FADE_OUT + BASE_APPEAR, start at BLUE_SEGMENT visible
+            (108, 113, "PieChart", "80-90% cost is maintenance, McKinsey Stripe tech debt", 120),
             # [VISUAL: Pie morphs to compound interest curve, regeneration flat]
-            (114, 116, "PieToCurve", "Costs compound literally, unless you regenerate"),
+            # frameOffset=90: skip MORPH phase (pie shrinks to nothing = near-black)
+            (114, 116, "PieToCurve", "Costs compound literally, unless you regenerate", 90),
         ],
     },
     "part2": {
@@ -462,6 +463,7 @@ def generate_component(section_key: str) -> str:
     for i, entry in enumerate(section["visual_sequence"]):
         comp_id, desc = entry[2], entry[3]
         frame_offset = entry[4] if len(entry) > 4 else 0
+        entry_extra_props = entry[5] if len(entry) > 5 else ""
         if comp_id.startswith("veo:"):
             veo_file = comp_id.replace("veo:", "")
             switch_cases.append(f'''
@@ -470,6 +472,7 @@ def generate_component(section_key: str) -> str:
         <Sequence from={{BEATS.VISUAL_{i:02d}_START}}>
           <AbsoluteFill>
             <OffthreadVideo
+              loop
               src={{staticFile("{veo_file}.mp4")}}
               style={{{{ width: "100%", height: "100%" }}}}
             />
@@ -600,7 +603,7 @@ def generate_component(section_key: str) -> str:
             SECTION_PROP_OVERRIDES = {
                 "CodeCostChartMini": " showAudio={false}",
             }
-            extra_props = SECTION_PROP_OVERRIDES.get(comp_id, "")
+            extra_props = SECTION_PROP_OVERRIDES.get(comp_id, "") + entry_extra_props
             if frame_offset > 0:
                 # Wrap in inner Sequence with negative from to skip ahead in animation
                 switch_cases.append(f'''

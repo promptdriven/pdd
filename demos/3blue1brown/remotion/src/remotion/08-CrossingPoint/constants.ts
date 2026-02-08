@@ -138,10 +138,14 @@ export const PULSE_CONFIG = {
 // Props schema
 export const CrossingPointProps = z.object({
   showTitle: z.boolean().default(true),
+  showOverlayText: z.boolean().default(false),
+  startAtFullView: z.boolean().default(false),
 });
 
 export const defaultCrossingPointProps: z.infer<typeof CrossingPointProps> = {
   showTitle: true,
+  showOverlayText: false,
+  startAtFullView: false,
 };
 
 export type CrossingPointPropsType = z.infer<typeof CrossingPointProps>;
