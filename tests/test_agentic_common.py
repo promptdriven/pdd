@@ -2269,34 +2269,7 @@ class TestFindStateCommentPagination:
             assert comment_id == 1010
             assert state["last_completed_step"] == 10
 
-    # ---- Test 4: State ONLY on second page ----
-
-    def test_find_state_comment_state_only_on_second_page(self, tmp_path):
-        """State comment exists only beyond position 30 — the exact bug scenario.
-
-        First 30 comments are regular. The only state comment is at position 35.
-        Without --paginate, gh api would only return the first 30, missing it.
-        """
-        mock_comments = _make_mock_comments(42, state_positions=[35])
-
-        with patch("shutil.which", return_value="/usr/bin/gh"), \
-             patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(
-                returncode=0,
-                stdout=json.dumps(mock_comments),
-            )
-            result = _find_state_comment("owner", "repo", 481, "bug", tmp_path)
-
-            assert result is not None, (
-                "State comment at position 35 was not found. "
-                "This reproduces the exact bug from issue #481."
-            )
-            comment_id, state = result
-            assert comment_id == 1035
-            assert state["workflow"] == "bug"
-            assert state["issue_number"] == 481
-
-    # ---- Test 5: No state comment exists ----
+    # ---- Test 4: No state comment exists ----
 
     def test_find_state_comment_no_state_comment(self, tmp_path):
         """Returns None when no state comment exists, even with many comments."""
@@ -2311,7 +2284,7 @@ class TestFindStateCommentPagination:
             result = _find_state_comment("owner", "repo", 481, "bug", tmp_path)
             assert result is None
 
-    # ---- Test 6: Empty issue (0 comments) ----
+    # ---- Test 5: Empty issue (0 comments) ----
 
     def test_find_state_comment_empty_issue(self, tmp_path):
         """Returns None gracefully on issues with 0 comments."""
@@ -2324,7 +2297,7 @@ class TestFindStateCommentPagination:
             result = _find_state_comment("owner", "repo", 481, "bug", tmp_path)
             assert result is None
 
-    # ---- Test 7: gh CLI not installed ----
+    # ---- Test 6: gh CLI not installed ----
 
     def test_find_state_comment_gh_not_installed(self, tmp_path):
         """Returns None without calling subprocess when gh is not installed."""
@@ -2334,7 +2307,7 @@ class TestFindStateCommentPagination:
             assert result is None
             mock_run.assert_not_called()
 
-    # ---- Test 8: API failure ----
+    # ---- Test 7: API failure ----
 
     def test_find_state_comment_api_failure(self, tmp_path):
         """Returns None gracefully on gh api errors."""
@@ -2344,27 +2317,7 @@ class TestFindStateCommentPagination:
             result = _find_state_comment("owner", "repo", 481, "bug", tmp_path)
             assert result is None
 
-    # ---- Test 9: github_load_state wrapper uses paginated find ----
-
-    def test_github_load_state_uses_paginated_find(self, tmp_path):
-        """github_load_state() should find state beyond 30 comments via _find_state_comment."""
-        mock_comments = _make_mock_comments(42, state_positions=[35])
-
-        with patch("shutil.which", return_value="/usr/bin/gh"), \
-             patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(
-                returncode=0,
-                stdout=json.dumps(mock_comments),
-            )
-            state, comment_id = github_load_state("owner", "repo", 481, "bug", tmp_path)
-
-            assert state is not None, (
-                "github_load_state returned None — state beyond comment #30 not found"
-            )
-            assert comment_id == 1035
-            assert state["last_completed_step"] == 35
-
-    # ---- Test 10: Full call chain — load_workflow_state with no local cache ----
+    # ---- Test 8: Full call chain — load_workflow_state with no local cache ----
 
     def test_load_workflow_state_github_fallback_with_pagination(self, tmp_path):
         """load_workflow_state() recovers from GitHub when no local cache exists.
@@ -2406,7 +2359,7 @@ class TestFindStateCommentPagination:
             assert state["last_completed_step"] == 35
 
 
-# ---- Tests 11-12: Secondary affected call sites ----
+# ---- Tests 9-10: Secondary affected call sites ----
 
 class TestSecondaryPaginationCallSites:
     """Verify --paginate is present in secondary call sites (agentic_bug.py, agentic_test.py)."""
