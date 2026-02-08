@@ -2,7 +2,7 @@
 
 import os
 
-__version__ = "0.0.141"
+__version__ = "0.0.142"
 
 # Strength parameter used for LLM extraction across the codebase
 # Used in postprocessing, XML tagging, code generation, and other extraction

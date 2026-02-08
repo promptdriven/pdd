@@ -1,3 +1,21 @@
+## v0.0.142 (2026-02-07)
+
+### Feat
+
+- Introduce replay stability A/B experiment with its infrastructure, runs, and results.
+
+### Fix
+
+- Update stale model name and make sys.path preamble injection deterministic
+- Replace all 'pdd login' references with 'pdd auth login'
+- pdd sessions cleanup error message references non-existent pdd login command
+- Address Copilot review feedback on test quality
+- Add include path validation to architecture Step 11 (#426)
+
+### Refactor
+
+- remove Firecrawl cache prompt and enhance prompt path resolution logic with new precedence rules.
+
 ## v0.0.141 (2026-02-06)
 
 ### Feat
