@@ -193,6 +193,7 @@ run-examples: $(EXAMPLE_FILES)
 # Ensure dev dependencies are installed before running tests
 ensure-dev-deps:
 	@echo "Updating pdd conda environment with dev dependencies"
+	@conda run -n pdd --no-capture-output python -c "import site, glob, shutil; [shutil.rmtree(p) for p in glob.glob(site.getsitepackages()[0] + '/pdd_cli-*.dist-info')]" 2>/dev/null || true
 	@conda run -n pdd --no-capture-output pip install -e '.[dev]'
 
 # Run tests
