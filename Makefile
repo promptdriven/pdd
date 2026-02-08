@@ -199,13 +199,13 @@ ensure-dev-deps:
 test: ensure-dev-deps
 	@echo "Running staging tests"
 	@cd $(STAGING_DIR)
-	@conda run -n pdd --no-capture-output PDD_RUN_REAL_LLM_TESTS=1 PDD_RUN_LLM_TESTS=1 PDD_PATH=$(abspath $(PDD_DIR)) PYTHONPATH=$(PDD_DIR):$$PYTHONPATH python -m pytest -vv -n auto $(TESTS_DIR)
+	@conda run -n pdd --no-capture-output PDD_MODEL_DEFAULT=vertex_ai/gemini-3-flash-preview PDD_RUN_REAL_LLM_TESTS=1 PDD_RUN_LLM_TESTS=1 PDD_PATH=$(abspath $(PDD_DIR)) PYTHONPATH=$(PDD_DIR):$$PYTHONPATH python -m pytest -vv -n auto $(TESTS_DIR)
 
 # Run tests with coverage
 coverage: ensure-dev-deps
 	@echo "Running tests with coverage"
 	@cd $(STAGING_DIR)
-	@conda run -n pdd --no-capture-output PDD_PATH=$(STAGING_DIR) PYTHONPATH=$(PDD_DIR):$$PYTHONPATH python -m pytest --cov=$(PDD_DIR) --cov-report=term-missing --cov-report=html $(TESTS_DIR)
+	@conda run -n pdd --no-capture-output PDD_MODEL_DEFAULT=vertex_ai/gemini-3-flash-preview PDD_PATH=$(STAGING_DIR) PYTHONPATH=$(PDD_DIR):$$PYTHONPATH python -m pytest --cov=$(PDD_DIR) --cov-report=term-missing --cov-report=html $(TESTS_DIR)
 
 # Run pylint
 lint: ensure-dev-deps
