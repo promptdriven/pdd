@@ -230,7 +230,7 @@ def run_agentic_architecture(
     # 4. Fetch Comments
     comments_text = ""
     if comments_url:
-        c_success, c_output = _run_gh_command(["api", comments_url])
+        c_success, c_output = _run_gh_command(["api", comments_url, "--paginate"])
         if c_success:
             try:
                 comments = json.loads(c_output)
