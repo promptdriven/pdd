@@ -49,11 +49,36 @@ def _validate_inputs(
         raise ValueError("Language must be a non-empty string")
 
 
+def _strip_existing_sys_path_lines(code: str) -> str:
+    """Remove any LLM-generated sys.path isolation lines from code.
+
+    Strips lines that look like LLM-generated sys.path manipulation so
+    the canonical preamble can be injected deterministically.
+    """
+    patterns = [
+        re.compile(r'^\s*sys\.path\.(insert|append)\s*\('),
+        re.compile(r'^\s*project_root\s*=.*__file__'),
+        re.compile(r'^\s*#.*sys\.path.*local|prioriti|isolat', re.IGNORECASE),
+    ]
+    lines = code.splitlines()
+    filtered = []
+    for line in lines:
+        if any(p.search(line) for p in patterns):
+            continue
+        filtered.append(line)
+    return "\n".join(filtered)
+
+
 def _inject_sys_path_preamble(code: str) -> str:
     """
     Injects sys.path isolation preamble into Python code.
-    Ensures it appears after __future__ imports but before other imports.
+    Strips any existing LLM-generated sys.path manipulation first,
+    then ensures the canonical preamble appears after __future__ imports
+    but before other imports.
     """
+    # Strip any existing sys.path manipulation from LLM output
+    code = _strip_existing_sys_path_lines(code)
+
     preamble = (
         "\nimport sys\n"
         "from pathlib import Path\n\n"
@@ -62,18 +87,18 @@ def _inject_sys_path_preamble(code: str) -> str:
         "project_root = Path(__file__).resolve().parents[1]\n"
         "sys.path.insert(0, str(project_root))\n"
     )
-    
+
     lines = code.splitlines()
     insert_idx = 0
-    
+
     # Skip shebang
     if lines and len(lines) > insert_idx and lines[insert_idx].startswith("#!"):
         insert_idx += 1
-        
+
     # Skip encoding
     if lines and len(lines) > insert_idx and lines[insert_idx].startswith("# -*-"):
         insert_idx += 1
-        
+
     # Skip __future__ imports and initial comments/blanks
     while insert_idx < len(lines):
         line = lines[insert_idx].strip()
@@ -86,10 +111,10 @@ def _inject_sys_path_preamble(code: str) -> str:
         if line.startswith("from __future__"):
             insert_idx += 1
             continue
-        
+
         # Found something that is not a comment, empty, or future import.
         break
-            
+
     lines.insert(insert_idx, preamble)
     return "\n".join(lines)
 
@@ -292,7 +317,7 @@ def generate_test(
         unit_test = best_match if best_match else current_text
 
     # --- Step 6.5: Inject sys.path isolation for Python ---
-    if language.lower() == 'python' and unit_test.strip() and "sys.path.insert" not in unit_test:
+    if language.lower() == 'python' and unit_test.strip():
         unit_test = _inject_sys_path_preamble(unit_test)
 
     # --- Step 7: Final Cost Reporting ---

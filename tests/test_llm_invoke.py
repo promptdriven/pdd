@@ -1685,7 +1685,7 @@ def test_vertex_ai_claude_opus_passes_response_format_for_structured_output(mock
     for structured output. This was fixed in LiteLLM versions after v1.80.5.
 
     This test verifies that after upgrading LiteLLM to >=1.81.0:
-    - structured_output=True in CSV for vertex_ai/claude-opus-4-5
+    - structured_output=True in CSV for vertex_ai/claude-opus-4-6
     - response_format is correctly passed to LiteLLM
 
     This test will:
@@ -1697,12 +1697,12 @@ def test_vertex_ai_claude_opus_passes_response_format_for_structured_output(mock
     real_data = _load_model_data(None)  # None uses package default CSV path
 
     # Filter to only include Vertex AI Claude Opus model
-    opus_data = real_data[real_data['model'] == 'vertex_ai/claude-opus-4-5'].copy()
+    opus_data = real_data[real_data['model'] == 'vertex_ai/claude-opus-4-6'].copy()
     assert len(opus_data) == 1, "Vertex AI Claude Opus model not found in CSV"
 
     # Verify CSV has structured_output=True
     assert opus_data.iloc[0]['structured_output'] == True, \
-        "vertex_ai/claude-opus-4-5 should have structured_output=True in CSV"
+        "vertex_ai/claude-opus-4-6 should have structured_output=True in CSV"
 
     with patch('pdd.llm_invoke._load_model_data', return_value=opus_data):
         with patch.dict(os.environ, {'VERTEX_CREDENTIALS': 'fake_creds'}):
@@ -1711,7 +1711,7 @@ def test_vertex_ai_claude_opus_passes_response_format_for_structured_output(mock
                 json_response = '{"field1": "test_value", "field2": 42}'
                 mock_response = create_mock_litellm_response(
                     json_response,
-                    model_name='vertex_ai/claude-opus-4-5'
+                    model_name='vertex_ai/claude-opus-4-6'
                 )
                 mock_completion.return_value = mock_response
 
@@ -1729,7 +1729,7 @@ def test_vertex_ai_claude_opus_passes_response_format_for_structured_output(mock
                 # Verify Claude Opus was called
                 mock_completion.assert_called_once()
                 call_args, call_kwargs = mock_completion.call_args
-                assert call_kwargs['model'] == 'vertex_ai/claude-opus-4-5', \
+                assert call_kwargs['model'] == 'vertex_ai/claude-opus-4-6', \
                     f"Expected Claude Opus model, got {call_kwargs['model']}"
 
                 # EXPECTED: Vertex AI Claude Opus should have response_format passed
@@ -1759,7 +1759,7 @@ def test_structured_output_uses_strict_json_schema_mode(mock_set_llm_cache):
 
     # Use a model with structured_output=True
     real_data = _load_model_data(None)
-    opus_data = real_data[real_data['model'] == 'vertex_ai/claude-opus-4-5'].copy()
+    opus_data = real_data[real_data['model'] == 'vertex_ai/claude-opus-4-6'].copy()
     assert len(opus_data) == 1, "Vertex AI Claude Opus model not found in CSV"
 
     with patch('pdd.llm_invoke._load_model_data', return_value=opus_data):
@@ -1769,7 +1769,7 @@ def test_structured_output_uses_strict_json_schema_mode(mock_set_llm_cache):
                 json_response = '{"field1": "test_value", "field2": 42}'
                 mock_response = create_mock_litellm_response(
                     json_response,
-                    model_name='vertex_ai/claude-opus-4-5'
+                    model_name='vertex_ai/claude-opus-4-6'
                 )
                 mock_completion.return_value = mock_response
 
