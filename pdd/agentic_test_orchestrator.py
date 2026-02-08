@@ -444,7 +444,7 @@ def run_agentic_test_orchestrator(
             state["github_comment_id"] = github_comment_id
 
         if not quiet:
-            lines = step_output.splitlines()
+            lines = step_output.strip().split('\n')
             brief = lines[-1] if lines else "Done"
             if len(brief) > 80: brief = brief[:77] + "..."
             console.print(f"   -> {escape(brief)}")

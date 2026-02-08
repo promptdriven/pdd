@@ -220,7 +220,7 @@ def _parse_direct_edit_candidates(step6_output: str) -> List[str]:
     table_pattern = r"### Direct Edit Candidates[^\n]*\n\|[^\n]+\n\|[-\s|]+\n((?:\|[^\n]+\n)*)"
     table_match = re.search(table_pattern, step6_output, re.IGNORECASE)
     if table_match:
-        rows = table_match.group(1).splitlines()
+        rows = table_match.group(1).strip().split("\n")
         for row in rows:
             if row.strip().startswith("|"):
                 # Extract first column (file path)
@@ -691,7 +691,7 @@ def run_agentic_change_orchestrator(
             state["github_comment_id"] = github_comment_id
 
         if not quiet:
-            lines = step_output.splitlines()
+            lines = step_output.strip().split('\n')
             brief = lines[-1] if lines else "Done"
             if len(brief) > 80: brief = brief[:77] + "..."
             console.print(f"   -> {escape(brief)}")

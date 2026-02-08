@@ -49,7 +49,7 @@ def _get_files_from_git(directory_path: str) -> Optional[List[str]]:
             check=True,
             cwd=cwd
         )
-        files = [f for f in result.stdout.splitlines() if f]
+        files = [f for f in result.stdout.strip().split('\n') if f]
         # Convert to absolute paths
         return [os.path.join(cwd, f) for f in files]
     except (subprocess.CalledProcessError, FileNotFoundError):

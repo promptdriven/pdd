@@ -1,18 +1,42 @@
+## v0.0.142 (2026-02-07)
+
+### Feat
+
+- Introduce replay stability A/B experiment with its infrastructure, runs, and results.
+
+### Fix
+
+- Update stale model name and make sys.path preamble injection deterministic
+- Replace all 'pdd login' references with 'pdd auth login'
+- pdd sessions cleanup error message references non-existent pdd login command
+- Address Copilot review feedback on test quality
+- Add include path validation to architecture Step 11 (#426)
+
+### Refactor
+
+- remove Firecrawl cache prompt and enhance prompt path resolution logic with new precedence rules.
+
 ## v0.0.141 (2026-02-06)
 
 ### Feat
 
-- Update demo narration and audio synchronization, add new video assets, and re-render all sections.
+- **sync steering**: Add interactive operation steering to `pdd sync`. Users can now override the recommended sync operation (generate, test, fix, etc.) via a modal choice picker in the TUI, with configurable timeout (`--steer-timeout`) and opt-out (`--no-steer`). Headless/CI environments auto-accept the default. Thanks Benjamin Knobloch! (upstream #267)
+- **agentic_common**: Support `CLAUDE_MODEL` environment variable to override the Claude model used in agentic workflows.
+- **agentic_common**: Inject user feedback from GitHub issue comments (`PDD_USER_FEEDBACK` env var) into agentic task prompts for iterative fix attempts.
 
 ### Fix
 
-- Address Copilot review feedback on track_cost pytest guard
-- Prevent `PDD_ENV` environment variable pollution in e2e tests to avoid incorrect JWT audience validation.
-- correct misleading docstrings about exit code behavior
-- remove exit code 1 to avoid CLI error handler
-- use ctx.exit(1) instead of raise click.exceptions.Exit(1)
-- deregister() returns bool so cleanup tracks real failures
-- pdd sessions cleanup shows misleading success message when all cleanups fail
+- **sessions cleanup**: Fix misleading "Successfully cleaned up" message when all cleanups actually failed. `deregister()` now returns `bool` so callers can track real failures (#469). Thanks Serhan Asad! (upstream #475)
+- **unfinished_prompt**: Strip trailing markdown code fences (` ``` `) before completeness checks. Try multiple parse strategies (raw, dedented, wrapped in function body) so indented Python tails like `return a + b` are correctly recognized as complete.
+- **sync_determine_operation**: Fix resource leak in `SyncLock.acquire()` — file descriptor and lock file are now properly cleaned up on failure. Re-raises the original exception instead of wrapping in `TimeoutError`.
+- **sync_orchestration**: Use `worker_exception is not None` instead of `isinstance(worker_exception, BaseException)` for crash detection.
+- **track_cost**: Prevent `@track_cost` decorator from writing mock data to `pdd_cost.csv` during pytest runs.
+- **agentic_common**: Remove `PDD_OUTPUT_COST_PATH` from subprocess environment to prevent cost tracking side effects in child processes.
+- **codebase-wide**: Replace `.split('\n')` with `.splitlines()` across codebase to fix Windows CRLF line ending bug (#471). Thanks Serhan Asad! (upstream #473)
+
+### Refactor
+
+- **agentic_bug_step5_root_cause**: Restructure root cause analysis prompt to emphasize tracing to the true root cause (not just symptoms), searching for existing patterns in the codebase, and specifying the fix location with rationale.
 
 ## v0.0.140 (2026-02-05)
 
