@@ -6,9 +6,12 @@ import {
   OffthreadVideo,
   staticFile,
   useCurrentFrame,
+  interpolate,
+  Easing,
 } from "remotion";
 import { BEATS, VISUAL_SEQUENCE, Part2ParadigmShiftPropsType } from "./constants";
-import { MoldToPrompt, defaultMoldToPromptProps } from "../19-MoldToPrompt";
+import { DefectDiscovered, defaultDefectDiscoveredProps } from "../15-DefectDiscovered";
+import { ChipDesignHistory, defaultChipDesignHistoryProps } from "../19a-ChipDesignHistory";
 import { PartsEject, defaultPartsEjectProps } from "../14-PartsEject";
 import { PerfectParts, defaultPerfectPartsProps } from "../16-PerfectParts";
 import { PlasticRegenerates, defaultPlasticRegeneratesProps } from "../18-PlasticRegenerates";
@@ -67,16 +70,10 @@ export const Part2ParadigmShift: React.FC<Part2ParadigmShiftPropsType> = () => {
         </Sequence>
       )}
 
-      {/* Visual 3: Veo clip - When there's a defect, don't patch individual part */}
+      {/* Visual 3: DefectDiscovered - When there's a defect, don't patch individual part */}
       {activeVisual === 3 && (
         <Sequence from={BEATS.VISUAL_03_START}>
-          <AbsoluteFill>
-            <OffthreadVideo
-              loop
-              src={staticFile("veo_defect_discovered.mp4")}
-              style={{ width: "100%", height: "100%" }}
-            />
-          </AbsoluteFill>
+          <DefectDiscovered {...defaultDefectDiscoveredProps} />
         </Sequence>
       )}
 
@@ -101,7 +98,7 @@ export const Part2ParadigmShift: React.FC<Part2ParadigmShiftPropsType> = () => {
         </Sequence>
       )}
 
-      {/* Visual 7: Veo clip - Not just plastics, chip industry hit this exact wa */}
+      {/* Visual 7: Veo clip + transistor counter overlay - Not just plastics, chip industry hit this exact wall */}
       {activeVisual === 7 && (
         <Sequence from={BEATS.VISUAL_07_START}>
           <AbsoluteFill>
@@ -110,35 +107,90 @@ export const Part2ParadigmShift: React.FC<Part2ParadigmShiftPropsType> = () => {
               src={staticFile("07_craftsman_vs_mold.mp4")}
               style={{ width: "100%", height: "100%" }}
             />
+            {/* Transistor counter overlay (spec 09b) */}
+            {(() => {
+              const localFrame = frame - BEATS.VISUAL_07_START;
+              const duration = BEATS.VISUAL_07_END - BEATS.VISUAL_07_START;
+              const counterProgress = interpolate(
+                localFrame,
+                [0, duration * 0.9],
+                [0, 1],
+                {
+                  extrapolateLeft: "clamp",
+                  extrapolateRight: "clamp",
+                  easing: Easing.bezier(0.25, 0.1, 0.25, 1),
+                }
+              );
+              const count = Math.round(
+                100 * Math.pow(500, counterProgress)
+              );
+              const counterOpacity = interpolate(
+                localFrame,
+                [10, 30],
+                [0, 1],
+                {
+                  extrapolateLeft: "clamp",
+                  extrapolateRight: "clamp",
+                }
+              );
+              const isBlinking =
+                localFrame > duration * 0.9 &&
+                Math.sin(localFrame * 0.3) > 0;
+              return (
+                <div
+                  style={{
+                    position: "absolute",
+                    top: 40,
+                    right: 40,
+                    padding: "12px 20px",
+                    borderRadius: 8,
+                    backgroundColor: "rgba(30, 30, 46, 0.75)",
+                    fontFamily:
+                      "'JetBrains Mono', 'Fira Code', monospace",
+                    fontSize: 22,
+                    color:
+                      localFrame > duration * 0.9
+                        ? "#D9944A"
+                        : "#2AA198",
+                    opacity: isBlinking
+                      ? counterOpacity * 0.3
+                      : counterOpacity,
+                    border: "1px solid rgba(42, 161, 152, 0.3)",
+                  }}
+                >
+                  ~{count.toLocaleString()} transistors
+                </div>
+              );
+            })()}
           </AbsoluteFill>
         </Sequence>
       )}
 
-      {/* Visual 8: MoldToPrompt - 1980s drew gates by hand, moved to Verilog in 1985 */}
+      {/* Visual 8: ChipDesignHistory (phase: verilogSynthesis) - 1980s drew gates by hand, moved to Verilog in 1985 */}
       {activeVisual === 8 && (
         <Sequence from={BEATS.VISUAL_08_START}>
-          <MoldToPrompt {...defaultMoldToPromptProps} />
+          <ChipDesignHistory {...defaultChipDesignHistoryProps} phase="verilogSynthesis" />
         </Sequence>
       )}
 
-      {/* Visual 9: MoldToPrompt - Synthesis non-deterministic, different gates every */}
+      {/* Visual 9: ChipDesignHistory (phase: threeNetlists) - Synthesis non-deterministic, different gates every time */}
       {activeVisual === 9 && (
         <Sequence from={BEATS.VISUAL_09_START}>
-          <MoldToPrompt {...defaultMoldToPromptProps} />
+          <ChipDesignHistory {...defaultChipDesignHistoryProps} phase="threeNetlists" />
         </Sequence>
       )}
 
-      {/* Visual 10: MoldToPrompt - Synopsys wrapped verification, SAT/SMT proof, same */}
+      {/* Visual 10: ChipDesignHistory (phase: verification) - Synopsys wrapped verification, SAT/SMT proof, same function */}
       {activeVisual === 10 && (
         <Sequence from={BEATS.VISUAL_10_START}>
-          <MoldToPrompt {...defaultMoldToPromptProps} />
+          <ChipDesignHistory {...defaultChipDesignHistoryProps} phase="verification" />
         </Sequence>
       )}
 
-      {/* Visual 11: MoldToPrompt - By 1990 schematic, mid-90s half switched, all use  */}
+      {/* Visual 11: ChipDesignHistory (phase: abstractionTimeline) - By 1990 schematic, mid-90s half switched, all use HDL now */}
       {activeVisual === 11 && (
         <Sequence from={BEATS.VISUAL_11_START}>
-          <MoldToPrompt {...defaultMoldToPromptProps} />
+          <ChipDesignHistory {...defaultChipDesignHistoryProps} phase="abstractionTimeline" />
         </Sequence>
       )}
 

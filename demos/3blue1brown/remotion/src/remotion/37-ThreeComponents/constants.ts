@@ -10,19 +10,42 @@ export const THREE_COMPONENTS_HEIGHT = 1080;
 
 // Beat timings (in frames at 30fps)
 export const BEATS = {
-  SYSTEM_START: 0,
-  SYSTEM_END: 90,
-  PROMPT_GLOW_START: 120,
-  PROMPT_GLOW_END: 180,
-  GROUNDING_GLOW_START: 240,
-  GROUNDING_GLOW_END: 300,
-  WALLS_GLOW_START: 360,
-  WALLS_GLOW_END: 420,
-  CODE_OUTPUT_START: 480,
-  CODE_OUTPUT_END: 540,
-  FORMULA_START: 600,
-  FORMULA_END: 660,
-  HOLD_START: 720,
+  // Vertices appear (staggered)
+  VERTEX_PROMPT_START: 0,
+  VERTEX_TESTS_START: 10,
+  VERTEX_GROUNDING_START: 20,
+  VERTEX_APPEAR_END: 50,
+
+  // Edges connect
+  EDGES_START: 60,
+  EDGES_END: 120,
+
+  // Glows intensify + sub-labels
+  GLOW_INTENSIFY_START: 120,
+  GLOW_INTENSIFY_END: 160,
+  SUBLABEL_START: 130,
+  SUBLABEL_END: 170,
+
+  // Center code appears
+  CODE_START: 180,
+  CODE_END: 220,
+  ARROWS_START: 200,
+  ARROWS_END: 240,
+
+  // Hold
+  HOLD_START: 240,
+};
+
+// Triangle geometry
+export const TRIANGLE = {
+  CENTER_X: 960,
+  CENTER_Y: 440,
+  // Vertex positions
+  PROMPT: { x: 960, y: 180 },
+  TESTS: { x: 560, y: 700 },
+  GROUNDING: { x: 1360, y: 700 },
+  // Centroid for generated code
+  CENTROID: { x: 960, y: 430 },
 };
 
 // Color palette

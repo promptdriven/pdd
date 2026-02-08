@@ -12,12 +12,15 @@ export const BEATS = {
   // Zoom out from milestone view
   ZOOM_OUT_START: 0,
   ZOOM_OUT_END: 60,              // 0-2s: Zoom out animation
-  // Crossing point marker appears
-  MARKER_APPEAR_START: 60,
-  MARKER_APPEAR_END: 90,         // 2-3s: Radial burst appearance
-  // First strong pulse
-  PULSE_1_START: 90,
-  PULSE_1_END: 150,              // 3-5s: First pulse wave
+  // First crossing: generate crosses below dashed total cost line (modest emphasis)
+  FIRST_CROSSING_START: 60,
+  FIRST_CROSSING_END: 90,        // 2-3s: Brief pulse at first intersection
+  // Second crossing: generate crosses below solid immediate line (dramatic moment)
+  MARKER_APPEAR_START: 90,
+  MARKER_APPEAR_END: 120,        // 3-4s: Radial burst at second crossing
+  // Strong pulse for second crossing
+  PULSE_1_START: 120,
+  PULSE_1_END: 150,              // 4-5s: Dramatic pulse wave
   // Label "We are here." fades in
   LABEL_FADE_START: 150,
   LABEL_FADE_END: 210,           // 5-7s: Label appears
@@ -107,13 +110,24 @@ export const interpolateHours = (data: DataPoint[], year: number): number => {
   return data[data.length - 1].hours;
 };
 
-// The crossing point (where generate crosses below large-codebase total cost)
+// First crossing: generate crosses below large-codebase total cost (dashed line)
 // Between 2022-2023: generate goes 28→15, total goes 27→30
 // 28 - 13t = 27 + 3t → t = 1/16 → year ≈ 2022.06, hours ≈ 27.19
-export const CROSSING_POINT = {
+export const CROSSING_POINT_1 = {
   year: 2022.0625,
   hours: 27.1875,
 };
+
+// Second crossing: generate crosses below large-codebase immediate patch cost (solid line)
+// Between 2023-2024: generate goes 15→6, immediate goes 11→12
+// 15 - 9t = 11 + t → 4 = 10t → t = 0.4 → year ≈ 2023.4, hours ≈ 11.4
+export const CROSSING_POINT_2 = {
+  year: 2023.4,
+  hours: 11.4,
+};
+
+// Legacy alias (the primary marker shown with "We are here." label)
+export const CROSSING_POINT = CROSSING_POINT_2;
 
 // Chart margins
 export const CHART_MARGINS = {
@@ -127,7 +141,15 @@ export const CHART_MARGINS = {
 export const YEAR_RANGE = { min: 2015, max: 2025 };
 export const HOURS_RANGE = { min: 0, max: 35 };
 
-// Pulse effect configuration - more dramatic than sock threshold
+// Pulse effect configuration for first crossing (modest emphasis)
+export const FIRST_CROSSING_PULSE_CONFIG = {
+  NUM_RINGS: 3,           // Fewer rings - modest
+  RING_STAGGER: 10,       // Frames between ring starts
+  MAX_SCALE: 3,           // Smaller expansion
+  MARKER_RADIUS: 18,      // Smaller marker
+};
+
+// Pulse effect configuration for second crossing - more dramatic than sock threshold
 export const PULSE_CONFIG = {
   NUM_RINGS: 5,           // 4-5 concentric rings
   RING_STAGGER: 15,       // Frames between ring starts

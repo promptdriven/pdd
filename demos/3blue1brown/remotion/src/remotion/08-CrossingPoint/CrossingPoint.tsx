@@ -2,10 +2,12 @@ import React from "react";
 import { AbsoluteFill, interpolate, useCurrentFrame, useVideoConfig } from "remotion";
 import { CodeCostChart } from "./CodeCostChart";
 import { WeAreHereMarker } from "./WeAreHereMarker";
+import { FirstCrossingMarker } from "./FirstCrossingMarker";
 import { AnimatedArrow } from "./AnimatedArrow";
 import {
   COLORS,
-  CROSSING_POINT,
+  CROSSING_POINT_1,
+  CROSSING_POINT_2,
   CHART_MARGINS,
   YEAR_RANGE,
   HOURS_RANGE,
@@ -41,10 +43,19 @@ export const CrossingPoint: React.FC<CrossingPointPropsType> = ({
     );
   };
 
-  const crossingX = getXPosition(CROSSING_POINT.year);
-  const crossingY = getYPosition(CROSSING_POINT.hours);
+  // First crossing: generate crosses below dashed total cost line
+  const crossing1X = getXPosition(CROSSING_POINT_1.year);
+  const crossing1Y = getYPosition(CROSSING_POINT_1.hours);
 
-  // Label position (below and right of crossing point)
+  // Second crossing: generate crosses below solid immediate patch cost line (the dramatic moment)
+  const crossing2X = getXPosition(CROSSING_POINT_2.year);
+  const crossing2Y = getYPosition(CROSSING_POINT_2.hours);
+
+  // Legacy aliases for label/arrow (point to second crossing)
+  const crossingX = crossing2X;
+  const crossingY = crossing2Y;
+
+  // Label position (below and right of second crossing point)
   const labelOffsetX = 140;
   const labelOffsetY = 100;
   const labelX = crossingX + labelOffsetX;
@@ -102,8 +113,11 @@ export const CrossingPoint: React.FC<CrossingPointPropsType> = ({
       {/* Chart with zoom animation */}
       <CodeCostChart startAtFullView={startAtFullView} />
 
-      {/* Crossing point marker with pulse effects */}
-      <WeAreHereMarker x={crossingX} y={crossingY} />
+      {/* First crossing: generate crosses below dashed total cost line (modest emphasis) */}
+      <FirstCrossingMarker x={crossing1X} y={crossing1Y} />
+
+      {/* Second crossing: generate crosses below solid immediate patch cost (dramatic moment) */}
+      <WeAreHereMarker x={crossing2X} y={crossing2Y} />
 
       {/* Animated arrow pointing to crossing point */}
       <AnimatedArrow

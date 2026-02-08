@@ -80,19 +80,19 @@ export const BEATS = {
   VISUAL_07_START: s2f(65.54),  // 1966 frames
   VISUAL_07_END: s2f(71.0),  // 2130 frames
 
-  // Visual 8: MoldToPrompt — "In the 1980s, chip designers drew every gate by ha..."
+  // Visual 8: ChipDesignHistory:verilogSynthesis — "In the 1980s, chip designers drew every gate by ha..."
   VISUAL_08_START: s2f(72.58),  // 2177 frames
   VISUAL_08_END: s2f(93.7),  // 2811 frames
 
-  // Visual 9: MoldToPrompt — "But here's the thing, synthesis was non-determinis..."
+  // Visual 9: ChipDesignHistory:threeNetlists — "But here's the thing, synthesis was non-determinis..."
   VISUAL_09_START: s2f(95.24),  // 2857 frames
   VISUAL_09_END: s2f(108.52),  // 3256 frames
 
-  // Visual 10: MoldToPrompt — "What synopsis did was wrap a verification tool cha..."
+  // Visual 10: ChipDesignHistory:verification — "What synopsis did was wrap a verification tool cha..."
   VISUAL_10_START: s2f(109.62),  // 3289 frames
   VISUAL_10_END: s2f(131.12),  // 3934 frames
 
-  // Visual 11: MoldToPrompt — "By 1990, most designs were still schematic based. ..."
+  // Visual 11: ChipDesignHistory:abstractionTimeline — "By 1990, most designs were still schematic based. ..."
   VISUAL_11_START: s2f(132.68),  // 3980 frames
   VISUAL_11_END: s2f(155.2),  // 4656 frames
 
@@ -106,15 +106,15 @@ export const VISUAL_SEQUENCE = [
   { start: BEATS.VISUAL_00_START, end: BEATS.VISUAL_00_END, id: "veo:01_factory_floor", desc: "Pattern across industries, deeper shift in how things made" },
   { start: BEATS.VISUAL_01_START, end: BEATS.VISUAL_01_END, id: "veo:02_mold_closeup", desc: "Consider injection molding, crafted to designed molds" },
   { start: BEATS.VISUAL_02_START, end: BEATS.VISUAL_02_END, id: "PartsEject", desc: "Make mold once, unlimited parts, refine once all improve" },
-  { start: BEATS.VISUAL_03_START, end: BEATS.VISUAL_03_END, id: "veo:veo_defect_discovered", desc: "When there's a defect, don't patch individual parts" },
+  { start: BEATS.VISUAL_03_START, end: BEATS.VISUAL_03_END, id: "DefectDiscovered", desc: "When there's a defect, don't patch individual parts" },
   { start: BEATS.VISUAL_04_START, end: BEATS.VISUAL_04_END, id: "PerfectParts", desc: "Fix the mold, fix applies to every future part" },
   { start: BEATS.VISUAL_05_START, end: BEATS.VISUAL_05_END, id: "ValueAura", desc: "Real shift: migration of where value lives" },
   { start: BEATS.VISUAL_06_START, end: BEATS.VISUAL_06_END, id: "PlasticRegenerates", desc: "Molding value in specification, disposable, regenerate" },
   { start: BEATS.VISUAL_07_START, end: BEATS.VISUAL_07_END, id: "veo:07_craftsman_vs_mold", desc: "Not just plastics, chip industry hit this exact wall" },
-  { start: BEATS.VISUAL_08_START, end: BEATS.VISUAL_08_END, id: "MoldToPrompt", desc: "1980s drew gates by hand, moved to Verilog in 1985" },
-  { start: BEATS.VISUAL_09_START, end: BEATS.VISUAL_09_END, id: "MoldToPrompt", desc: "Synthesis non-deterministic, different gates every time" },
-  { start: BEATS.VISUAL_10_START, end: BEATS.VISUAL_10_END, id: "MoldToPrompt", desc: "Synopsys wrapped verification, SAT/SMT proof, same function" },
-  { start: BEATS.VISUAL_11_START, end: BEATS.VISUAL_11_END, id: "MoldToPrompt", desc: "By 1990 schematic, mid-90s half switched, all use HDL now" },
+  { start: BEATS.VISUAL_08_START, end: BEATS.VISUAL_08_END, id: "ChipDesignHistory:verilogSynthesis", desc: "1980s drew gates by hand, moved to Verilog in 1985" },
+  { start: BEATS.VISUAL_09_START, end: BEATS.VISUAL_09_END, id: "ChipDesignHistory:threeNetlists", desc: "Synthesis non-deterministic, different gates every time" },
+  { start: BEATS.VISUAL_10_START, end: BEATS.VISUAL_10_END, id: "ChipDesignHistory:verification", desc: "Synopsys wrapped verification, SAT/SMT proof, same function" },
+  { start: BEATS.VISUAL_11_START, end: BEATS.VISUAL_11_END, id: "ChipDesignHistory:abstractionTimeline", desc: "By 1990 schematic, mid-90s half switched, all use HDL now" },
   { start: BEATS.VISUAL_12_START, end: BEATS.VISUAL_12_END, id: "PromptGeneratesCode", desc: "Same transition for software, prompt is mold, tests lock" },
 ];
 

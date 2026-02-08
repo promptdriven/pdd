@@ -3,6 +3,56 @@ import { AbsoluteFill, interpolate, useCurrentFrame, Easing, spring } from "remo
 import { COLORS, BEATS, EXISTING_TESTS, NEW_TEST, AddTestWallPropsType } from "./constants";
 import { ADD_TEST_WALL_FPS } from "./constants";
 
+/** Terminal snippet overlay styled as a small terminal window. */
+const TerminalOverlay: React.FC<{
+  lines: string[];
+  opacity: number;
+}> = ({ lines, opacity }) => {
+  if (opacity <= 0) return null;
+  return (
+    <div
+      style={{
+        position: "absolute",
+        bottom: 30,
+        right: 30,
+        width: 300,
+        opacity,
+      }}
+    >
+      <div
+        style={{
+          background: "#252535",
+          border: "1px solid #444",
+          borderRadius: 6,
+          padding: "10px 14px",
+          minHeight: 80,
+        }}
+      >
+        {/* Terminal title bar dots */}
+        <div style={{ display: "flex", gap: 5, marginBottom: 8 }}>
+          <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#E74C3C" }} />
+          <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#F1C40F" }} />
+          <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#2ECC71" }} />
+        </div>
+        {lines.map((line, i) => (
+          <div
+            key={i}
+            style={{
+              fontSize: 12,
+              fontFamily: "JetBrains Mono, monospace",
+              color: line.startsWith("$") ? "#4A90D9" : line.includes("Test created") ? "#4CAF50" : "#ccc",
+              lineHeight: 1.6,
+              whiteSpace: "pre",
+            }}
+          >
+            {line}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
 export const AddTestWall: React.FC<AddTestWallPropsType> = ({
   showNewTest = true,
 }) => {
@@ -45,6 +95,23 @@ export const AddTestWall: React.FC<AddTestWallPropsType> = ({
     [0, 1],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
   );
+
+  // Terminal overlay opacity
+  const terminalOpacity = interpolate(
+    frame,
+    [BEATS.NEW_WALL_START - 30, BEATS.NEW_WALL_START],
+    [0, 1],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+  );
+
+  // Terminal lines (progressively revealed)
+  const terminalLines: string[] = ["$ pdd bug user_parser"];
+  if (frame >= BEATS.NEW_WALL_START) {
+    terminalLines.push("Creating failing test...");
+  }
+  if (frame >= BEATS.LABEL_START) {
+    terminalLines.push("Test created: test_whitespace_returns_none");
+  }
 
   // Wall dimensions
   const wallConfig = {
@@ -131,17 +198,24 @@ export const AddTestWall: React.FC<AddTestWallPropsType> = ({
             ),
           }}
         >
-          🔧
+          {/* Ratchet click flash */}
+          <svg width={32} height={32} viewBox="0 0 32 32">
+            <circle cx={16} cy={16} r={12} fill="none" stroke={COLORS.WALLS_AMBER} strokeWidth={2} opacity={0.7} />
+            <circle cx={16} cy={16} r={4} fill={COLORS.WALLS_AMBER} />
+          </svg>
         </div>
       )}
+
+      {/* Terminal snippet overlay */}
+      <TerminalOverlay lines={terminalLines} opacity={terminalOpacity} />
 
       {/* Explanation text */}
       <div
         style={{
           position: "absolute",
-          bottom: 100,
+          bottom: 140,
           left: 0,
-          right: 0,
+          right: 340,
           textAlign: "center",
           opacity: interpolate(frame, [BEATS.HOLD_START, BEATS.HOLD_START + 30], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" }),
         }}

@@ -1,0 +1,286 @@
+import React from "react";
+import { AbsoluteFill, interpolate, useCurrentFrame, Easing } from "remotion";
+import { COLORS, BEATS, DeveloperRegeneratesPropsType } from "./constants";
+
+// ── Typewriter text helper ──────────────────────────────────────
+const TypewriterText: React.FC<{
+  text: string;
+  progress: number;
+  color: string;
+}> = ({ text, progress, color }) => {
+  const visibleChars = Math.floor(progress * text.length);
+  const displayed = text.substring(0, visibleChars);
+  const showCursor = progress < 1;
+
+  return (
+    <span style={{ color }}>
+      {displayed}
+      {showCursor && (
+        <span
+          style={{
+            color: "rgba(255, 255, 255, 0.6)",
+            animation: "none",
+          }}
+        >
+          _
+        </span>
+      )}
+    </span>
+  );
+};
+
+// ── Terminal Title Bar ──────────────────────────────────────────
+const TerminalTitleBar: React.FC = () => (
+  <div
+    style={{
+      display: "flex",
+      gap: 6,
+      marginBottom: 16,
+      paddingBottom: 12,
+      borderBottom: "1px solid rgba(255, 255, 255, 0.08)",
+    }}
+  >
+    <div
+      style={{
+        width: 10,
+        height: 10,
+        borderRadius: "50%",
+        backgroundColor: "rgba(255, 95, 86, 0.7)",
+      }}
+    />
+    <div
+      style={{
+        width: 10,
+        height: 10,
+        borderRadius: "50%",
+        backgroundColor: "rgba(255, 189, 46, 0.7)",
+      }}
+    />
+    <div
+      style={{
+        width: 10,
+        height: 10,
+        borderRadius: "50%",
+        backgroundColor: "rgba(39, 201, 63, 0.7)",
+      }}
+    />
+    <span
+      style={{
+        marginLeft: 12,
+        fontSize: 11,
+        color: "rgba(255, 255, 255, 0.3)",
+      }}
+    >
+      terminal
+    </span>
+  </div>
+);
+
+// ── Main Component ──────────────────────────────────────────────
+export const DeveloperRegenerates: React.FC<DeveloperRegeneratesPropsType> = () => {
+  const frame = useCurrentFrame();
+
+  // Terminal visibility
+  const terminalOpacity = interpolate(
+    frame,
+    [BEATS.TERMINAL_FADE_START, BEATS.TERMINAL_FADE_END],
+    [0, 1],
+    { extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
+  );
+
+  // Bug command typing progress
+  const bugCmdProgress = interpolate(
+    frame,
+    [BEATS.BUG_CMD_START, BEATS.BUG_CMD_END],
+    [0, 1],
+    { extrapolateRight: "clamp" }
+  );
+
+  // Bug output opacity
+  const bugOutputOpacity = interpolate(
+    frame,
+    [BEATS.BUG_OUTPUT_START, BEATS.BUG_OUTPUT_END],
+    [0, 1],
+    { extrapolateRight: "clamp" }
+  );
+
+  // Fix command typing progress
+  const fixCmdProgress = interpolate(
+    frame,
+    [BEATS.FIX_CMD_START, BEATS.FIX_CMD_END],
+    [0, 1],
+    { extrapolateRight: "clamp" }
+  );
+
+  // Regenerating text opacity
+  const regenOpacity = interpolate(
+    frame,
+    [BEATS.FIX_REGEN_START, BEATS.FIX_REGEN_END],
+    [0, 1],
+    { extrapolateRight: "clamp" }
+  );
+
+  // Generated output opacity
+  const generatedOpacity = interpolate(
+    frame,
+    [BEATS.FIX_OUTPUT_START, BEATS.FIX_OUTPUT_END],
+    [0, 1],
+    { extrapolateRight: "clamp" }
+  );
+
+  // Test command typing progress
+  const testCmdProgress = interpolate(
+    frame,
+    [BEATS.TEST_CMD_START, BEATS.TEST_CMD_END],
+    [0, 1],
+    { extrapolateRight: "clamp" }
+  );
+
+  // Test result opacity
+  const testResultOpacity = interpolate(
+    frame,
+    [BEATS.TEST_OUTPUT_START, BEATS.TEST_OUTPUT_END],
+    [0, 1],
+    { extrapolateRight: "clamp" }
+  );
+
+  // Checkmark scale (pop effect with overshoot)
+  const checkScale = interpolate(
+    frame,
+    [BEATS.CHECK_START, BEATS.CHECK_POP, BEATS.CHECK_SETTLE],
+    [0, 1.3, 1.0],
+    { extrapolateRight: "clamp", easing: Easing.out(Easing.back(1.5)) }
+  );
+
+  const checkOpacity = interpolate(
+    frame,
+    [BEATS.CHECK_START, BEATS.CHECK_START + 10],
+    [0, 1],
+    { extrapolateRight: "clamp" }
+  );
+
+  const lineStyle: React.CSSProperties = {
+    marginBottom: 6,
+    lineHeight: 1.6,
+  };
+
+  const outputStyle: React.CSSProperties = {
+    marginBottom: 8,
+    marginLeft: 16,
+    lineHeight: 1.5,
+  };
+
+  return (
+    <AbsoluteFill style={{ backgroundColor: COLORS.BACKGROUND }}>
+      {/* Semi-transparent dark background strip */}
+      <div
+        style={{
+          position: "absolute",
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: "rgba(0, 0, 0, 0.3)",
+        }}
+      />
+
+      {/* Terminal window */}
+      <div
+        style={{
+          position: "absolute",
+          left: "50%",
+          top: "50%",
+          transform: "translate(-50%, -50%)",
+          width: 620,
+          opacity: terminalOpacity,
+          backgroundColor: COLORS.TERMINAL_BG,
+          borderRadius: 12,
+          border: `1px solid ${COLORS.TERMINAL_BORDER}`,
+          padding: 24,
+          fontFamily: "JetBrains Mono, monospace",
+          fontSize: 14,
+          backdropFilter: "blur(8px)",
+        }}
+      >
+        <TerminalTitleBar />
+
+        {/* Bug command */}
+        <div style={lineStyle}>
+          <span style={{ color: "rgba(255, 255, 255, 0.4)" }}>$ </span>
+          <TypewriterText
+            text="pdd bug parser"
+            progress={bugCmdProgress}
+            color={COLORS.BUG_AMBER}
+          />
+        </div>
+
+        {/* Bug output */}
+        {bugOutputOpacity > 0 && (
+          <div style={{ ...outputStyle, opacity: bugOutputOpacity }}>
+            <span style={{ color: COLORS.ERROR_RED }}>
+              Bug identified: off-by-one in line 23
+            </span>
+          </div>
+        )}
+
+        {/* Fix command */}
+        {frame >= BEATS.FIX_CMD_START && (
+          <div style={lineStyle}>
+            <span style={{ color: "rgba(255, 255, 255, 0.4)" }}>$ </span>
+            <TypewriterText
+              text="pdd fix parser"
+              progress={fixCmdProgress}
+              color={COLORS.FIX_BLUE}
+            />
+          </div>
+        )}
+
+        {/* Regenerating indicator */}
+        {regenOpacity > 0 && generatedOpacity === 0 && (
+          <div style={{ ...outputStyle, opacity: regenOpacity }}>
+            <span style={{ color: COLORS.TEXT_DIM }}>Regenerating...</span>
+          </div>
+        )}
+
+        {/* Generated output */}
+        {generatedOpacity > 0 && (
+          <div style={{ ...outputStyle, opacity: generatedOpacity }}>
+            <span style={{ color: COLORS.TEXT_NORMAL }}>
+              Generated parser.py (247 lines)
+            </span>
+          </div>
+        )}
+
+        {/* Test command */}
+        {frame >= BEATS.TEST_CMD_START && (
+          <div style={lineStyle}>
+            <span style={{ color: "rgba(255, 255, 255, 0.4)" }}>$ </span>
+            <TypewriterText
+              text="pdd test parser"
+              progress={testCmdProgress}
+              color={COLORS.TEST_GREEN}
+            />
+          </div>
+        )}
+
+        {/* Test result */}
+        {testResultOpacity > 0 && (
+          <div style={{ ...outputStyle, opacity: testResultOpacity }}>
+            <span style={{ color: COLORS.TEST_GREEN }}>47 tests passed </span>
+            <span
+              style={{
+                color: COLORS.TEST_GREEN,
+                fontSize: 20,
+                display: "inline-block",
+                transform: `scale(${checkScale})`,
+                opacity: checkOpacity,
+              }}
+            >
+              ✓
+            </span>
+          </div>
+        )}
+      </div>
+    </AbsoluteFill>
+  );
+};

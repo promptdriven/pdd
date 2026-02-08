@@ -1,51 +1,61 @@
 import React from "react";
 import { AbsoluteFill, interpolate, useCurrentFrame, Easing } from "remotion";
-import { COLORS, BEATS, ThreeComponentsPropsType } from "./constants";
+import { COLORS, BEATS, TRIANGLE, ThreeComponentsPropsType } from "./constants";
 
-interface ComponentBlockProps {
+// ── Helper: hex to rgb string ───────────────────────────────────
+const hexToRgb = (hex: string): string => {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  if (!result) return "255, 255, 255";
+  return `${parseInt(result[1], 16)}, ${parseInt(result[2], 16)}, ${parseInt(result[3], 16)}`;
+};
+
+// ── Vertex Node ─────────────────────────────────────────────────
+interface VertexNodeProps {
   label: string;
-  sublabel: string;
+  subLabel: string;
   color: string;
-  glowIntensity: number;
   x: number;
   y: number;
+  scale: number;
+  glowIntensity: number;
+  subLabelOpacity: number;
 }
 
-const ComponentBlock: React.FC<ComponentBlockProps> = ({
+const VertexNode: React.FC<VertexNodeProps> = ({
   label,
-  sublabel,
+  subLabel,
   color,
-  glowIntensity,
   x,
   y,
+  scale,
+  glowIntensity,
+  subLabelOpacity,
 }) => (
   <div
     style={{
       position: "absolute",
       left: x,
       top: y,
-      transform: "translate(-50%, -50%)",
+      transform: `translate(-50%, -50%) scale(${scale})`,
       textAlign: "center",
     }}
   >
     <div
       style={{
-        width: 160,
-        height: 70,
-        background: `rgba(${color === "#4A90D9" ? "74, 144, 217" : color === "#5AAA6E" ? "90, 170, 110" : "217, 148, 74"}, ${0.15 + 0.2 * glowIntensity})`,
+        backgroundColor: `rgba(${hexToRgb(color)}, 0.15)`,
         border: `2px solid ${color}`,
         borderRadius: 12,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        boxShadow: glowIntensity > 0 ? `0 0 ${25 * glowIntensity}px ${color}` : "none",
+        padding: "14px 24px",
+        boxShadow: `0 0 ${30 * glowIntensity}px ${color}`,
+        minWidth: 140,
       }}
     >
       <span
         style={{
-          fontSize: 16,
+          fontSize: 20,
           fontWeight: "bold",
           color: color,
+          letterSpacing: 2,
         }}
       >
         {label}
@@ -53,248 +63,289 @@ const ComponentBlock: React.FC<ComponentBlockProps> = ({
     </div>
     <div
       style={{
-        marginTop: 8,
-        fontSize: 14,
-        color: COLORS.LABEL_GRAY,
+        marginTop: 10,
+        fontSize: 15,
+        color: "rgba(255, 255, 255, 0.6)",
+        fontStyle: "italic",
+        opacity: subLabelOpacity,
       }}
     >
-      {sublabel}
+      {subLabel}
     </div>
   </div>
 );
 
-export const ThreeComponents: React.FC<ThreeComponentsPropsType> = ({
-  showFormula = true,
+// ── Triangle Edge (SVG) ─────────────────────────────────────────
+interface TriangleEdgeProps {
+  fromX: number;
+  fromY: number;
+  fromColor: string;
+  toX: number;
+  toY: number;
+  toColor: string;
+  progress: number;
+  glowIntensity: number;
+  gradientId: string;
+}
+
+const TriangleEdge: React.FC<TriangleEdgeProps> = ({
+  fromX,
+  fromY,
+  fromColor,
+  toX,
+  toY,
+  toColor,
+  progress,
+  glowIntensity,
+  gradientId,
 }) => {
+  const dx = toX - fromX;
+  const dy = toY - fromY;
+  const endX = fromX + dx * progress;
+  const endY = fromY + dy * progress;
+
+  return (
+    <>
+      <defs>
+        <linearGradient id={gradientId} x1={fromX} y1={fromY} x2={toX} y2={toY} gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stopColor={fromColor} />
+          <stop offset="100%" stopColor={toColor} />
+        </linearGradient>
+      </defs>
+      {/* Glow layer */}
+      <line
+        x1={fromX}
+        y1={fromY}
+        x2={endX}
+        y2={endY}
+        stroke={fromColor}
+        strokeWidth={6}
+        opacity={0.2 * glowIntensity}
+        filter="url(#edgeBlur)"
+      />
+      {/* Main line */}
+      <line
+        x1={fromX}
+        y1={fromY}
+        x2={endX}
+        y2={endY}
+        stroke={`url(#${gradientId})`}
+        strokeWidth={2}
+        opacity={0.8}
+      />
+    </>
+  );
+};
+
+// ── Derivation Arrow (dashed, pointing inward) ─────────────────
+interface DerivationArrowProps {
+  fromX: number;
+  fromY: number;
+  toX: number;
+  toY: number;
+  opacity: number;
+}
+
+const DerivationArrow: React.FC<DerivationArrowProps> = ({
+  fromX,
+  fromY,
+  toX,
+  toY,
+  opacity,
+}) => {
+  // Shorten the arrow: start 40% from edge midpoint, end 80% toward centroid
+  const startX = fromX + (toX - fromX) * 0.4;
+  const startY = fromY + (toY - fromY) * 0.4;
+  const endX = fromX + (toX - fromX) * 0.8;
+  const endY = fromY + (toY - fromY) * 0.8;
+
+  return (
+    <line
+      x1={startX}
+      y1={startY}
+      x2={endX}
+      y2={endY}
+      stroke="rgba(160, 160, 160, 0.4)"
+      strokeWidth={1.5}
+      strokeDasharray="6 4"
+      opacity={opacity}
+    />
+  );
+};
+
+// ── Main Component ──────────────────────────────────────────────
+export const ThreeComponents: React.FC<ThreeComponentsPropsType> = () => {
   const frame = useCurrentFrame();
 
-  // System visibility
-  const systemOpacity = interpolate(
+  // Vertex positions
+  const vertices = [
+    { label: "PROMPT", subLabel: "encodes intent", color: COLORS.NOZZLE_BLUE, ...TRIANGLE.PROMPT, delay: BEATS.VERTEX_PROMPT_START },
+    { label: "TESTS", subLabel: "preserves behavior", color: COLORS.WALLS_AMBER, ...TRIANGLE.TESTS, delay: BEATS.VERTEX_TESTS_START },
+    { label: "GROUNDING", subLabel: "maintains style", color: COLORS.GROUNDING_GREEN, ...TRIANGLE.GROUNDING, delay: BEATS.VERTEX_GROUNDING_START },
+  ];
+
+  // Vertex appearance (staggered scale-up with overshoot)
+  const vertexScale = (delay: number) =>
+    interpolate(
+      frame,
+      [delay, delay + 30],
+      [0, 1],
+      { extrapolateRight: "clamp", easing: Easing.out(Easing.back(1.5)) }
+    );
+
+  // Edge draw progress
+  const edgeProgress = interpolate(
     frame,
-    [BEATS.SYSTEM_START, BEATS.SYSTEM_END],
+    [BEATS.EDGES_START, BEATS.EDGES_END],
     [0, 1],
     { extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
   );
 
-  // Component glows
-  const promptGlow = interpolate(
+  // Glow intensification
+  const glowPulse = interpolate(
     frame,
-    [BEATS.PROMPT_GLOW_START, BEATS.PROMPT_GLOW_END, BEATS.PROMPT_GLOW_END + 60],
-    [0, 1, 0.3],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+    [BEATS.GLOW_INTENSIFY_START, BEATS.GLOW_INTENSIFY_END],
+    [0.6, 1.0],
+    { extrapolateRight: "clamp" }
   );
 
-  const groundingGlow = interpolate(
+  // Sub-label opacity
+  const subLabelOpacity = interpolate(
     frame,
-    [BEATS.GROUNDING_GLOW_START, BEATS.GROUNDING_GLOW_END, BEATS.GROUNDING_GLOW_END + 60],
-    [0, 1, 0.3],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+    [BEATS.SUBLABEL_START, BEATS.SUBLABEL_END],
+    [0, 1],
+    { extrapolateRight: "clamp" }
   );
 
-  const wallsGlow = interpolate(
-    frame,
-    [BEATS.WALLS_GLOW_START, BEATS.WALLS_GLOW_END, BEATS.WALLS_GLOW_END + 60],
-    [0, 1, 0.4],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-  );
-
-  // Code output
+  // Center code appearance
   const codeOpacity = interpolate(
     frame,
-    [BEATS.CODE_OUTPUT_START, BEATS.CODE_OUTPUT_END],
-    [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+    [BEATS.CODE_START, BEATS.CODE_END],
+    [0, 0.5],
+    { extrapolateRight: "clamp" }
   );
 
-  // Formula
-  const formulaOpacity = interpolate(
+  // Derivation arrows
+  const arrowOpacity = interpolate(
     frame,
-    [BEATS.FORMULA_START, BEATS.FORMULA_END],
-    [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+    [BEATS.ARROWS_START, BEATS.ARROWS_END],
+    [0, 0.3],
+    { extrapolateRight: "clamp" }
   );
 
-  // Layout
-  const centerX = 960;
-  const promptY = 180;
-  const groundingY = 340;
-  const wallsY = 500;
-  const outputY = 680;
+  // Edge midpoints for derivation arrows
+  const edgeMidpoints = [
+    { x: (TRIANGLE.PROMPT.x + TRIANGLE.TESTS.x) / 2, y: (TRIANGLE.PROMPT.y + TRIANGLE.TESTS.y) / 2 },
+    { x: (TRIANGLE.TESTS.x + TRIANGLE.GROUNDING.x) / 2, y: (TRIANGLE.TESTS.y + TRIANGLE.GROUNDING.y) / 2 },
+    { x: (TRIANGLE.GROUNDING.x + TRIANGLE.PROMPT.x) / 2, y: (TRIANGLE.GROUNDING.y + TRIANGLE.PROMPT.y) / 2 },
+  ];
 
   return (
     <AbsoluteFill style={{ backgroundColor: COLORS.BACKGROUND }}>
-      <div style={{ opacity: systemOpacity }}>
-        {/* Prompt component */}
-        <ComponentBlock
-          label="PROMPT"
-          sublabel="Intent"
-          color={COLORS.NOZZLE_BLUE}
-          glowIntensity={promptGlow}
-          x={centerX}
-          y={promptY}
+      {/* SVG layer for edges and arrows */}
+      <svg
+        style={{
+          position: "absolute",
+          width: "100%",
+          height: "100%",
+          top: 0,
+          left: 0,
+        }}
+      >
+        <defs>
+          <filter id="edgeBlur">
+            <feGaussianBlur stdDeviation="4" />
+          </filter>
+        </defs>
+
+        {/* Triangle edges */}
+        <TriangleEdge
+          fromX={TRIANGLE.PROMPT.x}
+          fromY={TRIANGLE.PROMPT.y}
+          fromColor={COLORS.NOZZLE_BLUE}
+          toX={TRIANGLE.TESTS.x}
+          toY={TRIANGLE.TESTS.y}
+          toColor={COLORS.WALLS_AMBER}
+          progress={edgeProgress}
+          glowIntensity={glowPulse}
+          gradientId="edge-prompt-tests"
+        />
+        <TriangleEdge
+          fromX={TRIANGLE.TESTS.x}
+          fromY={TRIANGLE.TESTS.y}
+          fromColor={COLORS.WALLS_AMBER}
+          toX={TRIANGLE.GROUNDING.x}
+          toY={TRIANGLE.GROUNDING.y}
+          toColor={COLORS.GROUNDING_GREEN}
+          progress={edgeProgress}
+          glowIntensity={glowPulse}
+          gradientId="edge-tests-grounding"
+        />
+        <TriangleEdge
+          fromX={TRIANGLE.GROUNDING.x}
+          fromY={TRIANGLE.GROUNDING.y}
+          fromColor={COLORS.GROUNDING_GREEN}
+          toX={TRIANGLE.PROMPT.x}
+          toY={TRIANGLE.PROMPT.y}
+          toColor={COLORS.NOZZLE_BLUE}
+          progress={edgeProgress}
+          glowIntensity={glowPulse}
+          gradientId="edge-grounding-prompt"
         />
 
-        {/* Flow arrow 1 */}
-        <svg
-          width="40"
-          height="60"
-          style={{
-            position: "absolute",
-            left: centerX - 20,
-            top: promptY + 50,
-          }}
-        >
-          <line
-            x1={20}
-            y1={0}
-            x2={20}
-            y2={45}
-            stroke={frame > BEATS.PROMPT_GLOW_START ? COLORS.NOZZLE_BLUE : COLORS.LABEL_GRAY}
-            strokeWidth={2}
-            opacity={0.6}
+        {/* Derivation arrows pointing to centroid */}
+        {edgeMidpoints.map((mid, i) => (
+          <DerivationArrow
+            key={i}
+            fromX={mid.x}
+            fromY={mid.y}
+            toX={TRIANGLE.CENTROID.x}
+            toY={TRIANGLE.CENTROID.y}
+            opacity={arrowOpacity}
           />
-          <polygon
-            points="20,55 12,42 28,42"
-            fill={frame > BEATS.PROMPT_GLOW_START ? COLORS.NOZZLE_BLUE : COLORS.LABEL_GRAY}
-            opacity={0.6}
-          />
-        </svg>
+        ))}
+      </svg>
 
-        {/* Grounding component */}
-        <ComponentBlock
-          label="GROUNDING"
-          sublabel="Style"
-          color={COLORS.GROUNDING_GREEN}
-          glowIntensity={groundingGlow}
-          x={centerX}
-          y={groundingY}
+      {/* Vertex nodes */}
+      {vertices.map((v) => (
+        <VertexNode
+          key={v.label}
+          label={v.label}
+          subLabel={v.subLabel}
+          color={v.color}
+          x={v.x}
+          y={v.y}
+          scale={vertexScale(v.delay)}
+          glowIntensity={glowPulse}
+          subLabelOpacity={subLabelOpacity}
         />
+      ))}
 
-        {/* Flow arrow 2 */}
-        <svg
-          width="40"
-          height="60"
-          style={{
-            position: "absolute",
-            left: centerX - 20,
-            top: groundingY + 50,
-          }}
-        >
-          <line
-            x1={20}
-            y1={0}
-            x2={20}
-            y2={45}
-            stroke={frame > BEATS.GROUNDING_GLOW_START ? COLORS.GROUNDING_GREEN : COLORS.LABEL_GRAY}
-            strokeWidth={2}
-            opacity={0.6}
-          />
-          <polygon
-            points="20,55 12,42 28,42"
-            fill={frame > BEATS.GROUNDING_GLOW_START ? COLORS.GROUNDING_GREEN : COLORS.LABEL_GRAY}
-            opacity={0.6}
-          />
-        </svg>
-
-        {/* Walls/Tests component */}
-        <ComponentBlock
-          label="TESTS"
-          sublabel="Constraints"
-          color={COLORS.WALLS_AMBER}
-          glowIntensity={wallsGlow}
-          x={centerX}
-          y={wallsY}
-        />
-
-        {/* Flow arrow 3 */}
-        <svg
-          width="40"
-          height="60"
-          style={{
-            position: "absolute",
-            left: centerX - 20,
-            top: wallsY + 50,
-          }}
-        >
-          <line
-            x1={20}
-            y1={0}
-            x2={20}
-            y2={45}
-            stroke={frame > BEATS.WALLS_GLOW_START ? COLORS.WALLS_AMBER : COLORS.LABEL_GRAY}
-            strokeWidth={2}
-            opacity={0.6}
-          />
-          <polygon
-            points="20,55 12,42 28,42"
-            fill={frame > BEATS.WALLS_GLOW_START ? COLORS.WALLS_AMBER : COLORS.LABEL_GRAY}
-            opacity={0.6}
-          />
-        </svg>
-
-        {/* Code output */}
+      {/* Center code block (NO GLOW) */}
+      <div
+        style={{
+          position: "absolute",
+          left: TRIANGLE.CENTROID.x - 80,
+          top: TRIANGLE.CENTROID.y - 30,
+          width: 160,
+          textAlign: "center",
+          opacity: codeOpacity,
+        }}
+      >
         <div
           style={{
-            position: "absolute",
-            left: centerX,
-            top: outputY,
-            transform: "translate(-50%, -50%)",
-            opacity: codeOpacity,
-            textAlign: "center",
+            backgroundColor: "rgba(160, 160, 160, 0.1)",
+            border: "1px solid rgba(160, 160, 160, 0.25)",
+            borderRadius: 8,
+            padding: "12px 16px",
+            fontFamily: "monospace",
+            fontSize: 13,
+            color: "rgba(160, 160, 160, 0.6)",
           }}
         >
-          <div
-            style={{
-              width: 200,
-              height: 60,
-              background: "rgba(138, 156, 175, 0.15)",
-              border: `2px solid ${COLORS.CODE_GRAY}`,
-              borderRadius: 12,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 8,
-            }}
-          >
-            <span style={{ fontSize: 14, color: COLORS.CODE_GRAY }}>Generated Code</span>
-            <span style={{ fontSize: 18, color: COLORS.SUCCESS_GREEN }}>✓✓✓</span>
-          </div>
+          Generated Code
         </div>
       </div>
-
-      {/* Integration formula */}
-      {showFormula && formulaOpacity > 0 && (
-        <div
-          style={{
-            position: "absolute",
-            bottom: 80,
-            left: "50%",
-            transform: "translateX(-50%)",
-            opacity: formulaOpacity,
-            textAlign: "center",
-          }}
-        >
-          <div
-            style={{
-              fontSize: 24,
-              fontWeight: "bold",
-              marginBottom: 8,
-            }}
-          >
-            <span style={{ color: COLORS.NOZZLE_BLUE }}>Prompt</span>
-            {" + "}
-            <span style={{ color: COLORS.WALLS_AMBER }}>Tests</span>
-            {" + "}
-            <span style={{ color: COLORS.GROUNDING_GREEN }}>Grounding</span>
-          </div>
-          <div style={{ fontSize: 18, color: COLORS.LABEL_GRAY }}>
-            Intent + Constraints + Style
-          </div>
-          <div style={{ fontSize: 20, color: COLORS.LABEL_WHITE, marginTop: 8 }}>
-            = Complete Specification
-          </div>
-        </div>
-      )}
     </AbsoluteFill>
   );
 };

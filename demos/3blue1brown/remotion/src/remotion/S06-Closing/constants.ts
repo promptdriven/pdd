@@ -18,7 +18,7 @@ import { z } from "zod";
 //    30.5s [ 9] "The mold is what matters."
 
 export const CLOSING_FPS = 30;
-export const CLOSING_DURATION_SECONDS = 36;
+export const CLOSING_DURATION_SECONDS = 39;
 export const CLOSING_DURATION_FRAMES = CLOSING_FPS * CLOSING_DURATION_SECONDS;
 export const CLOSING_WIDTH = 1920;
 export const CLOSING_HEIGHT = 1080;
@@ -27,19 +27,19 @@ export const CLOSING_HEIGHT = 1080;
 const s2f = (seconds: number) => Math.round(seconds * CLOSING_FPS);
 
 export const BEATS = {
-  // Visual 0: CodeOutputMoldGlows — "So here's the mental shift...."
+  // Visual 0: CompleteSystem — "So here's the mental shift...."
   VISUAL_00_START: s2f(0.0),  // 0 frames
   VISUAL_00_END: s2f(1.16),  // 35 frames
 
-  // Visual 1: veo:07_split_screen_sepia — "You don't patch socks because socks got cheap...."
+  // Visual 1: veo:07_split_screen_sepia + "$0.50" overlay — "You don't patch socks..."
   VISUAL_01_START: s2f(2.7),  // 81 frames
   VISUAL_01_END: s2f(7.62),  // 229 frames
 
-  // Visual 2: CodeOutputMoldGlows — "Code just got that cheap...."
+  // Visual 2: DeveloperRegenerates — "Code just got that cheap...."
   VISUAL_02_START: s2f(9.36),  // 281 frames
   VISUAL_02_END: s2f(10.74),  // 322 frames
 
-  // Visual 3: ThreeComponents — "Prompts in code intent...."
+  // Visual 3: ThreeComponents (triangle) — "Prompts encode intent...."
   VISUAL_03_START: s2f(13.02),  // 391 frames
   VISUAL_03_END: s2f(19.06),  // 572 frames
 
@@ -50,16 +50,21 @@ export const BEATS = {
   // Visual 5: CodeOutputMoldGlows — "The code is just plastic...."
   VISUAL_05_START: s2f(26.9),  // 807 frames
   VISUAL_05_END: s2f(33.22),  // 997 frames
+
+  // Visual 6: FadeToBlack — title card after narration ends
+  VISUAL_06_START: s2f(33.5),  // 1005 frames
+  VISUAL_06_END: s2f(38.5),   // 1155 frames
 };
 
 // Visual sequence: maps BEATS ranges to composition IDs
 export const VISUAL_SEQUENCE = [
-  { start: BEATS.VISUAL_00_START, end: BEATS.VISUAL_00_END, id: "CodeOutputMoldGlows", desc: "So here's the mental shift" },
+  { start: BEATS.VISUAL_00_START, end: BEATS.VISUAL_00_END, id: "CompleteSystem", desc: "So here's the mental shift" },
   { start: BEATS.VISUAL_01_START, end: BEATS.VISUAL_01_END, id: "veo:07_split_screen_sepia", desc: "Don't patch socks, socks got cheap, irrational" },
-  { start: BEATS.VISUAL_02_START, end: BEATS.VISUAL_02_END, id: "CodeOutputMoldGlows", desc: "Code just got that cheap" },
+  { start: BEATS.VISUAL_02_START, end: BEATS.VISUAL_02_END, id: "DeveloperRegenerates", desc: "Code just got that cheap" },
   { start: BEATS.VISUAL_03_START, end: BEATS.VISUAL_03_END, id: "ThreeComponents", desc: "Prompts encode intent, tests preserve, grounding maintains" },
   { start: BEATS.VISUAL_04_START, end: BEATS.VISUAL_04_END, id: "CodeOutputMoldGlows", desc: "Code is generated verified and disposable" },
   { start: BEATS.VISUAL_05_START, end: BEATS.VISUAL_05_END, id: "CodeOutputMoldGlows", desc: "The code is just plastic, the mold is what matters" },
+  { start: BEATS.VISUAL_06_START, end: BEATS.VISUAL_06_END, id: "FadeToBlack", desc: "Title card and fade to black" },
 ];
 
 // Props schema

@@ -2,6 +2,56 @@ import React from "react";
 import { AbsoluteFill, interpolate, useCurrentFrame, Easing } from "remotion";
 import { COLORS, BEATS, TRADITIONAL_STEPS, PDD_STEPS, TraditionalVsPddPropsType } from "./constants";
 
+/** Terminal snippet overlay for the PDD side, showing pdd bug and pdd fix commands. */
+const PddTerminalOverlay: React.FC<{
+  lines: Array<{ text: string; color?: string }>;
+  opacity: number;
+}> = ({ lines, opacity }) => {
+  if (opacity <= 0) return null;
+  return (
+    <div
+      style={{
+        position: "absolute",
+        bottom: 30,
+        right: 30,
+        width: 300,
+        opacity,
+      }}
+    >
+      <div
+        style={{
+          background: "#252535",
+          border: "1px solid #444",
+          borderRadius: 6,
+          padding: "10px 14px",
+          minHeight: 80,
+        }}
+      >
+        {/* Terminal title bar dots */}
+        <div style={{ display: "flex", gap: 5, marginBottom: 8 }}>
+          <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#E74C3C" }} />
+          <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#F1C40F" }} />
+          <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#2ECC71" }} />
+        </div>
+        {lines.map((line, i) => (
+          <div
+            key={i}
+            style={{
+              fontSize: 12,
+              fontFamily: "JetBrains Mono, monospace",
+              color: line.color || "#ccc",
+              lineHeight: 1.6,
+              whiteSpace: "pre",
+            }}
+          >
+            {line.text}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
 export const TraditionalVsPdd: React.FC<TraditionalVsPddPropsType> = ({
   showComparison = true,
 }) => {
@@ -46,6 +96,29 @@ export const TraditionalVsPdd: React.FC<TraditionalVsPddPropsType> = ({
     [0, 1],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
+
+  // Terminal overlay opacity -- appears with PDD animation
+  const terminalOpacity = interpolate(
+    frame,
+    [BEATS.PDD_ANIMATE_START + 30, BEATS.PDD_ANIMATE_START + 60],
+    [0, 1],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+  );
+
+  // Terminal lines (progressively revealed based on PDD flow)
+  const terminalLines: Array<{ text: string; color?: string }> = [];
+  if (frame >= BEATS.PDD_ANIMATE_START + 30) {
+    terminalLines.push({ text: "$ pdd bug user_parser", color: "#4A90D9" });
+  }
+  if (pddProgress >= 2) {
+    terminalLines.push({ text: "Test created: test_ws", color: "#ccc" });
+  }
+  if (pddProgress >= 3) {
+    terminalLines.push({ text: "$ pdd fix user_parser", color: "#4A90D9" });
+  }
+  if (pddProgress >= 4) {
+    terminalLines.push({ text: "All tests passing \u2713", color: "#4CAF50" });
+  }
 
   return (
     <AbsoluteFill style={{ backgroundColor: COLORS.BACKGROUND }}>
@@ -132,7 +205,7 @@ export const TraditionalVsPdd: React.FC<TraditionalVsPddPropsType> = ({
                   color: COLORS.TRADITIONAL_RED,
                 }}
               >
-                ↻ Repeat forever
+                {"\u21BB"} Repeat forever
               </div>
             )}
           </div>
@@ -146,6 +219,7 @@ export const TraditionalVsPdd: React.FC<TraditionalVsPddPropsType> = ({
             flexDirection: "column",
             alignItems: "center",
             padding: 60,
+            position: "relative",
           }}
         >
           <div
@@ -193,7 +267,7 @@ export const TraditionalVsPdd: React.FC<TraditionalVsPddPropsType> = ({
                       color: isLast ? "#fff" : COLORS.PDD_GREEN,
                     }}
                   >
-                    {isLast ? "✓" : i + 1}
+                    {isLast ? "\u2713" : i + 1}
                   </div>
                   <span
                     style={{
@@ -208,6 +282,9 @@ export const TraditionalVsPdd: React.FC<TraditionalVsPddPropsType> = ({
               );
             })}
           </div>
+
+          {/* Terminal overlay inside PDD side */}
+          <PddTerminalOverlay lines={terminalLines} opacity={terminalOpacity} />
         </div>
       </div>
 
@@ -226,11 +303,11 @@ export const TraditionalVsPdd: React.FC<TraditionalVsPddPropsType> = ({
           }}
         >
           <div style={{ textAlign: "center" }}>
-            <div style={{ fontSize: 36, color: COLORS.TRADITIONAL_RED }}>∞</div>
+            <div style={{ fontSize: 36, color: COLORS.TRADITIONAL_RED }}>{"\u221E"}</div>
             <div style={{ fontSize: 14, color: COLORS.LABEL_GRAY }}>Endless cycle</div>
           </div>
           <div style={{ textAlign: "center" }}>
-            <div style={{ fontSize: 36, color: COLORS.PDD_GREEN }}>→</div>
+            <div style={{ fontSize: 36, color: COLORS.PDD_GREEN }}>{"\u2192"}</div>
             <div style={{ fontSize: 14, color: COLORS.LABEL_GRAY }}>Forward progress</div>
           </div>
         </div>

@@ -8,6 +8,7 @@ import {
   YEAR_RANGE,
   COST_RANGE,
   PIE_CONFIG,
+  REGEN_COST_DATA,
   PieToCurvePropsType,
 } from "./constants";
 
@@ -105,11 +106,56 @@ export const PieToCurve: React.FC<PieToCurvePropsType> = ({
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
 
-  // === FINAL STATE (Frame 240-300) ===
+  // === REGENERATION LINE (Frame 210-260) ===
+  const regenLineProgress = interpolate(
+    frame,
+    [BEATS.REGEN_LINE_START, BEATS.REGEN_LINE_END],
+    [0, 1],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    }
+  );
+
+  const regenLabelOpacity = interpolate(
+    frame,
+    [BEATS.REGEN_LINE_START + 20, BEATS.REGEN_LINE_END],
+    [0, 1],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.cubic),
+    }
+  );
+
+  // Helper to get chart positions
+  const getXPosition = (year: number) => {
+    return (
+      CHART_MARGINS.left +
+      ((year - YEAR_RANGE.min) / (YEAR_RANGE.max - YEAR_RANGE.min)) * chartWidth
+    );
+  };
+
+  const getYPosition = (cost: number) => {
+    return (
+      CHART_MARGINS.top +
+      chartHeight -
+      (cost / COST_RANGE.max) * chartHeight
+    );
+  };
+
+  // Regeneration line endpoints
+  const regenStartX = getXPosition(REGEN_COST_DATA[0].year);
+  const regenEndX = getXPosition(REGEN_COST_DATA[1].year);
+  const regenY = getYPosition(REGEN_COST_DATA[0].cost);
+  const regenCurrentEndX = regenStartX + (regenEndX - regenStartX) * regenLineProgress;
+
+  // === FINAL STATE (Frame 260-300) ===
   // Text fade in with easeOutCubic
   const textOpacity = interpolate(
     frame,
-    [BEATS.FINAL_START + 20, BEATS.FINAL_START + 60],
+    [BEATS.FINAL_START + 10, BEATS.FINAL_START + 30],
     [0, 1],
     {
       extrapolateLeft: "clamp",
@@ -393,16 +439,118 @@ export const PieToCurve: React.FC<PieToCurvePropsType> = ({
         />
       )}
 
+      {/* === EXPONENTIAL CURVE LABEL === */}
+      {frame >= BEATS.CURVE_END - 20 && (
+        <div
+          style={{
+            position: "absolute",
+            top: getYPosition(10) - 30,
+            right: CHART_MARGINS.right + 20,
+            maxWidth: 380,
+            fontFamily: "Inter, system-ui, sans-serif",
+            fontSize: 16,
+            fontWeight: 500,
+            color: COLORS.AMBER,
+            opacity: interpolate(
+              frame,
+              [BEATS.CURVE_END - 20, BEATS.CURVE_END + 10],
+              [0, 1],
+              { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+            ),
+            textShadow: "0 1px 8px rgba(0,0,0,0.7)",
+            lineHeight: 1.4,
+          }}
+        >
+          Technical debt follows compound interest:
+          <br />
+          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 14 }}>
+            Debt x (1 + Rate)^Time
+          </span>
+        </div>
+      )}
+
+      {/* === REGENERATION COST LINE === */}
+      {frame >= BEATS.REGEN_LINE_START && (
+        <svg
+          width={width}
+          height={height}
+          style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none" }}
+        >
+          {/* Glow effect for regeneration line */}
+          <line
+            x1={regenStartX}
+            y1={regenY}
+            x2={regenCurrentEndX}
+            y2={regenY}
+            stroke={COLORS.REGEN_BLUE}
+            strokeWidth={8}
+            strokeLinecap="round"
+            opacity={0.2 * regenLineProgress}
+            style={{ filter: "blur(6px)" }}
+          />
+          {/* Main regeneration line */}
+          <line
+            x1={regenStartX}
+            y1={regenY}
+            x2={regenCurrentEndX}
+            y2={regenY}
+            stroke={COLORS.REGEN_BLUE}
+            strokeWidth={3}
+            strokeLinecap="round"
+            opacity={regenLineProgress}
+          />
+          {/* Animated dot at drawing tip */}
+          {regenLineProgress > 0 && regenLineProgress < 1 && (
+            <circle
+              cx={regenCurrentEndX}
+              cy={regenY}
+              r={6}
+              fill={COLORS.REGEN_BLUE}
+              opacity={regenLineProgress}
+            />
+          )}
+          {/* End point marker */}
+          {regenLineProgress >= 1 && (
+            <circle
+              cx={regenEndX}
+              cy={regenY}
+              r={5}
+              fill={COLORS.REGEN_BLUE}
+            />
+          )}
+        </svg>
+      )}
+
+      {/* === REGENERATION LABEL === */}
+      {regenLabelOpacity > 0 && (
+        <div
+          style={{
+            position: "absolute",
+            top: regenY - 35,
+            right: CHART_MARGINS.right + 20,
+            maxWidth: 350,
+            fontFamily: "Inter, system-ui, sans-serif",
+            fontSize: 16,
+            fontWeight: 500,
+            color: COLORS.REGEN_BLUE,
+            opacity: regenLabelOpacity,
+            textShadow: "0 1px 8px rgba(0,0,0,0.7)",
+          }}
+        >
+          Regeneration cost (debt resets each cycle)
+        </div>
+      )}
+
       {/* === FINAL TEXT === */}
       {frame >= BEATS.FINAL_START && (
         <div
           style={{
             position: "absolute",
-            top: "50%",
+            bottom: 40,
             left: "50%",
-            transform: "translate(-50%, -50%)",
+            transform: "translateX(-50%)",
             fontFamily: "Georgia, serif",
-            fontSize: 36,
+            fontSize: 28,
             fontStyle: "italic",
             fontWeight: 400,
             color: COLORS.TEXT,
@@ -411,7 +559,7 @@ export const PieToCurve: React.FC<PieToCurvePropsType> = ({
             textAlign: "center",
           }}
         >
-          "And those costs compound."
+          "Unless you regenerate. Then the debt resets."
         </div>
       )}
 

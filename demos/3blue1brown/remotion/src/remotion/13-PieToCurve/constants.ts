@@ -10,17 +10,20 @@ export const PIE_TO_CURVE_HEIGHT = 1080;
 // Beat timings (in frames at 30fps)
 // Frame 0-90: Morph begins - Pie chart rotates and flattens
 // Frame 90-150: Axes establish - X/Y axes extend, grid lines fade in
-// Frame 150-240: Curve draws - Exponential curve animates from origin
-// Frame 240-300: Final state - Pulse animation, text fades in
+// Frame 150-210: Curve draws - Exponential curve animates from origin
+// Frame 210-260: Regeneration line appears - Flat blue line draws across
+// Frame 260-300: Final state - Pulse animation, gap emphasis
 export const BEATS = {
   MORPH_START: 0,
   MORPH_END: 90,              // 0-3s: Pie morphs into chart origin
   AXES_START: 90,
   AXES_END: 150,              // 3-5s: Axes establish with grid
   CURVE_START: 150,
-  CURVE_END: 240,             // 5-8s: Exponential curve draws
-  FINAL_START: 240,
-  FINAL_END: 300,             // 8-10s: Final state with text
+  CURVE_END: 210,             // 5-7s: Exponential curve draws
+  REGEN_LINE_START: 210,
+  REGEN_LINE_END: 260,        // 7-8.5s: Flat regeneration cost line
+  FINAL_START: 260,
+  FINAL_END: 300,             // 8.5-10s: Final state with gap emphasis
 };
 
 // Convert seconds to frames helper
@@ -37,6 +40,8 @@ export const COLORS = {
   AMBER: "#D9944A",
   // Faint blue for linear reference line
   LINEAR_REF: "rgba(74, 144, 217, 0.4)",
+  // Regeneration cost line - solid blue
+  REGEN_BLUE: "#4A90D9",
   // Pie chart colors for morph animation
   PIE_AMBER: "#D9944A",
   PIE_BLUE: "#4A90D9",
@@ -61,6 +66,12 @@ export const COST_CURVE_DATA = [
 export const LINEAR_REF_DATA = [
   { year: 1, cost: 1.0 },
   { year: 10, cost: 1.0 },
+];
+
+// Regeneration cost - flat line near bottom (debt resets each cycle)
+export const REGEN_COST_DATA = [
+  { year: 1, cost: 1.2 },
+  { year: 10, cost: 1.2 },
 ];
 
 // Chart dimensions (within the canvas)

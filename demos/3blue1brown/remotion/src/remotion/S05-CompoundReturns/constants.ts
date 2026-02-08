@@ -40,23 +40,23 @@ export const PART5_HEIGHT = 1080;
 const s2f = (seconds: number) => Math.round(seconds * PART5_FPS);
 
 export const BEATS = {
-  // Visual 0: GraphAnimateCurve — "Let's talk about compound returns...."
+  // Visual 0: CompoundCurvesGraph phase 1 — "Let's talk about compound returns...."
   VISUAL_00_START: s2f(0.0),  // 0 frames
   VISUAL_00_END: s2f(1.86),  // 56 frames
 
-  // Visual 1: GraphAnimateCurve — "When you patch code, each fix has local returns...."
+  // Visual 1: CompoundCurvesGraph phase 2 — "When you patch code, each fix has local returns...."
   VISUAL_01_START: s2f(2.74),  // 82 frames
   VISUAL_01_END: s2f(23.56),  // 707 frames
 
-  // Visual 2: GraphAnimateCurve — "The returns are linear at best, often sub-linear,..."
+  // Visual 2: CompoundCurvesGraph phase 3 — "The returns are linear at best, often sub-linear,..."
   VISUAL_02_START: s2f(24.42),  // 733 frames
   VISUAL_02_END: s2f(37.34),  // 1120 frames
 
-  // Visual 3: ShortPromptTests — "When you add a test in PDD, the returns are differ..."
+  // Visual 3: CompoundCurvesGraph phase 5 — "When you add a test in PDD, the returns are differ..."
   VISUAL_03_START: s2f(39.04),  // 1171 frames
   VISUAL_03_END: s2f(52.28),  // 1568 frames
 
-  // Visual 4: BothGenerateFinal — "Every investment in the mold has compound returns...."
+  // Visual 4: InvestmentTable — "Every investment in the mold has compound returns...."
   VISUAL_04_START: s2f(53.94),  // 1618 frames
   VISUAL_04_END: s2f(60.32),  // 1810 frames
 
@@ -75,11 +75,11 @@ export const BEATS = {
 
 // Visual sequence: maps BEATS ranges to composition IDs
 export const VISUAL_SEQUENCE = [
-  { start: BEATS.VISUAL_00_START, end: BEATS.VISUAL_00_END, id: "GraphAnimateCurve", desc: "Let's talk about compound returns" },
-  { start: BEATS.VISUAL_01_START, end: BEATS.VISUAL_01_END, id: "GraphAnimateCurve", desc: "Patch code local returns, 1.7x issues, risks more patches" },
-  { start: BEATS.VISUAL_02_START, end: BEATS.VISUAL_02_END, id: "GraphAnimateCurve", desc: "Returns linear at best, cost compounding, 1.52T annually" },
-  { start: BEATS.VISUAL_03_START, end: BEATS.VISUAL_03_END, id: "ShortPromptTests", desc: "PDD test returns compound, constrains future, permanent wall" },
-  { start: BEATS.VISUAL_04_START, end: BEATS.VISUAL_04_END, id: "BothGenerateFinal", desc: "Every mold investment compounds, patching diminishes" },
+  { start: BEATS.VISUAL_00_START, end: BEATS.VISUAL_00_END, id: "CompoundCurvesGraph:1", desc: "Let's talk about compound returns" },
+  { start: BEATS.VISUAL_01_START, end: BEATS.VISUAL_01_END, id: "CompoundCurvesGraph:2", desc: "Patch code local returns, 1.7x issues, risks more patches" },
+  { start: BEATS.VISUAL_02_START, end: BEATS.VISUAL_02_END, id: "CompoundCurvesGraph:3", desc: "Returns linear at best, cost compounding, 1.52T annually" },
+  { start: BEATS.VISUAL_03_START, end: BEATS.VISUAL_03_END, id: "CompoundCurvesGraph:5", desc: "PDD test returns compound, constrains future, permanent wall" },
+  { start: BEATS.VISUAL_04_START, end: BEATS.VISUAL_04_END, id: "InvestmentTable", desc: "Every mold investment compounds, patching diminishes" },
   { start: BEATS.VISUAL_05_START, end: BEATS.VISUAL_05_END, id: "veo:07_split_screen_sepia", desc: "Great-grandmother rational for darning, economics made sense" },
   { start: BEATS.VISUAL_06_START, end: BEATS.VISUAL_06_END, id: "veo:07_split_screen_sepia", desc: "Not stupid for patching, economics made it rational" },
   { start: BEATS.VISUAL_07_START, end: BEATS.VISUAL_07_END, id: "CrossingPoint", desc: "Economics changed, rational becomes darning socks" },

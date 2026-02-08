@@ -154,6 +154,14 @@ import {
   defaultMoldToPromptProps,
 } from "./19-MoldToPrompt";
 import {
+  ChipDesignHistory,
+  CHIP_DESIGN_FPS,
+  CHIP_DESIGN_DURATION_FRAMES,
+  CHIP_DESIGN_WIDTH,
+  CHIP_DESIGN_HEIGHT,
+  defaultChipDesignHistoryProps,
+} from "./19a-ChipDesignHistory";
+import {
   PromptGeneratesCode,
   PROMPT_CODE_FPS,
   PROMPT_CODE_DURATION_FRAMES,
@@ -617,6 +625,17 @@ export const RemotionRoot: React.FC = () => {
           width={MOLD_TO_PROMPT_WIDTH}
           height={MOLD_TO_PROMPT_HEIGHT}
           defaultProps={defaultMoldToPromptProps}
+        />
+      </Folder>
+      <Folder name="19a-ChipDesignHistory">
+        <Composition
+          id="ChipDesignHistory"
+          component={ChipDesignHistory}
+          durationInFrames={CHIP_DESIGN_DURATION_FRAMES}
+          fps={CHIP_DESIGN_FPS}
+          width={CHIP_DESIGN_WIDTH}
+          height={CHIP_DESIGN_HEIGHT}
+          defaultProps={defaultChipDesignHistoryProps}
         />
       </Folder>
       <Folder name="20-PromptGeneratesCode">

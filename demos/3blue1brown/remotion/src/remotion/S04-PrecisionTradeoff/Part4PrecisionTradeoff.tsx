@@ -8,6 +8,8 @@ import {
   useCurrentFrame,
 } from "remotion";
 import { BEATS, VISUAL_SEQUENCE, Part4PrecisionTradeoffPropsType } from "./constants";
+import { PrinterFocus, defaultPrinterFocusProps } from "../39-3DPrinterFocus";
+import { MoldFlowFocus, defaultMoldFlowFocusProps } from "../40-MoldFlowFocus";
 import { BothGenerateFinal, defaultBothGenerateFinalProps } from "../45-BothGenerateFinal";
 import { GraphAnimateCurve, defaultGraphAnimateCurveProps } from "../42-GraphAnimateCurve";
 import { LongPrompt, defaultLongPromptProps } from "../43-LongPrompt";
@@ -46,29 +48,17 @@ export const Part4PrecisionTradeoff: React.FC<Part4PrecisionTradeoffPropsType> =
         </Sequence>
       )}
 
-      {/* Visual 1: Veo clip - 3D printing no mold, every point precise, specific */}
+      {/* Visual 1: 3D Printer Focus - coordinate grid, axis labels, crosshair overlays */}
       {activeVisual === 1 && (
         <Sequence from={BEATS.VISUAL_01_START}>
-          <AbsoluteFill>
-            <OffthreadVideo
-              loop
-              src={staticFile("veo_3d_printer_focus.mp4")}
-              style={{ width: "100%", height: "100%" }}
-            />
-          </AbsoluteFill>
+          <PrinterFocus {...defaultPrinterFocusProps} />
         </Sequence>
       )}
 
-      {/* Visual 2: Veo clip - Injection molding precision comes from walls, flow */}
+      {/* Visual 2: Mold Flow Focus - wall glow, liquid flow, contact pulse overlays */}
       {activeVisual === 2 && (
         <Sequence from={BEATS.VISUAL_02_START}>
-          <AbsoluteFill>
-            <OffthreadVideo
-              loop
-              src={staticFile("veo_mold_flow_focus.mp4")}
-              style={{ width: "100%", height: "100%" }}
-            />
-          </AbsoluteFill>
+          <MoldFlowFocus {...defaultMoldFlowFocusProps} />
         </Sequence>
       )}
 

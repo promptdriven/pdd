@@ -14,9 +14,17 @@ export const BEATS = {
   WALL_VISIBLE_END: 30,
   ZOOM_START: 30,
   ZOOM_END: 120,
-  HIGHLIGHT_START: 120,
-  HIGHLIGHT_END: 180,
-  EXPLANATION_START: 180,
+  // Liquid approach (frames 120-180)
+  LIQUID_APPROACH_START: 120,
+  LIQUID_APPROACH_END: 180,
+  // Impact moment (frame 180)
+  IMPACT_FRAME: 180,
+  // Wall glow / highlight
+  HIGHLIGHT_START: 180,
+  HIGHLIGHT_END: 210,
+  // Splash dissipation
+  SPLASH_END: 210,
+  EXPLANATION_START: 240,
   HOLD_START: 360,
 };
 
@@ -27,6 +35,8 @@ export const COLORS = {
   HIGHLIGHT_YELLOW: "#FFD700",
   LABEL_WHITE: "#ffffff",
   LABEL_GRAY: "#888888",
+  LIQUID_BLUE: "#8A9CAF",
+  IMPACT_AMBER: "#FFAA55",
 };
 
 // The test case to focus on

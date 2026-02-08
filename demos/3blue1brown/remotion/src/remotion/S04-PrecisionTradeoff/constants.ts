@@ -37,11 +37,11 @@ export const BEATS = {
   VISUAL_00_START: s2f(0.0),  // 0 frames
   VISUAL_00_END: s2f(3.02),  // 91 frames
 
-  // Visual 1: veo:veo_3d_printer_focus — "In 3D printing, there's no mold...."
+  // Visual 1: PrinterFocus — "In 3D printing, there's no mold...."
   VISUAL_01_START: s2f(4.4),  // 132 frames
   VISUAL_01_END: s2f(14.46),  // 434 frames
 
-  // Visual 2: veo:veo_mold_flow_focus — "In injection molding, precision comes from the wal..."
+  // Visual 2: MoldFlowFocus — "In injection molding, precision comes from the wal..."
   VISUAL_02_START: s2f(15.68),  // 470 frames
   VISUAL_02_END: s2f(22.12),  // 664 frames
 
@@ -67,10 +67,19 @@ export const BEATS = {
 };
 
 // Visual sequence: maps BEATS ranges to composition IDs
+//
+// NOTE: The spec (README.md) lists GraphAnimateCurve (4.5) right after
+// PrecisionGraph (4.4). However, the audio narration locks a different order:
+//   - 26.7s "With few tests, specify everything..." -> LongPrompt
+//   - 35.3s "With many tests, only needs intent..." -> ShortPromptTests
+//   - 43.1s "Test accumulation matters..."          -> GraphAnimateCurve
+// The narration first shows concrete examples (dense prompt, then short prompt
+// with tests), then zooms out to the abstract curve. This order is correct for
+// the audio sync; rearranging would mismatch narration content with visuals.
 export const VISUAL_SEQUENCE = [
   { start: BEATS.VISUAL_00_START, end: BEATS.VISUAL_00_END, id: "veo:split_3d_vs_mold", desc: "Something subtle that changes how you think about prompts" },
-  { start: BEATS.VISUAL_01_START, end: BEATS.VISUAL_01_END, id: "veo:veo_3d_printer_focus", desc: "3D printing no mold, every point precise, specification prec" },
-  { start: BEATS.VISUAL_02_START, end: BEATS.VISUAL_02_END, id: "veo:veo_mold_flow_focus", desc: "Injection molding precision comes from walls, flows constrai" },
+  { start: BEATS.VISUAL_01_START, end: BEATS.VISUAL_01_END, id: "PrinterFocus", desc: "3D printing no mold, every point precise, specification prec" },
+  { start: BEATS.VISUAL_02_START, end: BEATS.VISUAL_02_END, id: "MoldFlowFocus", desc: "Injection molding precision comes from walls, flows constrai" },
   { start: BEATS.VISUAL_03_START, end: BEATS.VISUAL_03_END, id: "PrecisionGraph", desc: "This maps directly to PDD" },
   { start: BEATS.VISUAL_04_START, end: BEATS.VISUAL_04_END, id: "LongPrompt", desc: "Few tests prompt specifies everything, edge cases, errors" },
   { start: BEATS.VISUAL_05_START, end: BEATS.VISUAL_05_END, id: "ShortPromptTests", desc: "Many tests prompt only needs intent, tests handle constraint" },
