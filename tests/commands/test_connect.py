@@ -382,3 +382,23 @@ def test_connect_port_available_uses_requested(mock_dependencies):
             # Verify uvicorn called with default port
             call_kwargs = mock_dependencies["uvicorn"].run.call_args[1]
             assert call_kwargs["port"] == 9876
+
+
+# --- Bug #470: Incorrect auth command reference in error messages ---
+
+def test_connect_unauthenticated_shows_correct_auth_command(mock_dependencies):
+    """
+    Test for Issue #470: Verify connect command references 'pdd auth login'
+    when not authenticated, not the non-existent 'pdd login'.
+    """
+    with patch("pdd.commands.connect.is_port_available", return_value=True), \
+         patch("pdd.core.cloud.CloudConfig.get_jwt_token", return_value=None):
+
+        runner = CliRunner()
+        with runner.isolated_filesystem():
+            result = runner.invoke(connect)
+
+        assert "pdd auth login" in result.output, (
+            "Connect command should reference 'pdd auth login' when not authenticated, "
+            f"not 'pdd login'. Got: {result.output}"
+        )
