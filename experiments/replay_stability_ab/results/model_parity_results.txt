@@ -1,0 +1,130 @@
+========================================================================
+Model-Parity Experiment Results (Runs 07-09)
+========================================================================
+
+EXPERIMENT DESIGN
+-----------------
+Both arms use Claude Opus 4.6 (anthropic/claude-opus-4-6).
+Task: Medium difficulty - robust user ID parser with 7 requirements.
+Acceptance test: tests/test_task_acceptance_medium.py (4 tests).
+PDD arm: pdd --force --local sync user_id_parser
+Agentic arm: Claude Code directly patching src/user_id_parser.py
+
+
+RESULTS
+-------
+
+  PDD Arm (anthropic/claude-opus-4-6 via --local):
+  ┌────────┬──────┬───────────┬──────────┬───────┐
+  │ Run    │ Pass │ Time (s)  │ Cost ($) │ Drift │
+  ├────────┼──────┼───────────┼──────────┼───────┤
+  │ run_07 │ 4/4  │ 1244      │ $3.43    │ minor │
+  │ run_08 │ 4/4  │ 263       │ $0.21    │ minor │
+  │ run_09 │ 4/4  │ 222       │ $0.18    │ minor │
+  └────────┴──────┴───────────┴──────────┴───────┘
+
+  Agentic Arm (Claude Code = anthropic/claude-opus-4-6):
+  ┌────────┬──────┬───────────┬──────────┬───────┐
+  │ Run    │ Pass │ Time (s)  │ Cost ($) │ Drift │
+  ├────────┼──────┼───────────┼──────────┼───────┤
+  │ run_07 │ 4/4  │ ~25       │ ~$0.03*  │ none  │
+  │ run_08 │ 4/4  │ ~25       │ ~$0.03*  │ none  │
+  │ run_09 │ 4/4  │ ~18       │ ~$0.03*  │ none  │
+  └────────┴──────┴───────────┴──────────┴───────┘
+
+  * Agentic cost is session-level (not isolated per workspace),
+    estimated at ~$0.03 per implementation based on output tokens.
+
+
+PASS RATE
+---------
+  PDD:     3/3 (100%)
+  Agentic: 3/3 (100%)
+  → Tied. Both arms produce correct code from the same model.
+
+
+DRIFT ANALYSIS
+--------------
+  PDD:     3/3 minor drift (all added blanket try/except Exception wrapper)
+  Agentic: 0/3 drift (all used pure defensive type checking)
+
+  The PDD-generated code includes `except Exception: return None` around
+  the entire parse_user_id function body. The spec says "never raise for
+  expected bad input" which PDD interprets as a catch-all, while the
+  agentic arm implements defensive checks (isinstance guards) that prevent
+  exceptions from being raised in the first place.
+
+  This is arguably a minor interpretive difference, not a harmful drift.
+  The catch-all doesn't change correctness but adds unnecessary code.
+
+
+TIMING
+------
+  PDD avg:     576s (9.6 min) — includes verify + test gen + fix loop
+  Agentic avg:  23s (0.4 min)
+  Ratio: PDD takes ~25x longer
+
+  PDD run_07 was an outlier (1244s) because the verify loop burned 3
+  attempts before falling back to agentic mode. Runs 08-09 were smooth.
+
+  IMPORTANT: The timing comparison is NOT apples-to-apples.
+  PDD sync does: generate code → generate examples → verify → generate tests → fix tests
+  Agentic arm does: read spec → write code → run tests
+  PDD's extra pipeline steps add latency and cost.
+
+
+COST
+----
+  PDD avg:     $1.27
+  Agentic avg: ~$0.03
+  Ratio: PDD costs ~42x more (using Opus 4.6 locally for all steps)
+
+
+REPRODUCIBILITY
+---------------
+  PDD runs 08 and 09 produced IDENTICAL code (LLM cache hit).
+  This demonstrates PDD's deterministic generation when inputs are stable.
+  Agentic runs produced 3 different (but functionally equivalent) implementations.
+
+
+KEY OBSERVATIONS
+----------------
+1. With model parity established, BOTH arms achieve 100% pass rate on
+   medium-difficulty tasks. The claim that PDD's context-window advantage
+   improves code quality is NOT supported by this data point.
+
+2. PDD's value proposition at this task complexity is:
+   - Structural: prompt IS the spec (source of truth)
+   - Reproducibility: cache → identical outputs
+   - Pipeline: auto-generated tests + verification
+   NOT: better code from the same model.
+
+3. The context-window advantage (CW-1: 661x overhead ratio) may become
+   relevant at higher task complexity where the 25K+ tokens of agentic
+   overhead compete with task content for attention. This experiment's
+   medium task (~500 token spec) doesn't stress the window.
+
+4. PDD's --local flag forces use of local llm_model.csv. Without it,
+   PDD defaults to cloud execution (which selects gpt-5.2-codex).
+   This is a confound that was discovered and corrected during the run.
+
+
+WHAT THIS EXPERIMENT PROVES
+----------------------------
+✓ Same model (Claude Opus 4.6) produces correct code through both PDD
+  and agentic workflows for medium-complexity tasks.
+✓ PDD's pipeline (verify + test + fix) works end-to-end with Opus 4.6.
+✓ PDD's caching produces deterministic outputs.
+✓ Agentic approach is faster and cheaper for single-shot implementations.
+✗ Context-window advantage does NOT manifest at this task complexity.
+
+
+RECOMMENDED NEXT EXPERIMENTS
+-----------------------------
+To test the CW-1 hypothesis (context window overhead matters):
+  - CW-3: Session-Length Degradation — give both arms a 10-turn
+    conversation before the implementation request. The agentic arm
+    will have accumulated ~30K tokens of history; PDD will start fresh.
+  - CW-4: Long Spec Task — use a spec that consumes >50K tokens of
+    context (complex API spec, many edge cases). The agentic arm's 25K
+    overhead leaves only ~125K for the task; PDD gets the full 200K.

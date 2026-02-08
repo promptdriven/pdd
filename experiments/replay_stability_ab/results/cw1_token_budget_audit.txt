@@ -1,0 +1,89 @@
+========================================================================
+CW-1: Token Budget Audit
+========================================================================
+
+AGENTIC CLI (Claude Code) — Fresh Session Overhead
+--------------------------------------------------
+  System prompt (instructions):       4,900 tokens
+  Core tool definitions (20):         6,501 tokens
+  Quill MCP tools (32):               4,800 tokens
+  Context7 MCP tools (2):               500 tokens
+  Firebase MCP tools (30):            6,400 tokens
+  Generic MCP tools (2):                200 tokens
+  MCP server instructions:              150 tokens
+  CLAUDE.md / project context:        1,410 tokens
+  Environment / git context:            300 tokens
+  System reminders:                     200 tokens
+  Skill definitions:                    400 tokens
+  Chat history (fresh session):           0 tokens
+  ────────────────────────────────────────
+  TOTAL OVERHEAD:                    25,761 tokens
+  % of 200K window:                 12.9%
+
+PDD BATCH — Generation Payload
+--------------------------------------------------
+  User prompt content:                   82 tokens
+  Test content:                         407 tokens
+  PDD wrapper tags:                      39 tokens
+  System prompt:                          0 tokens
+  Tool definitions:                       0 tokens
+  MCP overhead:                           0 tokens
+  Chat history:                           0 tokens
+  ────────────────────────────────────────
+  TOTAL OVERHEAD:                        39 tokens
+  TOTAL USEFUL:                         489 tokens
+  % of 200K window:                  0.3%
+
+COMPARISON
+--------------------------------------------------
+  Agentic overhead:                  25,761 tokens
+  PDD overhead:                          39 tokens
+  Ratio (agentic / PDD):                661x
+
+  Tokens available for task content:
+    Agentic (200K window):        174,239 tokens (87.1%)
+    PDD (no overhead):              200,000 tokens (100.0%)
+
+  Overhead as % of window by model size:
+    32K: agentic=80.5%  PDD=~0%
+    128K: agentic=20.1%  PDD=~0%
+    200K: agentic=12.9%  PDD=~0%
+
+  Chat history growth projection (agentic):
+    After  5 turns: + 2,500 history =  28,261 total (14.1% of 200K)
+    After 10 turns: + 5,000 history =  30,761 total (15.4% of 200K)
+    After 20 turns: +10,000 history =  35,761 total (17.9% of 200K)
+    After 50 turns: +25,000 history =  50,761 total (25.4% of 200K)
+
+METHODOLOGY NOTES
+--------------------------------------------------
+  - Token counts use tiktoken cl100k_base (Claude's tokenizer differs; ~10% variance)
+  - Agentic tool tokens are ESTIMATES based on JSON schema complexity
+  - PDD payload is MEASURED from actual experiment prompt file
+  - PDD cloud path adds grounding (few-shot examples) server-side; not counted here
+  - PDD's fix loop accumulates error context across iterations (not measured here)
+  - Agentic session has 90 tool definitions in this configuration
+  - CLAUDE.md tokens are MEASURED from actual project files
+
+ESTIMATE CALIBRATION
+--------------------------------------------------
+  Reconstructed 3 real tool schemas and measured with tiktoken:
+    Bash (truncated, real is ~2x longer):  667 tokens measured
+    Glob (complete):                       150 tokens measured
+    Task (truncated, real is ~3x longer):  334 tokens measured
+  Average: 384 tokens (but reconstructions were truncated)
+  Tool estimate uses ~200 avg per tool; likely UNDERESTIMATES by 20-40%.
+  Conservative lower bound for total overhead: ~20,000 tokens.
+  Realistic estimate: 25,000-35,000 tokens.
+  The 661x ratio is robust to this uncertainty (even at 20K: 512x).
+
+KEY FINDING
+--------------------------------------------------
+  PDD's generation call is verified to send zero system prompt
+  (code_generator_main.py -> code_generator.py -> llm_invoke.py:
+   _format_messages returns [{"role": "user", "content": prompt}])
+
+  Agentic CLI carries 25K+ tokens of operational overhead per API call.
+  On a 200K window this is ~13%. On a 32K window this is ~80%.
+  After 50 turns of history, overhead reaches ~25% of a 200K window.
+
