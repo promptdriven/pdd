@@ -35,32 +35,38 @@ export const Part4PrecisionTradeoff: React.FC<Part4PrecisionTradeoffPropsType> =
       
       {/* Visual 0: Veo clip - Something subtle that changes how you think about  */}
       {activeVisual === 0 && (
-        <AbsoluteFill>
-          <OffthreadVideo
-            src={staticFile("split_3d_vs_mold.mp4")}
-            style={{ width: "100%", height: "100%" }}
-          />
-        </AbsoluteFill>
+        <Sequence from={BEATS.VISUAL_00_START}>
+          <AbsoluteFill>
+            <OffthreadVideo
+              src={staticFile("split_3d_vs_mold.mp4")}
+              style={{ width: "100%", height: "100%" }}
+            />
+          </AbsoluteFill>
+        </Sequence>
       )}
 
       {/* Visual 1: Veo clip - 3D printing no mold, every point precise, specific */}
       {activeVisual === 1 && (
-        <AbsoluteFill>
-          <OffthreadVideo
-            src={staticFile("veo_3d_printer_focus.mp4")}
-            style={{ width: "100%", height: "100%" }}
-          />
-        </AbsoluteFill>
+        <Sequence from={BEATS.VISUAL_01_START}>
+          <AbsoluteFill>
+            <OffthreadVideo
+              src={staticFile("veo_3d_printer_focus.mp4")}
+              style={{ width: "100%", height: "100%" }}
+            />
+          </AbsoluteFill>
+        </Sequence>
       )}
 
       {/* Visual 2: Veo clip - Injection molding precision comes from walls, flow */}
       {activeVisual === 2 && (
-        <AbsoluteFill>
-          <OffthreadVideo
-            src={staticFile("veo_mold_flow_focus.mp4")}
-            style={{ width: "100%", height: "100%" }}
-          />
-        </AbsoluteFill>
+        <Sequence from={BEATS.VISUAL_02_START}>
+          <AbsoluteFill>
+            <OffthreadVideo
+              src={staticFile("veo_mold_flow_focus.mp4")}
+              style={{ width: "100%", height: "100%" }}
+            />
+          </AbsoluteFill>
+        </Sequence>
       )}
 
       {/* Visual 3: PrecisionGraph - This maps directly to PDD */}

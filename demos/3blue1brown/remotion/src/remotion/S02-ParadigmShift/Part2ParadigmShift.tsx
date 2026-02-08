@@ -36,22 +36,26 @@ export const Part2ParadigmShift: React.FC<Part2ParadigmShiftPropsType> = () => {
       
       {/* Visual 0: Veo clip - Pattern across industries, deeper shift in how thi */}
       {activeVisual === 0 && (
-        <AbsoluteFill>
-          <OffthreadVideo
-            src={staticFile("01_factory_floor.mp4")}
-            style={{ width: "100%", height: "100%" }}
-          />
-        </AbsoluteFill>
+        <Sequence from={BEATS.VISUAL_00_START}>
+          <AbsoluteFill>
+            <OffthreadVideo
+              src={staticFile("01_factory_floor.mp4")}
+              style={{ width: "100%", height: "100%" }}
+            />
+          </AbsoluteFill>
+        </Sequence>
       )}
 
       {/* Visual 1: Veo clip - Consider injection molding, crafted to designed mo */}
       {activeVisual === 1 && (
-        <AbsoluteFill>
-          <OffthreadVideo
-            src={staticFile("02_mold_closeup.mp4")}
-            style={{ width: "100%", height: "100%" }}
-          />
-        </AbsoluteFill>
+        <Sequence from={BEATS.VISUAL_01_START}>
+          <AbsoluteFill>
+            <OffthreadVideo
+              src={staticFile("02_mold_closeup.mp4")}
+              style={{ width: "100%", height: "100%" }}
+            />
+          </AbsoluteFill>
+        </Sequence>
       )}
 
       {/* Visual 2: PartsEject - Make mold once, unlimited parts, refine once all i */}
@@ -63,12 +67,14 @@ export const Part2ParadigmShift: React.FC<Part2ParadigmShiftPropsType> = () => {
 
       {/* Visual 3: Veo clip - When there's a defect, don't patch individual part */}
       {activeVisual === 3 && (
-        <AbsoluteFill>
-          <OffthreadVideo
-            src={staticFile("veo_defect_discovered.mp4")}
-            style={{ width: "100%", height: "100%" }}
-          />
-        </AbsoluteFill>
+        <Sequence from={BEATS.VISUAL_03_START}>
+          <AbsoluteFill>
+            <OffthreadVideo
+              src={staticFile("veo_defect_discovered.mp4")}
+              style={{ width: "100%", height: "100%" }}
+            />
+          </AbsoluteFill>
+        </Sequence>
       )}
 
       {/* Visual 4: PerfectParts - Fix the mold, fix applies to every future part */}
@@ -94,12 +100,14 @@ export const Part2ParadigmShift: React.FC<Part2ParadigmShiftPropsType> = () => {
 
       {/* Visual 7: Veo clip - Not just plastics, chip industry hit this exact wa */}
       {activeVisual === 7 && (
-        <AbsoluteFill>
-          <OffthreadVideo
-            src={staticFile("07_craftsman_vs_mold.mp4")}
-            style={{ width: "100%", height: "100%" }}
-          />
-        </AbsoluteFill>
+        <Sequence from={BEATS.VISUAL_07_START}>
+          <AbsoluteFill>
+            <OffthreadVideo
+              src={staticFile("07_craftsman_vs_mold.mp4")}
+              style={{ width: "100%", height: "100%" }}
+            />
+          </AbsoluteFill>
+        </Sequence>
       )}
 
       {/* Visual 8: MoldToPrompt - 1980s drew gates by hand, moved to Verilog in 1985 */}

@@ -110,6 +110,12 @@ SEGMENTS = {
         "left_prompt": "../../specs/00-cold-open/prompts/01e_left_developer.md",
         "right_prompt": "../../specs/00-cold-open/prompts/01e_right_grandmother.md",
     },
+    "01f": {
+        "name": "modern_sock_toss",
+        "duration": 8,
+        "file": "../../specs/00-cold-open/prompts/01f_modern_sock_toss.md",
+        # No left_prompt/right_prompt: this is a full-frame 16:9 shot, not split-screen
+    },
 }
 
 

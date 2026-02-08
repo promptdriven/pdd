@@ -69,22 +69,26 @@ export const Part5CompoundReturns: React.FC<Part5CompoundReturnsPropsType> = () 
 
       {/* Visual 5: Veo clip - Great-grandmother rational for darning, economics  */}
       {activeVisual === 5 && (
-        <AbsoluteFill>
-          <OffthreadVideo
-            src={staticFile("07_split_screen_sepia.mp4")}
-            style={{ width: "100%", height: "100%" }}
-          />
-        </AbsoluteFill>
+        <Sequence from={BEATS.VISUAL_05_START}>
+          <AbsoluteFill>
+            <OffthreadVideo
+              src={staticFile("07_split_screen_sepia.mp4")}
+              style={{ width: "100%", height: "100%" }}
+            />
+          </AbsoluteFill>
+        </Sequence>
       )}
 
       {/* Visual 6: Veo clip - Not stupid for patching, economics made it rationa */}
       {activeVisual === 6 && (
-        <AbsoluteFill>
-          <OffthreadVideo
-            src={staticFile("07_split_screen_sepia.mp4")}
-            style={{ width: "100%", height: "100%" }}
-          />
-        </AbsoluteFill>
+        <Sequence from={BEATS.VISUAL_06_START}>
+          <AbsoluteFill>
+            <OffthreadVideo
+              src={staticFile("07_split_screen_sepia.mp4")}
+              style={{ width: "100%", height: "100%" }}
+            />
+          </AbsoluteFill>
+        </Sequence>
       )}
 
       {/* Visual 7: CrossingPoint - Economics changed, rational becomes darning socks */}

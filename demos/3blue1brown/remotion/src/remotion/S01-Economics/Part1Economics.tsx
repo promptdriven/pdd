@@ -166,22 +166,26 @@ export const Part1Economics: React.FC<Part1EconomicsPropsType> = () => {
 
       {/* Visual 18: Veo clip - Regeneration no problem, prompt fits, no retrieval */}
       {activeVisual === 18 && (
-        <AbsoluteFill>
-          <OffthreadVideo
-            src={staticFile("veo_developer_edit.mp4")}
-            style={{ width: "100%", height: "100%" }}
-          />
-        </AbsoluteFill>
+        <Sequence from={BEATS.VISUAL_18_START}>
+          <AbsoluteFill>
+            <OffthreadVideo
+              src={staticFile("veo_developer_edit.mp4")}
+              style={{ width: "100%", height: "100%" }}
+            />
+          </AbsoluteFill>
+        </Sequence>
       )}
 
       {/* Visual 19: Veo clip - NL is models deepest fluency, 250 lines lowest def */}
       {activeVisual === 19 && (
-        <AbsoluteFill>
-          <OffthreadVideo
-            src={staticFile("veo_developer_edit.mp4")}
-            style={{ width: "100%", height: "100%" }}
-          />
-        </AbsoluteFill>
+        <Sequence from={BEATS.VISUAL_19_START}>
+          <AbsoluteFill>
+            <OffthreadVideo
+              src={staticFile("veo_developer_edit.mp4")}
+              style={{ width: "100%", height: "100%" }}
+            />
+          </AbsoluteFill>
+        </Sequence>
       )}
 
       {/* Visual 20: CrossingPoint - Generation crossed below both lines, debt resets */}
@@ -193,12 +197,14 @@ export const Part1Economics: React.FC<Part1EconomicsPropsType> = () => {
 
       {/* Visual 21: Veo clip - Best darning needles ever, still accumulation */}
       {activeVisual === 21 && (
-        <AbsoluteFill>
-          <OffthreadVideo
-            src={staticFile("07_split_screen_sepia.mp4")}
-            style={{ width: "100%", height: "100%" }}
-          />
-        </AbsoluteFill>
+        <Sequence from={BEATS.VISUAL_21_START}>
+          <AbsoluteFill>
+            <OffthreadVideo
+              src={staticFile("07_split_screen_sepia.mp4")}
+              style={{ width: "100%", height: "100%" }}
+            />
+          </AbsoluteFill>
+        </Sequence>
       )}
 
       {/* Visual 22: PieChart - 80-90% cost is maintenance, McKinsey Stripe tech d */}

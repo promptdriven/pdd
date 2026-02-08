@@ -39,12 +39,14 @@ export const ClosingSection: React.FC<ClosingSectionPropsType> = () => {
 
       {/* Visual 1: Veo clip - Don't patch socks, socks got cheap, irrational */}
       {activeVisual === 1 && (
-        <AbsoluteFill>
-          <OffthreadVideo
-            src={staticFile("07_split_screen_sepia.mp4")}
-            style={{ width: "100%", height: "100%" }}
-          />
-        </AbsoluteFill>
+        <Sequence from={BEATS.VISUAL_01_START}>
+          <AbsoluteFill>
+            <OffthreadVideo
+              src={staticFile("07_split_screen_sepia.mp4")}
+              style={{ width: "100%", height: "100%" }}
+            />
+          </AbsoluteFill>
+        </Sequence>
       )}
 
       {/* Visual 2: CodeOutputMoldGlows - Code just got that cheap */}

@@ -37,16 +37,16 @@ SECTIONS = {
         # 5 Whisper segments, 16.1s
         # Script: COLD OPEN: THE SOCK HOOK (0:00 - 2:00)
         "visual_sequence": [
-            # [VISUAL: Split screen. Developer/Cursor + Grandmother darning]
-            (0, 0, "veo:07_split_screen_sepia", "If you use Cursor, Claude Code, Copilot, getting good"),
-            # [VISUAL: Zoom out on both sides, accumulated weight of repair]
-            (1, 1, "veo:07_split_screen_sepia", "Great-grandmother figured out sixty years ago"),
-            # [VISUAL: Hard cut modern day. Toss sock, grab fresh pair.]
-            (2, 2, "veo:07_split_screen_sepia", "When socks got cheap enough she stopped"),
-            # [VISUAL: Code function deletes and regenerates clean]
-            (3, 3, "veo:07_split_screen_sepia", "Code just got that cheap"),
-            # [VISUAL: Title card: Prompt-Driven Development]
-            (4, 4, "veo:07_split_screen_sepia", "So why are we still patching"),
+            # [VISUAL: Split screen establish — dev at keyboard + grandma darning]
+            (0, 0, "veo:cold_open_01a_establish", "If you use Cursor, Claude Code, Copilot, getting good"),
+            # [VISUAL: Zoom out reveals accumulated burden on both sides]
+            (1, 1, "veo:cold_open_01d_zoom_out", "Great-grandmother figured out sixty years ago"),
+            # [VISUAL: Hard cut modern day — person tosses holey sock, grabs fresh pair]
+            (2, 2, "veo:cold_open_01f_modern_sock_toss", "When socks got cheap enough she stopped"),
+            # [VISUAL: Code function DELETES then REGENERATES, pdd generate terminal]
+            (3, 3, "code_regen:pdd generate", "Code just got that cheap"),
+            # [VISUAL: Title card fades in over the regenerated code]
+            (4, 4, "title_over_code:Prompt-Driven Development", "So why are we still patching"),
         ],
     },
     "part1": {
@@ -412,12 +412,21 @@ def generate_component(section_key: str) -> str:
     comp_name = section["component"]
     prefix = section["prefix"]
 
-    # Collect unique composition IDs used (excluding veo: prefixed ones)
+    # Collect unique composition IDs used (excluding veo: and title: prefixed ones)
     used_compositions = set()
     has_veo = False
+    has_title = False
+    has_code_regen = False
+    has_title_over_code = False
     for _, _, comp_id, _ in section["visual_sequence"]:
         if comp_id.startswith("veo:"):
             has_veo = True
+        elif comp_id.startswith("title:"):
+            has_title = True
+        elif comp_id.startswith("code_regen:"):
+            has_code_regen = True
+        elif comp_id.startswith("title_over_code:"):
+            has_title_over_code = True
         else:
             used_compositions.add(comp_id)
 
@@ -428,10 +437,12 @@ def generate_component(section_key: str) -> str:
             folder, name, default_props = COMPOSITION_IMPORTS[comp_id]
             comp_imports.append(f'import {{ {name}, {default_props} }} from "../{folder}";')
 
-    # Build Remotion imports (only include OffthreadVideo if needed)
+    # Build Remotion imports (only include OffthreadVideo/interpolate if needed)
     remotion_imports = ["AbsoluteFill", "Audio", "Sequence", "staticFile", "useCurrentFrame"]
     if has_veo:
         remotion_imports.insert(3, "OffthreadVideo")
+    if has_title or has_code_regen or has_title_over_code:
+        remotion_imports.insert(1, "interpolate")
 
     # Build visual switch cases
     switch_cases = []
@@ -441,12 +452,129 @@ def generate_component(section_key: str) -> str:
             switch_cases.append(f'''
       {{/* Visual {i}: Veo clip - {desc[:50]} */}}
       {{activeVisual === {i} && (
-        <AbsoluteFill>
-          <OffthreadVideo
-            src={{staticFile("{veo_file}.mp4")}}
-            style={{{{ width: "100%", height: "100%" }}}}
-          />
-        </AbsoluteFill>
+        <Sequence from={{BEATS.VISUAL_{i:02d}_START}}>
+          <AbsoluteFill>
+            <OffthreadVideo
+              src={{staticFile("{veo_file}.mp4")}}
+              style={{{{ width: "100%", height: "100%" }}}}
+            />
+          </AbsoluteFill>
+        </Sequence>
+      )}}''')
+        elif comp_id.startswith("title:"):
+            title_text = comp_id.replace("title:", "")
+            switch_cases.append(f'''
+      {{/* Visual {i}: Title card - {desc[:50]} */}}
+      {{activeVisual === {i} && (
+        <Sequence from={{BEATS.VISUAL_{i:02d}_START}}>
+          <AbsoluteFill style={{{{ backgroundColor: "#0a0a1a", display: "flex", alignItems: "center", justifyContent: "center" }}}}>
+            <div style={{{{
+              opacity: interpolate(frame - BEATS.VISUAL_{i:02d}_START, [0, 15], [0, 1], {{ extrapolateLeft: "clamp", extrapolateRight: "clamp" }}),
+              textAlign: "center",
+            }}}}>
+              <h1 style={{{{
+                fontFamily: "'SF Pro Display', 'Helvetica Neue', sans-serif",
+                fontSize: 72,
+                fontWeight: 700,
+                color: "#ffffff",
+                letterSpacing: -1,
+                margin: 0,
+              }}}}>
+                {title_text}
+              </h1>
+            </div>
+          </AbsoluteFill>
+        </Sequence>
+      )}}''')
+        elif comp_id.startswith("code_regen:"):
+            terminal_text = comp_id.replace("code_regen:", "")
+            switch_cases.append(f'''
+      {{/* Visual {i}: Code regeneration - {desc[:50]} */}}
+      {{activeVisual === {i} && (
+        <Sequence from={{BEATS.VISUAL_{i:02d}_START}}>
+          <AbsoluteFill style={{{{ backgroundColor: "#1a1a2e" }}}}>
+            {{/* Old patched code - dissolves away */}}
+            <div style={{{{
+              position: "absolute",
+              top: "50%",
+              left: "50%",
+              transform: "translate(-50%, -50%)",
+              opacity: interpolate(frame - BEATS.VISUAL_{i:02d}_START, [0, 10, 11, 25], [1, 1, 1, 0], {{ extrapolateRight: "clamp" }}),
+              filter: `blur(${{interpolate(frame - BEATS.VISUAL_{i:02d}_START, [10, 25], [0, 8], {{ extrapolateLeft: "clamp", extrapolateRight: "clamp" }})}}px)`,
+            }}}}>
+              <div style={{{{ background: "#1E1E2E", padding: 24, borderRadius: 12, border: "1px solid #E74C3C", width: 700 }}}}>
+                <pre style={{{{ fontSize: 14, fontFamily: "'JetBrains Mono', monospace", color: "#8a9caf", margin: 0, lineHeight: 1.6 }}}}>{{`def process_data(input):\\n    # TODO: fix edge case\\n    data = input.strip()  # patched\\n    if len(data) > MAX:\\n        data = data[:MAX]  # hotfix #2847\\n    return validate(data)  # patched`}}</pre>
+              </div>
+            </div>
+            {{/* New clean code - fades in */}}
+            <div style={{{{
+              position: "absolute",
+              top: "50%",
+              left: "50%",
+              transform: "translate(-50%, -50%)",
+              opacity: interpolate(frame - BEATS.VISUAL_{i:02d}_START, [18, 30], [0, 1], {{ extrapolateLeft: "clamp", extrapolateRight: "clamp" }}),
+            }}}}>
+              <div style={{{{ background: "#1E1E2E", padding: 24, borderRadius: 12, border: "1px solid #4CAF50", boxShadow: `0 0 ${{interpolate(frame - BEATS.VISUAL_{i:02d}_START, [28, 38], [0, 20], {{ extrapolateLeft: "clamp", extrapolateRight: "clamp" }})}}px #4CAF50`, width: 700 }}}}>
+                <pre style={{{{ fontSize: 14, fontFamily: "'JetBrains Mono', monospace", color: "#8a9caf", margin: 0, lineHeight: 1.6 }}}}>{{`def process_data(input):\\n    cleaned = sanitize(input)\\n    validated = enforce_constraints(cleaned)\\n    return validated`}}</pre>
+              </div>
+            </div>
+            {{/* Terminal indicator */}}
+            <div style={{{{
+              position: "absolute",
+              bottom: 60,
+              right: 60,
+              opacity: interpolate(frame - BEATS.VISUAL_{i:02d}_START, [25, 35], [0, 1], {{ extrapolateLeft: "clamp", extrapolateRight: "clamp" }}),
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 18,
+              color: "#4CAF50",
+            }}}}>
+              $ {terminal_text}
+            </div>
+          </AbsoluteFill>
+        </Sequence>
+      )}}''')
+        elif comp_id.startswith("title_over_code:"):
+            title_text = comp_id.replace("title_over_code:", "")
+            switch_cases.append(f'''
+      {{/* Visual {i}: Title over code - {desc[:50]} */}}
+      {{activeVisual === {i} && (
+        <Sequence from={{BEATS.VISUAL_{i:02d}_START}}>
+          <AbsoluteFill style={{{{ backgroundColor: "#1a1a2e" }}}}>
+            {{/* Dimmed regenerated code in background */}}
+            <div style={{{{
+              position: "absolute",
+              top: "50%",
+              left: "50%",
+              transform: "translate(-50%, -50%)",
+              opacity: 0.25,
+            }}}}>
+              <div style={{{{ background: "#1E1E2E", padding: 24, borderRadius: 12, border: "1px solid #4CAF50", width: 700 }}}}>
+                <pre style={{{{ fontSize: 14, fontFamily: "'JetBrains Mono', monospace", color: "#8a9caf", margin: 0, lineHeight: 1.6 }}}}>{{`def process_data(input):\\n    cleaned = sanitize(input)\\n    validated = enforce_constraints(cleaned)\\n    return validated`}}</pre>
+              </div>
+            </div>
+            {{/* Title text fading in */}}
+            <div style={{{{
+              position: "absolute",
+              top: 0, left: 0, right: 0, bottom: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              opacity: interpolate(frame - BEATS.VISUAL_{i:02d}_START, [0, 20], [0, 1], {{ extrapolateLeft: "clamp", extrapolateRight: "clamp" }}),
+            }}}}>
+              <h1 style={{{{
+                fontFamily: "'SF Pro Display', 'Helvetica Neue', sans-serif",
+                fontSize: 72,
+                fontWeight: 700,
+                color: "#ffffff",
+                letterSpacing: -1,
+                margin: 0,
+                textShadow: "0 0 40px rgba(0,0,0,0.8)",
+              }}}}>
+                {title_text}
+              </h1>
+            </div>
+          </AbsoluteFill>
+        </Sequence>
       )}}''')
         else:
             default_props = COMPOSITION_IMPORTS[comp_id][2] if comp_id in COMPOSITION_IMPORTS else None
