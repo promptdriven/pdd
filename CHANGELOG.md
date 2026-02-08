@@ -2,19 +2,29 @@
 
 ### Feat
 
-- Introduce replay stability A/B experiment with its infrastructure, runs, and results.
+- **firecrawl caching**: Automatic SQLite-based caching for Firecrawl web scraping results, reducing API credit usage. `<web>` tags in prompts now check cache before scraping. Configurable via environment variables (`FIRECRAWL_CACHE_TTL_HOURS`, `FIRECRAWL_CACHE_MAX_SIZE_MB`, `FIRECRAWL_CACHE_MAX_ENTRIES`). Includes URL normalization (strips tracking params), LRU eviction, and access tracking. New `pdd firecrawl-cache` CLI group with `stats`, `clear`, `info`, and `check` subcommands (#46). Thanks Niti Goyal! (upstream #474)
 
 ### Fix
 
-- Update stale model name and make sys.path preamble injection deterministic
-- Replace all 'pdd login' references with 'pdd auth login'
-- pdd sessions cleanup error message references non-existent pdd login command
-- Address Copilot review feedback on test quality
-- Add include path validation to architecture Step 11 (#426)
+- **generate_test**: Make `sys.path` preamble injection deterministic by stripping any existing LLM-generated `sys.path` manipulation before injecting the canonical preamble. Previously skipped injection if `sys.path.insert` was already present, leading to inconsistent isolation.
+- **firecrawl_cache**: Fix 5 review findings — remove duplicate TTL parsing crash, add `try/except` for `MAX_SIZE_MB`/`MAX_ENTRIES` env vars, preserve `ref` and `source` URL params during normalization, replace `SELECT+UPDATE` with atomic `INSERT ... ON CONFLICT DO UPDATE` (upstream #479).
+- **sessions/connect/cloud**: Replace all stale `pdd login` references with `pdd auth login` across CLI output and error messages (#470). Thanks Serhan Asad! (upstream #472)
+- **agentic_arch_step11**: Add `<include>` path validation — verifies that include paths in prompt files match `.pddrc` `example_output_path` prefixes, skipping URLs, template variables, and `pdd/` internal paths (#426).
+- **llm_invoke**: Update stale model name reference in tests.
 
 ### Refactor
 
-- remove Firecrawl cache prompt and enhance prompt path resolution logic with new precedence rules.
+- **preprocess**: Remove Firecrawl cache prompt file; enhance prompt path resolution logic with explicit precedence rules (`PDD_PROMPT_PATH` > `PDD_PROMPTS_DIR`, `.pddrc` `prompt_path` alias support).
+
+### Build
+
+- **llm_model.csv**: Update model roster and Elo ratings. Add `claude-opus-4-6` (Elo 1576, replaces `claude-opus-4-5`), `gpt-5.2-codex` (replaces `gpt-5.1-codex` and `gpt-5.1-codex-max`), `kimi-k2p5` via Fireworks (replaces Groq `kimi-k2-instruct`), `qwen3-coder-next` via LM Studio. Updated Elo ratings across the board (e.g., `gemini-3-pro-preview` 1487→1452, `gpt-5.2` 1486→1472, `claude-sonnet-4-5` 1370→1386).
+
+### Docs
+
+- **construct_paths_python.prompt**: Document prompt path resolution precedence rules and `prompt_path` alias.
+- **agentic_arch_step12_fix_LLM.prompt**: Add fix instructions for wrong `<include>` paths.
+- **README.md**: Add firecrawl cache documentation section with configuration and CLI usage.
 
 ## v0.0.141 (2026-02-06)
 
