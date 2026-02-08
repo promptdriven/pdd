@@ -17,14 +17,19 @@ Total runtime: ~4 minutes.
 | 2.7 | `07_craftsman_vs_mold.md` | **Veo 3.1** | ~15s | Split: craftsman carving wood vs injection mold |
 | 2.8 | `08_value_aura.md` | Remotion | ~15s | Glowing aura shows where value lives |
 | 2.9 | `09_plastic_regenerates.md` | Remotion | ~10s | Plastic part dissolves, instantly regenerates |
-| 2.10 | `10_mold_to_prompt.md` | Remotion | ~20s | Mold morphs into PROMPT document, plastic → code |
+| 2.9a | `09a_electronics_lab.md` | **Hybrid** | ~15s | 1980s electronics lab, engineer drawing circuits by hand |
+| 2.9b | `09b_schematic_zooms_out.md` | **Hybrid** | ~20s | Schematic zooms out, transistor count explodes, hand slows |
+| 2.9c | `09c_verilog_synthesis.md` | Remotion | ~15s | Schematic dissolves into Verilog, synthesis tool generates netlist |
+| 2.9d | `09d_three_netlists.md` | Remotion | ~20s | Same Verilog → 3 different netlists, all functionally equivalent |
+| 2.9e | `09e_abstraction_timeline.md` | Remotion | ~20s | Abstraction Staircase: Transistors → Schematics → Verilog → HLS → NL→Code |
+| 2.10 | `10_mold_to_prompt.md` | Remotion | ~20s | Verilog morphs into PROMPT document, netlist → code, checkmark → test suite |
 | 2.11 | `11_prompt_generates_code.md` | Remotion | ~15s | Prompt pulses, code flows, tests appear as walls |
 
 ## Tool Distribution
 
-**Remotion (6 sections):** Abstract animations, counters, morphing transitions, glowing effects
+**Remotion (9 sections):** Abstract animations, counters, morphing transitions, glowing effects, chip design diagrams
 **Veo 3.1 (4 sections):** Factory footage, human engineer, physical objects
-**Hybrid (1 section):** Video with animated overlay
+**Hybrid (3 sections):** Video with animated overlay (defect discovery, electronics lab, schematic zoom)
 
 ## Key Metaphor Mapping
 
@@ -75,8 +80,13 @@ Total runtime: ~4 minutes.
 - **Value Aura:** White/gold gradient
 - **Defect Highlight:** Red (#D94A4A)
 
-## Missing Spec Coverage
+## Chip Design History Sequence (VISUALs 10-14)
 
-The following main script content in Part 2 does not yet have corresponding spec files:
-- **Chip Design History (lines 198-216):** 1980s electronics lab, hand-drawn schematics, Verilog introduction (1985), Synopsys synthesis non-determinism, formal equivalence checking, abstraction timeline (transistors -> schematics -> RTL -> behavioral -> natural language)
-- **Transition to Software (lines 218-225):** Verilog morphs to PROMPT document, gate-level netlist morphs to code, Synopsys checkmark morphs to test suite
+The chip design history sequence is now fully covered by specs 09a-09e:
+- **09a** (VISUAL 10): 1980s electronics lab, engineer drawing circuits by hand
+- **09b** (VISUAL 11): Schematic zooms out, transistor count explodes, scaling wall hit
+- **09c** (VISUAL 12): Schematic dissolves into Verilog, synthesis tool generates gate-level netlist
+- **09d** (VISUAL 13): Same Verilog run 3 times produces 3 different but functionally equivalent netlists
+- **09e** (VISUAL 14): Abstraction Staircase timeline (Transistors -> Schematics -> Verilog -> HLS -> NL->Code)
+
+The transition from Verilog to PROMPT (script VISUAL 15) is covered in `10_mold_to_prompt.md`.

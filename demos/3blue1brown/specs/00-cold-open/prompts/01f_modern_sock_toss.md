@@ -72,7 +72,7 @@ Cinematic, photorealistic, 4K, natural warm lighting, contemporary home interior
 
 ## Continuity
 
-- **Previous:** 01d - zoom out showing accumulated burden (both sides)
+- **Previous:** 01e - hold on accumulated weight (both sides)
 - **Next:** Cuts to code regeneration animation (Remotion component)
 - **Tone shift:** From serious/contemplative to casual/effortless
 - **Key message:** "When socks got cheap enough... she stopped."

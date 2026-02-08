@@ -10,7 +10,7 @@
 ```
 Split screen video, vertical white line divider in center. Static wide shot holding on final zoomed-out composition from previous segment.
 
-LEFT HALF: Wide view of complex software codebase visualization filling the frame, dozens of code files and windows scattered throughout, red and green diff markers visible, floating TODO and FIXME comment labels, tangled dependency lines, software developer figure small in the lower portion of frame surrounded by digital complexity, subtle animation of occasional new warning icon appearing or lint error flickering, the weight of accumulated technical debt palpable, cool blue overall lighting.
+LEFT HALF: Wide view of complex software codebase visualization filling the frame, files everywhere with thousands of patches, red and green diff markers visible, floating TODO and FIXME comment labels, tangled dependency lines, software developer figure small in the lower portion of frame surrounded by digital complexity, subtle animation of occasional new warning icon appearing or lint error flickering, the weight of accumulated technical debt palpable, cool blue overall lighting.
 
 RIGHT HALF: Wide view of domestic mending workspace filling the frame, overflowing basket of repaired garments, piles of patched socks and clothes covering table and surrounding area, grandmother figure small in frame surrounded by lifetime of careful repair work, subtle animation of lamp light flickering gently, the weight of accumulated domestic labor visible, warm amber overall lighting.
 
@@ -32,7 +32,7 @@ Split screen static wide shot hold. Left: full view of complex codebase with fil
 ## Left Side Only (If Compositing)
 
 ```
-Static wide shot of complex software codebase visualization, dozens of code file windows and icons filling frame, red and green diff markers scattered throughout, floating text labels reading TODO FIXME and code comments, tangled dependency lines connecting elements, software developer figure visible but small in lower portion surrounded by accumulated digital complexity, subtle ambient animation of occasional warning icon appearing or error indicator flickering, cool blue monitor glow lighting entire scene, weight of technical debt and maintenance burden visually apparent. Static camera, 6 second hold, contemplative mood, slight vignette. Cinematic, photorealistic, 4K.
+Static wide shot of complex software codebase visualization, files everywhere with thousands of patches filling frame, red and green diff markers scattered throughout, floating text labels reading TODO FIXME and code comments, tangled dependency lines connecting elements, software developer figure visible but small in lower portion surrounded by accumulated digital complexity, subtle ambient animation of occasional warning icon appearing or error indicator flickering, cool blue monitor glow lighting entire scene, weight of technical debt and maintenance burden visually apparent. Static camera, 6 second hold, contemplative mood, slight vignette. Cinematic, photorealistic, 4K.
 ```
 
 ---

@@ -1,4 +1,4 @@
-# Section 2.10: Mold Morphs to Prompt
+# Section 2.10: Verilog Morphs to Prompt
 
 **Tool:** Remotion
 **Duration:** ~20 seconds
@@ -6,7 +6,9 @@
 
 ## Visual Description
 
-The injection mold transforms into a glowing document labeled "PROMPT". The plastic part morphs into lines of code. The manufacturing metaphor becomes explicit: prompt = mold, code = plastic.
+The Verilog code morphs into a glowing document labeled "PROMPT". The gate-level netlist morphs into lines of software code. The Synopsys verification checkmark morphs into a test suite with green checkmarks. The chip design metaphor bridges directly into the software/PDD metaphor: prompt = specification, code = output, tests = verification.
+
+> **NOTE:** This section follows the chip design history sequence (VISUALs 10-14 in the main script), covered by specs `09a_electronics_lab.md` through `09e_abstraction_timeline.md`. Those specs cover the 1980s electronics lab, hand-drawn schematics becoming impossibly dense, the transition to Verilog/synthesis, non-deterministic synthesis producing different but functionally equivalent netlists, and the Abstraction Staircase timeline.
 
 ## Technical Specifications
 
@@ -18,59 +20,69 @@ The injection mold transforms into a glowing document labeled "PROMPT". The plas
 ### Morph Transformation
 
 **Starting State:**
-- Injection mold (3D-ish representation)
-- Plastic part below/beside it
-- Manufacturing context
+- Verilog code (from chip design sequence)
+- Gate-level netlist below/beside it
+- Synopsys verification checkmark
+- Chip design / EDA context
 
 **Ending State:**
 - Glowing document labeled "PROMPT"
-- Lines of code flowing below/beside it
-- Software context
+- Lines of software code flowing below/beside it
+- Test suite with green checkmarks
+- Software/PDD context
 
 ### Animation Elements
 
-1. **Mold → Prompt Document**
-   - Mold flattens into rectangular shape
-   - Metallic texture → Paper/document texture
+1. **Verilog Code → Prompt Document**
+   - Verilog text reshapes into rectangular document
+   - Code syntax → Clean specification text
    - "PROMPT" label appears
    - Blue glow (#4A90D9) surrounds it
 
-2. **Plastic Part → Code**
-   - Part stretches into horizontal lines
-   - Solid amber → Monospace text
-   - Code syntax visible
+2. **Gate-Level Netlist → Software Code**
+   - Netlist diagram stretches into horizontal lines
+   - Gate symbols → Monospace text
+   - Software code syntax visible
    - Gray color (#A0A0A0)
 
-3. **Context Shift**
-   - Factory background fades
+3. **Synopsys Checkmark → Test Suite**
+   - Verification checkmark splits into multiple checkmarks
+   - Single formal proof → Multiple test cases
+   - Green checkmarks (#5AAA6E) appear beside test names
+   - Establishes tests as the verification layer
+
+4. **Context Shift**
+   - Chip design background fades
    - Abstract/digital background appears
-   - Manufacturing → Software visual language
+   - Hardware synthesis → Software generation visual language
 
 ### Animation Sequence
 
 1. **Frame 0-90 (0-3s):** Setup from previous section
-   - Mold and part visible
-   - Manufacturing context
+   - Verilog code, gate-level netlist, and Synopsys checkmark visible
+   - Chip design / EDA context
 
 2. **Frame 90-240 (3-8s):** Primary morph
-   - Mold begins transforming
-   - Shape flattens, rotates
-   - Texture shifts to paper/screen
-   - Part begins stretching into lines
+   - Verilog code begins reshaping into document form
+   - Gate-level netlist stretches into software code lines
+   - Synopsys checkmark begins splitting into multiple test checkmarks
 
 3. **Frame 240-360 (8-12s):** Labels appear
    - "PROMPT" fades in on document
-   - Code text becomes readable
+   - Software code text becomes readable
+   - Test suite with green checkmarks becomes visible
    - Blue glow establishes on prompt
 
 4. **Frame 360-480 (12-16s):** Relationship established
    - Arrow or flow indicator from prompt to code
+   - Test suite positioned as verification layer
    - "generates" label (optional)
-   - Clear visual hierarchy
+   - Clear visual hierarchy: prompt -> code -> verified by tests
 
 5. **Frame 480-600 (16-20s):** Hold on final state
-   - Prompt glowing
-   - Code present but not glowing
+   - Prompt glowing (value here)
+   - Tests glowing (value here)
+   - Code present but not glowing (just output)
    - Ready for Part 3 concepts
 
 ### Visual Design: The Prompt Document
@@ -116,17 +128,17 @@ def parse_user_id(input_str):
 ### Morph Technical Details
 
 ```typescript
-const MoldToPromptMorph = ({ progress }) => {
-  // Interpolate between mold shape and document shape
-  const moldPath = "M0,0 L100,0 L100,80 L0,80 Z"; // Simplified
+const VerilogToPromptMorph = ({ progress }) => {
+  // Interpolate between Verilog code block and prompt document shape
+  const verilogPath = "M0,0 L100,0 L100,80 L0,80 Z"; // Simplified
   const docPath = "M10,10 L190,10 L190,140 L10,140 Z";
 
-  const currentPath = interpolatePath(moldPath, docPath, progress);
+  const currentPath = interpolatePath(verilogPath, docPath, progress);
 
   // Interpolate colors
   const fillColor = interpolateColors(
-    "#8A9BA8", // Steel gray
-    "#FFFFFF", // White
+    "#2A2A3E", // Dark code background
+    "#FFFFFF", // White document
     progress
   );
 
@@ -170,19 +182,27 @@ This single line lands as the transformation completes and "PROMPT" is clearly v
 
 ```typescript
 <Sequence from={0} durationInFrames={600}>
-  {/* Mold to Prompt morph */}
+  {/* Verilog to Prompt morph */}
   <Sequence from={90} durationInFrames={150}>
     <MorphAnimation
-      from={<MoldVisualization />}
+      from={<VerilogCode />}
       to={<PromptDocument />}
     />
   </Sequence>
 
-  {/* Plastic to Code morph */}
+  {/* Gate-level netlist to Software Code morph */}
   <Sequence from={90} durationInFrames={150}>
     <MorphAnimation
-      from={<PlasticPart />}
+      from={<GateLevelNetlist />}
       to={<CodeLines />}
+    />
+  </Sequence>
+
+  {/* Synopsys checkmark to Test Suite morph */}
+  <Sequence from={90} durationInFrames={150}>
+    <MorphAnimation
+      from={<SynopsysCheckmark />}
+      to={<TestSuiteCheckmarks />}
     />
   </Sequence>
 
@@ -195,6 +215,7 @@ This single line lands as the transformation completes and "PROMPT" is clearly v
   {/* Relationship indicator */}
   <Sequence from={360}>
     <FlowArrow from="prompt" to="code" />
+    <TestSuiteVerification />
   </Sequence>
 </Sequence>
 ```
@@ -203,7 +224,8 @@ This single line lands as the transformation completes and "PROMPT" is clearly v
 
 - THE pivotal visual of Part 2
 - Should feel like a revelation
-- Manufacturing → Software connection made explicit
+- Chip design synthesis → Software generation connection made explicit
+- Three parallel morphs (Verilog->prompt, netlist->code, checkmark->tests) reinforce the analogy
 - 3Blue1Brown: elegant, mathematical, satisfying transformation
 
 ## Transition

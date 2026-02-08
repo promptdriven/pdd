@@ -76,13 +76,17 @@ The sock chart morphs into the code chart:
    - **Tech debt area** fills above the large-codebase line (the real-world path)
    - **Total cost line RISES** from 25 to 33 hrs — large codebases get WORSE, not better
 
-5. **Frame 2700-3240 (90-108s):** Emphasis beat
-   - Highlight the two forked paths:
-     - Small codebase fork: 1.5 hrs — "This is what you feel"
-     - Large codebase total: 33 hrs — "This is where you actually are"
-   - Annotation near small-codebase fork: "Small codebase: -55% (Peng et al., 2023)"
-   - Annotation near large-codebase fork: "Large codebase: +19% slower (METR, 2025)"
-   - Annotation near rising total line: "Bug rate: +41% (Uplevel, 2024)"
+5. **Frame 2700-3060 (90-102s):** First annotation beat (VISUAL 9)
+   - Annotation pointing to the dropping solid line: "Individual task: -55% (GitHub, 2022)"
+     - Fine print below: "95 developers, one greenfield task"
+   - Annotation pointing to the nearly-flat dashed line: "Overall throughput: ~0% (Uplevel, 2024)"
+     - Fine print: "785 developers, one year"
+   - The contrast between these two is the key visual punch
+
+   **Frame 3060-3240 (102-108s):** Second annotation beat (VISUAL 10)
+   - Annotation pointing to the debt area: "Code churn: +44% (GitClear, 2025, 211M lines analyzed)"
+   - Annotation pointing to the widening gap: "Refactoring: -60%"
+   - The picture is getting worse, not better
 
 6. **Frame 3240-3600 (108-120s):** Crossing point
    - Generate line (3 hrs) is FAR below large-codebase total (33 hrs) — 11x cheaper
@@ -255,24 +259,35 @@ The crossing point isn't just "generate < patch." It's "patching is self-defeati
     />
   </Sequence>
 
-  {/* Emphasis: study citation annotations */}
+  {/* First annotation beat: individual vs overall (VISUAL 9) */}
   <Sequence from={2700}>
     <Annotation
-      text="Small codebase: -55% (Peng et al., 2023)"
-      position="near-small-codebase-fork"
+      text="Individual task: -55% (GitHub, 2022)"
+      subtext="95 developers, one greenfield task"
+      position="near-dropping-solid-line"
       fadeIn={30}
     />
     <Annotation
-      text="Large codebase: +19% slower (METR, 2025)"
-      position="near-large-codebase-fork"
+      text="Overall throughput: ~0% (Uplevel, 2024)"
+      subtext="785 developers, one year"
+      position="near-flat-dashed-line"
       fadeIn={30}
       delay={30}
     />
+  </Sequence>
+
+  {/* Second annotation beat: churn and refactoring (VISUAL 10) */}
+  <Sequence from={3060}>
     <Annotation
-      text="Bug rate: +41% (Uplevel, 2024)"
+      text="Code churn: +44% (GitClear, 2025, 211M lines analyzed)"
       position="near-debt-area"
       fadeIn={30}
-      delay={60}
+    />
+    <Annotation
+      text="Refactoring: -60%"
+      position="near-widening-gap"
+      fadeIn={30}
+      delay={30}
     />
   </Sequence>
 

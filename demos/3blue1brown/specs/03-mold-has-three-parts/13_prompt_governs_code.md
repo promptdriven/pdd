@@ -6,7 +6,7 @@
 
 ## Visual Description
 
-The prompt glows brightly. It's small—maybe 10-15 lines. But it governs a 200-line code file shown beside it. This visualizes the leverage: a small specification controls a large implementation.
+The prompt glows brightly. It's small -- maybe 10-15 lines. But it governs a 200-line code file shown beside it. A ratio appears: "1:5 to 1:10". This visualizes the leverage: a small specification controls a large implementation.
 
 ## Technical Specifications
 
@@ -32,7 +32,7 @@ The prompt glows brightly. It's small—maybe 10-15 lines. But it governs a 200-
 3. **Size Comparison**
    - Visual ratio emphasized
    - Arrows showing "governs" relationship
-   - "10x leverage" or similar indicator
+   - Ratio indicator: "1:5 to 1:10"
 
 4. **Dominance Indicator**
    - Prompt glows brighter
@@ -57,8 +57,8 @@ The prompt glows brightly. It's small—maybe 10-15 lines. But it governs a 200-
    - "governs" arrow or connection
    - Prompt pulses
 
-4. **Frame 270-360 (9-12s):** Leverage highlight
-   - "10-15x leverage" text appears
+4. **Frame 270-360 (9-12s):** Ratio highlight
+   - "1:5 to 1:10" ratio text appears
    - Prompt is clearly the source of truth
    - Code is derived output
 
@@ -94,9 +94,9 @@ The prompt glows brightly. It's small—maybe 10-15 lines. But it governs a 200-
 │                 │   ○ No glow (just output)         │
 │                 │                                   │
 ├─────────────────┴───────────────────────────────────┤
-│  "A good prompt is much smaller than the code       │
-│   it generates. You're specifying what and why,     │
-│   not how."                                         │
+│  Ratio: "1:5 to 1:10"                              │
+│  "A good prompt is a fifth to a tenth the size      │
+│   of the code it generates."                        │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -174,9 +174,9 @@ const PromptGovernsCode: React.FC = () => {
         />
       </div>
 
-      {/* Leverage indicator */}
-      <LeverageIndicator
-        ratio="~15x"
+      {/* Ratio indicator */}
+      <RatioIndicator
+        ratio="1:5 to 1:10"
         opacity={leverageOpacity}
       />
     </AbsoluteFill>
@@ -296,9 +296,9 @@ const CodeFileCard: React.FC<{
 
 ## Narration Sync
 
-> "A good prompt is much smaller than the code it generates. You're specifying what and why, not how."
+> "A good prompt is a fifth to a tenth the size of the code it generates. You're specifying what and why, not how. And that compression matters."
 
-The size comparison is fully visible during this narration. The leverage indicator appears as "what and why, not how" is spoken.
+The size comparison is fully visible during this narration. The "1:5 to 1:10" ratio appears as "a fifth to a tenth" is spoken.
 
 ## Audio Notes
 

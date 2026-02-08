@@ -89,10 +89,10 @@ This is the key moment. We pull back to reveal the true scope.
 
 **Left Side Zoom Out:**
 1. Start: Single file with the patched function
-2. Pull back: File tree appears - dozens of files
+2. Pull back: File tree appears - hundreds of files
 3. Continue: More files, diff markers visible throughout
 4. Reveal: Massive codebase visualization
-   - Files scattered/stacked
+   - Files everywhere, thousands of patches
    - Red diff markers everywhere
    - TODO comments floating: `// FIXME`, `// temporary`, `// don't touch`
    - Git blame colors showing patchwork history

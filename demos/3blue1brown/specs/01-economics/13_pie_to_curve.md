@@ -6,7 +6,7 @@
 
 ## Visual Description
 
-The pie chart transforms into an exponentially growing cost curve, showing how maintenance costs don't just dominate - they compound over time. The final visual punch of Part 1.
+The pie chart morphs into an exponentially growing cost curve labeled "Technical debt follows compound interest: Debt x (1 + Rate)^Time". A second, flat line appears labeled "Regeneration cost (debt resets each cycle)". The contrast between compound growth and flat reset is the final visual punch of Part 1.
 
 ## Technical Specifications
 
@@ -28,13 +28,18 @@ The pie chart elements transform into line chart elements:
 #### Chart Elements
 - **X-axis:** Time (Years 1-10)
 - **Y-axis:** "Cumulative Maintenance Cost"
-- **Curve:** Exponential growth (y = e^(0.3x) scaled)
-- **Color:** Amber (#D9944A) - same as maintenance segment
+- **Curve 1 (Technical Debt):** Exponential growth (y = e^(0.3x) scaled)
+  - Color: Amber (#D9944A) - same as maintenance segment
+  - Label: "Technical debt follows compound interest: Debt x (1 + Rate)^Time"
+- **Line 2 (Regeneration Cost):** Flat horizontal line near the bottom
+  - Color: Cool blue (#4A90D9) - same as generation color
+  - Label: "Regeneration cost (debt resets each cycle)"
+  - This line stays flat because regeneration resets the debt to zero each cycle
 
 #### Key Features
-- Curve starts shallow, becomes steep
-- Annotations at key inflection points
-- Optional: Ghost line showing "if costs were linear"
+- Exponential curve starts shallow, becomes steep
+- Flat regeneration line provides stark visual contrast
+- The growing gap between the two lines IS the argument for PDD
 
 ### Animation Sequence
 
@@ -48,14 +53,20 @@ The pie chart elements transform into line chart elements:
    - Y-axis grows upward
    - Grid lines fade in
 
-3. **Frame 150-240 (5-8s):** Curve draws
+3. **Frame 150-210 (5-7s):** Exponential curve draws
    - Starts at origin
    - Accelerates as it goes right
    - Amber color matches pie segment
+   - Label appears: "Technical debt follows compound interest: Debt x (1 + Rate)^Time"
 
-4. **Frame 240-300 (8-10s):** Final state
-   - Subtle pulse on steep portion
-   - Text: "And those costs compound."
+4. **Frame 210-260 (7-8.5s):** Regeneration line appears
+   - Flat blue line draws across near the bottom
+   - Label: "Regeneration cost (debt resets each cycle)"
+   - The contrast with the exponential curve is stark
+
+5. **Frame 260-300 (8.5-10s):** Final state
+   - Subtle pulse on steep portion of exponential curve
+   - The gap between the two lines widens visually
 
 ### Morph Technical Details
 
@@ -66,9 +77,9 @@ Using SVG path morphing:
 
 ### Typography
 
-- New title: "Cumulative Maintenance Cost" or just remove title
-- Axis labels: Simple year numbers, dollar/cost indicators
-- Closing text: "And those costs compound." (bottom, italic, fade in at end)
+- Curve label: "Technical debt follows compound interest: Debt x (1 + Rate)^Time" (near the exponential curve)
+- Regeneration label: "Regeneration cost (debt resets each cycle)" (near the flat line)
+- Axis labels: Simple year numbers, cost indicators
 
 ### Exponential Curve Formula
 
@@ -102,9 +113,9 @@ const data = [
 
 ## Narration Sync
 
-> "And those costs compound."
+> "And those costs compound—literally. Technical debt follows a compound interest curve. Unless you regenerate. Then the debt resets."
 
-This single line lands as the curve reaches its steep portion.
+The exponential curve draws as "compound" is said. The flat regeneration line appears as "regenerate" is said.
 
 ## Code Structure (Remotion)
 
@@ -127,18 +138,24 @@ This single line lands as the curve reaches its steep portion.
     />
   </Sequence>
 
-  {/* Curve draw */}
+  {/* Exponential debt curve */}
   <Sequence from={150}>
     <ExponentialCurve
       data={compoundCostData}
       color="#D9944A"
-      drawDuration={90}
+      drawDuration={60}
+      label="Technical debt follows compound interest: Debt × (1 + Rate)^Time"
     />
   </Sequence>
 
-  {/* Closing text */}
-  <Sequence from={240}>
-    <ClosingText text="And those costs compound." />
+  {/* Flat regeneration line */}
+  <Sequence from={210}>
+    <FlatLine
+      y={regenerationCost}
+      color="#4A90D9"
+      drawDuration={50}
+      label="Regeneration cost (debt resets each cycle)"
+    />
   </Sequence>
 </Sequence>
 ```
@@ -157,12 +174,12 @@ Maintain the amber (#D9944A) through the transformation:
 - Curve line is amber
 - Creates visual connection: "this IS that, just over time"
 
-## Optional Enhancement
+## Key Visual Contrast
 
-Add a faint blue "linear" reference line:
-- Shows what costs would be if they were constant
-- Makes the exponential divergence more dramatic
-- Could draw simultaneously with main curve
+The flat blue regeneration line vs. the exponential amber debt curve is the visual thesis of Part 1:
+- Patching: costs compound over time (exponential growth)
+- Regeneration: costs reset each cycle (flat line)
+- The divergence between these two lines IS the economic argument for PDD
 
 ## Transition
 

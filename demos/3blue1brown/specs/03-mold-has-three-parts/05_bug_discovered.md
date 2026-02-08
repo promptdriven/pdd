@@ -6,7 +6,7 @@
 
 ## Visual Description
 
-A bug is discovered in the generated code. Red alert indicators appear, the word "BUG" materializes. This creates the problem that Section 3.6 will solve. In the corner, a subtle terminal shows `pdd bug user_parser`.
+A bug is discovered in the generated code. Red alert indicators appear on a piece of code, and the word "BUG" materializes. This creates the problem that Section 3.6 will solve. No terminal commands are shown in this section -- the terminal (`pdd bug user_parser`) belongs to the next section (06).
 
 ## Option A: Video Primary (Preferred)
 
@@ -43,7 +43,6 @@ DURATION: 12 seconds
 ### Remotion Overlay
 - Red highlight circle around bug location
 - "BUG" label appears with alert animation
-- Terminal snippet in corner: `pdd bug user_parser`
 
 ## Option B: Full Remotion
 
@@ -58,11 +57,6 @@ DURATION: 12 seconds
    - Red pulsing circle around bug location
    - Scan line effect moving down code
    - "BUG" label materializes
-
-3. **Terminal Snippet**
-   - Bottom-right corner
-   - Shows: `$ pdd bug user_parser`
-   - Output: "Creating failing test..."
 
 ### Sample Bug Code
 
@@ -93,12 +87,7 @@ The bug: `"   "` (whitespace only) passes the `if not input_str` check but retur
    - Pulsing animation
    - "BUG" label fades in above
 
-4. **Frame 270-360 (9-12s):** Terminal appears
-   - Corner terminal fades in
-   - `pdd bug user_parser` visible
-   - "Creating failing test..." output
-
-5. **Frame 360-450 (12-15s):** Hold
+4. **Frame 270-450 (9-15s):** Hold
    - Bug clearly highlighted
    - Problem established
    - Ready for solution
@@ -125,14 +114,6 @@ const BugDiscovered: React.FC = () => {
     { extrapolateRight: 'clamp' }
   );
 
-  // Terminal visibility
-  const terminalOpacity = interpolate(
-    frame,
-    [270, 300],
-    [0, 1],
-    { extrapolateRight: 'clamp' }
-  );
-
   // Bug label pulse
   const bugPulse = Math.sin(frame * 0.15) * 0.1 + 1;
 
@@ -146,11 +127,6 @@ const BugDiscovered: React.FC = () => {
         line={4}
       />
       <BugLabel opacity={bugHighlight} scale={bugPulse} />
-      <TerminalSnippet
-        opacity={terminalOpacity}
-        command="pdd bug user_parser"
-        output="Creating failing test..."
-      />
     </AbsoluteFill>
   );
 };
@@ -182,10 +158,6 @@ const BugDiscoveredHybrid: React.FC = () => {
           position={{ x: 420, y: 220 }}
         />
       </Sequence>
-
-      <Sequence from={270}>
-        <TerminalSnippet position="bottom-right" />
-      </Sequence>
     </AbsoluteFill>
   );
 };
@@ -196,7 +168,6 @@ const BugDiscoveredHybrid: React.FC = () => {
 - Bug highlight: Red (#D94A4A)
 - Code background: Dark (#1E1E2E)
 - Code text: Syntax highlighted
-- Terminal: Dark gray background, green text
 
 ### Easing
 
@@ -215,13 +186,11 @@ The bug highlight appears as "bug" is spoken, creating visual emphasis.
 
 - Subtle "scan" sound during analysis
 - Alert/warning tone when bug is found
-- Soft terminal keystroke sounds
 
 ## Visual Style Notes
 
 - Red is used sparingly but effectively
 - This is a PROBLEM that needs solving
-- Terminal command is subtle, not center stage
 - Build tension for the "add a wall" solution
 
 ## Transition

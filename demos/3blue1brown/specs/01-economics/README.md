@@ -7,7 +7,7 @@ This section establishes the economic argument for PDD by drawing a parallel bet
 | Section | File | Tool | Duration | Description |
 |---------|------|------|----------|-------------|
 | 1.1 | `01_sock_price_chart.md` | Remotion | ~20s | Animated line chart: sock cost vs labor over time |
-| 1.2 | `02_threshold_highlight.md` | Remotion | ~10s | Highlight the 1970s crossing point |
+| 1.2 | `02_threshold_highlight.md` | Remotion | ~10s | Highlight the 1960-65 crossing point |
 | 1.3 | `03_lines_diverge.md` | Remotion | ~15s | Lines diverge dramatically by 2020 |
 | 1.4 | `04_code_cost_chart.md` | Remotion | ~20s | Morph to code cost chart (generate vs patch vs debt) |
 | 1.5 | `05_ai_milestones.md` | Remotion | ~15s | AI models marked on falling "generate" line |

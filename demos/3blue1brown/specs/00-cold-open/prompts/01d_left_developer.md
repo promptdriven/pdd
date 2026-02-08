@@ -21,7 +21,7 @@
 
 A slow, cinematic dolly zoom pulling back from the developer at his desk. What begins as a simple scene of one person with one code file gradually reveals overwhelming complexity.
 
-As the camera pulls back: multiple browser tabs and code files appear, then dozens of files become visible. Red and green diff markers scatter throughout the codebase. Floating text labels appear - "TODO", "FIXME", "// temporary fix", "// don't touch this", "// legacy (2019)".
+As the camera pulls back: multiple browser tabs and code files appear, then hundreds of files become visible with thousands of patches. Files everywhere. Red and green diff markers scatter throughout the codebase. Floating text labels appear - "TODO", "FIXME", "// temporary fix", "// don't touch this", "// legacy (2019)".
 
 Tangled dependency lines connect files like a web. The developer becomes smaller and smaller in the frame, dwarfed by the massive accumulated technical debt surrounding him.
 
@@ -32,7 +32,7 @@ Tangled dependency lines connect files like a web. The developer becomes smaller
 ```
 Slow cinematic dolly zoom out. Starting close on 32-year-old male developer at desk - short dark brown hair, stubble, black-framed glasses, navy hoodie. Single code file on monitor.
 
-Camera steadily pulls back revealing increasing complexity. Multiple windows and tabs appear. Then dozens of code files visible. Red and green diff markers scattered throughout.
+Camera steadily pulls back revealing increasing complexity. Multiple windows and tabs appear. Then hundreds of code files visible with thousands of patches. Files everywhere. Red and green diff markers scattered throughout.
 
 Floating comment labels appear in space: "TODO", "FIXME", "// temporary fix", "// don't touch this", "// legacy". Tangled dependency lines connecting files like a web.
 
@@ -74,6 +74,7 @@ Vertical 9:16 framing. Cinematic, photorealistic, 4K.
 
 ## Visual Elements to Reveal
 
+- Files everywhere, thousands of patches visible
 - Multiple code file windows/icons
 - File tree with nested folders
 - Red/green diff markers (git-style)

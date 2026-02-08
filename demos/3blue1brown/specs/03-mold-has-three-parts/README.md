@@ -12,15 +12,19 @@ Total runtime: ~5.5 minutes.
 | 3.2 | `02_walls_illuminate.md` | Remotion | ~15s | Test walls light up with labels |
 | 3.3 | `03_liquid_injection.md` | Remotion | ~15s | Code generation flows, constrained by walls |
 | 3.4 | `04_focus_single_wall.md` | Remotion | ~10s | Closeup: liquid hits "null→None" wall |
+| 3.4a | `04a_research_annotations.md` | Remotion | ~15s | CodeRabbit/DORA citations, walls glow brighter |
 | 3.5 | `05_bug_discovered.md` | **Hybrid** | ~15s | Red alert on code, "BUG" label |
 | 3.6 | `06_add_test_wall.md` | Remotion | ~20s | New wall materializes, `pdd bug` shown |
 | 3.7 | `07_code_regenerates.md` | Remotion | ~15s | Code regenerates, `pdd fix` shown |
 | 3.8 | `08_ratchet_timelapse.md` | Remotion | ~25s | Time-lapse wall accumulation, ratchet click |
 | 3.9 | `09_traditional_vs_pdd.md` | Remotion | ~15s | Split screen comparison |
+| 3.9a | `09a_z3_smt_sidebar.md` | Remotion | ~20s | Z3/Synopsys sidebar: "Same math." |
+| 3.9b | `09b_formal_verification_comparison.md` | Remotion | ~25s | Formal verification side-by-side comparison |
 | 3.10 | `10_injection_nozzle.md` | Remotion | ~15s | Prompt capital intro, nozzle highlights |
 | 3.11 | `11_prompt_text_flows.md` | Remotion | ~15s | Prompt text flows + `user_parser.prompt` visible |
 | 3.12 | `12_prompt_variations.md` | Remotion | ~15s | Same prompt → different valid outputs |
 | 3.13 | `13_prompt_governs_code.md` | Remotion | ~15s | Small prompt governs 200-line file |
+| 3.13a | `13a_context_window_comparison.md` | Remotion | ~20s | Prompts vs raw code in context window |
 | 3.14 | `14_grounding_panel.md` | Remotion | ~15s | Material properties panel |
 | 3.15 | `15_grounding_comparison.md` | Remotion | ~20s | OOP vs Functional split |
 | 3.16 | `16_grounding_database.md` | Remotion | ~15s | Success flows to grounding database |
@@ -29,7 +33,7 @@ Total runtime: ~5.5 minutes.
 
 ## Tool Distribution
 
-**Remotion (17 sections):** Abstract animations, diagrams, flows, technical visualizations
+**Remotion (21 sections):** Abstract animations, diagrams, flows, technical visualizations
 **Hybrid (1 section):** Bug discovery - video base with Remotion overlay
 
 ## Key Metaphor Mapping
@@ -104,9 +108,8 @@ Total runtime: ~5.5 minutes.
 
 | Timestamp | Section | Command Shown |
 |-----------|---------|---------------|
-| ~11:35 | 05 - Bug discovered | `pdd bug user_parser` |
-| ~11:55 | 06 - Add test wall | "Creating failing test..." output |
-| ~12:10 | 07 - Code regenerates | `pdd fix user_parser` |
+| ~11:45 | 06 - Add test wall | `pdd bug user_parser` → "Creating failing test..." |
+| ~12:10 | 07 - Code regenerates | `pdd fix user_parser` → "All tests passing" |
 | ~12:25 | 08 - Ratchet timelapse | `pdd test` with scrolling output |
 | ~13:00 | 11 - Prompt flows | `user_parser.prompt` visible |
 | ~13:30 | 12 - Variations | `pdd generate user_parser.prompt` (twice) |
@@ -121,9 +124,10 @@ Total runtime: ~5.5 minutes.
 - Clean split-screen for traditional vs PDD comparison
 - Subtle terminal overlays in bottom-right corner
 
-## Missing Spec Coverage
+## Spec Coverage
 
-The following main script content in Part 3 does not yet have corresponding spec files:
-- **Z3/SMT Formal Verification Sidebar (lines 277-285):** Synopsys Formality logo + Z3 logo, side-by-side comparison of hardware FEC vs PDD formal verification, mathematical proof visualization
-- **Context Window Comparison (lines 304-308):** Two context windows side by side--code-filled (15,000 tokens, noisy) vs prompt-filled (ten modules, clean natural language)
-- **Research Citations Visual (lines 249-251):** CodeRabbit and DORA annotations on the mold walls
+All main script VISUAL blocks in Part 3 now have corresponding spec files. The following were added to fill previous gaps:
+- **3.4a** `04a_research_annotations.md` -- VISUAL #5: CodeRabbit/DORA research citations next to mold walls
+- **3.9a** `09a_z3_smt_sidebar.md` -- VISUAL #11: Z3/Synopsys Formality sidebar ("Same math.")
+- **3.9b** `09b_formal_verification_comparison.md` -- VISUAL #12: Formal verification side-by-side comparison
+- **3.13a** `13a_context_window_comparison.md` -- VISUAL #17: Prompts vs raw code context window comparison

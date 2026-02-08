@@ -10,7 +10,7 @@
 ```
 Split screen video continuous, vertical white line divider in center. Camera begins slow cinematic dolly zoom pulling back on both sides simultaneously at identical pace.
 
-LEFT HALF ZOOMING OUT: Starting from developer at desk with single code file, camera pulls back to reveal increasingly complex scene - multiple browser tabs and code files appear, then dozens of files visible, red and green diff markers scattered throughout codebase, floating text labels reading "TODO", "FIXME", "// temporary fix", "// don't touch this" appearing throughout, tangled dependency lines connecting files, the developer becoming smaller in frame as massive software project complexity is revealed, overwhelming accumulation of patches and technical debt visible.
+LEFT HALF ZOOMING OUT: Starting from developer at desk with single code file, camera pulls back to reveal increasingly complex scene - multiple browser tabs and code files appear, then hundreds of files visible with thousands of patches, red and green diff markers scattered throughout codebase, floating text labels reading "TODO", "FIXME", "// temporary fix", "// don't touch this" appearing throughout, files everywhere, tangled dependency lines connecting files, the developer becoming smaller in frame as massive software project complexity is revealed, overwhelming accumulation of patches and technical debt visible.
 
 RIGHT HALF ZOOMING OUT: Starting from grandmother with single repaired sock, camera pulls back to reveal - more mended items on table, then drawer or basket opens or becomes visible containing dozens of carefully repaired garments, socks with multiple visible patch areas in different thread colors, shirts with elbow patches, trousers with knee reinforcements, the grandmother becoming smaller in frame surrounded by lifetime of accumulated repair work, mending basket overflowing.
 
@@ -24,7 +24,7 @@ Cinematic, photorealistic, 4K, smooth camera movement with ease-in-out, professi
 ## Concise Version
 
 ```
-Split screen slow zoom out on both sides simultaneously. Left: pulls back from developer to reveal massive complex codebase, dozens of files, TODO and FIXME comments floating, diff markers everywhere, tangled dependencies, developer small amid digital chaos. Right: pulls back from grandmother to reveal overflowing mending basket, dozens of patched socks and clothes, lifetime of repairs, grandmother small amid piles of mended garments. Synchronized dolly out, melancholic weight of accumulated work. Cinematic, photorealistic.
+Split screen slow zoom out on both sides simultaneously. Left: pulls back from developer to reveal massive complex codebase, files everywhere with thousands of patches, TODO and FIXME comments floating, diff markers everywhere, tangled dependencies, developer small amid digital chaos. Right: pulls back from grandmother to reveal overflowing mending basket, dozens of patched socks and clothes, lifetime of repairs, grandmother small amid piles of mended garments. Synchronized dolly out, melancholic weight of accumulated work. Cinematic, photorealistic.
 ```
 
 ---
@@ -32,7 +32,7 @@ Split screen slow zoom out on both sides simultaneously. Left: pulls back from d
 ## Left Side Only (If Compositing)
 
 ```
-Slow cinematic dolly zoom out starting from software developer at desk with single code file on monitor, camera steadily pulls back revealing increasingly complex software project - multiple windows and tabs appear, then dozens of code files visible, red and green diff markers scattered throughout, floating comment labels "TODO" "FIXME" "// temporary fix" "// don't touch this" "// legacy" appearing in space, tangled dependency graph lines connecting files, overwhelming technical debt visualization, developer figure becoming progressively smaller in frame surrounded by massive accumulated codebase complexity.
+Slow cinematic dolly zoom out starting from software developer at desk with single code file on monitor, camera steadily pulls back revealing increasingly complex software project - multiple windows and tabs appear, then hundreds of code files visible with thousands of patches, files everywhere, red and green diff markers scattered throughout, floating comment labels "TODO" "FIXME" "// temporary fix" "// don't touch this" "// legacy" appearing in space, tangled dependency graph lines connecting files, overwhelming technical debt visualization, developer figure becoming progressively smaller in frame surrounded by massive accumulated codebase complexity.
 
 Smooth continuous zoom out over 14 seconds, ease-in at start ease-out at end, cool blue lighting throughout, sense of overwhelming accumulated work, slightly melancholic tone. Cinematic, photorealistic, 4K.
 ```
@@ -104,6 +104,7 @@ Avoid: Jerky camera movement, fast zoom, harsh transitions, happy upbeat mood, c
 ## Visual Reference Notes
 
 **Left Side Accumulated Elements:**
+- Files everywhere, thousands of patches
 - Multiple code file windows/icons
 - File tree with many nested folders
 - Red/green diff markers (git-style)

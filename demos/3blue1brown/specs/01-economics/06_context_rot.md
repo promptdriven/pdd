@@ -72,19 +72,23 @@ This section explains the mechanism behind the fork the viewer just saw in the c
 ### Part 3: The Consequence (30-45s)
 
 **Frame 900-1020 (30-34s):** Show the degradation in action
-- Split view: Left = what AI puts in context, Right = what's actually relevant
-- Mismatch visualization: Some relevant code is OUTSIDE the window
-- Some irrelevant code is INSIDE the window
+- Inside the tiny window: some blocks highlighted red — irrelevant code the AI grabbed
+- Outside the window: green-highlighted blocks showing code that was actually needed but couldn't be seen
 
-**Frame 1020-1140 (34-38s):** Return to the chart
+**Frame 1020-1110 (34-37s):** Performance vs. Context Length graph inset
+- A subtle graph inset appears: "Performance vs. Context Length"
+- Line drops steadily from left to right
+- Label: "Even with perfect retrieval, performance degrades 14-85% as context grows (EMNLP, 2025)"
+- This is a small overlay, not a full chart transition
+
+**Frame 1110-1230 (37-41s):** Return to the chart
 - Zoom back out to show full chart with the fork visible
-- The large-codebase fork's "Context Rot" layer now pulses slightly
-- The small-codebase fork glows faintly below — a reminder of what's possible at small scale
-- Annotation: "Faster patching = faster growth = faster rot"
+- The "Context Rot" layer in the debt area pulses
+- Annotation: "Faster patching → faster growth → faster rot"
 
-**Frame 1140-1350 (38-45s):** Setup for the solution
-- The "Generate" line pulses
-- Small annotation appears: "Regeneration: always starts small, always fits"
+**Frame 1230-1350 (41-45s):** Setup for the solution
+- The "Generate" line pulses with emphasis
+- Small annotation appears: "Small modules. Clear prompts. Always fits in context."
 - Hold for transition to crossing point
 
 ## Visual Elements
@@ -179,28 +183,35 @@ This section explains the mechanism behind the fork the viewer just saw in the c
 
   {/* Part 3: Consequence and return */}
   <Sequence from={900} durationInFrames={450}>
-    {/* Mismatch visualization */}
+    {/* Inside window: red irrelevant, outside: green needed */}
     <Sequence from={0} durationInFrames={120}>
-      <SplitView
-        left={<ContextContents label="What AI sees" />}
-        right={<RelevantCode label="What's actually needed" />}
+      <ContextWindow>
+        <IrrelevantCodeHighlight color="red" inside={true} />
+        <NeededCodeHighlight color="green" outside={true} />
+      </ContextWindow>
+    </Sequence>
+
+    {/* Performance vs Context Length graph inset */}
+    <Sequence from={120} durationInFrames={90}>
+      <GraphInset
+        title="Performance vs. Context Length"
+        data={performanceVsContextLength}
+        label="Even with perfect retrieval, performance degrades 14-85% as context grows (EMNLP, 2025)"
       />
-      <MismatchHighlight />
     </Sequence>
 
-    {/* Return to chart — fork visible */}
-    <Sequence from={120} durationInFrames={120}>
+    {/* Return to chart — Context Rot layer pulses */}
+    <Sequence from={210} durationInFrames={120}>
       <ZoomOutToChart showFork={true} />
-      <PulsingLayer layer="contextRot" target="large-codebase-fork" />
-      <GlowingLine line="small-codebase-fork" opacity={0.4} />
-      <Annotation text="Faster patching = faster growth = faster rot" />
+      <PulsingLayer layer="contextRot" />
+      <Annotation text="Faster patching → faster growth → faster rot" />
     </Sequence>
 
-    {/* Setup solution */}
-    <Sequence from={240} durationInFrames={210}>
+    {/* Setup solution — generate line pulses */}
+    <Sequence from={330} durationInFrames={120}>
       <PulsingLine line="generate" color="#4A90D9" />
       <Annotation
-        text="Regeneration: always starts small, always fits"
+        text="Small modules. Clear prompts. Always fits in context."
         position="near-generate-line"
       />
     </Sequence>

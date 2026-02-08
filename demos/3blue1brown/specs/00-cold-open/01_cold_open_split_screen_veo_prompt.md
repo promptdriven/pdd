@@ -11,7 +11,7 @@ RIGHT SIDE: 1950s elderly woman in warm lamplight, cozy domestic interior, sitti
 
 Both sides complete their tasks at exactly the same moment. Synchronized timing.
 
-Camera slowly pulls back on both sides simultaneously to reveal: LEFT shows dozens of code files and complex software project, RIGHT shows basket full of mended clothes and repaired garments.
+Camera slowly pulls back on both sides simultaneously to reveal: LEFT shows files everywhere with thousands of patches in a massive complex software project, RIGHT shows basket full of mended clothes and repaired garments.
 
 Cinematic, smooth camera movement, 4K quality, photorealistic, soft focus on backgrounds, sharp focus on hands and work.
 ```
@@ -49,7 +49,7 @@ Both tasks complete at precisely the same moment - synchronized parallel action.
 ```
 Split screen continuous, camera begins slow cinematic pull-back zoom on both sides simultaneously.
 
-LEFT SIDE REVEALS: Zooming out from single code file to show massive software project - dozens of file icons and code windows scattered across screen, red and green diff markers visible throughout, floating text comments reading "TODO" and "FIXME" and "temporary fix", complex tangled dependency lines connecting files, overwhelming accumulation of patches and fixes, developer now small in frame surrounded by digital complexity.
+LEFT SIDE REVEALS: Zooming out from single code file to show massive software project - files everywhere, hundreds of file icons and code windows scattered across screen with thousands of patches, red and green diff markers visible throughout, floating text comments reading "TODO" and "FIXME" and "temporary fix", complex tangled dependency lines connecting files, overwhelming accumulation of patches and fixes, developer now small in frame surrounded by digital complexity.
 
 RIGHT SIDE REVEALS: Zooming out from single sock to show overflowing mending basket - dozens of carefully repaired garments piling up, socks with multiple visible patch areas, shirts with elbow patches, trousers with reinforced knees, drawer or basket full of accumulated repair work, grandmother now small in frame surrounded by lifetime of careful mending.
 
@@ -124,7 +124,7 @@ Split screen continuous, left: code edit completes with green highlight, develop
 
 **Shot 3:**
 ```
-Split screen slow zoom out, left reveals massive codebase with dozens of files and TODO comments, right reveals basket full of mended clothes, both sides showing accumulated repair work, cinematic dolly out, melancholic tone
+Split screen slow zoom out, left reveals massive codebase with files everywhere and thousands of patches plus TODO comments, right reveals basket full of mended clothes, both sides showing accumulated repair work, cinematic dolly out, melancholic tone
 ```
 
 **Shot 4:**

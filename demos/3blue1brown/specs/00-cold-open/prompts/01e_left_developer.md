@@ -17,7 +17,7 @@
 
 ## Scene Description
 
-A static wide shot holding on the final zoomed-out composition. The full complexity of the software codebase fills the frame - dozens of code files and windows, red and green diff markers, floating TODO and FIXME labels, tangled dependency lines.
+A static wide shot holding on the final zoomed-out composition. The full complexity of the software codebase fills the frame - files everywhere with thousands of patches, red and green diff markers, floating TODO and FIXME labels, tangled dependency lines.
 
 The developer sits small in the lower portion of the frame, dwarfed by the accumulated technical debt. Subtle ambient animation: occasional warning icon flickering, cursor blinking, perhaps a new lint error appearing.
 
@@ -28,7 +28,7 @@ The weight of endless maintenance work is palpable. Contemplative, melancholic m
 ## Veo Prompt
 
 ```
-Static wide shot of complex software codebase visualization filling the frame. Dozens of code file windows and icons scattered throughout. Red and green diff markers. Floating text labels: "TODO", "FIXME", "// temporary fix", "// don't touch this". Tangled dependency lines connecting elements.
+Static wide shot of complex software codebase visualization filling the frame. Files everywhere with thousands of patches. Red and green diff markers. Floating text labels: "TODO", "FIXME", "// temporary fix", "// don't touch this". Tangled dependency lines connecting elements.
 
 32-year-old male developer figure small in lower portion of frame - dark brown hair, glasses, navy hoodie. Surrounded by accumulated digital complexity.
 

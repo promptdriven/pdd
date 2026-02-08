@@ -6,7 +6,7 @@
 
 ## Visual Description
 
-The "cost to generate" line crosses below the "total cost to patch (large codebase)" line. This is the key moment — the equivalent of the sock threshold, but for code. The crossing is especially dramatic because the lines move in **opposite directions**: generate plunges while large-codebase total cost rises. Scissors closing from both sides. Highlight with pulsing "We are here" label.
+The blue "cost to generate" line crosses below the dashed "total cost" line, then keeps going, crossing below even the solid "immediate patch cost" line. This is the key moment — the equivalent of the sock threshold, but for code. The crossing is especially dramatic because generation cost has fallen below both lines — not just the debt-laden total, but even the bare cost of a single patch. Highlight with pulsing "We are here." label.
 
 ## Technical Specifications
 
@@ -22,29 +22,34 @@ The "cost to generate" line crosses below the "total cost to patch (large codeba
    - Return to full chart view
    - All milestones still visible but smaller
 
-2. **Crossing Point Marker**
-   - Circle at intersection of generate line and large-codebase total cost line (~2022-2023, where generate drops from 28→15 and total rises from 27→30)
-   - Color: White with blue glow (#4A90D9)
-   - Size: 25px radius
+2. **First Crossing: Generate crosses below dashed "total cost" line**
+   - Generate line visibly dips below the dashed total cost line
+   - Brief pulse at the intersection
+
+3. **Second Crossing: Generate crosses below solid "immediate patch cost" line**
+   - Generate line continues falling, crossing below even the solid amber immediate patch line
+   - This is the dramatic moment — generation is now cheaper than even a single patch
+   - Crossing point marker: Circle, white with blue glow (#4A90D9), 25px radius
    - Stronger pulse effect than sock chart (this is the KEY moment)
 
-3. **Label: "We are here."**
-   - Position: Below and right of crossing point
+4. **Label: "We are here."**
+   - Position: Below and right of the second crossing point
    - Font: Sans-serif bold, 28pt
    - Color: White
    - Period included (definitive statement)
    - Subtle underline or emphasis
 
-4. **Arrow/Pointer**
+5. **Arrow/Pointer**
    - Points from label to crossing point
    - Animated drawing
 
 ### Animation Sequence
 
 1. **Frame 0-60 (0-2s):** Zoom out from milestone view
-2. **Frame 60-90 (2-3s):** Crossing point marker appears
-   - Dramatic entrance with radial burst
-3. **Frame 90-150 (3-5s):** First strong pulse
+2. **Frame 60-90 (2-3s):** Generate line crosses below dashed "total cost" line
+   - Brief pulse at first intersection
+3. **Frame 90-150 (3-5s):** Generate line continues falling, crosses below solid "immediate" line
+   - Dramatic entrance with radial burst at second crossing point
 4. **Frame 150-210 (5-7s):** Label fades in: "We are here."
 5. **Frame 210-300 (7-10s):** Continued pulsing, hold
 
@@ -83,16 +88,24 @@ The "cost to generate" line crosses below the "total cost to patch (large codeba
     />
   </Sequence>
 
-  {/* Crossing point: generate vs large-codebase total cost */}
+  {/* First crossing: generate crosses below dashed total cost */}
   <Sequence from={60}>
     <CrossingPointMarker
-      x={crossingX}  // generate ∩ totalCostToPatch_largeCodebase (~2022-2023)
-      y={crossingY}
+      x={crossingX_total}  // generate ∩ totalCostToPatch (dashed line)
+      y={crossingY_total}
+      pulseColor="#4A90D9"
+      pulseIntensity="medium"
+    />
+  </Sequence>
+
+  {/* Second crossing: generate crosses below solid immediate line */}
+  <Sequence from={90}>
+    <CrossingPointMarker
+      x={crossingX_immediate}  // generate ∩ immediatePatchCost (solid line)
+      y={crossingY_immediate}
       pulseColor="#4A90D9"
       pulseIntensity="high"
     />
-    {/* Small-codebase fork visible as contrast */}
-    <GlowingLine line="small-codebase-fork" opacity={0.3} />
   </Sequence>
 
   {/* Label */}
@@ -115,8 +128,8 @@ The "cost to generate" line crosses below the "total cost to patch (large codeba
 
 - This is THE key moment of Part 1
 - Should feel like a revelation, but mathematically grounded
-- The crossing is more dramatic with the fork: generate is falling while large-codebase total is rising — opposite trajectories make the gap widen visibly
-- The small-codebase fork visible below reminds the viewer: for small modules, both costs are already low — regeneration wins either way
+- The double crossing is the visual punch: generate crosses below the dashed total cost line first, then keeps going to cross below even the solid immediate line
+- This shows generation is now cheaper than patching by ANY measure — not just when you include debt
 - The pulsing should draw attention without being cheesy
 - "We are here." period is important - it's a statement, not a question
 

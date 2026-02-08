@@ -6,7 +6,7 @@
 
 ## Visual Description
 
-Return to the split screen from the cold open, but now both sides are slightly faded and sepia-toned, framing them as "historical" - both represent outdated approaches.
+Split screen with developer and grandmother side by side. Both are working efficiently — this isn't dismissive of their tools. The framing should respect their skill and competence.
 
 ## Veo 3.1 Prompt
 
@@ -17,11 +17,11 @@ LEFT SIDE: Modern developer at a desk with multiple monitors. Cursor IDE or VS C
 
 RIGHT SIDE: 1950s grandmother sitting by a lamp, carefully darning a wool sock with a needle. Warm incandescent lighting. Period-appropriate clothing and furniture. Careful, precise hand movements.
 
-STYLE: Both sides have a sepia/faded vintage tone applied, as if viewing a historical photograph or old film. Slightly desaturated. The framing suggests "this is how things used to be done."
+STYLE: Both sides show skilled professionals working efficiently. Slightly desaturated with warm tones. The framing is respectful and parallel — both are competent at what they do.
 
 CAMERA: Static shot, both subjects centered in their respective frames. Medium shot showing upper body and hands.
 
-MOOD: Nostalgic but slightly critical - these are both skilled techniques that economics has made obsolete.
+MOOD: Both subjects are working efficiently and with skill. This is NOT dismissive — these are excellent tools being used well. The parallel is respectful.
 
 DURATION: 15 seconds
 NO DIALOGUE, NO TEXT OVERLAYS

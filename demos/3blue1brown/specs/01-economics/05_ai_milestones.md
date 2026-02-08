@@ -6,7 +6,7 @@
 
 ## Visual Description
 
-Key AI model releases appear as markers on the "cost to generate" line. Each milestone pushes the line lower — but the drops are **not equal**. Early models cause small dips; the real plunge begins in mid-2024.
+Key AI model releases appear as markers on the "cost to generate" line. Each milestone pushes the line lower — but the drops are **not equal**. The line barely dips at Codex (2021-2022), then plunges steeply starting at GPT-4/Claude (2023).
 
 ## Technical Specifications
 
@@ -26,7 +26,7 @@ Zoom in on the 2020-2025 section of the chart:
 | Model | Date | Color | Icon | Drop Size | Evidence |
 |-------|------|-------|------|-----------|---------|
 | Codex / Copilot | 2021 | Blue | Circle | **Small** | Autocomplete only, ~43% accuracy on first try, local scope |
-| GPT-4 | Mar 2023 | Purple | Circle | **Moderate** | ~80% HumanEval, but only ~4% SWE-bench (real-world bugs) |
+| GPT-4 | Mar 2023 | Purple | Circle | **Large** | ~80% HumanEval, but only ~4% SWE-bench (real-world bugs) — marks start of steep plunge |
 | Claude 3.5 Sonnet | Jun 2024 | Orange | Circle | **Large** | 92% HumanEval, 49% SWE-bench Verified, #1 on Coding Arena |
 | Claude 3.7 Sonnet | Feb 2025 | Orange | Circle | **Moderate** | 70.3% SWE-bench Verified, extended thinking |
 | Frontier models | Late 2025 | Multi | Cluster | **Moderate** | 77-81% SWE-bench (Opus 4.5, GPT 5.2, Gemini 3) |
@@ -68,7 +68,7 @@ The drop sizes reflect measured capability progression:
    - Line drops a **small step** — autocomplete era
 3. **Frame 150-240 (5-8s):** GPT-4 marker appears (Mar 2023)
    - Label: "GPT-4"
-   - Line drops a **moderate step** — first capable model, but limited real-world impact
+   - Line drops a **large step** — marks the start of the steep plunge
 4. **Frame 240-330 (8-11s):** Claude 3.5 Sonnet marker appears (Jun 2024)
    - **Largest visual impact** — marker is slightly bigger, impact ring expands further
    - Label: "Claude 3.5 Sonnet"
@@ -101,8 +101,8 @@ The drop sizes reflect measured capability progression:
 
 - Zoom: `easeInOutCubic`
 - Marker pop-in: `spring({ damping: 12, stiffness: 200 })`
-- Small drops: `easeOutQuad`, duration 20 frames
-- Large drop (Claude 3.5 Sonnet): `easeOutQuad`, duration 40 frames — slower fall emphasizes magnitude
+- Small drops (Codex): `easeOutQuad`, duration 20 frames
+- Large drops (GPT-4, Claude 3.5 Sonnet): `easeOutQuad`, duration 40 frames — slower fall emphasizes magnitude
 
 ## Narration Sync
 
@@ -138,7 +138,7 @@ The narration from Section 1.4 continues:
       name="GPT-4"
       year={2023}
       color="#8B5CF6"
-      dropSize="moderate"
+      dropSize="large"
     />
   </Sequence>
 
@@ -177,8 +177,9 @@ The narration from Section 1.4 continues:
 ## Visual Style Notes
 
 - This should feel like an **uneven staircase descent** — not equal steps
-- Early drops (2021-2023) are incremental: autocomplete, then basic code generation
-- The **mid-2024 drop is the cliff** — Claude 3.5 Sonnet changed what AI coding could actually do
+- Codex (2021) is a small dip: autocomplete era, limited impact
+- GPT-4/Claude (2023) marks the start of the steep plunge — this is where generation cost begins falling dramatically
+- Claude 3.5 Sonnet (mid-2024) continues the steep descent as the biggest single step
 - The late-2025 cluster shows competitive convergence — multiple companies reaching similar capability
 - Clean, informative, data-driven — not promotional for any specific company
 
