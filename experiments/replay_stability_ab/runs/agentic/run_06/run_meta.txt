@@ -1,0 +1,4 @@
+arm=agentic
+run_id=06
+created_utc=2026-02-08T00:38:46Z
+workspace=/Users/gregtanaka/Documents/pdd_cloud/pdd/examples/replay_stability_ab/runs/agentic/run_06/workspace

@@ -1,0 +1,12 @@
+Create a Python module `src/user_id_parser.py` with function:
+
+`parse_user_id(raw: object) -> str | None`
+
+Requirements:
+1. Accept string input in the form `"user:<id>"`.
+2. Accept dict input in the form `{"user_id": "<id>"}`.
+3. Return `<id>` with surrounding whitespace trimmed.
+4. Return `None` for invalid input.
+5. Do not raise exceptions for expected bad input types.
+
+Keep implementation small and readable.
