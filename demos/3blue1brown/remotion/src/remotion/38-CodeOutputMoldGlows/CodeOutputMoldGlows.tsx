@@ -195,20 +195,21 @@ export const CodeOutputMoldGlows: React.FC<CodeOutputMoldGlowsPropsType> = ({
         >
           <div
             style={{
-              fontSize: 24,
+              fontSize: 32,
               color: COLORS.LABEL_GRAY,
               opacity: message1Opacity,
               marginBottom: 12,
             }}
           >
-            The code is output.
+            The code is just plastic.
           </div>
           <div
             style={{
-              fontSize: 28,
+              fontSize: 36,
               color: COLORS.LABEL_WHITE,
               fontWeight: "bold",
               opacity: message2Opacity,
+              textShadow: `0 0 20px ${COLORS.NOZZLE_BLUE}, 0 0 20px ${COLORS.WALLS_AMBER}, 0 0 20px ${COLORS.GROUNDING_GREEN}`,
             }}
           >
             The mold is what matters.

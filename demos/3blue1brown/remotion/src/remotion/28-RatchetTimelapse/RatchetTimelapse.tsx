@@ -17,9 +17,9 @@ export const RatchetTimelapse: React.FC<RatchetTimelapsePropsType> = ({
 
   // Calculate how many walls are visible during timelapse
   const wallCount = frame < BEATS.TIMELAPSE_START
-    ? 3 // Start with 3 walls
+    ? 5 // Start with 5 walls
     : Math.min(
-        3 + Math.floor((frame - BEATS.TIMELAPSE_START) / BEATS.WALL_ACCUMULATION_RATE),
+        5 + Math.floor((frame - BEATS.TIMELAPSE_START) / BEATS.WALL_ACCUMULATION_RATE),
         maxWalls
       );
 

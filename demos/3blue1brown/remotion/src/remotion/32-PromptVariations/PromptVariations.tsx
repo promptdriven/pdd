@@ -30,14 +30,7 @@ export const PromptVariations: React.FC<PromptVariationsPropsType> = ({
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
 
-  const variation3Opacity = interpolate(
-    frame,
-    [BEATS.VARIATION_3_START, BEATS.VARIATION_3_START + 40],
-    [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-  );
-
-  const variationOpacities = [variation1Opacity, variation2Opacity, variation3Opacity];
+  const variationOpacities = [variation1Opacity, variation2Opacity];
 
   // Insight
   const insightOpacity = interpolate(
@@ -97,7 +90,7 @@ export const PromptVariations: React.FC<PromptVariationsPropsType> = ({
             marginTop: 20,
           }}
         >
-          {[0, 1, 2].map((i) => (
+          {[0, 1].map((i) => (
             <div
               key={i}
               style={{
@@ -188,21 +181,12 @@ export const PromptVariations: React.FC<PromptVariationsPropsType> = ({
               marginBottom: 12,
             }}
           >
-            Same prompt, different outputs
-          </div>
-          <div
-            style={{
-              fontSize: 18,
-              color: COLORS.LABEL_GRAY,
-              fontFamily: "sans-serif",
-            }}
-          >
-            Without tests, which one is correct?
+            Code varies. Behavior is fixed.
           </div>
         </div>
       )}
 
-      {/* Question mark */}
+      {/* Green checkmarks on both versions */}
       {insightOpacity > 0 && (
         <div
           style={{
@@ -210,12 +194,13 @@ export const PromptVariations: React.FC<PromptVariationsPropsType> = ({
             bottom: 60,
             left: "50%",
             transform: "translateX(-50%)",
-            fontSize: 48,
-            color: COLORS.NOZZLE_BLUE,
+            fontSize: 18,
+            color: "#4CAF50",
             opacity: insightOpacity,
+            fontFamily: "sans-serif",
           }}
         >
-          ?
+          ✓ All tests pass
         </div>
       )}
     </AbsoluteFill>

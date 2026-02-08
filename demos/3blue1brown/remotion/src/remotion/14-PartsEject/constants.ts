@@ -38,7 +38,7 @@ export const COLORS = {
   PART_AMBER: "#D9944A",
   PART_AMBER_LIGHT: "#e8b070",
   COUNTER_WHITE: "#ffffff",
-  COUNTER_GLOW: "rgba(74, 144, 217, 0.8)",
+  COUNTER_GLOW: "rgba(74, 144, 217, 0.5)",
   LABEL_GRAY: "#888888",
   STREAM_AMBER: "#D9944A",
 };

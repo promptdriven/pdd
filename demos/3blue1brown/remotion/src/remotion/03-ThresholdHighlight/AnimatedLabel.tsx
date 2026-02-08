@@ -82,7 +82,7 @@ export const AnimatedLabel: React.FC<AnimatedLabelProps> = ({
           transform: "translate(-50%, -50%)",
           opacity: labelOpacity,
           fontFamily: "Inter, system-ui, sans-serif",
-          fontSize: 28,
+          fontSize: 24,
           fontWeight: 700,
           color: COLORS.MARKER,
           textShadow: `0 0 20px ${COLORS.PULSE_GLOW}, 0 2px 10px rgba(0,0,0,0.8)`,

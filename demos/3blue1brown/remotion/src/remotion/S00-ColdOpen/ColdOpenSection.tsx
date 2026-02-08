@@ -24,7 +24,7 @@ export const ColdOpenSection: React.FC<ColdOpenSectionPropsType> = () => {
   }
 
   return (
-    <AbsoluteFill style={{ backgroundColor: "#0a0a1a" }}>
+    <AbsoluteFill style={{ backgroundColor: "#1a1a2e" }}>
       {/* Narration audio */}
       <Audio src={staticFile("cold_open_narration.wav")} />
 
@@ -83,7 +83,7 @@ export const ColdOpenSection: React.FC<ColdOpenSectionPropsType> = () => {
               filter: `blur(${interpolate(frame - BEATS.VISUAL_03_START, [10, 25], [0, 8], { extrapolateLeft: "clamp", extrapolateRight: "clamp" })}px)`,
             }}>
               <div style={{ background: "#1E1E2E", padding: 24, borderRadius: 12, border: "1px solid #E74C3C", width: 700 }}>
-                <pre style={{ fontSize: 14, fontFamily: "'JetBrains Mono', monospace", color: "#8a9caf", margin: 0, lineHeight: 1.6 }}>{`def process_data(input):\n    # TODO: fix edge case\n    data = input.strip()  # patched\n    if len(data) > MAX:\n        data = data[:MAX]  # hotfix #2847\n    return validate(data)  # patched`}</pre>
+                <pre style={{ fontSize: 14, fontFamily: "'JetBrains Mono', monospace", color: "#8a9caf", margin: 0, lineHeight: 1.6 }}>{`def parse_user_input(raw_input, context=None, legacy=False):\n    # patched: handle None input (hotfix 2024-01)\n    if raw_input is None:\n        return default_response(context)\n    data = raw_input.strip()\n    # workaround for unicode edge case\n    if legacy:\n        data = data.encode('ascii', 'ignore').decode()\n    # TODO: this whole block needs refactoring\n    if context and context.get('strict'):\n        validated = _strict_validate(data)\n    else:\n        validated = _loose_validate(data)  # don't remove -- breaks downstream\n    return validated`}</pre>
               </div>
             </div>
             {/* New clean code - fades in */}
@@ -94,8 +94,8 @@ export const ColdOpenSection: React.FC<ColdOpenSectionPropsType> = () => {
               transform: "translate(-50%, -50%)",
               opacity: interpolate(frame - BEATS.VISUAL_03_START, [18, 30], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" }),
             }}>
-              <div style={{ background: "#1E1E2E", padding: 24, borderRadius: 12, border: "1px solid #4CAF50", boxShadow: `0 0 ${interpolate(frame - BEATS.VISUAL_03_START, [28, 38], [0, 20], { extrapolateLeft: "clamp", extrapolateRight: "clamp" })}px #4CAF50`, width: 700 }}>
-                <pre style={{ fontSize: 14, fontFamily: "'JetBrains Mono', monospace", color: "#8a9caf", margin: 0, lineHeight: 1.6 }}>{`def process_data(input):\n    cleaned = sanitize(input)\n    validated = enforce_constraints(cleaned)\n    return validated`}</pre>
+              <div style={{ background: "#1E1E2E", padding: 24, borderRadius: 12, border: "1px solid #333", width: 700 }}>
+                <pre style={{ fontSize: 14, fontFamily: "'JetBrains Mono', monospace", color: "#8a9caf", margin: 0, lineHeight: 1.6 }}>{`def parse_user_input(raw_input, context=None):\n    if raw_input is None:\n        return None\n    cleaned = raw_input.strip()\n    if not cleaned:\n        return None\n    return validate_and_normalize(cleaned, context)`}</pre>
               </div>
             </div>
             {/* Terminal indicator */}
@@ -105,10 +105,10 @@ export const ColdOpenSection: React.FC<ColdOpenSectionPropsType> = () => {
               right: 60,
               opacity: interpolate(frame - BEATS.VISUAL_03_START, [25, 35], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" }),
               fontFamily: "'JetBrains Mono', monospace",
-              fontSize: 18,
-              color: "#4CAF50",
+              fontSize: 12,
+              color: "#E0E0E0",
             }}>
-              $ pdd generate
+              $ pdd generate user_parser
             </div>
           </AbsoluteFill>
         </Sequence>
@@ -126,8 +126,8 @@ export const ColdOpenSection: React.FC<ColdOpenSectionPropsType> = () => {
               transform: "translate(-50%, -50%)",
               opacity: 0.25,
             }}>
-              <div style={{ background: "#1E1E2E", padding: 24, borderRadius: 12, border: "1px solid #4CAF50", width: 700 }}>
-                <pre style={{ fontSize: 14, fontFamily: "'JetBrains Mono', monospace", color: "#8a9caf", margin: 0, lineHeight: 1.6 }}>{`def process_data(input):\n    cleaned = sanitize(input)\n    validated = enforce_constraints(cleaned)\n    return validated`}</pre>
+              <div style={{ background: "#1E1E2E", padding: 24, borderRadius: 12, border: "1px solid #333", width: 700 }}>
+                <pre style={{ fontSize: 14, fontFamily: "'JetBrains Mono', monospace", color: "#8a9caf", margin: 0, lineHeight: 1.6 }}>{`def parse_user_input(raw_input, context=None):\n    if raw_input is None:\n        return None\n    cleaned = raw_input.strip()\n    if not cleaned:\n        return None\n    return validate_and_normalize(cleaned, context)`}</pre>
               </div>
             </div>
             {/* Title text fading in */}
@@ -137,16 +137,17 @@ export const ColdOpenSection: React.FC<ColdOpenSectionPropsType> = () => {
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              opacity: interpolate(frame - BEATS.VISUAL_04_START, [0, 20], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" }),
+              opacity: interpolate(frame - BEATS.VISUAL_04_START, [0, 60], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" }),
             }}>
               <h1 style={{
-                fontFamily: "'SF Pro Display', 'Helvetica Neue', sans-serif",
+                transform: `translateY(${interpolate(frame - BEATS.VISUAL_04_START, [0, 60], [20, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" })}px)`,
+                fontFamily: "Inter, system-ui, sans-serif",
                 fontSize: 72,
-                fontWeight: 700,
-                color: "#ffffff",
-                letterSpacing: -1,
+                fontWeight: 600,
+                color: "#F8F4F0",
+                letterSpacing: "0.02em",
                 margin: 0,
-                textShadow: "0 0 40px rgba(0,0,0,0.8)",
+                textShadow: "0 0 60px rgba(74, 144, 217, 0.15), 0 0 40px rgba(0,0,0,0.8)",
               }}>
                 Prompt-Driven Development
               </h1>

@@ -121,7 +121,7 @@ export const MoldToPrompt: React.FC<MoldToPromptPropsType> = ({
               letterSpacing: 0.5,
             }}
           >
-            This is Prompt-Driven Development.
+            This is that same transition. For software.
           </div>
         </div>
       )}

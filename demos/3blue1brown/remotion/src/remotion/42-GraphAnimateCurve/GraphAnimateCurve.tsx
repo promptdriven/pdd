@@ -248,7 +248,7 @@ const PrecisionGraphStatic: React.FC = () => {
         transform="rotate(-90, 100, 400)"
         textAnchor="middle"
       >
-        Prompt Complexity
+        Required Prompt Precision
       </text>
       {/* X-axis label */}
       <text
@@ -266,7 +266,7 @@ const PrecisionGraphStatic: React.FC = () => {
       <path
         d={curvePath}
         fill="none"
-        stroke={COLORS.CURVE_CYAN}
+        stroke={COLORS.CURVE_BLUE}
         strokeWidth={3}
         opacity={0.8}
       />

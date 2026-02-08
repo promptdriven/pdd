@@ -30,7 +30,12 @@ export const COLORS = {
 };
 
 // Prompt text that flows
-export const PROMPT_TEXT = "Parse user ID from untrusted input. Return None for invalid.";
+export const PROMPT_TEXT_LINES = [
+  "Parse user IDs from untrusted input.",
+  "Return None on failure, never throw.",
+  "Handle unicode.",
+];
+export const PROMPT_TEXT = PROMPT_TEXT_LINES.join("\n");
 
 // Props schema
 export const PromptTextFlowsProps = z.object({

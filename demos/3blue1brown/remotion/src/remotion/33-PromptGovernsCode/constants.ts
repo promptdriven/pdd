@@ -74,13 +74,13 @@ export const CODE_PREVIEW = `def parse_user_id(input_str: str) -> Optional[str]:
 
 // Props schema
 export const PromptGovernsCodeProps = z.object({
-  promptLineCount: z.number().default(4),
-  codeLineCount: z.number().default(30),
+  promptLineCount: z.number().default(12),
+  codeLineCount: z.number().default(200),
 });
 
 export const defaultPromptGovernsCodeProps: z.infer<typeof PromptGovernsCodeProps> = {
-  promptLineCount: 4,
-  codeLineCount: 30,
+  promptLineCount: 12,
+  codeLineCount: 200,
 };
 
 export type PromptGovernsCodePropsType = z.infer<typeof PromptGovernsCodeProps>;

@@ -25,7 +25,7 @@ export const BEATS = {
 // Color palette
 export const COLORS = {
   BACKGROUND: "#1a1a2e",
-  BUG_RED: "#E74C3C",
+  BUG_RED: "#D94A4A",
   CODE_GRAY: "#8a9caf",
   WALLS_AMBER: "#D9944A",
   LABEL_WHITE: "#ffffff",

@@ -14,7 +14,7 @@ export const BEATS = {
   PROMPT_END: 60,
   VARIATION_1_START: 90,
   VARIATION_2_START: 180,
-  VARIATION_3_START: 270,
+  DIFF_HIGHLIGHT_START: 270,
   INSIGHT_START: 420,
   HOLD_START: 540,
 };
@@ -33,21 +33,16 @@ export const BASE_PROMPT = "Parse user ID from input";
 
 export const VARIATIONS = [
   {
-    label: "Run 1",
-    code: `def parse_user_id(s):
-    return s.strip() if s else None`,
-  },
-  {
-    label: "Run 2",
+    label: "Version A",
     code: `def parse_user_id(input_str):
     if not input_str:
         return None
     return input_str.strip()`,
   },
   {
-    label: "Run 3",
-    code: `def parse_user_id(value):
-    cleaned = (value or "").strip()
+    label: "Version B",
+    code: `def parse_user_id(raw_input):
+    cleaned = (raw_input or "").strip()
     return cleaned or None`,
   },
 ];

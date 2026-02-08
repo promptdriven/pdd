@@ -26,7 +26,7 @@ export const Part5CompoundReturns: React.FC<Part5CompoundReturnsPropsType> = () 
   }
 
   return (
-    <AbsoluteFill style={{ backgroundColor: "#0a0a1a" }}>
+    <AbsoluteFill style={{ backgroundColor: "#1a1a2e" }}>
       {/* Narration audio */}
       <Audio src={staticFile("part5_compound_narration.wav")} />
 

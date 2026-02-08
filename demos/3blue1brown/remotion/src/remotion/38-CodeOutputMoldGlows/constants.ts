@@ -28,7 +28,7 @@ export const COLORS = {
   NOZZLE_BLUE: "#4A90D9",
   WALLS_AMBER: "#D9944A",
   GROUNDING_GREEN: "#5AAA6E",
-  CODE_GRAY: "#8a9caf",
+  CODE_GRAY: "#A0A0A0",
   CODE_GLOW: "rgba(138, 156, 175, 0.5)",
   LABEL_WHITE: "#ffffff",
   LABEL_GRAY: "#888888",

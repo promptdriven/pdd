@@ -24,7 +24,7 @@ export const ClosingSection: React.FC<ClosingSectionPropsType> = () => {
   }
 
   return (
-    <AbsoluteFill style={{ backgroundColor: "#0a0a1a" }}>
+    <AbsoluteFill style={{ backgroundColor: "#1a1a2e" }}>
       {/* Narration audio */}
       <Audio src={staticFile("closing_narration.wav")} />
 

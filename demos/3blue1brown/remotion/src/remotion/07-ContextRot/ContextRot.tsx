@@ -363,7 +363,7 @@ export const ContextRot: React.FC<ContextRotPropsType> = ({
                 textAlign: "center",
               }}
             >
-              Faster patching = faster growth = faster rot
+              Faster patching → faster growth → faster rot
             </div>
           )}
 
@@ -388,7 +388,7 @@ export const ContextRot: React.FC<ContextRotPropsType> = ({
                 textAlign: "center",
               }}
             >
-              Regeneration: always starts small, always fits
+              Small modules. Clear prompts. Always fits in context.
             </div>
           )}
 
