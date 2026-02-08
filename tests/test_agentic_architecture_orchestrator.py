@@ -877,8 +877,15 @@ contexts:
 
         success, msg, cost, model, files = run_agentic_architecture_orchestrator(**base_args)
 
-        # Should complete but Step 11 validation should have failed at least once
+        # Step 11 validation should have detected the wrong include path
         assert step11_validation_count["value"] >= 1, "Step 11 validation should have been called"
+
+        # Verify orchestrator triggered fix+retry flow after INVALID
+        labels = [kwargs.get("label", "") for _, kwargs in mocks["run"].call_args_list]
+        step11_fix_labels = [l for l in labels if "step11_fix" in l]
+        assert len(step11_fix_labels) >= 1, (
+            f"Orchestrator should trigger step11_fix after INVALID, got labels: {labels}"
+        )
 
     def test_step11_passes_with_correct_include_paths(self, mock_dependencies, base_args):
         """
@@ -950,8 +957,10 @@ contexts:
         # Should succeed
         assert success is True
 
-        # All 11 steps should have run (no retries needed)
-        assert mocks["run"].call_count == 11
+        # All main steps should have run without any fix/retry steps
+        labels = [kwargs.get("label", "") for _, kwargs in mocks["run"].call_args_list]
+        assert any("step11" in l for l in labels), "Step 11 should have run"
+        assert not any("_fix" in l for l in labels), "No fix steps should have been triggered"
 
     def test_step11_handles_multiple_wrong_include_paths(self, mock_dependencies, base_args):
         """
@@ -1044,5 +1053,12 @@ INCLUDE PATH ERROR in prompts/routes_Python.prompt: 'src/context/routes_example.
 
         success, msg, cost, model, files = run_agentic_architecture_orchestrator(**base_args)
 
-        # Should complete but Step 11 validation should have failed
+        # Step 11 validation should have detected the wrong include paths
         assert step11_validation_count["value"] >= 1, "Step 11 validation should have been called and detected errors"
+
+        # Verify orchestrator triggered fix+retry flow after INVALID
+        labels = [kwargs.get("label", "") for _, kwargs in mocks["run"].call_args_list]
+        step11_fix_labels = [l for l in labels if "step11_fix" in l]
+        assert len(step11_fix_labels) >= 1, (
+            f"Orchestrator should trigger step11_fix after INVALID, got labels: {labels}"
+        )
