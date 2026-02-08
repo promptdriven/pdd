@@ -60,7 +60,7 @@ export const Part2ParadigmShift: React.FC<Part2ParadigmShiftPropsType> = () => {
 
       {/* Visual 2: PartsEject - Make mold once, unlimited parts, refine once all i */}
       {activeVisual === 2 && (
-        <Sequence from={BEATS.VISUAL_02_START} durationInFrames={BEATS.VISUAL_02_END - BEATS.VISUAL_02_START}>
+        <Sequence from={BEATS.VISUAL_02_START}>
           <PartsEject {...defaultPartsEjectProps} />
         </Sequence>
       )}
@@ -79,21 +79,21 @@ export const Part2ParadigmShift: React.FC<Part2ParadigmShiftPropsType> = () => {
 
       {/* Visual 4: PerfectParts - Fix the mold, fix applies to every future part */}
       {activeVisual === 4 && (
-        <Sequence from={BEATS.VISUAL_04_START} durationInFrames={BEATS.VISUAL_04_END - BEATS.VISUAL_04_START}>
+        <Sequence from={BEATS.VISUAL_04_START}>
           <PerfectParts {...defaultPerfectPartsProps} />
         </Sequence>
       )}
 
       {/* Visual 5: ValueAura - Real shift: migration of where value lives */}
       {activeVisual === 5 && (
-        <Sequence from={BEATS.VISUAL_05_START} durationInFrames={BEATS.VISUAL_05_END - BEATS.VISUAL_05_START}>
+        <Sequence from={BEATS.VISUAL_05_START}>
           <ValueAura {...defaultValueAuraProps} />
         </Sequence>
       )}
 
       {/* Visual 6: PlasticRegenerates - Molding value in specification, disposable, regene */}
       {activeVisual === 6 && (
-        <Sequence from={BEATS.VISUAL_06_START} durationInFrames={BEATS.VISUAL_06_END - BEATS.VISUAL_06_START}>
+        <Sequence from={BEATS.VISUAL_06_START}>
           <PlasticRegenerates {...defaultPlasticRegeneratesProps} />
         </Sequence>
       )}
@@ -112,35 +112,35 @@ export const Part2ParadigmShift: React.FC<Part2ParadigmShiftPropsType> = () => {
 
       {/* Visual 8: MoldToPrompt - 1980s drew gates by hand, moved to Verilog in 1985 */}
       {activeVisual === 8 && (
-        <Sequence from={BEATS.VISUAL_08_START} durationInFrames={BEATS.VISUAL_08_END - BEATS.VISUAL_08_START}>
+        <Sequence from={BEATS.VISUAL_08_START}>
           <MoldToPrompt {...defaultMoldToPromptProps} />
         </Sequence>
       )}
 
       {/* Visual 9: MoldToPrompt - Synthesis non-deterministic, different gates every */}
       {activeVisual === 9 && (
-        <Sequence from={BEATS.VISUAL_09_START} durationInFrames={BEATS.VISUAL_09_END - BEATS.VISUAL_09_START}>
+        <Sequence from={BEATS.VISUAL_09_START}>
           <MoldToPrompt {...defaultMoldToPromptProps} />
         </Sequence>
       )}
 
       {/* Visual 10: MoldToPrompt - Synopsys wrapped verification, SAT/SMT proof, same */}
       {activeVisual === 10 && (
-        <Sequence from={BEATS.VISUAL_10_START} durationInFrames={BEATS.VISUAL_10_END - BEATS.VISUAL_10_START}>
+        <Sequence from={BEATS.VISUAL_10_START}>
           <MoldToPrompt {...defaultMoldToPromptProps} />
         </Sequence>
       )}
 
       {/* Visual 11: MoldToPrompt - By 1990 schematic, mid-90s half switched, all use  */}
       {activeVisual === 11 && (
-        <Sequence from={BEATS.VISUAL_11_START} durationInFrames={BEATS.VISUAL_11_END - BEATS.VISUAL_11_START}>
+        <Sequence from={BEATS.VISUAL_11_START}>
           <MoldToPrompt {...defaultMoldToPromptProps} />
         </Sequence>
       )}
 
       {/* Visual 12: PromptGeneratesCode - Same transition for software, prompt is mold, test */}
       {activeVisual === 12 && (
-        <Sequence from={BEATS.VISUAL_12_START} durationInFrames={BEATS.VISUAL_12_END - BEATS.VISUAL_12_START}>
+        <Sequence from={BEATS.VISUAL_12_START}>
           <PromptGeneratesCode {...defaultPromptGeneratesCodeProps} />
         </Sequence>
       )}

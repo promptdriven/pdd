@@ -32,7 +32,7 @@ export const ClosingSection: React.FC<ClosingSectionPropsType> = () => {
       
       {/* Visual 0: CodeOutputMoldGlows - So here's the mental shift */}
       {activeVisual === 0 && (
-        <Sequence from={BEATS.VISUAL_00_START} durationInFrames={BEATS.VISUAL_00_END - BEATS.VISUAL_00_START}>
+        <Sequence from={BEATS.VISUAL_00_START}>
           <CodeOutputMoldGlows {...defaultCodeOutputMoldGlowsProps} />
         </Sequence>
       )}
@@ -51,28 +51,28 @@ export const ClosingSection: React.FC<ClosingSectionPropsType> = () => {
 
       {/* Visual 2: CodeOutputMoldGlows - Code just got that cheap */}
       {activeVisual === 2 && (
-        <Sequence from={BEATS.VISUAL_02_START} durationInFrames={BEATS.VISUAL_02_END - BEATS.VISUAL_02_START}>
+        <Sequence from={BEATS.VISUAL_02_START}>
           <CodeOutputMoldGlows {...defaultCodeOutputMoldGlowsProps} />
         </Sequence>
       )}
 
       {/* Visual 3: ThreeComponents - Prompts encode intent, tests preserve, grounding m */}
       {activeVisual === 3 && (
-        <Sequence from={BEATS.VISUAL_03_START} durationInFrames={BEATS.VISUAL_03_END - BEATS.VISUAL_03_START}>
+        <Sequence from={BEATS.VISUAL_03_START}>
           <ThreeComponents {...defaultThreeComponentsProps} />
         </Sequence>
       )}
 
       {/* Visual 4: CodeOutputMoldGlows - Code is generated verified and disposable */}
       {activeVisual === 4 && (
-        <Sequence from={BEATS.VISUAL_04_START} durationInFrames={BEATS.VISUAL_04_END - BEATS.VISUAL_04_START}>
+        <Sequence from={BEATS.VISUAL_04_START}>
           <CodeOutputMoldGlows {...defaultCodeOutputMoldGlowsProps} />
         </Sequence>
       )}
 
       {/* Visual 5: CodeOutputMoldGlows - The code is just plastic, the mold is what matters */}
       {activeVisual === 5 && (
-        <Sequence from={BEATS.VISUAL_05_START} durationInFrames={BEATS.VISUAL_05_END - BEATS.VISUAL_05_START}>
+        <Sequence from={BEATS.VISUAL_05_START}>
           <CodeOutputMoldGlows {...defaultCodeOutputMoldGlowsProps} />
         </Sequence>
       )}

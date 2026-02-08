@@ -34,35 +34,35 @@ export const Part5CompoundReturns: React.FC<Part5CompoundReturnsPropsType> = () 
       
       {/* Visual 0: GraphAnimateCurve - Let's talk about compound returns */}
       {activeVisual === 0 && (
-        <Sequence from={BEATS.VISUAL_00_START} durationInFrames={BEATS.VISUAL_00_END - BEATS.VISUAL_00_START}>
+        <Sequence from={BEATS.VISUAL_00_START}>
           <GraphAnimateCurve {...defaultGraphAnimateCurveProps} />
         </Sequence>
       )}
 
       {/* Visual 1: GraphAnimateCurve - Patch code local returns, 1.7x issues, risks more  */}
       {activeVisual === 1 && (
-        <Sequence from={BEATS.VISUAL_01_START} durationInFrames={BEATS.VISUAL_01_END - BEATS.VISUAL_01_START}>
+        <Sequence from={BEATS.VISUAL_01_START}>
           <GraphAnimateCurve {...defaultGraphAnimateCurveProps} />
         </Sequence>
       )}
 
       {/* Visual 2: GraphAnimateCurve - Returns linear at best, cost compounding, 1.52T an */}
       {activeVisual === 2 && (
-        <Sequence from={BEATS.VISUAL_02_START} durationInFrames={BEATS.VISUAL_02_END - BEATS.VISUAL_02_START}>
+        <Sequence from={BEATS.VISUAL_02_START}>
           <GraphAnimateCurve {...defaultGraphAnimateCurveProps} />
         </Sequence>
       )}
 
       {/* Visual 3: ShortPromptTests - PDD test returns compound, constrains future, perm */}
       {activeVisual === 3 && (
-        <Sequence from={BEATS.VISUAL_03_START} durationInFrames={BEATS.VISUAL_03_END - BEATS.VISUAL_03_START}>
+        <Sequence from={BEATS.VISUAL_03_START}>
           <ShortPromptTests {...defaultShortPromptTestsProps} />
         </Sequence>
       )}
 
       {/* Visual 4: BothGenerateFinal - Every mold investment compounds, patching diminish */}
       {activeVisual === 4 && (
-        <Sequence from={BEATS.VISUAL_04_START} durationInFrames={BEATS.VISUAL_04_END - BEATS.VISUAL_04_START}>
+        <Sequence from={BEATS.VISUAL_04_START}>
           <BothGenerateFinal {...defaultBothGenerateFinalProps} />
         </Sequence>
       )}
@@ -93,7 +93,7 @@ export const Part5CompoundReturns: React.FC<Part5CompoundReturnsPropsType> = () 
 
       {/* Visual 7: CrossingPoint - Economics changed, rational becomes darning socks */}
       {activeVisual === 7 && (
-        <Sequence from={BEATS.VISUAL_07_START} durationInFrames={BEATS.VISUAL_07_END - BEATS.VISUAL_07_START}>
+        <Sequence from={BEATS.VISUAL_07_START}>
           <CrossingPoint {...defaultCrossingPointProps} />
         </Sequence>
       )}

@@ -66,13 +66,17 @@ SECTIONS = {
             # [VISUAL: Lines diverge dramatically. By 2020, socks essentially free]
             (3, 5, "LinesDiverge", "Mid-1960s math flipped, darning became irrational"),
             # [VISUAL: Transition to similar chart for code]
-            (6, 6, "CodeCostChart", "Now look at code"),
+            # frameOffset=540: skip morph phase, show established chart with axes
+            (6, 6, "CodeCostChart", "Now look at code", 540),
             # [VISUAL: Key dates on falling generate line: Codex, GPT-4, Claude]
             (7, 10, "AIMilestones", "For decades generating expensive, you patched, rational"),
             # [VISUAL: Post-2020, amber patch line drops; AI made patching faster]
-            (11, 16, "CodeCostChart", "AI made patching faster too, Cursor Claude Copilot"),
+            # frameOffset=2280: skip to last 14s of fork drawing where cubic easing
+            # shows visible motion (fork ~65% → 100% complete in available window)
+            (11, 16, "CodeCostChart", "AI made patching faster too, Cursor Claude Copilot", 2280),
             # [VISUAL: Focus on immediate patch line dropping]
-            (17, 18, "CodeCostChartMini", "Each patch getting faster, that's real, you feel it"),
+            # frameOffset=938: skip to HIGHLIGHT_PATCH phase where patch line drops are visible
+            (17, 18, "CodeCostChartMini", "Each patch getting faster, that's real, you feel it", 938),
             # [VISUAL: Camera pulls back, debt EXPANDS, dashed total cost barely moves]
             (19, 22, "CrossingPoint", "But watch dashed line, debt accumulates faster"),
             # [VISUAL: Annotations: GitHub 55%, Uplevel 0%, 41% more bugs]
@@ -80,15 +84,21 @@ SECTIONS = {
             # [VISUAL: Annotations: GitClear +44% churn, -60% refactoring]
             (34, 39, "CrossingPoint", "GitClear 44% churn, refactoring -60%, piling on"),
             # [VISUAL: Zoom into debt area: Code Complexity + Context Rot layers]
+            # ContextRot is 45s (1350 frames). Progressive offsets create continuous
+            # animation across 5 segments instead of restarting each time.
             (40, 41, "ContextRot", "Something else hiding in debt, AI-specific"),
             # [VISUAL: Context window over small codebase, covers ~80%]
-            (42, 47, "ContextRot", "Small codebase AI brilliant, context covers everything"),
+            # offset=240: continues from where V10's 8s left off (layer separation → small grid)
+            (42, 47, "ContextRot", "Small codebase AI brilliant, context covers everything", 240),
             # [VISUAL: Codebase grid grows, context window stays same size]
-            (48, 51, "ContextRot", "Codebases grow, window stays same, millions of tokens"),
+            # offset=630: continues into codebase growth animation (grid expanding)
+            (48, 51, "ContextRot", "Codebases grow, window stays same, millions of tokens", 630),
             # [VISUAL: Red/green blocks: irrelevant inside, needed outside window]
-            (52, 59, "ContextRot", "AI guesses relevance, vector search fails, agentic slow"),
+            # offset=1020: consequence section (split view, mismatch visualization)
+            (52, 59, "ContextRot", "AI guesses relevance, vector search fails, agentic slow", 1020),
             # [VISUAL: Performance vs Context Length graph, degrades 14-85%]
-            (60, 68, "ContextRot", "EMNLP: performance degrades with length, context rot"),
+            # offset=1350: final resolved state (holds consequence view)
+            (60, 68, "ContextRot", "EMNLP: performance degrades with length, context rot", 1350),
             # [VISUAL: Patch line FORKS: small codebase down, large stays flat]
             (69, 72, "CrossingPoint", "AI patching two stories, small codebase transformative"),
             # [VISUAL: Large-codebase flat, METR 19% slower, 39-point gap]
@@ -104,7 +114,8 @@ SECTIONS = {
             # [VISUAL: Split screen: Developer with Cursor / Grandma with needle]
             (104, 107, "veo:07_split_screen_sepia", "Best darning needles ever, still accumulation"),
             # [VISUAL: Pie chart: Initial Dev 10-20%, Maintenance 80-90%]
-            (108, 113, "PieChart", "80-90% cost is maintenance, McKinsey Stripe tech debt"),
+            # frameOffset=60: skip 2s FADE_OUT intro that shows black
+            (108, 113, "PieChart", "80-90% cost is maintenance, McKinsey Stripe tech debt", 60),
             # [VISUAL: Pie morphs to compound interest curve, regeneration flat]
             (114, 116, "PieToCurve", "Costs compound literally, unless you regenerate"),
         ],
@@ -347,7 +358,8 @@ def generate_constants(section_key: str) -> str:
 
     # Build BEATS entries from visual sequence
     beats_lines = []
-    for i, (seg_start, seg_end, comp_id, desc) in enumerate(section["visual_sequence"]):
+    for i, entry in enumerate(section["visual_sequence"]):
+        seg_start, seg_end, comp_id, desc = entry[0], entry[1], entry[2], entry[3]
         # Get timestamp from the first segment in the range
         start_time = segments[seg_start]["start"] if seg_start < len(segments) else 0
         end_time = segments[min(seg_end, len(segments) - 1)]["end"] if seg_end < len(segments) else duration
@@ -390,7 +402,7 @@ export const BEATS = {{
 
 // Visual sequence: maps BEATS ranges to composition IDs
 export const VISUAL_SEQUENCE = [
-{chr(10).join(f'  {{ start: BEATS.VISUAL_{i:02d}_START, end: BEATS.VISUAL_{i:02d}_END, id: "{comp_id}", desc: "{desc[:60]}" }},' for i, (_, _, comp_id, desc) in enumerate(section["visual_sequence"]))}
+{chr(10).join(f'  {{ start: BEATS.VISUAL_{i:02d}_START, end: BEATS.VISUAL_{i:02d}_END, id: "{entry[2]}", desc: "{entry[3][:60]}" }},' for i, entry in enumerate(section["visual_sequence"]))}
 ];
 
 // Props schema
@@ -418,7 +430,8 @@ def generate_component(section_key: str) -> str:
     has_title = False
     has_code_regen = False
     has_title_over_code = False
-    for _, _, comp_id, _ in section["visual_sequence"]:
+    for entry in section["visual_sequence"]:
+        comp_id = entry[2]
         if comp_id.startswith("veo:"):
             has_veo = True
         elif comp_id.startswith("title:"):
@@ -446,7 +459,9 @@ def generate_component(section_key: str) -> str:
 
     # Build visual switch cases
     switch_cases = []
-    for i, (_, _, comp_id, desc) in enumerate(section["visual_sequence"]):
+    for i, entry in enumerate(section["visual_sequence"]):
+        comp_id, desc = entry[2], entry[3]
+        frame_offset = entry[4] if len(entry) > 4 else 0
         if comp_id.startswith("veo:"):
             veo_file = comp_id.replace("veo:", "")
             switch_cases.append(f'''
@@ -579,11 +594,30 @@ def generate_component(section_key: str) -> str:
         else:
             default_props = COMPOSITION_IMPORTS[comp_id][2] if comp_id in COMPOSITION_IMPORTS else None
             props_spread = f" {{...{default_props}}}" if default_props else ""
-            switch_cases.append(f'''
+            # Override props for components with internal audio (suppress in sections)
+            # NOTE: single braces here — f-string doesn't re-interpret braces inside
+            # variable values, so {false} passes through literally to the JSX output
+            SECTION_PROP_OVERRIDES = {
+                "CodeCostChartMini": " showAudio={false}",
+            }
+            extra_props = SECTION_PROP_OVERRIDES.get(comp_id, "")
+            if frame_offset > 0:
+                # Wrap in inner Sequence with negative from to skip ahead in animation
+                switch_cases.append(f'''
       {{/* Visual {i}: {comp_id} - {desc[:50]} */}}
       {{activeVisual === {i} && (
-        <Sequence from={{BEATS.VISUAL_{i:02d}_START}} durationInFrames={{BEATS.VISUAL_{i:02d}_END - BEATS.VISUAL_{i:02d}_START}}>
-          <{comp_id}{props_spread} />
+        <Sequence from={{BEATS.VISUAL_{i:02d}_START}}>
+          <Sequence from={{-{frame_offset}}}>
+            <{comp_id}{props_spread}{extra_props} />
+          </Sequence>
+        </Sequence>
+      )}}''')
+            else:
+                switch_cases.append(f'''
+      {{/* Visual {i}: {comp_id} - {desc[:50]} */}}
+      {{activeVisual === {i} && (
+        <Sequence from={{BEATS.VISUAL_{i:02d}_START}}>
+          <{comp_id}{props_spread}{extra_props} />
         </Sequence>
       )}}''')
 

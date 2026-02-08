@@ -85,10 +85,12 @@ export const BEATS = {
 // Props schema
 export const CodeCostChartMiniProps = z.object({
   showTitle: z.boolean().default(true),
+  showAudio: z.boolean().default(true),
 });
 
 export const defaultCodeCostChartMiniProps: z.infer<typeof CodeCostChartMiniProps> = {
   showTitle: true,
+  showAudio: true,
 };
 
 export type CodeCostChartMiniPropsType = z.infer<typeof CodeCostChartMiniProps>;

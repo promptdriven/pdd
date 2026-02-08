@@ -233,6 +233,7 @@ const AnimatedArea: React.FC<{
 // ══════════════════════════════════════════════════════════════════════
 export const CodeCostChartMini: React.FC<CodeCostChartMiniPropsType> = ({
   showTitle = true,
+  showAudio = true,
 }) => {
   const frame = useCurrentFrame();
   const { width, height } = useVideoConfig();
@@ -358,8 +359,8 @@ export const CodeCostChartMini: React.FC<CodeCostChartMiniPropsType> = ({
         background: `linear-gradient(180deg, ${COLORS.BACKGROUND} 0%, ${COLORS.BACKGROUND_GRADIENT_END} 100%)`,
       }}
     >
-      {/* Narration audio */}
-      <Audio src={staticFile("codecostchart_narration.wav")} />
+      {/* Narration audio (suppressed when used in section compositions) */}
+      {showAudio && <Audio src={staticFile("codecostchart_narration.wav")} />}
 
       {/* Title */}
       {showTitle && (

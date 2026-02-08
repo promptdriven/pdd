@@ -71,35 +71,35 @@ export const Part4PrecisionTradeoff: React.FC<Part4PrecisionTradeoffPropsType> =
 
       {/* Visual 3: PrecisionGraph - This maps directly to PDD */}
       {activeVisual === 3 && (
-        <Sequence from={BEATS.VISUAL_03_START} durationInFrames={BEATS.VISUAL_03_END - BEATS.VISUAL_03_START}>
+        <Sequence from={BEATS.VISUAL_03_START}>
           <PrecisionGraph {...defaultPrecisionGraphProps} />
         </Sequence>
       )}
 
       {/* Visual 4: LongPrompt - Few tests prompt specifies everything, edge cases, */}
       {activeVisual === 4 && (
-        <Sequence from={BEATS.VISUAL_04_START} durationInFrames={BEATS.VISUAL_04_END - BEATS.VISUAL_04_START}>
+        <Sequence from={BEATS.VISUAL_04_START}>
           <LongPrompt {...defaultLongPromptProps} />
         </Sequence>
       )}
 
       {/* Visual 5: ShortPromptTests - Many tests prompt only needs intent, tests handle  */}
       {activeVisual === 5 && (
-        <Sequence from={BEATS.VISUAL_05_START} durationInFrames={BEATS.VISUAL_05_END - BEATS.VISUAL_05_START}>
+        <Sequence from={BEATS.VISUAL_05_START}>
           <ShortPromptTests {...defaultShortPromptTestsProps} />
         </Sequence>
       )}
 
       {/* Visual 6: GraphAnimateCurve - Test accumulation not just catching bugs, simpler  */}
       {activeVisual === 6 && (
-        <Sequence from={BEATS.VISUAL_06_START} durationInFrames={BEATS.VISUAL_06_END - BEATS.VISUAL_06_START}>
+        <Sequence from={BEATS.VISUAL_06_START}>
           <GraphAnimateCurve {...defaultGraphAnimateCurveProps} />
         </Sequence>
       )}
 
       {/* Visual 7: BothGenerateFinal - More walls less to specify, mold does precision wo */}
       {activeVisual === 7 && (
-        <Sequence from={BEATS.VISUAL_07_START} durationInFrames={BEATS.VISUAL_07_END - BEATS.VISUAL_07_START}>
+        <Sequence from={BEATS.VISUAL_07_START}>
           <BothGenerateFinal {...defaultBothGenerateFinalProps} />
         </Sequence>
       )}
