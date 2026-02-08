@@ -195,7 +195,7 @@ def run_agentic_change(
     # 4. Fetch Comments
     comments_data = []
     if comments_url:
-        success, comments_json = _run_gh_command(["api", comments_url])
+        success, comments_json = _run_gh_command(["api", comments_url, "--paginate"])
         if success:
             try:
                 comments_data = json.loads(comments_json)
