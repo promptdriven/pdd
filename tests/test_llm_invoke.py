@@ -2897,7 +2897,6 @@ def test_default_base_model_can_be_none():
 # Issue #375: Thread-safe cost extraction tests
 # ==============================================================================
 
-import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 

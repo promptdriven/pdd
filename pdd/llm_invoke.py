@@ -2808,8 +2808,8 @@ def llm_invoke(
                 if verbose:
                     # Extract tokens directly from last response (thread-safe)
                     last_usage = getattr(response_list[-1], 'usage', None) if response_list else None
-                    input_tokens = getattr(last_usage, 'prompt_tokens', 0) or 0
-                    output_tokens = getattr(last_usage, 'completion_tokens', 0) or 0
+                    input_tokens = getattr(last_usage, 'prompt_tokens', None) or getattr(last_usage, 'input_tokens', 0) or 0
+                    output_tokens = getattr(last_usage, 'completion_tokens', None) or getattr(last_usage, 'output_tokens', 0) or 0
 
                     cost_input_pm = model_info.get('input', 0.0) if pd.notna(model_info.get('input')) else 0.0
                     cost_output_pm = model_info.get('output', 0.0) if pd.notna(model_info.get('output')) else 0.0
