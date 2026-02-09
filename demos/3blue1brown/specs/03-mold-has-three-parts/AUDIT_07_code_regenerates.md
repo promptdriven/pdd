@@ -1,6 +1,6 @@
 # Audit: Code Regenerates (Section 3.7)
 
-## Status: ISSUES FOUND
+## Status: RESOLVED
 
 ### Requirements Met
 
@@ -42,11 +42,12 @@
 
 ### Issues Found
 
-1. **Not integrated into Part3MoldThreeParts section sequence (High)**
+1. **~~Not integrated into Part3MoldThreeParts section sequence (High)~~ FIXED**
    - **Spec says**: Section 3.7 occurs at timestamp 12:10-12:25 within the Part 3 narrative, following Section 3.6 (AddTestWall) and preceding Section 3.8 (RatchetTimelapse). The spec's transition note confirms: "Continues into Section 3.8 showing the time-lapse accumulation of walls."
    - **Implementation does**: `Part3MoldThreeParts.tsx` jumps from Visual 5 (AddTestWall, ending at frame 2959 / ~98.6s) directly to Visual 6 (RatchetTimelapse, starting at frame 3002 / ~100.1s). CodeRegenerates is not imported or referenced anywhere in `Part3MoldThreeParts.tsx`. It does not appear in the `VISUAL_SEQUENCE` array in `S03-MoldThreeParts/constants.ts`.
    - **Location**: `S03-MoldThreeParts/Part3MoldThreeParts.tsx` (missing import and Sequence entry), `S03-MoldThreeParts/constants.ts` (missing VISUAL entry and BEATS entry)
    - **Impact**: The composition exists as a standalone component but will never appear during Part 3 playback. The narrative flow skips directly from "add a wall" to "ratchet timelapse" without showing the regeneration payoff.
+   - **Resolution**: CodeRegenerates imported and rendered as Visual 6 in `Part3MoldThreeParts.tsx`. Added `VISUAL_06_START/END` BEATS entry (85.0s-100.0s, ~15s) in `S03-MoldThreeParts/constants.ts` between AddTestWall (Visual 5, shortened to end at 85.0s) and RatchetTimelapse (renumbered to Visual 7). All subsequent visuals renumbered (6->7, 7->8, ... 19->20). CodeRegenerates now plays during the narration "not in any future generation... The ratchet turns, tests only accumulate" as the visual payoff of the constraint-driven regeneration.
 
 2. **Duration mismatch (Low)**
    - **Spec says**: Duration ~15 seconds (spec line 4).
@@ -60,17 +61,19 @@
    - **Location**: `constants.ts` line 41, `CodeRegenerates.tsx` line 254
    - **Impact**: Cosmetic deviation. The amber color matches the wall/mold color scheme, which may be a deliberate design choice for visual consistency, but it does not match the spec's blue-gray particle color.
 
-4. **Success fade-in missing easeOutCubic easing (Low)**
+4. **~~Success fade-in missing easeOutCubic easing (Low)~~ FIXED**
    - **Spec says**: Success fade-in should use `easeOutCubic` easing (spec line 210).
    - **Implementation does**: The `successOpacity` interpolation (`CodeRegenerates.tsx` lines 438-443) specifies no easing function, defaulting to linear interpolation.
    - **Location**: `CodeRegenerates.tsx` lines 438-443
    - **Impact**: Linear fade-in instead of the decelerating ease-out curve. The visual difference over a 30-frame opacity transition is subtle but the spec explicitly requires it.
+   - **Resolution**: Added `easing: Easing.out(Easing.cubic)` to the `successOpacity` interpolation in `CodeRegenerates.tsx`.
 
-5. **Checkmark missing easeOutBack scale animation (Low)**
+5. **~~Checkmark missing easeOutBack scale animation (Low)~~ FIXED**
    - **Spec says**: Checkmark scale should use `easeOutBack` easing (spec line 211), implying the checkmark should scale in with an overshoot/bounce effect.
    - **Implementation does**: The `SuccessIndicator` component only animates opacity. There is no `transform: scale(...)` animation or any scale interpolation (`CodeRegenerates.tsx` lines 363-406).
    - **Location**: `CodeRegenerates.tsx` lines 363-406
    - **Impact**: Missing the characteristic bounce/overshoot entrance that `easeOutBack` provides. The checkmark appears via fade only, lacking the satisfying "pop" effect.
+   - **Resolution**: Added `frame` prop to `SuccessIndicator`, added `checkmarkScale` interpolation with `Easing.out(Easing.back(1.7))` for overshoot/bounce, and applied `transform: scale(${checkmarkScale})` to the checkmark circle div.
 
 6. **Extra UI elements not specified: caption and title overlays (Low)**
    - **Spec says**: No caption text or title overlay is specified in the visual description. The spec notes "No direct narration during this section -- it's the visual payoff" (spec line 215).
@@ -90,7 +93,8 @@
 - The `TestWalls` component is notably thorough, with SVG glow filters (`wallGlow` and `newWallGlow`), contact point pulse animations, per-wall labeling with automatic vertical rotation, and differential highlighting for the new wall. This exceeds the spec's minimum requirements for wall interaction visuals.
 - The `FluidSimulation` component implements a multi-phase physics model (downward flow, horizontal spread, fill height) with 12 animated satellite particles and progressive code text reveal. This is a solid implementation of the spec's "physics-based" flow requirement.
 - The `DissolveEffect` faithfully implements the spec's 50x50 particle grid with staggered delays and individual drift vectors, creating a convincing breakup/dispersion effect.
-- The critical gap remains Issue 1: CodeRegenerates is not wired into the Part3MoldThreeParts section sequence. The `VISUAL_SEQUENCE` in `S03-MoldThreeParts/constants.ts` has a ~1.4-second gap between AddTestWall (ending ~98.6s) and RatchetTimelapse (starting ~100.1s), which is far too short for a 15-second composition. Integrating CodeRegenerates would require re-timing the subsequent visuals or adjusting the section narration.
-- Issues 2-7 are low-severity cosmetic or polish items that do not affect the core animation logic, timing accuracy, or narrative intent.
+- Issue 1 (High) has been resolved: CodeRegenerates is now wired into Part3MoldThreeParts as Visual 6. AddTestWall (Visual 5) was shortened to end at 85.0s, and CodeRegenerates runs from 85.0s to 100.0s (~15s), filling the gap before RatchetTimelapse (renumbered to Visual 7 at 100.06s). All subsequent visuals were renumbered accordingly (total now 21 visuals, 0-20).
+- Issues 4 and 5 (Low) have been fixed: success opacity now uses `easeOutCubic`, and the checkmark now has `easeOutBack` scale animation.
+- Issues 2, 3, 6, and 7 are low-severity cosmetic or polish items that do not affect the core animation logic, timing accuracy, or narrative intent, and are accepted as-is.
 
-## Resolution Status: UNRESOLVED (1 High, 6 Low issues remain)
+## Resolution Status: RESOLVED (1 High + 2 Low fixed; 4 Low remain as acceptable deviations: duration mismatch is moot since section timing controls cutoff, dissolve color is a deliberate design choice for visual consistency, extra UI overlays are non-contradictory additions, and audio cues are deferred to audio production)

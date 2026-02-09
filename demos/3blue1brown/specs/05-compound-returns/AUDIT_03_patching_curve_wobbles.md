@@ -1,6 +1,6 @@
 # Audit: Patching Curve Wobbles (Section 5.3)
 
-## Status: ISSUES FOUND
+## Status: RESOLVED
 
 ### Requirements Met
 
@@ -113,11 +113,11 @@
 
 | # | Issue | Severity | Status |
 |---|-------|----------|--------|
-| 1 | Dip annotation fontSize 15 vs spec 16 | Low | UNRESOLVED |
-| 2 | Cost subtitle fontSize 16 vs spec 18 | Low | UNRESOLVED |
-| 3 | Hold period only ~0.9s vs spec 3s | Medium | UNRESOLVED |
-| 4 | Flicker applied globally not per-dip | Low | UNRESOLVED |
-| 5 | PDD curve invisible at phase 3 start | Medium | UNRESOLVED |
-| 6 | Patching curve re-draws from 8% in phase 3 | Medium | UNRESOLVED |
-| 7 | Patching dots re-animate in phase 3 | Low | UNRESOLVED |
-| 8 | Dip activation scaled by wobble vs discrete | Low | UNRESOLVED |
+| 1 | Dip annotation fontSize 15 vs spec 16 | Low | RESOLVED |
+| 2 | Cost subtitle fontSize 16 vs spec 18 | Low | RESOLVED |
+| 3 | Hold period only ~0.9s vs spec 3s | Medium | RESOLVED |
+| 4 | Flicker applied globally not per-dip | Low | RESOLVED |
+| 5 | PDD curve invisible at phase 3 start | Medium | RESOLVED |
+| 6 | Patching curve re-draws from 8% in phase 3 | Medium | RESOLVED |
+| 7 | Patching dots re-animate in phase 3 | Low | RESOLVED |
+| 8 | Dip activation scaled by wobble vs discrete | Low | RESOLVED |

@@ -22,11 +22,17 @@ const patchingBaseY = (t: number): number => {
   return maxHeight * (Math.log(t * 5 + 1) / Math.log(6));
 };
 
-/** Patching curve with wobble dips applied. */
-const patchingWobblyY = (t: number, wobbleAmount: number): number => {
+/** Patching curve with wobble dips applied. Per-dip activation flags allow
+ *  discrete dip appearance matching the spec pseudo-code (frame >= 30, etc). */
+const patchingWobblyY = (
+  t: number,
+  wobbleAmount: number,
+  dipActive: readonly boolean[] = [true, true, true],
+): number => {
   const base = patchingBaseY(t);
   let dipTotal = 0;
   for (let i = 0; i < DIP_POSITIONS.length; i++) {
+    if (!dipActive[i]) continue;
     const pos = DIP_POSITIONS[i];
     const mag = DIP_MAGNITUDES[i];
     dipTotal += -mag * Math.exp(-Math.pow((t - pos) / DIP_SPREAD, 2));
@@ -480,7 +486,7 @@ const CostCallout: React.FC<{ opacity: number }> = ({ opacity }) => (
       x={1530}
       y={200}
       fill={COLORS.LABEL_DIM}
-      fontSize={16}
+      fontSize={18}
       fontFamily="system-ui, sans-serif"
       textAnchor="middle"
     >
@@ -497,74 +503,96 @@ export const CompoundCurvesGraph: React.FC<CompoundCurvesGraphPropsType> = ({
   const frame = useCurrentFrame();
 
   // ── Phase 1: axes, labels, legend, curve starts ──────────────────
-  const axisYProgress = interpolate(
-    frame,
-    [0, 60],
-    [0, 1],
-    { extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) },
-  );
-  const axisXProgress = interpolate(
-    frame,
-    [15, 75],
-    [0, 1],
-    { extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) },
-  );
-  const labelOpacity = interpolate(
-    frame,
-    [60, 120],
-    [0, 1],
-    { extrapolateRight: "clamp", easing: Easing.out(Easing.quad) },
-  );
-  const curveStartProgress = interpolate(
-    frame,
-    [120, 210],
-    [0, 0.08],
-    { extrapolateRight: "clamp", easing: Easing.inOut(Easing.cubic) },
-  );
+  const axisYProgress =
+    phase >= 2
+      ? 1 // Phase 2+: axes already fully drawn from phase 1
+      : interpolate(
+          frame,
+          [0, 60],
+          [0, 1],
+          { extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) },
+        );
+  const axisXProgress =
+    phase >= 2
+      ? 1 // Phase 2+: axes already fully drawn from phase 1
+      : interpolate(
+          frame,
+          [15, 75],
+          [0, 1],
+          { extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) },
+        );
+  const labelOpacity =
+    phase >= 2
+      ? 1 // Phase 2+: labels already fully visible from phase 1
+      : interpolate(
+          frame,
+          [60, 120],
+          [0, 1],
+          { extrapolateRight: "clamp", easing: Easing.out(Easing.quad) },
+        );
+  const curveStartProgress =
+    phase >= 3
+      ? 0.08 // Phase 3+: PDD starting segment is already fully visible from phase 1
+      : interpolate(
+          frame,
+          [120, 210],
+          [0, 0.08],
+          { extrapolateRight: "clamp", easing: Easing.inOut(Easing.cubic) },
+        );
 
   // ── Phase 2: patching curve draws, dots, annotations ─────────────
   const patchCurveProgress =
-    phase >= 2
-      ? interpolate(
-          frame,
-          [0, 450],
-          [0.08, 1],
-          { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) },
-        )
-      : 0;
+    phase >= 3
+      ? 1 // Phase 3+: patching curve is already fully drawn from phase 2
+      : phase >= 2
+        ? interpolate(
+            frame,
+            [0, 450],
+            [0.08, 1],
+            { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) },
+          )
+        : 0;
   const patchVisibleDots =
-    phase >= 2
-      ? Math.floor(
-          interpolate(frame, [0, 450], [1, PATCH_DOT_COUNT], {
+    phase >= 3
+      ? PATCH_DOT_COUNT // Phase 3+: all dots already visible from phase 2
+      : phase >= 2
+        ? Math.floor(
+            interpolate(frame, [0, 450], [1, PATCH_DOT_COUNT], {
+              extrapolateLeft: "clamp",
+              extrapolateRight: "clamp",
+            }),
+          )
+        : 0;
+  const patchAnnot1Opacity =
+    phase >= 3
+      ? 1 // Phase 3+: annotations fully visible from phase 2
+      : phase >= 2
+        ? interpolate(frame, [90, 150], [0, 1], {
             extrapolateLeft: "clamp",
             extrapolateRight: "clamp",
-          }),
-        )
-      : 0;
-  const patchAnnot1Opacity =
-    phase >= 2
-      ? interpolate(frame, [90, 150], [0, 1], {
-          extrapolateLeft: "clamp",
-          extrapolateRight: "clamp",
-          easing: Easing.out(Easing.cubic),
-        })
-      : 0;
+            easing: Easing.out(Easing.cubic),
+          })
+        : 0;
   const patchAnnot2Opacity =
-    phase >= 2
-      ? interpolate(frame, [150, 330], [0, 1], {
-          extrapolateLeft: "clamp",
-          extrapolateRight: "clamp",
-          easing: Easing.out(Easing.cubic),
-        })
-      : 0;
+    phase >= 3
+      ? 1 // Phase 3+: annotations fully visible from phase 2
+      : phase >= 2
+        ? interpolate(frame, [150, 330], [0, 1], {
+            extrapolateLeft: "clamp",
+            extrapolateRight: "clamp",
+            easing: Easing.out(Easing.cubic),
+          })
+        : 0;
   const ceilingOpacity =
-    phase >= 2
-      ? interpolate(frame, [330, 450], [0, 0.4], {
-          extrapolateLeft: "clamp",
-          extrapolateRight: "clamp",
-          easing: Easing.out(Easing.quad),
-        })
-      : 0;
+    phase >= 3
+      ? 0.4 // Phase 3+: ceiling fully visible from phase 2
+      : phase >= 2
+        ? interpolate(frame, [330, 450], [0, 0.4], {
+            extrapolateLeft: "clamp",
+            extrapolateRight: "clamp",
+            easing: Easing.out(Easing.quad),
+          })
+        : 0;
 
   // ── Phase 3: wobbles, dip annotations, cost callout ──────────────
   const wobbleAmount =
@@ -716,13 +744,19 @@ export const CompoundCurvesGraph: React.FC<CompoundCurvesGraphPropsType> = ({
 
   // ── Determine which curve functions and progress to use ──────────
 
+  // Discrete per-dip activation matching spec pseudo-code thresholds
+  const dipActive: readonly boolean[] = useMemo(
+    () => [frame >= 30, frame >= 120, frame >= 210] as const,
+    [frame],
+  );
+
   // The patching curve fn depends on whether wobbles are active
   const patchYFn = useMemo(() => {
     if (phase >= 3) {
-      return (t: number) => patchingWobblyY(t, wobbleAmount);
+      return (t: number) => patchingWobblyY(t, wobbleAmount, dipActive);
     }
     return patchingBaseY;
-  }, [phase, wobbleAmount]);
+  }, [phase, wobbleAmount, dipActive]);
 
   // Effective PDD draw range
   const effectivePddTo =
@@ -773,7 +807,7 @@ export const CompoundCurvesGraph: React.FC<CompoundCurvesGraphPropsType> = ({
 
         {/* ── Patching curve ────────────────────────────────────── */}
         {effectivePatchTo > 0 && (
-          <g opacity={patchingDimOpacity} transform={`translate(${flickerOffsets.reduce((a, b) => a + b, 0) / 3}, 0)`}>
+          <g opacity={patchingDimOpacity}>
             <CurveLine
               yFn={patchYFn}
               from={0}
@@ -790,7 +824,7 @@ export const CompoundCurvesGraph: React.FC<CompoundCurvesGraphPropsType> = ({
                 totalCount={PATCH_DOT_COUNT}
                 color={COLORS.PATCHING_AMBER}
                 radius={PATCH_DOT_RADIUS}
-                frame={frame}
+                frame={phase >= 3 ? 9999 : frame} // Phase 3+: force all springs settled (dots fully visible)
                 dotStartFrame={10}
                 fps={30}
               />
@@ -838,10 +872,31 @@ export const CompoundCurvesGraph: React.FC<CompoundCurvesGraphPropsType> = ({
                   y={toSvgY(patchYFn(pos))}
                   opacity={dipAnnotOpacities[i]}
                   color={COLORS.DIP_RED}
-                  fontSize={15}
+                  fontSize={16}
                   icon={["arrow-down", "revert", "fork"][i] as "arrow-down" | "revert" | "fork"}
                 />
               ))}
+
+            {/* Phase 3 per-dip flicker: short curve segments near each dip shake laterally */}
+            {phase >= 3 &&
+              DIP_POSITIONS.map((pos, i) => {
+                const offset = flickerOffsets[i];
+                if (offset === 0) return null;
+                const segFrom = Math.max(0, pos - DIP_SPREAD * 3);
+                const segTo = Math.min(1, pos + DIP_SPREAD * 3);
+                return (
+                  <g key={`flicker-${i}`} transform={`translate(${offset}, 0)`}>
+                    <CurveLine
+                      yFn={patchYFn}
+                      from={segFrom}
+                      to={segTo}
+                      color={COLORS.PATCHING_AMBER}
+                      strokeWidth={3}
+                      opacity={0.7}
+                    />
+                  </g>
+                );
+              })}
           </g>
         )}
 
@@ -852,7 +907,7 @@ export const CompoundCurvesGraph: React.FC<CompoundCurvesGraphPropsType> = ({
         {phase >= 5 && gapOpacity > 0 && (
           <GapRegion
             pddFn={pddY}
-            patchFn={(t) => patchingWobblyY(t, 1)}
+            patchFn={(t) => patchingWobblyY(t, 1, [true, true, true])}
             from={0.1}
             to={pddFullProgress}
             opacity={gapOpacity}

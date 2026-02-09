@@ -11,7 +11,26 @@ import {
   DataPoint,
 } from "./constants";
 
-export const CodeCostChart: React.FC<{ startAtFullView?: boolean }> = ({ startAtFullView = false }) => {
+export const CodeCostChart: React.FC<{
+  startAtFullView?: boolean;
+  /** Opacity for the small-codebase fork line (default 0.35) */
+  forkSmallOpacity?: number;
+  /** Opacity for the large-codebase fork line (default 0.7) */
+  forkLargeOpacity?: number;
+  /** Opacity for the total cost dashed line (default 0.9) */
+  totalCostOpacity?: number;
+  /** Opacity for the tech debt shaded area (default 1) */
+  techDebtAreaOpacity?: number;
+  /** Opacity for the baseline pre-fork line (default 1) */
+  baselineOpacity?: number;
+}> = ({
+  startAtFullView = false,
+  forkSmallOpacity = 0.35,
+  forkLargeOpacity = 0.7,
+  totalCostOpacity = 0.9,
+  techDebtAreaOpacity = 1,
+  baselineOpacity = 1,
+}) => {
   const frame = useCurrentFrame();
   const { width, height } = useVideoConfig();
 
@@ -177,6 +196,7 @@ export const CodeCostChart: React.FC<{ startAtFullView?: boolean }> = ({ startAt
         <path
           d={buildTechDebtArea()}
           fill={COLORS.AREA_TECH_DEBT}
+          opacity={techDebtAreaOpacity}
         />
 
         {/* Cost to Generate line (blue, solid) */}
@@ -196,6 +216,7 @@ export const CodeCostChart: React.FC<{ startAtFullView?: boolean }> = ({ startAt
           stroke={COLORS.LINE_PATCH}
           strokeWidth={3}
           strokeLinecap="round"
+          opacity={baselineOpacity}
         />
 
         {/* Small codebase fork (amber, lower opacity as contrast) */}
@@ -205,7 +226,7 @@ export const CodeCostChart: React.FC<{ startAtFullView?: boolean }> = ({ startAt
           stroke={COLORS.LINE_PATCH}
           strokeWidth={3}
           strokeLinecap="round"
-          opacity={0.35}
+          opacity={forkSmallOpacity}
         />
 
         {/* Large codebase fork (amber, solid) */}
@@ -215,7 +236,7 @@ export const CodeCostChart: React.FC<{ startAtFullView?: boolean }> = ({ startAt
           stroke={COLORS.LINE_PATCH}
           strokeWidth={3}
           strokeLinecap="round"
-          opacity={0.7}
+          opacity={forkLargeOpacity}
         />
 
         {/* Total cost large codebase (amber, dashed) */}
@@ -226,7 +247,7 @@ export const CodeCostChart: React.FC<{ startAtFullView?: boolean }> = ({ startAt
           strokeWidth={3}
           strokeLinecap="round"
           strokeDasharray="12,6"
-          opacity={0.9}
+          opacity={totalCostOpacity}
         />
       </svg>
 

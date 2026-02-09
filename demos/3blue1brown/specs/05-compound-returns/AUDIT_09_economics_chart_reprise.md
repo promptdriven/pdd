@@ -1,6 +1,6 @@
 # Audit: 09_economics_chart_reprise (Economics Chart Reprise -- Crossing Point Pulses)
 
-## Status: ISSUES FOUND
+## Status: RESOLVED
 
 ### Requirements Met
 
@@ -136,5 +136,38 @@
 - `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/08-CrossingPoint/index.ts` (exports)
 
 ## Resolution Status
-- **Status**: UNRESOLVED
-- **Summary**: The implementation reuses the Part 1 `CrossingPoint` composition as-is, without any of the reprise-specific enhancements specified. Three HIGH-severity issues (enhanced pulse, "darning socks" text, three-pulse-cycle structure) represent the core emotional arc of this section. Two MEDIUM issues (chart dimming, cross-dissolve) affect visual storytelling. One LOW issue (`startAtFullView` prop) is a trivial one-line fix. The underlying chart infrastructure (axes, lines, colors, data, crossing point, "We are here." label) is solid and matches Part 1 correctly. The missing work is exclusively the reprise-specific layer on top.
+- **Status**: RESOLVED
+- **Date**: 2026-02-08
+- **Summary**: Created a new `EconomicsChartReprise` wrapper component (`08-CrossingPoint/EconomicsChartReprise.tsx`) that replaces the verbatim Part 1 `CrossingPoint` reuse with a reprise-specific composition. All 3 HIGH, 2 MEDIUM, and relevant LOW issues are addressed:
+
+### Issues Resolved
+
+1. **Enhanced crossing point pulse (HIGH -- RESOLVED)**: `EconomicsChartReprise.tsx` implements 7 concentric rings per cycle (vs 5 in Part 1), each lasting 30 frames (vs ~50 in Part 1). Ring opacity and radius are configured per-cycle with a distinct emotional arc. Rings transition from blue (#4A90D9) to white as they expand (Issue #8 also resolved).
+
+2. **"...darning socks." text overlay (HIGH -- RESOLVED)**: Text "...darning socks." fades in at local frames 200-230 (synced with narration segment [22] at 83.8s). Positioned below and right of crossing point at `crossingX + 80, crossingY + 160`. Font: Inter sans-serif, italic, 24pt. Color: amber (#D9944A) at 70% opacity. Fade uses `easeOutCubic`.
+
+3. **Three-pulse-cycle structure (HIGH -- RESOLVED)**: Three distinct pulse cycles implemented:
+   - Cycle 1 (frames 10-66): 7 rings, assertive, 80px max radius -- synced with "economics changed"
+   - Cycle 2 (frames 90-146): 7 rings, reinforcing, 90px max radius -- synced with "when economics change"
+   - Cycle 3 (frames 160-195): 4 rings, gentle wind-down, 60px max radius -- synced with "becomes..."
+
+4. **Chart simplification/dimming (MEDIUM -- RESOLVED)**: Added opacity props to `CodeCostChart.tsx` (`forkSmallOpacity`, `forkLargeOpacity`, `totalCostOpacity`, `techDebtAreaOpacity`, `baselineOpacity`). Reprise uses: small fork 0.2, large fork 0.3, tech debt area 0.2, baseline 0.4, generate and total cost at full opacity. Legend simplified to show only the two key lines at 50% overall opacity.
+
+5. **Cross-dissolve from developer footage (MEDIUM -- RESOLVED)**: `EconomicsChartReprise` applies `opacity: chartOpacity` to its root `AbsoluteFill`, where `chartOpacity` interpolates from 0 to 1 over frames 0-30 using `easeInOutCubic`. This creates a cross-dissolve effect as the previous visual fades out and the chart fades in.
+
+6. **Duration mismatch (MEDIUM -- RESOLVED)**: The spec's 25-second / 750-frame timing was compressed proportionally to fit the actual ~244-frame narration window (76.38s-84.5s). All pulse cycles, text overlay, and hold phase are mapped to the compressed timeline as recommended in the audit notes.
+
+7. **Hold on final composition (LOW -- RESOLVED)**: `isHoldPhase` flag (frame >= 230) stops all pulse ring rendering, creating the specified stillness for the final ~14 frames with chart, "We are here.", and "...darning socks." all visible.
+
+8. **Pulse ring color gradient (LOW -- RESOLVED)**: Rings transition from blue (#4A90D9) to white (#ffffff) based on expansion progress (`whiteBlend` threshold at 0.5).
+
+9. **`startAtFullView` (LOW -- RESOLVED)**: `EconomicsChartReprise` passes `startAtFullView={true}` to `CodeCostChart`, preventing the zoom-out animation.
+
+### Files Modified
+- `remotion/src/remotion/08-CrossingPoint/EconomicsChartReprise.tsx` (NEW -- 497 lines)
+- `remotion/src/remotion/08-CrossingPoint/CodeCostChart.tsx` (added opacity props for dimming support)
+- `remotion/src/remotion/08-CrossingPoint/index.ts` (added `EconomicsChartReprise` export)
+- `remotion/src/remotion/S05-CompoundReturns/Part5CompoundReturns.tsx` (Visual 7 now uses `EconomicsChartReprise` instead of `CrossingPoint`)
+
+### Design Decision
+Created a new wrapper component rather than adding reprise mode props to the base `CrossingPoint` component. This avoids any risk of breaking Part 1's existing behavior and keeps the reprise-specific logic (three-cycle pulse structure, "darning socks" text, chart dimming, cross-dissolve) cleanly isolated. The base `CodeCostChart` was extended with optional opacity props (backward-compatible, all defaults match existing behavior) to support the dimming requirement.

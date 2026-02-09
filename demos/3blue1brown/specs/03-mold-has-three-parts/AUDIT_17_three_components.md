@@ -1,6 +1,6 @@
 # Audit: 17_three_components
 
-## Status: ISSUES FOUND
+## Status: RESOLVED
 
 ### Requirements Met
 
@@ -119,6 +119,24 @@
   - `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/S03-MoldThreeParts/Part3MoldThreeParts.tsx` (Visual 18 at line 176)
   - `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/S03-MoldThreeParts/constants.ts` (timing at lines 132-134)
 
-### Resolution Status: UNRESOLVED
+### Resolution Status: RESOLVED
 
-Two HIGH severity issues (layout architecture, missing flow animation), four MEDIUM severity issues (missing WallsBlock, missing FlowArrow, missing OutputBlock with checkmarks, formula unreachable in S03 context), and two LOW severity issues (minor styling, easing differences). The formula unreachability in the S03 section context (#9) is particularly impactful since it prevents the key visual takeaway from appearing during narration sync.
+All issues have been addressed by refactoring ThreeComponents from a triangle layout to a vertical flow layout matching the spec's injection-mold metaphor:
+
+1. **Layout fixed** (was HIGH) -- Replaced triangle geometry with vertical flow: PROMPT at top, GROUNDING in middle, TESTS walls constraining, Output at bottom. Components centered at x=960 with top-to-bottom flow. `LAYOUT` object replaces `TRIANGLE` in constants.ts.
+
+2. **Flow animation fixed** (was HIGH) -- Sequential per-component glow activation implemented: `promptGlow` at frames [30,50,70], `groundingGlow` at [70,90,110], `wallGlow` at [110,130,150]. Each component glows as material flows through it, with sublabels appearing during their respective phase. Uses `easeOutQuad` for glows as spec requires.
+
+3. **WallsBlock added** (was MEDIUM) -- New `WallsBlock` component with solid left/right/bottom wall bars (amber fill at 0.6 opacity), interior label "TESTS", and "Constraints" sublabel positioned to the right. Visually distinct from rounded-rectangle ComponentBlocks.
+
+4. **FlowArrow added** (was MEDIUM) -- New `FlowArrow` SVG component with directional shaft and arrowhead, activated sequentially: arrow1 at frame 30 (prompt->grounding), arrow2 at frame 70 (grounding->walls), arrow3 at frame 110 (walls->output). Uses `easeOutQuad` progress.
+
+5. **OutputBlock added** (was MEDIUM) -- New `OutputBlock` component with "Generated Code" label and three green checkmark success indicators. Opacity controlled by `codeOpacity` with `easeOutCubic`.
+
+6. **Timeline compressed for S03 context** (was MEDIUM) -- All six phases now complete within ~220 frames: system fade (0-30), prompt glow (30-70), grounding glow (70-110), wall glow (110-150), code output (150-180), formula (190-220). This fits well within the ~236 frames available in S03 Visual 18.
+
+7. **Styling matches spec** (was LOW) -- ComponentBlock now uses width 180, height 70, fontSize 18, sublabel fontSize 14 with color `#888`. Matches spec lines 243-266 exactly.
+
+8. **Easing matches spec** (was LOW) -- System fade uses `easeOutCubic`, component glows use `easeOutQuad`, flow arrows use `easeOutQuad`, code output uses `easeOutCubic`, formula uses `easeOutCubic`. Matches spec lines 318-322.
+
+9. **Formula reachable in S03** (was MEDIUM) -- Formula now starts at frame 190 (was 600), well within the ~236 frames available in Visual 18. The formula text will appear during narration segments 38-39 as intended.

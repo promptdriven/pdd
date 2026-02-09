@@ -76,6 +76,14 @@ const TerminalTitleBar: React.FC = () => (
   </div>
 );
 
+// ── Bug display pseudocode (frames 0-60) ──────────────────────
+const BUG_CODE_LINES = [
+  { text: "def parse(tokens):", highlight: false },
+  { text: "    for i in range(len(tokens)):", highlight: false },
+  { text: "        node = tokens[i + 1]", highlight: true },
+  { text: "    return tree", highlight: false },
+];
+
 // ── Main Component ──────────────────────────────────────────────
 export const DeveloperRegenerates: React.FC<DeveloperRegeneratesPropsType> = () => {
   const frame = useCurrentFrame();
@@ -88,6 +96,14 @@ export const DeveloperRegenerates: React.FC<DeveloperRegeneratesPropsType> = () 
     { extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
   );
 
+  // Initial bug display opacity (visible frames 0-60, fades out before commands)
+  const bugDisplayOpacity = interpolate(
+    frame,
+    [0, 30, 60, 85],
+    [0, 1, 1, 0],
+    { extrapolateRight: "clamp", extrapolateLeft: "clamp" }
+  );
+
   // Bug command typing progress
   const bugCmdProgress = interpolate(
     frame,
@@ -96,12 +112,12 @@ export const DeveloperRegenerates: React.FC<DeveloperRegeneratesPropsType> = () 
     { extrapolateRight: "clamp" }
   );
 
-  // Bug output opacity
+  // Bug output opacity (spec: easeOutQuad)
   const bugOutputOpacity = interpolate(
     frame,
     [BEATS.BUG_OUTPUT_START, BEATS.BUG_OUTPUT_END],
     [0, 1],
-    { extrapolateRight: "clamp" }
+    { extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
   );
 
   // Fix command typing progress
@@ -112,20 +128,20 @@ export const DeveloperRegenerates: React.FC<DeveloperRegeneratesPropsType> = () 
     { extrapolateRight: "clamp" }
   );
 
-  // Regenerating text opacity
+  // Regenerating text opacity (spec: easeOutQuad)
   const regenOpacity = interpolate(
     frame,
     [BEATS.FIX_REGEN_START, BEATS.FIX_REGEN_END],
     [0, 1],
-    { extrapolateRight: "clamp" }
+    { extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
   );
 
-  // Generated output opacity
+  // Generated output opacity (spec: easeOutQuad)
   const generatedOpacity = interpolate(
     frame,
     [BEATS.FIX_OUTPUT_START, BEATS.FIX_OUTPUT_END],
     [0, 1],
-    { extrapolateRight: "clamp" }
+    { extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
   );
 
   // Test command typing progress
@@ -136,20 +152,20 @@ export const DeveloperRegenerates: React.FC<DeveloperRegeneratesPropsType> = () 
     { extrapolateRight: "clamp" }
   );
 
-  // Test result opacity
+  // Test result opacity (spec: easeOutQuad)
   const testResultOpacity = interpolate(
     frame,
     [BEATS.TEST_OUTPUT_START, BEATS.TEST_OUTPUT_END],
     [0, 1],
-    { extrapolateRight: "clamp" }
+    { extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
   );
 
-  // Checkmark scale (pop effect with overshoot - spec: 1.2)
+  // Checkmark scale (pop effect with overshoot - spec: easeOutBack)
   const checkScale = interpolate(
     frame,
     [BEATS.CHECK_START, BEATS.CHECK_POP, BEATS.CHECK_SETTLE],
     [0, 1.2, 1.0],
-    { extrapolateRight: "clamp" }
+    { extrapolateRight: "clamp", easing: Easing.out(Easing.back(1.7)) }
   );
 
   const checkOpacity = interpolate(
@@ -201,6 +217,39 @@ export const DeveloperRegenerates: React.FC<DeveloperRegeneratesPropsType> = () 
         }}
       >
         <TerminalTitleBar />
+
+        {/* Initial bug display: pseudocode with red-highlighted bug line (frames 0-60) */}
+        {bugDisplayOpacity > 0 && (
+          <div style={{ opacity: bugDisplayOpacity, marginBottom: 12 }}>
+            {BUG_CODE_LINES.map((line, i) => (
+              <div
+                key={i}
+                style={{
+                  lineHeight: 1.6,
+                  padding: "1px 4px",
+                  borderRadius: 3,
+                  backgroundColor: line.highlight
+                    ? "rgba(255, 60, 60, 0.15)"
+                    : "transparent",
+                  borderLeft: line.highlight
+                    ? "2px solid rgba(255, 80, 80, 0.8)"
+                    : "2px solid transparent",
+                }}
+              >
+                <span
+                  style={{
+                    color: line.highlight
+                      ? "rgba(255, 100, 100, 0.9)"
+                      : "rgba(255, 255, 255, 0.6)",
+                    fontSize: 13,
+                  }}
+                >
+                  {line.text}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* Bug command */}
         <div style={lineStyle}>

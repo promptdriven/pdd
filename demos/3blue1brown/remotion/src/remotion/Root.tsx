@@ -90,6 +90,14 @@ import {
   defaultDeveloperEditZoomoutProps,
 } from "./09-DeveloperEditZoomout";
 import {
+  PatchCycle,
+  PATCH_CYCLE_FPS,
+  PATCH_CYCLE_DURATION_FRAMES,
+  PATCH_CYCLE_WIDTH,
+  PATCH_CYCLE_HEIGHT,
+  defaultPatchCycleProps,
+} from "./10-PatchCycle";
+import {
   PieChart,
   PIE_CHART_FPS,
   PIE_CHART_DURATION_FRAMES,
@@ -106,6 +114,15 @@ import {
   defaultPieToCurveProps,
 } from "./13-PieToCurve";
 import {
+  ContextWindowComparison,
+  CONTEXT_COMPARISON_FPS,
+  CONTEXT_COMPARISON_DURATION_FRAMES,
+  CONTEXT_COMPARISON_WIDTH,
+  CONTEXT_COMPARISON_HEIGHT,
+  defaultContextWindowComparisonProps,
+  ContextWindowComparisonProps,
+} from "./14a-ContextWindowComparison";
+import {
   PartsEject,
   PARTS_EJECT_FPS,
   PARTS_EJECT_DURATION_FRAMES,
@@ -121,6 +138,14 @@ import {
   DEFECT_HEIGHT,
   defaultDefectDiscoveredProps,
 } from "./15-DefectDiscovered";
+import {
+  EngineerFixesMold,
+  ENGINEER_FIXES_MOLD_FPS,
+  ENGINEER_FIXES_MOLD_DURATION_FRAMES,
+  ENGINEER_FIXES_MOLD_WIDTH,
+  ENGINEER_FIXES_MOLD_HEIGHT,
+  defaultEngineerFixesMoldProps,
+} from "./15a-EngineerFixesMold";
 import {
   PerfectParts,
   PERFECT_PARTS_FPS,
@@ -241,6 +266,14 @@ import {
   TRADITIONAL_VS_PDD_HEIGHT,
   defaultTraditionalVsPddProps,
 } from "./29-TraditionalVsPdd";
+import {
+  Z3SmtSidebar,
+  Z3_SMT_SIDEBAR_FPS,
+  Z3_SMT_SIDEBAR_DURATION_FRAMES,
+  Z3_SMT_SIDEBAR_WIDTH,
+  Z3_SMT_SIDEBAR_HEIGHT,
+  defaultZ3SmtSidebarProps,
+} from "./29a-Z3SmtSidebar";
 import {
   InjectionNozzle,
   NOZZLE_FPS,
@@ -370,6 +403,14 @@ import {
   defaultBothGenerateFinalProps,
 } from "./45-BothGenerateFinal";
 import {
+  CodeRegenerationLoop,
+  CODE_REGEN_LOOP_FPS,
+  CODE_REGEN_LOOP_DURATION_FRAMES,
+  CODE_REGEN_LOOP_WIDTH,
+  CODE_REGEN_LOOP_HEIGHT,
+  defaultCodeRegenerationLoopProps,
+} from "./49a-CodeRegenerationLoop";
+import {
   Part1Economics,
   PART1_FPS,
   PART1_DURATION_FRAMES,
@@ -419,6 +460,9 @@ import {
 } from "./S06-Closing";
 import {
   ColdOpenSection,
+  CodeBlinks,
+  CODE_BLINKS_FPS,
+  CODE_BLINKS_DURATION_FRAMES,
   COLD_OPEN_FPS as COLD_OPEN_SECTION_FPS,
   COLD_OPEN_DURATION_FRAMES as COLD_OPEN_SECTION_DURATION_FRAMES,
   COLD_OPEN_WIDTH as COLD_OPEN_SECTION_WIDTH,
@@ -539,6 +583,17 @@ export const RemotionRoot: React.FC = () => {
           defaultProps={defaultDeveloperEditZoomoutProps}
         />
       </Folder>
+      <Folder name="10-PatchCycle">
+        <Composition
+          id="PatchCycle"
+          component={PatchCycle}
+          durationInFrames={PATCH_CYCLE_DURATION_FRAMES}
+          fps={PATCH_CYCLE_FPS}
+          width={PATCH_CYCLE_WIDTH}
+          height={PATCH_CYCLE_HEIGHT}
+          defaultProps={defaultPatchCycleProps}
+        />
+      </Folder>
       <Folder name="12-PieChart">
         <Composition
           id="PieChart"
@@ -561,6 +616,18 @@ export const RemotionRoot: React.FC = () => {
           defaultProps={defaultPieToCurveProps}
         />
       </Folder>
+      <Folder name="14a-ContextWindowComparison">
+        <Composition
+          id="ContextWindowComparison"
+          component={ContextWindowComparison}
+          durationInFrames={CONTEXT_COMPARISON_DURATION_FRAMES}
+          fps={CONTEXT_COMPARISON_FPS}
+          width={CONTEXT_COMPARISON_WIDTH}
+          height={CONTEXT_COMPARISON_HEIGHT}
+          schema={ContextWindowComparisonProps}
+          defaultProps={defaultContextWindowComparisonProps}
+        />
+      </Folder>
       <Folder name="14-PartsEject">
         <Composition
           id="PartsEject"
@@ -581,6 +648,17 @@ export const RemotionRoot: React.FC = () => {
           width={DEFECT_WIDTH}
           height={DEFECT_HEIGHT}
           defaultProps={defaultDefectDiscoveredProps}
+        />
+      </Folder>
+      <Folder name="15a-EngineerFixesMold">
+        <Composition
+          id="EngineerFixesMold"
+          component={EngineerFixesMold}
+          durationInFrames={ENGINEER_FIXES_MOLD_DURATION_FRAMES}
+          fps={ENGINEER_FIXES_MOLD_FPS}
+          width={ENGINEER_FIXES_MOLD_WIDTH}
+          height={ENGINEER_FIXES_MOLD_HEIGHT}
+          defaultProps={defaultEngineerFixesMoldProps}
         />
       </Folder>
       <Folder name="16-PerfectParts">
@@ -746,6 +824,17 @@ export const RemotionRoot: React.FC = () => {
           width={TRADITIONAL_VS_PDD_WIDTH}
           height={TRADITIONAL_VS_PDD_HEIGHT}
           defaultProps={defaultTraditionalVsPddProps}
+        />
+      </Folder>
+      <Folder name="29a-Z3SmtSidebar">
+        <Composition
+          id="Z3SmtSidebar"
+          component={Z3SmtSidebar}
+          durationInFrames={Z3_SMT_SIDEBAR_DURATION_FRAMES}
+          fps={Z3_SMT_SIDEBAR_FPS}
+          width={Z3_SMT_SIDEBAR_WIDTH}
+          height={Z3_SMT_SIDEBAR_HEIGHT}
+          defaultProps={defaultZ3SmtSidebarProps}
         />
       </Folder>
       <Folder name="30-InjectionNozzle">
@@ -924,6 +1013,17 @@ export const RemotionRoot: React.FC = () => {
           defaultProps={defaultBothGenerateFinalProps}
         />
       </Folder>
+      <Folder name="49a-CodeRegenerationLoop">
+        <Composition
+          id="CodeRegenerationLoop"
+          component={CodeRegenerationLoop}
+          durationInFrames={CODE_REGEN_LOOP_DURATION_FRAMES}
+          fps={CODE_REGEN_LOOP_FPS}
+          width={CODE_REGEN_LOOP_WIDTH}
+          height={CODE_REGEN_LOOP_HEIGHT}
+          defaultProps={defaultCodeRegenerationLoopProps}
+        />
+      </Folder>
       <Folder name="S00-ColdOpen">
         <Composition
           id="ColdOpenSection"
@@ -933,6 +1033,15 @@ export const RemotionRoot: React.FC = () => {
           width={COLD_OPEN_SECTION_WIDTH}
           height={COLD_OPEN_SECTION_HEIGHT}
           defaultProps={defaultColdOpenSectionProps}
+        />
+        <Composition
+          id="CodeBlinks"
+          component={CodeBlinks}
+          durationInFrames={CODE_BLINKS_DURATION_FRAMES}
+          fps={CODE_BLINKS_FPS}
+          width={1920}
+          height={1080}
+          defaultProps={{}}
         />
       </Folder>
       <Folder name="S01-Economics">

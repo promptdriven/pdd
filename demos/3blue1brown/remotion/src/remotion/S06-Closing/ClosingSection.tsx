@@ -13,6 +13,7 @@ import { CompleteSystem, defaultCompleteSystemProps } from "../48-CompleteSystem
 import { DeveloperRegenerates, defaultDeveloperRegeneratesProps } from "../49-DeveloperRegenerates";
 import { FadeToBlack, defaultFadeToBlackProps } from "../50-FadeToBlack";
 import { SockMetaphorFinal, defaultSockMetaphorFinalProps } from "../51-SockMetaphorFinal";
+import { CodeRegenerationLoop, defaultCodeRegenerationLoopProps } from "../49a-CodeRegenerationLoop";
 
 export const ClosingSection: React.FC<ClosingSectionPropsType> = () => {
   const frame = useCurrentFrame();
@@ -61,17 +62,20 @@ export const ClosingSection: React.FC<ClosingSectionPropsType> = () => {
         </Sequence>
       )}
 
-      {/* Visual 4: CodeOutputMoldGlows — "Code is generated verified and disposable" */}
+      {/* Visual 4: CodeRegenerationLoop — "Code is generated verified and disposable" */}
       {activeVisual === 4 && (
         <Sequence from={BEATS.VISUAL_04_START}>
-          <CodeOutputMoldGlows {...defaultCodeOutputMoldGlowsProps} />
+          <CodeRegenerationLoop {...defaultCodeRegenerationLoopProps} />
         </Sequence>
       )}
 
       {/* Visual 5: CodeOutputMoldGlows — "The code is just plastic, the mold is what matters" */}
       {activeVisual === 5 && (
         <Sequence from={BEATS.VISUAL_05_START}>
-          <CodeOutputMoldGlows {...defaultCodeOutputMoldGlowsProps} />
+          <CodeOutputMoldGlows
+            {...defaultCodeOutputMoldGlowsProps}
+            durationFrames={BEATS.VISUAL_05_END - BEATS.VISUAL_05_START}
+          />
         </Sequence>
       )}
 

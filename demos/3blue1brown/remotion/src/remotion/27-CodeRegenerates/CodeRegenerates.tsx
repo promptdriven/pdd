@@ -360,8 +360,16 @@ const FluidSimulation: React.FC<{ progress: number; frame: number }> = ({ progre
 };
 
 /** Success indicator with checkmark */
-const SuccessIndicator: React.FC<{ opacity: number }> = ({ opacity }) => {
+const SuccessIndicator: React.FC<{ opacity: number; frame: number }> = ({ opacity, frame }) => {
   if (opacity <= 0) return null;
+
+  // Checkmark scale with easeOutBack for overshoot/bounce entrance
+  const checkmarkScale = interpolate(
+    frame,
+    [BEATS.SUCCESS_START, BEATS.SUCCESS_START + 30],
+    [0, 1],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.back(1.7)) }
+  );
 
   return (
     <div
@@ -387,6 +395,7 @@ const SuccessIndicator: React.FC<{ opacity: number }> = ({ opacity }) => {
           fontSize: 24,
           color: COLORS.LABEL_WHITE,
           boxShadow: `0 0 20px ${COLORS.SUCCESS_GREEN}`,
+          transform: `scale(${checkmarkScale})`,
         }}
       >
         ✓
@@ -439,7 +448,7 @@ export const CodeRegenerates: React.FC<CodeRegeneratesPropsType> = ({
     frame,
     [BEATS.SUCCESS_START, BEATS.SUCCESS_START + 30],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
   );
 
   // Terminal overlay opacity
@@ -480,7 +489,7 @@ export const CodeRegenerates: React.FC<CodeRegeneratesPropsType> = ({
       )}
 
       {/* Success indicator */}
-      <SuccessIndicator opacity={successOpacity} />
+      <SuccessIndicator opacity={successOpacity} frame={frame} />
 
       {/* Terminal snippet overlay */}
       <TerminalOverlay lines={terminalLines} opacity={terminalOpacity} />

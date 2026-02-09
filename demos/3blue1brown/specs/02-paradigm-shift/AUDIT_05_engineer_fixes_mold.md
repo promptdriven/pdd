@@ -1,6 +1,6 @@
 # Audit: Engineer Fixes the Mold (Section 2.5)
 
-## Status: ISSUES FOUND
+## Status: RESOLVED
 
 ### Requirements Met
 
@@ -92,4 +92,12 @@ The `15a` naming convention (between 15-DefectDiscovered and 16-PerfectParts) cl
 - `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/S02-ParadigmShift/index.ts`
 - `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/Root.tsx`
 
-## Resolution Status: UNRESOLVED
+## Resolution Status: RESOLVED
+
+### Resolution Notes
+
+**Issue 1 (CRITICAL) -- RESOLVED**: EngineerFixesMold is now imported and rendered in `Part2ParadigmShift.tsx` as Visual 4, positioned between DefectDiscovered (Visual 3) and PerfectParts (Visual 5). It plays during narration segment [7] "You fix the mold, and that fix applies to every part you'll ever make again" (33.9s-40.4s). The VISUAL_SEQUENCE in `S02-ParadigmShift/constants.ts` was updated to include the new slot, and all subsequent visuals were renumbered (old 4-12 became 5-13).
+
+**Issue 2 (MODERATE) -- RESOLVED**: EngineerFixesMold is now registered in `Root.tsx` as a standalone `<Composition>` inside a `<Folder name="15a-EngineerFixesMold">`, positioned between the 15-DefectDiscovered and 16-PerfectParts folders. This enables previewing and rendering in Remotion Studio.
+
+**Issues 3-8 (BY DESIGN / MODERATE / LOW)**: Remain as-is. These relate to placeholder animation vs Veo video, missing engineer character, camera movement, environment, audio, and Math.random() non-determinism -- all pre-existing design choices unrelated to the orphan integration issue.

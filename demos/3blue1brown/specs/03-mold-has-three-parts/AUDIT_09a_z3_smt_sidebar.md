@@ -1,6 +1,6 @@
 # Audit: Z3 SMT Sidebar (09a)
 
-## Status: ISSUES FOUND
+## Status: RESOLVED
 
 ### Requirements Met
 
@@ -62,11 +62,9 @@
 
 ### Issues Found
 
-1. **[HIGH] Not integrated into S03-MoldThreeParts parent sequence**: The `Z3SmtSidebar` composition is never imported or referenced in `Part3MoldThreeParts.tsx`. The narration segments covering the Z3/SMT content (Visuals 8 and 9 in `S03-MoldThreeParts/constants.ts:93-98`, spanning frames 3528-5143 / 117.6s-171.4s) both render `TraditionalVsPdd` as a fallback instead of `Z3SmtSidebar`. The VISUAL_SEQUENCE descriptions ("Synopsys uses SAT/SMT, PDD uses Z3, same class solver" and "Z3 proves for all inputs, symbolic reasoning, same math") clearly indicate these slots are intended for this composition.
-   - `S03-MoldThreeParts/Part3MoldThreeParts.tsx:103-115` -- uses `TraditionalVsPdd` where `Z3SmtSidebar` should be
-   - `S03-MoldThreeParts/constants.ts:151-152` -- VISUAL_SEQUENCE labels match spec content
+1. **[HIGH] ~~Not integrated into S03-MoldThreeParts parent sequence~~**: RESOLVED. `Z3SmtSidebar` is now imported in `Part3MoldThreeParts.tsx` and replaces `TraditionalVsPdd` for Visual 8 and Visual 9 slots. The `VISUAL_SEQUENCE` entries in `constants.ts` have been updated to reference `Z3SmtSidebar` instead of `TraditionalVsPdd`.
 
-2. **[HIGH] Not registered in Root.tsx**: `Z3SmtSidebar` is not registered as a `<Composition>` in `Root.tsx`. It cannot be previewed or rendered standalone from Remotion Studio. Grep for "Z3Smt" or "29a" in Root.tsx returns no matches.
+2. **[HIGH] ~~Not registered in Root.tsx~~**: RESOLVED. `Z3SmtSidebar` is now registered as a `<Composition>` in `Root.tsx` under a `29a-Z3SmtSidebar` folder, with all required dimension/fps/duration constants and default props imported from `./29a-Z3SmtSidebar`.
 
 3. **[LOW] Missing Synopsys shimmer/pulse recognition effect**: Spec line 57 requires "Brief shimmer/pulse -- you remember this from Part 2" on the Synopsys icon during frames 0-60. The implementation only applies a simple opacity fade-in (`Z3SmtSidebar.tsx:11-16`). No shimmer, scale pulse, or glow animation is present on the Synopsys icon to signal recognition callback. This is a visual polish item that affects the "you've seen this before" feel described in the spec.
 
@@ -86,4 +84,4 @@
 - The narration timing in S03 constants maps frames 3528-5143 (117.6s-171.4s) to the Z3/SMT content. The standalone composition's own 600-frame (20s) duration aligns with the spec's stated 13:00-13:20 timestamp. Integration would require coordinating these parent-sequence frame offsets with the child composition's internal beat timings.
 - The `gap` property on the logo row uses `LAYOUT.BRIDGE_WIDTH` (200) at `Z3SmtSidebar.tsx:96`, which means the visual gap between the Synopsys container and bridge, and between bridge and Z3 container, is each 200px -- effectively making the total distance between the two logos wider than the spec layout diagram suggests. The spec pseudocode uses `gap: 200` for the entire row but has the bridge element as a separate child in between. The implementation matches the spec pseudocode structure.
 
-## Resolution Status: UNRESOLVED
+## Resolution Status: RESOLVED

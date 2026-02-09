@@ -79,63 +79,67 @@ export const BEATS = {
 
   // Visual 5: AddTestWall — "not in this generation, not in any future generati..."
   VISUAL_05_START: s2f(83.58),  // 2507 frames
-  VISUAL_05_END: s2f(98.64),  // 2959 frames
+  VISUAL_05_END: s2f(85.0),  // 2550 frames
 
-  // Visual 6: RatchetTimelapse — "In traditional development, a bug fix helps one pl..."
-  VISUAL_06_START: s2f(100.06),  // 3002 frames
-  VISUAL_06_END: s2f(107.38),  // 3221 frames
+  // Visual 6: CodeRegenerates — visual payoff: code regenerates with new wall constraint
+  VISUAL_06_START: s2f(85.0),  // 2550 frames
+  VISUAL_06_END: s2f(100.0),  // 3000 frames (~15s regeneration animation)
 
-  // Visual 7: TraditionalVsPdd — "forever. Now here's something most people don't kn..."
-  VISUAL_07_START: s2f(108.02),  // 3241 frames
-  VISUAL_07_END: s2f(117.6),  // 3528 frames
+  // Visual 7: RatchetTimelapse — "In traditional development, a bug fix helps one pl..."
+  VISUAL_07_START: s2f(100.06),  // 3002 frames
+  VISUAL_07_END: s2f(107.38),  // 3221 frames
 
-  // Visual 8: TraditionalVsPdd — "SAT and SMT solvers to mathematically prove equiva..."
-  VISUAL_08_START: s2f(117.6),  // 3528 frames
-  VISUAL_08_END: s2f(138.78),  // 4163 frames
+  // Visual 8: TraditionalVsPdd — "forever. Now here's something most people don't kn..."
+  VISUAL_08_START: s2f(108.02),  // 3241 frames
+  VISUAL_08_END: s2f(117.6),  // 3528 frames
 
-  // Visual 9: TraditionalVsPdd — "When Z3 proves that a function never returns null ..."
-  VISUAL_09_START: s2f(140.2),  // 4206 frames
-  VISUAL_09_END: s2f(171.44),  // 5143 frames
+  // Visual 9: TraditionalVsPdd — "SAT and SMT solvers to mathematically prove equiva..."
+  VISUAL_09_START: s2f(117.6),  // 3528 frames
+  VISUAL_09_END: s2f(138.78),  // 4163 frames
 
-  // Visual 10: InjectionNozzle — "analogy isn't a metaphor. It's the same technology..."
-  VISUAL_10_START: s2f(171.44),  // 5143 frames
-  VISUAL_10_END: s2f(187.78),  // 5633 frames
+  // Visual 10: TraditionalVsPdd — "When Z3 proves that a function never returns null ..."
+  VISUAL_10_START: s2f(140.2),  // 4206 frames
+  VISUAL_10_END: s2f(171.44),  // 5143 frames
 
-  // Visual 11: PromptTextFlows — "and why. And here's something subtle. The exact im..."
-  VISUAL_11_START: s2f(187.78),  // 5633 frames
-  VISUAL_11_END: s2f(195.5),  // 5865 frames
+  // Visual 11: InjectionNozzle — "analogy isn't a metaphor. It's the same technology..."
+  VISUAL_11_START: s2f(171.44),  // 5143 frames
+  VISUAL_11_END: s2f(187.78),  // 5633 frames
 
-  // Visual 12: PromptVariations — "behavior. The code is flexible. The contract is fi..."
-  VISUAL_12_START: s2f(195.5),  // 5865 frames
-  VISUAL_12_END: s2f(203.48),  // 6104 frames
+  // Visual 12: PromptTextFlows — "and why. And here's something subtle. The exact im..."
+  VISUAL_12_START: s2f(187.78),  // 5633 frames
+  VISUAL_12_END: s2f(195.5),  // 5865 frames
 
-  // Visual 13: PromptGovernsCode — "of the code it generates. You're specifying what a..."
-  VISUAL_13_START: s2f(203.48),  // 6104 frames
-  VISUAL_13_END: s2f(210.4),  // 6312 frames
+  // Visual 13: PromptVariations — "behavior. The code is flexible. The contract is fi..."
+  VISUAL_13_START: s2f(195.5),  // 5865 frames
+  VISUAL_13_END: s2f(203.48),  // 6104 frames
 
-  // Visual 14: PromptGovernsCode — "Remember the context window problem? Code is token..."
-  VISUAL_14_START: s2f(211.72),  // 6352 frames
-  VISUAL_14_END: s2f(249.7),  // 7491 frames
+  // Visual 14: PromptGovernsCode — "of the code it generates. You're specifying what a..."
+  VISUAL_14_START: s2f(203.48),  // 6104 frames
+  VISUAL_14_END: s2f(210.4),  // 6312 frames
 
-  // Visual 15: GroundingPanel — "not machine-assemble. Third, grounding. This deter..."
-  VISUAL_15_START: s2f(250.08),  // 7502 frames
-  VISUAL_15_END: s2f(258.04),  // 7741 frames
+  // Visual 15: ContextWindowComparison (density) — "Remember the context window problem? Code is token..."
+  VISUAL_15_START: s2f(211.72),  // 6352 frames
+  VISUAL_15_END: s2f(249.7),  // 7491 frames
 
-  // Visual 16: GroundingComparison — "Grounding is learned from your past generations. W..."
-  VISUAL_16_START: s2f(259.24),  // 7777 frames
-  VISUAL_16_END: s2f(264.6),  // 7938 frames
+  // Visual 16: GroundingPanel — "not machine-assemble. Third, grounding. This deter..."
+  VISUAL_16_START: s2f(250.08),  // 7502 frames
+  VISUAL_16_END: s2f(258.04),  // 7741 frames
 
-  // Visual 17: GroundingDatabase — "that knowledge feeds back into the system. Your st..."
-  VISUAL_17_START: s2f(264.6),  // 7938 frames
-  VISUAL_17_END: s2f(276.48),  // 8294 frames
+  // Visual 17: GroundingComparison — "Grounding is learned from your past generations. W..."
+  VISUAL_17_START: s2f(259.24),  // 7777 frames
+  VISUAL_17_END: s2f(264.6),  // 7938 frames
 
-  // Visual 18: ThreeComponents — "Cramped plus tests plus grounding. Intent plus con..."
-  VISUAL_18_START: s2f(278.46),  // 8354 frames
-  VISUAL_18_END: s2f(286.34),  // 8590 frames
+  // Visual 18: GroundingDatabase — "that knowledge feeds back into the system. Your st..."
+  VISUAL_18_START: s2f(264.6),  // 7938 frames
+  VISUAL_18_END: s2f(276.48),  // 8294 frames
 
-  // Visual 19: CodeOutputMoldGlows — "complete specification. The code is output, the mo..."
-  VISUAL_19_START: s2f(286.34),  // 8590 frames
-  VISUAL_19_END: s2f(291.86),  // 8756 frames
+  // Visual 19: ThreeComponents — "Cramped plus tests plus grounding. Intent plus con..."
+  VISUAL_19_START: s2f(278.46),  // 8354 frames
+  VISUAL_19_END: s2f(286.34),  // 8590 frames
+
+  // Visual 20: CodeOutputMoldGlows — "complete specification. The code is output, the mo..."
+  VISUAL_20_START: s2f(286.34),  // 8590 frames
+  VISUAL_20_END: s2f(295.0),  // 8850 frames (extended to fill remaining Part3 duration)
 };
 
 // Visual sequence: maps BEATS ranges to composition IDs
@@ -146,20 +150,21 @@ export const VISUAL_SEQUENCE = [
   { start: BEATS.VISUAL_03_START, end: BEATS.VISUAL_03_END, id: "FocusSingleWall", desc: "Walls not optional, model sees tests, cannot violate" },
   { start: BEATS.VISUAL_04_START, end: BEATS.VISUAL_04_END, id: "BugDiscovered", desc: "Bug found, you don't patch the code" },
   { start: BEATS.VISUAL_05_START, end: BEATS.VISUAL_05_END, id: "AddTestWall", desc: "Add a wall, permanent, bug can never occur again" },
-  { start: BEATS.VISUAL_06_START, end: BEATS.VISUAL_06_END, id: "RatchetTimelapse", desc: "Ratchet effect, tests only accumulate, mold more precise" },
-  { start: BEATS.VISUAL_07_START, end: BEATS.VISUAL_07_END, id: "TraditionalVsPdd", desc: "Traditional fix one place, PDD prevents bug everywhere" },
-  { start: BEATS.VISUAL_08_START, end: BEATS.VISUAL_08_END, id: "TraditionalVsPdd", desc: "Synopsys uses SAT/SMT, PDD uses Z3, same class solver" },
-  { start: BEATS.VISUAL_09_START, end: BEATS.VISUAL_09_END, id: "TraditionalVsPdd", desc: "Z3 proves for all inputs, symbolic reasoning, same math" },
-  { start: BEATS.VISUAL_10_START, end: BEATS.VISUAL_10_END, id: "InjectionNozzle", desc: "Second the prompt, specification of what you want" },
-  { start: BEATS.VISUAL_11_START, end: BEATS.VISUAL_11_END, id: "PromptTextFlows", desc: "Prompt defines what and why, implementation can vary" },
-  { start: BEATS.VISUAL_12_START, end: BEATS.VISUAL_12_END, id: "PromptVariations", desc: "Behavior locked, code flexible, contract fixed" },
-  { start: BEATS.VISUAL_13_START, end: BEATS.VISUAL_13_END, id: "PromptGovernsCode", desc: "Good prompt 1/5 to 1/10 size, what and why not how" },
-  { start: BEATS.VISUAL_14_START, end: BEATS.VISUAL_14_END, id: "PromptGovernsCode", desc: "Context window: prompts are NL, 30x more training data" },
-  { start: BEATS.VISUAL_15_START, end: BEATS.VISUAL_15_END, id: "GroundingPanel", desc: "Third grounding, determines properties of what fills mold" },
-  { start: BEATS.VISUAL_16_START, end: BEATS.VISUAL_16_END, id: "GroundingComparison", desc: "Grounding learned from past generations" },
-  { start: BEATS.VISUAL_17_START, end: BEATS.VISUAL_17_END, id: "GroundingDatabase", desc: "Style patterns conventions, feeds back into system" },
-  { start: BEATS.VISUAL_18_START, end: BEATS.VISUAL_18_END, id: "ThreeComponents", desc: "Prompt+tests+grounding, complete specification" },
-  { start: BEATS.VISUAL_19_START, end: BEATS.VISUAL_19_END, id: "CodeOutputMoldGlows", desc: "Code is output, mold is what matters" },
+  { start: BEATS.VISUAL_06_START, end: BEATS.VISUAL_06_END, id: "CodeRegenerates", desc: "Code regenerates with new wall, visual payoff of constraint" },
+  { start: BEATS.VISUAL_07_START, end: BEATS.VISUAL_07_END, id: "RatchetTimelapse", desc: "Ratchet effect, tests only accumulate, mold more precise" },
+  { start: BEATS.VISUAL_08_START, end: BEATS.VISUAL_08_END, id: "TraditionalVsPdd", desc: "Traditional fix one place, PDD prevents bug everywhere" },
+  { start: BEATS.VISUAL_09_START, end: BEATS.VISUAL_09_END, id: "Z3SmtSidebar", desc: "Synopsys uses SAT/SMT, PDD uses Z3, same class solver" },
+  { start: BEATS.VISUAL_10_START, end: BEATS.VISUAL_10_END, id: "Z3SmtSidebar", desc: "Z3 proves for all inputs, symbolic reasoning, same math" },
+  { start: BEATS.VISUAL_11_START, end: BEATS.VISUAL_11_END, id: "InjectionNozzle", desc: "Second the prompt, specification of what you want" },
+  { start: BEATS.VISUAL_12_START, end: BEATS.VISUAL_12_END, id: "PromptTextFlows", desc: "Prompt defines what and why, implementation can vary" },
+  { start: BEATS.VISUAL_13_START, end: BEATS.VISUAL_13_END, id: "PromptVariations", desc: "Behavior locked, code flexible, contract fixed" },
+  { start: BEATS.VISUAL_14_START, end: BEATS.VISUAL_14_END, id: "PromptGovernsCode", desc: "Good prompt 1/5 to 1/10 size, what and why not how" },
+  { start: BEATS.VISUAL_15_START, end: BEATS.VISUAL_15_END, id: "ContextWindowComparison", desc: "Context window: prompts are NL, 30x more training data, density variant" },
+  { start: BEATS.VISUAL_16_START, end: BEATS.VISUAL_16_END, id: "GroundingPanel", desc: "Third grounding, determines properties of what fills mold" },
+  { start: BEATS.VISUAL_17_START, end: BEATS.VISUAL_17_END, id: "GroundingComparison", desc: "Grounding learned from past generations" },
+  { start: BEATS.VISUAL_18_START, end: BEATS.VISUAL_18_END, id: "GroundingDatabase", desc: "Style patterns conventions, feeds back into system" },
+  { start: BEATS.VISUAL_19_START, end: BEATS.VISUAL_19_END, id: "ThreeComponents", desc: "Prompt+tests+grounding, complete specification" },
+  { start: BEATS.VISUAL_20_START, end: BEATS.VISUAL_20_END, id: "CodeOutputMoldGlows", desc: "Code is output, mold is what matters" },
 ];
 
 // Props schema

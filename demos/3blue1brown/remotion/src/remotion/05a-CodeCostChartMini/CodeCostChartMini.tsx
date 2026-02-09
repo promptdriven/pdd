@@ -325,13 +325,44 @@ export const CodeCostChartMini: React.FC<CodeCostChartMiniPropsType> = ({
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
   );
 
-  // Emphasis annotations
+  // First annotation beat (VISUAL 9)
   const emphasisOpacity = interpolate(
     frame,
     [BEATS.EMPHASIS_START, BEATS.EMPHASIS_START + 30],
     [0, 1],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
   );
+
+  // Second annotation beat (VISUAL 10)
+  const emphasis2Opacity = interpolate(
+    frame,
+    [BEATS.EMPHASIS2_START, BEATS.EMPHASIS2_START + 30],
+    [0, 1],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
+  );
+
+  // "Same tools. Different codebase sizes." annotation - mid Phase 2
+  const sameToolsStart = Math.round((BEATS.PHASE2_START + BEATS.PHASE2_END) / 2);
+  const forkAnnotationOpacity = interpolate(
+    frame,
+    [sameToolsStart, sameToolsStart + 60],
+    [0, 1],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
+  );
+
+  // Curved arrow "Every patch adds code" - appears with delay after "Same tools"
+  const arrowStart = sameToolsStart + 180;
+  const arrowOpacity = interpolate(
+    frame,
+    [arrowStart, arrowStart + 60],
+    [0, 1],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
+  );
+
+  // Arrow coordinates: from small codebase (~3 hrs) to large codebase (~11 hrs) at ~2023.5
+  const arrowX = getX(2023.5);
+  const arrowStartY = getY(3);
+  const arrowEndY = getY(11);
 
   // Crossing point
   const crossingOpacity = interpolate(
@@ -467,6 +498,77 @@ export const CodeCostChartMini: React.FC<CodeCostChartMiniPropsType> = ({
         label="Large Codebase"
       />
 
+      {/* "Same tools. Different codebase sizes." annotation during Phase 2 */}
+      {frame >= sameToolsStart && frame < BEATS.REVEAL_DASHED_START && (
+        <div
+          style={{
+            position: "absolute",
+            top: "50%",
+            left: "50%",
+            transform: "translate(-50%, -50%)",
+            opacity: forkAnnotationOpacity,
+            fontFamily: "Inter, system-ui, sans-serif",
+            fontSize: 26,
+            fontWeight: 600,
+            color: "#ffffff",
+            textShadow: "0 2px 10px rgba(0,0,0,0.8)",
+            backgroundColor: "rgba(0, 0, 0, 0.6)",
+            padding: "16px 32px",
+            borderRadius: 8,
+          }}
+        >
+          Same tools. Different codebase sizes.
+        </div>
+      )}
+
+      {/* Curved arrow from small fork to large fork: "Every patch adds code" */}
+      {frame >= arrowStart && frame < BEATS.REVEAL_DASHED_START && (
+        <svg
+          width={width}
+          height={height}
+          style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none" }}
+        >
+          <defs>
+            <marker
+              id="arrowhead-mini"
+              markerWidth="10"
+              markerHeight="7"
+              refX="10"
+              refY="3.5"
+              orient="auto"
+            >
+              <polygon
+                points="0 0, 10 3.5, 0 7"
+                fill={COLORS.LINE_PATCH}
+                opacity={arrowOpacity}
+              />
+            </marker>
+          </defs>
+          <path
+            d={`M ${arrowX} ${arrowStartY} C ${arrowX + 80} ${arrowStartY}, ${arrowX + 80} ${arrowEndY}, ${arrowX} ${arrowEndY}`}
+            fill="none"
+            stroke={COLORS.LINE_PATCH}
+            strokeWidth={2}
+            strokeDasharray="6,4"
+            opacity={arrowOpacity}
+            markerEnd="url(#arrowhead-mini)"
+          />
+          <text
+            x={arrowX + 90}
+            y={(arrowStartY + arrowEndY) / 2}
+            fill="#ffffff"
+            fontSize={20}
+            fontFamily="Inter, system-ui, sans-serif"
+            fontWeight={500}
+            opacity={arrowOpacity}
+            textAnchor="start"
+            dominantBaseline="middle"
+          >
+            Every patch adds code
+          </text>
+        </svg>
+      )}
+
       {/* ══ SECTION 3: The reveal ══ */}
       {/* "But watch the dashed line" — it draws for the FIRST time here */}
 
@@ -541,8 +643,8 @@ export const CodeCostChartMini: React.FC<CodeCostChartMiniPropsType> = ({
 
       {/* ══ SECTION 4: The data ══ */}
 
-      {/* Emphasis annotations (synced to "AI gave you a 60% speed up...") */}
-      {frame >= BEATS.EMPHASIS_START && frame < BEATS.CROSSING_START && (
+      {/* First annotation beat (VISUAL 9): Individual task vs Overall throughput */}
+      {frame >= BEATS.EMPHASIS_START && frame < BEATS.EMPHASIS_MID && (
         <div
           style={{
             position: "absolute",
@@ -557,13 +659,40 @@ export const CodeCostChartMini: React.FC<CodeCostChartMiniPropsType> = ({
           }}
         >
           <p style={{ fontFamily: "Inter, system-ui, sans-serif", fontSize: 28, color: COLORS.LINE_PATCH, margin: 0, marginBottom: 8, fontWeight: 600 }}>
-            Individual task: -55% faster (Peng et al., 2023)
+            Individual task: -55% (GitHub, 2022)
+          </p>
+          <p style={{ fontFamily: "Inter, system-ui, sans-serif", fontSize: 18, color: "rgba(255, 255, 255, 0.7)", margin: 0, marginBottom: 16, fontWeight: 400 }}>
+            95 developers, one greenfield task
           </p>
           <p style={{ fontFamily: "Inter, system-ui, sans-serif", fontSize: 28, color: "#ffffff", margin: 0, fontWeight: 500 }}>
-            Overall throughput: ~0% change (Uplevel, 2024)
+            Overall throughput: ~0% (Uplevel, 2024)
           </p>
-          <p style={{ fontFamily: "Inter, system-ui, sans-serif", fontSize: 28, color: COLORS.LINE_PATCH, margin: 0, marginTop: 8, fontWeight: 600 }}>
-            Bug rate: +41% (Uplevel, 2024)
+          <p style={{ fontFamily: "Inter, system-ui, sans-serif", fontSize: 18, color: "rgba(255, 255, 255, 0.7)", margin: 0, marginTop: 4, fontWeight: 400 }}>
+            785 developers, one year
+          </p>
+        </div>
+      )}
+
+      {/* Second annotation beat (VISUAL 10): Code churn and refactoring */}
+      {frame >= BEATS.EMPHASIS2_START && frame < BEATS.CROSSING_START && (
+        <div
+          style={{
+            position: "absolute",
+            top: "50%",
+            left: "50%",
+            transform: "translate(-50%, -50%)",
+            opacity: emphasis2Opacity,
+            textAlign: "center",
+            backgroundColor: "rgba(0, 0, 0, 0.75)",
+            padding: "24px 40px",
+            borderRadius: 12,
+          }}
+        >
+          <p style={{ fontFamily: "Inter, system-ui, sans-serif", fontSize: 28, color: COLORS.LINE_PATCH, margin: 0, marginBottom: 8, fontWeight: 600 }}>
+            Code churn: +44% (GitClear, 2025, 211M lines analyzed)
+          </p>
+          <p style={{ fontFamily: "Inter, system-ui, sans-serif", fontSize: 28, color: "#ffffff", margin: 0, fontWeight: 500 }}>
+            Refactoring: -60%
           </p>
         </div>
       )}
@@ -586,10 +715,13 @@ export const CodeCostChartMini: React.FC<CodeCostChartMiniPropsType> = ({
           <p style={{ fontFamily: "Inter, system-ui, sans-serif", fontSize: 24, color: "#ffffff", margin: 0, marginBottom: 12, fontWeight: 500 }}>
             Generate: <span style={{ color: COLORS.LINE_GENERATE, fontWeight: 700 }}>3 hrs</span>
             &nbsp;&nbsp;&nbsp;vs&nbsp;&nbsp;&nbsp;
-            True Cost: <span style={{ color: COLORS.LINE_PATCH, fontWeight: 700 }}>33 hrs</span>
+            Large CB Total: <span style={{ color: COLORS.LINE_PATCH, fontWeight: 700 }}>33 hrs</span>
+          </p>
+          <p style={{ fontFamily: "Inter, system-ui, sans-serif", fontSize: 22, color: "rgba(255, 255, 255, 0.8)", margin: 0, marginBottom: 12, fontWeight: 400 }}>
+            Patching wins... if you stay small. But patching makes you grow.
           </p>
           <p style={{ fontFamily: "Georgia, serif", fontSize: 32, color: "#ffffff", textShadow: "0 2px 10px rgba(0,0,0,0.8)", fontStyle: "italic", margin: 0 }}>
-            &ldquo;The debt ate the gains.&rdquo;
+            &ldquo;We are here.&rdquo;
           </p>
         </div>
       )}

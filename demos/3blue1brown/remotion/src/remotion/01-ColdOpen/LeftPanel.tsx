@@ -200,6 +200,39 @@ export const LeftPanel: React.FC = () => {
   // Show original code before diff appears
   const showOriginal = frame < syncStart;
 
+  // ── Hold-phase ambient animations (Issue #3 fix) ──
+  // These only activate once zoomProgress reaches 1 (the hold phase, 0:32-0:38)
+  const holdStart = secondsToFrames(BEATS.HOLD_START);
+  const isInHold = frame >= holdStart;
+  const holdFrame = Math.max(0, frame - holdStart);
+
+  // Warning icon: fades in/out on a 3-second cycle during hold
+  const warningCycle = isInHold ? (holdFrame % (fps * 3)) / (fps * 3) : 0;
+  const warningOpacity = isInHold
+    ? interpolate(warningCycle, [0, 0.15, 0.3, 0.45, 1], [0, 0.7, 0.7, 0, 0])
+    : 0;
+  const warningPositionIndex = isInHold ? Math.floor(holdFrame / (fps * 3)) % 4 : 0;
+  const warningPositions = [
+    { x: 35, y: 25 },
+    { x: 72, y: 42 },
+    { x: 20, y: 60 },
+    { x: 65, y: 18 },
+  ];
+
+  // Cursor blink: 0.5s on, 0.5s off during hold
+  const cursorVisible = isInHold ? Math.floor(holdFrame / (fps * 0.5)) % 2 === 0 : false;
+
+  // New TODO label that fades in mid-hold
+  const newTodoProgress = isInHold
+    ? interpolate(holdFrame, [fps * 2.5, fps * 3.5], [0, 1], {
+        extrapolateLeft: "clamp",
+        extrapolateRight: "clamp",
+      })
+    : 0;
+
+  // Subtle screen flicker (very occasional, very brief)
+  const flickerAmount = isInHold && (holdFrame % (fps * 4) < 2) ? 0.03 : 0;
+
   return (
     <AbsoluteFill
       style={{
@@ -265,7 +298,7 @@ export const LeftPanel: React.FC = () => {
             style={{
               fontFamily: "JetBrains Mono, SF Mono, Consolas, monospace",
               fontSize: 16,
-              lineHeight: 1.8,
+              lineHeight: 1.5,
               color: COLORS.CODE_NORMAL,
             }}
           >
@@ -450,14 +483,14 @@ export const LeftPanel: React.FC = () => {
                   }),
                 }}
               >
-                {/* Diff marker (red/green dots) */}
+                {/* Diff marker (red/green dots) - deterministic based on index */}
                 {!isFolder && item.hasChanges && (
                   <div
                     style={{
                       width: 5,
                       height: 5,
                       borderRadius: "50%",
-                      backgroundColor: Math.random() > 0.5 ? COLORS.CODE_ADDED : COLORS.CODE_REMOVED,
+                      backgroundColor: i % 2 === 0 ? COLORS.CODE_ADDED : COLORS.CODE_REMOVED,
                       flexShrink: 0,
                     }}
                   />
@@ -500,8 +533,8 @@ export const LeftPanel: React.FC = () => {
               }),
               fontFamily: "JetBrains Mono, monospace",
               fontSize: 11,
-              color: "#f87171",
-              backgroundColor: "rgba(248, 113, 113, 0.15)",
+              color: "#888888",
+              backgroundColor: "rgba(136, 136, 136, 0.15)",
               padding: "4px 8px",
               borderRadius: 4,
               transform: `rotate(${(i % 2 === 0 ? 1 : -1) * 5}deg)`,
@@ -511,15 +544,15 @@ export const LeftPanel: React.FC = () => {
           </div>
         ))}
 
-      {/* Developer hands on keyboard (satisfaction beat) */}
-      {frame >= satisfactionStart && frame < zoomStart && (
+      {/* Developer hands on keyboard (visible from Beat 1, fades out at zoom start) */}
+      {frame < zoomStart && (
         <div
           style={{
             position: "absolute",
             bottom: "15%",
             left: "50%",
             transform: "translateX(-50%)",
-            opacity: interpolate(frame, [satisfactionStart, satisfactionStart + fps * 0.5], [0, 0.8], {
+            opacity: interpolate(frame, [0, fps * 0.5], [0, 0.8], {
               extrapolateLeft: "clamp",
               extrapolateRight: "clamp",
             }),
@@ -630,6 +663,101 @@ export const LeftPanel: React.FC = () => {
           <path d="M 210 40 Q 100 80 40 150" stroke="#ec4899" strokeWidth="1" fill="none" opacity="0.4" strokeDasharray="3,3" />
           <path d="M 120 20 Q 80 140 130 160" stroke="#06b6d4" strokeWidth="1" fill="none" opacity="0.4" strokeDasharray="3,3" />
         </svg>
+      )}
+
+      {/* ── Hold-phase ambient elements ── */}
+      {/* Subtle screen flicker overlay */}
+      {flickerAmount > 0 && (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            backgroundColor: `rgba(74, 144, 217, ${flickerAmount})`,
+            pointerEvents: "none",
+            zIndex: 10,
+          }}
+        />
+      )}
+
+      {/* Warning icon fading in/out during hold */}
+      {isInHold && warningOpacity > 0 && (
+        <div
+          style={{
+            position: "absolute",
+            left: `${warningPositions[warningPositionIndex].x}%`,
+            top: `${warningPositions[warningPositionIndex].y}%`,
+            opacity: warningOpacity,
+            fontSize: 14,
+            pointerEvents: "none",
+            zIndex: 5,
+          }}
+        >
+          {"\u26A0"}
+        </div>
+      )}
+
+      {/* Blinking cursor in IDE window during hold */}
+      {isInHold && (
+        <div
+          style={{
+            position: "absolute",
+            top: "50%",
+            left: "50%",
+            transform: `translate(-50%, -50%) scale(${scale}) translateY(${translateY}px)`,
+            width: "90%",
+            transformOrigin: "center center",
+            pointerEvents: "none",
+          }}
+        >
+          <div
+            style={{
+              paddingLeft: 20,
+              paddingTop: 92,
+              fontFamily: "JetBrains Mono, SF Mono, monospace",
+              fontSize: 16,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center" }}>
+              <span style={{ width: 24 }} />
+              <span style={{ width: 30, marginRight: 12 }} />
+              <span style={{ color: COLORS.CODE_NORMAL, visibility: "hidden" }}>
+                {"  return data?.user?.name ?? 'Unknown';"}
+              </span>
+              <span
+                style={{
+                  opacity: cursorVisible ? 1 : 0,
+                  color: COLORS.LEFT_ACCENT,
+                  marginLeft: 2,
+                  fontWeight: "bold",
+                }}
+              >
+                |
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* New TODO appearing mid-hold */}
+      {newTodoProgress > 0 && (
+        <div
+          style={{
+            position: "absolute",
+            left: "45%",
+            top: "48%",
+            opacity: newTodoProgress * 0.8,
+            fontFamily: "JetBrains Mono, monospace",
+            fontSize: 11,
+            color: "#fbbf24",
+            backgroundColor: "rgba(251, 191, 36, 0.12)",
+            padding: "4px 8px",
+            borderRadius: 4,
+            transform: "rotate(-3deg)",
+            zIndex: 5,
+          }}
+        >
+          {"// TODO: fix race condition"}
+        </div>
       )}
 
       {/* Browser tabs (during zoom) */}

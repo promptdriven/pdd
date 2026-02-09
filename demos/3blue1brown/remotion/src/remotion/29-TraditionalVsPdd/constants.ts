@@ -9,17 +9,22 @@ export const TRADITIONAL_VS_PDD_WIDTH = 1920;
 export const TRADITIONAL_VS_PDD_HEIGHT = 1080;
 
 // Beat timings (in frames at 30fps)
+// Both sides animate in parallel from frame 0 per spec (simultaneous side-by-side comparison)
 export const BEATS = {
   SPLIT_START: 0,
   SPLIT_END: 60,
-  TRADITIONAL_ANIMATE_START: 90,
-  TRADITIONAL_ANIMATE_END: 240,
-  PDD_ANIMATE_START: 270,
-  PDD_ANIMATE_END: 420,
+  TRADITIONAL_ANIMATE_START: 60,
+  TRADITIONAL_ANIMATE_END: 450,
+  PDD_ANIMATE_START: 60,
+  PDD_ANIMATE_END: 450,
   COMPARISON_START: 480,
   INSIGHT_START: 600,
   HOLD_START: 720,
 };
+
+// Traditional side cycling: the bug-patch loop repeats every CYCLE_PERIOD frames
+// Per spec line 153: const cyclePosition = frame % 180
+export const TRADITIONAL_CYCLE_PERIOD = 180;
 
 // Color palette
 export const COLORS = {

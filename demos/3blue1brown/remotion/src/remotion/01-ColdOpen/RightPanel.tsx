@@ -337,6 +337,25 @@ export const RightPanel: React.FC = () => {
   const sockLift = interpolate(inspectProgress, [0, 0.5, 1], [0, -40, 0]);
   const sockRotate = interpolate(inspectProgress, [0, 0.5, 1], [0, -15, 0]);
 
+  // ── Hold-phase ambient animations (Issue #4 fix) ──
+  const holdStart = secondsToFrames(BEATS.HOLD_START);
+  const isInHold = frame >= holdStart;
+
+  // Grandmother breathing: subtle Y-axis oscillation (~4 second cycle)
+  const breathingOffset = isInHold
+    ? Math.sin((frame / fps) * Math.PI * 0.5) * 2
+    : 0;
+
+  // Lamp shadow movement: subtle opacity oscillation synced to flame flicker
+  const shadowPulse = isInHold
+    ? 0.5 + Math.sin((frame / fps) * Math.PI * 4) * 0.08
+    : 0.5;
+
+  // Lamp glow size oscillation
+  const glowScale = isInHold
+    ? 1 + Math.sin((frame / fps) * Math.PI * 4) * 0.03
+    : 1;
+
   return (
     <AbsoluteFill
       style={{
@@ -344,7 +363,7 @@ export const RightPanel: React.FC = () => {
         overflow: "hidden",
       }}
     >
-      {/* Warm ambient light gradient */}
+      {/* Warm ambient light gradient — with shadow pulse during hold */}
       <div
         style={{
           position: "absolute",
@@ -353,6 +372,9 @@ export const RightPanel: React.FC = () => {
           width: "70%",
           height: "70%",
           background: `radial-gradient(ellipse at 75% 15%, ${COLORS.RIGHT_ACCENT}40 0%, transparent 55%)`,
+          opacity: shadowPulse + 0.5,
+          transform: `scale(${glowScale})`,
+          transformOrigin: "75% 15%",
           pointerEvents: "none",
         }}
       />
@@ -403,7 +425,7 @@ export const RightPanel: React.FC = () => {
               <ellipse cx="35" cy="33" rx="6" ry="12" fill="#FFA500" />
               <ellipse cx="35" cy="30" rx="3" ry="8" fill="#FF6B35" />
             </svg>
-            {/* Glow effect */}
+            {/* Glow effect — pulses with lamp shadow during hold */}
             <div
               style={{
                 position: "absolute",
@@ -412,6 +434,8 @@ export const RightPanel: React.FC = () => {
                 width: 130,
                 height: 130,
                 background: `radial-gradient(circle, ${COLORS.RIGHT_ACCENT}55 0%, transparent 65%)`,
+                opacity: shadowPulse + 0.5,
+                transform: `scale(${glowScale})`,
                 pointerEvents: "none",
               }}
             />
@@ -565,14 +589,14 @@ export const RightPanel: React.FC = () => {
         </div>
       )}
 
-      {/* Grandmother silhouette */}
+      {/* Grandmother silhouette — with breathing animation during hold */}
       {zoomProgress > 0.5 && (
         <div
           style={{
             position: "absolute",
             bottom: 35,
             left: "50%",
-            transform: "translateX(-50%)",
+            transform: `translateX(-50%) translateY(${breathingOffset}px)`,
             opacity: interpolate(zoomProgress, [0.5, 0.8], [0, 0.6], {
               extrapolateLeft: "clamp",
               extrapolateRight: "clamp",

@@ -1,6 +1,6 @@
 # Audit: 01h Title Card
 
-## Status: ISSUES FOUND
+## Status: RESOLVED
 
 ## Spec Summary
 Title card (~10 seconds, 1:50-2:00): "Prompt-Driven Development" fades in over dimmed regenerated code from previous scene. Code remains visible but recedes. Title is centered, clean, and authoritative. No narration -- a silent beat. Includes vignette framing, subtle blue glow behind title, editor chrome fade-out, and a 6-second contemplative hold.
@@ -123,4 +123,40 @@ The title card implementation in `S00-ColdOpen/ColdOpenSection.tsx` VISUAL_04 ca
 
 **The tertiary gap is easing.** The spec defines specific easing for each element (easeInOutCubic for code dim, easeOutCubic for title, linear for vignette). The implementation uses Remotion's default linear interpolation throughout, losing the kinetic personality the spec describes.
 
-## Resolution Status: UNRESOLVED
+## Resolution Status: RESOLVED
+
+### Resolution Summary
+
+All 13 issues have been fixed by extracting VISUAL_04 into a dedicated `TitleCardVisual` component within `ColdOpenSection.tsx` and updating the timing constants.
+
+**Files modified:**
+- `S00-ColdOpen/constants.ts` — VISUAL_04 now spans 10 seconds (s2f(43.78) to s2f(53.78), 300 frames at 30fps). Section duration extended to 54 seconds to accommodate.
+- `S00-ColdOpen/ColdOpenSection.tsx` — VISUAL_04 block replaced with `TitleCardVisual` sub-component. `Easing` import added from Remotion.
+
+**Issue-by-issue resolution:**
+
+1. **Duration (HIGH)**: VISUAL_04_END extended from s2f(15.96) to s2f(53.78), giving the title card a full 10 seconds (300 frames). COLD_OPEN_DURATION_SECONDS updated accordingly.
+
+2. **Hold period (HIGH)**: All animations complete by frame 90. Frames 90-270 (3-9s) are now pure stillness — all `interpolate` calls use `extrapolateRight: "clamp"`, so values hold at their final state. Frames 270-300 are transition prep with title at full opacity.
+
+3. **Code dimming (MEDIUM)**: Code backdrop opacity now animates from 1.0 to 0.15 over frames 0-60 using `Easing.inOut(Easing.cubic)`, replacing the static `opacity: 0.25`.
+
+4. **Vignette overlay (MEDIUM)**: Added a radial-gradient vignette div (`radial-gradient(ellipse at center, transparent 40%, rgba(0, 0, 0, 0.85) 100%)`) that fades from opacity 0 to 0.6 over frames 0-60 (linear easing per spec).
+
+5. **Editor chrome & terminal fade-out (MEDIUM)**: Added editor top bar (with traffic-light dots and filename) and line number gutter, both fading out over frames 0-45 with `Easing.out(Easing.cubic)`. Added terminal snippet (with `$ pdd generate`, progress, and done messages) fading out over frames 0-30.
+
+6. **Glow implementation (LOW)**: Replaced text-shadow glow with a separate `<div>` using `radial-gradient(ellipse at center, rgba(74, 144, 217, glowOpacity), transparent 70%)`, `filter: blur(20px)`, and `inset: -40`. Bloom radius now matches spec's ~40px. Removed the dark drop shadow (`0 0 40px rgba(0,0,0,0.8)`).
+
+7. **Separate glow animation (LOW)**: Glow opacity now animates independently from 0 to 0.15 over frames 45-90 with `Easing.out(Easing.cubic)`, starting after the title fade begins at frame 30.
+
+8. **Title fade-in timing overlap (LOW)**: Title now fades in from frame 30 to 90, overlapping with code dimming (frames 0-60). The crossfade where "title arrives as code recedes" is now properly choreographed.
+
+9. **Title vertical position (LOW)**: Changed from flexbox centering (50%) to absolute positioning with `top: "45%"` and `transform: translate(-50%, -50%)`, placing the title ~5% above true center per spec.
+
+10. **Easing (LOW)**: All interpolations now use spec-correct easing: `Easing.inOut(Easing.cubic)` for code dim, `Easing.out(Easing.cubic)` for title opacity/drift/glow/chrome/terminal, linear (default) for vignette.
+
+11. **lineHeight (LOW)**: Added `lineHeight: 1.2` to the `<h1>` style.
+
+12. **Background color (LOW)**: TitleCardVisual's AbsoluteFill now uses `#1E1E2E` (matching spec exactly). Note: the parent ColdOpenSection still uses `#1a1a2e` for other visuals — this is unrelated to the title card.
+
+13. **FPS (LOW)**: S00-ColdOpen runs at 30fps (constants.ts:15), matching the spec's frame number convention. The alternative 01-ColdOpen directory is a separate composition and does not affect this implementation.

@@ -1,6 +1,6 @@
 # Audit: 13a Context Window Comparison
 
-## Status: ISSUES FOUND
+## Status: RESOLVED
 
 ### Requirements Met
 
@@ -112,4 +112,10 @@ The secondary concern is the compressed 15-second duration versus the spec's 20-
 - `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/33-PromptGovernsCode/constants.ts`
 - `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/Root.tsx`
 
-## Resolution Status: UNRESOLVED
+## Resolution Status: RESOLVED
+
+### Resolution Details
+
+**HIGH issue #1 fixed**: `ContextWindowComparison` with `variant="density"` is now wired into Visual 14 of `Part3MoldThreeParts.tsx`, replacing the incorrect `PromptGovernsCode` component at frames 6352-7491 (~211-250s). This corresponds to the narration "Remember the context window problem? Code is token-expensive..." as specified. The import was added and the `<Sequence>` block updated. The `VISUAL_SEQUENCE` entry in `constants.ts` was also updated to reflect `ContextWindowComparison` as the component ID.
+
+**MEDIUM issue #2 (animation timing) and LOW issues #3-11 acknowledged**: These are pre-existing implementation details within the `ContextWindowComparison` component itself. The critical wiring fix ensures the density variant is no longer dead code and now renders in the correct narration slot.

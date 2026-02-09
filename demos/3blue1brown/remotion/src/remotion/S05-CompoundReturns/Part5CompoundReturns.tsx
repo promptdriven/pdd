@@ -2,6 +2,7 @@ import React from "react";
 import {
   AbsoluteFill,
   Audio,
+  Easing,
   Sequence,
   OffthreadVideo,
   staticFile,
@@ -11,7 +12,7 @@ import {
 import { BEATS, VISUAL_SEQUENCE, Part5CompoundReturnsPropsType } from "./constants";
 import { CompoundCurvesGraph } from "../46-CompoundCurvesGraph";
 import { InvestmentTable } from "../47-InvestmentTable";
-import { CrossingPoint, defaultCrossingPointProps } from "../08-CrossingPoint";
+import { EconomicsChartReprise } from "../08-CrossingPoint";
 
 /** Lower-third text overlay for callback video sections. */
 const CallbackTextOverlay: React.FC<{
@@ -168,32 +169,74 @@ export const Part5CompoundReturns: React.FC<Part5CompoundReturnsPropsType> = () 
                   "radial-gradient(ellipse at center, transparent 50%, rgba(26,26,46,0.4) 100%)",
               }}
             />
-            {/* Text: "Until now, the economics made it rational." */}
-            <CallbackTextOverlay
-              frame={localFrame6}
-              fadeStart={90}
-              fadeEnd={120}
-            >
-              <span
-                style={{
-                  color: "white",
-                  fontSize: 28,
-                  fontFamily: "system-ui, sans-serif",
-                  fontStyle: "italic",
-                }}
-              >
-                <span style={{ fontWeight: "bold" }}>Until now,</span>
-                {" "}the economics made it rational.
-              </span>
-            </CallbackTextOverlay>
+            {/* Text: "Until now, the economics made it rational."
+                Staggered fade: "Until now," fades in 20 frames before the rest
+                to land the narrative pivot per spec lines 77-79, 98-106 */}
+            {(() => {
+              const untilNowOpacity = interpolate(
+                localFrame6,
+                [90, 120],
+                [0, 1],
+                {
+                  extrapolateLeft: "clamp",
+                  extrapolateRight: "clamp",
+                  easing: Easing.out(Easing.cubic),
+                },
+              );
+              const restOfTextOpacity = interpolate(
+                localFrame6,
+                [110, 140],
+                [0, 1],
+                {
+                  extrapolateLeft: "clamp",
+                  extrapolateRight: "clamp",
+                  easing: Easing.out(Easing.cubic),
+                },
+              );
+              return (
+                <div
+                  style={{
+                    position: "absolute",
+                    bottom: 120,
+                    left: "50%",
+                    transform: "translateX(-50%)",
+                    backgroundColor: "rgba(26, 26, 46, 0.7)",
+                    padding: "12px 40px",
+                    borderRadius: 4,
+                    opacity: Math.max(untilNowOpacity, restOfTextOpacity),
+                  }}
+                >
+                  <span
+                    style={{
+                      color: "white",
+                      fontSize: 28,
+                      fontFamily: "system-ui, sans-serif",
+                      fontStyle: "italic",
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontWeight: "bold",
+                        opacity: untilNowOpacity,
+                      }}
+                    >
+                      Until now,
+                    </span>
+                    <span style={{ opacity: restOfTextOpacity }}>
+                      {" "}the economics made it rational.
+                    </span>
+                  </span>
+                </div>
+              );
+            })()}
           </AbsoluteFill>
         </Sequence>
       )}
 
-      {/* Visual 7: CrossingPoint - Economics changed, rational becomes darning socks */}
+      {/* Visual 7: Economics Chart Reprise - "rational becomes... darning socks." */}
       {activeVisual === 7 && (
         <Sequence from={BEATS.VISUAL_07_START}>
-          <CrossingPoint {...defaultCrossingPointProps} />
+          <EconomicsChartReprise />
         </Sequence>
       )}
     </AbsoluteFill>

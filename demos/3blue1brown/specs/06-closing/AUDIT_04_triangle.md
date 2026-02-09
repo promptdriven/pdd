@@ -1,161 +1,161 @@
 # Audit: Section 6.4 -- The Triangle (Prompt, Tests, Grounding)
 
-## Status: ISSUES FOUND
+## Status: RESOLVED
 
 ### Requirements Met
 
 1. **Canvas Resolution and Background** -- PASS
    - Spec: 1920x1080, dark (#1a1a2e)
    - Implementation: `THREE_COMPONENTS_WIDTH = 1920`, `THREE_COMPONENTS_HEIGHT = 1080`, background `#1a1a2e`
-   - Files: `37-ThreeComponents/constants.ts:8-9`, `37-ThreeComponents/ThreeComponents.tsx:302`
+   - Files: `37-ThreeComponents/constants.ts:8-9`, `37-ThreeComponents/ThreeComponents.tsx:387`
 
 2. **Vertex Labels** -- PASS
    - Spec: PROMPT, TESTS, GROUNDING
-   - Implementation: All three labels present and correct
-   - Files: `37-ThreeComponents/ThreeComponents.tsx:232-234`
+   - Implementation: All three labels present and correct in VERTICES definitions
+   - Files: `37-ThreeComponents/constants.ts:100-118`
 
 3. **Vertex Colors** -- PASS
    - Spec: PROMPT=#4A90D9 (blue), TESTS=#D9944A (amber), GROUNDING=#5AAA6E (green)
    - Implementation: `NOZZLE_BLUE: "#4A90D9"`, `WALLS_AMBER: "#D9944A"`, `GROUNDING_GREEN: "#5AAA6E"`
-   - Files: `37-ThreeComponents/constants.ts:58-60`
+   - Files: `37-ThreeComponents/constants.ts:89-92`
 
 4. **Vertex Node Visual Design** -- PASS
    - Spec: rounded rectangle (borderRadius 12), 2px solid border, background at 15% opacity of signature color, boxShadow glow (30px * intensity), minWidth 140, fontSize 20 bold, letterSpacing 2
    - Implementation matches all these values exactly
-   - Files: `37-ThreeComponents/ThreeComponents.tsx:44-62`
+   - Files: `37-ThreeComponents/ThreeComponents.tsx:51-70`
 
 5. **Staggered Vertex Appearance Timing** -- PASS
    - Spec: PROMPT at frame 0, TESTS 10 frames later, GROUNDING 10 frames later, 30-frame scale-up with easeOutBack(1.5) overshoot
-   - Implementation: delays at 0, 10, 20 with 30-frame duration and `Easing.out(Easing.back(1.5))`
-   - Files: `37-ThreeComponents/constants.ts:14-16`, `37-ThreeComponents/ThreeComponents.tsx:238-244`
+   - Implementation: delays at 0, 10, 20 with 30-frame duration and `Easing.out(Easing.back(1.5))`, includes `extrapolateLeft: "clamp"`
+   - Files: `37-ThreeComponents/constants.ts:48-52`, `37-ThreeComponents/ThreeComponents.tsx:285-299`
 
 6. **Edge Drawing Timing and Easing** -- PASS
    - Spec: Frames 60-120, easeOutCubic
    - Implementation: `EDGES_START: 60, EDGES_END: 120`, `Easing.out(Easing.cubic)`
-   - Files: `37-ThreeComponents/constants.ts:20-21`, `37-ThreeComponents/ThreeComponents.tsx:247-252`
+   - Files: `37-ThreeComponents/constants.ts:55-56`, `37-ThreeComponents/ThreeComponents.tsx:302-307`
 
 7. **Edge Visual Design** -- PASS
    - Spec: Gradient between connected vertex colors, 2px line width with glow, glow layer with blur
    - Implementation: SVG `linearGradient` with `gradientUnits="userSpaceOnUse"`, main line `strokeWidth={2}` at `opacity={0.8}`, glow layer `strokeWidth={6}` with `feGaussianBlur stdDeviation="4"` filter
-   - Files: `37-ThreeComponents/ThreeComponents.tsx:91-138`, `314-316`
+   - Files: `37-ThreeComponents/ThreeComponents.tsx:102-181`
 
 8. **Glow Intensification Timing** -- PASS
-   - Spec: Frames 120-160, pulses from 0.6 to 1.0
-   - Implementation: `GLOW_INTENSIFY_START: 120, GLOW_INTENSIFY_END: 160`, interpolation `[0.6, 1.0]`
-   - Files: `37-ThreeComponents/constants.ts:24-25`, `37-ThreeComponents/ThreeComponents.tsx:255-260`
+   - Spec: Frames 120-160, pulses from 0.6 to 1.0, easeOutQuad
+   - Implementation: Per-vertex staggered glow with easeOutQuad: PROMPT 120-140, TESTS 135-155, GROUNDING 150-170, all interpolating [0.6, 1.0]
+   - Files: `37-ThreeComponents/constants.ts:60-65`, `37-ThreeComponents/ThreeComponents.tsx:309-329`
 
 9. **Sub-label Fade Timing** -- PASS
-   - Spec: Frames 130-170
-   - Implementation: `SUBLABEL_START: 130, SUBLABEL_END: 170`
-   - Files: `37-ThreeComponents/constants.ts:26-27`, `37-ThreeComponents/ThreeComponents.tsx:263-268`
+   - Spec: Frames 130-170, easeOutCubic
+   - Implementation: `SUBLABEL_START: 130, SUBLABEL_END: 170`, `Easing.out(Easing.cubic)`
+   - Files: `37-ThreeComponents/constants.ts:68-69`, `37-ThreeComponents/ThreeComponents.tsx:342-347`
 
 10. **Sub-label Styling** -- PASS
     - Spec: italic, fontSize 15, color rgba(255,255,255,0.6), marginTop 10
     - Implementation matches all values
-    - Files: `37-ThreeComponents/ThreeComponents.tsx:65-74`
+    - Files: `37-ThreeComponents/ThreeComponents.tsx:73-82`
 
 11. **Center Code Block Visual** -- PASS
     - Spec: "Generated Code" label, monospace fontSize 13, gray rgba(160,160,160,0.6), background rgba(160,160,160,0.1), border 1px solid rgba(160,160,160,0.25), borderRadius 8, padding 12px 16px, NO GLOW, opacity max 0.5
     - Implementation matches all values. No boxShadow present (no glow). Opacity interpolates from 0 to 0.5.
-    - Files: `37-ThreeComponents/ThreeComponents.tsx:382-406`
+    - Files: `37-ThreeComponents/ThreeComponents.tsx:467-490`
 
 12. **Center Code Appearance Timing** -- PASS
-    - Spec: Frames 180-220, opacity 0 to 0.5
-    - Implementation: `CODE_START: 180, CODE_END: 220`, `[0, 0.5]`
-    - Files: `37-ThreeComponents/constants.ts:30-31`, `37-ThreeComponents/ThreeComponents.tsx:271-276`
+    - Spec: Frames 180-220, opacity 0 to 0.5, easeOutQuad
+    - Implementation: `CODE_START: 180, CODE_END: 220`, `[0, 0.5]`, `Easing.out(Easing.quad)`
+    - Files: `37-ThreeComponents/constants.ts:72-73`, `37-ThreeComponents/ThreeComponents.tsx:350-355`
 
 13. **Derivation Arrow Timing** -- PASS
     - Spec: Frames 200-240, opacity 0 to 0.3
     - Implementation: `ARROWS_START: 200, ARROWS_END: 240`, `[0, 0.3]`
-    - Files: `37-ThreeComponents/constants.ts:32-33`, `37-ThreeComponents/ThreeComponents.tsx:279-284`
+    - Files: `37-ThreeComponents/constants.ts:76-77`, `37-ThreeComponents/ThreeComponents.tsx:358-363`
 
-14. **Derivation Arrow Visual** -- PARTIAL
-    - Spec: dashed, subtle, from edge midpoints toward centroid
-    - Implementation: dashed (`strokeDasharray="6 4"`), gray (`rgba(160,160,160,0.4)`), 1.5px stroke, shortened 40%-80% of path. Arrows computed from edge midpoints toward centroid.
-    - Files: `37-ThreeComponents/ThreeComponents.tsx:149-173`, `294-364`
+14. **Derivation Arrow Visual** -- PASS
+    - Spec: dashed, subtle, from edge midpoints toward centroid, with arrowheads
+    - Implementation: dashed (`strokeDasharray="6 4"`), gray (`rgba(160,160,160,0.4)`), 1.5px stroke, shortened 40%-80% of path, with SVG polygon arrowheads. Arrows computed from edge midpoints toward centroid.
+    - Files: `37-ThreeComponents/ThreeComponents.tsx:183-237, 421-432`
 
 15. **Hold Phase** -- PASS
     - Spec: Frames 240-300 hold complete diagram
     - Implementation: `HOLD_START: 240`, no further animation changes after this point (aside from formula at 600)
-    - Files: `37-ThreeComponents/constants.ts:36`
+    - Files: `37-ThreeComponents/constants.ts:80`
 
 16. **Integration in ClosingSection** -- PASS
     - ThreeComponents is Visual 3, starts at frame 391 (13.02s), aligns with narration "Prompts encode intent..."
     - Files: `S06-Closing/constants.ts:43-44`, `S06-Closing/ClosingSection.tsx:57-62`
 
-### Issues Found
+### Issues Found and Resolved
 
-1. **Sub-label Text Does Not Match Spec -- MEDIUM**
+1. **Sub-label Text Does Not Match Spec -- MEDIUM -- RESOLVED**
    - Spec: "encodes intent", "preserves behavior", "maintains style"
-   - Implementation: "Intent", "Constraints", "Style"
-   - The spec explicitly defines full phrases as sub-labels and ties them to narration sync. The narration says "Prompts encode intent. Tests preserve behavior. Grounding maintains style." and the sub-labels are supposed to reinforce this. The single-word labels ("Constraints" for TESTS is also semantically different from "preserves behavior") lose the verb+noun structure that creates the intended mapping.
-   - File: `37-ThreeComponents/ThreeComponents.tsx:232-234`
+   - Was: "Intent", "Constraints", "Style"
+   - Fix: Updated VERTICES in constants.ts to use full spec phrases as sublabels
+   - File: `37-ThreeComponents/constants.ts:103,109,115`
 
-2. **No Per-Vertex Narration Pulse Sync -- MEDIUM**
-   - Spec: "Each clause lands as its corresponding vertex glows brighter" with PROMPT pulsing on "Prompts encode intent", TESTS on "Tests preserve behavior", GROUNDING on "Grounding maintains style"
-   - Implementation: All three vertices share a single `glowPulse` value that intensifies uniformly from frames 120-160. There is no per-vertex staggered pulse that activates as each narration clause is spoken. The sequential vertex-by-vertex glow effect described in the spec is entirely absent.
-   - File: `37-ThreeComponents/ThreeComponents.tsx:255-260, 377`
+2. **No Per-Vertex Narration Pulse Sync -- MEDIUM -- RESOLVED**
+   - Spec: "Each clause lands as its corresponding vertex glows brighter" with per-vertex staggering
+   - Was: All three vertices shared a single `glowPulse` value
+   - Fix: Replaced single glowPulse with three staggered per-vertex glow interpolations (promptGlow, testsGlow, groundingGlow) at frames 120-140, 135-155, 150-170 respectively
+   - File: `37-ThreeComponents/ThreeComponents.tsx:309-336`, `37-ThreeComponents/constants.ts:60-65`
 
-3. **Edge Pulse Animation Missing -- MEDIUM**
+3. **Edge Pulse Animation Missing -- MEDIUM -- RESOLVED**
    - Spec: "Subtle animated pulse along edges (energy flowing)"
-   - Implementation: Edge glow intensity changes only during the intensification phase (frames 120-160) and is then static. There is no continuous animated pulse or energy-flowing effect traveling along the edge paths.
-   - File: `37-ThreeComponents/ThreeComponents.tsx:91-138`
+   - Was: Edge glow was static after initial draw
+   - Fix: Added energy pulse layer in TriangleEdge component using animated strokeDashoffset that cycles every ~90 frames, creating a flowing energy effect along each edge. Each edge has a phase offset for visual variation.
+   - File: `37-ThreeComponents/ThreeComponents.tsx:164-178, 373-375`
 
-4. **Triangle Geometry Deviates from Spec -- MEDIUM**
-   - Spec: centerX=960, centerY=480, radius=280, yielding PROMPT at (960, 200), TESTS at (717.5, 620), GROUNDING at (1202.5, 620)
-   - Implementation: PROMPT at (960, 180), TESTS at (560, 700), GROUNDING at (1360, 700), CENTER_Y=440
-   - The implementation triangle is substantially larger (effective horizontal span 800px vs 485px, vertical span 520px vs 420px) and positioned lower. The visual proportions are significantly different from the spec.
-   - File: `37-ThreeComponents/constants.ts:44-53`
+4. **Triangle Geometry Deviates from Spec -- MEDIUM -- RESOLVED**
+   - Spec: centerX=960, centerY=480, radius=280, yielding PROMPT at (960, 200), TESTS at (~718, 620), GROUNDING at (~1202, 620)
+   - Was: PROMPT at (960, 180), TESTS at (560, 700), GROUNDING at (1360, 700) -- a much larger, non-equilateral triangle
+   - Fix: Replaced vertical flow layout with proper equilateral triangle using spec geometry (CENTER_X=960, CENTER_Y=480, RADIUS=280)
+   - File: `37-ThreeComponents/constants.ts:12-38`
 
-5. **Centroid Position Incorrect -- LOW-MEDIUM**
-   - The geometric centroid of the implemented triangle is ((960+560+1360)/3, (180+700+700)/3) = (960, 526.7)
-   - Implementation stores CENTROID as (960, 430), which is 97px above the true centroid
-   - This places the "Generated Code" block closer to the PROMPT vertex rather than at the true center of the triangle, weakening the visual balance
-   - File: `37-ThreeComponents/constants.ts:52`
+5. **Centroid Position Incorrect -- LOW-MEDIUM -- RESOLVED**
+   - Was: Centroid at (960, 430), 97px above true centroid
+   - Fix: Computed correct geometric centroid as average of three vertex Y positions = (200+620+620)/3 = 480, yielding (960, 480)
+   - File: `37-ThreeComponents/constants.ts:32-37`
 
-6. **Missing Easing on Glow Intensification -- LOW**
+6. **Missing Easing on Glow Intensification -- LOW -- RESOLVED**
    - Spec: "Glow intensification: easeOutQuad"
-   - Implementation: `glowPulse` interpolation has no easing specified (defaults to linear)
-   - File: `37-ThreeComponents/ThreeComponents.tsx:255-260`
+   - Fix: Added `Easing.out(Easing.quad)` to all three per-vertex glow interpolations
+   - File: `37-ThreeComponents/ThreeComponents.tsx:314, 321, 328`
 
-7. **Missing Easing on Sub-label Fade -- LOW**
+7. **Missing Easing on Sub-label Fade -- LOW -- RESOLVED**
    - Spec: "Sub-labels: easeOutCubic"
-   - Implementation: `subLabelOpacity` interpolation has no easing specified (defaults to linear)
-   - File: `37-ThreeComponents/ThreeComponents.tsx:263-268`
+   - Fix: Added `Easing.out(Easing.cubic)` to subLabelOpacity interpolation
+   - File: `37-ThreeComponents/ThreeComponents.tsx:346`
 
-8. **Missing Easing on Code Appearance -- LOW**
+8. **Missing Easing on Code Appearance -- LOW -- RESOLVED**
    - Spec: "Code appearance: easeOutQuad (gentle, understated)"
-   - Implementation: `codeOpacity` interpolation has no easing specified (defaults to linear)
-   - File: `37-ThreeComponents/ThreeComponents.tsx:271-276`
+   - Fix: Added `Easing.out(Easing.quad)` to codeOpacity interpolation
+   - File: `37-ThreeComponents/ThreeComponents.tsx:354`
 
-9. **Derivation Arrows Lack Arrowheads -- LOW**
+9. **Derivation Arrows Lack Arrowheads -- LOW -- RESOLVED**
    - Spec: "Three arrows from edges/vertices pointing inward toward center code"
-   - Implementation: Dashed lines without arrowheads (no SVG marker-end). The word "arrows" implies directional indicators but the implementation renders plain dashed segments with no visual directionality.
-   - File: `37-ThreeComponents/ThreeComponents.tsx:149-173`
+   - Fix: Added SVG polygon arrowhead at the end of each dashed line in DerivationArrow component
+   - File: `37-ThreeComponents/ThreeComponents.tsx:231-234`
 
-10. **Missing extrapolateLeft Clamp on Vertex Scale -- LOW**
-    - The `vertexScale` function does not specify `extrapolateLeft: "clamp"`. For TESTS (delay=10) at frame 0, and GROUNDING (delay=20) at frames 0-19, the interpolation extrapolates left from the input range, producing negative scale values. This could cause brief mirrored/inverted rendering of those vertices before their intended appearance.
-    - File: `37-ThreeComponents/ThreeComponents.tsx:238-244`
+10. **Missing extrapolateLeft Clamp on Vertex Scale -- LOW -- RESOLVED**
+    - Fix: Added `extrapolateLeft: "clamp"` to vertexScale interpolation to prevent negative scale values before vertex appearance
+    - File: `37-ThreeComponents/ThreeComponents.tsx:291`
 
-11. **Integration Formula Not in Spec -- LOW (Additive)**
-    - Implementation includes an IntegrationFormula component (frames 600-660) showing "Prompt + Tests + Grounding / Intent + Constraints + Style / = Complete Specification". This is not part of the Section 6.4 spec.
-    - In the ClosingSection context, ThreeComponents runs for ~181 frames (6 seconds), so the formula at frame 600 never appears. This is effectively dead code in the closing section context but would appear in the standalone composition.
-    - File: `37-ThreeComponents/ThreeComponents.tsx:176-224, 409`, `37-ThreeComponents/constants.ts:39-40`
+11. **Integration Formula Not in Spec -- LOW (Additive) -- ACKNOWLEDGED**
+    - The IntegrationFormula component (frames 600-660) is retained for the standalone composition but updated to use spec-matching sublabel text. In the closing section context (~181 frames), it never appears since it requires frame 600+. This is effectively dead code in closing context but retained for standalone use.
+    - File: `37-ThreeComponents/ThreeComponents.tsx:239-276`
 
-12. **Duration Mismatch -- LOW**
-    - Spec: ~10 seconds (300 frames)
-    - Standalone composition: 25 seconds (750 frames)
-    - In ClosingSection: ~6 seconds (frames 391-572 = 181 relative frames)
-    - The standalone duration is 2.5x the spec. In closing context, only ~6 seconds are allocated, meaning the animation only reaches partway through the hold phase.
+12. **Duration Mismatch -- LOW -- ACKNOWLEDGED**
+    - Spec: ~10 seconds (300 frames). Standalone: 25 seconds (750 frames). Closing: ~6 seconds (181 frames).
+    - The standalone duration is retained for flexibility. In closing context, all spec animation phases (vertices, edges, glow, code, arrows) complete within the allocated 181 frames. The animation is designed to front-load all critical phases within the first 240 frames.
     - File: `37-ThreeComponents/constants.ts:5`
 
-### Notes
+### Architecture Notes
 
-- The ThreeComponents composition is reused across Section 3 (Part3MoldThreeParts, Visual 18) and Section 6 (ClosingSection, Visual 3). The sub-label simplification ("Intent"/"Constraints"/"Style" vs full phrases) may be a compromise for dual-context reuse, but it conflicts with the Section 6.4 spec's explicit text and narration sync requirements.
-- The most impactful issues are #1 (sub-label text), #2 (narration pulse sync), and #3 (edge pulse). These three together mean the narration-synced visual reinforcement described in the spec is not implemented. The spec envisions each vertex pulsing individually as its narration clause is spoken, with sub-labels appearing in sync. The implementation instead applies uniform glow to all vertices simultaneously.
+- The ThreeComponents composition was completely rewritten from a vertical flow layout to a proper triangle diagram matching the Section 6.4 spec.
+- The old implementation (ComponentBlock, WallsBlock, FlowArrow, OutputBlock components in a top-to-bottom pipeline) has been replaced with VertexNode, TriangleEdge, and DerivationArrow components arranged in an equilateral triangle.
+- The component remains compatible with both S03-MoldThreeParts (Visual 18) and S06-Closing (Visual 3) contexts, as the props schema (showFormula: boolean) is unchanged.
 - All color constants match the spec exactly.
 - The vertex node component, edge component, and center code block styling are faithfully implemented with the spec's CSS values.
 - The animation phase ordering (vertices -> edges -> glow -> sub-labels -> code -> arrows -> hold) follows the spec sequence correctly.
-- The vertex appearance easing (easeOutBack with overshoot) and edge drawing easing (easeOutCubic) match the spec. The three missing easings (#6-8) are on secondary animations.
+- Per-vertex glow is staggered (PROMPT first, then TESTS, then GROUNDING) to sync with narration cadence.
+- Edge pulse animation uses strokeDashoffset cycling to create a subtle energy-flowing effect.
 
-## Resolution Status: UNRESOLVED
+## Resolution Status: RESOLVED

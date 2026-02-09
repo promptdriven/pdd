@@ -2,41 +2,46 @@ import { z } from "zod";
 
 // Video specs
 export const CODE_OUTPUT_FPS = 30;
-export const CODE_OUTPUT_DURATION_SECONDS = 10;
+export const CODE_OUTPUT_DURATION_SECONDS = 20;
 export const CODE_OUTPUT_DURATION_FRAMES =
   CODE_OUTPUT_FPS * CODE_OUTPUT_DURATION_SECONDS;
 export const CODE_OUTPUT_WIDTH = 1920;
 export const CODE_OUTPUT_HEIGHT = 1080;
 
-// Beat timings (in frames at 30fps) - aligned to spec
-// Spec: Frame 0-60 (0-2s): Mold and plastic appear
-// Spec: Frame 60-120 (2-4s): Mold glow intensifies
-// Spec: Frame 120-180 (4-6s): First text line
-// Spec: Frame 180-210 (6-7s): THE BEAT (one second of silence)
-// Spec: Frame 210-270 (7-9s): Second text line + glow boost
-// Spec: Frame 270-300 (9-10s): Final hold
+// Five-phase beat timings (in frames at 30fps) for standalone 20s version
+// Phase 1 (0-4s):   Code glows brightly with "success" feeling
+// Phase 2 (4-10s):  Code glow fades, code becomes gray and ordinary
+// Phase 3 (10-14s): Mold components glow brighter, code clearly secondary
+// Phase 4 (14-18s): "The code is output." message, code dim, mold strong
+// Phase 5 (18-20s): "The mold is what matters." message, hold on glowing mold
 export const BEATS = {
-  MOLD_APPEAR_START: 0,
-  MOLD_APPEAR_END: 45,
-  PLASTIC_APPEAR_START: 15,
-  PLASTIC_APPEAR_END: 50,
-  MOLD_GLOW_INTENSIFY: 60,
-  MESSAGE_1_START: 120,
-  MESSAGE_1_END: 160,
-  THE_BEAT_START: 180,
-  THE_BEAT_END: 210,
-  MESSAGE_2_START: 210,
-  MESSAGE_2_END: 250,
-  GLOW_BOOST_START: 210,
-  GLOW_BOOST_END: 270,
-  FINAL_HOLD: 270,
+  // Phase 1: Code glows (frames 0-120)
+  CODE_GLOW_HOLD_END: 120,
+
+  // Phase 2: Code glow fades (frames 120-300)
+  CODE_FADE_END: 300,
+
+  // Phase 3: Mold prominence (frames 200-420)
+  MOLD_GLOW_START: 200,
+  MOLD_GLOW_END: 400,
+
+  // Phase 4: First message (frames 420-460)
+  MESSAGE_1_START: 420,
+  MESSAGE_1_END: 460,
+
+  // Phase 5: Second message (frames 540-580)
+  MESSAGE_2_START: 540,
+  MESSAGE_2_END: 580,
+
+  // Total
+  TOTAL_FRAMES: 600,
 };
 
 // Color palette
 export const COLORS = {
   BACKGROUND: "#1a1a2e",
-  NOZZLE_BLUE: "#4A90D9",
-  WALLS_AMBER: "#D9944A",
+  PROMPT_BLUE: "#4A90D9",
+  TESTS_AMBER: "#D9944A",
   GROUNDING_GREEN: "#5AAA6E",
   CODE_GRAY: "#A0A0A0",
   CODE_GLOW: "rgba(138, 156, 175, 0.5)",
@@ -44,7 +49,7 @@ export const COLORS = {
   LABEL_GRAY: "#888888",
 };
 
-// Generated code
+// Generated code - the parse_user_id Python function
 export const GENERATED_CODE = `def parse_user_id(input_str):
     """Parse user ID from untrusted input."""
     if not input_str or not input_str.strip():
@@ -57,6 +62,10 @@ export const GENERATED_CODE = `def parse_user_id(input_str):
 // Props schema
 export const CodeOutputMoldGlowsProps = z.object({
   showMessages: z.boolean().default(true),
+  // Optional: override the total frame count used for animation scaling.
+  // When the component is embedded in a shorter section, pass the available
+  // frames so the five-phase animation compresses proportionally.
+  durationFrames: z.number().optional(),
 });
 
 export const defaultCodeOutputMoldGlowsProps: z.infer<typeof CodeOutputMoldGlowsProps> = {

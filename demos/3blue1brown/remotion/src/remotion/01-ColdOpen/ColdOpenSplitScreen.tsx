@@ -84,8 +84,8 @@ export const ColdOpenSplitScreen: React.FC<ColdOpenPropsType> = () => {
         }}
       />
 
-      {/* Narrator text area (0:24 - 0:32 as per spec) */}
-      {frame >= secondsToFrames(24) && (
+      {/* Narrator text area — fades in at 0:32, fades out by 0:35 to let visual speak */}
+      {frame >= secondsToFrames(32) && frame <= secondsToFrames(36) && (
         <div
           style={{
             position: "absolute",
@@ -94,8 +94,8 @@ export const ColdOpenSplitScreen: React.FC<ColdOpenPropsType> = () => {
             transform: "translateX(-50%)",
             opacity: interpolate(
               frame,
-              [secondsToFrames(24), secondsToFrames(24.5)],
-              [0, 1],
+              [secondsToFrames(32), secondsToFrames(32.5), secondsToFrames(34.5), secondsToFrames(35.5)],
+              [0, 1, 1, 0],
               { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
             ),
             textAlign: "center",

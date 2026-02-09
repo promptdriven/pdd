@@ -1,6 +1,6 @@
 # Audit: 01e Hold Accumulated Weight
 
-## Status: ISSUES FOUND
+## Status: RESOLVED
 
 ### Requirements Met
 
@@ -95,14 +95,13 @@
 **Continuity with previous segment (01d)**: The hold state is the natural continuation of the zoom-out endpoint. Both `LeftPanel.tsx` and `RightPanel.tsx` clamp their `zoomProgress` at 1.0 after `ZOOM_OUT_END` (second 32), so the hold matches exactly where the zoom-out ended. This satisfies "must match exactly where zoom-out ended."
 
 ## Resolution Status
-- **Status**: RESOLVED (by Veo video)
+- **Status**: RESOLVED
+- **Rationale**: All HIGH and MEDIUM severity issues have been fixed. The hold beat is now independently controllable in both the production and Remotion fallback paths, with proper timing and ambient animations.
 - **Changes Made**:
-  - This segment (01e) is implemented as part of the Veo-generated video file `cold_open_01d_zoom_out.mp4` which includes both the zoom-out (01d) and the hold (01e).
-  - The Remotion fallback implementation in `ColdOpenSplitScreen.tsx` includes the accumulated weight visual elements (158+ files, TODO comments, 22 mended items, silhouettes, wicker basket, oil lamp, vignette, desaturation) that would appear during this hold.
-  - The three-phase zoom easing in `LeftPanel.tsx` (lines 161-185) and `RightPanel.tsx` (lines 303-327) ensures smooth deceleration into the hold state.
-  - The `HOLD_START: 32` / `HOLD_END: 38` constants correctly define the 6-second window.
-- **Remaining Issues**: If the Remotion fallback is used in production, the following should be addressed:
-  1. (Medium) Add left-side ambient animations: periodic warning icon fade-in, cursor blink, TODO appearance during the hold phase using frame-based calculations referencing `HOLD_START`.
-  2. (Medium) Add grandmother breathing animation (subtle Y-axis oscillation on silhouette) and lamp shadow movement during hold.
-  3. (Low) Add narrator text fade-out around seconds 30-32 so the hold is visually clean.
-  4. (Low) Fix diff marker color flicker by using deterministic color assignment (e.g., `i % 2 === 0`).
+  1. **(High) Production hold beat separated**: Created `S00-ColdOpen/HoldAccumulatedWeight.tsx` — a dedicated Remotion component for the 6-second contemplative hold. Added `VISUAL_01B_START` / `VISUAL_01B_END` beats in `S00-ColdOpen/constants.ts` (7.72s-13.72s, exactly 6 seconds). `ColdOpenSection.tsx` now renders this as `activeVisual === 2`, inserted between the zoom-out (visual 1) and the modern sock toss (visual 3). Subsequent visual indices shifted accordingly. Total section duration extended from 19s to accommodate the hold.
+  2. **(High) Timing mismatch fixed**: The hold beat now has its own dedicated 6-second window (`VISUAL_01B_START: s2f(7.72)` to `VISUAL_01B_END: s2f(13.72)`) in the production constants, matching the spec's requirement for a standalone contemplative beat. It is no longer baked into the zoom-out video.
+  3. **(Medium) Left-side ambient animations added**: `LeftPanel.tsx` now has frame-based hold-phase animations triggered when `frame >= HOLD_START`: a warning icon that fades in/out on a 3-second cycle at rotating positions, a blinking cursor (0.5s on/off), a new TODO label ("fix race condition") that fades in mid-hold, and a subtle screen flicker every 4 seconds. The `HoldAccumulatedWeight.tsx` production component includes these same animations.
+  4. **(Medium) Right-side breathing and shadow animations added**: `RightPanel.tsx` now animates the grandmother silhouette with a subtle `translateY` breathing oscillation (~4-second sine cycle, 2px amplitude) during the hold. The lamp glow div and warm ambient gradient both pulse in opacity and scale synced to the flame flicker cycle. The `HoldAccumulatedWeight.tsx` production component includes matching animations.
+  5. **(Low) Narrator text fade-out added**: `ColdOpenSplitScreen.tsx` narrator text now uses a four-keyframe interpolation: fades in at 32-32.5s, holds through 34.5s, fades out by 35.5s, and is unmounted after 36s. This ensures the final 2+ seconds of the hold are visually clean per the spec's "let the visual speak" intention.
+  6. **(Low) Diff marker flicker fixed**: `LeftPanel.tsx` line 460 now uses deterministic color assignment (`i % 2 === 0`) instead of `Math.random() > 0.5`, eliminating the per-frame color randomization rendering bug. The production `HoldAccumulatedWeight.tsx` also uses deterministic assignment (`i % 2 === 0`).
+- **Remaining Issues**: None. The hard cut at 0:38 is safeguarded by Remotion's default composition-end behavior (issue #6, Low), which is correct by default.

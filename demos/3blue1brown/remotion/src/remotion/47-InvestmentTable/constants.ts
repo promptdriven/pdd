@@ -1,32 +1,37 @@
 import { z } from "zod";
 
 // Video specs
+// NOTE: Duration compressed from 20s to ~8.4s (252 frames) to fit the
+// orchestrator allocation in Part5CompoundReturns (Visual 4 window:
+// s2f(53.94) to s2f(62.34)).  All BEATS are scaled proportionally so
+// Row 3, the blue column pulse, and the hold phase render within the
+// available window.
 export const INVESTMENT_TABLE_FPS = 30;
-export const INVESTMENT_TABLE_DURATION_SECONDS = 20;
+export const INVESTMENT_TABLE_DURATION_SECONDS = 9;
 export const INVESTMENT_TABLE_DURATION_FRAMES =
-  INVESTMENT_TABLE_FPS * INVESTMENT_TABLE_DURATION_SECONDS;
+  INVESTMENT_TABLE_FPS * INVESTMENT_TABLE_DURATION_SECONDS; // 270 frames (covers 252 with margin)
 export const INVESTMENT_TABLE_WIDTH = 1920;
 export const INVESTMENT_TABLE_HEIGHT = 1080;
 
-// Beat timings (in frames at 30fps)
+// Beat timings (in frames at 30fps) — compressed to fit ~252 frame window
 export const BEATS = {
-  // Table fade-in (0-1.5s)
+  // Table fade-in (0-0.67s)
   TABLE_FADE_START: 0,
-  TABLE_FADE_END: 45,
-  // Row 1 slide-in (1.5-5s)
-  ROW1_START: 45,
-  ROW1_END: 120,
-  // Row 2 slide-in (5-9s)
-  ROW2_START: 150,
-  ROW2_END: 225,
-  // Row 3 slide-in (9-13s)
-  ROW3_START: 270,
-  ROW3_END: 345,
-  // Column-wide pulse (13-16s)
-  PULSE_START: 390,
-  PULSE_END: 450,
-  // Hold (16-20s)
-  HOLD_START: 480,
+  TABLE_FADE_END: 20,
+  // Row 1 slide-in (0.67-1.67s)
+  ROW1_START: 20,
+  ROW1_END: 50,
+  // Row 2 slide-in (2.17-3.17s)
+  ROW2_START: 65,
+  ROW2_END: 95,
+  // Row 3 slide-in (3.67-4.67s)
+  ROW3_START: 110,
+  ROW3_END: 140,
+  // Column-wide pulse (5.33-6.67s)
+  PULSE_START: 160,
+  PULSE_END: 200,
+  // Hold (7.17-8.4s)
+  HOLD_START: 215,
 };
 
 // Color palette

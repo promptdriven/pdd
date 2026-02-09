@@ -9,19 +9,23 @@ export const LONG_PROMPT_WIDTH = 1920;
 export const LONG_PROMPT_HEIGHT = 1080;
 
 // Beat timings (in frames at 30fps)
-// ~15 seconds = 450 frames
+// ~15 seconds = 450 frames (standalone)
+// When embedded in S04-PrecisionTradeoff, this component gets ~256 internal
+// frames (VISUAL_04 spans global frames 802-1058). Timings are compressed so
+// all phases — including test walls — complete well within 256 frames while
+// the standalone 450-frame composition still looks natural.
 export const BEATS = {
-  // Frame 0-90 (0-3s): Prompt file appears
+  // Frame 0-60 (0-2s): Prompt file appears
   CONTAINER_FADE_START: 0,
-  CONTAINER_FADE_END: 90,
-  // Frame 90-270 (3-9s): Content reveals / scroll
-  SCROLL_START: 90,
-  SCROLL_END: 270,
-  // Frame 270-360 (9-12s): Test walls appear
-  WALLS_FADE_START: 270,
-  WALLS_FADE_END: 330,
-  // Frame 360-450 (12-15s): Hold
-  HOLD_START: 360,
+  CONTAINER_FADE_END: 60,
+  // Frame 60-180 (2-6s): Content reveals / scroll
+  SCROLL_START: 60,
+  SCROLL_END: 180,
+  // Frame 190-230 (6.3-7.7s): Test walls appear
+  WALLS_FADE_START: 190,
+  WALLS_FADE_END: 230,
+  // Frame 240+ (8s+): Hold
+  HOLD_START: 240,
 };
 
 // Color palette

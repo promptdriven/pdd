@@ -1,6 +1,6 @@
 # Audit: Developer Regenerates Instead of Patching
 
-## Status: ISSUES FOUND
+## Status: RESOLVED
 
 ### Requirements Met
 
@@ -58,20 +58,17 @@
 
 ### Issues Found
 
-1. **Missing initial bug display (frames 0-60)** -- Severity: **Medium**
+1. **~~Missing initial bug display (frames 0-60)~~** -- Severity: **Medium** -- **RESOLVED**
    - **Spec says**: The Animation Sequence defines Frame 0-60 (0-2s) as "Bug visible" where "Terminal shows code with red-highlighted bug." The Overlay Elements section specifies a "Bug Display (Initial)" element: "Code snippet with a visible bug (red highlight), 3-4 lines of Python-like pseudocode, Bug line marked with red squiggly or highlight." Frame 60-90 is a "Decision moment" where the terminal remains unchanged showing this code.
-   - **Implementation does**: Terminal fades in over frames 0-30 and shows only an empty terminal with the title bar. Nothing is rendered until the `pdd bug parser` command starts typing at frame 90. There is no code snippet, no red-highlighted bug line, and no initial problem display.
-   - **Impact**: The spec's narrative arc is "see the bug -> pause and decide -> type PDD commands instead of editing." Without the initial code display, the story jumps straight to typing commands with no visible problem to solve. This is especially significant given the ClosingSection only allocates ~1.38 seconds (frames 281-322 relative to section start), meaning only the very early frames of the composition are shown.
+   - **Fix applied**: Added `BUG_CODE_LINES` array with 4 lines of Python pseudocode (`def parse(tokens):`, loop, off-by-one access `tokens[i + 1]`, return). The bug line is highlighted with a red left border (`2px solid rgba(255, 80, 80, 0.8)`) and red background tint (`rgba(255, 60, 60, 0.15)`). A `bugDisplayOpacity` interpolation fades the code in with the terminal (frames 0-30), holds it visible (frames 30-60), then fades it out before commands begin (frames 60-85). This ensures the bug is visible during the ClosingSection's ~41-frame window.
 
-2. **Missing easeOutQuad on output appearance** -- Severity: **Low**
+2. **~~Missing easeOutQuad on output appearance~~** -- Severity: **Low** -- **RESOLVED**
    - **Spec says**: "Output appearance: easeOutQuad" in the Easing section.
-   - **Implementation does**: All output opacity interpolations (bugOutputOpacity, regenOpacity, generatedOpacity, testResultOpacity) use no easing function -- they default to linear interpolation. (`DeveloperRegenerates.tsx:100-105, 116-121, 124-129, 140-145`)
-   - **Impact**: Output text fades in linearly instead of with a decelerating ease. The visual difference is subtle over these short frame ranges (15-20 frames each).
+   - **Fix applied**: Added `easing: Easing.out(Easing.quad)` to all four output opacity interpolations: `bugOutputOpacity`, `regenOpacity`, `generatedOpacity`, and `testResultOpacity`.
 
-3. **Missing easeOutBack on checkmark pop** -- Severity: **Low**
+3. **~~Missing easeOutBack on checkmark pop~~** -- Severity: **Low** -- **RESOLVED**
    - **Spec says**: "Checkmark pop: easeOutBack (satisfying overshoot)" in the Easing section.
-   - **Implementation does**: The checkmark scale uses linear interpolation between the three keyframes `[0, 1.2, 1.0]` with no easing function. The 1.2 overshoot value partially simulates the easeOutBack feel (scale exceeds 1.0 then settles), but the actual easing curve shape differs from a true `Easing.out(Easing.back(...))`. (`DeveloperRegenerates.tsx:148-153`)
-   - **Impact**: The checkmark pop will feel slightly more mechanical than intended. The 1.2 overshoot provides the basic visual intent but without the characteristic easeOutBack curve.
+   - **Fix applied**: Added `easing: Easing.out(Easing.back(1.7))` to the `checkScale` interpolation. The `1.7` parameter provides the characteristic easeOutBack overshoot curve combined with the existing `[0, 1.2, 1.0]` keyframe values.
 
 4. **Video filename differs from spec** -- Severity: **Low**
    - **Spec says**: `<Video src="developer_regenerates.mp4" />`
@@ -106,6 +103,6 @@
 - The `COMMANDS` array in constants.ts (line 47-51) stores all three commands with their correct colors, though this array is not directly used by the component -- the commands are hardcoded inline instead.
 - The conditional rendering pattern (`{bugOutputOpacity > 0 && ...}`) prevents elements from appearing prematurely even without `extrapolateLeft: 'clamp'`, since the opacity interpolation returns negative values before the input range, failing the `> 0` check.
 
-### Resolution Status: UNRESOLVED
+### Resolution Status: RESOLVED
 
-All 8 issues remain open. The medium-severity missing bug display (Issue 1) is the most impactful, particularly given the short allocation in ClosingSection. The low-severity easing mismatches (Issues 2, 3) and minor dimension differences (Issues 5, 6, 7) are cosmetic. Issues 4 and 8 are acceptable implementation choices.
+Issues 1 (medium: missing bug display), 2 (low: easeOutQuad on outputs), and 3 (low: easeOutBack on checkmark) have been fixed. Issues 4 (video filename), 5 (padding 24 vs 20), 6 (checkmark fontSize 20 vs 18), 7 (no explicit terminal height), and 8 (component structure) are accepted as low-severity implementation choices with negligible visual impact.

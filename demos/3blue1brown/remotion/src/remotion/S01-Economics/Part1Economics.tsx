@@ -14,9 +14,11 @@ import { CodeCostChartMini, defaultCodeCostChartMiniProps } from "../05a-CodeCos
 import { ContextRot, defaultContextRotProps } from "../07-ContextRot";
 import { CrossingPoint, defaultCrossingPointProps } from "../08-CrossingPoint";
 import { LinesDiverge, defaultLinesDivergeProps } from "../04-LinesDiverge";
+import { ContextWindowComparison } from "../14a-ContextWindowComparison";
 import { PieChart, defaultPieChartProps } from "../12-PieChart";
 import { PieToCurve, defaultPieToCurveProps } from "../13-PieToCurve";
 import { SockPriceChart, defaultSockPriceChartProps } from "../02-SockPriceChart";
+import { PatchCycle, defaultPatchCycleProps } from "../10-PatchCycle";
 import { ThresholdHighlight, defaultThresholdHighlightProps } from "../03-ThresholdHighlight";
 
 export const Part1Economics: React.FC<Part1EconomicsPropsType> = () => {
@@ -171,10 +173,10 @@ export const Part1Economics: React.FC<Part1EconomicsPropsType> = () => {
         </Sequence>
       )}
 
-      {/* Visual 17: CrossingPoint - Every patch makes codebase bigger, pushes to worse */}
+      {/* Visual 17: PatchCycle - Every patch makes codebase bigger, pushes to worse */}
       {activeVisual === 17 && (
         <Sequence from={BEATS.VISUAL_17_START}>
-          <CrossingPoint {...defaultCrossingPointProps} startAtFullView={true} />
+          <PatchCycle {...defaultPatchCycleProps} />
         </Sequence>
       )}
 
@@ -191,16 +193,10 @@ export const Part1Economics: React.FC<Part1EconomicsPropsType> = () => {
         </Sequence>
       )}
 
-      {/* Visual 19: Veo clip - NL is models deepest fluency, 250 lines lowest def */}
+      {/* Visual 19: ContextWindowComparison - NL is models deepest fluency, room to think */}
       {activeVisual === 19 && (
         <Sequence from={BEATS.VISUAL_19_START}>
-          <AbsoluteFill>
-            <OffthreadVideo
-              loop
-              src={staticFile("veo_developer_edit.mp4")}
-              style={{ width: "100%", height: "100%" }}
-            />
-          </AbsoluteFill>
+          <ContextWindowComparison variant="efficiency" showKnowledgeIndicator={true} />
         </Sequence>
       )}
 

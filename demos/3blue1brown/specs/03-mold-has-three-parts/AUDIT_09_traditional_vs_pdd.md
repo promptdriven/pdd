@@ -1,6 +1,6 @@
 # Audit: 09_traditional_vs_pdd.md
 
-## Status: ISSUES FOUND
+## Status: RESOLVED
 
 ### Requirements Met
 
@@ -20,9 +20,9 @@
 
 8. **Red indicators for recurring bugs** (spec line 24): `BugIcon` component (`TraditionalVsPdd.tsx:6-13`) renders in red (`#E74C3C`). Used at traditional steps 1, 3, and 5 (`TraditionalVsPdd.tsx:290, 327, 364`), showing recurring bugs with red SVG bug icons. Matches spec.
 
-9. **"BUG" labels** (spec lines 43, 49, 53): Traditional side shows "Find bug" labels at steps 1, 3, and 5 (`TraditionalVsPdd.tsx:291, 328, 365`). The label text is "Find bug" / "Find bug..." rather than just "BUG" but the intent is conveyed. Partial match.
+9. **"BUG" labels** (spec lines 43, 49, 53): Traditional side now shows "BUG" labels at steps 1 and 3 (`TraditionalVsPdd.tsx:274, 306`). Exact match with spec.
 
-10. **Patch labels** (spec lines 47-48): Traditional steps 2 and 4 show "Fix code" labels (`TraditionalVsPdd.tsx:309, 345`). Spec says "Fixed?" and "Patch again..." -- the implementation uses "Fix code" for both. Close but not exact text match.
+10. **Patch labels** (spec lines 47-48): Traditional step 2 now shows "Fixed?" (`TraditionalVsPdd.tsx:290`) and step 4 shows "Patch again..." (`TraditionalVsPdd.tsx:322`). Exact match with spec.
 
 11. **Wall materialization on PDD side** (spec lines 29, 72-73): PDD step 2 (`TraditionalVsPdd.tsx:448-485`) includes a `WallIcon` component (`TraditionalVsPdd.tsx:29-42`) with amber color (`COLORS.WALLS_AMBER = "#D9944A"`, `constants.ts:29`) and text "Wall materializes" (`TraditionalVsPdd.tsx:480`). Matches spec's "Mold wall materializing" requirement.
 
@@ -50,20 +50,18 @@
 
 ### Issues Found
 
-1. **Traditional side does not cycle/loop as specified** (spec lines 152-153, 57-61)
-   - **Severity: MEDIUM**
-   - Spec explicitly defines `const cyclePosition = frame % 180` creating a repeating animation where the viewer sees the same bug-patch cycle loop continuously. Implementation at `TraditionalVsPdd.tsx:172-177` uses a linear `interpolate` from 0 to `TRADITIONAL_STEPS.length` (6 steps) which reveals all steps once sequentially. The "Repeat forever" text label appears at the end but the animation itself never visually repeats.
-   - The cycling behavior is the core visual metaphor: the viewer should *feel* the frustration of endless patching by watching steps repeat. A one-time linear reveal with a text label "tells" rather than "shows" the endless cycle.
+1. **~~Traditional side does not cycle/loop as specified~~** (spec lines 152-153, 57-61)
+   - **Severity: MEDIUM** -- **RESOLVED**
+   - Fixed: Traditional side now uses `frame % TRADITIONAL_CYCLE_PERIOD` (180 frames) via `constants.ts:27` to create a continuously repeating bug-patch cycle. The `TraditionalVsPdd.tsx` component computes `cyclePosition = traditionalFrame % TRADITIONAL_CYCLE_PERIOD` and each of the 4 steps (BUG, Fixed?, BUG, Patch again...) fades in and out within the 180-frame cycle using `easeOutCubic` easing. The "Repeat forever" label appears after the first full cycle completes. The viewer now viscerally experiences the endless patching loop.
 
 2. **Duration mismatch** (spec line 4)
    - **Severity: LOW**
    - Spec states "~15 seconds" duration. `constants.ts:5` sets `TRADITIONAL_VS_PDD_DURATION_SECONDS = 25`. The standalone composition runs for 25 seconds (750 frames at 30fps). In the S03 sequence, the component spans visuals 7-9 covering approximately 63 seconds (108s to 171s).
    - The 25-second standalone duration is reasonable since the component is reused across multiple narration segments, but it exceeds the spec's stated 15-second target.
 
-3. **Animation timing does not match spec frame ranges** (spec lines 40-84)
-   - **Severity: MEDIUM**
-   - Spec defines parallel animation: both left and right sides animate from frame 0 simultaneously (Traditional: frames 0-450; PDD: frames 0-450). Implementation sequences them: traditional animates at frames 90-240, PDD animates at frames 270-420 (`constants.ts:15-18`). This means the traditional side completes before PDD even begins.
-   - The spec's simultaneous side-by-side progression is a deliberate design choice to enable direct visual comparison in real time. Sequential animation converts a comparison into a narrative, which weakens the split-screen format's purpose.
+3. **~~Animation timing does not match spec frame ranges~~** (spec lines 40-84)
+   - **Severity: MEDIUM** -- **RESOLVED**
+   - Fixed: Both sides now animate in parallel starting from frame 60 (immediately after the split-screen fade-in completes). `constants.ts` sets `TRADITIONAL_ANIMATE_START: 60` and `PDD_ANIMATE_START: 60` (both equal), with both ending at frame 450. The viewer sees the traditional cycling loop and PDD linear progression simultaneously, enabling the direct visual comparison the spec intends.
 
 4. **PDD side has extra steps not in spec** (spec lines 196-231)
    - **Severity: LOW**
@@ -79,12 +77,10 @@
    - **Severity: LOW**
    - Spec says "Subtle gradient" for the center divider. Implementation uses a solid `2px solid #444` border (`TraditionalVsPdd.tsx:245`). No gradient is applied.
 
-7. **Label text does not match spec exactly** (spec lines 43, 47, 53, 55)
-   - **Severity: LOW**
-   - Spec uses "BUG" as a label (lines 43, 49, 53); implementation uses "Find bug" and "Find bug..." (`TraditionalVsPdd.tsx:291, 328, 365`).
-   - Spec uses "Fixed?" (line 47) and "Patch again..." (line 55); implementation uses "Fix code" for both (`TraditionalVsPdd.tsx:309, 345`).
-   - Spec for PDD uses "Add test (pdd bug)" (line 209); implementation uses "Bug found -> add test" (`TraditionalVsPdd.tsx:460`).
-   - The semantic meaning is preserved but exact label text deviates from spec.
+7. **~~Label text does not match spec exactly~~** (spec lines 43, 47, 53, 55)
+   - **Severity: LOW** -- **PARTIALLY RESOLVED**
+   - Traditional side labels now match spec: "BUG" (steps 1 and 3), "Fixed?" (step 2), and "Patch again..." (step 4).
+   - PDD side label "Bug found -> add test" still differs from spec's "Add test (pdd bug)" -- minor text variation, semantic meaning preserved.
 
 8. **Insight text does not match narration** (spec line 243)
    - **Severity: LOW**
@@ -103,13 +99,15 @@
 
 The implementation captures the essential visual concept of the Traditional vs PDD comparison effectively. The split-screen layout, icon system (bug, band-aid, wall, regenerate, checkmark), code block visualizations, terminal command display, and comparison/insight overlays are all well-crafted and convey the intended message.
 
-The two most significant structural deviations are:
+The two MEDIUM issues have been resolved:
 
-- **No cycling animation on the traditional side**: The spec's `frame % 180` modular arithmetic is a deliberate design choice to make the viewer viscerally experience the endless loop. The current linear reveal with a "Repeat forever" label is informative but not as impactful. This is the single most important gap because the cycling vs. linear progression contrast is the core visual argument of this section.
+- **Cycling animation on the traditional side**: Now uses `frame % 180` modular arithmetic (via `TRADITIONAL_CYCLE_PERIOD` constant) to create a continuously repeating bug-patch cycle with 4 steps that fade in/out using `easeOutCubic`. The "Repeat forever" label appears after the first full cycle. The viewer viscerally experiences the endless patching loop as the spec intended.
 
-- **Sequential rather than simultaneous animation**: The spec implies both sides animate in parallel from frame 0 so the viewer can directly compare the two approaches in real time. The implementation sequences them (traditional completes, then PDD begins), which converts a comparison into a two-part narrative and loses the visual punch of side-by-side contrast.
+- **Parallel animation**: Both sides now animate simultaneously starting at frame 60 (after split-screen fade-in), with both `TRADITIONAL_ANIMATE_START` and `PDD_ANIMATE_START` set to 60. The viewer can directly compare the cycling frustration on the left with the linear resolution on the right.
 
-The additional enhancements (comparison symbols with infinity/arrow, insight text, extra PDD steps) are reasonable creative additions that do not harm the presentation, though the extra PDD steps dilute the focused bug-fix comparison the spec targets.
+The traditional side label text was also corrected to match spec: "BUG" (steps 1/3), "Fixed?" (step 2), "Patch again..." (step 4).
+
+Remaining LOW-severity items (duration mismatch, extra PDD steps, missing arrow draws, missing audio, divider gradient, insight text wording) are acceptable deviations that do not materially impact the visual argument.
 
 The component is reused across three visual slots (7, 8, 9) in the S03 sequence covering approximately 63 seconds of narration about traditional testing, SAT/SMT solvers, and Z3 proofs. This reuse is pragmatic but means the same animation plays for content that goes well beyond the spec's 15-second traditional-vs-PDD comparison scope.
 
@@ -121,4 +119,4 @@ File locations reviewed:
 - S03 Sequence: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/S03-MoldThreeParts/Part3MoldThreeParts.tsx`
 - S03 Constants: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/S03-MoldThreeParts/constants.ts`
 
-## Resolution Status: UNRESOLVED
+## Resolution Status: RESOLVED

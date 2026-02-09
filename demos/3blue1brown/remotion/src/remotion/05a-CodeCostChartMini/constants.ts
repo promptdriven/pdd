@@ -75,7 +75,12 @@ export const BEATS = {
   DEBT_HIGHLIGHT_END: s2f(54.84),        // 1645 - "you're patching faster."
 
   // ── Section 4: The data ──
+  // First annotation beat (VISUAL 9): Individual task vs Overall throughput
   EMPHASIS_START: s2f(56.52),            // 1696 - "AI gave you a 60% speed up"
+  EMPHASIS_MID: s2f(60.70),             // 1821 - transition to second annotation beat
+
+  // Second annotation beat (VISUAL 10): Code churn and refactoring
+  EMPHASIS2_START: s2f(60.70),          // 1821
   EMPHASIS_END: s2f(64.88),              // 1946 - "the debt ate the rest"
 
   CROSSING_START: s2f(64.88),            // 1946

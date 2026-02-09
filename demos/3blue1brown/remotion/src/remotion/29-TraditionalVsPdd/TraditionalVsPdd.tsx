@@ -1,6 +1,6 @@
 import React from "react";
 import { AbsoluteFill, interpolate, useCurrentFrame, Easing } from "remotion";
-import { COLORS, BEATS, TRADITIONAL_STEPS, PDD_STEPS, TraditionalVsPddPropsType } from "./constants";
+import { COLORS, BEATS, PDD_STEPS, TRADITIONAL_CYCLE_PERIOD, TraditionalVsPddPropsType } from "./constants";
 
 /** Bug icon - red bug symbol */
 const BugIcon: React.FC<{ size?: number; color?: string }> = ({ size = 24, color = "#E74C3C" }) => (
@@ -168,13 +168,13 @@ export const TraditionalVsPdd: React.FC<TraditionalVsPddPropsType> = ({
     { extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
   );
 
-  // Traditional steps animation progress
-  const traditionalProgress = interpolate(
-    frame,
-    [BEATS.TRADITIONAL_ANIMATE_START, BEATS.TRADITIONAL_ANIMATE_END],
-    [0, TRADITIONAL_STEPS.length],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-  );
+  // Traditional side: cycling animation per spec (frame % 180)
+  // After the split appears, the traditional side loops through bug-patch steps endlessly
+  const traditionalActive = frame >= BEATS.TRADITIONAL_ANIMATE_START;
+  const traditionalFrame = Math.max(0, frame - BEATS.TRADITIONAL_ANIMATE_START);
+  const cyclePosition = traditionalFrame % TRADITIONAL_CYCLE_PERIOD;
+  // Whether we've completed at least one full cycle (to show "Repeat forever" label)
+  const hasCompletedOneCycle = traditionalFrame >= TRADITIONAL_CYCLE_PERIOD;
 
   // PDD steps animation progress
   const pddProgress = interpolate(
@@ -256,131 +256,91 @@ export const TraditionalVsPdd: React.FC<TraditionalVsPddPropsType> = ({
             Traditional
           </div>
 
-          {/* Cycle visualization */}
+          {/* Cycling visualization - bug/patch steps loop via frame % 180 */}
           <div style={{ position: "relative", width: 400, height: 500 }}>
-            {/* Step 0: Write code */}
-            {traditionalProgress >= 0 && (
-              <div
-                style={{
-                  position: "absolute",
-                  top: 0,
-                  left: 0,
-                  opacity: Math.min(1, Math.max(0, traditionalProgress - 0)),
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 12,
-                }}
-              >
-                <div style={{ fontSize: 20 }}>{"📝"}</div>
-                <span style={{ color: COLORS.LABEL_WHITE, fontSize: 16 }}>Write code</span>
-              </div>
-            )}
-
-            {/* Step 1: Find bug - with code block */}
-            {traditionalProgress >= 1 && (
-              <div
-                style={{
-                  position: "absolute",
-                  top: 50,
-                  left: 0,
-                  opacity: Math.min(1, Math.max(0, traditionalProgress - 1)),
-                }}
-              >
-                <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
-                  <BugIcon size={24} />
-                  <span style={{ color: COLORS.LABEL_WHITE, fontSize: 16 }}>Find bug</span>
+            {traditionalActive && (
+              <>
+                {/* Step 1: Bug found (cycle frames 0-60) */}
+                <div
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    opacity: cyclePosition < 60 ? interpolate(cyclePosition, [0, 10], [0, 1], { extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }) : interpolate(cyclePosition, [60, 70], [1, 0], { extrapolateRight: "clamp" }),
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
+                    <BugIcon size={24} />
+                    <span style={{ color: COLORS.LABEL_WHITE, fontSize: 16 }}>BUG</span>
+                  </div>
+                  <CodeBlockWithBug opacity={1} />
                 </div>
-                <CodeBlockWithBug opacity={1} />
-              </div>
-            )}
 
-            {/* Step 2: Fix code - code with bandaid */}
-            {traditionalProgress >= 2 && (
-              <div
-                style={{
-                  position: "absolute",
-                  top: 150,
-                  left: 0,
-                  opacity: Math.min(1, Math.max(0, traditionalProgress - 2)),
-                }}
-              >
-                <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
-                  <BandaidIcon size={24} />
-                  <span style={{ color: COLORS.LABEL_WHITE, fontSize: 16 }}>Fix code</span>
+                {/* Step 2: Patch applied (cycle frames 60-120) */}
+                <div
+                  style={{
+                    position: "absolute",
+                    top: 120,
+                    left: 0,
+                    opacity: cyclePosition >= 45 && cyclePosition < 120 ? interpolate(cyclePosition, [45, 60], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }) : cyclePosition >= 120 ? interpolate(cyclePosition, [120, 135], [1, 0], { extrapolateRight: "clamp" }) : 0,
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
+                    <BandaidIcon size={24} />
+                    <span style={{ color: COLORS.LABEL_WHITE, fontSize: 16 }}>Fixed?</span>
+                  </div>
+                  <CodeBlockWithBug opacity={1} hasBandaid />
                 </div>
-                <CodeBlockWithBug opacity={1} hasBandaid />
-              </div>
-            )}
 
-            {/* Step 3: Find bug again */}
-            {traditionalProgress >= 3 && (
-              <div
-                style={{
-                  position: "absolute",
-                  top: 250,
-                  left: 0,
-                  opacity: Math.min(1, Math.max(0, traditionalProgress - 3)),
-                }}
-              >
-                <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
-                  <BugIcon size={24} />
-                  <span style={{ color: COLORS.LABEL_WHITE, fontSize: 16 }}>Find bug</span>
+                {/* Step 3: Similar bug elsewhere (cycle frames 90-150) */}
+                <div
+                  style={{
+                    position: "absolute",
+                    top: 240,
+                    left: 0,
+                    opacity: cyclePosition >= 90 && cyclePosition < 150 ? interpolate(cyclePosition, [90, 105], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }) : cyclePosition >= 150 ? interpolate(cyclePosition, [150, 165], [1, 0], { extrapolateRight: "clamp" }) : 0,
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
+                    <BugIcon size={24} />
+                    <span style={{ color: COLORS.LABEL_WHITE, fontSize: 16 }}>BUG</span>
+                  </div>
+                  <CodeBlockWithBug opacity={1} />
                 </div>
-                <CodeBlockWithBug opacity={1} />
-              </div>
-            )}
 
-            {/* Step 4: Fix code again */}
-            {traditionalProgress >= 4 && (
-              <div
-                style={{
-                  position: "absolute",
-                  top: 350,
-                  left: 0,
-                  opacity: Math.min(1, Math.max(0, traditionalProgress - 4)),
-                }}
-              >
-                <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
-                  <BandaidIcon size={24} />
-                  <span style={{ color: COLORS.LABEL_WHITE, fontSize: 16 }}>Fix code</span>
+                {/* Step 4: Patch again (cycle frames 120-180) */}
+                <div
+                  style={{
+                    position: "absolute",
+                    top: 360,
+                    left: 0,
+                    opacity: cyclePosition >= 120 ? interpolate(cyclePosition, [120, 135], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }) : 0,
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
+                    <BandaidIcon size={24} />
+                    <span style={{ color: COLORS.LABEL_WHITE, fontSize: 16 }}>Patch again...</span>
+                  </div>
+                  <CodeBlockWithBug opacity={1} hasBandaid />
                 </div>
-                <CodeBlockWithBug opacity={1} hasBandaid />
-              </div>
-            )}
 
-            {/* Step 5: Find bug... (ellipsis indicating continuation) */}
-            {traditionalProgress >= 5 && (
-              <div
-                style={{
-                  position: "absolute",
-                  top: 450,
-                  left: 0,
-                  opacity: Math.min(1, Math.max(0, traditionalProgress - 5)),
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 12,
-                }}
-              >
-                <BugIcon size={24} />
-                <span style={{ color: COLORS.LABEL_WHITE, fontSize: 16 }}>Find bug...</span>
-              </div>
-            )}
-
-            {/* Cycle arrow with pulsing animation */}
-            {traditionalProgress >= TRADITIONAL_STEPS.length && (
-              <div
-                style={{
-                  position: "absolute",
-                  top: 500,
-                  left: "50%",
-                  transform: "translateX(-50%)",
-                  fontSize: 20,
-                  color: COLORS.TRADITIONAL_RED,
-                  opacity: 0.5 + 0.5 * Math.sin((frame / 30) * Math.PI * 2), // Pulsing effect
-                }}
-              >
-                {"\u21BB"} Repeat forever
-              </div>
+                {/* Cycle arrow with pulsing animation - visible after first cycle completes */}
+                {hasCompletedOneCycle && (
+                  <div
+                    style={{
+                      position: "absolute",
+                      top: 480,
+                      left: "50%",
+                      transform: "translateX(-50%)",
+                      fontSize: 20,
+                      color: COLORS.TRADITIONAL_RED,
+                      opacity: 0.5 + 0.5 * Math.sin((frame / 30) * Math.PI * 2),
+                    }}
+                  >
+                    {"\u21BB"} Repeat forever
+                  </div>
+                )}
+              </>
             )}
           </div>
         </div>

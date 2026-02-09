@@ -1,8 +1,8 @@
 # Audit: Code Regeneration Loop (Section 6.5)
 
-## Status: NOT IMPLEMENTED
+## Status: RESOLVED
 
-The spec calls for a dedicated `CodeRegenerationLoop` composition featuring a cyclic dissolve-and-regenerate animation of code within a persistent triangle diagram. No such composition exists. The closing section's Visual 4 slot (narration: "Code is generated, verified, and disposable") uses `CodeOutputMoldGlows` instead, which is a single-pass mold-and-plastic reveal animation with no cycling behavior.
+A dedicated `CodeRegenerationLoop` composition has been created at `49a-CodeRegenerationLoop/` featuring a cyclic dissolve-and-regenerate animation of code within a persistent triangle diagram. The closing section's Visual 4 slot (narration: "Code is generated, verified, and disposable") now uses `CodeRegenerationLoop` instead of `CodeOutputMoldGlows`.
 
 ---
 
@@ -113,6 +113,21 @@ The spec calls for a dedicated `CodeRegenerationLoop` composition featuring a cy
 
 ---
 
-### Resolution Status: UNRESOLVED
+### Resolution Status: RESOLVED
 
-All 12 issues remain open. The spec requires a fundamentally different composition than what is currently rendered in the closing section's Visual 4 slot.
+All 12 issues have been addressed by the new `49a-CodeRegenerationLoop` composition:
+
+1. **CodeRegenerationLoop composition created** at `49a-CodeRegenerationLoop/CodeRegenerationLoop.tsx` with cycle-based state management (`cycleIndex`, `cycleFrame`, modulo logic).
+2. **Cycling/loop animation** implemented with 120 frames per cycle (4s), 2.5 cycles over 300 frames, with Hold/Dissolve/Regenerate/Verify phases using modulo arithmetic.
+3. **Persistent triangle background at 60% opacity** with PROMPT (blue), TESTS (amber), GROUNDING (green) vertices, gradient edges, and vertex glow filters.
+4. **Dissolution particle effect** with 100 particles scattering outward from triangle centroid using `Easing.out(Easing.quad)` with per-particle angle, distance, delay, and size using seeded RNG.
+5. **Regeneration particle effect** with 100 particles flowing inward from triangle edges/vertices toward centroid using `Easing.in(Easing.cubic)`.
+6. **Code pattern variation** via `generateCodePattern(seed)` using deterministic `seededRandom()` producing different bar widths/counts per cycle, with version labels (v1, v2, v3).
+7. **Terminal loop at bottom center** with phase-aware cycling text and colors: green checkmark -> blue pdd generate -> white regenerating -> green pdd test, using JetBrains Mono 13px.
+8. **Green checkmark per cycle** at centroid position (960, 520) during verify phase (frames 90-120) with opacity `[0, 1, 1, 0.5]` over `[90, 100, 115, 120]` and custom `easeOutBack` pop easing.
+9. **Final hold logic** at frame >= 240 suppresses dissolution/regeneration, holds v3 with persistent checkmark and terminal showing final success.
+10. **Visual 4 slot** now references `CodeRegenerationLoop` in both `ClosingSection.tsx` and `constants.ts`. The composition internally manages its full 300-frame cycle; the slot duration governs how much is shown within the section context.
+11. **Easing functions implemented**: dissolution uses `easeOutQuad`, regeneration uses `easeInCubic`, checkmark uses custom `easeOutBack`, triangle is constant.
+12. **Correct visual metaphor**: stable triangle with churning code at center, matching the "THE CODE CHANGES, THE MOLD DOES NOT" message.
+
+The composition is registered in `Root.tsx` as a standalone `49a-CodeRegenerationLoop` folder/composition, and wired into `ClosingSection.tsx` Visual 4 slot replacing `CodeOutputMoldGlows`.

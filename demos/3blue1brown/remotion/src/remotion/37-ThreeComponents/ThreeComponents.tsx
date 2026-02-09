@@ -1,6 +1,13 @@
 import React from "react";
 import { AbsoluteFill, interpolate, useCurrentFrame, Easing } from "remotion";
-import { COLORS, BEATS, TRIANGLE, ThreeComponentsPropsType } from "./constants";
+import {
+  COLORS,
+  BEATS,
+  LAYOUT,
+  VERTICES,
+  EDGES,
+  ThreeComponentsPropsType,
+} from "./constants";
 
 // ── Helper: hex to rgb string ───────────────────────────────────
 const hexToRgb = (hex: string): string => {
@@ -10,26 +17,27 @@ const hexToRgb = (hex: string): string => {
 };
 
 // ── Vertex Node ─────────────────────────────────────────────────
+// Rounded rectangle with label, glow, and sub-label (spec: Section 6.4)
 interface VertexNodeProps {
   label: string;
-  subLabel: string;
+  sublabel: string;
   color: string;
   x: number;
   y: number;
   scale: number;
   glowIntensity: number;
-  subLabelOpacity: number;
+  sublabelOpacity: number;
 }
 
 const VertexNode: React.FC<VertexNodeProps> = ({
   label,
-  subLabel,
+  sublabel,
   color,
   x,
   y,
   scale,
   glowIntensity,
-  subLabelOpacity,
+  sublabelOpacity,
 }) => (
   <div
     style={{
@@ -67,15 +75,16 @@ const VertexNode: React.FC<VertexNodeProps> = ({
         fontSize: 15,
         color: "rgba(255, 255, 255, 0.6)",
         fontStyle: "italic",
-        opacity: subLabelOpacity,
+        opacity: sublabelOpacity,
       }}
     >
-      {subLabel}
+      {sublabel}
     </div>
   </div>
 );
 
-// ── Triangle Edge (SVG) ─────────────────────────────────────────
+// ── Triangle Edge ───────────────────────────────────────────────
+// SVG gradient line between two vertices with glow and animated pulse
 interface TriangleEdgeProps {
   fromX: number;
   fromY: number;
@@ -85,7 +94,9 @@ interface TriangleEdgeProps {
   toColor: string;
   progress: number;
   glowIntensity: number;
+  edgePulseOffset: number;
   gradientId: string;
+  filterId: string;
 }
 
 const TriangleEdge: React.FC<TriangleEdgeProps> = ({
@@ -97,20 +108,37 @@ const TriangleEdge: React.FC<TriangleEdgeProps> = ({
   toColor,
   progress,
   glowIntensity,
+  edgePulseOffset,
   gradientId,
+  filterId,
 }) => {
   const dx = toX - fromX;
   const dy = toY - fromY;
   const endX = fromX + dx * progress;
   const endY = fromY + dy * progress;
 
+  // Animated edge pulse: energy flowing along the edge via dashoffset
+  const totalLength = Math.sqrt(dx * dx + dy * dy);
+  const dashLength = totalLength * 0.15;
+  const gapLength = totalLength * 0.85;
+
   return (
     <>
       <defs>
-        <linearGradient id={gradientId} x1={fromX} y1={fromY} x2={toX} y2={toY} gradientUnits="userSpaceOnUse">
+        <linearGradient
+          id={gradientId}
+          gradientUnits="userSpaceOnUse"
+          x1={fromX}
+          y1={fromY}
+          x2={toX}
+          y2={toY}
+        >
           <stop offset="0%" stopColor={fromColor} />
           <stop offset="100%" stopColor={toColor} />
         </linearGradient>
+        <filter id={filterId}>
+          <feGaussianBlur stdDeviation="4" />
+        </filter>
       </defs>
       {/* Glow layer */}
       <line
@@ -118,10 +146,10 @@ const TriangleEdge: React.FC<TriangleEdgeProps> = ({
         y1={fromY}
         x2={endX}
         y2={endY}
-        stroke={fromColor}
+        stroke={`url(#${gradientId})`}
         strokeWidth={6}
         opacity={0.2 * glowIntensity}
-        filter="url(#edgeBlur)"
+        filter={`url(#${filterId})`}
       />
       {/* Main line */}
       <line
@@ -133,11 +161,27 @@ const TriangleEdge: React.FC<TriangleEdgeProps> = ({
         strokeWidth={2}
         opacity={0.8}
       />
+      {/* Energy pulse layer (visible once edge is drawn and glow active) */}
+      {progress > 0.95 && glowIntensity > 0.6 && (
+        <line
+          x1={fromX}
+          y1={fromY}
+          x2={endX}
+          y2={endY}
+          stroke={`url(#${gradientId})`}
+          strokeWidth={3}
+          opacity={0.35 * glowIntensity}
+          strokeDasharray={`${dashLength} ${gapLength}`}
+          strokeDashoffset={-edgePulseOffset}
+          filter={`url(#${filterId})`}
+        />
+      )}
     </>
   );
 };
 
-// ── Derivation Arrow (dashed, pointing inward) ─────────────────
+// ── Derivation Arrow ────────────────────────────────────────────
+// Dashed line with arrowhead from edge midpoint toward centroid
 interface DerivationArrowProps {
   fromX: number;
   fromY: number;
@@ -153,23 +197,42 @@ const DerivationArrow: React.FC<DerivationArrowProps> = ({
   toY,
   opacity,
 }) => {
-  // Shorten the arrow: start 40% from edge midpoint, end 80% toward centroid
-  const startX = fromX + (toX - fromX) * 0.4;
-  const startY = fromY + (toY - fromY) * 0.4;
-  const endX = fromX + (toX - fromX) * 0.8;
-  const endY = fromY + (toY - fromY) * 0.8;
+  // Shorten path: start at 40% from midpoint, end at 80%
+  const startFrac = 0.4;
+  const endFrac = 0.8;
+  const sx = fromX + (toX - fromX) * startFrac;
+  const sy = fromY + (toY - fromY) * startFrac;
+  const ex = fromX + (toX - fromX) * endFrac;
+  const ey = fromY + (toY - fromY) * endFrac;
+
+  // Arrowhead computation
+  const dx = ex - sx;
+  const dy = ey - sy;
+  const len = Math.sqrt(dx * dx + dy * dy);
+  const ux = dx / len;
+  const uy = dy / len;
+  const headSize = 6;
+  const ax = ex - ux * headSize + uy * headSize * 0.5;
+  const ay = ey - uy * headSize - ux * headSize * 0.5;
+  const bx = ex - ux * headSize - uy * headSize * 0.5;
+  const by = ey - uy * headSize + ux * headSize * 0.5;
 
   return (
-    <line
-      x1={startX}
-      y1={startY}
-      x2={endX}
-      y2={endY}
-      stroke="rgba(160, 160, 160, 0.4)"
-      strokeWidth={1.5}
-      strokeDasharray="6 4"
-      opacity={opacity}
-    />
+    <g opacity={opacity}>
+      <line
+        x1={sx}
+        y1={sy}
+        x2={ex}
+        y2={ey}
+        stroke="rgba(160, 160, 160, 0.4)"
+        strokeWidth={1.5}
+        strokeDasharray="6 4"
+      />
+      <polygon
+        points={`${ex},${ey} ${ax},${ay} ${bx},${by}`}
+        fill="rgba(160, 160, 160, 0.4)"
+      />
+    </g>
   );
 };
 
@@ -203,188 +266,209 @@ const IntegrationFormula: React.FC<IntegrationFormulaProps> = ({ opacity }) => (
       {" + "}
       <span style={{ color: COLORS.GROUNDING_GREEN }}>Grounding</span>
     </div>
-    <div
-      style={{
-        fontSize: 18,
-        color: COLORS.LABEL_GRAY,
-      }}
-    >
-      Intent + Constraints + Style
+    <div style={{ fontSize: 18, color: COLORS.LABEL_GRAY }}>
+      encodes intent + preserves behavior + maintains style
     </div>
-    <div
-      style={{
-        fontSize: 20,
-        color: COLORS.LABEL_WHITE,
-        marginTop: 8,
-      }}
-    >
+    <div style={{ fontSize: 20, color: COLORS.LABEL_WHITE, marginTop: 8 }}>
       = Complete Specification
     </div>
   </div>
 );
 
 // ── Main Component ──────────────────────────────────────────────
-export const ThreeComponents: React.FC<ThreeComponentsPropsType> = ({ showFormula }) => {
+export const ThreeComponents: React.FC<ThreeComponentsPropsType> = ({
+  showFormula,
+}) => {
   const frame = useCurrentFrame();
 
-  // Vertex positions
-  const vertices = [
-    { label: "PROMPT", subLabel: "Intent", color: COLORS.NOZZLE_BLUE, ...TRIANGLE.PROMPT, delay: BEATS.VERTEX_PROMPT_START },
-    { label: "TESTS", subLabel: "Constraints", color: COLORS.WALLS_AMBER, ...TRIANGLE.TESTS, delay: BEATS.VERTEX_TESTS_START },
-    { label: "GROUNDING", subLabel: "Style", color: COLORS.GROUNDING_GREEN, ...TRIANGLE.GROUNDING, delay: BEATS.VERTEX_GROUNDING_START },
-  ];
-
-  // Vertex appearance (staggered scale-up with overshoot)
+  // ── Phase 1: Vertex appearance (staggered, easeOutBack with overshoot) ──
   const vertexScale = (delay: number) =>
     interpolate(
       frame,
-      [delay, delay + 30],
+      [delay, delay + BEATS.VERTEX_SCALE_DURATION],
       [0, 1],
-      { extrapolateRight: "clamp", easing: Easing.out(Easing.back(1.5)) }
+      {
+        extrapolateLeft: "clamp",
+        extrapolateRight: "clamp",
+        easing: Easing.out(Easing.back(1.5)),
+      }
     );
 
-  // Edge draw progress
+  const promptScale = vertexScale(BEATS.VERTEX_PROMPT_DELAY);
+  const testsScale = vertexScale(BEATS.VERTEX_TESTS_DELAY);
+  const groundingScale = vertexScale(BEATS.VERTEX_GROUNDING_DELAY);
+
+  // ── Phase 2: Edge draw progress (easeOutCubic) ──
   const edgeProgress = interpolate(
     frame,
     [BEATS.EDGES_START, BEATS.EDGES_END],
     [0, 1],
-    { extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
   );
 
-  // Glow intensification
-  const glowPulse = interpolate(
+  // ── Phase 3: Per-vertex glow intensification (staggered, easeOutQuad) ──
+  const promptGlow = interpolate(
     frame,
-    [BEATS.GLOW_INTENSIFY_START, BEATS.GLOW_INTENSIFY_END],
+    [BEATS.GLOW_PROMPT_START, BEATS.GLOW_PROMPT_END],
     [0.6, 1.0],
-    { extrapolateRight: "clamp" }
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
   );
 
-  // Sub-label opacity
+  const testsGlow = interpolate(
+    frame,
+    [BEATS.GLOW_TESTS_START, BEATS.GLOW_TESTS_END],
+    [0.6, 1.0],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
+  );
+
+  const groundingGlow = interpolate(
+    frame,
+    [BEATS.GLOW_GROUNDING_START, BEATS.GLOW_GROUNDING_END],
+    [0.6, 1.0],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
+  );
+
+  // Base glow before intensification phase (vertices glow softly from appearance)
+  const baseGlow = frame < BEATS.GLOW_PROMPT_START ? 0.3 : 0;
+  const effectivePromptGlow = frame >= BEATS.GLOW_PROMPT_START ? promptGlow : baseGlow;
+  const effectiveTestsGlow = frame >= BEATS.GLOW_TESTS_START ? testsGlow : baseGlow;
+  const effectiveGroundingGlow =
+    frame >= BEATS.GLOW_GROUNDING_START ? groundingGlow : baseGlow;
+
+  // Average glow for edges
+  const avgGlow = (effectivePromptGlow + effectiveTestsGlow + effectiveGroundingGlow) / 3;
+
+  // ── Sub-label opacity (easeOutCubic) ──
   const subLabelOpacity = interpolate(
     frame,
     [BEATS.SUBLABEL_START, BEATS.SUBLABEL_END],
     [0, 1],
-    { extrapolateRight: "clamp" }
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
   );
 
-  // Center code appearance
+  // ── Phase 4: Center code appearance (easeOutQuad) ──
   const codeOpacity = interpolate(
     frame,
     [BEATS.CODE_START, BEATS.CODE_END],
     [0, 0.5],
-    { extrapolateRight: "clamp" }
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
   );
 
-  // Derivation arrows
+  // ── Derivation arrows opacity ──
   const arrowOpacity = interpolate(
     frame,
     [BEATS.ARROWS_START, BEATS.ARROWS_END],
     [0, 0.3],
-    { extrapolateRight: "clamp" }
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
 
-  // Integration formula opacity
+  // ── Integration formula opacity (easeOutCubic) ──
   const formulaOpacity = interpolate(
     frame,
     [BEATS.FORMULA_START, BEATS.FORMULA_END],
     [0, 1],
-    { extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
   );
 
-  // Edge midpoints for derivation arrows
-  const edgeMidpoints = [
-    { x: (TRIANGLE.PROMPT.x + TRIANGLE.TESTS.x) / 2, y: (TRIANGLE.PROMPT.y + TRIANGLE.TESTS.y) / 2 },
-    { x: (TRIANGLE.TESTS.x + TRIANGLE.GROUNDING.x) / 2, y: (TRIANGLE.TESTS.y + TRIANGLE.GROUNDING.y) / 2 },
-    { x: (TRIANGLE.GROUNDING.x + TRIANGLE.PROMPT.x) / 2, y: (TRIANGLE.GROUNDING.y + TRIANGLE.PROMPT.y) / 2 },
-  ];
+  // ── Edge pulse animation (continuous energy flowing along edges) ──
+  // Cycles through full edge length every ~90 frames (3s) for subtle flow effect
+  const edgePulseOffset = (frame % 90) / 90;
+
+  // ── Compute edge midpoints for derivation arrows ──
+  const edgeMidpoints = EDGES.map(([fromKey, toKey]) => {
+    const from = VERTICES[fromKey];
+    const to = VERTICES[toKey];
+    return { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 };
+  });
+
+  const centroid = LAYOUT.CENTROID;
 
   return (
     <AbsoluteFill style={{ backgroundColor: COLORS.BACKGROUND }}>
-      {/* SVG layer for edges and arrows */}
+      {/* Triangle edges (SVG) */}
       <svg
         style={{
           position: "absolute",
           width: "100%",
           height: "100%",
-          top: 0,
-          left: 0,
+          pointerEvents: "none",
         }}
       >
-        <defs>
-          <filter id="edgeBlur">
-            <feGaussianBlur stdDeviation="4" />
-          </filter>
-        </defs>
+        {EDGES.map(([fromKey, toKey], i) => {
+          const from = VERTICES[fromKey];
+          const to = VERTICES[toKey];
+          const totalLen = Math.sqrt(
+            (to.x - from.x) ** 2 + (to.y - from.y) ** 2
+          );
+          return (
+            <TriangleEdge
+              key={`edge-${fromKey}-${toKey}`}
+              fromX={from.x}
+              fromY={from.y}
+              fromColor={from.color}
+              toX={to.x}
+              toY={to.y}
+              toColor={to.color}
+              progress={edgeProgress}
+              glowIntensity={avgGlow}
+              edgePulseOffset={edgePulseOffset * totalLen + i * totalLen * 0.33}
+              gradientId={`edgeGrad-${i}`}
+              filterId={`edgeBlur-${i}`}
+            />
+          );
+        })}
 
-        {/* Triangle edges */}
-        <TriangleEdge
-          fromX={TRIANGLE.PROMPT.x}
-          fromY={TRIANGLE.PROMPT.y}
-          fromColor={COLORS.NOZZLE_BLUE}
-          toX={TRIANGLE.TESTS.x}
-          toY={TRIANGLE.TESTS.y}
-          toColor={COLORS.WALLS_AMBER}
-          progress={edgeProgress}
-          glowIntensity={glowPulse}
-          gradientId="edge-prompt-tests"
-        />
-        <TriangleEdge
-          fromX={TRIANGLE.TESTS.x}
-          fromY={TRIANGLE.TESTS.y}
-          fromColor={COLORS.WALLS_AMBER}
-          toX={TRIANGLE.GROUNDING.x}
-          toY={TRIANGLE.GROUNDING.y}
-          toColor={COLORS.GROUNDING_GREEN}
-          progress={edgeProgress}
-          glowIntensity={glowPulse}
-          gradientId="edge-tests-grounding"
-        />
-        <TriangleEdge
-          fromX={TRIANGLE.GROUNDING.x}
-          fromY={TRIANGLE.GROUNDING.y}
-          fromColor={COLORS.GROUNDING_GREEN}
-          toX={TRIANGLE.PROMPT.x}
-          toY={TRIANGLE.PROMPT.y}
-          toColor={COLORS.NOZZLE_BLUE}
-          progress={edgeProgress}
-          glowIntensity={glowPulse}
-          gradientId="edge-grounding-prompt"
-        />
-
-        {/* Derivation arrows pointing to centroid */}
+        {/* Derivation arrows from edge midpoints toward centroid */}
         {edgeMidpoints.map((mid, i) => (
           <DerivationArrow
-            key={i}
+            key={`arrow-${i}`}
             fromX={mid.x}
             fromY={mid.y}
-            toX={TRIANGLE.CENTROID.x}
-            toY={TRIANGLE.CENTROID.y}
+            toX={centroid.x}
+            toY={centroid.y}
             opacity={arrowOpacity}
           />
         ))}
       </svg>
 
       {/* Vertex nodes */}
-      {vertices.map((v) => (
-        <VertexNode
-          key={v.label}
-          label={v.label}
-          subLabel={v.subLabel}
-          color={v.color}
-          x={v.x}
-          y={v.y}
-          scale={vertexScale(v.delay)}
-          glowIntensity={glowPulse}
-          subLabelOpacity={subLabelOpacity}
-        />
-      ))}
+      <VertexNode
+        label={VERTICES.prompt.label}
+        sublabel={VERTICES.prompt.sublabel}
+        color={VERTICES.prompt.color}
+        x={VERTICES.prompt.x}
+        y={VERTICES.prompt.y}
+        scale={promptScale}
+        glowIntensity={effectivePromptGlow}
+        sublabelOpacity={subLabelOpacity}
+      />
+      <VertexNode
+        label={VERTICES.tests.label}
+        sublabel={VERTICES.tests.sublabel}
+        color={VERTICES.tests.color}
+        x={VERTICES.tests.x}
+        y={VERTICES.tests.y}
+        scale={testsScale}
+        glowIntensity={effectiveTestsGlow}
+        sublabelOpacity={subLabelOpacity}
+      />
+      <VertexNode
+        label={VERTICES.grounding.label}
+        sublabel={VERTICES.grounding.sublabel}
+        color={VERTICES.grounding.color}
+        x={VERTICES.grounding.x}
+        y={VERTICES.grounding.y}
+        scale={groundingScale}
+        glowIntensity={effectiveGroundingGlow}
+        sublabelOpacity={subLabelOpacity}
+      />
 
-      {/* Center code block (NO GLOW) */}
+      {/* Center code block (NO GLOW -- spec critical) */}
       <div
         style={{
           position: "absolute",
-          left: TRIANGLE.CENTROID.x - 80,
-          top: TRIANGLE.CENTROID.y - 30,
+          left: centroid.x - 80,
+          top: centroid.y - 30,
           width: 160,
           textAlign: "center",
           opacity: codeOpacity,
@@ -405,7 +489,7 @@ export const ThreeComponents: React.FC<ThreeComponentsPropsType> = ({ showFormul
         </div>
       </div>
 
-      {/* Integration formula */}
+      {/* Integration formula (standalone only) */}
       {showFormula && <IntegrationFormula opacity={formulaOpacity} />}
     </AbsoluteFill>
   );

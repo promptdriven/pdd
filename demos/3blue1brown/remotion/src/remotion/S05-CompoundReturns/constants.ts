@@ -50,10 +50,10 @@ export const BEATS = {
 
   // Visual 2: CompoundCurvesGraph phase 3 — "The returns are linear at best, often sub-linear,..."
   VISUAL_02_START: s2f(24.42),  // 733 frames
-  VISUAL_02_END: s2f(37.34),  // 1120 frames
+  VISUAL_02_END: s2f(39.43),  // 1183 frames (733 + 450 = full 450 frames for hold period)
 
   // Visual 3: CompoundCurvesGraph phase 5 — "When you add a test in PDD, the returns are differ..."
-  VISUAL_03_START: s2f(39.04),  // 1171 frames
+  VISUAL_03_START: s2f(39.43),  // 1183 frames (immediately follows VISUAL_02)
   VISUAL_03_END: s2f(52.28),  // 1568 frames
 
   // Visual 4: InvestmentTable — "Every investment in the mold has compound returns...."

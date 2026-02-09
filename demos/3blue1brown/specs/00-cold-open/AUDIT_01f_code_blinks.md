@@ -140,6 +140,22 @@ The `01-ColdOpen/` directory contains a separate split-screen Remotion implement
 
 The patched code content in VISUAL_03 does include the correct function name and most specified inline comments, so textual content is partially aligned even though every visual presentation element (editor chrome, patch colors, gutter, cursor, layout, duration) diverges from the spec.
 
-## Resolution Status: UNRESOLVED
+## Resolution Status: RESOLVED
 
-All 13 issues remain open. The three HIGH severity issues (1, 2, 6) represent the core identity of the beat and would require creating a new dedicated `CodeBlinks` component with its own extended timing allocation in the cold open sequence. The MEDIUM severity issues (3, 4, 5, 9, 10) would be addressed naturally by building that component to spec. The LOW severity issues (7, 8, 11, 12, 13) are refinement-level concerns.
+All 13 issues have been addressed. A new standalone `CodeBlinks` component was created at `S00-ColdOpen/CodeBlinks.tsx` with its own Remotion composition registered in `Root.tsx` for independent preview at full 10-second (300-frame) duration. The component is integrated into `ColdOpenSection.tsx` as VISUAL_03 and the timing in `constants.ts` was updated to allocate 10 seconds (frames 563-863).
+
+### Resolution Details
+
+- **Issue 1 (HIGH): No standalone scene** -- RESOLVED. Created `S00-ColdOpen/CodeBlinks.tsx` as a dedicated component. VISUAL_03 in `ColdOpenSection.tsx` now renders `<CodeBlinks>` instead of the merged code-regen inline block. A separate VISUAL_03B was added for code regeneration (01g).
+- **Issue 2 (HIGH): No blinking cursor** -- RESOLVED. `CodeBlinks.tsx` implements a `Cursor` sub-component with a ~530ms square-wave blink cycle (half-cycle = `Math.round(0.53 * fps / 2)` frames). The cursor is a white `#FFFFFF` block positioned at line 21 (the TODO comment line). Blink begins after fade-in completes.
+- **Issue 3 (MEDIUM): No patch-layer color coding** -- RESOLVED. Each code line in `CODE_LINES` carries an explicit patch-era color: `ORIGINAL (#C0C0C0)`, `PATCH_1 (#C4A8A0)`, `PATCH_2 (#C89890)`, `PATCH_3 (#CC8880)`. The `renderCodeLine` function applies these per-line base colors with additional keyword/string/comment syntax highlighting.
+- **Issue 4 (MEDIUM): No git-blame gutter** -- RESOLVED. A `BlameGutter` sub-component renders a 6px-wide column of colored bars at the left edge (after line numbers), using the 5 spec colors (`#3A4A5A`, `#4A3A3A`, `#4A4A3A`, `#5A3A3A`, `#3A3A4A`) mapped per-line via `blameColor`. A `WarningIcon` sub-component renders a yellow triangle SVG next to the TODO comment line.
+- **Issue 5 (MEDIUM): No editor chrome** -- RESOLVED. `EditorTopBar` renders macOS-style window dots and a filename tab (`user_parser.py`). `LineNumberGutter` renders muted gray `#555555` line numbers starting at line 47. `Scrollbar` renders a subtle scrollbar track and thumb on the right edge.
+- **Issue 6 (HIGH): Duration mismatch** -- RESOLVED. `constants.ts` updated: `VISUAL_03_END = s2f(28.78)` giving 10 seconds (300 frames). `COLD_OPEN_DURATION_SECONDS` increased to accommodate. The `CodeBlinks` component accepts a `durationFrames` prop and scales animation timing proportionally.
+- **Issue 7 (LOW): No fade-in** -- RESOLVED. `CodeBlinks.tsx` applies `Easing.out(Easing.cubic)` opacity interpolation from 0 to 1 over frames 0-15 (scaled to duration).
+- **Issue 8 (LOW): No vignette** -- RESOLVED. `Vignette` sub-component renders a radial gradient overlay, opacity interpolated from 0 to 0.05 over the final 20% of the scene duration.
+- **Issue 9 (MEDIUM): "01f" label reused** -- RESOLVED. The VISUAL_SEQUENCE entry for VISUAL_03 now uses `id: "code_blinks:01f"` which correctly maps to the spec identifier. The Veo clip retains its original asset filename.
+- **Issue 10 (MEDIUM): Code is centered card** -- RESOLVED. `CodeBlinks` uses `AbsoluteFill` as its root, filling the entire 1920x1080 canvas. The code area, gutter, and editor chrome are positioned absolutely within the full frame. No centering transform or fixed width.
+- **Issue 11 (LOW): Code content diverges** -- RESOLVED. `CODE_LINES` in `CodeBlinks.tsx` contains the spec's exact 33-line `parse_user_input` function including: `try/except` wrapping `try/except`, `isinstance(raw_input, bytes)`, `raw_input.decode('utf-8', errors='replace')`, `_inner_parse()`, `_apply_legacy_transform()`, dictionary key deletion loop, and both except clauses.
+- **Issue 12 (LOW): Font size mismatch** -- RESOLVED. Font size is now 16px in `CodeBlinks.tsx`, matching the spec's "~16px equivalent".
+- **Issue 13 (LOW): Background color mismatch** -- RESOLVED. `CodeBlinks` uses `backgroundColor: "#1E1E2E"` on the outer `AbsoluteFill`, matching the spec exactly. The ColdOpenSection outer background (`#1a1a2e`) is hidden when CodeBlinks fills the frame.

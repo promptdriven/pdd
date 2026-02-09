@@ -164,21 +164,22 @@ export const InvestmentTable: React.FC<InvestmentTablePropsType> = () => {
   );
 
   // PDD cell glow pulses (brief glow per row after it appears)
+  // Compressed offsets: -5/+5/+15 frames to fit tighter beat spacing
   const pddGlow1 = interpolate(
     frame,
-    [BEATS.ROW1_END - 10, BEATS.ROW1_END + 10, BEATS.ROW1_END + 40],
+    [BEATS.ROW1_END - 5, BEATS.ROW1_END + 5, BEATS.ROW1_END + 15],
     [0, 1, 0],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
   );
   const pddGlow2 = interpolate(
     frame,
-    [BEATS.ROW2_END - 10, BEATS.ROW2_END + 10, BEATS.ROW2_END + 40],
+    [BEATS.ROW2_END - 5, BEATS.ROW2_END + 5, BEATS.ROW2_END + 15],
     [0, 1, 0],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
   );
   const pddGlow3 = interpolate(
     frame,
-    [BEATS.ROW3_END - 10, BEATS.ROW3_END + 10, BEATS.ROW3_END + 40],
+    [BEATS.ROW3_END - 5, BEATS.ROW3_END + 5, BEATS.ROW3_END + 15],
     [0, 1, 0],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
   );

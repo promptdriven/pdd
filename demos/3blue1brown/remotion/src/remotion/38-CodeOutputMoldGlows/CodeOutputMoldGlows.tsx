@@ -1,256 +1,273 @@
 import React from "react";
 import { AbsoluteFill, interpolate, useCurrentFrame, Easing } from "remotion";
-import { COLORS, BEATS, CodeOutputMoldGlowsPropsType } from "./constants";
+import { COLORS, BEATS, GENERATED_CODE, CodeOutputMoldGlowsPropsType } from "./constants";
 
-// MoldInterior component showing three colored bars representing the mold components
-const MoldInterior: React.FC<{ glowIntensity: number }> = ({ glowIntensity }) => {
+// Helper: convert hex color to RGB string for rgba() usage
+const hexToRgb = (hex: string): string => {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `${r}, ${g}, ${b}`;
+};
+
+// MiniComponent: a single labeled mold component box with individual glow
+const MiniComponent: React.FC<{
+  label: string;
+  color: string;
+  glowIntensity: number;
+}> = ({ label, color, glowIntensity }) => {
+  const rgb = hexToRgb(color);
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: 20 }}>
-      {/* Prompt layer - blue */}
+    <div
+      style={{
+        padding: "12px 24px",
+        background: `rgba(${rgb}, ${0.1 + 0.1 * glowIntensity})`,
+        border: `2px solid ${color}`,
+        borderRadius: 8,
+        boxShadow: `0 0 ${20 * glowIntensity}px ${color}`,
+        fontSize: 14,
+        fontWeight: "bold",
+        color: color,
+        fontFamily: "monospace",
+        textAlign: "center",
+        minWidth: 100,
+      }}
+    >
+      {label}
+    </div>
+  );
+};
+
+// MoldSystem: three labeled component boxes in a horizontal layout
+const MoldSystem: React.FC<{ glowIntensity: number }> = ({ glowIntensity }) => {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        top: 100,
+        left: "50%",
+        transform: "translateX(-50%)",
+      }}
+    >
       <div
         style={{
-          height: 6,
-          backgroundColor: `rgba(74, 144, 217, ${0.4 * glowIntensity})`,
-          borderRadius: 3,
-          width: "80%",
-          boxShadow: `0 0 8px rgba(74, 144, 217, ${0.3 * glowIntensity})`,
+          display: "flex",
+          gap: 30,
+          marginBottom: 30,
         }}
-      />
-      {/* Test layers - amber */}
+      >
+        <MiniComponent
+          label="PROMPT"
+          color={COLORS.PROMPT_BLUE}
+          glowIntensity={glowIntensity}
+        />
+        <MiniComponent
+          label="TESTS"
+          color={COLORS.TESTS_AMBER}
+          glowIntensity={glowIntensity}
+        />
+        <MiniComponent
+          label="GROUNDING"
+          color={COLORS.GROUNDING_GREEN}
+          glowIntensity={glowIntensity}
+        />
+      </div>
+    </div>
+  );
+};
+
+// GeneratedCode: actual readable code with glow border that fades
+const GeneratedCode: React.FC<{
+  glowIntensity: number;
+  opacity: number;
+}> = ({ glowIntensity, opacity }) => {
+  const glowColor = `rgba(138, 156, 175, ${0.5 * glowIntensity})`;
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        bottom: 180,
+        left: "50%",
+        transform: "translateX(-50%)",
+        opacity,
+      }}
+    >
       <div
         style={{
-          height: 6,
-          backgroundColor: `rgba(217, 148, 74, ${0.4 * glowIntensity})`,
-          borderRadius: 3,
-          width: "90%",
-          boxShadow: `0 0 8px rgba(217, 148, 74, ${0.3 * glowIntensity})`,
+          width: 500,
+          padding: 20,
+          background: "#1E1E2E",
+          borderRadius: 8,
+          boxShadow:
+            glowIntensity > 0.1
+              ? `0 0 ${40 * glowIntensity}px ${glowColor}`
+              : "none",
+          border:
+            glowIntensity > 0.1
+              ? `1px solid rgba(138, 156, 175, ${0.3 * glowIntensity})`
+              : "1px solid #333",
         }}
-      />
+      >
+        <pre
+          style={{
+            fontSize: 12,
+            fontFamily: "'JetBrains Mono', monospace",
+            color: `rgba(160, 160, 160, ${0.5 + opacity * 0.5})`,
+            margin: 0,
+            whiteSpace: "pre",
+            lineHeight: 1.5,
+          }}
+        >
+          {GENERATED_CODE}
+        </pre>
+      </div>
+    </div>
+  );
+};
+
+// FinalMessage: two lines of text that fade in sequentially
+const FinalMessage: React.FC<{
+  line1: string;
+  line2: string;
+  line1Opacity: number;
+  line2Opacity: number;
+  moldGlowIntensity: number;
+}> = ({ line1, line2, line1Opacity, line2Opacity, moldGlowIntensity }) => {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        bottom: 60,
+        left: "50%",
+        transform: "translateX(-50%)",
+        textAlign: "center",
+      }}
+    >
       <div
         style={{
-          height: 6,
-          backgroundColor: `rgba(217, 148, 74, ${0.4 * glowIntensity})`,
-          borderRadius: 3,
-          width: "70%",
-          boxShadow: `0 0 8px rgba(217, 148, 74, ${0.3 * glowIntensity})`,
+          fontSize: 24,
+          color: "#888",
+          opacity: line1Opacity,
+          marginBottom: 12,
         }}
-      />
-      {/* Grounding layer - green */}
+      >
+        {line1}
+      </div>
       <div
         style={{
-          height: 6,
-          backgroundColor: `rgba(90, 170, 110, ${0.4 * glowIntensity})`,
-          borderRadius: 3,
-          width: "60%",
-          boxShadow: `0 0 8px rgba(90, 170, 110, ${0.3 * glowIntensity})`,
+          fontSize: 28,
+          color: "#FFF",
+          fontWeight: "bold",
+          opacity: line2Opacity,
+          textShadow:
+            moldGlowIntensity > 0.5
+              ? `
+              0 0 30px rgba(${hexToRgb(COLORS.PROMPT_BLUE)}, ${0.4 * moldGlowIntensity}),
+              0 0 30px rgba(${hexToRgb(COLORS.TESTS_AMBER)}, ${0.3 * moldGlowIntensity}),
+              0 0 30px rgba(${hexToRgb(COLORS.GROUNDING_GREEN)}, ${0.3 * moldGlowIntensity})
+            `
+              : "none",
         }}
-      />
+      >
+        {line2}
+      </div>
     </div>
   );
 };
 
 export const CodeOutputMoldGlows: React.FC<CodeOutputMoldGlowsPropsType> = ({
   showMessages = true,
+  durationFrames,
 }) => {
   const frame = useCurrentFrame();
 
-  // Breathing animation - sinusoidal oscillation
-  const breathCycle = Math.sin(frame * 0.035) * 0.1 + 0.9;
+  // Scale factor: when durationFrames is provided, proportionally compress
+  // all animation keyframes so the full five-phase sequence fits within
+  // the available time. Default is 1.0 (20s / 600 frames).
+  const totalFrames = durationFrames ?? BEATS.TOTAL_FRAMES;
+  const scale = totalFrames / BEATS.TOTAL_FRAMES;
 
-  // Mold glow (increases over time)
-  const baseMoldGlow = interpolate(
+  // Helper to scale a frame number
+  const sf = (f: number) => Math.round(f * scale);
+
+  // ── Phase 1 (0-4s): Code glows brightly ──────────────────────────
+  // Code glow holds at 1.0 for the first 4s then fades to 0 by 10s
+  const codeGlow = interpolate(
     frame,
-    [0, 60],
-    [0.4, 1.0],
-    { extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
+    [0, sf(BEATS.CODE_GLOW_HOLD_END), sf(BEATS.CODE_FADE_END)],
+    [1, 1, 0],
+    { extrapolateRight: "clamp", easing: Easing.in(Easing.quad) }
   );
 
-  // Apply breathing to mold glow
-  const moldGlow = baseMoldGlow * breathCycle;
-
-  // Mold appearance
-  const moldOpacity = interpolate(
+  // ── Phase 2 (4-10s): Code opacity dims but stays visible ────────
+  // Code starts fully visible (1.0) and dims to 0.5
+  const codeOpacity = interpolate(
     frame,
-    [0, 45],
-    [0, 1],
-    { extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
+    [0, sf(BEATS.CODE_FADE_END)],
+    [1, 0.5],
+    { extrapolateRight: "clamp", easing: Easing.in(Easing.quad) }
   );
 
-  // Plastic appearance
-  const plasticOpacity = interpolate(
+  // ── Phase 3 (10-14s): Mold glow increases ───────────────────────
+  // Mold glow starts at 0.5 and rises to 1.0 with easeOutQuad
+  const moldGlow = interpolate(
     frame,
-    [15, 50],
-    [0, 0.4],
-    { extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
+    [sf(BEATS.MOLD_GLOW_START), sf(BEATS.MOLD_GLOW_END)],
+    [0.5, 1.0],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    }
   );
 
-  // First text: "The code is just plastic."
-  const text1Opacity = interpolate(
-    frame,
-    [120, 160],
-    [0, 1],
-    { extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
-  );
+  // ── Phase 4 (14-18s): First message appears ─────────────────────
+  const message1Opacity = showMessages
+    ? interpolate(
+        frame,
+        [sf(BEATS.MESSAGE_1_START), sf(BEATS.MESSAGE_1_END)],
+        [0, 1],
+        { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
+      )
+    : 0;
 
-  // Second text: "The mold is what matters."
-  const text2Opacity = interpolate(
-    frame,
-    [210, 250],
-    [0, 1],
-    { extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
-  );
+  // ── Phase 5 (18-20s): Second message appears ────────────────────
+  const message2Opacity = showMessages
+    ? interpolate(
+        frame,
+        [sf(BEATS.MESSAGE_2_START), sf(BEATS.MESSAGE_2_END)],
+        [0, 1],
+        { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
+      )
+    : 0;
 
-  // Glow boost when second message appears
+  // Final mold glow boost when the second message appears
   const finalGlowBoost = interpolate(
     frame,
-    [210, 270],
+    [sf(BEATS.MESSAGE_2_START), sf(BEATS.MESSAGE_2_END)],
     [1.0, 1.4],
-    { extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
   );
 
-  // Final combined glow intensity
-  const finalGlowIntensity = moldGlow * finalGlowBoost;
+  const finalMoldGlow = moldGlow * finalGlowBoost;
 
   return (
     <AbsoluteFill style={{ backgroundColor: COLORS.BACKGROUND }}>
-      {/* The Mold - UNIFIED GLOWING SHAPE */}
-      <div
-        style={{
-          position: "absolute",
-          left: 350,
-          top: 280,
-          width: 240,
-          height: 200,
-          opacity: moldOpacity,
-        }}
-      >
-        {/* Multi-layer glow - three separate layers with different blur radii */}
-        <div
-          style={{
-            position: "absolute",
-            inset: -20,
-            borderRadius: 20,
-            background: `radial-gradient(ellipse, rgba(74, 144, 217, ${0.15 * finalGlowIntensity}), transparent)`,
-            filter: `blur(${15 * finalGlowIntensity}px)`,
-          }}
-        />
-        <div
-          style={{
-            position: "absolute",
-            inset: -15,
-            borderRadius: 20,
-            background: `radial-gradient(ellipse, rgba(217, 148, 74, ${0.12 * finalGlowIntensity}), transparent)`,
-            filter: `blur(${12 * finalGlowIntensity}px)`,
-          }}
-        />
-        <div
-          style={{
-            position: "absolute",
-            inset: -10,
-            borderRadius: 20,
-            background: `radial-gradient(ellipse, rgba(90, 170, 110, ${0.10 * finalGlowIntensity}), transparent)`,
-            filter: `blur(${10 * finalGlowIntensity}px)`,
-          }}
-        />
+      {/* Mold system: three labeled component boxes */}
+      <MoldSystem glowIntensity={finalMoldGlow} />
 
-        {/* Mold shape container */}
-        <div
-          style={{
-            position: "relative",
-            width: "100%",
-            height: "100%",
-            borderRadius: 16,
-            border: "2px solid rgba(255, 255, 255, 0.3)",
-            backgroundColor: "rgba(255, 255, 255, 0.05)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            boxShadow: `
-              0 0 ${30 * finalGlowIntensity}px rgba(74, 144, 217, 0.3),
-              0 0 ${25 * finalGlowIntensity}px rgba(217, 148, 74, 0.2),
-              0 0 ${20 * finalGlowIntensity}px rgba(90, 170, 110, 0.2)
-            `,
-          }}
-        >
-          {/* Mold interior with colored bars */}
-          <MoldInterior glowIntensity={finalGlowIntensity} />
-        </div>
-      </div>
+      {/* Generated code: actual readable Python code with glow border */}
+      <GeneratedCode glowIntensity={codeGlow} opacity={codeOpacity} />
 
-      {/* The Plastic Part - ABSTRACT GEOMETRIC FORM */}
-      <div
-        style={{
-          position: "absolute",
-          left: 700,
-          top: 310,
-          width: 160,
-          height: 140,
-          opacity: plasticOpacity,
-          borderRadius: 12,
-          backgroundColor: "rgba(136, 136, 136, 0.15)",
-          border: "1px solid rgba(136, 136, 136, 0.2)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        {/* Abstract code lines - simple bars of varying widths */}
-        <div style={{ padding: 16, width: "100%" }}>
-          {[70, 55, 80, 45, 65].map((w, i) => (
-            <div
-              key={i}
-              style={{
-                height: 4,
-                backgroundColor: "rgba(136, 136, 136, 0.25)",
-                marginBottom: 4,
-                borderRadius: 2,
-                width: `${w}%`,
-              }}
-            />
-          ))}
-        </div>
-      </div>
-
-      {/* Text container */}
-      <div
-        style={{
-          position: "absolute",
-          bottom: 140,
-          left: 0,
-          right: 0,
-          textAlign: "center",
-        }}
-      >
-        {/* First line: understated */}
-        <div
-          style={{
-            fontSize: 32,
-            color: "#888888",
-            fontWeight: 400,
-            opacity: text1Opacity,
-            marginBottom: 24,
-          }}
-        >
-          The code is just plastic.
-        </div>
-
-        {/* Second line: emphasized */}
-        <div
-          style={{
-            fontSize: 36,
-            color: "#FFFFFF",
-            fontWeight: 600,
-            opacity: text2Opacity,
-            textShadow: `
-              0 0 30px rgba(74, 144, 217, 0.4),
-              0 0 30px rgba(217, 148, 74, 0.3),
-              0 0 30px rgba(90, 170, 110, 0.3)
-            `,
-          }}
-        >
-          The mold is what matters.
-        </div>
-      </div>
+      {/* Final messages */}
+      <FinalMessage
+        line1="The code is output."
+        line2="The mold is what matters."
+        line1Opacity={message1Opacity}
+        line2Opacity={message2Opacity}
+        moldGlowIntensity={finalMoldGlow}
+      />
     </AbsoluteFill>
   );
 };

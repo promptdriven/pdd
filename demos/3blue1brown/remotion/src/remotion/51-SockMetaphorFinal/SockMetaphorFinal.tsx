@@ -1,6 +1,13 @@
-import React from "react";
+import React, { useMemo } from "react";
 import { AbsoluteFill, interpolate, useCurrentFrame, Easing } from "remotion";
 import { COLORS, BEATS, SockMetaphorFinalPropsType } from "./constants";
+
+// ── Deterministic seeded random ─────────────────────────────────
+// Deterministic PRNG to avoid Remotion flickering from Math.random()
+function seededRandom(seed: number): number {
+  const x = Math.sin(seed * 9301 + 49297) * 49297;
+  return x - Math.floor(x);
+}
 
 // ── Particle Component ──────────────────────────────────────────
 interface ParticleProps {
@@ -11,11 +18,17 @@ interface ParticleProps {
 }
 
 const CrumpleParticle: React.FC<ParticleProps> = ({ index, progress, startX, startY }) => {
+  // Deterministic per-particle values derived from index (stable across renders)
+  const particleParams = useMemo(() => {
+    const distance = 80 + seededRandom(index * 17 + 3) * 60;
+    const size = 4 + seededRandom(index * 31 + 7) * 4;
+    return { distance, size };
+  }, [index]);
+
   // Each particle has a unique trajectory
   const angle = (index / 12) * Math.PI * 2 + Math.PI / 4;
-  const distance = 80 + Math.random() * 60;
-  const endX = startX + Math.cos(angle) * distance;
-  const endY = startY + Math.sin(angle) * distance + 40; // Extra gravity
+  const endX = startX + Math.cos(angle) * particleParams.distance;
+  const endY = startY + Math.sin(angle) * particleParams.distance + 40; // Extra gravity
 
   const x = interpolate(progress, [0, 1], [startX, endX], {
     extrapolateRight: "clamp",
@@ -31,13 +44,11 @@ const CrumpleParticle: React.FC<ParticleProps> = ({ index, progress, startX, sta
     extrapolateRight: "clamp",
   });
 
-  const size = 4 + Math.random() * 4;
-
   return (
     <circle
       cx={x}
       cy={y}
-      r={size}
+      r={particleParams.size}
       fill={COLORS.PARTICLE_GRAY}
       opacity={opacity}
     />
@@ -224,7 +235,7 @@ export const SockMetaphorFinal: React.FC<SockMetaphorFinalPropsType> = ({
     frame,
     [BEATS.COST_LABEL_FADE_IN, 30, BEATS.COST_LABEL_FADE_OUT - 20, BEATS.COST_LABEL_FADE_OUT],
     [0, 0.6, 0.6, 0],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.inOut(Easing.quad) }
   );
 
   // ── Phase 3: Discard (120-240) ──
@@ -318,22 +329,12 @@ export const SockMetaphorFinal: React.FC<SockMetaphorFinalPropsType> = ({
           <div
             style={{
               fontFamily: "JetBrains Mono, monospace",
-              fontSize: 32,
+              fontSize: 18,
               color: COLORS.COST_LABEL,
               fontWeight: 600,
-              marginBottom: 8,
             }}
           >
             $0.50
-          </div>
-          <div
-            style={{
-              fontFamily: "JetBrains Mono, monospace",
-              fontSize: 14,
-              color: "rgba(255, 255, 255, 0.4)",
-            }}
-          >
-            Cost to replace: nearly zero
           </div>
         </div>
       )}

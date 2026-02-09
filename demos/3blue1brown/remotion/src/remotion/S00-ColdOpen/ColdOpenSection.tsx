@@ -1,6 +1,7 @@
 import React from "react";
 import {
   AbsoluteFill,
+  Easing,
   interpolate,
   Audio,
   Sequence,
@@ -9,6 +10,9 @@ import {
   useCurrentFrame,
 } from "remotion";
 import { BEATS, VISUAL_SEQUENCE, ColdOpenSectionPropsType } from "./constants";
+import { HoldAccumulatedWeight } from "./HoldAccumulatedWeight";
+import { CodeBlinks } from "./CodeBlinks";
+import { CodeRegeneratesVisual } from "./CodeRegeneratesVisual";
 
 
 export const ColdOpenSection: React.FC<ColdOpenSectionPropsType> = () => {
@@ -56,8 +60,19 @@ export const ColdOpenSection: React.FC<ColdOpenSectionPropsType> = () => {
         </Sequence>
       )}
 
-      {/* Visual 2: Veo clip - When socks got cheap enough she stopped */}
+      {/* Visual 1B: Hold on accumulated weight (01e) - 6 second contemplative hold */}
       {activeVisual === 2 && (
+        <Sequence from={BEATS.VISUAL_01B_START}>
+          <AbsoluteFill>
+            <HoldAccumulatedWeight
+              durationFrames={BEATS.VISUAL_01B_END - BEATS.VISUAL_01B_START}
+            />
+          </AbsoluteFill>
+        </Sequence>
+      )}
+
+      {/* Visual 2: Veo clip - When socks got cheap enough she stopped */}
+      {activeVisual === 3 && (
         <Sequence from={BEATS.VISUAL_02_START}>
           <AbsoluteFill>
             <OffthreadVideo
@@ -69,92 +84,260 @@ export const ColdOpenSection: React.FC<ColdOpenSectionPropsType> = () => {
         </Sequence>
       )}
 
-      {/* Visual 3: Code regeneration - Code just got that cheap */}
-      {activeVisual === 3 && (
+      {/* Visual 3: Code Blinks (01f) - Code just got that cheap */}
+      {/* Standalone contemplative beat: full-frame patched code with blinking cursor. */}
+      {/* The only motion is the cursor blink -- viewer absorbs accumulated technical debt. */}
+      {activeVisual === 4 && (
         <Sequence from={BEATS.VISUAL_03_START}>
-          <AbsoluteFill style={{ backgroundColor: "#1a1a2e" }}>
-            {/* Old patched code - dissolves away */}
-            <div style={{
-              position: "absolute",
-              top: "50%",
-              left: "50%",
-              transform: "translate(-50%, -50%)",
-              opacity: interpolate(frame - BEATS.VISUAL_03_START, [0, 10, 11, 25], [1, 1, 1, 0], { extrapolateRight: "clamp" }),
-              filter: `blur(${interpolate(frame - BEATS.VISUAL_03_START, [10, 25], [0, 8], { extrapolateLeft: "clamp", extrapolateRight: "clamp" })}px)`,
-            }}>
-              <div style={{ background: "#1E1E2E", padding: 24, borderRadius: 12, border: "1px solid #E74C3C", width: 700 }}>
-                <pre style={{ fontSize: 14, fontFamily: "'JetBrains Mono', monospace", color: "#8a9caf", margin: 0, lineHeight: 1.6 }}>{`def parse_user_input(raw_input, context=None, legacy=False):\n    # patched: handle None input (hotfix 2024-01)\n    if raw_input is None:\n        return default_response(context)\n    data = raw_input.strip()\n    # workaround for unicode edge case\n    if legacy:\n        data = data.encode('ascii', 'ignore').decode()\n    # TODO: this whole block needs refactoring\n    if context and context.get('strict'):\n        validated = _strict_validate(data)\n    else:\n        validated = _loose_validate(data)  # don't remove -- breaks downstream\n    return validated`}</pre>
-              </div>
-            </div>
-            {/* New clean code - fades in */}
-            <div style={{
-              position: "absolute",
-              top: "50%",
-              left: "50%",
-              transform: "translate(-50%, -50%)",
-              opacity: interpolate(frame - BEATS.VISUAL_03_START, [18, 30], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" }),
-            }}>
-              <div style={{ background: "#1E1E2E", padding: 24, borderRadius: 12, border: "1px solid #333", width: 700 }}>
-                <pre style={{ fontSize: 14, fontFamily: "'JetBrains Mono', monospace", color: "#8a9caf", margin: 0, lineHeight: 1.6 }}>{`def parse_user_input(raw_input, context=None):\n    if raw_input is None:\n        return None\n    cleaned = raw_input.strip()\n    if not cleaned:\n        return None\n    return validate_and_normalize(cleaned, context)`}</pre>
-              </div>
-            </div>
-            {/* Terminal indicator */}
-            <div style={{
-              position: "absolute",
-              bottom: 60,
-              right: 60,
-              opacity: interpolate(frame - BEATS.VISUAL_03_START, [25, 35], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" }),
-              fontFamily: "'JetBrains Mono', monospace",
-              fontSize: 12,
-              color: "#E0E0E0",
-            }}>
-              $ pdd generate user_parser
-            </div>
+          <CodeBlinks
+            durationFrames={BEATS.VISUAL_03_END - BEATS.VISUAL_03_START}
+          />
+        </Sequence>
+      )}
+
+      {/* Visual 3B: Code Regenerates (01g) - Deletion, empty beat, line-by-line regeneration
+          Spec 01g: 15-second sequence with 7 animation phases:
+            selection flash (0.2s) -> delete sweep (0.8s) -> empty beat (1s) ->
+            terminal activity (0.2s) -> regeneration (0.8s) -> terminal done (0.2s) ->
+            hold on clean code (11.8s) with title crossfade in final 3s.
+          "The empty beat is critical -- do not rush it." */}
+      {activeVisual === 5 && (
+        <Sequence from={BEATS.VISUAL_03B_START}>
+          <AbsoluteFill>
+            <CodeRegeneratesVisual
+              localFrame={frame - BEATS.VISUAL_03B_START}
+              totalFrames={BEATS.VISUAL_03B_END - BEATS.VISUAL_03B_START}
+            />
           </AbsoluteFill>
         </Sequence>
       )}
 
-      {/* Visual 4: Title over code - So why are we still patching */}
-      {activeVisual === 4 && (
+      {/* Visual 4: Title card — "Prompt-Driven Development" over dimmed code
+          Spec: ~10 seconds (300 frames at 30fps).
+          Frame 0-60: code dims 1.0->0.15, editor chrome fades, terminal fades, vignette fades in.
+          Frame 30-90: title fades in with upward drift, overlapping code dim.
+          Frame 45-90: glow blooms gently behind title (delayed accent).
+          Frame 90-270: contemplative hold — pure stillness, no animation.
+          Frame 270-300: transition prep — title at full opacity at cut. */}
+      {activeVisual === 6 && (
         <Sequence from={BEATS.VISUAL_04_START}>
-          <AbsoluteFill style={{ backgroundColor: "#1a1a2e" }}>
-            {/* Dimmed regenerated code in background */}
-            <div style={{
-              position: "absolute",
-              top: "50%",
-              left: "50%",
-              transform: "translate(-50%, -50%)",
-              opacity: 0.25,
-            }}>
-              <div style={{ background: "#1E1E2E", padding: 24, borderRadius: 12, border: "1px solid #333", width: 700 }}>
-                <pre style={{ fontSize: 14, fontFamily: "'JetBrains Mono', monospace", color: "#8a9caf", margin: 0, lineHeight: 1.6 }}>{`def parse_user_input(raw_input, context=None):\n    if raw_input is None:\n        return None\n    cleaned = raw_input.strip()\n    if not cleaned:\n        return None\n    return validate_and_normalize(cleaned, context)`}</pre>
-              </div>
-            </div>
-            {/* Title text fading in */}
-            <div style={{
-              position: "absolute",
-              top: 0, left: 0, right: 0, bottom: 0,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              opacity: interpolate(frame - BEATS.VISUAL_04_START, [0, 60], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" }),
-            }}>
-              <h1 style={{
-                transform: `translateY(${interpolate(frame - BEATS.VISUAL_04_START, [0, 60], [20, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" })}px)`,
-                fontFamily: "Inter, system-ui, sans-serif",
-                fontSize: 72,
-                fontWeight: 600,
-                color: "#F8F4F0",
-                letterSpacing: "0.02em",
-                margin: 0,
-                textShadow: "0 0 60px rgba(74, 144, 217, 0.15), 0 0 40px rgba(0,0,0,0.8)",
-              }}>
-                Prompt-Driven Development
-              </h1>
-            </div>
-          </AbsoluteFill>
+          <TitleCardVisual parentFrame={frame} startFrame={BEATS.VISUAL_04_START} />
         </Sequence>
       )}
+    </AbsoluteFill>
+  );
+};
+
+
+/**
+ * Title Card visual (VISUAL_04) — the "poster frame" of the entire video.
+ * Implements the full spec: animated code dimming (easeInOutCubic),
+ * editor chrome fade-out, terminal fade-out, vignette overlay,
+ * title with separate glow layer, easeOutCubic easing, and 6-second hold.
+ */
+const TitleCardVisual: React.FC<{ parentFrame: number; startFrame: number }> = ({
+  parentFrame,
+  startFrame,
+}) => {
+  // Local frame relative to VISUAL_04_START
+  const f = parentFrame - startFrame;
+
+  // ── Frame 0-60 (0-2s): Background code dims from 1.0 to 0.15 ──
+  // Spec: easeInOutCubic — smooth, gradual recession
+  const codeDim = interpolate(
+    f,
+    [0, 60],
+    [1, 0.15],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.inOut(Easing.cubic) }
+  );
+
+  // ── Frame 0-45: Editor chrome (top bar, gutter) fades out ──
+  // Spec: easeOutCubic — quick fade, gets out of the way
+  const chromeFade = interpolate(
+    f,
+    [0, 45],
+    [1, 0],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
+  );
+
+  // ── Frame 0-30: Terminal snippet fades out completely ──
+  // Spec: easeOutCubic
+  const terminalFade = interpolate(
+    f,
+    [0, 30],
+    [1, 0],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
+  );
+
+  // ── Frame 30-90 (1-3s): Title fades in with upward drift ──
+  // Spec: easeOutCubic — confident arrival, settles into place
+  const titleOpacity = interpolate(
+    f,
+    [30, 90],
+    [0, 1],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
+  );
+
+  const titleY = interpolate(
+    f,
+    [30, 90],
+    [20, 0],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
+  );
+
+  // ── Frame 45-90: Glow blooms gently (delayed accent) ──
+  // Spec: separate animation timeline, starts after title fade begins at frame 30
+  const glowOpacity = interpolate(
+    f,
+    [45, 90],
+    [0, 0.15],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
+  );
+
+  // ── Frame 0-60: Vignette fades in ──
+  // Spec: linear (gradual, atmospheric)
+  const vignetteOpacity = interpolate(
+    f,
+    [0, 60],
+    [0, 0.6],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+  );
+
+  // Frames 90-270: Hold (pure stillness). Frames 270-300: Transition prep.
+  // No additional animation — all interpolations clamp at their final values.
+
+  return (
+    <AbsoluteFill style={{ backgroundColor: "#1E1E2E" }}>
+      {/* Dimmed regenerated code backdrop — animates from full to 0.15 opacity */}
+      <div style={{
+        position: "absolute",
+        top: "50%",
+        left: "50%",
+        transform: "translate(-50%, -50%)",
+        opacity: codeDim,
+      }}>
+        <div style={{ background: "#1E1E2E", padding: 24, borderRadius: 12, border: "1px solid #333", width: 700 }}>
+          <pre style={{ fontSize: 14, fontFamily: "'JetBrains Mono', monospace", color: "#8a9caf", margin: 0, lineHeight: 1.6 }}>{`def parse_user_input(raw_input, context=None):\n    if raw_input is None:\n        return None\n    cleaned = raw_input.strip()\n    if not cleaned:\n        return None\n    return validate_and_normalize(cleaned, context)`}</pre>
+        </div>
+      </div>
+
+      {/* Editor chrome — top bar fading out */}
+      <div style={{
+        position: "absolute",
+        top: 0,
+        left: 0,
+        right: 0,
+        height: 36,
+        background: "#252535",
+        borderBottom: "1px solid #333",
+        display: "flex",
+        alignItems: "center",
+        paddingLeft: 16,
+        opacity: chromeFade,
+      }}>
+        <div style={{ display: "flex", gap: 6 }}>
+          <div style={{ width: 12, height: 12, borderRadius: "50%", background: "#FF5F56" }} />
+          <div style={{ width: 12, height: 12, borderRadius: "50%", background: "#FFBD2E" }} />
+          <div style={{ width: 12, height: 12, borderRadius: "50%", background: "#27C93F" }} />
+        </div>
+        <span style={{ marginLeft: 16, fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "#888" }}>
+          user_parser.py
+        </span>
+      </div>
+
+      {/* Editor chrome — line number gutter fading out */}
+      <div style={{
+        position: "absolute",
+        top: 36,
+        left: 0,
+        width: 48,
+        bottom: 0,
+        background: "#1a1a28",
+        borderRight: "1px solid #2a2a3e",
+        opacity: chromeFade,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "flex-end",
+        paddingRight: 8,
+        paddingTop: 12,
+        fontFamily: "'JetBrains Mono', monospace",
+        fontSize: 12,
+        color: "#555",
+        lineHeight: "1.6",
+      }}>
+        {Array.from({ length: 8 }, (_, i) => (
+          <div key={i}>{47 + i}</div>
+        ))}
+      </div>
+
+      {/* Terminal snippet — fades out completely over first second */}
+      <div style={{
+        position: "absolute",
+        bottom: 40,
+        right: 40,
+        opacity: terminalFade,
+      }}>
+        <div style={{
+          width: 300,
+          padding: "8px 12px",
+          backgroundColor: "#252535",
+          borderRadius: 6,
+          border: "1px solid #333",
+          fontFamily: "'JetBrains Mono', monospace",
+          fontSize: 12,
+        }}>
+          <div style={{ color: "#E0E0E0" }}>$ pdd generate user_parser</div>
+          <div style={{ color: "#888" }}>Generating from prompt...</div>
+          <div style={{ color: "#5AAA6E" }}>Done. (0.8s) {"\u2713"}</div>
+        </div>
+      </div>
+
+      {/* Vignette overlay — soft radial darkening, center bright, edges ~85% darkness */}
+      <div style={{
+        position: "absolute",
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        background: "radial-gradient(ellipse at center, transparent 40%, rgba(0, 0, 0, 0.85) 100%)",
+        opacity: vignetteOpacity,
+        pointerEvents: "none",
+      }} />
+
+      {/* Title container — positioned ~5% above true center (top: 45%) for visual balance */}
+      <div style={{
+        position: "absolute",
+        top: "45%",
+        left: "50%",
+        transform: `translate(-50%, -50%) translateY(${titleY}px)`,
+        opacity: titleOpacity,
+        textAlign: "center",
+      }}>
+        {/* Glow layer (behind text) — separate div with radial gradient per spec */}
+        {/* Bloom radius ~40px via inset: -40, filter: blur(20px) */}
+        <div style={{
+          position: "absolute",
+          inset: -40,
+          background: `radial-gradient(ellipse at center, rgba(74, 144, 217, ${glowOpacity}) 0%, transparent 70%)`,
+          filter: "blur(20px)",
+          pointerEvents: "none",
+        }} />
+
+        {/* Title text */}
+        <h1 style={{
+          fontFamily: "Inter, -apple-system, sans-serif",
+          fontWeight: 600,
+          fontSize: 72,
+          color: "#F8F4F0",
+          letterSpacing: "0.02em",
+          lineHeight: 1.2,
+          margin: 0,
+          position: "relative",
+          textShadow: "0 2px 20px rgba(0,0,0,0.5)",
+        }}>
+          Prompt-Driven Development
+        </h1>
+      </div>
     </AbsoluteFill>
   );
 };
