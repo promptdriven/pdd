@@ -41,7 +41,7 @@ contexts:
       target_coverage: 80.0
       strength: 1.0
       temperature: 0.0
-      budget: 10.0
+      budget: 20.0
       max_attempts: 3
 YAML
 
