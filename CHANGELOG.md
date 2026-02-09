@@ -1,3 +1,23 @@
+## v0.0.143 (2026-02-08)
+
+### Feat
+
+- Introduce `replay_stability_ab` experiment with multi-step agentic development for `user_id_parser`, adding email input parsing and configurable reserved IDs.
+- Implement and test a `user_id_parser` within the `replay_stability_ab` experiment, including new source, examples, and acceptance tests.
+- Implement new Remotion visual components and refine existing scene timings, addressing audit feedback across several video sections.
+- Add audit specification markdown files for the 3blue1brown demo across multiple chapters.
+- add numerous new Remotion compositions and integrate them into existing sequences, including a cost label overlay in `ClosingSection`.
+- add and refine specifications for the 3blue1brown demo, covering cold open, economics, paradigm shift, mold, compound returns, and closing sections.
+- Add video looping to prevent freezing, introduce `startAtFullView` and `showOverlayText` props for charts, and adjust sequence timings.
+
+### Fix
+
+- Handle worktree add when branch is checked out (#445)
+
+### Refactor
+
+- Convert E2E skip-tests to proper regression assertions (#445)
+
 ## v0.0.142 (2026-02-07)
 
 ### Feat
