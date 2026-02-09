@@ -106,9 +106,13 @@ elif [[ "$ARM" == "pdd" ]]; then
   mkdir -p "${WORKSPACE}/prompts"
   cp "${STEPS_DIR}/prompt_step_${STEP}.txt" "${WORKSPACE}/prompts/user_id_parser_python.prompt"
 
-  # Run PDD sync
+  # Run PDD sync (use --local unless PDD_CLOUD=1 is set)
   cd "${WORKSPACE}"
-  pdd --force --local sync user_id_parser 2>&1 | tee "${RUN_DIR}/pdd_step_${STEP}.log" || true
+  if [[ "${PDD_CLOUD:-0}" == "1" ]]; then
+    pdd --force sync user_id_parser 2>&1 | tee "${RUN_DIR}/pdd_step_${STEP}.log" || true
+  else
+    pdd --force --local sync user_id_parser 2>&1 | tee "${RUN_DIR}/pdd_step_${STEP}.log" || true
+  fi
 
   # Check if tests pass
   TEST_OUTPUT="$(cd "${WORKSPACE}" && pytest -q "tests/test_acceptance_step_${STEP}.py" 2>&1)" || true
