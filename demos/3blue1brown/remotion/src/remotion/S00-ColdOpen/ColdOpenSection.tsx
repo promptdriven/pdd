@@ -216,8 +216,8 @@ const TitleCardVisual: React.FC<{ parentFrame: number; startFrame: number }> = (
         transform: "translate(-50%, -50%)",
         opacity: codeDim,
       }}>
-        <div style={{ background: "#1E1E2E", padding: 24, borderRadius: 12, border: "1px solid #333", width: 700 }}>
-          <pre style={{ fontSize: 14, fontFamily: "'JetBrains Mono', monospace", color: "#8a9caf", margin: 0, lineHeight: 1.6 }}>{`def parse_user_input(raw_input, context=None):\n    if raw_input is None:\n        return None\n    cleaned = raw_input.strip()\n    if not cleaned:\n        return None\n    return validate_and_normalize(cleaned, context)`}</pre>
+        <div style={{ background: "#1E1E2E", padding: 24, borderRadius: 12, border: "1px solid #333", width: 880 }}>
+          <pre style={{ fontSize: 14, fontFamily: "'JetBrains Mono', monospace", color: "#8a9caf", margin: 0, lineHeight: 1.6 }}>{`def parse_user_input(raw_input: str | None, context: dict | None = None) -> dict:\n    """Parse and validate user input string.\n\n    Args:\n        raw_input: The raw input string to parse, or None.\n        context: Optional context dictionary for strict mode filtering.\n\n    Returns:\n        Parsed result dictionary, or error dictionary on failure.\n    """\n    if raw_input is None:\n        return {"error": "null_input", "value": None}\n    text = raw_input if isinstance(raw_input, str) else raw_input.decode("utf-8", errors="replace")\n    result = _inner_parse(text)\n    if context and context.get("strict_mode"):\n        result = {k: v for k, v in result.items() if not k.startswith("_")}\n    return result`}</pre>
         </div>
       </div>
 
@@ -265,7 +265,7 @@ const TitleCardVisual: React.FC<{ parentFrame: number; startFrame: number }> = (
         color: "#555",
         lineHeight: "1.6",
       }}>
-        {Array.from({ length: 8 }, (_, i) => (
+        {Array.from({ length: 16 }, (_, i) => (
           <div key={i}>{47 + i}</div>
         ))}
       </div>

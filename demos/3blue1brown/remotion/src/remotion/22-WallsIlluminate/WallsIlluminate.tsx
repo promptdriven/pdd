@@ -41,7 +41,7 @@ export const WallsIlluminate: React.FC<WallsIlluminatePropsType> = ({
       frame,
       [label.start, label.start + 15, label.start + 30],
       [0, 0.3, 0],
-      { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.inOut(Easing.sine) }
+      { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.inOut(Easing.sin) }
     );
   };
 
@@ -139,7 +139,7 @@ export const WallsIlluminate: React.FC<WallsIlluminatePropsType> = ({
               frame,
               [label.start, label.start + 15, label.start + 30],
               [0, 1, 0],
-              { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.inOut(Easing.sine) }
+              { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.inOut(Easing.sin) }
             );
 
             // Position based on wall

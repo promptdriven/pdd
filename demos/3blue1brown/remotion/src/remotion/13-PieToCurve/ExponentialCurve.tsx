@@ -133,7 +133,7 @@ export const ExponentialCurve: React.FC<ExponentialCurveProps> = ({
   const pulseGlow = pulseStartFrame && pulseEndFrame
     ? interpolate(
         frame,
-        [pulseStartFrame, pulseStartFrame + 20, pulseEndFrame - 20, pulseEndFrame],
+        [pulseStartFrame, pulseStartFrame + 20, pulseEndFrame - 19, pulseEndFrame],
         [0, 8, 8, 0],
         { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
       )

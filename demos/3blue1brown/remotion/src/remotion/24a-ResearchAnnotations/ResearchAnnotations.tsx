@@ -20,7 +20,7 @@ export const ResearchAnnotations: React.FC<ResearchAnnotationsPropsType> = ({
     frame,
     [BEATS.EMPHASIS_FLASH_START, BEATS.EMPHASIS_FLASH_PEAK, BEATS.EMPHASIS_FLASH_END],
     [0.7, 1, 0.7],
-    { extrapolateRight: "clamp", easing: Easing.inOut(Easing.sine) }
+    { extrapolateRight: "clamp", easing: Easing.inOut(Easing.sin) }
   );
 
   // Citation 2 fade-in
