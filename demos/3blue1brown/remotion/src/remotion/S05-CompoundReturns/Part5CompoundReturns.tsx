@@ -48,6 +48,7 @@ const CallbackTextOverlay: React.FC<{
 
 export const Part5CompoundReturns: React.FC<Part5CompoundReturnsPropsType> = () => {
   const frame = useCurrentFrame();
+  const DISSOLVE_FRAMES = 45;
 
   // Determine which visual is active based on frame position
   let activeVisual = 0;
@@ -61,6 +62,16 @@ export const Part5CompoundReturns: React.FC<Part5CompoundReturnsPropsType> = () 
   // Relative frame within the active visual's Sequence
   const localFrame5 = frame - BEATS.VISUAL_05_START;
   const localFrame6 = frame - BEATS.VISUAL_06_START;
+  const visual6Opacity = interpolate(
+    frame,
+    [BEATS.VISUAL_07_START, BEATS.VISUAL_07_START + DISSOLVE_FRAMES],
+    [1, 0],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.inOut(Easing.cubic),
+    },
+  );
 
   return (
     <AbsoluteFill style={{ backgroundColor: "#1a1a2e" }}>
@@ -148,9 +159,11 @@ export const Part5CompoundReturns: React.FC<Part5CompoundReturnsPropsType> = () 
       )}
 
       {/* Visual 6: Developer callback with text overlay */}
-      {activeVisual === 6 && (
+      {/* Kept visible for the first 45 frames of Visual 7 for a true cross-dissolve. */}
+      {frame >= BEATS.VISUAL_06_START &&
+        frame < BEATS.VISUAL_07_START + DISSOLVE_FRAMES && (
         <Sequence from={BEATS.VISUAL_06_START}>
-          <AbsoluteFill>
+          <AbsoluteFill style={{ opacity: visual6Opacity }}>
             <OffthreadVideo
               loop
               src={staticFile("07_split_screen_sepia.mp4")}
@@ -234,7 +247,7 @@ export const Part5CompoundReturns: React.FC<Part5CompoundReturnsPropsType> = () 
       )}
 
       {/* Visual 7: Economics Chart Reprise - "rational becomes... darning socks." */}
-      {activeVisual === 7 && (
+      {frame >= BEATS.VISUAL_07_START && (
         <Sequence from={BEATS.VISUAL_07_START}>
           <EconomicsChartReprise />
         </Sequence>

@@ -1,6 +1,8 @@
 # Audit: 01f_code_blinks.md
 
-## Status: ISSUES FOUND
+## Status: RESOLVED
+
+> Note: The sections above "Resolution Status" are the original baseline audit snapshot captured before implementation fixes landed.
 
 ## Spec Summary
 Section 0.6 "Code Blinks" is a ~10-second contemplative beat (timestamp 1:25-1:35) showing a full-frame code editor with a complex patched Python function. The only motion is a blinking cursor. The scene communicates accumulated technical debt through visual density: patch-layer color coding, git-blame gutter bars, inline comments, nested conditionals, and a lonely blinking cursor. It is a "breathing room" shot that precedes the hard cut to 01g where the function deletes and regenerates clean.
@@ -159,3 +161,12 @@ All 13 issues have been addressed. A new standalone `CodeBlinks` component was c
 - **Issue 11 (LOW): Code content diverges** -- RESOLVED. `CODE_LINES` in `CodeBlinks.tsx` contains the spec's exact 33-line `parse_user_input` function including: `try/except` wrapping `try/except`, `isinstance(raw_input, bytes)`, `raw_input.decode('utf-8', errors='replace')`, `_inner_parse()`, `_apply_legacy_transform()`, dictionary key deletion loop, and both except clauses.
 - **Issue 12 (LOW): Font size mismatch** -- RESOLVED. Font size is now 16px in `CodeBlinks.tsx`, matching the spec's "~16px equivalent".
 - **Issue 13 (LOW): Background color mismatch** -- RESOLVED. `CodeBlinks` uses `backgroundColor: "#1E1E2E"` on the outer `AbsoluteFill`, matching the spec exactly. The ColdOpenSection outer background (`#1a1a2e`) is hidden when CodeBlinks fills the frame.
+
+## Re-Audit Update (2026-02-09)
+- **Status**: RESOLVED
+- **Result**: Confirmed the resolution still holds in current implementation.
+- **Validation points**:
+  - Standalone beat exists: `remotion/src/remotion/S00-ColdOpen/CodeBlinks.tsx`
+  - Section wiring uses dedicated `CodeBlinks` visual: `remotion/src/remotion/S00-ColdOpen/ColdOpenSection.tsx:84`
+  - 10-second allocation is present for 01f beat: `remotion/src/remotion/S00-ColdOpen/constants.ts:45`
+  - Cursor blink, editor chrome, blame gutter, warning icon, and vignette are implemented in `CodeBlinks.tsx`.

@@ -31,7 +31,7 @@ import {
 const REPRISE_BEATS = {
   // Cross-dissolve fade-in
   FADE_IN_START: 0,
-  FADE_IN_END: 30,
+  FADE_IN_END: 45,
 
   // Pulse cycle 1: assertive, 7 rings (synced with "economics changed")
   PULSE_CYCLE_1_START: 10,

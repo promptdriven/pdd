@@ -2,6 +2,8 @@
 
 ## Status: RESOLVED
 
+> Note: The sections below ("Requirements Met", "Issues Found", and "Notes") are the original 2026-02-08 baseline audit snapshot. Current verification is captured in the dated re-audit updates at the bottom.
+
 ### Requirements Met
 
 1. **Chart composition exists and is wired into Part 5 sequence** (PASS)
@@ -136,7 +138,7 @@
 - `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/08-CrossingPoint/index.ts` (exports)
 
 ## Resolution Status
-- **Status**: RESOLVED
+- **Status**: RESOLVED (superseded by 2026-02-09 re-audit below)
 - **Date**: 2026-02-08
 - **Summary**: Created a new `EconomicsChartReprise` wrapper component (`08-CrossingPoint/EconomicsChartReprise.tsx`) that replaces the verbatim Part 1 `CrossingPoint` reuse with a reprise-specific composition. All 3 HIGH, 2 MEDIUM, and relevant LOW issues are addressed:
 
@@ -171,3 +173,39 @@
 
 ### Design Decision
 Created a new wrapper component rather than adding reprise mode props to the base `CrossingPoint` component. This avoids any risk of breaking Part 1's existing behavior and keeps the reprise-specific logic (three-cycle pulse structure, "darning socks" text, chart dimming, cross-dissolve) cleanly isolated. The base `CodeCostChart` was extended with optional opacity props (backward-compatible, all defaults match existing behavior) to support the dimming requirement.
+
+## Re-Audit Update (2026-02-09)
+- **Status**: PARTIALLY RESOLVED (1 MEDIUM issue open)
+- **Scope**: Re-checked `09_economics_chart_reprise.md` against current Remotion implementation after the 2026-02-08 resolution update.
+- **Result**: The reprise component work is largely correct (enhanced pulse cycles, text overlay, dimming controls, start-at-full-view), but the developer-to-chart transition is still not a true cross-dissolve.
+
+### Remaining Open Issue
+
+1. **No actual cross-dissolve overlap from Visual 6 -> Visual 7 (MEDIUM, RE-OPENED)**
+   - **Spec requirement**: `09_economics_chart_reprise.md:93-96` requires a cross-dissolve from developer footage into the chart.
+   - **Current implementation behavior**:
+     - `remotion/src/remotion/S05-CompoundReturns/Part5CompoundReturns.tsx:52-58` computes a single `activeVisual`.
+     - `remotion/src/remotion/S05-CompoundReturns/Part5CompoundReturns.tsx:151-234` renders Visual 6 only when `activeVisual === 6`.
+     - `remotion/src/remotion/S05-CompoundReturns/Part5CompoundReturns.tsx:237-240` renders Visual 7 only when `activeVisual === 7`.
+     - This makes Visual 6 and Visual 7 mutually exclusive, so there is no overlapping blend window.
+     - `remotion/src/remotion/08-CrossingPoint/EconomicsChartReprise.tsx:107-117` and `remotion/src/remotion/08-CrossingPoint/EconomicsChartReprise.tsx:206-210` fade the chart in, but that fade is over the section background, not over still-visible developer footage.
+   - **Impact**: The transition still reads as hard cut + chart fade-in rather than a true footage-to-chart dissolve.
+
+### Items Confirmed Still Resolved
+- Reprise-specific composition exists and is wired in: `remotion/src/remotion/S05-CompoundReturns/Part5CompoundReturns.tsx:237-240`, `remotion/src/remotion/08-CrossingPoint/index.ts:1-2`.
+- Three pulse cycles implemented with reprise timing controls: `remotion/src/remotion/08-CrossingPoint/EconomicsChartReprise.tsx:31-63`, `remotion/src/remotion/08-CrossingPoint/EconomicsChartReprise.tsx:273-304`.
+- "...darning socks." overlay present with fade timing and styling: `remotion/src/remotion/08-CrossingPoint/EconomicsChartReprise.tsx:125-135`, `remotion/src/remotion/08-CrossingPoint/EconomicsChartReprise.tsx:412-433`.
+- Chart starts fully drawn and supports reprise dimming: `remotion/src/remotion/08-CrossingPoint/EconomicsChartReprise.tsx:231-238`, `remotion/src/remotion/08-CrossingPoint/CodeCostChart.tsx:14-33`.
+
+## Re-Audit Update (2026-02-09, Post-Fix)
+- **Status**: RESOLVED
+- **Result**: The remaining medium issue (missing true cross-dissolve overlap) is resolved.
+- **Fix implemented**:
+  - `remotion/src/remotion/S05-CompoundReturns/Part5CompoundReturns.tsx:51` introduces `DISSOLVE_FRAMES = 45`.
+  - `remotion/src/remotion/S05-CompoundReturns/Part5CompoundReturns.tsx:163` keeps Visual 6 rendering for the first 45 frames of Visual 7.
+  - `remotion/src/remotion/S05-CompoundReturns/Part5CompoundReturns.tsx:65` applies fade-out opacity on Visual 6 across that overlap window.
+  - `remotion/src/remotion/S05-CompoundReturns/Part5CompoundReturns.tsx:250` renders Visual 7 from its start frame so both visuals overlap during dissolve.
+  - `remotion/src/remotion/08-CrossingPoint/EconomicsChartReprise.tsx:34` updates chart fade-in to 45 frames for symmetry with the overlap duration.
+- **Verification**:
+  - Lint check for changed files passed: `npx eslint src/remotion/S05-CompoundReturns/Part5CompoundReturns.tsx src/remotion/08-CrossingPoint/EconomicsChartReprise.tsx`
+  - Targeted render across transition frames completed successfully for frame range `2285-2345`.
