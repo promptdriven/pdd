@@ -2155,3 +2155,89 @@ Issue URL: {issue_url}
 
     # Should not fail due to format key errors
     assert "Context missing key for step 4" not in msg, f"Curly brace escaping failed: {msg}"
+
+
+# -----------------------------------------------------------------------------
+# Issue #445: Worktree restoration fails when branch is checked out
+# -----------------------------------------------------------------------------
+
+def test_setup_worktree_branch_checked_out_fails_without_fallback(tmp_path):
+    """
+    Test that reproduces issue #445: _setup_worktree() fails when trying to
+    create a worktree for a branch that already exists and is currently checked out.
+
+    This test demonstrates the bug where:
+    1. _delete_branch() returns (False, error) because the branch is checked out
+    2. The return value is ignored (line 168 in agentic_change_orchestrator.py)
+    3. git worktree add -b fails with exit code 255 because the branch still exists
+
+    This test uses real git operations to reproduce the exact failure scenario.
+
+    Expected behavior BEFORE fix: Test FAILS (demonstrates the bug)
+    Expected behavior AFTER fix: Test PASSES (worktree created using existing branch)
+    """
+    # Import the function under test
+    from pdd.agentic_change_orchestrator import _setup_worktree
+
+    # Create a real git repository
+    git_repo = tmp_path / "test_repo"
+    git_repo.mkdir()
+
+    # Initialize git repo
+    subprocess.run(["git", "init"], cwd=git_repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=git_repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=git_repo, check=True, capture_output=True)
+
+    # Create initial commit (required for git worktree operations)
+    (git_repo / "README.md").write_text("Initial commit")
+    subprocess.run(["git", "add", "README.md"], cwd=git_repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=git_repo, check=True, capture_output=True)
+
+    # Create the branch that will cause the bug
+    issue_number = 445
+    branch_name = f"change/issue-{issue_number}"
+    subprocess.run(["git", "checkout", "-b", branch_name], cwd=git_repo, check=True, capture_output=True)
+
+    # Verify we're on the branch (this is the critical condition for the bug)
+    result = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=git_repo,
+        capture_output=True,
+        text=True,
+        check=True
+    )
+    current_branch = result.stdout.strip()
+    assert current_branch == branch_name, f"Expected to be on {branch_name}, but on {current_branch}"
+
+    # Call _setup_worktree() - this should fail with the current buggy code
+    # because:
+    # 1. Branch exists and is checked out
+    # 2. _delete_branch() will fail (can't delete checked-out branch)
+    # 3. Return value from _delete_branch() is ignored (bug on line 168)
+    # 4. git worktree add -b will fail with exit code 255 (branch exists)
+    worktree_path, error = _setup_worktree(git_repo, issue_number, quiet=True)
+
+    # BEFORE FIX: This assertion will FAIL because worktree_path is None and error is set
+    # The error message will be: "Git worktree creation failed: Command ... returned non-zero exit status 255"
+    #
+    # AFTER FIX: This assertion will PASS because:
+    # - _setup_worktree() will detect that _delete_branch() returned (False, ...)
+    # - It will fall back to: git worktree add <path> change/issue-445 (without -b)
+    # - The worktree will be created successfully using the existing branch
+    assert worktree_path is not None, f"Expected worktree to be created, but got error: {error}"
+    assert error is None, f"Expected no error, but got: {error}"
+
+    # Verify the worktree was actually created
+    assert worktree_path.exists(), f"Worktree path {worktree_path} should exist"
+    assert (worktree_path / ".git").exists(), f"Worktree should have .git file at {worktree_path}"
+
+    # Verify the worktree is on the correct branch
+    result = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=worktree_path,
+        capture_output=True,
+        text=True,
+        check=True
+    )
+    worktree_branch = result.stdout.strip()
+    assert worktree_branch == branch_name, f"Worktree should be on {branch_name}, but is on {worktree_branch}"
