@@ -1,0 +1,32 @@
+Create a Python module `src/user_id_parser.py` with two functions:
+
+## `parse_user_id(raw, reserved_ids=None) -> str | None`
+
+Requirements:
+1. Accept string input in form `"user:<id>"`.
+2. Accept string input in form `"email:user@domain"` — extract the username before `@`.
+3. Accept dict input in either form:
+   - `{"user_id": "<id>"}`
+   - `{"user": {"id": "<id>"}}`
+4. Normalize extracted IDs:
+   - Trim surrounding whitespace.
+   - Lowercase the result.
+5. Validate (applies to all input types):
+   - Allowed characters: a-z, 0-9, _, -
+   - Length between 3 and 20 inclusive.
+   - Reject reserved IDs:
+     - When `reserved_ids` is `None`, use default set: {admin, root, system}.
+     - When a set is provided, use that set instead (replaces defaults entirely).
+     - An empty set means nothing is reserved.
+6. Return `None` for invalid input.
+7. Never raise for expected bad input types or malformed payloads.
+8. Do not mutate input dictionaries.
+
+## `parse_user_ids(items: list, reserved_ids=None) -> list[str | None]`
+
+Batch processing function:
+1. Process each item through `parse_user_id`, passing `reserved_ids` through.
+2. Preserve input ordering: result[i] corresponds to items[i].
+3. Invalid items produce `None` in that position.
+
+Keep implementation small and readable.

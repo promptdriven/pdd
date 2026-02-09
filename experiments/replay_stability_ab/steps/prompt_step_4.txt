@@ -1,0 +1,41 @@
+Create a Python module `src/user_id_parser.py` with a namedtuple and two functions:
+
+## `ParseResult`
+
+```python
+import collections
+ParseResult = collections.namedtuple("ParseResult", ["user_id", "source"])
+```
+
+Must be importable: `from user_id_parser import ParseResult`.
+
+## `parse_user_id(raw, reserved_ids=None) -> ParseResult | None`
+
+Requirements:
+1. Accept string input in form `"user:<id>"` — source = `"string"`.
+2. Accept string input in form `"email:user@domain"` — extract username before `@`, source = `"email"`.
+3. Accept dict input in either form:
+   - `{"user_id": "<id>"}` — source = `"dict_flat"`.
+   - `{"user": {"id": "<id>"}}` — source = `"dict_nested"`.
+4. Normalize extracted IDs:
+   - Trim surrounding whitespace.
+   - Lowercase the result.
+5. Validate (applies to all input types):
+   - Allowed characters: a-z, 0-9, _, -
+   - Length between 3 and 20 inclusive.
+   - Reject reserved IDs:
+     - When `reserved_ids` is `None`, use default set: {admin, root, system}.
+     - When a set is provided, use that set instead (replaces defaults entirely).
+6. Return `ParseResult(user_id=<validated_id>, source=<source_type>)` on success.
+7. Return `None` for invalid input.
+8. Never raise for expected bad input types or malformed payloads.
+9. Do not mutate input dictionaries.
+
+## `parse_user_ids(items: list, reserved_ids=None) -> list[ParseResult | None]`
+
+Batch processing function:
+1. Process each item through `parse_user_id`, passing `reserved_ids` through.
+2. Preserve input ordering: result[i] corresponds to items[i].
+3. Invalid items produce `None` in that position.
+
+Keep implementation small and readable.
