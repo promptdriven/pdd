@@ -10,7 +10,7 @@ analysis
 </fix_attempt>
 
 <verification_output iteration=1>
-<MagicMock name='run().stderr.__radd__()' id='4695042640'>
+<MagicMock name='run().stderr.__radd__()' id='5296617520'>
 </verification_output>
 
 <pytest_output iteration=2>
