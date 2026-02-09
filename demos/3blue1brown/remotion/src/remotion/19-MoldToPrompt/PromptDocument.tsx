@@ -1,11 +1,11 @@
 import React from "react";
 import { useCurrentFrame, interpolate, Easing } from "remotion";
-import { BEATS, COLORS, MOLD_SHAPE, PROMPT_TITLE, PROMPT_LINES } from "./constants";
+import { BEATS, COLORS, VERILOG_BLOCK, PROMPT_TITLE, PROMPT_LINES } from "./constants";
 
 /**
  * Renders the prompt document text content that fades in during the labels phase.
  * Title "PROMPT" centered at top, body text below divider.
- * Positioned to align with the final document shape from MoldShape.
+ * Positioned to align with the final document shape from VerilogBlock.
  */
 export const PromptDocument: React.FC = () => {
   const frame = useCurrentFrame();
@@ -48,9 +48,9 @@ export const PromptDocument: React.FC = () => {
 
   if (frame < BEATS.LABELS_START) return null;
 
-  const docX = MOLD_SHAPE.finalX;
-  const docY = MOLD_SHAPE.finalY;
-  const docWidth = MOLD_SHAPE.finalWidth;
+  const docX = VERILOG_BLOCK.finalX;
+  const docY = VERILOG_BLOCK.finalY;
+  const docWidth = VERILOG_BLOCK.finalWidth;
 
   return (
     <g>
@@ -62,7 +62,7 @@ export const PromptDocument: React.FC = () => {
         fontSize={24}
         fontFamily="'Inter', 'Helvetica Neue', Arial, sans-serif"
         fontWeight={700}
-        fill={COLORS.DOC_TITLE_COLOR}
+        fill={COLORS.PROMPT_TITLE_COLOR}
         opacity={titleOpacity}
         letterSpacing={3}
       >
@@ -98,7 +98,7 @@ export const PromptDocument: React.FC = () => {
             fontSize={isBold ? 16 : 15}
             fontFamily="'Inter', 'Helvetica Neue', Arial, sans-serif"
             fontWeight={isBold ? 600 : 400}
-            fill={COLORS.DOC_TEXT_COLOR}
+            fill={COLORS.PROMPT_TEXT_COLOR}
             opacity={Math.min(bodyOpacity, lineOpacity)}
           >
             {line}

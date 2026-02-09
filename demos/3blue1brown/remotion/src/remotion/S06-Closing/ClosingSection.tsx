@@ -3,10 +3,8 @@ import {
   AbsoluteFill,
   Audio,
   Sequence,
-  OffthreadVideo,
   staticFile,
   useCurrentFrame,
-  interpolate,
 } from "remotion";
 import { BEATS, VISUAL_SEQUENCE, ClosingSectionPropsType } from "./constants";
 import { CodeOutputMoldGlows, defaultCodeOutputMoldGlowsProps } from "../38-CodeOutputMoldGlows";
@@ -14,6 +12,7 @@ import { ThreeComponents, defaultThreeComponentsProps } from "../37-ThreeCompone
 import { CompleteSystem, defaultCompleteSystemProps } from "../48-CompleteSystem";
 import { DeveloperRegenerates, defaultDeveloperRegeneratesProps } from "../49-DeveloperRegenerates";
 import { FadeToBlack, defaultFadeToBlackProps } from "../50-FadeToBlack";
+import { SockMetaphorFinal, defaultSockMetaphorFinalProps } from "../51-SockMetaphorFinal";
 
 export const ClosingSection: React.FC<ClosingSectionPropsType> = () => {
   const frame = useCurrentFrame();
@@ -26,16 +25,6 @@ export const ClosingSection: React.FC<ClosingSectionPropsType> = () => {
       break;
     }
   }
-
-  // Cost label for sock video overlay (spec 6.2)
-  // Fades in at ~1s into the veo clip, fades out at ~3s
-  const costLabelLocalFrame = frame - BEATS.VISUAL_01_START;
-  const costLabelOpacity = interpolate(
-    costLabelLocalFrame,
-    [15, 30, 60, 90],
-    [0, 0.6, 0.6, 0],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-  );
 
   return (
     <AbsoluteFill style={{ backgroundColor: "#1a1a2e" }}>
@@ -51,30 +40,10 @@ export const ClosingSection: React.FC<ClosingSectionPropsType> = () => {
         </Sequence>
       )}
 
-      {/* Visual 1: Veo clip + "$0.50" cost label overlay */}
+      {/* Visual 1: Sock Metaphor Final - "You don't patch socks because socks got cheap" */}
       {activeVisual === 1 && (
         <Sequence from={BEATS.VISUAL_01_START}>
-          <AbsoluteFill>
-            <OffthreadVideo
-              loop
-              src={staticFile("07_split_screen_sepia.mp4")}
-              style={{ width: "100%", height: "100%" }}
-            />
-            {/* Cost label overlay (spec 6.2) */}
-            <div
-              style={{
-                position: "absolute",
-                right: 280,
-                top: 200,
-                opacity: costLabelOpacity,
-                fontFamily: "JetBrains Mono, monospace",
-                fontSize: 18,
-                color: "rgba(255, 255, 255, 0.6)",
-              }}
-            >
-              $0.50
-            </div>
-          </AbsoluteFill>
+          <SockMetaphorFinal {...defaultSockMetaphorFinalProps} />
         </Sequence>
       )}
 

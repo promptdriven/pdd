@@ -15,63 +15,95 @@ const TODO_COMMENTS = [
   { text: "// don't touch!", x: 70, y: 70 },
 ];
 
-const FILE_TREE = [
-  "src/",
-  "  components/",
-  "    Header.tsx",
-  "    Footer.tsx",
-  "    Sidebar.tsx",
-  "    Navigation.tsx",
-  "    Button.tsx",
-  "    Input.tsx",
-  "    Modal.tsx",
-  "    Card.tsx",
-  "    Table.tsx",
-  "    Form.tsx",
-  "  utils/",
-  "    parser.ts",
-  "    helpers.ts",
-  "    validators.ts",
-  "    formatters.ts",
-  "    string-utils.ts",
-  "    date-utils.ts",
-  "    array-utils.ts",
-  "  api/",
-  "    routes.ts",
-  "    middleware.ts",
-  "    auth.ts",
-  "    handlers.ts",
-  "    validators.ts",
-  "  services/",
-  "    user-service.ts",
-  "    auth-service.ts",
-  "    data-service.ts",
-  "    cache-service.ts",
-  "  models/",
-  "    User.ts",
-  "    Session.ts",
-  "    Config.ts",
-  "  hooks/",
-  "    useAuth.ts",
-  "    useData.ts",
-  "    useForm.ts",
-  "  store/",
-  "    actions.ts",
-  "    reducers.ts",
-  "    selectors.ts",
-  "  types/",
-  "    index.ts",
-  "    api.ts",
-  "    models.ts",
-  "  config/",
-  "    app-config.ts",
-  "    env.ts",
-  "  lib/",
-  "    client.ts",
-  "    server.ts",
-  "  index.ts",
-  "  App.tsx",
-];
+// Generate comprehensive file tree programmatically for "hundreds of files"
+const generateFileTree = (): Array<{ path: string; hasChanges: boolean; hasWarning: boolean }> => {
+  const files: Array<{ path: string; hasChanges: boolean; hasWarning: boolean }> = [];
+
+  const addFiles = (dir: string, fileNames: string[], indent: string) => {
+    files.push({ path: `${indent}${dir}`, hasChanges: false, hasWarning: false });
+    fileNames.forEach((name, i) => {
+      files.push({
+        path: `${indent}  ${name}`,
+        hasChanges: Math.random() > 0.6,
+        hasWarning: Math.random() > 0.85
+      });
+    });
+  };
+
+  files.push({ path: "src/", hasChanges: false, hasWarning: false });
+
+  addFiles("components/", [
+    "Header.tsx", "Footer.tsx", "Sidebar.tsx", "Navigation.tsx", "Button.tsx",
+    "Input.tsx", "Modal.tsx", "Card.tsx", "Table.tsx", "Form.tsx", "Avatar.tsx",
+    "Badge.tsx", "Tooltip.tsx", "Dropdown.tsx", "Menu.tsx", "List.tsx", "Grid.tsx",
+    "Accordion.tsx", "Tabs.tsx", "Dialog.tsx", "Alert.tsx", "Toast.tsx", "Spinner.tsx",
+    "Progress.tsx", "Slider.tsx", "Switch.tsx", "Checkbox.tsx", "Radio.tsx", "Select.tsx"
+  ], "  ");
+
+  addFiles("utils/", [
+    "parser.ts", "helpers.ts", "validators.ts", "formatters.ts", "string-utils.ts",
+    "date-utils.ts", "array-utils.ts", "object-utils.ts", "number-utils.ts", "url-utils.ts",
+    "cookie-utils.ts", "storage-utils.ts", "crypto-utils.ts", "encoding-utils.ts", "color-utils.ts"
+  ], "  ");
+
+  addFiles("api/", [
+    "routes.ts", "middleware.ts", "auth.ts", "handlers.ts", "validators.ts",
+    "errors.ts", "response.ts", "request.ts", "transforms.ts", "interceptors.ts",
+    "client.ts", "server.ts", "websocket.ts", "graphql.ts", "rest.ts"
+  ], "  ");
+
+  addFiles("services/", [
+    "user-service.ts", "auth-service.ts", "data-service.ts", "cache-service.ts",
+    "payment-service.ts", "email-service.ts", "notification-service.ts", "analytics-service.ts",
+    "search-service.ts", "upload-service.ts", "export-service.ts", "import-service.ts",
+    "logging-service.ts", "monitoring-service.ts", "queue-service.ts"
+  ], "  ");
+
+  addFiles("models/", [
+    "User.ts", "Session.ts", "Config.ts", "Product.ts", "Order.ts", "Payment.ts",
+    "Customer.ts", "Invoice.ts", "Subscription.ts", "Category.ts", "Tag.ts",
+    "Comment.ts", "Post.ts", "Media.ts", "Settings.ts"
+  ], "  ");
+
+  addFiles("hooks/", [
+    "useAuth.ts", "useData.ts", "useForm.ts", "useFetch.ts", "useDebounce.ts",
+    "useThrottle.ts", "useLocalStorage.ts", "useMediaQuery.ts", "useClickOutside.ts",
+    "useKeyPress.ts", "useInterval.ts", "useTimeout.ts", "usePrevious.ts", "useToggle.ts"
+  ], "  ");
+
+  addFiles("store/", [
+    "actions.ts", "reducers.ts", "selectors.ts", "middleware.ts", "store.ts",
+    "user-slice.ts", "app-slice.ts", "cart-slice.ts", "products-slice.ts", "orders-slice.ts"
+  ], "  ");
+
+  addFiles("types/", [
+    "index.ts", "api.ts", "models.ts", "components.ts", "utils.ts", "store.ts",
+    "hooks.ts", "services.ts", "common.ts", "errors.ts"
+  ], "  ");
+
+  addFiles("config/", [
+    "app-config.ts", "env.ts", "routes.ts", "constants.ts", "theme.ts",
+    "api-config.ts", "feature-flags.ts", "locales.ts"
+  ], "  ");
+
+  addFiles("lib/", [
+    "client.ts", "server.ts", "database.ts", "redis.ts", "s3.ts",
+    "stripe.ts", "sendgrid.ts", "firebase.ts", "analytics.ts", "sentry.ts"
+  ], "  ");
+
+  addFiles("pages/", [
+    "index.tsx", "about.tsx", "contact.tsx", "login.tsx", "register.tsx",
+    "dashboard.tsx", "profile.tsx", "settings.tsx", "products.tsx", "orders.tsx",
+    "checkout.tsx", "cart.tsx", "search.tsx", "404.tsx", "500.tsx"
+  ], "  ");
+
+  files.push({ path: "  index.ts", hasChanges: true, hasWarning: false });
+  files.push({ path: "  App.tsx", hasChanges: true, hasWarning: false });
+
+  return files;
+};
+
+const FILE_TREE = generateFileTree();
 
 // Git blame colors for file tree items (simulating patch history)
 const FILE_BLAME_COLORS = [
@@ -85,6 +117,7 @@ export const LeftPanel: React.FC = () => {
 
   const syncStart = secondsToFrames(BEATS.SYNC_COMPLETION_START);
   const syncEnd = secondsToFrames(BEATS.SYNC_COMPLETION_END);
+  const satisfactionStart = secondsToFrames(BEATS.SATISFACTION_START);
   const zoomStart = secondsToFrames(BEATS.ZOOM_OUT_START);
   const zoomEnd = secondsToFrames(BEATS.ZOOM_OUT_END);
 
@@ -393,37 +426,62 @@ export const LeftPanel: React.FC = () => {
             left: 30,
             opacity: fileTreeOpacity,
             fontFamily: "JetBrains Mono, SF Mono, monospace",
-            fontSize: 12,
+            fontSize: 10,
             color: "#888",
+            maxHeight: "80%",
+            overflow: "hidden",
           }}
         >
-          {FILE_TREE.map((item, i) => (
-            <div
-              key={i}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 6,
-                opacity: interpolate(zoomProgress, [0.2 + i * 0.01, 0.3 + i * 0.01], [0, 1], {
-                  extrapolateLeft: "clamp",
-                  extrapolateRight: "clamp",
-                }),
-              }}
-            >
-              {/* Git blame color strip (for files, not folders) */}
-              {!item.endsWith("/") && (
-                <div
-                  style={{
-                    width: 3,
-                    height: 12,
-                    backgroundColor: FILE_BLAME_COLORS[i % FILE_BLAME_COLORS.length],
-                    borderRadius: 1,
-                  }}
-                />
-              )}
-              <span>{item}</span>
-            </div>
-          ))}
+          {FILE_TREE.map((item, i) => {
+            const isFolder = item.path.endsWith("/");
+            const fadeDelay = Math.min(i * 0.003, 0.4); // Stagger appearance
+
+            return (
+              <div
+                key={i}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 4,
+                  marginBottom: 1,
+                  opacity: interpolate(zoomProgress, [0.2 + fadeDelay, 0.35 + fadeDelay], [0, 1], {
+                    extrapolateLeft: "clamp",
+                    extrapolateRight: "clamp",
+                  }),
+                }}
+              >
+                {/* Diff marker (red/green dots) */}
+                {!isFolder && item.hasChanges && (
+                  <div
+                    style={{
+                      width: 5,
+                      height: 5,
+                      borderRadius: "50%",
+                      backgroundColor: Math.random() > 0.5 ? COLORS.CODE_ADDED : COLORS.CODE_REMOVED,
+                      flexShrink: 0,
+                    }}
+                  />
+                )}
+                {/* Git blame color strip (for files without changes) */}
+                {!isFolder && !item.hasChanges && (
+                  <div
+                    style={{
+                      width: 2,
+                      height: 10,
+                      backgroundColor: FILE_BLAME_COLORS[i % FILE_BLAME_COLORS.length],
+                      borderRadius: 1,
+                      flexShrink: 0,
+                    }}
+                  />
+                )}
+                {/* Warning/flame icon */}
+                {!isFolder && item.hasWarning && (
+                  <span style={{ fontSize: 8, flexShrink: 0 }}>🔥</span>
+                )}
+                <span style={{ fontSize: isFolder ? 10 : 9 }}>{item.path}</span>
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -453,7 +511,67 @@ export const LeftPanel: React.FC = () => {
           </div>
         ))}
 
-      {/* Developer silhouette */}
+      {/* Developer hands on keyboard (satisfaction beat) */}
+      {frame >= satisfactionStart && frame < zoomStart && (
+        <div
+          style={{
+            position: "absolute",
+            bottom: "15%",
+            left: "50%",
+            transform: "translateX(-50%)",
+            opacity: interpolate(frame, [satisfactionStart, satisfactionStart + fps * 0.5], [0, 0.8], {
+              extrapolateLeft: "clamp",
+              extrapolateRight: "clamp",
+            }),
+          }}
+        >
+          {/* Keyboard */}
+          <svg width="200" height="80" viewBox="0 0 200 80">
+            <rect x="10" y="30" width="180" height="45" rx="4" fill="#1a1a2e" stroke="#4A90D9" strokeWidth="1.5" />
+            {/* Keys */}
+            {Array.from({ length: 14 }).map((_, i) => (
+              <rect key={`k1-${i}`} x={15 + i * 12} y="35" width="10" height="8" rx="1" fill="#2a2a3e" />
+            ))}
+            {Array.from({ length: 13 }).map((_, i) => (
+              <rect key={`k2-${i}`} x={20 + i * 12} y="45" width="10" height="8" rx="1" fill="#2a2a3e" />
+            ))}
+            {Array.from({ length: 12 }).map((_, i) => (
+              <rect key={`k3-${i}`} x={25 + i * 12} y="55" width="10" height="8" rx="1" fill="#2a2a3e" />
+            ))}
+            <rect x="50" y="65" width="100" height="8" rx="1" fill="#2a2a3e" /> {/* Spacebar */}
+          </svg>
+          {/* Hands silhouette */}
+          <svg width="200" height="60" viewBox="0 0 200 60" style={{ position: "absolute", top: -10 }}>
+            {/* Left hand */}
+            <ellipse cx="60" cy="30" rx="30" ry="20" fill="#4A90D9" opacity="0.4" />
+            <ellipse cx="45" cy="25" rx="8" ry="15" fill="#4A90D9" opacity="0.4" /> {/* Thumb */}
+            {/* Right hand */}
+            <ellipse cx="140" cy="30" rx="30" ry="20" fill="#4A90D9" opacity="0.4" />
+            <ellipse cx="155" cy="25" rx="8" ry="15" fill="#4A90D9" opacity="0.4" /> {/* Thumb */}
+          </svg>
+          {/* Satisfied nod animation */}
+          <div
+            style={{
+              position: "absolute",
+              top: -80,
+              left: "50%",
+              transform: `translateX(-50%) translateY(${interpolate(
+                frame,
+                [satisfactionStart + fps * 1, satisfactionStart + fps * 1.5, satisfactionStart + fps * 2],
+                [0, -3, 0],
+                { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+              )}px)`,
+            }}
+          >
+            <svg width="60" height="60" viewBox="0 0 24 24" fill="#4A90D9" opacity="0.5">
+              <circle cx="12" cy="8" r="4" />
+              <path d="M12 14c-6 0-8 3-8 3v2h16v-2s-2-3-8-3z" />
+            </svg>
+          </div>
+        </div>
+      )}
+
+      {/* Developer silhouette (during zoom) */}
       {zoomProgress > 0.5 && (
         <div
           style={{
@@ -470,6 +588,87 @@ export const LeftPanel: React.FC = () => {
           <svg width="60" height="60" viewBox="0 0 24 24" fill="#4A90D9">
             <path d="M12 4a4 4 0 0 1 4 4 4 4 0 0 1-4 4 4 4 0 0 1-4-4 4 4 0 0 1 4-4m0 10c4.42 0 8 1.79 8 4v2H4v-2c0-2.21 3.58-4 8-4z" />
           </svg>
+        </div>
+      )}
+
+      {/* Dependency graph with tangled lines (during zoom) */}
+      {zoomProgress > 0.4 && (
+        <svg
+          style={{
+            position: "absolute",
+            top: "20%",
+            right: "10%",
+            opacity: interpolate(zoomProgress, [0.4, 0.7], [0, 0.5], {
+              extrapolateLeft: "clamp",
+              extrapolateRight: "clamp",
+            }),
+          }}
+          width="250"
+          height="200"
+          viewBox="0 0 250 200"
+        >
+          {/* Node positions */}
+          {[
+            { x: 30, y: 30 }, { x: 120, y: 20 }, { x: 210, y: 40 },
+            { x: 50, y: 90 }, { x: 140, y: 100 }, { x: 220, y: 85 },
+            { x: 40, y: 150 }, { x: 130, y: 160 }, { x: 200, y: 170 }
+          ].map((node, i) => (
+            <circle key={`node-${i}`} cx={node.x} cy={node.y} r="6" fill="#4A90D9" opacity="0.7" />
+          ))}
+          {/* Tangled dependency lines - intentionally crossing */}
+          <path d="M 30 30 Q 75 50 120 20" stroke="#f87171" strokeWidth="1.5" fill="none" opacity="0.6" />
+          <path d="M 120 20 Q 165 30 210 40" stroke="#4ade80" strokeWidth="1.5" fill="none" opacity="0.6" />
+          <path d="M 30 30 Q 40 60 50 90" stroke="#fbbf24" strokeWidth="1.5" fill="none" opacity="0.6" />
+          <path d="M 210 40 Q 215 60 220 85" stroke="#f87171" strokeWidth="1.5" fill="none" opacity="0.6" />
+          <path d="M 50 90 Q 95 95 140 100" stroke="#4ade80" strokeWidth="1.5" fill="none" opacity="0.6" />
+          <path d="M 140 100 Q 180 90 220 85" stroke="#fbbf24" strokeWidth="1.5" fill="none" opacity="0.6" />
+          <path d="M 50 90 Q 45 120 40 150" stroke="#f87171" strokeWidth="1.5" fill="none" opacity="0.6" />
+          <path d="M 140 100 Q 135 130 130 160" stroke="#4ade80" strokeWidth="1.5" fill="none" opacity="0.6" />
+          <path d="M 220 85 Q 210 125 200 170" stroke="#fbbf24" strokeWidth="1.5" fill="none" opacity="0.6" />
+          {/* Cross connections creating tangles */}
+          <path d="M 30 30 Q 120 110 200 170" stroke="#a855f7" strokeWidth="1" fill="none" opacity="0.4" strokeDasharray="3,3" />
+          <path d="M 210 40 Q 100 80 40 150" stroke="#ec4899" strokeWidth="1" fill="none" opacity="0.4" strokeDasharray="3,3" />
+          <path d="M 120 20 Q 80 140 130 160" stroke="#06b6d4" strokeWidth="1" fill="none" opacity="0.4" strokeDasharray="3,3" />
+        </svg>
+      )}
+
+      {/* Browser tabs (during zoom) */}
+      {zoomProgress > 0.35 && (
+        <div
+          style={{
+            position: "absolute",
+            top: 20,
+            left: 20,
+            opacity: interpolate(zoomProgress, [0.35, 0.6], [0, 0.7], {
+              extrapolateLeft: "clamp",
+              extrapolateRight: "clamp",
+            }),
+          }}
+        >
+          {[0, 1, 2, 3, 4].map((i) => (
+            <div
+              key={i}
+              style={{
+                display: "inline-block",
+                width: 80,
+                height: 24,
+                backgroundColor: i === 0 ? "#0d0d1a" : "#1a1a2e",
+                borderRadius: "6px 6px 0 0",
+                marginRight: 2,
+                padding: "4px 8px",
+                fontSize: 9,
+                color: "#666",
+                fontFamily: "SF Mono, monospace",
+                border: i === 0 ? "1px solid #4A90D9" : "1px solid #2a2a3e",
+                borderBottom: "none",
+                overflow: "hidden",
+                whiteSpace: "nowrap",
+                textOverflow: "ellipsis",
+              }}
+            >
+              {i === 0 ? "parser.ts" : `file${i + 1}.tsx`}
+            </div>
+          ))}
         </div>
       )}
     </AbsoluteFill>

@@ -1,6 +1,6 @@
 import React from "react";
 import { useCurrentFrame, interpolate, Easing } from "remotion";
-import { BEATS, COLORS, MOLD_SHAPE, PART_SHAPE } from "./constants";
+import { BEATS, COLORS, VERILOG_BLOCK, NETLIST_BLOCK } from "./constants";
 
 /**
  * Renders a downward arrow/flow indicator from the prompt document to the code block.
@@ -48,10 +48,10 @@ export const FlowArrow: React.FC = () => {
 
   if (frame < BEATS.RELATIONSHIP_START) return null;
 
-  // Arrow coordinates: from bottom of document to top of code
-  const docBottom = MOLD_SHAPE.finalY + MOLD_SHAPE.finalHeight;
-  const codeTop = PART_SHAPE.finalY;
-  const centerX = MOLD_SHAPE.finalX + MOLD_SHAPE.finalWidth / 2;
+  // Arrow coordinates: from bottom of prompt document to top of code
+  const docBottom = VERILOG_BLOCK.finalY + VERILOG_BLOCK.finalHeight;
+  const codeTop = NETLIST_BLOCK.finalY;
+  const centerX = VERILOG_BLOCK.finalX + VERILOG_BLOCK.finalWidth / 2;
 
   const arrowStartY = docBottom + 10;
   const arrowEndY = codeTop - 10;

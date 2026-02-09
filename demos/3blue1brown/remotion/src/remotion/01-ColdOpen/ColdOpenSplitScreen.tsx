@@ -6,7 +6,7 @@ import { COLORS, BEATS, secondsToFrames, ColdOpenPropsType } from "./constants";
 
 export const ColdOpenSplitScreen: React.FC<ColdOpenPropsType> = () => {
   const frame = useCurrentFrame();
-  const { width, height, fps } = useVideoConfig();
+  const { width, height } = useVideoConfig();
 
   // Vignette darkens during zoom out
   const zoomStart = secondsToFrames(BEATS.ZOOM_OUT_START);
@@ -84,8 +84,8 @@ export const ColdOpenSplitScreen: React.FC<ColdOpenPropsType> = () => {
         }}
       />
 
-      {/* Optional: Narrator text area (0:32 - 0:38) */}
-      {frame >= secondsToFrames(BEATS.HOLD_START) && (
+      {/* Narrator text area (0:24 - 0:32 as per spec) */}
+      {frame >= secondsToFrames(24) && (
         <div
           style={{
             position: "absolute",
@@ -94,7 +94,7 @@ export const ColdOpenSplitScreen: React.FC<ColdOpenPropsType> = () => {
             transform: "translateX(-50%)",
             opacity: interpolate(
               frame,
-              [secondsToFrames(BEATS.HOLD_START), secondsToFrames(BEATS.HOLD_START) + fps],
+              [secondsToFrames(24), secondsToFrames(24.5)],
               [0, 1],
               { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
             ),

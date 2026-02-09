@@ -9,11 +9,11 @@ export const MOLD_TO_PROMPT_WIDTH = 1920;
 export const MOLD_TO_PROMPT_HEIGHT = 1080;
 
 // Beat timings (in frames at 30fps)
-// Frame 0-90:    Setup — mold visible left-center, plastic part below
-// Frame 90-240:  Primary morph — mold flattens to document, part stretches to code lines
-// Frame 240-360: Labels — "PROMPT" title fades in, code becomes readable, blue glow
-// Frame 360-480: Relationship — downward arrow/flow from prompt to code
-// Frame 480-600: Hold — final state, prompt glowing blue, code present but not glowing
+// Frame 0-90:    Setup — Verilog code, gate netlist, Synopsys checkmark visible
+// Frame 90-240:  Primary morph — THREE parallel transformations
+// Frame 240-360: Labels — "PROMPT" title, code text, test checkmarks, glows
+// Frame 360-480: Relationship — flow arrow from prompt to code
+// Frame 480-600: Hold — final state, prompt + tests glowing, code present
 export const BEATS = {
   SETUP_START: 0,
   SETUP_END: 90,
@@ -32,65 +32,116 @@ export const BEATS = {
 export const COLORS = {
   BACKGROUND: "#1a1a2e",
   BACKGROUND_GRADIENT_END: "#0f0f1a",
-  // Mold (initial state)
-  MOLD_METALLIC_LIGHT: "#A0B0C0",
-  MOLD_METALLIC_MID: "#8A9BA8",
-  MOLD_METALLIC_DARK: "#5A6A7A",
-  MOLD_EDGE: "#C0CED8",
-  MOLD_CAVITY: "#2a2a3e",
-  // Part (initial state)
-  PART_AMBER: "#D9944A",
-  PART_AMBER_LIGHT: "#E8B070",
-  // Document (final state)
-  DOC_WHITE: "#FFFFFF",
-  DOC_BORDER: "#D0D8E0",
-  DOC_SHADOW: "rgba(0, 0, 0, 0.3)",
-  DOC_TITLE_COLOR: "#1a1a2e",
-  DOC_TEXT_COLOR: "#333333",
-  // Code (final state)
-  CODE_GRAY: "#A0A0A0",
-  CODE_KEYWORD: "#A0A0A0",
-  // Prompt glow
-  PROMPT_GLOW: "#4A90D9",
+
+  // Chip design / left side (teal colors from ChipDesignHistory)
+  CODE_BG: "#1E1E2E",
+  VERILOG_KEYWORD: "#2AA198",
+  VERILOG_IDENTIFIER: "#E0E0E0",
+  VERILOG_NUMBER: "#B58900",
+  VERILOG_COMMENT: "#586E75",
+  NETLIST_TEAL: "#1A7A6E",
+  NETLIST_BORDER: "rgba(42, 161, 152, 0.3)",
+  NETLIST_BG: "rgba(26, 122, 110, 0.08)",
+  CHECK_GREEN: "#5AAA6E",
+  SYNOPSYS_BORDER: "#8A9BA8",
+
+  // Software / right side (PDD colors)
+  PROMPT_BG: "#FFFFFF",
+  PROMPT_BORDER: "#D0D8E0",
+  PROMPT_TITLE_COLOR: "#1a1a2e",
+  PROMPT_TEXT_COLOR: "#333333",
+  PROMPT_GLOW: "#4A90D9", // Blue
   PROMPT_GLOW_RGBA: "rgba(74, 144, 217, 0.6)",
+
+  CODE_GRAY: "#A0A0A0", // Software code (gray, no glow)
+  CODE_BG_DARK: "#1E1E2A",
+
+  TEST_AMBER: "#D9944A", // Tests (amber glow)
+  TEST_AMBER_GLOW: "rgba(217, 148, 74, 0.6)",
+  TEST_CHECK_GREEN: "#5AAA6E",
+
   // Flow arrow
   ARROW_COLOR: "rgba(74, 144, 217, 0.8)",
   ARROW_LABEL: "rgba(255, 255, 255, 0.7)",
+
   // Narration
   NARRATION_WHITE: "rgba(255, 255, 255, 0.95)",
 };
 
-// Mold shape configuration (initial state — wider, shorter, left-center)
-export const MOLD_SHAPE = {
-  // Initial: wide metallic rectangle
-  initialX: 560,
-  initialY: 260,
-  initialWidth: 340,
-  initialHeight: 140,
-  initialRx: 6,
-  // Final: taller, narrower document
-  finalX: 560,
+// Verilog code block configuration (LEFT side, starting state)
+export const VERILOG_BLOCK = {
+  // Initial: Verilog code from chip design
+  initialX: 260,
+  initialY: 180,
+  initialWidth: 400,
+  initialHeight: 320,
+  // Final: Prompt document (RIGHT side)
+  finalX: 1160,
   finalY: 160,
   finalWidth: 420,
   finalHeight: 380,
-  finalRx: 8,
 };
 
-// Part shape configuration (initial state — amber block below mold)
-export const PART_SHAPE = {
-  // Initial: compact amber part
-  initialX: 640,
-  initialY: 460,
-  initialWidth: 180,
-  initialHeight: 60,
-  initialRx: 10,
-  // Final: code region below document
-  finalX: 570,
+// Gate netlist configuration (LEFT side, starting state)
+export const NETLIST_BLOCK = {
+  // Initial: Gate-level netlist from chip design
+  initialX: 280,
+  initialY: 560,
+  initialWidth: 220,
+  initialHeight: 140,
+  // Final: Software code (RIGHT side)
+  finalX: 1170,
   finalY: 620,
   finalWidth: 400,
   finalHeight: 240,
-  finalRx: 4,
 };
+
+// Synopsys checkmark configuration (LEFT side, starting state)
+export const CHECKMARK_CONFIG = {
+  // Initial: Single Synopsys checkmark
+  initialX: 280,
+  initialY: 770,
+  // Final: Test suite with multiple checkmarks (RIGHT side)
+  finalX: 1170,
+  finalY: 900,
+};
+
+// Verilog source code (from ChipDesignHistory)
+export const VERILOG_SOURCE = `module alu(
+  input  [7:0] a, b,
+  input  [1:0] op,
+  output reg [7:0] result
+);
+  always @(*) begin
+    case(op)
+      2'b00: result = a + b;
+      2'b01: result = a - b;
+      2'b10: result = a & b;
+      2'b11: result = a | b;
+    endcase
+  end
+endmodule`;
+
+export const VERILOG_KEYWORDS = [
+  "module",
+  "input",
+  "output",
+  "reg",
+  "always",
+  "begin",
+  "case",
+  "endcase",
+  "end",
+  "endmodule",
+];
+
+// Gate netlist layout (from ChipDesignHistory)
+export const NETLIST_GATES = [
+  { type: "AND" as const, x: 30, y: 30 },
+  { type: "AND" as const, x: 30, y: 80 },
+  { type: "OR" as const, x: 110, y: 55 },
+  { type: "NOT" as const, x: 170, y: 55 },
+];
 
 // Prompt document text content
 export const PROMPT_TITLE = "PROMPT";
@@ -106,7 +157,7 @@ export const PROMPT_LINES = [
   "- Return clean ID or None",
 ];
 
-// Code text content
+// Software code text content
 export const CODE_LINES = [
   "def parse_user_id(input_str):",
   "    if not input_str:",
@@ -115,6 +166,13 @@ export const CODE_LINES = [
   "    if not validate_format(clean):",
   "        return None",
   "    return clean",
+];
+
+// Test suite content
+export const TEST_LINES = [
+  "test_valid_input",
+  "test_empty_input",
+  "test_unicode_handling",
 ];
 
 // Props schema

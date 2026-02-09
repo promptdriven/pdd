@@ -8,14 +8,30 @@ import {
 } from "remotion";
 import { COLORS, BEATS, secondsToFrames } from "./constants";
 
-// Mended items for the zoom-out reveal
+// Mended items for the zoom-out reveal - dozens of items
 const MENDED_ITEMS = [
-  { type: "sock", x: 20, y: 25, rotation: -15 },
-  { type: "shirt", x: 70, y: 20, rotation: 10 },
-  { type: "sock", x: 35, y: 45, rotation: 5 },
-  { type: "trouser", x: 65, y: 50, rotation: -8 },
-  { type: "sock", x: 25, y: 65, rotation: 12 },
-  { type: "shirt", x: 75, y: 70, rotation: -5 },
+  { type: "sock", x: 15, y: 18, rotation: -15 },
+  { type: "shirt", x: 68, y: 15, rotation: 10 },
+  { type: "sock", x: 32, y: 22, rotation: 5 },
+  { type: "trouser", x: 82, y: 20, rotation: -8 },
+  { type: "sock", x: 22, y: 30, rotation: 12 },
+  { type: "shirt", x: 75, y: 28, rotation: -5 },
+  { type: "sock", x: 40, y: 35, rotation: -10 },
+  { type: "trouser", x: 58, y: 38, rotation: 7 },
+  { type: "shirt", x: 12, y: 42, rotation: -12 },
+  { type: "sock", x: 85, y: 45, rotation: 15 },
+  { type: "sock", x: 28, y: 48, rotation: -8 },
+  { type: "shirt", x: 65, y: 52, rotation: 11 },
+  { type: "trouser", x: 45, y: 55, rotation: -6 },
+  { type: "sock", x: 18, y: 58, rotation: 9 },
+  { type: "shirt", x: 78, y: 62, rotation: -13 },
+  { type: "sock", x: 35, y: 65, rotation: 14 },
+  { type: "trouser", x: 55, y: 68, rotation: -9 },
+  { type: "sock", x: 70, y: 72, rotation: 6 },
+  { type: "shirt", x: 25, y: 75, rotation: -11 },
+  { type: "sock", x: 48, y: 78, rotation: 8 },
+  { type: "sock", x: 82, y: 80, rotation: -7 },
+  { type: "trouser", x: 38, y: 83, rotation: 13 },
 ];
 
 // Side-view sock SVG - classic L-shape profile

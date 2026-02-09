@@ -1,20 +1,26 @@
 import React from "react";
 import { AbsoluteFill, interpolate, useCurrentFrame, Easing } from "remotion";
-import { MoldShape } from "./MoldShape";
+import { VerilogBlock } from "./VerilogBlock";
 import { PromptDocument } from "./PromptDocument";
-import { CodeLines } from "./CodeLines";
+import { GateNetlist } from "./GateNetlist";
+import { SynopsysCheckmark } from "./SynopsysCheckmark";
 import { FlowArrow } from "./FlowArrow";
 import { COLORS, BEATS, MoldToPromptPropsType } from "./constants";
 
 /**
- * Main composition for "Mold Morphs to Prompt" (Section 2.10).
+ * Main composition for "Verilog Morphs to Prompt" (Section 2.10).
+ *
+ * Implements the chip-design-to-software transformation with THREE parallel morphs:
+ * 1. Verilog code (LEFT) → Prompt document (RIGHT)
+ * 2. Gate-level netlist (LEFT) → Software code (RIGHT)
+ * 3. Synopsys checkmark (LEFT) → Test suite (RIGHT)
  *
  * Animation sequence:
- * 1. Frame 0-90: Setup — mold visible left-center, plastic part below.
- * 2. Frame 90-240: Primary morph — mold flattens to document, part stretches to code.
- * 3. Frame 240-360: Labels — "PROMPT" title, code readable, blue glow.
- * 4. Frame 360-480: Relationship — downward arrow from prompt to code.
- * 5. Frame 480-600: Hold — prompt glowing, code present but not glowing.
+ * 1. Frame 0-90: Setup — Verilog code, gate netlist, Synopsys checkmark visible (LEFT side)
+ * 2. Frame 90-240: Primary morph — THREE parallel transformations (LEFT → RIGHT)
+ * 3. Frame 240-360: Labels — "PROMPT" title, code text, test checkmarks, glows appear
+ * 4. Frame 360-480: Relationship — flow arrow from prompt to code
+ * 5. Frame 480-600: Hold — prompt + tests glowing (blue/amber), code present (gray, no glow)
  */
 export const MoldToPrompt: React.FC<MoldToPromptPropsType> = ({
   showNarration = true,
@@ -35,14 +41,26 @@ export const MoldToPrompt: React.FC<MoldToPromptPropsType> = ({
       )
     : 0;
 
-  // Manufacturing context label (fades out as morph begins)
-  const contextOpacity = interpolate(
+  // Chip design context labels (LEFT side, fades out as morph begins)
+  const leftLabelsOpacity = interpolate(
     frame,
     [0, 20, BEATS.MORPH_START, BEATS.MORPH_START + 30],
     [0, 0.6, 0.6, 0],
     {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
+    }
+  );
+
+  // Software context labels (RIGHT side, fades in during labels phase)
+  const rightLabelsOpacity = interpolate(
+    frame,
+    [BEATS.LABELS_START, BEATS.LABELS_START + 40],
+    [0, 0.6],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.cubic),
     }
   );
 
@@ -59,42 +77,160 @@ export const MoldToPrompt: React.FC<MoldToPromptPropsType> = ({
         viewBox="0 0 1920 1080"
         style={{ position: "absolute", top: 0, left: 0 }}
       >
-        {/* Mold shape morphing to document */}
-        <MoldShape />
-
-        {/* Prompt document text content */}
+        {/* MORPH 1: Verilog code → Prompt document */}
+        <VerilogBlock />
         <PromptDocument />
 
-        {/* Code lines (morphed from plastic part) */}
-        <CodeLines />
+        {/* MORPH 2: Gate netlist → Software code */}
+        <GateNetlist />
+
+        {/* MORPH 3: Synopsys checkmark → Test suite */}
+        <SynopsysCheckmark />
 
         {/* Flow arrow from prompt to code */}
         <FlowArrow />
       </svg>
 
-      {/* Manufacturing context label (setup phase only) */}
-      {contextOpacity > 0 && (
-        <div
-          style={{
-            position: "absolute",
-            top: 180,
-            left: 520,
-            opacity: contextOpacity,
-          }}
-        >
+      {/* LEFT side context labels (chip design) */}
+      {leftLabelsOpacity > 0 && (
+        <>
           <div
             style={{
-              fontSize: 14,
-              fontFamily: "sans-serif",
-              fontWeight: 500,
-              textTransform: "uppercase" as const,
-              letterSpacing: 2,
-              color: "rgba(255, 255, 255, 0.4)",
+              position: "absolute",
+              top: 140,
+              left: 260,
+              opacity: leftLabelsOpacity,
             }}
           >
-            Injection Mold
+            <div
+              style={{
+                fontSize: 12,
+                fontFamily: "'JetBrains Mono', monospace",
+                fontWeight: 500,
+                textTransform: "uppercase" as const,
+                letterSpacing: 2,
+                color: "rgba(42, 161, 152, 0.6)",
+              }}
+            >
+              Verilog Code
+            </div>
           </div>
-        </div>
+
+          <div
+            style={{
+              position: "absolute",
+              top: 520,
+              left: 280,
+              opacity: leftLabelsOpacity,
+            }}
+          >
+            <div
+              style={{
+                fontSize: 12,
+                fontFamily: "'JetBrains Mono', monospace",
+                fontWeight: 500,
+                textTransform: "uppercase" as const,
+                letterSpacing: 2,
+                color: "rgba(26, 122, 110, 0.6)",
+              }}
+            >
+              Gate-Level Netlist
+            </div>
+          </div>
+
+          <div
+            style={{
+              position: "absolute",
+              top: 730,
+              left: 280,
+              opacity: leftLabelsOpacity,
+            }}
+          >
+            <div
+              style={{
+                fontSize: 12,
+                fontFamily: "'JetBrains Mono', monospace",
+                fontWeight: 500,
+                textTransform: "uppercase" as const,
+                letterSpacing: 2,
+                color: "rgba(90, 170, 110, 0.6)",
+              }}
+            >
+              Synopsys Verification
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* RIGHT side context labels (software) */}
+      {rightLabelsOpacity > 0 && (
+        <>
+          <div
+            style={{
+              position: "absolute",
+              top: 120,
+              right: 340,
+              opacity: rightLabelsOpacity,
+            }}
+          >
+            <div
+              style={{
+                fontSize: 11,
+                fontFamily: "'Inter', sans-serif",
+                fontWeight: 500,
+                textTransform: "uppercase" as const,
+                letterSpacing: 2,
+                color: "rgba(74, 144, 217, 0.5)",
+              }}
+            >
+              Specification
+            </div>
+          </div>
+
+          <div
+            style={{
+              position: "absolute",
+              top: 580,
+              right: 350,
+              opacity: rightLabelsOpacity,
+            }}
+          >
+            <div
+              style={{
+                fontSize: 11,
+                fontFamily: "'Inter', sans-serif",
+                fontWeight: 500,
+                textTransform: "uppercase" as const,
+                letterSpacing: 2,
+                color: "rgba(160, 160, 160, 0.5)",
+              }}
+            >
+              Generated Code
+            </div>
+          </div>
+
+          <div
+            style={{
+              position: "absolute",
+              top: 860,
+              right: 350,
+              opacity: rightLabelsOpacity,
+            }}
+          >
+            <div
+              style={{
+                fontSize: 11,
+                fontFamily: "'Inter', sans-serif",
+                fontWeight: 500,
+                textTransform: "uppercase" as const,
+                letterSpacing: 2,
+                color: "rgba(217, 148, 74, 0.5)",
+              }}
+            >
+              Verification Tests
+            </div>
+          </div>
+        </>
       )}
 
       {/* Narration overlay at frame 360 */}
