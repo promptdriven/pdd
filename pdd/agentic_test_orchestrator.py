@@ -153,18 +153,28 @@ def _setup_worktree(cwd: Path, issue_number: int, quiet: bool) -> Tuple[Optional
             shutil.rmtree(worktree_path)
 
     # Clean up branch if it exists
-    if _branch_exists(cwd, branch_name):
-        _delete_branch(cwd, branch_name)
+    branch_exists = _branch_exists(cwd, branch_name)
+    if branch_exists:
+        success, _err = _delete_branch(cwd, branch_name)
+        if success:
+            branch_exists = False
 
     # Create worktree
     try:
         worktree_path.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(
-            ["git", "worktree", "add", "-b", branch_name, str(worktree_path), "HEAD"],
-            cwd=git_root,
-            capture_output=True,
-            check=True
-        )
+        if branch_exists:
+            # Branch couldn't be deleted (e.g. currently checked out) — use existing
+            # --force required: git refuses to checkout a branch already in use
+            subprocess.run(
+                ["git", "worktree", "add", "--force", str(worktree_path), branch_name],
+                cwd=git_root, capture_output=True, check=True
+            )
+        else:
+            # Branch was deleted or didn't exist — create new
+            subprocess.run(
+                ["git", "worktree", "add", "-b", branch_name, str(worktree_path), "HEAD"],
+                cwd=git_root, capture_output=True, check=True
+            )
         if not quiet:
             console.print(f"[blue]Working in worktree: {worktree_path}[/blue]")
         return worktree_path, None
