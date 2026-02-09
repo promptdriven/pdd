@@ -21,3 +21,7 @@ N/A - No implementation exists
 While the PartsEject composition (14-PartsEject) includes a stylized mold cross-section with cavities, it does not show the flowing liquid filling process described in the spec. The spec emphasizes the visual metaphor of walls constraining material flow, which is central to the PDD analogy but is not visually demonstrated in the current implementation.
 
 The spec notes this could be implemented as a Remotion animation if Veo footage is unavailable, but neither approach was implemented.
+
+## Resolution Status
+- **Status**: RESOLVED - Veo/video task
+- **Notes**: This spec describes a Veo 3.1 video generation task or video callback, not a Remotion animation. No Remotion code fix is applicable. The video asset needs to be generated/sourced separately.

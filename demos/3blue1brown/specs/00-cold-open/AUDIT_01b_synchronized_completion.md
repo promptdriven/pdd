@@ -91,3 +91,7 @@ Implemented
 
 ## Notes
 Like spec 01a, this is a Veo video generation prompt, not intended for Remotion implementation. The Remotion version provides the core animation logic and timing, but omits photorealistic human elements (hands, faces, gestures) that would be present in the Veo-generated video. The production version uses `cold_open_01b_synchronized.mp4` (referenced naming pattern) which would include these details. The synchronization timing is accurately implemented, which is the critical requirement.
+
+## Resolution Status
+- **Status**: RESOLVED - Veo/video task
+- **Notes**: This spec describes a Veo 3.1 video generation task or video callback, not a Remotion animation. No Remotion code fix is applicable. The video asset needs to be generated/sourced separately.

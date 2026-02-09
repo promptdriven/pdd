@@ -21,13 +21,62 @@ const FILE_TREE = [
   "    Header.tsx",
   "    Footer.tsx",
   "    Sidebar.tsx",
+  "    Navigation.tsx",
+  "    Button.tsx",
+  "    Input.tsx",
+  "    Modal.tsx",
+  "    Card.tsx",
+  "    Table.tsx",
+  "    Form.tsx",
   "  utils/",
   "    parser.ts",
   "    helpers.ts",
+  "    validators.ts",
+  "    formatters.ts",
+  "    string-utils.ts",
+  "    date-utils.ts",
+  "    array-utils.ts",
   "  api/",
   "    routes.ts",
   "    middleware.ts",
+  "    auth.ts",
+  "    handlers.ts",
+  "    validators.ts",
+  "  services/",
+  "    user-service.ts",
+  "    auth-service.ts",
+  "    data-service.ts",
+  "    cache-service.ts",
+  "  models/",
+  "    User.ts",
+  "    Session.ts",
+  "    Config.ts",
+  "  hooks/",
+  "    useAuth.ts",
+  "    useData.ts",
+  "    useForm.ts",
+  "  store/",
+  "    actions.ts",
+  "    reducers.ts",
+  "    selectors.ts",
+  "  types/",
+  "    index.ts",
+  "    api.ts",
+  "    models.ts",
+  "  config/",
+  "    app-config.ts",
+  "    env.ts",
+  "  lib/",
+  "    client.ts",
+  "    server.ts",
   "  index.ts",
+  "  App.tsx",
+];
+
+// Git blame colors for file tree items (simulating patch history)
+const FILE_BLAME_COLORS = [
+  "#5A3A3A", "#4A4A3A", "#3A4A5A", "#4A3A5A", "#3A5A4A",
+  "#5A4A3A", "#3A3A5A", "#5A5A3A", "#4A5A3A", "#5A3A4A",
 ];
 
 export const LeftPanel: React.FC = () => {
@@ -76,12 +125,31 @@ export const LeftPanel: React.FC = () => {
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
 
-  // Zoom out animation
-  const zoomProgress = interpolate(frame, [zoomStart, zoomEnd], [0, 1], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-    easing: Easing.inOut(Easing.cubic),
-  });
+  // Zoom out animation with three-phase easing
+  // Phase 1: Ease-in (0:18-0:20, 2 seconds)
+  // Phase 2: Constant speed (0:20-0:28, 8 seconds)
+  // Phase 3: Ease-out (0:28-0:32, 4 seconds)
+  const easeInEnd = zoomStart + fps * 2;
+  const constantEnd = zoomStart + fps * 10;
+
+  let zoomProgress = 0;
+  if (frame < zoomStart) {
+    zoomProgress = 0;
+  } else if (frame < easeInEnd) {
+    // Ease-in phase (0-2s): slow start
+    const phaseProgress = (frame - zoomStart) / (fps * 2);
+    zoomProgress = Easing.in(Easing.cubic)(phaseProgress) * 0.143; // 0-14.3% of total zoom
+  } else if (frame < constantEnd) {
+    // Constant phase (2-10s): steady movement
+    const phaseProgress = (frame - easeInEnd) / (fps * 8);
+    zoomProgress = 0.143 + phaseProgress * 0.714; // 14.3%-85.7% of total zoom
+  } else if (frame <= zoomEnd) {
+    // Ease-out phase (10-14s): slow to stop
+    const phaseProgress = (frame - constantEnd) / (fps * 4);
+    zoomProgress = 0.857 + Easing.out(Easing.cubic)(phaseProgress) * 0.143; // 85.7%-100%
+  } else {
+    zoomProgress = 1;
+  }
 
   const scale = interpolate(zoomProgress, [0, 1], [1, 0.3]);
   const translateY = interpolate(zoomProgress, [0, 1], [0, -100]);
@@ -333,13 +401,27 @@ export const LeftPanel: React.FC = () => {
             <div
               key={i}
               style={{
-                opacity: interpolate(zoomProgress, [0.2 + i * 0.02, 0.3 + i * 0.02], [0, 1], {
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                opacity: interpolate(zoomProgress, [0.2 + i * 0.01, 0.3 + i * 0.01], [0, 1], {
                   extrapolateLeft: "clamp",
                   extrapolateRight: "clamp",
                 }),
               }}
             >
-              {item}
+              {/* Git blame color strip (for files, not folders) */}
+              {!item.endsWith("/") && (
+                <div
+                  style={{
+                    width: 3,
+                    height: 12,
+                    backgroundColor: FILE_BLAME_COLORS[i % FILE_BLAME_COLORS.length],
+                    borderRadius: 1,
+                  }}
+                />
+              )}
+              <span>{item}</span>
             </div>
           ))}
         </div>

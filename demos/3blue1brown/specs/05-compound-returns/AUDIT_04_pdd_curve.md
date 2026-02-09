@@ -86,3 +86,11 @@ Implemented (Phase 4 of CompoundCurvesGraph.tsx)
 - **Severity**: Low (phase system handles this)
 
 Overall implementation is solid. Main gaps: simplified activation (no traveling pulse), missing radial emphasis for annotated dot.
+
+## Resolution Status
+
+**RESOLVED** - Fixed timing issues:
+1. ✅ Annotation timing: Changed end frame from 160 to 180 to match spec (frame 120-180)
+2. ✅ Added easing function: annotation uses `easeOutCubic` to match spec
+3. ⚠️ Activation pulse: Remains simplified (opacity change only, no traveling pulse animation - acceptable tradeoff)
+4. ⚠️ Radial emphasis: No special pulse for dot #3 radials (subtle enhancement, not critical)

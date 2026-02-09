@@ -75,8 +75,8 @@ export interface Milestone {
 
 export const MILESTONES: Milestone[] = [
   { id: "codex", name: "Codex / Copilot", year: 2021, color: COLORS.CODEX, startFrame: BEATS.CODEX_START, impactScale: 1.0 },
-  { id: "gpt4", name: "GPT-4", year: 2023.25, color: COLORS.GPT4, startFrame: BEATS.GPT4_START, impactScale: 1.2 },
-  { id: "claude35", name: "Claude 3.5 Sonnet", year: 2024.5, color: COLORS.CLAUDE, startFrame: BEATS.CLAUDE35_START, impactScale: 1.5 },
+  { id: "gpt4", name: "GPT-4", year: 2023.25, color: COLORS.GPT4, startFrame: BEATS.GPT4_START, impactScale: 1.5 },
+  { id: "claude35", name: "Claude 3.5 Sonnet", year: 2024.5, color: COLORS.CLAUDE, startFrame: BEATS.CLAUDE35_START, impactScale: 1.8 },
   { id: "claude37", name: "Claude 3.7 Sonnet", year: 2025.15, color: COLORS.CLAUDE, startFrame: BEATS.CLAUDE37_START, impactScale: 1.2 },
   { id: "opus45", name: "Opus 4.5", year: 2025.7, color: COLORS.CLAUDE, startFrame: BEATS.OPUS_START, impactScale: 1.0 },
   { id: "gpt52", name: "GPT 5.2", year: 2025.8, color: COLORS.GPT4, startFrame: BEATS.GPT52_START, impactScale: 1.0 },

@@ -16,6 +16,20 @@ import {
 } from "./constants";
 import { Easing } from "remotion";
 
+/**
+ * CrossingPoint composition - "THE key moment of Part 1"
+ *
+ * This is the dramatic moment where the blue "cost to generate" line crosses below
+ * both the dashed "total cost" line AND the solid "immediate patch cost" line,
+ * showing that generation is now cheaper than patching by ANY measure.
+ *
+ * Spec: 07_crossing_point.md
+ * - Frame 0-60: Zoom out from milestone view (from Section 1.6)
+ * - Frame 60-90: First crossing (generate crosses below dashed total cost)
+ * - Frame 90-150: Second crossing (generate crosses below solid immediate cost) - THE dramatic moment
+ * - Frame 150-210: "We are here." label fades in
+ * - Frame 210-300: Continued pulsing, hold
+ */
 export const CrossingPoint: React.FC<CrossingPointPropsType> = ({
   showTitle = true,
   showOverlayText = false,
@@ -110,7 +124,7 @@ export const CrossingPoint: React.FC<CrossingPointPropsType> = ({
         </div>
       )}
 
-      {/* Chart with zoom animation */}
+      {/* Chart with zoom animation (0-60f: zoom out from milestone view) */}
       <CodeCostChart startAtFullView={startAtFullView} />
 
       {/* First crossing: generate crosses below dashed total cost line (modest emphasis) */}

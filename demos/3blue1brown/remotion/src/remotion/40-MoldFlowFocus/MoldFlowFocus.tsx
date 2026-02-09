@@ -136,96 +136,6 @@ const WallGlow: React.FC<WallGlowProps> = ({ baseOpacity, contactPoints, color }
   );
 };
 
-interface LiquidFlowProps {
-  progress: number;
-  color: string;
-}
-
-const LiquidFlow: React.FC<LiquidFlowProps> = ({ progress, color }) => {
-  // Liquid flows down from injection point and spreads
-  const flowY = interpolate(progress, [0, 0.4], [200, 550], {
-    extrapolateRight: "clamp",
-  });
-  const spreadX = interpolate(progress, [0.2, 0.8], [0, 400], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
-
-  return (
-    <svg
-      style={{
-        position: "absolute",
-        width: "100%",
-        height: "100%",
-        pointerEvents: "none",
-      }}
-    >
-      <defs>
-        <filter id="liquidGlow" x="-50%" y="-50%" width="200%" height="200%">
-          <feGaussianBlur stdDeviation="4" result="blur" />
-          <feMerge>
-            <feMergeNode in="blur" />
-            <feMergeNode in="SourceGraphic" />
-          </feMerge>
-        </filter>
-      </defs>
-
-      {/* Main liquid blob */}
-      <ellipse
-        cx={960}
-        cy={flowY}
-        rx={80 + spreadX}
-        ry={60 + progress * 80}
-        fill={color}
-        opacity={0.6}
-        filter="url(#liquidGlow)"
-      />
-
-      {/* Chaotic flow particles */}
-      {progress > 0.1 &&
-        [0, 1, 2, 3, 4].map((i) => {
-          const offsetX = Math.sin(progress * 10 + i * 2) * (50 + i * 20);
-          const offsetY = Math.cos(progress * 8 + i * 1.5) * 30;
-          const particleProgress = Math.min(1, progress + i * 0.05);
-          return (
-            <circle
-              key={i}
-              cx={960 + offsetX}
-              cy={Math.min(flowY + offsetY, 580)}
-              r={15 - i * 2}
-              fill={color}
-              opacity={0.4 * (1 - particleProgress * 0.5)}
-              filter="url(#liquidGlow)"
-            />
-          );
-        })}
-
-      {/* Side spreading when hitting walls */}
-      {progress > 0.5 && (
-        <>
-          <ellipse
-            cx={500 + (progress - 0.5) * 200}
-            cy={550}
-            rx={40 + (progress - 0.5) * 100}
-            ry={30}
-            fill={color}
-            opacity={0.5 * Math.min(1, (progress - 0.5) * 2)}
-            filter="url(#liquidGlow)"
-          />
-          <ellipse
-            cx={1420 - (progress - 0.5) * 200}
-            cy={550}
-            rx={40 + (progress - 0.5) * 100}
-            ry={30}
-            fill={color}
-            opacity={0.5 * Math.min(1, (progress - 0.5) * 2)}
-            filter="url(#liquidGlow)"
-          />
-        </>
-      )}
-    </svg>
-  );
-};
 
 export const MoldFlowFocus: React.FC<MoldFlowFocusPropsType> = ({
   showLabel = true,
@@ -238,14 +148,6 @@ export const MoldFlowFocus: React.FC<MoldFlowFocusPropsType> = ({
     [BEATS.WALL_GLOW_START, BEATS.WALL_GLOW_END],
     [0, 0.6],
     { extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
-  );
-
-  // Liquid flow progress
-  const flowProgress = interpolate(
-    frame,
-    [BEATS.WALL_GLOW_END, BEATS.CONSTRAIN_END],
-    [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.inOut(Easing.quad) }
   );
 
   // Contact pulse effects (multiple contact points)
@@ -292,9 +194,6 @@ export const MoldFlowFocus: React.FC<MoldFlowFocusPropsType> = ({
         src={staticFile("veo_mold_flow_focus.mp4")}
         style={{ width: "100%", height: "100%", objectFit: "cover" }}
       />
-
-      {/* Liquid flow animation */}
-      <LiquidFlow progress={flowProgress} color={COLORS.LIQUID_BLUE} />
 
       {/* Wall glow overlay */}
       <WallGlow

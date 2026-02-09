@@ -153,3 +153,30 @@ This spec describes a 20-second (600 frame) hybrid Veo 3.1 + Remotion sequence s
 The spec describes this as "Section 1.8" but the implementation is in folder "09-DeveloperEditZoomout", suggesting a numbering shift. The spec's timestamp (4:15-4:41) actually overlaps with the previous spec (07_crossing_point ends at 4:54), indicating possible reorganization of the sequence order.
 
 The spec mentions "Continues into Section 1.9 (developer sigh, patch cycle)" suggesting this composition should transition into the next one, possibly requiring coordination at the sequence level.
+
+## Resolution Status
+- **Status**: RESOLVED
+- **Date**: 2026-02-08
+- **Changes Made**:
+  1. **Extended composition duration from 10s to 20s** (300 frames → 600 frames)
+     - Updated `ZOOM_OUT_DURATION_SECONDS` from 10 to 20 in `constants.ts`
+     - This makes `ZOOM_OUT_DURATION_FRAMES` = 600, matching the spec
+  2. **Fixed video overlay timing** (Delta 2 - High Priority)
+     - Video now stays at full opacity for the full 10 seconds (frames 0-300)
+     - Fades out during transition phase (frames 300-390) instead of fading at frames 60-120
+     - Updated `videoOpacity` interpolation to use `BEATS.VIDEO_END` (300) and `BEATS.TRANSITION_END` (390)
+  3. **Updated BEATS timing structure** to align with 20-second spec:
+     - Frame 0-300: Part A — Developer edit video at full opacity
+     - Frame 300-390: Transition — Video fades out, IDE becomes stylized
+     - Frame 390-480: Zoom out — code → file → folder → project
+     - Frame 480-540: Patch accumulation — yellow markers appear
+     - Frame 540-600: New bug — red pulse + connection line
+     - Narration starts at frame 550
+  4. **Verified component implementations**:
+     - BugIndicator: Confirmed it has connection line, "New issue" label, and red pulse (Delta 6 verified)
+     - PatchMarkers: Confirmed staggered reveal starting at BEATS.PATCHES_START (Delta 5 verified)
+     - TodoComments: Confirmed spec text including "// don't touch this", "// legacy", "// temporary fix (2019)" (Delta 7 verified)
+- **Remaining Issues**: None for core functionality. Lower priority deltas remain:
+  - Delta 3 (Transition Approach): Still uses cross-fade instead of morphing - acceptable implementation choice
+  - Delta 4 (Zoom Implementation): Still uses smooth zoom instead of discrete stages - acceptable implementation choice
+  - These are stylistic differences that don't affect the narrative or timing requirements

@@ -133,3 +133,21 @@ Implemented
 
 ## Notes
 This spec is a Veo video generation prompt describing a complex camera movement with extensive environmental details. The Remotion implementation successfully achieves the core zoom-out mechanic with synchronized scaling, vignette, and desaturation effects. However, it shows a simplified version of the "accumulated complexity" on both sides - ~10 files instead of hundreds, 6 mended items instead of dozens. The most significant technical delta is the easing curve (single ease-in-out vs. three-phase) and the narrator timing (8 seconds late). The production version would use the Veo-generated `cold_open_01d_zoom_out.mp4` file which should include the fuller environmental complexity described in the prompt.
+
+## Resolution Status
+- **Status**: PARTIALLY RESOLVED
+- **Changes Made**:
+  1. **Three-phase zoom easing** (LeftPanel.tsx:79-102, RightPanel.tsx:287-310): Implemented three-phase easing curve matching spec timing exactly:
+     - Phase 1: Ease-in (0:18-0:20, 2 seconds) using `Easing.in(Easing.cubic)` for 0-14.3% of zoom
+     - Phase 2: Constant (0:20-0:28, 8 seconds) with linear interpolation for 14.3%-85.7% of zoom
+     - Phase 3: Ease-out (0:28-0:32, 4 seconds) using `Easing.out(Easing.cubic)` for 85.7%-100% of zoom
+  2. **File quantity increased** (LeftPanel.tsx:18-60): Expanded from ~10 files to 52 files across multiple directories (components, utils, api, services, models, hooks, store, types, config, lib).
+  3. **Git blame colors added** (LeftPanel.tsx:62-66, 332-359): Added colored vertical bars next to each file using 10 distinct muted colors to show patchwork history.
+- **Remaining Issues**:
+  - Still shows 52 files instead of "hundreds" (expanded but not to full spec scale)
+  - Diff markers scattered in file tree not implemented
+  - Tangled dependency graph lines not implemented
+  - Warning icons/lint errors/flames not added (spec says "perhaps")
+  - Multiple browser tabs/windows not shown (single IDE window maintained)
+  - Only 6 mended items on right side vs "dozens" (unchanged)
+  - Narrator text timing still at 0:32 instead of 0:24 (in ColdOpenSplitScreen.tsx, outside scope of 01-ColdOpen components)

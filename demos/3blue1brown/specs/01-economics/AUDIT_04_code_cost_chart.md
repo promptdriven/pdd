@@ -89,3 +89,24 @@ A 120-second complex chart showing the economics of code from 2015-2025. Feature
 - Missing the morphing sophistication specified, but fade transition is functional
 - The legend is a good addition not explicitly in spec
 - The implementation aligns with the complex spec structure but uses different research sources
+
+## Resolution Status
+- **Status**: RESOLVED
+- **Changes Made**:
+  1. **Fixed research citations** (HIGH severity):
+     - Changed "Small codebase: -55% (Peng et al., 2023)" to "Individual task: -55% (GitHub, 2022)" with fine print "95 developers, one greenfield task"
+     - Changed "Large codebase: +19% slower (METR, 2025)" to "Overall throughput: ~0% (Uplevel, 2024)" with fine print "785 developers, one year"
+  2. **Added missing VISUAL 10 beat** (HIGH severity):
+     - Separated annotation beats into two distinct phases (VISUAL 9 and VISUAL 10)
+     - VISUAL 9 (frames 2700-3060): Individual task vs Overall throughput
+     - VISUAL 10 (frames 3060-3240): Code churn and refactoring data
+     - Added "Code churn: +44% (GitClear, 2025, 211M lines analyzed)" annotation
+     - Added "Refactoring: -60%" annotation
+     - Removed "Bug rate: +41% (Uplevel, 2024)" which was not in spec
+  3. **Updated timing constants**:
+     - Added BEATS.EMPHASIS_MID at frame 3060 to split annotation beats
+     - Properly sequenced annotations as spec requires
+- **Remaining Issues**:
+  - Morphing transition still uses simple fade instead of sophisticated morph effect (Medium severity - not addressed)
+  - Fine print context details are now present and match spec exactly
+  - All high-severity issues have been resolved

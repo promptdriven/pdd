@@ -72,10 +72,10 @@ export const DeveloperEditZoomout: React.FC<DeveloperEditZoomoutPropsType> = ({
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
 
-  // Video overlay opacity: full for first 2s, fades out during transition
+  // Video overlay opacity: full for Part A (10s/300 frames), fades out during transition (frames 300-390)
   const videoOpacity = interpolate(
     frame,
-    [60, 120],
+    [BEATS.VIDEO_END, BEATS.TRANSITION_END],
     [1, 0],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );

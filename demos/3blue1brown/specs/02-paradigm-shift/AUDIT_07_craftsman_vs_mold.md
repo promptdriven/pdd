@@ -56,3 +56,7 @@ These elements should be present in the video file `07_craftsman_vs_mold.mp4` bu
    - Proper audio balance
 
 3. **Consider**: Document the relationship between this spec and Section 2.8 (Value Aura), as the spec notes this "fades into Section 2.8 where glowing aura shows where value lives."
+
+## Resolution Status
+- **Status**: RESOLVED - Veo/video task
+- **Notes**: This spec describes a Veo 3.1 video generation task or video callback, not a Remotion animation. No Remotion code fix is applicable. The video asset needs to be generated/sourced separately.

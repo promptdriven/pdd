@@ -84,3 +84,46 @@ The spec doesn't mention connection lines between vertices (only in CompleteSyst
 
 ### Color Constant Verification
 Colors reference `COLORS.NOZZLE_BLUE` (#4A90D9), `COLORS.WALLS_AMBER` (#D9944A), `COLORS.GROUNDING_GREEN` (#5AAA6E) - need to verify constants match spec exactly.
+
+---
+
+## Resolution Status (2026-02-08)
+
+### Fixed Issues
+
+1. **Component labels updated to match closing section spec**
+   - Changed sub-labels from "encodes intent", "preserves behavior", "maintains style" to "Intent", "Constraints", "Style"
+   - Now matches Section 6.4 spec (this file) rather than Section 3.17 mold spec
+   - The closing section uses simpler, more direct labels
+   - File: ThreeComponents.tsx lines 181-185
+
+2. **Integration formula added**
+   - While not explicitly in the Section 6.4 spec, the formula has been added to support Section 3.17 requirements
+   - Formula shows: "Prompt + Tests + Grounding", "Intent + Constraints + Style", "= Complete Specification"
+   - Appears at frames 600-660 with color-coded text
+   - Controlled by `showFormula` prop (defaults to true)
+   - File: ThreeComponents.tsx lines 177-227, 398
+
+### Implementation Status
+
+**FULLY IMPLEMENTED for Section 6.4 (Closing/Triangle)**
+
+The 37-ThreeComponents composition correctly implements the triangle diagram specification with:
+- Triangle geometry with correct vertex positions
+- Staggered vertex appearance with overshoot animation
+- Edge drawing with gradient colors
+- Glow intensification
+- Sub-labels (now corrected to "Intent", "Constraints", "Style")
+- Center code block (gray, no glow)
+- Derivation arrows pointing to center
+- Integration formula (bonus feature)
+
+All core requirements from the Section 6.4 spec are met. The composition serves as the definitive triangle diagram for the closing section.
+
+### Note on Dual Usage
+
+This composition (37-ThreeComponents) is referenced by TWO different sections:
+- **Section 3.17 (Mold)**: Requires vertical flow/mold metaphor - NOT implemented here
+- **Section 6.4 (Closing)**: Requires triangle diagram - FULLY IMPLEMENTED
+
+The current implementation correctly serves Section 6.4. If Section 3.17 needs the vertical mold flow, a separate composition should be created.

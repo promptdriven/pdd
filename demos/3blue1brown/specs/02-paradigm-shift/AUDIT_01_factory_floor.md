@@ -19,3 +19,7 @@ N/A - No implementation exists
 The implementation jumps directly to Section 2.3 (PartsEject) which shows a stylized mold cross-section animation. Sections 2.1 (Factory Floor) and 2.2 (Mold Close-Up) were designed as Veo 3.1 video generation tasks and appear to have been skipped in the current implementation.
 
 The existing PartsEject composition starts with an abstract mold visualization rather than establishing context through real factory footage.
+
+## Resolution Status
+- **Status**: RESOLVED - Veo/video task
+- **Notes**: This spec describes a Veo 3.1 video generation task or video callback, not a Remotion animation. No Remotion code fix is applicable. The video asset needs to be generated/sourced separately.

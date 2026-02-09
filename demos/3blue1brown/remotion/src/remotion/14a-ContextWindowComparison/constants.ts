@@ -1,5 +1,11 @@
 import { z } from "zod";
 
+// Module data type
+export interface ModulePrompt {
+  name: string;
+  description: string;
+}
+
 // Video specs
 export const CONTEXT_COMPARISON_FPS = 30;
 export const CONTEXT_COMPARISON_DURATION_SECONDS = 15;
@@ -180,15 +186,31 @@ export const TOKEN_COUNTS = {
   right: 2300,
 };
 
+// Module prompts for the "density" variant (10 modules in 15K tokens)
+export const TEN_MODULE_PROMPTS = [
+  { name: 'user_parser', description: 'Parse user IDs from untrusted input. Return None on failure.' },
+  { name: 'auth_handler', description: 'Handle OAuth2 tokens. Validate, refresh, cache results.' },
+  { name: 'data_pipeline', description: 'ETL from Postgres to Elasticsearch. Handle schema drift.' },
+  { name: 'payment_processor', description: 'Stripe integration. Idempotent charges. Webhook verify.' },
+  { name: 'email_service', description: 'Transactional email via SendGrid. Template rendering.' },
+  { name: 'cache_layer', description: 'Redis caching with TTL. Graceful fallback on miss.' },
+  { name: 'api_gateway', description: 'Rate limiting, auth middleware, request validation.' },
+  { name: 'search_index', description: 'Full-text search over documents. Relevance tuning.' },
+  { name: 'notification_hub', description: 'Push, SMS, email routing. User preference respect.' },
+  { name: 'audit_logger', description: 'Immutable audit trail. Structured events. Compliance.' },
+];
+
 // Props schema
 export const ContextWindowComparisonProps = z.object({
   showKnowledgeIndicator: z.boolean().default(true),
+  variant: z.enum(['efficiency', 'density']).default('efficiency'),
 });
 
 export const defaultContextWindowComparisonProps: z.infer<
   typeof ContextWindowComparisonProps
 > = {
   showKnowledgeIndicator: true,
+  variant: 'efficiency',
 };
 
 export type ContextWindowComparisonPropsType = z.infer<

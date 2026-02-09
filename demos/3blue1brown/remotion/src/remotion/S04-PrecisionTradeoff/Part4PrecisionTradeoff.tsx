@@ -3,11 +3,11 @@ import {
   AbsoluteFill,
   Audio,
   Sequence,
-  OffthreadVideo,
   staticFile,
   useCurrentFrame,
 } from "remotion";
 import { BEATS, VISUAL_SEQUENCE, Part4PrecisionTradeoffPropsType } from "./constants";
+import { SplitComparison, defaultSplitComparisonProps } from "../38-SplitComparison";
 import { PrinterFocus, defaultPrinterFocusProps } from "../39-3DPrinterFocus";
 import { MoldFlowFocus, defaultMoldFlowFocusProps } from "../40-MoldFlowFocus";
 import { BothGenerateFinal, defaultBothGenerateFinalProps } from "../45-BothGenerateFinal";
@@ -34,17 +34,11 @@ export const Part4PrecisionTradeoff: React.FC<Part4PrecisionTradeoffPropsType> =
       <Audio src={staticFile("part4_precision_narration.wav")} />
 
       {/* Visual compositions sequenced by BEATS */}
-      
-      {/* Visual 0: Veo clip - Something subtle that changes how you think about  */}
+
+      {/* Visual 0: Split Comparison - Something subtle that changes how you think about  */}
       {activeVisual === 0 && (
         <Sequence from={BEATS.VISUAL_00_START}>
-          <AbsoluteFill>
-            <OffthreadVideo
-              loop
-              src={staticFile("split_3d_vs_mold.mp4")}
-              style={{ width: "100%", height: "100%" }}
-            />
-          </AbsoluteFill>
+          <SplitComparison {...defaultSplitComparisonProps} />
         </Sequence>
       )}
 

@@ -121,7 +121,7 @@ export const ValueAura: React.FC<ValueAuraPropsType> = ({
                 color: COLORS.LABEL_WHITE,
                 textTransform: "uppercase" as const,
                 letterSpacing: 3,
-                textShadow: "0 2px 10px rgba(0,0,0,0.7)",
+                textShadow: "0 2px 10px rgba(0,0,0,0.5)",
               }}
             >
               Value in Object
@@ -174,7 +174,7 @@ export const ValueAura: React.FC<ValueAuraPropsType> = ({
                 color: COLORS.LABEL_WHITE,
                 textTransform: "uppercase" as const,
                 letterSpacing: 3,
-                textShadow: "0 2px 10px rgba(0,0,0,0.7)",
+                textShadow: "0 2px 10px rgba(0,0,0,0.5)",
               }}
             >
               Value in Specification

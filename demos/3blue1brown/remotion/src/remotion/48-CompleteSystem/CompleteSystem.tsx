@@ -155,24 +155,28 @@ export const CompleteSystem: React.FC<CompleteSystemPropsType> = ({
   );
 
   // Glow activation for prompts (staggered per module)
+  // Spec: Frame 60-150 (2-5s) for all glows to activate
+  // With 5 modules and 10-frame stagger: 60 + (4 * 10) = 100 frames to start last module
+  // Need to end by frame 150, so each glow gets ~10-12 frames (0.3-0.4s per spec)
   const promptGlow = (moduleIndex: number) =>
     interpolate(
       frame,
       [
         BEATS.PROMPT_GLOW_START + moduleIndex * BEATS.PROMPT_GLOW_STAGGER,
-        BEATS.PROMPT_GLOW_START + moduleIndex * BEATS.PROMPT_GLOW_STAGGER + 30,
+        BEATS.PROMPT_GLOW_START + moduleIndex * BEATS.PROMPT_GLOW_STAGGER + 10,
       ],
       [0, 1],
       { extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
     );
 
   // Glow activation for tests (staggered, after prompts)
+  // Test glows start at frame 100, last module at 140, must end by 150
   const testGlow = (moduleIndex: number) =>
     interpolate(
       frame,
       [
         BEATS.TEST_GLOW_START + moduleIndex * BEATS.TEST_GLOW_STAGGER,
-        BEATS.TEST_GLOW_START + moduleIndex * BEATS.TEST_GLOW_STAGGER + 30,
+        BEATS.TEST_GLOW_START + moduleIndex * BEATS.TEST_GLOW_STAGGER + 10,
       ],
       [0, 1],
       { extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }

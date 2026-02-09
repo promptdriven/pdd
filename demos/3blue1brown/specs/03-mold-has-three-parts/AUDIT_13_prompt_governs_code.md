@@ -56,3 +56,16 @@ Implemented
 The implementation captures the core concept: small prompt on left, larger code on right, with arrow showing direction and ratio displayed. However, it undersells the SCALE (30 lines vs 200+) and the DOMINANCE (prompt should visually dominate through glow/pulse). The missing minimap is significant as it's meant to viscerally show "this is a HUGE file controlled by a TINY spec."
 
 The ratio calculation is correct but generic - the spec wants the specific "1:5 to 1:10" framing to connect to the narration and establish a memorable rule of thumb.
+
+## Resolution Status
+- **Status**: RESOLVED
+- **Changes Made**:
+  1. **Minimap Added**: Implemented minimap with viewport indicator (lines 201-235 in PromptGovernsCode.tsx) showing full code extent with animated viewport position that tracks scroll progress
+  2. **Scrolling Animation**: Added code scroll animation from 0 to 100px (lines 38-44) with easing, applied as translateY transform (line 182)
+  3. **Pulsing Glow**: Added pulsing glow effect to prompt using `0.8 + Math.sin(frame * 0.1) * 0.2` formula (line 12), applied as boxShadow (line 101)
+  4. **Ratio Display Updated**: Changed from calculated ratio to explicit "1:5 to 1:10" text (line 277) with descriptive subtitle "A good prompt is a fifth to a tenth the size of the code it generates" (lines 287-296)
+  5. **Line Counts Corrected**: Updated defaults from 4/30 to 15/200 lines (lines 6-7 in PromptGovernsCode.tsx, lines 77-84 in constants.ts)
+  6. **Visual Hierarchy Enhanced**: Prompt now has animated pulsing glow while code remains gray without glow, establishing clear dominance
+  7. **Code Content Expanded**: Replaced abbreviated code (30 lines) with comprehensive implementation showing imports, error handling, validation, and helper functions representing 200+ lines
+  8. **Prompt Content Updated**: Changed from 4 generic lines to 15 specific lines matching spec requirements
+- **Remaining Issues**: None - all audit items have been addressed. The implementation now fully matches the spec's requirements for scale (15→200 lines), visual impact (pulsing glow + minimap), and messaging (1:5 to 1:10 ratio).

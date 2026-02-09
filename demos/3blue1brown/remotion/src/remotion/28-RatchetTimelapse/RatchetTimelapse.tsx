@@ -1,6 +1,6 @@
 import React from "react";
 import { AbsoluteFill, interpolate, useCurrentFrame, Easing, spring } from "remotion";
-import { COLORS, BEATS, ACCUMULATING_TESTS, RatchetTimelapsePropsType, RATCHET_FPS } from "./constants";
+import { COLORS, BEATS, WALL_SCHEDULE, TERMINAL_TESTS, RatchetTimelapsePropsType, RATCHET_FPS } from "./constants";
 
 /** Number of teeth on the ratchet gear */
 const GEAR_TEETH = 12;
@@ -8,6 +8,76 @@ const GEAR_TEETH = 12;
 const GEAR_RADIUS = 50;
 /** Tooth height */
 const TOOTH_HEIGHT = 14;
+
+/**
+ * Terminal overlay showing scrolling test output with green checkmarks.
+ */
+const TerminalOverlay: React.FC<{
+  testCount: number;
+  opacity: number;
+}> = ({ testCount, opacity }) => {
+  if (opacity <= 0) return null;
+
+  // Generate test lines up to current count
+  const lines: string[] = ["$ pdd test"];
+  for (let i = 0; i < testCount && i < TERMINAL_TESTS.length; i++) {
+    lines.push(`✓ ${TERMINAL_TESTS[i]}`);
+  }
+  lines.push("");
+  lines.push(`${testCount} tests passing`);
+
+  // Show only last 8 lines for scrolling effect
+  const visibleLines = lines.slice(Math.max(0, lines.length - 8));
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        bottom: 30,
+        right: 30,
+        width: 400,
+        opacity,
+      }}
+    >
+      <div
+        style={{
+          background: "#252535",
+          border: "1px solid #444",
+          borderRadius: 6,
+          padding: "10px 14px",
+          minHeight: 120,
+        }}
+      >
+        {/* Terminal title bar dots */}
+        <div style={{ display: "flex", gap: 5, marginBottom: 8 }}>
+          <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#E74C3C" }} />
+          <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#F1C40F" }} />
+          <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#2ECC71" }} />
+        </div>
+        {visibleLines.map((line, i) => (
+          <div
+            key={i}
+            style={{
+              fontSize: 12,
+              fontFamily: "JetBrains Mono, monospace",
+              color: line.startsWith("$")
+                ? "#4A90D9"
+                : line.startsWith("✓")
+                ? "#2ECC71"
+                : line.includes("passing")
+                ? "#4CAF50"
+                : "#ccc",
+              lineHeight: 1.6,
+              whiteSpace: "pre",
+            }}
+          >
+            {line}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
 
 /**
  * SVG ratchet gear component with triangular teeth and a pawl.
@@ -159,20 +229,16 @@ export const RatchetTimelapse: React.FC<RatchetTimelapsePropsType> = ({
     { extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
   );
 
-  // Calculate how many walls are visible during timelapse
-  const wallCount = frame < BEATS.TIMELAPSE_START
-    ? 5 // Start with 5 walls
-    : Math.min(
-        5 + Math.floor((frame - BEATS.TIMELAPSE_START) / BEATS.WALL_ACCUMULATION_RATE),
-        maxWalls
-      );
+  // Calculate how many new walls are visible based on the accelerating schedule
+  const activeNewWalls = WALL_SCHEDULE.filter(w => frame >= w.frame);
+  const wallCount = 5 + activeNewWalls.length; // Starting with 5 initial walls
 
   // Number of new walls added (for gear advancement)
-  const newWallsAdded = wallCount - 5;
+  const newWallsAdded = activeNewWalls.length;
 
   // Frame of the most recent wall addition (for spring animation reset)
   const lastWallFrame = newWallsAdded > 0
-    ? BEATS.TIMELAPSE_START + (newWallsAdded - 1) * BEATS.WALL_ACCUMULATION_RATE
+    ? activeNewWalls[activeNewWalls.length - 1].frame
     : 0;
 
   // Counter visibility
@@ -190,6 +256,25 @@ export const RatchetTimelapse: React.FC<RatchetTimelapsePropsType> = ({
     [0, 1],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
+
+  // Terminal overlay opacity
+  const terminalOpacity = interpolate(
+    frame,
+    [BEATS.TERMINAL_START, BEATS.TERMINAL_START + 30],
+    [0, 1],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+  );
+
+  // Dynamic font size that shrinks as walls accumulate
+  const getFontSize = (wallCount: number) => {
+    // Start at 12px, shrink to 9px as walls grow from 5 to 17
+    return interpolate(wallCount, [5, 17], [12, 9], {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+    });
+  };
+
+  const currentFontSize = getFontSize(wallCount);
 
   // Wall layout configuration
   const columns = 3;
@@ -212,14 +297,38 @@ export const RatchetTimelapse: React.FC<RatchetTimelapsePropsType> = ({
           opacity: initialOpacity,
         }}
       >
-        {ACCUMULATING_TESTS.slice(0, wallCount).map((test, i) => {
-          // Spring animation for each new wall
-          const wallAppearFrame = i < 3
-            ? 0
-            : BEATS.TIMELAPSE_START + (i - 3) * BEATS.WALL_ACCUMULATION_RATE;
+        {/* Render initial 5 walls first */}
+        {[
+          "null → None",
+          "empty → None",
+          '"abc" → "abc"',
+          '" abc " → "abc"',
+          '"a1b2" → "a1b2"',
+        ].map((test, i) => (
+          <div
+            key={`initial-${i}`}
+            style={{
+              width: wallWidth,
+              height: wallHeight,
+              background: "rgba(217, 148, 74, 0.3)",
+              border: `2px solid ${COLORS.WALLS_AMBER}`,
+              borderRadius: 6,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: currentFontSize,
+              fontFamily: "JetBrains Mono, monospace",
+              color: COLORS.WALLS_AMBER,
+            }}
+          >
+            {test}
+          </div>
+        ))}
 
+        {/* Render new walls from schedule with spring animation */}
+        {activeNewWalls.map((wall, i) => {
           const wallScale = spring({
-            frame: frame - wallAppearFrame,
+            frame: frame - wall.frame,
             fps: RATCHET_FPS,
             config: {
               damping: 15,
@@ -228,11 +337,11 @@ export const RatchetTimelapse: React.FC<RatchetTimelapsePropsType> = ({
             },
           });
 
-          const isNewWall = frame - wallAppearFrame < 30;
+          const isNewWall = frame - wall.frame < 30;
 
           return (
             <div
-              key={i}
+              key={`new-${i}`}
               style={{
                 width: wallWidth,
                 height: wallHeight,
@@ -242,7 +351,7 @@ export const RatchetTimelapse: React.FC<RatchetTimelapsePropsType> = ({
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                fontSize: 11,
+                fontSize: currentFontSize,
                 fontFamily: "JetBrains Mono, monospace",
                 color: COLORS.WALLS_AMBER,
                 transform: `scale(${Math.min(wallScale, 1)})`,
@@ -252,7 +361,7 @@ export const RatchetTimelapse: React.FC<RatchetTimelapsePropsType> = ({
                 opacity: wallScale > 0 ? 1 : 0,
               }}
             >
-              {test}
+              {wall.label}
             </div>
           );
         })}
@@ -290,7 +399,7 @@ export const RatchetTimelapse: React.FC<RatchetTimelapsePropsType> = ({
         </div>
       )}
 
-      {/* SVG Ratchet gear mechanism (replaces text placeholder) */}
+      {/* SVG Ratchet gear mechanism */}
       {frame >= BEATS.TIMELAPSE_START && (
         <div
           style={{
@@ -315,6 +424,9 @@ export const RatchetTimelapse: React.FC<RatchetTimelapsePropsType> = ({
           </svg>
         </div>
       )}
+
+      {/* Terminal overlay with scrolling tests */}
+      <TerminalOverlay testCount={wallCount} opacity={terminalOpacity} />
 
       {/* Insight text */}
       {insightOpacity > 0 && (

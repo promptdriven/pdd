@@ -75,3 +75,20 @@ Spec line 236 references `getPointOnPath(particleProgress)` for calculating part
 - Border glow effect on data pair works well (line 89)
 - Particle system functions, even if simplified
 - Database pulse effect creates nice emphasis
+
+## Resolution Status
+- **Status**: RESOLVED
+- **Changes Made**:
+  1. **Extended timeline** - Updated all BEATS constants in constants.ts to match spec timings:
+     - SUCCESS_END: 60 → 90 frames (0-3s)
+     - DATA_HIGHLIGHT_END: 120 → 180 frames (3-6s)
+     - FLOW_START/END: 150-250 → 180-300 frames (6-10s)
+     - DB_PULSE_START/END: 280-340 → 300-390 frames (10-13s)
+     - FEEDBACK_END: 400 → 450 frames (13-15s)
+  2. **Added "Learning from success..." message** - Implemented learningMessageOpacity interpolation and added message display during data extraction phase (frames 90-180) in italic green text below the code block
+  3. **Fixed particle count to 5** - Changed particle array from [0.2, 0.4, 0.6, 0.8] to [0.1, 0.3, 0.5, 0.7, 0.9] as specified in spec
+  4. **Implemented getPointOnPath() function** - Added helper function to calculate positions along quadratic bezier curve path (M0,100 Q150,100 200,200 T400,300) with proper mathematical bezier interpolation
+  5. **Curved flow arrow** - Changed arrow path from horizontal `d="M0,50 Q200,50 400,50"` to curved spec path `d="M0,100 Q150,100 200,200 T400,300"` with proper arrowhead marker
+  6. **Adjusted database pulse** - Updated scale from 1.15 to 1.1 and adjusted timing to match spec keyframes [300, 320, 360] with easeOutBack easing
+  7. **Particle fade-out** - Implemented opacity fade near end of path for particles as they approach database
+- **Remaining Issues**: None - all major deltas from audit have been addressed. The inlined components (SuccessfulGeneration, FlowArrow, etc.) are an implementation detail and work correctly.

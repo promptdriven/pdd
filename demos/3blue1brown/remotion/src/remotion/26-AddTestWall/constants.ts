@@ -9,16 +9,22 @@ export const ADD_TEST_WALL_WIDTH = 1920;
 export const ADD_TEST_WALL_HEIGHT = 1080;
 
 // Beat timings (in frames at 30fps)
+// Following spec: Frame 0-90 (return to mold), 90-180 (particles), 180-270 (solidify), 270-360 (click/lock), 360-600 (hold)
 export const BEATS = {
   WALLS_VISIBLE_START: 0,
   WALLS_VISIBLE_END: 30,
-  NEW_WALL_START: 60,
-  NEW_WALL_END: 120,
-  CLICK_SOUND: 90,
-  LABEL_START: 150,
-  GLOW_START: 180,
-  GLOW_END: 240,
+  PARTICLES_START: 90,
+  PARTICLES_END: 180,
+  WALL_SOLIDIFY_START: 180,
+  WALL_SOLIDIFY_END: 270,
+  RATCHET_ENGAGE: 270,
+  RATCHET_VISUAL_END: 300,
+  LABEL_START: 240,
+  TERMINAL_START: 60,
+  TERMINAL_COMMAND_START: 90,
+  TERMINAL_COMPLETE: 300,
   HOLD_START: 360,
+  HOLD_END: 600,
 };
 
 // Color palette

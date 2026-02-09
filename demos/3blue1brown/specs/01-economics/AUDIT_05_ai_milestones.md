@@ -98,3 +98,17 @@ An 18-second sequence showing AI model releases as markers on the falling "cost 
 - The addition of vertical drop indicators is a good touch not in spec
 - The subtitle during hold contradicts spec's "visual only" note but may improve clarity
 - The cost line gradient effect is a nice polish addition
+
+## Resolution Status
+- **Status**: RESOLVED
+- **Changes Made**:
+  1. Fixed GPT-4 impactScale from 1.2 to 1.5 to match spec's "Large" drop size requirement
+  2. Increased Claude 3.5 Sonnet impactScale from 1.5 to 1.8 to emphasize it as "the visual climax" and differentiate from GPT-4
+  3. Removed subtitle "Each release accelerated the decline" from hold phase to comply with spec's "Visual only during this section - the chart speaks for itself" directive
+- **Remaining Issues**: None for HIGH/MEDIUM severity
+- **Verification Results**:
+  - Milestone count: ✓ CORRECT (7 milestones as specified: Codex, GPT-4, Claude 3.5, Claude 3.7, Opus 4.5, GPT 5.2, Gemini 3)
+  - Drop sizes: ✓ NOW CORRECT (Codex: 1.0 Small, GPT-4: 1.5 Large, Claude 3.5: 1.8 Largest, Claude 3.7: 1.2 Moderate, Frontier: 1.0 Small)
+  - Frontier cluster stagger: ✓ CORRECT (15 frames between each: 390, 405, 420)
+  - Zoom behavior: ✓ CORRECT (scale and fade to 0.3 opacity)
+  - Visual only during hold: ✓ NOW CORRECT (subtitle removed)

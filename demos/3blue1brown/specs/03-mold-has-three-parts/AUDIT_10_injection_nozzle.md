@@ -49,3 +49,18 @@ Partially Implemented
 
 ## Additional Notes
 The implementation delivers the core visual of a blue-glowing nozzle but lacks the conceptual framework elements (intent/requirements/constraints labels) that the spec emphasizes. The spec's metaphor is about showing what goes INTO the nozzle (the three aspects of a prompt specification), while the implementation focuses on labeling the nozzle itself.
+
+## Resolution Status
+- **Status**: RESOLVED
+- **Changes Made**:
+  1. Added three concept labels ("intent", "requirements", "constraints") as circular badges with descriptions, positioned around the nozzle at coordinates specified in CONCEPT_LABELS array
+  2. Added mold cross-section context with left, right, and bottom walls rendered in amber color (#D9944A) with dimmed opacity
+  3. Added wall dimming animation from full opacity to 40% (frames 90-150) using easing
+  4. Added pulse animation to nozzle using `pulseScale = 1 + Math.sin(frame * 0.1) * 0.05` applied as SVG transform
+  5. Changed section title from "Second: the prompt" to "PROMPT CAPITAL" with subtitle "The Specification"
+  6. Added sequential label appearance with individual start frames (180, 240, 300) and fade duration of 30 frames
+  7. Added connection lines from each label to the nozzle center with dashed stroke and 50% opacity
+  8. Updated BEATS timing structure to match spec: MOLD_START/END, WALL_DIM_START/END, NOZZLE_GLOW_START/END, individual label timings, TITLE_START/END
+  9. Refactored nozzle SVG to use transform with pulseScale for proper animation
+  10. Added WALLS_AMBER color constant and CONCEPT_LABELS configuration array to constants.ts
+- **Remaining Issues**: None - all audit findings have been addressed

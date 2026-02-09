@@ -77,3 +77,23 @@ None - all spec requirements are present in the implementation, though with some
 3. Optional label display via `showLabels` prop
 4. Uses BEATS constants from external constants file for frame timing
 5. Uses COLORS constants for color values
+
+---
+
+## Resolution Status (2026-02-08)
+
+### MEDIUM Severity Issues - RESOLVED
+
+#### Marker Position Calculation Differs - FIXED
+- **Issue**: Marker and trail calculations used different coordinates than spec
+  - Spec: `markerX = 100 + curveProgress * 1300`, `markerY = 650 - 500 * (1 / (curveProgress * 2 + 0.3))`
+  - Implementation had: `markerX = 200 + curveProgress * 1100`, `markerY = 700 - 450 * (1 / (curveProgress * 2 + 0.3))`
+- **Resolution**: Updated all coordinate calculations to match spec exactly
+- **Changes Made**:
+  - Updated marker position: `markerX = 100 + curveProgress * 1300` and `markerY = 650 - 500 * (1 / (curveProgress * 2 + 0.3))`
+  - Updated trail points: `trailX = 100 + trailProgress * 1300` and `trailY = 650 - 500 * (1 / (trailProgress * 2 + 0.3))`
+  - Updated PrecisionGraphStatic curve path: `x = 100 + progress * 1300` and `y = 650 - 500 * (1 / (progress * 2 + 0.3))`
+  - Updated static graph axes: Y-axis from (100, 150) to (100, 650), X-axis from (100, 650) to (1400, 650)
+- **Result**: Marker now follows the exact curve path specified in the original design, ensuring proper alignment with the graph and consistent visual behavior
+
+The implementation now uses the correct mathematical coordinates as specified, ensuring the marker travels along the precise curve defined in Section 4.5 of the specification.

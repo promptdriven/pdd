@@ -3,10 +3,13 @@ import { AbsoluteFill, interpolate, useCurrentFrame, Easing } from "remotion";
 import { COLORS, BEATS, PROMPT_LINES, CODE_PREVIEW, PromptGovernsCodePropsType } from "./constants";
 
 export const PromptGovernsCode: React.FC<PromptGovernsCodePropsType> = ({
-  promptLineCount = 4,
-  codeLineCount = 30,
+  promptLineCount = 15,
+  codeLineCount = 200,
 }) => {
   const frame = useCurrentFrame();
+
+  // Pulsing glow for prompt (spec line 24, 40, 117)
+  const promptGlow = 0.8 + Math.sin(frame * 0.1) * 0.2;
 
   // Prompt visibility
   const promptOpacity = interpolate(
@@ -28,8 +31,16 @@ export const PromptGovernsCode: React.FC<PromptGovernsCodePropsType> = ({
   const codeHeight = interpolate(
     frame,
     [BEATS.CODE_EXPAND_START, BEATS.CODE_EXPAND_END],
-    [0, 400],
+    [0, 500],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
+  );
+
+  // Code scroll animation (spec line 90-96, 125-134)
+  const codeScroll = interpolate(
+    frame,
+    [BEATS.CODE_EXPAND_START + 60, BEATS.CODE_EXPAND_END],
+    [0, 100],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.inOut(Easing.quad) }
   );
 
   // Ratio display
@@ -87,6 +98,7 @@ export const PromptGovernsCode: React.FC<PromptGovernsCodePropsType> = ({
               padding: 24,
               width: "100%",
               maxWidth: 400,
+              boxShadow: `0 0 ${40 * promptGlow}px rgba(74, 144, 217, ${0.5 * promptGlow})`,
             }}
           >
             {PROMPT_LINES.map((line, i) => (
@@ -162,20 +174,65 @@ export const PromptGovernsCode: React.FC<PromptGovernsCodePropsType> = ({
               width: "100%",
               height: codeHeight,
               overflow: "hidden",
+              position: "relative",
             }}
           >
-            <pre
+            <div
               style={{
-                fontSize: 11,
-                fontFamily: "JetBrains Mono, monospace",
-                color: COLORS.CODE_GRAY,
-                margin: 0,
-                lineHeight: 1.4,
-                whiteSpace: "pre-wrap",
+                transform: `translateY(-${codeScroll}px)`,
+                transition: "transform 0.1s ease-out",
               }}
             >
-              {CODE_PREVIEW}
-            </pre>
+              <pre
+                style={{
+                  fontSize: 11,
+                  fontFamily: "JetBrains Mono, monospace",
+                  color: COLORS.CODE_GRAY,
+                  margin: 0,
+                  lineHeight: 1.4,
+                  whiteSpace: "pre-wrap",
+                }}
+              >
+                {CODE_PREVIEW}
+              </pre>
+            </div>
+
+            {/* Minimap (spec lines 258-271) */}
+            {codeHeight > 0 && (
+              <div
+                style={{
+                  position: "absolute",
+                  right: 8,
+                  top: 8,
+                  width: 60,
+                  height: Math.min(codeHeight - 16, 480),
+                  background: "#2A2A3E",
+                  borderRadius: 4,
+                  overflow: "hidden",
+                }}
+              >
+                {/* Minimap content (simplified representation of code) */}
+                <div
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    background: "repeating-linear-gradient(to bottom, #444 0px, #444 1px, transparent 1px, transparent 3px)",
+                  }}
+                />
+                {/* Viewport indicator */}
+                <div
+                  style={{
+                    position: "absolute",
+                    top: `${(codeScroll / 100) * 50}%`,
+                    left: 0,
+                    right: 0,
+                    height: "20%",
+                    background: "rgba(74, 144, 217, 0.3)",
+                    border: "1px solid rgba(74, 144, 217, 0.5)",
+                  }}
+                />
+              </div>
+            )}
           </div>
           <div
             style={{
@@ -189,7 +246,7 @@ export const PromptGovernsCode: React.FC<PromptGovernsCodePropsType> = ({
         </div>
       </div>
 
-      {/* Ratio display */}
+      {/* Ratio display (spec lines 95, 100, 178-180) */}
       {ratioOpacity > 0 && (
         <div
           style={{
@@ -210,23 +267,33 @@ export const PromptGovernsCode: React.FC<PromptGovernsCodePropsType> = ({
           >
             <div
               style={{
-                fontSize: 32,
+                fontSize: 40,
                 color: COLORS.RATIO_GOLD,
                 fontWeight: "bold",
                 textAlign: "center",
+                marginBottom: 8,
               }}
             >
-              {promptLineCount} lines → {codeLineCount} lines
+              1:5 to 1:10
             </div>
             <div
               style={{
-                fontSize: 16,
-                color: COLORS.LABEL_GRAY,
+                fontSize: 18,
+                color: COLORS.LABEL_WHITE,
                 textAlign: "center",
-                marginTop: 8,
+                marginTop: 4,
               }}
             >
-              {Math.round(codeLineCount / promptLineCount)}x amplification
+              A good prompt is a fifth to a tenth
+            </div>
+            <div
+              style={{
+                fontSize: 18,
+                color: COLORS.LABEL_WHITE,
+                textAlign: "center",
+              }}
+            >
+              the size of the code it generates
             </div>
           </div>
         </div>
@@ -249,9 +316,10 @@ export const PromptGovernsCode: React.FC<PromptGovernsCodePropsType> = ({
               fontSize: 20,
               color: COLORS.LABEL_WHITE,
               fontFamily: "sans-serif",
+              fontWeight: "500",
             }}
           >
-            The prompt governs what gets generated. Compact input, expanded output.
+            You're specifying <span style={{ color: COLORS.NOZZLE_BLUE, fontWeight: "bold" }}>what and why</span>, not <em>how</em>. That compression matters.
           </div>
         </div>
       )}

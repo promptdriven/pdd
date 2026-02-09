@@ -8,20 +8,20 @@ export const GROUNDING_DB_DURATION_FRAMES =
 export const GROUNDING_DB_WIDTH = 1920;
 export const GROUNDING_DB_HEIGHT = 1080;
 
-// Beat timings (in frames at 30fps)
+// Beat timings (in frames at 30fps) - aligned with spec
 export const BEATS = {
   SUCCESS_START: 0,
-  SUCCESS_END: 60,
+  SUCCESS_END: 90,           // Extended from 60 to 90 (0-3s)
   DATA_HIGHLIGHT_START: 90,
-  DATA_HIGHLIGHT_END: 120,
-  FLOW_START: 150,
-  FLOW_END: 250,
-  DB_APPEAR_START: 200,
-  DB_APPEAR_END: 260,
-  DB_PULSE_START: 280,
-  DB_PULSE_END: 340,
-  FEEDBACK_START: 360,
-  FEEDBACK_END: 400,
+  DATA_HIGHLIGHT_END: 180,   // Extended from 120 to 180 (3-6s)
+  FLOW_START: 180,           // Shifted from 150 to 180
+  FLOW_END: 300,             // Extended from 250 to 300 (6-10s)
+  DB_APPEAR_START: 240,
+  DB_APPEAR_END: 300,        // Extended from 260 to 300
+  DB_PULSE_START: 300,       // Shifted from 280 to 300
+  DB_PULSE_END: 390,         // Extended from 340 to 390 (10-13s)
+  FEEDBACK_START: 390,       // Shifted from 360 to 390
+  FEEDBACK_END: 450,         // Extended from 400 to 450 (13-15s)
   QUOTE_START: 420,
   HOLD_START: 420,
 };

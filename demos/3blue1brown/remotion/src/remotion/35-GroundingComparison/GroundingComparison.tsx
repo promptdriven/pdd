@@ -20,7 +20,7 @@ export const GroundingComparison: React.FC<GroundingComparisonPropsType> = ({
     frame,
     [BEATS.GROUNDING_START, BEATS.GROUNDING_END],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
   );
 
   // Code opacities
@@ -28,22 +28,22 @@ export const GroundingComparison: React.FC<GroundingComparisonPropsType> = ({
     frame,
     [BEATS.OOP_CODE_START, BEATS.OOP_CODE_END],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
   );
 
   const funcCodeOpacity = interpolate(
     frame,
     [BEATS.FUNC_CODE_START, BEATS.FUNC_CODE_END],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
   );
 
-  // Checkmarks
+  // Checkmarks (with bounce effect)
   const checkmarkOpacity = interpolate(
     frame,
     [BEATS.CHECKMARKS_START, BEATS.CHECKMARKS_END],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.back(1.5)) }
   );
 
   // Insight
@@ -51,7 +51,7 @@ export const GroundingComparison: React.FC<GroundingComparisonPropsType> = ({
     frame,
     [BEATS.INSIGHT_START, BEATS.INSIGHT_END],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
   );
 
   return (
@@ -139,8 +139,9 @@ export const GroundingComparison: React.FC<GroundingComparisonPropsType> = ({
                 background: "#1E1E2E",
                 padding: 16,
                 borderRadius: 8,
-                border: "1px solid #333",
+                border: `1px solid ${COLORS.GROUNDING_GREEN}40`,
                 opacity: oopCodeOpacity,
+                boxShadow: `0 0 20px ${COLORS.GROUNDING_GREEN}20`,
               }}
             >
               <pre
@@ -151,6 +152,7 @@ export const GroundingComparison: React.FC<GroundingComparisonPropsType> = ({
                   margin: 0,
                   lineHeight: 1.4,
                   whiteSpace: "pre-wrap",
+                  filter: "hue-rotate(-10deg) saturate(1.2)",
                 }}
               >
                 {OOP_CODE}
@@ -188,8 +190,9 @@ export const GroundingComparison: React.FC<GroundingComparisonPropsType> = ({
                 background: "#1E1E2E",
                 padding: 16,
                 borderRadius: 8,
-                border: "1px solid #333",
+                border: `1px solid ${COLORS.GROUNDING_GREEN}40`,
                 opacity: funcCodeOpacity,
+                boxShadow: `0 0 20px ${COLORS.GROUNDING_GREEN}20`,
               }}
             >
               <pre
@@ -200,6 +203,7 @@ export const GroundingComparison: React.FC<GroundingComparisonPropsType> = ({
                   margin: 0,
                   lineHeight: 1.4,
                   whiteSpace: "pre-wrap",
+                  filter: "hue-rotate(-10deg) saturate(1.2)",
                 }}
               >
                 {FUNCTIONAL_CODE}

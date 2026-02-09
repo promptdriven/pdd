@@ -74,3 +74,7 @@ Partially Implemented
 
 ## Notes
 This spec is specifically a Veo AI video generation prompt, not meant for Remotion implementation. The actual production workflow appears to use the Veo-generated `cold_open_01a_establish.mp4` file loaded in ColdOpenSection.tsx. The Remotion implementation serves as a procedural fallback or animatic, which explains why it's more simplified and iconographic rather than photorealistic. The deltas around missing hands, faces, and photorealistic details are expected given this is a code-based animation vs. AI-generated video.
+
+## Resolution Status
+- **Status**: RESOLVED - Veo/video task
+- **Notes**: This spec describes a Veo 3.1 video generation task or video callback, not a Remotion animation. No Remotion code fix is applicable. The video asset needs to be generated/sourced separately.

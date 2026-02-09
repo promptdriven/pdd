@@ -88,3 +88,10 @@ The implementation adds several enhancements:
 - Defect part is red-tinted (#D94A4A) to distinguish from good amber parts (MoldScene.tsx:211)
 
 The implementation successfully conveys the "moment of tension" described in the spec through visual treatments and timing.
+
+## Resolution Status
+- **Status**: RESOLVED
+- **Changes Made**:
+  - Fixed mold position inconsistency: changed `MOLD.centerX` from 960 to 580 in `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/15-DefectDiscovered/constants.ts` to match PartsEject section
+  - This ensures visual continuity between sections, as the mold remains in the same position when transitioning from PartsEject to DefectDiscovered
+- **Remaining Issues**: None. The primary positioning issue identified in the audit has been corrected.

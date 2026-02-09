@@ -284,12 +284,31 @@ export const RightPanel: React.FC = () => {
     easing: Easing.out(Easing.quad),
   });
 
-  // Zoom out (0:18 - 0:32)
-  const zoomProgress = interpolate(frame, [zoomStart, zoomEnd], [0, 1], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-    easing: Easing.inOut(Easing.cubic),
-  });
+  // Zoom out (0:18 - 0:32) with three-phase easing
+  // Phase 1: Ease-in (0:18-0:20, 2 seconds)
+  // Phase 2: Constant speed (0:20-0:28, 8 seconds)
+  // Phase 3: Ease-out (0:28-0:32, 4 seconds)
+  const easeInEnd = zoomStart + fps * 2;
+  const constantEnd = zoomStart + fps * 10;
+
+  let zoomProgress = 0;
+  if (frame < zoomStart) {
+    zoomProgress = 0;
+  } else if (frame < easeInEnd) {
+    // Ease-in phase (0-2s): slow start
+    const phaseProgress = (frame - zoomStart) / (fps * 2);
+    zoomProgress = Easing.in(Easing.cubic)(phaseProgress) * 0.143; // 0-14.3% of total zoom
+  } else if (frame < constantEnd) {
+    // Constant phase (2-10s): steady movement
+    const phaseProgress = (frame - easeInEnd) / (fps * 8);
+    zoomProgress = 0.143 + phaseProgress * 0.714; // 14.3%-85.7% of total zoom
+  } else if (frame <= zoomEnd) {
+    // Ease-out phase (10-14s): slow to stop
+    const phaseProgress = (frame - constantEnd) / (fps * 4);
+    zoomProgress = 0.857 + Easing.out(Easing.cubic)(phaseProgress) * 0.143; // 85.7%-100%
+  } else {
+    zoomProgress = 1;
+  }
 
   const scale = interpolate(zoomProgress, [0, 1], [1, 0.35]);
   const translateY = interpolate(zoomProgress, [0, 1], [0, -80]);

@@ -15,12 +15,12 @@ export const PromptTextFlows: React.FC<PromptTextFlowsPropsType> = ({
     { extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
   );
 
-  // Text flow progress (0 to 1)
-  const flowProgress = interpolate(
+  // Document opacity (spec: fade in, hold, then dim)
+  const docOpacity = interpolate(
     frame,
-    [BEATS.TEXT_FLOW_START, BEATS.TEXT_FLOW_END],
-    [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
+    [BEATS.DOCUMENT_START, BEATS.DOCUMENT_PEAK, BEATS.DOCUMENT_FADE, BEATS.DOCUMENT_END],
+    [0, 1, 1, 0.3],
+    { extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
   );
 
   // Transform to code
@@ -32,14 +32,62 @@ export const PromptTextFlows: React.FC<PromptTextFlowsPropsType> = ({
   );
 
   // Nozzle position
-  const nozzleY = 180;
-  const moldY = 600;
+  const nozzleY = 280;
+  const moldY = 680;
 
-  // Characters that have flowed
-  const visibleChars = Math.floor(flowProgress * promptText.length);
+  // Individual text lines with their start frames
+  const textLines = [
+    { text: "Parse user IDs from untrusted input.", start: BEATS.LINE1_START },
+    { text: "Return None on failure, never throw.", start: BEATS.LINE2_START },
+    { text: "Handle unicode.", start: BEATS.LINE3_START },
+  ];
 
   return (
     <AbsoluteFill style={{ backgroundColor: COLORS.BACKGROUND }}>
+      {/* Prompt Document (spec: lines 121-126, 212-257) */}
+      <div
+        style={{
+          position: "absolute",
+          top: 120,
+          left: "50%",
+          transform: "translateX(-50%)",
+          opacity: docOpacity,
+        }}
+      >
+        <div
+          style={{
+            width: 180,
+            background: "rgba(74, 144, 217, 0.1)",
+            border: `2px solid ${COLORS.NOZZLE_BLUE}`,
+            borderRadius: 8,
+            padding: 12,
+            boxShadow: `0 0 20px rgba(74, 144, 217, 0.3)`,
+          }}
+        >
+          <div
+            style={{
+              fontSize: 12,
+              color: COLORS.NOZZLE_BLUE,
+              fontFamily: "JetBrains Mono, monospace",
+              marginBottom: 8,
+            }}
+          >
+            user_parser.prompt
+          </div>
+          <div
+            style={{
+              fontSize: 10,
+              color: "#888",
+              lineHeight: 1.4,
+            }}
+          >
+            Parse user IDs...<br />
+            Return None...<br />
+            Handle unicode.
+          </div>
+        </div>
+      </div>
+
       {/* Nozzle */}
       <div
         style={{
@@ -75,68 +123,65 @@ export const PromptTextFlows: React.FC<PromptTextFlowsPropsType> = ({
         </div>
       </div>
 
-      {/* Flowing text */}
-      <div
-        style={{
-          position: "absolute",
-          top: nozzleY + 100,
-          left: "50%",
-          transform: "translateX(-50%)",
-          width: 600,
-          textAlign: "center",
-        }}
-      >
-        {/* Text above the flow */}
-        <div
-          style={{
-            fontSize: 20,
-            fontFamily: "sans-serif",
-            color: COLORS.NOZZLE_BLUE,
-            opacity: nozzleOpacity,
-            marginBottom: 20,
-          }}
-        >
-          {promptText.slice(0, visibleChars)}
-          <span style={{ opacity: 0.3 }}>{promptText.slice(visibleChars)}</span>
-        </div>
+      {/* Flowing text lines (spec: lines 127-136, 149-209) */}
+      {textLines.map((line, i) => {
+        const elapsed = frame - line.start;
+        if (elapsed < 0) return null;
 
-        {/* Flow stream */}
-        {flowProgress > 0 && (
-          <svg width="40" height={moldY - nozzleY - 200} style={{ overflow: "visible" }}>
-            <defs>
-              <linearGradient id="flowGradient" x1="0%" y1="0%" x2="0%" y2="100%">
-                <stop offset="0%" stopColor={COLORS.NOZZLE_BLUE} stopOpacity={0.8} />
-                <stop offset="100%" stopColor={COLORS.CODE_GRAY} stopOpacity={0.6} />
-              </linearGradient>
-            </defs>
-            <rect
-              x={15}
-              y={0}
-              width={10}
-              height={(moldY - nozzleY - 200) * flowProgress}
-              fill="url(#flowGradient)"
-              rx={5}
-            />
-            {/* Particles */}
-            {[...Array(5)].map((_, i) => {
-              const particleY = ((i * 50) + frame * 3) % (moldY - nozzleY - 200);
-              if (particleY > (moldY - nozzleY - 200) * flowProgress) return null;
-              return (
-                <circle
-                  key={i}
-                  cx={20}
-                  cy={particleY}
-                  r={4}
-                  fill={COLORS.NOZZLE_BLUE}
-                  opacity={0.6}
-                />
-              );
-            })}
-          </svg>
-        )}
-      </div>
+        // Text position (moves down from document to nozzle)
+        const y = interpolate(
+          elapsed,
+          [0, 60],
+          [200, nozzleY],
+          { extrapolateRight: "clamp", easing: Easing.in(Easing.quad) }
+        );
 
-      {/* Mold cavity */}
+        // Text opacity (fades as it enters nozzle)
+        const opacity = interpolate(
+          elapsed,
+          [0, 30, 60, 90],
+          [0, 1, 1, 0],
+          { extrapolateRight: "clamp" }
+        );
+
+        // Text scale (shrinks into nozzle)
+        const scale = interpolate(
+          elapsed,
+          [40, 70],
+          [1, 0.3],
+          { extrapolateRight: "clamp" }
+        );
+
+        // Text blur (becomes fluid - spec: lines 184-190)
+        const blur = interpolate(
+          elapsed,
+          [50, 70],
+          [0, 5],
+          { extrapolateRight: "clamp" }
+        );
+
+        return (
+          <div
+            key={i}
+            style={{
+              position: "absolute",
+              left: "50%",
+              top: y,
+              transform: `translateX(-50%) scale(${scale})`,
+              opacity,
+              filter: `blur(${blur}px)`,
+              color: COLORS.NOZZLE_BLUE,
+              fontSize: 20,
+              fontFamily: "JetBrains Mono, monospace",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {line.text}
+          </div>
+        );
+      })}
+
+      {/* Mold cavity with fluid accumulation (spec: lines 138-143) */}
       <div
         style={{
           position: "absolute",
@@ -153,28 +198,52 @@ export const PromptTextFlows: React.FC<PromptTextFlowsPropsType> = ({
             background: "rgba(138, 156, 175, 0.1)",
             border: `2px solid ${COLORS.CODE_GRAY}`,
             borderRadius: 8,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
+            position: "relative",
             overflow: "hidden",
           }}
         >
-          {/* Transforming text to code */}
-          <pre
+          {/* Fluid accumulation layer */}
+          <div
             style={{
-              fontSize: 14,
-              fontFamily: "JetBrains Mono, monospace",
-              color: COLORS.CODE_GRAY,
-              opacity: transformProgress,
-              transform: `scale(${0.8 + 0.2 * transformProgress})`,
-              margin: 0,
+              position: "absolute",
+              bottom: 0,
+              left: 0,
+              right: 0,
+              height: `${interpolate(frame, [BEATS.TEXT_FLOW_START, BEATS.TRANSFORM_END], [0, 100], { extrapolateLeft: "clamp", extrapolateRight: "clamp" })}%`,
+              background: `linear-gradient(to bottom, rgba(74, 144, 217, 0.2), rgba(138, 156, 175, 0.4))`,
+              transition: "height 0.3s ease-out",
+            }}
+          />
+
+          {/* Transforming text to code */}
+          <div
+            style={{
+              position: "absolute",
+              top: "50%",
+              left: "50%",
+              transform: "translate(-50%, -50%)",
+              width: "100%",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
             }}
           >
-            {`def parse_user_id(input_str):
+            <pre
+              style={{
+                fontSize: 14,
+                fontFamily: "JetBrains Mono, monospace",
+                color: COLORS.CODE_GRAY,
+                opacity: transformProgress,
+                transform: `scale(${0.8 + 0.2 * transformProgress})`,
+                margin: 0,
+              }}
+            >
+              {`def parse_user_id(input_str):
     if not input_str:
         return None
     ...`}
-          </pre>
+            </pre>
+          </div>
         </div>
 
         {/* Label */}

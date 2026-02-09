@@ -3,6 +3,8 @@ import { AbsoluteFill, Easing, interpolate, useCurrentFrame, useVideoConfig } fr
 import { DebtLayerSeparation } from "./DebtLayerSeparation";
 import { ContextWindowVisualization } from "./ContextWindowVisualization";
 import { SplitViewMismatch } from "./SplitViewMismatch";
+import { InGridMismatch } from "./InGridMismatch";
+import { PerformanceGraphInset } from "./PerformanceGraphInset";
 import {
   COLORS,
   BEATS,
@@ -13,6 +15,10 @@ import {
   CHART_DATA,
   interpolateHours,
 } from "./constants";
+
+// Toggle between split-screen and in-grid mismatch visualization
+// Set to true for spec-compliant in-grid approach, false for split-screen comparison
+const USE_IN_GRID_MISMATCH = true;
 
 export const ContextRot: React.FC<ContextRotPropsType> = ({
   showTitle = true,
@@ -161,9 +167,9 @@ export const ContextRot: React.FC<ContextRotPropsType> = ({
         </div>
       )}
 
-      {/* Part 2b: Split View Mismatch (frames 900-1020) */}
+      {/* Part 2b: Context Mismatch Visualization (frames 900-1020) */}
       {isPart2Split && (
-        <SplitViewMismatch />
+        USE_IN_GRID_MISMATCH ? <InGridMismatch /> : <SplitViewMismatch />
       )}
 
       {/* Part 3: Return to Chart (frames 1020-1350) */}
@@ -178,6 +184,10 @@ export const ContextRot: React.FC<ContextRotPropsType> = ({
             opacity: part3ChartOpacity,
           }}
         >
+          {/* Performance Graph Inset (frames 1020-1110) */}
+          {frame >= BEATS.RETURN_TO_CHART_START && frame < BEATS.RETURN_TO_CHART_START + 90 && (
+            <PerformanceGraphInset opacity={part3ChartOpacity} />
+          )}
           {/* Chart SVG */}
           <svg
             width={width}

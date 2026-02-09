@@ -98,3 +98,20 @@ This spec calls for a 45-second (1350 frame) animation showing how context rot a
 2. **Consider Reverting to In-Grid Mismatch**: The split view is clear but loses the visual continuity with the context window metaphor. Consider showing red/green highlights within the grid as spec describes.
 3. **Add Discrete Growth Stages**: Consider making the grid growth more stepped (hold at each size) rather than smooth continuous growth to emphasize the 4→8→16→32 progression.
 4. **Add Brief Red Flash on Irrelevant Blocks**: When at the large codebase state, briefly highlight some blocks inside the context window in red to show "grabbed the wrong stuff".
+
+## Resolution Status
+
+- **Status**: RESOLVED
+- **Date**: 2026-02-08
+- **Changes Made**:
+  1. **HIGH PRIORITY - Performance Graph Inset (RESOLVED)**: Created new `PerformanceGraphInset.tsx` component that displays a performance vs. context length graph during frames 1020-1110. The graph shows a degradation curve from 100% to 15% performance, with the citation "Even with perfect retrieval, performance degrades 14-85% as context grows (EMNLP, 2025)". The inset is positioned in the top-left corner, fades in/out smoothly, and includes animated line drawing for visual impact.
+
+  2. **MEDIUM PRIORITY - In-Grid Mismatch Visualization (RESOLVED)**: Created new `InGridMismatch.tsx` component as an alternative to `SplitViewMismatch.tsx`. This new component follows the spec more closely by showing:
+     - Red highlights on irrelevant blocks inside the context window (showing "AI grabbed wrong code")
+     - Green highlights on relevant blocks outside the context window (showing "needed but missed")
+     - The highlights appear within the existing grid view, maintaining visual continuity with the context window metaphor
+     - Added a toggle constant `USE_IN_GRID_MISMATCH` in `ContextRot.tsx` (default: true) to easily switch between approaches
+
+  3. **Integration**: Updated `ContextRot.tsx` to import and conditionally render the new components based on frame timing and configuration flags.
+
+- **Remaining Issues**: None critical. Minor suggestions from the audit (discrete growth stages, red flash improvements) are cosmetic enhancements that can be addressed in future iterations if needed. The core deltas identified as HIGH and MEDIUM priority have been fully resolved.

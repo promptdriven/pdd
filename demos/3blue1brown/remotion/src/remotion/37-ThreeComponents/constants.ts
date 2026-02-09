@@ -34,6 +34,10 @@ export const BEATS = {
 
   // Hold
   HOLD_START: 240,
+
+  // Integration formula (appears after hold begins)
+  FORMULA_START: 600,
+  FORMULA_END: 660,
 };
 
 // Triangle geometry

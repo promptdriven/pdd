@@ -63,17 +63,19 @@ export const PromptGeneratesCode: React.FC<PromptGeneratesCodePropsType> = ({
         >
           <div
             style={{
-              fontSize: 32,
+              fontSize: 28,
               fontFamily: "sans-serif",
               fontWeight: 400,
               color: "rgba(255, 255, 255, 0.95)",
               lineHeight: 1.6,
-              maxWidth: 900,
+              maxWidth: 1100,
               margin: "0 auto",
               letterSpacing: 0.5,
             }}
           >
-            The prompt is your mold. The code is just plastic.
+            The prompt is your mold. The code is just plastic. And just like
+            chip synthesis--the code is different every generation. But the
+            tests lock the behavior. The process is deterministic.
           </div>
         </div>
       )}

@@ -49,3 +49,7 @@ This section is specified as "Hybrid (Video + Remotion)" suggesting it may be:
 3. Not yet implemented
 
 **Recommendation**: Check S05-CompoundReturns sequence composition and video assets directory for grandmother footage. This callback is narratively critical per spec lines 151-159 (ties economics argument to past behavior).
+
+## Resolution Status
+- **Status**: RESOLVED - Veo/video task
+- **Notes**: This spec describes a Veo 3.1 video generation task or video callback, not a Remotion animation. No Remotion code fix is applicable. The video asset needs to be generated/sourced separately.

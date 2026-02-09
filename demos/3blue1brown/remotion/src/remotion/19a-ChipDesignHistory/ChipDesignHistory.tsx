@@ -9,6 +9,8 @@ import {
 } from "remotion";
 import {
   COLORS,
+  ELECTRONICS_LAB_BEATS,
+  SCHEMATIC_ZOOM_BEATS,
   VERILOG_BEATS,
   THREE_NETLISTS_BEATS,
   VERIFICATION_BEATS,
@@ -627,6 +629,200 @@ const AbstractionStaircase: React.FC<{
   );
 };
 
+// ── Phase: ElectronicsLab ────────────────────────────────────────────
+
+const ElectronicsLabPhase: React.FC<{ frame: number; fps: number }> = ({
+  frame,
+}) => {
+  // Schematic highlight fade-in
+  const highlightOpacity = interpolate(
+    frame,
+    [ELECTRONICS_LAB_BEATS.HIGHLIGHT_START, ELECTRONICS_LAB_BEATS.HIGHLIGHT_START + 60],
+    [0, 0.15],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+  );
+
+  // Transistor counter fade-in
+  const counterOpacity = interpolate(
+    frame,
+    [ELECTRONICS_LAB_BEATS.COUNTER_START, ELECTRONICS_LAB_BEATS.COUNTER_START + 30],
+    [0, 1],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+  );
+
+  return (
+    <>
+      {/* Placeholder for video layer - in production would be: <Video src="electronics_lab_1980s.mp4" /> */}
+      <div
+        style={{
+          position: "absolute",
+          left: 0,
+          top: 0,
+          width: 1920,
+          height: 1080,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontSize: 32,
+          color: "rgba(255, 255, 255, 0.3)",
+          fontFamily: "'JetBrains Mono', monospace",
+          textAlign: "center",
+          padding: "0 100px",
+        }}
+      >
+        1980s Electronics Lab
+        <br />
+        <span style={{ fontSize: 18, marginTop: 20, display: "block" }}>
+          (Video layer: Engineer at drafting desk, drawing circuits by hand)
+        </span>
+      </div>
+
+      {/* Schematic highlight overlay */}
+      {highlightOpacity > 0 && (
+        <div
+          style={{
+            position: "absolute",
+            left: 760,
+            top: 340,
+            width: 400,
+            height: 400,
+            border: `3px solid ${COLORS.CODE_KEYWORD}`,
+            borderRadius: 12,
+            backgroundColor: `${COLORS.CODE_KEYWORD}33`,
+            opacity: highlightOpacity,
+            boxShadow: `0 0 40px ${COLORS.CODE_KEYWORD}`,
+          }}
+        />
+      )}
+
+      {/* Transistor count label */}
+      {counterOpacity > 0 && (
+        <div
+          style={{
+            position: "absolute",
+            bottom: 80,
+            right: 80,
+            padding: "12px 24px",
+            borderRadius: 8,
+            backgroundColor: "rgba(30, 30, 46, 0.8)",
+            fontFamily: "'JetBrains Mono', monospace",
+            fontSize: 18,
+            color: COLORS.DECADE_LABEL,
+            opacity: counterOpacity,
+            border: "1px solid rgba(255, 255, 255, 0.1)",
+          }}
+        >
+          ~500 transistors
+        </div>
+      )}
+    </>
+  );
+};
+
+// ── Phase: SchematicZoomOut ──────────────────────────────────────────
+
+const SchematicZoomOutPhase: React.FC<{ frame: number; fps: number }> = ({
+  frame,
+}) => {
+  // Transistor counter value with acceleration
+  const counterValue = interpolate(
+    frame,
+    [
+      SCHEMATIC_ZOOM_BEATS.ZOOM_START,
+      SCHEMATIC_ZOOM_BEATS.COUNTER_SLOW_END,
+      SCHEMATIC_ZOOM_BEATS.COUNTER_MID_END,
+      SCHEMATIC_ZOOM_BEATS.COUNTER_FAST_END,
+      SCHEMATIC_ZOOM_BEATS.HAND_STOP,
+    ],
+    [100, 500, 1000, 10000, 50000],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.in(Easing.exp),
+    }
+  );
+
+  // Hand stopped - counter blinks
+  const isHandStopped = frame >= SCHEMATIC_ZOOM_BEATS.HAND_STOP;
+  const blinkOpacity = isHandStopped
+    ? Math.sin(frame * 0.3) > 0 ? 1 : 0.3
+    : 1;
+
+  const counterColor = isHandStopped ? COLORS.ARROW_AMBER : COLORS.CODE_KEYWORD;
+
+  return (
+    <>
+      {/* Placeholder for video layer - in production would be: <Video src="schematic_zooms_out.mp4" /> */}
+      <div
+        style={{
+          position: "absolute",
+          left: 0,
+          top: 0,
+          width: 1920,
+          height: 1080,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontSize: 32,
+          color: "rgba(255, 255, 255, 0.3)",
+          fontFamily: "'JetBrains Mono', monospace",
+          textAlign: "center",
+          padding: "0 100px",
+        }}
+      >
+        Schematic Zooms Out
+        <br />
+        <span style={{ fontSize: 18, marginTop: 20, display: "block" }}>
+          (Video layer: Camera zooms out revealing increasingly dense schematic, hand slowing)
+        </span>
+      </div>
+
+      {/* Transistor counter with acceleration */}
+      <div
+        style={{
+          position: "absolute",
+          top: 40,
+          right: 40,
+          padding: "12px 20px",
+          borderRadius: 8,
+          backgroundColor: "rgba(30, 30, 46, 0.7)",
+          fontFamily: "'JetBrains Mono', monospace",
+          fontSize: 24,
+          color: counterColor,
+          opacity: blinkOpacity,
+          border: `1px solid ${counterColor}`,
+        }}
+      >
+        {Math.round(counterValue).toLocaleString()} transistors
+      </div>
+
+      {/* "Couldn't scale" indicator when hand stops */}
+      {isHandStopped && (
+        <div
+          style={{
+            position: "absolute",
+            left: 0,
+            right: 0,
+            bottom: 100,
+            textAlign: "center",
+            fontFamily: "'JetBrains Mono', monospace",
+            fontSize: 22,
+            color: COLORS.ARROW_AMBER,
+            opacity: interpolate(
+              frame,
+              [SCHEMATIC_ZOOM_BEATS.HAND_STOP, SCHEMATIC_ZOOM_BEATS.HAND_STOP + 40],
+              [0, 0.9],
+              { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+            ),
+          }}
+        >
+          Human limits reached
+        </div>
+      )}
+    </>
+  );
+};
+
 // ── Phase: VerilogSynthesis ──────────────────────────────────────────
 
 const VerilogSynthesisPhase: React.FC<{ frame: number; fps: number }> = ({
@@ -920,6 +1116,29 @@ const ThreeNetlistsPhase: React.FC<{ frame: number; fps: number }> = ({
   const netX2 = 850;
   const netX3 = 1500;
 
+  // Synthesis tool positions (above each netlist)
+  const synthY = 410;
+
+  // Synthesis tool opacities - show during each run
+  const synth1Opacity = interpolate(
+    frame,
+    [THREE_NETLISTS_BEATS.RUN1_START, THREE_NETLISTS_BEATS.RUN1_START + 20],
+    [0, 0.7],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+  );
+  const synth2Opacity = interpolate(
+    frame,
+    [THREE_NETLISTS_BEATS.RUN2_START, THREE_NETLISTS_BEATS.RUN2_START + 20],
+    [0, 0.7],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+  );
+  const synth3Opacity = interpolate(
+    frame,
+    [THREE_NETLISTS_BEATS.RUN3_START, THREE_NETLISTS_BEATS.RUN3_START + 20],
+    [0, 0.7],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+  );
+
   return (
     <>
       {/* Verilog code block (compact, top center, glowing) */}
@@ -955,15 +1174,55 @@ const ThreeNetlistsPhase: React.FC<{ frame: number; fps: number }> = ({
         Same Verilog Source
       </div>
 
-      {/* Flow arrows from code to each netlist */}
+      {/* Synthesis tools for each run */}
+      {synth1Opacity > 0 && (
+        <SynthesisToolBox
+          opacity={synth1Opacity}
+          processing={frame >= THREE_NETLISTS_BEATS.RUN1_START}
+          frame={frame}
+          x={netX1 + 30}
+          y={synthY}
+        />
+      )}
+      {synth2Opacity > 0 && (
+        <SynthesisToolBox
+          opacity={synth2Opacity}
+          processing={frame >= THREE_NETLISTS_BEATS.RUN2_START}
+          frame={frame}
+          x={netX2 + 30}
+          y={synthY}
+        />
+      )}
+      {synth3Opacity > 0 && (
+        <SynthesisToolBox
+          opacity={synth3Opacity}
+          processing={frame >= THREE_NETLISTS_BEATS.RUN3_START}
+          frame={frame}
+          x={netX3 + 30}
+          y={synthY}
+        />
+      )}
+
+      {/* Flow arrows from code to synthesis tools */}
       {arrow1Opacity > 0 && (
-        <FlowArrow x={netX1 + 110} y1={380} y2={netY} opacity={arrow1Opacity} />
+        <FlowArrow x={netX1 + 110} y1={280} y2={synthY} opacity={arrow1Opacity} />
       )}
       {arrow2Opacity > 0 && (
-        <FlowArrow x={netX2 + 110} y1={380} y2={netY} opacity={arrow2Opacity} />
+        <FlowArrow x={netX2 + 110} y1={280} y2={synthY} opacity={arrow2Opacity} />
       )}
       {arrow3Opacity > 0 && (
-        <FlowArrow x={netX3 + 110} y1={380} y2={netY} opacity={arrow3Opacity} />
+        <FlowArrow x={netX3 + 110} y1={280} y2={synthY} opacity={arrow3Opacity} />
+      )}
+
+      {/* Flow arrows from synthesis tools to netlists */}
+      {arrow1Opacity > 0 && (
+        <FlowArrow x={netX1 + 110} y1={synthY + 70} y2={netY} opacity={arrow1Opacity} />
+      )}
+      {arrow2Opacity > 0 && (
+        <FlowArrow x={netX2 + 110} y1={synthY + 70} y2={netY} opacity={arrow2Opacity} />
+      )}
+      {arrow3Opacity > 0 && (
+        <FlowArrow x={netX3 + 110} y1={synthY + 70} y2={netY} opacity={arrow3Opacity} />
       )}
 
       {/* Three netlists */}
@@ -1315,11 +1574,13 @@ const AbstractionTimelinePhase: React.FC<{ frame: number; fps: number }> = ({
 // ── Main Component ───────────────────────────────────────────────────
 
 /**
- * 19a-ChipDesignHistory: Covers the chip design narrative from Verilog
- * synthesis through three netlists with verification checkmarks to the
+ * 19a-ChipDesignHistory: Covers the chip design narrative from 1980s electronics
+ * lab through Verilog synthesis, three netlists with verification, to the
  * abstraction staircase timeline.
  *
  * Phases:
+ *   - electronicsLab: 1980s lab scene, engineer drawing circuits by hand
+ *   - schematicZoomOut: Schematic zooms out revealing density, hand slows
  *   - verilogSynthesis: Schematic dissolves, Verilog code types in,
  *     synthesis tool generates netlist
  *   - threeNetlists: Same code produces three different netlists
@@ -1327,7 +1588,7 @@ const AbstractionTimelinePhase: React.FC<{ frame: number; fps: number }> = ({
  *   - abstractionTimeline: Rising staircase of abstraction levels
  */
 export const ChipDesignHistory: React.FC<ChipDesignHistoryPropsType> = ({
-  phase = "verilogSynthesis",
+  phase = "electronicsLab",
 }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
@@ -1338,6 +1599,12 @@ export const ChipDesignHistory: React.FC<ChipDesignHistoryPropsType> = ({
         background: `linear-gradient(180deg, ${COLORS.BACKGROUND} 0%, ${COLORS.BACKGROUND_GRADIENT_END} 100%)`,
       }}
     >
+      {phase === "electronicsLab" && (
+        <ElectronicsLabPhase frame={frame} fps={fps} />
+      )}
+      {phase === "schematicZoomOut" && (
+        <SchematicZoomOutPhase frame={frame} fps={fps} />
+      )}
       {phase === "verilogSynthesis" && (
         <VerilogSynthesisPhase frame={frame} fps={fps} />
       )}

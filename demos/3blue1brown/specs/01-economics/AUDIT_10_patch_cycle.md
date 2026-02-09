@@ -126,3 +126,7 @@ While this is "just" a 10-second shot of a developer sighing, the spec emphasize
 - Avoids being dismissive of current tools (they're good at what they do)
 
 The subtle performance required ("well, here we go again" not "I hate my job") is crucial to maintaining the respectful tone throughout the video.
+
+## Resolution Status
+- **Status**: RESOLVED - Veo/video task
+- **Notes**: This spec describes a Veo 3.1 video generation task or video callback, not a Remotion animation. No Remotion code fix is applicable. The video asset needs to be generated/sourced separately.

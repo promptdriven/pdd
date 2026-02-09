@@ -72,3 +72,31 @@ The implementation shows:
 These are **different arguments**. The spec is making a TECHNICAL point about token economics and model training. The implementation is making a WORKFLOW point about methodology effectiveness. The spec appears to have been repurposed for a different message entirely, possibly because this "agentic patching vs PDD" comparison was deemed more valuable for the demo.
 
 **Recommendation**: This should likely be renamed or the spec should be updated to match, as they're fundamentally different sections addressing different points in the argument.
+
+## Resolution Status
+- **Status**: RESOLVED
+- **Changes Made**:
+  - Added `variant` prop to support both 'efficiency' (Section 1.14) and 'density' (Section 3.13a) use cases
+  - DENSITY variant implementation (variant='density'):
+    - LEFT window: Shows 15,000 tokens of dense raw code (no red/green overlays) with "~1 module" label
+    - RIGHT window: Shows 15,000 tokens as 10 module prompts (using TEN_MODULE_PROMPTS constant) with "~10 modules" label
+    - Module prompts display with blue-highlighted headers (## user_parser, ## auth_handler, etc.) and natural language descriptions
+    - Both windows labeled "Context Window (15K tokens)" to emphasize same size
+    - Token counters show both as 15,000 tokens (not 15K vs 2.3K)
+    - Message changed to "Same tokens. 10x the system knowledge." with large "10x" emphasis
+    - Research citations added: "NL comments improved generation +41% (UC Berkeley, 2024)" and "Author-defined context, not machine-assembled"
+    - Left window dims after knowledge indicator appears to emphasize right window advantage
+    - Right window gets blue glow pulse to reinforce it's the better approach
+    - No "6.5x fewer tokens" badge (that's efficiency variant only)
+  - EFFICIENCY variant preserved (variant='efficiency', default):
+    - Original behavior maintained for Section 1.14 use case
+    - Shows methodology comparison with different token counts and relevance filtering
+  - Single implementation now correctly serves both specs with appropriate visual metaphors
+- **Remaining Issues**: None - all major deltas addressed:
+  - ✓ Both windows now 15K tokens in density variant
+  - ✓ LEFT shows dense raw code wall (~1 module)
+  - ✓ RIGHT shows 10 labeled module prompts (~10 modules)
+  - ✓ Correct message: "Same tokens. 10x the system knowledge."
+  - ✓ Research citations included
+  - ✓ Emphasis on information DENSITY within fixed capacity
+  - ✓ Visual metaphor matches spec: what you can FIT in same space

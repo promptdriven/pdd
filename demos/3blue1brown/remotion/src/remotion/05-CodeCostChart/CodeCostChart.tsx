@@ -71,9 +71,18 @@ export const CodeCostChart: React.FC<CodeCostChartPropsType> = ({
   );
 
   // Annotation opacities
+  // First annotation beat (VISUAL 9): Individual task vs Overall throughput
   const emphasisOpacity = interpolate(
     frame,
     [BEATS.EMPHASIS_START, BEATS.EMPHASIS_START + 30],
+    [0, 1],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+  );
+
+  // Second annotation beat (VISUAL 10): Code churn and refactoring
+  const emphasisOpacity2 = interpolate(
+    frame,
+    [BEATS.EMPHASIS_MID, BEATS.EMPHASIS_MID + 30],
     [0, 1],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
@@ -419,8 +428,8 @@ export const CodeCostChart: React.FC<CodeCostChartPropsType> = ({
         </div>
       </div>
 
-      {/* Emphasis annotations */}
-      {frame >= BEATS.EMPHASIS_START && frame < BEATS.CROSSING_START && (
+      {/* First annotation beat (VISUAL 9): Individual task vs Overall throughput */}
+      {frame >= BEATS.EMPHASIS_START && frame < BEATS.EMPHASIS_MID && (
         <div
           style={{
             position: "absolute",
@@ -444,7 +453,19 @@ export const CodeCostChart: React.FC<CodeCostChartPropsType> = ({
               fontWeight: 600,
             }}
           >
-            Small codebase: -55% (Peng et al., 2023)
+            Individual task: -55% (GitHub, 2022)
+          </p>
+          <p
+            style={{
+              fontFamily: "Inter, system-ui, sans-serif",
+              fontSize: 18,
+              color: "rgba(255, 255, 255, 0.7)",
+              margin: 0,
+              marginBottom: 16,
+              fontWeight: 400,
+            }}
+          >
+            95 developers, one greenfield task
           </p>
           <p
             style={{
@@ -455,19 +476,60 @@ export const CodeCostChart: React.FC<CodeCostChartPropsType> = ({
               fontWeight: 500,
             }}
           >
-            Large codebase: +19% slower (METR, 2025)
+            Overall throughput: ~0% (Uplevel, 2024)
           </p>
+          <p
+            style={{
+              fontFamily: "Inter, system-ui, sans-serif",
+              fontSize: 18,
+              color: "rgba(255, 255, 255, 0.7)",
+              margin: 0,
+              marginTop: 4,
+              fontWeight: 400,
+            }}
+          >
+            785 developers, one year
+          </p>
+        </div>
+      )}
+
+      {/* Second annotation beat (VISUAL 10): Code churn and refactoring */}
+      {frame >= BEATS.EMPHASIS_MID && frame < BEATS.CROSSING_START && (
+        <div
+          style={{
+            position: "absolute",
+            top: "50%",
+            left: "50%",
+            transform: "translate(-50%, -50%)",
+            opacity: emphasisOpacity2,
+            textAlign: "center",
+            backgroundColor: "rgba(0, 0, 0, 0.75)",
+            padding: "24px 40px",
+            borderRadius: 12,
+          }}
+        >
           <p
             style={{
               fontFamily: "Inter, system-ui, sans-serif",
               fontSize: 28,
               color: COLORS.LINE_PATCH,
               margin: 0,
-              marginTop: 8,
+              marginBottom: 8,
               fontWeight: 600,
             }}
           >
-            Bug rate: +41% (Uplevel, 2024)
+            Code churn: +44% (GitClear, 2025, 211M lines analyzed)
+          </p>
+          <p
+            style={{
+              fontFamily: "Inter, system-ui, sans-serif",
+              fontSize: 28,
+              color: "#ffffff",
+              margin: 0,
+              fontWeight: 500,
+            }}
+          >
+            Refactoring: -60%
           </p>
         </div>
       )}

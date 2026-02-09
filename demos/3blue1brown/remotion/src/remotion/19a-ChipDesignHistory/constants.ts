@@ -46,6 +46,35 @@ export const COLORS = {
 
 // Beat timings for each phase (in frames at 30fps, relative to phase start)
 
+// Phase: electronicsLab (spec 09a) ~15s = 450 frames
+// Covers 1980s electronics lab, engineer drawing circuits, transistor count label
+export const ELECTRONICS_LAB_BEATS = {
+  // Lab scene with schematic
+  LAB_START: 0,
+  LAB_END: 450,
+  // Schematic highlight appears
+  HIGHLIGHT_START: 240,
+  // Transistor counter appears
+  COUNTER_START: 300,
+};
+
+// Phase: schematicZoomOut (spec 09b) ~20s = 600 frames
+// Covers zoom-out revealing density, hand slowing, transistor counter accelerating
+export const SCHEMATIC_ZOOM_BEATS = {
+  // Counter starts, ticking slowly
+  ZOOM_START: 0,
+  COUNTER_SLOW_END: 90,
+  // Counter accelerates with zoom-out
+  COUNTER_MID_END: 210,
+  // Counter races ahead
+  COUNTER_FAST_END: 420,
+  // Hand slows, counter still climbing
+  HAND_SLOW_END: 540,
+  // Hand stops, counter freezes/blinks
+  HAND_STOP: 540,
+  ZOOM_END: 600,
+};
+
 // Phase: verilogSynthesis (spec 09c) ~21s = 634 frames
 // Covers narration segments 13-16: 1980s hand-drawn -> Verilog -> synthesis -> gates
 export const VERILOG_BEATS = {
@@ -220,18 +249,20 @@ export const STAIRCASE_STEPS = [
 export const ChipDesignHistoryProps = z.object({
   phase: z
     .enum([
+      "electronicsLab",
+      "schematicZoomOut",
       "verilogSynthesis",
       "threeNetlists",
       "verification",
       "abstractionTimeline",
     ])
-    .default("verilogSynthesis"),
+    .default("electronicsLab"),
 });
 
 export const defaultChipDesignHistoryProps: z.infer<
   typeof ChipDesignHistoryProps
 > = {
-  phase: "verilogSynthesis",
+  phase: "electronicsLab",
 };
 
 export type ChipDesignHistoryPropsType = z.infer<typeof ChipDesignHistoryProps>;

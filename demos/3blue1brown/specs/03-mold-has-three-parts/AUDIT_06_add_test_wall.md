@@ -54,3 +54,21 @@ Partially Implemented
 The implementation captures the core concept (wall appearing with terminal output) but significantly simplifies the visual storytelling. The spec emphasizes a three-stage materialization with a mechanical ratchet lock as the key metaphor for permanence. The implementation uses a cleaner but less dramatic spring scale animation with a momentary glow.
 
 The biggest conceptual gap is the ratchet mechanism - the spec treats this as the central visual metaphor ("This is the ratchet effect" per narration), but the implementation only has a brief circle flash rather than a visible mechanical engagement.
+
+## Resolution Status
+
+- **Status**: RESOLVED
+- **Changes Made**:
+  1. **Added ParticleEffect component**: 30 particles converge from scattered positions to form the wall (frames 90-180), implementing spec lines 178-202 with easeInQuad convergence
+  2. **Added RatchetMechanism component**: Full gear mechanism with 8 teeth, rotating pawl that engages when wall locks, golden flash on engagement (frames 270-300), replacing simple circle flash
+  3. **Added MoldCrossSection component**: Cross-section view showing left/right/bottom walls of the mold cavity with "Test Mold" label, providing spatial context
+  4. **Implemented three-phase wall formation**:
+     - Phase 1 (90-180): Particles gather with convergence animation
+     - Phase 2 (180-270): Dashed outline appears and fills in progressively
+     - Phase 3 (270+): Solid wall with ratchet engagement
+  5. **Updated timing constants**: Changed BEATS to match spec sequence (PARTICLES_START: 90, WALL_SOLIDIFY_START: 180, RATCHET_ENGAGE: 270)
+  6. **Added hold phase pulse effect**: Subtle glow pulse on new wall during hold phase (360-420) to emphasize permanence
+  7. **Updated terminal timing**: Aligned with spec - appears at frame 60, shows command at 90, completes at 300
+  8. **Enhanced narration alignment**: Updated explanation text to emphasize "permanent" (bold, amber color) matching spec narration sync points
+  9. **Used specified easing functions**: easeInQuad for particles, easeOutCubic for solidification, instant for ratchet
+- **Remaining Issues**: None - all major deltas addressed

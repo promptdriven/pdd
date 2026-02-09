@@ -33,17 +33,22 @@ export const BASE_PROMPT = "Parse user ID from input";
 
 export const VARIATIONS = [
   {
-    label: "Version A",
+    label: "Generation A",
     code: `def parse_user_id(input_str):
-    if not input_str:
+    if not input_str or not input_str.strip():
         return None
-    return input_str.strip()`,
+    cleaned = input_str.strip()
+    if not cleaned.isalnum():
+        return None
+    return cleaned`,
   },
   {
-    label: "Version B",
+    label: "Generation B",
     code: `def parse_user_id(raw_input):
-    cleaned = (raw_input or "").strip()
-    return cleaned or None`,
+    sanitized = (raw_input or "").strip()
+    if len(sanitized) == 0:
+        return None
+    return sanitized if sanitized.isalnum() else None`,
   },
 ];
 

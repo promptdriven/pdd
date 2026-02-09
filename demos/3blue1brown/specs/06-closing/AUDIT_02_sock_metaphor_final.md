@@ -62,3 +62,35 @@ Spec describes helper components that don't exist:
 - Spec defines 5 distinct phases over 450 frames (15s)
 - Implementation only handles cost label timing
 - Missing: toss timing (120-240), fresh grab timing (240-360), hold timing (360-450)
+
+---
+
+## RESOLUTION STATUS: PARTIALLY RESOLVED ⚠️
+
+### Status Summary
+Overlay elements (cost label) are correctly implemented in ClosingSection.tsx. However, resolution is blocked on the primary blocker: **missing video asset from Veo 3.1 with proper sock scene content**.
+
+### Implementation Complete
+- Cost label overlay positioned and timed correctly
+- Label fades at spec times with proper opacity values
+- Integration into ClosingSection.tsx (Visual 1) successful
+
+### Blockers
+- **Video Source Issue**: Current implementation uses `staticFile("07_split_screen_sepia.mp4")` which:
+  - Has different filename than expected
+  - May not contain the dedicated sock metaphor scene
+  - Shows split-screen composition (not specified in spec)
+  - Applies sepia coloring (not in spec)
+
+### Incomplete Elements (Dependent on Video Asset)
+- Particle effects for sock toss (needs coordination with video timing)
+- Fresh sock glow effect (needs accurate video frame identification)
+- Component structure (currently inline in ClosingSection)
+
+### Next Steps Required
+1. Obtain or generate video from Veo 3.1 with proper prompt: "Person holds holey sock, tosses it, grabs fresh one"
+2. Once video is available, implement:
+   - `CrumpleParticles` component for toss effect (frame 120-180)
+   - Fresh sock glow effect (frame 260-280)
+   - Frame-precise timing synchronization
+3. Replace `07_split_screen_sepia.mp4` reference with correct asset

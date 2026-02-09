@@ -1,5 +1,5 @@
 import React from "react";
-import { AbsoluteFill, interpolate, useCurrentFrame, Easing } from "remotion";
+import { AbsoluteFill, interpolate, useCurrentFrame, Easing, OffthreadVideo, staticFile } from "remotion";
 import { COLORS, BEATS, DeveloperRegeneratesPropsType } from "./constants";
 
 // ── Typewriter text helper ──────────────────────────────────────
@@ -144,12 +144,12 @@ export const DeveloperRegenerates: React.FC<DeveloperRegeneratesPropsType> = () 
     { extrapolateRight: "clamp" }
   );
 
-  // Checkmark scale (pop effect with overshoot)
+  // Checkmark scale (pop effect with overshoot - spec: 1.2)
   const checkScale = interpolate(
     frame,
     [BEATS.CHECK_START, BEATS.CHECK_POP, BEATS.CHECK_SETTLE],
-    [0, 1.3, 1.0],
-    { extrapolateRight: "clamp", easing: Easing.out(Easing.back(1.5)) }
+    [0, 1.2, 1.0],
+    { extrapolateRight: "clamp" }
   );
 
   const checkOpacity = interpolate(
@@ -170,28 +170,26 @@ export const DeveloperRegenerates: React.FC<DeveloperRegeneratesPropsType> = () 
     lineHeight: 1.5,
   };
 
+  // Animated dots for "Regenerating..."
+  const dotsCount = Math.floor((frame % 30) / 10); // Cycles through 0, 1, 2 every 30 frames
+  const animatedDots = ".".repeat(Math.min(dotsCount + 1, 3));
+
   return (
-    <AbsoluteFill style={{ backgroundColor: COLORS.BACKGROUND }}>
-      {/* Semi-transparent dark background strip */}
-      <div
-        style={{
-          position: "absolute",
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: "rgba(0, 0, 0, 0.3)",
-        }}
+    <AbsoluteFill>
+      {/* Video base layer */}
+      <OffthreadVideo
+        loop
+        src={staticFile("veo_developer_edit.mp4")}
+        style={{ width: "100%", height: "100%" }}
       />
 
       {/* Terminal window */}
       <div
         style={{
           position: "absolute",
-          left: "50%",
-          top: "50%",
-          transform: "translate(-50%, -50%)",
-          width: 620,
+          right: 120,
+          top: 180,
+          width: 500,
           opacity: terminalOpacity,
           backgroundColor: COLORS.TERMINAL_BG,
           borderRadius: 12,
@@ -235,10 +233,12 @@ export const DeveloperRegenerates: React.FC<DeveloperRegeneratesPropsType> = () 
           </div>
         )}
 
-        {/* Regenerating indicator */}
+        {/* Regenerating indicator with animated dots */}
         {regenOpacity > 0 && generatedOpacity === 0 && (
           <div style={{ ...outputStyle, opacity: regenOpacity }}>
-            <span style={{ color: COLORS.TEXT_DIM }}>Regenerating...</span>
+            <span style={{ color: COLORS.TEXT_DIM }}>
+              Regenerating{animatedDots}
+            </span>
           </div>
         )}
 

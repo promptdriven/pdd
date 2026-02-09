@@ -71,3 +71,14 @@ Spec lines 239-246 reference an `<InsightText>` component with a `lines` array p
 - Checkmark messages match spec exactly ("✓ All tests pass")
 - Final insight messages match spec exactly
 - Duration is correct (20 seconds / 600 frames)
+
+## Resolution Status
+- **Status**: RESOLVED
+- **Changes Made**:
+  - Added `easeOutCubic` easing to groundingOpacity, oopCodeOpacity, funcCodeOpacity, and insightOpacity interpolations
+  - Added `easeOutBack(1.5)` easing to checkmarkOpacity for bounce effect as specified
+  - Extended timeline to match spec: SOURCE_END now 90 (was 60), GROUNDING_END now 180 (was 140), CHECKMARKS_START now 420 (was 300), INSIGHT_START now 540 (was 420)
+  - Added green tint to code blocks via border color (`${COLORS.GROUNDING_GREEN}40`), box shadow (`${COLORS.GROUNDING_GREEN}20`), and CSS filter (`hue-rotate(-10deg) saturate(1.2)`) on code text
+  - Added type hints to OOP code example: `parse(self, input_str: str) -> Optional[str]`, `_sanitize(self, value: str) -> str`, `_validate(self, value: str) -> bool`
+  - Added type hints to functional code example: `parse_user_id(input_str: str) -> Optional[str]`, `sanitize(value: str) -> str`, `validate(value: str) -> Optional[str]`
+- **Remaining Issues**: None. All medium and low severity deltas have been addressed. Missing component abstractions (GroundingLabel, CodeBlock, Checkmark, InsightText) remain as inline implementations, which is acceptable for functionality.

@@ -6,5 +6,6 @@ export {
   CONTEXT_COMPARISON_HEIGHT,
   ContextWindowComparisonProps,
   defaultContextWindowComparisonProps,
+  TEN_MODULE_PROMPTS,
 } from "./constants";
-export type { ContextWindowComparisonPropsType } from "./constants";
+export type { ContextWindowComparisonPropsType, ModulePrompt } from "./constants";

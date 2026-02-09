@@ -173,15 +173,65 @@ const DerivationArrow: React.FC<DerivationArrowProps> = ({
   );
 };
 
+// ── Integration Formula ─────────────────────────────────────────
+interface IntegrationFormulaProps {
+  opacity: number;
+}
+
+const IntegrationFormula: React.FC<IntegrationFormulaProps> = ({ opacity }) => (
+  <div
+    style={{
+      position: "absolute",
+      bottom: 60,
+      left: "50%",
+      transform: "translateX(-50%)",
+      opacity,
+      textAlign: "center",
+    }}
+  >
+    <div
+      style={{
+        fontSize: 24,
+        color: COLORS.LABEL_WHITE,
+        fontWeight: "bold",
+        marginBottom: 8,
+      }}
+    >
+      <span style={{ color: COLORS.NOZZLE_BLUE }}>Prompt</span>
+      {" + "}
+      <span style={{ color: COLORS.WALLS_AMBER }}>Tests</span>
+      {" + "}
+      <span style={{ color: COLORS.GROUNDING_GREEN }}>Grounding</span>
+    </div>
+    <div
+      style={{
+        fontSize: 18,
+        color: COLORS.LABEL_GRAY,
+      }}
+    >
+      Intent + Constraints + Style
+    </div>
+    <div
+      style={{
+        fontSize: 20,
+        color: COLORS.LABEL_WHITE,
+        marginTop: 8,
+      }}
+    >
+      = Complete Specification
+    </div>
+  </div>
+);
+
 // ── Main Component ──────────────────────────────────────────────
-export const ThreeComponents: React.FC<ThreeComponentsPropsType> = () => {
+export const ThreeComponents: React.FC<ThreeComponentsPropsType> = ({ showFormula }) => {
   const frame = useCurrentFrame();
 
   // Vertex positions
   const vertices = [
-    { label: "PROMPT", subLabel: "encodes intent", color: COLORS.NOZZLE_BLUE, ...TRIANGLE.PROMPT, delay: BEATS.VERTEX_PROMPT_START },
-    { label: "TESTS", subLabel: "preserves behavior", color: COLORS.WALLS_AMBER, ...TRIANGLE.TESTS, delay: BEATS.VERTEX_TESTS_START },
-    { label: "GROUNDING", subLabel: "maintains style", color: COLORS.GROUNDING_GREEN, ...TRIANGLE.GROUNDING, delay: BEATS.VERTEX_GROUNDING_START },
+    { label: "PROMPT", subLabel: "Intent", color: COLORS.NOZZLE_BLUE, ...TRIANGLE.PROMPT, delay: BEATS.VERTEX_PROMPT_START },
+    { label: "TESTS", subLabel: "Constraints", color: COLORS.WALLS_AMBER, ...TRIANGLE.TESTS, delay: BEATS.VERTEX_TESTS_START },
+    { label: "GROUNDING", subLabel: "Style", color: COLORS.GROUNDING_GREEN, ...TRIANGLE.GROUNDING, delay: BEATS.VERTEX_GROUNDING_START },
   ];
 
   // Vertex appearance (staggered scale-up with overshoot)
@@ -231,6 +281,14 @@ export const ThreeComponents: React.FC<ThreeComponentsPropsType> = () => {
     [BEATS.ARROWS_START, BEATS.ARROWS_END],
     [0, 0.3],
     { extrapolateRight: "clamp" }
+  );
+
+  // Integration formula opacity
+  const formulaOpacity = interpolate(
+    frame,
+    [BEATS.FORMULA_START, BEATS.FORMULA_END],
+    [0, 1],
+    { extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
   );
 
   // Edge midpoints for derivation arrows
@@ -346,6 +404,9 @@ export const ThreeComponents: React.FC<ThreeComponentsPropsType> = () => {
           Generated Code
         </div>
       </div>
+
+      {/* Integration formula */}
+      {showFormula && <IntegrationFormula opacity={formulaOpacity} />}
     </AbsoluteFill>
   );
 };

@@ -169,8 +169,14 @@ export const TIME_LABELS: TimeLabel[] = [
 ];
 
 // Node drift offsets per frame (simulates structure deterioration)
+// Uses easeInOutSine for organic movement as specified in the spec
+const easeInOutSine = (x: number): number => {
+  return -(Math.cos(Math.PI * x) - 1) / 2;
+};
+
 export const getNodeDrift = (nodeIndex: number, frame: number): { dx: number; dy: number } => {
-  const driftIntensity = Math.min(frame / 600, 1);
+  const rawProgress = Math.min(frame / 600, 1);
+  const driftIntensity = easeInOutSine(rawProgress);
   const seed = nodeIndex * 137.5; // Golden ratio-ish seed for variety
   return {
     dx: Math.sin(frame * 0.008 + seed) * 30 * driftIntensity +

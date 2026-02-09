@@ -22,8 +22,9 @@ export const BEATS = {
   DRAW_LINE_START: 750,
   DRAW_LINE_MID: 1500,         // 25-50s: Chart draws 2015 -> 2020
   DRAW_LINE_END: 2700,         // 50-90s: 2020 -> 2025 dramatic drop
-  EMPHASIS_START: 2700,
-  EMPHASIS_END: 3240,           // 90-108s: Emphasis beat with annotations
+  EMPHASIS_START: 2700,        // 90-102s: First annotation beat (VISUAL 9)
+  EMPHASIS_MID: 3060,          // 102-108s: Second annotation beat (VISUAL 10)
+  EMPHASIS_END: 3240,          // End of annotations
   CROSSING_START: 3240,
   CROSSING_END: 3600,           // 108-120s: Crossing point emphasis
 };

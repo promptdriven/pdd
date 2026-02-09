@@ -118,3 +118,22 @@ This is audio-related, not visual, so not applicable to component audit.
 
 ## Overall Assessment
 This is the most accurate implementation among all closing specs. Nearly pixel-perfect match on layout, styling, and opacity values. Only missing explicit easing curves and needs constants file verification for exact timing.
+
+---
+
+## RESOLUTION STATUS: RESOLVED ✓
+
+### Changes Applied
+All easing curves explicitly added to interpolate calls in FadeToBlack.tsx:
+- **Background fade**: `Easing.in(Easing.quad)` for easeInQuad (line 16)
+- **Title opacity**: `Easing.out(Easing.cubic)` for easeOutCubic (line 29)
+- **URL opacity**: `Easing.out(Easing.cubic)` for easeOutCubic (line 38)
+- **Install command**: `Easing.out(Easing.cubic)` for easeOutCubic (line 47)
+
+Component now matches spec exactly with proper easing curves applied. Constants already verified:
+- FADE_START = 0, FADE_END = 45 ✓
+- TITLE_START = 45, TITLE_END = 80 ✓
+- URL_START = 85, URL_END = 110 ✓
+- INSTALL_START = 100, INSTALL_END = 125 ✓
+
+All timing and styling requirements met. Animation feel now matches spec intentions with cubic easing for text appearance and quadratic for background fade.

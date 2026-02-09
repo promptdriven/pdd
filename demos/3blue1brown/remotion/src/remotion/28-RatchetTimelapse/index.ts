@@ -6,4 +6,6 @@ export {
   RATCHET_HEIGHT,
   RatchetTimelapseProps,
   defaultRatchetTimelapseProps,
+  WALL_SCHEDULE,
+  TERMINAL_TESTS,
 } from "./constants";

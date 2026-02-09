@@ -37,6 +37,7 @@ interface TableRowProps {
   pddGlow: number;
   rowIndex: number;
   columnPulseProgress: number;
+  ambientGlow: number;
 }
 
 const TableRow: React.FC<TableRowProps> = ({
@@ -47,6 +48,7 @@ const TableRow: React.FC<TableRowProps> = ({
   pddGlow,
   rowIndex,
   columnPulseProgress,
+  ambientGlow,
 }) => {
   const slideX = interpolate(progress, [0, 1], [-30, 0]);
   const bgColor = rowIndex % 2 === 0 ? COLORS.ROW_DARK : COLORS.ROW_ALT;
@@ -99,10 +101,10 @@ const TableRow: React.FC<TableRowProps> = ({
           ...bodyCellStyle,
           color: `rgba(74, 144, 217, 0.8)`,
           fontWeight: 600,
-          backgroundColor: `rgba(74, 144, 217, ${Math.max(pddGlow * 0.2, pulseIntensity)})`,
+          backgroundColor: `rgba(74, 144, 217, ${Math.max(pddGlow * 0.2, pulseIntensity, ambientGlow)})`,
           boxShadow:
-            pddGlow > 0 || pulseIntensity > 0
-              ? `inset 0 0 20px rgba(74, 144, 217, ${Math.max(pddGlow * 0.15, pulseIntensity)})`
+            pddGlow > 0 || pulseIntensity > 0 || ambientGlow > 0
+              ? `inset 0 0 20px rgba(74, 144, 217, ${Math.max(pddGlow * 0.15, pulseIntensity, ambientGlow * 0.5)})`
               : "none",
         }}
       >
@@ -193,6 +195,18 @@ export const InvestmentTable: React.FC<InvestmentTablePropsType> = () => {
     },
   );
 
+  // Ambient glow during hold phase (subtle persistent glow after pulse)
+  const ambientGlow = interpolate(
+    frame,
+    [BEATS.PULSE_END, BEATS.HOLD_START],
+    [0, 0.08],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    },
+  );
+
   const rowProgresses = [row1Progress, row2Progress, row3Progress];
   const pddGlows = [pddGlow1, pddGlow2, pddGlow3];
 
@@ -263,6 +277,7 @@ export const InvestmentTable: React.FC<InvestmentTablePropsType> = () => {
                 pddGlow={pddGlows[i]}
                 rowIndex={i}
                 columnPulseProgress={columnPulseProgress}
+                ambientGlow={ambientGlow}
               />
             ))}
           </tbody>

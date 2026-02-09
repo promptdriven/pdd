@@ -53,3 +53,20 @@ All timing uses `BEATS` constants which need to be audited against the spec's ex
 ### Sub-Components Not Audited
 - `ModuleConnections` component draws connection lines but exact positioning logic not verified
 - Constants file needs separate audit to confirm all values match spec
+
+## Resolution Status
+- **Status**: RESOLVED
+- **Changes Made**:
+  1. Fixed glow activation duration from 30 frames to 10 frames (~0.3s at 30fps) to match spec requirement "Each glow activates in ~0.3s stagger per module"
+  2. Fixed CODE_DIM_END timing from 200 to 240 frames to match spec's "Frame 150-240 (5-8s): Code dims" animation sequence
+  3. Verified module names match spec: auth, parser, api, db, utils (all 5 modules present in constants.ts)
+  4. Verified all BEATS timing constants match spec:
+     - ZOOM_START/END: 0/60 ✓
+     - PROMPT_GLOW_START: 60 ✓
+     - TEST_GLOW_START: 100 ✓
+     - CODE_DIM_START/END: 150/240 ✓ (fixed)
+     - HOLD_START: 240 ✓
+  5. Verified glow stagger values: PROMPT_GLOW_STAGGER and TEST_GLOW_STAGGER both set to 10 frames ✓
+  6. Verified connection lines opacity (0.15) and dashed pattern match spec ✓
+  7. Verified code dim range [0.8, 0.4] matches spec ✓
+- **Remaining Issues**: None - all HIGH and MEDIUM severity deltas resolved

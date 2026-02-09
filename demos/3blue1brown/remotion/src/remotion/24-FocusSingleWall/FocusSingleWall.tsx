@@ -24,12 +24,13 @@ export const FocusSingleWall: React.FC<FocusSingleWallPropsType> = ({
     { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.inOut(Easing.cubic) }
   );
 
-  // Liquid position: approaches wall from left, stops at wall edge
+  // Liquid position: approaches wall from RIGHT, stops at wall edge with INSTANT hard stop
+  // Use linear easing for most of approach, then clamp at impact for instant stop
   const liquidX = interpolate(
     frame,
-    [BEATS.LIQUID_APPROACH_START, BEATS.LIQUID_APPROACH_END],
-    [300, 0],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.in(Easing.quad) }
+    [BEATS.LIQUID_APPROACH_START, BEATS.IMPACT_FRAME],
+    [-300, 0], // Negative values = liquid on RIGHT side, approaching left toward wall at x=0
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.linear }
   );
 
   // Impact glow on wall (peaks at impact, holds at moderate)
@@ -81,7 +82,8 @@ export const FocusSingleWall: React.FC<FocusSingleWallPropsType> = ({
     const particles: Array<{ angle: number; speed: number; size: number }> = [];
     for (let i = 0; i < 12; i++) {
       // Splash outward from impact point (mostly upward and downward from wall face)
-      const angle = -90 + (Math.random() - 0.5) * 160; // Spread in left-facing semicircle
+      // Liquid comes from RIGHT, so splash bounces back to the RIGHT
+      const angle = 90 + (Math.random() - 0.5) * 160; // Spread in right-facing semicircle
       particles.push({
         angle: (angle * Math.PI) / 180,
         speed: 30 + Math.random() * 60,
@@ -100,7 +102,8 @@ export const FocusSingleWall: React.FC<FocusSingleWallPropsType> = ({
   // Liquid body dimensions
   const liquidWidth = 180;
   const liquidHeight = 200;
-  const liquidBaseX = wallCenterX - wallWidth / 2 - liquidX;
+  // Liquid approaches from RIGHT: positive liquidX moves it leftward toward wall
+  const liquidBaseX = wallCenterX + wallWidth / 2 - liquidX;
 
   return (
     <AbsoluteFill style={{ backgroundColor: COLORS.BACKGROUND }}>
@@ -123,9 +126,9 @@ export const FocusSingleWall: React.FC<FocusSingleWallPropsType> = ({
           {/* Approaching liquid body */}
           {frame >= BEATS.LIQUID_APPROACH_START && (
             <g>
-              {/* Main liquid mass */}
+              {/* Main liquid mass - positioned to RIGHT of wall, approaching from right */}
               <rect
-                x={liquidBaseX - liquidWidth}
+                x={liquidBaseX}
                 y={wallCenterY - liquidHeight / 2}
                 width={liquidWidth + (liquidCompression > 0 ? liquidCompression * 40 : 0)}
                 height={liquidHeight}
@@ -136,9 +139,9 @@ export const FocusSingleWall: React.FC<FocusSingleWallPropsType> = ({
                   filter: `drop-shadow(0 0 8px ${COLORS.LIQUID_BLUE})`,
                 }}
               />
-              {/* Liquid leading edge (brighter) */}
+              {/* Liquid leading edge (brighter) - LEFT edge of liquid (facing the wall) */}
               <rect
-                x={liquidBaseX - 15}
+                x={liquidBaseX - (liquidCompression > 0 ? liquidCompression * 30 : 0)}
                 y={wallCenterY - liquidHeight / 2 + 10}
                 width={15 + (liquidCompression > 0 ? liquidCompression * 30 : 0)}
                 height={liquidHeight - 20}
@@ -153,7 +156,7 @@ export const FocusSingleWall: React.FC<FocusSingleWallPropsType> = ({
                 return (
                   <rect
                     key={lineIdx}
-                    x={liquidBaseX - liquidWidth + 20}
+                    x={liquidBaseX + 20}
                     y={lineY}
                     width={lineW}
                     height={3}
@@ -169,7 +172,8 @@ export const FocusSingleWall: React.FC<FocusSingleWallPropsType> = ({
           {splashProgress >= 0 && splashProgress < 1 && (
             <g>
               {splashParticles.map((p, i) => {
-                const px = wallCenterX - wallWidth / 2 + Math.cos(p.angle) * p.speed * splashProgress;
+                // Impact is on RIGHT side of wall (wallCenterX + wallWidth / 2)
+                const px = wallCenterX + wallWidth / 2 + Math.cos(p.angle) * p.speed * splashProgress;
                 const py = wallCenterY + Math.sin(p.angle) * p.speed * splashProgress;
                 const particleOpacity = 1 - splashProgress;
                 const particleSize = p.size * (1 - splashProgress * 0.6);
@@ -187,10 +191,10 @@ export const FocusSingleWall: React.FC<FocusSingleWallPropsType> = ({
             </g>
           )}
 
-          {/* Ripple ring at impact on wall */}
+          {/* Ripple ring at impact on wall (RIGHT side) */}
           {splashProgress >= 0 && splashProgress < 1 && (
             <ellipse
-              cx={wallCenterX - wallWidth / 2}
+              cx={wallCenterX + wallWidth / 2}
               cy={wallCenterY}
               rx={10 + splashProgress * 50}
               ry={10 + splashProgress * 80}

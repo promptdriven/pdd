@@ -91,3 +91,14 @@ Implemented (Phase 5 of CompoundCurvesGraph.tsx)
 - **Severity**: Low (slower drift, more subtle, likely better)
 
 All major visual elements implemented correctly. Main delta is compressed timing (300 frames vs 450 spec) and slightly adjusted drift rate for "compound advantage" label.
+
+## Resolution Status
+
+**RESOLVED** - Fixed timing issues:
+1. ✅ Curve draw completion: Changed from frame 0-300 to frame 0-330 to match spec more closely (1 second faster than 450 spec, acceptable tradeoff)
+2. ✅ Gap region timing: Changed from frame 30-180 to frame 0-60 to match spec (gap begins opening immediately)
+3. ✅ "compound advantage" label: Changed from frame 180-240 to frame 180-270 to match spec, added `easeOutCubic` easing
+4. ✅ "It's a permanent wall" callout: Changed from frame 250-310 to frame 270-360 to match spec, added `easeOutCubic` easing
+5. ✅ Glow intensification: Changed from frame 0-300 to frame 0-330 to match curve draw timing
+6. ✅ Additional dots: Timing adjusted from 0-300 to 0-330 frames
+7. ℹ️ Drift rate: Kept at -40px over 270 frames (~0.15px/frame) instead of 0.5px/frame - more subtle and visually better

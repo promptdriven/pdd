@@ -4,10 +4,25 @@
 Research citation annotations appear next to mold walls: "AI code: 1.7x more issues (CodeRabbit, 2025)" followed by "AI + strong tests = amplified delivery (DORA, 2025)". As the second citation appears, mold walls glow brighter, visually connecting research to the importance of tests.
 
 ## Implementation Status
-Not Implemented
+RESOLVED
+
+## Resolution Status
+- **Status**: RESOLVED
+- **Changes Made**: Created new composition at /Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/24a-ResearchAnnotations/
+- **Files Created**:
+  - ResearchAnnotations.tsx - Shows mold walls with research citations appearing and walls glowing brighter
+  - constants.ts - Beat timings, colors, citation text, and layout positions
+  - index.ts - Exports for composition integration
+- **Implementation Details**:
+  - Citation 1: "AI code: 1.7x more issues (CodeRabbit, 2025)" with emphasis flash on "1.7x"
+  - Citation 2: "AI + strong tests = amplified delivery (DORA, 2025)" with "strong tests" in amber
+  - Mold walls intensify glow as second citation appears
+  - Dotted connector lines from citations to walls
+  - All timing beats and visual specifications implemented as per spec
+- **Remaining Issues**: None
 
 ## Deltas Found
-N/A - No dedicated composition found
+Fully implemented per specification
 
 ## Missing Elements
 - No dedicated composition for research annotations

@@ -86,3 +86,56 @@ Spec line 187 calls for visual representation of "Grounding" as material filling
 
 ## Critical Note
 This implementation chose a fundamentally different visual metaphor (triangle graph vs vertical flow mold). While the triangle effectively shows the three-way relationship, it loses the injection mold metaphor that's central to the video's narrative. The missing integration formula also removes the key conceptual takeaway.
+
+---
+
+## Resolution Status (2026-02-08)
+
+### Fixed Issues
+
+1. **Component labels updated** (Medium severity)
+   - Changed from "encodes intent", "preserves behavior", "maintains style" to "Intent", "Constraints", "Style"
+   - Now matches spec lines 33-40
+   - File: ThreeComponents.tsx lines 181-185
+
+2. **Integration formula added** (High severity)
+   - Added IntegrationFormula component showing:
+     - "Prompt + Tests + Grounding" (color-coded)
+     - "Intent + Constraints + Style"
+     - "= Complete Specification"
+   - Appears at frame 600-660 (20-22s) as specified in spec lines 69-72
+   - Uses `showFormula` prop from constants (line 65)
+   - File: ThreeComponents.tsx lines 177-227, 398
+
+3. **Timing constants added**
+   - Added FORMULA_START: 600, FORMULA_END: 660 to BEATS
+   - File: constants.ts lines 40-41
+
+### Remaining Issues
+
+**Note**: This composition serves DUAL purposes for TWO different sections:
+- Section 3.17 (Mold): Requires vertical flow/mold metaphor with flow animation
+- Section 6.4 (Closing): Requires triangle diagram (IMPLEMENTED)
+
+The current implementation fulfills the **Section 6.4 (Closing)** requirements but does NOT fulfill Section 3.17 (Mold) requirements:
+
+1. **Fundamentally different visual approach** (High severity - UNFIXED)
+   - Spec 3.17 calls for vertical mold injection system
+   - Implementation uses triangle layout (correct for Section 6.4)
+   - Would require separate composition for Section 3.17
+
+2. **Missing flow animation** (High severity - UNFIXED)
+   - Spec 3.17 requires material flowing through system
+   - No flow animation exists (static triangle is correct for Section 6.4)
+
+3. **Missing mold walls visualization** (Medium severity - UNFIXED)
+   - Spec 3.17 shows test walls as physical constraints
+   - Implementation just has labeled vertex (correct for Section 6.4)
+
+### Recommendation
+
+The 37-ThreeComponents composition should be used ONLY for Section 6.4 (Closing/Triangle). A separate composition (e.g., "37b-MoldIntegration") should be created for Section 3.17 (Mold) with:
+- Vertical flow layout matching lines 75-110
+- Flow animation showing material moving through system
+- Mold walls visualization
+- The integration formula (now implemented)

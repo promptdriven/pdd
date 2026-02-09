@@ -106,20 +106,7 @@ export const GapIndicator: React.FC = () => {
         style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none" }}
       >
         <defs>
-          {/* Arrow marker for the gap line */}
-          <marker
-            id="arrowUp"
-            markerWidth={arrowHeadSize}
-            markerHeight={arrowHeadSize}
-            refX={arrowHeadSize / 2}
-            refY={arrowHeadSize}
-            orient="auto"
-          >
-            <polygon
-              points={`0,${arrowHeadSize} ${arrowHeadSize / 2},0 ${arrowHeadSize},${arrowHeadSize}`}
-              fill={COLORS.GAP_INDICATOR}
-            />
-          </marker>
+          {/* Arrow marker for the gap line - pointing down to irrational zone */}
           <marker
             id="arrowDown"
             markerWidth={arrowHeadSize}
@@ -144,16 +131,16 @@ export const GapIndicator: React.FC = () => {
           </filter>
         </defs>
 
-        {/* Vertical line showing the gap */}
+        {/* Vertical line showing the gap with arrow pointing to irrational zone */}
         <line
           x1={indicatorX}
-          y1={repairY + arrowHeadSize}
+          y1={repairY}
           x2={indicatorX}
           y2={buyY - arrowHeadSize}
           stroke={COLORS.GAP_INDICATOR}
           strokeWidth={3}
           opacity={indicatorOpacity * springProgress}
-          markerStart="url(#arrowUp)"
+          strokeDasharray="6,4"
           markerEnd="url(#arrowDown)"
           filter="url(#gapGlow)"
           style={{
@@ -183,7 +170,7 @@ export const GapIndicator: React.FC = () => {
         />
       </svg>
 
-      {/* Gap value label - positioned above the Cost to Repair line */}
+      {/* Gap value label - positioned above the arrow with emotional messaging */}
       <div
         style={{
           position: "absolute",
@@ -192,8 +179,9 @@ export const GapIndicator: React.FC = () => {
           transform: `translateY(-50%) scale(${holdPulse})`,
           opacity: indicatorOpacity * springProgress,
           fontFamily: "Inter, system-ui, sans-serif",
-          fontSize: 22,
-          fontWeight: 700,
+          fontSize: 20,
+          fontWeight: 600,
+          fontStyle: "italic",
           color: COLORS.GAP_INDICATOR,
           textShadow: `0 0 15px ${COLORS.GAP_INDICATOR}, 0 2px 8px rgba(0,0,0,0.8)`,
           whiteSpace: "nowrap",
@@ -203,7 +191,7 @@ export const GapIndicator: React.FC = () => {
           border: `2px solid ${COLORS.GAP_INDICATOR}`,
         }}
       >
-        {gapValue}h saved
+        Waste of time
       </div>
     </>
   );

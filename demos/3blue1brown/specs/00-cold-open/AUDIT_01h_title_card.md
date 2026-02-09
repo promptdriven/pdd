@@ -99,3 +99,13 @@ The implementation compresses this to under 2 seconds - title fades in and the c
 This is consistent with the pattern seen in the other audits: the implemented cold open is significantly faster-paced than the spec (16 seconds vs the spec's apparent 2:00 timeline). The title card exists and looks right, but doesn't get its moment to land.
 
 Recommendation: If the goal is to match spec intent, VISUAL_04 should be extended to at least 5-7 seconds total, with the title fade-in over 1.5-2 seconds followed by a static hold. However, the current fast pace may be an intentional creative decision for the final cut.
+
+## Resolution Status
+- **Status**: NOT RESOLVED (Outside scope of 01-ColdOpen components)
+- **Changes Made**: None - the title card is implemented in ColdOpenSection.tsx (VISUAL_04), not in the 01-ColdOpen Remotion fallback components.
+- **Remaining Issues**:
+  - The 01-ColdOpen components (ColdOpenSplitScreen.tsx, LeftPanel.tsx, RightPanel.tsx) implement only the split-screen sequence (0:00-0:38)
+  - The title card is part of ColdOpenSection.tsx which uses Veo video files
+  - Timing and pacing issues (1.87s vs 10s) are in ColdOpenSection.tsx, outside the scope of this fix
+  - To address would require modifying ColdOpenSection.tsx VISUAL_04 timing and adding extended hold period
+  - Vignette implementation would also need to be added to ColdOpenSection.tsx VISUAL_04

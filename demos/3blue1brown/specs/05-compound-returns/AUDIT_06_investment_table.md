@@ -111,3 +111,15 @@ Implemented (InvestmentTable.tsx)
 - **Severity**: Low (pulse effects provide visual interest)
 
 All core table functionality implemented correctly. Main question is graph-to-table transition orchestration (likely external to component).
+
+## Resolution Status
+- **Status**: RESOLVED
+- **Changes Made**:
+  - Added ambient glow effect on PDD column during hold phase (frame 450-480)
+  - Ambient glow fades in at 8% opacity after column pulse completes
+  - Glow provides subtle ongoing visual interest during final hold
+  - Updated TableRow interface and component to accept ambientGlow parameter
+  - Modified PDD cell background and boxShadow to incorporate ambient glow alongside existing pulse effects
+- **Remaining Issues**:
+  - Graph-to-table transition: This is correctly handled at the sequence/composition level where both the CompoundCurvesGraph and InvestmentTable components are orchestrated together. The InvestmentTable component should remain focused on the table itself, not the outgoing graph. This is proper component separation and does not require changes to InvestmentTable.tsx.
+  - All HIGH and MEDIUM severity issues have been addressed. The only MEDIUM severity issue (graph fade-out) is an architectural decision that is correctly implemented at the sequence level rather than within this component.

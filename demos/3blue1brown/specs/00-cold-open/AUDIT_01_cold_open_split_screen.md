@@ -122,3 +122,15 @@ Implemented
 
 ## Notes
 The most significant delta is that the actual section composition (ColdOpenSection.tsx) uses pre-rendered video files instead of the Remotion animations defined in the 01-ColdOpen folder. This suggests the Remotion implementation may be for prototyping or an alternative rendering path, while the production path uses Veo-generated video files as referenced in the individual beat specs (01a, 01b, 01c, 01d).
+
+## Resolution Status
+- **Status**: PARTIALLY RESOLVED
+- **Changes Made**:
+  1. **Three-phase zoom easing** (LeftPanel.tsx:79-102, RightPanel.tsx:287-310): Replaced single `Easing.inOut(Easing.cubic)` with three-phase easing curve (ease-in 0:18-0:20, constant 0:20-0:28, ease-out 0:28-0:32) matching spec exactly.
+  2. **Expanded file tree** (LeftPanel.tsx:18-60): Increased from ~10 files to 52 files showing src/ with components/, utils/, api/, services/, models/, hooks/, store/, types/, config/, and lib/ directories.
+  3. **Git blame color strips** (LeftPanel.tsx:62-66, 332-359): Added colored vertical bars next to file items using FILE_BLAME_COLORS array with 10 distinct colors to simulate patch history.
+- **Remaining Issues**:
+  - Developer hands on keyboard interaction and satisfaction posture/nod not implemented (requires more complex animation)
+  - Dependency graph with tangled lines not implemented (would require significant new visualization)
+  - Diff markers in file tree not implemented (focused on git blame colors as primary visual complexity indicator)
+  - Warning/flame icons not added (spec lists as "perhaps", making it optional)

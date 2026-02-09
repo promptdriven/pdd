@@ -8,39 +8,39 @@ export const DEV_REGENERATES_DURATION_FRAMES =
 export const DEV_REGENERATES_WIDTH = 1920;
 export const DEV_REGENERATES_HEIGHT = 1080;
 
-// Beat timings (in frames at 30fps)
+// Beat timings (in frames at 30fps) - matched to spec
 export const BEATS = {
   // Terminal fades in
   TERMINAL_FADE_START: 0,
   TERMINAL_FADE_END: 30,
 
-  // Bug command types out
-  BUG_CMD_START: 30,
-  BUG_CMD_END: 70,
-  BUG_OUTPUT_START: 75,
-  BUG_OUTPUT_END: 90,
+  // Bug command types out (spec: 90-130)
+  BUG_CMD_START: 90,
+  BUG_CMD_END: 130,
+  BUG_OUTPUT_START: 135,
+  BUG_OUTPUT_END: 150,
 
-  // Fix command types out
-  FIX_CMD_START: 100,
-  FIX_CMD_END: 140,
-  FIX_REGEN_START: 145,
-  FIX_REGEN_END: 165,
-  FIX_OUTPUT_START: 170,
-  FIX_OUTPUT_END: 190,
+  // Fix command types out (spec: 150-190)
+  FIX_CMD_START: 150,
+  FIX_CMD_END: 190,
+  FIX_REGEN_START: 195,
+  FIX_REGEN_END: 210,
+  FIX_OUTPUT_START: 215,
+  FIX_OUTPUT_END: 235,
 
-  // Test command types out
-  TEST_CMD_START: 200,
-  TEST_CMD_END: 240,
-  TEST_OUTPUT_START: 250,
-  TEST_OUTPUT_END: 270,
+  // Test command types out (spec: 240-280)
+  TEST_CMD_START: 240,
+  TEST_CMD_END: 280,
+  TEST_OUTPUT_START: 290,
+  TEST_OUTPUT_END: 310,
 
-  // Checkmark pop
-  CHECK_START: 270,
-  CHECK_POP: 290,
-  CHECK_SETTLE: 310,
+  // Checkmark pop (spec: 310-340-360)
+  CHECK_START: 310,
+  CHECK_POP: 340,
+  CHECK_SETTLE: 360,
 
   // Hold
-  HOLD_START: 310,
+  HOLD_START: 360,
 };
 
 // Terminal commands

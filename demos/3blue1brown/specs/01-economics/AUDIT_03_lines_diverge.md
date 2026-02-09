@@ -76,3 +76,10 @@ A 15-second sequence showing the dramatic divergence of sock costs from 1965 to 
 - The shaded region uses gradient and pattern fills for visual richness
 - The gap indicator is data-driven (shows actual hour difference) rather than emotional messaging
 - The zoom effect direction seems reversed from spec intent but may be correct for showing "full picture"
+
+## Resolution Status
+- **Status**: RESOLVED
+- **Changes Made**:
+  1. **Gap Indicator Label** (MEDIUM severity): Changed from data-focused "{gapValue}h saved" to emotional messaging "Waste of time" as specified in the spec (line 32). Also changed arrow from double-ended to single arrow pointing down to the irrational zone, making it clearer that the arrow indicates the zone where darning is irrational.
+  2. **Zoom Out Effect** (LOW severity): Adjusted zoom scale from 0.95 to 0.92 to provide a slightly more pronounced zoom-out effect, better showing the "full picture" as specified in the spec (line 48). The scaling down (zooming out) is correct - it makes the chart appear smaller on screen, revealing more context around it.
+- **Remaining Issues**: None. All HIGH and MEDIUM severity deltas have been resolved. LOW severity items are acceptable implementation details that enhance the spec without contradicting it.

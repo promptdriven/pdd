@@ -129,3 +129,12 @@ The PromptGeneratesCode component is well-implemented with strong adherence to t
 - Proper layering (walls behind code flow)
 
 The visual metaphor is effectively conveyed: value lives in the specification (prompt + tests), not the generated output (code). This sets up Part 3's deeper exploration of the framework's three components.
+
+## Resolution Status
+- **Status**: RESOLVED
+- **Changes Made**:
+  - Updated narration text in PromptGeneratesCode.tsx (line 76) to include the complete narration from the spec
+  - Added the critical connection back to chip synthesis: "And just like chip synthesis--the code is different every generation."
+  - Added the determinism insight: "But the tests lock the behavior. The process is deterministic."
+  - Adjusted fontSize from 32 to 28 and maxWidth from 900 to 1100 to accommodate the longer text
+- **Remaining Issues**: None - all HIGH and MEDIUM severity issues have been resolved

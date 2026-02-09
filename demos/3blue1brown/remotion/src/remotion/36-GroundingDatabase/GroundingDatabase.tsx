@@ -2,6 +2,41 @@ import React from "react";
 import { AbsoluteFill, interpolate, useCurrentFrame, Easing } from "remotion";
 import { COLORS, BEATS, GroundingDatabasePropsType } from "./constants";
 
+// Helper function to calculate point on quadratic bezier curve
+// Path: M0,100 Q150,100 200,200 T400,300
+// This uses quadratic bezier for first segment and smooth continuation (T) for second
+const getPointOnPath = (t: number): { x: number; y: number } => {
+  // Clamp t to [0, 1]
+  t = Math.max(0, Math.min(1, t));
+
+  // The path has two segments: Q150,100 200,200 and T400,300
+  // Split at midpoint (t=0.5)
+  if (t <= 0.5) {
+    // First quadratic bezier: start(0,100), control(150,100), end(200,200)
+    const localT = t * 2; // Scale to [0,1] for this segment
+    const p0 = { x: 0, y: 100 };
+    const p1 = { x: 150, y: 100 };
+    const p2 = { x: 200, y: 200 };
+
+    const x = Math.pow(1 - localT, 2) * p0.x + 2 * (1 - localT) * localT * p1.x + Math.pow(localT, 2) * p2.x;
+    const y = Math.pow(1 - localT, 2) * p0.y + 2 * (1 - localT) * localT * p1.y + Math.pow(localT, 2) * p2.y;
+
+    return { x, y };
+  } else {
+    // Second quadratic bezier (T continuation): start(200,200), control(250,300), end(400,300)
+    // The control point is reflected from previous
+    const localT = (t - 0.5) * 2; // Scale to [0,1] for this segment
+    const p0 = { x: 200, y: 200 };
+    const p1 = { x: 250, y: 300 }; // Reflected control point
+    const p2 = { x: 400, y: 300 };
+
+    const x = Math.pow(1 - localT, 2) * p0.x + 2 * (1 - localT) * localT * p1.x + Math.pow(localT, 2) * p2.x;
+    const y = Math.pow(1 - localT, 2) * p0.y + 2 * (1 - localT) * localT * p1.y + Math.pow(localT, 2) * p2.y;
+
+    return { x, y };
+  }
+};
+
 export const GroundingDatabase: React.FC<GroundingDatabasePropsType> = ({
   showFeedbackLoop = true,
 }) => {
@@ -39,11 +74,19 @@ export const GroundingDatabase: React.FC<GroundingDatabasePropsType> = ({
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
 
-  // Database pulse
+  // Database pulse - adjusted to spec timing and scale
   const dbPulse = interpolate(
     frame,
-    [BEATS.DB_PULSE_START, BEATS.DB_PULSE_START + 20, BEATS.DB_PULSE_END],
-    [1, 1.15, 1],
+    [BEATS.DB_PULSE_START, BEATS.DB_PULSE_START + 20, BEATS.DB_PULSE_START + 60],
+    [1, 1.1, 1],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.back(1.5)) }
+  );
+
+  // "Learning from success..." message opacity
+  const learningMessageOpacity = interpolate(
+    frame,
+    [BEATS.DATA_HIGHLIGHT_START, BEATS.DATA_HIGHLIGHT_START + 30, BEATS.DATA_HIGHLIGHT_END - 30, BEATS.DATA_HIGHLIGHT_END],
+    [0, 1, 1, 0],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
 
@@ -133,47 +176,80 @@ export const GroundingDatabase: React.FC<GroundingDatabasePropsType> = ({
         )}
       </div>
 
+      {/* "Learning from success..." message */}
+      {learningMessageOpacity > 0 && (
+        <div
+          style={{
+            position: "absolute",
+            left: codeBlockX,
+            top: centerY + 140,
+            transform: "translateX(-50%)",
+            opacity: learningMessageOpacity,
+            fontSize: 16,
+            color: COLORS.GROUNDING_GREEN,
+            fontStyle: "italic",
+          }}
+        >
+          Learning from success...
+        </div>
+      )}
+
       {/* Flow arrow with particles */}
       <svg
         width="600"
-        height="200"
+        height="400"
         style={{
           position: "absolute",
           left: codeBlockX + 150,
-          top: centerY - 50,
+          top: centerY - 100,
         }}
       >
-        {/* Arrow path */}
+        <defs>
+          <marker
+            id="arrowhead"
+            markerWidth="10"
+            markerHeight="7"
+            refX="9"
+            refY="3.5"
+            orient="auto"
+          >
+            <polygon points="0 0, 10 3.5, 0 7" fill={COLORS.GROUNDING_GREEN} />
+          </marker>
+        </defs>
+
+        {/* Arrow path - curved as per spec */}
         <path
-          d={`M0,50 Q200,50 400,50`}
+          d="M0,100 Q150,100 200,200 T400,300"
           fill="none"
           stroke={COLORS.GROUNDING_GREEN}
           strokeWidth={3}
-          strokeDasharray={400}
-          strokeDashoffset={400 * (1 - flowProgress)}
+          strokeDasharray={600}
+          strokeDashoffset={600 * (1 - flowProgress)}
           opacity={flowProgress > 0 ? 1 : 0}
+          markerEnd={flowProgress > 0.9 ? "url(#arrowhead)" : ""}
         />
-        {/* Arrowhead */}
-        {flowProgress > 0.9 && (
-          <polygon
-            points="400,50 385,40 385,60"
-            fill={COLORS.GROUNDING_GREEN}
-          />
-        )}
-        {/* Particles */}
-        {flowProgress > 0 && flowProgress < 1 && (
+
+        {/* Particles - 5 particles following bezier path */}
+        {flowProgress > 0 && (
           <>
-            {[0.2, 0.4, 0.6, 0.8].map((offset, i) => {
-              const particleX = 400 * Math.min(flowProgress, 1 - offset);
-              if (flowProgress < offset) return null;
+            {[0.1, 0.3, 0.5, 0.7, 0.9].map((offset, i) => {
+              const particleProgress = flowProgress - offset;
+              if (particleProgress <= 0) return null;
+
+              // Get position along the bezier curve
+              const pos = getPointOnPath(Math.min(particleProgress / (1 - offset), 1));
+
+              // Fade out particles near the end
+              const opacity = particleProgress < 0.9 ? 0.8 : Math.max(0, (1 - particleProgress) * 8);
+
               return (
                 <circle
                   key={i}
-                  cx={particleX}
-                  cy={50}
+                  cx={pos.x}
+                  cy={pos.y}
                   r={6}
                   fill={COLORS.GROUNDING_GREEN}
-                  opacity={0.6}
+                  opacity={opacity}
                 />
               );
             })}

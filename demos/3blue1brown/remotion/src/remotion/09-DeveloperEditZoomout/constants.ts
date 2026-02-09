@@ -2,27 +2,29 @@ import { z } from "zod";
 
 // Video specs
 export const ZOOM_OUT_FPS = 30;
-export const ZOOM_OUT_DURATION_SECONDS = 10;
+export const ZOOM_OUT_DURATION_SECONDS = 20; // 10s video (Part A) + 10s animation (Part B)
 export const ZOOM_OUT_DURATION_FRAMES =
   ZOOM_OUT_FPS * ZOOM_OUT_DURATION_SECONDS;
 export const ZOOM_OUT_WIDTH = 1920;
 export const ZOOM_OUT_HEIGHT = 1080;
 
 // Beat timings (in frames at 30fps)
-// Frame 0-90:   Transition — IDE view becomes stylized
-// Frame 90-180: Zoom out — code → file → folder → project
-// Frame 180-240: Patch accumulation — yellow markers appear
-// Frame 240-300: New bug — red pulse + connection line
+// Frame 0-300:   Part A — Developer edit video at full opacity
+// Frame 300-390: Transition — Video fades out, IDE view becomes stylized
+// Frame 390-480: Zoom out — code → file → folder → project
+// Frame 480-540: Patch accumulation — yellow markers appear
+// Frame 540-600: New bug — red pulse + connection line
 export const BEATS = {
-  TRANSITION_START: 0,
-  TRANSITION_END: 90,
-  ZOOM_START: 90,
-  ZOOM_END: 180,
-  PATCHES_START: 180,
-  PATCHES_END: 240,
-  BUG_START: 240,
-  BUG_END: 300,
-  NARRATION_START: 250,
+  VIDEO_END: 300, // End of Part A (10s of video)
+  TRANSITION_START: 300,
+  TRANSITION_END: 390,
+  ZOOM_START: 390,
+  ZOOM_END: 480,
+  PATCHES_START: 480,
+  PATCHES_END: 540,
+  BUG_START: 540,
+  BUG_END: 600,
+  NARRATION_START: 550,
 };
 
 // Color palette

@@ -46,3 +46,14 @@ Implemented
 
 ## Additional Notes
 The core concept is implemented well: same prompt at top, two different code outputs below, insight text "Code varies. Behavior is fixed." with checkmarks. The missing elements are primarily enhancement details (terminal commands, difference highlights) that would strengthen the demonstration but aren't critical to the message. The implementation is functional but less detailed than the spec envisions.
+
+## Resolution Status
+- **Status**: RESOLVED
+- **Changes Made**:
+  1. **Terminal Overlay Added**: Implemented `TerminalOverlay` component showing `pdd generate user_parser.prompt` commands with animated appearance tied to variation timing. Terminal shows both generations with success indicators (✓).
+  2. **Difference Highlights Added**: Created `DifferenceHighlight` component with amber highlight boxes (#FFAA55) that highlight key differences between versions: "input_str" vs "raw_input" and "cleaned" vs "sanitized".
+  3. **Diverging Arrows Implemented**: Replaced simple downward arrows with SVG-based diverging arrow visualization showing one source path splitting into two destination paths with proper curve animations.
+  4. **Separate Checkmark Timing**: Implemented independent checkmark timing for each variation (checkmark1Opacity and checkmark2Opacity) appearing at different frames relative to each variation's appearance.
+  5. **Code Variations Updated**: Updated constants to match spec exactly with "Generation A" and "Generation B" labels, and more detailed code showing structural differences (if-chains vs ternary expressions).
+  6. **Enhanced Insight Text**: Improved styling of "Code varies. Behavior is fixed." message with better typography and shadow effects.
+- **Remaining Issues**: None - all audit deltas have been addressed.

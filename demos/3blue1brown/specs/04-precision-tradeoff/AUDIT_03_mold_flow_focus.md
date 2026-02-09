@@ -85,3 +85,20 @@ The implementation demonstrates:
 - Implementation: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/40-MoldFlowFocus/MoldFlowFocus.tsx`
 - Constants: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/40-MoldFlowFocus/constants.ts`
 - Video source: `staticFile("veo_mold_flow_focus.mp4")`
+
+---
+
+## Resolution Status (2026-02-08)
+
+### MEDIUM Severity Issues - RESOLVED
+
+#### Added Animated Liquid Flow Component (Not in Spec) - FIXED
+- **Issue**: LiquidFlow SVG component with animated liquid blobs, chaotic particles, and spreading effects was added without spec approval
+- **Resolution**: Removed entire LiquidFlow component and all associated code
+- **Changes Made**:
+  - Removed LiquidFlow component definition (lines 139-228)
+  - Removed flowProgress calculation from main component
+  - Removed `<LiquidFlow progress={flowProgress} color={COLORS.LIQUID_BLUE} />` from render
+- **Result**: Implementation now relies solely on video content for liquid flow visualization, as specified
+
+The implementation now correctly matches the spec by using only the Veo-generated video for liquid flow, with Remotion overlays limited to wall glow highlights and contact point pulses as originally specified.

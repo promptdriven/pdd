@@ -3,6 +3,7 @@ import {
   AbsoluteFill,
   Easing,
   interpolate,
+  spring,
   useCurrentFrame,
   useVideoConfig,
 } from "remotion";
@@ -260,10 +261,14 @@ export const CodebaseTimelapse: React.FC<CodebaseTimelapsePropsType> = ({
                 (p) => p.nodeId === node.id && frame >= p.frame
               ).map((p, pi) => {
                 const badgeAge = frame - p.frame;
-                const badgeOpacity = interpolate(badgeAge, [0, 15], [0, 0.8], {
-                  extrapolateLeft: "clamp",
-                  extrapolateRight: "clamp",
+                const badgeScale = spring({
+                  frame: badgeAge,
+                  fps: 30,
+                  config: {
+                    damping: 20,
+                  },
                 });
+                const badgeOpacity = Math.min(badgeScale, 0.8);
                 const angle = (pi * 2 * Math.PI) / 5 - Math.PI / 2;
                 const badgeR = nodeSize + 15 + pi * 6;
                 const bx = pos.x + Math.cos(angle) * badgeR;
@@ -277,18 +282,23 @@ export const CodebaseTimelapse: React.FC<CodebaseTimelapsePropsType> = ({
                       : "#D94A4A";
 
                 return (
-                  <g key={`badge-${node.id}-${pi}`} opacity={badgeOpacity}>
+                  <g
+                    key={`badge-${node.id}-${pi}`}
+                    opacity={badgeOpacity}
+                    transform={`translate(${bx}, ${by}) scale(${badgeScale})`}
+                    style={{ transformOrigin: '0 0' }}
+                  >
                     <rect
-                      x={bx - 22}
-                      y={by - 7}
+                      x={-22}
+                      y={-7}
                       width={44}
                       height={14}
                       rx={3}
                       fill="rgba(0,0,0,0.7)"
                     />
                     <text
-                      x={bx}
-                      y={by + 4}
+                      x={0}
+                      y={4}
                       textAnchor="middle"
                       fill={badgeColor}
                       fontSize={9}

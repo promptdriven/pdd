@@ -16,8 +16,7 @@ export const BEATS = {
   ZOOM_END: 120,
   // Liquid approach (frames 120-180)
   LIQUID_APPROACH_START: 120,
-  LIQUID_APPROACH_END: 180,
-  // Impact moment (frame 180)
+  // Impact moment (frame 180) - liquid stops INSTANTLY at this frame (hard stop, no easing)
   IMPACT_FRAME: 180,
   // Wall glow / highlight
   HIGHLIGHT_START: 180,

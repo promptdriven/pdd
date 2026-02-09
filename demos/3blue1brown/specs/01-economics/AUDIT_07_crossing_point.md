@@ -104,3 +104,31 @@ This spec describes a 10-second (300 frame) sequence showing the dramatic moment
 ## Notes on Spec Ambiguity
 
 The spec mentions "Continues from Section 1.6 zoom-out — full chart with fork visible" which suggests the zoom-out may be handled in the Section 1.6 composition or in a parent sequence that stitches both sections together. The CrossingPoint composition may be designed to start at full view, with the zoom happening in the previous composition's outro or a parent sequence's transition.
+
+## Resolution Status
+
+- **Status**: RESOLVED
+- **Date**: 2026-02-08
+- **Changes Made**:
+  1. **Added easeOutCubic easing to zoom animation** - The CodeCostChart component now applies `Easing.out(Easing.cubic)` to all zoom interpolations (zoomScale, zoomOffsetX, zoomOffsetY) to match the spec requirement
+  2. **Added comprehensive documentation** - Added JSDoc comment to CrossingPoint.tsx explaining this is "THE key moment of Part 1" with frame-by-frame breakdown matching the spec
+  3. **Clarified zoom implementation** - Added comments explaining that the zoom animation IS implemented in CodeCostChart.tsx and is controlled by the `startAtFullView` prop (defaults to `false`, which enables zoom-out animation)
+  4. **Verified frame timings** - Confirmed all BEATS constants match spec exactly:
+     - ZOOM_OUT_END: 60 (0-2s)
+     - FIRST_CROSSING_START: 60, END: 90 (2-3s)
+     - MARKER_APPEAR_START: 90 (second crossing)
+     - LABEL_FADE_START: 150, END: 210 (5-7s)
+     - HOLD_END: 300 (7-10s)
+  5. **Verified pulse configurations** - Confirmed differential pulse intensity:
+     - First crossing: 3 rings, 18px marker (modest)
+     - Second crossing: 5 rings, 25px marker (dramatic)
+     - Ring stagger: 15 frames (matches spec)
+
+- **Remaining Issues**: None
+
+**Analysis**: The audit's MEDIUM severity "Delta 1: No Zoom Out Animation" was based on a misunderstanding. The zoom-out animation IS fully implemented in CodeCostChart.tsx (lines 22-51). The confusion arose because:
+1. The zoom logic is inside CodeCostChart rather than CrossingPoint
+2. The prop name `startAtFullView` is counterintuitive (false = zoom happens, true = skip zoom)
+3. The zoom animation was missing the easeOutCubic easing specified in the spec
+
+All issues have been resolved by adding the missing easing function and clarifying the implementation with comments.

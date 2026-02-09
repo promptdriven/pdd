@@ -9,20 +9,22 @@ export const GROUNDING_COMPARISON_WIDTH = 1920;
 export const GROUNDING_COMPARISON_HEIGHT = 1080;
 
 // Beat timings (in frames at 30fps)
+// Spec: 0-90 (0-3s) source, 90-180 (3-6s) grounding, 180-300 (6-10s) code gen,
+// 300-420 (10-14s) comparison, 420-540 (14-18s) both pass, 540-600 (18-20s) insight
 export const BEATS = {
   SOURCE_START: 0,
-  SOURCE_END: 60,
+  SOURCE_END: 90,
   GROUNDING_START: 90,
-  GROUNDING_END: 140,
+  GROUNDING_END: 180,
   OOP_CODE_START: 180,
   OOP_CODE_END: 240,
   FUNC_CODE_START: 200,
   FUNC_CODE_END: 260,
-  CHECKMARKS_START: 300,
-  CHECKMARKS_END: 340,
-  INSIGHT_START: 420,
-  INSIGHT_END: 460,
-  HOLD_START: 540,
+  CHECKMARKS_START: 420,
+  CHECKMARKS_END: 460,
+  INSIGHT_START: 540,
+  INSIGHT_END: 580,
+  HOLD_START: 580,
 };
 
 // Color palette
@@ -42,20 +44,20 @@ export const OOP_CODE = `class UserParser:
     def __init__(self):
         self._validators = [...]
 
-    def parse(self, input_str):
+    def parse(self, input_str: str) -> Optional[str]:
         if not input_str:
             return None
         cleaned = self._sanitize(input_str)
         return cleaned if self._validate(cleaned) else None
 
-    def _sanitize(self, value):
+    def _sanitize(self, value: str) -> str:
         return value.strip()
 
-    def _validate(self, value):
+    def _validate(self, value: str) -> bool:
         return bool(value) and value.isalnum()`;
 
 // Functional code output
-export const FUNCTIONAL_CODE = `def parse_user_id(input_str):
+export const FUNCTIONAL_CODE = `def parse_user_id(input_str: str) -> Optional[str]:
     return pipe(
         input_str,
         sanitize,
@@ -63,10 +65,10 @@ export const FUNCTIONAL_CODE = `def parse_user_id(input_str):
         lambda x: x if x else None
     )
 
-def sanitize(value):
+def sanitize(value: str) -> str:
     return (value or "").strip()
 
-def validate(value):
+def validate(value: str) -> Optional[str]:
     return value if value and value.isalnum() else None`;
 
 // Props schema

@@ -71,3 +71,13 @@ Implemented (Phase 2 of CompoundCurvesGraph.tsx)
 - **Severity**: Low (emerges from math, not explicitly coded)
 
 All major elements present. Main deltas are timing compression (phase runs faster than spec) and simplified spring animation.
+
+## Resolution Status
+
+**RESOLVED** - Fixed all medium-severity issues:
+1. ✅ Animation duration: Changed from 300 frames to 450 frames (frames 0-450 for full curve draw)
+2. ✅ First annotation timing: Changed from frame 60-100 to frame 90-150 to match spec
+3. ✅ Second annotation timing: Changed from frame 120-160 to frame 150-330 to match spec
+4. ✅ Ceiling line timing: Changed from frame 220-300 to frame 330-450 to match spec
+5. ✅ Dot pop-in animation: Replaced linear interpolation with spring physics (damping: 12, stiffness: 200)
+6. ✅ Added easing functions: annotations use `easeOutCubic`, ceiling uses `easeOutQuad`

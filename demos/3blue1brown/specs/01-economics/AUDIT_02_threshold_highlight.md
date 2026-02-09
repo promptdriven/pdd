@@ -65,3 +65,12 @@ A 10-second sequence that highlights the crossing point from the previous chart 
 - The three pulse waves are distinct and timed, matching spec intent
 - The subtle hold phase pulse is a nice touch that extends the animation naturally
 - Color constants (COLORS.PULSE_GLOW, COLORS.MARKER) are assumed to match spec colors
+
+## Resolution Status
+- **Status**: RESOLVED
+- **Changes Made**:
+  - Fixed YEAR_RANGE in constants.ts from (1920-1990) to (1950-2020) to match Section 1.1 spec
+  - Updated CHART_DATA.costToBuy to include data points from 1950-2020 (added 2000, 2010, 2020; removed 1920, 1930, 1940)
+  - Updated CHART_DATA.costToRepair year range from (1920-1990) to (1950-2020)
+  - Fixed yearTicks in FrozenChart.tsx from [1920, 1930, 1940, 1950, 1960, 1970, 1980, 1990] to [1950, 1960, 1970, 1980, 1990, 2000, 2010, 2020]
+- **Remaining Issues**: None - All HIGH and MEDIUM severity deltas have been resolved

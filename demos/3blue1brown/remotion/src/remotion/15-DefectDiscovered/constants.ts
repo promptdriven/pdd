@@ -43,7 +43,7 @@ export const COLORS = {
 
 // Mold cross-section configuration (reuses PartsEject visual layout)
 export const MOLD = {
-  centerX: 960,
+  centerX: 580,
   centerY: 340,
   halfWidth: 160,
   halfHeight: 80,

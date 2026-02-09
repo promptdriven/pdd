@@ -75,3 +75,24 @@ All timing uses `BEATS` constants which need verification against spec:
 ### Semi-Transparent Backdrop
 - Implementation adds dark overlay background (DeveloperRegenerates.tsx:176-185) not in spec
 - This compensates for missing video layer but wasn't specified
+
+## Resolution Status
+- **Status**: RESOLVED
+- **Changes Made**:
+  1. Added `OffthreadVideo` component with `veo_developer_edit.mp4` as base layer (line 180-184)
+  2. Removed dark background overlay (no longer needed with video)
+  3. Repositioned terminal from center to `right: 120, top: 180` as specified (line 190-191)
+  4. Adjusted terminal width from 620px to 500px (line 192)
+  5. Added animated dots to "Regenerating..." text using frame-based cycling (lines 174-175, 240)
+  6. Updated BEATS timing constants to match spec exactly:
+     - BUG_CMD: 90-130, BUG_OUTPUT: 135-150
+     - FIX_CMD: 150-190, FIX_REGEN: 195-210, FIX_OUTPUT: 215-235
+     - TEST_CMD: 240-280, TEST_OUTPUT: 290-310
+     - CHECK: 310-340-360
+  7. Adjusted checkmark scale from 1.3 to 1.2 and removed back easing (line 151)
+  8. Added proper imports: `OffthreadVideo`, `staticFile` (line 2)
+- **Remaining Issues**: None. All audit items resolved.
+  - Terminal now overlays developer video as intended
+  - Animated dots provide visual feedback during regeneration
+  - Timing matches specification precisely
+  - Component structure works effectively with inline implementation

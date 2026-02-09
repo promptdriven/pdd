@@ -3,6 +3,8 @@ export { DebtLayerSeparation } from "./DebtLayerSeparation";
 export { ContextWindowVisualization } from "./ContextWindowVisualization";
 export { CodebaseGrid } from "./CodebaseGrid";
 export { SplitViewMismatch } from "./SplitViewMismatch";
+export { InGridMismatch } from "./InGridMismatch";
+export { PerformanceGraphInset } from "./PerformanceGraphInset";
 export {
   CONTEXT_ROT_FPS,
   CONTEXT_ROT_DURATION_FRAMES,

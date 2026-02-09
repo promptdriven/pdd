@@ -201,7 +201,7 @@ export const CodeOutputMoldGlows: React.FC<CodeOutputMoldGlowsPropsType> = ({
               marginBottom: 12,
             }}
           >
-            The code is just plastic.
+            The code is output.
           </div>
           <div
             style={{

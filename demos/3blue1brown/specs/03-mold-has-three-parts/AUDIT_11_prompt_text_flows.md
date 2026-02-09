@@ -42,3 +42,15 @@ Implemented
 
 ## Additional Notes
 The implementation captures the core concept of text flowing from nozzle to mold and transforming, but simplifies the execution. The spec's emphasis on showing the SOURCE (the .prompt file) and the TRANSFORMATION (text → fluid) are understated. However, the fundamental animation arc is present: text appears, flows downward, and becomes code in the mold.
+
+## Resolution Status
+- **Status**: RESOLVED
+- **Changes Made**:
+  1. Added `user_parser.prompt` document visual (lines 47-89 in PromptTextFlows.tsx) with blue glow, appearing at frame 0-60 and fading at frame 360-420
+  2. Implemented three sequential text line animations (lines 126-182) with individual start frames: Line 1 at frame 90, Line 2 at frame 180, Line 3 at frame 270
+  3. Added text-to-fluid blur transformation effect (lines 155-161) with blur interpolating from 0 to 5px as text enters nozzle
+  4. Added fluid accumulation layer in mold cavity (lines 205-216) with fillLevel interpolation from TEXT_FLOW_START to TRANSFORM_END showing fluid rising from 0% to 100%
+  5. Updated BEATS constants in constants.ts to include DOCUMENT_START, DOCUMENT_PEAK, DOCUMENT_FADE, DOCUMENT_END, LINE1_START, LINE2_START, LINE3_START with proper timing per spec
+- **Remaining Issues**:
+  - Simplified nozzle design remains (not integrated into full mold cross-section context) - marked as Low severity in audit
+  - This is acceptable as the focus is on the text flow animation, not the mold structural detail

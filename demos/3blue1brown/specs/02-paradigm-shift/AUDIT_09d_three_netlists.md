@@ -102,3 +102,40 @@ This is a logical separation that maintains the narrative flow. The implementati
 - Detailed labeling and context
 
 The main gap is the absence of visible synthesis tool processing for each of the three runs, which would strengthen the visual metaphor of "running synthesis multiple times."
+
+---
+
+## Resolution Status
+
+**Date:** 2026-02-08
+**Status:** RESOLVED
+
+### Changes Made
+
+1. **Added Synthesis Tool Boxes for Three Runs**: Modified the ThreeNetlistsPhase component to include three SynthesisToolBox components, one above each netlist position.
+
+2. **Implemented Visual Processing**:
+   - Each synthesis tool appears with fade-in animation when its respective run starts
+   - Rotating gear animation indicates active processing
+   - Tools positioned at y=410, above netlists at y=580
+   - Each tool has independent opacity control (synth1Opacity, synth2Opacity, synth3Opacity)
+
+3. **Updated Flow Arrows**:
+   - Added flow arrows from Verilog code to each synthesis tool
+   - Added flow arrows from each synthesis tool to its respective netlist
+   - Creates complete visual pipeline: Code → Synth Tool → Netlist (3x)
+
+### Severity Resolution
+
+- **Medium: Missing Synthesis Tool Icons for Three Runs** - RESOLVED: Three synthesis tools now visible, one per run
+- **Low: Missing Slight Pulsing on Differences** - NOT IMPLEMENTED: Marked as optional in spec
+- **Low: Missing Connecting Bracket/Line for Equivalence** - ACCEPTED: Centered label position provides sufficient visual grouping
+
+### Implementation Details
+
+The synthesis tools use the existing SynthesisToolBox component with proper positioning and timing:
+- Run 1 tool appears at frame 60 (THREE_NETLISTS_BEATS.RUN1_START)
+- Run 2 tool appears at frame 150 (THREE_NETLISTS_BEATS.RUN2_START)
+- Run 3 tool appears at frame 240 (THREE_NETLISTS_BEATS.RUN3_START)
+
+Each tool shows rotating gear animation while processing, making it clear that synthesis is running three separate times on the same input, producing three different outputs. This strengthens the visual metaphor of non-deterministic generation.

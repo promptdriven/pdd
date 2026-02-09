@@ -400,39 +400,6 @@ export const AIMilestones: React.FC<AIMilestonesPropsType> = ({
         ))}
       </div>
 
-      {/* Subtitle during hold phase */}
-      {frame >= BEATS.HOLD_START && (
-        <div
-          style={{
-            position: "absolute",
-            bottom: 60,
-            left: "50%",
-            transform: "translateX(-50%)",
-            opacity: interpolate(
-              frame,
-              [BEATS.HOLD_START, BEATS.HOLD_START + 30],
-              [0, 1],
-              { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-            ),
-            textAlign: "center",
-            backgroundColor: "rgba(0, 0, 0, 0.6)",
-            padding: "20px 40px",
-            borderRadius: 12,
-          }}
-        >
-          <p
-            style={{
-              fontFamily: "Inter, system-ui, sans-serif",
-              fontSize: 28,
-              color: "#ffffff",
-              textShadow: "0 2px 8px rgba(0,0,0,0.8)",
-              margin: 0,
-            }}
-          >
-            Each release accelerated the decline
-          </p>
-        </div>
-      )}
     </AbsoluteFill>
   );
 };

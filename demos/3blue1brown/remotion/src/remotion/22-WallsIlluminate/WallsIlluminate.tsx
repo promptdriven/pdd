@@ -32,6 +32,24 @@ export const WallsIlluminate: React.FC<WallsIlluminatePropsType> = ({
     wallThickness: 60,
   };
 
+  // Individual wall pulse calculations
+  const getWallPulse = (wallPosition: "top" | "right" | "bottom" | "left") => {
+    const label = TEST_LABELS.find((l) => l.position === wallPosition);
+    if (!label) return 0;
+
+    return interpolate(
+      frame,
+      [label.start, label.start + 15, label.start + 30],
+      [0, 0.3, 0],
+      { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.inOut(Easing.sine) }
+    );
+  };
+
+  const topPulse = getWallPulse("top");
+  const rightPulse = getWallPulse("right");
+  const bottomPulse = getWallPulse("bottom");
+  const leftPulse = getWallPulse("left");
+
   return (
     <AbsoluteFill style={{ backgroundColor: COLORS.BACKGROUND }}>
       <svg width="100%" height="100%" viewBox="0 0 1920 1080" style={{ opacity: moldOpacity }}>
@@ -53,11 +71,11 @@ export const WallsIlluminate: React.FC<WallsIlluminatePropsType> = ({
           y={moldConfig.centerY - moldConfig.height / 2}
           width={moldConfig.wallThickness}
           height={moldConfig.height}
-          fill={`rgba(217, 148, 74, ${0.2 + 0.5 * wallsGlow})`}
+          fill={`rgba(217, 148, 74, ${0.2 + 0.5 * wallsGlow + leftPulse})`}
           stroke={COLORS.WALLS_AMBER}
           strokeWidth={2}
           style={{
-            filter: `drop-shadow(0 0 ${30 * wallsGlow}px ${COLORS.WALLS_AMBER})`,
+            filter: `drop-shadow(0 0 ${30 * wallsGlow + 30 * leftPulse}px ${COLORS.WALLS_AMBER})`,
           }}
         />
 
@@ -67,11 +85,11 @@ export const WallsIlluminate: React.FC<WallsIlluminatePropsType> = ({
           y={moldConfig.centerY - moldConfig.height / 2}
           width={moldConfig.wallThickness}
           height={moldConfig.height}
-          fill={`rgba(217, 148, 74, ${0.2 + 0.5 * wallsGlow})`}
+          fill={`rgba(217, 148, 74, ${0.2 + 0.5 * wallsGlow + rightPulse})`}
           stroke={COLORS.WALLS_AMBER}
           strokeWidth={2}
           style={{
-            filter: `drop-shadow(0 0 ${30 * wallsGlow}px ${COLORS.WALLS_AMBER})`,
+            filter: `drop-shadow(0 0 ${30 * wallsGlow + 30 * rightPulse}px ${COLORS.WALLS_AMBER})`,
           }}
         />
 
@@ -81,68 +99,92 @@ export const WallsIlluminate: React.FC<WallsIlluminatePropsType> = ({
           y={moldConfig.centerY + moldConfig.height / 2 - moldConfig.wallThickness}
           width={moldConfig.width - 2 * moldConfig.wallThickness}
           height={moldConfig.wallThickness}
-          fill={`rgba(217, 148, 74, ${0.2 + 0.5 * wallsGlow})`}
+          fill={`rgba(217, 148, 74, ${0.2 + 0.5 * wallsGlow + bottomPulse})`}
           stroke={COLORS.WALLS_AMBER}
           strokeWidth={2}
           style={{
-            filter: `drop-shadow(0 0 ${30 * wallsGlow}px ${COLORS.WALLS_AMBER})`,
+            filter: `drop-shadow(0 0 ${30 * wallsGlow + 30 * bottomPulse}px ${COLORS.WALLS_AMBER})`,
+          }}
+        />
+
+        {/* Top wall with glow */}
+        <rect
+          x={moldConfig.centerX - moldConfig.width / 2 + moldConfig.wallThickness}
+          y={moldConfig.centerY - moldConfig.height / 2}
+          width={moldConfig.width - 2 * moldConfig.wallThickness}
+          height={moldConfig.wallThickness}
+          fill={`rgba(217, 148, 74, ${0.2 + 0.5 * wallsGlow + topPulse})`}
+          stroke={COLORS.WALLS_AMBER}
+          strokeWidth={2}
+          style={{
+            filter: `drop-shadow(0 0 ${30 * wallsGlow + 30 * topPulse}px ${COLORS.WALLS_AMBER})`,
           }}
         />
       </svg>
 
-      {/* Test labels on walls */}
+      {/* Test labels on walls - one per wall */}
       {showLabels && (
         <div style={{ opacity: moldOpacity }}>
-          {/* Left wall labels */}
-          {TEST_LABELS.slice(0, 3).map((label, i) => {
+          {TEST_LABELS.map((label, i) => {
+            // Label fade in
             const labelOpacity = interpolate(
               frame,
-              [BEATS.LABELS_START + i * BEATS.LABELS_STAGGER, BEATS.LABELS_START + i * BEATS.LABELS_STAGGER + 20],
+              [label.start, label.start + 30],
               [0, 1],
-              { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+              { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
             );
-            return (
-              <div
-                key={`left-${i}`}
-                style={{
-                  position: "absolute",
-                  left: moldConfig.centerX - moldConfig.width / 2 + 10,
-                  top: moldConfig.centerY - moldConfig.height / 2 + 60 + i * 80,
-                  fontSize: 14,
-                  fontFamily: "JetBrains Mono, monospace",
-                  color: COLORS.WALLS_AMBER,
-                  opacity: labelOpacity,
-                  textShadow: `0 0 10px ${COLORS.WALLS_AMBER}`,
-                }}
-              >
-                {label}
-              </div>
-            );
-          })}
 
-          {/* Right wall labels */}
-          {TEST_LABELS.slice(3).map((label, i) => {
-            const labelOpacity = interpolate(
+            // Wall pulse effect when label appears
+            const wallPulse = interpolate(
               frame,
-              [BEATS.LABELS_START + (i + 3) * BEATS.LABELS_STAGGER, BEATS.LABELS_START + (i + 3) * BEATS.LABELS_STAGGER + 20],
-              [0, 1],
-              { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+              [label.start, label.start + 15, label.start + 30],
+              [0, 1, 0],
+              { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.inOut(Easing.sine) }
             );
+
+            // Position based on wall
+            let labelStyle: React.CSSProperties = {
+              position: "absolute",
+              fontSize: 24,
+              fontFamily: "JetBrains Mono, monospace",
+              color: "#FFF8F0",
+              opacity: labelOpacity,
+              textShadow: `0 2px 4px rgba(0, 0, 0, 0.5), 0 0 ${10 + 10 * wallPulse}px ${COLORS.WALLS_AMBER}`,
+            };
+
+            if (label.position === "top") {
+              labelStyle = {
+                ...labelStyle,
+                top: moldConfig.centerY - moldConfig.height / 2 - 40,
+                left: moldConfig.centerX,
+                transform: "translateX(-50%)",
+              };
+            } else if (label.position === "right") {
+              labelStyle = {
+                ...labelStyle,
+                top: moldConfig.centerY,
+                right: 960 - moldConfig.width / 2 - moldConfig.wallThickness - 20,
+                transform: "translateY(-50%) translateX(100%)",
+              };
+            } else if (label.position === "bottom") {
+              labelStyle = {
+                ...labelStyle,
+                bottom: 1080 - moldConfig.centerY - moldConfig.height / 2 - 40,
+                left: moldConfig.centerX,
+                transform: "translateX(-50%)",
+              };
+            } else if (label.position === "left") {
+              labelStyle = {
+                ...labelStyle,
+                top: moldConfig.centerY,
+                left: moldConfig.centerX - moldConfig.width / 2 - moldConfig.wallThickness - 20,
+                transform: "translateY(-50%) translateX(-100%)",
+              };
+            }
+
             return (
-              <div
-                key={`right-${i}`}
-                style={{
-                  position: "absolute",
-                  right: 960 - moldConfig.width / 2 + 70,
-                  top: moldConfig.centerY - moldConfig.height / 2 + 60 + i * 80,
-                  fontSize: 14,
-                  fontFamily: "JetBrains Mono, monospace",
-                  color: COLORS.WALLS_AMBER,
-                  opacity: labelOpacity,
-                  textShadow: `0 0 10px ${COLORS.WALLS_AMBER}`,
-                }}
-              >
-                {label}
+              <div key={`label-${i}`} style={labelStyle}>
+                {label.text}
               </div>
             );
           })}

@@ -13,8 +13,8 @@ const CurveMarker: React.FC<{
     const points = [];
     for (let i = 0; i < 10; i++) {
       const trailProgress = Math.max(0, progress - i * 0.02);
-      const trailX = 200 + trailProgress * 1100;
-      const trailY = 700 - 450 * (1 / (trailProgress * 2 + 0.3));
+      const trailX = 100 + trailProgress * 1300;
+      const trailY = 650 - 500 * (1 / (trailProgress * 2 + 0.3));
       points.push({ x: trailX, y: trailY, opacity: 1 - i * 0.1 });
     }
     return points;
@@ -201,8 +201,8 @@ const PrecisionGraphStatic: React.FC = () => {
     const points: string[] = [];
     for (let i = 0; i <= 100; i++) {
       const progress = i / 100;
-      const x = 200 + progress * 1100;
-      const y = 700 - 450 * (1 / (progress * 2 + 0.3));
+      const x = 100 + progress * 1300;
+      const y = 650 - 500 * (1 / (progress * 2 + 0.3));
       if (i === 0) {
         points.push(`M ${x} ${y}`);
       } else {
@@ -222,19 +222,19 @@ const PrecisionGraphStatic: React.FC = () => {
     >
       {/* Y-axis */}
       <line
-        x1={200}
-        y1={100}
-        x2={200}
-        y2={750}
+        x1={100}
+        y1={150}
+        x2={100}
+        y2={650}
         stroke={COLORS.AXIS_GRAY}
         strokeWidth={2}
       />
       {/* X-axis */}
       <line
-        x1={200}
-        y1={750}
+        x1={100}
+        y1={650}
         x2={1400}
-        y2={750}
+        y2={650}
         stroke={COLORS.AXIS_GRAY}
         strokeWidth={2}
       />
@@ -300,8 +300,8 @@ export const GraphAnimateCurve: React.FC<GraphAnimateCurvePropsType> = ({
   );
 
   // Calculate marker position on curve
-  const markerX = 200 + curveProgress * 1100;
-  const markerY = 700 - 450 * (1 / (curveProgress * 2 + 0.3));
+  const markerX = 100 + curveProgress * 1300;
+  const markerY = 650 - 500 * (1 / (curveProgress * 2 + 0.3));
 
   // Prompt size (large at start, small at end)
   const promptScale = interpolate(curveProgress, [0, 1], [1, 0.3]);

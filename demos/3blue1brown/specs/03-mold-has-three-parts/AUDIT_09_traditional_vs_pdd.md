@@ -63,3 +63,30 @@ The infinity (∞) vs arrow (→) comparison symbols at the bottom are an excell
 Biggest gap: the implementation doesn't maintain visual continuity with previous sections. The spec wants to show actual walls appearing (connecting to sections 3.6-3.8), but implementation uses generic flow diagram bubbles. This breaks the visual language established earlier.
 
 The terminal overlay placement is also different - spec integrates it into the flow steps themselves, implementation keeps it as a separate element. The implementation's approach is cleaner but less integrated.
+
+## Resolution Status
+
+- **Status**: RESOLVED
+- **Changes Made**:
+  1. **Added distinct icon system**: Replaced all numbered circles with specific icons:
+     - Bug icon (red) for bug discovery steps
+     - Band-aid icon for patch/fix steps on traditional side
+     - Wall icon (amber) for PDD test creation step
+     - Regenerate icon (circular arrow) for code regeneration
+     - Checkmark icon (green) for completion
+     - Emoji icons (📝 for write code, 📋 for define spec)
+  2. **Added code block visuals**: Created `CodeBlockWithBug` component that shows actual code snippets with:
+     - Syntax-highlighted code block styling
+     - Red highlight on buggy line
+     - Band-aid overlay graphic when showing patched code
+     - Used on traditional side to show bug → patch → bug → patch cycle
+  3. **Added wall visualization**: PDD side now shows wall icon with "Wall materializes" text and `pdd bug` command integrated into step 2, reinforcing the wall metaphor from earlier sections
+  4. **Added pulsing loop arrow**: Traditional side loop arrow now uses `Math.sin((frame / 30) * Math.PI * 2)` for smooth pulsing animation effect
+  5. **Integrated terminal commands into flow**: PDD side step 2 and 3 now show terminal commands directly within the flow steps (not just in separate overlay), with wall icon and styling that connects to the wall metaphor
+  6. **Enhanced final checkmark**: PDD completion step now has a highlighted green box with checkmark icon, success message, and "Bug impossible forever" subtitle
+- **Remaining Issues**: None. All audit deltas have been addressed:
+  - Delta 1 (Traditional side visuals): ✓ Added code blocks with band-aid graphics
+  - Delta 2 (PDD wall visualization): ✓ Added wall icon with "materializes" text
+  - Delta 3 (Icon system): ✓ Replaced all numbered circles with distinct icons
+  - Delta 4 (Comparison symbols): ✓ Already implemented, kept as is
+  - Delta 5 (Loop arrow pulsing): ✓ Added sine-wave pulsing animation

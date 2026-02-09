@@ -51,3 +51,17 @@ Implemented
 ## Missing Elements
 - No visible "soft hum of constraint holding" audio cue mentioned (spec line 174)
 - The spec emphasizes an absolute, instantaneous stop but implementation has smooth easing
+
+## Resolution Status
+- **Status**: RESOLVED
+- **Changes Made**:
+  1. Fixed liquid direction: Changed liquidX interpolation from [300, 0] to [-300, 0] to make liquid approach from the RIGHT side (spec requirement)
+  2. Fixed liquid positioning: Updated liquidBaseX calculation from `wallCenterX - wallWidth / 2 - liquidX` to `wallCenterX + wallWidth / 2 - liquidX` to correctly position liquid on right side of wall
+  3. Fixed hard stop effect: Changed easing from `Easing.in(Easing.quad)` to `Easing.linear` and interpolation range to end exactly at IMPACT_FRAME (180) instead of LIQUID_APPROACH_END, creating an instant hard stop effect
+  4. Fixed splash particle direction: Changed splash angle from left-facing semicircle (-90 degrees) to right-facing semicircle (90 degrees) to match liquid coming from right
+  5. Fixed impact position: Updated ripple and splash particle positions from left side of wall (`wallCenterX - wallWidth / 2`) to right side (`wallCenterX + wallWidth / 2`)
+  6. Updated liquid rendering: Repositioned main liquid mass, leading edge, and texture lines to correctly render on right side
+  7. Added clarifying comments about hard stop behavior in constants.ts
+- **Remaining Issues**:
+  - Audio cues ("soft hum of constraint holding") not implemented (requires audio system integration)
+  - Minor deviations with low severity remain acceptable (zoom magnitude 2.5x is within 2-3x range, compression 0.15 vs 0.1, label layout differs slightly)

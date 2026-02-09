@@ -1,5 +1,5 @@
 import React from "react";
-import { AbsoluteFill, interpolate, useCurrentFrame } from "remotion";
+import { AbsoluteFill, Easing, interpolate, useCurrentFrame } from "remotion";
 import { BEATS, FadeToBlackPropsType } from "./constants";
 
 export const FadeToBlack: React.FC<FadeToBlackPropsType> = ({
@@ -8,11 +8,12 @@ export const FadeToBlack: React.FC<FadeToBlackPropsType> = ({
   const frame = useCurrentFrame();
 
   // Background transition: #1a1a2e -> #000000
+  // Spec: Fade to black uses easeInQuad
   const bgDarkness = interpolate(
     frame,
     [BEATS.FADE_START, BEATS.FADE_END],
     [0, 1],
-    { extrapolateRight: "clamp" }
+    { extrapolateRight: "clamp", easing: Easing.in(Easing.quad) }
   );
 
   const r = Math.round(interpolate(bgDarkness, [0, 1], [26, 0]));
@@ -20,27 +21,30 @@ export const FadeToBlack: React.FC<FadeToBlackPropsType> = ({
   const b = Math.round(interpolate(bgDarkness, [0, 1], [46, 0]));
 
   // Title opacity
+  // Spec: Title uses easeOutCubic
   const titleOpacity = interpolate(
     frame,
     [BEATS.TITLE_START, BEATS.TITLE_END],
     [0, 0.9],
-    { extrapolateRight: "clamp" }
+    { extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
   );
 
   // URL opacity
+  // Spec: URL uses easeOutCubic
   const urlOpacity = interpolate(
     frame,
     [BEATS.URL_START, BEATS.URL_END],
     [0, 0.5],
-    { extrapolateRight: "clamp" }
+    { extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
   );
 
   // Install command opacity
+  // Spec: Install command uses easeOutCubic
   const installOpacity = interpolate(
     frame,
     [BEATS.INSTALL_START, BEATS.INSTALL_END],
     [0, 0.3],
-    { extrapolateRight: "clamp" }
+    { extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
   );
 
   return (

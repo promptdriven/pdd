@@ -15,6 +15,14 @@ export const BugDiscovered: React.FC<BugDiscoveredPropsType> = ({
     { extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
   );
 
+  // Scan line position
+  const scanY = interpolate(
+    frame,
+    [BEATS.SCAN_START, BEATS.SCAN_END],
+    [0, 300],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.linear }
+  );
+
   // Bug highlight
   const bugHighlight = interpolate(
     frame,
@@ -22,6 +30,11 @@ export const BugDiscovered: React.FC<BugDiscoveredPropsType> = ({
     [0, 1],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
   );
+
+  // Bug pulse effect
+  const bugPulse = frame > BEATS.BUG_HIGHLIGHT_START
+    ? Math.sin((frame - BEATS.BUG_HIGHLIGHT_START) * 0.15) * 0.1 + 1
+    : 1;
 
   // Red flash intensity
   const redFlash = interpolate(
@@ -109,18 +122,42 @@ export const BugDiscovered: React.FC<BugDiscoveredPropsType> = ({
             ))}
           </pre>
 
-          {/* Bug indicator */}
+          {/* Scan line */}
+          {frame >= BEATS.SCAN_START && frame < BEATS.SCAN_END && (
+            <div
+              style={{
+                position: "absolute",
+                left: 0,
+                right: 0,
+                top: scanY,
+                height: 2,
+                background: `linear-gradient(to bottom, transparent, ${COLORS.BUG_RED}, transparent)`,
+                boxShadow: `0 0 10px ${COLORS.BUG_RED}`,
+                pointerEvents: "none",
+              }}
+            />
+          )}
+
+          {/* BUG label */}
           {bugHighlight > 0 && (
             <div
               style={{
                 position: "absolute",
-                right: -60,
+                right: -120,
                 top: 90,
-                fontSize: 32,
+                fontSize: 24,
+                fontWeight: "bold",
+                color: COLORS.BUG_RED,
                 opacity: bugHighlight,
+                transform: `scale(${bugPulse})`,
+                padding: "8px 16px",
+                background: "rgba(217, 74, 74, 0.2)",
+                border: `2px solid ${COLORS.BUG_RED}`,
+                borderRadius: 8,
+                boxShadow: `0 0 20px rgba(217, 74, 74, 0.5)`,
               }}
             >
-              🐛
+              BUG
             </div>
           )}
         </div>

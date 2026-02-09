@@ -247,7 +247,7 @@ export const PieChart: React.FC<PieChartPropsType> = ({
             fontFamily: "Inter, system-ui, sans-serif",
             fontSize: 36,
             fontWeight: 700,
-            color: "#ffffff",
+            color: PIE_SEGMENTS.maintenance.color,
             opacity: percentageOpacity,
             textShadow: "0 2px 8px rgba(0,0,0,0.7)",
           }}

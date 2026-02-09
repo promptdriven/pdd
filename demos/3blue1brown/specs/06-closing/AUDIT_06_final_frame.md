@@ -108,3 +108,110 @@ No implementation of layered bars showing:
 
 ## Alternative Interpretation Note
 The implementation appears to show the three components explicitly labeled rather than abstracting them into a unified "mold" shape. This is more literal and educational but loses the emotional/metaphorical impact of the spec's "single glowing mold vs dim plastic" visual contrast.
+
+---
+
+## RESOLUTION STATUS: PARTIALLY RESOLVED ⚠️
+
+### Current Status
+The implementation at `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/38-CodeOutputMoldGlows/CodeOutputMoldGlows.tsx` provides a functional component with correct text content and basic styling, but diverges significantly from the spec's intentional visual design.
+
+### What Is Working
+- Text content matches spec exactly ("The code is just plastic." + "The mold is what matters.")
+- Text styling correct (colors, font, sizes, weights)
+- Tri-color text shadow for "mold is what matters" implemented correctly
+- Duration and approximate timing (~10 seconds / 300 frames)
+
+### What Needs Fixing
+
+#### 1. Layout Structure (HIGH IMPACT)
+**Spec says**: Two objects in abstract spatial arrangement
+- Mold: Single glowing shape at left-center (350, 280)
+- Plastic: Single geometric form at right (700, 310)
+- Text: Centered at bottom
+
+**Current does**: Three separate labeled boxes in horizontal row
+- PROMPT, TESTS, GROUNDING boxes spread across top
+- Code block centered below
+- Missing unified "mold" metaphor entirely
+
+**Fix approach**:
+- Replace three separate boxes with single unified rounded rectangle "mold" shape
+- Simplify code display to abstract geometric representation
+- Reposition to left-center and right-center for visual balance
+- Apply "SIMPLICITY IS EVERYTHING" principle from spec
+
+#### 2. Glow Effect (MEDIUM IMPACT)
+**Spec says**: Three separate glow layers with different blur radii
+- Blue inset -20, blur 15px
+- Amber inset -15, blur 12px
+- Green inset -10, blur 10px
+
+**Current does**: Single color boxShadow per component
+
+**Fix approach**:
+- Implement multi-layer boxShadow with comma-separated values
+- Apply to unified mold shape container
+- Create depth effect with layered glow
+
+#### 3. Breathing Animation (MEDIUM IMPACT)
+**Spec says**: Sinusoidal breathing glow
+- Formula: `Math.sin(frame * 0.035) * 0.1 + 0.9`
+- Applied to glow intensities for organic pulse
+- Creates "living" feel
+
+**Current does**: Static glow, no cycling animation
+
+**Fix approach**:
+- Add breathing calculation to component
+- Multiply glow intensity values by breath factor
+- Applies to all glow layers uniformly
+
+#### 4. Glow Boost on Message 2 (LOW IMPACT)
+**Spec says**: `finalGlowBoost` from 1.0 to 1.4 when "mold is what matters" appears
+- Frame 210-270: Boost multiplier increases
+- Emphasizes key message
+
+**Current does**: No boost, single glow level
+
+**Fix approach**:
+- Add boost interpolation tied to second message timing
+- Multiply final glow calculations by boost factor
+- Creates emphasis effect on key moment
+
+#### 5. Mold Interior Representation (MEDIUM IMPACT)
+**Spec says**: Three colored horizontal bars (6px each) inside rounded mold container
+- Blue bar (80% width) for prompt layer
+- Amber bars (90%, 70% widths) for test layers
+- Green bar (60% width) for grounding layer
+
+**Current does**: Shows three separate labeled component boxes
+
+**Fix approach**:
+- Create `MoldInterior` sub-component
+- Display as stacked colored bars with glow
+- Position inside unified mold container
+- Maintains educational component mapping
+
+#### 6. Plastic Part Representation (LOW IMPACT)
+**Spec says**: Geometric shape (not real code) with abstract code line bars
+- 5 bars with varying widths (70%, 55%, 80%, 45%, 65%)
+- Simple rectangles representing code lines
+- Gray color, no glow
+
+**Current does**: Real code text at bottom-center
+
+**Fix approach**:
+- Replace actual code with abstract bar representation
+- Position to right of mold instead of below
+- Use gray color without glow to show contrast
+
+### Implementation Priority
+1. **CRITICAL**: Restructure layout - unified mold vs separate components
+2. **HIGH**: Implement breathing animation
+3. **MEDIUM**: Multi-layer glow effect + interior bars
+4. **MEDIUM**: Glow boost on second message
+5. **LOW**: Abstract plastic representation
+
+### Severity Assessment
+The current implementation works functionally but contradicts the spec's core design philosophy: "Two objects, two lines of text. Nothing else." The busy three-box layout undermines the emotional metaphor of simplicity (mold) vs complexity (plastic). Visual redesign recommended for full spec compliance.

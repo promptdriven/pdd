@@ -59,3 +59,21 @@ The main gaps are:
 The ratchet mechanism itself is excellent - it has the mechanical feel the spec calls for, with spring-based snappy rotation and pawl bounce. The gear visual with triangular teeth matches the spec's ASCII diagram almost perfectly.
 
 The composition successfully communicates "tests only accumulate" through the visual of the ratchet preventing backward movement. The missing terminal overlay is a secondary element that would reinforce the message but isn't critical to the core metaphor.
+
+## Resolution Status
+- **Status**: RESOLVED
+- **Changes Made**:
+  1. **Added Terminal Overlay**: Implemented `TerminalOverlay` component showing `pdd test` command output with scrolling green checkmarks (✓) for each test. The terminal shows the last 8 lines with proper scrolling effect and displays "{count} tests passing" at the bottom. Terminal fades in at frame 150 (5 seconds).
+  2. **Implemented Accelerating Tempo**: Replaced constant `WALL_ACCUMULATION_RATE` with explicit `WALL_SCHEDULE` array matching spec's timing:
+     - First wave (3 walls): frames 60, 90, 120 (60 frames per wall)
+     - Accelerated wave (5 walls): frames 180, 210, 240, 270, 300 (30 frames per wall)
+     - Final accumulation (4 walls): frames 360, 390, 420, 450 (~22-30 frames per wall)
+  3. **Dynamic Label Sizing**: Added `getFontSize()` function that interpolates font size from 12px (at 5 walls) to 9px (at 17 walls), making labels progressively smaller as walls accumulate.
+  4. **Used Spec Wall Labels**: Wall schedule now uses the exact labels from spec (empty array → [], negative → error, overflow → clamp, special chars, etc.)
+  5. **Terminal Test Names**: Added `TERMINAL_TESTS` array with realistic test names matching the wall labels.
+- **Remaining Issues**: None. All major deltas have been addressed. The implementation now matches the spec's requirements for:
+  - Terminal overlay with scrolling tests
+  - Accelerating wall accumulation tempo
+  - Shrinking label text as walls grow
+  - Specific wall labels from spec
+  - Proper 12-tooth ratchet gear (already correct)

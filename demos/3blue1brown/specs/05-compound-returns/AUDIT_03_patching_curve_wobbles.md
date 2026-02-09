@@ -91,3 +91,13 @@ Implemented (Phase 3 of CompoundCurvesGraph.tsx)
 - **Severity**: Low (likely correct via color parameter)
 
 Main issues: timing compression, missing flicker effect, missing dip annotation icons.
+
+## Resolution Status
+
+**RESOLVED** - Fixed all high and medium-severity issues:
+1. ✅ Wobble animation timing: Changed from frame 0-180 to frame 0-270 to match spec (3 dips over 270 frames)
+2. ✅ Dip annotation timing: Changed to frame 60-90, 150-180, 240-270 to match spec
+3. ✅ Cost callout timing: Changed from frame 200-260 to frame 270-360 to match spec
+4. ✅ Flicker effect: Added 1-2px lateral shake (±1.5px oscillation) for 5-8 frames at each dip position
+5. ✅ Dip annotation icons: Added arrow-down icon for "new bug", revert icon for "regression", fork icon for "merge conflict"
+6. ✅ Added easing functions: wobble uses `easeInOutQuad`, annotations use `easeOutCubic`, cost uses `easeOutCubic`

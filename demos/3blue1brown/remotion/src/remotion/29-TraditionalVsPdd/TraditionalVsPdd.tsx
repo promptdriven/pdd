@@ -2,6 +2,109 @@ import React from "react";
 import { AbsoluteFill, interpolate, useCurrentFrame, Easing } from "remotion";
 import { COLORS, BEATS, TRADITIONAL_STEPS, PDD_STEPS, TraditionalVsPddPropsType } from "./constants";
 
+/** Bug icon - red bug symbol */
+const BugIcon: React.FC<{ size?: number; color?: string }> = ({ size = 24, color = "#E74C3C" }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <path
+      d="M12 2C10.9 2 10 2.9 10 4C10 4.7 10.4 5.3 11 5.6V7H9C7.9 7 7 7.9 7 9V11H5V13H7V15H5V17H7C7 19.2 8.8 21 11 21H13C15.2 21 17 19.2 17 17H19V15H17V13H19V11H17V9C17 7.9 16.1 7 15 7H13V5.6C13.6 5.3 14 4.7 14 4C14 2.9 13.1 2 12 2Z"
+      fill={color}
+    />
+  </svg>
+);
+
+/** Band-aid icon - patch symbol */
+const BandaidIcon: React.FC<{ size?: number; color?: string }> = ({ size = 24, color = "#E74C3C" }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <rect x="3" y="10" width="18" height="4" rx="2" fill={color} opacity="0.3" />
+    <rect x="10" y="3" width="4" height="18" rx="2" fill={color} opacity="0.3" />
+    <circle cx="12" cy="12" r="3" fill={color} />
+    <circle cx="8" cy="8" r="1.5" fill={color} opacity="0.6" />
+    <circle cx="16" cy="8" r="1.5" fill={color} opacity="0.6" />
+    <circle cx="8" cy="16" r="1.5" fill={color} opacity="0.6" />
+    <circle cx="16" cy="16" r="1.5" fill={color} opacity="0.6" />
+  </svg>
+);
+
+/** Wall icon - brick wall symbol */
+const WallIcon: React.FC<{ size?: number; color?: string }> = ({ size = 24, color = "#D9944A" }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <rect x="2" y="3" width="8" height="4" fill={color} stroke={color} strokeWidth="0.5" />
+    <rect x="11" y="3" width="11" height="4" fill={color} stroke={color} strokeWidth="0.5" />
+    <rect x="2" y="8" width="6" height="4" fill={color} stroke={color} strokeWidth="0.5" />
+    <rect x="9" y="8" width="6" height="4" fill={color} stroke={color} strokeWidth="0.5" />
+    <rect x="16" y="8" width="6" height="4" fill={color} stroke={color} strokeWidth="0.5" />
+    <rect x="2" y="13" width="8" height="4" fill={color} stroke={color} strokeWidth="0.5" />
+    <rect x="11" y="13" width="11" height="4" fill={color} stroke={color} strokeWidth="0.5" />
+    <rect x="2" y="18" width="6" height="4" fill={color} stroke={color} strokeWidth="0.5" />
+    <rect x="9" y="18" width="6" height="4" fill={color} stroke={color} strokeWidth="0.5" />
+    <rect x="16" y="18" width="6" height="4" fill={color} stroke={color} strokeWidth="0.5" />
+  </svg>
+);
+
+/** Regenerate icon - circular arrow */
+const RegenerateIcon: React.FC<{ size?: number; color?: string }> = ({ size = 24, color = "#4CAF50" }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <path
+      d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"
+      fill={color}
+    />
+  </svg>
+);
+
+/** Checkmark icon - success symbol */
+const CheckmarkIcon: React.FC<{ size?: number; color?: string }> = ({ size = 24, color = "#4CAF50" }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <circle cx="12" cy="12" r="10" fill={color} opacity="0.2" />
+    <path
+      d="M9 12l2 2 4-4"
+      stroke={color}
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      fill="none"
+    />
+  </svg>
+);
+
+/** Code block with bug - shows a snippet of code with a red bug highlight */
+const CodeBlockWithBug: React.FC<{ opacity: number; hasBandaid?: boolean }> = ({ opacity, hasBandaid = false }) => (
+  <div
+    style={{
+      position: "relative",
+      background: "#1e1e2e",
+      border: "1px solid #333",
+      borderRadius: 4,
+      padding: 8,
+      fontSize: 11,
+      fontFamily: "monospace",
+      color: "#ccc",
+      opacity,
+      width: 200,
+    }}
+  >
+    <div style={{ color: "#888" }}>{"// parse user input"}</div>
+    <div style={{ background: hasBandaid ? "transparent" : "#E74C3C33", color: hasBandaid ? "#ccc" : "#E74C3C" }}>
+      {"if (input.trim())"}
+    </div>
+    <div style={{ paddingLeft: 12 }}>{"  process(input)"}</div>
+    {hasBandaid && (
+      <div
+        style={{
+          position: "absolute",
+          top: 18,
+          left: 0,
+          right: 0,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <BandaidIcon size={40} color="#E74C3Caa" />
+      </div>
+    )}
+  </div>
+);
+
 /** Terminal snippet overlay for the PDD side, showing pdd bug and pdd fix commands. */
 const PddTerminalOverlay: React.FC<{
   lines: Array<{ text: string; color?: string }>;
@@ -154,55 +257,126 @@ export const TraditionalVsPdd: React.FC<TraditionalVsPddPropsType> = ({
           </div>
 
           {/* Cycle visualization */}
-          <div style={{ position: "relative", width: 300, height: 400 }}>
-            {TRADITIONAL_STEPS.map((step, i) => {
-              const stepOpacity = Math.min(1, Math.max(0, traditionalProgress - i));
-              const yOffset = i * 60;
-              return (
-                <div
-                  key={i}
-                  style={{
-                    position: "absolute",
-                    top: yOffset,
-                    left: 0,
-                    right: 0,
-                    opacity: stepOpacity,
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 12,
-                  }}
-                >
-                  <div
-                    style={{
-                      width: 24,
-                      height: 24,
-                      borderRadius: "50%",
-                      background: i % 2 === 0 ? "rgba(231, 76, 60, 0.3)" : "rgba(231, 76, 60, 0.5)",
-                      border: `2px solid ${COLORS.TRADITIONAL_RED}`,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      fontSize: 12,
-                      color: COLORS.TRADITIONAL_RED,
-                    }}
-                  >
-                    {i + 1}
-                  </div>
-                  <span style={{ color: COLORS.LABEL_WHITE, fontSize: 16 }}>{step}</span>
-                </div>
-              );
-            })}
+          <div style={{ position: "relative", width: 400, height: 500 }}>
+            {/* Step 0: Write code */}
+            {traditionalProgress >= 0 && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  opacity: Math.min(1, Math.max(0, traditionalProgress - 0)),
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 12,
+                }}
+              >
+                <div style={{ fontSize: 20 }}>{"📝"}</div>
+                <span style={{ color: COLORS.LABEL_WHITE, fontSize: 16 }}>Write code</span>
+              </div>
+            )}
 
-            {/* Cycle arrow */}
+            {/* Step 1: Find bug - with code block */}
+            {traditionalProgress >= 1 && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: 50,
+                  left: 0,
+                  opacity: Math.min(1, Math.max(0, traditionalProgress - 1)),
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
+                  <BugIcon size={24} />
+                  <span style={{ color: COLORS.LABEL_WHITE, fontSize: 16 }}>Find bug</span>
+                </div>
+                <CodeBlockWithBug opacity={1} />
+              </div>
+            )}
+
+            {/* Step 2: Fix code - code with bandaid */}
+            {traditionalProgress >= 2 && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: 150,
+                  left: 0,
+                  opacity: Math.min(1, Math.max(0, traditionalProgress - 2)),
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
+                  <BandaidIcon size={24} />
+                  <span style={{ color: COLORS.LABEL_WHITE, fontSize: 16 }}>Fix code</span>
+                </div>
+                <CodeBlockWithBug opacity={1} hasBandaid />
+              </div>
+            )}
+
+            {/* Step 3: Find bug again */}
+            {traditionalProgress >= 3 && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: 250,
+                  left: 0,
+                  opacity: Math.min(1, Math.max(0, traditionalProgress - 3)),
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
+                  <BugIcon size={24} />
+                  <span style={{ color: COLORS.LABEL_WHITE, fontSize: 16 }}>Find bug</span>
+                </div>
+                <CodeBlockWithBug opacity={1} />
+              </div>
+            )}
+
+            {/* Step 4: Fix code again */}
+            {traditionalProgress >= 4 && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: 350,
+                  left: 0,
+                  opacity: Math.min(1, Math.max(0, traditionalProgress - 4)),
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
+                  <BandaidIcon size={24} />
+                  <span style={{ color: COLORS.LABEL_WHITE, fontSize: 16 }}>Fix code</span>
+                </div>
+                <CodeBlockWithBug opacity={1} hasBandaid />
+              </div>
+            )}
+
+            {/* Step 5: Find bug... (ellipsis indicating continuation) */}
+            {traditionalProgress >= 5 && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: 450,
+                  left: 0,
+                  opacity: Math.min(1, Math.max(0, traditionalProgress - 5)),
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 12,
+                }}
+              >
+                <BugIcon size={24} />
+                <span style={{ color: COLORS.LABEL_WHITE, fontSize: 16 }}>Find bug...</span>
+              </div>
+            )}
+
+            {/* Cycle arrow with pulsing animation */}
             {traditionalProgress >= TRADITIONAL_STEPS.length && (
               <div
                 style={{
                   position: "absolute",
-                  top: TRADITIONAL_STEPS.length * 60 + 20,
+                  top: 500,
                   left: "50%",
                   transform: "translateX(-50%)",
                   fontSize: 20,
                   color: COLORS.TRADITIONAL_RED,
+                  opacity: 0.5 + 0.5 * Math.sin((frame / 30) * Math.PI * 2), // Pulsing effect
                 }}
               >
                 {"\u21BB"} Repeat forever
@@ -234,53 +408,151 @@ export const TraditionalVsPdd: React.FC<TraditionalVsPddPropsType> = ({
           </div>
 
           {/* Linear progression */}
-          <div style={{ position: "relative", width: 350, height: 400 }}>
-            {PDD_STEPS.map((step, i) => {
-              const stepOpacity = Math.min(1, Math.max(0, pddProgress - i));
-              const yOffset = i * 70;
-              const isLast = i === PDD_STEPS.length - 1;
-              return (
+          <div style={{ position: "relative", width: 400, height: 500 }}>
+            {/* Step 0: Define spec */}
+            {pddProgress >= 0 && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  opacity: Math.min(1, Math.max(0, pddProgress - 0)),
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 12,
+                }}
+              >
+                <div style={{ fontSize: 20 }}>{"📋"}</div>
+                <span style={{ color: COLORS.LABEL_WHITE, fontSize: 16 }}>Define spec (prompt + tests)</span>
+              </div>
+            )}
+
+            {/* Step 1: Generate code */}
+            {pddProgress >= 1 && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: 70,
+                  left: 0,
+                  opacity: Math.min(1, Math.max(0, pddProgress - 1)),
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 12,
+                }}
+              >
+                <RegenerateIcon size={24} color={COLORS.PDD_GREEN} />
+                <span style={{ color: COLORS.LABEL_WHITE, fontSize: 16 }}>Generate code</span>
+              </div>
+            )}
+
+            {/* Step 2: Bug found → add test with wall visualization */}
+            {pddProgress >= 2 && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: 140,
+                  left: 0,
+                  opacity: Math.min(1, Math.max(0, pddProgress - 2)),
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
+                  <BugIcon size={24} color="#E74C3C" />
+                  <span style={{ color: COLORS.LABEL_WHITE, fontSize: 16 }}>Bug found → add test</span>
+                </div>
                 <div
-                  key={i}
                   style={{
-                    position: "absolute",
-                    top: yOffset,
-                    left: 0,
-                    right: 0,
-                    opacity: stepOpacity,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    marginTop: 8,
+                    padding: "8px 12px",
+                    background: "#252535",
+                    borderRadius: 4,
+                    border: `1px solid ${COLORS.WALLS_AMBER}`,
+                  }}
+                >
+                  <WallIcon size={32} color={COLORS.WALLS_AMBER} />
+                  <div>
+                    <div style={{ fontSize: 11, fontFamily: "monospace", color: "#4A90D9" }}>
+                      $ pdd bug user_parser
+                    </div>
+                    <div style={{ fontSize: 10, color: COLORS.WALLS_AMBER, marginTop: 2 }}>
+                      Wall materializes
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Step 3: Regenerate code */}
+            {pddProgress >= 3 && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: 260,
+                  left: 0,
+                  opacity: Math.min(1, Math.max(0, pddProgress - 3)),
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
+                  <RegenerateIcon size={24} color={COLORS.PDD_GREEN} />
+                  <span style={{ color: COLORS.LABEL_WHITE, fontSize: 16 }}>Regenerate code</span>
+                </div>
+                <div
+                  style={{
+                    padding: "8px 12px",
+                    background: "#252535",
+                    borderRadius: 4,
+                    fontSize: 11,
+                    fontFamily: "monospace",
+                    color: "#4A90D9",
+                    marginTop: 8,
+                  }}
+                >
+                  $ pdd fix user_parser
+                </div>
+              </div>
+            )}
+
+            {/* Step 4: All tests pass - final checkmark */}
+            {pddProgress >= 4 && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: 360,
+                  left: 0,
+                  opacity: Math.min(1, Math.max(0, pddProgress - 4)),
+                }}
+              >
+                <div
+                  style={{
                     display: "flex",
                     alignItems: "center",
                     gap: 12,
+                    padding: "12px 16px",
+                    background: `${COLORS.PDD_GREEN}22`,
+                    border: `2px solid ${COLORS.PDD_GREEN}`,
+                    borderRadius: 8,
                   }}
                 >
-                  <div
-                    style={{
-                      width: 24,
-                      height: 24,
-                      borderRadius: "50%",
-                      background: isLast ? COLORS.PDD_GREEN : "rgba(76, 175, 80, 0.3)",
-                      border: `2px solid ${COLORS.PDD_GREEN}`,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      fontSize: 12,
-                      color: isLast ? "#fff" : COLORS.PDD_GREEN,
-                    }}
-                  >
-                    {isLast ? "\u2713" : i + 1}
+                  <CheckmarkIcon size={32} color={COLORS.PDD_GREEN} />
+                  <div>
+                    <div
+                      style={{
+                        color: COLORS.PDD_GREEN,
+                        fontSize: 18,
+                        fontWeight: "bold",
+                      }}
+                    >
+                      All tests pass ✓
+                    </div>
+                    <div style={{ fontSize: 13, color: COLORS.LABEL_GRAY, marginTop: 2 }}>
+                      Bug impossible forever
+                    </div>
                   </div>
-                  <span
-                    style={{
-                      color: isLast ? COLORS.PDD_GREEN : COLORS.LABEL_WHITE,
-                      fontSize: 16,
-                      fontWeight: isLast ? "bold" : "normal",
-                    }}
-                  >
-                    {step}
-                  </span>
                 </div>
-              );
-            })}
+              </div>
+            )}
           </div>
 
           {/* Terminal overlay inside PDD side */}

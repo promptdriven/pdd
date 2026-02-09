@@ -24,7 +24,7 @@ export const BEATS = {
 
   // Code dims
   CODE_DIM_START: 150,
-  CODE_DIM_END: 200,
+  CODE_DIM_END: 240,
 
   // Hold
   HOLD_START: 240,

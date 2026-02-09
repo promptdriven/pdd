@@ -55,11 +55,11 @@ export const LinesDiverge: React.FC<LinesDivergePropsType> = ({
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
 
-  // Zoom out effect
+  // Zoom out effect - scale down to show full picture
   const zoomScale = interpolate(
     frame,
     [BEATS.ZOOM_OUT_START, BEATS.ZOOM_OUT_END],
-    [1, 0.95],
+    [1, 0.92],
     {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",

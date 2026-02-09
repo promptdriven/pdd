@@ -1,5 +1,5 @@
 import React, { useMemo } from "react";
-import { AbsoluteFill, interpolate, useCurrentFrame, Easing } from "remotion";
+import { AbsoluteFill, interpolate, useCurrentFrame, Easing, spring } from "remotion";
 import {
   COLORS,
   GRAPH,
@@ -244,7 +244,7 @@ const CurveLine: React.FC<{
   );
 };
 
-/** Dots along a curve. */
+/** Dots along a curve with spring physics pop-in. */
 const CurveDots: React.FC<{
   yFn: (t: number) => number;
   visibleCount: number;
@@ -255,6 +255,7 @@ const CurveDots: React.FC<{
   radius?: number;
   frame: number;
   dotStartFrame?: number;
+  fps?: number;
 }> = ({
   yFn,
   visibleCount,
@@ -265,20 +266,23 @@ const CurveDots: React.FC<{
   radius = 8,
   frame,
   dotStartFrame = 0,
+  fps = 30,
 }) => {
   const dots = [];
   for (let i = 0; i < visibleCount; i++) {
     const t = from + ((i + 1) / (totalCount + 1)) * (to - from);
     const x = toSvgX(t);
     const y = toSvgY(yFn(t));
-    // Spring-like pop: each dot appears at a staggered frame
+    // Spring physics pop-in: each dot appears at a staggered frame
     const dotFrame = dotStartFrame + i * 8;
-    const popScale = interpolate(
-      frame,
-      [dotFrame, dotFrame + 10],
-      [0, 1],
-      { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
-    );
+    const popScale = spring({
+      frame: frame - dotFrame,
+      fps,
+      config: {
+        damping: 12,
+        stiffness: 200,
+      },
+    });
     dots.push(
       <g key={i} transform={`translate(${x}, ${y}) scale(${popScale})`}>
         <circle r={radius} fill={color} stroke="#ffffff" strokeWidth={2} />
@@ -288,7 +292,49 @@ const CurveDots: React.FC<{
   return <>{dots}</>;
 };
 
-/** Annotation callout with leader line. */
+/** Dip annotation icons. */
+const DipIcon: React.FC<{
+  type: "arrow-down" | "revert" | "fork";
+  x: number;
+  y: number;
+  color: string;
+  size?: number;
+}> = ({ type, x, y, color, size = 14 }) => {
+  if (type === "arrow-down") {
+    return (
+      <path
+        d={`M ${x} ${y - size / 2} L ${x} ${y + size / 2} M ${x - size / 3} ${y + size / 4} L ${x} ${y + size / 2} L ${x + size / 3} ${y + size / 4}`}
+        stroke={color}
+        strokeWidth={2}
+        fill="none"
+      />
+    );
+  }
+  if (type === "revert") {
+    return (
+      <g>
+        <circle cx={x} cy={y} r={size / 2} stroke={color} strokeWidth={2} fill="none" />
+        <path
+          d={`M ${x - size / 4} ${y - size / 4} L ${x - size / 4} ${y + size / 4} L ${x + size / 4} ${y}`}
+          stroke={color}
+          strokeWidth={2}
+          fill="none"
+        />
+      </g>
+    );
+  }
+  // fork
+  return (
+    <path
+      d={`M ${x} ${y - size / 2} L ${x} ${y} M ${x} ${y} L ${x - size / 3} ${y + size / 2} M ${x} ${y} L ${x + size / 3} ${y + size / 2}`}
+      stroke={color}
+      strokeWidth={2}
+      fill="none"
+    />
+  );
+};
+
+/** Annotation callout with leader line and optional icon. */
 const Annotation: React.FC<{
   text: string;
   x: number;
@@ -297,6 +343,7 @@ const Annotation: React.FC<{
   color?: string;
   offsetY?: number;
   fontSize?: number;
+  icon?: "arrow-down" | "revert" | "fork";
 }> = ({
   text,
   x,
@@ -305,6 +352,7 @@ const Annotation: React.FC<{
   color = "rgba(255,255,255,0.7)",
   offsetY = 50,
   fontSize = 16,
+  icon,
 }) => (
   <g opacity={opacity}>
     {/* Leader line */}
@@ -317,8 +365,16 @@ const Annotation: React.FC<{
       strokeWidth={1}
       opacity={0.5}
     />
+    {icon && (
+      <DipIcon
+        type={icon}
+        x={x + 12}
+        y={y + offsetY - 10}
+        color={color}
+      />
+    )}
     <text
-      x={x + 14}
+      x={icon ? x + 28 : x + 14}
       y={y + offsetY + 4}
       fill={color}
       fontSize={fontSize}
@@ -471,7 +527,7 @@ export const CompoundCurvesGraph: React.FC<CompoundCurvesGraphPropsType> = ({
     phase >= 2
       ? interpolate(
           frame,
-          [0, 300],
+          [0, 450],
           [0.08, 1],
           { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) },
         )
@@ -479,7 +535,7 @@ export const CompoundCurvesGraph: React.FC<CompoundCurvesGraphPropsType> = ({
   const patchVisibleDots =
     phase >= 2
       ? Math.floor(
-          interpolate(frame, [0, 300], [1, PATCH_DOT_COUNT], {
+          interpolate(frame, [0, 450], [1, PATCH_DOT_COUNT], {
             extrapolateLeft: "clamp",
             extrapolateRight: "clamp",
           }),
@@ -487,55 +543,73 @@ export const CompoundCurvesGraph: React.FC<CompoundCurvesGraphPropsType> = ({
       : 0;
   const patchAnnot1Opacity =
     phase >= 2
-      ? interpolate(frame, [60, 100], [0, 1], {
+      ? interpolate(frame, [90, 150], [0, 1], {
           extrapolateLeft: "clamp",
           extrapolateRight: "clamp",
+          easing: Easing.out(Easing.cubic),
         })
       : 0;
   const patchAnnot2Opacity =
     phase >= 2
-      ? interpolate(frame, [120, 160], [0, 1], {
+      ? interpolate(frame, [150, 330], [0, 1], {
           extrapolateLeft: "clamp",
           extrapolateRight: "clamp",
+          easing: Easing.out(Easing.cubic),
         })
       : 0;
   const ceilingOpacity =
     phase >= 2
-      ? interpolate(frame, [220, 300], [0, 0.4], {
+      ? interpolate(frame, [330, 450], [0, 0.4], {
           extrapolateLeft: "clamp",
           extrapolateRight: "clamp",
+          easing: Easing.out(Easing.quad),
         })
       : 0;
 
   // ── Phase 3: wobbles, dip annotations, cost callout ──────────────
   const wobbleAmount =
     phase >= 3
-      ? interpolate(frame, [0, 180], [0, 1], {
+      ? interpolate(frame, [0, 270], [0, 1], {
           extrapolateLeft: "clamp",
           extrapolateRight: "clamp",
           easing: Easing.inOut(Easing.quad),
         })
       : 0;
+
+  // Flicker effect for each dip (1-2px lateral shake, 5-8 frames per dip)
+  const flickerOffsets = phase >= 3 ? DIP_POSITIONS.map((_, i) => {
+    const dipStartFrame = [0, 90, 180][i]; // When each dip starts forming
+    const flickerStart = dipStartFrame + 60;
+    const flickerEnd = flickerStart + 7;
+    if (frame >= flickerStart && frame <= flickerEnd) {
+      return Math.sin(frame * 3) * 1.5; // Oscillate ±1.5px
+    }
+    return 0;
+  }) : [0, 0, 0];
+
   const dipAnnotOpacities =
     phase >= 3
       ? [
-          interpolate(frame, [40, 70], [0, 1], {
+          interpolate(frame, [60, 90], [0, 1], {
             extrapolateLeft: "clamp",
             extrapolateRight: "clamp",
+            easing: Easing.out(Easing.cubic),
           }),
-          interpolate(frame, [100, 130], [0, 1], {
+          interpolate(frame, [150, 180], [0, 1], {
             extrapolateLeft: "clamp",
             extrapolateRight: "clamp",
+            easing: Easing.out(Easing.cubic),
           }),
-          interpolate(frame, [160, 190], [0, 1], {
+          interpolate(frame, [240, 270], [0, 1], {
             extrapolateLeft: "clamp",
             extrapolateRight: "clamp",
+            easing: Easing.out(Easing.cubic),
           }),
         ]
       : [0, 0, 0];
   const costOpacity =
     phase >= 3
-      ? interpolate(frame, [200, 260], [0, 1], {
+      ? interpolate(frame, [270, 360], [0, 1], {
           extrapolateLeft: "clamp",
           extrapolateRight: "clamp",
           easing: Easing.out(Easing.cubic),
@@ -569,9 +643,10 @@ export const CompoundCurvesGraph: React.FC<CompoundCurvesGraphPropsType> = ({
       : 0;
   const pddAnnotOpacity =
     phase >= 4
-      ? interpolate(frame, [120, 160], [0, 1], {
+      ? interpolate(frame, [120, 180], [0, 1], {
           extrapolateLeft: "clamp",
           extrapolateRight: "clamp",
+          easing: Easing.out(Easing.cubic),
         })
       : 0;
   const patchingDimOpacity =
@@ -585,7 +660,7 @@ export const CompoundCurvesGraph: React.FC<CompoundCurvesGraphPropsType> = ({
   // ── Phase 5: PDD exponential, gap shading, labels ────────────────
   const pddFullProgress =
     phase >= 5
-      ? interpolate(frame, [0, 300], [0.5, 1.0], {
+      ? interpolate(frame, [0, 330], [0.5, 1.0], {
           extrapolateLeft: "clamp",
           extrapolateRight: "clamp",
           easing: Easing.in(Easing.quad),
@@ -594,7 +669,7 @@ export const CompoundCurvesGraph: React.FC<CompoundCurvesGraphPropsType> = ({
   const pddVisibleDots5 =
     phase >= 5
       ? Math.floor(
-          interpolate(frame, [0, 300], [8, PDD_DOT_COUNT], {
+          interpolate(frame, [0, 330], [8, PDD_DOT_COUNT], {
             extrapolateLeft: "clamp",
             extrapolateRight: "clamp",
           }),
@@ -602,7 +677,7 @@ export const CompoundCurvesGraph: React.FC<CompoundCurvesGraphPropsType> = ({
       : 0;
   const gapOpacity =
     phase >= 5
-      ? interpolate(frame, [30, 180], [0, 1], {
+      ? interpolate(frame, [0, 60], [0, 1], {
           extrapolateLeft: "clamp",
           extrapolateRight: "clamp",
           easing: Easing.out(Easing.cubic),
@@ -610,9 +685,10 @@ export const CompoundCurvesGraph: React.FC<CompoundCurvesGraphPropsType> = ({
       : 0;
   const advantageLabelOpacity =
     phase >= 5
-      ? interpolate(frame, [180, 240], [0, 1], {
+      ? interpolate(frame, [180, 270], [0, 1], {
           extrapolateLeft: "clamp",
           extrapolateRight: "clamp",
+          easing: Easing.out(Easing.cubic),
         })
       : 0;
   const advantageLabelDrift =
@@ -624,14 +700,15 @@ export const CompoundCurvesGraph: React.FC<CompoundCurvesGraphPropsType> = ({
       : 0;
   const wallCalloutOpacity =
     phase >= 5
-      ? interpolate(frame, [250, 310], [0, 1], {
+      ? interpolate(frame, [270, 360], [0, 1], {
           extrapolateLeft: "clamp",
           extrapolateRight: "clamp",
+          easing: Easing.out(Easing.cubic),
         })
       : 0;
   const glowStd =
     phase >= 5
-      ? interpolate(frame, [0, 300], [4, 8], {
+      ? interpolate(frame, [0, 330], [4, 8], {
           extrapolateLeft: "clamp",
           extrapolateRight: "clamp",
         })
@@ -696,7 +773,7 @@ export const CompoundCurvesGraph: React.FC<CompoundCurvesGraphPropsType> = ({
 
         {/* ── Patching curve ────────────────────────────────────── */}
         {effectivePatchTo > 0 && (
-          <g opacity={patchingDimOpacity}>
+          <g opacity={patchingDimOpacity} transform={`translate(${flickerOffsets.reduce((a, b) => a + b, 0) / 3}, 0)`}>
             <CurveLine
               yFn={patchYFn}
               from={0}
@@ -715,6 +792,7 @@ export const CompoundCurvesGraph: React.FC<CompoundCurvesGraphPropsType> = ({
                 radius={PATCH_DOT_RADIUS}
                 frame={frame}
                 dotStartFrame={10}
+                fps={30}
               />
             )}
 
@@ -750,7 +828,7 @@ export const CompoundCurvesGraph: React.FC<CompoundCurvesGraphPropsType> = ({
               />
             )}
 
-            {/* Phase 3 dip annotations */}
+            {/* Phase 3 dip annotations with icons */}
             {phase >= 3 &&
               DIP_POSITIONS.map((pos, i) => (
                 <Annotation
@@ -761,6 +839,7 @@ export const CompoundCurvesGraph: React.FC<CompoundCurvesGraphPropsType> = ({
                   opacity={dipAnnotOpacities[i]}
                   color={COLORS.DIP_RED}
                   fontSize={15}
+                  icon={["arrow-down", "revert", "fork"][i] as "arrow-down" | "revert" | "fork"}
                 />
               ))}
           </g>
@@ -817,6 +896,7 @@ export const CompoundCurvesGraph: React.FC<CompoundCurvesGraphPropsType> = ({
                   radius={PDD_DOT_RADIUS}
                   frame={frame}
                   dotStartFrame={phase >= 5 ? 0 : 40}
+                  fps={30}
                 />
               </>
             )}

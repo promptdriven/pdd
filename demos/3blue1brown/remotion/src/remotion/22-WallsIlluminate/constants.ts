@@ -29,14 +29,12 @@ export const COLORS = {
   LABEL_GRAY: "#888888",
 };
 
-// Test labels to display on walls
+// Test labels to display on walls (one per wall: Top, Right, Bottom, Left)
 export const TEST_LABELS = [
-  "null → None",
-  "empty → None",
-  '"abc" → "abc"',
-  '" abc " → "abc"',
-  '"a1b2" → "a1b2"',
-  '"a@b" → None',
+  { text: "null → None", position: "top", start: 60 },
+  { text: "empty string → ''", position: "right", start: 120 },
+  { text: "handles unicode", position: "bottom", start: 180 },
+  { text: "latency < 100ms", position: "left", start: 240 },
 ];
 
 // Props schema

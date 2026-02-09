@@ -1,5 +1,5 @@
 import React from "react";
-import { interpolate, useCurrentFrame, useVideoConfig } from "remotion";
+import { Easing, interpolate, useCurrentFrame, useVideoConfig } from "remotion";
 import {
   COLORS,
   CHART_DATA,
@@ -19,25 +19,40 @@ export const CodeCostChart: React.FC<{ startAtFullView?: boolean }> = ({ startAt
   const chartHeight = height - CHART_MARGINS.top - CHART_MARGINS.bottom;
 
   // Zoom out effect: start zoomed in on right side, zoom out to full view
+  // When startAtFullView is true, skip zoom animation (already at full view)
+  // When startAtFullView is false (default), perform zoom-out animation (frames 0-60)
+  // Spec: "Zoom out: easeOutCubic"
   const zoomScale = startAtFullView ? 1 : interpolate(
     frame,
     [BEATS.ZOOM_OUT_START, BEATS.ZOOM_OUT_END],
     [1.5, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.cubic),
+    }
   );
 
   const zoomOffsetX = startAtFullView ? 0 : interpolate(
     frame,
     [BEATS.ZOOM_OUT_START, BEATS.ZOOM_OUT_END],
     [-300, 0],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.cubic),
+    }
   );
 
   const zoomOffsetY = startAtFullView ? 0 : interpolate(
     frame,
     [BEATS.ZOOM_OUT_START, BEATS.ZOOM_OUT_END],
     [-100, 0],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.cubic),
+    }
   );
 
   const getXPosition = (year: number) => {

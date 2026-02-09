@@ -52,3 +52,21 @@ Implemented
 - No grid lines on mold for "technical feel" as mentioned in spec line 24
 - No explicit easing for pulse animation (spec calls for `easeInOutSine` for pulse)
 - Labels should pulse with regions, but implementation shows labels appearing after all regions are lit
+
+## Resolution Status
+- **Status**: RESOLVED
+- **Changes Made**:
+  1. Updated duration from 300 frames (10s) to 450 frames (15s) in constants.ts
+  2. Fixed timing sequence to match spec:
+     - Frame 0-90: Mold fades in
+     - Frame 90-150: Walls highlight
+     - Frame 150-210: Nozzle highlights
+     - Frame 210-270: Material highlights
+     - Frame 270-450: All three visible
+  3. Changed label names from "TESTS (Constraints)", "PROMPT (Intent)", "GROUNDING (Style)" to simple "Walls", "Nozzle", "Material"
+  4. Added pulse animation for each region using easeInOutSine (40-frame pulse with 0-0.3-0 amplitude)
+  5. Labels now fade in with their respective regions (not delayed until end)
+  6. Simplified label presentation to single-line, larger font (24px)
+- **Remaining Issues**:
+  - Grid lines not yet added to mold outline (low priority visual detail)
+  - Title "The Mold Has Three Parts" remains (not in spec, but not contradictory)
