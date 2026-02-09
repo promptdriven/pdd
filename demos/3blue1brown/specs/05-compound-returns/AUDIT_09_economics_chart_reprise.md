@@ -4,97 +4,137 @@
 
 ### Requirements Met
 
-1. **Chart composition exists and is integrated into Part 5 sequence**: The `CrossingPoint` composition from `08-CrossingPoint/` is used as Visual 7 in `Part5CompoundReturns.tsx` (line 194-198). It is invoked with `defaultCrossingPointProps` and sequenced at `BEATS.VISUAL_07_START` (frame 2291, ~76.38s into Part 5).
+1. **Chart composition exists and is wired into Part 5 sequence** (PASS)
+   - `Part5CompoundReturns.tsx:194-198`: Visual 7 renders `<CrossingPoint {...defaultCrossingPointProps} />` inside a `<Sequence from={BEATS.VISUAL_07_START}>`.
+   - `constants.ts:72-73`: `VISUAL_07_START = s2f(76.38)` (frame 2291), `VISUAL_07_END = s2f(84.5)` (frame 2535).
+   - The composition is correctly positioned as the final visual in Part 5.
 
-2. **Background color matches spec**: Both the spec (`#1a1a2e`) and the implementation use `#1a1a2e` as the base background. The implementation also adds a gradient to `#0f0f1a` (acceptable embellishment).
+2. **Canvas resolution 1920x1080** (PASS)
+   - `08-CrossingPoint/constants.ts:7-8`: `CROSSING_POINT_WIDTH = 1920`, `CROSSING_POINT_HEIGHT = 1080`.
 
-3. **Resolution correct**: Canvas is 1920x1080 as specified (`CROSSING_POINT_WIDTH = 1920`, `CROSSING_POINT_HEIGHT = 1080` in `08-CrossingPoint/constants.ts` lines 7-8).
+3. **Background color #1a1a2e** (PASS)
+   - `08-CrossingPoint/constants.ts:34`: `BACKGROUND: "#1a1a2e"`.
+   - `08-CrossingPoint/CrossingPoint.tsx:104`: Uses `linear-gradient(180deg, ${COLORS.BACKGROUND} 0%, ${COLORS.BACKGROUND_GRADIENT_END} 100%)`. The gradient to `#0f0f1a` is an acceptable embellishment over the spec's solid `#1a1a2e`.
 
-4. **Axes match spec**: X-axis Years (2015-2025) and Y-axis "Developer hours per module" are implemented with correct range (`YEAR_RANGE = { min: 2015, max: 2025 }`, `HOURS_RANGE = { min: 0, max: 35 }` in `08-CrossingPoint/constants.ts` lines 141-142).
+4. **X-axis: Years 2015-2025** (PASS)
+   - `08-CrossingPoint/constants.ts:141`: `YEAR_RANGE = { min: 2015, max: 2025 }`.
+   - `08-CrossingPoint/CodeCostChart.tsx:106`: `yearLabels = [2015, 2020, 2025]` rendered as axis labels.
 
-5. **Generate line (Blue #4A90D9) present**: `LINE_GENERATE: "#4A90D9"` used as a solid 4px stroke for the cost-to-generate line (`08-CrossingPoint/CodeCostChart.tsx` lines 183-190). Spec says 3px; implementation uses 4px (minor delta).
+5. **Y-axis: "Developer Hours"** (PASS)
+   - `08-CrossingPoint/constants.ts:142`: `HOURS_RANGE = { min: 0, max: 35 }`.
+   - `08-CrossingPoint/CodeCostChart.tsx:297`: Y-axis label reads "Developer hours per module" (spec says "Developer Hours" or "Cost" -- close enough).
 
-6. **Total cost to patch line (Amber #D9944A, dashed) present**: `LINE_PATCH_TOTAL: "#D9944A"` with `strokeDasharray="12,6"` and 3px stroke (`08-CrossingPoint/CodeCostChart.tsx` lines 222-230). Data rises from 22h (2015) to 33h (2025). Spec says "rises from ~25h (2020) to ~33h (2025)" -- the data starts at 22h in 2015 and reaches 25h at 2020, then 33h at 2025, which is consistent.
+6. **Generate Line (Blue #4A90D9, solid)** (PASS)
+   - `08-CrossingPoint/constants.ts:40`: `LINE_GENERATE: "#4A90D9"`.
+   - `08-CrossingPoint/CodeCostChart.tsx:183-190`: Solid blue path, `strokeWidth={4}`. Spec says 3px; implementation is 4px (minor delta, see Issue #9).
 
-7. **"We are here." label present**: Rendered in `CrossingPoint.tsx` (lines 144-168) at the second crossing point with bold 28pt font, matching spec's "bold 28pt" requirement.
+7. **Total Cost to Patch Line (Amber #D9944A, dashed)** (PASS)
+   - `08-CrossingPoint/constants.ts:42`: `LINE_PATCH_TOTAL: "#D9944A"`.
+   - `08-CrossingPoint/CodeCostChart.tsx:222-230`: `strokeDasharray="12,6"`, `strokeWidth={3}`, `opacity={0.9}`.
+   - Data: rises from 25h at 2020 to 33h at 2025 (`constants.ts:89-96`), consistent with spec's "~25 hours (2020) to ~33 hours (2025)".
 
-8. **Crossing point marker present**: `WeAreHereMarker` component renders a pulsing marker at the second crossing point (`CROSSING_POINT_2: { year: 2023.4, hours: 11.4 }`) with concentric pulse rings.
+8. **Crossing point marker exists** (PASS)
+   - `08-CrossingPoint/WeAreHereMarker.tsx`: Renders pulsing marker with concentric rings at the second crossing point.
+   - `08-CrossingPoint/constants.ts:124-127`: `CROSSING_POINT_2 = { year: 2023.4, hours: 11.4 }`.
 
-9. **Title "The Economics of Code" displayed**: Shown at top center, 42pt, matching the spec's chart title concept (`CrossingPoint.tsx` lines 108-125).
+9. **"We are here." label present** (PASS)
+   - `08-CrossingPoint/CrossingPoint.tsx:144-168`: Renders "We are here." with `fontSize: 28`, `fontWeight: 700`, positioned at `crossingX + 140, crossingY + 100`. The spec says bold 28pt -- matches.
 
-10. **Narration sync timing reasonable**: The section is sequenced to begin at 76.38s in Part 5, aligning with narration segment [20]: "But the economics changed, and when economics change," and ending around 84.5s with "darning socks." (segment [22] at 83.8s).
+10. **Title "The Economics of Code" displayed** (PASS)
+    - `08-CrossingPoint/CrossingPoint.tsx:108-125`: `fontSize: 42`, `fontWeight: 700`, centered at top.
 
-11. **Chart data includes forked structure**: The implementation correctly includes small-codebase fork at 35% opacity and large-codebase fork at 70% opacity (`08-CrossingPoint/CodeCostChart.tsx` lines 201-219), which partially addresses the spec's "dimmed forks" concept.
+11. **Blue pulse color (#4A90D9)** (PASS)
+    - `08-CrossingPoint/constants.ts:46`: `PULSE_GLOW: "#4A90D9"`.
+    - `08-CrossingPoint/WeAreHereMarker.tsx:181`: Ring `stroke={COLORS.PULSE_GLOW}`.
 
-12. **Legend present**: A legend showing all four line categories is rendered at top-right (`CrossingPoint.tsx` lines 170-276).
+12. **Narration sync timing is reasonable** (PASS)
+    - `S05-CompoundReturns/constants.ts:29-31`: Narration segments [20] at 76.4s ("But the economics changed..."), [21] at 80.4s ("behavior that was rational becomes..."), [22] at 83.8s ("darning socks.").
+    - Visual 7 starts at 76.38s and ends at 84.5s, covering all three narration segments.
+
+13. **Small-codebase fork visible at reduced opacity** (PARTIAL)
+    - `08-CrossingPoint/CodeCostChart.tsx:203-209`: `opacity={0.35}`. Spec calls for 30% opacity for the fork; 35% is close.
+
+14. **Legend for chart lines present** (PASS)
+    - `08-CrossingPoint/CrossingPoint.tsx:170-276`: Four-item legend showing Generate, Patch (small CB), Patch (large CB), and True cost (with tech debt).
 
 ### Issues Found
 
-1. **No enhanced crossing point pulse for the reprise (HIGH)**
-   - **Spec says**: 6-8 concentric rings (vs 4-5 in Part 1), each ring lasts 30 frames (vs 20), slower pulse rate, 2-3 pulse cycles at frames 120, 300, and 480 (spec lines 48-53, 103-118)
-   - **Implementation does**: Reuses the exact Part 1 `CrossingPoint` composition with `defaultCrossingPointProps`. The `WeAreHereMarker` has `PULSE_CONFIG.NUM_RINGS = 5` rings with 15-frame stagger and a single strong pulse at frame 120-150 of the composition's local timeline. No enhanced/reprise variant exists.
-   - **Impact**: The spec explicitly states "This is a REPRISE, not a repeat" and calls for more emphatic, slower pulsing with more rings. The current implementation is a literal repeat of Part 1.
+1. **No enhanced crossing point pulse for the reprise -- SEVERITY: HIGH**
+   - **Spec requirement** (lines 48-53, 103-118): The reprise must have 6-8 concentric rings (vs 4-5 in Part 1). Each ring lasts 30 frames (vs 20 in Part 1). The pulse rate is slower, more emphatic. The pulse repeats 2-3 times during the section. Specific timing: first cycle at frame 120-300, second at 300-480, third (gentler, 3-4 rings) at 480-570.
+   - **Implementation**: `08-CrossingPoint/constants.ts:153`: `PULSE_CONFIG.NUM_RINGS = 5`. `WeAreHereMarker.tsx:67-69`: One strong pulse of 5 rings at frames 120-150 of local timeline. Then `WeAreHereMarker.tsx:72-103`: Continuous hold-phase pulsing with only 3 rings repeating every 45 frames from frame 210. No separate "enhanced" variant or reprise-specific pulse configuration exists.
+   - **Impact**: The spec explicitly states (line 295): "This is a REPRISE, not a repeat -- the viewer should recognize the chart instantly but feel the added weight." The current implementation is a literal Part 1 repeat. The deliberate three-cycle emotional arc (building, reinforcing, winding down) synchronized with narration beats is entirely absent.
 
-2. **No "darning socks" text overlay (HIGH)**
-   - **Spec says**: "...darning socks." appears at frame 570-660, below/right of crossing point, italic 24pt, amber (#D9944A) at 70% opacity (spec lines 55-61, 119-123)
-   - **Implementation does**: No "darning socks" text element exists anywhere in the `CrossingPoint` composition or in `Part5CompoundReturns.tsx` for Visual 7.
-   - **Impact**: This is described as "the visual punchline" (spec line 296) that completes the analogy. Its absence removes the emotional landing of the entire section.
+2. **No "...darning socks." text overlay -- SEVERITY: HIGH**
+   - **Spec requirement** (lines 55-61, 119-122): Text "...darning socks." fades in at frame 570-630 (mapped to spec's local timeline). Position: below and to the right of crossing point, offset from "We are here." Font: sans-serif, italic, 24pt. Color: amber (#D9944A) at 70% opacity. Fade uses `easeOutCubic`.
+   - **Implementation**: No "darning socks" text appears anywhere in `CrossingPoint.tsx`, `WeAreHereMarker.tsx`, or `Part5CompoundReturns.tsx` Visual 7. The text "darning socks" only appears in `constants.ts` comments and the Visual 7 description string.
+   - **Impact**: Spec line 296 calls this "the visual punchline -- understated, devastatingly placed." It is the emotional and intellectual climax text of Part 5. Its absence removes the landing of the entire section.
 
-3. **No chart simplification/dimming for reprise (MEDIUM)**
-   - **Spec says**: Study annotations dimmed to 20% opacity, fork lines dimmed to 30% opacity, only main generate and total cost lines at full opacity (spec lines 63-68)
-   - **Implementation does**: The small-codebase fork is at 35% opacity (close to 30%), but the large-codebase fork is at 70% opacity and the total cost dashed line is at 90% opacity. There is no dynamic dimming specific to the reprise context. The legend remains fully visible.
-   - **Impact**: The spec calls for simplified focus on "two key lines and the crossing point." The current rendering shows all lines at their Part 1 opacities.
+3. **No chart simplification/dimming for reprise -- SEVERITY: MEDIUM**
+   - **Spec requirement** (lines 63-68): Study annotations dimmed to 20% opacity. Fork lines dimmed (only main generate and total cost lines at full opacity). Small-codebase fork visible but at 30% opacity. This focuses attention on the two key lines and the crossing point.
+   - **Implementation**: `CodeCostChart.tsx` renders all lines at their Part 1 opacities: small-codebase fork at 35% (line 208), large-codebase fork at 70% (line 218), total cost dashed at 90% (line 229), generate at full (line 186). There are no props on `CrossingPoint` or `CodeCostChart` to accept annotation/fork opacity overrides. No `annotationOpacity`, `forkOpacity`, or similar prop exists.
+   - **Impact**: The spec wants a visually simplified chart that directs attention to the two essential lines and the crossing point. The current rendering shows the full Part 1 chart with all detail, diluting focus.
 
-4. **No cross-dissolve transition from developer footage (MEDIUM)**
-   - **Spec says**: Frame 0-45 (0-1.5s) cross-dissolve from developer footage (5.8) to chart (spec lines 93-96)
-   - **Implementation does**: `Part5CompoundReturns.tsx` uses a discrete `activeVisual` switch -- Visual 6 (developer callback) cuts to Visual 7 (CrossingPoint) at `BEATS.VISUAL_07_START`. There is no cross-dissolve or opacity interpolation between the two.
-   - **Impact**: The transition is an abrupt cut rather than the specified dissolve.
+4. **No cross-dissolve transition from developer footage -- SEVERITY: MEDIUM**
+   - **Spec requirement** (lines 93-96): Frame 0-45 (0-1.5s) cross-dissolve from developer footage (Section 5.8) to the economics chart. The chart fades in already fully drawn (no re-animation of lines). Easing: `easeInOutCubic`.
+   - **Implementation**: `Part5CompoundReturns.tsx:52-58` uses discrete `activeVisual` switching. When `frame >= BEATS.VISUAL_07_START`, Visual 6 (developer callback) disappears and Visual 7 (CrossingPoint) appears. There is no opacity interpolation, no cross-fade between them.
+   - **Impact**: The transition is an abrupt hard cut rather than the specified dissolve, which was intended to connect the developer callback emotionally to the economics chart.
 
-5. **Composition duration mismatch (MEDIUM)**
-   - **Spec says**: ~25 seconds duration with detailed frame-by-frame breakdown up to frame 750 (spec lines 4, 93-127)
-   - **Implementation does**: The CrossingPoint composition is 10 seconds / 300 frames (`CROSSING_POINT_DURATION_SECONDS = 10`). In the Part 5 sequence, Visual 7 runs from frame 2291 to frame 2535 (~8.1 seconds, 244 frames).
-   - **Impact**: The section is approximately one-third of the specified 25-second duration. The elaborate three-pulse-cycle timing structure (frames 120-750) cannot fit.
+5. **Composition duration mismatch -- SEVERITY: MEDIUM**
+   - **Spec requirement** (line 4): ~25 seconds duration. Detailed frame breakdown from frame 0 to 750 (lines 93-127).
+   - **Implementation**: `08-CrossingPoint/constants.ts:5-6`: `CROSSING_POINT_DURATION_SECONDS = 10`, `CROSSING_POINT_DURATION_FRAMES = 300`. In the Part 5 sequence: Visual 7 spans frames 2291-2535 = 244 frames = ~8.1 seconds.
+   - **Impact**: The section runs at roughly one-third the spec's designed duration. The three-pulse-cycle timing structure (frames 120/300/480/570/660/750) cannot fit into 244 frames. However, this may be intentional: the Part 5 narration timing (segments [20]-[22] = 76.38s to 84.5s) yields ~8 seconds, suggesting the spec's 25-second duration was drafted before narration was recorded. Even so, the pulse timing and text overlay still need to be implemented at the compressed scale.
 
-6. **No three-pulse-cycle structure (HIGH)**
-   - **Spec says**: First pulse cycle frames 120-300, second frames 300-480 (larger radius), third frames 480-570 (gentler, 3-4 rings) (spec lines 103-118)
-   - **Implementation does**: `WeAreHereMarker` has one strong pulse (5 rings at frames 120-150 of local timeline) and continuous hold-phase pulsing (3 rings repeating every 45 frames from frame 210). This is the Part 1 behavior, not the enhanced three-cycle structure.
-   - **Impact**: The deliberate three-act emotional build (pulse-pulse-gentle wind-down) synchronized with narration is missing.
+6. **No three-pulse-cycle structure -- SEVERITY: HIGH**
+   - **Spec requirement** (lines 103-118): First pulse cycle frames 120-300 (6-8 rings, staggered by 20 frames). Second pulse cycle frames 300-480 (slightly larger expansion radius). Third pulse cycle frames 480-570 (gentler, 3-4 rings, energy winding down).
+   - **Implementation**: `WeAreHereMarker.tsx:67-69`: One strong pulse of 5 rings starting at local frame 120 with 15-frame stagger. `WeAreHereMarker.tsx:72-103`: Continuous 3-ring pulsing every 45 frames starting at frame 210. This is the Part 1 pulse behavior. There is no concept of distinct pulse cycles with varying ring counts, radii, or emotional intensity.
+   - **Impact**: The three-act emotional build (assertive -> reinforcing -> gentle wind-down) timed to narration beats ("economics changed" / "when economics change" / "becomes...") is missing. The current implementation has a flat, repeating pulse with no narrative arc.
 
-7. **No hold on final composition (LOW)**
-   - **Spec says**: Frame 660-750 (22-25s) hold with chart, "We are here.", and "darning socks" all visible, no animation (spec lines 124-127)
-   - **Implementation does**: The composition duration is only ~8 seconds and ends with continuous hold pulsing. No distinct "stillness" phase exists.
-   - **Impact**: The spec calls this a "moment of stillness for the statement to land" before Part 6.
+7. **No hold on final composition -- SEVERITY: LOW**
+   - **Spec requirement** (lines 124-127): Frame 660-750 (22-25s) hold with chart, "We are here.", and "...darning socks." all visible. No further animation -- stillness for the statement to land. 3-second hold before Part 6.
+   - **Implementation**: The composition continues pulsing during its hold phase (`WeAreHereMarker.tsx:72-103`). There is no distinct stillness period. Additionally, the "darning socks" text doesn't exist, so the final composition cannot display it.
+   - **Impact**: The spec calls for a "moment of stillness" (line 297) as the bookend to Part 1's economics argument. Without it, the section lacks the pause for emotional landing.
 
-8. **Pulse ring color gradient not implemented (LOW)**
-   - **Spec says**: Each ring transitions blue (#4A90D9) to white to transparent (spec lines 49-50, 105)
-   - **Implementation does**: Rings use solid `PULSE_GLOW (#4A90D9)` stroke with opacity decay only. No white intermediate color.
-   - **Impact**: Purely visual polish difference.
+8. **Pulse ring color gradient not implemented -- SEVERITY: LOW**
+   - **Spec requirement** (lines 49-50, 105): Each ring transitions from blue (#4A90D9) to white to transparent.
+   - **Implementation**: `WeAreHereMarker.tsx:181`: Rings use solid `stroke={COLORS.PULSE_GLOW}` (#4A90D9) with opacity decay. No intermediate white color in the ring stroke.
+   - **Impact**: Visual polish difference. The spec's blue-to-white-to-transparent gradient would create a more ethereal expanding effect.
 
-9. **Generate line stroke width (LOW)**
-   - **Spec says**: Solid, 3px stroke (spec line 29)
-   - **Implementation does**: 4px stroke (`08-CrossingPoint/CodeCostChart.tsx` line 188)
-   - **Impact**: Minor visual difference, 1px thicker than specified.
+9. **Generate line stroke width 4px vs spec's 3px -- SEVERITY: LOW**
+   - **Spec requirement** (line 29): "Solid, 3px stroke"
+   - **Implementation**: `CodeCostChart.tsx:188`: `strokeWidth={4}`.
+   - **Impact**: Minor 1px difference. Purely cosmetic.
+
+10. **`startAtFullView` prop not passed for reprise -- SEVERITY: LOW**
+    - **Spec requirement** (lines 93-96): "The chart fades in already fully drawn (no re-animation of lines)."
+    - **Implementation**: `Part5CompoundReturns.tsx:196`: `<CrossingPoint {...defaultCrossingPointProps} />`. `08-CrossingPoint/constants.ts:167-171`: `defaultCrossingPointProps = { showTitle: true, showOverlayText: false, startAtFullView: false }`. With `startAtFullView: false`, the chart performs a zoom-out animation from frames 0-60 of its local timeline (zooms from 1.5x to 1x). In the reprise context, the chart should appear instantly at full view.
+    - **Impact**: The chart incorrectly zooms in at the start of the reprise section instead of appearing already fully drawn as specified.
 
 ### Notes
 
-**Architecture observation**: The implementation reuses the Part 1 `CrossingPoint` composition verbatim via `<CrossingPoint {...defaultCrossingPointProps} />`. The spec explicitly calls for a distinct reprise version with enhancements (enhanced pulses, chart simplification, "darning socks" text, cross-dissolve entry). To properly implement this spec, either:
-1. A new `EconomicsChartReprise` composition should be created that wraps/extends `CrossingPoint` with the enhanced behaviors, or
-2. The existing `CrossingPoint` should accept props for reprise mode (ring count, pulse timing, dimming levels, text overlay content).
+**Architecture observation**: The implementation reuses the Part 1 `CrossingPoint` composition verbatim via `<CrossingPoint {...defaultCrossingPointProps} />`. The spec explicitly calls for a distinct reprise version ("This is a REPRISE, not a repeat" -- line 295) with enhanced behaviors: more emphatic pulses (6-8 rings, three distinct cycles), chart simplification (dimmed annotations and forks), "...darning socks." text overlay, and cross-dissolve entry from developer footage. To properly implement this, either:
+1. A new `EconomicsChartReprise` composition should be created wrapping/extending the chart elements with reprise-specific enhancements, or
+2. The existing `CrossingPoint` should accept props for reprise mode (ring count/timing overrides, annotation dimming levels, optional text overlays, dissolve opacity).
 
-**Duration gap**: The most structurally significant issue is that the allocated time (~8s) is far shorter than the spec's 25-second design. The entire three-pulse emotional arc with narration sync cannot be achieved in 8 seconds. However, the Part 5 constants show this section maps to narration segments [20]-[22] which span 76.38s-84.5s (~8.1s), suggesting the implementation timing was derived from actual narration length. The spec's 25-second duration may have been drafted before narration timing was finalized.
+**Duration reconciliation**: The spec's 25-second / 750-frame design was likely drafted before narration was finalized. The actual narration for this section spans ~8 seconds (76.38s-84.5s). The pulse timing and text overlay concepts from the spec remain valid but should be compressed into the actual ~244-frame window. A reasonable mapping would be:
+- Pulse cycle 1: local frames 0-80
+- Pulse cycle 2: local frames 80-160
+- Pulse cycle 3 (gentle): local frames 160-200
+- "darning socks" text fade-in: local frames 200-230
+- Hold: local frames 230-244
 
-**Narration alignment**: If the ~8s duration is correct based on actual narration, the pulse timing and "darning socks" text still need to be implemented but scaled to fit the shorter window. The spec's frame numbers (120, 300, 480, 570, 660, 750 at 30fps) would need to be compressed.
+**Quick win**: Passing `startAtFullView: true` (Issue #10) is a one-line fix that would correctly prevent the zoom-out animation in the reprise context.
 
 **File locations examined**:
-- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/S05-CompoundReturns/Part5CompoundReturns.tsx` (sequence orchestration)
-- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/S05-CompoundReturns/constants.ts` (timing/beats)
-- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/08-CrossingPoint/CrossingPoint.tsx` (main composition)
-- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/08-CrossingPoint/constants.ts` (chart data, pulse config)
-- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/08-CrossingPoint/CodeCostChart.tsx` (chart rendering)
-- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/08-CrossingPoint/WeAreHereMarker.tsx` (pulse rings)
-- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/08-CrossingPoint/FirstCrossingMarker.tsx` (first crossing)
-- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/08-CrossingPoint/AnimatedArrow.tsx` (arrow to label)
+- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/S05-CompoundReturns/Part5CompoundReturns.tsx` (sequence orchestration, Visual 7 at lines 193-198)
+- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/S05-CompoundReturns/constants.ts` (timing/beats, Visual 7 at lines 71-73)
+- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/08-CrossingPoint/CrossingPoint.tsx` (main composition, 318 lines)
+- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/08-CrossingPoint/constants.ts` (chart data, pulse config, crossing points, 173 lines)
+- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/08-CrossingPoint/CodeCostChart.tsx` (chart SVG rendering, 318 lines)
+- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/08-CrossingPoint/WeAreHereMarker.tsx` (pulse rings + marker, 236 lines)
+- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/08-CrossingPoint/FirstCrossingMarker.tsx` (first crossing marker, 182 lines)
+- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/08-CrossingPoint/AnimatedArrow.tsx` (arrow to label, 135 lines)
+- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/08-CrossingPoint/index.ts` (exports)
 
 ## Resolution Status
 - **Status**: UNRESOLVED
-- **Notes**: The implementation reuses the Part 1 CrossingPoint composition without any of the reprise-specific enhancements called for in the spec: enhanced pulses (6-8 rings, three cycles), "darning socks" text overlay, chart simplification/dimming, and cross-dissolve transition. The previous audit incorrectly marked this as "RESOLVED - Veo/video task" but this is clearly a Remotion composition (it uses `<CrossingPoint>` in the sequence). The core chart and crossing point infrastructure exists; the missing work is the reprise-specific enhancements.
+- **Summary**: The implementation reuses the Part 1 `CrossingPoint` composition as-is, without any of the reprise-specific enhancements specified. Three HIGH-severity issues (enhanced pulse, "darning socks" text, three-pulse-cycle structure) represent the core emotional arc of this section. Two MEDIUM issues (chart dimming, cross-dissolve) affect visual storytelling. One LOW issue (`startAtFullView` prop) is a trivial one-line fix. The underlying chart infrastructure (axes, lines, colors, data, crossing point, "We are here." label) is solid and matches Part 1 correctly. The missing work is exclusively the reprise-specific layer on top.

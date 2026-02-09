@@ -2,93 +2,125 @@
 
 ## Status: ISSUES FOUND
 
-### Requirements Met
+## Spec Summary
+Title card (~10 seconds, 1:50-2:00): "Prompt-Driven Development" fades in over dimmed regenerated code from previous scene. Code remains visible but recedes. Title is centered, clean, and authoritative. No narration -- a silent beat. Includes vignette framing, subtle blue glow behind title, editor chrome fade-out, and a 6-second contemplative hold.
 
-1. **Title text content**: The title "Prompt-Driven Development" is correctly displayed (ColdOpenSection.tsx line 152).
-
-2. **Typography**: Implementation matches spec precisely:
-   - Font family: `Inter, system-ui, sans-serif` (spec: Inter or system sans-serif fallback) -- line 144
-   - Font size: 72px -- line 145
-   - Font weight: 600 (semi-bold) -- line 146
-   - Color: `#F8F4F0` (warm white) -- line 147
-   - Letter-spacing: `0.02em` -- line 148
-
-3. **Title fade-in with upward drift**: Title fades from opacity 0 to 1 with a translateY drift from +20px to 0px (lines 140, 143), matching the spec's animation concept.
-
-4. **Blue glow behind title**: Text-shadow includes `0 0 60px rgba(74, 144, 217, 0.15)` (line 150), using the correct glow color (#4A90D9 = rgb(74,144,217)) and target opacity (0.15).
-
-5. **Background dark color**: AbsoluteFill uses `#1a1a2e` (line 120), close to spec's `#1E1E2E`.
-
-6. **Dimmed code backdrop**: The clean regenerated code from VISUAL_03 is shown behind the title (lines 122-132), maintaining visual continuity from the code regeneration scene. Code content matches the clean version from VISUAL_03 (line 130 matches line 98).
-
-7. **No narration**: This section has no narration overlay, matching the spec's "silent beat" intention. The narration "So why are we still patching?" from the audio track plays during this visual.
-
-8. **Canvas resolution**: 1920x1080 (constants.ts lines 18-19).
-
-9. **Center alignment**: Title is centered using flexbox `alignItems: "center"` and `justifyContent: "center"` (lines 138-139).
-
-### Issues Found
-
-1. **Duration is 5x shorter than spec (HIGH)**
-   - Spec: ~10 seconds (timestamp 1:50-2:00), with frames 0-60 for code dim, frames 30-90 for title fade, frames 90-270 for hold, frames 270-300 for transition prep
-   - Implementation: VISUAL_04 runs from 14.1s to 15.96s (frames 423-479 at 30fps), giving only 1.87 seconds total duration (S00-ColdOpen/constants.ts lines 42-43)
-   - The entire cold open section is 19 seconds (constants.ts line 16), whereas the spec's cold open extends to 2:00. The compressed timeline leaves no room for the title card to breathe.
-
-2. **No hold period (HIGH)**
-   - Spec: Frames 90-270 (3-9s) should be a 6-second static hold with "pure stillness" where the viewer reads and absorbs the title. The spec explicitly states: "No animation -- pure stillness. This is the moment the viewer reads and absorbs the title."
-   - Implementation: The title fades in over frames 0-60 of the local sequence (2 seconds), then the cold open section ends roughly 0.87s later. No contemplative hold exists.
-
-3. **Code dimming is static, not animated (MEDIUM)**
-   - Spec: Code opacity animates from 1.0 to 0.15 over the first 2 seconds using `easeInOutCubic`, creating a "crossfade from code to title backdrop"
-   - Implementation: Code backdrop is set to a static opacity of 0.25 (line 127) with no animation. The value is also slightly off (0.25 vs spec's 0.15).
-
-4. **No vignette (MEDIUM)**
-   - Spec: Soft radial vignette darkening edges, center bright, edges at ~85% darkness, fading in from 0 to target opacity over frames 0-60
-   - Implementation: No vignette overlay exists in VISUAL_04. The 01-ColdOpen/ColdOpenSplitScreen.tsx does implement a vignette (radial-gradient, line 82), but this is in the separate split-screen composition, not the title card.
-
-5. **No editor chrome or terminal fade-out (MEDIUM)**
-   - Spec: Editor chrome (top bar, gutter) and terminal snippet in bottom-right should fade out during the title card transition. Cursor should stop blinking and disappear.
-   - Implementation: VISUAL_03 shows a terminal indicator (`$ pdd generate user_parser` at line 111), but it does not carry over into VISUAL_04. The visual switch between activeVisual states is a hard cut rather than a crossfade, so these elements simply disappear rather than fading out.
-
-6. **Glow implementation differs from spec (LOW)**
-   - Spec: Glow should be a separate div behind the title text with `radial-gradient(ellipse at center, rgba(74,144,217,glowOpacity), transparent 70%)`, `filter: blur(20px)`, spanning `inset: -40px`
-   - Implementation: Glow is implemented as a text-shadow `0 0 60px rgba(74, 144, 217, 0.15)` (line 150). The visual effect is similar but technically different. Bloom radius is 60px vs spec's 40px.
-
-7. **No separate glow fade-in animation (LOW)**
-   - Spec: Glow intensity should animate independently from 0 to 0.15 over frames 45-90 using `easeOutCubic`
-   - Implementation: Since glow is part of the text-shadow, it fades in coupled to the title opacity (frames 0-60), not on its own delayed timeline.
-
-8. **Title fade-in timing offset (LOW)**
-   - Spec: Title fades in from frame 30 to 90 (1-3s), overlapping with the code dimming so "title arrives as code recedes"
-   - Implementation: Title fades in from frame 0 to 60 (0-2s relative to VISUAL_04 start). Animation starts immediately rather than being delayed to allow code dimming to begin first.
-
-9. **Title vertical position not shifted above center (LOW)**
-   - Spec: Title should be positioned at ~45% from top ("optionally shifted ~5% above true center for visual weight balance")
-   - Implementation: Title container uses flexbox centering at exact center (lines 136-139), with no vertical offset. The spec's reference code uses `top: '45%'` with `transform: translate(-50%, -50%)`.
-
-10. **Background color slight mismatch (LOW)**
-    - Spec: `#1E1E2E`
-    - Implementation: `#1a1a2e` (slightly darker). Minor visual difference.
-
-11. **FPS difference between implementations (LOW)**
-    - S00-ColdOpen runs at 30fps (constants.ts line 15)
-    - 01-ColdOpen runs at 60fps (01-ColdOpen/constants.ts line 4)
-    - The spec's frame numbers (e.g., "Frame 0-60" for 2 seconds) assume 30fps, which matches S00-ColdOpen.
-
-### Notes
-
-The title card implementation in `S00-ColdOpen/ColdOpenSection.tsx` (VISUAL_04, lines 117-157) captures the core visual design accurately. Typography, color palette, title text, code backdrop, and the blue glow are all present and closely match the spec. The fundamental look of the title card is correct.
-
-The primary gap is **timing and pacing**. The spec envisions the title card as a 10-second contemplative beat -- the "poster frame" of the entire video. The title arrives over 2 seconds as background code recedes, then holds in silence for 6 seconds, allowing the rhetorical question "So why are we still patching?" to resonate. This stillness is described as giving "the title weight."
-
-The implementation compresses VISUAL_04 to under 2 seconds. The title fades in and the cold open ends almost immediately. The viewer barely has time to read the title, let alone contemplate it. This is consistent with the overall pattern of the implemented cold open being ~19 seconds versus the spec's ~2:00 timeline.
-
-The secondary gap is **transition quality**. The spec describes a smooth crossfade where code dims, editor chrome fades, terminal disappears, vignette frames the title, and the glow blooms -- a choreographed sequence. The implementation uses a hard cut between visual states (the `activeVisual` switching logic at lines 18-24), so VISUAL_03 elements vanish instantly when VISUAL_04 begins.
-
-The `01-ColdOpen/` directory contains an alternative implementation (`ColdOpenSplitScreen.tsx`) that covers the split-screen sock/code sequence (0:00-0:38 in spec), but does not include a title card component. The title card exists only in `S00-ColdOpen/ColdOpenSection.tsx`.
+## Implementation Locations
+The title card is implemented as **VISUAL_04** within `S00-ColdOpen/ColdOpenSection.tsx` (lines 117-157). Timing constants are in `S00-ColdOpen/constants.ts` (lines 42-43). No standalone TitleCard component exists. The `01-ColdOpen/` directory contains an alternative split-screen composition that does not include a title card. The `50-FadeToBlack/FadeToBlack.tsx` contains a separate closing title card for the end of the video (not this spec).
 
 **Files reviewed:**
 - `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/S00-ColdOpen/ColdOpenSection.tsx` (primary implementation, VISUAL_04 at lines 117-157)
 - `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/S00-ColdOpen/constants.ts` (timing at lines 42-43)
+- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/S00-ColdOpen/index.ts` (exports)
 - `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/01-ColdOpen/ColdOpenSplitScreen.tsx` (alternative composition, no title card)
+- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/01-ColdOpen/LeftPanel.tsx` (alternative composition panels)
+- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/01-ColdOpen/RightPanel.tsx` (alternative composition panels)
 - `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/01-ColdOpen/constants.ts` (alternative timing)
+- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/50-FadeToBlack/FadeToBlack.tsx` (separate closing title card, not this spec)
+
+### Requirements Met
+
+1. **Title text content**: "Prompt-Driven Development" is correctly displayed (ColdOpenSection.tsx:152).
+
+2. **Font family**: `Inter, system-ui, sans-serif` (ColdOpenSection.tsx:144). Spec says "Inter (or system sans-serif fallback)". Match.
+
+3. **Font weight**: 600 (semi-bold) (ColdOpenSection.tsx:146). Spec says 600. Match.
+
+4. **Font size**: 72px (ColdOpenSection.tsx:145). Spec says ~72px. Match.
+
+5. **Text color**: `#F8F4F0` (ColdOpenSection.tsx:147). Spec says `#F8F4F0` (warm white). Match.
+
+6. **Letter-spacing**: `0.02em` (ColdOpenSection.tsx:148). Spec says 0.02em. Match.
+
+7. **Title fade-in with upward drift**: Title fades from opacity 0 to 1 while translateY moves from +20px to 0px (ColdOpenSection.tsx:140, 143). Spec says "Fade in with slight upward drift (20px translate-Y, settles to 0)". Match on animation concept.
+
+8. **Blue glow color present**: Text-shadow includes `rgba(74, 144, 217, 0.15)` (ColdOpenSection.tsx:150). The color #4A90D9 = rgb(74, 144, 217) matches the spec's glow color, and 0.15 matches the spec's target glow opacity.
+
+9. **Dimmed code backdrop from previous scene**: The clean regenerated code from VISUAL_03 is displayed behind the title at reduced opacity (ColdOpenSection.tsx:122-131). The code content on line 130 is identical to the clean code in VISUAL_03 at line 98, maintaining visual continuity.
+
+10. **No narration**: This visual has no narration overlay. The spec says "No narration. This is a silent beat -- a title card." The narration audio from the cold open track ("So why are we still patching?") plays during this visual, but no additional narration is added. Match.
+
+11. **Canvas resolution**: 1920x1080 (constants.ts:18-19). Match.
+
+12. **Center alignment**: Title is centered using flexbox with `alignItems: "center"` and `justifyContent: "center"` (ColdOpenSection.tsx:138-139). Spec says centered horizontally and vertically. Match.
+
+13. **Title fade-in easing**: `interpolate` with default linear easing between frames 0-60 relative to VISUAL_04_START (ColdOpenSection.tsx:140). Spec says `easeOutCubic`. Partial match -- the animation exists but uses the wrong easing curve.
+
+### Issues Found
+
+#### Issue 1: Duration is drastically shorter than spec (HIGH)
+- **Spec says**: ~10 seconds (timestamp 1:50-2:00). Frame 0-60 for code dim, frame 30-90 for title fade, frame 90-270 for hold, frame 270-300 for transition prep.
+- **Implementation does**: VISUAL_04 runs from s2f(14.1) to s2f(15.96), which is frames 423-479 at 30fps -- only 1.87 seconds total (constants.ts:42-43). The entire cold open section is 19 seconds (constants.ts:16-17), whereas the spec's cold open extends to 2:00.
+- **Impact**: The title card, described as the "poster frame" of the entire video, has no time to register with the viewer before the section ends.
+
+#### Issue 2: No hold period -- "pure stillness" is absent (HIGH)
+- **Spec says**: Frames 90-270 (3-9s) should be a 6-second static hold. "No animation -- pure stillness. This is the moment the viewer reads and absorbs the title. The silence (no narration) gives the title weight."
+- **Implementation does**: Title fades in over frames 0-60 relative to VISUAL_04_START (2 seconds at 30fps), leaving only ~0.13 seconds before the section ends. No contemplative hold exists.
+- **Impact**: The deliberate rhetorical pause between "So why are we still patching?" and the title "Prompt-Driven Development" is lost. The spec describes this silence as giving both the question and the answer room to breathe.
+
+#### Issue 3: Code dimming is static, not animated (MEDIUM)
+- **Spec says**: Code opacity animates from 1.0 to 0.15 over the first 2 seconds using `easeInOutCubic`, creating a "crossfade from code to title backdrop."
+- **Implementation does**: Code backdrop is a static `opacity: 0.25` (ColdOpenSection.tsx:127) with no animation. The opacity value is also slightly different (0.25 vs spec's 0.15 target).
+- **Impact**: The choreographed crossfade where "title arrives as code recedes" is absent. The code is already dim when the visual starts.
+
+#### Issue 4: No vignette overlay (MEDIUM)
+- **Spec says**: "Soft radial vignette, darkening edges. Center bright, edges at ~85% darkness. Creates natural focus on the centered title." Vignette fades from 0 to target opacity over frames 0-60.
+- **Implementation does**: No vignette overlay exists in VISUAL_04. The `01-ColdOpen/ColdOpenSplitScreen.tsx` does implement a radial-gradient vignette (line 82) for the split-screen composition, but it is not present in the title card.
+- **Impact**: The spec's "natural focus on the centered title" through vignette framing is absent.
+
+#### Issue 5: No editor chrome or terminal fade-out transition (MEDIUM)
+- **Spec says**: "Editor chrome (top bar, gutter) fades out" (opacity 1.0 to 0.0 over frames 0-45). "Terminal snippet in bottom-right fades out completely (opacity to 0)" over frames 0-30. "Cursor stops blinking and disappears."
+- **Implementation does**: VISUAL_03 shows a terminal indicator (`$ pdd generate user_parser` at ColdOpenSection.tsx:111), but the activeVisual switching logic (lines 18-24) creates a hard cut between visuals. When VISUAL_04 begins, VISUAL_03 elements are instantly removed from the DOM rather than fading out. No editor chrome (top bar, line number gutter) exists in either visual to fade.
+- **Impact**: The transition from code-regeneration scene to title card is abrupt rather than the spec's choreographed crossfade.
+
+#### Issue 6: Glow implementation differs from spec (LOW)
+- **Spec says**: Glow is a separate `<div>` behind the title text with `radial-gradient(ellipse at center, rgba(74,144,217,glowOpacity), transparent 70%)`, `filter: blur(20px)`, spanning `inset: -40px`. Bloom radius ~40px.
+- **Implementation does**: Glow is a text-shadow property: `0 0 60px rgba(74, 144, 217, 0.15)` (ColdOpenSection.tsx:150). The bloom radius is 60px vs spec's 40px. The second shadow `0 0 40px rgba(0,0,0,0.8)` adds a dark drop shadow not in the spec.
+- **Impact**: Visual result is similar -- faint blue glow behind text -- but technically differs. The text-shadow approach creates a tighter glow halo; the spec's radial-gradient approach creates a broader atmospheric bloom.
+
+#### Issue 7: No separate glow fade-in animation (LOW)
+- **Spec says**: Glow intensity animates independently from 0 to 0.15 over frames 45-90, starting after the title fade begins at frame 30.
+- **Implementation does**: Glow is part of the text-shadow property, so it fades in coupled with the title's opacity (frames 0-60 of VISUAL_04). No separate animation timeline for the glow.
+- **Impact**: The spec's effect of the glow "blooming gently" as a delayed accent after the title is already partly visible is lost.
+
+#### Issue 8: Title fade-in timing does not overlap with code dimming (LOW)
+- **Spec says**: Title fades in from frame 30 to 90 (1-3s), overlapping with code dimming (frames 0-60), so "title arrives as code recedes."
+- **Implementation does**: Title fades in from frame 0 to 60 relative to VISUAL_04_START (ColdOpenSection.tsx:140). Since code dimming is absent entirely (Issue 3), there is no overlap choreography.
+- **Impact**: The poetic crossfade described in the spec is missing.
+
+#### Issue 9: Title vertical position is true center, not shifted above (LOW)
+- **Spec says**: Title positioned at ~45% from top ("optionally shifted ~5% above true center for more visually balanced" composition). The reference code uses `top: '45%'` with `transform: translate(-50%, -50%)`.
+- **Implementation does**: Title uses flexbox exact centering with `alignItems: "center"` and `justifyContent: "center"` (ColdOpenSection.tsx:138-139), which places it at 50% vertical. No upward offset.
+- **Impact**: Minor visual weight difference. The spec notes this creates balance "with dimmed code below."
+
+#### Issue 10: Title fade-in easing is linear, not easeOutCubic (LOW)
+- **Spec says**: Title opacity uses `easeOutCubic` ("confident arrival"). Title Y drift uses `easeOutCubic` ("settles into place").
+- **Implementation does**: Both `interpolate` calls (ColdOpenSection.tsx:140, 143) use Remotion's default linear interpolation -- no `easing` parameter is provided.
+- **Impact**: The title arrival feels mechanical rather than the spec's "confident" settling motion. A minor kinetic quality difference.
+
+#### Issue 11: Missing lineHeight: 1.2 on title text (LOW)
+- **Spec says**: Title typography specifies `line-height: 1.2`.
+- **Implementation does**: No `lineHeight` property is set on the `<h1>` element (ColdOpenSection.tsx:142-153). Browser default (typically ~1.2 for headings) likely produces an acceptable result, but it is not explicitly set.
+- **Impact**: Negligible for a single-line title. Could matter if the title ever wraps to two lines.
+
+#### Issue 12: Background color slight mismatch (LOW)
+- **Spec says**: Background `#1E1E2E`.
+- **Implementation does**: AbsoluteFill uses `#1a1a2e` (ColdOpenSection.tsx:120). The red channel differs by 4 units (0x1A vs 0x1E), making the implementation slightly darker.
+- **Impact**: Minimal visual difference. The code backdrop panel inside does use `#1E1E2E` (ColdOpenSection.tsx:129), creating a subtle two-tone effect.
+
+#### Issue 13: FPS difference affects frame number interpretation (LOW)
+- **Spec says**: Frame numbers (e.g., "Frame 0-60" = 2 seconds, "Frame 30-90") imply 30fps.
+- **Implementation does**: S00-ColdOpen runs at 30fps (constants.ts:15), which matches. However, the alternative `01-ColdOpen/` directory runs at 60fps (01-ColdOpen/constants.ts:4). If someone references the spec frame numbers against 01-ColdOpen, they would be off by 2x.
+- **Impact**: Low -- only relevant if someone uses the wrong constants file.
+
+### Notes
+
+The title card implementation in `S00-ColdOpen/ColdOpenSection.tsx` VISUAL_04 captures the core visual design faithfully. The typography (Inter, 600 weight, 72px, #F8F4F0, 0.02em tracking), the blue glow effect (#4A90D9 at 0.15 opacity), the dimmed code backdrop, the upward drift animation, and the "Prompt-Driven Development" text are all present and closely aligned with the spec. If you pause the video at the right moment, the title card looks approximately correct.
+
+**The primary gap is timing and pacing.** The spec envisions this as a 10-second contemplative beat -- the "poster frame" of the entire video. The spec describes a choreographed sequence: background code recedes over 2 seconds, the title arrives over 2 seconds, then the composition holds in silence for 6 seconds. This stillness is explicitly described as giving the rhetorical question ("So why are we still patching?") and the answer ("Prompt-Driven Development") room to breathe. The implementation compresses VISUAL_04 into under 2 seconds, barely enough for the title to finish fading in before the cold open section ends.
+
+**The secondary gap is transition quality.** The spec describes overlapping animations where code dims, editor chrome fades, the terminal disappears, a vignette frames the composition, and the glow blooms -- all happening on staggered timelines. The implementation uses a hard cut between visual states (the `activeVisual` switching logic), so VISUAL_03 elements vanish instantly when VISUAL_04 begins. Within VISUAL_04 itself, the code backdrop is statically dimmed rather than animated.
+
+**The tertiary gap is easing.** The spec defines specific easing for each element (easeInOutCubic for code dim, easeOutCubic for title, linear for vignette). The implementation uses Remotion's default linear interpolation throughout, losing the kinetic personality the spec describes.
+
+## Resolution Status: UNRESOLVED
