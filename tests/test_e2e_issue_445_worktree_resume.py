@@ -42,9 +42,8 @@ attach the worktree to the existing branch.
 
 import pytest
 import subprocess
-import tempfile
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 
 @pytest.fixture
@@ -126,18 +125,10 @@ class TestIssue445WorktreeResumptionE2E:
     creation, demonstrating the bug and verifying the fix.
     """
 
-    def test_setup_worktree_fails_when_branch_is_checked_out(self, mock_git_repo_with_branch):
+    def test_setup_worktree_succeeds_when_branch_is_checked_out(self, mock_git_repo_with_branch):
         """
-        E2E Test: _setup_worktree() fails when branch exists and is currently checked out.
-
-        This test demonstrates the EXACT bug scenario from issue #445:
-        1. Repository has branch `change/issue-445` currently checked out
-        2. Call _setup_worktree() which attempts to create a worktree for issue 445
-        3. _setup_worktree() tries to delete the branch (line 168) but ignores return value
-        4. _delete_branch() fails because branch is checked out (git safety mechanism)
-        5. Code proceeds to `git worktree add -b` which fails with exit code 255
-
-        This is the behavior that occurs before the fix is applied.
+        Regression test for issue #445: _setup_worktree() must succeed even when the
+        target branch is already checked out in the main worktree.
         """
         from pdd.agentic_change_orchestrator import _setup_worktree
 
@@ -154,38 +145,31 @@ class TestIssue445WorktreeResumptionE2E:
         )
         assert result.stdout.strip() == "change/issue-445", "Precondition: branch must be checked out"
 
-        # Call _setup_worktree - this should fail with the bug
+        # Call _setup_worktree - should succeed via --force fallback
         worktree_path, error = _setup_worktree(main_repo, issue_number, quiet=True)
 
-        # BUG: This should fail because the branch is checked out
-        # The error message should contain "exit status 255" from git worktree add -b
-        if worktree_path is None:
-            assert error is not None, "Error message should be present when worktree creation fails"
-            assert "255" in error or "exit" in error.lower(), \
-                f"Error should indicate git command failure (exit 255), got: {error}"
-            pytest.fail(
-                f"BUG CONFIRMED: _setup_worktree() failed with exit code 255 when branch is checked out.\n"
-                f"Error: {error}\n"
-                f"This is the exact bug from issue #445."
-            )
-        else:
-            # If this succeeds, the fix has been applied
-            assert worktree_path.exists(), "Worktree path should exist after successful creation"
-            # Clean up for next test
-            subprocess.run(["git", "worktree", "remove", str(worktree_path)], cwd=main_repo, check=False)
-            pytest.skip("Fix has been applied - _setup_worktree() now handles checked-out branches correctly")
+        assert worktree_path is not None, f"Expected worktree to be created, but got error: {error!r}"
+        assert error is None, f"Expected no error, got: {error!r}"
+        assert worktree_path.exists(), "Worktree path should exist after successful creation"
 
-    def test_orchestrator_resume_fails_with_checked_out_branch(self, mock_git_repo_with_branch, monkeypatch):
+        # Verify the worktree is on the correct branch
+        branch_result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=worktree_path,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert branch_result.stdout.strip() == "change/issue-445", \
+            f"Worktree should be on 'change/issue-445', got: {branch_result.stdout.strip()!r}"
+
+        # Clean up
+        subprocess.run(["git", "worktree", "remove", str(worktree_path)], cwd=main_repo, check=False)
+
+    def test_orchestrator_resume_succeeds_with_checked_out_branch(self, mock_git_repo_with_branch, monkeypatch):
         """
-        E2E Test: Full orchestrator workflow fails when resuming with branch checked out.
-
-        This test simulates the complete user workflow from issue #445:
-        1. User runs `pdd change <issue_url>` - completes steps 1-10, saves state
-        2. User runs `pdd change <issue_url>` again on machine with branch checked out
-        3. Orchestrator loads cached state, tries to resume from step 11
-        4. Step 11 requires worktree → calls _setup_worktree() → fails with exit 255
-
-        This is the exact scenario when PDD Cloud executor re-triggers a job.
+        Regression test for issue #445: Full orchestrator resume must succeed when
+        the target branch is already checked out.
         """
         from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator
 
@@ -210,31 +194,26 @@ class TestIssue445WorktreeResumptionE2E:
             },
             "total_cost": 0.50,
             "model_used": "gpt-4",
-            "worktree_path": None,  # Worktree was cleaned up
+            "worktree_path": None,
             "issue_updated_at": "2024-01-01T00:00:00Z",
         }
 
         def mock_load_state(*args, **kwargs):
-            """Mock loading cached state from GitHub issue comment."""
             return cached_state, "mock-github-comment-id"
 
         def mock_save_state(*args, **kwargs):
-            """Mock saving state to GitHub issue comment."""
             pass
 
         def mock_clear_state(*args, **kwargs):
-            """Mock clearing state from GitHub issue comment."""
             pass
 
         def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries):
-            """Mock LLM calls for steps 11-13."""
             return (True, f"Mock success for {label}", 0.001, "mock-model")
 
         with patch('pdd.agentic_change_orchestrator.load_workflow_state', side_effect=mock_load_state):
             with patch('pdd.agentic_change_orchestrator.save_workflow_state', side_effect=mock_save_state):
                 with patch('pdd.agentic_change_orchestrator.clear_workflow_state', side_effect=mock_clear_state):
                     with patch('pdd.agentic_change_orchestrator.run_agentic_task', side_effect=mock_run_agentic_task):
-                        # Run the orchestrator - should fail at worktree restoration
                         success, message, cost, model, files = run_agentic_change_orchestrator(
                             issue_url="https://github.com/test/repo/issues/445",
                             issue_content="Worktree restoration bug",
@@ -250,20 +229,8 @@ class TestIssue445WorktreeResumptionE2E:
                             use_github_state=True,
                         )
 
-                        # BUG: The orchestrator should fail because _setup_worktree fails
-                        if not success:
-                            assert "Failed to restore worktree" in message or "worktree" in message.lower(), \
-                                f"Error should mention worktree restoration failure, got: {message}"
-                            assert "255" in message or "exit" in message.lower(), \
-                                f"Error should indicate git exit code 255, got: {message}"
-                            pytest.fail(
-                                f"BUG CONFIRMED: Orchestrator failed to resume when branch is checked out.\n"
-                                f"Error: {message}\n"
-                                f"This is the exact bug reported in issue #445."
-                            )
-                        else:
-                            # If this succeeds, the fix has been applied
-                            pytest.skip("Fix has been applied - orchestrator now handles resumption with checked-out branches correctly")
+                        assert success, f"Orchestrator should succeed when resuming with checked-out branch, got: {message}"
+                        assert isinstance(files, list), "Expected files to be a list"
 
     def test_orchestrator_resume_succeeds_after_fix(self, mock_git_repo_with_branch, monkeypatch):
         """
