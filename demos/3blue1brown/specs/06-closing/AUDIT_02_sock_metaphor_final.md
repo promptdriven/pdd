@@ -1,138 +1,85 @@
-# Audit: 02_sock_metaphor_final.md
+# Audit: Sock Metaphor Final (Section 6.2)
 
-## Spec Summary
-Hybrid video + Remotion overlay. Person holds holey sock, tosses it, grabs fresh one. Remotion overlays: "$0.50" cost label (fades 1-3s), particle effect on toss, brief glow on fresh sock grab. Video base is 15 seconds from Veo 3.1.
+## Status: ISSUES FOUND
 
-## Implementation Status
-**Partially Implemented** - Overlay elements present in `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/S06-Closing/ClosingSection.tsx` but simplified.
+### Requirements Met
 
-## Deltas Found
+1. **Dedicated SockMetaphorFinal Component** -- Spec calls for a standalone `SockMetaphorFinal` component. Implementation provides `SockMetaphorFinal.tsx` in `/remotion/src/remotion/51-SockMetaphorFinal/` with its own `constants.ts` and `index.ts`. This matches the spec's code structure section.
 
-### Cost Label Implementation
-- **Spec says**: Small text "$0.50" near sock, fades in at 1s (frame 30), fades out at 3s (frame 90), positioned "near the sock as it is held up"
-- **Implementation does**: Cost label overlay at right: 280, top: 200 with timing [15, 30, 60, 90] frames (ClosingSection.tsx:32-38, 63-76)
-- **Severity**: Medium (timing close but position is hardcoded, not tracking sock in video)
+2. **Canvas Resolution** -- Spec requires 1920x1080. Constants file defines `SOCK_METAPHOR_WIDTH = 1920` and `SOCK_METAPHOR_HEIGHT = 1080`.
 
-### Particle Effects Missing
-- **Spec says**: "Crumple Particle Effect" with 10-15 particles when sock is tossed (frame 120-180), particles trail the toss arc
-- **Implementation does**: No particle system implemented
-- **Severity**: High (missing visual element from spec)
+3. **Duration and FPS** -- Spec requires ~15 seconds. Constants define `SOCK_METAPHOR_FPS = 30` and `SOCK_METAPHOR_DURATION_SECONDS = 15`, yielding 450 frames. Matches exactly.
 
-### Fresh Sock Glow Missing
-- **Spec says**: "Subtle warm glow" when fresh sock is grabbed (frame 260-280), soft white with amber tint, 0.3s pulse
-- **Implementation does**: No glow effect on fresh sock
-- **Severity**: High (missing visual element from spec)
+4. **Cost Label "$0.50"** -- Spec requires small text "$0.50" near the sock, fading in at ~1s and out at ~3s, white at 60% opacity, monospace, 18px. Implementation renders "$0.50" at `right: 280, top: 200` with `costLabelOpacity` driven by keyframes `[15, 30, 60, 90]` mapping to `[0, 0.6, 0.6, 0]`, matching the spec's reference code exactly. Color is `rgba(255, 255, 255, 0.6)` via `COLORS.COST_LABEL`. Font is `JetBrains Mono, monospace`. Positioning matches the spec reference code (`right: 280, top: 200`).
 
-### Video Source
-- **Spec says**: Base video from Veo 3.1 with specific prompt describing sock discard action
-- **Implementation does**: Uses `staticFile("07_split_screen_sepia.mp4")` with loop enabled (ClosingSection.tsx:59-61)
-- **Severity**: Medium (video file name suggests split screen, not dedicated sock scene; sepia coloring not specified in spec)
+5. **Crumple Particle Effect** -- Spec requires 10-15 particles trailing the toss arc (frames 120-180), gray, with `easeOutQuad` easing and 0.5s dissipation. Implementation provides `CrumpleParticle` component rendering 12 SVG circles (within the 10-15 range). Particles use `Easing.out(Easing.quad)` for trajectory, gray fill via `COLORS.PARTICLE_GRAY` (#888888), and active during frames 120-180 (`BEATS.PARTICLE_START` to `BEATS.PARTICLE_END`). Opacity fades from 0.8 to 0 over progress. Matches spec.
 
-### Component Structure
-- **Spec says**: Dedicated `SockMetaphorFinal` component
-- **Implementation does**: Inline implementation in ClosingSection.tsx as "Visual 1"
-- **Severity**: Low (organizational preference, functionality can still match)
+6. **Fresh Sock Glow** -- Spec requires warm glow when fresh sock is grabbed, color `rgba(255, 240, 220, ...)`, with `easeOutCubic`, brief 0.3s pulse. Implementation shows glow from frame 260 to 320 (BEATS.FRESH_GLOW_START/END), radial gradient using `COLORS.GLOW_AMBER = "rgba(255, 240, 220, 0.3)"`, with `Easing.out(Easing.cubic)`. Area is 300x225px (spec says 200x150px -- see issues). Opacity ramps `[0, 0.5, 0.5, 0]`.
 
-## Missing Elements
+7. **Five Animation Phases** -- Spec defines: Phase 1 Examination (0-60), Phase 2 Decision (60-120), Phase 3 Discard (120-240), Phase 4 Grab Fresh (240-360), Phase 5 Hold (360-450). Constants file defines matching beat ranges: `EXAMINATION_START: 0, EXAMINATION_END: 60`, `DECISION_START: 60, DECISION_END: 120`, `DISCARD_START: 120, DISCARD_END: 240`, `GRAB_FRESH_START: 240, GRAB_FRESH_END: 360`, `HOLD_START: 360, HOLD_END: 450`. All five phases implemented.
 
-### No Dedicated Composition
-The spec describes this as a standalone scene with its own component structure including:
-- `CrumpleParticles` component for toss effect
-- Fresh sock glow as radial gradient overlay
-- All missing from implementation
+8. **Particle Easing** -- Spec: `easeOutQuad`. Implementation: `Easing.out(Easing.quad)`. Matches.
 
-### Particle System
-Complete absence of:
-- 12 particles scattering on toss (frame 120-240)
-- Particle trajectory from startX/Y to endX/Y
-- Progressive fade and scatter animation
+9. **Fresh Glow Easing** -- Spec: `easeOutCubic`. Implementation: `Easing.out(Easing.cubic)`. Matches.
 
-### Fresh Sock Visual Feedback
-No implementation of:
-- 200x150px glow area
-- Radial gradient with `rgba(255, 240, 220, ...)`
-- Pulse animation with easing
+10. **Integration into ClosingSection** -- `ClosingSection.tsx` imports `SockMetaphorFinal` from `../51-SockMetaphorFinal` and renders it as Visual 1 with a `<Sequence from={BEATS.VISUAL_01_START}>` wrapper. Props are passed via `defaultSockMetaphorFinalProps`. The old broken `staticFile("07_split_screen_sepia.mp4")` video reference has been removed.
 
-### Code Structure Components
-Spec describes helper components that don't exist:
-- `CrumpleParticles` component
-- Fresh glow div overlay
+11. **Worn Sock with Visible Hole** -- SVG-based `WornSock` component includes a detailed hole rendered as a dark ellipse with frayed edges at the heel area, matching the spec's requirement for a "holey sock."
 
-### Animation Timing Discrepancies
-- Spec defines 5 distinct phases over 450 frames (15s)
-- Implementation only handles cost label timing
-- Missing: toss timing (120-240), fresh grab timing (240-360), hold timing (360-450)
+12. **Fresh Sock Illustration** -- SVG-based `FreshSock` component renders a pristine sock in brighter colors (`SOCK_FRESH: "#E8D4B8"`) without any hole, matching the "brand new, fresh sock" requirement.
 
----
+13. **Toss Animation** -- Old sock animates with `translateX` (0 to -800px), `translateY` (0 to 300px), rotation (0 to -180deg), and opacity fade (1 to 0) during frames 120-240. Matches the discard phase timing.
 
-## RESOLUTION STATUS: RESOLVED ✅
+14. **Sparkle Particles on Fresh Sock** -- 8 sparkle particles rendered as golden circles around the fresh sock during its appearance (freshSockProgress 0.3-0.8). This is a bonus not explicitly in the spec but enhances the "new, cheap, replaceable" feeling.
 
-### Status Summary
-**FULLY RESOLVED** - Created a complete Remotion-based fallback composition that implements all spec requirements without depending on the missing Veo 3.1 video asset.
+### Issues Found
 
-### Implementation Complete
-- **New Composition Created**: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/51-SockMetaphorFinal/`
-  - `SockMetaphorFinal.tsx` - Main component with all visual elements
-  - `constants.ts` - Timing constants and color palette
-  - `index.ts` - Module exports
+1. **Cost Label Font Size Mismatch** -- Spec says 18px monospace. Implementation uses `fontSize: 32` (SockMetaphorFinal.tsx line 322). Additionally, implementation adds a subtitle line "Cost to replace: nearly zero" at 14px that is not in the spec. The spec only calls for "$0.50" text.
+   - **Severity**: Medium
+   - **Spec reference**: "Font: Monospace, 18px"
+   - **File**: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/51-SockMetaphorFinal/SockMetaphorFinal.tsx` lines 320-337
 
-### All Spec Requirements Implemented
-1. **Cost Label Overlay** ✅
-   - "$0.50" with subtitle "Cost to replace: nearly zero"
-   - Fades in at frame 15 (0.5s), fades out at frame 90 (3s)
-   - Positioned at right: 280, top: 200 as specified
-   - Proper opacity and timing matching spec
+2. **Fresh Sock Glow Area Size Mismatch** -- Spec says 200x150px glow area (reference code: `width: 200, height: 150`). Implementation uses 300x225px (SockMetaphorFinal.tsx lines 386-387). The glow is 50% larger than specified.
+   - **Severity**: Low
+   - **Spec reference**: "width: 200, height: 150" in code structure
+   - **File**: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/51-SockMetaphorFinal/SockMetaphorFinal.tsx` lines 386-387
 
-2. **Sock Illustrations** ✅
-   - Worn sock with visible hole (SVG-based, similar to RightPanel in 01-ColdOpen)
-   - Examination phase with subtle lift and rotation animation
-   - Toss animation with translateX + rotation (frames 120-240)
-   - Fresh sock appearance from opposite side (frames 240-360)
+3. **No Video Base Layer** -- Spec describes this as a "Hybrid (Video + Remotion overlay)" with a Veo 3.1 video as the base. The implementation is entirely SVG/code-based with no video layer. While this is a reasonable fallback (the video asset was never generated), the spec's primary intent is for a real video of a person holding and discarding a sock, with Remotion overlays on top. The current implementation substitutes animated SVG sock illustrations for the video.
+   - **Severity**: Medium (acknowledged as intentional fallback; the composition can be upgraded when the video asset becomes available)
+   - **Spec reference**: "Tool: Hybrid (Video + Remotion overlay)", "Video base layer" with `<Video src="sock_discard_final.mp4" />`
 
-3. **Particle Effects** ✅
-   - 12 crumple particles during sock toss (frames 120-180)
-   - Particles scatter in arc pattern with progressive fade
-   - Easing: `easeOutQuad` as specified
-   - Proper trajectory calculation for realistic toss effect
+4. **Cost Label Easing Missing** -- Spec calls for `easeInOutQuad` on the cost label fade. Implementation uses linear interpolation for the cost label opacity (no easing parameter supplied to the `interpolate` call at lines 223-228). The `Easing.inOut(Easing.ease)` is only applied to `sockHoldY`, not the cost label.
+   - **Severity**: Low
+   - **Spec reference**: "Cost label: `easeInOutQuad` (gentle appear/disappear)"
+   - **File**: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/51-SockMetaphorFinal/SockMetaphorFinal.tsx` lines 223-228
 
-4. **Glow Effects** ✅
-   - Fresh sock glow when appearing (frames 260-320)
-   - Radial gradient with amber tint: `rgba(255, 240, 220, ...)`
-   - 300x225px glow area around fresh sock
-   - Pulse animation with cubic easing
-   - 8 sparkle particles around fresh sock (frames during appearance)
+5. **CrumpleParticle Uses Math.random()** -- The `CrumpleParticle` component calls `Math.random()` for distance and size calculations (lines 16, 34). In Remotion, `Math.random()` produces different values on each render pass, causing visual flickering during rendering. Remotion recommends using deterministic pseudo-random values derived from the particle index or frame number.
+   - **Severity**: Medium (will cause visual artifacts during Remotion rendering)
+   - **File**: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/51-SockMetaphorFinal/SockMetaphorFinal.tsx` lines 16, 34
 
-5. **Animation Phases** ✅
-   - Phase 1: Examination (0-60 frames) - sock held up with subtle motion
-   - Phase 2: Decision (60-120 frames) - cost label fades out
-   - Phase 3: Discard (120-240 frames) - toss with particles
-   - Phase 4: Grab fresh (240-360 frames) - new sock slides in with glow
-   - Phase 5: Hold (360-450 frames) - satisfied final hold
-   - Total duration: 15 seconds (450 frames) at 30fps
+6. **Particle Trajectory Does Not Follow Toss Arc** -- Spec describes particles that "trail" the sock toss, implying they should follow or emanate from the arc of the toss. Implementation scatters particles radially from a fixed point (`startX: 860, startY: 380`) in all directions, not along a toss arc from start to end coordinates. The spec reference code shows directional trajectory (`startX: 600, startY: 400, endX: 800, endY: 600`), but the implementation just uses start coordinates with random circular dispersion.
+   - **Severity**: Low
+   - **Spec reference**: "particles trail it" along toss arc; code reference shows `endX: 800, endY: 600`
 
-6. **Integration** ✅
-   - Updated `ClosingSection.tsx` to use new `SockMetaphorFinal` composition
-   - Removed broken video reference to `07_split_screen_sepia.mp4`
-   - Cleaned up unused imports (`OffthreadVideo`, `interpolate`)
-   - Proper import and props passing with `defaultSockMetaphorFinalProps`
+7. **ClosingSection Constants Still Reference Old Video** -- In `S06-Closing/constants.ts` line 34, the comment still reads `veo:07_split_screen_sepia + "$0.50" overlay` and the `VISUAL_SEQUENCE` array at line 62 has `id: "veo:07_split_screen_sepia"`. These references are stale; the composition is now `SockMetaphorFinal`, not a Veo video.
+   - **Severity**: Low (cosmetic; does not affect rendering)
+   - **File**: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/S06-Closing/constants.ts` lines 34, 62
 
-### Technical Details
-- SVG-based sock illustrations (scalable, no external assets required)
-- Proper animation timing matching spec exactly
-- All effects use specified easing functions
-- Color palette matches warm, domestic feel from spec
-- Component structure follows existing patterns (49-DeveloperRegenerates)
+### Notes
 
-### Resolution Approach
-Instead of waiting for the missing Veo 3.1 video asset, created a **self-contained Remotion composition** that:
-- Uses SVG illustrations for socks (no video dependency)
-- Implements all visual effects through code (particles, glow, animations)
-- Maintains spec-accurate timing and visual design
-- Can be easily replaced with video-based version later if desired
+- The implementation takes a reasonable approach by creating a self-contained SVG-based composition as a fallback for the missing Veo 3.1 video asset. The SVG sock illustrations are detailed and visually appropriate.
+- The component is cleanly structured with proper separation of constants, types, and rendering logic.
+- All five animation phases from the spec are represented with correct frame boundaries.
+- The warm neutral background (`#2A2520`) with amber gradient overlay provides a domestic feel consistent with the spec's "warm, domestic color grading" requirement.
+- The color palette (warm beige tones, amber highlights) is appropriate though the spec notes "NOT the sepia of Section 1" -- the implementation's dark warm background is distinct from sepia.
+- The `SockMetaphorFinal` composition runs internally at 450 frames (15s), but within `ClosingSection` it is sequenced starting at `VISUAL_01_START` (frame 81, ~2.7s) which corresponds to "You don't patch socks" in the narration, matching the narration sync requirements.
+- Audio notes (crumple sound, rustle sound) are not handled in this component; they would be managed at the ClosingSection level or via separate audio tracks.
 
-### Files Modified
-1. Created: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/51-SockMetaphorFinal/SockMetaphorFinal.tsx`
-2. Created: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/51-SockMetaphorFinal/constants.ts`
-3. Created: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/51-SockMetaphorFinal/index.ts`
-4. Modified: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/S06-Closing/ClosingSection.tsx`
-5. Updated: This audit file (marked as RESOLVED)
+### Files Reviewed
+
+- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/51-SockMetaphorFinal/SockMetaphorFinal.tsx`
+- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/51-SockMetaphorFinal/constants.ts`
+- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/51-SockMetaphorFinal/index.ts`
+- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/S06-Closing/ClosingSection.tsx`
+- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/S06-Closing/constants.ts`
+- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/S06-Closing/index.ts`

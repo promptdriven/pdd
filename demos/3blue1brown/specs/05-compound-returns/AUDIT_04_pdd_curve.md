@@ -1,96 +1,80 @@
-# Audit: 04_pdd_curve.md
+# Audit: 04_pdd_curve (PDD Curve -- Compounding Investment)
 
-## Spec Summary
-PDD curve (blue) activates and draws forward from dormant segment to ~50% of X-axis with exponential (convex) shape. Each test dot sends forward radial lines showing compound effect. Includes annotation "constrains all future generations". Duration ~10 seconds.
+## Status: ISSUES FOUND
 
-## Implementation Status
-Implemented (Phase 4 of CompoundCurvesGraph.tsx)
+### Requirements Met
 
-## Deltas Found
+1. **Canvas and background**: Resolution 1920x1080 with dark background `#1a1a2e` matches spec exactly. Constants in `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/46-CompoundCurvesGraph/constants.ts` lines 8-9 and line 13.
 
-### Curve mathematical function
-- **Spec says**: Exponential `y = a * (e^(bx) - 1)`, convex upward (line 24)
-- **Implementation does**: `maxHeight * ((Math.exp(t * 2.5) - 1) / (Math.exp(2.5) - 1))` where maxHeight = GRAPH.HEIGHT * 0.88 (~700px) (lines 38-41)
-- **Severity**: Low (correct exponential form with normalization)
+2. **PDD curve color and stroke**: Blue `#4A90D9` with stroke width 3px matches spec (line 22). Implementation at `CompoundCurvesGraph.tsx` lines 869-870 uses `COLORS.PDD_BLUE` and `strokeWidth={phase >= 5 ? 4 : 3}` -- correct for phase 4.
 
-### Activation pulse
-- **Spec says**: Frame 0-30 (0-1s) dormant segment brightens, pulse of light runs along it, glow intensifies (lines 73-77)
-- **Implementation does**: Activation interpolates frame 0-30 from 0.5→1.0 opacity (lines 546-552)
-- **Severity**: Medium (simple opacity change, no "pulse running along" animation)
+3. **Curve mathematical function**: Spec calls for exponential `y = a * (e^(bx) - 1)`, convex upward. Implementation at lines 38-41: `maxHeight * ((Math.exp(t * 2.5) - 1) / (Math.exp(2.5) - 1))` with `maxHeight = GRAPH.HEIGHT * 0.88` (~700px). Correct exponential form with proper normalization.
 
-### Curve draw timing
-- **Spec says**: Frame 30-240 (1-8s) curve extends from ~8% to ~50% of X-axis (lines 78-84, 92-98)
-- **Implementation does**: Frame 30-240 progress from 0.08→0.5 (lines 553-560)
-- **Severity**: Low (matches spec exactly)
+4. **Curve draw range**: Spec says frame 30-240 extending from ~8% to ~50% of X-axis. Implementation at lines 627-634: `interpolate(frame, [30, 240], [0.08, 0.5])`. Exact match.
 
-### Test dot count
-- **Spec says**: 6-8 dots visible by end (lines 29-31, 99)
-- **Implementation does**: Interpolates frame 30-240 from 0→8 dots (lines 561-569)
-- **Severity**: Low (8 dots, within spec range)
+5. **Curve draw easing**: Spec says `easeInQuad` (accelerating, mirrors exponential growth). Implementation at line 632: `Easing.in(Easing.quad)`. Exact match.
 
-### Forward radial lines
-- **Spec says**: 2-3 faint lines project forward from each dot to right edge, light blue #6AB0E9 at 30% opacity (lines 34-39)
-- **Implementation does**: ForwardRadials component renders 3 lines (offsets [0, -15, 15]) in COLORS.PDD_GLOW at opacity * 0.3 (lines 333-359, used at 798-811)
-- **Severity**: Low (3 lines, color and opacity via constants)
+6. **Test dot count**: Spec says 6-8 dots visible by end. Implementation at lines 635-643: `interpolate(frame, [30, 240], [0, 8])`. 8 dots at end, within spec range.
 
-### Forward radial line accumulation
-- **Spec says**: Each new dot's radial lines overlay with previous ones, creating accumulating density (lines 38-39)
-- **Implementation does**: Loops through all visible dots rendering ForwardRadials for each (lines 799-810)
-- **Severity**: Low (correct accumulation via loop)
+7. **Test dot appearance**: Spec says small circles (8px radius), blue `#4A90D9` with white border. Implementation: `PDD_DOT_RADIUS = 8` (constants.ts line 55), `CurveDots` component at lines 286-289 renders `<circle r={radius} fill={color} stroke="#ffffff" strokeWidth={2} />`. Matches spec.
 
-### Annotation text and timing
-- **Spec says**: "constrains all future generations" near dot #3, frame 120-180 (4-6s) (lines 85-88)
-- **Implementation does**: Frame 120-160, text matches, positioned at dot 3/(PDD_DOT_COUNT+1) (lines 570-576, 824-834)
-- **Severity**: Low (20 frames earlier end: 160 vs 180)
+8. **Test dot spring animation**: Spec says `spring({ damping: 12, stiffness: 200 })`. Implementation at lines 278-285 uses exactly `damping: 12, stiffness: 200`. Exact match.
 
-### Annotation emphasis
-- **Spec says**: Forward radial lines from this dot pulse brighter briefly, leader line draws (lines 86-88)
-- **Implementation does**: Standard Annotation component, no special pulse for this dot
-- **Severity**: Medium (radial pulse emphasis not implemented)
+9. **Forward radial lines -- count and direction**: Spec says 2-3 faint lines project forward from each dot to right edge. Implementation: `ForwardRadials` at lines 390-415 renders 3 lines (offsets `[0, -15, 15]`) extending to `GRAPH.RIGHT`. Correct.
 
-### Patching curve dimming
-- **Spec says**: Wobbly patching curve from 5.3 remains visible at reduced opacity (60%) (lines 47-49)
-- **Implementation does**: patchingDimOpacity interpolates frame 0-30 from 1→0.6 (lines 577-583, applied at line 699)
-- **Severity**: Low (matches spec exactly)
+10. **Forward radial lines -- color and opacity**: Spec says light blue `#6AB0E9` at 30% opacity. Implementation uses `COLORS.PDD_GLOW` (which is `#6AB0E9`, constants.ts line 17) at `opacity * 0.3` (line 410). Matches spec.
 
-### Blue glow on PDD curve
-- **Spec says**: Subtle blue glow (feGaussianBlur, 4px) (lines 26-27)
-- **Implementation does**: glowId="pddGlow" with glowStd=4 in phase 4 (lines 210-244, applied at 792)
-- **Severity**: Low (matches spec)
+11. **Forward radial line accumulation**: Spec says each new dot's radials overlay with previous, creating accumulating density. Implementation at lines 878-890 loops through all visible dots rendering `ForwardRadials` for each. Correct layering behavior.
 
-### Easing functions
-- **Spec says**: Activation pulse `easeOutQuad`, curve draw `easeInQuad` (accelerating), dots `spring`, radials `easeOutCubic` (lines 204-209)
-- **Implementation does**: Curve `Easing.in(Easing.quad)` (line 558), activation and other elements use defaults
-- **Severity**: Low (curve easing matches, others simplified)
+12. **Blue glow on PDD curve**: Spec says subtle blue glow (feGaussianBlur, 4px). Implementation uses `glowId="pddGlow"` and `glowStd={glowStd}` (line 872-873) where `glowStd` defaults to 4 when phase < 5 (line 715). The glow filter at lines 224-234 applies `feGaussianBlur` with the given `stdDeviation`. Matches spec.
 
-### Convex shape visibility
-- **Spec says**: Curve clearly convex (slope increasing) contrasting with patching concave (lines 8-9, 96-97)
-- **Implementation does**: Exponential function produces convex shape naturally
-- **Severity**: Low (mathematical property, visually correct)
+13. **Patching curve dimming**: Spec says patching curve remains at 60% opacity. Implementation at lines 652-658: `interpolate(frame, [0, 30], [1, 0.6])`. Applied to the patching group at line 776. Matches spec.
 
-## Missing Elements
+14. **Activation timing**: Spec says frame 0-30 the dormant segment brightens. Implementation at lines 620-626: `interpolate(frame, [0, 30], [0.5, 1])`. Correct frame range.
 
-### Activation pulse animation detail
-- **Spec says**: "A pulse of light runs along the existing segment" (lines 75-76)
-- **Implementation does**: Simple opacity increase, no traveling pulse
-- **Severity**: Medium (less dramatic activation than spec suggests)
+15. **Annotation text**: Spec says "constrains all future generations". Implementation at line 907: exact text match.
 
-### Radial line brightness pulse for annotation
-- **Spec says**: Forward radial lines from dot #3 pulse brighter when annotation appears (lines 86-87)
-- **Implementation does**: No special treatment for dot #3 radials
-- **Severity**: Low (subtle enhancement missing)
+16. **Annotation position**: Spec says near dot #3. Implementation at lines 908-909 positions at `3 / (PDD_DOT_COUNT + 1)`. Correct (3rd dot).
 
-### Hold timing
-- **Spec says**: Frame 240-300 (8-10s) hold with all elements visible (lines 94-99)
-- **Implementation does**: Implicit via phase timing
-- **Severity**: Low (phase system handles this)
+17. **Annotation styling**: Spec says white at 80% opacity, italic, 18pt. Implementation at lines 911-912 uses `color="rgba(255,255,255,0.8)"` and `fontSize={17}`. The `Annotation` component at line 382 applies `fontStyle="italic"`. Close match (17pt vs 18pt is minor).
 
-Overall implementation is solid. Main gaps: simplified activation (no traveling pulse), missing radial emphasis for annotated dot.
+18. **Annotation timing**: Spec says frame 120-180. Implementation at lines 644-651: `interpolate(frame, [120, 180], [0, 1])` with `easeOutCubic`. Exact frame match.
 
-## Resolution Status
+19. **Annotation easing**: Spec says `easeOutCubic`. Implementation at line 649: `Easing.out(Easing.cubic)`. Exact match.
 
-**RESOLVED** - Fixed timing issues:
-1. ✅ Annotation timing: Changed end frame from 160 to 180 to match spec (frame 120-180)
-2. ✅ Added easing function: annotation uses `easeOutCubic` to match spec
-3. ⚠️ Activation pulse: Remains simplified (opacity change only, no traveling pulse animation - acceptable tradeoff)
-4. ⚠️ Radial emphasis: No special pulse for dot #3 radials (subtle enhancement, not critical)
+20. **Convex shape**: The exponential function naturally produces a convex (slope-increasing) curve, contrasting with the patching curve's logarithmic (concave) shape. Visually correct.
+
+### Issues Found
+
+1. **Phase 4 is never rendered standalone in orchestration -- annotation never appears**
+   - **Spec says**: The PDD curve section (5.4) is a distinct ~10-second segment with its own animation sequence including the "constrains all future generations" annotation (lines 41-44, 85-88).
+   - **Implementation does**: In `Part5CompoundReturns.tsx` line 95, Visual 3 renders `<CompoundCurvesGraph phase={5} />`, jumping directly from phase 3 to phase 5. Phase 4 is never used as a standalone phase. The annotation rendering at line 905 checks `phase === 4` (strict equality), so it is **never visible** when phase 5 is active.
+   - **Impact**: The annotation "constrains all future generations" with its leader line -- a key visual element that explains the forward radial lines metaphor -- is completely absent from the rendered video.
+   - **Severity**: HIGH. The annotation is called out in the spec as a critical visual element for narration sync ("constrains all future generations" near dot #3) and is part of an entire animation phase (frames 120-180).
+
+2. **Activation pulse is simplified -- no traveling light pulse**
+   - **Spec says**: Frame 0-30: "A pulse of light runs along the existing segment" and "The glow intensifies" (lines 75-76).
+   - **Implementation does**: Simple opacity interpolation from 0.5 to 1.0 (lines 620-626). No traveling pulse animation.
+   - **Severity**: Medium. The activation is a fade-in rather than a dramatic "pulse running along" the segment. The spec envisions a more cinematic activation moment.
+
+3. **No radial line brightness pulse for annotated dot**
+   - **Spec says**: "The forward radial lines from this dot pulse brighter briefly" when the annotation appears at frame 120-180 (line 86).
+   - **Implementation does**: All radial lines are treated identically. No special pulsing for the dot associated with the annotation.
+   - **Severity**: Low. Subtle visual emphasis is missing but does not block comprehension.
+
+4. **Separate phase 4 timing not reflected in orchestration**
+   - **Spec says**: Section 5.4 is ~10 seconds (frames 0-300 at 30fps) as a standalone animation segment.
+   - **Implementation does**: Phase 4 logic exists in `CompoundCurvesGraph.tsx` (lines 619-658) but the orchestrator at `Part5CompoundReturns.tsx` skips from phase 3 (Visual 2) directly to phase 5 (Visual 3, starting at frame 1171 / 39.04s). The phase 4 animation timing has no dedicated window.
+   - **Severity**: Medium. Phase 4 and 5 are merged, which compresses the PDD curve introduction. The narration sync at 39.04s ("When you add a test in PDD, the returns are different") is correctly timed, but the full phase 4 animation sequence (activation, curve draw, dots, annotation, hold) is collapsed into phase 5's animation.
+
+5. **Annotation font size is 17pt instead of 18pt**
+   - **Spec says**: 18pt (line 44).
+   - **Implementation does**: `fontSize={17}` (line 912).
+   - **Severity**: Very low. 1px difference.
+
+### Notes
+
+- The core Phase 4 animation logic in `CompoundCurvesGraph.tsx` is well-implemented and closely follows the spec: curve math, draw timing, easing, dot physics, radial lines, colors, and glow all match. The main problem is at the orchestration layer where phase 4 is skipped in favor of jumping to phase 5.
+- The `phase === 4` check for annotation rendering (line 905) is the critical bug. If the orchestrator used phase 4, or if this check were changed to `phase >= 4`, the annotation would appear. However, in phase 5 the PDD curve extends beyond 50% (to 100%), so displaying the phase 4 annotation throughout phase 5 may not be the right fix either -- a timed fade-out would be more appropriate.
+- The forward radial lines implementation is clean and matches the spec's "accumulating density" metaphor well.
+- The patching curve correctly remains visible at 60% opacity for simultaneous comparison as the spec requires.

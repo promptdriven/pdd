@@ -1,104 +1,59 @@
 # Audit: 02_3d_printer_focus.md
 
-## Spec Summary
-A 15-second composition showing a 3D printer with Remotion overlays including a 3D coordinate grid, X/Y/Z axis labels, a position indicator panel showing live coordinates, and a bottom label "Every point must be specified". The video base shows a close-up of an FDM 3D printer nozzle in operation.
+## Status: PASS
 
-## Implementation Status
-Implemented
+### Requirements Met
 
-## Deltas Found
+1. **Canvas Resolution**: 1920x1080 as specified. Constants define `PRINTER_FOCUS_WIDTH = 1920` and `PRINTER_FOCUS_HEIGHT = 1080`. (`constants.ts:8-9`)
 
-### Added Crosshair Tracking Element (Not in Spec)
-- **Spec says**: Position indicator should show X, Y, Z values in a panel (lines 151-162)
-- **Implementation does**: Adds both a position panel AND a crosshair overlay that tracks nozzle movement on screen (PrinterFocus.tsx:178-224, 294-301)
-- **Severity**: Low - This is an enhancement that improves visual tracking, not a deviation
+2. **Duration**: 15 seconds at 30fps (450 frames). `PRINTER_FOCUS_DURATION_SECONDS = 15`, `PRINTER_FOCUS_FPS = 30`. (`constants.ts:4-7`)
 
-### Added Title Overlay (Not in Spec)
-- **Spec says**: No title mentioned in overlay elements
-- **Implementation does**: Adds "3D Printer Coordinate System" title at top of frame (PrinterFocus.tsx:341-363)
-- **Severity**: Low - Helpful addition for clarity
+3. **Video Base Layer**: Uses `OffthreadVideo` with `staticFile("veo_3d_printer_focus.mp4")`, full coverage with `objectFit: "cover"`. (`PrinterFocus.tsx:283-286`)
 
-### Grid Pulse Effect (Not in Spec)
-- **Spec says**: Grid should overlay with specified opacity (lines 97-100)
-- **Implementation does**: Grid has additional pulse intensity effect during tracking phase that adds 15% opacity variation (PrinterFocus.tsx:6-11, 268-270, 289)
-- **Severity**: Low - Subtle enhancement that emphasizes movement
+4. **Coordinate Grid (Overlay Element 1)**: `CoordinateGrid3D` component renders 3D perspective grid lines using SVG. Grid color is `#5A9FE9` (spec: `#5A9FE9`). Maximum opacity is 0.3 (spec: 30% opacity). Grid lines include X-axis (12 vertical with perspective), Y-axis (10 horizontal with perspective tilt), and Z-axis indicator lines (5 diagonal). (`PrinterFocus.tsx:6-65`, `constants.ts:37`)
 
-### Position Panel Styling Differences
-- **Spec says**: Position values should update as nozzle moves (lines 156-162)
-- **Implementation does**: Position panel includes "POSITION" header label and uses cyan color (#00E5FF) instead of pure blue (PrinterFocus.tsx:126-175)
-- **Severity**: Low - Styling refinement that improves readability
+5. **Axis Labels (Overlay Element 2)**: `AxisLabels` component renders X, Y, Z labels at grid edges. Uses monospace font (`'JetBrains Mono', 'Fira Code', monospace`) as spec requires. Color is white (`#ffffff`) with text-shadow glow using `COLORS.GLOW_BLUE`. (`PrinterFocus.tsx:68-117`, `constants.ts:38,42`)
 
-### Simulated vs Real Tracking
-- **Spec says**: Current position indicator "tracks nozzle position" (line 67)
-- **Implementation does**: Uses mathematical simulation with sin/cos functions to create realistic movement rather than actual video tracking (PrinterFocus.tsx:259-265)
-- **Severity**: Low - Practical implementation choice; real video tracking would require ML/CV
+6. **Current Position Indicator (Overlay Element 3)**: `PositionIndicator` component shows live X, Y, Z coordinate values. Values update via sin/cos simulation matching spec's suggested approach (`nozzleX = 142 + Math.sin(frame * 0.05) * 30`, etc.). Appears after frame 90, matching spec's "position tracking begins" phase. (`PrinterFocus.tsx:120-176`, `259-261`)
 
-## Missing Elements
+7. **Bottom Label (Overlay Element 4)**: Text "Every point must be specified" appears at bottom of frame (`bottom: 80`). Fades in during second half (frames 300-360, i.e., 10-12s). Matches spec requirement for fade-in during second half. (`PrinterFocus.tsx:314-338`, `constants.ts:29-30`)
 
-None - all core spec requirements are implemented. The implementation includes all specified elements:
-- 3D coordinate grid with perspective (CoordinateGrid3D component)
-- X, Y, Z axis labels
-- Position indicator showing numeric coordinates
-- Bottom label with fade-in animation
-- Proper timing alignment with BEATS constants
+8. **Animation Phase 1 (Frame 0-90, 0-3s)**: Grid fades in from 0 to 0.3 opacity with `Easing.out(Easing.cubic)`. Axis labels fade in from frame 30-90. Matches spec's "Grid fades in, X/Y/Z labels appear." (`PrinterFocus.tsx:234-247`, `constants.ts:15-18`)
 
-## Improvements Over Spec
+9. **Animation Phase 2 (Frame 90-180, 3-6s)**: Position tracking begins at `BEATS.TRACKING_START = 90`. Crosshair and position indicator appear with fade-in over 30 frames. X, Y, Z values update per-frame. Matches spec's "Position tracking begins, values update." (`PrinterFocus.tsx:250-255,294-311`, `constants.ts:21`)
 
-1. **Crosshair Visual**: Adds on-screen crosshair that moves with simulated nozzle position for better visual tracking
-2. **Title Card**: "3D Printer Coordinate System" provides immediate context
-3. **Grid Pulse**: Subtle animation that makes the grid feel more alive during tracking
-4. **Enhanced Typography**: Monospace font ('JetBrains Mono', 'Fira Code') for technical aesthetic
-5. **Glow Effects**: Text shadows and glows enhance visibility over video
+10. **Animation Phase 3 (Frame 180-300, 6-10s)**: Grid pulse effect activates at `BEATS.TRACKING_ACTIVE = 180` with subtle `Math.sin(frame * 0.1) * 0.3` oscillation. Position tracking continues. Matches spec's "Grid pulses subtly with movement." (`PrinterFocus.tsx:268-270`, `constants.ts:22,25-26`)
 
-## Code Quality
+11. **Animation Phase 4 (Frame 300-450, 10-15s)**: Label fades in frames 300-360 with `easeOutCubic`. Position tracking continues through end. Matches spec's "Label fades in, tracking continues." (`PrinterFocus.tsx:273-278`, `constants.ts:29-31`)
 
-The implementation follows good practices:
-- Modular component structure (CoordinateGrid3D, AxisLabels, PositionIndicator, NozzleCrosshair)
-- Proper typing with Zod schemas in constants.ts
-- BEATS constants match spec timing exactly (0-3s, 3-6s, 6-10s, 10-15s)
-- Easing functions from spec preserved (easeOutCubic)
+12. **Easing Functions**: Grid fade-in uses `Easing.out(Easing.cubic)` (spec: easeOutCubic). Label fade-in uses same easing (spec: easeOutCubic). Position updates are linear via direct sin/cos per-frame (spec: linear for real-time tracking feel). (`PrinterFocus.tsx:238,247,277`)
 
-## File References
+13. **Section Integration**: `Part4PrecisionTradeoff.tsx` sequences PrinterFocus as Visual 1 starting at 4.4s (frame 132), receiving `defaultPrinterFocusProps`. (`Part4PrecisionTradeoff.tsx:46-49`, `S04 constants.ts:41-42`)
+
+### Issues Found
+
+None. All spec requirements are fully implemented. The deviations listed below are additive enhancements that do not conflict with any spec requirement.
+
+### Notes
+
+**Enhancements beyond spec (all additive, low severity):**
+
+1. **Crosshair Tracking Element**: `NozzleCrosshair` component (lines 178-224) renders an SVG crosshair overlay that moves on-screen following simulated nozzle position. The spec mentions a "Current Position Indicator" showing values but does not explicitly describe a visual crosshair. This enhancement improves the visual tracking experience.
+
+2. **Title Overlay**: "3D Printer Coordinate System" text at top of frame (lines 341-363), fading in with axis labels. Not mentioned in the spec overlay elements. Provides useful context.
+
+3. **Grid Pulse Effect**: The `pulseIntensity` prop on `CoordinateGrid3D` adds a 15% opacity variation during the tracking phase (frame 180+). The spec mentions "grid pulses subtly with movement" at Phase 3 (line 109), so this is actually implementing a spec suggestion, though the exact mechanism was left to implementation.
+
+4. **Position Panel Styling**: The `PositionIndicator` includes a "POSITION" header label and uses cyan (`#00E5FF`) for the header and border instead of the grid blue (`#5A9FE9`). The spec does not prescribe specific position indicator styling beyond showing X, Y, Z values. This is a reasonable styling choice that improves readability.
+
+5. **Enhanced Typography**: Uses `'JetBrains Mono', 'Fira Code', monospace` font stack. The spec requires "Monospace font" -- this fulfills the requirement with specific professional monospace faces.
+
+6. **Simulated Tracking**: The spec's reference code uses `Math.sin(frame * 0.05) * 30` for nozzle X movement. The implementation extends this with additional harmonic terms (`Math.cos(frame * 0.03) * 15`) for more natural movement. The Z value increments every 180 frames (layer change simulation) rather than a simple step at frame 180 as in the spec reference code.
+
+**File References:**
 - Implementation: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/39-3DPrinterFocus/PrinterFocus.tsx`
 - Constants: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/39-3DPrinterFocus/constants.ts`
+- Index: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/39-3DPrinterFocus/index.ts`
+- Section orchestrator: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/S04-PrecisionTradeoff/Part4PrecisionTradeoff.tsx`
+- Section constants: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/S04-PrecisionTradeoff/constants.ts`
 - Video source: `staticFile("veo_3d_printer_focus.mp4")`
-
----
-
-## Resolution Status
-
-**Date:** 2026-02-08
-**Status:** NO ACTION REQUIRED
-
-### Assessment
-
-The 3DPrinterFocus implementation is complete and high-quality:
-
-- ✓ All core spec requirements implemented
-- ✓ 3D coordinate grid with perspective (CoordinateGrid3D)
-- ✓ X, Y, Z axis labels with proper positioning
-- ✓ Position indicator panel with live coordinate display
-- ✓ Bottom label "Every point must be specified" with fade-in
-- ✓ Proper timing alignment with BEATS constants
-- ✓ Clean modular component structure
-
-### Enhancements Beyond Spec (All Low Severity)
-
-The implementation includes valuable enhancements not in the original spec:
-
-1. **Crosshair Tracking Element**: Improves visual tracking of nozzle movement
-2. **Title Overlay**: "3D Printer Coordinate System" provides immediate context
-3. **Grid Pulse Effect**: Subtle animation adds visual interest during tracking
-4. **Enhanced Typography**: Monospace fonts ('JetBrains Mono', 'Fira Code') for technical aesthetic
-5. **Glow Effects**: Text shadows improve visibility over video background
-
-These enhancements improve the composition without deviating from spec intent. The simulated tracking (using sin/cos functions) is a practical implementation choice that achieves the desired visual effect without requiring computer vision.
-
-### Code Quality
-
-- Clean separation of concerns (CoordinateGrid3D, AxisLabels, PositionIndicator, NozzleCrosshair)
-- Proper TypeScript typing with Zod schemas
-- BEATS timing constants match spec exactly
-- Easing functions preserved from spec
-
-No changes needed. Implementation exceeds expectations.

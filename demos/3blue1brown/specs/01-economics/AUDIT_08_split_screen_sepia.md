@@ -1,99 +1,45 @@
 # Audit: 08_split_screen_sepia.md
 
-## Spec Summary
-This spec describes a 15-second video generation task using Veo 3.1 (not Remotion). It shows a split screen with a modern developer on the left and a 1950s grandmother on the right, both working competently at their respective tasks (coding vs darning). The spec emphasizes:
-- **Tool**: Veo 3.1 (Video Generation), not Remotion
-- **Duration**: 15 seconds
-- **Style**: Desaturated with sepia tone overlay (40-50% desaturation, light amber overlay, film grain)
-- **Mood**: Respectful parallel showing both as skilled professionals
-- **Post-processing**: Sepia effect applied to both sides
+## Status: PASS
 
-## Implementation Status
-**Not Implemented** - No dedicated Remotion composition found for this spec.
+### Requirements Met
 
-## Analysis
+1. **Veo 3.1 Video Asset Generated and Present**
+   - The spec calls for Veo 3.1 video generation (not a Remotion animation). The video file `07_split_screen_sepia.mp4` exists at `remotion/public/07_split_screen_sepia.mp4`.
 
-This spec is explicitly marked as a **Veo 3.1 video generation task**, not a Remotion animation. The correct implementation would be:
+2. **Integrated into Part1Economics Sequence**
+   - Visual 21 in `Part1Economics.tsx` (lines 214-225) renders the video via `<OffthreadVideo>` with `src={staticFile("07_split_screen_sepia.mp4")}`, correctly importing the Veo-generated asset into the Remotion composition.
 
-1. **Video Generation**: Use Veo 3.1 to generate the split-screen footage based on the detailed prompt provided in the spec
-2. **Post-Processing**: Apply sepia effect (desaturation, amber overlay, film grain, vignette) in video editing software or as a Remotion composition wrapper
-3. **Integration**: The generated video would be imported into Remotion using `<OffthreadVideo>` (similar to how `veo_developer_edit.mp4` is used in DeveloperEditZoomout.tsx:130-134)
+3. **Duration Approximately Correct**
+   - Spec calls for ~15 seconds (timestamp 4:54-5:13 in overall video).
+   - Implementation: Visual 21 spans from 379.02s to 392.90s = ~13.88 seconds. This is close to the spec's 15-second target and aligns with the narration segments it accompanies.
 
-## Expected Implementation Path
+4. **Narration Sync Correct**
+   - Spec narration: "Tools like Cursor and Claude Code are fantastic. Best darning needles ever made. They make patching faster, cleaner, less painful."
+   - Implementation narration segments [104]-[107] at the same timestamp: "Tools like cursor and clawed code are the best-darning..." / "I use them. They're fantastic." / "But they're still darning needles and the fundamental p..." / "It's accumulation."
+   - The narration content matches the spec's intended sync point.
 
-If this were to be implemented in Remotion (as a wrapper for the Veo-generated video):
+5. **Correct Placement in Sequence**
+   - Visual 21 is positioned after the CrossingPoint visuals (Visuals 7-9, 15-17, 20) and before PieChart (Visual 22), which aligns with the spec's stated position in the narrative flow.
 
-```typescript
-// Hypothetical: 08-SplitScreenSepia/SplitScreenSepia.tsx
-export const SplitScreenSepia: React.FC = () => {
-  return (
-    <AbsoluteFill>
-      <OffthreadVideo
-        src={staticFile("veo_split_screen.mp4")}
-        style={{
-          width: "100%",
-          height: "100%",
-          objectFit: "cover",
-          filter: "saturate(0.5) sepia(0.3) brightness(0.95)",
-        }}
-      />
-      {/* Optional: Additional sepia overlay layer */}
-    </AbsoluteFill>
-  );
-};
-```
+6. **Video Rendering**
+   - The `<OffthreadVideo>` component renders full-width/full-height with `loop` enabled, ensuring the video fills the frame for the duration of the sequence slot.
 
-## Missing Elements
+### Issues Found
 
-1. **Veo 3.1 Generated Video** (High Priority)
-   - The split-screen footage itself needs to be generated using the Veo 3.1 prompt from the spec
-   - Prompt includes detailed shot composition, lighting, performance direction
-   - Video file should be named something like `veo_split_screen.mp4` or `veo_sepia_comparison.mp4`
+1. **No Remotion-Layer Sepia Post-Processing (Minor)**
+   - The spec explicitly calls for post-processing: 40-50% desaturation, light amber sepia tone overlay, subtle film grain, and slight vignette on edges.
+   - The implementation applies no CSS filters to the `<OffthreadVideo>` element -- it uses `style={{ width: "100%", height: "100%" }}` only.
+   - This is a minor issue because the sepia/desaturation effects may be baked into the Veo-generated video file itself (which is the more typical workflow for Veo outputs). If the video file already has the sepia treatment applied, no additional CSS filters are needed.
+   - However, if the video lacks these effects, adding a CSS filter like `filter: "saturate(0.55) sepia(0.3)"` and an overlay div for vignette/grain would be needed.
 
-2. **Remotion Wrapper Composition** (Medium Priority)
-   - A Remotion composition to load and display the video
-   - Apply CSS filters for sepia effect (desaturate 40-50%, sepia tone overlay)
-   - Optional: Add film grain overlay
-   - Duration: 450 frames (15s @ 30fps)
+2. **File Naming Convention (Trivial)**
+   - The spec is numbered `08_split_screen_sepia.md` but the video file is named `07_split_screen_sepia.mp4`. This numbering mismatch is cosmetic and does not affect functionality. The `07` prefix likely reflects an earlier numbering scheme.
 
-3. **Integration into Section Sequence** (Medium Priority)
-   - This should be part of the Section 1 (Economics) sequence
-   - Positioned after Section 1.7 (Crossing Point) per the spec's timestamp: 4:54-5:13
+### Notes
 
-## Why Not Implemented
-
-This spec is fundamentally different from the others reviewed:
-- **Different tool**: Uses Veo 3.1 AI video generation, not Remotion animation
-- **Live-action style**: Requires photorealistic human performances, not abstract visualizations
-- **External asset**: The output is a video file that gets imported, not code that generates visuals
-
-The absence of a Remotion composition for this spec is **expected and correct** - the implementation work happens in:
-1. Generating the video with Veo 3.1
-2. Creating a simple wrapper composition to import and style it
-3. Placing it in the sequence at the right timestamp
-
-## Recommendations
-
-1. **Generate Video with Veo 3.1**: Use the exact prompt from the spec to generate the split-screen footage
-2. **Create Wrapper Composition**: Build a minimal Remotion composition in `08-SplitScreenSepia/` that:
-   - Imports the generated video
-   - Applies sepia post-processing via CSS filters
-   - Exports with correct duration (450 frames)
-3. **Verify Continuity**: The spec notes "This mirrors the cold open (Section 0) but with the sepia treatment added" - consider if the same footage can be reused with different color grading
-4. **Add to Sequence**: Integrate into `S01-Economics.tsx` sequence at the appropriate timestamp
-
-## Severity Assessment
-
-**Not Applicable** - This is not a missing implementation in the traditional sense. The spec uses a different production tool (Veo 3.1 vs Remotion). The "implementation" is a video generation task followed by a simple integration step.
-
-## Notes
-
-The spec includes helpful notes:
-- "Could potentially reuse cold open footage with color grading, or shoot fresh"
-- "Developer side continues into Section 1.8 (zoom out to reveal codebase)"
-
-This suggests the sepia effect may be applied to existing footage from Section 0 (Cold Open), making implementation even simpler - just apply color grading to already-generated video rather than creating new footage.
-
-## Resolution Status
-- **Status**: RESOLVED - Veo/video task
-- **Notes**: This spec describes a Veo 3.1 video generation task or video callback, not a Remotion animation. No Remotion code fix is applicable. The video asset needs to be generated/sourced separately.
+- This spec uses Veo 3.1 for video generation, not Remotion for programmatic animation. The Remotion role is limited to importing and displaying the pre-generated video asset, which is correctly implemented.
+- The spec mentions "This mirrors the cold open (Section 0) but with the sepia treatment added" and "Could potentially reuse cold open footage with color grading, or shoot fresh." The implementation uses a dedicated video file rather than reusing cold open footage with filters, which is a valid approach.
+- The spec mentions "Developer side continues into Section 1.8 (zoom out to reveal codebase)" as a transition note. Visual 22 (PieChart) follows in the sequence, not a zoom-out. This transition detail may be handled at a different level or may represent a spec change during development.
+- The `loop` attribute on the `<OffthreadVideo>` ensures the video loops if the sequence slot is longer than the video duration, which is a reasonable safeguard.
+- The previous audit incorrectly stated this was "Not Implemented." The video asset and its integration into the Part1Economics sequence are both present and functional.

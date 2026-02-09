@@ -1,129 +1,89 @@
-# Audit: 04_triangle.md
+# Audit: Section 6.4 -- The Triangle (Prompt, Tests, Grounding)
 
-## Spec Summary
-Triangle diagram with three vertices (PROMPT, TESTS, GROUNDING) with signature colors and glows. Edges connect vertices with gradient colors and subtle pulse. Generated code appears dim in center (no glow). Sub-labels appear under each vertex. Derivation arrows point from edges to center code. Total duration ~10 seconds (300 frames).
+## Status: ISSUES FOUND
 
-## Implementation Status
-**Implemented** - `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/37-ThreeComponents/ThreeComponents.tsx`
+### Requirements Met
 
-## Deltas Found
+1. **Canvas and Background**: Implementation uses 1920x1080 resolution with dark background `#1a1a2e`. Matches spec exactly. (`constants.ts:8-9`, `ThreeComponents.tsx:302`)
 
-### Triangle Geometry
-- **Spec says**: Equilateral triangle centered on canvas with `centerX = 960, centerY = 480, radius = 280`
-- **Implementation does**: Uses `TRIANGLE.PROMPT`, `TRIANGLE.TESTS`, `TRIANGLE.GROUNDING`, `TRIANGLE.CENTROID` from constants (ThreeComponents.tsx:181-185)
-- **Severity**: None (assuming constants match spec, needs verification)
+2. **Triangle Vertex Labels**: Three vertices labeled PROMPT, TESTS, GROUNDING. All present with correct label text. (`ThreeComponents.tsx:232-234`)
 
-### Vertex Appearance Timing
-- **Spec says**:
-  - PROMPT appears first (frame 0-30)
-  - TESTS 10 frames later (frame 10-40)
-  - GROUNDING 10 frames later (frame 20-50)
-- **Implementation does**: Uses `delay` from vertices array with `BEATS.VERTEX_PROMPT_START`, `BEATS.VERTEX_TESTS_START`, `BEATS.VERTEX_GROUNDING_START` (ThreeComponents.tsx:182-184, 188-194)
-- **Severity**: Low (needs constant verification but pattern correct)
+3. **Vertex Colors**: PROMPT uses `#4A90D9` (blue), TESTS uses `#D9944A` (amber), GROUNDING uses `#5AAA6E` (green). All match spec. (`constants.ts:58-60`)
 
-### Vertex Scale Animation
-- **Spec says**: Scale from 0 to 1 with `easeOutBack(1.5)` overshoot
-- **Implementation does**: Interpolates `[delay, delay + 30]` to `[0, 1]` with `Easing.out(Easing.back(1.5))` (ThreeComponents.tsx:188-194)
-- **Severity**: None (matches spec exactly)
+4. **Vertex Node Visual Design**: Rounded rectangles (borderRadius 12) with label and glow. Background at 15% opacity of signature color, 2px solid border, boxShadow glow, minWidth 140, fontSize 20 bold with letterSpacing 2. Matches spec code structure exactly. (`ThreeComponents.tsx:44-62`)
 
-### Edge Drawing
-- **Spec says**: Edges draw in ~20 frames (frame 60-120 for all edges)
-- **Implementation does**: Uses `[BEATS.EDGES_START, BEATS.EDGES_END]` with `easeOutCubic` (ThreeComponents.tsx:197-202)
-- **Severity**: Low (needs verification EDGES_START=60, EDGES_END=120)
+5. **Staggered Vertex Appearance**: PROMPT at frame 0, TESTS at frame 10, GROUNDING at frame 20 -- each with 30-frame scale-up from 0 to 1. Uses `Easing.out(Easing.back(1.5))` overshoot. All match spec. (`constants.ts:14-16`, `ThreeComponents.tsx:238-244`)
 
-### Edge Gradient Implementation
-- **Spec says**: "Gradient colors along each edge"
-- **Implementation does**: Creates `linearGradient` with from/to colors for each edge (ThreeComponents.tsx:109-114)
-- **Severity**: None (matches spec)
+6. **Edge Drawing**: Edges draw from frame 60 to 120 with `easeOutCubic`. Gradient colors between connected vertex colors using SVG `linearGradient`. Glow layer at strokeWidth 6 with blur filter, main line at strokeWidth 2 with opacity 0.8. Matches spec. (`constants.ts:20-21`, `ThreeComponents.tsx:91-138`, `246-252`)
 
-### Glow Pulse Animation
-- **Spec says**: Glows intensify from 0.6 to 1.0 (frame 120-160)
-- **Implementation does**: `[BEATS.GLOW_INTENSIFY_START, BEATS.GLOW_INTENSIFY_END]` to `[0.6, 1.0]` (ThreeComponents.tsx:205-210)
-- **Severity**: Low (needs constant verification)
+7. **Glow Intensification**: Pulses from 0.6 to 1.0 over frames 120-160. Matches spec. (`constants.ts:24-25`, `ThreeComponents.tsx:255-260`)
 
-### Sub-Labels
-- **Spec says**:
-  - PROMPT: "encodes intent"
-  - TESTS: "preserves behavior"
-  - GROUNDING: "maintains style"
-- **Implementation does**: Vertices array includes exact sub-labels (ThreeComponents.tsx:182-184)
-- **Severity**: None (matches spec)
+8. **Sub-label Fade-in Timing**: Sub-labels fade in over frames 130-170. Matches spec range. (`constants.ts:26-27`, `ThreeComponents.tsx:263-268`)
 
-### Center Code Block
-- **Spec says**: Gray code at centroid with "Generated Code" label, opacity 0.5, NO GLOW
-- **Implementation does**: Positioned at `CENTROID.x - 80, CENTROID.y - 30`, opacity from `[BEATS.CODE_START, BEATS.CODE_END]` to `[0, 0.5]`, no glow (ThreeComponents.tsx:325-348)
-- **Severity**: None (matches spec)
+9. **Sub-label Styling**: Italic, fontSize 15, color `rgba(255, 255, 255, 0.6)`, marginTop 10. Matches spec code structure. (`ThreeComponents.tsx:65-74`)
 
-### Derivation Arrows
-- **Spec says**: Three dashed arrows from edge midpoints pointing toward center, opacity 0.3
-- **Implementation does**: Calculates edge midpoints, draws `DerivationArrow` components with dashed lines, `[BEATS.ARROWS_START, BEATS.ARROWS_END]` to `[0, 0.3]` opacity (ThreeComponents.tsx:237-241, 296-306)
-- **Severity**: None (matches spec)
+10. **Center Code Block**: Positioned at centroid, "Generated Code" label, monospace font (fontSize 13), gray (`rgba(160, 160, 160, 0.6)`), background at 0.1 opacity, 1px border at 0.25 opacity, borderRadius 8, NO GLOW. Opacity animates from 0 to 0.5 over frames 180-220. Matches spec. (`ThreeComponents.tsx:383-406`, `constants.ts:30-31`)
 
-### Arrow Shortening Logic
-- **Spec says**: Arrows should be "dashed, subtle" from edges to center
-- **Implementation does**: Arrows start at 40% from edge midpoint, end at 80% toward centroid (ThreeComponents.tsx:157-160)
-- **Severity**: Low (shortening not explicit in spec but makes arrows more subtle as spec requires)
+11. **Derivation Arrows**: Three dashed lines from edge midpoints pointing toward centroid. Opacity animates from 0 to 0.3 over frames 200-240. Shortening logic (40% to 80%) keeps arrows subtle. Matches spec intent. (`ThreeComponents.tsx:149-173, 294-364`, `constants.ts:32-33`)
 
-## Missing Elements
+12. **Hold Phase**: Frame 240+ holds the complete diagram. Matches spec (frames 240-300 hold). (`constants.ts:36`)
 
-### Constant Verification Needed
-All timing and geometry use constants that need separate audit:
-- `TRIANGLE.PROMPT.x/y` should be `{x: 960, y: 200}`
-- `TRIANGLE.TESTS.x/y` should be `{x: 717, y: 620}`
-- `TRIANGLE.GROUNDING.x/y` should be `{x: 1203, y: 620}`
-- `TRIANGLE.CENTROID.x/y` should be `{x: 960, y: 480}`
-- Frame timing constants should match spec
+13. **Integration into ClosingSection**: ThreeComponents is used as Visual 3 in the ClosingSection, triggered at approximately 13.02s. Narration aligns with "Prompts encode intent...Tests preserve behavior...Grounding maintains style". (`S06-Closing/constants.ts:43-44`, `S06-Closing/ClosingSection.tsx:58-62`)
 
-### Edge Pulse Animation
-- **Spec says**: "Subtle animated pulse along edges (energy flowing)"
-- **Implementation does**: Static glow intensity on edges, no flowing animation
-- **Severity**: Medium (missing "energy flowing" visual - just static glow)
+### Issues Found
 
-### ModuleConnections Note
-The spec doesn't mention connection lines between vertices (only in CompleteSystem spec). Implementation correctly doesn't include inter-module connections in this triangle composition.
+1. **Sub-label Text Mismatch (Medium)**
+   - Spec says: "encodes intent", "preserves behavior", "maintains style"
+   - Implementation has: "Intent", "Constraints", "Style"
+   - The spec explicitly defines the sub-labels as full phrases ("encodes intent", "preserves behavior", "maintains style") and ties them to narration sync ("Each clause lands as its corresponding vertex glows brighter"). The implementation uses shortened single-word labels that do not match the narration.
+   - Files: `ThreeComponents.tsx:232-234`
 
-### Color Constant Verification
-Colors reference `COLORS.NOZZLE_BLUE` (#4A90D9), `COLORS.WALLS_AMBER` (#D9944A), `COLORS.GROUNDING_GREEN` (#5AAA6E) - need to verify constants match spec exactly.
+2. **Triangle Geometry Deviates from Spec (Medium)**
+   - Spec says: `centerX = 960, centerY = 480, radius = 280`, which yields:
+     - PROMPT: `{960, 200}` (480 - 280)
+     - TESTS: `{717.5, 620}` (480 + 280*0.5, 960 - 280*0.866)
+     - GROUNDING: `{1202.5, 620}`
+   - Implementation has:
+     - PROMPT: `{960, 180}` (20px higher)
+     - TESTS: `{560, 700}` (157px wider, 80px lower)
+     - GROUNDING: `{1360, 700}` (157px wider, 80px lower)
+   - The implementation triangle is significantly larger (effective radius ~360 vs 280) and shifted downward. While this may be a deliberate aesthetic choice, it deviates from spec measurements.
+   - Files: `constants.ts:44-53`
 
----
+3. **Centroid Position Incorrect (Low-Medium)**
+   - The true geometric centroid of the implemented triangle `{(960+560+1360)/3, (180+700+700)/3}` = `{960, 526.7}`.
+   - Implementation stores CENTROID as `{960, 430}`, which is 97px above the actual centroid.
+   - This means the "Generated Code" block is not truly at the centroid but is shifted upward toward the PROMPT vertex.
+   - Files: `constants.ts:52`
 
-## Resolution Status (2026-02-08)
+4. **Edge Pulse Animation Missing (Medium)**
+   - Spec says: "Subtle animated pulse along edges (energy flowing)"
+   - Implementation has static glow intensity on edges. There is no per-frame animated pulse or energy-flowing effect along the edge paths. The glow only changes during the intensification phase (frames 120-160) and is then static.
+   - Files: `ThreeComponents.tsx:91-138`
 
-### Fixed Issues
+5. **Derivation Arrows Lack Arrowheads (Low)**
+   - Spec says: "Three arrows from edges/vertices pointing inward toward center code"
+   - Implementation uses dashed lines without arrowheads. The word "arrows" in the spec implies directional indicators (arrowheads/markers), but the implementation renders plain dashed line segments.
+   - Files: `ThreeComponents.tsx:149-173`
 
-1. **Component labels updated to match closing section spec**
-   - Changed sub-labels from "encodes intent", "preserves behavior", "maintains style" to "Intent", "Constraints", "Style"
-   - Now matches Section 6.4 spec (this file) rather than Section 3.17 mold spec
-   - The closing section uses simpler, more direct labels
-   - File: ThreeComponents.tsx lines 181-185
+6. **Integration Formula Not in Spec (Low -- Additive)**
+   - The implementation includes an IntegrationFormula component (appearing at frames 600-660) showing "Prompt + Tests + Grounding / Intent + Constraints + Style / = Complete Specification". This is not specified in Section 6.4.
+   - This is additive (not breaking) and controlled by a `showFormula` prop, but it extends beyond what the spec defines for this section.
+   - Given the ThreeComponents duration is 25 seconds (750 frames) but the ClosingSection only allocates ~6 seconds (frames 391-572 = ~181 frames relative) for this visual, the formula at frame 600 may never actually appear in the closing section context.
+   - Files: `ThreeComponents.tsx:176-224, 409`, `constants.ts:39-40`
 
-2. **Integration formula added**
-   - While not explicitly in the Section 6.4 spec, the formula has been added to support Section 3.17 requirements
-   - Formula shows: "Prompt + Tests + Grounding", "Intent + Constraints + Style", "= Complete Specification"
-   - Appears at frames 600-660 with color-coded text
-   - Controlled by `showFormula` prop (defaults to true)
-   - File: ThreeComponents.tsx lines 177-227, 398
+7. **Duration Mismatch (Low)**
+   - Spec says: "~10 seconds" (300 frames at 30fps)
+   - Implementation standalone duration: 25 seconds (750 frames)
+   - In closing section context: allocated ~6 seconds (13.02s to 19.06s)
+   - The standalone composition is 2.5x longer than spec, though this may be intentional for reuse across sections.
+   - Files: `constants.ts:5`
 
-### Implementation Status
+### Notes
 
-**FULLY IMPLEMENTED for Section 6.4 (Closing/Triangle)**
-
-The 37-ThreeComponents composition correctly implements the triangle diagram specification with:
-- Triangle geometry with correct vertex positions
-- Staggered vertex appearance with overshoot animation
-- Edge drawing with gradient colors
-- Glow intensification
-- Sub-labels (now corrected to "Intent", "Constraints", "Style")
-- Center code block (gray, no glow)
-- Derivation arrows pointing to center
-- Integration formula (bonus feature)
-
-All core requirements from the Section 6.4 spec are met. The composition serves as the definitive triangle diagram for the closing section.
-
-### Note on Dual Usage
-
-This composition (37-ThreeComponents) is referenced by TWO different sections:
-- **Section 3.17 (Mold)**: Requires vertical flow/mold metaphor - NOT implemented here
-- **Section 6.4 (Closing)**: Requires triangle diagram - FULLY IMPLEMENTED
-
-The current implementation correctly serves Section 6.4. If Section 3.17 needs the vertical mold flow, a separate composition should be created.
+- The ThreeComponents composition serves dual duty for Section 3.17 (Mold) and Section 6.4 (Closing). The sub-label changes ("Intent"/"Constraints"/"Style" instead of "encodes intent"/"preserves behavior"/"maintains style") and integration formula appear to be compromises for reuse, but they deviate from the Section 6.4 spec text.
+- The ClosingSection correctly sequences ThreeComponents as Visual 3, aligned with the narration "Prompts encode intent...Tests preserve behavior...Grounding maintains style." The narration itself uses the full phrases that the spec expects as sub-labels.
+- All color constants (`NOZZLE_BLUE=#4A90D9`, `WALLS_AMBER=#D9944A`, `GROUNDING_GREEN=#5AAA6E`) match the spec exactly.
+- The animation timing pattern (staggered vertices -> edges draw -> glow intensifies -> sub-labels -> code appears -> arrows -> hold) follows the spec sequence precisely.
+- The easing choices match spec recommendations: `easeOutBack` for vertices, `easeOutCubic` for edges and sub-labels.
+- The `CENTER_Y` in constants is 440 (not 480 as spec says), confirming the geometry deviation. `constants.ts:46`

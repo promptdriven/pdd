@@ -1,62 +1,55 @@
-# Audit: 07_craftsman_vs_mold.md
+# Audit: 07_craftsman_vs_mold
 
-## Spec Summary
-The spec requires a 15-second split screen video comparing traditional craftsmanship (left: hand-carving a wooden chair) with modern manufacturing (right: injection molding). The visual should demonstrate the paradigm shift where value migrates from the crafted object to the specification/mold. This should be generated using Veo 3.1 (video generation tool).
+## Status: ISSUES FOUND
 
-## Implementation Status
-**Implemented** (as video asset)
+### Requirements Met
 
-## Implementation Details
-The spec is implemented as a pre-generated video file served via:
-- **File**: `07_craftsman_vs_mold.mp4` (referenced in `S02-ParadigmShift/Part2ParadigmShift.tsx:107`)
-- **Integration**: Used as a video source in the paradigm shift sequence
-- **Type**: Veo-generated video asset (not a Remotion composition)
+1. **Video asset exists**: The file `07_craftsman_vs_mold.mp4` is present at `/remotion/public/07_craftsman_vs_mold.mp4` and is referenced in the Remotion composition.
+2. **Integration into sequence**: The video is loaded via `OffthreadVideo` with `staticFile("07_craftsman_vs_mold.mp4")` in `Part2ParadigmShift.tsx` (line 107), correctly using Remotion's video playback pipeline.
+3. **Veo 3.1 tool usage**: The spec correctly identifies this as a Veo 3.1 video generation task. The implementation uses a pre-generated video file, which is the expected approach for Veo-generated content (no Remotion animation needed for the base video).
+4. **Video looping**: The `OffthreadVideo` component has `loop` enabled, ensuring the video fills its allocated time window regardless of source clip duration.
 
-## Deltas Found
+### Issues Found
 
-### Video vs Remotion Implementation
-- **Spec says**: Should use "Veo 3.1 (Video Generation)" tool
-- **Implementation does**: Uses pre-generated video file (`07_craftsman_vs_mold.mp4`) served via `staticFile()` function
-- **Severity**: **Low** - This is the expected implementation path for Veo-generated content. The spec correctly identifies this as video generation, not Remotion animation.
+1. **Narration sync mismatch (HIGH severity)**
+   - **Spec says**: This section should accompany the narration: "This is the real shift. Not 'cheaper material.' A migration of where value lives."
+   - **Implementation does**: That narration (segment [8] at 40.4s in `constants.ts`) is paired with Visual 5 (ValueAura composition), not Visual 7. Visual 7 instead plays during narration segment [12] at 65.54s: "And it's not just plastics. The chip industry hit this exact wall..."
+   - **Impact**: The craftsman vs mold split screen video is used as a transition into the chip industry analogy rather than as the accompaniment for the "migration of value" narration. This represents a narrative restructuring from the spec.
 
-### Narration Sync
-- **Spec says**: Narration should be: "This is the real shift. Not 'cheaper material.' A migration of where value lives."
-- **Implementation does**: Video file is referenced in sequence at BEATS.VISUAL_07_START to VISUAL_07_END, but narration text in constants.ts (line 79) says: "And it's not just plastics. The chip industry hit this exact wall..."
-- **Severity**: **High** - The narration in the implementation differs significantly from the spec. This appears to be a different narrative beat entirely.
+2. **Duration significantly shorter than spec (MEDIUM severity)**
+   - **Spec says**: "~15 seconds" (timestamp 8:23 - 8:43).
+   - **Implementation does**: Visual 7 spans from `s2f(65.54)` to `s2f(71.0)`, which is approximately 5.46 seconds -- roughly one-third of the specified duration.
+   - **Note**: The `loop` attribute on the video would fill any gap, but the visual is only displayed for ~5.5 seconds before the sequence transitions to Visual 8 (ChipDesignHistory).
 
-### Duration Verification Needed
-- **Spec says**: "~15 seconds" duration (timestamp 8:23 - 8:43)
-- **Implementation does**: Cannot verify exact duration without examining the video file and beat constants
-- **Severity**: **Low** - Would need to check BEATS.VISUAL_07_START/END duration in constants.ts to confirm
+3. **Transistor counter overlay not in spec (LOW severity)**
+   - **Spec says**: No overlays are specified. The spec calls for a clean split-screen video with "NO DIALOGUE."
+   - **Implementation does**: A transistor counter overlay is rendered on top of the video (lines 111-164 of `Part2ParadigmShift.tsx`). The counter animates from ~100 to ~50,000 with easing, turns from teal (#2AA198) to orange (#D9944A) at 90% progress, and blinks. A code comment references "spec 09b" for this overlay.
+   - **Impact**: This is an additive element not called for by the 07 spec. It may be correctly specified in spec 09b, making this a cross-spec integration rather than a deviation.
 
-## Missing Elements
+4. **Sequence ordering differs from spec (MEDIUM severity)**
+   - **Spec says**: The craftsman vs mold visual should appear at timestamp 8:23-8:43 in the overall video, and "Fades into Section 2.8 where glowing aura shows where value lives."
+   - **Implementation does**: ValueAura (the "where value lives" aura composition) is Visual 5, which plays at 40.36s-54.82s -- BEFORE the craftsman vs mold video at Visual 7 (65.54s). The spec's expected ordering (craftsman -> value aura) is reversed in the implementation (value aura -> craftsman).
 
-### Technical Verification
-Cannot verify from code alone:
-1. Split screen composition (vertical divide at 960px as specified)
-2. Left side: craftsman, warm lighting, wood shavings, wooden chair
-3. Right side: injection mold, cool lighting, industrial setting, parts ejecting
-4. Visual balance and framing as specified
-5. Audio mix (wood sounds vs machine sounds)
+5. **No fade transition to next section (LOW severity)**
+   - **Spec says**: "Fades into Section 2.8."
+   - **Implementation does**: Uses hard-cut transitions driven by the `activeVisual` state machine. There is no opacity interpolation or crossfade between Visual 7 and Visual 8.
 
-These elements should be present in the video file `07_craftsman_vs_mold.mp4` but cannot be audited without viewing the actual video asset.
+6. **Split screen and visual content unverifiable from code (INFO)**
+   - The following spec requirements are baked into the video file and cannot be verified from the Remotion code:
+     - Vertical divide at exact center (960px)
+     - Left side: craftsman with warm lighting, wood shavings, partially carved wooden chair
+     - Right side: injection mold with cool lighting, industrial setting, parts ejecting
+     - Visual balance (both subjects centered, similar framing scale)
+     - Audio (left: wood carving sounds, right: machine sounds)
+     - Color grading (warm left vs cool right)
+     - Static camera on both sides
 
-## Recommendations
+### Notes
 
-1. **Critical**: Verify the narration sync - the spec says this beat should have narration about "migration of where value lives" but the implementation suggests different narration about the chip industry. Check if:
-   - The spec is out of date
-   - The constants.ts description is incorrect
-   - There's been a narrative restructure
-
-2. **Verify**: Check the actual video file to ensure it matches all technical specifications:
-   - 15-second duration
-   - Split screen at exact center (960px divide)
-   - Warm/cool color grading contrast
-   - Both subjects centered in their halves
-   - Proper audio balance
-
-3. **Consider**: Document the relationship between this spec and Section 2.8 (Value Aura), as the spec notes this "fades into Section 2.8 where glowing aura shows where value lives."
-
-## Resolution Status
-- **Status**: RESOLVED - Veo/video task
-- **Notes**: This spec describes a Veo 3.1 video generation task or video callback, not a Remotion animation. No Remotion code fix is applicable. The video asset needs to be generated/sourced separately.
+- The narrative has been restructured from the spec. In the spec, the craftsman vs mold split screen is the centerpiece visual for the "value migration" narration. In the implementation, the "value migration" beat uses a dedicated Remotion composition (ValueAura), and the craftsman vs mold video has been repositioned as a brief transition clip bridging the injection molding analogy into the chip industry analogy.
+- The video file `07_craftsman_vs_mold.mp4` exists and is correctly wired into the Remotion pipeline. The issues are primarily about sequencing and narrative placement rather than missing implementation.
+- The transistor counter overlay layered on this video appears intentional and cross-referenced to spec 09b, suggesting this visual slot has been deliberately repurposed to serve double duty as both the split-screen comparison and a chip industry transition.
+- Key source files:
+  - `/remotion/src/remotion/S02-ParadigmShift/Part2ParadigmShift.tsx` (lines 101-167)
+  - `/remotion/src/remotion/S02-ParadigmShift/constants.ts` (lines 79-81 for VISUAL_07 beats, line 113 for sequence entry)
+  - `/remotion/public/07_craftsman_vs_mold.mp4` (video asset)

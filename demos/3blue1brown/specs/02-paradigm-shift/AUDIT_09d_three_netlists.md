@@ -1,141 +1,80 @@
-# Audit: 09d_three_netlists.md
+# Audit: 09d Three Netlists (Non-Deterministic Synthesis)
 
-## Spec Summary
-Same Verilog code runs through synthesis three times, producing three visibly different gate-level netlists side by side. Green checkmarks appear over each with "Functionally Equivalent" label, demonstrating non-deterministic generation with deterministic verification. Duration: ~20 seconds.
+## Status: ISSUES FOUND
 
-## Implementation Status
-**Implemented** - Split across ChipDesignHistory's "threeNetlists" and "verification" phases.
+### Requirements Met
 
-## Deltas Found
+1. **Canvas and Background**: Resolution 1920x1080 with dark background (#1a1a2e) matching spec. Background gradient applied via `linear-gradient` in `AbsoluteFill`.
 
-### Verilog Code Source Display
-- **Spec says**: "Verilog code visible at top, centered" with "Subtle blue-ish glow to suggest it holds the value" (lines 21-25, sketch at lines 50-68)
-- **Implementation does**: Compact Verilog code block at top with glowing property (ChipDesignHistory.tsx:926-936), positioned at x=580, y=40, scale=0.85
-- **Severity**: None - Correctly implemented with glow
+2. **Verilog Code Block (Source)**: Compact code block displayed at top-center (x=580, y=40, scale=0.85) with `glowing=true` providing the spec's "subtle blue-ish glow" via `BLUE_GLOW` (#4A90D9) box-shadow. Code background is #1E1E2E. Syntax highlighting uses teal (#2AA198) for keywords, matching spec. `revealProgress=1` so code is fully shown (stable, unchanged). Implementation file: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/19a-ChipDesignHistory/ChipDesignHistory.tsx` lines 1144-1156.
 
-### "Same input" Label
-- **Spec says**: Implied by visual layout showing same code feeding three runs
-- **Implementation does**: Explicit label "Same Verilog Source" rendered (ChipDesignHistory.tsx:940-956)
-- **Severity**: None - Enhancement improves clarity
+3. **"Same Verilog Source" Label**: Added as enhancement for narrative clarity (lines 1158-1175). Not explicitly in spec but strengthens the visual message.
 
-### Three Synthesis Runs
-- **Spec says**: "Same compiler icon appears three times (or one icon runs three times)" with "Run 1", "Run 2", "Run 3" labels (lines 27-30)
-- **Implementation does**: No visible synthesis tool icons for the three runs, but netlists are labeled "Run 1", "Run 2", "Run 3" (ChipDesignHistory.tsx:977-1007)
-- **Severity**: Medium - Missing the visual synthesis process for each run
+4. **Three Synthesis Runs with Tool Icons**: Three `SynthesisToolBox` components render above each netlist at y=410, one per run (lines 1177-1204). Each has a rotating gear animation indicating active processing. Positioned at `netX1+30`, `netX2+30`, `netX3+30`. Each appears with fade-in opacity at the corresponding RUN_START beat.
 
-### Three Netlists with Different Layouts
-- **Spec says**: Three netlists with visibly different gate arrangements (lines 122-140):
-  - Netlist A: AND gates first, linear left-to-right, compact
-  - Netlist B: OR gates first, tree-like branching, spread vertically
-  - Netlist C: Mixed ordering, diagonal wiring, uses NAND/NOR equivalents
-- **Implementation does**: Three netlists rendered with variants A, B, C using NETLIST_LAYOUTS data structure (ChipDesignHistory.tsx:970-1008, GateNetlist:331-397)
-- **Severity**: None - Correctly implemented with distinct layouts
+5. **Three Gate-Level Netlists**: Three netlists rendered with variants A, B, C using `NETLIST_LAYOUTS` from constants (lines 1228-1267). Layouts match spec:
+   - Netlist A: AND+AND+OR+NOT (AND gates first, linear flow)
+   - Netlist B: OR+NOT+AND+OR (OR gates first, tree-like branching)
+   - Netlist C: NAND+NOR+AND+NOT (uses NAND/NOR equivalents, mixed ordering)
+   All use `NETLIST_TEAL` (#1A7A6E) color. Constants file: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/19a-ChipDesignHistory/constants.ts` lines 192-211.
 
-### Netlist Drawing Animation
-- **Spec says**: Staggered drawing of three netlists (lines 76-102) with different start times
-- **Implementation does**: Three netlists draw with interpolated progress at different frame ranges (RUN1: 60-150, RUN2: 150-240, RUN3: 240-330) (ChipDesignHistory.tsx:843-875)
-- **Severity**: None - Correctly implemented
+6. **Netlist Drawing Animation (Staggered)**: Three netlists draw with `Easing.inOut(Easing.cubic)` (matching spec's `easeInOutCubic`) at staggered frame ranges: RUN1 60-150, RUN2 150-240, RUN3 240-330. These match the spec's animation sequence exactly (lines 1039-1071).
 
-### Flow Arrows from Code to Netlists
-- **Spec says**: "Arrow/flow from code to left slot," "center slot," "right slot" (lines 82-97)
-- **Implementation does**: Three flow arrows rendered from code position to each netlist (ChipDesignHistory.tsx:959-967)
-- **Severity**: None - Correctly implemented
+7. **Flow Arrows (Code to Synth, Synth to Netlist)**: Dual-layer arrows implemented -- arrows from code (y1=280) to synthesis tools (y2=synthY=410), and from synthesis tools (y1=synthY+70=480) to netlists (y2=netY=580). Creates the complete visual pipeline: Code -> Synth Tool -> Netlist (3x) (lines 1206-1226).
 
-### "Different every time" Label
-- **Spec says**: Not explicitly specified in structured overlay, but implied by narration
-- **Implementation does**: Label "Different gates. Different wiring. Every time." rendered at bottom during hold phase (ChipDesignHistory.tsx:1011-1035)
-- **Severity**: None - Good addition for narrative clarity
+8. **"Run 1/2/3" Labels**: Each `GateNetlist` component renders its `runLabel` text below the netlist box (GateNetlist lines 387-397).
 
-### Verification Checkmarks
-- **Spec says**: "Green checkmark (#5AAA6E) appears over Netlist 1, Then over Netlist 2 (0.5s delay), Then over Netlist 3 (0.5s delay)" with "scale bounce" animation (lines 106-115, 141-184)
-- **Implementation does**: VerificationCheckmark component with spring animation and staggered delays (ChipDesignHistory.tsx:400-449, verification phase:1138-1160). Uses CHECK_GREEN color and spring config matching spec.
-- **Severity**: None - Correctly implemented in separate verification phase
+9. **"Different gates. Different wiring. Every time." Label**: Appears during HOLD phase with amber color (#D9944A), fading in over 30 frames (lines 1269-1294). Good addition for narrative clarity.
 
-### "Functionally Equivalent" Label
-- **Spec says**: "Text fades in below all three netlists" in green (#5AAA6E) with "Connecting line or bracket groups all three" (lines 117-120)
-- **Implementation does**: Label rendered with green border, background, and detailed styling including "Formal equivalence checking via SAT/SMT solvers" subtitle (ChipDesignHistory.tsx:1163-1201)
-- **Severity**: None - Enhanced implementation with additional context
+10. **Verification Checkmarks**: `VerificationCheckmark` component uses spring animation with config `damping=12, stiffness=200, mass=0.5` matching spec exactly (lines 414-422). Uses `CHECK_GREEN` (#5AAA6E). Opacity interpolation matches spec pattern (lines 424-426). Checkmarks render inside SVG at the center of each netlist (lines 1398-1418).
 
-### Checkmark Component Details
-- **Spec says**: Detailed VerificationCheckmark component with spring animation (lines 143-184)
-- **Implementation does**: Component structure matches spec with spring damping=12, stiffness=200, mass=0.5 (ChipDesignHistory.tsx:400-449)
-- **Severity**: None - Correctly implemented
+11. **"Functionally Equivalent" Label**: Rendered with green border (#5AAA6E), `JetBrains Mono` font at 22px, letterSpacing=2, plus a subtitle "Formal equivalence checking via SAT/SMT solvers" (lines 1422-1460). Label uses `Easing.out(Easing.cubic)` fade-in matching spec's `easeOutCubic`.
 
-### Netlist Positioning
-- **Spec says**: Three netlists "Side by side in the lower two-thirds of screen" (line 35)
-- **Implementation does**: Netlists positioned at y=580 (threeNetlists phase) and y=500 (verification phase) with x positions at 200, 850, 1500 (ChipDesignHistory.tsx:918-921, 1053-1056)
-- **Severity**: None - Correctly positioned
+12. **Gate Symbol Rendering**: `GateSymbol` component renders AND (&), OR (>=1), NOT (1 with negation bubble), NAND (& with negation bubble), NOR (>=1 with negation bubble) -- all gate types needed by the spec's three netlist variants (lines 270-329).
 
-### Gate Symbol Variations
-- **Spec says**: Specific gate types and layouts for each netlist variant (lines 122-140)
-- **Implementation does**: NETLIST_LAYOUTS constant (in constants file) defines gate positions and types for variants A, B, C. GateSymbol component renders AND, OR, NOT, NAND, NOR gates (ChipDesignHistory.tsx:267-327)
-- **Severity**: None - Correctly implemented
+13. **Wire Connections**: Wire connections drawn between visible gates using sequential line segments, appearing progressively as gates become visible (lines 366-386).
 
-## Missing Elements
+14. **Integration in Part2ParadigmShift**: Visual 9 maps to `ChipDesignHistory:threeNetlists` (VISUAL_09_START at 95.24s) and Visual 10 maps to `ChipDesignHistory:verification` (VISUAL_10_START at 109.62s). Both are wired correctly in `Part2ParadigmShift.tsx` lines 176-188. File: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/S02-ParadigmShift/Part2ParadigmShift.tsx`.
 
-### Synthesis Tool Icons for Three Runs
-- **Spec says**: "Same compiler icon appears three times (or one icon runs three times)" with visual indicators for each run (lines 27-30)
-- **Implementation does**: No synthesis tool boxes visible during the three-netlists phase
-- **Severity**: Medium - The visual process of running synthesis three times is not shown, only the outputs
+### Issues Found
 
-### Slight Pulsing on Differences
-- **Spec says**: "Optional: subtle pulsing on the differences" during the hold phase (lines 105-107)
-- **Implementation does**: No pulsing animation on the netlists themselves
-- **Severity**: Low - Marked as optional
+1. **Checkmark Stagger Delay Mismatch (Low)**
+   - **Spec says**: Checkmarks appear with 0.5s delay between each (15 frames at 30fps). Spec lines 110-113: "Then over Netlist 2 (0.5s delay), Then over Netlist 3 (0.5s delay)". Spec code example (line 274-276) uses delays of 0, 15, 30.
+   - **Implementation does**: `VERIFICATION_BEATS.CHECK1_START=60, CHECK2_START=90, CHECK3_START=120` -- 30-frame (1.0s) delays between each checkmark, double the spec.
+   - **Impact**: Checkmarks take 2 seconds to all appear instead of 1 second. Still reads well visually, but is slower than the spec's "satisfying sequential appearance" intention.
 
-### Connecting Bracket/Line for Equivalence
-- **Spec says**: "Connecting line or bracket groups all three" netlists under the Functionally Equivalent label (line 119)
-- **Implementation does**: Label is centered but no explicit visual grouping element
-- **Severity**: Low - The centered position and color scheme sufficiently indicate grouping
+2. **Netlist Vertical Position Shift Between Phases (Medium)**
+   - **Spec says**: The spec describes a single continuous 600-frame sequence where netlists stay in place.
+   - **Implementation does**: In `ThreeNetlistsPhase`, netlists are at y=580. In `VerificationPhase`, netlists shift to y=500. These are separate phases with separate frame counters, so the netlists jump upward by 80px at the phase transition.
+   - **Impact**: Visual discontinuity at the cut between threeNetlists and verification phases. The netlists appear to jump upward when the verification phase begins.
 
-## Notes
+3. **Synthesis Tools Disappear in Verification Phase (Low)**
+   - **Spec says**: The spec's code structure (lines 250-290) shows a single Sequence where netlists, checkmarks, and labels overlay progressively. The synthesis process is part of the visual continuity.
+   - **Implementation does**: The verification phase re-renders netlists and code but does not show the synthesis tool boxes. The visual pipeline (Code -> Synth Tool -> Netlist) shown in the threeNetlists phase is reduced to just (Code -> Netlist) arrows in the verification phase.
+   - **Impact**: Minor visual continuity break. The synthesis tools vanishing when checkmarks appear is not harmful to comprehension but differs from the spec's implied continuous scene.
 
-The implementation splits this spec across two phases:
-1. **threeNetlists phase**: Shows the three different netlists being generated from the same Verilog source
-2. **verification phase**: Adds the green checkmarks and "Functionally Equivalent" label
+4. **Connecting Bracket/Line for Equivalence Grouping (Low)**
+   - **Spec says**: "Connecting line or bracket groups all three" netlists under the Functionally Equivalent label (line 119).
+   - **Implementation does**: The label is centered below all netlists but no visual bracket or connecting element explicitly groups them.
+   - **Impact**: Minor omission. The centered label and green border styling sufficiently communicate grouping.
 
-This is a logical separation that maintains the narrative flow. The implementation is highly faithful to the spec with proper:
-- Three distinct netlist layouts (variants A, B, C)
-- Staggered animation timing
-- Spring-animated checkmarks with proper delays
-- Green color coding for verification (#5AAA6E)
-- Detailed labeling and context
+5. **Optional Pulsing on Differences (Low)**
+   - **Spec says**: "Optional: subtle pulsing on the differences" during the hold phase (line 106).
+   - **Implementation does**: No pulsing animation on netlists during the hold phase.
+   - **Impact**: Explicitly marked optional in the spec. The hold with the amber "Different gates. Different wiring. Every time." label serves the same narrative purpose.
 
-The main gap is the absence of visible synthesis tool processing for each of the three runs, which would strengthen the visual metaphor of "running synthesis multiple times."
+### Notes
 
----
+**Architecture**: The implementation splits this single spec across two Remotion phases: `threeNetlists` (397 frames, ~13.2s) and `verification` (646 frames, ~21.5s). The spec describes a single ~20s / 600-frame sequence. The split is a reasonable architectural decision that aligns with the narration segments (segments 17-19 for netlists, segments 20-23 for verification), but introduces the position-shift issue at the phase boundary.
 
-## Resolution Status
+**Narration Sync Points**: The implementation correctly aligns with narration:
+- Visual 9 (threeNetlists) starts at 95.24s, covering narration segments 17-19 about non-deterministic synthesis
+- Visual 10 (verification) starts at 109.62s, covering narration segments 20-23 about Synopsys verification and equivalence
 
-**Date:** 2026-02-08
-**Status:** RESOLVED
+**Color Fidelity**: All colors match the spec precisely: background #1a1a2e, code background #1E1E2E, code keyword teal #2AA198, netlist teal #1A7A6E, check green #5AAA6E, blue glow #4A90D9.
 
-### Changes Made
+**Spring Animation**: The VerificationCheckmark spring config (damping=12, stiffness=200, mass=0.5) is an exact match to the spec's suggested code.
 
-1. **Added Synthesis Tool Boxes for Three Runs**: Modified the ThreeNetlistsPhase component to include three SynthesisToolBox components, one above each netlist position.
+**Easing Curves**: Netlist drawing uses `Easing.inOut(Easing.cubic)` (equivalent to `easeInOutCubic`). Label fade-in uses `Easing.out(Easing.cubic)` (equivalent to `easeOutCubic`). Both match spec.
 
-2. **Implemented Visual Processing**:
-   - Each synthesis tool appears with fade-in animation when its respective run starts
-   - Rotating gear animation indicates active processing
-   - Tools positioned at y=410, above netlists at y=580
-   - Each tool has independent opacity control (synth1Opacity, synth2Opacity, synth3Opacity)
-
-3. **Updated Flow Arrows**:
-   - Added flow arrows from Verilog code to each synthesis tool
-   - Added flow arrows from each synthesis tool to its respective netlist
-   - Creates complete visual pipeline: Code → Synth Tool → Netlist (3x)
-
-### Severity Resolution
-
-- **Medium: Missing Synthesis Tool Icons for Three Runs** - RESOLVED: Three synthesis tools now visible, one per run
-- **Low: Missing Slight Pulsing on Differences** - NOT IMPLEMENTED: Marked as optional in spec
-- **Low: Missing Connecting Bracket/Line for Equivalence** - ACCEPTED: Centered label position provides sufficient visual grouping
-
-### Implementation Details
-
-The synthesis tools use the existing SynthesisToolBox component with proper positioning and timing:
-- Run 1 tool appears at frame 60 (THREE_NETLISTS_BEATS.RUN1_START)
-- Run 2 tool appears at frame 150 (THREE_NETLISTS_BEATS.RUN2_START)
-- Run 3 tool appears at frame 240 (THREE_NETLISTS_BEATS.RUN3_START)
-
-Each tool shows rotating gear animation while processing, making it clear that synthesis is running three separate times on the same input, producing three different outputs. This strengthens the visual metaphor of non-deterministic generation.
+**Gate Netlist Variants**: The three layouts faithfully implement the spec's requirements for visually distinct gate arrangements. Variant C properly uses NAND/NOR gates as specified for "different gates, same function."

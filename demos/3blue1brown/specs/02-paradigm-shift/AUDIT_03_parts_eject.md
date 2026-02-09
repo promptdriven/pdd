@@ -1,100 +1,77 @@
-# Audit: 03_parts_eject.md
+# Audit: 03_parts_eject (Parts Eject / Counter Animation)
 
-## Spec Summary
-Remotion composition showing mold opening/closing with parts ejecting and a counter displaying exponential growth: 1 → 10 → 100 → 1,000 → 10,000. Duration ~20 seconds. Emphasizes "make the mold once, produce unlimited identical parts."
+## Status: ISSUES FOUND
 
-## Implementation Status
-Implemented
+### Requirements Met
 
-## Deltas Found
+1. **Canvas and background**: 1920x1080 resolution with dark industrial background (#1a1a2e), implemented as a gradient to #0f0f1a. Matches spec.
+   - File: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/14-PartsEject/constants.ts` (lines 8-9, 33-34)
+   - File: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/14-PartsEject/PartsEject.tsx` (lines 22-25)
 
-### Duration discrepancy
-- **Spec says**: ~20 seconds (frame 600 at 30fps)
-- **Implementation does**: Exactly 20 seconds (600 frames)
-- **Severity**: Low (matches spec)
-- **File**: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/14-PartsEject/constants.ts:5-7`
+2. **Standalone duration**: Spec says ~20 seconds (600 frames at 30fps). Standalone composition is exactly 600 frames at 30fps.
+   - File: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/14-PartsEject/constants.ts` (lines 4-7)
 
-### Counter values and timing
-- **Spec says**: Counts 1 → 10 → 100 → 1,000 → 10,000 with specific frame timings
-- **Implementation does**: Uses logarithmic interpolation `Math.pow(10, progress * 4)` reaching 10,000 by frame 420
-- **Severity**: Low (achieves same effect with smoother interpolation)
-- **File**: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/14-PartsEject/constants.ts:105-119`
+3. **Mold cross-section animation**: Two halves (top/bottom) separate vertically with configurable gap, part ejects from center cavity, mold closes, cycle repeats. SVG-based cross-section view with cavity indents on both halves.
+   - File: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/14-PartsEject/MoldAndParts.tsx` (lines 122-164)
+   - File: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/14-PartsEject/constants.ts` (lines 47-55, 79-99)
 
-### Animation sequence structure
-- **Spec says**:
-  - Frame 0-60: First part ejects (1)
-  - Frame 60-120: Parts 2-10
-  - Frame 120-240: Parts 10-100
-  - Frame 240-420: Parts 100-10,000
-  - Frame 420-600: Hold on scale
-- **Implementation does**: Different beat structure:
-  - Frame 0-60: First eject (slow)
-  - Frame 60-120: Ramp (acceleration begins)
-  - Frame 120-240: Rapid cycling
-  - Frame 240-420: Blur/stream effect
-  - Frame 420-600: Hold with narration
-- **Severity**: Low (achieves same narrative arc with refined timing)
-- **File**: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/14-PartsEject/constants.ts:12-29`
+4. **Part color and shape**: Spec says cooled amber (#D9944A), simple geometric shape. Implementation uses #D9944A, rectangle with rounded corners (68x36px, rx=8) -- reasonable abstract widget.
+   - File: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/14-PartsEject/constants.ts` (lines 38, 58-62)
 
-### Mold position
-- **Spec says**: No specific position mentioned
-- **Implementation does**: Mold positioned off-center at x=580 (not centered at 960)
-- **Severity**: Low (compositional choice)
-- **File**: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/14-PartsEject/constants.ts:48`
+5. **Counter display styling**: Spec says 72px JetBrains Mono, #FFFFFF, blue glow text-shadow, position top-right or bottom-right. Implementation uses 72px JetBrains Mono (with Fira Code and Courier New fallbacks), #FFFFFF, dynamic blue glow shadow using rgba(74,144,217,0.5), positioned top-right at (top:280, left:1150).
+   - File: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/14-PartsEject/PartCounter.tsx` (lines 56-67)
 
-### Counter styling
-- **Spec says**: 72px JetBrains Mono font, position bottom-right or top-right
-- **Implementation does**: 72px JetBrains Mono font, position top-right (top: 280, left: 1150)
-- **Severity**: Low (matches spec)
-- **File**: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/14-PartsEject/PartCounter.tsx:56-67`
+6. **Counter label styling**: Spec says 18px, #888, uppercase, letter-spacing 2px. Implementation: 18px, #888888, uppercase, letter-spacing 2. Exact match.
+   - File: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/14-PartsEject/PartCounter.tsx` (lines 42-50)
 
-### Part shape
-- **Spec says**: "Simple geometric shape (could be abstract widget)" - options include abstract widget, recognizable object, or "The Sock" callback
-- **Implementation does**: Rectangle with rounded corners (68x36px, rx=8)
-- **Severity**: Low (reasonable choice for abstract widget)
-- **File**: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/14-PartsEject/constants.ts:58-62`
+7. **Counter values**: Spec says 1 -> 10 -> 100 -> 1,000 -> 10,000. Implementation uses logarithmic interpolation `Math.pow(10, progress * 4)` reaching 10,000 by frame 420. Achieves the same progression (10^0 through 10^4) with smooth interpolation rather than discrete steps.
+   - File: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/14-PartsEject/constants.ts` (lines 105-119)
 
-### Narration text
-- **Spec says**: "Make the mold once, produce unlimited identical parts. Refine the mold once, every future part improves automatically."
-- **Implementation does**: Exact match
-- **Severity**: None
-- **File**: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/14-PartsEject/PartsEject.tsx:57-59`
+8. **Counter format**: Spec says comma-separated. Implementation uses `toLocaleString("en-US")` for comma formatting. Match.
+   - File: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/14-PartsEject/constants.ts` (lines 132-134)
 
-### Stream effect
-- **Spec says**: "Very fast, almost blur" with "overwhelming quantity"
-- **Implementation does**: Implements stream gradient with floating particles, vibration effect during high speed
-- **Severity**: None (well-implemented)
-- **File**: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/14-PartsEject/MoldAndParts.tsx:69-92`
+9. **Cycle speed acceleration**: Spec says starts slow (1 part every 2s), accelerates, parts blur together. Implementation uses power curve `Math.pow(f/52, 2.2)` for exponential acceleration, with stream/blur effect at high speed.
+   - File: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/14-PartsEject/constants.ts` (lines 68-73)
 
-## Missing Elements
-None - all major spec requirements are implemented
+10. **Stream/blur effect**: Spec says "very fast, almost blur" with "overwhelming quantity". Implementation provides amber gradient stream, floating particles, and vibration effect at high speed.
+    - File: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/14-PartsEject/MoldAndParts.tsx` (lines 69-91, 197-221)
 
-## Additional Implementation Details
-The implementation includes several enhancements not explicitly specified:
-- Vibration effect during high-speed production (lines 22-28 in MoldAndParts.tsx)
-- Glow intensity on counter that scales with rate of change (PartCounter.tsx:15-20)
-- Metallic gradient for mold body (MoldAndParts.tsx:104-109)
-- Drop shadow filter for visual depth (MoldAndParts.tsx:115-118)
+11. **Narration text**: Spec says "Make the mold once, produce unlimited identical parts. Refine the mold once, every future part improves automatically." Implementation is an exact match.
+    - File: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/14-PartsEject/PartsEject.tsx` (lines 57-59)
 
-These additions align with the spec's "3Blue1Brown aesthetic: clean, mathematical, satisfying" guidance.
+12. **Beat structure**: Spec defines 5 phases across frames 0-600. Implementation defines matching 5 phases (FIRST_EJECT, RAMP, RAPID, BLUR, HOLD) at the same frame boundaries. Achieves same narrative arc.
+    - File: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/14-PartsEject/constants.ts` (lines 17-29)
 
-## Resolution Status
-- **Status**: RESOLVED
-- **Changes Made**: None required - all deltas are LOW severity
-- **Remaining Issues**: None
+13. **Mold styling**: Spec says stylized/abstract, not photorealistic. Implementation uses SVG with metallic gradient, edge strokes, and drop shadow -- appropriately stylized.
+    - File: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/14-PartsEject/MoldAndParts.tsx` (lines 104-118)
 
-### Summary
-The 14-PartsEject implementation has no HIGH or MEDIUM severity deltas. All identified differences from the spec are either:
-1. Direct matches (narration text, counter styling, stream effect)
-2. Low-severity compositional choices (mold position, part shape)
-3. Low-severity refinements that maintain the intended narrative arc (animation beat structure, logarithmic counter interpolation)
+### Issues Found
 
-The implementation successfully captures the spec's core requirements:
-- 20-second duration with exponential part production visualization
-- Counter displaying 1 → 10 → 100 → 1,000 → 10,000 progression
-- Mold open/close animation with accelerating cycle speed
-- Stream/blur effect at high speeds
-- Proper narration text and timing
-- 3Blue1Brown aesthetic (clean, mathematical, satisfying)
+1. **MEDIUM: Section integration truncates animation to ~8 seconds**
+   - **Spec says**: ~20 seconds duration with 5 phases ending at frame 600
+   - **Implementation does**: Standalone composition is 600 frames (correct), but in S02-ParadigmShift integration, VISUAL_02 runs from s2f(19.58)=587 to s2f(27.82)=835, giving only ~248 local frames (~8.27 seconds). The `activeVisual === 2` conditional unmounts PartsEject at that boundary. This means:
+     - BLUR phase (240-420): only 8 frames visible (240-248)
+     - HOLD phase (420-600): never visible
+     - Narration text overlay (starts frame 460): never visible
+     - Counter reaches only ~172 parts (not 10,000) before cutoff
+   - **Note**: This may be intentional if the section narration audio provides the pacing and the narration overlay is handled differently at the section level, but the counter never reaching 10,000 undermines the core visual message of "exponential scale."
+   - **File**: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/S02-ParadigmShift/constants.ts` (lines 59-61)
+   - **File**: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/S02-ParadigmShift/Part2ParadigmShift.tsx` (lines 67-71)
 
-The implementation includes thoughtful enhancements (vibration effect, dynamic glow, metallic gradients) that elevate the visual quality while staying true to the spec's intent.
+2. **LOW: Mold easing does not match spec**
+   - **Spec says**: Mold open/close uses `easeInOutQuad`, part eject uses `easeOutCubic`
+   - **Implementation does**: Mold opening uses linear piecewise interpolation in `getMoldOpening()` (phase 0-0.3 linear ramp up, 0.3-0.5 hold, 0.5-0.8 linear ramp down). First part eject uses Remotion's `interpolate` with default (linear) easing. Neither matches the specified easing curves.
+   - **File**: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/14-PartsEject/constants.ts` (lines 88-99)
+   - **File**: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/14-PartsEject/MoldAndParts.tsx` (lines 42-47)
+
+3. **LOW: Mold positioned off-center**
+   - **Spec says**: No explicit position, but cross-section view implies centered or prominent placement
+   - **Implementation does**: Mold at x=580 (left-of-center) with counter at x=1150 (right side), creating an asymmetric layout
+   - **Severity**: Low -- compositional choice that allows counter and mold to coexist without overlap
+   - **File**: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/14-PartsEject/constants.ts` (line 48)
+
+### Notes
+
+- The standalone `PartsEject` composition (registered in Root.tsx at 600 frames) works correctly per spec. The MEDIUM issue is specifically about the S02-ParadigmShift section integration where the allocated time window is much shorter than the composition's internal timeline.
+- Implementation includes well-crafted enhancements beyond spec: vibration at high speed (MoldAndParts.tsx lines 22-28), dynamic glow intensity on counter scaling with rate of change (PartCounter.tsx lines 15-20), metallic gradient for mold body (MoldAndParts.tsx lines 104-109), and drop shadow filter (MoldAndParts.tsx lines 116-118). These align with the spec's "3Blue1Brown aesthetic: clean, mathematical, satisfying" guidance.
+- The `PartsEject` component's visual language is reused by `16-PerfectParts`, which explicitly matches the mold configuration and part shape and continues the counter from 10,001 onward.

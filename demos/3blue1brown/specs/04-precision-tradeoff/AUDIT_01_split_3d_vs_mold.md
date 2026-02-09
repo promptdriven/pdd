@@ -1,76 +1,30 @@
-# Audit: 01_split_3d_vs_mold.md
+# Audit: Split Screen - 3D Printer vs Injection Mold (01_split_3d_vs_mold)
 
-## Spec Summary
-A 15-second split-screen video comparing 3D printing (left) with injection molding (right), showing the fundamental contrast in how precision is achieved. The spec calls for a Veo 3.1-generated video with minimal Remotion overlay (just a subtle divider line that fades in).
+## Status: PASS
 
-## Implementation Status
-Partially Implemented
+### Requirements Met
 
-## Deltas Found
+1. **Standalone SplitComparison Component**: A dedicated `SplitComparison` component exists at `/remotion/src/remotion/38-SplitComparison/SplitComparison.tsx` with its own `constants.ts` and `index.ts` module structure. This matches the spec requirement for a composable, standalone component (spec lines 88-116).
 
-### No Dedicated Composition - Only Video Playback
-- **Spec says**: Should have a dedicated `SplitComparison` React component with Remotion overlays including a center divider that fades in (lines 88-116)
-- **Implementation does**: Only plays raw video file `split_3d_vs_mold.mp4` with no Remotion overlays at all (Part4PrecisionTradeoff.tsx:40-48)
-- **Severity**: Medium - The video is present but lacks the designed Remotion overlay
+2. **Video Base Layer**: The component renders `split_3d_vs_mold.mp4` via `staticFile()` as the base layer inside an `AbsoluteFill`, matching the spec design. Implementation uses `OffthreadVideo` (Remotion's recommended performant variant) instead of the spec's `Video` tag -- functionally equivalent and preferred.
 
-### Missing Center Divider Animation
-- **Spec says**: A 2px white divider line at 50% screen position that fades from 0 to 0.5 opacity over frames 0-30 (lines 92-112)
-- **Implementation does**: No divider rendered at all
-- **Severity**: Low - This is a subtle enhancement, but was explicitly designed to clarify the split
+3. **Center Divider Animation**: The 2px white vertical divider at 50% horizontal position fades from opacity 0 to 0.5 over frames 0-30 using `interpolate()` with `extrapolateRight: "clamp"`. This is an exact match to the spec's animation logic (spec lines 92-96, 104-112).
 
-### Missing Component Structure
-- **Spec says**: Should be a standalone component called `SplitComparison` that can be imported and composed (lines 88-116)
-- **Implementation does**: Video is directly embedded in Part4PrecisionTradeoff.tsx as an OffthreadVideo tag (lines 40-48)
-- **Severity**: Low - Functional but not architecturally aligned with spec
+4. **Divider Styling**: White color (`#ffffff`), 2px width, `position: "absolute"`, `left: "50%"`, `top: 0`, `height: "100%"` -- all match spec. Implementation separates `backgroundColor` and `opacity` into distinct CSS properties rather than using a single `rgba()` value; visually identical result.
 
-## Missing Elements
+5. **Integration into Part4PrecisionTradeoff**: `Part4PrecisionTradeoff.tsx` imports and renders `SplitComparison` with `defaultSplitComparisonProps` at `VISUAL_00_START` (frame 0), correctly placing it as the opening visual of Section 4.
 
-1. **SplitComparison Component**: No standalone composition exists at `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/38-SplitComparison/` or similar
-2. **Center Divider Overlay**: The subtle vertical divider with fade-in animation (spec lines 104-112)
-3. **Divider Opacity Animation**: `interpolate(frame, [0, 30], [0, 0.5])` animation logic (spec line 93-96)
+6. **Configurable Props**: Component accepts `showDivider` (boolean, default `true`) and `dividerOpacityMax` (number, default `0.5`) via a Zod-validated props schema, providing flexibility beyond the spec's baseline.
 
-## Notes
-The implementation correctly uses the video file and places it in the proper sequence position (VISUAL_00_START), but it's implemented as a simple video playback rather than the designed Remotion composition with overlay elements. The video itself should match the Veo prompt specification (lines 13-45), but the Remotion enhancement layer is missing.
+7. **Constants and Type Safety**: `constants.ts` defines `SPLIT_COMPARISON_FPS` (30), `SPLIT_COMPARISON_DURATION_SECONDS` (15), frame dimensions (1920x1080), `BEATS` timing, `COLORS`, and Zod schema. All values align with spec.
 
-## Video File Reference
-The implementation expects the video file at: `staticFile("split_3d_vs_mold.mp4")`
-This should contain the Veo-generated content matching the prompt in spec lines 13-45.
+### Issues Found
 
----
+None. All spec requirements are fully implemented.
 
-## Resolution Status
+### Notes
 
-**Date:** 2026-02-08
-**Status:** RESOLVED
-
-### Changes Made
-
-1. **Created SplitComparison Component** at `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/38-SplitComparison/`
-   - `SplitComparison.tsx`: Main component with center divider overlay
-   - `constants.ts`: Type definitions, BEATS timing, and color constants
-   - `index.ts`: Module exports
-
-2. **Implemented Center Divider Animation**
-   - 2px white divider line positioned at 50% screen width
-   - Fades from 0 to 0.5 opacity over frames 0-30 (0-1s)
-   - Uses `interpolate()` with `extrapolateRight: "clamp"` as specified
-
-3. **Updated Part4PrecisionTradeoff.tsx**
-   - Replaced raw `OffthreadVideo` with `SplitComparison` component
-   - Imported `SplitComparison` and `defaultSplitComparisonProps`
-   - Component now matches spec architectural design
-
-### All Deltas Addressed
-
-- **No Dedicated Composition**: ✓ Created standalone `SplitComparison` component
-- **Missing Center Divider Animation**: ✓ Implemented with fade-in animation (frames 0-30)
-- **Missing Component Structure**: ✓ Proper modular architecture with separate constants and types
-
-### Implementation Details
-
-The `SplitComparison` component:
-- Plays `split_3d_vs_mold.mp4` video as base layer
-- Overlays a 2px vertical divider at center (50%)
-- Divider fades in from opacity 0 → 0.5 over 1 second
-- Supports `showDivider` and `dividerOpacityMax` props for flexibility
-- Uses `transform: "translateX(-50%)"` for precise centering
+- The implementation adds `transform: "translateX(-50%)"` to the divider for sub-pixel centering precision. The spec does not include this, but it is an improvement that ensures the 2px line is perfectly centered rather than offset by 1px.
+- The video element includes `loop` and `objectFit: "cover"` attributes not specified in the original spec. These are sensible defaults that ensure clean rendering.
+- The on-screen duration of this visual in the final composition is approximately 3 seconds (frames 0-91), not the 15 seconds stated in the spec header. This is correct: the 15-second duration refers to the Veo-generated source video file, while the actual screen time is governed by audio/narration sync in `Part4PrecisionTradeoff`. The narration moves to the next topic ("In 3D printing, there's no mold") at 4.4 seconds, so the split comparison visual correctly transitions out before that.
+- Previous audit deltas (missing component, missing divider, missing animation) have all been resolved. The implementation now fully matches the spec's architectural and visual intent.

@@ -1,93 +1,75 @@
-# Audit: 11_codebase_timelapse.md
+# Audit: Codebase Time-Lapse (Section 1.10)
 
-## Spec Summary
-A 25-second time-lapse visualization showing a codebase accumulating patches over months/years. The visualization depicts files/modules as nodes in a dependency graph, with patches (yellow/orange highlights) appearing over time, edges becoming tangled, warning comments fading in, and color shifting from blue to red to represent technical debt accumulation.
+## Status: PASS
 
-## Implementation Status
-**Implemented** - All core requirements are present with high fidelity to the spec.
+### Requirements Met
 
-## Deltas Found
+1. **Canvas & Resolution**: 1920x1080 with dark IDE-like background `#1a1a2e`. Verified in `constants.ts` lines 8-9 and `COLORS.BACKGROUND`.
 
-### Time Labels Format
-- **Spec says**: Time counter should show "Day 1", then "Month 3", "Month 6", "Month 12" during first year
-- **Implementation does**: Uses time labels from `constants.ts` - need to verify the exact labels match the spec progression
-- **Severity**: Low (functional but may not match exact text)
-- **File reference**: CodebaseTimelapse.tsx:86-94
+2. **Duration**: 25 seconds at 30fps = 750 frames. `CODEBASE_TIMELAPSE_DURATION_SECONDS = 25`, `CODEBASE_TIMELAPSE_FPS = 30`, and `BEATS.HOLD_END = 750` all match the spec exactly.
 
-### Duration Discrepancy
-- **Spec says**: ~25 seconds duration, 750 frames at 30fps
-- **Implementation does**: Uses constants BEATS.HOLD_START through BEATS.HOLD_END from constants.ts (need to verify total duration)
-- **Severity**: Low (need to check constants file for actual frame count)
-- **File reference**: CodebaseTimelapse.tsx (throughout)
+3. **Animation Sequence Beat Timings**: All five phases match the spec frame ranges precisely:
+   - Frame 0-90 (0-3s): Clean codebase establishes (`CLEAN_START`/`CLEAN_END`)
+   - Frame 90-300 (3-10s): First year of patches (`YEAR1_START`/`YEAR1_END`)
+   - Frame 300-510 (10-17s): Second year, comments start (`YEAR2_START`/`YEAR2_END`)
+   - Frame 510-630 (17-21s): Third year, chaos mode (`YEAR3_START`/`YEAR3_END`)
+   - Frame 630-750 (21-25s): Hold on final chaotic state (`HOLD_START`/`HOLD_END`)
 
-### Warning Comment Implementation
-- **Spec says**: Comments should fade in with `easeOutCubic`
-- **Implementation does**: Uses `Easing.out(Easing.cubic)` which is correct
-- **Severity**: None (implemented correctly)
-- **File reference**: CodebaseTimelapse.tsx:311-315
+4. **Node Visualization**: 12 file/module nodes rendered as circles in an organized grid layout. Spec allows "circles or rectangles"; circles were chosen. Each node has a label (e.g., `auth.py`, `api.py`). Verified in `constants.ts` lines 57-70 and `CodebaseTimelapse.tsx` line 237.
 
-### Patch Appearance Animation
-- **Spec says**: Patch appearances should use `spring({ damping: 20 })`
-- **Implementation does**: Uses interpolate with fade-in but not spring animation for patch badges
-- **Severity**: Medium (different animation approach than specified)
-- **File reference**: CodebaseTimelapse.tsx:262-266
+5. **Edge/Dependency Visualization**: 11 initial clean edges connecting nodes, representing imports/dependencies. Verified in `constants.ts` lines 78-90 and rendered in `CodebaseTimelapse.tsx` lines 149-175.
 
-### Node Drift Easing
-- **Spec says**: Structure drift should use `easeInOutSine` (organic movement)
-- **Implementation does**: Uses `getNodeDrift()` function from constants - need to verify easing function used
-- **Severity**: Low (implementation exists but easing function needs verification)
-- **File reference**: CodebaseTimelapse.tsx:35-41
+6. **Tangled Edges**: 10 additional tangled edges appear progressively from frame 120 to frame 560, rendered with dashed stroke (`strokeDasharray="6,4"`) and orange color. Represents increasing tight coupling. Verified in `constants.ts` lines 93-104 and `CodebaseTimelapse.tsx` lines 178-202.
 
-### Color Progression
-- **Spec says**: Specific color progression table (Day 1: Blue #4A90D9, Year 1: Blue-Gray, Year 2: Gray-Orange, Year 3: Orange-Red to #D94A4A)
-- **Implementation does**: Uses constants COLORS.NODE_CLEAN, NODE_YEAR1, NODE_YEAR2, NODE_YEAR3 with colorProgress interpolation
-- **Severity**: Low (implementation exists, need to verify exact hex values in constants match spec)
-- **File reference**: CodebaseTimelapse.tsx:59-72
+7. **Patch Accumulation**: 23 patch events spread across frames 100-620. Patches appear at roughly 1 per second during year 1 (every ~30 frames), then accelerate in years 2-3 as specified. Patch badges orbit around their target node with labels (`// HACK`, `// TODO`, `// FIXME`). Verified in `constants.ts` lines 130-154 and `CodebaseTimelapse.tsx` lines 260-312.
 
-### Visual Metaphor Representation
-- **Spec says**: Files should be shown as "circles or rectangles"
-- **Implementation does**: Renders nodes as circles only (line 236: `<circle>`)
-- **Severity**: Low (spec allows either, circles chosen)
-- **File reference**: CodebaseTimelapse.tsx:236-244
+8. **Patch Appearance Animation (spring damping 20)**: Patch badges use `spring({ frame: badgeAge, fps: 30, config: { damping: 20 } })` for scale-in animation, matching the spec's `spring({ damping: 20 })` requirement exactly. Verified in `CodebaseTimelapse.tsx` lines 264-270.
 
-## Missing Elements
+9. **Warning Comments**: All 6 comments from the spec are implemented with correct text and appearance timing:
+   - `"// don't touch this"` at frame 300
+   - `"// legacy - do not modify"` at frame 360 (spec JSON says `"// legacy"`, spec paragraph says `"// legacy - do not modify"`)
+   - `"// temporary fix (2019)"` at frame 420
+   - `"// TODO: refactor"` at frame 480
+   - `"// workaround for bug #1234"` at frame 540
+   - `"// here be dragons"` at frame 600
+   Verified in `constants.ts` lines 114-121.
 
-None identified. All major spec requirements are implemented:
-- Node/edge dependency graph visualization
-- Patch accumulation with visual highlights
-- Warning comments that fade in
-- Color progression from blue to red
-- Time counter display
-- Complexity warnings in Year 3
-- Structure drift
-- Tangled edges appearing over time
-- Hold phase with subtle pulse
+10. **Comment Styling**: Matches spec CSS exactly:
+    - `fontFamily: "'JetBrains Mono', monospace"`, `fontSize: 12`, `color: #888888`, `backgroundColor: "rgba(0, 0, 0, 0.7)"`, `padding: "4px 8px"`, `borderLeft: "3px solid #D9944A"`.
+    Verified in `CodebaseTimelapse.tsx` lines 334-343.
 
-## Implementation Strengths
+11. **Comment Fade-in Easing (easeOutCubic)**: Uses `Easing.out(Easing.cubic)` which is the Remotion equivalent of `easeOutCubic`. Verified in `CodebaseTimelapse.tsx` line 324.
 
-1. **Comprehensive patch system**: Implements patch badges (// HACK, // TODO, // FIXME) with orbiting badges around nodes
-2. **Visual complexity**: Node glow effects for heavily-patched nodes add visual weight
-3. **Patch counter**: Bottom-right counter showing "X patches accumulated" with color coding
-4. **Warning indicator**: Red pulsing "Complexity Warning" in Year 3 phase
-5. **Warm overlay tint**: Gradual red overlay as time progresses
-6. **Organized constants**: All configuration values cleanly separated into constants.ts
+12. **Structure Drift (easeInOutSine)**: Explicit `easeInOutSine` function defined in `constants.ts` line 173-175 and applied to the drift intensity in `getNodeDrift()` (line 179). Nodes oscillate with sinusoidal drift whose intensity ramps up via the easing function. Verified in `constants.ts` lines 172-187.
 
-## Recommendations
+13. **Color Progression**: Matches the spec color table:
+    - Day 1: `NODE_CLEAN: #4A90D9` (Blue) -- matches spec `#4A90D9`
+    - Year 1: `NODE_YEAR1: #7A8A9A` (Blue-Gray) -- matches spec "Blue-Gray"
+    - Year 2: `NODE_YEAR2: #D9944A` (Yellow-Orange) -- spec says accent `#D9944A`, reasonable interpretation
+    - Year 3: `NODE_YEAR3: #D94A4A` (Red) -- matches spec `#D94A4A`
+    Verified in `constants.ts` lines 33-36.
 
-1. Verify TIME_LABELS in constants.ts match the spec's exact progression (Day 1, Month 3, Month 6, Month 12, etc.)
-2. Verify total duration equals 750 frames (25 seconds at 30fps)
-3. Consider adding spring animation to patch badge appearances as specified
-4. Verify node drift uses easeInOutSine easing as specified
-5. Verify color hex values in constants.ts match the spec's color progression table exactly
+14. **Time Counter**: Displayed in top-right corner (top: 40, right: 60) with large font (36px, weight 700, Inter). Labels match spec progression: "Day 1", "Month 3", "Month 6", "Month 12", "Year 2", "Year 3". Verified in `constants.ts` lines 162-169 and `CodebaseTimelapse.tsx` lines 352-371.
 
-## Resolution Status
-- **Status**: RESOLVED
-- **Changes Made**:
-  1. **MEDIUM - Patch Appearance Animation**: Added `spring({ damping: 20 })` animation to patch badge appearances in `CodebaseTimelapse.tsx` (lines 258-307). Badges now scale in with spring physics as specified, replacing the previous linear interpolate fade-in.
-  2. **LOW - Node Drift Easing**: Implemented `easeInOutSine` easing function in `constants.ts` for organic structure drift movement. The `getNodeDrift` function now applies easeInOutSine to the drift intensity progress (lines 172-188).
-  3. Imported `spring` from Remotion to enable spring-based animations.
-- **Remaining Issues**: None - all HIGH and MEDIUM severity deltas have been resolved. LOW severity items were verified:
-  - TIME_LABELS match spec progression (Day 1, Month 3, Month 6, Month 12, Year 2, Year 3)
-  - Total duration is 750 frames (25 seconds at 30fps) as defined in BEATS.HOLD_END
-  - Color progression matches spec (NODE_CLEAN: #4A90D9, NODE_YEAR1: #7A8A9A, NODE_YEAR2: #D9944A, NODE_YEAR3: #D94A4A)
-  - Warning comments use easeOutCubic as specified (already implemented correctly)
+15. **Hold Phase Subtle Pulsing**: From frame 630+, a subtle scale pulse (`0.95 + 0.05 * Math.sin(...)`) is applied to the entire SVG layer. Verified in `CodebaseTimelapse.tsx` lines 125-128.
+
+16. **Warm Overlay Tint**: Red overlay (`rgba(217, 74, 74, ...)`) fades in from YEAR1_END to YEAR3_END with max opacity of 0.08, simulating the warm color shift. Verified in `CodebaseTimelapse.tsx` lines 110-115 and 431-444.
+
+17. **Complexity Warning Indicator**: Red pulsing "Complexity Warning" label with glowing red dot appears at YEAR3_START (frame 510). Pulsing opacity: `0.6 + 0.4 * Math.sin(...)`. Verified in `CodebaseTimelapse.tsx` lines 103-107 and 396-429.
+
+18. **Patch Counter**: Bottom-right counter showing "X patches accumulated" with color coding (white -> yellow -> red). Verified in `CodebaseTimelapse.tsx` lines 374-393.
+
+19. **Node Glow Effects**: Heavily-patched nodes (2+ patches) receive a pulsing glow ring. Verified in `CodebaseTimelapse.tsx` lines 224-234.
+
+### Issues Found
+
+None. All spec requirements are fully implemented.
+
+### Notes
+
+- The component is self-contained in `/remotion/src/remotion/11-CodebaseTimelapse/` with clean separation of constants (`constants.ts`) and rendering logic (`CodebaseTimelapse.tsx`).
+- The component is exported via `index.ts` but is not currently imported in the `S01-Economics` directory. This is an integration/composition concern outside the scope of this individual component audit.
+- The implementation adds several enrichments beyond the spec (patch counter, node glow effects, complexity warning indicator) that enhance the visual without contradicting spec requirements.
+- The warning comment `"// legacy - do not modify"` uses the fuller form from the spec paragraph rather than the abbreviated `"// legacy"` from the spec JSON array. This is the more descriptive version and aligns well with the intent.
+- All easing functions match spec: `spring({ damping: 20 })` for patch appearances, `easeInOutSine` for structure drift, `easeOutCubic` for comment fade-in.
+- All color hex values verified against the spec's color progression table.

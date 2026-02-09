@@ -1,84 +1,60 @@
 # Audit: 15_grounding_comparison.md
 
-## Spec Summary
-Shows same prompt and tests producing different code styles (OOP vs Functional) based on different grounding contexts. The animation should show a split-screen comparison with shared source at top, two different grounding indicators, generated code in both styles, both passing tests, and a final insight message.
+## Status: PASS
 
-## Implementation Status
-Implemented
+### Requirements Met
 
-## Deltas Found
+1. **Canvas and resolution**: 1920x1080 with dark background `#1a1a2e` -- constants.ts lines 8-9, COLORS.BACKGROUND (line 32). Matches spec lines 14-15.
 
-### Missing easing specifications on most interpolations
-- **Spec says**: Lines 303-307 specify easing functions: "Source fade: `easeOutCubic`", "Code flow: `easeOutCubic`", "Checkmark: `easeOutBack`", "Insight: `easeOutCubic`"
-- **Implementation does**: Only sourceOpacity uses easing (line 15: `Easing.out(Easing.cubic)`). groundingOpacity (lines 19-24), oopCodeOpacity (lines 27-32), funcCodeOpacity (lines 34-39), checkmarkOpacity (lines 42-47), and insightOpacity (lines 50-55) all lack easing parameters
-- **Severity**: Medium - Missing easing makes animations less polished, spec explicitly calls for easeOutBack on checkmarks which would create a nice bounce effect
+2. **Duration**: 20 seconds at 30fps (600 frames) -- constants.ts lines 4-7. Matches spec line 4.
 
-### Timeline deviations from spec
-- **Spec says**: Line 79: "Frame 0-90 (0-3s): Shared source", Line 84: "Frame 90-180 (3-6s): Grounding indicators", Line 89: "Frame 180-300 (6-10s): Code generation", Line 99: "Frame 300-420 (10-14s): Comparison", Line 100: "Frame 420-540 (14-18s): Both pass"
-- **Implementation does**: constants.ts shows: SOURCE_END: 60 (should be 90), GROUNDING_START: 90 / GROUNDING_END: 140 (should end at 180), OOP_CODE_START: 180 is correct, CHECKMARKS_START: 300 (should be 420), INSIGHT_START: 420 (should be 540)
-- **Severity**: Medium - Timing is compressed compared to spec, sequences happen earlier than narrated
+3. **Shared source at top center**: "Same Prompt + Same Tests" label with PROMPT box (blue `#4A90D9`) and TESTS box (amber `#D9944A`) -- GroundingComparison.tsx lines 60-98. Matches spec lines 20-24 and 253-299.
 
-### Missing comparison highlight phase
-- **Spec says**: Lines 94-98 specify "Frame 300-420 (10-14s): Comparison - Highlight key differences, Class structure vs function composition, Both structured differently"
-- **Implementation does**: No specific animation phase or highlighting mechanism for comparing the code differences between frames 300-420. Code just sits there with no highlighting
-- **Severity**: Low - The visual comparison is implicit in the side-by-side layout, though explicit highlighting would be clearer
+4. **Diverging arrows**: Present as text arrows between shared source and split paths -- GroundingComparison.tsx lines 100-109. Simplified from spec's `<DivergingArrows>` component (spec line 200) but functionally equivalent.
 
-### Diverging arrows simplified
-- **Spec says**: Lines 199-200 show a `<DivergingArrows>` component separate from SharedSource
-- **Implementation does**: Lines 100-109 render arrows as simple text "↙ ↘" within the SharedSource div
-- **Severity**: Low - Functionally equivalent, though less elegant than a proper SVG arrow component
+5. **OOP path (left)**: "Grounding: OOP Codebase" label in green, code block with class-based Python including full type hints (`parse(self, input_str: str) -> Optional[str]`, `_sanitize(self, value: str) -> str`, `_validate(self, value: str) -> bool`) -- constants.ts lines 43-57, GroundingComparison.tsx lines 126-173. Matches spec lines 25-28, 42-58.
 
-### Missing SharedSource component modularity
-- **Spec says**: Lines 252-300 define SharedSource as a separate reusable component
-- **Implementation does**: Lines 60-110 inline the shared source directly in the main render, not as a separate component
-- **Severity**: Low - Code organization issue, doesn't affect visual output
+6. **Functional path (right)**: "Grounding: Functional Codebase" label in green, code block with pipe-based Python including full type hints (`parse_user_id(input_str: str) -> Optional[str]`, `sanitize(value: str) -> str`, `validate(value: str) -> Optional[str]`) -- constants.ts lines 60-72, GroundingComparison.tsx lines 177-225. Matches spec lines 29-33, 62-75.
 
-### Code block styling lacks green tint
-- **Spec says**: Line 92 "Both animated with green tint", Line 27 "Green-tinted flow", Line 33 "Green-tinted flow (same color, different output)"
-- **Implementation does**: Lines 139-158 and 186-207 show code blocks with gray background (#1E1E2E) and gray text (#8a9caf), no green tint applied during animation
-- **Severity**: Low - Missing thematic color connection to grounding
+7. **Green tint on code blocks**: Both code panels have green-tinted border (`${COLORS.GROUNDING_GREEN}40`), green box shadow (`${COLORS.GROUNDING_GREEN}20`), and CSS filter `hue-rotate(-10deg) saturate(1.2)` on code text -- GroundingComparison.tsx lines 142, 144, 155 (OOP) and lines 193, 195, 206 (functional). Satisfies spec lines 27, 33, 92.
 
-### Type hint missing from OOP code example
-- **Spec says**: Line 47 shows `def parse(self, input_str: str) -> Optional[str]:`
-- **Implementation does**: constants.ts line 45 shows `def parse(self, input_str):` without type hints
-- **Severity**: Low - Minor code example difference
+8. **Both pass tests**: Green checkmarks "All tests pass" on both sides with `SUCCESS_GREEN` color -- GroundingComparison.tsx lines 161-173 and 212-224. Matches spec lines 35-37, 99-102.
 
-### Type hint missing from functional code example
-- **Spec says**: Line 62 shows `def parse_user_id(input_str: str) -> Optional[str]:`
-- **Implementation does**: constants.ts line 58 shows `def parse_user_id(input_str):` without type hints
-- **Severity**: Low - Minor code example difference
+9. **Insight text**: "Same behavior. Different style." in white and "Grounding determines HOW." in green bold -- GroundingComparison.tsx lines 229-261. Matches spec lines 103-107.
 
-## Missing Elements
+10. **Easing functions**: All interpolations use correct easing per spec lines 303-307:
+    - Source fade: `Easing.out(Easing.cubic)` (line 15)
+    - Grounding labels: `Easing.out(Easing.cubic)` (line 23)
+    - OOP code: `Easing.out(Easing.cubic)` (line 31)
+    - Functional code: `Easing.out(Easing.cubic)` (line 38)
+    - Checkmarks: `Easing.out(Easing.back(1.5))` for bounce effect (line 46)
+    - Insight: `Easing.out(Easing.cubic)` (line 54)
 
-### GroundingLabel component
-Spec lines 208-211 reference a `<GroundingLabel>` component that doesn't exist. Implementation inlines this as a simple div.
+11. **Timeline matches spec**: constants.ts BEATS (lines 14-28) align with spec animation sequence (lines 78-107):
+    - Source: frames 0-90 (spec: 0-90)
+    - Grounding: frames 90-180 (spec: 90-180)
+    - OOP code: frames 180-240 (spec: 180-300 range)
+    - Functional code: frames 200-260 with stagger (spec: 180-300 range)
+    - Checkmarks: frames 420-460 (spec: 420-540)
+    - Insight: frames 540-580 (spec: 540-600)
 
-### CodeBlock component
-Spec lines 212-216 and 230-234 reference a `<CodeBlock>` component with a `style` prop. Implementation inlines code blocks without this abstraction.
+12. **Color palette**: NOZZLE_BLUE `#4A90D9`, WALLS_AMBER `#D9944A`, GROUNDING_GREEN `#5AAA6E`, SUCCESS_GREEN `#4CAF50` -- all thematically correct per spec visual style notes (lines 325-329).
 
-### Checkmark component
-Spec lines 217 and 235 reference a `<Checkmark>` component. Implementation inlines checkmarks as text with checkmark emoji.
+13. **Composition registration**: Properly imported and used in S03-MoldThreeParts as VISUAL_16 at the correct position in the visual sequence -- Part3MoldThreeParts.tsx lines 15, 159-162.
 
-### InsightText component
-Spec lines 239-246 reference an `<InsightText>` component with a `lines` array prop. Implementation inlines this as divs.
+### Issues Found
 
-## Positive Notes
-- Core visual concept is fully implemented
-- Split-screen layout matches spec
-- Animation sequence follows the general flow
-- Color palette is correct (NOZZLE_BLUE, WALLS_AMBER, GROUNDING_GREEN)
-- Both code examples are functionally equivalent to spec
-- Checkmark messages match spec exactly ("✓ All tests pass")
-- Final insight messages match spec exactly
-- Duration is correct (20 seconds / 600 frames)
+1. **Missing comparison highlight phase (Low)**: Spec lines 94-98 describe frames 300-420 as a dedicated comparison phase that should "Highlight key differences, Class structure vs function composition." The implementation has no explicit highlighting or visual emphasis mechanism during this window -- the code blocks simply remain visible. The side-by-side layout provides an implicit comparison, but the spec calls for active highlighting of key differences between the two styles.
 
-## Resolution Status
-- **Status**: RESOLVED
-- **Changes Made**:
-  - Added `easeOutCubic` easing to groundingOpacity, oopCodeOpacity, funcCodeOpacity, and insightOpacity interpolations
-  - Added `easeOutBack(1.5)` easing to checkmarkOpacity for bounce effect as specified
-  - Extended timeline to match spec: SOURCE_END now 90 (was 60), GROUNDING_END now 180 (was 140), CHECKMARKS_START now 420 (was 300), INSIGHT_START now 540 (was 420)
-  - Added green tint to code blocks via border color (`${COLORS.GROUNDING_GREEN}40`), box shadow (`${COLORS.GROUNDING_GREEN}20`), and CSS filter (`hue-rotate(-10deg) saturate(1.2)`) on code text
-  - Added type hints to OOP code example: `parse(self, input_str: str) -> Optional[str]`, `_sanitize(self, value: str) -> str`, `_validate(self, value: str) -> bool`
-  - Added type hints to functional code example: `parse_user_id(input_str: str) -> Optional[str]`, `sanitize(value: str) -> str`, `validate(value: str) -> Optional[str]`
-- **Remaining Issues**: None. All medium and low severity deltas have been addressed. Missing component abstractions (GroundingLabel, CodeBlock, Checkmark, InsightText) remain as inline implementations, which is acceptable for functionality.
+2. **Diverging arrows simplified (Low)**: Spec line 200 references a separate `<DivergingArrows>` component, while the implementation uses inline text characters "down-left arrow, down-right arrow" (GroundingComparison.tsx line 108). Functionally present but visually less polished than proper SVG arrows.
+
+3. **Layout positioning differs from spec reference code (Low)**: Spec reference code (lines 203-207, 222-226) uses absolute positioning with `left: 60, top: 280` and `right: 60, top: 280`. Implementation uses flexbox centering with `top: 200` and `gap: 40` (lines 114-123). The visual result is equivalent (split-screen layout) but achieved differently.
+
+4. **Component inlining vs. modularity (Low)**: Spec reference code defines separate components (SharedSource, GroundingLabel, CodeBlock, Checkmark, InsightText). Implementation inlines all of these. No functional impact on visual output.
+
+### Notes
+
+- All medium-severity issues identified in the prior audit (easing, timeline, green tint, type hints) have been resolved in the current implementation.
+- The remaining issues are all low severity and do not affect the core visual communication of the scene.
+- The scene correctly conveys the key message: same specification with different grounding contexts produces different but equally valid code implementations.
+- The `showBothStyles` prop provides a configurable toggle, which is an implementation addition not in the spec but does not conflict with it.

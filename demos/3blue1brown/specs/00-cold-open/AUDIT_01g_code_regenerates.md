@@ -1,5 +1,7 @@
 # Audit: 01g_code_regenerates.md
 
+## Status: ISSUES FOUND
+
 ## Spec Summary
 Code deletion and regeneration sequence (~15 seconds, 1:35-1:50):
 - Patched function from 01f deletes (blue selection flash, lines sweep upward)
@@ -10,102 +12,94 @@ Code deletion and regeneration sequence (~15 seconds, 1:35-1:50):
 - Narration: "So why are we still patching?" lands during hold on clean code
 - Crossfade transition to 01h title card
 
-## Implementation Status
-Partially Implemented
+## Implementation Locations
+Three relevant implementations exist:
+1. **S00-ColdOpen/ColdOpenSection.tsx** (VISUAL_03, lines 72-115): The primary section-level composition that sequences all cold open beats. Contains the code regeneration beat as an inline Remotion composition using Veo-style timing.
+2. **01-ColdOpen/**: The Remotion fallback split-screen composition (ColdOpenSplitScreen.tsx, LeftPanel.tsx, RightPanel.tsx). Does NOT contain a code regeneration beat at all -- it covers the split-screen compare/zoom-out only.
+3. **27-CodeRegenerates/CodeRegenerates.tsx**: A standalone composition for a later section (mold/injection metaphor). Uses `pdd fix` (not `pdd generate`), has mold cavity, test walls, and fluid simulation. This is a conceptually different composition, not an implementation of this spec.
 
-## Deltas Found
+The primary implementation for this audit is **S00-ColdOpen/ColdOpenSection.tsx** VISUAL_03.
 
-### Delta 1: Combined with 01f into single sequence
-- **Spec says**: This is Section 0.7 starting at 1:35, following the separate 01f "Code Blinks" section at 1:25-1:35
-- **Implementation does**: ColdOpenSection.tsx VISUAL_03 (lines 73-115) combines both 01f and 01g into one sequence running 12.78-13.76s (383-413 frames = 1 second duration). Old code blurs out, new code fades in
-- **Severity**: High - Timeline completely different, merged implementation
+### Requirements Met
 
-### Delta 2: No deletion animation with selection flash
-- **Spec says**: "Frame 0-6 (0-0.2s): Selection flash - All lines highlight blue simultaneously, Brief flash: opacity 0 → 0.4 → 0 over 6 frames. Frame 6-30 (0.2-1s): Delete sweep - Lines dissolve upward with staggered timing, top lines go first, particle-like dissolve effect"
-- **Implementation does**: Old code simply blurs out with opacity fade (line 82-83), no selection flash, no upward sweep animation, no staggered line-by-line deletion
-- **Severity**: Medium - Different visual effect, less dramatic
+1. **Dark background (#1E1E2E)**: ColdOpenSection.tsx VISUAL_03 uses `backgroundColor: "#1a1a2e"` on the outer fill (line 75) and `#1E1E2E` on the code panels (lines 85, 97). Close match.
+2. **Old patched code shown**: Lines 77-88 display old patched code in a styled `<pre>` block with red border (`#E74C3C`), showing a multi-line patched function with inline comments like `# patched: handle None input (hotfix 2024-01)` and `# TODO: this whole block needs refactoring`.
+3. **New clean code shown**: Lines 90-100 display new clean code in a `<pre>` block with neutral border (`#333`), showing a shorter function without patches or workaround comments.
+4. **Terminal indicator in bottom-right**: Lines 101-112 show `$ pdd generate user_parser` positioned at `bottom: 60, right: 60` in JetBrains Mono at 12px font size. Matches spec's placement and `pdd generate` command.
+5. **Old code is longer than new code**: Old code has ~14 lines with patches/comments, new code has ~7 lines. Communicates the "less code, more clarity" contrast, though not the spec's exact 30-to-15 ratio.
+6. **Code font**: Both code blocks use `JetBrains Mono, monospace` at 14px (lines 86, 98).
+7. **Subsequent title card**: VISUAL_04 (lines 117-157) shows "Prompt-Driven Development" title fading in over dimmed regenerated code (opacity 0.25), matching the spec's intent of title appearing over the clean code.
 
-### Delta 3: No empty editor hold
-- **Spec says**: "Frame 30-60 (1-2s): Empty beat - Empty editor holds, Single cursor blinks at line 47, Terminal window fades in at bottom-right corner. The emptiness is the point"
-- **Implementation does**: Direct crossfade from old to new code, no empty state, no pause, no blinking cursor moment
-- **Severity**: High - Key conceptual beat missing ("code is disposable")
+### Issues Found
 
-### Delta 4: No line-by-line regeneration animation
-- **Spec says**: "Frame 66-90 (2.2-3s): Regeneration - Fresh code appears line by line, top to bottom, ~15 lines in 24 frames = ~1.6 frames per line, Each line: left-to-right character reveal with slight blur leading edge"
-- **Implementation does**: New code fades in as a complete block (lines 90-100), no typewriter effect, no line-by-line reveal, instant appearance
-- **Severity**: High - "Effortless generation" effect completely missing
+#### Issue 1: No deletion animation (selection flash + upward sweep)
+- **Spec says**: Frame 0-6: all lines highlight blue simultaneously (opacity 0 to 0.4 to 0 over 6 frames). Frame 6-30: lines dissolve upward with staggered timing, top lines go first (0.5-frame stagger), each line fades while translating Y upward by 20px. Git-blame gutter colors and warning icon disappear. Easing: `easeInQuad`.
+- **Implementation does**: Old code blurs out (`filter: blur`) and fades opacity from 1 to 0 over frames 10-25 relative to VISUAL_03_START (lines 82-83). No selection flash, no staggered line-by-line deletion, no upward sweep, no particle dissolve.
+- **Severity**: High
 
-### Delta 5: Terminal implementation differs
-- **Spec says**: "Terminal Snippet (Bottom-Right Corner) - Small terminal window: ~300x120px, Background: slightly lighter dark (#252535) with subtle border, Content appears line by line as generation progresses, Shows completion time and checkmark"
-- **Implementation does**: Terminal text appears at bottom-right (lines 102-112) but only shows final command `$ pdd generate user_parser`, no multi-line progression, no "Generating from prompt...", no "Done. (0.8s) ✓" with timing and checkmark
-- **Severity**: Medium - Simplified terminal output loses the sense of process
+#### Issue 2: No empty editor hold ("the emptiness is the point")
+- **Spec says**: Frame 30-60 (1-2s): blank editor with single blinking cursor at line 47, column 1. Hold for ~1 second. "The empty beat is critical -- do not rush it."
+- **Implementation does**: Old code fades out (frames 10-25) and new code fades in (frames 18-30), overlapping. There is no moment where the editor is empty. The crossfade is direct and continuous.
+- **Severity**: High -- the spec calls this the "visual thesis: code is disposable"
 
-### Delta 6: No git-blame gutter removal
-- **Spec says**: "No git-blame gutter colors on the new code -- it has no history, no layers, no baggage" - emphasizing the fresh start
-- **Implementation does**: No git-blame gutters shown in either old or new code (both are plain pre blocks), so this contrast doesn't exist
-- **Severity**: Low - Related to missing 01f implementation
+#### Issue 3: No line-by-line code regeneration animation
+- **Spec says**: Frame 66-90 (2.2-3s): fresh code types in line by line, top to bottom. Each line has a left-to-right character reveal with slight blur leading edge. ~15 lines in 24 frames (~1.6 frames per line). Easing: `easeOutCubic` per line.
+- **Implementation does**: New code fades in as a complete block (opacity 0 to 1 over frames 18-30, line 95). No typewriter effect, no sequential line reveal.
+- **Severity**: High
 
-### Delta 7: Code samples differ slightly
-- **Spec says**: Regenerated code shows clean 15-line function with type hints `def parse_user_input(raw_input: str | None, context: dict | None = None) -> dict:` and dictionary comprehension
-- **Implementation does**: Regenerated code (lines 98) is similar spirit but slightly different implementation (6 lines vs 15), uses simpler approach without explicit type hints or dict comprehension
-- **Severity**: Low - Both show the concept of "less code, more clarity"
+#### Issue 4: Terminal lacks multi-stage progression
+- **Spec says**: Terminal content appears in stages: (1) `$ pdd generate user_parser` in white at frame 30, (2) `Generating from prompt...` in gray (#888) at frame 60, (3) `Done. (0.8s) checkmark` in soft green (#5AAA6E) at frame 90. Terminal window has background #252535, subtle border, 300x120px, monospace at smaller size.
+- **Implementation does**: Terminal shows only the single line `$ pdd generate user_parser` in #E0E0E0, fading in at frames 25-35 (lines 102-112). No background panel, no border, no "Generating from prompt..." line, no "Done. (0.8s)" completion indicator, no checkmark.
+- **Severity**: Medium
 
-### Delta 8: Timing is drastically compressed
-- **Spec says**: 15-second sequence with distinct phases: deletion (1s), empty hold (1s), regeneration (0.8s), then 11+ seconds holding on clean code
-- **Implementation does**: Entire VISUAL_03 is 1 second (383-413 frames at 30fps), then immediately transitions to VISUAL_04 title card
-- **Severity**: High - Spec's deliberate pacing completely changed
+#### Issue 5: Timing drastically compressed
+- **Spec says**: ~15-second sequence: deletion (1s), empty hold (1s), terminal activity (0.2s), regeneration (0.8s), terminal completion (0.2s), hold on clean code (11.8s). Narration "So why are we still patching?" lands during the long hold (~frame 150-300).
+- **Implementation does**: VISUAL_03 runs from frame 383 to 413 (1 second total at 30fps). Old code fades out in 0.5s, new code fades in in 0.4s, terminal fades in in 0.3s. VISUAL_04 starts at frame 423 (0.33s gap). The narration "So why are we still patching?" is mapped to VISUAL_04, not VISUAL_03.
+- **Severity**: High
 
-### Delta 9: No audio cues specified in implementation
-- **Spec says**: "Brief digital 'select' sound (subtle), Soft whoosh/sweep as lines delete, Silence during empty beat, Rapid soft typing/generation sound, Soft completion chime"
-- **Implementation does**: Only references cold_open_narration.wav (line 29), no sound effects visible in code
-- **Severity**: Medium - Audio design not implemented (or implemented separately)
+#### Issue 6: No editor chrome (gutter, line numbers, filename bar)
+- **Spec says**: "Full-frame code editor view (continuous from previous scene). Same editor chrome as 01f: gutter, line numbers, filename bar." Spec references `EditorTopBar filename="user_parser.py"` and `LineNumberGutter startLine={47} lineCount={30}`.
+- **Implementation does**: Code is shown in styled `<div>` and `<pre>` blocks with no editor chrome. No line numbers, no gutter, no filename bar. Old code panel has a red border, new code panel has a gray border.
+- **Severity**: Medium
 
-### Delta 10: Transition to title card different
-- **Spec says**: "Crossfade into Section 0.8 (01h_title_card) -- the title 'Prompt-Driven Development' fades in over the clean regenerated code. The code remains visible but dims slightly"
-- **Implementation does**: VISUAL_03 ends at frame 413, VISUAL_04 (title card) starts at frame 423 - a 10-frame gap with hard cut, not a crossfade. Code does dim in background (line 127 opacity 0.25) but transition is different
-- **Severity**: Medium - Transition style differs
+#### Issue 7: No blinking cursor
+- **Spec says**: Cursor blinks at line 47, column 1 during empty beat (frame 30-66), then at end of regenerated function during hold (frame 90+). Blink cycle is ~0.53s.
+- **Implementation does**: No cursor element at all.
+- **Severity**: Medium
 
-## Missing Elements
+#### Issue 8: Code samples differ from spec
+- **Spec says**: Regenerated code is exactly `def parse_user_input(raw_input: str | None, context: dict | None = None) -> dict:` with type hints, docstring, dictionary comprehension, and `_inner_parse` call (~15 lines).
+- **Implementation does**: Regenerated code is `def parse_user_input(raw_input, context=None):` without type hints, no docstring, no dictionary comprehension (~7 lines). Old code has ~14 lines vs spec's ~30.
+- **Severity**: Low -- concept of "less code, more clarity" is preserved
 
-1. **Deletion animation components**: No OldPatchedCode component with selection flash and staggered line-by-line upward sweep as described in spec's code structure (lines 182-187)
+#### Issue 9: No git-blame gutter contrast
+- **Spec says**: Old code has git-blame gutter colors (showing patch history), new code has NO git-blame colors (fresh generation, no history). The contrast emphasizes the "no baggage" aspect.
+- **Implementation does**: Neither old nor new code has git-blame gutters. Old code has a red border to signal "bad" and inline comments signal patches, but the gutter-based visual storytelling is absent.
+- **Severity**: Low -- related to missing editor chrome (Issue 6)
 
-2. **Empty state with cursor**: No empty editor hold showing single blinking cursor at line 47, column 1 (spec lines 190-193)
+#### Issue 10: Transition to title card is not a crossfade
+- **Spec says**: "Crossfade into Section 0.8 (01h_title_card) -- the title 'Prompt-Driven Development' fades in over the clean regenerated code. The code remains visible but dims slightly as the title takes visual priority."
+- **Implementation does**: VISUAL_03 ends at frame 413, VISUAL_04 starts at frame 423 (10-frame gap = 0.33s of no visual). VISUAL_04 does show dimmed code (opacity 0.25) in the background with the title fading in, but the transition between visuals is a hard cut, not a crossfade overlay.
+- **Severity**: Medium
 
-3. **Line-by-line reveal component**: No CleanCodeReveal component that types in code line-by-line with left-to-right character reveal (spec lines 196-201)
+#### Issue 11: No audio cues
+- **Spec says**: Detailed audio design: digital "select" sound, whoosh/sweep during deletion, silence during empty beat, typing/generation sound during regeneration, soft completion chime. "The overall audio arc: destruction -> silence -> creation -> resolution."
+- **Implementation does**: Only `cold_open_narration.wav` audio (line 29). No sound effect tracks visible in the code.
+- **Severity**: Medium -- may be handled externally in post-production
 
-4. **Multi-stage terminal animation**: No TerminalSnippet component showing command → "Generating..." → "Done ✓" progression (spec lines 213-230)
+#### Issue 12: Background color mismatch
+- **Spec says**: Background `#1E1E2E` (dark navy).
+- **Implementation does**: Outer AbsoluteFill uses `#1a1a2e` (line 75), code panels use `#1E1E2E` (lines 85, 97). The 6-unit difference in the red channel creates a visible two-tone effect rather than the spec's single-tone editor view.
+- **Severity**: Low
 
-5. **Post-regeneration cursor**: No cursor blinking at end of regenerated function during the hold (spec lines 203-207)
+### Notes
 
-6. **Visual relief emphasis**: Spec emphasizes "The contrast in line count (30 → 15) should be visually obvious without annotation" but current implementation shows similar-sized code blocks
+The spec describes this as a pivotal narrative moment with five distinct phases: selection flash, decisive deletion, contemplative empty beat, effortless regeneration, and long contemplative hold. The spec explicitly marks the empty editor beat as "critical -- do not rush it" since it communicates the thesis that code is disposable.
 
-7. **Easing variations**: Spec details specific easing for each phase (easeInQuad for deletion, easeOutCubic for regeneration, etc.) - not implemented in current simple fade transitions
+The S00-ColdOpen implementation compresses this entire 15-second sequence into a 1-second crossfade between old and new code blocks. This is a substantial scope reduction that loses all of the spec's distinct animation phases and the key narrative beat (emptiness). The terminal is reduced from a multi-stage indicator to a single static line.
 
-## Notes
+The standalone `27-CodeRegenerates` composition in the codebase is for a different conceptual scene (mold/injection metaphor at a later point in the video) and uses `pdd fix` rather than `pdd generate`. It is not an implementation of this cold open spec, though it shares thematic DNA (old code dissolves, new code appears, terminal shows process).
 
-This spec describes a deliberate, almost ceremonial process: code is selected, swept away, the editor sits empty (emphasizing disposability), then new code generates with visible process, culminating in a long contemplative hold. The philosophical point is that code regeneration should feel "decisive, not violent" and "effortless -- fast but not frantic."
+The `01-ColdOpen/` Remotion fallback directory does not contain any code regeneration beat at all -- it only covers the split-screen comparison of developer and grandmother.
 
-The implementation condenses this 15-second philosophical journey into a 1-second fade transition, losing the narrative beats entirely. The terminal command appears but doesn't show the generation process. The empty editor beat - which the spec calls "critical -- do not rush it" - is completely absent.
-
-This suggests significant scope reduction from spec to implementation, possibly due to:
-1. Time constraints (cold open needed to be shorter)
-2. Pacing feedback (the deliberate beats felt too slow)
-3. Technical complexity (line-by-line animations are more complex than fades)
-
-The current implementation communicates "old code becomes new code" but not the spec's intended message about code being disposable/regenerable through an AI tool.
-
-## Resolution Status
-- **Status**: NOT RESOLVED (Veo video implementation path)
-- **Changes Made**: None - this segment is part of the Veo video implementation in ColdOpenSection.tsx, not the Remotion fallback.
-- **Remaining Issues**:
-  - The Remotion fallback implementation (01-ColdOpen components) does not include this beat as a separate composition
-  - ColdOpenSection.tsx uses Veo video files which may or may not include this code regeneration sequence as specified
-  - To implement this in Remotion fallback would require:
-    - Creating a new CodeRegenerates.tsx component
-    - Deletion animation with selection flash and upward sweep
-    - Empty editor state with blinking cursor
-    - Line-by-line code regeneration with typewriter effect
-    - Multi-stage terminal animation showing generation process
-    - Integration into the sequence after split-screen
-  - This is beyond the scope of fixing the existing 01-ColdOpen Remotion implementation, which focuses on the split-screen sequence only
-  - The philosophical beats (emptiness, disposability, effortless regeneration) are better suited to the Veo video implementation path
+There is no dedicated Remotion composition in either the S00-ColdOpen or 01-ColdOpen directories that implements the spec's detailed animation sequence (selection flash, staggered deletion, empty beat, typewriter regeneration, multi-stage terminal). To reach spec compliance, a new dedicated component would need to be built and integrated into the ColdOpenSection visual sequence with significantly expanded timing.

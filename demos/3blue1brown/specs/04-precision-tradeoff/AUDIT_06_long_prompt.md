@@ -1,101 +1,47 @@
-# Audit: 06_long_prompt.md
+# Audit: Long Prompt Display (Section 4.6)
 
-## Spec Summary
-Displays a dense 50-line prompt file (`parser_v1.prompt`) with auto-scrolling to emphasize complexity. Only 2-3 test walls appear on the right side to show the lack of test coverage. The visual emphasizes that without tests, prompts must carry all precision burden.
+## Status: PASS
 
-## Implementation Status
-Implemented
+### Requirements Met
 
-## Deltas Found
+1. **Canvas and resolution**: 1920x1080 confirmed in `constants.ts` (`LONG_PROMPT_WIDTH`, `LONG_PROMPT_HEIGHT`). Dark background `#1a1a2e` applied via `COLORS.BACKGROUND`.
 
-### Test wall count
-- **Spec says**: "2-3 test walls" (line 31), shown as `count={3}` in code (line 186)
-- **Implementation does**: `count={3}` (line 308)
-- **Severity**: None - Matches
+2. **Duration**: Standalone composition is 15 seconds (450 frames at 30fps), matching the spec's "~15 seconds". When embedded in the S04-PrecisionTradeoff sequence, it occupies VISUAL_04 (~8 seconds synced to narration at 26.7s-34.6s), which is correct for audio sync.
 
-### Test wall positioning
-- **Spec says**: `position={{ x: 1400, y: 350 }}` (line 187)
-- **Implementation does**: `position={{ x: 1450, y: 350 }}` (line 310)
-- **Severity**: Low - 50px horizontal difference
+3. **Prompt file display**: File is rendered with filename `parser_v1.prompt`, blue header accent `#4A90D9`, and syntax-highlighted content. Content matches the spec's sample prompt content (User ID Parser, all sections: Purpose, Input Handling, Validation Rules, Unicode Support, Error Handling, Edge Cases, Performance, Return Value, Logging).
 
-### Scroll calculation
-- **Spec says**: `const visibleStart = Math.floor(scrollProgress * (lines.length - 20))` and shows 25 lines (line 211-212)
-- **Implementation does**: `const totalScrollableLines = Math.max(0, lines.length - maxVisibleLines)` then `const visibleStart = Math.floor(scrollProgress * totalScrollableLines)` (lines 22-23, with maxVisibleLines = 25)
-- **Severity**: Low - More defensive calculation but same behavior
+4. **Line count**: Dynamically computed from `PROMPT_CONTENT.split("\n").length` rather than hardcoded to 50. The actual content is ~49-51 lines, consistent with the spec's "~50 lines". A `LineCountBadge` component displays the count.
 
-### Container height
-- **Spec says**: `height: 800` (line 220)
-- **Implementation does**: `height: 850` (line 33)
-- **Severity**: Low - 50px taller
+5. **Content scroll**: `scrollProgress` interpolates from 0 to 0.6 over frames 90-270 using `Easing.inOut(Easing.quad)`, matching the spec's `easeInOutQuad` for smooth reading pace. Visible window of 25 lines scrolls through the content.
 
-### Content area height
-- **Spec says**: `height: 700` (line 254)
-- **Implementation does**: `height: 750` (line 76)
-- **Severity**: Low - 50px taller to match container
+6. **Syntax highlighting**: Three-tier coloring implemented: headers (`#`) in blue `#4A90D9`, bullet lines (`-`) in orange `#D9944A`, and regular text in `rgba(255, 255, 255, 0.8)`. Matches the spec's color rules.
 
-### Font styling
-- **Spec says**: `fontFamily: 'monospace'` (line 259)
-- **Implementation does**: `fontFamily: "JetBrains Mono, monospace"` (line 89)
-- **Severity**: Low - Specific monospace font specified
+7. **Test walls**: 3 amber (`#D9944A`) walls rendered on the right side via `TestWallsSmall` component with `count={3}`. Walls fade in over frames 270-330 with `easeOutCubic`, matching the spec's timing and easing.
 
-### Header font weight
-- **Spec says**: No font weight specified for header text
-- **Implementation does**: `fontWeight: "bold"` (line 54)
-- **Severity**: Low - Enhancement
+8. **Fade indicator**: Bottom fade gradient from `transparent` to `#1E1E2E` at 80px height, matching spec.
 
-### Syntax highlighting
-- **Spec says**: Three colors based on line start: `#` → `#4A90D9`, `-` → `#D9944A`, else → `rgba(255, 255, 255, 0.8)` (lines 261-263)
-- **Implementation does**: Uses COLORS constants: `COLORS.HEADER_BLUE`, `COLORS.BULLET_ORANGE`, `COLORS.TEXT_GRAY` plus adds `fontWeight: isHeader ? "bold" : "normal"` (lines 91-98)
-- **Severity**: Low - Uses constants and adds bold for headers
+9. **Animation sequence**: All four phases implemented correctly:
+   - Frames 0-90: Container fades in (`easeOutCubic`)
+   - Frames 90-270: Content scrolls (`easeInOutQuad`)
+   - Frames 270-330: Test walls fade in (`easeOutCubic`)
+   - Frames 330-450: Hold with all elements visible
 
-### Scroll indicator added
-- **Spec says**: No scroll indicator mentioned
-- **Implementation does**: Adds visual scrollbar with thumb position (lines 120-144)
-- **Severity**: Low - Enhancement not in spec
+10. **Narration sync**: Caption text at bottom reads "With few tests, your prompt needs to specify everything." matching the narration. In S04 sequence, LongPrompt is placed at the correct narration segment (26.7s).
 
-### Line count badge positioning
-- **Spec says**: Not shown in spec code examples
-- **Implementation does**: Positioned at `left: 1150, top: 140` (line 222)
-- **Severity**: Low - Specific positioning added
+11. **Background**: `#1a1a2e` matches spec. Content area background `#1E1E2E` matches spec.
 
-### Test walls have "test" label
-- **Spec says**: No text inside walls
-- **Implementation does**: Each wall contains a small "test" label (lines 185-193)
-- **Severity**: Low - Enhancement
+12. **Component integration**: Properly imported and used in `Part4PrecisionTradeoff.tsx` at VISUAL_04 slot with default props.
 
-### Test wall size
-- **Spec says**: `width: 40, height: 60` (line 303-304)
-- **Implementation does**: `width: 50, height: 70` (line 174-175)
-- **Severity**: Low - 25% larger walls
+### Issues Found
 
-### Border radius on walls
-- **Spec says**: `borderRadius: 4` (line 306)
-- **Implementation does**: `borderRadius: 6` (line 177)
-- **Severity**: Low - Slightly more rounded
+None. All spec requirements are faithfully implemented. The minor deviations below are all low-severity enhancements or trivial positioning adjustments that do not violate the spec.
 
-### Caption text added
-- **Spec says**: No caption mentioned
-- **Implementation does**: Adds italic caption "With few tests, your prompt needs to specify everything." at bottom (lines 315-342)
-- **Severity**: Low - Enhancement matching narration
+### Notes
 
-### showTestWalls prop added
-- **Spec says**: Walls always shown
-- **Implementation does**: Conditional rendering with `showTestWalls` prop (lines 306-312)
-- **Severity**: Low - Flexibility enhancement
-
-## Resolution Status
-- **Status**: RESOLVED
-- **Changes Made**: No changes needed - low severity only
-- **Remaining Issues**: None
-
-## Missing Elements
-None - all core requirements implemented.
-
-## Additional Features
-1. Scroll indicator visual feedback
-2. "test" labels inside each wall
-3. Caption text synchronized with narration
-4. Optional test wall display via `showTestWalls` prop
-5. JetBrains Mono font for better code readability
-6. Bold header styling in prompt content
-7. Uses BEATS and COLORS constants from external file
+- **Test wall position**: `x: 1450` vs spec's `x: 1400` (50px rightward shift). Low severity, likely a layout refinement.
+- **Container/content height**: 850/750 vs spec's 800/700 (50px taller each). Proportionally consistent, accommodates more visible lines.
+- **Test wall dimensions**: 50x70 vs spec's 40x60 (25% larger). Walls remain visually small and sparse as intended.
+- **Font**: `JetBrains Mono, monospace` used instead of generic `monospace`. This is an improvement for code readability while falling back to monospace.
+- **Enhancements beyond spec**: Scroll indicator bar, "test" labels inside walls, bold header text, caption overlay, `showTestWalls` prop for flexibility, and dynamic line count computation. All are additive and do not alter the core visual contract.
+- **Line count display**: Shown both in the file header ("N lines") and as a standalone `LineCountBadge` positioned near the header. The spec mentions a "50 lines badge" and the header display, so both are covered.
+- **Arrow characters**: Spec sample uses Unicode arrows (`-->`) in edge cases section; implementation uses ASCII (`->`). Purely cosmetic and not visible at the rendered font size.

@@ -1,111 +1,52 @@
-# Audit: 07_short_prompt_tests.md
+# Audit: 07_short_prompt_tests
 
-## Spec Summary
-Shows a minimal 10-line prompt file (`parser_v2.prompt`) surrounded by 25+ amber test walls in a ring formation, with a terminal snippet showing "47 tests passed ✓" in the bottom-right. The contrast with Section 4.6 demonstrates that tests handle constraints, allowing simpler prompts.
+## Status: PASS
 
-## Implementation Status
-Implemented
+### Requirements Met
 
-## Deltas Found
+1. **Canvas & Resolution**: 1920x1080, dark background `#1a1a2e` -- matches spec exactly (`SHORT_PROMPT_WIDTH`, `SHORT_PROMPT_HEIGHT`, `COLORS.BACKGROUND` in constants.ts).
 
-### Wall count constant
-- **Spec says**: "30" walls maximum in code (lines 119, 124)
-- **Implementation does**: Uses `WALL_COUNT` constant (line 111), actual value not visible in this file
-- **Severity**: Low - Uses external constant
+2. **Duration**: 15 seconds at 30fps (450 frames) -- matches spec (`SHORT_PROMPT_DURATION_SECONDS = 15`, `SHORT_PROMPT_FPS = 30`).
 
-### Wall appearance timing/easing
-- **Spec says**: Staggered appearance with `easeOutBack` (lines 117-126, 326)
-- **Implementation does**: Uses `Easing.out(Easing.back(1.5))` (line 212)
-- **Severity**: None - Matches (1.5 is the back overshoot parameter)
+3. **Prompt File Display**: Renders `parser_v2.prompt` filename, 10-line count badge, blue `#4A90D9` header accent, centered at 50%/50% with width 500 -- all match spec precisely.
 
-### Terminal opacity timing
-- **Spec says**: Frames 210-270 (lines 128-134)
-- **Implementation does**: `[BEATS.TERMINAL_START, BEATS.TERMINAL_END]` (line 219)
-- **Severity**: Low - Uses external constants instead of magic numbers
+4. **Prompt Content**: `SHORT_PROMPT_CONTENT` in constants.ts matches the spec's sample markdown (User ID Parser heading, parse/validate instructions, "See tests for exact behavior").
 
-### Wall pulse timing
-- **Spec says**: `frame > 210` (line 137)
-- **Implementation does**: `frame > BEATS.TERMINAL_START` (line 228)
-- **Severity**: Low - Uses constant
+5. **Test Walls (25+ amber)**: `WALL_COUNT = 30` amber walls (`#D9944A`), arranged in a ring with `INNER_RADIUS = 300`, `CENTER_X = 960`, `CENTER_Y = 960`, `(i % 3) * 60` radius offset. Wall dimensions 40x60, border-radius 4, glow `0 0 20px rgba(217, 148, 74, 0.5)` -- all match spec.
 
-### Prompt file width
-- **Spec says**: `width: 500` (line 183)
-- **Implementation does**: `width: 500` (line 34)
-- **Severity**: None - Matches
+6. **Terminal Snippet**: Positioned bottom-right (`right: 80, bottom: 80`), shows `$ pdd test parser` command, output `"47 tests passed"` with Unicode checkmark (`\u2713`), success green `#5AAA6E`, terminal background `rgba(30, 30, 46, 0.95)` with 1px border -- all match spec.
 
-### File header font
-- **Spec says**: `fontFamily: 'monospace'` (line 198)
-- **Implementation does**: `fontFamily: "JetBrains Mono, monospace"` (line 54)
-- **Severity**: Low - Specific font family
+7. **Animation Sequence Timing**: All four phases match spec beat timings:
+   - Frame 0-90: Prompt fade-in (`BEATS.PROMPT_START: 0`, `PROMPT_END: 90`)
+   - Frame 90-210: Walls materialize (`BEATS.WALLS_START: 90`, `WALLS_END: 210`)
+   - Frame 210-270: Terminal fade-in (`BEATS.TERMINAL_START: 210`, `TERMINAL_END: 270`)
+   - Frame 330+: Hold (`BEATS.HOLD_START: 330`)
 
-### Line count display font
-- **Spec says**: `fontFamily: 'monospace'` implied but not specified
-- **Implementation does**: `fontFamily: "JetBrains Mono, monospace"` (line 64)
-- **Severity**: Low - Consistent font application
+8. **Easing Functions**: All match spec:
+   - Prompt fade-in: `Easing.out(Easing.cubic)` (easeOutCubic)
+   - Wall appearance: `Easing.out(Easing.back(1.5))` (easeOutBack with overshoot)
+   - Terminal fade-in: `Easing.out(Easing.cubic)` (easeOutCubic)
+   - Wall pulse: Sine-based `1 + Math.sin(frame * 0.08) * 0.05` after frame 210 (easeInOutSine approximation)
 
-### Content background color
-- **Spec says**: `backgroundColor: '#1E1E2E'` (line 212)
-- **Implementation does**: `backgroundColor: COLORS.FILE_CONTENT_BG` (line 74)
-- **Severity**: Low - Uses constant
+9. **Color Palette**: All colors match spec exactly -- `#4A90D9` (blue), `#D9944A` (amber), `#5AAA6E` (green), `rgba(255, 255, 255, 0.7)` (label), `rgba(30, 30, 46, 0.95)` (terminal BG), `#1E1E2E` (file content BG).
 
-### Line display with fallback
-- **Spec says**: No handling for empty lines mentioned (line 218-227)
-- **Implementation does**: `{line || "\u00A0"}` non-breaking space for empty lines (line 93)
-- **Severity**: Low - Prevents layout collapse on empty lines
+10. **Z-Index Layering**: Walls at zIndex 1, prompt at zIndex 10, terminal at zIndex 20 -- ensures correct visual stacking (prompt on top of walls, terminal on top of both).
 
-### Line height added
-- **Spec says**: No line height specified
-- **Implementation does**: `lineHeight: 1.5` (line 90)
-- **Severity**: Low - Better readability
+11. **Composition Registration**: Registered in Root.tsx as `ShortPromptTests` in folder `44-ShortPromptTests` with correct fps/dimensions/defaultProps. Integrated into `Part4PrecisionTradeoff.tsx` as Visual 5 (frames ~1058-1260) synced to narration "With many tests, the prompt only needs to specify intent...".
 
-### Wall radius calculation
-- **Spec says**: `const radius = innerRadius + (i % 3) * 60` with specific values for `innerRadius` and `outerRadius` (line 245, 250)
-- **Implementation does**: Uses imported constants `INNER_RADIUS`, `CENTER_X`, `CENTER_Y` (lines 8-10, 112)
-- **Severity**: Low - Externalized constants
+12. **Component Architecture**: Three sub-components (`SmallPromptFile`, `SurroundingWalls`, `TerminalSnippet`) match the spec's code structure with TypeScript interfaces and proper prop typing via Zod schema.
 
-### Z-index on elements
-- **Spec says**: No z-index specified
-- **Implementation does**: Prompt has `zIndex: 10` (line 36), walls have `zIndex: 1` (line 136), terminal has `zIndex: 20` (line 165)
-- **Severity**: Low - Ensures proper layering
+### Issues Found
 
-### Terminal background
-- **Spec says**: `backgroundColor: 'rgba(30, 30, 46, 0.95)'` (line 294)
-- **Implementation does**: `backgroundColor: COLORS.TERMINAL_BG` (line 160)
-- **Severity**: Low - Uses constant
+1. **Non-heading text opacity (cosmetic)**: Spec says non-heading prompt lines should be `rgba(255, 255, 255, 0.8)`. Implementation uses `COLORS.LABEL_GRAY` which is `rgba(255, 255, 255, 0.7)`. Difference of 0.1 opacity -- barely perceptible.
+   - **Severity**: Low
+   - **Impact**: Negligible visual difference
 
-### Success green color
-- **Spec says**: `color: '#5AAA6E'` (line 311)
-- **Implementation does**: `color: COLORS.SUCCESS_GREEN` (line 182)
-- **Severity**: Low - Uses constant
+### Notes
 
-### Label color for terminal command
-- **Spec says**: `color: 'rgba(255, 255, 255, 0.7)'` (line 303)
-- **Implementation does**: `color: COLORS.LABEL_GRAY` (line 172)
-- **Severity**: Low - Uses constant (may differ in exact value)
-
-### showTerminal prop added
-- **Spec says**: Terminal always shown
-- **Implementation does**: Conditional rendering with `showTerminal` prop (lines 217-224, 246-252)
-- **Severity**: Low - Flexibility enhancement
-
-### Checkmark character
-- **Spec says**: `✓` (line 159)
-- **Implementation does**: `\u2713` (Unicode escape for ✓) (line 249)
-- **Severity**: None - Same character, different representation
-
-## Resolution Status
-- **Status**: RESOLVED
-- **Changes Made**: No changes needed - low severity only
-- **Remaining Issues**: None
-
-## Missing Elements
-None - all core requirements implemented.
-
-## Additional Features
-1. Z-index layering for proper element stacking
-2. Non-breaking space fallback for empty lines
-3. Line height for better readability
-4. Optional terminal display via `showTerminal` prop
-5. JetBrains Mono font specification
-6. Uses external BEATS, COLORS, and dimension constants
-7. More defensive layout handling
+- Implementation uses externalized constants (`BEATS`, `COLORS`, `WALL_COUNT`, `CENTER_X`, `CENTER_Y`, `INNER_RADIUS`) rather than inline magic numbers. This is an improvement over the spec's inline values for maintainability while preserving the same numeric values.
+- Font family upgraded from generic `monospace` to `JetBrains Mono, monospace` with proper fallback -- consistent with the rest of the codebase.
+- Non-breaking space (`\u00A0`) fallback for empty lines prevents layout collapse -- a defensive improvement not in spec.
+- `lineHeight: 1.5` added to prompt content lines for better readability -- not in spec but a standard improvement.
+- `showTerminal` prop allows conditional terminal rendering for reuse in parent compositions -- flexibility enhancement beyond spec.
+- `extrapolateLeft: "clamp"` added to terminal interpolation for additional safety.

@@ -1,103 +1,80 @@
-# Audit: 03_patching_curve_wobbles.md
+# Audit: Patching Curve Wobbles (Section 5.3)
 
-## Spec Summary
-The smooth patching curve morphs into a wobbly version with 3-4 distinct dips (new bug, regression, merge conflict) and a $1.52T cost statistic callout. Duration ~15 seconds.
+## Status: ISSUES FOUND
 
-## Implementation Status
-Implemented (Phase 3 of CompoundCurvesGraph.tsx)
+### Requirements Met
 
-## Deltas Found
+1. **Canvas and background** -- Resolution 1920x1080 with dark #1a1a2e background. SVG viewBox matches spec, COLORS.BACKGROUND is "#1a1a2e" (`constants.ts` line 13).
 
-### Wobble mathematical implementation
-- **Spec says**: Smooth curve progressively deforms with dips at ~55%, ~70%, ~85% along X-axis (lines 21-26)
-- **Implementation does**: `patchingWobblyY` function adds Gaussian dips at positions from DIP_POSITIONS array (lines 26-35)
-- **Severity**: Low (uses Gaussian exponential for smooth dips, positions configurable via constants)
+2. **Wobble morph timing** -- Spec: frame 0-270 (0-9s). Implementation: `interpolate(frame, [0, 270], [0, 1])` (`CompoundCurvesGraph.tsx` line 572). Exact match.
 
-### Number of dips
-- **Spec says**: 3-4 distinct dips (line 22)
-- **Implementation does**: `DIP_POSITIONS.length` dips (3 dips based on iteration in lines 753-765)
-- **Severity**: Low (appears to be 3 dips, within spec range)
+3. **Wobble easing** -- Spec: `easeInOutQuad`. Implementation: `Easing.inOut(Easing.quad)` (line 575). Exact match.
 
-### Dip depth specification
-- **Spec says**: 10-20% of curve height at that point (line 23)
-- **Implementation does**: Uses DIP_MAGNITUDES array with values applied via `dipTotal * wobbleAmount` (lines 29-33)
-- **Severity**: Medium (magnitude values not visible here, need constant verification)
+4. **Dip positions** -- Spec: ~55%, ~70%, ~85% along X-axis. Implementation: `DIP_POSITIONS = [0.55, 0.70, 0.85]` (`constants.ts` line 58). Exact match.
 
-### Wobble animation timing
-- **Spec says**: Frame 0-90 (0-3s) first dip, 90-180 (3-6s) second dip, 180-270 (6-9s) third dip (lines 75-92)
-- **Implementation does**: Wobble amount interpolates frame 0-180 from 0→1 (lines 511-517)
-- **Severity**: High (faster overall: 180 frames vs 270 frames for full wobble)
+5. **Dip count** -- Spec: 3-4 distinct dips. Implementation: 3 dips (DIP_POSITIONS has 3 entries). Within spec range.
 
-### Dip annotation timing
-- **Spec says**: First at frame 60-90, second 150-180, third 240-270 (lines 78, 84, 90)
-- **Implementation does**: Frame 40-70, 100-130, 160-190 (lines 520-535)
-- **Severity**: Medium (all annotations appear earlier than spec)
+6. **Dip depth** -- Spec: 10-20% of curve height at that point. Implementation: `DIP_MAGNITUDES = [60, 45, 50]` (`constants.ts` line 64). At dip positions the logarithmic base curve reaches roughly 400-500px, making the dips approximately 10-15% of curve height. Within spec range.
 
-### Dip labels
-- **Spec says**: "new bug from patch" (~55%), "regression" (~70%), "merge conflict" (~85%) (lines 27-36)
-- **Implementation does**: Uses DIP_LABELS array, renders via map at lines 753-765
-- **Severity**: Low (labels stored in constants, positions match iteration)
+7. **Dip math (Gaussian)** -- Spec code reference uses Gaussian exponential dips. Implementation: `Math.exp(-Math.pow((t - pos) / DIP_SPREAD, 2))` with `DIP_SPREAD = 0.04` (lines 29-33, constants line 65). Matches spec's reference code.
 
-### Flicker effect at dips
-- **Spec says**: 1-2px lateral shake for 5-8 frames per dip (lines 39-43)
-- **Implementation does**: Not visible in current implementation
-- **Severity**: High (flicker/shake effect not implemented)
+8. **Dip labels** -- Spec: "new bug from patch", "regression", "merge conflict". Implementation: `DIP_LABELS = ["new bug from patch", "regression", "merge conflict"]` (`constants.ts` lines 59-63). Exact match.
 
-### Cost statistic callout
-- **Spec says**: "$1.52T" in 36pt bold red-amber #E06040 at upper-right, subtitle "annual US tech debt cost (CISQ)" 18pt (lines 44-48)
-- **Implementation does**: CostCallout component at lines 399-434, positioned at (1350, 120), "$1.52T" in 36pt, subtitle 16pt
-- **Severity**: Low (implemented, subtitle font slightly smaller: 16pt vs 18pt)
+9. **Dip annotation color** -- Spec: #E06040 red-tinted amber. Implementation: `COLORS.DIP_RED = "#E06040"` (`constants.ts` line 17), used at line 840. Exact match.
 
-### Cost callout timing
-- **Spec says**: Frame 270-360 (9-12s) fade in (lines 94-97)
-- **Implementation does**: Frame 200-260 (lines 536-543)
-- **Severity**: Medium (earlier: starts frame 200 vs 270)
+10. **Dip annotation timing** -- Spec: frame 60-90, 150-180, 240-270. Implementation: `[60, 90]`, `[150, 180]`, `[240, 270]` (lines 593-607). Exact match.
 
-### Cost callout color
-- **Spec says**: Value in red-amber #E06040 (line 45)
-- **Implementation does**: Uses COLORS.DIP_RED (line 418)
-- **Severity**: Low (needs constant verification for exact color)
+11. **Dip annotation icons** -- Spec: downward arrow for "new bug", circular revert for "regression", forking-paths for "merge conflict". Implementation: DipIcon component (lines 296-335) with types "arrow-down", "revert", "fork"; invoked at line 842 via `icon={["arrow-down", "revert", "fork"][i]}`. All three icon types implemented.
 
-### Red-tinted annotations
-- **Spec says**: All dip annotations in red-tinted amber #E06040 with icons (lines 27-37)
-- **Implementation does**: Uses COLORS.DIP_RED, no icons visible in Annotation component (lines 292-330)
-- **Severity**: Medium (color likely correct, icons not implemented: arrow-down, revert, fork)
+12. **Annotation italic style** -- Spec: annotations should be italic. Implementation: `fontStyle="italic"` on annotation text (line 382). Match.
 
-### PDD curve state during wobbles
-- **Spec says**: PDD starting segment remains visible with faint blue glow (lines 50-52)
-- **Implementation does**: Phase 1/4 PDD curve would be visible based on phase checks
-- **Severity**: Low (persistence via phase system)
+13. **Leader lines** -- Spec: thin red-tinted leader lines connecting annotations to dip troughs. Implementation: leader line in Annotation component (lines 359-367) using the color prop set to COLORS.DIP_RED. Match.
 
-### Duration and hold
-- **Spec says**: Frame 360-450 (12-15s) hold on damaged curve (lines 98-101)
-- **Implementation does**: Phase 3 runs to accommodate wobble completion
-- **Severity**: Low (implicit in phase system)
+14. **Flicker/shake effect** -- Spec: 1-2px lateral shake, 5-8 frames per dip. Implementation (lines 579-588): `Math.sin(frame * 3) * 1.5` yields +/-1.5px oscillation, duration 7 frames per dip. Applied as `transform={translate(...)}` on the patching curve group (line 776). Match.
 
-## Missing Elements
+15. **Flicker easing** -- Spec: linear sinusoidal (raw, unstable feel). Implementation: `Math.sin(frame * 3)` -- sinusoidal oscillation with no easing wrapper. Match.
 
-### Flicker/shake effect
-- **Spec says**: Curve segments briefly flicker or shake laterally (1-2px) at each dip, 5-8 frames (lines 39-43)
-- **Implementation does**: Not implemented
-- **Severity**: High (visual effect entirely missing)
+16. **Cost callout "$1.52T"** -- Spec: 36pt bold red-amber #E06040. Implementation (lines 468-478): fontSize={36}, fontWeight="bold", fill={COLORS.DIP_RED}. Match.
 
-### Dip annotation icons
-- **Spec says**: Small downward arrow icon for "new bug", circular "revert" icon for "regression", forking-paths icon for "merge conflict" (lines 28-36)
-- **Implementation does**: Text-only annotations via Annotation component
-- **Severity**: Medium (visual enhancement missing, reduces clarity)
+17. **Cost callout position** -- Spec: upper-right area. Implementation: rect at x=1350, y=120, width=360 (lines 458-462). This places it in the upper-right quadrant. Match.
 
-### Thin red-tinted leader lines
-- **Spec says**: Leader lines should be red-tinted to match dip annotations (lines 37-38)
-- **Implementation does**: Leader lines use annotation color parameter, which is COLORS.DIP_RED (lines 311-317)
-- **Severity**: Low (likely correct via color parameter)
+18. **Cost callout background card** -- Spec: subtle background card with dark border. Implementation (lines 458-466): rect with `fill="rgba(26, 26, 46, 0.85)"`, `stroke="rgba(255,255,255,0.15)"`. Match.
 
-Main issues: timing compression, missing flicker effect, missing dip annotation icons.
+19. **Cost callout timing** -- Spec: frame 270-360 fade in. Implementation: `interpolate(frame, [270, 360], [0, 1])` (lines 611-612). Exact match.
 
-## Resolution Status
+20. **Cost callout easing** -- Spec: `easeOutCubic`. Implementation: `Easing.out(Easing.cubic)` (line 615). Exact match.
 
-**RESOLVED** - Fixed all high and medium-severity issues:
-1. ✅ Wobble animation timing: Changed from frame 0-180 to frame 0-270 to match spec (3 dips over 270 frames)
-2. ✅ Dip annotation timing: Changed to frame 60-90, 150-180, 240-270 to match spec
-3. ✅ Cost callout timing: Changed from frame 200-260 to frame 270-360 to match spec
-4. ✅ Flicker effect: Added 1-2px lateral shake (±1.5px oscillation) for 5-8 frames at each dip position
-5. ✅ Dip annotation icons: Added arrow-down icon for "new bug", revert icon for "regression", fork icon for "merge conflict"
-6. ✅ Added easing functions: wobble uses `easeInOutQuad`, annotations use `easeOutCubic`, cost uses `easeOutCubic`
+21. **PDD curve dormant** -- Spec: PDD starting segment visible with faint blue glow. In phase 3, effectivePddTo falls back to curveStartProgress (~0.08), and the PDD CurveLine renders with glowId="pddGlow" and glowStd (lines 865-873). Match.
+
+22. **Dip recovery slope decreasing** -- Spec: recovery slope after each dip is shallower. The base logarithmic curve naturally has decreasing slope at later positions, so dips further along the curve inherently recover more slowly. Implicit match.
+
+23. **Annotation easing** -- Spec: `easeOutCubic` for dip annotations. Implementation: `Easing.out(Easing.cubic)` (lines 596, 601, 606). Match. (Note: previous audit incorrectly flagged spec as requesting `easeOutQuad`; spec line 209 says `easeOutQuad` for "annotation fade" but dip appearance says `easeOutCubic` with slight bounce on line 208. Implementation uses cubic for dip annotations, which aligns with the dip appearance spec.)
+
+### Issues Found
+
+1. **Dip annotation fontSize slightly small** -- Spec says 16pt for annotations (line 36). Implementation passes `fontSize={15}` at the call site (line 841), overriding the Annotation component's default of 16.
+   - Severity: Low
+   - Location: `CompoundCurvesGraph.tsx` line 841
+   - Spec reference: line 36 ("All annotations are small (16pt)")
+
+2. **Cost callout subtitle fontSize** -- Spec says 18pt for the subtitle "annual US tech debt cost (CISQ)" (line 47). Implementation uses fontSize={16} (line 485).
+   - Severity: Low
+   - Location: `CompoundCurvesGraph.tsx` line 485
+   - Spec reference: line 47 ("18pt, white at 70% opacity")
+
+3. **Hold period truncated** -- Spec calls for frame 360-450 (12-15s) as a hold period with all elements visible. The Section 5 sequence allocates VISUAL_02 from frame 733 to frame 1120 globally (387 local frames). Since the cost callout finishes fading at frame 360, only ~27 local frames (0.9s) remain for the hold, versus the spec's 90 frames (3s).
+   - Severity: Medium
+   - Location: `S05-CompoundReturns/constants.ts` lines 52-53 (VISUAL_02_START/END)
+   - Spec reference: lines 98-101 ("Frame 360-450 (12-15s): Hold on damaged curve")
+
+4. **Flicker applied globally not per-dip segment** -- Spec says "at each dip, the curve segment briefly flickers." The implementation sums all flickerOffsets and applies a single `translate()` on the entire patching curve group (line 776: `flickerOffsets.reduce((a, b) => a + b, 0) / 3`). This means the entire curve shifts rather than just the segment near each dip point.
+   - Severity: Low
+   - Location: `CompoundCurvesGraph.tsx` line 776
+   - Spec reference: lines 39-41 ("At each dip, the curve segment briefly flickers")
+
+### Notes
+
+- The phase system cleanly isolates phase 3 behavior. Phase 3 inherits the full patching curve from phase 2 and overlays wobble, dip annotations, flicker, and cost callout.
+- All previously reported high-severity issues from the prior audit have been resolved: wobble timing now matches 0-270 frames, annotation timing matches spec exactly, flicker effect is implemented, and dip icons are present.
+- The annotation easing discrepancy flagged in the prior audit (cubic vs quad) appears to be a misread of the spec; the spec lists multiple easing types for different elements, and `easeOutCubic` for dip appearance is consistent with the implementation's use of `Easing.out(Easing.cubic)` for dip annotations.
+- The remaining issues are all low-to-medium severity: two font size mismatches of 1-2pt each, a truncated hold period, and a global-vs-local flicker application.

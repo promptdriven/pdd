@@ -1,80 +1,47 @@
-# Audit: 01a_establish_split_screen.md
+# Audit: 01a Establish Split Screen
 
-## Spec Summary
-This spec is a Veo (video generation AI) prompt for the first 8 seconds of the cold open. It describes:
-- Split screen with vertical white divider in exact center
-- Left half: Modern developer at minimalist desk, dark room with cool blue monitor glow, code editor visible, hands on keyboard
-- Right half: 1950s grandmother in wooden chair, warm amber oil lamp light, holding darning egg with holey sock and needle
-- Static camera, medium shot, both sides framed identically
-- Photorealistic, 4K, cinematic style
+## Status: PASS
 
-Duration: 8 seconds (0:00-0:08)
-Color palette: Cool blue left (#4A90D9), warm amber right (#D9944A)
+### Spec vs Implementation Comparison
 
-## Implementation Status
-Partially Implemented
+**Spec file:** `specs/00-cold-open/01a_establish_split_screen.md`
+**Implementation files:**
+- `remotion/src/remotion/01-ColdOpen/ColdOpenSplitScreen.tsx` (Remotion fallback/animatic)
+- `remotion/src/remotion/01-ColdOpen/LeftPanel.tsx` (left side procedural animation)
+- `remotion/src/remotion/01-ColdOpen/RightPanel.tsx` (right side procedural animation)
+- `remotion/src/remotion/01-ColdOpen/constants.ts` (timing and color definitions)
+- `remotion/src/remotion/S00-ColdOpen/ColdOpenSection.tsx` (production version, loads `cold_open_01a_establish.mp4`)
+- `remotion/src/remotion/S00-ColdOpen/constants.ts` (production timing, audio-synced beats)
 
-## Deltas Found
+### Requirements Met
 
-### Implementation approach: Remotion vs Veo video
-- **Spec says**: "Veo Prompt" section provides detailed prompt for AI video generation, suggesting this segment should be a rendered video file
-- **Implementation does**: The Remotion implementation in `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/01-ColdOpen/` creates this scene procedurally with code, not as a video file. However, ColdOpenSection.tsx line 39 loads `cold_open_01a_establish.mp4`, suggesting Veo output is used in production
-- **Severity**: Low - Both approaches exist; Remotion is likely a fallback/prototype
+- **Split screen layout with vertical white divider**: `ColdOpenSplitScreen.tsx` lines 33-72 implement left/right panels each at `width/2` with a 2px white divider (`COLORS.DIVIDER = "#ffffff"`) positioned at 50% with `translateX(-50%)`, plus a subtle `boxShadow: "0 0 10px rgba(255,255,255,0.3)"` glow. Matches spec requirement for "clean vertical white line divider in exact center of frame."
+- **Color palette -- exact match**: `constants.ts` defines `LEFT_BG: "#1a1a2e"` (spec: `#1a1a2e`), `LEFT_ACCENT: "#4A90D9"` (spec: `#4A90D9`), `RIGHT_BG: "#2d2416"` (spec: `#2d2416`), `RIGHT_ACCENT: "#D9944A"` (spec: `#D9944A`). All four hex values are pixel-perfect matches.
+- **Cool blue left / warm amber right contrast**: LeftPanel uses `#1a1a2e` background with blue accents; RightPanel uses `#2d2416` background with amber radial gradient glow (lines 348-358) simulating oil lamp ambience.
+- **Code editor visible on left side**: `LeftPanel.tsx` lines 220-280 render a Cursor IDE mockup with macOS traffic light dots (red/yellow/green), filename in title bar, and syntax-highlighted code content with line numbers. During the establish phase (frame < syncStart, i.e., 0:00-0:08), the original code is shown statically (lines 272-279).
+- **Oil lamp with animated flame on right side**: `RightPanel.tsx` lines 385-418 implement a detailed oil lamp SVG with glass chimney, oil reservoir, base, and a three-layer animated flame (gold/orange/red ellipses with `<animate>` on the `ry` attribute cycling every 0.5s). A radial gradient glow effect surrounds the lamp.
+- **Wooden table surface**: `RightPanel.tsx` lines 370-383 render a table with wood grain texture via `backgroundImage: linear-gradient(90deg, ...)` and `backgroundSize: "20px 20px"`.
+- **Sock with visible hole**: `WoolSock` component (RightPanel.tsx lines 38-185) renders a detailed side-view L-shaped wool sock SVG with ribbed cuff, heel reinforcement, toe area, wool texture pattern, and a prominently visible hole (dark ellipse at the heel/bottom area with frayed edges). The `holeProgress` prop controls darning animation.
+- **Hands holding sock / needle ready**: RightPanel.tsx lines 420-459 render left hand silhouette (ellipse shapes, lines 430-440) holding the sock and right hand with needle (lines 447-459). The `NeedleAndThread` component (lines 188-216) renders a silver needle with eye, shaft, point, and trailing thread in amber.
+- **Timing -- 8-second establish phase**: `constants.ts` defines `BEATS.ESTABLISH_START = 0`, `BEATS.ESTABLISH_END = 8` (8 seconds). The `secondsToFrames` helper converts at 60 fps. LeftPanel's `showOriginal` flag (line 201) ensures static display during this window. No animations trigger until `syncStart` (8s) on either panel.
+- **Static camera during establish phase**: Neither panel applies zoom, translation, or camera movement transforms during frames 0 through `secondsToFrames(8)`. Scale is 1, translateY is 0, and no interpolation is active during this phase.
+- **16:9 aspect ratio at 1080p**: `constants.ts` defines `COLD_OPEN_WIDTH = 1920`, `COLD_OPEN_HEIGHT = 1080` -- standard 16:9. Spec lists "4K / 1080p" indicating either is acceptable.
+- **Production version uses Veo-generated video**: `S00-ColdOpen/ColdOpenSection.tsx` lines 34-44 load `cold_open_01a_establish.mp4` via Remotion's `OffthreadVideo` component with `loop` for VISUAL_00 (0-4.92s). This is the intended production path using actual AI-generated footage.
 
-### Static vs implied animation
-- **Spec says**: "Static camera, medium shot" and "Both focused intently on their work, moment of calm before action begins" with "Duration: 8 seconds"
-- **Implementation does**: The Remotion LeftPanel.tsx and RightPanel.tsx components show only the IDE and darning scene during establishment phase, with minimal animation until syncStart (0:08)
-- **Severity**: None - Implementation matches static establishment intent
+### Issues Found
 
-### Developer hands on keyboard
-- **Spec says**: "hands resting on mechanical keyboard", "hands positioned on mechanical keyboard"
-- **Implementation does**: LeftPanel.tsx shows IDE/code editor but no hand visualization during establish phase (hands only implied)
-- **Severity**: Medium - Hands are mentioned as key visual element but not rendered in Remotion version
+- **No issues that require code changes.** The spec is a Veo video generation prompt describing photorealistic cinematic footage (detailed human faces, hands, shallow depth of field, etc.). The Remotion implementation in `01-ColdOpen/` faithfully serves as a procedural fallback/animatic, correctly implementing all structural and timing elements. The production path in `S00-ColdOpen/` correctly references the Veo-generated MP4.
+- **Minor observations (not blocking):**
+  - Left panel title bar shows `parser.ts` (LeftPanel.tsx line 242) while spec references Python code. This is a stylistic choice for the Remotion animatic that does not affect the production Veo video.
+  - Grandmother's hands are simplified SVG ellipse silhouettes rather than photorealistic "weathered hands." Expected and appropriate for a code-based animation fallback.
+  - Developer face/torso not rendered during establish phase in the animatic -- hands and silhouette appear only in later phases (satisfaction beat at 15s+). The production Veo video handles this.
+  - Production timing (`S00-ColdOpen/constants.ts`) uses VISUAL_00 spanning 0-4.92s (not 8s) because the production narration pacing was adjusted to match actual audio timing from `cold_open_narration.wav`.
 
-### Grandmother holding darning egg and needle
-- **Spec says**: "weathered hands holding wooden darning egg with gray wool sock stretched over it, visible hole in sock heel area, threaded needle poised ready to begin repair"
-- **Implementation does**: RightPanel.tsx lines 385-425 show hand silhouettes (lines 395-405, 414-423) and WoolSock component (line 409) with hole visible
-- **Severity**: Low - Hands are simplified silhouettes rather than detailed weathered hands
+### Notes
 
-### Monitor glow on face
-- **Spec says**: "single monitor casting cool blue glow on face"
-- **Implementation does**: LeftPanel.tsx shows code editor but no face or glow-on-face lighting effect
-- **Severity**: Medium - Face and lighting effect not implemented in Remotion version
-
-### Oil lamp with warm glow
-- **Spec says**: "warm amber glow from antique oil lamp illuminating scene"
-- **Implementation does**: RightPanel.tsx lines 350-383 implement detailed oil lamp SVG with animated flame and radial gradient glow effect (lines 372-382)
-- **Severity**: None - Well implemented with flame animation
-
-### Wooden table and period details
-- **Spec says**: "small side table beside her" and "cozy period-accurate domestic interior"
-- **Implementation does**: RightPanel.tsx lines 336-348 render wooden table surface with wood grain texture pattern
-- **Severity**: None - Table implemented appropriately
-
-### Color palette accuracy
-- **Spec says**: "Background: Dark gray/navy (#1a1a2e), Monitor glow: Cool blue (#4A90D9)" for left; "Background: Warm brown shadows (#2d2416), Lamp light: Amber/gold (#D9944A)" for right
-- **Implementation does**: constants.ts defines matching colors exactly, used throughout components
-- **Severity**: None - Perfect match
-
-### 4K resolution
-- **Spec says**: "4K resolution" and "4K / 1080p"
-- **Implementation does**: constants.ts line 7 defines `COLD_OPEN_WIDTH = 1920` and line 8 `COLD_OPEN_HEIGHT = 1080` (1080p, not 4K)
-- **Severity**: Low - Using 1080p instead of 4K, though spec notes "4K / 1080p" suggesting either is acceptable
-
-### Continuity notes for posture
-- **Spec says**: "Developer's hand position must allow for natural transition to typing in next segment" and "Grandmother's needle position must be ready to begin stitching in next segment"
-- **Implementation does**: No explicit hand positioning in establish phase; animations begin at syncStart
-- **Severity**: Low - Continuity handled by starting animations at correct time rather than setup postures
-
-## Missing Elements
-1. Developer's hands visible on keyboard during establish phase
-2. Developer's face with blue glow lighting effect
-3. Detailed weathered grandmother hands (only silhouettes shown)
-4. Photorealistic human elements (faces, detailed hands) - implementation is more iconographic/simplified
-
-## Notes
-This spec is specifically a Veo AI video generation prompt, not meant for Remotion implementation. The actual production workflow appears to use the Veo-generated `cold_open_01a_establish.mp4` file loaded in ColdOpenSection.tsx. The Remotion implementation serves as a procedural fallback or animatic, which explains why it's more simplified and iconographic rather than photorealistic. The deltas around missing hands, faces, and photorealistic details are expected given this is a code-based animation vs. AI-generated video.
-
-## Resolution Status
-- **Status**: RESOLVED - Veo/video task
-- **Notes**: This spec describes a Veo 3.1 video generation task or video callback, not a Remotion animation. No Remotion code fix is applicable. The video asset needs to be generated/sourced separately.
+- This spec is a Veo 3.1 video generation prompt, not a Remotion animation spec. The Remotion implementation in `01-ColdOpen/` is a procedural fallback/animatic that captures the core visual structure, layout, color palette, and timing.
+- The production version in `S00-ColdOpen/ColdOpenSection.tsx` correctly loads the Veo-generated video file (`cold_open_01a_establish.mp4`) for the final render.
+- All four color palette hex values from the spec are exactly matched in `constants.ts`.
+- The split screen layout, center divider, cool/warm contrast, 8-second establish timing, and static camera behavior are all faithfully implemented in the animatic.
+- The three-phase zoom-out easing system (ease-in, constant, ease-out) in both LeftPanel and RightPanel demonstrates careful engineering for later segments, but does not affect the 01a establish phase.
+- Production constants use 30 fps (vs 60 fps in the animatic) and audio-synced timing derived from Whisper word timestamps. This is expected for the final production pipeline.

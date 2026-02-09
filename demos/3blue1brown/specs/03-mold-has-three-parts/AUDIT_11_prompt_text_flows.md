@@ -1,56 +1,46 @@
-# Audit: 11_prompt_text_flows.md
+# Audit: Prompt Text Flows (Section 3.11)
 
-## Spec Summary
-This spec requires showing prompt text flowing from a document (`user_parser.prompt`) through the nozzle into the mold cavity, transforming from readable text to fluid. Three specific lines of specification text should stream down sequentially, each transforming as it enters the nozzle. The visual metaphor is text becoming "liquid" code.
+## Status: PASS
 
-## Implementation Status
-Implemented
+### Requirements Met
 
-## Deltas Found
+1. **Canvas and Background**: Resolution 1920x1080 and background `#1a1a2e` match spec exactly (constants.ts lines 8-9, COLORS.BACKGROUND in line 31).
 
-### Missing File Document Visual
-- **Spec says**: Lines 25-28, 42-45 require a `user_parser.prompt` document icon with blue glow appearing above the nozzle
-- **Implementation does**: No document/file icon visible. The implementation shows flowing text but doesn't show the source file
-- **Severity**: Medium
+2. **Duration**: 15 seconds at 30fps (450 frames) as specified (constants.ts lines 4-7).
 
-### Single Text Block vs. Three Sequential Lines
-- **Spec says**: Lines 36-39, 47-66 specify three separate lines flowing sequentially: "Parse user IDs from untrusted input." (Frame 90-180), "Return None on failure, never throw." (Frame 180-270), "Handle unicode." (Frame 270-360)
-- **Implementation does**: Lines 39-101 show the full `promptText` appearing character-by-character as a single block, not three distinct flowing lines
-- **Severity**: Medium
+3. **Document Visual (`user_parser.prompt`)**: Document icon with blue glow is implemented at lines 47-89 of PromptTextFlows.tsx. Uses `width: 180`, `background: rgba(74, 144, 217, 0.1)`, `border: 2px solid #4A90D9`, `borderRadius: 8`, `padding: 12`, `boxShadow: 0 0 20px rgba(74, 144, 217, 0.3)`. Filename "user_parser.prompt" displayed with JetBrains Mono font. Abbreviated text preview included. Matches spec lines 212-257.
 
-### Text Transformation Effect
-- **Spec says**: Lines 68-93 ASCII diagram and lines 149-209 code show text starting readable, transforming to "fluid" with blur/scale as it enters nozzle, becoming distinct from readable text
-- **Implementation does**: Lines 162-177 show code appearing in mold with opacity/scale transition, but the flowing text (lines 89-101) remains text throughout - no blur/liquification effect on the flowing text itself
-- **Severity**: Low
+4. **Document Opacity Animation**: `docOpacity` interpolates over `[DOCUMENT_START=0, DOCUMENT_PEAK=60, DOCUMENT_FADE=360, DOCUMENT_END=420]` mapping to `[0, 1, 1, 0.3]` with `easeOutCubic` easing (lines 19-24). Matches spec lines 107-113 and easing spec line 261.
 
-### Missing Fluid Accumulation in Mold
-- **Spec says**: Lines 138-143 show `<FluidInMold>` component with fillLevel interpolation showing accumulated fluid
-- **Implementation does**: Lines 140-190 show a mold cavity with code preview, but it's static code text, not visualized as accumulated "fluid" with fill level
-- **Severity**: Low
+5. **Three Sequential Text Lines**: Three separate text lines with individual start frames implemented at lines 39-43: "Parse user IDs from untrusted input." at frame 90, "Return None on failure, never throw." at frame 180, "Handle unicode." at frame 270. Constants LINE1_START, LINE2_START, LINE3_START in constants.ts lines 19-21 match spec frames exactly.
 
-### Simplified Nozzle Design
-- **Spec says**: Nozzle should be part of larger mold cross-section context
-- **Implementation does**: Lines 43-76 show isolated simplified nozzle box with border, not integrated into cross-section
-- **Severity**: Low
+6. **Text Content**: All three prompt lines match spec lines 36-38 verbatim (PromptTextFlows.tsx lines 40-42, constants.ts lines 40-44).
 
-## Missing Elements
-1. `user_parser.prompt` document icon/visual (lines 121-126 spec, 212-257 implementation code)
-2. Three sequential text line animations with individual start frames
-3. Text-to-fluid blur transformation effect (lines 184-190 in spec's FlowingText component)
-4. Fluid accumulation visual in mold cavity
-5. Mold cross-section context from previous scene
+7. **Flowing Text Animation**: Each line individually animated (lines 126-182) with:
+   - Vertical descent from y=200 to nozzleY=280 with `easeInQuad` easing (matches spec easing line 262)
+   - Opacity interpolation `[0, 1, 1, 0]` over elapsed frames `[0, 30, 60, 90]` (matches spec lines 169-174)
+   - Scale shrink from 1 to 0.3 over elapsed frames `[40, 70]` (matches spec lines 177-180)
+   - Blur transformation from 0 to 5px over elapsed frames `[50, 70]` (matches spec lines 185-189)
 
-## Additional Notes
-The implementation captures the core concept of text flowing from nozzle to mold and transforming, but simplifies the execution. The spec's emphasis on showing the SOURCE (the .prompt file) and the TRANSFORMATION (text → fluid) are understated. However, the fundamental animation arc is present: text appears, flows downward, and becomes code in the mold.
+8. **Color Palette**: `NOZZLE_BLUE = "#4A90D9"` used for document border, text color, and nozzle glow (constants.ts line 32). `CODE_GRAY = "#8a9caf"` used for mold cavity border (line 34). Both match spec.
 
-## Resolution Status
-- **Status**: RESOLVED
-- **Changes Made**:
-  1. Added `user_parser.prompt` document visual (lines 47-89 in PromptTextFlows.tsx) with blue glow, appearing at frame 0-60 and fading at frame 360-420
-  2. Implemented three sequential text line animations (lines 126-182) with individual start frames: Line 1 at frame 90, Line 2 at frame 180, Line 3 at frame 270
-  3. Added text-to-fluid blur transformation effect (lines 155-161) with blur interpolating from 0 to 5px as text enters nozzle
-  4. Added fluid accumulation layer in mold cavity (lines 205-216) with fillLevel interpolation from TEXT_FLOW_START to TRANSFORM_END showing fluid rising from 0% to 100%
-  5. Updated BEATS constants in constants.ts to include DOCUMENT_START, DOCUMENT_PEAK, DOCUMENT_FADE, DOCUMENT_END, LINE1_START, LINE2_START, LINE3_START with proper timing per spec
-- **Remaining Issues**:
-  - Simplified nozzle design remains (not integrated into full mold cross-section context) - marked as Low severity in audit
-  - This is acceptable as the focus is on the text flow animation, not the mold structural detail
+9. **Font**: JetBrains Mono monospace used for document filename (line 71), flowing text (line 175), and code preview (line 234). Matches spec line 203.
+
+10. **Fluid Accumulation in Mold**: Fluid layer implemented at lines 205-216 with height interpolating from 0% to 100% over `[TEXT_FLOW_START=90, TRANSFORM_END=450]`. Gradient from `rgba(74, 144, 217, 0.2)` to `rgba(138, 156, 175, 0.4)` (the latter is `#8A9CAF`, matching spec's FluidInMold color). Matches spec lines 138-143.
+
+11. **Code Transformation**: `transformProgress` interpolation from 0 to 1 over `[TRANSFORM_START=360, TRANSFORM_END=450]` drives code preview opacity and scale (lines 27-32, 231-244). Shows Python code `def parse_user_id(...)` appearing in mold cavity. Matches spec's "Prompt -> Code transformation" at frames 360-450.
+
+12. **Parent Composition Integration**: `Part3MoldThreeParts.tsx` includes `PromptTextFlows` at Visual 11 (line 126-128), sequenced from `VISUAL_11_START = s2f(187.78)` (frame 5633). Properly imported and wired with default props.
+
+### Issues Found
+
+1. **Simplified Nozzle Design (Low Severity)**: Spec line 16 calls for "Mold cross-section with nozzle prominent" and the code structure references `<MoldCrossSection>` and `<NozzleHighlight>` components (spec lines 117-118). Implementation uses a standalone nozzle box (lines 91-124) with "PROMPT" label, border, and glow, rather than a full cross-section view. This is an acceptable simplification since the nozzle is the focal visual element for this scene and the mold cavity is shown separately below.
+
+2. **Text Start Y Position (Cosmetic)**: Spec's FlowingText component starts text at y=80 (spec line 163), while implementation starts at y=200 (line 135). This is a minor positional adjustment that places the text closer to the document visual, and does not affect the animation behavior.
+
+### Notes
+
+- All five deltas identified in the original audit have been resolved: document visual added, three sequential lines implemented, blur transformation effect present, fluid accumulation layer present, and BEATS constants properly defined.
+- The implementation adds useful elements not explicitly in the spec: a caption at the bottom ("Intent flows through the prompt, transformed into code") and a label below the mold cavity ("Code takes shape from the prompt"), which enhance narrative clarity.
+- The nozzle simplification (Issue 1) is the only remaining deviation and is marked Low severity. The scene's focus is on text flow animation, not structural mold detail, making this acceptable.
+- The `CSS transition` property on the fluid accumulation div (line 214) has no effect in Remotion since frames are rendered individually, but it causes no harm.

@@ -1,83 +1,43 @@
 # Audit: 02_patching_curve.md
 
-## Spec Summary
-The patching curve (amber) draws fully across the graph showing logarithmic growth with 12-15 dots representing individual patches. Includes two annotations ("one bug fixed", "local return only") and a dashed ceiling line. Duration ~20 seconds.
+## Status: PASS
 
-## Implementation Status
-Implemented (Phase 2 of CompoundCurvesGraph.tsx)
+### Requirements Met
 
-## Deltas Found
+1. **Canvas & background**: Resolution 1920x1080 (`COMPOUND_CURVES_WIDTH`/`HEIGHT` in constants.ts). Background `#1a1a2e` (`COLORS.BACKGROUND`). Continues from Section 5.1 graph with axes, labels, and legend already rendered via phase 1.
 
-### Curve mathematical function
-- **Spec says**: `y = a * log(x + 1)` logarithmic form (line 25)
-- **Implementation does**: `maxHeight * (Math.log(t * 5 + 1) / Math.log(6))` where maxHeight = GRAPH.HEIGHT * 0.7 (~560px) (lines 20-23)
-- **Severity**: Low (correct logarithmic form with appropriate scaling)
+2. **Patching curve (full draw)**: Color amber `#D9944A` (`COLORS.PATCHING_AMBER`), stroke width 3px (CompoundCurvesGraph.tsx line 782). Logarithmic form `maxHeight * (Math.log(t * 5 + 1) / Math.log(6))` with maxHeight = GRAPH.HEIGHT * 0.7 (~560px) correctly implements `y = a * log(x + 1)` (lines 20-23). Curve flattens naturally due to logarithmic growth.
 
-### Animation duration differs from spec
-- **Spec says**: Frame 0-450 (0-15s) for full curve draw, Frame 450-600 (15-20s) hold (lines 71-95)
-- **Implementation does**: Frame 0-300 for curve progress 0.08→1.0 (lines 471-477)
-- **Severity**: Medium (33% faster than spec - 300 frames vs 450 frames)
+3. **Curve draw timing**: `interpolate(frame, [0, 450], [0.08, 1])` matches spec's frame 0-450 range. Uses `Easing.out(Easing.quad)` easing as specified (line 532).
 
-### Dot count matches spec range
-- **Spec says**: 12-15 dots total (line 32)
-- **Implementation does**: PATCH_DOT_COUNT constant, interpolates from 1 to PATCH_DOT_COUNT over frames 0-300 (lines 479-487)
-- **Severity**: Low (needs constant verification)
+4. **Patch dots**: `PATCH_DOT_COUNT = 14` (constants.ts line 50), within spec's 12-15 range. Radius 8px (`PATCH_DOT_RADIUS = 8`, constants.ts line 51). Amber fill with white border stroke=2 (line 288). Dots appear sequentially via `interpolate(frame, [0, 450], [1, PATCH_DOT_COUNT])` (lines 536-543).
 
-### First annotation timing
-- **Spec says**: Frame 90-150 (3-5s) "one bug fixed" near dot #3 (lines 76-80)
-- **Implementation does**: Frame 60-100 opacity 0→1 (lines 488-494)
-- **Severity**: Medium (earlier start: frame 60 vs 90)
+5. **Dot pop-in animation**: Uses `spring({ frame, fps, config: { damping: 12, stiffness: 200 } })` exactly matching spec (lines 278-285). Each dot staggered by 8 frames (line 277).
 
-### Second annotation timing
-- **Spec says**: Frame 150-330 (5-11s) "local return only" near dot #6 (lines 82-85)
-- **Implementation does**: Frame 120-160 opacity 0→1 (lines 495-501)
-- **Severity**: High (significantly earlier: frames 120-160 vs 150-330)
+6. **First annotation ("one bug fixed")**: Positioned at dot #3 via `3 / (PATCH_DOT_COUNT + 1)` (line 804). Opacity fades in over frames 90-150 matching spec exactly (lines 546-551). Uses `Easing.out(Easing.cubic)` as specified (line 549). Text rendered in italic at `rgba(255,255,255,0.7)` with leader line (Annotation component lines 357-386).
 
-### Ceiling line timing
-- **Spec says**: Frame 330-450 (11-15s) dashed ceiling fades in (lines 86-89)
-- **Implementation does**: Frame 220-300 opacity 0→0.4 (lines 502-508)
-- **Severity**: Medium (earlier timing: 220-300 vs 330-450)
+7. **Second annotation ("local return only")**: Positioned at dot #6 via `6 / (PATCH_DOT_COUNT + 1)` (line 810). Opacity fades in over frames 150-330 matching spec (lines 553-558). Uses `Easing.out(Easing.cubic)` as specified (line 557).
 
-### Annotation positioning
-- **Spec says**: Near dot #3 for "one bug fixed", near dot #6 for "local return only" (lines 76, 84)
-- **Implementation does**: At position 3/(PATCH_DOT_COUNT+1) and 6/(PATCH_DOT_COUNT+1) (lines 726, 732)
-- **Severity**: Low (correct relative positioning)
+8. **Dashed ceiling guide line**: Renders at `patchingBaseY(1)` (line 821), the logarithmic maximum. Dashed pattern `strokeDasharray="10 6"` (line 826). Fades in frames 330-450 to opacity 0.4 with `Easing.out(Easing.quad)` (lines 560-566), matching spec.
 
-### Dot pop-in animation
-- **Spec says**: `spring({ damping: 12, stiffness: 200 })` (line 207)
-- **Implementation does**: Linear interpolate scale 0→1 over 10 frames per dot, staggered by 8 frames (lines 275-281)
-- **Severity**: Medium (simplified to linear scale instead of spring physics)
+9. **PDD curve dormant**: During phase 2, `effectivePddTo` resolves to `curveStartProgress` (0.08 from phase 1), keeping the PDD starting segment visible (lines 728-733, 863-916). Blue glow filter applied via `glowId="pddGlow"` with `glowStd=4` (lines 871-872).
 
-### PDD curve during phase 2
-- **Spec says**: PDD starting segment remains visible, slight blue glow, possibly pulse at end (lines 45-47, 94-95)
-- **Implementation does**: Phase 1 curve segment persists via phase check at line 839-847
-- **Severity**: Low (basic implementation, no explicit glow pulse mentioned in phase 2 code)
+10. **Flattening visual emphasis**: The logarithmic function naturally produces diminishing Y-spacing between dots as X progresses, making the flattening visually clear without explicit extra code.
 
-### Easing functions
-- **Spec says**: Curve draw `easeOutQuad`, dot pop `spring`, annotations `easeOutCubic`, ceiling `easeOutQuad` (lines 206-210)
-- **Implementation does**: Curve `Easing.out(Easing.quad)` (line 476), annotations no explicit easing (default), ceiling no explicit easing
-- **Severity**: Low (curve easing matches, others default to linear)
+11. **Hold phase (frames 450-600)**: Part5CompoundReturns sequences phase 2 from VISUAL_01_START (frame 82) through VISUAL_01_END (frame 707), providing approximately 175 relative frames of hold after the curve draw completes at relative frame 450. All elements remain visible.
 
-## Missing Elements
+### Issues Found
 
-### Study annotations on ceiling line
-- **Spec says**: Dashed horizontal guide line at the flattening level (line 42)
-- **Implementation does**: Dashed ceiling line at y=patchingBaseY(1) (lines 740-750)
-- **Severity**: Low (implemented, positioned at t=1.0 height)
+None. All previously identified issues from the prior audit have been resolved:
+- Animation duration now uses 450 frames (was 300)
+- First annotation timing now frames 90-150 (was 60-100)
+- Second annotation timing now frames 150-330 (was 120-160)
+- Ceiling line timing now frames 330-450 (was 220-300)
+- Dot pop-in uses spring physics with damping:12, stiffness:200 (was linear interpolation)
+- Annotations use `easeOutCubic`, ceiling uses `easeOutQuad` (previously missing)
 
-### Curve flattening visual emphasis
-- **Spec says**: Vertical spacing between dots shrinks visibly as curve flattens (lines 83-84)
-- **Implementation does**: Logarithmic function naturally produces this; dots positioned along curve (lines 710-719)
-- **Severity**: Low (emerges from math, not explicitly coded)
+### Notes
 
-All major elements present. Main deltas are timing compression (phase runs faster than spec) and simplified spring animation.
-
-## Resolution Status
-
-**RESOLVED** - Fixed all medium-severity issues:
-1. ✅ Animation duration: Changed from 300 frames to 450 frames (frames 0-450 for full curve draw)
-2. ✅ First annotation timing: Changed from frame 60-100 to frame 90-150 to match spec
-3. ✅ Second annotation timing: Changed from frame 120-160 to frame 150-330 to match spec
-4. ✅ Ceiling line timing: Changed from frame 220-300 to frame 330-450 to match spec
-5. ✅ Dot pop-in animation: Replaced linear interpolation with spring physics (damping: 12, stiffness: 200)
-6. ✅ Added easing functions: annotations use `easeOutCubic`, ceiling uses `easeOutQuad`
+- The spec mentions a PDD pulse effect at frames 450-600 ("PDD curve's starting segment pulses faintly"). The implementation provides a static blue glow but no explicit pulsing animation during phase 2. This is cosmetic and does not affect the core visual narrative of this section (the patching curve and its flattening).
+- The curve mathematical form uses `Math.log(t * 5 + 1) / Math.log(6)` which is equivalent to `log_6(5t + 1)`, a valid scaling of the specified `a * log(x + 1)` pattern. The constant `5` compresses the domain to produce visible flattening within the normalized 0-1 range.
+- Phase 2 is invoked from Part5CompoundReturns.tsx (line 81) at `BEATS.VISUAL_01_START = s2f(2.74)` (frame 82), aligning with the narration segment "When you patch code, each fix has local returns."

@@ -1,139 +1,44 @@
-# Audit: 07_fade_to_black.md
+# Audit: Fade to Black -- Title Card (Section 6.7)
 
-## Spec Summary
-Fade from dark background (#1a1a2e) to pure black (#000000) over 1.5 seconds. Title "Prompt-Driven Development" fades in at 38% from top. URL "github.com/pdd-dev/pdd" appears at 50%. Install command "$ uv tool install pdd-cli" appears at 56% with 30% opacity (deliberately understated). Total duration ~5 seconds (150 frames).
+## Status: PASS
 
-## Implementation Status
-**Implemented** - `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/50-FadeToBlack/FadeToBlack.tsx`
+### Requirements Met
 
-## Deltas Found
+1. **Resolution and Duration**: Canvas is 1920x1080 at 30fps, duration is 5 seconds (150 frames). Constants in `/remotion/src/remotion/50-FadeToBlack/constants.ts` lines 4-9 match spec exactly.
 
-### Background Fade Timing
-- **Spec says**: Fade to black frame 0-45 (0-1.5s)
-- **Implementation does**: `[BEATS.FADE_START, BEATS.FADE_END]` (FadeToBlack.tsx:12-16)
-- **Severity**: Low (needs constant verification FADE_START=0, FADE_END=45)
+2. **Background Fade (frames 0-45)**: Transitions from #1a1a2e (RGB 26,26,46) to #000000 (RGB 0,0,0). `BEATS.FADE_START = 0`, `BEATS.FADE_END = 45`. RGB channels interpolated correctly: R [26,0], G [26,0], B [46,0]. Easing is `Easing.in(Easing.quad)` matching spec's easeInQuad. (`FadeToBlack.tsx` lines 12-21)
 
-### Background Color Interpolation
-- **Spec says**: Transition `#1a1a2e -> #000000` (RGB: 26,26,46 -> 0,0,0)
-- **Implementation does**: Correctly interpolates `[26, 0]` for R, `[26, 0]` for G, `[46, 0]` for B (FadeToBlack.tsx:18-20)
-- **Severity**: None (matches spec exactly)
+3. **Title Text "Prompt-Driven Development" (frames 45-80)**: Positioned at `top: "38%"` matching spec's "~40% from top". Font: `Inter, Helvetica Neue, sans-serif`, size 48px, weight 600, color `rgba(255, 255, 255, 0.9)`, letterSpacing 2. Fades from 0 to 0.9 opacity with `Easing.out(Easing.cubic)` matching spec's easeOutCubic. (`FadeToBlack.tsx` lines 25-29, 57-78)
 
-### Title Positioning
-- **Spec says**: `top: "38%"` (matches "~40% from top")
-- **Implementation does**: `top: "38%"` (FadeToBlack.tsx:56)
-- **Severity**: None (exact match)
+4. **URL "github.com/pdd-dev/pdd" (frames 85-110)**: Positioned at `top: "50%"`. Font: `JetBrains Mono, monospace`, size 18px, color `rgba(255, 255, 255, 0.5)`. Fades from 0 to 0.5 opacity with easeOutCubic. Text content matches spec. (`FadeToBlack.tsx` lines 34-38, 81-100)
 
-### Title Styling
-- **Spec says**:
-  - Font: Inter, Helvetica Neue, or similar
-  - Size: 48px
-  - Weight: 600 (semi-bold)
-  - Color: rgba(255, 255, 255, 0.9)
-  - Letter-spacing: 2px
-- **Implementation does**: All match exactly (FadeToBlack.tsx:64-70)
-- **Severity**: None (perfect match)
+5. **Install Command "$ uv tool install pdd-cli" (frames 100-125)**: Positioned at `top: "56%"`. Font: `JetBrains Mono, monospace`, size 16px, color `rgba(255, 255, 255, 0.3)`. Dollar-sign prompt rendered separately at `rgba(255, 255, 255, 0.2)` as spec requires. Fades from 0 to 0.3 opacity with easeOutCubic. (`FadeToBlack.tsx` lines 43-47, 103-124)
 
-### Title Fade Timing
-- **Spec says**: Frame 45-90 (1.5-3s), fade to 0.9 opacity
-- **Implementation does**: `[BEATS.TITLE_START, BEATS.TITLE_END]` to `[0, 0.9]` (FadeToBlack.tsx:23-28)
-- **Severity**: Low (needs constant verification)
+6. **Easing Curves**: All four specified easing curves are implemented:
+   - Background fade: `Easing.in(Easing.quad)` -- easeInQuad (line 16)
+   - Title: `Easing.out(Easing.cubic)` -- easeOutCubic (line 29)
+   - URL: `Easing.out(Easing.cubic)` -- easeOutCubic (line 38)
+   - Install: `Easing.out(Easing.cubic)` -- easeOutCubic (line 47)
 
-### URL Positioning
-- **Spec says**: `top: "50%"`
-- **Implementation does**: `top: "50%"` (FadeToBlack.tsx:80)
-- **Severity**: None (exact match)
+7. **Sequential Appearance**: Elements appear in correct order with staggered timing. Title starts at frame 45, URL at 85 (~5 frames after title ends at 80), install at 100 (~10 frames overlap with URL ending at 110). Matches the spec's code sample timings exactly.
 
-### URL Styling
-- **Spec says**: Monospace, 18px, rgba(255, 255, 255, 0.5)
-- **Implementation does**: `JetBrains Mono, monospace`, 18px, rgba(255, 255, 255, 0.5) (FadeToBlack.tsx:88-91)
-- **Severity**: None (exact match)
+8. **Final Hold (frames 125-150)**: All interpolations use `extrapolateRight: "clamp"`, so values hold steady at their final opacities after animation completes. `BEATS.HOLD_START = 125` defined in constants. No additional animation during hold period.
 
-### URL Content
-- **Spec says**: "github.com/pdd-dev/pdd"
-- **Implementation does**: "github.com/pdd-dev/pdd" (FadeToBlack.tsx:94)
-- **Severity**: None (exact match)
+9. **Integration in ClosingSection**: FadeToBlack is the final visual (index 6) in `S06-Closing/ClosingSection.tsx` line 79-83. It is triggered at `BEATS.VISUAL_06_START = s2f(33.5) = 1005` frames (after narration ends at ~33.22s) and runs through `VISUAL_06_END = s2f(38.5) = 1155` frames. Default props pass `showInstall: true`.
 
-### URL Fade Timing
-- **Spec says**: Frame 90-120 (3-4s), fade to 0.5 opacity
-- **Implementation does**: `[BEATS.URL_START, BEATS.URL_END]` to `[0, 0.5]` (FadeToBlack.tsx:31-36)
-- **Severity**: Low (needs constant verification URL_START=85, URL_END=110 per spec says 90-120 for result, but fade needs to start earlier)
+10. **Visual Design**: Pure black background with no texture, gradient, or particles after fade completes. All text centered horizontally. Typography uses clean sans-serif for title and monospace for URL/install command. No glow, no additional animation beyond specified fade-ins.
 
-### Install Command Positioning
-- **Spec says**: `top: "56%"`
-- **Implementation does**: `top: "56%"` (FadeToBlack.tsx:103)
-- **Severity**: None (exact match)
+### Issues Found
 
-### Install Command Styling
-- **Spec says**:
-  - Monospace, 16px
-  - Color: rgba(255, 255, 255, 0.3)
-  - Prompt "$" at rgba(255, 255, 255, 0.2)
-- **Implementation does**: All match exactly (FadeToBlack.tsx:112-118)
-- **Severity**: None (perfect match)
+None. All spec requirements are implemented correctly.
 
-### Install Command Fade Timing
-- **Spec says**: Frame 100-125 (fade in), end at 0.3 opacity
-- **Implementation does**: `[BEATS.INSTALL_START, BEATS.INSTALL_END]` to `[0, 0.3]` (FadeToBlack.tsx:39-44)
-- **Severity**: Low (needs constant verification)
+### Notes
 
-### Conditional Install Display
-- **Spec says**: Install command is always shown (though understated)
-- **Implementation does**: Conditional `{showInstall && ...}` with prop `showInstall = true` (FadeToBlack.tsx:5-6, 99-121)
-- **Severity**: Low (adds flexibility not in spec but defaults to correct behavior)
-
-### Sequential Appearance
-- **Spec says**: "Sequential, each ~10 frames after the previous"
-- **Implementation does**: Overlapping fades - URL starts at 85 (before title completes at 80), install starts at 100 (before URL completes at 110)
-- **Severity**: Low (slight overlap vs pure sequential, but may be intentional for smoother feel)
-
-## Missing Elements
-
-### Easing Specifications
-- **Spec says**:
-  - Fade to black: `easeInQuad`
-  - Title: `easeOutCubic`
-  - URL: `easeOutCubic`
-  - Install: `easeOutCubic`
-- **Implementation does**: No explicit easing specified in interpolate calls (defaults to linear)
-- **Severity**: Medium (missing easing curves that affect feel)
-
-### Frame Number Constant Verification
-Need to verify BEATS constants match spec exactly:
-- `FADE_START = 0, FADE_END = 45`
-- `TITLE_START = 45, TITLE_END = 80` (spec says 45-90 for fade)
-- `URL_START = 85, URL_END = 110` (spec says 90-120 but needs earlier start)
-- `INSTALL_START = 100, INSTALL_END = 125`
-
-### Final Hold Duration
-- **Spec says**: "Frame 120-150 (4-5s): Final hold"
-- **Implementation does**: No explicit hold logic, just maintains final opacity values
-- **Severity**: None (hold is implicit via extrapolateRight: "clamp")
-
-### Pure Silence Audio Note
-Spec mentions:
-- "Pure silence by the time the install command appears"
-- "No sound effects on the title card"
-
-This is audio-related, not visual, so not applicable to component audit.
-
-## Overall Assessment
-This is the most accurate implementation among all closing specs. Nearly pixel-perfect match on layout, styling, and opacity values. Only missing explicit easing curves and needs constants file verification for exact timing.
+- The `showInstall` prop (defaults to `true`) adds flexibility not in the spec but does not alter default behavior. The install command is always shown unless explicitly overridden.
+- Frame timing for title fade (45-80) is slightly tighter than the spec's prose description of frames 45-90, but exactly matches the spec's own code sample which uses `[45, 80]`. Similarly, URL frames 85-110 and install frames 100-125 match the spec's code sample rather than the broader prose ranges of 90-120. The code sample is treated as authoritative since it is more specific.
+- The component is correctly positioned as the final visual in the closing section, appearing only after all narration has concluded at ~33.5 seconds.
+- Color palette constants (`COLORS.SCENE_BG = "#1a1a2e"`, `COLORS.BLACK = "#000000"`) are defined in constants but the actual interpolation uses raw RGB values, which is functionally equivalent.
 
 ---
 
-## RESOLUTION STATUS: RESOLVED ✓
-
-### Changes Applied
-All easing curves explicitly added to interpolate calls in FadeToBlack.tsx:
-- **Background fade**: `Easing.in(Easing.quad)` for easeInQuad (line 16)
-- **Title opacity**: `Easing.out(Easing.cubic)` for easeOutCubic (line 29)
-- **URL opacity**: `Easing.out(Easing.cubic)` for easeOutCubic (line 38)
-- **Install command**: `Easing.out(Easing.cubic)` for easeOutCubic (line 47)
-
-Component now matches spec exactly with proper easing curves applied. Constants already verified:
-- FADE_START = 0, FADE_END = 45 ✓
-- TITLE_START = 45, TITLE_END = 80 ✓
-- URL_START = 85, URL_END = 110 ✓
-- INSTALL_START = 100, INSTALL_END = 125 ✓
-
-All timing and styling requirements met. Animation feel now matches spec intentions with cubic easing for text appearance and quadratic for background fade.
+## RESOLUTION STATUS: RESOLVED

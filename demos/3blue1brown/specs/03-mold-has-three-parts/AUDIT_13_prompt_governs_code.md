@@ -1,71 +1,59 @@
 # Audit: 13_prompt_governs_code.md
 
-## Spec Summary
-Visual comparison showing a small prompt (10-15 lines) governing a large code file (200+ lines), emphasizing the 1:5 to 1:10 leverage ratio. The prompt should glow brightly while the code file appears subordinate. A minimap should show the full extent of the code, and a "1:5 to 1:10" ratio indicator should appear.
+## Status: PASS
 
-## Implementation Status
-Implemented
+### Requirements Met
 
-## Deltas Found
+1. **Canvas and Background**: 1920x1080 resolution (constants.ts lines 8-9). Dark background `#1a1a2e` (PromptGovernsCode.tsx line 63 via `COLORS.BACKGROUND`). Side-by-side flex layout (lines 64-71).
 
-### Missing Minimap
-- **Spec says**: Lines 30, 112, 258-271 require a minimap showing the full extent of the 200-line code file with viewport indicator
-- **Implementation does**: Lines 157-189 show a code panel with height animation but no minimap visualization to indicate the scrollable extent
-- **Severity**: Medium
+2. **Prompt Document (Left)**: Compact 15-line prompt (constants.ts lines 35-51 `PROMPT_LINES` array with 15 entries, default `promptLineCount=15` on line 6). Blue glow using `#4A90D9` (`COLORS.NOZZLE_BLUE` on line 96). Pulsing glow animation with formula `0.8 + Math.sin(frame * 0.1) * 0.2` (line 12) applied as dynamic boxShadow (line 101). Line counter displays "~15 lines" (line 126).
 
-### Missing Scrolling Animation
-- **Spec says**: Lines 90-96, 125-134 specify code scroll animation to demonstrate the file's extent (scroll from 0 to 100)
-- **Implementation does**: No scroll animation - code height expands (line 28-33) but content doesn't scroll to show more code
-- **Severity**: Low
+3. **Code File (Right)**: Large code representation with `codeLineCount=200` default (line 7). `CODE_PREVIEW` in constants.ts (lines 54-203) contains a comprehensive 200-line Python implementation matching the spec's `parse_user_id` example. Gray text color via `COLORS.CODE_GRAY` (line 190). No glow on code panel -- just a subdued `#333` border (line 171). Line counter shows "~200 lines" (line 244).
 
-### Different Ratio Display
-- **Spec says**: Lines 95, 100, 178-180 emphasize "1:5 to 1:10" ratio text
-- **Implementation does**: Lines 193-232 show ratio as "{promptLineCount} lines → {codeLineCount} lines" with "{Math.round(codeLineCount / promptLineCount)}x amplification" - calculates ratio but doesn't use the specific "1:5 to 1:10" phrasing
-- **Severity**: Low
+4. **Minimap with Viewport Indicator**: Minimap rendered in absolute-positioned panel (lines 200-235) at right=8, top=8, width=60, background `#2A2A3E`. Contains repeating linear gradient lines simulating code density (lines 215-221). Animated viewport indicator tracks scroll position `(codeScroll / 100) * 50%` with semi-transparent blue highlight (lines 223-233). Matches spec's minimap requirement (spec lines 258-271).
 
-### Missing Prompt Pulsing Glow
-- **Spec says**: Lines 24, 40, 117 specify prompt with pulsing glow animation `0.8 + Math.sin(frame * 0.1) * 0.2`
-- **Implementation does**: Prompt shown with static border/background (lines 72-116), no pulsing glow effect
-- **Severity**: Low
+5. **Scrolling Animation**: Code scroll from 0 to 100px (lines 38-44) using `Easing.inOut(Easing.quad)` matching spec's `easeInOutQuad` requirement. Applied as `translateY` transform (line 182).
 
-### Different Line Counts
-- **Spec says**: Lines 9, 24, 30 specify "10-15 lines" for prompt and "200+ lines" for code
-- **Implementation does**: Lines 6-7 use `promptLineCount = 4, codeLineCount = 30` as defaults - significantly smaller than spec
-- **Severity**: Medium
+6. **Size Comparison and Ratio**: "1:5 to 1:10" ratio text displayed in gold (`COLORS.RATIO_GOLD` = `#FFD700`) at font size 40 (lines 268-278). Subtitle reads "A good prompt is a fifth to a tenth the size of the code it generates" (lines 287-296), directly matching the spec's narration text.
 
-### Missing Visual Hierarchy Emphasis
-- **Spec says**: Lines 39-41, 70-77 emphasize prompt GLOWING while code is gray/dimmed with no glow, establishing dominance
-- **Implementation does**: Both sides shown relatively equally - prompt has blue border, code has gray, but no strong glow differential
-- **Severity**: Low
+7. **Dominance Indicator / Visual Hierarchy**: Prompt has animated pulsing glow boxShadow (line 101) while code has no glow -- only a static gray border. Clear subordination of code to prompt visually.
 
-### Missing "Governs" Arrow or Connection
-- **Spec says**: Lines 32, 58, 161 mention "governs" relationship shown with arrows/connection
-- **Implementation does**: Lines 118-134 show simple arrow "→" between sides but no emphasis on governance relationship
-- **Severity**: Low
+8. **"Governs" Arrow**: Directional arrow between prompt and code (lines 131-146) using "--->" character in blue (`COLORS.NOZZLE_BLUE`), size 48. Opacity tied to `arrowOpacity` animation.
 
-## Missing Elements
-1. Code minimap with viewport indicator (spec lines 258-271)
-2. Scrolling animation through code to show extent
-3. Pulsing glow on prompt
-4. Specific "1:5 to 1:10" ratio text phrasing
-5. Line count matching spec (15 vs 200, not 4 vs 30)
-6. Strong visual hierarchy with glowing prompt dominating gray code
-7. "Governs" relationship visualization beyond simple arrow
+9. **Animation Sequence**: Prompt fades in frames 0-60 with `easeOutCubic` (lines 15-20). Arrow appears frames 90-150 (lines 23-28). Code expands frames 150-360 with `easeOutCubic` (lines 31-36). Scroll animates after code appears (line 41). Ratio fades in at frame 400 (lines 47-52). Insight text at frame 500 (lines 55-60). Timings are stretched for 20-second duration vs spec's 15-second suggestion but all phases present in correct order.
 
-## Additional Notes
-The implementation captures the core concept: small prompt on left, larger code on right, with arrow showing direction and ratio displayed. However, it undersells the SCALE (30 lines vs 200+) and the DOMINANCE (prompt should visually dominate through glow/pulse). The missing minimap is significant as it's meant to viscerally show "this is a HUGE file controlled by a TINY spec."
+10. **Prompt Content**: Matches spec's example content -- "Parse user IDs from untrusted input", "Return None on failure, never throw", "Handle unicode" plus additional lines to fill 15-line count (constants.ts lines 35-51).
 
-The ratio calculation is correct but generic - the spec wants the specific "1:5 to 1:10" framing to connect to the narration and establish a memorable rule of thumb.
+11. **Code Content**: Full Python implementation with imports, docstrings, type hints, error handling, validation logic, and helper functions (constants.ts lines 54-203). Matches the spec's example of `parse_user_id` function.
 
-## Resolution Status
-- **Status**: RESOLVED
-- **Changes Made**:
-  1. **Minimap Added**: Implemented minimap with viewport indicator (lines 201-235 in PromptGovernsCode.tsx) showing full code extent with animated viewport position that tracks scroll progress
-  2. **Scrolling Animation**: Added code scroll animation from 0 to 100px (lines 38-44) with easing, applied as translateY transform (line 182)
-  3. **Pulsing Glow**: Added pulsing glow effect to prompt using `0.8 + Math.sin(frame * 0.1) * 0.2` formula (line 12), applied as boxShadow (line 101)
-  4. **Ratio Display Updated**: Changed from calculated ratio to explicit "1:5 to 1:10" text (line 277) with descriptive subtitle "A good prompt is a fifth to a tenth the size of the code it generates" (lines 287-296)
-  5. **Line Counts Corrected**: Updated defaults from 4/30 to 15/200 lines (lines 6-7 in PromptGovernsCode.tsx, lines 77-84 in constants.ts)
-  6. **Visual Hierarchy Enhanced**: Prompt now has animated pulsing glow while code remains gray without glow, establishing clear dominance
-  7. **Code Content Expanded**: Replaced abbreviated code (30 lines) with comprehensive implementation showing imports, error handling, validation, and helper functions representing 200+ lines
-  8. **Prompt Content Updated**: Changed from 4 generic lines to 15 specific lines matching spec requirements
-- **Remaining Issues**: None - all audit items have been addressed. The implementation now fully matches the spec's requirements for scale (15→200 lines), visual impact (pulsing glow + minimap), and messaging (1:5 to 1:10 ratio).
+12. **Insight Text**: Additional narration-aligned text "You're specifying what and why, not how. That compression matters." (lines 322) reinforces the spec's core message.
+
+13. **S03 Integration**: PromptGovernsCode is sequenced at Visual 13 (203.48s) and Visual 14 (211.72s) in Part3MoldThreeParts.tsx (lines 138-150), aligned with narration segments [27] and [28] covering the ratio and context window topics.
+
+### Issues Found
+
+1. **Prompt font family mismatch**
+   - **Spec says**: `fontFamily: 'JetBrains Mono'` for prompt text (spec line 207)
+   - **Implementation does**: `fontFamily: "sans-serif"` for prompt text (PromptGovernsCode.tsx line 111). The code file correctly uses `JetBrains Mono` (line 189), but the prompt card does not.
+   - **Severity**: Low -- cosmetic difference; code side is correct
+
+2. **Prompt card width wider than spec**
+   - **Spec says**: `width: 280` for the prompt card (spec line 196)
+   - **Implementation does**: `maxWidth: 400` (PromptGovernsCode.tsx line 100), making the prompt card ~43% wider than specified
+   - **Severity**: Low -- may slightly reduce the visual contrast between small prompt and large code
+
+3. **Arrow lacks "governs" label**
+   - **Spec says**: "governs" arrow or connection with emphasis on governance relationship (spec lines 32, 58, 161)
+   - **Implementation does**: Plain right-arrow character without any "governs" label text (PromptGovernsCode.tsx lines 138-145)
+   - **Severity**: Low -- the directional relationship is clear, but the explicit "governs" semantic is not labeled
+
+4. **Duration 20s vs spec's 15s**
+   - **Spec says**: ~15 seconds duration (spec line 5)
+   - **Implementation does**: 20 seconds standalone duration (constants.ts line 5, `PROMPT_GOVERNS_DURATION_SECONDS = 20`). In S03 sequence, used across two visuals spanning ~46 seconds total.
+   - **Severity**: Low -- animation phases are proportionally preserved; the S03 sequencer controls actual runtime
+
+### Notes
+
+All seven original audit deltas (missing minimap, missing scroll, wrong ratio text, missing pulsing glow, wrong line counts, weak visual hierarchy, weak governs arrow) have been resolved. The implementation now faithfully represents the core visual concept: a small glowing prompt on the left governing a large gray code file on the right, with minimap, scroll animation, pulsing glow, correct line counts (15 vs 200), and the explicit "1:5 to 1:10" ratio indicator matching the narration.
+
+The four remaining issues are all low-severity cosmetic matters (prompt font, prompt width, arrow label, duration) that do not affect the scene's ability to communicate its message. The visual hierarchy, scale contrast, and ratio messaging are all correctly implemented.

@@ -1,71 +1,65 @@
-# Audit: 09a_z3_smt_sidebar.md
+# Audit: Z3 SMT Sidebar (09a)
 
-## Spec Summary
-Brief sidebar establishing that PDD's verification uses the same mathematical foundation as chip design verification. Shows Synopsys Formality logo (callback to Part 2) on left and Z3 logo on right, both in teal (#2AA198). Bridge line connects them with text: "Hardware: SMT-based formal proof. PDD: SMT-based formal proof. Same math." This establishes PDD is not an analogy - it's literally the same class of technology.
+## Status: ISSUES FOUND
 
-## Implementation Status
-RESOLVED
+### Requirements Met
 
-## Resolution Status
-- **Status**: RESOLVED
-- **Changes Made**: Created new composition at /Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/29a-Z3SmtSidebar/
-- **Files Created**:
-  - Z3SmtSidebar.tsx - Shows Synopsys Formality and Z3 logos with bridge connection and comparison text
-  - constants.ts - Beat timings, colors, text content, and layout positions
-  - index.ts - Exports for composition integration
-- **Implementation Details**:
-  - Synopsys checkmark icon (teal #2AA198) fades in left
-  - Z3 logo (stylized text) fades in right
-  - Bridge line draws between them with equals sign
-  - Three text lines appear: "Hardware: SMT-based formal proof", "PDD: SMT-based formal proof", "Same math."
-  - "Same math." pulses gently for emphasis
-  - Sidebar accent lines at top and bottom
-  - All timing beats per specification
-- **Remaining Issues**: None
+1. **Composition exists**: Standalone composition at `/remotion/src/remotion/29a-Z3SmtSidebar/` with three files: `Z3SmtSidebar.tsx`, `constants.ts`, `index.ts`.
 
-## Deltas Found
-Fully implemented per specification
+2. **Canvas and resolution**: 1920x1080 at 30fps, 20-second duration (600 frames). Background color is `#1a1a2e` per spec. All match spec exactly.
 
-## Missing Elements
+3. **Synopsys Formality icon (left)**: Checkmark icon rendered as SVG path in teal `#2AA198`. Size is 100x100 container with 80x80 SVG. Label "Synopsys Formality" in teal, 16px Inter font below icon. Fades in frames 0-60 with `easeOutCubic`. All match spec (lines 20-26, 55-59, 117-120).
 
-1. **Entire composition missing**: No dedicated composition found in /Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/ directory for Z3/SMT sidebar.
+4. **Z3 logo (right)**: Stylized "Z3" text in teal `#2AA198`, 48px bold JetBrains Mono font. Size is 100x100 container. Label "Z3 (Microsoft Research)" in teal, 16px Inter font below. Fades in frames 60-120 with `easeOutCubic`. Matches spec (lines 27-31, 60-65, 125-130).
 
-2. **Synopsys Formality icon callback**: Spec requires reusing the Synopsys icon from Part 2 Section 2.10 (spec lines 21-26). This visual callback establishes recognition.
+5. **Bridge line connection**: Horizontal teal line 200px wide with `boxShadow: 0 0 8px` glow. Draws from left via width percentage, frames 120-180 with `easeInOutQuad`. Equals sign `=` appears at center when progress > 0.5, fading in as `(progress - 0.5) * 2`. Matches spec (lines 33-38, 67-70, 250-284).
 
-3. **Z3 logo**: Z3 solver logo or stylized "Z3" text in teal #2AA198 (spec lines 27-31).
+6. **Comparison text block - three lines**:
+   - "Hardware: SMT-based formal proof" -- 24px, `#B0B0C0`, frames 180-220, `easeOutCubic`.
+   - "PDD: SMT-based formal proof" -- 24px, `#B0B0C0`, frames 220-260, `easeOutCubic`.
+   - "Same math." -- 32px, `#FFFFFF`, bold (fontWeight 700), frames 260-300, `easeOutCubic`.
+   - All text uses Inter font. Positioned at bottom 280px. Matches spec (lines 39-47, 72-77, 141-152, 206-241).
 
-4. **Bridge line connection**: Horizontal teal line connecting the two logos with equals sign at center (spec lines 33-38, 250-284).
+7. **"Same math." pulse**: Sinusoidal pulse after frame 300: `1.0 + Math.sin((frame - 300) * 0.08) * 0.1`. Applied as CSS `transform: scale()`. Matches spec (lines 78-87, 155-157).
 
-5. **Three-line comparison text**:
-   - "Hardware: SMT-based formal proof"
-   - "PDD: SMT-based formal proof"
-   - "Same math." (bold, larger)
-   (spec lines 39-47)
+8. **Sidebar accent lines**: Top and bottom teal lines at 80px from edges, inset 120px left/right, height 1px, opacity 0.3. Controlled by `showOverlay` prop. Matches spec (lines 48-51, 91-108).
 
-6. **Sidebar framing**: Thin teal accent lines at top/bottom to signal this is a sidebar, not main flow (spec lines 48-51, visual design lines 90-108).
+9. **Beat timings in constants.ts**: All timing values match the spec animation sequence exactly:
+   - SYNOPSYS: 0-60 (spec: 0-2s = 0-60 frames)
+   - Z3: 60-120 (spec: 2-4s = 60-120 frames)
+   - BRIDGE: 120-180 (spec: 4-6s = 120-180 frames)
+   - LINE1: 180-220, LINE2: 220-260, LINE3: 260-300 (spec: 6-10s)
+   - PULSE_START: 300 (spec: 10s)
+   - HOLD_START: 420 (spec: 14s)
 
-7. **Staggered text animation**: Three text lines appearing sequentially (spec lines 71-77, 141-152).
+10. **Easing functions**: All match spec (line 289-293):
+    - Logo fade-ins: `Easing.out(Easing.cubic)` -- matches `easeOutCubic`.
+    - Bridge line: `Easing.inOut(Easing.quad)` -- matches `easeInOutQuad`.
+    - Text fade-ins: `Easing.out(Easing.cubic)` -- matches `easeOutCubic`.
+    - Pulse: `Math.sin` -- matches sinusoidal.
 
-8. **"Same math." pulse**: Gentle sinusoidal pulse on the punchline text (spec lines 155-157, 237).
+11. **Color palette**: All colors correctly defined in constants:
+    - BACKGROUND: `#1a1a2e`, TEAL: `#2AA198`, MUTED_WHITE: `#B0B0C0`, BRIGHT_WHITE: `#FFFFFF`.
 
-9. **Teal color scheme**: Entire composition uses teal #2AA198 to maintain chip design visual language from Part 2 (spec lines 8, 23, 29).
+12. **Text content**: All text strings match spec exactly in constants.ts.
 
-10. **Narration sync points**: Spec details precise narration sync at lines 297-305, connecting Synopsys Formality, Z3, SMT solvers, and the "Same math" revelation.
+13. **Props and exports**: Zod schema with `showOverlay` boolean prop. Clean index.ts exports composition and all constants.
 
-## Notes
+### Issues Found
 
-This composition does not exist at all. Given its importance to the narrative (establishing that PDD uses the same mathematical verification technology as semiconductor companies), this is a significant gap.
+1. **Not integrated into S03-MoldThreeParts sequence**: The `Z3SmtSidebar` composition is never imported or used in `Part3MoldThreeParts.tsx`. Instead, Visuals 8 and 9 (frames 3528-5143, covering the Z3/SMT narration from 117.6s to 171.4s) both render `TraditionalVsPdd` as a fallback. The `Z3SmtSidebar` component is not imported in `Part3MoldThreeParts.tsx` and does not appear in its import list. The VISUAL_SEQUENCE in S03 constants.ts labels these slots as "Synopsys uses SAT/SMT, PDD uses Z3, same class solver" and "Z3 proves for all inputs, symbolic reasoning, same math" -- clearly intended for this composition -- but the code still renders `TraditionalVsPdd` for both.
 
-The spec is very detailed about:
-- Visual callbacks to Part 2 (Synopsys icon recognition)
-- Color scheme (teal #2AA198 specifically for chip design continuity)
-- The sidebar framing to distinguish from main flow
-- The "Same math." punchline as the key message
+2. **Not registered in Root.tsx**: The `Z3SmtSidebar` composition is not registered as a `<Composition>` in `Root.tsx`. It cannot be previewed or rendered standalone from the Remotion Studio.
 
-Without this section, viewers miss the crucial point that PDD's formal verification isn't metaphorical - it's literally the same category of SMT-based mathematical proof used in chip design.
+3. **Missing Synopsys shimmer/pulse animation**: Spec line 57 calls for a "Brief shimmer/pulse" on the Synopsys icon to signal recognition ("you remember this from Part 2"). The implementation only has a simple opacity fade-in -- no shimmer or pulse effect on the Synopsys icon itself.
 
-This appears to be a deliberate sidebar insertion that may have been deprioritized or planned for later implementation. The spec even notes "This is a SIDEBAR, not main flow" (line 318), suggesting it could potentially be skipped or added later without breaking the main sequence.
+4. **Missing logo pulse in unison**: Spec line 69 states "Both logos pulse gently in unison" during the bridge connection phase (frames 120-180). The implementation has no pulsing animation on either logo during this phase.
 
-However, losing this content weakens the connection between Part 2 (chip design) and Part 3 (PDD mold). The spec uses this moment to make explicit what might otherwise seem like just an analogy.
+5. **Missing sidebar frame fade-in with easing**: Spec line 293 calls for sidebar frame to use `easeOutCubic` easing. The accent lines are rendered with a static opacity of 0.3 with no animated fade-in.
 
-**Recommendation**: This composition should be implemented if the goal is to strengthen the "this is not a metaphor, it's the same technology" argument. It's a short 20-second sidebar that pays off the Part 2 setup.
+### Notes
+
+- The standalone `Z3SmtSidebar` composition is faithfully implemented against the spec in terms of visual elements, colors, timings, text content, and easing curves. The core visual design matches the spec closely.
+- The primary issue is integration: the composition exists but is completely disconnected from both the S03 parent sequence and the Root composition registry. In the parent sequence, `TraditionalVsPdd` is used as a placeholder for the narration segments that should show this Z3 sidebar.
+- Three minor animation details are missing: the Synopsys recognition shimmer, the synchronized logo pulse during bridge drawing, and the sidebar frame animated fade-in. These are polish items that affect the "callback recognition" feel described in the spec but do not affect the core visual layout or content.
+- The narration timing in S03 constants maps frames 3528-5143 (117.6s-171.4s) to the Z3/SMT content, aligning with the spec timestamp of 13:00-13:20 relative to Part 3's start. The standalone composition's own 600-frame duration (20s) would need to be coordinated with these parent sequence timings when integrated.

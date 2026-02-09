@@ -1,72 +1,66 @@
-# Audit: 01_cross_section_intro.md
+# Audit: Cross-Section Introduction (01_cross_section_intro)
 
-## Spec Summary
-Introduces the mold cross-section with three distinct regions (Walls, Nozzle, Material) highlighting sequentially over 15 seconds. Each region pulses with its color when introduced, with labels fading in for "Walls", "Nozzle", and "Material".
+## Status: ISSUES FOUND
 
-## Implementation Status
-Implemented
+### Requirements Met
 
-## Deltas Found
+1. **Resolution:** Canvas is 1920x1080 as specified. SVG viewBox matches (`"0 0 1920 1080"`). (`constants.ts` lines 8-9)
+2. **Background color:** Dark background `#1a1a2e` applied via AbsoluteFill. (`constants.ts` line 26, `CrossSectionIntro.tsx` line 100)
+3. **Duration:** 15 seconds at 30fps (450 frames). (`constants.ts` lines 4-7)
+4. **Beat timings match spec exactly:**
+   - Frame 0-90: Mold outline fades in (`BEATS.OUTLINE_START=0, OUTLINE_END=90`)
+   - Frame 90-150: Walls highlight (`BEATS.WALLS_START=90, WALLS_END=150`)
+   - Frame 150-210: Nozzle highlights (`BEATS.NOZZLE_START=150, NOZZLE_END=210`)
+   - Frame 210-270: Material highlights (`BEATS.MATERIAL_START=210, MATERIAL_END=270`)
+   - Frame 270-450: All three visible (`BEATS.ALL_VISIBLE_END=450`)
+   - (`constants.ts` lines 12-22)
+5. **Region colors correct:** Walls amber `#D9944A`, Nozzle blue `#4A90D9`, Material green `#5AAA6E`. (`constants.ts` lines 27-29)
+6. **Label names correct:** "Walls", "Nozzle", "Material" as single-line labels at 24px bold. (`CrossSectionIntro.tsx` lines 212, 230, 248)
+7. **Labels fade in with their respective regions:** Each label opacity is driven from its region's start time, not delayed. (`CrossSectionIntro.tsx` lines 36-43, 63-70, 90-97)
+8. **Pulse animation present:** Each region has a 40-frame pulse (0 -> 0.3 -> 0 amplitude) using `Easing.inOut(Easing.sin)`, matching spec's `easeInOutSine`. (`CrossSectionIntro.tsx` lines 27-34, 54-61, 81-88)
+9. **Easing - mold fade-in:** `Easing.out(Easing.cubic)` matches spec's `easeOutCubic`. (`CrossSectionIntro.tsx` line 14)
+10. **Easing - region highlights:** `Easing.out(Easing.quad)` matches spec's `easeOutQuad`. (`CrossSectionIntro.tsx` lines 23, 50, 77)
+11. **Easing - label fade-in:** `Easing.out(Easing.cubic)` matches spec's `easeOutCubic`. (`CrossSectionIntro.tsx` lines 41, 68, 95)
+12. **Glow effect on active regions:** CSS `drop-shadow` filter applied to each region when its glow value > 0, with intensity scaling by both glow and pulse. (`CrossSectionIntro.tsx` lines 128-129, 171, 189)
+13. **Three distinct regions rendered:** Walls (left, right, bottom rects), Nozzle (top rect), Interior/Material (dashed interior rect). Layout matches the spec diagram. (`CrossSectionIntro.tsx` lines 116-192)
+14. **Section integration:** CrossSectionIntro is wired as Visual 0 in `S03-MoldThreeParts/Part3MoldThreeParts.tsx` (lines 48-52), starting at frame 0 and running through ~12.26s of the section timeline.
+15. **showLabels prop:** Supports toggling labels on/off, used in the section composition with default `true`. (`constants.ts` lines 47-55)
 
-### Label Names Mismatch
-- **Spec says**: Labels should be "Walls", "Nozzle", "Material"
-- **Implementation does**: Labels are "TESTS (Constraints)", "PROMPT (Intent)", "GROUNDING (Style)" (lines 159-199)
-- **Severity**: High - This is a fundamental naming difference that changes the metaphor presentation
+### Issues Found
 
-### Duration Mismatch
-- **Spec says**: Duration of ~15 seconds (450 frames at 30fps)
-- **Implementation does**: Duration is 10 seconds (300 frames) per constants.ts lines 5-7
-- **Severity**: High - 33% shorter than specified
+1. **Outline gray color mismatch (Low)**
+   - **Spec says:** Steel gray `#8A9BA8` base color for the mold
+   - **Implementation does:** Uses `#5a6a7a` (OUTLINE_GRAY) which is noticeably darker
+   - **Location:** `constants.ts` line 30
+   - **Impact:** The mold outline appears darker and less "steel-like" than specified
 
-### Timing Sequence Different
-- **Spec says**:
-  - Frame 0-90: Mold fades in
-  - Frame 90-150: Walls highlight
-  - Frame 150-210: Nozzle highlights
-  - Frame 210-270: Material highlights
-  - Frame 270-450: All three visible
-- **Implementation does**:
-  - Frame 0-60: Outline fades in
-  - Frame 60-120: Walls glow
-  - Frame 120-180: Nozzle glows
-  - Frame 180-240: Material glows
-  - Frame 240-300: Labels appear
-- **Severity**: Medium - Timeline is compressed and sequencing differs
+2. **No grid lines for technical feel (Low)**
+   - **Spec says:** "Subtle grid lines for technical feel" on the mold cross-section
+   - **Implementation does:** Plain SVG rectangles with no grid overlay
+   - **Location:** `CrossSectionIntro.tsx` lines 101-193 (entire SVG block)
+   - **Impact:** Missing visual polish element; the rendering is clean but lacks the blueprint/technical aesthetic
 
-### Missing Pulse Animation
-- **Spec says**: "Brief pulse animation" for each region as it highlights
-- **Implementation does**: Simple glow fade-in with drop-shadow, no visible pulse effect
-- **Severity**: Low - Visual polish detail
+3. **No 3D-ish perspective (Low)**
+   - **Spec says:** "3D-ish perspective showing internal structure" and "Technical, blueprint-style rendering"
+   - **Implementation does:** Flat 2D rectangles in SVG. No depth cues, no perspective transform, no blueprint styling
+   - **Location:** `CrossSectionIntro.tsx` SVG rendering
+   - **Impact:** The mold reads as a 2D schematic rather than a cross-section with depth
 
-### Title Text Addition
-- **Spec says**: No title mentioned in spec
-- **Implementation does**: Adds "The Mold Has Three Parts" title at bottom (lines 204-218)
-- **Severity**: Low - Addition, not contradiction
+4. **Title text not in spec (Low - Addition)**
+   - **Spec says:** No title text mentioned in the visual description
+   - **Implementation does:** Adds "The Mold Has Three Parts" title at bottom center, fading in with the outline
+   - **Location:** `CrossSectionIntro.tsx` lines 255-269
+   - **Impact:** Non-contradictory addition; provides helpful context
 
-### Label Presentation Style
-- **Spec says**: Simple labels like "Walls", "Nozzle", "Material"
-- **Implementation does**: Two-line labels with main term and parenthetical subtitle
-- **Severity**: Medium - More verbose than specified
+5. **Audio cues not implemented (Low)**
+   - **Spec says:** "Subtle mechanical/technical ambient" and "Soft ping on each region highlight"
+   - **Implementation does:** No audio elements in the CrossSectionIntro component itself (audio is handled at the S03 section level with narration only)
+   - **Location:** N/A
+   - **Impact:** Missing sound design layer; narration audio is present at the section level but per-region pings are absent
 
-## Missing Elements
-- No grid lines on mold for "technical feel" as mentioned in spec line 24
-- No explicit easing for pulse animation (spec calls for `easeInOutSine` for pulse)
-- Labels should pulse with regions, but implementation shows labels appearing after all regions are lit
+### Notes
 
-## Resolution Status
-- **Status**: RESOLVED
-- **Changes Made**:
-  1. Updated duration from 300 frames (10s) to 450 frames (15s) in constants.ts
-  2. Fixed timing sequence to match spec:
-     - Frame 0-90: Mold fades in
-     - Frame 90-150: Walls highlight
-     - Frame 150-210: Nozzle highlights
-     - Frame 210-270: Material highlights
-     - Frame 270-450: All three visible
-  3. Changed label names from "TESTS (Constraints)", "PROMPT (Intent)", "GROUNDING (Style)" to simple "Walls", "Nozzle", "Material"
-  4. Added pulse animation for each region using easeInOutSine (40-frame pulse with 0-0.3-0 amplitude)
-  5. Labels now fade in with their respective regions (not delayed until end)
-  6. Simplified label presentation to single-line, larger font (24px)
-- **Remaining Issues**:
-  - Grid lines not yet added to mold outline (low priority visual detail)
-  - Title "The Mold Has Three Parts" remains (not in spec, but not contradictory)
+- All previously identified high-severity issues from the prior audit (label name mismatch, duration mismatch, timing sequence differences) have been fully resolved. The implementation now matches the spec on all critical dimensions.
+- The remaining issues are all low-severity visual polish items (outline color shade, grid lines, 3D perspective, audio pings). None affect the core animation logic, timing, labeling, or color scheme.
+- The component's internal 450-frame duration exceeds its allocation in the S03 section timeline (~368 frames / 12.26s at VISUAL_00_END). This means the "all three visible" hold phase (frames 270-450) may be cut short by the section transition to WallsIlluminate at ~13.44s. This is acceptable since the narration moves on and the next visual takes over.
+- The `showLabels` prop provides flexibility for reuse in other contexts where labels might be suppressed.

@@ -1,98 +1,75 @@
-# Audit: 03_developer_regenerates.md
+# Audit: Developer Regenerates Instead of Patching
 
-## Spec Summary
-Hybrid video + terminal overlay showing developer workflow. Terminal displays `pdd bug` -> `pdd fix` -> `pdd test` sequence with typewriter commands, outputs, and success checkmark. Video shows developer typing with expressions from concern to satisfaction over 15 seconds.
+## Status: ISSUES FOUND
 
-## Implementation Status
-**Implemented** - `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/49-DeveloperRegenerates/DeveloperRegenerates.tsx`
+### Requirements Met
 
-## Deltas Found
+1. **Video base layer**: `OffthreadVideo` renders `veo_developer_edit.mp4` (exists at `/remotion/public/veo_developer_edit.mp4`) as full-screen background. Uses `OffthreadVideo` instead of spec's `Video`, which is actually preferred for Remotion performance. (`DeveloperRegenerates.tsx:180-184`)
 
-### Video Base Missing
-- **Spec says**: "Video base layer" from Veo 3.1 showing developer at desk with `<Video src="developer_regenerates.mp4" />`
-- **Implementation does**: No video layer - only dark background with semi-transparent overlay (DeveloperRegenerates.tsx:174-185)
-- **Severity**: High (missing entire video component, terminal appears floating on dark background instead of overlaying developer video)
+2. **Terminal positioning**: `right: 120, top: 180` matches spec exactly. (`DeveloperRegenerates.tsx:190-191`)
 
-### Terminal Positioning
-- **Spec says**: Terminal positioned at `right: 120, top: 180` (as if on developer's monitor)
-- **Implementation does**: Terminal centered at `left: "50%", top: "50%", transform: "translate(-50%, -50%)"` (DeveloperRegenerates.tsx:191-193)
-- **Severity**: High (centered instead of positioned to align with monitor in video - but video is missing anyway)
+3. **Terminal dimensions and styling**: Width 500px, `borderRadius: 12`, `backgroundColor: rgba(30, 30, 46, 0.92)`, `border: 1px solid rgba(255, 255, 255, 0.15)`, `fontFamily: JetBrains Mono, monospace`, `fontSize: 14`, `backdropFilter: blur(8px)` all match spec. (`DeveloperRegenerates.tsx:192-200`)
 
-### Terminal Width
-- **Spec says**: Terminal width `500px`
-- **Implementation does**: Terminal width `620px` (DeveloperRegenerates.tsx:194)
-- **Severity**: Low (slightly wider than spec)
+4. **Terminal title bar**: `TerminalTitleBar` component renders macOS-style traffic light dots with "terminal" label, matching spec's `<TerminalTitleBar title="terminal" />`. (`DeveloperRegenerates.tsx:33-77`)
 
-### Bug Command Color
-- **Spec says**: Bug command in amber `#D9944A`
-- **Implementation does**: Uses `COLORS.BUG_AMBER` (DeveloperRegenerates.tsx:213)
-- **Severity**: None (assuming constant matches, but needs verification)
+5. **PDD command colors**: All three colors match spec exactly:
+   - Bug: `#D9944A` (amber) via `COLORS.BUG_AMBER` (`constants.ts:58`)
+   - Fix: `#4A90D9` (blue) via `COLORS.FIX_BLUE` (`constants.ts:59`)
+   - Test: `#5AAA6E` (green) via `COLORS.TEST_GREEN` (`constants.ts:60`)
 
-### Regenerating Dots Animation
-- **Spec says**: "Regenerating..." with `animated={true}` for animated dots
-- **Implementation does**: Static "Regenerating..." text with no dot animation (DeveloperRegenerates.tsx:240-242)
-- **Severity**: Medium (missing animation detail)
+6. **Command text and outputs**: All command strings and output messages match spec:
+   - `pdd bug parser` -> `Bug identified: off-by-one in line 23` in `rgba(255, 100, 100, 0.8)`
+   - `pdd fix parser` -> `Regenerating...` in `rgba(255, 255, 255, 0.5)` -> `Generated parser.py (247 lines)` in `rgba(255, 255, 255, 0.7)`
+   - `pdd test parser` -> `47 tests passed` with green checkmark
 
-### Checkmark Scale Timing
-- **Spec says**: Checkmark scale interpolation `[310, 340, 360]` frames to `[0, 1.2, 1.0]`
-- **Implementation does**: Uses `[BEATS.CHECK_START, BEATS.CHECK_POP, BEATS.CHECK_SETTLE]` to `[0, 1.3, 1.0]` with `Easing.out(Easing.back(1.5))` (DeveloperRegenerates.tsx:148-153)
-- **Severity**: Low (scale overshoot is 1.3 vs 1.2, easing adds back overshoot which matches intent)
+7. **Typewriter effect**: `TypewriterText` helper renders character-by-character with a cursor that disappears when typing completes. Linear interpolation used for typing progress (matches spec's "Linear typewriter feel"). (`DeveloperRegenerates.tsx:6-30`)
 
-### Component Structure Differences
-- **Spec says**: Separate `TerminalLine` and `TerminalOutput` components with specific props
-- **Implementation does**: Inline implementation with `TypewriterText` helper but no separate `TerminalLine`/`TerminalOutput` components (DeveloperRegenerates.tsx:5-30)
-- **Severity**: Low (different organization, similar functionality)
+8. **Animated dots on "Regenerating..."**: Frame-based cycling through 1-3 dots every 30 frames. Regenerating text is hidden once generated output appears. (`DeveloperRegenerates.tsx:174-175, 237`)
 
-## Missing Elements
+9. **BEATS timing constants**: All match spec frame numbers exactly:
+   - BUG_CMD: 90-130, BUG_OUTPUT: 135-150
+   - FIX_CMD: 150-190, FIX_REGEN: 195-210, FIX_OUTPUT: 215-235
+   - TEST_CMD: 240-280, TEST_OUTPUT: 290-310
+   - CHECK: 310-340-360 (`constants.ts:12-44`)
 
-### Video Layer
-Complete absence of:
-- Developer video base from Veo 3.1
-- `<Video src="developer_regenerates.mp4" />` component
-- Sync between developer's typing actions and terminal commands
+10. **Checkmark pop effect**: Scale interpolation `[0, 1.2, 1.0]` at frames `[310, 340, 360]` matches spec exactly. (`DeveloperRegenerates.tsx:148-153`)
 
-### Animated Dots on "Regenerating..."
-- No animation for ellipsis dots during regeneration phase
-- Spec shows `animated={true}` prop for `TerminalOutput`
+11. **Terminal fade-in easing**: Uses `Easing.out(Easing.cubic)` matching spec's `easeOutCubic`. (`DeveloperRegenerates.tsx:88`)
 
-### Specific Component Structure
-Spec describes components not present:
-- `TerminalLine` component with `prompt`, `command`, `progress`, `color` props
-- `TerminalOutput` component with `text`, `opacity`, `color`, `animated` props
-- Implementation uses inline divs instead
+12. **Canvas**: 1920x1080 at 30fps, 15-second duration. (`constants.ts:4-9`)
 
-### Frame Number Constants Verification
-All timing uses `BEATS` constants which need verification against spec:
-- BUG_CMD_START/END should be 90/130
-- BUG_OUTPUT_START/END should be 135/150
-- FIX_CMD_START/END should be 150/190
-- FIX_REGEN_START/END should be 195/210
-- FIX_OUTPUT_START/END should be 215/235
-- TEST_CMD_START/END should be 240/280
-- TEST_OUTPUT_START/END should be 290/310
-- CHECK_START/POP/SETTLE should be 310/340/360
+13. **ClosingSection integration**: DeveloperRegenerates is sequenced as Visual 2 in `ClosingSection.tsx`, starting at 9.36s to sync with narration "Code just got that cheap." (`S06-Closing/ClosingSection.tsx:51-55`, `S06-Closing/constants.ts:39-40`)
 
-### Semi-Transparent Backdrop
-- Implementation adds dark overlay background (DeveloperRegenerates.tsx:176-185) not in spec
-- This compensates for missing video layer but wasn't specified
+### Issues Found
 
-## Resolution Status
-- **Status**: RESOLVED
-- **Changes Made**:
-  1. Added `OffthreadVideo` component with `veo_developer_edit.mp4` as base layer (line 180-184)
-  2. Removed dark background overlay (no longer needed with video)
-  3. Repositioned terminal from center to `right: 120, top: 180` as specified (line 190-191)
-  4. Adjusted terminal width from 620px to 500px (line 192)
-  5. Added animated dots to "Regenerating..." text using frame-based cycling (lines 174-175, 240)
-  6. Updated BEATS timing constants to match spec exactly:
-     - BUG_CMD: 90-130, BUG_OUTPUT: 135-150
-     - FIX_CMD: 150-190, FIX_REGEN: 195-210, FIX_OUTPUT: 215-235
-     - TEST_CMD: 240-280, TEST_OUTPUT: 290-310
-     - CHECK: 310-340-360
-  7. Adjusted checkmark scale from 1.3 to 1.2 and removed back easing (line 151)
-  8. Added proper imports: `OffthreadVideo`, `staticFile` (line 2)
-- **Remaining Issues**: None. All audit items resolved.
-  - Terminal now overlays developer video as intended
-  - Animated dots provide visual feedback during regeneration
-  - Timing matches specification precisely
-  - Component structure works effectively with inline implementation
+1. **Missing initial bug display (frames 0-60)** -- Severity: Medium
+   - **Spec says**: Frames 0-60 should show "Terminal shows code with red-highlighted bug" -- a code snippet with 3-4 lines of Python-like pseudocode with a bug line marked with red squiggly or highlight. This establishes the problem before the developer begins typing.
+   - **Implementation does**: Terminal fades in (frames 0-30) showing only the empty terminal with title bar. Nothing is displayed until the bug command starts typing at frame 90. The entire "Bug Display (Initial)" element from the spec overlay elements section and the first phase of the animation sequence are absent.
+
+2. **Video filename differs from spec** -- Severity: Low
+   - **Spec says**: `<Video src="developer_regenerates.mp4" />`
+   - **Implementation does**: `staticFile("veo_developer_edit.mp4")`
+   - This is a practical naming choice and the file exists, so it functions correctly. The `loop` attribute on the video is not in the spec but is harmless.
+
+3. **Terminal padding** -- Severity: Low
+   - **Spec says**: `padding: 20`
+   - **Implementation does**: `padding: 24` (`DeveloperRegenerates.tsx:197`)
+
+4. **Checkmark fontSize** -- Severity: Low
+   - **Spec says**: `fontSize: 18`
+   - **Implementation does**: `fontSize: 20` (`DeveloperRegenerates.tsx:274`)
+
+5. **Checkmark easing** -- Severity: Low
+   - **Spec says**: Checkmark pop should use `easeOutBack` (satisfying overshoot)
+   - **Implementation does**: Linear interpolation between the three keyframes `[0, 1.2, 1.0]` with no easing function applied. The 1.2 overshoot partially compensates, but the easing curve characteristic of `easeOutBack` (initial overshoot then settle) is not present. (`DeveloperRegenerates.tsx:148-153`)
+
+6. **Component structure differs from spec** -- Severity: Low
+   - **Spec says**: Separate `TerminalLine` and `TerminalOutput` components with specific props (`prompt`, `command`, `progress`, `color` and `text`, `opacity`, `color`, `animated`)
+   - **Implementation does**: Inline divs with a `TypewriterText` helper. Functionally equivalent but differently organized.
+
+### Notes
+
+- The most significant gap is the missing initial code snippet with bug display (spec frames 0-60). This was part of the spec's narrative flow: the developer sees the bug, pauses to think, then runs PDD commands instead of manually patching. Without the initial code display, the terminal appears empty before commands start and the "problem -> decision -> solution" arc is weakened.
+- All color values in `constants.ts` match the spec's PDD Commands table exactly.
+- The ClosingSection integration is correct: DeveloperRegenerates appears as Visual 2 synced to "Code just got that cheap" narration segment.
+- The DeveloperRegenerates composition is allocated only ~1.38 seconds in the ClosingSection (9.36s to 10.74s), which is much shorter than its standalone 15-second duration. This means only the early portion of the animation sequence will be visible in the final video, making the missing initial bug display more impactful since the early frames are the ones actually shown.

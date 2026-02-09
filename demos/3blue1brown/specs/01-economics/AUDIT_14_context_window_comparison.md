@@ -1,148 +1,135 @@
-# Audit: 14_context_window_comparison.md
+# Audit: 14_context_window_comparison
 
-## Spec Summary
-A 15-second side-by-side comparison of two context windows (same size) showing "Agentic Patching" (left, cluttered with 15,000 tokens) vs. "PDD Regeneration" (right, clean with 2,300 tokens). The left window shows dense code with 85% red "irrelevant" highlights and a tiny 5% green "relevant" sliver. The right window shows clean blocks (Prompt, Tests, Grounding Example) with 50% empty "Room to think" space. Token counters and a "6.5x fewer tokens" badge emphasize the efficiency, while a "10x more system knowledge" indicator delivers the paradox.
+## Status: ISSUES FOUND
 
-## Implementation Status
-**Implemented** - All core requirements are present with excellent fidelity to the spec.
+### Requirements Met
 
-## Deltas Found
+1. **Canvas / Resolution**: Spec requires 1920x1080 dark (#1a1a2e) background. Implementation uses `CONTEXT_COMPARISON_WIDTH = 1920`, `CONTEXT_COMPARISON_HEIGHT = 1080`, and `COLORS.BACKGROUND = "#1a1a2e"`. Matches.
 
-### Window Dimensions
-- **Spec says**: Windows should be "~800x500px each"
-- **Implementation does**: Uses WINDOW.width and WINDOW.height from constants (need to verify exact values)
-- **Severity**: Low (need to verify constants match spec)
-- **File reference**: ContextWindowComparison.tsx references WINDOW constants
+2. **FPS and Duration**: Spec calls for ~15 seconds at 30fps (450 frames). Implementation uses `CONTEXT_COMPARISON_FPS = 30`, `CONTEXT_COMPARISON_DURATION_SECONDS = 15`, `CONTEXT_COMPARISON_DURATION_FRAMES = 450`. Matches.
 
-### Code Line Count
-- **Spec says**: Left window should show "~80 visible lines of tightly packed code"
-- **Implementation does**: Uses CODE_PATTERNS.length from constants for line count
-- **Severity**: Low (need to verify array length is ~80)
-- **File reference**: ContextWindowComparison.tsx:160
+3. **Beat Timings**: All seven animation phases (establish, frames, left fill, right fill, counters, knowledge, hold) match the spec's frame ranges exactly:
+   - Frame 0-30: Establish (divider + labels)
+   - Frame 30-60: Window frames appear
+   - Frame 60-150: Left fills with code
+   - Frame 90-180: Right fills with blocks
+   - Frame 180-270: Token counters
+   - Frame 270-330: Knowledge indicator
+   - Frame 330-450: Hold
 
-### Irrelevant Zone Coverage
-- **Spec says**: Red highlights should cover "~85% of the content"
-- **Implementation does**: Uses zones 0-42% and 48%-100% of visible lines (which equals ~94% coverage, not 85%)
-- **Severity**: Low (slightly more coverage than specified)
-- **File reference**: ContextWindowComparison.tsx:164-167
+4. **Panel Labels**: "Agentic Patching" (left) and "PDD Regeneration" (right) in efficiency variant. Font: Inter/system sans-serif, 28pt, semi-bold (600), white. Subtle text-shadow glow matching dominant color. All match spec.
 
-### Relevant Zone Size
-- **Spec says**: Green section should be "~3-4 lines" (about 5% of 80 lines)
-- **Implementation does**: Uses 42%-48% of visible lines (which is 6%, close to spec)
-- **Severity**: None (approximately correct)
-- **File reference**: ContextWindowComparison.tsx:168-171
+5. **Context Window Frames**: Both use identical dimensions, rounded rectangles with `borderRadius: 8`, border `1px solid #333`, background `#1E1E2E`. Chrome bar with three colored dots (red/yellow/green). Matches spec.
 
-### Chrome Bar Height
-- **Spec says**: "Top chrome bar with three dots (editor-style), height 24px"
-- **Implementation does**: Uses WINDOW.chromeHeight from constants (need to verify it's 24px)
-- **Severity**: Low (need to verify constant)
-- **File reference**: ContextWindowComparison.tsx:254-267, 372-386
+6. **Chrome Bar Height**: `WINDOW.chromeHeight = 24`. Matches spec's 24px exactly.
 
-### Right Block Heights
-- **Spec says**: Prompt 15%, Tests 25%, Grounding 10%, Empty 50%
-- **Implementation does**: Uses RIGHT_BLOCKS.promptHeight, testsHeight, groundingHeight from constants
-- **Severity**: Low (need to verify constants match spec percentages)
-- **File reference**: ContextWindowComparison.tsx:403, 430, 457
+7. **Right Block Height Proportions**: `RIGHT_BLOCKS` defines `promptHeight: 0.15` (15%), `testsHeight: 0.25` (25%), `groundingHeight: 0.10` (10%), `emptyHeight: 0.50` (50%). Matches spec table exactly.
 
-### Block Labels
-- **Spec says**: Prompt should show "Prompt (300 tokens)", Tests should show "Tests (2,000 tokens)"
-- **Implementation does**: Shows exact text as specified
-- **Severity**: None (correctly implemented)
-- **File reference**: ContextWindowComparison.tsx:421, 448
+8. **Block Labels**: "Prompt (300 tokens)", "Tests (2,000 tokens)", "Grounding Example" -- all match spec labels. Font: Inter, 14pt, white. Matches.
 
-### Left Window Code Cascade Speed
-- **Spec says**: "~20 lines per second — feels frantic"
-- **Implementation does**: Uses leftFillProgress over BEATS.LEFT_FILL_START to LEFT_FILL_END duration
-- **Severity**: Low (need to verify frame duration gives ~20 lines/sec)
-- **File reference**: ContextWindowComparison.tsx:63-68
+9. **"Room to think" Text**: Rendered in italic, 16pt, muted gray (`#666666`). Appears in the empty bottom area. Matches spec.
 
-### Right Block Animation Delays
-- **Spec says**: "Pause (200ms)" between blocks (approximately 6 frames at 30fps)
-- **Implementation does**: Uses 15-frame delays between blocks (rightBlockDelay function uses `index * 15`)
-- **Severity**: Low (15 frames = 500ms at 30fps, more pause than spec's 200ms)
-- **File reference**: ContextWindowComparison.tsx:71-84
+10. **Token Counter Values**: Left targets 15,000; right targets 2,300 (efficiency variant). Uses JetBrains Mono, 20pt, monospace with color tinting. Matches spec.
 
-### "Room to think" Text Timing
-- **Spec says**: Should appear "precisely as the narrator says 'giving it room to think'"
-- **Implementation does**: Fades in at BEATS.RIGHT_FILL_START + 60 to +90
-- **Severity**: Low (timing needs to be verified against narration sync)
-- **File reference**: ContextWindowComparison.tsx:86-95
+11. **Token Counter Animation Durations**: Left counter animates over 60 frames (2s at 30fps). Matches spec's "~2s". Right counter animates from frame 190 to 235 = 45 frames (1.5s). Matches spec's "~1.5s".
 
-### Token Counter Animation Duration
-- **Spec says**: Left counter ticks up over "~2s", right counter over "~1.5s"
-- **Implementation does**: Left uses 60 frames (2s at 30fps ✓), right uses 45 frames (1.5s at 30fps ✓)
-- **Severity**: None (matches spec exactly)
-- **File reference**: ContextWindowComparison.tsx:98-122
+12. **Comparison Badge**: Text "6.5x fewer tokens", Inter 16pt bold white, with spring animation using `damping: 12, stiffness: 150`. Spec says `spring({ damping: 12 })`. Matches (stiffness is an additive default).
 
-### Badge Pop Animation
-- **Spec says**: "Badge pop-in: `spring({ damping: 12 })`"
-- **Implementation does**: Uses spring with damping: 12, stiffness: 150
-- **Severity**: None (correctly implemented, stiffness added for better spring behavior)
-- **File reference**: ContextWindowComparison.tsx:125-129
+13. **Knowledge Indicator**: "10x more system knowledge" in soft green (`#5AAA6E`), 18pt, with easeOutCubic fade-in. Matches spec.
 
-### Idle Pulse Amplitude
-- **Spec says**: "Idle pulses: `sin` wave (amplitude 0.02, period 2s)"
-- **Implementation does**: Left pulse uses 0.02 amplitude with period based on 0.1 frequency, right shimmer uses 0.02 amplitude with 0.08 frequency
-- **Severity**: Low (frequencies need verification to match 2s period)
-- **File reference**: ContextWindowComparison.tsx:144-151
+14. **Window Frame Spring Animation**: `spring({ damping: 15, stiffness: 120 })`. Matches spec exactly.
 
-## Missing Elements
+15. **IRRELEVANT Watermarks**: Two instances at different positions/rotations with `IRRELEVANT_LABEL = rgba(217, 74, 74, 0.4)`. Spec calls for "subtle 'IRRELEVANT' watermark labels in red (#D94A4A at 40%) scattered across these zones". Matches.
 
-None identified. All major spec requirements are implemented:
-- Dark background (#1a1a2e)
-- Two equal-sized panels with vertical divider
-- Panel labels with glow effects
-- Context window frames with editor-style chrome bars
-- Left window: dense code with red "irrelevant" and green "relevant" highlights
-- "IRRELEVANT" watermarks scattered on left
-- Left window red glow pulse
-- Right window: clean blocks (Prompt, Tests, Grounding Example)
-- "Room to think" text in empty space
-- Token counters (15,000 vs 2,300)
-- "6.5x fewer tokens" comparison badge
-- "10x more system knowledge" indicator
-- Idle animations (left pulse, right shimmer)
-- All specified easing functions and spring animations
+16. **Left Border Red Glow**: Pulsing `boxShadow` with `rgba(217, 74, 74, ...)` after left fill completes. Spec calls for "faint red pulsing glow on the borders". Matches.
 
-## Implementation Strengths
+17. **Color Palette Consistency**: All specified hex colors are correctly used:
+    - Background: #1a1a2e
+    - Window BG: #1E1E2E
+    - Window border: #333
+    - Irrelevant red: rgba(217,74,74,0.25) = #D94A4A at 25%
+    - Relevant green: rgba(90,170,110,0.25) = #5AAA6E at 25%
+    - Prompt blue: #4A90D9
+    - Tests amber: #D9944A
+    - Grounding green: #5AAA6E
+    - Room to think: #666666
+    - Code text: #888888
 
-1. **Visual contrast**: Excellent implementation of chaos (left) vs clarity (right)
-2. **Code pattern system**: Uses CODE_PATTERNS array for realistic-looking code lines
-3. **Watermark positioning**: Multiple "IRRELEVANT" labels at different positions and rotations
-4. **Chrome bar authenticity**: Three-dot editor chrome looks professional
-5. **Block animations**: Smooth slide-in animations with translateX offset
-6. **Counter number formatting**: Uses toLocaleString() for thousand separators
-7. **Glow effects**: Text shadows and border glows enhance the visual hierarchy
-8. **Color consistency**: Proper use of color palette throughout (blue for regen, amber for tests, green for grounding, red for irrelevant)
-9. **Optional props**: showKnowledgeIndicator prop allows toggling the final indicator
-10. **Organized constants**: All configuration cleanly separated into constants.ts
+18. **Right Block Slide-in Easing**: Uses `Easing.out(Easing.cubic)` = easeOutCubic. Matches spec.
 
-## Recommendations
+19. **Token Counter Easing**: Uses `Easing.out(Easing.quad)` = easeOutQuad. Matches spec.
 
-1. Verify WINDOW dimensions in constants.ts are ~800x500px as specified
-2. Verify CODE_PATTERNS array contains ~80 lines
-3. Verify WINDOW.chromeHeight is 24px
-4. Verify RIGHT_BLOCKS percentages sum to 50% for visible blocks (15% + 25% + 10% = 50%, leaving 50% for empty space)
-5. Consider adjusting irrelevant zone coverage from ~94% to 85% as specified
-6. Verify idle pulse frequencies give a 2-second period as specified
-7. Verify right block delay timing (currently 15 frames = 500ms vs spec's 200ms)
-8. Consider reducing the pause between right blocks to match spec (6 frames instead of 15)
-9. Verify "Room to think" fade-in timing aligns with narration
-10. Overall, this is an excellent implementation that captures the spec's intent beautifully
+20. **Label Fade-in Easing**: Uses `Easing.out(Easing.cubic)`. Matches spec's easeOutCubic for fade-ins.
 
-## Resolution Status
-- **Status**: RESOLVED
-- **Changes Made**:
-  - Added `variant` prop supporting both 'efficiency' (default, Section 1.14) and 'density' (Section 3.13a) modes
-  - Efficiency variant: Shows "Agentic Patching" vs "PDD Regeneration" with different token counts (15K vs 2.3K)
-  - Density variant: Shows both windows at 15K tokens - left with raw code (~1 module), right with 10 module prompts (~10 modules)
-  - Conditional rendering for panel labels, window content, token counters, and comparison messages based on variant
-  - Added TEN_MODULE_PROMPTS constant with 10 module specifications for density variant
-  - Added research citation for density variant: "NL comments improved generation +41% (UC Berkeley, 2024)" and "Author-defined context, not machine-assembled"
-  - Added "Context Window (15K tokens)" labels above each window for density variant
-  - Added module count labels ("~1 module" left, "~10 modules" right) for density variant
-  - Removed red/green overlays and "IRRELEVANT" watermarks in density variant (shows clean code)
-  - Added blue glow to right window and dim effect to left window in density variant
-  - Updated knowledge indicator message for density variant: "Same tokens. 10x the system knowledge."
-  - Implementation now supports both specs through a single, configurable component
-- **Remaining Issues**: None - the implementation now correctly serves both Section 1.14 (efficiency comparison) and Section 3.13a (density comparison) with appropriate visual and messaging differences
+21. **Left Code Cascade**: Uses linear interpolation (no easing specified = linear). Matches spec's "linear (rapid-fire, mechanical)".
+
+22. **Idle Pulse (Left)**: `0.98 + 0.02 * Math.sin((frame - HOLD_START) * 0.1)`. Amplitude is 0.02. Matches spec's amplitude 0.02.
+
+23. **Variant System**: Supports both 'efficiency' (Section 1.14) and 'density' (Section 3.13a) modes via a `variant` prop, cleanly separating visual differences.
+
+24. **Code Line Font**: JetBrains Mono, 10px, color #888. Matches spec.
+
+25. **Divider**: 1px white at 50% opacity, draws from top to bottom. Matches spec.
+
+### Issues Found
+
+1. **NOT INTEGRATED into S01-Economics Section Sequence** (Severity: HIGH)
+   - **Spec says**: This visual is timestamped at 5:20-5:35, corresponding to the narration about natural language fluency and "room to think" (~320s-349s in the Part 1 narration audio).
+   - **Implementation does**: The `Part1Economics.tsx` composition does NOT import or use `ContextWindowComparison` at all. The narration segments covering this content (segments 91-96, ~320.9s-349.2s) are assigned to Visual 19, which renders a Veo clip (`veo_developer_edit.mp4`), not the ContextWindowComparison component.
+   - **Impact**: The component is built but never shown during the Part 1 Economics full-section playback. The narration about "room to think" and context window efficiency plays over a generic video clip instead of the purpose-built comparison visualization.
+   - **File reference**: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/S01-Economics/Part1Economics.tsx` (missing import/usage), `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/S01-Economics/constants.ts` lines 214-215 (Visual 19 uses veo clip).
+
+2. **NOT REGISTERED as Standalone Composition in Root.tsx** (Severity: MEDIUM)
+   - **Spec says**: Component should be viewable and testable.
+   - **Implementation does**: `Root.tsx` does not import or register a `<Composition>` for `ContextWindowComparison`. Other components in the codebase (02-SockPriceChart, 03-ThresholdHighlight, etc.) all have standalone `<Composition>` entries in Root.tsx for individual preview.
+   - **Impact**: Cannot preview this component standalone in the Remotion Studio.
+   - **File reference**: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/Root.tsx`
+
+3. **Window Dimensions Deviate from Spec** (Severity: LOW)
+   - **Spec says**: "Both windows: identical rounded rectangles (~800x500px each)"
+   - **Implementation does**: `WINDOW.width = 760`, `WINDOW.height = 480`. This is 760x480 vs. the specified ~800x500.
+   - **Impact**: Windows are ~5% smaller than specified. Within the "~" tolerance but at the lower end.
+   - **File reference**: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/14a-ContextWindowComparison/constants.ts` line 74-75
+
+4. **Code Line Count Below Spec** (Severity: LOW)
+   - **Spec says**: "~80 visible lines of tightly packed code"
+   - **Implementation does**: `CODE_PATTERNS` array contains 85 entries, but many are blank lines. The actual non-empty code lines are approximately 70. At 10px font with 14px line-height in a 456px content area (480 - 24 chrome), only ~32 lines are visible at once without scrolling.
+   - **Impact**: The "feels claustrophobic" density may not be as intense as spec intends with visible lines capped by the window height.
+   - **File reference**: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/14a-ContextWindowComparison/constants.ts` lines 96-181
+
+5. **Irrelevant Zone Coverage Exceeds Spec** (Severity: LOW)
+   - **Spec says**: Red highlights should cover "~85% of the content"
+   - **Implementation does**: Red zones cover 0-42% + 48%-100% = 94% of visible lines. The relevant (green) zone is 42%-48% = 6%.
+   - **Impact**: Slightly more red coverage than specified (94% vs 85%). The green "relevant" sliver is proportionally smaller than intended.
+   - **File reference**: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/14a-ContextWindowComparison/ContextWindowComparison.tsx` lines 187-194
+
+6. **Right Block Animation Delay Exceeds Spec** (Severity: LOW)
+   - **Spec says**: "Pause (200ms)" between blocks (~6 frames at 30fps)
+   - **Implementation does**: Uses `index * 15` frame delay between blocks (15 frames = 500ms at 30fps).
+   - **Impact**: Blocks appear more slowly than spec intends. The pause between them is 2.5x longer than specified.
+   - **File reference**: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/14a-ContextWindowComparison/ContextWindowComparison.tsx` line 75
+
+7. **Idle Pulse Period Does Not Match Spec** (Severity: LOW)
+   - **Spec says**: "sin wave (amplitude 0.02, period 2s)" -- period of 2s means frequency of `Math.PI / 30` at 30fps (completing one full cycle every 60 frames).
+   - **Implementation does**: Left pulse uses factor `0.1` per frame; right shimmer uses `0.08`. At factor 0.1, the period is `2*PI/0.1 = ~63 frames = ~2.1s`. At 0.08, the period is `~78 frames = ~2.6s`.
+   - **Impact**: Left pulse is close to spec (2.1s vs 2s). Right shimmer is slower than specified (2.6s vs 2s).
+   - **File reference**: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/14a-ContextWindowComparison/ContextWindowComparison.tsx` lines 153-158
+
+8. **Left Counter Color Logic Appears Non-functional** (Severity: LOW)
+   - **Spec says**: "Text subtly shifts toward red tint as it climbs"
+   - **Implementation does**: The color ternary on lines 690-697 interpolates a value from [1, 1] (always 1), then checks if it's > 0 to choose `LEFT_COUNTER` color. Since the interpolation output range is [1, 1], the condition is always true, so the color is always red from the start -- no gradual shift.
+   - **Impact**: Minor visual detail. Counter appears red immediately instead of shifting from white to red.
+   - **File reference**: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/14a-ContextWindowComparison/ContextWindowComparison.tsx` lines 690-697
+
+9. **Right Window Green Glow Pulse Missing in Efficiency Variant** (Severity: LOW)
+   - **Spec says**: "Subtle pulse on the right window border (green glow) to reinforce" during the knowledge indicator phase (frame 270-330).
+   - **Implementation does**: `rightGlowOpacity` only activates for the `density` variant. In the `efficiency` variant (the one this spec describes), the right window border never gets a green glow.
+   - **File reference**: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/14a-ContextWindowComparison/ContextWindowComparison.tsx` lines 177-180
+
+### Notes
+
+- The component itself is well-implemented with clean code structure, proper separation of constants, and organized animation logic. The core visual design faithfully captures the spec's contrast between "chaos" (left) and "clarity" (right).
+- The most significant issue is the non-integration into the Part 1 Economics section sequence. The component exists as a standalone implementation in `14a-ContextWindowComparison/` but is never imported or rendered in `S01-Economics/Part1Economics.tsx`. The narration window where this visual should appear (segments 91-96, covering "And there's something else... room to think") currently plays a Veo video clip instead.
+- The component is also missing from `Root.tsx` as a standalone Composition, meaning it cannot be previewed individually in Remotion Studio the way other components can.
+- The dual-variant system (efficiency + density) is a thoughtful addition that allows the same component to serve two different spec sections, but only the efficiency variant is relevant to this audit (Section 1.14).
+- All color values, easing functions, and spring configurations match the spec with high fidelity. The issues found are primarily about integration (high severity) and minor numerical deviations (low severity).

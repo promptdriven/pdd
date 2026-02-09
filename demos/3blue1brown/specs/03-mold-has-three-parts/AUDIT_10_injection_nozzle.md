@@ -1,66 +1,45 @@
-# Audit: 10_injection_nozzle.md
+# Audit: Injection Nozzle (Section 3.10)
 
-## Spec Summary
-The spec requires a visual showing the injection nozzle (representing the prompt) as the second type of capital. Key elements include a nozzle with blue glow, three concept labels ("intent", "requirements", "constraints"), and a section title "PROMPT CAPITAL - The Specification". The animation should show the nozzle highlighting with pulse, labels appearing sequentially, and narration sync.
+## Status: PASS
 
-## Implementation Status
-Partially Implemented
+### Requirements Met
 
-## Deltas Found
+1. **Canvas and background:** Resolution is 1920x1080 with dark background `#1a1a2e` as specified. (`constants.ts` lines 8-9, `COLORS.BACKGROUND` line 35.)
 
-### Missing Concept Labels (intent/requirements/constraints)
-- **Spec says**: Lines 31-34 require three labels orbiting/connecting to nozzle: "intent" (what you want), "requirements" (what it needs), "constraints" (boundaries but different from test walls)
-- **Implementation does**: Lines 117-163 show a single label structure with "PROMPT" as main label and "The Injection Nozzle" subtitle, plus explanatory text about intent. Does NOT show the three separate concept labels as circles/connections around the nozzle
-- **Severity**: High
+2. **Mold cross-section with dimmed walls:** Left, right, and bottom walls render in amber (`#D9944A` via `COLORS.WALLS_AMBER`). Mold fades in over frames 0-90 and walls dim from full opacity to 40% over frames 90-150 using `Easing.out(Easing.quad)`, matching the spec's `easeOutQuad`. (`InjectionNozzle.tsx` lines 11-24, 72-104.)
 
-### Missing "PROMPT CAPITAL" Section Title
-- **Spec says**: Lines 36-38 require section title "PROMPT CAPITAL" with subtitle "The Specification" to fade in around Frame 360-450
-- **Implementation does**: Lines 167-197 show different text: "Second: the prompt" with subtitle "Natural language intent that guides what code gets generated" - different wording and concept
-- **Severity**: Medium
+3. **Nozzle highlight with blue glow:** Nozzle uses `#4A90D9` (`COLORS.NOZZLE_BLUE`). Glow intensifies from frame 90 to 180 via `feGaussianBlur` filter driven by `glowIntensity`, with `Easing.out(Easing.cubic)` matching spec's `easeOutCubic`. Nozzle has gradient fill and is the clear focal point. (`InjectionNozzle.tsx` lines 27-32, 59-69, 106-154.)
 
-### Missing Pulse Animation
-- **Spec says**: Lines 27, 52, 113 specify pulsing animation with `pulseScale = 1 + Math.sin(frame * 0.1) * 0.05`
-- **Implementation does**: No pulse animation on the nozzle - it has static glow intensity but no scale pulsing
-- **Severity**: Low
+4. **Pulse animation:** Exactly matches spec code: `pulseScale = 1 + Math.sin(frame * 0.1) * 0.05`. Applied as SVG scale transform on the nozzle group. (`InjectionNozzle.tsx` line 35, line 108.)
 
-### Missing Mold Cross-Section Context
-- **Spec says**: Lines 20-23 specify that the full mold cross-section returns with walls dimmed, then nozzle brightens. Lines 42-50 detail Frame 0-90 showing cross-section fade-in
-- **Implementation does**: Only shows the nozzle in isolation - no mold walls or cross-section context visible
-- **Severity**: Medium
+5. **Three concept labels:** All three labels present -- "intent" (what you want), "requirements" (what it needs), "constraints" (boundaries) -- configured in `CONCEPT_LABELS` array with sequential start frames 180, 240, 300. Each fades in over 30 frames (`LABEL_FADE_DURATION: 30`) with `easeOutCubic` easing. Rendered as circular badges with blue borders positioned around the nozzle (left, right, below). (`constants.ts` lines 43-62, `InjectionNozzle.tsx` lines 182-240.)
 
-### Different Animation Timing
-- **Spec says**: Detailed beat structure in lines 42-68 with specific frame ranges for each element
-- **Implementation does**: Uses BEATS constants from external file (lines 13-42) but timing structure appears simplified - only has NOZZLE_START/END, GLOW_START/END, LABEL_START/END, EXPLANATION_START
-- **Severity**: Low
+6. **Label connection lines to nozzle:** Dashed SVG lines (`strokeDasharray="4 4"`) connect each label position to the nozzle center at 50% opacity, fading in with the same timing as their respective labels. (`InjectionNozzle.tsx` lines 156-178.)
 
-### Different Label Approach
-- **Spec says**: Lines 116-120 show labels array with three separate items positioned around nozzle with individual start frames (180, 240, 300)
-- **Implementation does**: Lines 117-163 use a conditional single label block with fixed positioning to the right of nozzle
-- **Severity**: High
+7. **Section title:** "PROMPT CAPITAL" with subtitle "The Specification" fades in from frame 360 to 400 using `easeOutCubic`. Positioned at bottom center. (`InjectionNozzle.tsx` lines 242-276, `constants.ts` lines 28-29.)
 
-## Missing Elements
-1. Three concept labels ("intent", "requirements", "constraints") orbiting/connected to nozzle
-2. Label connection lines from labels to nozzle
-3. Pulse animation on nozzle (scale oscillation)
-4. Mold cross-section with dimmed walls as background context
-5. "PROMPT CAPITAL" / "The Specification" title (has different text instead)
-6. Sequential label appearance animation (spec shows 180, 240, 300 frame starts)
-7. Wall opacity dimming animation (lines 96-102 in spec)
+8. **Animation sequence timing:** All six phases match the spec:
+   - Frames 0-90: Mold cross-section fades in
+   - Frames 90-150: Walls dim to 40% opacity
+   - Frames 90-180: Nozzle glow intensifies
+   - Frame 180: "intent" label appears
+   - Frame 240: "requirements" label appears
+   - Frame 300: "constraints" label appears
+   - Frames 360-400: Title fades in, holds through frame 450
 
-## Additional Notes
-The implementation delivers the core visual of a blue-glowing nozzle but lacks the conceptual framework elements (intent/requirements/constraints labels) that the spec emphasizes. The spec's metaphor is about showing what goes INTO the nozzle (the three aspects of a prompt specification), while the implementation focuses on labeling the nozzle itself.
+9. **Duration:** 15 seconds at 30fps (450 frames). (`constants.ts` lines 4-7.)
 
-## Resolution Status
-- **Status**: RESOLVED
-- **Changes Made**:
-  1. Added three concept labels ("intent", "requirements", "constraints") as circular badges with descriptions, positioned around the nozzle at coordinates specified in CONCEPT_LABELS array
-  2. Added mold cross-section context with left, right, and bottom walls rendered in amber color (#D9944A) with dimmed opacity
-  3. Added wall dimming animation from full opacity to 40% (frames 90-150) using easing
-  4. Added pulse animation to nozzle using `pulseScale = 1 + Math.sin(frame * 0.1) * 0.05` applied as SVG transform
-  5. Changed section title from "Second: the prompt" to "PROMPT CAPITAL" with subtitle "The Specification"
-  6. Added sequential label appearance with individual start frames (180, 240, 300) and fade duration of 30 frames
-  7. Added connection lines from each label to the nozzle center with dashed stroke and 50% opacity
-  8. Updated BEATS timing structure to match spec: MOLD_START/END, WALL_DIM_START/END, NOZZLE_GLOW_START/END, individual label timings, TITLE_START/END
-  9. Refactored nozzle SVG to use transform with pulseScale for proper animation
-  10. Added WALLS_AMBER color constant and CONCEPT_LABELS configuration array to constants.ts
-- **Remaining Issues**: None - all audit findings have been addressed
+10. **Easing functions:** Wall dimming uses `easeOutQuad`, nozzle glow uses `easeOutCubic`, label fade uses `easeOutCubic`, title fade uses `easeOutCubic`. All match spec. Pulse uses `Math.sin` which is inherently sinusoidal, consistent with the spec's `easeInOutSine`.
+
+11. **S03-MoldThreeParts integration:** Visual 10 maps to `InjectionNozzle` with default props, sequenced at frame 5143 (~171.44s) corresponding to the narration segment "Second the prompt, specification of what you want." (`Part3MoldThreeParts.tsx` lines 117-122, `S03-MoldThreeParts/constants.ts` lines 100-102.)
+
+### Issues Found
+
+None.
+
+### Notes
+
+- Label positions in the implementation (`{x: -180, y: 80}`, `{x: 200, y: 40}`, `{x: 20, y: 160}`) are scaled up from the spec's reference positions (`{x: -100, y: 50}`, `{x: 120, y: 30}`, `{x: 0, y: 100}`) to account for the nozzle being centered at (960, 450) in the full 1920x1080 canvas. The spatial arrangement (left, right, below) matches the spec's visual diagram.
+- The spec shows `NozzleHighlight` and `MoldCrossSection` as separate sub-components; the implementation inlines these as SVG elements directly within the main component. This is a structural difference that does not affect visual output.
+- The `showLabels` prop (defaulting to `true`) provides reuse flexibility not in the original spec but does not alter default behavior.
+- All previously identified audit deltas (missing concept labels, missing section title, missing pulse animation, missing mold cross-section, different timing) have been fully resolved in the current implementation.

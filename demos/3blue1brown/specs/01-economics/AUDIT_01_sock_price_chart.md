@@ -1,75 +1,75 @@
-# Audit: 01_sock_price_chart.md
+# Audit: Sock Price Chart (01_sock_price_chart.md)
 
-## Spec Summary
-A 20-second animated line chart showing the economics of sock repair from 1950-2020, with two lines: "Cost to Buy" (blue, dropping) and "Cost to Repair" (amber, flat). The animation draws the lines sequentially, holds at the crossing point (~1963), and includes titles, axes, and grid.
+## Status: ISSUES FOUND
 
-## Implementation Status
-**Implemented**
+### Requirements Met
 
-## Deltas Found
+- **Canvas Resolution**: 1920x1080 correctly defined in `constants.ts` (`SOCK_CHART_WIDTH = 1920`, `SOCK_CHART_HEIGHT = 1080`).
+- **Background**: Dark `#1a1a2e` with subtle gradient to `#0f0f1a` applied via `linear-gradient` in `SockPriceChart.tsx:28`. Matches spec.
+- **Grid Lines**: Color `#333344` (`COLORS.GRID`) with `strokeDasharray="5,5"` in `ChartAxes.tsx:76`. Matches spec's "subtle gray, dashed".
+- **X-axis Range**: `YEAR_RANGE = { min: 1950, max: 2020 }` in `constants.ts:71`. Year ticks `[1950, 1960, 1970, 1980, 1990, 2000, 2010, 2020]` in `ChartAxes.tsx:32`. Matches spec exactly.
+- **Y-axis Range**: `HOURS_RANGE = { min: 0, max: 1.5 }` in `constants.ts:72`. Hour ticks `[0, 0.5, 1, 1.5]` in `ChartAxes.tsx:33`. Matches spec.
+- **Y-axis Label**: "Hours of labor to buy / repair a sock" in `ChartAxes.tsx:178`. Matches spec.
+- **Line Colors**: `LINE_BUY = "#4A90D9"` (cool blue) and `LINE_REPAIR = "#D9944A"` (warm amber) in `constants.ts:39-40`. Match spec exactly.
+- **Cost to Repair Data**: Flat line at 0.5 hours from 1950 to 2020 (`constants.ts:57-60`). Matches spec.
+- **Title**: "The Economics of Sock Repair" in `SockPriceChart.tsx:47`. Matches spec.
+- **Axis Label Typography**: Inter/sans-serif, fontSize 18, color `rgba(255, 255, 255, 0.8)` in `ChartAxes.tsx:125-128`. Matches spec's "Sans-serif, 18pt, white with 80% opacity".
+- **Easing (Line Drawing)**: `Easing.inOut(Easing.cubic)` in `AnimatedLine.tsx:52`. Matches spec's `easeInOutCubic`.
+- **Animation Beat Structure**: The 7-phase timing from the spec (axes fade 0-30, buy line 30-90, repair line 90-150, time progress 150-300, drop 300-450, approach 450-540, hold 540-600) is exactly reproduced in `BEATS` object (`constants.ts:11-26`).
+- **Duration**: 20 seconds / 600 frames at 30fps (`constants.ts:4-6`). Matches spec.
+- **Narration Text**: "This isn't nostalgia. It's economics." displayed at `SockPriceChart.tsx:164`. Matches spec.
 
-### Year Range Mismatch
-- **Spec says**: X-axis ranges from 1950 to 2020 (line 19)
-- **Implementation does**: X-axis starts at 1920 (constants must define YEAR_RANGE.min as 1920 based on FrozenChart.tsx:46 which shows yearTicks starting at 1920)
-- **Severity**: Medium - The chart shows a wider historical range than specified
+### Issues Found
 
-### Title Font Weight
-- **Spec says**: No specific font weight mentioned for title (line 40)
-- **Implementation does**: Uses fontWeight: 700 (bold) in SockPriceChart.tsx:41
-- **Severity**: Low - Reasonable design choice, makes title more prominent
+#### 1. Cost to Buy Data Points Diverge from Spec (Medium Severity)
 
-### Animation Timing Simplified
-- **Spec says**: Complex 8-phase animation sequence (lines 31-37) with specific frame ranges for each phase
-- **Implementation does**: Uses simpler BEATS timing system with fewer distinct phases. The spec's "Frame 150-300" and "Frame 300-450" phases are condensed
-- **Severity**: Low - Implementation achieves same visual result with cleaner code structure
+The spec provides explicit data points for the "Cost to Buy" line, but the implementation uses significantly different values:
 
-### Narration Text Exact Quote
-- **Spec says**: "This isn't nostalgia. It's economics." (line 50)
-- **Implementation does**: Same text in SockPriceChart.tsx:164, but also includes "In 1950, a wool sock cost real money relative to an hour of labor." from spec line 52
-- **Severity**: Low - Implementation includes additional narration context
+| Year | Spec (hours) | Implementation (hours) |
+|------|-------------|----------------------|
+| 1950 | 1.0         | 1.4                  |
+| 1955 | 0.75        | (not present)        |
+| 1960 | 0.55        | 1.3                  |
+| 1963 | 0.5         | (not present)        |
+| 1970 | 0.2         | 1.2                  |
+| 1980 | 0.1         | 1.0                  |
+| 1985 | (not present) | 0.75               |
+| 1990 | 0.06        | 0.55                 |
+| 1993 | (not present) | 0.5                 |
+| 2000 | 0.04        | 0.2                  |
+| 2010 | 0.03        | 0.1                  |
+| 2020 | 0.03        | 0.03                 |
 
-### Legend Timing
-- **Spec says**: No specific mention of legend timing
-- **Implementation does**: Legend fades in after repair line finishes drawing (SockPriceChart.tsx:74-85) with interpolation from BEATS.REPAIR_LINE_END
-- **Severity**: Low - Good UX addition not explicitly specified
+The implementation's curve starts much higher (1.4 vs 1.0 hours) and drops much more slowly. In the spec, the crossing point with the repair line (0.5 hours) occurs around 1963. In the implementation, the crossing point occurs around 1993 -- roughly 30 years later. This fundamentally changes the narrative about when buying became cheaper than repairing.
 
-### Narration Overlay Positioning
-- **Spec says**: No specific positioning guidance for narration
-- **Implementation does**: Centers narration text at 50% top/left with semi-transparent background (SockPriceChart.tsx:133-167)
-- **Severity**: Low - Reasonable implementation choice
+**File**: `constants.ts:45-56` (`CHART_DATA.costToBuy`)
 
-### Easing Functions
-- **Spec says**: Line drawing uses `easeInOutCubic`, fade transitions use `easeOutQuad` (lines 44-45)
-- **Implementation does**: AnimatedLine.tsx:52 uses `Easing.inOut(Easing.cubic)` which matches spec
-- **Severity**: None - Correctly implemented
+#### 2. Fade Transition Easing Not Applied (Low Severity)
 
-### Grid Line Style
-- **Spec says**: Grid lines are "Subtle gray (#333344), dashed" (line 16)
-- **Implementation does**: Uses COLORS.GRID constant (ChartAxes.tsx:74) with strokeDasharray="5,5" for dashed appearance
-- **Severity**: None - Correct implementation assuming constant matches spec color
+The spec requires fade transitions to use `easeOutQuad`. The title fade-in (`SockPriceChart.tsx:18-23`) and axes fade-in (`ChartAxes.tsx:23-28`) both use Remotion's default linear interpolation (no `easing` option provided). Only the line drawing animation correctly applies a custom easing function.
 
-## Missing Elements
+**Files**: `SockPriceChart.tsx:18-23`, `ChartAxes.tsx:23-28`
 
-### Time Progression Component
-- **Spec mentions**: "TimeProgression" component with startYear/endYear in code structure example (line 67)
-- **Implementation**: Not visible in the files read - may be handled differently or omitted
-- **Severity**: Low - The hold phase at crossing point is implemented via timing, may not need explicit component
+#### 3. Second Narration Quote Not Displayed (Low Severity)
 
-### Data Accuracy Verification
-- **Spec provides**: Specific data points in JSON format (lines 73-93)
-- **Implementation**: Uses CHART_DATA.costToBuy and CHART_DATA.costToRepair from constants file (not read)
-- **Severity**: Unknown - Cannot verify data accuracy without reading constants file
+The spec lists two narration quotes for this section:
+- "This isn't nostalgia. It's economics." -- present in implementation
+- "In 1950, a wool sock cost real money relative to an hour of labor." -- not displayed
 
-## Notes
-- The implementation is well-structured with separated components (ChartAxes, AnimatedLine)
-- The animation timing system uses a BEATS constant structure which is more maintainable than hardcoded frame numbers
-- The spec's suggested code structure (lines 54-70) is followed closely in spirit but adapted for better component separation
+In the `Part1Economics` composition, the SockPriceChart is only shown for approximately 2.68 seconds (VISUAL_00_START to VISUAL_00_END), and the second quote begins at 3.52 seconds under a different visual (ThresholdHighlight). This is likely an intentional editorial choice where the second quote accompanies a different visual, but it means the SockPriceChart's hold phase (frames 540-600) is never reached in the Part1Economics context.
+
+**Files**: `SockPriceChart.tsx:132-167`, `S01-Economics/constants.ts:138-139`
+
+### Notes
+
+- The implementation is well-structured with clean component separation: `SockPriceChart.tsx` (main composition), `ChartAxes.tsx` (axes/grid/labels), `AnimatedLine.tsx` (animated path drawing), and `constants.ts` (all configuration).
+- The `BEATS` timing system in `constants.ts` faithfully reproduces all 7 animation phases from the spec with exact frame numbers.
+- The `AnimatedLine` component includes a nice dot-at-tip effect during drawing and label fade-in that are not specified but enhance the visual.
+- A legend component fades in after the repair line finishes drawing (`SockPriceChart.tsx:73-130`) -- a useful UX addition not in the spec.
+- The `SockPriceChart` is designed as a standalone 20-second composition but within `Part1Economics` it is only displayed for the first ~2.68 seconds. The internal BEATS system still controls animation timing from frame 0, meaning only the axes fade-in phase (0-30 frames / 0-1 second) is visible in the Part1Economics context.
+- The `showTitle` prop allows the title to be toggled, useful for when the chart is reused in other compositions.
+- The font weight of 700 (bold) on the title (`SockPriceChart.tsx:41`) is a reasonable design choice not explicitly specified.
 
 ## Resolution Status
-- **Status**: RESOLVED
-- **Changes Made**:
-  - Verified YEAR_RANGE in constants.ts is correctly set to { min: 1950, max: 2020 } (line 71)
-  - Verified yearTicks array in ChartAxes.tsx correctly starts at 1950 (line 32)
-  - Verified all CHART_DATA points are within the 1950-2020 range
-  - The year range issue mentioned in the audit appears to have been based on an older version of the code or was already fixed
-- **Remaining Issues**: None - all identified medium severity issues are resolved. Low severity items are acceptable design choices that enhance the implementation without contradicting the spec.
+- **Status**: UNRESOLVED
+- **Primary Blocker**: The costToBuy data points in `constants.ts:45-56` significantly diverge from the spec's data, shifting the crossing point from ~1963 to ~1993. This changes the core narrative message of the chart. Needs to be reconciled -- either the spec data should be updated to match the implementation's intended narrative, or the implementation data should be corrected to match the spec.

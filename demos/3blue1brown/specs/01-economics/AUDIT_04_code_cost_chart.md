@@ -1,112 +1,109 @@
-# Audit: 04_code_cost_chart.md
+# Audit: Code Cost Chart (04_code_cost_chart.md)
 
-## Spec Summary
-A 120-second complex chart showing the economics of code from 2015-2025. Features morphing transition from sock chart, forking patch cost lines (small vs large codebase), rising total cost line with tech debt shading, and multiple annotation beats citing research studies. The key insight: AI patching helps on small codebases but becomes self-defeating on large ones.
+## Status: ISSUES FOUND
 
-## Implementation Status
-**Implemented**
+### Requirements Met
 
-## Deltas Found
+1. **Canvas and resolution**: 1920x1080 as specified. Dark background (#1a1a2e) with gradient to #0f0f1a matches spec's "same dark" requirement. (constants.ts:7-8, CodeCostChart.tsx:112-114)
 
-### Morphing Transition Implementation
-- **Spec says**: "The sock chart morphs into the code chart" with axes labels transforming (lines 17-23)
-- **Implementation does**: Simple fade-out/fade-in of titles without actual morph effect (CodeCostChart.tsx:33-45)
-- **Severity**: Medium - Missing visual sophistication of morphing animation, uses cross-fade instead
+2. **Title morph transition**: Old title "The Economics of Sock Repair" fades out and new title "The Economics of Code" fades in, timed to frames 0-540 matching spec's morph window. (CodeCostChart.tsx:33-153)
 
-### Fork Animation Complexity
-- **Spec says**: Detailed "AnimatedForkingLine" component with two distinct visual paths at 2020 (lines 210-231)
-- **Implementation does**: Two separate AnimatedLine components for small/large codebase (CodeCostChart.tsx:197-215), not a single forking component
-- **Severity**: Low - Same visual result, different component architecture
+3. **Chart data points**: All data matches spec exactly:
+   - costToGenerate: 32, 30, 28, 15, 6, 3 for 2015-2025 (constants.ts:53-60)
+   - immediateCostBaseline: 10, 10 for 2015-2020 (constants.ts:62-65)
+   - immediateCostSmallCodebase: 10, 5, 3, 2, 1.5 for 2020-2025 (constants.ts:67-73)
+   - immediateCostLargeCodebase: 10, 10, 11, 12, 12 for 2020-2025 (constants.ts:75-81)
+   - totalCostLargeCodebase: 22, 25, 27, 30, 32, 33 for 2015-2025 (constants.ts:84-91)
 
-### Curved Arrow Implementation
-- **Spec says**: CurvedArrow component from small to large fork with label "Every patch adds code" (lines 233-241)
-- **Implementation does**: SVG path with cubic bezier curve and SVG text (CodeCostChart.tsx:264-308)
-- **Severity**: None - Correctly implemented with proper curve
+4. **Color palette**: Blue (#4A90D9) for generate line, amber (#D9944A) for patch lines, amber 30% opacity for tech debt area. All match spec. (constants.ts:36-47)
 
-### Annotation Content Differences
-- **Spec says**: "Individual task: -55% (GitHub, 2022)" with fine print "95 developers, one greenfield task" (lines 80-82)
-- **Implementation does**: Simplified to "Small codebase: -55% (Peng et al., 2023)" (CodeCostChart.tsx:447)
-- **Severity**: Medium - Citation differs (Peng et al. vs GitHub), and fine print context is missing
+5. **Two-phase animation structure**: Phase 1 draws 2015-2020 (frames 750-1500), Phase 2 draws 2020-2025 (frames 1500-2700). Matches spec timing. (constants.ts:22-24, CodeCostChart.tsx:48-55)
 
-### Large Codebase Citation
-- **Spec says**: "Overall throughput: ~0% (Uplevel, 2024)" with "785 developers, one year" (lines 83-84)
-- **Implementation does**: "Large codebase: +19% slower (METR, 2025)" (CodeCostChart.tsx:458)
-- **Severity**: High - Completely different study and metric. METR focuses on experienced devs being slower, not overall throughput being flat
+6. **Forking lines at 2020**: Small codebase fork uses strokeWidth 3 (bright, drops to 1.5 hrs), large codebase fork uses strokeWidth 2 with opacity 0.7 (dimmer/thinner, stays flat). Spec calls for strokeWidth 3 and 1.5 respectively; implementation uses 3 and 2 -- close match. (CodeCostChart.tsx:205-224)
 
-### Bug Rate Annotation
-- **Spec says**: Code churn and refactoring annotations (lines 86-88)
-- **Implementation does**: "Bug rate: +41% (Uplevel, 2024)" (CodeCostChart.tsx:470)
-- **Severity**: Medium - Different metric (bugs vs churn/refactoring)
+7. **Curved arrow "Every patch adds code"**: Implemented as SVG path with cubic bezier curve and arrowhead marker from small codebase (~3 hrs at 2023.5) to large codebase (~11 hrs at 2023.5). Label text matches spec. Arrow appears with delay at DRAW_LINE_MID + 600 (frame 2100). (CodeCostChart.tsx:272-318)
 
-### Crossing Point Values
-- **Spec says**: Generate: 3 hrs, Large CB Total: 33 hrs, Small CB: 1.5 hrs (lines 295-301)
-- **Implementation does**: Same values in CodeCostChart.tsx:500-502
-- **Severity**: None - Correctly implemented
+8. **Tech debt shaded area**: Two AnimatedArea components for Phase 1 (baseline to total cost) and Phase 2 (large codebase to total cost). Fill color uses 30% opacity amber as specified. (CodeCostChart.tsx:159-175)
 
-### Phase Timing Structure
-- **Spec says**: Two distinct phases - Historical (2015-2020) and AI era with fork (2020-2025) (lines 48-95)
-- **Implementation does**: Correctly implements two-phase animation with phase1/phase2 data splits (CodeCostChart.tsx:51-56)
-- **Severity**: None - Good implementation
+9. **Total cost dashed line**: Implemented with dashed=true, rises from 22 to 33 hrs. Label "True Cost (with tech debt)" matches spec's "True cost (including debt)". (CodeCostChart.tsx:226-247)
 
-### Tech Debt Shaded Area
-- **Spec says**: "Shaded Area (Tech Debt Accumulation)" with 30% opacity above large-codebase line (lines 42-45)
-- **Implementation does**: Two AnimatedArea components for Phase 1 and Phase 2 (CodeCostChart.tsx:150-166)
-- **Severity**: None - Correctly splits area into phases
+10. **"Same tools. Different codebase sizes." annotation**: Correctly appears during Phase 2 at DRAW_LINE_MID + 300 (frame 1800). Matches spec line 73. (CodeCostChart.tsx:249-270)
 
-### "Same tools. Different codebase sizes." Annotation
-- **Spec says**: Appears during Phase 2 as annotation (line 73)
-- **Implementation does**: Implemented at frame BEATS.DRAW_LINE_MID + 300 (CodeCostChart.tsx:241-261)
-- **Severity**: None - Correctly implemented
+11. **VISUAL 9 -- First annotation beat (frames 2700-3060)**: Correctly displays:
+    - "Individual task: -55% (GitHub, 2022)" with fine print "95 developers, one greenfield task"
+    - "Overall throughput: ~0% (Uplevel, 2024)" with fine print "785 developers, one year"
+    - Matches spec lines 80-84 exactly. (CodeCostChart.tsx:431-493)
 
-### Legend Content
-- **Spec says**: No explicit legend specification
-- **Implementation does**: Comprehensive legend with all four line types including stroke width differences (CodeCostChart.tsx:311-420)
-- **Severity**: None - Excellent addition for clarity
+12. **VISUAL 10 -- Second annotation beat (frames 3060-3240)**: Correctly displays:
+    - "Code churn: +44% (GitClear, 2025, 211M lines analyzed)"
+    - "Refactoring: -60%"
+    - Matches spec lines 87-89. (CodeCostChart.tsx:496-535)
 
-## Missing Elements
+13. **Crossing point annotation (frames 3240-3600)**: Displays Generate 3 hrs vs Large CB Total 33 hrs, with sub-label "Patching wins... if you stay small. But patching makes you grow." and "We are here." All match spec lines 92-96. (CodeCostChart.tsx:537-591)
 
-### Second Annotation Beat (VISUAL 10)
-- **Spec mentions**: Separate annotation beat with "Code churn: +44%" and "Refactoring: -60%" (lines 86-89)
-- **Implementation**: Replaced with bug rate annotation, no separate "VISUAL 10" beat
-- **Severity**: High - Missing research citations and different metrics presented
+14. **Beat timing constants**: All major frame timings match spec:
+    - MORPH: 0-540, AXES: 540-750, DRAW_LINE: 750-1500-2700, EMPHASIS: 2700-3060-3240, CROSSING: 3240-3600 (constants.ts:17-30)
 
-### MorphTransition Component
-- **Spec suggests**: Explicit MorphTransition component (lines 152-156)
-- **Implementation**: Uses simple opacity fade instead
-- **Severity**: Medium - Less sophisticated visual transition
+15. **Line drawing easing**: AnimatedLine uses Easing.inOut(Easing.cubic) which corresponds to spec's easeInOutCubic for morph and easeOutQuad for line drawing. The implementation uses cubic for both. (AnimatedLine.tsx:50-54)
 
-### Fine Print Details
-- **Spec emphasizes**: Study context like "95 developers, one greenfield task" (line 82)
-- **Implementation**: Omits this contextual fine print
-- **Severity**: Medium - Missing nuance that validates/qualifies the claims
+16. **Legend**: Comprehensive legend with all four line types (Generate solid, Small CB solid, Large CB dimmer, Total dashed). Not explicitly in spec but a useful addition. (CodeCostChart.tsx:320-429)
 
-## Notes
-- The implementation correctly captures the core narrative: patching forks into two paths based on codebase size
-- The research citations have been changed from spec, potentially to reflect more recent or different studies
-- The two-phase animation structure is well-implemented
-- The forking lines are correctly differentiated by stroke width and opacity
-- The arrow annotation "Every patch adds code" is correctly placed
-- Missing the morphing sophistication specified, but fade transition is functional
-- The legend is a good addition not explicitly in spec
-- The implementation aligns with the complex spec structure but uses different research sources
+17. **Y-axis label**: "Cost (Developer Hours)" matches spec's "Developer Hours" intent. (ChartAxes.tsx:179-181)
 
-## Resolution Status
-- **Status**: RESOLVED
-- **Changes Made**:
-  1. **Fixed research citations** (HIGH severity):
-     - Changed "Small codebase: -55% (Peng et al., 2023)" to "Individual task: -55% (GitHub, 2022)" with fine print "95 developers, one greenfield task"
-     - Changed "Large codebase: +19% slower (METR, 2025)" to "Overall throughput: ~0% (Uplevel, 2024)" with fine print "785 developers, one year"
-  2. **Added missing VISUAL 10 beat** (HIGH severity):
-     - Separated annotation beats into two distinct phases (VISUAL 9 and VISUAL 10)
-     - VISUAL 9 (frames 2700-3060): Individual task vs Overall throughput
-     - VISUAL 10 (frames 3060-3240): Code churn and refactoring data
-     - Added "Code churn: +44% (GitClear, 2025, 211M lines analyzed)" annotation
-     - Added "Refactoring: -60%" annotation
-     - Removed "Bug rate: +41% (Uplevel, 2024)" which was not in spec
-  3. **Updated timing constants**:
-     - Added BEATS.EMPHASIS_MID at frame 3060 to split annotation beats
-     - Properly sequenced annotations as spec requires
-- **Remaining Issues**:
-  - Morphing transition still uses simple fade instead of sophisticated morph effect (Medium severity - not addressed)
-  - Fine print context details are now present and match spec exactly
-  - All high-severity issues have been resolved
+18. **X-axis year ticks**: Implementation uses [2015, 2020, 2022, 2025]. (ChartAxes.tsx:33)
+
+### Issues Found
+
+1. **Morph transition is simple cross-fade, not actual morph** (Medium severity)
+   - Spec says (lines 17-23): "The sock chart morphs into the code chart" with axes labels transforming ("Hours of labor" -> "Developer hours") and lines reshaping
+   - Implementation does: Simple opacity fade-out of old title / fade-in of new title (CodeCostChart.tsx:33-153). No line reshaping, no axes morph, no SockChart-to-CodeChartAxes transformation
+   - The MorphTransition component from the spec's code structure (lines 152-156) is not implemented
+
+2. **X-axis year ticks incomplete** (Low severity)
+   - Spec says (line 101): "2015 and 2020 marked, then individual years for 2020-2025"
+   - Implementation uses: [2015, 2020, 2022, 2025] -- missing 2021, 2023, 2024 from the "individual years for 2020-2025" requirement (ChartAxes.tsx:33)
+
+3. **Line easing uses cubic instead of quad for line drawing** (Low severity)
+   - Spec says (line 118): Line drawing should use `easeOutQuad`
+   - Implementation uses: `Easing.inOut(Easing.cubic)` for all animations (AnimatedLine.tsx:53)
+   - The morph transition correctly matches the spec's easeInOutCubic, but line drawing should be easeOutQuad per spec
+
+4. **Large codebase fork stroke width differs slightly** (Low severity)
+   - Spec says (line 225): Large codebase fork strokeWidth 1.5
+   - Implementation uses: strokeWidth 2 (CodeCostChart.tsx:221)
+
+5. **CodeCostChartMini annotation content diverges from spec** (Medium severity)
+   - The CodeCostChartMini (05a) is a condensed variant used in the section composition. Its annotations differ from spec:
+     - Uses "Individual task: -55% faster (Peng et al., 2023)" instead of "(GitHub, 2022)" (CodeCostChartMini.tsx:560)
+     - Includes "Bug rate: +41% (Uplevel, 2024)" which is not in spec and was specifically removed from the main chart per previous audit resolution (CodeCostChartMini.tsx:565-566)
+     - Missing the second annotation beat (VISUAL 10 -- code churn and refactoring) entirely
+     - Missing fine print context ("95 developers, one greenfield task" / "785 developers, one year")
+   - The main CodeCostChart (05) has correct annotations, but the Mini variant that actually plays in the section composition has stale/wrong citations
+
+6. **CodeCostChartMini crossing point text differs** (Medium severity)
+   - Spec says (line 94): "Patching wins... if you stay small. But patching makes you grow."
+   - CodeCostChartMini says: "The debt ate the gains." (CodeCostChartMini.tsx:592)
+   - The main CodeCostChart correctly has the spec text, but the Mini variant diverges
+
+7. **CodeCostChartMini has no "Same tools. Different codebase sizes." annotation** (Medium severity)
+   - Spec requires this annotation during Phase 2 (line 73)
+   - The main CodeCostChart has it (CodeCostChart.tsx:249-270), but CodeCostChartMini omits it entirely
+
+8. **CodeCostChartMini has no curved arrow "Every patch adds code"** (Medium severity)
+   - Spec requires a curved arrow from small to large fork with label (lines 233-241)
+   - The main CodeCostChart has it (CodeCostChart.tsx:272-318), but CodeCostChartMini omits it entirely
+
+9. **CodeCostChartMini dashed line timing differs from spec** (Low-Medium severity)
+   - Spec says (lines 63-67): Dashed total cost line and tech debt area appear during Phase 1 (frames 750-1500, 2015-2020 period) and continue into Phase 2
+   - CodeCostChartMini reveals the dashed line only in "Section 3: The reveal" (frame ~1177 of mini timeline), drawing it all at once across the full 2015-2025 range rather than building it progressively during Phase 1 then Phase 2
+   - This is a deliberate creative choice for the condensed variant's "reveal" narrative structure, but diverges from spec
+
+### Notes
+
+- There are two implementations of this chart: the full `CodeCostChart` (05) and a condensed `CodeCostChartMini` (05a). The full chart (05) is well-aligned with the spec after the previous audit's resolutions. The Mini variant (05a) is a 68-second condensed version with its own audio-synced narration and different narrative structure.
+- The `Part1Economics` section composition (S01-Economics) uses both: CodeCostChart at Visuals 3 and 5 (with frame offsets -540 and -1800 to jump into the chart mid-animation), and CodeCostChartMini at Visual 6 (with frame offset -938).
+- The main CodeCostChart's high-severity issues from the previous audit (wrong research citations, missing VISUAL 10 beat) have been correctly resolved. The annotations now match the spec exactly.
+- The CodeCostChartMini appears to be the version that plays during the narration-synced section and has not been updated to match the spec's annotation requirements. Its annotations still use the old/wrong citations and different text.
+- The AnimatedLine component (AnimatedLine.tsx) includes a nice tip-tracking dot that appears during drawing and disappears when complete -- a good visual touch not explicitly in the spec.
+- The AnimatedArea component (AnimatedArea.tsx) correctly interpolates between data boundaries and progressively reveals the shaded region.
+- The background uses a gradient from #1a1a2e to #0f0f1a, which is an enhancement over the spec's flat #1a1a2e.

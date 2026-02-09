@@ -1,191 +1,76 @@
-# Audit: 10_mold_to_prompt.md
+# Audit: 10_mold_to_prompt (Verilog Morphs to Prompt)
 
-## Spec Summary
-The Verilog code morphs into a glowing document labeled "PROMPT", the gate-level netlist morphs into lines of software code, and the Synopsys verification checkmark morphs into a test suite with green checkmarks. This bridges the chip design metaphor directly to software/PDD. Duration: ~20 seconds.
+## Status: PASS
 
-## Implementation Status
-**Partially Implemented** - The MoldToPrompt component implements a similar transformation but from a different starting point (injection mold → prompt rather than Verilog → prompt).
+### Requirements Met
 
-## Deltas Found
+1. **Canvas and Duration**: 1920x1080, dark background (#1a1a2e) with gradient, full screen. Duration is 20 seconds (600 frames at 30fps). Constants in `constants.ts` lines 4-9 and 33.
 
-### Starting Visual Context
-- **Spec says**: "Starting State: Verilog code (from chip design sequence), Gate-level netlist below/beside it, Synopsys verification checkmark, Chip design / EDA context" (lines 21-26)
-- **Implementation does**: Starting state is an injection mold (metallic shape with cavity) and amber plastic part, not Verilog/netlist/checkmark (MoldToPrompt.tsx:55-98, MoldShape.tsx:114-196)
-- **Severity**: High - Completely different starting point, breaks continuity from chip design sequence
+2. **Starting State (Chip Design Context)**: All three chip-design elements are present on the LEFT side:
+   - `VerilogBlock.tsx` renders syntax-highlighted Verilog code (teal keywords `#2AA198`, numbers `#B58900`) from the `VERILOG_SOURCE` constant, which contains a realistic ALU module.
+   - `GateNetlist.tsx` renders AND, OR, and NOT gate symbols with wire connections between them, using teal color (`#1A7A6E`).
+   - `SynopsysCheckmark.tsx` renders a single green checkmark (`#5AAA6E`) inside a circle, with a spring-based scale animation during setup.
 
-### Verilog Code → Prompt Document Morph
-- **Spec says**: "Verilog code reshapes into rectangular document, Code syntax → Clean specification text, 'PROMPT' label appears" (lines 36-40)
-- **Implementation does**: Injection mold (metallic gradient) morphs to white document with "PROMPT" label (MoldShape.tsx:1-196, PromptDocument.tsx:1-111)
-- **Severity**: High - Source material is completely different (mold vs. Verilog)
+3. **Ending State (Software/PDD Context)**: All three software elements are present on the RIGHT side:
+   - Prompt document: white background, "PROMPT" title centered, body text matching the spec's example verbatim ("Parse user IDs from untrusted input. Return None on failure, never throw. Handle unicode." plus requirements bullets). Blue glow (#4A90D9) with Gaussian blur filter.
+   - Software code: gray monospace text (`#A0A0A0`) with no glow, matching the spec's `parse_user_id` function exactly.
+   - Test suite: three green checkmarks (`#5AAA6E`) with test names (`test_valid_input`, `test_empty_input`, `test_unicode_handling`).
 
-### Gate-Level Netlist → Software Code Morph
-- **Spec says**: "Netlist diagram stretches into horizontal lines, Gate symbols → Monospace text, Software code syntax visible" (lines 42-46)
-- **Implementation does**: Amber plastic part morphs into gray code lines with proper monospace text (CodeLines.tsx:1-186)
-- **Severity**: Medium - The target (code lines) is correct, but source (plastic part vs. netlist) differs
+4. **Three Parallel Morphs**: All three transformations run simultaneously during frames 90-240 (MORPH_START to MORPH_END), each using `Easing.inOut(Easing.cubic)`:
+   - VerilogBlock morphs from LEFT position (260,180) to RIGHT position (1160,160), color transitions from dark code background to white document.
+   - GateNetlist morphs from LEFT (280,560) to RIGHT (1170,620), gate symbols fade out, horizontal code bars appear, then actual code text fades in.
+   - SynopsysCheckmark morphs from LEFT (280,770) to RIGHT (1170,900), single checkmark fades out, multiple checkmarks fade in.
 
-### Synopsys Checkmark → Test Suite Morph
-- **Spec says**: "Verification checkmark splits into multiple checkmarks, Single formal proof → Multiple test cases" (lines 48-52)
-- **Implementation does**: No checkmark morph present in MoldToPrompt component
-- **Severity**: High - Missing entirely; test suite concept not introduced here
+5. **Animation Sequence Timing**: Matches spec's five-phase structure exactly via BEATS constants (`constants.ts` lines 17-29):
+   - Frame 0-90: Setup with chip design elements visible.
+   - Frame 90-240: Primary morph (three parallel transformations).
+   - Frame 240-360: Labels appear ("PROMPT" title, code text becomes readable, test checkmarks with names).
+   - Frame 360-480: Relationship established (FlowArrow from prompt to code with "generates" label).
+   - Frame 480-600: Hold on final state.
 
-### Prompt Document Content
-- **Spec says**: Example prompt text about "Parse user IDs from untrusted input. Return None on failure, never throw. Handle unicode." with requirements bullets (lines 91-102)
-- **Implementation does**: PROMPT_LINES constant provides prompt text (constants file), includes requirements format (PromptDocument.tsx:72-107)
-- **Severity**: Low - Content may differ but structure is correct
+6. **Blue Glow on Prompt (#4A90D9)**: Implemented in `VerilogBlock.tsx` using an SVG `feGaussianBlur` filter (`stdDeviation="10"`). Glow fades in during labels phase (frames 240-360) using `Easing.out(Easing.quad)`.
 
-### Blue Glow on Prompt
-- **Spec says**: "Blue (#4A90D9) soft outer glow" on prompt document (line 107)
-- **Implementation does**: Blue glow implemented using COLORS.PROMPT_GLOW filter on prompt document (MoldShape.tsx:60-70, 140-154)
-- **Severity**: None - Correctly implemented
+7. **Code Has No Glow**: GateNetlist renders code in `CODE_GRAY` (`#A0A0A0`) with no glow filter applied. Matches spec requirement "NO glow (value is in prompt, not code)".
 
-### Code Has No Glow
-- **Spec says**: "NO glow (value is in prompt, not code)" (line 126)
-- **Implementation does**: Code lines have no glow, rendered in gray (CodeLines.tsx:103-185)
-- **Severity**: None - Correctly implemented
+8. **Flow Arrow with "generates" Label**: `FlowArrow.tsx` draws a downward arrow from the bottom of the prompt document to the top of the code block, with a draw-down animation. The "generates" label appears in italic after the arrow is drawn. Arrow uses prompt blue color (`rgba(74, 144, 217, 0.8)`) with a subtle pulse animation.
 
-### Flow Arrow from Prompt to Code
-- **Spec says**: "Arrow or flow indicator from prompt to code, 'generates' label (optional)" (lines 77-79, 195-206)
-- **Implementation does**: FlowArrow component with downward arrow and "generates" label in italic (FlowArrow.tsx:1-133)
-- **Severity**: None - Correctly implemented
+9. **Easing Functions**: All four spec-required easings are correctly applied:
+   - Shape morph: `Easing.inOut(Easing.cubic)` (easeInOutCubic).
+   - Color transitions: `Easing.out(Easing.quad)` (easeOutQuad).
+   - Label fade-in: `Easing.out(Easing.cubic)` (easeOutCubic).
+   - Glow appearance: `Easing.out(Easing.quad)` (easeOutQuad).
 
-### Color Coding
-- **Spec says**: Prompt=Blue (#4A90D9), Tests=Amber (#D9944A), Code=Gray (#A0A0A0) (lines 115-121)
-- **Implementation does**: Prompt uses PROMPT_GLOW (blue), Code uses CODE_GRAY, but no tests/amber in this component
-- **Severity**: Medium - Tests not present in this component (they appear in PromptGeneratesCode)
+10. **Narration**: "This is that same transition. For software." renders at frame 360 (NARRATION_START), fading in over 40 frames with `Easing.out(Easing.cubic)`. Positioned at bottom center, white text, 36px.
 
-### Morph Animation Technique
-- **Spec says**: "Interpolate between Verilog code block and prompt document shape" using interpolatePath and interpolateColors (lines 130-166)
-- **Implementation does**: Interpolates dimensions, colors, and properties but not using path morphing (MoldShape.tsx:26-32, 34-57)
-- **Severity**: Low - Different technique but achieves similar visual result
+11. **Context Labels**: LEFT side displays "Verilog Code", "Gate-Level Netlist", and "Synopsys Verification" in teal/green monospace text (fades out as morph begins). RIGHT side displays "Specification", "Generated Code", and "Verification Tests" in appropriate colors (fades in during labels phase).
 
-### Animation Timing
-- **Spec says**: Frame 0-90 setup, 90-240 morph, 240-360 labels, 360-480 relationship, 480-600 hold (lines 61-86)
-- **Implementation does**: Uses BEATS constants with similar structure (MoldToPrompt.tsx:23-36, constants file)
-- **Severity**: None - Timing structure is appropriate
+12. **Prompt Document Design**: White background, border, sans-serif font ('Inter'), "PROMPT" title centered with letter-spacing, body text with requirements bullets. Matches spec's visual design section.
 
-### Narration
-- **Spec says**: "This is that same transition. For software." lands as transformation completes and "PROMPT" is visible (lines 176-178)
-- **Implementation does**: Narration "This is that same transition. For software." fades in at BEATS.NARRATION_START (MoldToPrompt.tsx:100-127)
-- **Severity**: None - Correctly implemented
+13. **Remotion Registration**: Properly registered in `Root.tsx` (line 619-628) as composition "MoldToPrompt" with correct dimensions, fps, and duration.
 
-### Manufacturing Context Label
-- **Spec says**: Not specified
-- **Implementation does**: "Injection Mold" label fades in during setup and out during morph (MoldToPrompt.tsx:75-98)
-- **Severity**: None - Contextual addition consistent with starting visual (mold)
+### Issues Found
 
-## Missing Elements
+1. **No explicit test-verification relationship indicator** (Minor): The spec says "Test suite positioned as verification layer" and "Clear visual hierarchy: prompt -> code -> verified by tests" (lines 78-80). The implementation shows the flow arrow only from prompt to code. There is no explicit arrow or connector from code to the test suite establishing the "verified by" relationship. The test suite appears below the code but lacks a visual link.
 
-### Three Parallel Morphs
-- **Spec says**: "Three parallel morphs (Verilog→prompt, netlist→code, checkmark→tests) reinforce the analogy" (line 228)
-- **Implementation does**: Only two morphs present (mold→prompt, part→code). No checkmark→tests morph.
-- **Severity**: High - The test suite transformation is missing
+2. **No background context shift animation** (Minor): Spec Animation Element 4 describes "Chip design background fades, Abstract/digital background appears" (lines 55-57). The implementation uses a static dark gradient background throughout. The left-to-right movement of the morph elements implicitly conveys the context shift, but there is no animated background transition.
 
-### Chip Design / EDA Visual Context
-- **Spec says**: Starting from "Verilog code, gate-level netlist, and Synopsys verification checkmark" from chip design context (lines 21-26)
-- **Implementation does**: Starts from injection molding context (mold + plastic part)
-- **Severity**: High - Breaks the narrative continuity from the chip design sequence
+3. **Code lacks syntax highlighting** (Minor): The spec says code should have "syntax highlighted" text with "Gray with subtle highlighting" (lines 124-125). The implementation renders all code lines in uniform gray (`#A0A0A0`) without any syntax-based color differentiation.
 
-### Test Suite with Green Checkmarks
-- **Spec says**: "Test suite with green checkmarks" as ending state element (line 31, 52)
-- **Implementation does**: No test suite visualization in MoldToPrompt component
-- **Severity**: High - Tests are a core element of the "three parts of the mold" framework
+4. **No drop shadow on prompt document**: The spec says "Border: Subtle shadow" (line 106). The implementation uses a border stroke but no SVG drop-shadow filter on the prompt document.
 
-### Relationship Indicator for Tests
-- **Spec says**: "Test suite positioned as verification layer, Clear visual hierarchy: prompt -> code -> verified by tests" (lines 217-218)
-- **Implementation does**: Only prompt→code relationship shown
-- **Severity**: High - Tests/verification layer not introduced here
+### Notes
 
-## Notes
+The implementation has been fully rewritten from the original injection-mold metaphor to match the spec's chip-design-to-software transformation. All high-severity deltas from the original audit (wrong starting metaphor, missing third morph, missing test suite) have been resolved. The three parallel morphs (Verilog to prompt, netlist to code, checkmark to tests) correctly bridge from the chip design history sequence into the software/PDD context.
 
-**Critical Finding**: The MoldToPrompt component implements a different conceptual transition than what the spec describes:
+The remaining issues are all minor visual polish items that do not affect the conceptual correctness or narrative flow of the composition. The core visual story -- showing that the chip design workflow (Verilog specification, synthesized netlist, formal verification) maps directly onto the software workflow (prompt specification, generated code, test verification) -- is clearly and effectively communicated.
 
-**Spec Intent**: Verilog/chip-design → Prompt/software (direct mapping)
-- Verilog code → Prompt document
-- Gate netlist → Software code
-- Synopsys checkmark → Test suite
-- Three parallel transformations showing the analogy
-
-**Implementation Reality**: Injection-molding → Software (metaphorical mapping)
-- Injection mold → Prompt document
-- Plastic part → Software code
-- Two parallel transformations
-- Manufacturing metaphor rather than direct chip-design transition
-
-This suggests one of two possibilities:
-1. The spec was written after/independently of the implementation and describes a different vision
-2. The implementation predates this spec and uses a different metaphorical approach
-
-The injection molding metaphor may actually be more accessible to general audiences (fewer people understand Verilog than understand injection molding), but it creates discontinuity with the detailed chip design history sequence (specs 09a-09e).
-
-The test suite element is completely absent from MoldToPrompt but appears later in PromptGeneratesCode, suggesting the framework's "three parts" (prompt, code, tests) are introduced incrementally rather than all at once as the spec envisions.
-
-**Verdict**: While the implementation is well-executed for what it does (mold→prompt morph), it does not match the spec's vision of a direct chip-design-to-software transformation with three parallel morphs. This is a fundamental conceptual delta, not just an implementation detail.
-
-## Resolution Status
-
-**Status**: RESOLVED
-
-**Summary**:
-The MoldToPrompt implementation has been completely rewritten to match the spec's vision of a chip-design-to-software transformation with three parallel morphs.
-
-**Changes Made**:
-1. **Replaced injection mold metaphor with chip design visuals**:
-   - Removed `MoldShape.tsx` (injection mold)
-   - Created `VerilogBlock.tsx` (Verilog code → Prompt document)
-   - Uses teal colors from ChipDesignHistory on LEFT side
-   - Uses blue PDD colors on RIGHT side
-
-2. **Implemented gate-level netlist transformation**:
-   - Removed old `CodeLines.tsx` (amber plastic part)
-   - Created `GateNetlist.tsx` (Gate netlist → Software code)
-   - Renders gate symbols (AND, OR, NOT) with wire connections
-   - Morphs into gray monospace code (no glow)
-
-3. **Added missing third morph element**:
-   - Created `SynopsysCheckmark.tsx` (Verification checkmark → Test suite)
-   - Single green checkmark on LEFT splits into multiple test checkmarks on RIGHT
-   - Test suite has amber glow in final state
-   - Completes the three-part transformation framework
-
-4. **Updated visual hierarchy**:
-   - LEFT side: Chip design context (teal colors)
-   - RIGHT side: Software/PDD context (blue prompt glow, gray code, amber test glow)
-   - Context labels identify "Verilog Code", "Gate-Level Netlist", "Synopsys Verification" (LEFT)
-   - Context labels identify "Specification", "Generated Code", "Verification Tests" (RIGHT)
-
-5. **Maintained smooth morph animations**:
-   - All three morphs run in parallel (frames 90-240)
-   - Consistent easing and timing across all transformations
-   - Labels, glows, and flow arrow appear during appropriate phases
-
-**Files Modified**:
-- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/19-MoldToPrompt/constants.ts` - Updated to include chip design visuals and test suite
-- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/19-MoldToPrompt/MoldToPrompt.tsx` - Rewritten to orchestrate three parallel morphs
-- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/19-MoldToPrompt/PromptDocument.tsx` - Updated to work with new layout
-- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/19-MoldToPrompt/FlowArrow.tsx` - Updated to work with new layout
-
-**Files Created**:
-- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/19-MoldToPrompt/VerilogBlock.tsx` - Verilog code morphing to prompt document
-- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/19-MoldToPrompt/GateNetlist.tsx` - Gate netlist morphing to software code
-- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/19-MoldToPrompt/SynopsysCheckmark.tsx` - Verification checkmark morphing to test suite
-
-**Files Removed**:
-- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/19-MoldToPrompt/MoldShape.tsx` - Replaced by VerilogBlock.tsx
-- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/19-MoldToPrompt/CodeLines.tsx` - Replaced by GateNetlist.tsx
-
-**Implementation Verification**:
-- All TypeScript files are syntactically correct
-- Three parallel morphs now match spec exactly:
-  1. Verilog code → Prompt document (with blue glow)
-  2. Gate-level netlist → Software code (gray, no glow)
-  3. Synopsys checkmark → Test suite (with amber glow)
-- Visual continuity established from ChipDesignHistory sequence (specs 09a-09e)
-- "Three parts" framework (prompt, code, tests) introduced simultaneously as spec envisions
-
-**All Issues Resolved**:
-✓ Chip design visuals (Verilog, netlist, checkmark) on LEFT side
-✓ Software visuals (prompt, code, tests) on RIGHT side
-✓ Three parallel morph transformations
-✓ Correct color coding (teal chip design, blue prompt, gray code, amber tests)
-✓ Direct visual continuity from chip design sequence
-✓ "Three parts of the mold" framework introduced all at once
+**Files reviewed:**
+- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/19-MoldToPrompt/MoldToPrompt.tsx` - Main composition orchestrating three morphs, labels, narration
+- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/19-MoldToPrompt/constants.ts` - BEATS timings, COLORS palette, layout configs, text content
+- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/19-MoldToPrompt/VerilogBlock.tsx` - Verilog code block morphing to prompt document shape with blue glow
+- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/19-MoldToPrompt/PromptDocument.tsx` - "PROMPT" title and body text appearing during labels phase
+- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/19-MoldToPrompt/GateNetlist.tsx` - Gate symbols morphing to gray software code lines
+- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/19-MoldToPrompt/SynopsysCheckmark.tsx` - Single checkmark splitting into test suite with green checkmarks
+- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/19-MoldToPrompt/FlowArrow.tsx` - Downward arrow from prompt to code with "generates" label
+- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/19-MoldToPrompt/index.ts` - Barrel exports
+- `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/Root.tsx` (lines 619-628) - Composition registration

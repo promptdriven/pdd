@@ -1,94 +1,64 @@
 # Audit: 16_grounding_database.md
 
-## Spec Summary
-Shows successful code generation flowing into a "Grounding Database" with a feedback loop. After `pdd fix` succeeds, the (prompt, code) pair flows via animated arrow and particles to a cloud/database icon, which then shows a feedback arrow indicating it informs future generations.
+## Status: PASS
 
-## Implementation Status
-Implemented
+### Requirements Met
 
-## Deltas Found
+1. **Canvas and resolution** -- Resolution is 1920x1080 (constants.ts lines 8-9), background is dark `#1a1a2e` (constants.ts line 31). Matches spec exactly.
 
-### Timeline significantly compressed
-- **Spec says**: Line 43: "Frame 0-90 (0-3s): Success state", Line 48: "Frame 90-180 (3-6s): Data extraction", Line 54: "Frame 180-300 (6-10s): Flow to database", Line 58: "Frame 300-390 (10-13s): Database receives", Line 65: "Frame 390-450 (13-15s): Feedback loop"
-- **Implementation does**: constants.ts shows: SUCCESS_END: 60 (not 90), DATA_HIGHLIGHT_END: 120 (not 180), FLOW_START: 150 / FLOW_END: 250 (not 180-300), DB_PULSE_END: 340 (not 390), FEEDBACK_END: 400 (not 450)
-- **Severity**: Medium - Entire sequence is compressed by 20-50 frames per section
+2. **Duration** -- 15 seconds / 450 frames at 30fps (constants.ts lines 4-7). Matches spec.
 
-### Missing "Learning from success..." message
-- **Spec says**: Lines 50-52 specify displaying "Learning from success..." during data extraction phase
-- **Implementation does**: No such message appears in the code (GroundingDatabase.tsx lines 1-310)
-- **Severity**: Low - Explanatory text that would help clarify the process
+3. **Timeline / beat timings** -- All five animation phases match the spec frame ranges:
+   - SUCCESS: 0-90 (0-3s) -- constants.ts line 14
+   - DATA_HIGHLIGHT: 90-180 (3-6s) -- constants.ts lines 15-16
+   - FLOW: 180-300 (6-10s) -- constants.ts lines 17-18
+   - DB_PULSE: 300-390 (10-13s) -- constants.ts lines 21-22
+   - FEEDBACK: 390-450 (13-15s) -- constants.ts lines 23-24
 
-### Particle animation incomplete
-- **Spec says**: Lines 227-252 show DataParticles component with array of particles (0.1, 0.3, 0.5, 0.7, 0.9), calculating positions along path via `getPointOnPath()`, and fading out particles near end
-- **Implementation does**: Lines 164-181 implement particles with simpler logic - only 4 particles (0.2, 0.4, 0.6, 0.8) instead of 5, uses linear calculation `particleX = 400 * Math.min(flowProgress, 1 - offset)` instead of bezier path, no `getPointOnPath()` function
-- **Severity**: Low - Particles work but don't follow the curved path specified
+4. **Successful generation with green checkmark** -- Code block with checkmark and success indicator present (GroundingDatabase.tsx lines 117-161). Shows `def parse_user_id` code with `"✓ pdd fix succeeded"`.
 
-### Flow arrow path differs from spec
-- **Spec says**: Lines 214-215 show curved path: `d="M0,100 Q150,100 200,200 T400,300"` (quadratic bezier with smooth continuation)
-- **Implementation does**: Line 148 shows simpler straight path: `d={M0,50 Q200,50 400,50}` (horizontal quadratic bezier)
-- **Severity**: Low - Different visual path but still shows flow
+5. **Flow arrow with curved path** -- Arrow path matches spec exactly: `d="M0,100 Q150,100 200,200 T400,300"` (GroundingDatabase.tsx line 222). Green-tinted stroke using `COLORS.GROUNDING_GREEN` (#5AAA6E). Arrow marker present.
 
-### Database pulse animation simplified
-- **Spec says**: Lines 133-139 show pulse interpolating `[300, 320, 360]` to `[1, 1.1, 1]`
-- **Implementation does**: Lines 43-48 show pulse interpolating `[DB_PULSE_START, DB_PULSE_START + 20, DB_PULSE_END]` = `[280, 300, 340]` to `[1, 1.15, 1]`
-- **Severity**: Low - Slightly different timing and scale (1.15 vs 1.1), but same concept
+6. **Data particles (5 particles along bezier path)** -- Five particles at offsets [0.1, 0.3, 0.5, 0.7, 0.9] as specified (GroundingDatabase.tsx line 235). Uses `getPointOnPath()` function (lines 8-38) that correctly calculates quadratic bezier positions for the two-segment path. Fade-out near end implemented (line 243).
 
-### Title added that wasn't in spec
-- **Spec says**: No title mentioned in animation elements or visual design
-- **Implementation does**: Lines 286-306 add "The Feedback Loop" title at top
-- **Severity**: Low - Addition rather than omission, could be helpful
+7. **Grounding Database icon** -- Cloud emoji icon with green glow border and `"Grounding Database"` label (GroundingDatabase.tsx lines 260-296). Background rgba and border color match green palette. Pulse animation on data arrival uses scale [1, 1.1, 1] at frames [300, 320, 360] matching spec exactly (line 80-81).
 
-### Code positioning specified by variables
-- **Spec says**: No positioning details given in spec for implementation
-- **Implementation does**: Lines 67-69 define explicit positions: `codeBlockX = 300`, `databaseX = 1400`, `centerY = 400`
-- **Severity**: N/A - Implementation detail
+8. **Feedback arrow** -- Present with "Informs future generations" label (GroundingDatabase.tsx lines 298-334). Shows loop from database back toward future generations. Controlled by `showFeedbackLoop` prop.
 
-## Missing Elements
+9. **Quote text** -- Exact match: `"Your style. Your patterns. Your team's conventions."` (GroundingDatabase.tsx line 356). Fades in at frames 420-450 matching spec.
 
-### SuccessfulGeneration component
-Spec lines 152-155 reference a `<SuccessfulGeneration>` component. Implementation inlines this content (lines 74-134).
+10. **(prompt, code) pair highlight** -- Data pair glow highlights during frames 90-180 with border color change and box shadow (GroundingDatabase.tsx lines 131-132). Label "(prompt, code) pair" appears below code block (lines 163-176).
 
-### FlowArrow component
-Spec lines 157-161 reference separate `<FlowArrow>` and `<DataParticles>` components. Implementation inlines both in SVG (lines 137-182).
+11. **"Learning from success..." message** -- Present during data extraction phase with fade in/out animation and italic green styling (GroundingDatabase.tsx lines 85-91, 179-195).
 
-### DatabaseIcon component
-Spec lines 167-171 reference a `<DatabaseIcon>` component. Implementation inlines this (lines 185-220).
+12. **Color palette** -- `GROUNDING_GREEN: "#5AAA6E"` matches spec. Background `#1a1a2e` matches spec.
 
-### FeedbackArrow component
-Spec lines 174-177 reference a `<FeedbackArrow>` component. Implementation inlines this (lines 223-258).
+13. **Easing functions** -- Success fade uses `Easing.out(Easing.cubic)` (easeOutCubic, line 50), arrow draw uses `Easing.out(Easing.quad)` (easeOutQuad, line 66), database pulse uses `Easing.out(Easing.back(1.5))` (easeOutBack, line 82). All match spec.
 
-### Quote component
-Spec lines 179-182 reference a `<Quote>` component. Implementation inlines this (lines 261-283).
+14. **Composition registration** -- Registered in Root.tsx as `"GroundingDatabase"` with correct dimensions and default props.
 
-### getPointOnPath function
-Spec line 236 references `getPointOnPath(particleProgress)` for calculating particle positions along bezier curve. This function is not implemented.
+### Issues Found
 
-## Positive Notes
-- Core feedback loop concept is implemented
-- Database cloud icon matches spec (☁️)
-- Data pair highlighting works as intended
-- Feedback arrow is present and labeled
-- Quote text matches exactly: "Your style. Your patterns. Your team's conventions."
-- Color palette matches (GROUNDING_GREEN: #5AAA6E)
-- Duration matches (15 seconds / 450 frames)
-- Success indicator matches: "✓ pdd fix succeeded"
-- Border glow effect on data pair works well (line 89)
-- Particle system functions, even if simplified
-- Database pulse effect creates nice emphasis
+1. **Data highlight easing missing** (Low)
+   - Spec (line 303): Data highlight should use `easeInOutSine`
+   - Implementation (GroundingDatabase.tsx line 54-59): `dataPairGlow` interpolation uses default linear easing (no easing option specified)
 
-## Resolution Status
-- **Status**: RESOLVED
-- **Changes Made**:
-  1. **Extended timeline** - Updated all BEATS constants in constants.ts to match spec timings:
-     - SUCCESS_END: 60 → 90 frames (0-3s)
-     - DATA_HIGHLIGHT_END: 120 → 180 frames (3-6s)
-     - FLOW_START/END: 150-250 → 180-300 frames (6-10s)
-     - DB_PULSE_START/END: 280-340 → 300-390 frames (10-13s)
-     - FEEDBACK_END: 400 → 450 frames (13-15s)
-  2. **Added "Learning from success..." message** - Implemented learningMessageOpacity interpolation and added message display during data extraction phase (frames 90-180) in italic green text below the code block
-  3. **Fixed particle count to 5** - Changed particle array from [0.2, 0.4, 0.6, 0.8] to [0.1, 0.3, 0.5, 0.7, 0.9] as specified in spec
-  4. **Implemented getPointOnPath() function** - Added helper function to calculate positions along quadratic bezier curve path (M0,100 Q150,100 200,200 T400,300) with proper mathematical bezier interpolation
-  5. **Curved flow arrow** - Changed arrow path from horizontal `d="M0,50 Q200,50 400,50"` to curved spec path `d="M0,100 Q150,100 200,200 T400,300"` with proper arrowhead marker
-  6. **Adjusted database pulse** - Updated scale from 1.15 to 1.1 and adjusted timing to match spec keyframes [300, 320, 360] with easeOutBack easing
-  7. **Particle fade-out** - Implemented opacity fade near end of path for particles as they approach database
-- **Remaining Issues**: None - all major deltas from audit have been addressed. The inlined components (SuccessfulGeneration, FlowArrow, etc.) are an implementation detail and work correctly.
+2. **Feedback arrow easing missing** (Low)
+   - Spec (line 307): Feedback arrow should use `easeOutCubic`
+   - Implementation (GroundingDatabase.tsx lines 94-99): `feedbackOpacity` interpolation uses default linear easing (no easing option specified)
+
+3. **Success indicator text differs slightly** (Low)
+   - Spec (line 46): `pdd fix user_parser ✓` (checkmark at end, includes module name)
+   - Implementation (GroundingDatabase.tsx line 142): `✓ pdd fix succeeded` (checkmark at start, no module name, different wording)
+
+4. **Database icon dimensions slightly larger than spec** (Low)
+   - Spec (lines 274-275): width 120, height 100, border 2px, label fontSize 14
+   - Implementation (GroundingDatabase.tsx lines 273-274, 276, 289): width 140, height 120, border 3px, label fontSize 16
+
+### Notes
+
+- The spec references separate sub-components (SuccessfulGeneration, FlowArrow, DataParticles, DatabaseIcon, FeedbackArrow, Quote) but the implementation inlines all of them in a single component. This is an acceptable implementation choice and all functionality is present.
+- The `getPointOnPath()` bezier helper function is well-implemented, correctly handling the two-segment path with the `T` smooth continuation command.
+- The title "The Feedback Loop" is an addition not in the spec but is a reasonable enhancement.
+- All previously identified major issues from the prior audit (compressed timeline, missing learning message, wrong particle count, straight flow arrow, wrong pulse scale) have been fully resolved.
+- The remaining issues are all low severity cosmetic differences that do not affect the overall visual narrative or animation flow.

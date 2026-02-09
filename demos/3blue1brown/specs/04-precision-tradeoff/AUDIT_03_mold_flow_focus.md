@@ -1,104 +1,71 @@
-# Audit: 03_mold_flow_focus.md
+# Audit: Mold Flow Focus (Section 4.3)
 
-## Spec Summary
-A 15-second composition showing an injection mold cross-section with Remotion overlays. Amber glowing walls highlight the mold boundaries, with pulsing contact effects when liquid material hits the walls. A bottom label states "Walls do the precision work". The message emphasizes that precision comes from constraints, not input specification.
+## Status: PASS
 
-## Implementation Status
-Implemented
+### Requirements Met
 
-## Deltas Found
+1. **Canvas Resolution**: 1920x1080 as specified. Constants define `MOLD_FLOW_FOCUS_WIDTH=1920` and `MOLD_FLOW_FOCUS_HEIGHT=1080` (constants.ts:8-9).
 
-### Added Animated Liquid Flow Component (Not in Spec)
-- **Spec says**: Video should show liquid flowing into mold (base video requirement, lines 19-26)
-- **Implementation does**: Adds a full LiquidFlow SVG component with animated liquid blobs, chaotic particles, and spreading effects (MoldFlowFocus.tsx:139-228, 296-297)
-- **Severity**: Medium - Significant addition not specified in original design. This overlays SVG animation on top of the video rather than relying solely on video content
+2. **Duration**: 15 seconds at 30fps (450 frames). Constants define `MOLD_FLOW_FOCUS_FPS=30`, `MOLD_FLOW_FOCUS_DURATION_SECONDS=15`, yielding 450 frames (constants.ts:4-7).
 
-### Subtitle Added to Label
-- **Spec says**: Label should read "Walls do the precision work" (line 69)
-- **Implementation does**: Adds primary label PLUS secondary subtitle "The material flows freely until constrained" (MoldFlowFocus.tsx:318-338)
-- **Severity**: Low - Helpful clarification that reinforces the concept
+3. **Video Base Layer**: Uses `<OffthreadVideo src={staticFile("veo_mold_flow_focus.mp4")} />` for the Veo-generated mold flow video (MoldFlowFocus.tsx:193-196).
 
-### Added Title Overlay (Not in Spec)
-- **Spec says**: No title mentioned
-- **Implementation does**: Adds "Injection Mold Cross-Section" title at top (MoldFlowFocus.tsx:342-362)
-- **Severity**: Low - Provides context, matches pattern from PrinterFocus
+4. **Wall Highlight Glow with Amber (#D9944A)**: `COLORS.WALLS_AMBER` is set to `"#D9944A"` exactly matching spec (constants.ts:32). WallGlow component renders left, right, and bottom wall rects with this color (MoldFlowFocus.tsx:48-85).
 
-### Wall Glow Positioning Differences
-- **Spec says**: Walls at positions x=300/800, y=400/350/600 (lines 150-155 in code structure)
-- **Implementation does**: Walls rendered at different coordinates: x=400/1480/400, y=250/250/610, with contact points adjusted (MoldFlowFocus.tsx:48-85, constants.ts:39-43)
-- **Severity**: Low - Adjusted to fit actual video composition
+5. **Wall Glow Fade-In (Frames 0-90)**: `BEATS.WALL_GLOW_START=0`, `BEATS.WALL_GLOW_END=90`, interpolating opacity from 0 to 0.6 with `Easing.out(Easing.cubic)` matching the spec's `easeOutCubic` requirement (MoldFlowFocus.tsx:146-151, constants.ts:14-15).
 
-### Wall Glow Intensification Logic
-- **Spec says**: Wall glow should intensify at contact points with pulse effects (lines 98-106)
-- **Implementation does**: Implements wallGlowIntensified variable that adds 0.3 opacity boost at first contact (MoldFlowFocus.tsx:266-271)
-- **Severity**: Low - Matches spec intent, implementation detail
+6. **Contact Pulse Effects at Frames 90, 150, 210**: Three contact pulses start at `CONTACT_1_START=90`, `CONTACT_2_START=150`, `CONTACT_3_START=210` matching the spec's animation sequence for 3-6s contact phase (constants.ts:17-19, MoldFlowFocus.tsx:154-165).
 
-### Contact Pulse Frequency
-- **Spec says**: Contact pulse uses `Math.sin((frame - 90) * 0.2)` in example (line 128)
-- **Implementation does**: Uses slower pulse `Math.sin((frame - BEATS.CONTACT_1_START) * 0.15)` (MoldFlowFocus.tsx:252-263)
-- **Severity**: Low - Adjusted for better visual rhythm (0.15 vs 0.2 multiplier)
+7. **Wall Glow Intensification at Contact**: `wallGlowIntensified` adds a 0.3 opacity boost starting at first contact (MoldFlowFocus.tsx:168-173), matching spec requirement for wall glow intensifying when liquid contacts wall.
 
-### Additional SVG Filters
-- **Spec says**: Basic glow filter with stdDeviation="8" (lines 226-233)
-- **Implementation does**: Adds both "wallGlow" (stdDeviation=8) AND "strongGlow" (stdDeviation=15) filters, plus "liquidGlow" for animated flow (MoldFlowFocus.tsx:30-46, 164-170)
-- **Severity**: Low - Enhanced visual quality
+8. **Contact Point Pulse Animation**: Sinusoidal pulsing using `Math.sin((frame - start) * 0.15) * 0.3 + 0.7` creates oscillating intensity matching spec's code example pattern (MoldFlowFocus.tsx:154-165).
 
-## Missing Elements
+9. **Label Text**: "Walls do the precision work" appears exactly as specified (MoldFlowFocus.tsx:226).
 
-None - all core spec requirements are implemented:
-- Wall highlights with amber glow (#D9944A)
-- Contact point pulses at multiple locations
-- Bottom label with fade-in animation
-- Proper timing with BEATS (0-3s glow, 3-6s contacts, 6-10s constrain, 10-15s label)
+10. **Label Fade-In (Frames 300-360)**: `BEATS.LABEL_START=300`, `BEATS.LABEL_END=360`, interpolating opacity 0 to 1 with `Easing.out(Easing.cubic)` matching spec's `easeOutCubic` (MoldFlowFocus.tsx:176-181, constants.ts:24-25).
 
-## Improvements Over Spec
+11. **Label Positioned at Bottom**: Label div has `bottom: 100` positioning (MoldFlowFocus.tsx:210).
 
-1. **LiquidFlow Animation**: Entire SVG-based liquid simulation overlaying the video, showing flow progression, chaotic particles, and wall interaction
-2. **Subtitle Label**: Secondary text reinforces the "freely flowing until constrained" concept
-3. **Title Card**: "Injection Mold Cross-Section" provides immediate context
-4. **Enhanced Glow Filters**: Multiple filter levels for different visual elements
-5. **Mold Frame Detail**: Adds injection opening frames at top (lines 87-111)
+12. **SVG Glow Filter**: Standard glow filter with `feGaussianBlur stdDeviation="8"` matching spec (MoldFlowFocus.tsx:31-37).
 
-## Potential Concerns
+13. **Radial Gradient Contact Points**: Contact points render as radial-gradient circles matching spec pattern (MoldFlowFocus.tsx:127-129).
 
-### Video vs Overlay Balance
-The LiquidFlow component (MoldFlowFocus.tsx:139-228) is a substantial SVG animation that wasn't in the original spec. This could potentially:
-- Obscure or conflict with actual liquid flow in the Veo-generated video
-- Create synchronization challenges if video timing doesn't match animation
-- Add complexity that may not be needed if video is high quality
+14. **Zod Props Schema**: Props validated with Zod schema (constants.ts:46-48).
 
-However, this also provides:
-- Guaranteed visual consistency regardless of video quality
-- Precise timing control synchronized with wall glow effects
-- Stylized presentation that may better match overall aesthetic
+15. **Integration in Part4PrecisionTradeoff**: MoldFlowFocus is sequenced as Visual 2 starting at frame 470 (15.68s), aligning with narration "In injection molding, precision comes from the walls" at 15.7s (S04-PrecisionTradeoff/constants.ts:45-46).
 
-## Code Quality
+16. **Flow Path Indicators**: Marked optional in spec. Not implemented, which is acceptable per spec.
 
-The implementation demonstrates:
-- Clean component separation (WallGlow, LiquidFlow as sub-components)
-- Proper TypeScript interfaces (ContactPoint, WallGlowProps, LiquidFlowProps)
-- BEATS constants aligned with spec timings
-- Zod schema for props validation
-- Proper easing functions (easeOutCubic, easeInOutQuad)
+17. **LiquidFlow Component Removed**: Previous audit flagged a non-spec LiquidFlow SVG animation component. Confirmed fully removed from current codebase. Implementation now relies solely on video for liquid flow as intended.
+
+### Issues Found
+
+None. All previously identified issues have been resolved.
+
+### Notes
+
+- **Subtitle Addition**: A secondary line "The material flows freely until constrained" appears below the main label (MoldFlowFocus.tsx:228-237). Not in spec but reinforces the narration text and is low-impact.
+
+- **Title Overlay Addition**: "Injection Mold Cross-Section" title at top of frame (MoldFlowFocus.tsx:241-261). Not in spec but provides scene context. Follows pattern used in PrinterFocus (Section 4.2).
+
+- **Wall Position Adjustments**: Spec example code placed walls at x=200/720/200; implementation uses x=400/1480/400 with larger spacing to better fit the 1920-wide canvas (MoldFlowFocus.tsx:48-85). Contact point base coordinates from constants (300/800/550) are offset in the main component (+150/+550/+350) to align with the adjusted wall positions (MoldFlowFocus.tsx:184-188).
+
+- **Contact Pulse Frequency**: Spec example used a 0.2 multiplier; implementation uses 0.15 for a slower, smoother pulse cycle (MoldFlowFocus.tsx:156). The previous audit noted this as an intentional visual rhythm adjustment.
+
+- **Enhanced Glow Filter**: In addition to the spec's standard glow filter (stdDeviation=8), a "strongGlow" filter (stdDeviation=15) is defined (MoldFlowFocus.tsx:38-45). It is defined but not actively referenced by any wall elements, so it has no visible effect currently.
+
+- **Top Injection Opening Frames**: Two additional wall rects at the top of the mold (MoldFlowFocus.tsx:87-111) frame the injection opening. These are not in the spec but align with the visual design diagram showing the injection point at top.
+
+- **Contact Point Size**: Spec uses 80x80px contact pulse divs; implementation uses 120x120px (MoldFlowFocus.tsx:123-126) for more visible glow effects.
+
+- **Beat Timing Alignment**: The MoldFlowFocus component's internal BEATS (0-90-180-300-450 frames) align with its 15s duration, while its placement in Part4PrecisionTradeoff at 15.68s-22.12s gives it approximately 6.44 seconds of screen time within the parent section. The component's internal timing runs independently from frame 0 of its Sequence.
 
 ## File References
-- Implementation: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/40-MoldFlowFocus/MoldFlowFocus.tsx`
+
+- Main component: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/40-MoldFlowFocus/MoldFlowFocus.tsx`
 - Constants: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/40-MoldFlowFocus/constants.ts`
+- Index: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/40-MoldFlowFocus/index.ts`
+- Parent section: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/S04-PrecisionTradeoff/Part4PrecisionTradeoff.tsx`
+- Parent constants: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/S04-PrecisionTradeoff/constants.ts`
 - Video source: `staticFile("veo_mold_flow_focus.mp4")`
-
----
-
-## Resolution Status (2026-02-08)
-
-### MEDIUM Severity Issues - RESOLVED
-
-#### Added Animated Liquid Flow Component (Not in Spec) - FIXED
-- **Issue**: LiquidFlow SVG component with animated liquid blobs, chaotic particles, and spreading effects was added without spec approval
-- **Resolution**: Removed entire LiquidFlow component and all associated code
-- **Changes Made**:
-  - Removed LiquidFlow component definition (lines 139-228)
-  - Removed flowProgress calculation from main component
-  - Removed `<LiquidFlow progress={flowProgress} color={COLORS.LIQUID_BLUE} />` from render
-- **Result**: Implementation now relies solely on video content for liquid flow visualization, as specified
-
-The implementation now correctly matches the spec by using only the Veo-generated video for liquid flow, with Remotion overlays limited to wall glow highlights and contact point pulses as originally specified.
+- Spec: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/specs/04-precision-tradeoff/03_mold_flow_focus.md`

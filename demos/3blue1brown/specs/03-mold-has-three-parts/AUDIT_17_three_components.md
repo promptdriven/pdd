@@ -1,141 +1,76 @@
-# Audit: 17_three_components.md
+# Audit: 17_three_components
 
-## Spec Summary
-Shows all three components (Prompt, Tests, Grounding) working together in an integrated system. The animation pulls back to show the full mold system with prompt flowing in, transforming through grounding, being constrained by walls, and producing code output. Ends with an integration formula showing how the three components combine.
+## Status: ISSUES FOUND
 
-## Implementation Status
-Partially Implemented
+### Requirements Met
 
-## Deltas Found
+1. **Resolution and background correct** -- Canvas is 1920x1080 at 30fps with background color `#1a1a2e`, matching spec lines 14-16. Verified in `constants.ts` lines 8-9 and `COLORS.BACKGROUND` at line 57.
 
-### Completely different visual approach: triangle vs vertical flow
-- **Spec says**: Lines 75-110 show a vertical flow diagram with nozzle at top (PROMPT), grounding in middle, test walls constraining sides, and code output at bottom - representing the injection mold metaphor
-- **Implementation does**: Lines 177-351 show a triangular layout with three vertices (PROMPT top, TESTS bottom-left, GROUNDING bottom-right) connected by edges, with code at the centroid - representing a dependency graph
-- **Severity**: High - Fundamentally different visual metaphor. Spec uses vertical mold injection, implementation uses triangular relationship diagram
+2. **Duration matches spec** -- Standalone composition is 25 seconds (750 frames), matching spec line 4. Verified in `constants.ts` lines 5-7.
 
-### Missing flow animation through system
-- **Spec says**: Lines 48-68 describe "Prompt enters (blue glow at nozzle)", "Through grounding (green glow, material transforms)", "Constrained by walls (amber walls glow, material hits boundaries)", "Code emerges (output appears at bottom)"
-- **Implementation does**: No flow animation exists. Components appear in sequence (lines 188-194 staggered vertex appearance), edges connect (lines 198-202), but no material/data flowing through the system
-- **Severity**: High - Missing the core animation of how data flows through the system
+3. **Three components present with correct colors** -- PROMPT (`#4A90D9` blue), TESTS (`#D9944A` amber), GROUNDING (`#5AAA6E` green) all present and correctly colored. Verified in `constants.ts` lines 58-60 and `ThreeComponents.tsx` lines 232-234.
 
-### Integration formula missing
-- **Spec says**: Lines 69-72 and 290-313 specify displaying "Prompt + Tests + Grounding", "Intent + Constraints + Style", "= Complete Specification" with colored text
-- **Implementation does**: No formula or text labels appear in the code. There's a `showFormula` prop (constants.ts line 65) but it's never used in the component
-- **Severity**: High - Missing the key conceptual takeaway message
+4. **Component labels match spec** -- Labels now read "PROMPT"/"Intent", "TESTS"/"Constraints", "GROUNDING"/"Style", matching spec lines 33-35. Verified in `ThreeComponents.tsx` lines 232-234.
 
-### Component labels don't match spec
-- **Spec says**: Lines 33-40 specify labels as "PROMPT" → "Intent", "TESTS" → "Constraints", "GROUNDING" → "Style"
-- **Implementation does**: Lines 182-184 show labels as "PROMPT" → "encodes intent", "TESTS" → "preserves behavior", "GROUNDING" → "maintains style" (different phrasing, different semantic framing)
-- **Severity**: Medium - Different conceptual framing, more implementation-focused vs user-focused
+5. **Integration formula implemented** -- The IntegrationFormula component (lines 177-224) displays:
+   - "Prompt + Tests + Grounding" with color-coded spans (blue/amber/green) matching spec line 292-304
+   - "Intent + Constraints + Style" in gray matching spec line 302
+   - "= Complete Specification" in white matching spec line 309
+   - Positioned at bottom: 60, centered, matching spec line 285.
 
-### Timeline completely different
-- **Spec says**: Lines 44-72 show 4-second phases: system overview (0-4s), prompt enters (4-8s), through grounding (8-12s), constrained by walls (12-16s), code emerges (16-20s), formula (20-25s)
-- **Implementation does**: constants.ts shows: vertices appear in first 50 frames (0-1.7s), edges connect (2-4s), glows intensify (4-5.3s), code appears (6-7.3s), then hold. No phase matches the spec timing
-- **Severity**: Medium - Compressed timeline changes the pacing and emphasis
+6. **Formula timing matches spec** -- Formula appears at frames 600-660, matching spec line 69 ("Frame 600-750"). Verified in `constants.ts` lines 39-40.
 
-### Code block has no success indicators
-- **Spec says**: Line 67 "Success indicator" when code emerges
-- **Implementation does**: Lines 324-348 show code block with gray styling and "Generated Code" label, but no success indicator (checkmark, green color, etc.)
-- **Severity**: Low - Missing positive feedback
+7. **hexToRgb helper present** -- Used for semi-transparent backgrounds on component blocks, matching spec line 245. Verified in `ThreeComponents.tsx` lines 6-10.
 
-### Missing mold walls visualization
-- **Spec says**: Lines 93-96 show ASCII art with test walls `█` constraining the code space
-- **Implementation does**: TESTS vertex is just a labeled node, no wall visualization
-- **Severity**: Medium - Loses the physical constraint metaphor
+8. **Glow effect on components** -- `boxShadow: 0 0 ${30 * glowIntensity}px ${color}` matches spec line 251. Verified in `ThreeComponents.tsx` line 49.
 
-### Missing flow arrows between components
-- **Spec says**: Lines 182 and 195 show `<FlowArrow from="prompt" to="grounding" />` and similar for other connections
-- **Implementation does**: Triangle edges (lines 262-294) are static connections, not directional flow arrows with animation
-- **Severity**: Medium - Shows relationships but not process flow
+9. **showFormula prop available** -- Allows toggling formula display, useful for dual-purpose usage. Verified in `constants.ts` lines 68-69 and `ThreeComponents.tsx` line 409.
 
-### Center code lacks prominence
-- **Spec says**: Lines 209-213 suggest code output is a significant visual element at bottom
-- **Implementation does**: Lines 324-348 show code as dim, semi-transparent (opacity 0.5), with explicit note "NO GLOW" in comment on line 324
-- **Severity**: Low - Code is de-emphasized, but this might be intentional for "the mold matters" message
+### Issues Found
 
-## Missing Elements
+1. **Fundamentally different visual layout: triangle vs vertical flow** (HIGH)
+   - Spec lines 75-110 define a vertical flow diagram: nozzle at top, grounding in middle, test walls constraining sides, code output at bottom -- representing the injection mold metaphor
+   - Implementation uses a triangular layout with PROMPT at top (960, 180), TESTS at bottom-left (560, 700), GROUNDING at bottom-right (1360, 700), connected by triangle edges (`constants.ts` lines 48-50)
+   - This is a fundamentally different visual metaphor (dependency graph vs mold injection flow)
 
-### ComponentBlock usage different from spec
-Spec lines 175-179, 186-192, 199-204 show ComponentBlock as a generic component used for all three types. Implementation has VertexNode (lines 24-76) which is similar but part of a triangle layout, not a flow layout.
+2. **Missing flow animation through system** (HIGH)
+   - Spec lines 48-68 describe a sequential flow: prompt enters nozzle with blue glow, transforms through grounding with green glow, hits wall boundaries with amber glow, code emerges at output
+   - Implementation has no flow animation. Components appear via staggered scale-up (lines 238-244), edges draw in (lines 247-252), and glows intensify uniformly (lines 255-260), but nothing moves through the system
+   - The spec explicitly describes material/data flowing directionally through components
 
-### WallsBlock component
-Spec lines 197-204 reference a `<WallsBlock>` component specifically for the test walls. Implementation just has another VertexNode.
+3. **Missing mold walls visualization** (MEDIUM)
+   - Spec lines 90-97 and lines 197-204 show test walls as physical barriers (`WallsBlock` component) with solid blocks constraining the code space
+   - Implementation renders TESTS as an identical `VertexNode` to the other components -- just a labeled box, not walls
 
-### OutputBlock component
-Spec lines 210-213 reference an `<OutputBlock>` component. Implementation inlines the code block (lines 324-348).
+4. **Missing FlowArrow components** (MEDIUM)
+   - Spec lines 182, 195, 207 reference `<FlowArrow>` components connecting prompt-to-grounding, grounding-to-walls, and walls-to-output with directional flow animation
+   - Implementation has `TriangleEdge` components (lines 91-138) which are static gradient lines, not directional flow arrows
 
-### IntegrationFormula component
-Spec lines 217 and 275-313 reference an `<IntegrationFormula>` component with color-coded text. This is completely missing from implementation despite a `showFormula` prop existing.
+5. **Missing OutputBlock component** (MEDIUM)
+   - Spec lines 100-103 and 209-213 show a distinct `OutputBlock` for generated code with success indicators (checkmarks)
+   - Implementation has an inline dim code block (lines 383-406) with `opacity: 0.5`, gray styling, and an explicit "NO GLOW" comment -- no success indicators present
 
-### Prompt/Nozzle visual representation
-Spec line 177 calls for "Prompt/Nozzle" visualization. Implementation only has a labeled box, no nozzle shape.
+6. **Timeline phases compressed and reordered** (MEDIUM)
+   - Spec defines 6 distinct 4-second phases: system overview (0-4s), prompt enters (4-8s), through grounding (8-12s), constrained by walls (12-16s), code emerges (16-20s), formula (20-25s)
+   - Implementation runs: vertices appear in 0-1.7s, edges 2-4s, glows 4-5.3s, code 6-7.3s, hold, then formula at 20-22s. The sequential component-by-component glow phases are missing entirely
 
-### Grounding material representation
-Spec line 187 calls for visual representation of "Grounding" as material filling space. Implementation only has a labeled box.
+7. **Easing functions differ from spec** (LOW)
+   - Spec line 318 calls for `easeOutCubic` on system fade and `easeOutQuad` on component glows
+   - Implementation uses `Easing.out(Easing.back(1.5))` for vertex appearance (overshoot bounce) and `Easing.out(Easing.cubic)` for edges. No `easeOutQuad` is used for glows (glow interpolation has no easing, lines 255-260)
 
-## Positive Notes
-- Three components are all present with correct colors
-- Staggered animation creates nice sequential reveal
-- Triangle edges with gradients are visually appealing
-- Easing includes nice overshoot on vertices (back easing)
-- Color palette is correct and consistent
-- Duration matches spec (25 seconds)
-- Derivation arrows pointing to center are a nice touch
-- Code is properly de-emphasized to support "mold matters" theme
-- Sub-labels add explanatory context
+8. **Formula unreachable in S03-MoldThreeParts context** (MEDIUM)
+   - Visual 18 in `S03-MoldThreeParts/constants.ts` runs from 278.46s to 286.34s (~7.87 seconds, ~236 frames)
+   - The formula starts at frame 600 internally, which would never be reached during the S03 sequence playback
+   - Within S03, only frames 0-236 of the internal timeline play: vertices (0-50), edges (60-120), glows (120-160), code (180-220)
+   - The formula feature effectively only works in standalone rendering or if the composition is given more time
 
-## Critical Note
-This implementation chose a fundamentally different visual metaphor (triangle graph vs vertical flow mold). While the triangle effectively shows the three-way relationship, it loses the injection mold metaphor that's central to the video's narrative. The missing integration formula also removes the key conceptual takeaway.
+### Notes
 
----
-
-## Resolution Status (2026-02-08)
-
-### Fixed Issues
-
-1. **Component labels updated** (Medium severity)
-   - Changed from "encodes intent", "preserves behavior", "maintains style" to "Intent", "Constraints", "Style"
-   - Now matches spec lines 33-40
-   - File: ThreeComponents.tsx lines 181-185
-
-2. **Integration formula added** (High severity)
-   - Added IntegrationFormula component showing:
-     - "Prompt + Tests + Grounding" (color-coded)
-     - "Intent + Constraints + Style"
-     - "= Complete Specification"
-   - Appears at frame 600-660 (20-22s) as specified in spec lines 69-72
-   - Uses `showFormula` prop from constants (line 65)
-   - File: ThreeComponents.tsx lines 177-227, 398
-
-3. **Timing constants added**
-   - Added FORMULA_START: 600, FORMULA_END: 660 to BEATS
-   - File: constants.ts lines 40-41
-
-### Remaining Issues
-
-**Note**: This composition serves DUAL purposes for TWO different sections:
-- Section 3.17 (Mold): Requires vertical flow/mold metaphor with flow animation
-- Section 6.4 (Closing): Requires triangle diagram (IMPLEMENTED)
-
-The current implementation fulfills the **Section 6.4 (Closing)** requirements but does NOT fulfill Section 3.17 (Mold) requirements:
-
-1. **Fundamentally different visual approach** (High severity - UNFIXED)
-   - Spec 3.17 calls for vertical mold injection system
-   - Implementation uses triangle layout (correct for Section 6.4)
-   - Would require separate composition for Section 3.17
-
-2. **Missing flow animation** (High severity - UNFIXED)
-   - Spec 3.17 requires material flowing through system
-   - No flow animation exists (static triangle is correct for Section 6.4)
-
-3. **Missing mold walls visualization** (Medium severity - UNFIXED)
-   - Spec 3.17 shows test walls as physical constraints
-   - Implementation just has labeled vertex (correct for Section 6.4)
-
-### Recommendation
-
-The 37-ThreeComponents composition should be used ONLY for Section 6.4 (Closing/Triangle). A separate composition (e.g., "37b-MoldIntegration") should be created for Section 3.17 (Mold) with:
-- Vertical flow layout matching lines 75-110
-- Flow animation showing material moving through system
-- Mold walls visualization
-- The integration formula (now implemented)
+- The composition is used as Visual 18 in `S03-MoldThreeParts/Part3MoldThreeParts.tsx` line 176, with `defaultThreeComponentsProps` (which sets `showFormula: true`).
+- The narration at that point is: "Cramped plus tests plus grounding. Intent plus constraints plus style..." (segment 38 at 278.5s), followed by "complete specification" (segment 39 at 286.3s). The narration about "complete specification" falls AFTER the ThreeComponents visual ends and CodeOutputMoldGlows begins -- meaning the formula text would ideally need to appear within the available 7.87 seconds, not at frame 600.
+- The existing audit's recommendation to create a separate "37b-MoldIntegration" composition for the Section 3.17 vertical-flow mold metaphor remains valid. The current triangle layout is appropriate for Section 6.4 (Closing) but does not match the mold injection metaphor required by Section 3.17.
+- Key implementation files:
+  - `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/37-ThreeComponents/ThreeComponents.tsx`
+  - `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/37-ThreeComponents/constants.ts`
+  - `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/S03-MoldThreeParts/Part3MoldThreeParts.tsx` (sequence integration at Visual 18)
+  - `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/S03-MoldThreeParts/constants.ts` (timing at lines 132-134)

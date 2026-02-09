@@ -1,92 +1,89 @@
 # Audit: 01f_code_blinks.md
 
-## Spec Summary
-Full-screen code editor showing complex patched function with blinking cursor as the only motion. Duration: ~10 seconds (1:25-1:35).
-- Dark code editor (VS Code/Cursor aesthetic), filename `user_parser.py`
-- 25-30 lines of Python function with multiple patch layers (color-coded by era)
-- Inline comments: "// patched for edge case", "// TODO: this whole block needs refactoring", etc.
-- Patch indicators in gutter (git-blame style colored bars)
-- Cursor blinks at ~530ms interval at end of complex line
-- Fade in from previous scene, static hold with only cursor blink
-- Narration: "Code just got cheap" lands during 4-6 second mark
-- Hard cut transition to 01g (code regenerates)
+## Status: ISSUES FOUND
 
-## Implementation Status
-Not Implemented (as specified)
+### Requirements Met
 
-## Deltas Found
+1. **Dark background color**: The spec requires `#1E1E2E` background. VISUAL_03 in `ColdOpenSection.tsx` (line 75) uses `backgroundColor: "#1a1a2e"` on the outer fill and `background: "#1E1E2E"` (line 85) on the code block itself. The code block matches spec; the outer container is close but slightly different (`#1a1a2e` vs `#1E1E2E`).
 
-### Delta 1: Wrong visual mapping in sequence
-- **Spec says**: Section 0.6 "Code Blinks" at timestamp 1:25-1:35, showing patched code with blinking cursor before regeneration happens in 0.7
-- **Implementation does**: ColdOpenSection.tsx has no visual at this timestamp range. The constants.ts shows the cold open ends at 15.96s (479 frames) with VISUAL_04. The spec's 1:25 (85 seconds) is far beyond the implemented cold open duration
-- **Severity**: High - Timing/sequencing completely different from spec
+2. **Python patched function code content**: The spec provides a `parse_user_input` function with inline patch comments. VISUAL_03 (line 86) renders a Python function named `parse_user_input` with similar patch-style comments (`# patched: handle None input (hotfix 2024-01)`, `# workaround for unicode edge case`, `# TODO: this whole block needs refactoring`, `# don't remove -- breaks downstream`). The code content is a reasonable match to the spec's code sample.
 
-### Delta 2: Implemented as part of code regeneration, not separate beat
-- **Spec says**: This is a standalone 10-second beat showing static patched code with cursor blink, followed by a hard cut to 01g where regeneration happens
-- **Implementation does**: ColdOpenSection.tsx VISUAL_03 (lines 73-115) shows both old and new code in a single sequence: old code blurs out (lines 77-88), then new code fades in (lines 90-100). There's no separate "code blinks" beat with static hold
-- **Severity**: High - Two separate beats (01f and 01g) have been merged into one visual
+3. **JetBrains Mono font**: VISUAL_03 (line 86) uses `fontFamily: "'JetBrains Mono', monospace"`, matching the spec's font requirement.
 
-### Delta 3: No cursor blink animation
-- **Spec says**: "Blinking cursor - Standard block cursor, white (#FFFFFF), blinks at ~530ms interval, positioned at end of complex line deep in function. The cursor blink is the only motion"
-- **Implementation does**: No cursor blink implementation in ColdOpenSection.tsx VISUAL_03. The code is shown as static text in a pre block with no interactive elements
-- **Severity**: High - Key visual element missing
+4. **1920x1080 resolution**: `S00-ColdOpen/constants.ts` (lines 18-19) defines `COLD_OPEN_WIDTH = 1920` and `COLD_OPEN_HEIGHT = 1080`, matching spec.
 
-### Delta 4: No patch layer color coding
-- **Spec says**: Multiple patch layers with distinct colors showing "eras": original (#C0C0C0), first patch (#C4A8A0), second patch (#C89890), third patch (#CC8880). Git-blame style colored bars in gutter with 4-5 distinct color bands
-- **Implementation does**: Single monochrome code block with basic syntax (lines 86-87), no patch layer visualization, no gutter color indicators
-- **Severity**: Medium - Simplified implementation loses the "geological strata" visual metaphor
+### Issues Found
 
-### Delta 5: No inline comments visualization
-- **Spec says**: Scattered inline comments like "// patched: handle None input (hotfix 2024-01)", "// TODO: this whole block needs refactoring", "// don't remove -- breaks downstream" with a warning icon (yellow triangle) next to one line
-- **Implementation does**: Python code in ColdOpenSection.tsx lines 86 includes basic comments but no visual treatment (no color coding, no warning icons, just plain text in code block)
-- **Severity**: Medium - Comments present but not visually emphasized as spec requires
+#### Issue 1: Beat merged with 01g code regeneration -- not a standalone scene
+- **Spec says**: Section 0.6 "Code Blinks" is a standalone ~10-second contemplative beat (timestamp 1:25-1:35) where patched code sits static on screen with only a blinking cursor for motion. It is followed by a hard cut to Section 0.7 (01g) where the function deletes and regenerates clean.
+- **Implementation does**: VISUAL_03 in `ColdOpenSection.tsx` (lines 73-115) combines both beats into a single ~1-second sequence (frames 383-413 at 30fps = ~1 second). The old patched code immediately begins dissolving (blur + fade at frames 10-25 local) while new clean code fades in (frames 18-30 local). There is no standalone "code blinks" hold.
+- **Impact**: High. The spec's entire emotional purpose -- a contemplative pause where the viewer absorbs accumulated technical debt -- is absent. The ~6-8 second static hold that defines this beat does not exist.
+- **Spec ref**: Animation Sequence steps 2-4 (frames 15-300), "breathing room" shot description.
+- **Code ref**: `S00-ColdOpen/ColdOpenSection.tsx` lines 73-115, `S00-ColdOpen/constants.ts` lines 37-39 (VISUAL_03: frames 383-413).
 
-### Delta 6: No editor chrome/UI mockup
-- **Spec says**: "Full-screen dark code editor (VS Code / Cursor aesthetic), Font: JetBrains Mono, ~16px, Line numbers in gutter: muted gray (#555), Subtle top bar with filename: `user_parser.py`"
-- **Implementation does**: Plain `<pre>` tag with inline styles (line 86), no editor chrome, no filename bar, no line numbers in gutter
-- **Severity**: Medium - Generic code display instead of IDE aesthetic
+#### Issue 2: No blinking cursor animation
+- **Spec says**: Standard block cursor, white `#FFFFFF`, blinks at ~530ms interval (on for 16 frames, off for 16 frames at 30fps), positioned at end of a complex line deep in the function. "The cursor blink is the only motion -- everything else is static."
+- **Implementation does**: No cursor element exists anywhere in `ColdOpenSection.tsx`. The code is rendered as a static `<pre>` block with no interactive or animated cursor element.
+- **Impact**: High. The blinking cursor is the defining visual motif of this beat -- "one small point of motion in a dense, static scene."
+- **Spec ref**: Animation Elements item 3 (Blinking Cursor), Code Structure lines 130-133 and 175-181.
+- **Code ref**: `S00-ColdOpen/ColdOpenSection.tsx` lines 85-87 (static pre block, no cursor).
 
-### Delta 7: No fade-in animation as specified
-- **Spec says**: "Frame 0-15 (0-0.5s): Fade in from previous scene, code editor fades in from black, Quick `easeOutCubic` opacity transition"
-- **Implementation does**: VISUAL_03 starts at frame 383 with old code immediately visible at opacity 1 (lines 77-88), no fade-in from black
-- **Severity**: Low - Different transition approach
+#### Issue 3: No patch layer color coding by era
+- **Spec says**: Multiple patch layers with distinct color temperatures showing different "eras" of modifications: original code `#C0C0C0`, first patch `#C4A8A0`, second patch `#C89890`, third patch `#CC8880`. Lines should be visually distinguishable by their age/era through warming color progression.
+- **Implementation does**: All code text is rendered in a single color `#8a9caf` (line 86). No per-line or per-section color differentiation exists. The code appears monochrome.
+- **Impact**: Medium. The "geological strata" visual metaphor that communicates accumulated technical debt layering is absent.
+- **Spec ref**: Animation Elements item 2 (Complex Patched Function, color coding), Code Structure lines 154-159 (patchLayers).
+- **Code ref**: `S00-ColdOpen/ColdOpenSection.tsx` line 86 (`color: "#8a9caf"`).
 
-### Delta 8: No vignette darkening
-- **Spec says**: "Frame 240-300 (8-10s): Final beat before transition, slight vignette darkening at edges (subtle, 5% opacity)"
-- **Implementation does**: No vignette effect in VISUAL_03 implementation
-- **Severity**: Low - Missing atmospheric detail
+#### Issue 4: No git-blame style gutter indicators
+- **Spec says**: Faint colored bars in the gutter (git-blame style) with 4-5 distinct muted color bands (`#3A4A5A`, `#4A3A3A`, `#4A4A3A`, `#5A3A3A`, `#3A3A4A`) showing different eras of patches. Also a small yellow warning triangle icon next to one comment line.
+- **Implementation does**: No gutter element, no blame-style colored bars, no warning icon. The code block has no side decorations.
+- **Impact**: Medium. These elements reinforce the visual narrative of code evolving through many hands and patches.
+- **Spec ref**: Animation Elements item 4 (Subtle Patch Indicators), Code Structure lines 164-172 (BlameGutter) and line 184 (WarningIcon).
+- **Code ref**: `S00-ColdOpen/ColdOpenSection.tsx` lines 85-87 (bare code block, no gutter).
 
-## Missing Elements
+#### Issue 5: No editor chrome (title bar, line numbers)
+- **Spec says**: Full-screen dark code editor with VS Code/Cursor aesthetic. Includes a subtle top bar with filename `user_parser.py`, line numbers in gutter (muted gray `#555`), minimal editor chrome.
+- **Implementation does**: The code is inside a plain `<div>` with `background: "#1E1E2E"`, padding, border-radius, and a red border (`border: "1px solid #E74C3C"`). No title bar, no line numbers, no editor chrome. The red border is not specified anywhere in the spec and contradicts the minimal aesthetic.
+- **Impact**: Medium. The editor mockup communicates "this is a real codebase" and the filename grounds the viewer in a specific file.
+- **Spec ref**: Animation Elements item 1 (Code Editor Frame), Code Structure lines 146-149.
+- **Code ref**: `S00-ColdOpen/ColdOpenSection.tsx` line 85.
 
-1. **Blinking cursor component**: No cursor implementation at all. Spec includes detailed cursor logic with 530ms blink cycle (16 frames on, 16 frames off) in the example code structure (lines 172-181)
+#### Issue 6: No fade-in from previous scene
+- **Spec says**: Frame 0-15 (0-0.5s): Fade in from black with `easeOutCubic` opacity transition.
+- **Implementation does**: VISUAL_03 starts immediately at full opacity. The old patched code is at opacity 1 from frame 0 of the local sequence (line 82: opacity interpolation starts `[0, 10, 11, 25]` mapping to `[1, 1, 1, 0]` -- starts at full opacity).
+- **Impact**: Low. The transition approach is different but may not be noticeable in context since VISUAL_02 (a Veo clip) precedes it.
+- **Spec ref**: Animation Sequence step 1 (frames 0-15).
+- **Code ref**: `S00-ColdOpen/ColdOpenSection.tsx` line 82.
 
-2. **Editor UI components**: No EditorTopBar, LineNumberGutter, BlameGutter, WarningIcon components mentioned in spec's code structure (lines 146-184)
+#### Issue 7: No vignette darkening effect
+- **Spec says**: Frame 240-300 (8-10s): Slight vignette darkening at edges, subtle 5% opacity.
+- **Implementation does**: No vignette overlay in VISUAL_03. Since the beat is only ~1 second, there is no time window for a vignette anyway.
+- **Impact**: Low. Atmospheric detail; depends on the static hold existing at all (Issue 1).
+- **Spec ref**: Animation Sequence step 4 (frames 240-300), Code Structure lines 136-141.
+- **Code ref**: Not present in `ColdOpenSection.tsx`.
 
-3. **Patch layer system**: No system for color-coding different "eras" of patches to show accumulated technical debt visually
+#### Issue 8: Duration mismatch (~1s vs ~10s)
+- **Spec says**: ~10 seconds duration (300 frames at 30fps). Timestamp 1:25-1:35.
+- **Implementation does**: VISUAL_03 spans frames 383-413 = 30 frames at 30fps = ~1 second. Furthermore, the spec timestamp of 1:25 (85 seconds) is far beyond the implemented cold open total duration of 19 seconds.
+- **Impact**: High. The beat is 10x shorter than specified. The entire cold open section was significantly restructured from the original spec timing.
+- **Spec ref**: Duration header, Animation Sequence timing.
+- **Code ref**: `S00-ColdOpen/constants.ts` lines 37-39.
 
-4. **Static hold period**: No ~6-8 second hold where cursor blinks as the only motion. Implementation immediately transitions from old to new code
+#### Issue 9: "01f" label reused for different visual
+- **Spec says**: 01f refers to "Code Blinks" -- static patched code with blinking cursor.
+- **Implementation does**: In `S00-ColdOpen/constants.ts` line 33, VISUAL_02 references `veo:cold_open_01f_modern_sock_toss`, which is a Veo video clip of modern sock tossing aligned to the narration "60 years ago, when socks got cheap enough, she stopped." The `01f` label in the implementation refers to a completely different visual than the spec.
+- **Impact**: Medium. Namespace confusion -- the same section identifier maps to unrelated content between spec and implementation.
+- **Code ref**: `S00-ColdOpen/constants.ts` lines 33-34, `ColdOpenSection.tsx` line 65.
 
-5. **Audio cues**: Spec mentions "very faint IDE hum / fan noise (subtle, almost subliminal)" and "single soft, low-pitched tone as the scene fades in" - no audio implementation visible in ColdOpenSection.tsx
+### Notes
 
-6. **JetBrains Mono font**: Implementation uses generic monospace in style (line 86), not the specified JetBrains Mono
+The spec describes a contemplative "breathing room" shot -- a full 10-second static hold where the viewer absorbs the weight of accumulated technical debt through a densely-patched function, with only a lonely blinking cursor for motion. This is followed by a hard cut to 01g where the function regenerates clean. The emotional payload depends on the contrast between the two beats.
 
-## Notes
+The implementation takes a fundamentally different architectural approach. The cold open section (`S00-ColdOpen`) uses Veo-generated video clips for most visuals and compresses the entire narrative into ~19 seconds. The "code blinks" concept is not implemented as a standalone beat. Instead, VISUAL_03 performs a quick ~1-second dissolve from patched code to clean code, effectively merging specs 01f and 01g into a single rapid transition.
 
-This spec describes a contemplative "breathing room" shot emphasizing the weight of accumulated technical debt through a heavily-patched function and a lonely blinking cursor. The implementation instead combines this with the next beat (01g code regeneration) into a single quick transition: old code blurs out, new code fades in, with `pdd generate` terminal text.
+The `01-ColdOpen` directory contains a separate split-screen Remotion implementation (developer/code on left, grandmother/darning on right) which is a different concept from the S00-ColdOpen section that uses Veo clips. Neither implementation contains the standalone CodeBlinks beat.
 
-The philosophical intent of the spec - to create a pause where the viewer absorbs the "heavy and encrusted, like geological strata" quality of patched code before witnessing clean regeneration - is largely lost in the implementation. The current implementation is more of a quick before/after comparison than a meditative moment.
+No standalone `CodeBlinks` component exists anywhere in the Remotion source. The components specified in the spec's code structure (`EditorTopBar`, `LineNumberGutter`, `BlameGutter`, `WarningIcon`, `Cursor`, `Vignette`, `CodeBlock`) have not been created.
 
-This suggests the cold open was significantly condensed from the original spec, likely for pacing reasons. The spec's 10-second beat has been compressed into a ~1-second transition within a longer sequence.
-
-## Resolution Status
-- **Status**: NOT RESOLVED (Veo video implementation path)
-- **Changes Made**: None - this segment is part of the Veo video implementation in ColdOpenSection.tsx, not the Remotion fallback.
-- **Remaining Issues**:
-  - The Remotion fallback implementation (01-ColdOpen components) does not include this beat as a separate composition
-  - ColdOpenSection.tsx uses Veo video files which may or may not include this contemplative beat as specified
-  - To implement this in Remotion fallback would require:
-    - Creating a new CodeBlinks.tsx component with blinking cursor animation
-    - Full editor UI mockup with git-blame gutter
-    - Patch layer color coding system
-    - Integration into the sequence between split-screen and code regeneration
-  - This is beyond the scope of fixing the existing 01-ColdOpen Remotion implementation, which focuses on the split-screen sequence only
+The patched code content in VISUAL_03 (line 86) does include the correct function name and most of the specified inline comments, so the textual content is partially aligned even though the visual presentation diverges significantly from spec.

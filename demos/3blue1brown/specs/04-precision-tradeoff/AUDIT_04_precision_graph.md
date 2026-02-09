@@ -1,117 +1,75 @@
-# Audit: 04_precision_graph.md
+# Audit: 04_precision_graph (Precision Graph Introduction)
 
-## Spec Summary
-A 15-second Remotion-only composition (no video) showing an animated graph illustrating the inverse relationship between test count and required prompt precision. The graph features animated axes, labels, and an inverse curve with a blue-to-amber gradient. This establishes the visual metaphor for the precision tradeoff in PDD.
+## Status: ISSUES FOUND
 
-## Implementation Status
-Implemented
+### Requirements Met
 
-## Deltas Found
+1. **Canvas and Background**: Resolution 1920x1080 and background color #1a1a2e both match spec exactly (constants.ts lines 8-9, 37).
 
-### Graph Dimensions Slightly Different
-- **Spec says**: Graph container at left: 200, top: 100, width: 1520, height: 800 (lines 123-130)
-- **Implementation does**: Container fills entire screen (left: 0, top: 0, width: 100%, height: 100%), with graph origin at (200, 750) and endpoints at (200, 150) and (1700, 750) (PrecisionGraph.tsx:321-328, constants.ts:29-33)
-- **Severity**: Low - Achieves same visual result with cleaner absolute positioning
+2. **Axis Labels**: Both "Required Prompt Precision" (Y-axis) and "Number of Tests" (X-axis) are present with the correct text (PrecisionGraph.tsx lines 97, 113). Sans-serif font family is used as specified.
 
-### Y-Axis Arrow Timing
-- **Spec says**: Y-axis arrow appears when yProgress === 1 (spec code line 176)
-- **Implementation does**: Arrow fades in when yProgress >= 0.95 with opacity interpolation (PrecisionGraph.tsx:38-46)
-- **Severity**: Low - Smoother visual transition
+3. **Axis Color**: Axes use rgba(255, 255, 255, 0.8) matching the spec's white/light gray requirement (constants.ts line 38).
 
-### X-Axis Arrow Timing
-- **Spec says**: X-axis arrow appears when xProgress === 1 (spec code line 194)
-- **Implementation does**: Arrow fades in when xProgress >= 0.95 with opacity interpolation (PrecisionGraph.tsx:60-68)
-- **Severity**: Low - Matches Y-axis approach for consistency
+4. **Curve Gradient**: Blue (#4A90D9) to Amber (#D9944A) gradient matches spec exactly (constants.ts lines 40-41). The linearGradient is applied horizontally as specified (PrecisionGraph.tsx lines 199-208).
 
-### Arrow Size
-- **Spec says**: Y-axis arrow with points at offsets ±8 and +16 (spec line 178)
-- **Implementation does**: Y-axis arrow with offsets ±10 and +20 (PrecisionGraph.tsx:40)
-- **Severity**: Low - Slightly larger for better visibility
+5. **Inverse Curve Shape**: Curve starts high-left (few tests, high precision) and curves down to low-right (many tests, low precision), matching the spec's visual description. The mathematical function maintains the inverse relationship.
 
-### Curve Inverse Function
-- **Spec says**: `y = 650 - 500 * (1 / (t * 2 + 0.3))` (spec line 218)
-- **Implementation does**: Different normalization: `normalizedY = 1 / (t * 2.5 + 0.25); y = ORIGIN.y - 50 - normalizedY * graphHeight * 0.85` (PrecisionGraph.tsx:175-176)
-- **Severity**: Low - Adjusted for actual graph dimensions, maintains inverse relationship
+6. **Animation Beat Timing**: All frame-based timings match the spec precisely (constants.ts lines 12-26):
+   - Y-axis: frames 0-60 (0-2s)
+   - X-axis: frames 20-80 (staggered start)
+   - Labels: frames 60-120 (2-4s)
+   - Curve: frames 120-270 (4-9s)
+   - Hold: frames 270+ (9-15s)
 
-### Curve Start/End Point Indicators
-- **Spec says**: No explicit mention of endpoint dots in spec
-- **Implementation does**: Adds blue dot at curve start (fades in early) and amber dot at curve end (fades in at 95% progress) (PrecisionGraph.tsx:238-268)
-- **Severity**: Low - Enhancement that makes endpoints more visible
+7. **Easing Functions**: All three easing types match spec (PrecisionGraph.tsx lines 283, 302, 314):
+   - Axes: easeOutCubic
+   - Labels: easeOutQuad
+   - Curve: easeInOutCubic
 
-### Stroke Width
-- **Spec says**: Curve strokeWidth={4} (spec line 256)
-- **Implementation does**: Curve strokeWidth={5} (PrecisionGraph.tsx:230)
-- **Severity**: Low - Slightly thicker for emphasis
+8. **Region Labels**: Optional "Few Tests" / "Many Tests" labels implemented with `showRegionLabels` prop (default: true). Rendered uppercase via CSS textTransform (PrecisionGraph.tsx lines 117-152).
 
-### Region Labels Implementation
-- **Spec says**: Region labels marked as "optional" in spec (lines 36-40)
-- **Implementation does**: Implements region labels as conditional based on `showRegionLabels` prop (default: true) (PrecisionGraph.tsx:117-152, 334)
-- **Severity**: None - Correct implementation of optional feature
+9. **Standalone Duration**: Component constants define 15 seconds at 30fps = 450 frames, matching spec's ~15 second duration (constants.ts lines 4-7).
 
-### Glow Filter Difference
-- **Spec says**: Glow filter with x/y at -20%, width/height at 140% (spec lines 242-248)
-- **Implementation does**: Glow filter with x/y at -30%, width/height at 160% (PrecisionGraph.tsx:211-216)
-- **Severity**: Low - Stronger glow effect for emphasis
+10. **Color Palette**: All colors match spec -- background #1a1a2e, axes rgba(255,255,255,0.8), labels rgba(255,255,255,0.9), curve gradient #4A90D9 to #D9944A.
 
-## Missing Elements
+11. **Section Integration**: PrecisionGraph is correctly integrated into Part4PrecisionTradeoff as Visual 3, synced to the narration "This maps directly to PDD" at 23.42s (S04 constants.ts lines 48-50).
 
-None - all core spec requirements are implemented:
-- Y-axis drawing animation (0-2s)
-- X-axis drawing animation (staggered start at frame 20)
-- Axis labels with fade-in
-- Inverse curve drawing left-to-right (4-9s)
-- Blue-to-amber gradient on curve
-- Hold on complete graph (9-15s)
-- Optional region labels ("Few Tests", "Many Tests")
+12. **Component Structure**: Clean separation into GraphAxes, AxisLabels, and InverseCurve sub-components matching the spec's suggested code structure. Zod schema used for props validation.
 
-## Improvements Over Spec
+### Issues Found
 
-1. **Endpoint Indicators**: Blue and amber dots mark the start and end of the curve with coordinated fade-ins
-2. **Arrow Fade Transitions**: Arrows fade in smoothly rather than appearing instantly
-3. **Stronger Glow**: Enhanced glow filter makes curve more prominent against dark background
-4. **Region Label Styling**: Uppercase, letter-spaced styling for region labels adds polish
+1. **MEDIUM -- Curve and labels never visible in section composition**: The PrecisionGraph component is allocated only ~70 frames (2.34s) within Part4PrecisionTradeoff (VISUAL_03_START at frame 703 to VISUAL_04_START at frame 802). Remotion's `<Sequence from={703}>` resets the child's frame counter to 0 at frame 703. The internal animation requires frame 120 for labels to finish fading in and frames 120-270 for the curve to draw. Within the allocated ~70 frames, only the axes partially draw (Y-axis completes at frame 60, X-axis at frame 80) while labels barely begin fading in and the curve never starts at all. The gradient curve -- described as "the hero element" in the spec -- is never visible during this composition's appearance. Note: GraphAnimateCurve (Visual 6, composition 42) later renders a static fully-drawn version of the graph, so the curve does appear eventually, but PrecisionGraph itself never shows its animated curve draw within the section context.
 
-## Code Quality
+2. **LOW -- Graph container dimensions differ from spec**: Spec defines graph container at left: 200, top: 100, width: 1520, height: 800 (spec lines 124-129). Implementation uses full-screen container (left: 0, top: 0, width: 100%, height: 100%) with graph origin at (200, 750) and endpoints at (200, 150) and (1700, 750) (PrecisionGraph.tsx lines 321-328, constants.ts lines 29-33). Achieves similar visual result with different absolute positioning.
 
-The implementation demonstrates:
-- Excellent component separation (GraphAxes, AxisLabels, InverseCurve as dedicated components)
-- Clean mathematical curve generation with proper normalization
-- BEATS constants exactly match spec timing (0-60, 60-120, 120-270, 270-450)
-- Proper TypeScript typing throughout
-- Zod schema for props validation
-- SVG filters properly defined and referenced
-- Easing functions match spec (easeOutCubic, easeOutQuad, easeInOutCubic)
+3. **LOW -- Axis stroke width**: Spec specifies strokeWidth={2} (spec line 173). Implementation uses strokeWidth={3} (PrecisionGraph.tsx line 34).
 
-## Color Palette Compliance
+4. **LOW -- Curve stroke width**: Spec specifies strokeWidth={4} (spec line 255). Implementation uses strokeWidth={5} (PrecisionGraph.tsx line 230).
 
-All colors match spec exactly:
-- Background: #1a1a2e
-- Axes: rgba(255, 255, 255, 0.8)
-- Labels: rgba(255, 255, 255, 0.9)
-- Curve gradient: #4A90D9 → #D9944A (blue to amber)
-- Region labels: rgba(255, 255, 255, 0.4)
+5. **LOW -- Arrow size scaled up**: Spec defines Y-axis arrow offsets at +/-8 and +16 (spec line 178). Implementation uses +/-10 and +20 (PrecisionGraph.tsx line 40). X-axis arrow similarly scaled.
 
-## Timing Compliance
+6. **LOW -- Arrow fade transition vs instant appear**: Spec shows arrows appearing when progress === 1 (spec lines 176, 194). Implementation fades arrows in starting at progress >= 0.95 with opacity interpolation (PrecisionGraph.tsx lines 38-46, 60-68).
 
-All animation beats match spec precisely:
-- Y-axis: 0-60 frames (0-2s)
-- X-axis: 20-80 frames (offset start, 0.67-2.67s)
-- Labels: 60-120 frames (2-4s)
-- Curve: 120-270 frames (4-9s)
-- Hold: 270-450 frames (9-15s)
+7. **LOW -- Label font size and positioning**: Spec uses fontSize: 24, left: -80, top: 350 for Y-axis label and left: 700, bottom: 20 for X-axis label (spec lines 278-298). Implementation uses fontSize: 28, left: 30, top: 400 for Y-axis and left: 900, bottom: 80 for X-axis (PrecisionGraph.tsx lines 85-86, 91, 104-105, 108).
 
-## File References
-- Implementation: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/41-PrecisionGraph/PrecisionGraph.tsx`
+8. **LOW -- Curve inverse function formula differs**: Spec formula: `y = 650 - 500 * (1 / (t * 2 + 0.3))` (spec line 218). Implementation formula: `normalizedY = 1 / (t * 2.5 + 0.25); y = ORIGIN.y - 50 - normalizedY * graphHeight * 0.85` (PrecisionGraph.tsx lines 175-176). Different coefficients but maintains the inverse relationship shape.
+
+9. **LOW -- Glow filter parameters differ**: Spec defines glow filter at x/y: -20%, width/height: 140%, stdDeviation: 4 (spec lines 242-248). Implementation uses x/y: -30%, width/height: 160%, stdDeviation: 6 (PrecisionGraph.tsx lines 211-217). Produces a stronger glow effect.
+
+10. **LOW -- Endpoint dots not in spec**: Implementation adds blue start dot and amber end dot on the curve (PrecisionGraph.tsx lines 237-268). These are not specified but serve as visual enhancements.
+
+### Notes
+
+- The MEDIUM severity issue (#1) regarding the curve never being visible in the section context is somewhat mitigated by the fact that GraphAnimateCurve (42-GraphAnimateCurve) renders a static fully-drawn precision graph as its base layer (GraphAnimateCurve.tsx lines 198-275). This means the audience does eventually see the complete graph with the curve, but the animated curve-drawing sequence specified in the spec (the smooth left-to-right draw from frames 120-270) is never shown within the section composition. The spec describes the curve draw as the centerpiece animation ("Gradient curve is the hero element"), so this omission is notable.
+- To fix the MEDIUM issue, either: (a) compress the PrecisionGraph internal timing to fit within ~70 frames, (b) extend the VISUAL_03 allocation in the section to accommodate the full 450-frame animation, or (c) accept that the standalone composition shows the full animation while the section uses the abbreviated version transitioning into GraphAnimateCurve.
+- All LOW severity items are minor refinements that improve visual quality (thicker strokes, larger arrows, smoother transitions, stronger glow) without changing the fundamental design intent.
+- The existing audit correctly identified most LOW deltas. This updated audit adds the MEDIUM timing issue discovered by cross-referencing the section composition's frame allocation against the component's internal animation timeline.
+
+### File References
+
+- Component: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/41-PrecisionGraph/PrecisionGraph.tsx`
 - Constants: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/41-PrecisionGraph/constants.ts`
-
-## Notes
-
-This is one of the most faithful implementations relative to its spec. All deviations are minor refinements that improve visual quality without changing the fundamental design. The mathematical curve generation is properly abstracted and the component structure is clean and maintainable.
-
----
-
-## Resolution Status (2026-02-08)
-
-### No HIGH or MEDIUM Severity Issues Found
-
-This implementation has no HIGH or MEDIUM severity deltas. All identified differences from the spec are LOW severity refinements that enhance visual quality while maintaining full compliance with the specification. No fixes required.
+- Index: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/41-PrecisionGraph/index.ts`
+- Section composition: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/S04-PrecisionTradeoff/Part4PrecisionTradeoff.tsx`
+- Section constants: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/S04-PrecisionTradeoff/constants.ts`
+- Related (static graph): `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/42-GraphAnimateCurve/GraphAnimateCurve.tsx`
