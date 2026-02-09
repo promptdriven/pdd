@@ -26,13 +26,7 @@ from unittest.mock import patch, MagicMock
 
 from pdd.agentic_common import (
     load_workflow_state,
-    save_workflow_state,
-    github_load_state,
-    _find_state_comment,
     _serialize_state_comment,
-    _build_state_marker,
-    GITHUB_STATE_MARKER_START,
-    GITHUB_STATE_MARKER_END,
 )
 
 
