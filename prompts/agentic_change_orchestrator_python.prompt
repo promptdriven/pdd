@@ -215,7 +215,7 @@ Before Step 9, create an isolated git worktree for prompt changes. This prevents
    - If branch already exists locally, attempt to delete with `git branch -D`
      - Check the return value from `_delete_branch(cwd, branch_name)` which returns `Tuple[bool, str]`
      - If deletion succeeds: Create new branch with `git worktree add -b {branch} {path} HEAD`
-     - If deletion fails (e.g., branch is currently checked out): Use existing branch with `git worktree add {path} {branch}` (without `-b` flag)
+     - If deletion fails (e.g., branch is currently checked out): Use existing branch with `git worktree add --force {path} {branch}` (without `-b` flag, `--force` required because git refuses to checkout a branch already in use by another worktree)
    - If branch does not exist: Create worktree with new branch using `git worktree add -b {branch} {path} HEAD`
    - Return (worktree_path, None) on success, (None, error_msg) on failure
 
