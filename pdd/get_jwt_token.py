@@ -293,6 +293,9 @@ class DeviceFlow:
             TokenError: If there's an error exchanging the code for a token.
         """
         start_time = time.time()
+        current_interval = interval
+        backoff_429 = 1  # Exponential backoff counter for HTTP 429 without JSON body
+
         while time.time() - start_time < expires_in:
             try:
                 response = requests.post(
@@ -305,22 +308,56 @@ class DeviceFlow:
                     },
                     timeout=10
                 )
-                response.raise_for_status()
-                data = response.json()
 
-                if "error" in data:
+                # Parse JSON before raise_for_status() to handle slow_down in 429 responses
+                # GitHub may return HTTP 429 with {"error": "slow_down"} in the body
+                data = None
+                try:
+                    data = response.json()
+                except (ValueError, requests.exceptions.JSONDecodeError):
+                    pass
+
+                # Handle error responses in JSON body (may come with 200 or 4xx status)
+                if data and "error" in data:
                     if data["error"] == "authorization_pending":
-                        await asyncio.sleep(interval)
+                        await asyncio.sleep(current_interval)
+                        continue
                     elif data["error"] == "slow_down":
-                        await asyncio.sleep(data["interval"])
+                        # Per GitHub spec: "add 5 seconds to the minimum polling interval"
+                        # The slow_down response does NOT include an interval field
+                        current_interval += 5
+                        await asyncio.sleep(current_interval)
+                        continue
                     elif data["error"] == "expired_token":
                         raise AuthError("Device code expired.")
                     elif data["error"] == "access_denied":
                         raise UserCancelledError("User denied access.")
                     else:
                         raise AuthError(f"GitHub authentication error: {data['error']}")
-                else:
+
+                # Handle HTTP 429 without parseable JSON body (network-level rate limit)
+                if response.status_code == 429:
+                    retry_after = response.headers.get("Retry-After")
+                    if retry_after:
+                        try:
+                            wait_time = int(retry_after)
+                        except ValueError:
+                            wait_time = current_interval * backoff_429
+                    else:
+                        wait_time = current_interval * backoff_429
+                    backoff_429 = min(backoff_429 * 2, 8)  # Cap exponential backoff
+                    await asyncio.sleep(wait_time)
+                    continue
+
+                # Raise for other HTTP errors (4xx, 5xx)
+                response.raise_for_status()
+
+                # Success - return access token
+                if data and "access_token" in data:
                     return data["access_token"]
+                else:
+                    raise TokenError("Unexpected response: missing access_token")
+
             except requests.exceptions.ConnectionError as e:
                 raise NetworkError(f"Failed to connect to GitHub: {e}")
             except requests.exceptions.RequestException as e:

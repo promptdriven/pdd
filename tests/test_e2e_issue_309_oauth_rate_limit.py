@@ -18,7 +18,7 @@ Bug Summary (Issue #309):
      in GitHub's response -> KeyError
   3. Polling interval wasn't accumulated per GitHub spec (should add 5s on each slow_down)
 
-The fix (PR #462, Issue #309):
+The fix (commit fca7268):
 - Parse JSON before `raise_for_status()` to check for `slow_down` errors
 - Track `current_interval` internally, incrementing by 5 seconds on each `slow_down`
 - Add exponential backoff for HTTP 429 without JSON body
@@ -27,7 +27,10 @@ The fix (PR #462, Issue #309):
 Run with: pytest tests/test_e2e_issue_309_oauth_rate_limit.py -v
 """
 
-from unittest.mock import patch, MagicMock
+import json
+import os
+from pathlib import Path
+from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
 from click.testing import CliRunner
@@ -136,7 +139,7 @@ class TestAuthLoginSlowDownE2E:
         return response
 
     def test_auth_login_succeeds_after_slow_down_without_interval_field(
-        self, runner, mock_env
+        self, runner, mock_env, monkeypatch
     ):
         """
         E2E Test: CLI `pdd auth login` succeeds when GitHub returns slow_down.
@@ -197,7 +200,7 @@ class TestAuthLoginSlowDownE2E:
         # so result.output won't capture it. exit_code == 0 confirms success.
 
     def test_auth_login_succeeds_after_http_429_with_slow_down_body(
-        self, runner, mock_env
+        self, runner, mock_env, monkeypatch
     ):
         """
         E2E Test: HTTP 429 with slow_down in JSON body is handled correctly.
@@ -251,7 +254,7 @@ class TestAuthLoginSlowDownE2E:
         # so result.output won't capture it. exit_code == 0 confirms success.
 
     def test_auth_login_full_recovery_after_slow_down_sequence(
-        self, runner, mock_env
+        self, runner, mock_env, monkeypatch
     ):
         """
         E2E Integration Test: Full recovery sequence with multiple responses.
@@ -311,7 +314,7 @@ class TestAuthLoginSlowDownE2E:
         # so result.output won't capture it. exit_code == 0 confirms success.
 
     def test_auth_login_handles_http_429_without_json_body(
-        self, runner, mock_env
+        self, runner, mock_env, monkeypatch
     ):
         """
         E2E Test: HTTP 429 without JSON body is handled with retry.
@@ -376,12 +379,10 @@ class TestAuthLoginE2EEnvironment:
     def runner(self):
         return CliRunner()
 
-    def test_auth_login_requires_firebase_api_key(self, runner, monkeypatch, tmp_path):
+    def test_auth_login_requires_firebase_api_key(self, runner, monkeypatch):
         """E2E: auth login fails gracefully when Firebase API key is missing."""
         from pdd import cli
 
-        # Isolate from repo .env file that may contain the key
-        monkeypatch.chdir(tmp_path)
         # Ensure no Firebase API key is set
         monkeypatch.delenv("NEXT_PUBLIC_FIREBASE_API_KEY", raising=False)
 
