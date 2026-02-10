@@ -591,10 +591,30 @@ flowchart TB
 - **[`detect`](#10-detect)**: Analyzes prompts to determine which ones need changes based on a description
 - **[`conflicts`](#11-conflicts)**: Finds and suggests resolutions for conflicts between two prompt files
 - **[`trace`](#13-trace)**: Finds the corresponding line number in a prompt file for a given code line
+- **[`story-test`](#21-story-test)**: Validates prompt changes against user stories
 
 ### Utility Commands
 - **[`auth`](#18-auth)**: Manages authentication with PDD Cloud
 - **[`sessions`](#19-pdd-sessions---manage-remote-sessions)**: Manage remote sessions for `connect`
+
+### User Story Prompt Tests
+PDD can validate prompt changes against user stories stored as Markdown files. This uses `detect` under the hood: a story **passes** when `detect` returns no required prompt changes.
+
+Defaults:
+- Stories live in `user_stories/` and match `story__*.md`.
+- Prompts are loaded from `prompts/` (excluding `*_llm.prompt` by default).
+
+Overrides:
+- `PDD_USER_STORIES_DIR` sets the stories directory.
+- `PDD_PROMPTS_DIR` sets the prompts directory.
+
+Commands:
+- `pdd story-test` runs the validation suite.
+- `pdd change` runs story validation after prompt modifications and fails if any story fails.
+- `pdd fix user_stories/story__*.md` applies a single story to prompts and re-validates it.
+
+Template:
+- See `user_stories/story__template.md` for a starter format.
 
 ## Global Options
 
@@ -1738,6 +1758,13 @@ pdd [GLOBAL OPTIONS] fix [OPTIONS] <GITHUB_ISSUE_URL>
 pdd [GLOBAL OPTIONS] fix --manual [OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE ERROR_FILE
 ```
 
+**User Story Fix Mode:**
+```
+pdd [GLOBAL OPTIONS] fix user_stories/story__my_story.md
+```
+
+This mode treats the story file as a change request for prompts. It runs `detect` to identify impacted prompts, applies prompt updates, and re-validates the story.
+
 #### Manual Mode Arguments
 - `PROMPT_FILE`: The filename of the prompt file that generated the code under test.
 - `CODE_FILE`: The filename of the code file to be fixed.
@@ -1963,6 +1990,8 @@ Options:
 - `--budget FLOAT`: Set the maximum cost allowed for the change process (default is $5.0).
 - `--output LOCATION`: Specify where to save the modified prompt file. The default file name is `modified_<basename>.prompt`. If an environment variable `PDD_CHANGE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 - `--csv`: Use a CSV file for the change prompts instead of a single change prompt file. The CSV file should have columns: `prompt_name` and `change_instructions`. When this option is used, `INPUT_PROMPT_FILE` is not needed, and `INPUT_CODE` should be the directory where the code files are located. The command expects prompt names in the CSV to follow the `<basename>_<language>.prompt` convention. For each `prompt_name` in the CSV, it will look for the corresponding code file (e.g., `<basename>.<language_extension>`) within the specified `INPUT_CODE` directory. Output files will overwrite existing files unless `--output LOCATION` is specified. If `LOCATION` is a directory, the modified prompt files will be saved inside this directory using the default naming convention otherwise, if a csv filename is specified the modified prompts will be saved in that CSV file with columns 'prompt_name' and 'modified_prompt'.
+
+**User Story Validation:** After prompt modifications (agentic or manual), `pdd change` runs user story tests when story files exist. It fails the command if any story indicates required prompt changes. Stories default to `user_stories/story__*.md` and can be overridden with `PDD_USER_STORIES_DIR`.
 
 Example (manual single prompt change):
 ```
@@ -2499,6 +2528,27 @@ pdd firecrawl-cache check <url>        # Check if a URL is cached
 
 **When to use**: Caching is automatic. Use `stats` to check cache status, `info` to view configuration, `check` to verify if a URL is cached, or `clear` to force re-scraping all URLs.
 
+### 21. story-test
+
+Validate prompt changes against user stories stored as Markdown files in `user_stories/`. A story **passes** when `detect` finds no required prompt changes.
+
+**Usage:**
+```bash
+pdd [GLOBAL OPTIONS] story-test [OPTIONS]
+```
+
+**Options:**
+- `--stories-dir DIR`: Directory containing `story__*.md` files (default: `user_stories/`).
+- `--prompts-dir DIR`: Directory containing `.prompt` files (default: `prompts/`).
+- `--include-llm`: Include `*_llm.prompt` files in validation.
+- `--fail-fast/--no-fail-fast`: Stop on the first failing story (default: `--fail-fast`).
+
+**Examples:**
+```bash
+pdd story-test
+PDD_USER_STORIES_DIR=stories pdd story-test --prompts-dir prompts
+```
+
 ## Example Review Process
 
 When the global `--review-examples` option is used with any command, PDD will present potential few-shot examples that might be used for the current operation. The review process follows these steps:
@@ -2658,6 +2708,7 @@ PDD uses several environment variables to customize its behavior:
 **Note**: When using `.pddrc` configuration, context-specific settings take precedence over these global environment variables.
 
 - **`PDD_PROMPTS_DIR`**: Default directory where prompt files are located (default: "prompts").
+- **`PDD_USER_STORIES_DIR`**: Default directory where user story files are located (default: "user_stories").
 - **`PDD_GENERATE_OUTPUT_PATH`**: Default path for the `generate` command.
 - **`PDD_EXAMPLE_OUTPUT_PATH`**: Default path for the `example` command.
 - **`PDD_TEST_OUTPUT_PATH`**: Default path for the unit test file.

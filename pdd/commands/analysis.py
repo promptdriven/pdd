@@ -13,6 +13,7 @@ from ..bug_main import bug_main
 from ..agentic_bug import run_agentic_bug
 from ..crash_main import crash_main
 from ..trace_main import trace_main
+from ..user_story_tests import run_user_story_tests
 from ..track_cost import track_cost
 from ..core.errors import handle_error
 from ..operation_log import log_operation
@@ -59,6 +60,65 @@ def detect_change(
         raise
     except Exception as exception:
         handle_error(exception, "detect", get_context_obj(ctx).get("quiet", False))
+        return None
+
+
+@click.command("story-test")
+@click.option(
+    "--stories-dir",
+    type=click.Path(file_okay=False, dir_okay=True),
+    default=None,
+    help="Directory containing story__*.md files (default: user_stories).",
+)
+@click.option(
+    "--prompts-dir",
+    type=click.Path(file_okay=False, dir_okay=True),
+    default=None,
+    help="Directory containing .prompt files (default: prompts).",
+)
+@click.option(
+    "--include-llm",
+    is_flag=True,
+    default=False,
+    help="Include *_llm.prompt files in validation.",
+)
+@click.option(
+    "--fail-fast/--no-fail-fast",
+    default=True,
+    help="Stop on the first failing story.",
+)
+@click.pass_context
+@track_cost
+def story_test(
+    ctx: click.Context,
+    stories_dir: Optional[str],
+    prompts_dir: Optional[str],
+    include_llm: bool,
+    fail_fast: bool,
+) -> Optional[Tuple[Dict[str, Any], float, str]]:
+    """Validate prompt changes against user stories."""
+    try:
+        obj = get_context_obj(ctx)
+        passed, results, total_cost, model_name = run_user_story_tests(
+            prompts_dir=prompts_dir,
+            stories_dir=stories_dir,
+            strength=obj.get("strength", 0.2),
+            temperature=obj.get("temperature", 0.0),
+            time=obj.get("time", 0.25),
+            verbose=obj.get("verbose", False),
+            quiet=obj.get("quiet", False),
+            fail_fast=fail_fast,
+            include_llm_prompts=include_llm,
+        )
+        result = {
+            "passed": passed,
+            "results": results,
+        }
+        return result, total_cost, model_name
+    except (click.Abort, click.ClickException):
+        raise
+    except Exception as exception:
+        handle_error(exception, "story-test", get_context_obj(ctx).get("quiet", False))
         return None
 
 
