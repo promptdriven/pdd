@@ -90,7 +90,7 @@ def _fetch_issue_data(owner: str, repo: str, number: int) -> Tuple[Optional[Dict
         comments_text = ""
         if comments_url:
             # The comments_url is a full URL. gh api accepts full URLs.
-            cmd_comments = ["gh", "api", comments_url]
+            cmd_comments = ["gh", "api", comments_url, "--paginate"]
             # We don't check=True here because comment fetching failure shouldn't block the whole process
             res_comments = subprocess.run(cmd_comments, capture_output=True, text=True, check=False)
             if res_comments.returncode == 0:

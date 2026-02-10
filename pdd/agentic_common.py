@@ -736,9 +736,10 @@ def _find_state_comment(
     try:
         # List comments
         cmd = [
-            "gh", "api", 
+            "gh", "api",
             f"repos/{repo_owner}/{repo_name}/issues/{issue_number}/comments",
-            "--method", "GET"
+            "--method", "GET",
+            "--paginate"
         ]
         result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
         if result.returncode != 0:
