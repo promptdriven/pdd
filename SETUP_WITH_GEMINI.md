@@ -60,14 +60,27 @@ Right after installation, let PDD bootstrap its configuration:
 pdd setup
 ```
 
-During the wizard:
-- Choose **Install tab completion** if you want shell helpers.
-- Pick **Google Gemini** when asked which providers to configure.
-- Paste your Gemini API key when prompted (you can create it in the next step if you haven’t already).
+The interactive setup wizard will:
+1. **Scan your environment** for existing API keys from all sources
+2. **Show an interactive menu** with options to:
+   - Add or fix API keys (including Gemini)
+   - Add local LLMs (Ollama, LM Studio)
+   - Add custom providers
+   - Remove providers
+3. **Validate your Gemini API key** with a real test request
+4. **Guide model selection** with cost transparency
+5. **Detect agentic CLI tools** and offer installation
+6. **Create .pddrc** for your project
 
-The wizard writes your credentials to `~/.pdd/api-env`, seeds `~/.pdd/llm_model.csv` with Gemini entries, and reminds you to reload your shell (`source ~/.zshrc`, etc.) so completion and env hooks load.
+When adding your Gemini API key:
+- Select option `1. Add or fix API keys` from the menu
+- The wizard will detect that `GEMINI_API_KEY` is missing
+- Paste your API key when prompted (you can create it in the next step if you haven't already)
+- The wizard tests it immediately and confirms it works
 
-If you prefer to configure everything manually—or you’re on an offline machine—skip the wizard and follow the manual instructions below.
+The wizard writes your credentials to `~/.pdd/api-env.zsh` (or `.bash`), updates `llm_model.csv` with your selected models, and reminds you to reload your shell (`source ~/.zshrc`, etc.) so completion and env hooks load.
+
+If you prefer to configure everything manually—or you're on an offline machine—skip the wizard and follow the manual instructions below.
 
 ---
 

@@ -222,12 +222,20 @@ If you want to understand PDD fundamentals, follow this manual example to see it
 
 ### Post-Installation Setup (Required first step after installation)
 
-Run the guided setup:
+Run the comprehensive setup wizard:
 ```bash
 pdd setup
 ```
 
-This wraps the interactive bootstrap utility to install shell tab completion, capture your API keys, create ~/.pdd configuration files, and write the starter prompt. Re-run it any time to update keys or reinstall completion.
+The setup wizard will:
+- **Scan your environment** for API keys from all sources (shell, .env, ~/.pdd files)
+- **Present an interactive menu** with options to add/fix keys, configure local LLMs (Ollama, LM Studio), add custom providers, or remove providers
+- **Validate API keys** using actual LLM requests to ensure they work
+- **Guide model selection** with cost transparency (show pricing for each tier)
+- **Detect agentic CLI tools** (claude, gemini, codex) and offer installation
+- **Create .pddrc** configuration file with sensible defaults for your project
+
+The wizard can be re-run at any time to update keys, add providers, or reconfigure settings.
 
 If you skip this step, the first regular pdd command you run will detect the missing setup files and print a reminder banner so you can finish onboarding later.
 
@@ -236,7 +244,7 @@ Reload your shell so the new completion and environment hooks are available:
 source ~/.zshrc  # or source ~/.bashrc / fish equivalent
 ```
 
-👉 If you prefer to configure things manually, see [SETUP_WITH_GEMINI.md](SETUP_WITH_GEMINI.md) for full instructions on obtaining a Gemini API key and creating your own `~/.pdd/llm_model.csv`.
+👉 For detailed setup documentation, see [docs/SETUP_GUIDE.md](docs/SETUP_GUIDE.md). For manual configuration, see [SETUP_WITH_GEMINI.md](SETUP_WITH_GEMINI.md).
 
 5. **Run Hello**:
    ```bash
@@ -320,28 +328,6 @@ The CSV includes columns for:
 For a concrete, up-to-date reference of supported models and example rows, see the bundled CSV in this repository: [pdd/data/llm_model.csv](pdd/data/llm_model.csv).
 
 For proper model identifiers to use in your custom configuration, refer to the [LiteLLM Model List](https://docs.litellm.ai/docs/providers) documentation. LiteLLM typically uses model identifiers in the format `provider/model_name` (e.g., "openai/gpt-4", "anthropic/claude-3-opus-20240229").
-
-## Post-Installation Setup
-
-1. Run the guided setup (required unless you do this manually or use the cloud):
-```bash
-pdd setup
-```
-This wraps the interactive bootstrap utility to install shell tab completion, capture your API keys, create `~/.pdd` configuration files, and write the starter prompt. Re-run it any time to update keys or reinstall completion.
-If you skip this step, the first regular `pdd` command you run will detect the missing setup files and print a reminder banner so you can finish onboarding later (the banner is suppressed once `~/.pdd/api-env` exists or when your project already provides credentials via `.env` or `.pdd/`).
-
-2. Reload your shell so the new completion and environment hooks are available:
-```bash
-source ~/.zshrc  # or source ~/.bashrc / fish equivalent
-```
-
-3. Configure environment variables (optional):
-```bash
-# Add to .bashrc, .zshrc, or equivalent
-export PDD_AUTO_UPDATE=true
-export PDD_GENERATE_OUTPUT_PATH=/path/to/generated/code/
-export PDD_TEST_OUTPUT_PATH=/path/to/tests/
-```
 
 ## Troubleshooting Common Installation Issues
 
@@ -2710,13 +2696,23 @@ The `.pddrc` approach is recommended for team projects as it ensures consistent 
 
 ### Model Configuration (`llm_model.csv`)
 
-PDD uses a CSV file (`llm_model.csv`) to store information about available AI models, their costs, capabilities, and required API key names. When running commands locally (e.g., using the `update_model_costs.py` utility or potentially local execution modes if implemented), PDD determines which configuration file to use based on the following priority:
+PDD uses a CSV file (`llm_model.csv`) to store information about available AI models, their costs, capabilities, and required API key names. The `pdd setup` wizard automatically manages this file by:
+
+- **Dynamic provider discovery:** Reading all provider API keys from the CSV to scan your environment
+- **Interactive model selection:** Letting you choose which model tiers to enable (Fast/Cheap, Balanced, Most Capable) with cost transparency
+- **Custom provider support:** Adding custom LiteLLM-compatible providers and local LLMs (Ollama, LM Studio)
+- **Provider removal:** Safely removing providers by deleting their model rows from the CSV
+
+When running commands locally, PDD determines which configuration file to use based on the following priority:
 
 1.  **User-specific:** `~/.pdd/llm_model.csv` - If this file exists, it takes precedence over any project-level configuration. This allows users to maintain a personal, system-wide model configuration.
 2.  **Project-specific:** `<PROJECT_ROOT>/.pdd/llm_model.csv` - If the user-specific file is not found, PDD looks for the file within the `.pdd` directory of the determined project root (based on `PDD_PATH` or auto-detection).
 3.  **Package default:** If neither of the above exist, PDD falls back to the default configuration bundled with the package installation.
 
 This tiered approach allows for both shared project configurations and individual user overrides, while ensuring PDD works out-of-the-box without requiring manual configuration.
+
+**Note:** The setup wizard uses this CSV as the source of truth for provider discovery and model selection. You can manually edit it, but running `pdd setup` again is the recommended way to manage providers and models.
+
 *Note: This file-based configuration primarily affects local operations and utilities. Cloud execution modes likely rely on centrally managed configurations.*
 
 

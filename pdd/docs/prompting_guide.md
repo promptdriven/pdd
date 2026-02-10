@@ -195,10 +195,10 @@ Tip: Prefer small, named sections using XML‑style tags to make context scannab
 
 The PDD preprocessor supports additional XML‑style tags to keep prompts clean, reproducible, and self‑contained. Processing order (per spec) is: `pdd` → `include`/`include-many` → `shell` → `web`. When `recursive=True`, `<shell>` and `<web>` are deferred until a non‑recursive pass.
 
-- `<pdd>…</pdd>`
+- ``
   - Purpose: human‑only comment. Removed entirely during preprocessing.
   - Use: inline rationale or notes that should not reach the model.
-  - Example: `Before step X <pdd>explain why we do this here</pdd>`
+  - Example: `Before step X `
 
 - `<shell>…</shell>`
   - Purpose: run a shell command and inline stdout at that position.
@@ -221,6 +221,194 @@ The PDD preprocessor supports additional XML‑style tags to keep prompts clean,
 > **Prefer instead:** Capture output to a static file, then `<include>` that file. This ensures reproducible regeneration.
 
 Use these tags sparingly. When you must use them, prefer stable commands with bounded output (e.g., `head -n 20` in `<shell>`).
+
+**`context_urls` in Architecture Entries:**
+
+When an architecture.json entry includes a `context_urls` array, the `generate_prompt` template automatically converts each entry into a `<web>` tag in the generated prompt's Dependencies section. This enables the LLM to fetch relevant API documentation during code generation:
+
+```json
+"context_urls": [
+  {"url": "https://fastapi.tiangolo.com/tutorial/first-steps/", "purpose": "FastAPI routing patterns"}
+]
+```
+
+Becomes in the generated prompt:
+```xml
+<fastapi_routing_patterns>
+  <web>https://fastapi.tiangolo.com/tutorial/first-steps/</web>
+</fastapi_routing_patterns>
+```
+
+The tag name is derived from the `purpose` field (lowercased, spaces replaced with underscores). This mechanism bridges architecture-level research with prompt-level context.
+
+---
+
+## Architecture Metadata Tags
+
+PDD prompts can include optional XML metadata tags that sync with `architecture.json`. These tags enable bidirectional sync between prompt files and the architecture visualization, keeping your project's architecture documentation automatically up-to-date.
+
+### Tag Format
+
+Place architecture metadata tags at the **top of your prompt file** (after any `<include>` directives but before the main content):
+
+```xml
+<pdd-reason>Brief description of module's purpose (60-120 chars)</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "module",
+  "module": {{
+    "functions": [
+      {"name": "function_name", "signature": "(...)", "returns": "Type"}
+    ]
+  }}
+}}
+</pdd-interface>
+
+<pdd-dependency>dependency_prompt_1.prompt</pdd-dependency>
+<pdd-dependency>dependency_prompt_2.prompt</pdd-dependency>
+```
+
+### Tag Reference
+
+**`<pdd-reason>`**
+- **Purpose**: One-line description of why this module exists
+- **Maps to**: `architecture.json["reason"]`
+- **Format**: Single line string (recommended 60-120 characters)
+- **Example**: `<pdd-reason>Provides unified LLM invocation across all PDD operations.</pdd-reason>`
+
+**`<pdd-interface>`**
+- **Purpose**: JSON describing the module's public API (functions, commands, pages)
+- **Maps to**: `architecture.json["interface"]`
+- **Format**: Valid JSON matching one of four interface types (see below)
+- **Example**:
+  ```xml
+  <pdd-interface>
+  {{
+    "type": "module",
+    "module": {{
+      "functions": [
+        {"name": "llm_invoke", "signature": "(prompt, strength, ...)", "returns": "Dict"}
+      ]
+    }}
+  }}
+  </pdd-interface>
+  ```
+
+**`<pdd-dependency>`**
+- **Purpose**: References other prompt files this module depends on
+- **Maps to**: `architecture.json["dependencies"]` array
+- **Format**: Prompt filename (e.g., `llm_invoke_python.prompt`)
+- **Multiple tags**: Use one `<pdd-dependency>` tag per dependency
+- **Example**:
+  ```xml
+  <pdd-dependency>llm_invoke_python.prompt</pdd-dependency>
+  <pdd-dependency>path_resolution_python.prompt</pdd-dependency>
+  ```
+
+### Interface Types
+
+The `<pdd-interface>` tag supports four interface types, matching the architecture.json schema:
+
+**Module Interface** (Python modules with functions):
+```json
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "func_name", "signature": "(arg1, arg2)", "returns": "Type"}
+    ]
+  }
+}
+```
+
+**CLI Interface** (Command-line interfaces):
+```json
+{
+  "type": "cli",
+  "cli": {
+    "commands": [
+      {"name": "cmd_name", "description": "What it does"}
+    ]
+  }
+}
+```
+
+**Command Interface** (PDD commands):
+```json
+{
+  "type": "command",
+  "command": {
+    "commands": [
+      {"name": "cmd_name", "description": "What it does"}
+    ]
+  }
+}
+```
+
+**Frontend Interface** (UI pages):
+```json
+{
+  "type": "frontend",
+  "frontend": {
+    "pages": [
+      {"name": "page_name", "route": "/path"}
+    ]
+  }
+}
+```
+
+### Sync Workflow
+
+1. **Add/edit tags** in your prompt files using the format above
+2. **Click "Sync from Prompt"** in the PDD Connect Architecture page (or call the API endpoint)
+3. **Tags automatically update** `architecture.json` with your changes
+4. **Architecture visualization** reflects the updated dependencies and interfaces
+
+Prompts are the **source of truth** - tags in prompt files override what's in `architecture.json`. This aligns with PDD's core philosophy that prompts, not code or documentation, are authoritative.
+
+### Validation
+
+Validation is **lenient**:
+- Missing tags are OK - only fields with tags get updated
+- Malformed XML/JSON is skipped without blocking sync
+- Circular dependencies are detected and prevent invalid updates
+- Missing dependency files generate warnings but don't block sync
+
+### Best Practices
+
+**Keep `<pdd-reason>` concise** (60-120 chars)
+- Good: "Provides unified LLM invocation across all PDD operations."
+- Too long: "This module exists because we needed a way to call different LLM providers through a unified interface that supports both streaming and non-streaming modes while also handling rate limiting and retry logic..."
+
+**Use prompt filenames for dependencies**, not module names
+- Correct: `<pdd-dependency>llm_invoke_python.prompt</pdd-dependency>`
+- Wrong: `<pdd-dependency>pdd.llm_invoke</pdd-dependency>`
+- Wrong: `<pdd-dependency>context/example.py</pdd-dependency>`
+
+**Validate interface JSON before committing**
+- Use a JSON validator to check syntax
+- Ensure `type` field matches one of: `module`, `cli`, `command`, `frontend`
+- Include required nested keys (`functions`, `commands`, or `pages`)
+
+**Run "Sync All" after bulk prompt updates**
+- If you've edited multiple prompts, sync all at once
+- Review the validation results for circular dependencies
+- Fix any warnings before committing changes
+
+### Relationship to Other Tags
+
+**`<pdd-dependency>` vs `<include>`**:
+- `<pdd-dependency>`: Declares architectural dependency (updates `architecture.json`)
+- `<include>`: Injects content into prompt for LLM context (does NOT affect architecture)
+- Use both when appropriate - they serve different purposes
+
+**`<pdd-*>` tags vs ``: Human-only comments (removed by preprocessor, never reach LLM)
+- Both are valid PDD directives with different purposes
+
+### Example: Complete Prompt with Metadata Tags
+
+See `docs/examples/prompt_with_metadata.prompt` for a full example showing all three metadata tags in context.
 
 ---
 
@@ -544,7 +732,8 @@ Key practice: Code and examples are ephemeral (regenerated); Tests and Prompts a
 | Task Type | Where to Start | The Workflow |
 | :--- | :--- | :--- |
 | **New Feature** | **The Prompt** | 1. Add/Update Requirements in Prompt.<br>2. Regenerate Code (LLM sees existing tests).<br>3. Write new Tests to verify. |
-| **Bug Fix** | **The Test File** | 1. Use `pdd bug` to create a failing test case (repro) in the Test file.<br>2. Clarify the Prompt to address the edge case if needed.<br>3. Run `pdd fix` (LLM sees the new test and must pass it). |
+| **Bug Fix (Code)** | **The Test File** | 1. Use `pdd bug` to create a failing test case (repro) in the Test file.<br>2. Clarify the Prompt to address the edge case if needed.<br>3. Run `pdd fix` (LLM sees the new test and must pass it).<br>**Tip:** Use `pdd fix --protect-tests` if the tests from `pdd bug` are correct and you want to prevent the LLM from modifying them. |
+| **Bug Fix (Prompt Defect)** | **The Prompt** | When `pdd bug` determines the prompt specification itself is wrong (Step 5.5), it auto-fixes the prompt file. The workflow then continues to generate tests based on the corrected prompt. |
 
 **Key insight:** When you run `pdd generate` after adding a test, the LLM sees that test as context. This means the generated code is constrained to pass it - the test acts as a specification, not just a verification.
 
@@ -571,6 +760,31 @@ After a successful fix, ask: "Where should this knowledge live?"
 - "There was a bug with null handling" → Add test; grounding captures the fix
 - "The code style was inconsistent" → Update preamble (not prompt)
 - "I prefer different variable names" → Update preamble/prompt
+
+### Prompt Defects vs. Code Bugs
+
+In PDD, the prompt is the source of truth. However, prompts themselves can contain defects. The `pdd bug` agentic workflow (Step 5.5: Prompt Classification) distinguishes between two types of bugs:
+
+| Defect Type | Definition | Detection | Action |
+|-------------|------------|-----------|--------|
+| **Code Bug** | Code doesn't match the prompt specification | Tests fail because implementation diverges from requirements | Fix the code via `pdd fix` |
+| **Prompt Defect** | Prompt doesn't match the intended behavior | User-reported expected behavior contradicts the prompt | Fix the prompt, then regenerate |
+
+**How Prompt Classification Works:**
+
+After root cause analysis (Step 5), the workflow examines whether:
+1. The code correctly implements the prompt, but the prompt is wrong (→ Prompt Defect)
+2. The code incorrectly implements the prompt (→ Code Bug)
+
+**Output markers** for automation:
+- `DEFECT_TYPE: code` - Proceed with normal test generation
+- `DEFECT_TYPE: prompt` - Auto-fix the prompt file first
+- `PROMPT_FIXED: path/to/file.prompt` - Indicates which prompt was modified
+- `PROMPT_REVIEW: reason` - Request human review for ambiguous cases
+
+**Default behavior:** When classification is uncertain, the workflow defaults to "code bug" to preserve backward compatibility.
+
+This classification prevents the "test oracle problem" - where tests generated from a flawed prompt would encode incorrect behavior, causing `pdd fix` to "fix" correct code to match the buggy specification.
 
 ---
 

@@ -1,0 +1,54 @@
+<pdd-reason>Configures local LLMs (Ollama, LM Studio) with auto-detection and CSV integration.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "configure_local_llm", "signature": "() -> bool", "returns": "bool"}
+    ]
+  }
+}
+</pdd-interface>
+
+% You are an expert Python engineer. Your goal is to write the pdd/setup/local_llm_configurator.py module.
+
+% Role & Scope
+This module guides users through configuring local LLM tools (Ollama, LM Studio, custom endpoints). Local models don't need API keys but require base_url and model name configuration. It auto-detects installed models where possible (e.g., querying Ollama API).
+
+% Requirements
+1. Function: `configure_local_llm() -> bool` - Interactive setup for local LLM providers
+2. Provider options: Present menu: 1. LM Studio (default: localhost:1234), 2. Ollama (default: localhost:11434), 3. Other (custom base URL)
+3. Ollama detection: For Ollama, query http://localhost:11434/api/tags to list installed models
+4. Model selection: For Ollama, show detected models and let user select which to add; for others, prompt for model name
+5. CSV addition: Append rows to llm_model.csv with provider prefix (lm_studio/ or ollama_chat/), base_url, and empty api_key
+6. Base URL validation: For custom providers, validate URL format (http/https scheme required)
+7. Multiple models: Allow adding multiple models in one session (loop until user declines)
+8. Cost defaults: For local models, set input/output costs to 0.0 or very low values ($0.0001)
+9. Atomic CSV writes: Use temp file + rename to prevent corruption
+10. Error handling: If Ollama API unreachable, fall back to manual model name entry
+
+% Dependencies
+<llm_model_csv_schema>
+The CSV at pdd/data/llm_model.csv has columns:
+provider,model,input,output,coding_arena_elo,base_url,api_key,max_reasoning_tokens,structured_output,reasoning_type,location
+
+Example local LLM rows:
+- lm_studio,lm_studio/openai-gpt-oss-120b-mlx-6,0.0001,0,1082,http://localhost:1234/v1,,0,True,effort,
+- custom_model,custom/Qwen3-30B-A3B-4bit,0,0,1040,http://localhost:8080,,0,False,none,
+</llm_model_csv_schema>
+
+% Instructions
+- For Ollama auto-detection: Make GET request to http://localhost:11434/api/tags, parse JSON response for model list
+- If Ollama unreachable, inform user and ask for manual model name entry
+- For LM Studio: Default base URL is http://localhost:1234/v1, ask if user wants different port
+- For model naming: Use prefix format (lm_studio/ or ollama_chat/) to match LiteLLM conventions
+- Set reasonable defaults: ELO=1000, structured_output=True, reasoning_type=effort, max_reasoning_tokens=0
+- After adding each model, ask: "Add another local model? [y/N]"
+- Use rich Console for formatted output and interactive prompts
+- Return bool indicating whether any models were added
+
+% Deliverables
+- A Python module located at `pdd/setup/local_llm_configurator.py`.
+- The module must export the following symbol:
+  - `configure_local_llm`: Provides an interactive setup for local LLM providers.
