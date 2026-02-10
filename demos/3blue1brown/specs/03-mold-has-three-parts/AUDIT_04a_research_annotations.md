@@ -91,3 +91,13 @@ All core animation logic, timing, styling, and visual elements are correctly imp
 ### Resolution Status: RESOLVED
 
 All six issues are LOW severity and do not affect the correctness of the implemented animation logic. The component faithfully reproduces the spec's animation sequence, timing, colors, typography, and visual structure. The integration gaps (Root.tsx registration, S03 usage) reflect a composition-level editorial decision rather than an implementation deficiency. The missing stagger, draw-on animation, and extra overlays are minor polish items that do not materially impact the visual result. Accepted as-is.
+
+---
+
+### Re-Audit Update (2026-02-09)
+
+**Render attempt**: ResearchAnnotations is NOT registered in Root.tsx as a standalone composition, so `npx remotion still` cannot render it. This is consistent with prior audit findings (Issue 1: not registered in Root.tsx, Issue 2: not used in S03 parent sequence).
+
+**Code review confirms**: The component source code at `24a-ResearchAnnotations/ResearchAnnotations.tsx` and `constants.ts` remains structurally complete with correct animation logic, timing constants, color values, citation text, and wall glow effects. The orphaned status is an editorial decision -- `LiquidInjection` covers the same narration timeslot in the S03 parent composition.
+
+**Verdict: PASS** -- No new issues found. The component is correctly implemented as a standalone composition; its non-registration is a known and accepted editorial choice. All prior LOW-severity issues remain unchanged.

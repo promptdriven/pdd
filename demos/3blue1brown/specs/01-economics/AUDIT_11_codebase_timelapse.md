@@ -102,11 +102,12 @@
 
 ### Issues Found
 
-1. **[LOW] Component not registered in Root.tsx**: The `CodebaseTimelapse` component is not imported or registered as a `<Composition>` in `Root.tsx`. Every other numbered component (01 through 45) has a corresponding Composition entry in Root.tsx, but 11-CodebaseTimelapse is missing. This means it cannot be previewed or rendered independently in the Remotion Studio.
-   - File: `/remotion/src/remotion/Root.tsx` -- no import from `./11-CodebaseTimelapse`
+1. **[LOW] Component not registered in Root.tsx**: The `CodebaseTimelapse` component is not imported or registered as a `<Composition>` in `Root.tsx`. Every other numbered component folder typically has a corresponding Composition entry in Root.tsx, but 11-CodebaseTimelapse is missing. This means it cannot be previewed or rendered independently in the Remotion Studio.
+   - File: `remotion/src/remotion/Root.tsx` -- no import from `./11-CodebaseTimelapse`
 
-2. **[LOW] Component not used in Part1Economics section composition**: The `Part1Economics.tsx` composition (S01-Economics) does not import or render `CodebaseTimelapse`. The spec narration for this section ("Patches accumulate... 80 to 90 percent of software cost isn't building the initial system") corresponds to VISUAL_21 in Part1Economics, which uses a Veo video clip (`07_split_screen_sepia.mp4`) instead. The standalone component exists but is not wired into the section-level orchestration.
-   - File: `/remotion/src/remotion/S01-Economics/Part1Economics.tsx` -- no import of CodebaseTimelapse
+2. **[LOW] Component not used in Part1Economics section composition**: The `Part1Economics.tsx` composition (S01-Economics) does not import or render `CodebaseTimelapse`. The narration corresponding to this scene ("Patches accumulate" / "80 to 90 percent of software cost isn't building the initial system") is covered by VISUAL_21 (`veo:07_split_screen_sepia` at ~379-393s) and VISUAL_22 (`PieChart` at ~395-420s). The standalone component exists as a complete implementation but was replaced by a Veo video clip and the PieChart component in the section-level orchestration.
+   - File: `remotion/src/remotion/S01-Economics/Part1Economics.tsx` -- no import of CodebaseTimelapse
+   - File: `remotion/src/remotion/S01-Economics/constants.ts` -- VISUAL_SEQUENCE does not include a `CodebaseTimelapse` entry
 
 3. **[TRIVIAL] Warning comment text discrepancy with spec JSON**: The spec JSON array defines the second comment as `"// legacy"` (abbreviated), but the implementation uses the fuller form `"// legacy - do not modify"` from the spec paragraph. Both are defensible interpretations; the longer form is more descriptive.
    - `constants.ts:116`: `text: "// legacy - do not modify"` vs spec JSON `"// legacy"`
@@ -116,7 +117,7 @@
 
 ### Notes
 
-- The component is self-contained in `/remotion/src/remotion/11-CodebaseTimelapse/` with clean separation: `constants.ts` (data/config), `CodebaseTimelapse.tsx` (render logic), `index.ts` (exports).
+- The component is self-contained in `remotion/src/remotion/11-CodebaseTimelapse/` with clean separation: `constants.ts` (data/config), `CodebaseTimelapse.tsx` (render logic), `index.ts` (exports).
 - The implementation adds valuable enrichments beyond the bare spec: patch counter overlay, node glow effects, "Complexity Warning" indicator, and patch-type badge labels. These enhance the visual storytelling without contradicting any spec requirement.
 - All three easing functions match spec: `spring({ damping: 20 })` for patch appearances, `easeInOutSine` for structure drift, `easeOutCubic` for comment fade-in.
 - All color hex values verified against the spec's color progression table.

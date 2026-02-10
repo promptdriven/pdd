@@ -2,6 +2,7 @@ import React from "react";
 import {
   AbsoluteFill,
   Audio,
+  Loop,
   Sequence,
   OffthreadVideo,
   staticFile,
@@ -144,7 +145,7 @@ export const Part1Economics: React.FC<Part1EconomicsPropsType> = () => {
       {/* Visual 13: ContextRot - AI guesses relevance, vector search fails, agentic */}
       {activeVisual === 13 && (
         <Sequence from={BEATS.VISUAL_13_START}>
-          <Sequence from={-870}>
+          <Sequence from={-840}>
             <ContextRot {...defaultContextRotProps} />
           </Sequence>
         </Sequence>
@@ -153,7 +154,7 @@ export const Part1Economics: React.FC<Part1EconomicsPropsType> = () => {
       {/* Visual 14: ContextRot - EMNLP: performance degrades with length, context r */}
       {activeVisual === 14 && (
         <Sequence from={BEATS.VISUAL_14_START}>
-          <Sequence from={-1350}>
+          <Sequence from={-1000}>
             <ContextRot {...defaultContextRotProps} />
           </Sequence>
         </Sequence>
@@ -184,11 +185,12 @@ export const Part1Economics: React.FC<Part1EconomicsPropsType> = () => {
       {activeVisual === 18 && (
         <Sequence from={BEATS.VISUAL_18_START}>
           <AbsoluteFill>
-            <OffthreadVideo
-              loop
-              src={staticFile("veo_developer_edit.mp4")}
-              style={{ width: "100%", height: "100%" }}
-            />
+            <Loop durationInFrames={240}>
+              <OffthreadVideo
+                src={staticFile("veo_developer_edit.mp4")}
+                style={{ width: "100%", height: "100%" }}
+              />
+            </Loop>
           </AbsoluteFill>
         </Sequence>
       )}
@@ -211,11 +213,12 @@ export const Part1Economics: React.FC<Part1EconomicsPropsType> = () => {
       {activeVisual === 21 && (
         <Sequence from={BEATS.VISUAL_21_START}>
           <AbsoluteFill>
-            <OffthreadVideo
-              loop
-              src={staticFile("07_split_screen_sepia.mp4")}
-              style={{ width: "100%", height: "100%" }}
-            />
+            <Loop durationInFrames={240}>
+              <OffthreadVideo
+                src={staticFile("07_split_screen_sepia.mp4")}
+                style={{ width: "100%", height: "100%" }}
+              />
+            </Loop>
           </AbsoluteFill>
         </Sequence>
       )}

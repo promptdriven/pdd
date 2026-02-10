@@ -67,6 +67,10 @@
 
 Issue #1 (MEDIUM) has been fixed by compressing internal BEATS timings in `constants.ts` so all animation phases complete within the ~256 internal frames available in the section context. Test walls are now fully visible by frame 230, with a hold period before unmount at frame 256. The standalone composition continues to work correctly with an extended hold at the end.
 
+## Re-Audit Update (2026-02-09)
+- **Status**: PASS
+- **Result**: Two visual renders performed within the section context. (1) At section frame 921 (internal frame ~119): parser_v1.prompt file visible with blue header showing "51 lines", content scrolled partway showing validation rules and unicode support sections, scroll indicator bar visible, line count badge ("51 lines") visible. Test walls not yet visible (WALLS_FADE_START=190, internal frame only 119). (2) At section frame 1040 (internal frame ~238): All elements fully visible -- 3 amber test walls on right with "3 tests" label, content scrolled further showing edge cases and performance sections, narration caption "With few tests, your prompt needs to specify everything." visible at bottom. This confirms the compressed BEATS timing fix is working correctly: walls appear by frame 230 and hold until unmount at ~256. All spec requirements verified including syntax highlighting (blue headers, orange bullets, gray text).
+
 ### File References
 
 - Component: `/Users/gregtanaka/Documents/pdd_cloud/pdd/demos/3blue1brown/remotion/src/remotion/43-LongPrompt/LongPrompt.tsx`

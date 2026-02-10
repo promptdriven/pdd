@@ -132,7 +132,7 @@ Both arms use `anthropic/claude-opus-4-6`. Model parity confirmed from runs 07-0
 
 - **6 steps** (0-5) applied sequentially to `user_id_parser.py`
 - **3 agentic runs** (10, 11, 12): Fresh Claude Code session per step. Receives only the **change request** (delta) + reference to step's test file.
-- **3 PDD runs** (13, 14, 15): Operator updates prompt with **cumulative requirements** (full spec), then runs `pdd --force --local sync`.
+- **3 PDD runs** (13, 14, 15): Operator updates prompt with **cumulative requirements** (full spec), then runs `pdd --force --local sync`. **Note: Grounding (few-shot example retrieval) was NOT used.** All PDD SCR runs used `--local` mode (`use_cloud: None` confirmed in sync logs). No examples were uploaded to or retrieved from the `few_shot` collection.
 - **Information asymmetry**: Intentional. Agentic gets deltas; PDD gets full spec. Mirrors real-world usage.
 - **Retry parity**: Both arms get up to 3 attempts per step.
 

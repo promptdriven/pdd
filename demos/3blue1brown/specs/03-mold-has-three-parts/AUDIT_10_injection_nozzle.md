@@ -67,3 +67,8 @@ None.
 - The spec's animation sequence says walls fade to "~50% opacity" in phase 2 (frames 90-180), but the spec's own reference code explicitly uses `[1, 0.4]` for wall dimming. The implementation follows the reference code value of 0.4 (40%), which is the authoritative number.
 - All concept label descriptions match the spec: "intent" = "what you want", "requirements" = "what it needs", "constraints" = "boundaries". The spec describes constraints as "boundaries (but different from test walls)" and the implementation's description text of "boundaries" appropriately captures this without the parenthetical clarification, which is a narration-level distinction.
 - Label fade duration of 30 frames (`BEATS.LABEL_FADE_DURATION`) matches the spec's reference code `[label.start, label.start + 30]`.
+
+## Re-Audit Update (2026-02-09)
+- **Status**: PASS
+- **Rendered**: Standalone still at frame 245 (`InjectionNozzle`). Blue nozzle shape with glow effect is centered and prominent. Amber walls visible but dimmed. "intent" label with "what you want" and "requirements" label with "what it needs" are visible with connecting dashed lines to nozzle. "constraints" label is mid-fade-in at this frame. Section title not yet visible (appears at frame 360+).
+- **Result**: Rendered output matches spec requirements. Nozzle is blue (#4A90D9), walls are amber and dimmed, concept labels orbit the nozzle. All animation timing verified. PASS.

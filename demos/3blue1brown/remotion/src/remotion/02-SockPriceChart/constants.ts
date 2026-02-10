@@ -43,15 +43,15 @@ export const COLORS = {
 // Chart data points
 export const CHART_DATA = {
   costToBuy: [
-    { year: 1950, hours: 1.4 },
-    { year: 1960, hours: 1.3 },
-    { year: 1970, hours: 1.2 },
-    { year: 1980, hours: 1.0 },
-    { year: 1985, hours: 0.75 },
-    { year: 1990, hours: 0.55 },
-    { year: 1993, hours: 0.5 },
-    { year: 2000, hours: 0.2 },
-    { year: 2010, hours: 0.1 },
+    { year: 1950, hours: 1.0 },
+    { year: 1955, hours: 0.75 },
+    { year: 1960, hours: 0.55 },
+    { year: 1963, hours: 0.5 },
+    { year: 1970, hours: 0.2 },
+    { year: 1980, hours: 0.1 },
+    { year: 1990, hours: 0.06 },
+    { year: 2000, hours: 0.04 },
+    { year: 2010, hours: 0.03 },
     { year: 2020, hours: 0.03 },
   ],
   costToRepair: [

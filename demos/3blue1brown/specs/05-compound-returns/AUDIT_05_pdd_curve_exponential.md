@@ -125,3 +125,10 @@ PDD curve accelerates dramatically upward (exponential growth) from 50% to 100% 
 ## Resolution Status: RESOLVED
 
 All spec requirements are implemented. The four minor deviations (static stroke width, drift rate, spring config, duration) are intentional design tunings or consequences of narration-synced timing. None affect the visual intent or narrative impact of the animation. The spec's own reference code is matched exactly where the prose and code disagree (drift rate). This is the visual climax of the compound curves motif and the implementation delivers the intended effect: an unmistakable exponential acceleration, a dramatic widening gap, and the "permanent wall" payoff.
+
+## Re-Audit Verification (2026-02-09)
+
+- **Render**: Still frame rendered at global frame 1500 via `Part5CompoundReturns` composition (`/tmp/audit_05_pdd_curve_exponential_section.png`).
+- **Visual inspection**: Dark background present. PDD curve dramatically accelerating upward with exponential shape, well above the patching curve. Shaded gap region between the two curves with gradient fill (blue to amber). "compound advantage" label visible in italic within the gap. "It's a permanent wall." callout visible in bold near the top-right. Multiple PDD dots visible with forward radial lines creating dense accumulation. Patching curve dimmed at ~60% with wobble dips. "$1.52T" callout from previous phase still absent (correct -- it belongs to the patching curve annotation which is now dimmed). Blue glow intensified on PDD curve.
+- **Status**: All 4 previously documented minor deviations remain at their resolved status. No new issues found.
+- **Conclusion**: PASS confirmed.

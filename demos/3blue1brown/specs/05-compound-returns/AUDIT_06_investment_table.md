@@ -159,4 +159,10 @@ Compound curves graph dissolves into a 3-column investment comparison table with
 
 - Column border separation is handled consistently: the patching column has explicit `borderLeft` and `borderRight` (lines 91-92, 252-253), while the investment and PDD columns rely on the header's bottom border and the cell bottom borders for visual separation.
 
+## Re-Audit Verification (2026-02-09)
+
+- **Render**: Still frame rendered at global frame 1714 via `Part5CompoundReturns` composition (`/tmp/audit_06_investment_table_section.png`).
+- **Visual inspection**: Dark background present. Table centered on screen with 3 columns (Investment, Return (Patching), Return (PDD)). Header row has dark background with amber underline on patching column and blue underline on PDD column. At the midpoint frame (1714, ~96 frames into the 252-frame window), 2 of 3 data rows are visible (Row 1 and Row 2 fully visible; Row 3 mid-animation). Row alternation colors visible. Patching column text in amber, PDD column text in blue with slightly bolder weight. Table has rounded corners and subtle border. PDD cell glow effects visible on earlier rows.
+- **Status**: All 4 previously documented issues remain at their resolved/accepted status. Compressed timing successfully renders all rows within the orchestrator window. No new issues found.
+
 ## Resolution Status: RESOLVED

@@ -118,3 +118,10 @@
 ## Resolution Status: RESOLVED
 
 All seven issues are editorial or minor deviations that have been reviewed and accepted. The most significant issue (phase 4 not rendered standalone, causing the annotation to be absent) is a deliberate orchestration decision driven by narration timing. The remaining issues are low-severity refinements (missing easing on radial line extension, simplified activation pulse, missing radial pulse for annotated dot) and negligible cosmetic differences (17pt vs 18pt font size, linear vs easeOutQuad on activation).
+
+## Re-Audit Verification (2026-02-09)
+
+- **Render**: Still frame rendered at global frame 1376 via `Part5CompoundReturns` composition (`/tmp/audit_04_pdd_curve_section.png`).
+- **Visual inspection**: Dark background present. Both curves visible -- amber patching (dimmed, with wobble dips) and blue PDD curve drawing from the origin with exponential shape. Multiple PDD dots visible with white borders and blue fill. Forward radial lines extending from dots to the right edge of the graph, with accumulating density as more dots are present. Blue glow visible on the PDD curve. Patching curve at reduced opacity (~60%). The gap between the two curves is beginning to form.
+- **Status**: All 7 previously documented issues remain at their accepted/resolved status. Phase 4 remains merged into phase 5 as an editorial decision. No new issues found.
+- **Conclusion**: RESOLVED confirmed.

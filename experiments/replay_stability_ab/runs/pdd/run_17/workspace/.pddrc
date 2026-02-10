@@ -1,0 +1,15 @@
+version: "1.0"
+
+contexts:
+  default:
+    defaults:
+      generate_output_path: "src/"
+      test_output_path: "tests/"
+      example_output_path: "examples/"
+      prompts_dir: "prompts/"
+      default_language: "python"
+      target_coverage: 80.0
+      strength: 1.0
+      temperature: 0.0
+      budget: 20.0
+      max_attempts: 3

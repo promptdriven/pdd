@@ -85,3 +85,22 @@
 - The `gap` property on the logo row uses `LAYOUT.BRIDGE_WIDTH` (200) at `Z3SmtSidebar.tsx:96`, which means the visual gap between the Synopsys container and bridge, and between bridge and Z3 container, is each 200px -- effectively making the total distance between the two logos wider than the spec layout diagram suggests. The spec pseudocode uses `gap: 200` for the entire row but has the bridge element as a separate child in between. The implementation matches the spec pseudocode structure.
 
 ## Resolution Status: RESOLVED
+
+---
+
+### Re-Audit Update (2026-02-09)
+
+**Rendered frame 318** (all elements visible, "Same math." pulsing): Visual inspection confirms:
+- Dark `#1a1a2e` background with thin teal accent lines at top and bottom edges
+- Left side: Teal checkmark SVG (Synopsys icon) with "Synopsys Formality" label below in teal
+- Right side: Bold "Z3" text in teal JetBrains Mono font with "Z3 (Microsoft Research)" label below
+- Horizontal teal bridge line connecting the two icons with an "=" equals sign at center
+- Bridge line has subtle glow effect
+- Three text lines below, sequentially visible:
+  - "Hardware: SMT-based formal proof" in muted white `#B0B0C0`
+  - "PDD: SMT-based formal proof" in muted white
+  - **"Same math."** in bright white `#FFFFFF`, bold, larger font -- confirms emphasis styling
+- "Same math." text has slight scale pulsing (frame 318 is past frame 300 pulse start)
+- No rendering errors, clean composition with correct color palette
+
+**Verdict: PASS** -- No new issues found. All prior LOW-severity issues remain unchanged and acceptable.

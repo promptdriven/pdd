@@ -209,3 +209,10 @@ Created a new wrapper component rather than adding reprise mode props to the bas
 - **Verification**:
   - Lint check for changed files passed: `npx eslint src/remotion/S05-CompoundReturns/Part5CompoundReturns.tsx src/remotion/08-CrossingPoint/EconomicsChartReprise.tsx`
   - Targeted render across transition frames completed successfully for frame range `2285-2345`.
+
+## Re-Audit Render Verification (2026-02-09)
+
+- **Render**: Still frame rendered at global frame 2413 via `Part5CompoundReturns` composition (`/tmp/audit_09_economics_chart_reprise_section.png`).
+- **Visual inspection**: Economics chart visible at full view (no zoom animation -- `startAtFullView` confirmed working). "The Economics of Code" title at top. Chart shows generate line (blue) and total cost to patch line (amber dashed). Chart simplification confirmed: fork lines dimmed, only the two key lines at full opacity. "We are here." marker visible at the crossing point with pulse rings. "...darning socks." text overlay visible in italic amber below the crossing point. The cross-dissolve from Visual 6 has completed (frame 2413 is well past the 45-frame overlap window). Background gradient present.
+- **Status**: All previously documented issues remain fully resolved. The `EconomicsChartReprise` wrapper correctly implements all reprise-specific enhancements (three pulse cycles, text overlay, chart dimming, cross-dissolve, hold phase). No new issues found.
+- **Conclusion**: RESOLVED confirmed.

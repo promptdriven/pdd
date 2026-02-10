@@ -121,3 +121,10 @@
 | 6 | Patching curve re-draws from 8% in phase 3 | Medium | RESOLVED |
 | 7 | Patching dots re-animate in phase 3 | Low | RESOLVED |
 | 8 | Dip activation scaled by wobble vs discrete | Low | RESOLVED |
+
+## Re-Audit Verification (2026-02-09)
+
+- **Render**: Still frame rendered at global frame 958 via `Part5CompoundReturns` composition (`/tmp/audit_03_patching_curve_wobbles_section.png`).
+- **Visual inspection**: Dark background present. Full patching curve visible with wobble dips at ~55%, ~70%, and ~85% of the X-axis. At this midpoint frame, 2 of 3 dip annotations are visible with red-amber coloring and icons. The "$1.52T" cost callout card is visible in the upper-right quadrant. PDD starting segment visible near origin with blue glow. Curve dots visible along the patching curve with diminishing vertical spacing as expected from the logarithmic shape.
+- **Status**: All 8 previously documented issues remain at their resolved status. The compressed hold period, global flicker application, and wobble-scaled dip activation are all accepted deviations. No new issues found.
+- **Conclusion**: RESOLVED confirmed.

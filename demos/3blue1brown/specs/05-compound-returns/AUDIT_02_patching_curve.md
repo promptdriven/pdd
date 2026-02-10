@@ -113,3 +113,10 @@
 ### Resolution Status: RESOLVED
 
 All critical and major requirements are met. The single low-severity issue (missing PDD pulse effect) is cosmetic and does not affect the narrative clarity of this section. The patching curve's logarithmic shape, dot animation, annotations, ceiling line, and timing all conform to spec.
+
+## Re-Audit Verification (2026-02-09)
+
+- **Render**: Still frame rendered at global frame 395 via `Part5CompoundReturns` composition (`/tmp/audit_02_patching_curve_section.png`).
+- **Visual inspection**: Dark background present. Axes fully drawn with arrowheads visible. Legend in upper-left with correct color swatches (amber "Patching", blue "PDD"). Amber patching curve drawn with logarithmic shape, multiple dots visible with white borders, annotations ("one bug fixed", "local return only") present in italic. Dashed ceiling line visible at the logarithmic maximum. PDD starting segment visible as a small blue segment near the origin. All elements correctly positioned within the graph area.
+- **Status**: All previously documented requirements remain met. The single low-severity issue (missing PDD pulse effect) remains accepted. No new issues found.
+- **Conclusion**: PASS confirmed.

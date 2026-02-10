@@ -83,3 +83,8 @@ The component was fully refactored to match the spec:
 Additionally, a `durationFrames` prop was added to support proportional animation scaling when the component is embedded in shorter section contexts (S03, S06). S03 Visual 20 was extended from ~5.5s to ~8.67s to provide more screen time for the value hierarchy narrative.
 
 ## Resolution Status: RESOLVED
+
+## Re-Audit Update (2026-02-09)
+- **Status**: PASS
+- **Rendered**: Standalone still at frame 130 (`CodeOutputMoldGlows`). Shows generated Python code (`parse_user_id` function) in JetBrains Mono monospace font with fading glow (code glow diminishing at this frame). Three mold components below: "PROMPT" (blue), "TESTS" (amber), "GROUNDING" (green) as separate labeled boxes with increasing glow intensity. Value hierarchy shift in progress -- code becoming subordinate while mold components gain visual prominence.
+- **Result**: Five-phase animation sequence correctly implemented. Code starts bright and dims while mold glow increases, achieving the spec's value hierarchy narrative. Generated code is readable Python, not abstract bars. Three labeled mold components with correct colors. Messages ("The code is output." / "The mold is what matters.") appear at later frames. durationFrames prop enables proportional scaling for S03 section context. PASS.

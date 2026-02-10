@@ -119,3 +119,8 @@ The secondary concern is the compressed 15-second duration versus the spec's 20-
 **HIGH issue #1 fixed**: `ContextWindowComparison` with `variant="density"` is now wired into Visual 14 of `Part3MoldThreeParts.tsx`, replacing the incorrect `PromptGovernsCode` component at frames 6352-7491 (~211-250s). This corresponds to the narration "Remember the context window problem? Code is token-expensive..." as specified. The import was added and the `<Sequence>` block updated. The `VISUAL_SEQUENCE` entry in `constants.ts` was also updated to reflect `ContextWindowComparison` as the component ID.
 
 **MEDIUM issue #2 (animation timing) and LOW issues #3-11 acknowledged**: These are pre-existing implementation details within the `ContextWindowComparison` component itself. The critical wiring fix ensures the density variant is no longer dead code and now renders in the correct narration slot.
+
+## Re-Audit Update (2026-02-09)
+- **Status**: PASS
+- **Rendered**: Section still at frame 6922 (`Part3MoldThreeParts`). The density variant is correctly displayed: "15,000 tokens of code" (left) with dense monospace code and "~1 module" label vs "15,000 tokens of prompts" (right) with 10 module headings (user_parser, auth_handler, data_pipeline, payment_processor, email_service, cache_layer, api_gateway, search_index, notification_hub, audit_logger) and "~10 modules" label. Bottom text: "Same tokens. 10x the system knowledge." with research citation "NL comments improved generation +41% (UC Berkeley, 2024) | Author-defined context, not machine-assembled". Both windows show 15,000 token counters.
+- **Result**: Density variant is correctly wired into section. All spec-required elements visible. The left window is properly dimmed relative to the right. PASS.

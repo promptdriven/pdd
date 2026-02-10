@@ -82,3 +82,10 @@
 All core visual requirements for the grandmother callback are implemented correctly: the video footage with sepia grading, warm vignette overlay, text content, text styling, text positioning, and text fade-in animation all match the spec. The timing has been properly adjusted from the pre-audio spec values to match the actual narration timestamps, demonstrating good audio-sync calibration.
 
 The remaining issues (missing cross-dissolve, missing easing curves, missing objectFit) are low-to-medium severity and are consistent with systemic patterns across the entire Part5 orchestrator. The cross-dissolve absence is the most notable deviation but is an architectural decision affecting all Part5 transitions, not a section-specific gap. No blocking issues remain for this section.
+
+## Re-Audit Verification (2026-02-09)
+
+- **Render**: Still frame rendered at global frame 1950 via `Part5CompoundReturns` composition (`/tmp/audit_07_return_to_grandmother_section.png`).
+- **Visual inspection**: Split-screen sepia video footage visible at full frame with warm color grading (sepia filter + desaturation). Vignette overlay present with darkened edges. Lower-third text overlay not yet visible at this frame (local frame ~80, text fade starts at local frame 120). The video file `07_split_screen_sepia.mp4` loads and renders correctly via `OffthreadVideo`.
+- **Status**: All 6 previously documented issues remain at their resolved/accepted status. The systemic cross-dissolve limitation, missing easing curves, and missing objectFit are all consistent with the Part5 orchestrator pattern. Audio-synced timing confirmed correct. No new issues found.
+- **Conclusion**: RESOLVED confirmed.

@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: init new-agentic new-pdd summarize clean scr-run scr-summary
+.PHONY: init new-agentic new-pdd summarize clean scr-run scr-summary grounding-run grounding-summary grounding-info
 
 init:
 	mkdir -p runs/agentic runs/pdd results
@@ -24,6 +24,15 @@ scr-run:
 
 scr-summary:
 	python3 scripts/scr_summarize.py
+
+grounding-run:
+	./scripts/run_grounding_experiment.sh
+
+grounding-summary:
+	python3 scripts/grounding_summarize.py
+
+grounding-info:
+	./scripts/extract_grounding_info.sh
 
 clean:
 	rm -rf runs/agentic runs/pdd results/run_results.csv results/scr_code_metrics.csv

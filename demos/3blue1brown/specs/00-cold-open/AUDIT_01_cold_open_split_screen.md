@@ -1,215 +1,77 @@
-# Audit: Cold Open Split Screen (01_cold_open_split_screen.md)
+# Audit: Cold Open Split Screen
 
-## Status: RESOLVED
+## Status: PASS
 
 ---
 
 ### Requirements Met
 
-1. **Split screen layout**: `ColdOpenSplitScreen.tsx:32-58` divides the frame into left and right halves at 50% width using `width: width / 2` for each panel, with a vertical divider at the center. Matches the spec's "clean vertical divide at center of frame."
+1. **Veo video assets exist and are referenced correctly**: Both required Veo assets are present in the public directory:
+   - `remotion/public/cold_open_01a_establish.mp4` (3.7 MB) -- used for Visual 0 (the "establish" beat)
+   - `remotion/public/cold_open_01f_modern_sock_toss.mp4` (3.7 MB) -- used for Visual 2 (the "modern sock toss" transition)
+   - Additionally, `cold_open_01d_zoom_out.mp4` (11.4 MB) exists for Visual 1.
 
-2. **Center divider**: `ColdOpenSplitScreen.tsx:60-72` renders a 2px white (`#ffffff`) divider line positioned at `left: 50%` with `transform: translateX(-50%)`. Matches spec exactly: "Divider | #ffffff | Clean vertical line, 2px." An additional `boxShadow` glow adds polish.
+2. **OffthreadVideo wrapped in Sequence with correct frame ranges**: All three Veo clips in `ColdOpenSection.tsx` follow the correct Remotion pattern:
+   - Visual 0: `<Sequence from={BEATS.VISUAL_00_START}>` (frame 0) wrapping `<OffthreadVideo loop src={staticFile("cold_open_01a_establish.mp4")} />` -- plays from 0.0s to 4.92s (148 frames at 30fps)
+   - Visual 1: `<Sequence from={BEATS.VISUAL_01_START}>` (frame 157) wrapping `<OffthreadVideo loop src={staticFile("cold_open_01d_zoom_out.mp4")} />` -- plays from 5.24s to 7.72s (75 frames)
+   - Visual 2: `<Sequence from={BEATS.VISUAL_02_START}>` (frame 428) wrapping `<OffthreadVideo loop src={staticFile("cold_open_01f_modern_sock_toss.mp4")} />` -- plays from 14.26s to 18.5s (127 frames)
 
-3. **Color palette -- all hex codes match**: `constants.ts:28-42` defines all colors matching the spec table:
-   - LEFT_BG: `#1a1a2e` (dark, cool workspace) -- matches spec
-   - LEFT_ACCENT: `#4A90D9` (Cursor UI elements) -- matches spec
-   - RIGHT_BG: `#2d2416` (warm, amber shadows) -- matches spec
-   - RIGHT_ACCENT: `#D9944A` (lamplight, warmth) -- matches spec
-   - CODE_NORMAL: `#e0e0e0` -- matches spec
-   - CODE_ADDED: `#4ade80` -- matches spec
-   - CODE_REMOVED: `#f87171` -- matches spec
-   - DIVIDER: `#ffffff` -- matches spec
+3. **Active visual switching logic is correct**: `ColdOpenSection.tsx:22-28` uses a reverse-scan loop to determine which visual is active: `for (let i = VISUAL_SEQUENCE.length - 1; i >= 0; i--) { if (frame >= VISUAL_SEQUENCE[i].start) { activeVisual = i; break; } }`. This means the previous visual continues rendering during inter-visual gaps (e.g., frames 148-157 between Visual 0 and Visual 1), preventing black frames. The `loop` attribute on OffthreadVideo ensures continuous playback even if the clip is shorter than its beat window.
 
-4. **Beat timings**: `constants.ts:11-22` defines BEATS matching the spec:
-   - Beat 1 Establish: 0-8s
-   - Beat 2 Sync Completion: 8-15s
-   - Beat 3 Satisfaction: 15-18s
-   - Beat 4 Zoom Out: 18-32s
-   - Beat 5 Hold: 32-38s
+4. **Narration audio correctly integrated**: `ColdOpenSection.tsx:33` uses `<Audio src={staticFile("cold_open_narration.wav")} />` at the top level, playing for the full section duration. The narration file `cold_open_narration.wav` (773 KB) exists and covers 16.1 seconds of audio synced to the Whisper-derived timestamps in `constants.ts`.
 
-5. **Duration**: `constants.ts:5-6` sets `COLD_OPEN_DURATION_SECONDS = 38` and derives frames from it. Matches spec's "Duration: ~38 seconds."
+5. **Section duration and frame rate**: `constants.ts:15-17` defines `COLD_OPEN_FPS = 30`, `COLD_OPEN_DURATION_SECONDS = 54`, yielding 1620 total frames. This matches the section-level production timeline (54 seconds covering all 7 visuals from establish through title card). Registered correctly in `Root.tsx:1027-1036` using aliased imports.
 
-6. **Frame rate**: `constants.ts:4` sets `COLD_OPEN_FPS = 60`. Matches spec's "60fps for smooth zooms" recommendation.
+6. **Resolution**: `constants.ts:18-19` sets `COLD_OPEN_WIDTH = 1920`, `COLD_OPEN_HEIGHT = 1080`. Matches the spec's "1080p minimum" requirement.
 
-7. **Left side background color (cool-toned)**: `LeftPanel.tsx:206` sets `backgroundColor: COLORS.LEFT_BG` (`#1a1a2e`). Matches spec's "Modern, cool-toned (slight blue cast)."
+7. **BEATS timing constants are internally consistent**: All frame values in `constants.ts:24-64` are derived from `s2f()` (seconds-to-frames helper using `Math.round(seconds * 30)`). The VISUAL_SEQUENCE array at lines 67-75 correctly maps each BEATS range to its composition ID.
 
-8. **Right side background color (warm-toned)**: `RightPanel.tsx:342` sets `backgroundColor: COLORS.RIGHT_BG` (`#2d2416`). Matches spec's "Warm, sepia-toned (amber/golden lamplight)."
+8. **HoldAccumulatedWeight component (Visual 1B)**: `HoldAccumulatedWeight.tsx` provides a 6-second contemplative hold on the split-screen zoomed-out state. It correctly implements:
+   - Split-screen layout with `width / 2` panels
+   - Left panel: file tree, TODO comments, dependency graph, developer silhouette, cursor blink, ambient warning icon cycling, new TODO fading in, subtle screen flicker
+   - Right panel: mended items collection (22 items), wicker basket, oil lamp with animated flame, grandmother silhouette with breathing animation, completed sock with darning patch
+   - Center divider: 2px white line with glow
+   - Vignette overlay and desaturation filter (`saturate(85%)`)
+   - All colors match the spec palette (LEFT_BG, RIGHT_BG, etc.)
 
-9. **Cursor IDE mockup**: `LeftPanel.tsx:221-417` implements a detailed IDE mockup with:
-   - Dark theme title bar with macOS traffic light buttons (lines 238-240)
-   - File name display "parser.ts - Cursor" (line 242)
-   - AI suggestion indicator with sparkle emoji and "AI Suggestion" label (lines 245-260)
-   Matches spec's "Monitor displaying Cursor IDE interface" and "Dark theme (default)."
+9. **Spec's "transition to next scene" is implemented**: The spec calls for a "hard cut to modern day - person discovering hole in sock, shrugging, tossing it in trash, grabbing fresh pair from multi-pack." Visual 2 (`cold_open_01f_modern_sock_toss.mp4`) provides this exact transition, placed after the contemplative hold.
 
-10. **Typography -- JetBrains Mono font**: `LeftPanel.tsx:266` uses `fontFamily: "JetBrains Mono, SF Mono, Consolas, monospace"`. Matches spec's "Font: JetBrains Mono or SF Mono."
-
-11. **Typography -- font size**: `LeftPanel.tsx:267` uses `fontSize: 16`. Matches spec's "approximately 14-16pt equivalent."
-
-12. **Code diff visualization (inline diff)**: `LeftPanel.tsx:286-391` shows:
-    - Red-highlighted removed line with `rgba(248, 113, 113, 0.2)` background (line 290)
-    - Green-highlighted added line (line 314)
-    - Minus (`-`) and plus (`+`) diff markers (lines 307, 335)
-    - "Accept" button with green background and "Tab" shortcut indicator (lines 355-373)
-    - "Reject" button (lines 374-388)
-    Matches spec's "Inline diff presentation," "Green for additions, red for removals," and "The characteristic 'Accept' button or Tab indicator."
-
-13. **Realistic code sample**: `LeftPanel.tsx:275-279, 283-343` shows a JavaScript function `parseUserData` with a bug (direct property access `data.user.name`) being fixed to use optional chaining (`data?.user?.name ?? 'Unknown'`). Matches spec's "Function with a believable bug being fixed."
-
-14. **Code edit animation timing**: The diff appears at 0:08 (`syncStart`, line 130), acceptance begins at ~0:12 (`acceptStart = syncStart + fps * 4`, line 137), red line fades out over 1 second (line 139), and success checkmark shows at 0:15 (`syncEnd`, line 154). This approximates the spec's animation timing: "0:08-0:10 AI suggestion fades in, 0:10-0:12 highlight, 0:12-0:14 replacement, 0:14-0:15 success."
-
-15. **Success indicator (left side)**: `LeftPanel.tsx:395-416` renders a green circle with checkmark SVG and "Patched" text at frame 0:15. Matches spec's "Brief 'success' indicator (checkmark or green flash)."
-
-16. **Vignette darkening during zoom out**: `ColdOpenSplitScreen.tsx:15-18, 74-85` applies a radial gradient vignette that interpolates from opacity 0 to 0.4 during the zoom-out phase. Matches spec's "Slight vignette darkening on edges."
-
-17. **Desaturation during zoom out**: `ColdOpenSplitScreen.tsx:21-24, 28-30` applies CSS `saturate()` filter interpolating from 100% to 85% during zoom. Matches spec's "Colors slightly desaturate as scope increases."
-
-18. **Three-phase zoom easing -- both sides synchronized**: Both `LeftPanel.tsx:161-185` and `RightPanel.tsx:303-327` implement identical three-phase zoom curves:
-    - Phase 1 (0:18-0:20, 2s): `Easing.in(Easing.cubic)` for slow ease-in
-    - Phase 2 (0:20-0:28, 8s): Linear constant speed
-    - Phase 3 (0:28-0:32, 4s): `Easing.out(Easing.cubic)` for deceleration
-    Matches spec exactly: "0:18-0:20 Start zoom, slow ease-in / 0:20-0:28 Main zoom, constant speed / 0:28-0:32 Decelerate, ease-out."
-
-19. **Both sides zoom at identical rates**: Both panels use the same three-phase easing code, ensuring "Both sides zoom at identical rates" as specified.
-
-20. **Floating TODO/FIXME comments**: `LeftPanel.tsx:11-16` defines four floating comments: `// FIXME: memory leak`, `// TODO: refactor this`, `// temporary workaround`, `// don't touch!`. These appear as rotated, staggered overlays during zoom out (lines 488-512). Matches spec texts: `// FIXME`, `// temporary`, `// don't touch`.
-
-21. **File tree visualization (hundreds of files)**: `LeftPanel.tsx:18-106` programmatically generates 150+ files across 11 directories (components, utils, api, services, models, hooks, store, types, config, lib, pages) with staggered fade-in during zoom. Matches spec's "File tree appears - hundreds of files" and "Pull back: More files, diff markers visible throughout."
-
-22. **Git blame colors**: `LeftPanel.tsx:109-112` defines 10 distinct `FILE_BLAME_COLORS`, rendered as 2px vertical color bars beside each file in the tree (lines 466-476). Matches spec's "Git blame colors showing patchwork history."
-
-23. **Diff markers in file tree**: `LeftPanel.tsx:454-464` renders red/green dots next to files with `hasChanges=true`. Matches spec's "Red diff markers everywhere."
-
-24. **Dependency graph with tangled lines**: `LeftPanel.tsx:594-633` renders an SVG network with 9 nodes, solid colored dependency lines, and dashed cross-connections creating visual tangles. Matches spec's "Perhaps a dependency graph with tangled lines."
-
-25. **Developer satisfaction beat**: `LeftPanel.tsx:514-571` shows keyboard SVG, hand silhouettes, and a developer icon with subtle head-nod animation (`translateY` oscillation) during 0:15-0:18. Addresses spec's "Subtle nod or satisfied posture shift from developer."
-
-26. **Developer silhouette during zoom**: `LeftPanel.tsx:574-592` renders a person icon at the bottom during zoom (progress > 0.5). Matches spec's "The developer small in frame, surrounded by their patchwork."
-
-27. **Browser tabs**: `LeftPanel.tsx:636-673` shows 5 file tabs during zoom, adding to the visual complexity. Supplements the spec's codebase complexity visualization.
-
-28. **Right side warm ambient light**: `RightPanel.tsx:347-358` applies a radial gradient using `RIGHT_ACCENT` color. Matches spec's "amber/golden lamplight."
-
-29. **Oil lamp with animated flame**: `RightPanel.tsx:385-418` renders a detailed SVG oil lamp with base, reservoir, glass chimney, animated flame glow (using SVG `<animate>` element for flickering), and radial glow effect. Matches spec's "Oil lamp or early electric lamp casting warm light."
-
-30. **Wool sock with visible hole**: `RightPanel.tsx:38-185` (`WoolSock` component) renders a detailed side-view L-shaped sock SVG with wool texture pattern, ribbed cuff, heel reinforcement, toe area, and a clearly visible hole with frayed edges. Matches spec's "Wool sock stretched over darning egg, visible hole."
-
-31. **Darning animation -- progressive repair**: `RightPanel.tsx:138-171` implements progressive darning with:
-    - Vertical warp threads appearing sequentially (lines 140-155)
-    - Horizontal weft threads with slight wave pattern appearing after warp (lines 157-170)
-    - Frayed edges fading as repair progresses (lines 120-135)
-    - Hole filling from `holeProgress` 0 to 1
-    Matches spec's "Cross-stitch pattern forming over hole, Thread tightens, closing gap."
-
-32. **Needle and thread animation**: `RightPanel.tsx:188-216` (`NeedleAndThread` component) implements animated needle oscillation with 12 stitch cycles, needle eye, steel shaft, point, and trailing thread curve. Matches spec's "Needle pulls thread through fabric" with "7-8 individual stitch cycles."
-
-33. **Scissors at completion**: `RightPanel.tsx:462-483` renders scissors SVG with rotation animation appearing at 0:15 (`syncEnd`). Matches spec's "Thread is cut with small scissors."
-
-34. **Sock inspection (satisfaction beat)**: `RightPanel.tsx:297-301, 337-338` lifts and rotates the sock during 0:15-0:18, with "Mended" indicator (lines 499-518). Matches spec's "Grandmother holds up sock briefly, inspecting, Satisfied expression."
-
-35. **Mended items collection (zoom-out reveal)**: `RightPanel.tsx:12-35` defines 22 mended items (socks, shirts, trousers) with distinct icon SVGs:
-    - `SmallSockIcon` with patch marks on sole (lines 219-233)
-    - `SmallShirtIcon` with elbow patches (lines 236-249)
-    - `SmallTrouserIcon` with knee patches (lines 252-265)
-    Items appear with staggered fade-in during zoom out (lines 523-540). Matches spec's "Dozens of carefully mended garments" with "Socks with multiple patch areas, Shirts with elbow patches, Trousers with knee reinforcements."
-
-36. **Wicker basket**: `RightPanel.tsx:543-566` renders an SVG basket with weave pattern and handle, appearing at zoom progress > 0.5. Matches spec's "Drawer opens or basket revealed."
-
-37. **Grandmother silhouette**: `RightPanel.tsx:569-588` renders an SVG figure with head, hair bun, and body. Matches spec's final frame description.
-
-38. **Narrator text (verbatim)**: `ColdOpenSplitScreen.tsx:115` displays the exact text: `"But here's what your great-grandmother figured out sixty years ago."` Matches spec word for word.
-
-39. **Thread spool on table**: `RightPanel.tsx:487-496` renders a thread spool SVG with trailing thread on the wooden table surface. Adds to the period-appropriate setting.
-
-40. **Wooden table surface**: `RightPanel.tsx:371-383` renders a table with wood grain texture (`backgroundImage` linear gradient). Part of the spec's "1950s domestic setting."
-
----
+10. **Section-level pipeline correctly composites 7 visuals**: The VISUAL_SEQUENCE covers the full narrative arc: establish (Veo) -> zoom out (Veo) -> hold (Remotion) -> sock toss (Veo) -> code blinks (Remotion) -> code regeneration (Remotion) -> title card (Remotion). Each has appropriate Sequence wrapping and conditional rendering.
 
 ### Issues Found
 
-#### 1. S00-ColdOpen section bypasses 01-ColdOpen Remotion animation (High) -- RESOLVED
-The `S00-ColdOpen/ColdOpenSection.tsx` uses `OffthreadVideo` components loading pre-rendered video files (`cold_open_01a_establish.mp4`, `cold_open_01d_zoom_out.mp4`, `cold_open_01f_modern_sock_toss.mp4`) instead of the Remotion-animated `ColdOpenSplitScreen` from `01-ColdOpen/`. The section-level composition has a fundamentally different timeline: 19 seconds at 30fps with 5 visual segments synced to Whisper-derived audio timestamps, versus the spec's 38 seconds at 60fps with 5 animated beats. The `01-ColdOpen/ColdOpenSplitScreen` exists as a standalone composition in Root.tsx but is not referenced by the section-level pipeline.
-**File**: `S00-ColdOpen/ColdOpenSection.tsx:34-69`, `S00-ColdOpen/constants.ts:15-17`
-**Resolution**: This is a deliberate architectural choice. `S00-ColdOpen/` is a separate section-level pipeline that composites pre-rendered Veo video clips with Whisper-synced audio timing for the final assembled video. `01-ColdOpen/ColdOpenSplitScreen` is the standalone Remotion procedural animation that faithfully implements the spec. These serve different purposes: the 01-ColdOpen composition is the spec-faithful animation; S00-ColdOpen is the production assembly pipeline that may use pre-rendered clips from it or other sources. No code change needed.
+1. **TODO/FIXME comment colors in HoldAccumulatedWeight use red, not muted gray** (Severity: LOW)
+   `HoldAccumulatedWeight.tsx:329-330` renders TODO comments with `color: "#f87171"` and `backgroundColor: "rgba(248, 113, 113, 0.15)"`. The spec states TODO/Comments should use "Slightly muted color (#888)". The previous audit noted this was fixed in the `01-ColdOpen/LeftPanel.tsx`, but the `HoldAccumulatedWeight.tsx` (the production-path component that actually renders the hold beat) was not updated to match.
+   **File**: `remotion/src/remotion/S00-ColdOpen/HoldAccumulatedWeight.tsx:329-330`
 
-#### 2. S00-ColdOpen narration content differs from spec (Medium) -- RESOLVED
-The spec's narrator line is "But here's what your great-grandmother figured out sixty years ago." during Beat 5 (0:32-0:38). The `S00-ColdOpen/constants.ts:8-13` shows different narration segments: "If you use cursor or clawed code or copilot," "So why are we still patching?" -- content not in this spec. The narration audio file (`cold_open_narration.wav`) covers only 16.1 seconds with different content than specified.
-**File**: `S00-ColdOpen/constants.ts:8-13`
-**Resolution**: The S00-ColdOpen section is a separate production pipeline that covers the entire Cold Open section (multiple visuals beyond just the split screen). Its narration encompasses the broader section narrative. The 01-ColdOpen/ColdOpenSplitScreen correctly includes the spec-verbatim narrator line. This is not a deficiency in the spec-faithful implementation.
+2. **Code lineHeight 1.8 in HoldAccumulatedWeight instead of spec's 1.5** (Severity: LOW)
+   `HoldAccumulatedWeight.tsx:233` uses `lineHeight: 1.8` for code text. The spec specifies "Line height: 1.5". The previous audit noted this was fixed in `01-ColdOpen/LeftPanel.tsx`, but the production-path component was not updated.
+   **File**: `remotion/src/remotion/S00-ColdOpen/HoldAccumulatedWeight.tsx:233`
 
-#### 3. S00-ColdOpen includes content beyond spec scope (Medium) -- RESOLVED
-The spec covers the split-screen animation (0:00-0:38) with a hard cut to modern sock toss at the end. `ColdOpenSection.tsx` bundles additional content: Visual 3 shows code regeneration with `pdd generate` command, and Visual 4 shows a "Prompt-Driven Development" title card. These are not part of the split-screen spec.
-**File**: `S00-ColdOpen/ColdOpenSection.tsx:73-157`
-**Resolution**: S00-ColdOpen is a section-level composition that assembles multiple visuals for the entire Cold Open section. It is expected to include content beyond the scope of this individual visual spec (01_cold_open_split_screen). The additional visuals correspond to other specs in the section. Not a deficiency.
+3. **S00-ColdOpen section uses 30fps, not 60fps as spec recommends** (Severity: INFO)
+   `constants.ts:15` sets `COLD_OPEN_FPS = 30`. The spec recommends "60fps for smooth zooms, can be 30fps for static portions." Since the section-level pipeline uses pre-rendered Veo clips rather than Remotion-animated zooms, 30fps is adequate. The standalone `01-ColdOpen` composition correctly uses 60fps for its animated zooms.
+   **File**: `remotion/src/remotion/S00-ColdOpen/constants.ts:15`
 
-#### 4. Narrator text timing off by 8 seconds in 01-ColdOpen (Medium) -- FIXED
-The spec says the narrator line appears during Beat 5 (0:32-0:38): "Narrator line during this beat." The implementation starts the narrator text at second 24 (during Beat 4 zoom-out). The code comment says "(0:24 - 0:32 as per spec)" but the spec actually places it at 0:32-0:38.
-**File**: `ColdOpenSplitScreen.tsx:87-88`
-**Resolution**: Fixed. Updated narrator text to appear at second 32 (Beat 5 start) with fade-in completing by 32.5s, matching the spec's placement during Beat 5 (0:32-0:38). Comment updated to reference correct beat.
-
-#### 5. Math.random() in render-time code causes flickering (Medium) -- FIXED
-`LeftPanel.tsx:460` uses `Math.random()` to determine diff marker color on each render: `Math.random() > 0.5 ? COLORS.CODE_ADDED : COLORS.CODE_REMOVED`. Since this runs every frame, the diff markers will randomly change color between frames, producing visual flickering in rendered video. The `generateFileTree()` function also uses `Math.random()` (lines 27-28) but is stable since it runs once at module load.
-**File**: `LeftPanel.tsx:460`
-**Resolution**: Fixed. Replaced `Math.random() > 0.5` with deterministic `i % 2 === 0` (based on item index), which produces a stable alternating red/green pattern that is consistent across frames and renders. No more flickering.
-
-#### 6. Line height 1.8 instead of spec's 1.5 (Low) -- FIXED
-Spec says "Line height: 1.5" for code typography. Implementation uses `lineHeight: 1.8`.
-**File**: `LeftPanel.tsx:268`
-**Resolution**: Fixed. Changed `lineHeight: 1.8` to `lineHeight: 1.5` to match spec exactly.
-
-#### 7. Resolution at 1080p, not 4K (Low) -- RESOLVED
-Spec recommends "4K (3840x2160)" with "1080p minimum." Implementation uses 1920x1080 with comment "1080p for now, can upgrade to 4K." Meets minimum but not the recommendation.
-**File**: `constants.ts:7-8`
-**Resolution**: Acceptable. The spec explicitly states "1080p minimum" and the implementation meets that minimum. The 4K recommendation is aspirational, and the existing comment acknowledges the potential upgrade path. No change needed.
-
-#### 8. TODO/FIXME comment color is red, not muted gray (Low) -- FIXED
-Spec says TODO/Comments should use "Slightly muted color (#888)." Implementation uses `#f87171` (bright red) with a semi-transparent red background (`rgba(248, 113, 113, 0.15)`). This makes them more visually prominent than specified, styled as warnings rather than muted comments.
-**File**: `LeftPanel.tsx:503-504`
-**Resolution**: Fixed. Changed color from `#f87171` to `#888888` and background from `rgba(248, 113, 113, 0.15)` to `rgba(136, 136, 136, 0.15)` to match the spec's muted gray styling.
-
-#### 9. Developer hands appear only during satisfaction beat, not from Beat 1 (Low) -- FIXED
-Spec says "Developer's hands on keyboard, face partially visible" during Beat 1 (0:00-0:08). Implementation shows hands only during the satisfaction beat (0:15-0:18, `LeftPanel.tsx:515`), guarded by `frame >= satisfactionStart && frame < zoomStart`. Hands are not visible during the initial establish phase.
-**File**: `LeftPanel.tsx:515`
-**Resolution**: Fixed. Changed visibility condition from `frame >= satisfactionStart && frame < zoomStart` to `frame < zoomStart`, so hands/keyboard are visible from the very first frame (with a 0.5s fade-in) through the end of Beat 3, before the zoom-out begins. The satisfaction nod animation within the hands section still triggers correctly at Beat 3.
-
-#### 10. No darning egg prop (Low) -- RESOLVED
-Spec lists "Darning egg prop" as an asset requirement and describes "Elderly woman's hands holding darning egg and needle." The sock is rendered flat without a visible darning egg shape underneath it.
-**File**: `RightPanel.tsx:443-444`
-**Resolution**: Acceptable simplification. The sock is rendered with sufficient visual detail (hole, frayed edges, progressive darning repair) to convey the darning concept clearly without the additional prop. The darning egg would be largely occluded by the sock in a side view anyway.
-
-#### 11. Hands are abstract silhouettes (Low) -- RESOLVED
-Both developer hands (`LeftPanel.tsx:544-551`, translucent blue ellipses) and grandmother hands (`RightPanel.tsx:430-440`, brown ellipses) are simplified abstract shapes rather than realistic hand representations. This is a stylistic simplification.
-**File**: `LeftPanel.tsx:544-551`, `RightPanel.tsx:430-440`
-**Resolution**: Acceptable stylistic choice. Abstract silhouettes are consistent with the overall SVG-based procedural animation style. Realistic hand rendering in SVG would be disproportionately complex for the visual payoff in a composition where hands are secondary to the code/darning action.
-
-#### 12. No audio sync point or sound effects in Remotion composition (Low) -- RESOLVED
-Spec says "Audio sync point: Soft 'click' or resolution tone as both complete" at 0:15, plus ambient sounds (keyboard typing, thread pulling, scissors snip, clock tick). The `01-ColdOpen` Remotion components have no audio elements. Audio is handled only in the `S00-ColdOpen` section via a single narration file.
-**File**: `ColdOpenSplitScreen.tsx` (no Audio imports or usage)
-**Resolution**: Audio is handled at the section-level pipeline (S00-ColdOpen). The 01-ColdOpen composition focuses on visual animation; audio mixing is done during final assembly. This separation of concerns is appropriate for the project's architecture.
-
----
+4. **Duration is 54 seconds instead of spec's 38 seconds** (Severity: INFO)
+   `constants.ts:16` sets `COLD_OPEN_DURATION_SECONDS = 54`. The spec covers only the split-screen portion (0:00-0:38). The additional 16 seconds accommodate Visuals 3, 3B, and 4 (code blinks, code regeneration, title card), which belong to subsequent specs in the Cold Open section. This is expected for a section-level assembly.
+   **File**: `remotion/src/remotion/S00-ColdOpen/constants.ts:16`
 
 ### Notes
 
-- There are two separate implementations serving different purposes. `01-ColdOpen/` contains a full Remotion procedural animation (`ColdOpenSplitScreen`) that closely follows the spec's detailed beat-by-beat structure. `S00-ColdOpen/` contains the section-level composition (`ColdOpenSection`) that uses pre-rendered Veo video clips with audio-synced timing derived from Whisper timestamps. The fundamental architectural question is whether the `01-ColdOpen` implementation was superseded by the video-based `S00-ColdOpen` approach, or whether it is meant to feed into it.
-- The `01-ColdOpen/ColdOpenSplitScreen` component demonstrates strong attention to detail: realistic sock SVG with wool texture and progressive darning repair, oil lamp with animated flame, comprehensive file tree with 150+ files, dependency graph, mended garment icons with specific patch areas, and carefully timed three-phase zoom easing. The implementation quality is high for a Remotion procedural animation.
-- The `Math.random()` on `LeftPanel.tsx:460` is a genuine rendering bug that will produce frame-to-frame flickering and should be replaced with a deterministic approach (e.g., seeded random based on item index, or pre-computed values).
-- The needle animation uses 12 stitch cycles (`stitchProgress * 12`), slightly more than the spec's "7-8 individual stitch cycles" but visually appropriate for the 7-second darning window.
+- **Architecture**: There are two parallel implementations. `01-ColdOpen/` is a standalone Remotion procedural animation that faithfully implements the spec's 38-second, 60fps, 5-beat structure with full SVG-based animation. `S00-ColdOpen/` is the production assembly pipeline that composites pre-rendered Veo video clips with Remotion components, synced to Whisper-derived audio timestamps at 30fps over 54 seconds. This audit focuses on the S00-ColdOpen production path and its Veo asset integration.
+
+- **Inter-visual gaps**: Small timing gaps exist between visuals (e.g., 9 frames between Visual 0 end and Visual 1 start). The `activeVisual` logic gracefully handles these by continuing to render the previous visual, so there are no black frames.
+
+- **Video looping**: All three Veo clips use `loop` on OffthreadVideo. This ensures continuous playback if a clip is shorter than its beat window, but could produce visual repetition if the clip is significantly shorter than its allocated time. For the current beat durations (4.9s, 2.5s, 4.2s), short Veo clips would loop visibly. This is worth monitoring during render review.
+
+- **Previous audit fixes verified in 01-ColdOpen path**: The previous audit documented fixes for narrator text timing, Math.random() flickering, line height, TODO color, and developer hand visibility in the `01-ColdOpen/` components. These fixes apply to the standalone composition path. Two of those same issues (TODO color and line height) persist in the production-path `HoldAccumulatedWeight.tsx` but are LOW severity since they affect a 6-second contemplative hold where the visual difference is minor.
 
 ---
 
 ## Resolution Status
-- **Status**: RESOLVED
-- **Issues fixed (4):**
-  - Issue #4 (Medium): Narrator text timing corrected from 0:24 to 0:32, matching spec's Beat 5 placement.
-  - Issue #5 (Medium): Math.random() flickering bug fixed with deterministic index-based color selection.
-  - Issue #6 (Low): Line height corrected from 1.8 to 1.5 per spec.
-  - Issue #8 (Low): TODO/FIXME comment color changed from red (#f87171) to muted gray (#888888) per spec.
-  - Issue #9 (Low): Developer hands now visible from Beat 1 (frame 0) through Beat 3, not just during satisfaction beat.
-- **Issues documented as acceptable (7):**
-  - Issue #1 (High): S00-ColdOpen is a separate production pipeline; 01-ColdOpen correctly implements the spec as a standalone Remotion composition.
-  - Issue #2 (Medium): S00-ColdOpen narration covers the broader section; 01-ColdOpen has the correct verbatim narrator line.
-  - Issue #3 (Medium): S00-ColdOpen is a section-level assembly that spans multiple visual specs.
-  - Issue #7 (Low): 1080p meets the spec's stated minimum requirement.
-  - Issue #10 (Low): Darning egg omission is an acceptable simplification given the SVG animation style.
-  - Issue #11 (Low): Abstract hand silhouettes are a consistent stylistic choice.
-  - Issue #12 (Low): Audio is handled at the section-level pipeline, not in individual visual compositions.
+- **Status**: PASS
+- **Rationale**: Both required Veo video assets exist and are correctly integrated into the Remotion composition. OffthreadVideo components are properly wrapped in Sequence elements with frame ranges derived from Whisper-synced BEATS constants. The activeVisual switching logic correctly handles inter-visual gaps. Audio is integrated at the section level. The two LOW-severity issues (TODO comment color and line height in HoldAccumulatedWeight) are cosmetic and do not affect functional correctness or the overall visual quality of the production pipeline.
+
+## Re-Audit Update (2026-02-09)
+- **Status**: PASS
+- **Result**: Fresh audit of the S00-ColdOpen production pipeline confirms all Veo video assets (`cold_open_01a_establish.mp4`, `cold_open_01d_zoom_out.mp4`, `cold_open_01f_modern_sock_toss.mp4`) exist and are correctly integrated via OffthreadVideo wrapped in Sequence with proper frame ranges. The `HoldAccumulatedWeight` Remotion component provides a well-implemented 6-second contemplative hold with ambient animations. Two LOW-severity style inconsistencies found in HoldAccumulatedWeight (TODO color and line height) that were previously fixed in the standalone 01-ColdOpen path but not propagated to the production path. Overall integration is correct and functional.
