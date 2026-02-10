@@ -153,14 +153,14 @@ def test_happy_path_clone_repo(mock_dependencies):
         cmd = args if isinstance(args, list) else []
 
         # Comments API (check BEFORE Issue API since comments URL contains "issues/1" too)
-        if "api" in cmd and "comments" in cmd[-1]:
+        if "api" in cmd and any("comments" in arg for arg in cmd):
             m = MagicMock()
             m.returncode = 0
             m.stdout = json.dumps(comments_data)
             return m
 
         # Issue API
-        if "api" in cmd and "issues/1" in cmd[-1]:
+        if "api" in cmd and any("issues/1" in arg for arg in cmd):
             m = MagicMock()
             m.returncode = 0
             m.stdout = json.dumps(issue_data)
@@ -276,14 +276,14 @@ def test_comments_fetch_failure_resilience(mock_dependencies):
         cmd = args if isinstance(args, list) else []
         
         # Issue API succeeds
-        if "api" in cmd and "issues/1" in cmd[-1]:
+        if "api" in cmd and any("issues/1" in arg for arg in cmd):
             m = MagicMock()
             m.returncode = 0
             m.stdout = json.dumps(issue_data)
             return m
             
         # Comments API fails
-        if "api" in cmd and "bad.url" in cmd[-1]:
+        if "api" in cmd and any("bad.url" in arg for arg in cmd):
             m = MagicMock()
             m.returncode = 1
             m.stderr = "Error"
@@ -373,14 +373,14 @@ def test_issue_content_curly_braces_escaped(mock_dependencies):
         cmd = args if isinstance(args, list) else []
 
         # Comments API
-        if "api" in cmd and "comments" in cmd[-1]:
+        if "api" in cmd and any("comments" in arg for arg in cmd):
             m = MagicMock()
             m.returncode = 0
             m.stdout = json.dumps(comments_data)
             return m
 
         # Issue API
-        if "api" in cmd and "issues/248" in cmd[-1]:
+        if "api" in cmd and any("issues/248" in arg for arg in cmd):
             m = MagicMock()
             m.returncode = 0
             m.stdout = json.dumps(issue_data)
