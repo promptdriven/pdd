@@ -3244,12 +3244,12 @@
     }
   },
   {
-    "reason": "LLM prompt template for agentic bug step9 pr operations.",
-    "description": "Defines the prompt structure for agentic bug step9 pr. Invoked by the corresponding Python module to format LLM requests.",
+    "reason": "Creates draft PR with failing tests and PDD fix command for step 10 of agentic bug workflow.",
+    "description": "Step 10 (final step) of the agentic bug workflow. Creates a draft pull request with failing tests and links it to the GitHub issue. Includes pdd fix command for resolving the bug.",
     "dependencies": [],
     "priority": 80,
-    "filename": "agentic_bug_step9_pr_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step9_pr_LLM.prompt",
+    "filename": "agentic_bug_step10_pr_LLM.prompt",
+    "filepath": "prompts/agentic_bug_step10_pr_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -3264,12 +3264,12 @@
     }
   },
   {
-    "reason": "LLM prompt template for agentic fix harvest only operations.",
-    "description": "Defines the prompt structure for agentic fix harvest only. Invoked by the corresponding Python module to format LLM requests.",
+    "reason": "Fallback fix strategy for non-Python PDD projects where normal fix loop failed.",
+    "description": "LLM prompt template for fixing failing tests in non-Python PDD projects. Runs as fallback after PDD normal fix loop failed multiple times. Follows PDD principle that prompt file is source of truth.",
     "dependencies": [],
     "priority": 81,
-    "filename": "agentic_fix_harvest_only_LLM.prompt",
-    "filepath": "prompts/agentic_fix_harvest_only_LLM.prompt",
+    "filename": "agentic_fix_nonpython_LLM.prompt",
+    "filepath": "prompts/agentic_fix_nonpython_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -3526,21 +3526,6 @@
       "config": {
         "keys": []
       }
-    }
-  },
-  {
-    "reason": "Implements encode message functionality.",
-    "description": "Provides encode message capabilities for PDD operations.",
-    "dependencies": [],
-    "priority": 93,
-    "filename": "encode_message_python.prompt",
-    "filepath": "pdd/encode_message.py",
-    "tags": [
-      "module",
-      "python"
-    ],
-    "interface": {
-      "type": "module"
     }
   },
   {
@@ -4518,33 +4503,6 @@
     }
   },
   {
-    "reason": "Implements simple math functionality.",
-    "description": "Provides simple math capabilities for PDD operations.",
-    "dependencies": [],
-    "priority": 130,
-    "filename": "simple_math_python.prompt",
-    "filepath": "pdd/simple_math.py",
-    "tags": [
-      "module",
-      "python"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "add",
-            "signature": "(a, b)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          }
-        ]
-      }
-    }
-  },
-  {
     "reason": "LLM prompt template for summarize file operations.",
     "description": "Defines the prompt structure for summarize file. Invoked by the corresponding Python module to format LLM requests.",
     "dependencies": [],
@@ -4928,22 +4886,6 @@
           }
         ]
       }
-    }
-  },
-  {
-    "reason": "Implements test other functionality.",
-    "description": "Provides test other capabilities for PDD operations.",
-    "dependencies": [],
-    "priority": 134,
-    "filename": "test_other_python.prompt",
-    "filepath": "pdd/test_other.py",
-    "tags": [
-      "module",
-      "python",
-      "testing"
-    ],
-    "interface": {
-      "type": "module"
     }
   },
   {
@@ -5621,14 +5563,14 @@
     }
   },
   {
-    "reason": "Validates architecture.json: checks circular deps, priority ordering, missing deps, field completeness.",
-    "description": "Step 7 of the agentic architecture workflow. Validates the generated architecture.json against 11 checks: valid JSON, required fields, no circular dependencies, priority ordering matches dependency graph, no missing dependencies, no priority gaps/duplicates, filename conventions, interface validity, and context_urls format.",
+    "reason": "Generates and validates .pddrc configuration file based on architecture.json, ensuring proper context mapping and output path templates.",
+    "description": "Step 7 of the agentic architecture workflow. Generates a complete .pddrc configuration file from architecture.json. Critical because without correct .pddrc, pdd sync will output files to wrong paths. Handles Next.js/Nuxt/SvelteKit multi-context projects.",
     "dependencies": [
       "agentic_arch_step6_generate_LLM.prompt"
     ],
     "priority": 160,
-    "filename": "agentic_arch_step7_validate_LLM.prompt",
-    "filepath": "prompts/agentic_arch_step7_validate_LLM.prompt",
+    "filename": "agentic_arch_step7_pddrc_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step7_pddrc_LLM.prompt",
     "tags": [
       "llm",
       "agentic",
@@ -5648,14 +5590,14 @@
     }
   },
   {
-    "reason": "Fixes validation errors in architecture.json: resolves circular deps, priority violations, missing fields.",
-    "description": "Step 8 of the agentic architecture workflow. Fixes validation errors identified in step 7. Handles circular dependency restructuring, priority reordering, missing dependency addition, field completion, filename convention fixes, and interface type corrections. Outputs complete corrected JSON array.",
+    "reason": "Generates prompt files for all modules defined in architecture.json, placing them in the correct directories based on .pddrc configuration.",
+    "description": "Step 8 of the agentic architecture workflow. Generates actual prompt files for all modules in architecture.json. Uses .pddrc from step 7 to determine correct output directories.",
     "dependencies": [
-      "agentic_arch_step7_validate_LLM.prompt"
+      "agentic_arch_step7_pddrc_LLM.prompt"
     ],
     "priority": 161,
-    "filename": "agentic_arch_step8_fix_LLM.prompt",
-    "filepath": "prompts/agentic_arch_step8_fix_LLM.prompt",
+    "filename": "agentic_arch_step8_prompts_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step8_prompts_LLM.prompt",
     "tags": [
       "llm",
       "agentic",
@@ -5669,6 +5611,1422 @@
             "name": "fix_architecture",
             "signature": "(current_architecture: str, step7_output: str)",
             "returns": "str (corrected JSON array)"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Validates .pddrc configuration using pdd sync --dry-run for each module.",
+    "description": "Step 10 of the agentic architecture workflow. Validates that pdd sync can run for every module by checking the .pddrc configuration.",
+    "dependencies": [
+      "agentic_arch_step9_completeness_LLM.prompt"
+    ],
+    "priority": 162,
+    "filename": "agentic_arch_step10_sync_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step10_sync_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "validate_sync",
+            "signature": "(architecture_json: str)",
+            "returns": "str ('VALID' or list of sync errors)"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Validates dependency graph: ensures priorities are correct so dependencies are generated before dependents.",
+    "description": "Step 11 of the agentic architecture workflow. Validates the dependency graph in architecture.json to ensure modules are ordered so dependencies are generated before dependents.",
+    "dependencies": [
+      "agentic_arch_step10_sync_LLM.prompt"
+    ],
+    "priority": 163,
+    "filename": "agentic_arch_step11_deps_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step11_deps_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "validate_dependency_graph",
+            "signature": "()",
+            "returns": "str ('VALID' or list of dependency errors)"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Fixes validation errors from a single failed validation step (completeness, sync, or dependencies).",
+    "description": "Step 12 of the agentic architecture workflow. Fixes validation errors discovered by the completeness, sync, or dependency validation steps.",
+    "dependencies": [
+      "agentic_arch_step11_deps_LLM.prompt"
+    ],
+    "priority": 164,
+    "filename": "agentic_arch_step12_fix_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step12_fix_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template",
+      "fix"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "fix_validation",
+            "signature": "(failed_step: str, failed_output: str)",
+            "returns": "str (list of fixes applied)"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Validates architecture completeness: PRD coverage, layer completeness, dependency graph validity.",
+    "description": "Step 9 of the agentic architecture workflow. Validates that the architecture covers all PRD requirements for a complete, compilable, runnable project.",
+    "dependencies": [
+      "agentic_arch_step8_prompts_LLM.prompt"
+    ],
+    "priority": 165,
+    "filename": "agentic_arch_step9_completeness_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step9_completeness_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "validate_completeness",
+            "signature": "(architecture_json: str, prd_summary: str)",
+            "returns": "str ('VALID' or list of completeness errors)"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Classifies whether a bug root cause is in code implementation or prompt specification.",
+    "description": "Step 5.5 of the agentic bug workflow. Classifies whether a bug root cause is in the code implementation or in the prompt specification itself.",
+    "dependencies": [],
+    "priority": 166,
+    "filename": "agentic_bug_step5_5_prompt_classification_LLM.prompt",
+    "filepath": "prompts/agentic_bug_step5_5_prompt_classification_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for generating E2E tests that verify a bug at system integration level.",
+    "description": "Step 9 of the agentic bug workflow. Generates and runs end-to-end tests that verify a bug at the system integration level.",
+    "dependencies": [],
+    "priority": 167,
+    "filename": "agentic_bug_step9_e2e_test_LLM.prompt",
+    "filepath": "prompts/agentic_bug_step9_e2e_test_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template",
+      "testing"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "Orchestrates the 13-step agentic change workflow for implementing feature requests.",
+    "description": "Coordinates duplicate checking, docs review, research, clarification, docs changes, dev units, architecture, analysis, implementation, architecture update, issue identification, issue fixing, and PR creation.",
+    "dependencies": [
+      "agentic_common_python.prompt",
+      "load_prompt_template_python.prompt"
+    ],
+    "priority": 168,
+    "filename": "agentic_change_orchestrator_python.prompt",
+    "filepath": "pdd/agentic_change_orchestrator.py",
+    "tags": [
+      "agentic",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "run_agentic_change_orchestrator",
+            "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str) -> Tuple[bool, str, float, str, List[str]]",
+            "returns": "Tuple[bool, str, float, str, List[str]]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Autonomously implements GitHub feature request issues via 13-step workflow.",
+    "description": "Entry point for the agentic change command. Parses issue URL, extracts issue metadata from GitHub, and delegates to the change orchestrator.",
+    "dependencies": [
+      "agentic_change_orchestrator_python.prompt",
+      "agentic_common_python.prompt"
+    ],
+    "priority": 169,
+    "filename": "agentic_change_python.prompt",
+    "filepath": "pdd/agentic_change.py",
+    "tags": [
+      "agentic",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "run_agentic_change",
+            "signature": "(issue_url: str) -> Tuple[bool, str, float, str, List[str]]",
+            "returns": "Tuple[bool, str, float, str, List[str]]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for updating architecture metadata after changes.",
+    "description": "Step 10 of the agentic change workflow. Updates architecture metadata (PDD tags) for prompts created or modified and updates architecture.json.",
+    "dependencies": [
+      "` tags:\n      - Extract from `<include>` directives in the prompt\n      - Only include .prompt file dependencies (not .py, .md, etc.)\n      - One `<pdd-dependency>` tag per dependency\n   e. Prepend tags to the prompt file (before first % line)\n\n4. **For each MODIFIED prompt in FILES_MODIFIED:**\n   a. Check if prompt already has PDD tags at the top\n   b. If tags exist and requirements changed significantly, update them\n   c. If no tags exist, add them following the same process as step 3\n   d. Skip if no meaningful interface changes\n\n5. **Update architecture.json (if it exists):**\n   a. For new prompts: Add new entry with reason, interface, dependencies\n   b. For modified prompts: Sync entry from prompt tags\n   c. Preserve existing entries not being modified\n\n% Output\n\nAfter completing your changes, use `gh issue comment` to post your findings to issue #{issue_number}:\n\n```\ngh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body \"...\"\n```\n\nYour comment should follow this format:\n\n**If tags added/updated:**\n```markdown\n## Step 10: Architecture Update\n\n**Status:** Updated\n\n### Tags Added/Updated\n| Prompt | Action | Interface Type |\n|--------|--------|---------------|\n| `prompts/xxx.prompt` | Added tags | module |\n| `prompts/yyy.prompt` | Updated tags | cli |\n\n### architecture.json Changes\n- Added: `xxx.prompt`\n- Updated: `yyy.prompt`\n\nARCHITECTURE_FILES_MODIFIED: prompts/xxx.prompt, prompts/yyy.prompt, architecture.json\n\n---\n*Proceeding to Step 11: Identify Issues*\n```\n\n**If no architecture.json exists:**\n```markdown\n## Step 10: Architecture Update\n\n**Status:** Tags Added (no architecture.json)\n\n### Tags Added/Updated\n| Prompt | Action | Interface Type |\n|--------|--------|---------------|\n| `prompts/xxx.prompt` | Added tags | module |\n\nARCHITECTURE_FILES_MODIFIED: prompts/xxx.prompt\n\n---\n*Proceeding to Step 11: Identify Issues*\n```\n\n**If no prompt files to update (only docs/non-prompt files changed):**\n```markdown\n## Step 10: Architecture Update\n\n**Status:** Skipped (no prompt files in changes)\n\nNo new or modified prompt files require architecture metadata updates.\n\n---\n*Proceeding to Step 11: Identify Issues*\n```\n\n% Important\n\n- Work in the worktree directory, not the main repo\n- Tags must be prepended BEFORE the first % line in prompts\n- Always post your findings as a GitHub comment before completing\n- The ARCHITECTURE_FILES_MODIFIED line is CRITICAL for the orchestrator to track changes\n- Use the exact format: `ARCHITECTURE_FILES_MODIFIED: file1, file2, file3` (comma-separated, same line)\n\n% Tag Format Examples\n\n**Example `<pdd-reason>` tag:**\n```xml\n<pdd-reason>Orchestrates the 13-step agentic change workflow for implementing GitHub issues.</pdd-reason>\n```\n\n**Example `<pdd-interface>` tag (module type):**\n```xml\n<pdd-interface>\n{{\n  \"type\": \"module\",\n  \"module\": {{\n    \"functions\": [\n      {{\"name\": \"run_agentic_change_orchestrator\", \"signature\": \"(issue_url, issue_content, ...)\", \"returns\": \"Tuple[bool, str, float, str, List[str]]\"}}\n    ]\n  }}\n}}\n</pdd-interface>\n```\n\n**Example `<pdd-interface>` tag (cli type):**\n```xml\n<pdd-interface>\n{{\n  \"type\": \"cli\",\n  \"cli\": {{\n    \"commands\": [\n      {{\"name\": \"change\", \"description\": \"Implement a GitHub issue as prompt changes\"}}\n    ]\n  }}\n}}\n</pdd-interface>\n```\n\n**Example `<pdd-dependency>` tags:**\n```xml\n<pdd-dependency>llm_invoke_python.prompt",
+      "path_resolution_python.prompt"
+    ],
+    "priority": 170,
+    "filename": "agentic_change_step10_architecture_update_LLM.prompt",
+    "filepath": "prompts/agentic_change_step10_architecture_update_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for identifying issues in prompt changes.",
+    "description": "Step 11 of the agentic change workflow. Identifies potential issues with prompt and documentation changes as part of a review loop (loops with step 12).",
+    "dependencies": [],
+    "priority": 171,
+    "filename": "agentic_change_step11_identify_issues_LLM.prompt",
+    "filepath": "prompts/agentic_change_step11_identify_issues_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for fixing issues found in review loop.",
+    "description": "Step 12 of the agentic change workflow. Fixes the issues identified by step 11 in the review loop (loops with step 11 up to 5 iterations).",
+    "dependencies": [],
+    "priority": 172,
+    "filename": "agentic_change_step12_fix_issues_LLM.prompt",
+    "filepath": "prompts/agentic_change_step12_fix_issues_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template",
+      "fix"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for creating a PR from the change workflow.",
+    "description": "Step 13 (final step) of the agentic change workflow. Creates a pull request from the worktree branch and links it to the original GitHub issue.",
+    "dependencies": [],
+    "priority": 173,
+    "filename": "agentic_change_step13_create_pr_LLM.prompt",
+    "filepath": "prompts/agentic_change_step13_create_pr_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for checking duplicate issues in agentic change workflow.",
+    "description": "Step 1 of the agentic change workflow. Checks if a change request issue is a duplicate of an existing GitHub issue.",
+    "dependencies": [],
+    "priority": 174,
+    "filename": "agentic_change_step1_duplicate_LLM.prompt",
+    "filepath": "prompts/agentic_change_step1_duplicate_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for checking if change is already implemented.",
+    "description": "Step 2 of the agentic change workflow. Checks if the requested change is already implemented or documented; may terminate the workflow if so.",
+    "dependencies": [],
+    "priority": 175,
+    "filename": "agentic_change_step2_docs_LLM.prompt",
+    "filepath": "prompts/agentic_change_step2_docs_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for researching feature change requests.",
+    "description": "Step 3 of the agentic change workflow. Researches the feature change request using web search to better understand requirements.",
+    "dependencies": [],
+    "priority": 176,
+    "filename": "agentic_change_step3_research_LLM.prompt",
+    "filepath": "prompts/agentic_change_step3_research_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for determining if change request needs clarification.",
+    "description": "Step 4 of the agentic change workflow. Determines if the change request is clear enough to proceed or if clarifying questions are needed; may stop the workflow.",
+    "dependencies": [],
+    "priority": 177,
+    "filename": "agentic_change_step4_clarify_LLM.prompt",
+    "filepath": "prompts/agentic_change_step4_clarify_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for analyzing documentation changes needed.",
+    "description": "Step 5 of the agentic change workflow. Analyzes how documentation should change to support the new feature.",
+    "dependencies": [],
+    "priority": 178,
+    "filename": "agentic_change_step5_docs_change_LLM.prompt",
+    "filepath": "prompts/agentic_change_step5_docs_change_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for identifying affected dev units.",
+    "description": "Step 6 of the agentic change workflow. Identifies which dev units (prompt + code + example + test) are involved in implementing the change.",
+    "dependencies": [],
+    "priority": 179,
+    "filename": "agentic_change_step6_devunits_LLM.prompt",
+    "filepath": "prompts/agentic_change_step6_devunits_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for identifying architectural decisions.",
+    "description": "Step 7 of the agentic change workflow. Identifies architectural or implementation decisions requiring user input before proceeding; may stop the workflow.",
+    "dependencies": [],
+    "priority": 180,
+    "filename": "agentic_change_step7_architecture_LLM.prompt",
+    "filepath": "prompts/agentic_change_step7_architecture_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for analyzing prompt changes.",
+    "description": "Step 8 of the agentic change workflow. Analyzes how identified prompts should change to implement the requested feature.",
+    "dependencies": [],
+    "priority": 181,
+    "filename": "agentic_change_step8_analyze_LLM.prompt",
+    "filepath": "prompts/agentic_change_step8_analyze_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for implementing prompt changes in a git worktree.",
+    "description": "Step 9 of the agentic change workflow. Implements the prompt changes (modifying .prompt files and documentation) in a git worktree; scoped to prompt/doc edits only.",
+    "dependencies": [],
+    "priority": 182,
+    "filename": "agentic_change_step9_implement_LLM.prompt",
+    "filepath": "prompts/agentic_change_step9_implement_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "Orchestrates the 9-step agentic E2E fix workflow for resolving end-to-end test failures.",
+    "description": "Coordinates running unit tests, E2E tests, root cause analysis, E2E test fixing, dev unit identification, unit test creation, test verification, pdd fix execution, and final verification.",
+    "dependencies": [
+      "agentic_common_python.prompt",
+      "load_prompt_template_python.prompt"
+    ],
+    "priority": 183,
+    "filename": "agentic_e2e_fix_orchestrator_python.prompt",
+    "filepath": "pdd/agentic_e2e_fix_orchestrator.py",
+    "tags": [
+      "agentic",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "run_agentic_e2e_fix_orchestrator",
+            "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str) -> Tuple[bool, str, float, str, List[str]]",
+            "returns": "Tuple[bool, str, float, str, List[str]]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Autonomously fixes end-to-end test failures from GitHub issues.",
+    "description": "Entry point for the agentic E2E fix command. Parses issue URL, finds associated worktree, and delegates to the E2E fix orchestrator.",
+    "dependencies": [
+      "agentic_e2e_fix_orchestrator_python.prompt",
+      "agentic_common_python.prompt"
+    ],
+    "priority": 184,
+    "filename": "agentic_e2e_fix_python.prompt",
+    "filepath": "pdd/agentic_e2e_fix.py",
+    "tags": [
+      "agentic",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "run_agentic_e2e_fix",
+            "signature": "(issue_url: str) -> Tuple[bool, str, float, str, List[str]]",
+            "returns": "Tuple[bool, str, float, str, List[str]]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "_find_worktree_for_issue",
+            "signature": "(issue_url: str) -> Optional[str]",
+            "returns": "Optional[str]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for running issue-specific unit tests in E2E fix workflow.",
+    "description": "Step 1 of the agentic E2E fix workflow. Runs issue-specific unit tests (created by pdd bug) and fixes failures using pdd fix.",
+    "dependencies": [],
+    "priority": 185,
+    "filename": "agentic_e2e_fix_step1_unit_tests_LLM.prompt",
+    "filepath": "prompts/agentic_e2e_fix_step1_unit_tests_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template",
+      "fix",
+      "testing"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for running E2E tests as exit condition.",
+    "description": "Step 2 of the agentic E2E fix workflow. Runs E2E tests and checks if they all pass, serving as the exit condition for the outer fix loop.",
+    "dependencies": [],
+    "priority": 186,
+    "filename": "agentic_e2e_fix_step2_e2e_tests_LLM.prompt",
+    "filepath": "prompts/agentic_e2e_fix_step2_e2e_tests_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template",
+      "testing"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for root cause analysis of E2E test failures.",
+    "description": "Step 3 of the agentic E2E fix workflow. Performs root cause analysis on E2E test failures to determine whether the problem is in code, tests, or both.",
+    "dependencies": [],
+    "priority": 187,
+    "filename": "agentic_e2e_fix_step3_root_cause_LLM.prompt",
+    "filepath": "prompts/agentic_e2e_fix_step3_root_cause_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template",
+      "fix"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for fixing E2E tests when they are the problem.",
+    "description": "Step 4 of the agentic E2E fix workflow. Fixes E2E tests themselves if root cause analysis indicates the tests are the problem.",
+    "dependencies": [],
+    "priority": 188,
+    "filename": "agentic_e2e_fix_step4_fix_e2e_tests_LLM.prompt",
+    "filepath": "prompts/agentic_e2e_fix_step4_fix_e2e_tests_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "fix",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for identifying dev units causing E2E failures.",
+    "description": "Step 5 of the agentic E2E fix workflow. Identifies which dev units (modules) are responsible for remaining test failures.",
+    "dependencies": [],
+    "priority": 189,
+    "filename": "agentic_e2e_fix_step5_identify_devunits_LLM.prompt",
+    "filepath": "prompts/agentic_e2e_fix_step5_identify_devunits_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template",
+      "fix"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for creating unit tests from E2E failure analysis.",
+    "description": "Step 6 of the agentic E2E fix workflow. Creates or appends unit tests for the dev units identified as causing E2E failures.",
+    "dependencies": [],
+    "priority": 190,
+    "filename": "agentic_e2e_fix_step6_create_unit_tests_LLM.prompt",
+    "filepath": "prompts/agentic_e2e_fix_step6_create_unit_tests_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template",
+      "testing"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for verifying unit tests detect the bug.",
+    "description": "Step 7 of the agentic E2E fix workflow. Verifies that the created unit tests actually fail on the current buggy code, confirming they detect the bug.",
+    "dependencies": [],
+    "priority": 191,
+    "filename": "agentic_e2e_fix_step7_verify_tests_LLM.prompt",
+    "filepath": "prompts/agentic_e2e_fix_step7_verify_tests_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template",
+      "testing"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for running pdd fix on identified dev units.",
+    "description": "Step 8 of the agentic E2E fix workflow. Runs pdd fix sequentially on dev units identified during E2E failure analysis to fix the underlying bugs.",
+    "dependencies": [],
+    "priority": 192,
+    "filename": "agentic_e2e_fix_step8_run_pdd_fix_LLM.prompt",
+    "filepath": "prompts/agentic_e2e_fix_step8_run_pdd_fix_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "fix",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for final verification and loop control.",
+    "description": "Step 9 of the agentic E2E fix workflow. Performs final verification and determines if another fix cycle is needed; controls the outer loop.",
+    "dependencies": [],
+    "priority": 193,
+    "filename": "agentic_e2e_fix_step9_verify_all_LLM.prompt",
+    "filepath": "prompts/agentic_e2e_fix_step9_verify_all_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template",
+      "fix"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for generating unit tests from prompt specification.",
+    "description": "Generates unit tests for a PDD project based on the prompt specification and code under test.",
+    "dependencies": [],
+    "priority": 194,
+    "filename": "agentic_test_generate_LLM.prompt",
+    "filepath": "prompts/agentic_test_generate_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template",
+      "testing"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "Generates tests using agentic single-pass execution with file change detection.",
+    "description": "Runs an agentic CLI to generate test files. Records file mtimes before/after agent execution, detects changed files, reads generated test content. Supports JSON metadata extraction from agent output.",
+    "dependencies": [
+      "agentic_common_python.prompt",
+      "load_prompt_template_python.prompt"
+    ],
+    "priority": 195,
+    "filename": "agentic_test_generate_python.prompt",
+    "filepath": "pdd/agentic_test_generate.py",
+    "tags": [
+      "agentic",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "run_agentic_test_generate",
+            "signature": "(prompt_path: str, code_path: str, test_path: str, project_root: str) -> Tuple[bool, str, str]",
+            "returns": "Tuple[bool, str, str]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "_get_file_mtimes",
+            "signature": "(root: Path) -> dict[Path, float]",
+            "returns": "dict[Path, float]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "_extract_json_from_text",
+            "signature": "(text: str) -> dict[str, Any] | None",
+            "returns": "dict[str, Any] | None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "_read_generated_test_file",
+            "signature": "(test_file: Path) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "_detect_changed_files",
+            "signature": "(before, after, project_root) -> list[str]",
+            "returns": "list[str]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Orchestrates the 9-step agentic test workflow for generating UI tests from issue descriptions.",
+    "description": "Coordinates duplicate checking, docs review, clarification, frontend detection, test planning, test generation, test running, fix iteration, and PR submission.",
+    "dependencies": [
+      "agentic_common_python.prompt",
+      "load_prompt_template_python.prompt"
+    ],
+    "priority": 196,
+    "filename": "agentic_test_orchestrator_python.prompt",
+    "filepath": "pdd/agentic_test_orchestrator.py",
+    "tags": [
+      "agentic",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "run_agentic_test_orchestrator",
+            "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str) -> Tuple[bool, str, float, str, List[str]]",
+            "returns": "Tuple[bool, str, float, str, List[str]]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Autonomously generates UI tests from GitHub issue descriptions.",
+    "description": "Entry point for the agentic test command. Parses issue URL, extracts issue metadata, and delegates to the test orchestrator. Supports both Playwright and Cypress test frameworks.",
+    "dependencies": [
+      "agentic_test_orchestrator_python.prompt",
+      "agentic_common_python.prompt"
+    ],
+    "priority": 197,
+    "filename": "agentic_test_python.prompt",
+    "filepath": "pdd/agentic_test.py",
+    "tags": [
+      "agentic",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "run_agentic_test",
+            "signature": "(issue_url: str) -> Tuple[bool, str, float, str, List[str]]",
+            "returns": "Tuple[bool, str, float, str, List[str]]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for checking duplicate test generation requests.",
+    "description": "Step 1 of the agentic test workflow. Checks if a test generation request is a duplicate of an existing issue.",
+    "dependencies": [],
+    "priority": 198,
+    "filename": "agentic_test_step1_duplicate_LLM.prompt",
+    "filepath": "prompts/agentic_test_step1_duplicate_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template",
+      "testing"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for researching codebase for test generation.",
+    "description": "Step 2 of the agentic test workflow. Researches the codebase to understand what needs to be tested.",
+    "dependencies": [],
+    "priority": 199,
+    "filename": "agentic_test_step2_docs_LLM.prompt",
+    "filepath": "prompts/agentic_test_step2_docs_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template",
+      "testing"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for assessing test generation feasibility.",
+    "description": "Step 3 of the agentic test workflow. Assesses whether there is sufficient information to create comprehensive tests; may terminate the workflow.",
+    "dependencies": [],
+    "priority": 200,
+    "filename": "agentic_test_step3_clarify_LLM.prompt",
+    "filepath": "prompts/agentic_test_step3_clarify_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template",
+      "testing"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for detecting test type and framework.",
+    "description": "Step 4 of the agentic test workflow. Identifies the test type (frontend/backend) and determines the appropriate testing framework.",
+    "dependencies": [],
+    "priority": 201,
+    "filename": "agentic_test_step4_detect_frontend_LLM.prompt",
+    "filepath": "prompts/agentic_test_step4_detect_frontend_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template",
+      "testing"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for creating comprehensive test plans.",
+    "description": "Step 5 of the agentic test workflow. Creates a comprehensive test plan and verifies it is achievable; may terminate if blocked by missing information.",
+    "dependencies": [],
+    "priority": 202,
+    "filename": "agentic_test_step5_test_plan_LLM.prompt",
+    "filepath": "prompts/agentic_test_step5_test_plan_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template",
+      "testing"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for generating test code from test plan.",
+    "description": "Step 6 of the agentic test workflow. Generates comprehensive test code based on the test plan.",
+    "dependencies": [],
+    "priority": 203,
+    "filename": "agentic_test_step6_generate_tests_LLM.prompt",
+    "filepath": "prompts/agentic_test_step6_generate_tests_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template",
+      "testing"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for running generated tests.",
+    "description": "Step 7 of the agentic test workflow. Runs the generated tests and reports results.",
+    "dependencies": [],
+    "priority": 204,
+    "filename": "agentic_test_step7_run_tests_LLM.prompt",
+    "filepath": "prompts/agentic_test_step7_run_tests_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template",
+      "testing"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for iteratively fixing failing tests.",
+    "description": "Step 8 of the agentic test workflow. Fixes failing tests and re-runs them iteratively until they pass.",
+    "dependencies": [],
+    "priority": 205,
+    "filename": "agentic_test_step8_fix_iterate_LLM.prompt",
+    "filepath": "prompts/agentic_test_step8_fix_iterate_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "fix",
+      "llm",
+      "template",
+      "testing"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for creating PR with generated tests.",
+    "description": "Step 9 (final step) of the agentic test workflow. Creates a draft pull request with the generated tests and links it to the issue.",
+    "dependencies": [],
+    "priority": 206,
+    "filename": "agentic_test_step9_submit_pr_LLM.prompt",
+    "filepath": "prompts/agentic_test_step9_submit_pr_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template",
+      "testing"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "Provides bidirectional sync between architecture.json and prompt files using PDD metadata tags.",
+    "description": "Bidirectional sync between architecture.json and prompt files using PDD metadata tags. Parses pdd-reason, pdd-interface, pdd-dependency tags from prompts and updates/creates architecture.json entries.",
+    "dependencies": [],
+    "priority": 207,
+    "filename": "architecture_sync_python.prompt",
+    "filepath": "pdd/architecture_sync.py",
+    "tags": [
+      "agentic",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "parse_prompt_tags",
+            "signature": "(prompt_content: str) -> Dict[str, Any]",
+            "returns": "Dict with keys: reason, interface, dependencies, has_dependency_tags"
+          },
+          {
+            "name": "update_architecture_from_prompt",
+            "signature": "(prompt_filename: str, prompts_dir: Path, architecture_path: Path, dry_run: bool) -> Dict[str, Any]",
+            "returns": "Dict with keys: success, updated, changes, error, warnings"
+          },
+          {
+            "name": "sync_all_prompts_to_architecture",
+            "signature": "(prompts_dir: Path, architecture_path: Path, dry_run: bool) -> Dict[str, Any]",
+            "returns": "Dict with keys: success, updated_count, skipped_count, results, errors"
+          },
+          {
+            "name": "validate_dependencies",
+            "signature": "(dependencies: List[str], prompts_dir: Path) -> Dict[str, Any]",
+            "returns": "Dict with keys: valid, missing, duplicates"
+          },
+          {
+            "name": "validate_interface_structure",
+            "signature": "(interface: Dict[str, Any]) -> Dict[str, Any]",
+            "returns": "Dict with keys: valid, errors"
+          },
+          {
+            "name": "get_architecture_entry_for_prompt",
+            "signature": "(prompt_filename: str, architecture_path: Path) -> Optional[Dict[str, Any]]",
+            "returns": "Architecture entry dict or None"
+          },
+          {
+            "name": "has_pdd_tags",
+            "signature": "(prompt_content: str) -> bool",
+            "returns": "True if prompt contains PDD metadata tags"
+          },
+          {
+            "name": "generate_tags_from_architecture",
+            "signature": "(arch_entry: Dict[str, Any]) -> str",
+            "returns": "XML tags string ready to prepend to prompt"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Manages JWT authentication tokens, refresh tokens, and auth state for PDD Cloud.",
+    "description": "Provides auth status checking, JWT caching, token refresh, and logout functionality. Interfaces with Firebase auth for PDD Cloud authentication.",
+    "dependencies": [
+      "get_jwt_token_python.prompt"
+    ],
+    "priority": 208,
+    "filename": "auth_service_python.prompt",
+    "filepath": "pdd/auth_service.py",
+    "tags": [
+      "agentic",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "get_jwt_cache_info",
+            "signature": "() -> Dict[str, Any]",
+            "returns": "Dict[str, Any]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "has_refresh_token",
+            "signature": "() -> bool",
+            "returns": "bool",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "clear_jwt_cache",
+            "signature": "() -> None",
+            "returns": "None",
+            "sideEffects": [
+              "Clears cached JWT"
+            ]
+          },
+          {
+            "name": "get_auth_status",
+            "signature": "() -> Dict[str, Any]",
+            "returns": "Dict[str, Any]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "logout",
+            "signature": "() -> bool",
+            "returns": "bool",
+            "sideEffects": [
+              "Clears tokens and cache"
+            ]
+          },
+          {
+            "name": "verify_auth",
+            "signature": "() -> bool",
+            "returns": "bool",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "get_cached_jwt",
+            "signature": "() -> Optional[str]",
+            "returns": "Optional[str]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for generating tests from example usage files.",
+    "description": "Generates tests based on intended behavior from a prompt and an example usage file, appending to existing tests if present.",
+    "dependencies": [],
+    "priority": 209,
+    "filename": "generate_test_from_example_LLM.prompt",
+    "filepath": "prompts/generate_test_from_example_LLM.prompt",
+    "tags": [
+      "config",
+      "llm",
+      "template",
+      "testing"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "Provides operation logging and state tracking for PDD commands via @log_operation decorator.",
+    "description": "Decorator-based operation logging that tracks PDD command executions. Manages fingerprints, run reports, and event logs. Works with Click commands to extract module identity from prompt_file parameter.",
+    "dependencies": [],
+    "priority": 210,
+    "filename": "operation_log_python.prompt",
+    "filepath": "pdd/operation_log.py",
+    "tags": [
+      "agentic",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "log_operation",
+            "signature": "(updates_fingerprint: bool, updates_run_report: bool, clears_run_report: bool) -> Callable",
+            "returns": "Callable (decorator)",
+            "sideEffects": [
+              "Writes to .pdd/meta/ state files"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for analyzing prompt-vs-code regeneration gaps.",
+    "description": "Strict code analysis that evaluates whether an LLM could regenerate the code from only the prompt. Finds gaps that would cause regeneration failures.",
+    "dependencies": [],
+    "priority": 211,
+    "filename": "prompt_code_diff_LLM.prompt",
+    "filepath": "prompts/prompt_code_diff_LLM.prompt",
+    "tags": [
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for comparing two prompt versions.",
+    "description": "Compares two versions of a prompt to identify semantic and linguistic differences between them.",
+    "dependencies": [],
+    "priority": 212,
+    "filename": "prompt_diff_LLM.prompt",
+    "filepath": "prompts/prompt_diff_LLM.prompt",
+    "tags": [
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "Manages remote PDD Cloud sessions with heartbeat, command polling, and execution.",
+    "description": "Provides RemoteSessionManager class for cloud session lifecycle: registration, heartbeat, command polling/execution, and deregistration. Supports token refresh and async operations via httpx.",
+    "dependencies": [
+      "get_jwt_token_python.prompt"
+    ],
+    "priority": 213,
+    "filename": "remote_session_python.prompt",
+    "filepath": "pdd/remote_session.py",
+    "tags": [
+      "agentic",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "RemoteSessionManager",
+            "signature": "(jwt_token: str, server_port: int, session_name: Optional[str])",
+            "returns": "RemoteSessionManager instance",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "get_active_session_manager",
+            "signature": "() -> Optional[RemoteSessionManager]",
+            "returns": "Optional[RemoteSessionManager]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "set_active_session_manager",
+            "signature": "(manager: Optional[RemoteSessionManager]) -> None",
+            "returns": "None",
+            "sideEffects": [
+              "Sets module-level state"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Determines correct sync order for PDD modules based on dependency graph.",
+    "description": "Analyzes include directives across prompt files to build a dependency graph, performs topological sort, and generates ordered sync scripts. Identifies affected modules when a prompt changes.",
+    "dependencies": [
+      "auto_include_python.prompt"
+    ],
+    "priority": 214,
+    "filename": "sync_order_python.prompt",
+    "filepath": "pdd/sync_order.py",
+    "tags": [
+      "agentic",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "extract_includes_from_file",
+            "signature": "(file_path: str) -> List[str]",
+            "returns": "List[str]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "extract_module_from_include",
+            "signature": "(include_path: str) -> Optional[str]",
+            "returns": "Optional[str]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "build_dependency_graph",
+            "signature": "(prompts_dir: str) -> Dict[str, Set[str]]",
+            "returns": "Dict[str, Set[str]]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "topological_sort",
+            "signature": "(graph: Dict[str, Set[str]]) -> List[str]",
+            "returns": "List[str]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "get_affected_modules",
+            "signature": "(module: str, graph: Dict[str, Set[str]]) -> List[str]",
+            "returns": "List[str]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "generate_sync_order_script",
+            "signature": "(modules: List[str]) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
           }
         ]
       }

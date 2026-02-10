@@ -71,7 +71,7 @@ On macOS, you'll need to install some prerequisites before installing PDD:
    brew install python
    ```
    
-   **Note**: macOS comes with Python 2.7 by default (deprecated), but PDD requires Python 3.8 or higher. The `brew install python` command installs the latest Python 3 version.
+   **Note**: Recent versions of macOS no longer ship with Python pre-installed. PDD requires Python 3.8 or higher. The `brew install python` command installs the latest Python 3 version.
 
 ### Recommended Method: uv
 
@@ -796,6 +796,8 @@ Options:
 - `--skip-tests`: Skip unit test generation and fixing
 - `--target-coverage FLOAT`: Desired code coverage percentage (default is 90.0)
 - `--dry-run`: Display real-time sync analysis for this basename instead of running sync operations. This performs the same state analysis as a normal sync run but without acquiring exclusive locks or executing any operations, allowing inspection even when another sync process is active.
+- `--no-steer`: Disable interactive steering of sync operations.
+- `--steer-timeout FLOAT`: Timeout in seconds for steering prompts (default: 8.0).
 
 **Real-time Progress Animation**:
 The sync command provides live visual feedback showing:
@@ -2645,6 +2647,11 @@ PDD uses several environment variables to customize its behavior:
 - **`PDD_CONFIG_PATH`**: Override the default `.pddrc` file location (default: searches upward from current directory).
 - **`PDD_DEFAULT_CONTEXT`**: Default context to use when no context is detected (default: "default").
 - **`PDD_DEFAULT_LANGUAGE`**: Global default programming language when not specified in context (default: "python").
+
+#### Agentic Workflow Variables
+
+- **`CLAUDE_MODEL`**: Override the model used by Claude CLI in agentic workflows (e.g., `claude-sonnet-4-5-20250929`). When set, passes `--model` to the Claude CLI command. No default; only used if explicitly set.
+- **`PDD_USER_FEEDBACK`**: Inject user feedback from GitHub issue comments into agentic task instructions. Set by the GitHub App executor to pass feedback from previous execution attempts. No default.
 
 #### Output Path Variables
 
