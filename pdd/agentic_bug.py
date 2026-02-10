@@ -115,8 +115,8 @@ def _fetch_comments(comments_url: str) -> str:
     """
     # The comments_url from API is full URL like https://api.github.com/repos/...
     # gh api expects path relative to api root or full URL.
-    cmd = ["gh", "api", comments_url]
-    
+    cmd = ["gh", "api", comments_url, "--paginate"]
+
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
         comments_data = json.loads(result.stdout)

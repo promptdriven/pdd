@@ -2145,3 +2145,274 @@ def test_pdd_user_feedback_not_injected_when_absent(mock_cwd, mock_env, mock_loa
     args, kwargs = mock_subprocess.call_args
     prompt_input = kwargs.get("input", "")
     assert "User Feedback" not in prompt_input
+
+
+# ---------------------------------------------------------------------------
+# GitHub State Persistence Tests — Issue #481
+# _find_state_comment() missing --paginate causes workflow state loss
+# on issues with 30+ comments
+# ---------------------------------------------------------------------------
+
+from pdd.agentic_common import (
+    _find_state_comment,
+    _serialize_state_comment,
+    _build_state_marker,
+    github_load_state,
+    load_workflow_state,
+    GITHUB_STATE_MARKER_START,
+    GITHUB_STATE_MARKER_END,
+)
+
+
+def _make_mock_comments(total, state_positions=None, workflow_type="bug", issue_number=481):
+    """Generate a list of mock GitHub API comment objects.
+
+    Args:
+        total: Total number of comments to generate.
+        state_positions: List of 0-based positions where state comments should appear.
+        workflow_type: Workflow type for state marker.
+        issue_number: Issue number for state marker.
+    """
+    comments = []
+    for i in range(total):
+        if state_positions and i in state_positions:
+            state = {
+                "workflow": workflow_type,
+                "issue_number": issue_number,
+                "last_completed_step": i,
+                "step_outputs": {},
+            }
+            body = _serialize_state_comment(workflow_type, issue_number, state)
+        else:
+            body = f"Regular comment #{i + 1}"
+        comments.append({"id": 1000 + i, "body": body, "user": {"login": "testuser"}})
+    return comments
+
+
+class TestFindStateCommentPagination:
+    """Tests for _find_state_comment() pagination behavior (issue #481).
+
+    Bug: _find_state_comment() calls `gh api` without --paginate, so GitHub
+    only returns the first 30 comments. State comments beyond #30 are invisible,
+    causing workflow state loss.
+    """
+
+    # ---- Test 1: Primary bug test — assert --paginate flag is present ----
+
+    def test_find_state_comment_includes_paginate_flag(self, tmp_path):
+        """The gh api command MUST include --paginate to fetch all comments.
+
+        Without --paginate, GitHub API returns max 30 comments per page.
+        This is the most precise regression test for issue #481.
+        """
+        mock_comments = _make_mock_comments(5, state_positions=[2])
+
+        with patch("shutil.which", return_value="/usr/bin/gh"), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0,
+                stdout=json.dumps(mock_comments),
+            )
+            _find_state_comment("owner", "repo", 481, "bug", tmp_path)
+
+            # The critical assertion — the command MUST include --paginate
+            args = mock_run.call_args[0][0]  # First positional arg (cmd list)
+            assert "--paginate" in args, (
+                f"gh api command missing --paginate flag. "
+                f"Without it, GitHub API only returns first 30 comments. "
+                f"Command was: {args}"
+            )
+
+    # ---- Test 2: Behavioral — state comment beyond 30 is found ----
+
+    def test_find_state_comment_finds_state_beyond_30_comments(self, tmp_path):
+        """State comment at position 35 (beyond 30-comment page) must be found.
+
+        Even if the implementation changes (e.g., ?per_page=100 instead of
+        --paginate), this test catches truncation at 30.
+        """
+        mock_comments = _make_mock_comments(42, state_positions=[35])
+
+        with patch("shutil.which", return_value="/usr/bin/gh"), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0,
+                stdout=json.dumps(mock_comments),
+            )
+            result = _find_state_comment("owner", "repo", 481, "bug", tmp_path)
+
+            assert result is not None, (
+                "_find_state_comment returned None — state comment at position 35 "
+                "was not found. This is the exact bug from issue #481."
+            )
+            comment_id, state = result
+            assert comment_id == 1035  # 1000 + 35
+            assert state["last_completed_step"] == 35
+
+    # ---- Test 3: Returns first matching state comment ----
+
+    def test_find_state_comment_returns_first_match(self, tmp_path):
+        """When multiple state comments exist, returns the first one found."""
+        mock_comments = _make_mock_comments(42, state_positions=[10, 35])
+
+        with patch("shutil.which", return_value="/usr/bin/gh"), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0,
+                stdout=json.dumps(mock_comments),
+            )
+            result = _find_state_comment("owner", "repo", 481, "bug", tmp_path)
+
+            assert result is not None
+            comment_id, state = result
+            # Should return the first match (position 10), not the later one
+            assert comment_id == 1010
+            assert state["last_completed_step"] == 10
+
+    # ---- Test 4: No state comment exists ----
+
+    def test_find_state_comment_no_state_comment(self, tmp_path):
+        """Returns None when no state comment exists, even with many comments."""
+        mock_comments = _make_mock_comments(42, state_positions=None)
+
+        with patch("shutil.which", return_value="/usr/bin/gh"), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0,
+                stdout=json.dumps(mock_comments),
+            )
+            result = _find_state_comment("owner", "repo", 481, "bug", tmp_path)
+            assert result is None
+
+    # ---- Test 5: Empty issue (0 comments) ----
+
+    def test_find_state_comment_empty_issue(self, tmp_path):
+        """Returns None gracefully on issues with 0 comments."""
+        with patch("shutil.which", return_value="/usr/bin/gh"), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0,
+                stdout=json.dumps([]),
+            )
+            result = _find_state_comment("owner", "repo", 481, "bug", tmp_path)
+            assert result is None
+
+    # ---- Test 6: gh CLI not installed ----
+
+    def test_find_state_comment_gh_not_installed(self, tmp_path):
+        """Returns None without calling subprocess when gh is not installed."""
+        with patch("shutil.which", return_value=None), \
+             patch("subprocess.run") as mock_run:
+            result = _find_state_comment("owner", "repo", 481, "bug", tmp_path)
+            assert result is None
+            mock_run.assert_not_called()
+
+    # ---- Test 7: API failure ----
+
+    def test_find_state_comment_api_failure(self, tmp_path):
+        """Returns None gracefully on gh api errors."""
+        with patch("shutil.which", return_value="/usr/bin/gh"), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="API error")
+            result = _find_state_comment("owner", "repo", 481, "bug", tmp_path)
+            assert result is None
+
+    # ---- Test 8: Full call chain — load_workflow_state with no local cache ----
+
+    def test_load_workflow_state_github_fallback_with_pagination(self, tmp_path):
+        """load_workflow_state() recovers from GitHub when no local cache exists.
+
+        This is the exact end-to-end scenario from the bug report:
+        1. No local cache file
+        2. State comment on GitHub at position 35 (beyond 30-comment page)
+        3. Expected: state is recovered from GitHub
+        4. Actual (before fix): Returns (None, None) — state invisible
+        """
+        state_dir = tmp_path / "state"
+        state_dir.mkdir()
+        # No local cache file — load_workflow_state must fall back to GitHub
+
+        mock_comments = _make_mock_comments(42, state_positions=[35])
+
+        with patch("shutil.which", return_value="/usr/bin/gh"), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0,
+                stdout=json.dumps(mock_comments),
+            )
+            state, gh_id = load_workflow_state(
+                cwd=tmp_path,
+                issue_number=481,
+                workflow_type="bug",
+                state_dir=state_dir,
+                repo_owner="owner",
+                repo_name="repo",
+                use_github_state=True,
+            )
+
+            assert state is not None, (
+                "load_workflow_state returned None despite state comment on GitHub. "
+                "This is the exact bug from issue #481 — state beyond comment #30 "
+                "is invisible without --paginate."
+            )
+            assert gh_id == 1035
+            assert state["last_completed_step"] == 35
+
+
+# ---- Tests 9-10: Secondary affected call sites ----
+
+class TestSecondaryPaginationCallSites:
+    """Verify --paginate is present in secondary call sites (agentic_bug.py, agentic_test.py)."""
+
+    def test_agentic_bug_fetch_comments_includes_paginate(self, tmp_path):
+        """agentic_bug.py _fetch_comments() must include --paginate.
+
+        Without it, issues with 30+ comments have truncated context for the LLM.
+        """
+        from pdd.agentic_bug import _fetch_comments
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0,
+                stdout=json.dumps([{"user": {"login": "test"}, "body": "comment"}]),
+            )
+            _fetch_comments("https://api.github.com/repos/owner/repo/issues/1/comments")
+
+            args = mock_run.call_args[0][0]  # cmd list
+            assert "--paginate" in args, (
+                f"agentic_bug.py _fetch_comments() missing --paginate. "
+                f"Command was: {args}"
+            )
+
+    def test_agentic_test_fetch_comments_includes_paginate(self, tmp_path):
+        """agentic_test.py comment fetching must include --paginate.
+
+        Without it, issues with 30+ comments have truncated context for the LLM.
+        """
+        # _fetch_issue_data(owner, repo, number) first fetches the issue,
+        # then fetches comments using the comments_url from the issue response.
+        with patch("subprocess.run") as mock_run:
+            issue_json = {
+                "title": "Test issue",
+                "body": "Test body",
+                "labels": [],
+                "state": "open",
+                "comments_url": "https://api.github.com/repos/owner/repo/issues/1/comments",
+            }
+            comments_json = [{"user": {"login": "test"}, "body": "comment"}]
+
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout=json.dumps(issue_json)),  # issue fetch
+                MagicMock(returncode=0, stdout=json.dumps(comments_json)),  # comments fetch
+            ]
+
+            from pdd.agentic_test import _fetch_issue_data
+            _fetch_issue_data("owner", "repo", 1)
+
+            # The second call should be the comments fetch
+            assert mock_run.call_count >= 2, "Expected at least 2 subprocess calls (issue + comments)"
+            comments_call_args = mock_run.call_args_list[1][0][0]
+            assert "--paginate" in comments_call_args, (
+                f"agentic_test.py comment fetching missing --paginate. "
+                f"Command was: {comments_call_args}"
+            )
