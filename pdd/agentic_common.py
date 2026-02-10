@@ -553,6 +553,7 @@ def _run_with_provider(
     env["TERM"] = "dumb"
     env["NO_COLOR"] = "1"
     env["CI"] = "1"
+    env.pop("PDD_OUTPUT_COST_PATH", None)
 
     # Get CLI binary name for this provider
     cli_name = CLI_COMMANDS.get(provider)
@@ -735,9 +736,10 @@ def _find_state_comment(
     try:
         # List comments
         cmd = [
-            "gh", "api", 
+            "gh", "api",
             f"repos/{repo_owner}/{repo_name}/issues/{issue_number}/comments",
-            "--method", "GET"
+            "--method", "GET",
+            "--paginate"
         ]
         result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
         if result.returncode != 0:
