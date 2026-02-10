@@ -209,7 +209,7 @@ class TestDictNestedUser:
         assert parse_user_id({"user": 123}) is None
 
     def test_inner_not_dict_none(self):
-        assert parse_user_id("user": None) is None
+        assert parse_user_id({"user": None}) is None
 
     def test_inner_missing_id_key(self):
         assert parse_user_id({"user": {"name": "abc"}}) is None
