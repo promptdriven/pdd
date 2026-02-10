@@ -22,6 +22,7 @@ from .construct_paths import construct_paths
 from .change import change as change_func
 from .process_csv_change import process_csv_change
 from .get_extension import get_extension
+from .user_story_tests import run_user_story_tests, discover_prompt_files
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -487,7 +488,71 @@ def change_main(
                     logger.error(msg, exc_info=True)
                     return msg, total_cost, model_name or ""
 
-        # --- 5. Final User Feedback ---
+        # --- 5. User Story Validation (Optional) ---
+        if (use_csv or success) and not ctx.obj.get("skip_user_stories", False):
+            prompts_dir = resolved_config.get("prompts_dir") or os.environ.get("PDD_PROMPTS_DIR") or "prompts"
+            stories_dir = os.environ.get("PDD_USER_STORIES_DIR") or "user_stories"
+            validation_prompt_files = None
+            validation_prompts_dir = Path(prompts_dir)
+            output_is_csv = False
+
+            if use_csv and output_path_obj:
+                output_is_csv = output_path_obj.suffix.lower() == ".csv"
+
+            if output_is_csv:
+                if not quiet:
+                    rprint("[yellow]Skipping user story validation: output is CSV, no prompt files written.[/yellow]")
+                passed = True
+                story_cost = 0.0
+                story_model = ""
+            else:
+                override_dir = None
+                if use_csv:
+                    if "output_dir" in locals():
+                        override_dir = output_dir
+                    elif output_path_obj:
+                        if output_path_obj.is_dir() or (not output_path_obj.exists() and not output_path_obj.suffix):
+                            override_dir = output_path_obj
+                        else:
+                            override_dir = output_path_obj.parent
+                else:
+                    if output_path_obj:
+                        override_dir = output_path_obj.parent
+
+                if override_dir:
+                    override_prompts = discover_prompt_files(str(override_dir))
+                    base_prompts = discover_prompt_files(str(validation_prompts_dir))
+                    merged: List[Path] = []
+                    seen = set()
+                    for pf in override_prompts + base_prompts:
+                        key = pf.name.lower()
+                        if key in seen:
+                            continue
+                        merged.append(pf)
+                        seen.add(key)
+                    validation_prompt_files = merged
+
+                passed, _, story_cost, story_model = run_user_story_tests(
+                    prompts_dir=str(validation_prompts_dir) if validation_prompt_files is None else None,
+                    prompt_files=validation_prompt_files,
+                    stories_dir=stories_dir,
+                    strength=strength,
+                    temperature=temperature,
+                    time=time_budget,
+                    verbose=not quiet,
+                    quiet=quiet,
+                    fail_fast=True,
+                )
+            total_cost += story_cost
+            if story_model:
+                model_name = model_name or story_model
+            if not passed:
+                msg = "User story validation failed. Review detect results for details."
+                if not quiet:
+                    rprint(f"[bold red]Error:[/bold red] {msg}")
+                return msg, total_cost, model_name or ""
+
+        # --- 6. Final User Feedback ---
         # Show summary if not quiet AND (it was CSV mode OR non-CSV mode succeeded)
         if not quiet and (use_csv or success):
             rprint("[bold green]Prompt modification completed successfully.[/bold green]")

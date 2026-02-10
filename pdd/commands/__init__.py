@@ -7,7 +7,7 @@ from .generate import generate, test, example
 from .fix import fix
 from .modify import split, change, update
 from .maintenance import sync, auto_deps, setup
-from .analysis import detect_change, conflicts, bug, crash, trace
+from .analysis import detect_change, conflicts, bug, crash, trace, story_test
 from .connect import connect
 from .auth import auth_group
 from .misc import preprocess
@@ -35,6 +35,7 @@ def register_commands(cli: click.Group) -> None:
     cli.add_command(bug)
     cli.add_command(crash)
     cli.add_command(trace)
+    cli.add_command(story_test)
     cli.add_command(preprocess)
     cli.add_command(report_core)
     cli.add_command(install_completion_cmd, name="install_completion")

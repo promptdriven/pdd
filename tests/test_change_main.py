@@ -326,7 +326,9 @@ def test_change_main_non_csv_success(
     # or ensure the mock_open_function handles the Path object correctly.
     # Here, we pass the resolved path object directly to assert_called_once_with.
     with patch.object(Path, 'resolve', return_value=output_path_obj) as mock_resolve, \
-         patch.object(Path, 'mkdir') as mock_mkdir: # Mock Path.mkdir
+         patch.object(Path, 'mkdir') as mock_mkdir, \
+         patch("pdd.change_main.run_user_story_tests") as mock_story_tests: # Mock user story validation
+            mock_story_tests.return_value = (True, [], 0.0, "")
             result = change_main(
                 ctx=ctx_instance,
                 change_prompt_file=change_prompt_file,
@@ -929,3 +931,217 @@ def test_change_csv_skips_empty_modified_content(mock_construct_paths, mock_proc
     empty_file = output_dir / "empty.prompt"
     assert not empty_file.exists(), \
         f"File {empty_file} should not be written when modified_prompt is empty string"
+
+
+def test_change_main_user_story_validation_failure(tmp_path):
+    change_file = tmp_path / "change.prompt"
+    code_file = tmp_path / "code.py"
+    prompt_file = tmp_path / "input.prompt"
+    output_file = tmp_path / "modified.prompt"
+    change_file.write_text("Change request", encoding="utf-8")
+    code_file.write_text("print('hi')", encoding="utf-8")
+    prompt_file.write_text("Original prompt", encoding="utf-8")
+
+    ctx_instance = create_mock_context(
+        obj={
+            "quiet": True,
+            "force": True,
+            "strength": DEFAULT_STRENGTH,
+            "temperature": 0,
+            "language": "python",
+            "extension": ".py",
+            "time": 0.25,
+        }
+    )
+
+    with patch("pdd.change_main.construct_paths") as mock_construct, \
+         patch("pdd.change_main.change_func") as mock_change, \
+         patch("pdd.change_main.run_user_story_tests") as mock_story_tests:
+        mock_construct.return_value = (
+            {"prompts_dir": str(tmp_path / "prompts")},
+            {
+                "change_prompt_file": "Change request",
+                "input_code": "print('hi')",
+                "input_prompt_file": "Original prompt",
+            },
+            {"output_prompt_file": str(output_file)},
+            "python",
+        )
+        mock_change.return_value = ("Modified prompt", 0.2, "model-a")
+        mock_story_tests.return_value = (False, [{"story": "s", "passed": False}], 0.3, "model-b")
+
+        message, total_cost, model_name = change_main(
+            ctx=ctx_instance,
+            change_prompt_file=str(change_file),
+            input_code=str(code_file),
+            input_prompt_file=str(prompt_file),
+            output=str(output_file),
+            use_csv=False,
+            budget=5.0,
+        )
+
+    assert message == "User story validation failed. Review detect results for details."
+    assert total_cost == pytest.approx(0.5)
+    assert model_name == "model-a"
+
+
+def test_change_main_skip_user_story_validation(tmp_path):
+    change_file = tmp_path / "change.prompt"
+    code_file = tmp_path / "code.py"
+    prompt_file = tmp_path / "input.prompt"
+    output_file = tmp_path / "modified.prompt"
+    change_file.write_text("Change request", encoding="utf-8")
+    code_file.write_text("print('hi')", encoding="utf-8")
+    prompt_file.write_text("Original prompt", encoding="utf-8")
+
+    ctx_instance = create_mock_context(
+        obj={
+            "quiet": True,
+            "force": True,
+            "skip_user_stories": True,
+            "strength": DEFAULT_STRENGTH,
+            "temperature": 0,
+            "language": "python",
+            "extension": ".py",
+            "time": 0.25,
+        }
+    )
+
+    with patch("pdd.change_main.construct_paths") as mock_construct, \
+         patch("pdd.change_main.change_func") as mock_change, \
+         patch("pdd.change_main.run_user_story_tests") as mock_story_tests:
+        mock_construct.return_value = (
+            {"prompts_dir": str(tmp_path / "prompts")},
+            {
+                "change_prompt_file": "Change request",
+                "input_code": "print('hi')",
+                "input_prompt_file": "Original prompt",
+            },
+            {"output_prompt_file": str(output_file)},
+            "python",
+        )
+        mock_change.return_value = ("Modified prompt", 0.2, "model-a")
+        mock_story_tests.side_effect = AssertionError("run_user_story_tests should not be called")
+
+        message, total_cost, model_name = change_main(
+            ctx=ctx_instance,
+            change_prompt_file=str(change_file),
+            input_code=str(code_file),
+            input_prompt_file=str(prompt_file),
+            output=str(output_file),
+            use_csv=False,
+            budget=5.0,
+        )
+
+    assert "Modified prompt saved to" in message
+    assert total_cost == pytest.approx(0.2)
+    assert model_name == "model-a"
+
+
+def test_change_main_user_story_validation_uses_output_dir(tmp_path):
+    csv_file = tmp_path / "changes.csv"
+    csv_file.write_text("prompt_name,change_instructions\nfoo.prompt,Do it\n", encoding="utf-8")
+    code_dir = tmp_path / "code"
+    code_dir.mkdir()
+    (code_dir / "foo.py").write_text("pass", encoding="utf-8")
+    output_dir = tmp_path / "modified_prompts"
+
+    ctx_instance = create_mock_context(
+        obj={
+            "quiet": True,
+            "force": True,
+            "strength": DEFAULT_STRENGTH,
+            "temperature": 0,
+            "language": "python",
+            "extension": ".py",
+            "time": 0.25,
+        }
+    )
+
+    out_prompt = output_dir / "foo.prompt"
+    base_prompt = tmp_path / "prompts" / "foo.prompt"
+    base_other = tmp_path / "prompts" / "bar.prompt"
+
+    with patch("pdd.change_main.construct_paths") as mock_construct, \
+         patch("pdd.change_main.process_csv_change") as mock_process, \
+         patch("pdd.change_main.discover_prompt_files") as mock_discover, \
+         patch("pdd.change_main.run_user_story_tests") as mock_story_tests:
+        mock_construct.return_value = (
+            {"prompts_dir": str(tmp_path / "prompts")},
+            {"change_prompt_file": csv_file.read_text(encoding="utf-8")},
+            {"output_prompt_file": str(output_dir)},
+            "python",
+        )
+        mock_process.return_value = (
+            True,
+            [{"file_name": "foo.prompt", "modified_prompt": "updated"}],
+            0.1,
+            "model-a",
+        )
+        mock_discover.side_effect = [[out_prompt], [base_prompt, base_other]]
+        mock_story_tests.return_value = (True, [], 0.0, "")
+
+        change_main(
+            ctx=ctx_instance,
+            change_prompt_file=str(csv_file),
+            input_code=str(code_dir),
+            input_prompt_file=None,
+            output=str(output_dir),
+            use_csv=True,
+            budget=5.0,
+        )
+
+    _, kwargs = mock_story_tests.call_args
+    assert kwargs["prompt_files"] == [out_prompt, base_other]
+
+
+def test_change_main_skips_user_story_validation_for_csv_output(tmp_path):
+    csv_file = tmp_path / "changes.csv"
+    csv_file.write_text("prompt_name,change_instructions\nfoo.prompt,Do it\n", encoding="utf-8")
+    code_dir = tmp_path / "code"
+    code_dir.mkdir()
+    (code_dir / "foo.py").write_text("pass", encoding="utf-8")
+    output_csv = tmp_path / "modified_prompts.csv"
+
+    ctx_instance = create_mock_context(
+        obj={
+            "quiet": True,
+            "force": True,
+            "strength": DEFAULT_STRENGTH,
+            "temperature": 0,
+            "language": "python",
+            "extension": ".py",
+            "time": 0.25,
+        }
+    )
+
+    with patch("pdd.change_main.construct_paths") as mock_construct, \
+         patch("pdd.change_main.process_csv_change") as mock_process, \
+         patch("pdd.change_main.run_user_story_tests") as mock_story_tests:
+        mock_construct.return_value = (
+            {"prompts_dir": str(tmp_path / "prompts")},
+            {"change_prompt_file": csv_file.read_text(encoding="utf-8")},
+            {"output_prompt_file": str(output_csv)},
+            "python",
+        )
+        mock_process.return_value = (
+            True,
+            [{"file_name": "foo.prompt", "modified_prompt": "updated"}],
+            0.1,
+            "model-a",
+        )
+        mock_story_tests.side_effect = AssertionError("run_user_story_tests should not be called for CSV output")
+
+        message, total_cost, model_name = change_main(
+            ctx=ctx_instance,
+            change_prompt_file=str(csv_file),
+            input_code=str(code_dir),
+            input_prompt_file=None,
+            output=str(output_csv),
+            use_csv=True,
+            budget=5.0,
+        )
+
+    assert message == "Multiple prompts have been updated."
+    assert total_cost == pytest.approx(0.1)
+    assert model_name == "model-a"

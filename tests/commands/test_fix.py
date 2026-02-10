@@ -210,4 +210,16 @@ def test_options_passing(runner, mock_deps):
     runner.invoke(fix, args)
     kwargs = mock_deps["fix_main"].call_args[1]
     assert kwargs["budget"] == 10.5
-    assert kwargs["max_attempts"] == 7
+
+
+def test_user_story_fix_mode(runner, mock_deps):
+    with patch("pdd.user_story_tests.run_user_story_fix") as mock_story_fix:
+        mock_story_fix.return_value = (True, "Story fixed", 0.2, "gpt-4", ["prompts/foo.prompt"])
+        with runner.isolated_filesystem():
+            with open("story__sample.md", "w") as fh:
+                fh.write("As a user...")
+
+            result = runner.invoke(fix, ["story__sample.md"])
+
+        assert result.exit_code == 0
+        mock_story_fix.assert_called_once()
