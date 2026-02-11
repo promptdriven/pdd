@@ -26,13 +26,19 @@ TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
 PASSED=0
 FAILED=0
 ERRORS=0
-TOTAL=56
+
+# Derive task count from the Cloud Batch job (avoids hardcoding)
+TOTAL=$(gcloud batch jobs describe "${JOB_NAME}" \
+    --project="${PROJECT_ID}" \
+    --location="${GCP_REGION:-us-central1}" \
+    --format="value(taskGroups[0].taskCount)" 2>/dev/null || echo "64")
+TOTAL=${TOTAL:-64}
 
 # Parse all JSON results
 TABLE_ROWS=()
 FAILURE_LOGS=()
 
-for i in $(seq 0 55); do
+for i in $(seq 0 $((TOTAL - 1))); do
     JSON_FILE="${RESULTS_LOCAL}/task_${i}.json"
     LOG_FILE="${RESULTS_LOCAL}/task_${i}.log"
 
