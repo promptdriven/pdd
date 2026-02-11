@@ -1,0 +1,47 @@
+name: Unit Tests
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '*.md'
+      - 'docs/**'
+      - 'scripts/**'
+      - '.github/**'
+      - '.vscode/**'
+      - '.cursor/**'
+      - '.claude/**'
+      - 'Makefile'
+      - '.env.example'
+      - '.gitattributes'
+      - 'example_prompts/**'
+      - 'example_project/**'
+      - 'example_workspace/**'
+      - 'staging/**'
+      - '*.log'
+      - 'LICENSE'
+  pull_request:
+    branches: [main]
+
+jobs:
+  unit-tests:
+    if: github.event.pull_request.draft != true
+    name: Run Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Run unit tests
+        run: pytest tests/ -m "not integration and not e2e and not real" -v --tb=short
