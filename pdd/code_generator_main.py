@@ -733,13 +733,13 @@ def code_generator_main(
                     git_add_files(files_to_stage_for_rollback, verbose=verbose)
             
             # Preprocess both prompts: expand includes, substitute vars, then double
-            orig_proc = pdd_preprocess(original_prompt_content_for_incremental, recursive=True, double_curly_brackets=False)
+            orig_proc = pdd_preprocess(original_prompt_content_for_incremental, recursive=True, double_curly_brackets=False, quiet=quiet)
             orig_proc = _expand_vars(orig_proc, env_vars)
-            orig_proc = pdd_preprocess(orig_proc, recursive=False, double_curly_brackets=True)
+            orig_proc = pdd_preprocess(orig_proc, recursive=False, double_curly_brackets=True, quiet=quiet)
 
-            new_proc = pdd_preprocess(prompt_content, recursive=True, double_curly_brackets=False)
+            new_proc = pdd_preprocess(prompt_content, recursive=True, double_curly_brackets=False, quiet=quiet)
             new_proc = _expand_vars(new_proc, env_vars)
-            new_proc = pdd_preprocess(new_proc, recursive=False, double_curly_brackets=True)
+            new_proc = pdd_preprocess(new_proc, recursive=False, double_curly_brackets=True, quiet=quiet)
 
             generated_code_content, was_incremental_operation, total_cost, model_name = incremental_code_generator_func(
                 original_prompt=orig_proc,
@@ -770,9 +770,9 @@ def code_generator_main(
             if not current_execution_is_local:
                 if verbose: console.print("Attempting cloud code generation...")
                 # Expand includes, substitute vars, then double
-                processed_prompt_for_cloud = pdd_preprocess(prompt_content, recursive=True, double_curly_brackets=False, exclude_keys=[])
+                processed_prompt_for_cloud = pdd_preprocess(prompt_content, recursive=True, double_curly_brackets=False, exclude_keys=[], quiet=quiet)
                 processed_prompt_for_cloud = _expand_vars(processed_prompt_for_cloud, env_vars)
-                processed_prompt_for_cloud = pdd_preprocess(processed_prompt_for_cloud, recursive=False, double_curly_brackets=True, exclude_keys=[])
+                processed_prompt_for_cloud = pdd_preprocess(processed_prompt_for_cloud, recursive=False, double_curly_brackets=True, exclude_keys=[], quiet=quiet)
                 if verbose: console.print(Panel(Text(processed_prompt_for_cloud, overflow="fold"), title="[cyan]Preprocessed Prompt for Cloud[/cyan]", expand=False))
 
                 # Extract and display pinned example ID if present in prompt
@@ -891,9 +891,9 @@ def code_generator_main(
             if current_execution_is_local:
                 if verbose: console.print("Executing code generator locally...")
                 # Expand includes, substitute vars, then double; pass to local generator with preprocess_prompt=False
-                local_prompt = pdd_preprocess(prompt_content, recursive=True, double_curly_brackets=False, exclude_keys=[])
+                local_prompt = pdd_preprocess(prompt_content, recursive=True, double_curly_brackets=False, exclude_keys=[], quiet=quiet)
                 local_prompt = _expand_vars(local_prompt, env_vars)
-                local_prompt = pdd_preprocess(local_prompt, recursive=False, double_curly_brackets=True, exclude_keys=[])
+                local_prompt = pdd_preprocess(local_prompt, recursive=False, double_curly_brackets=True, exclude_keys=[], quiet=quiet)
                 # Language already resolved (front matter overrides detection if present)
                 gen_language = language
                 

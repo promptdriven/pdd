@@ -7,7 +7,7 @@ def print_formatted(message: str) -> None:
     """Print message with raw formatting tags for testing compatibility."""
     print(message)
 
-def load_prompt_template(prompt_name: str) -> Optional[str]:
+def load_prompt_template(prompt_name: str, quiet: bool = False) -> Optional[str]:
     """
     Load a prompt template from a file.
 
@@ -39,15 +39,17 @@ def load_prompt_template(prompt_name: str) -> Optional[str]:
             prompt_candidates.append(root / 'pdd' / 'prompts' / f"{prompt_name}.prompt")
 
         tried = "\n".join(str(c) for c in prompt_candidates)
-        print_formatted(
-            f"[red]Prompt file not found in any candidate locations for '{prompt_name}'. Tried:\n{tried}[/red]"
-        )
+        if not quiet:
+            print_formatted(
+                f"[red]Prompt file not found in any candidate locations for '{prompt_name}'. Tried:\n{tried}[/red]"
+            )
         return None
 
     try:
         with open(prompt_path, 'r', encoding='utf-8') as file:
             prompt_template = file.read()
-            print_formatted(f"[green]Successfully loaded prompt: {prompt_name}[/green]")
+            if not quiet:
+                print_formatted(f"[green]Successfully loaded prompt: {prompt_name}[/green]")
             return prompt_template
 
     except IOError as e:

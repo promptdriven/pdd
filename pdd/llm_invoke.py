@@ -56,6 +56,11 @@ if not logger.handlers:
     if not litellm_logger.handlers:
         litellm_logger.addHandler(console_handler)
 
+def set_quiet_mode():
+    """Set logger level to WARNING to suppress INFO messages in quiet mode."""
+    logger.setLevel(logging.WARNING)
+    litellm_logger.setLevel(logging.WARNING)
+
 # Function to set up file logging if needed
 def setup_file_logging(log_file_path=None):
     """Configure rotating file handler for logging"""
