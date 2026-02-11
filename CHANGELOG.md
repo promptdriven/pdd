@@ -2,14 +2,28 @@
 
 ### Feat
 
-- add Cloud Batch parallel test infrastructure with Spot VMs
+- **Cloud Batch CI**: Add parallel test infrastructure running 56 Spot VM tasks on GCP Cloud Batch. Includes Dockerfile, entrypoint dispatching pytest chunks / regression / sync / cloud suites by task index, JSON job template with Secret Manager integration, GCS-based result collection with markdown report generation, and one-time GCP setup script. New Makefile targets: `cloud-test`, `cloud-test-quick`, `cloud-test-build`, `cloud-test-push`, `cloud-test-setup`.
 
 ### Fix
 
-- Return error signal (-1) instead of false success (0) on verify LLM failures (#305)
-- prevent CI auth hang by skipping auto_submit in local mode
-- Address Copilot review feedback on PR #462
-- Handle OAuth device flow rate limiting correctly (#309)
+- **fix_verification_errors**: Return error signal (`-1`) instead of false success (`0`) on all LLM failure paths, preventing the verify loop from misinterpreting errors as "0 issues found" (#305). All five early-return error paths (`verification_issues_count: 0`) changed to `-1`. Thanks James Levin!
+- **fix_main / sync_orchestration**: Skip `auto_submit` when running in local mode (`PDD_FORCE_LOCAL` env flag or `--local` sync flag), preventing CI auth hangs that blocked headless test runs.
+- **get_jwt_token**: Rewrite OAuth device flow polling to handle rate limiting correctly (#309). Parse JSON body before `raise_for_status()` so `slow_down` errors in HTTP 429 responses are handled per GitHub spec (increment interval by 5s). Add exponential backoff with cap for HTTP 429 responses without JSON body. Respect `Retry-After` header. Clean up redundant `JSONDecodeError` catch and unused imports. Thanks James Levin!
+- **commands/modify**: `pdd change` now raises `Exit(1)` on failure instead of silently returning, so callers and CI detect unsuccessful modifications.
+
+### Docs
+
+- **CONTRIBUTING.md**: Add Continuous Integration section documenting the GitHub Actions unit test workflow, how to reproduce the CI test subset locally (`pytest -m "not integration and not e2e and not real" --timeout=60`), and a new checklist item requiring CI to pass before merge.
+
+### Tests
+
+- **test_e2e_issue_305_false_success**: New 365-line E2E test suite exercising the full `fix_verification_errors` → verify loop path with simulated LLM failures, confirming `-1` error signal propagation and correct failure reporting.
+- **test_e2e_issue_309_oauth_rate_limit**: New 406-line E2E test suite covering OAuth device flow rate limiting: `slow_down` interval increment, HTTP 429 exponential backoff, `Retry-After` header, mixed 429-then-success sequences, and backoff cap behavior.
+- **test_fix_verification_errors**: Add 169 lines of tests for all error-signal return paths.
+- **test_fix_main**: Add 178 lines of tests covering `auto_submit` suppression under `PDD_FORCE_LOCAL`.
+- **test_get_jwt_token**: Expand with 273 lines of new rate-limiting and backoff tests.
+- **test_sync_orchestration**: Add 99 lines testing `auto_submit=(not local)` propagation in sync fix calls.
+- **test_commands_modify**: Add 28 lines testing `Exit(1)` on change failure.
 
 ## v0.0.144 (2026-02-09)
 
