@@ -545,7 +545,8 @@ def _get_known_languages() -> set:
         'powershell', 'sql', 'prompt', 'html', 'css', 'makefile',
         'haskell', 'dart', 'elixir', 'clojure', 'julia', 'erlang', 'fortran',
         'nim', 'ocaml', 'groovy', 'coffeescript', 'fish', 'zsh',
-        'prisma', 'lean', 'agda', 'lisp', 'scheme', 'ada',
+        'prisma', 'lean', 'agda',
+        'lisp', 'scheme', 'ada',
         'svelte', 'vue', 'scss', 'sass', 'less',
         'jinja', 'handlebars', 'pug', 'ejs', 'twig',
         'zig', 'mojo', 'solidity',
@@ -583,43 +584,6 @@ def _is_known_language(language_name: str) -> bool:
         return False
     return language_name_lower in _get_known_languages()
 
-
-def _levenshtein_distance(s1: str, s2: str) -> int:
-    """Compute the Levenshtein edit distance between two strings."""
-    if len(s1) < len(s2):
-        return _levenshtein_distance(s2, s1)
-    if not s2:
-        return len(s1)
-    prev_row = list(range(len(s2) + 1))
-    for i, c1 in enumerate(s1):
-        curr_row = [i + 1]
-        for j, c2 in enumerate(s2):
-            cost = 0 if c1 == c2 else 1
-            curr_row.append(min(curr_row[j] + 1, prev_row[j + 1] + 1, prev_row[j] + cost))
-        prev_row = curr_row
-    return prev_row[-1]
-
-
-def _closest_known_language(token: str, max_distance: int = 2) -> str | None:
-    """Return the closest known language if within max_distance, else None.
-
-    Only considers tokens with length >= 4 to avoid false positives on short
-    language names like 'r', 'd', 'go'.
-    """
-    if len(token) < 4:
-        return None
-    token_lower = token.lower()
-    known = _get_known_languages()
-    best_lang = None
-    best_dist = max_distance + 1
-    for lang in known:
-        if len(lang) < 4:
-            continue
-        dist = _levenshtein_distance(token_lower, lang)
-        if dist < best_dist:
-            best_dist = dist
-            best_lang = lang
-    return best_lang if best_dist <= max_distance else None
 
 
 def _strip_language_suffix(path_like: os.PathLike[str]) -> str:
@@ -790,14 +754,6 @@ def _determine_language(
                 # Check if the token is a known language using the new helper
                 if _is_known_language(token):
                     return token.lower()
-                # Warn if token looks like a misspelled language
-                close_match = _closest_known_language(token)
-                if close_match:
-                    click.echo(
-                        f"Warning: '{token}' in prompt filename is not a recognized language. "
-                        f"Did you mean '{close_match}'?",
-                        err=True,
-                    )
 
     # 4 - Special handling for detect command - default to prompt for LLM prompts
     if command == "detect" and "change_file" in input_file_paths:
