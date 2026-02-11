@@ -441,6 +441,8 @@ def run_agentic_task(
         with open(prompt_path, "w", encoding="utf-8") as f:
             f.write(full_instruction)
 
+        provider_errors: List[str] = []
+
         for provider in candidates:
             if verbose:
                 console.print(f"[dim]Attempting provider: {provider} for task '{label}'[/dim]")
@@ -502,6 +504,7 @@ def run_agentic_task(
                     time.sleep(backoff)
 
             # All retries exhausted for this provider
+            provider_errors.append(f"{provider}: {last_output[:200]}")
             if verbose:
                 console.print(f"[yellow]Provider {provider} failed after {max_retries} attempts: {last_output}[/yellow]")
                 _log_agentic_interaction(
@@ -515,7 +518,7 @@ def run_agentic_task(
                     cwd=cwd
                 )
 
-        return False, "All agent providers failed", 0.0, ""
+        return False, f"All agent providers failed: {'; '.join(provider_errors)}", 0.0, ""
 
     finally:
         # Cleanup prompt file
@@ -954,3 +957,68 @@ def clear_workflow_state(
     # Clear GitHub
     if _should_use_github_state(use_github_state):
         github_clear_state(repo_owner, repo_name, issue_number, workflow_type, cwd)
+
+
+def post_step_comment(
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    step_num: int,
+    total_steps: int,
+    description: str,
+    output: str,
+    cwd: Path,
+) -> bool:
+    """
+    Post a fallback comment on a GitHub issue when a step fails.
+
+    When the LLM agent fails (e.g., all providers unavailable), the agent never
+    runs and therefore never posts its own step comment. This function posts a
+    fallback comment so users can see which steps failed and why.
+
+    Args:
+        repo_owner: GitHub repository owner
+        repo_name: GitHub repository name
+        issue_number: Issue number to comment on
+        step_num: Current step number
+        total_steps: Total number of steps in the workflow
+        description: Human-readable step description
+        output: Error output / failure details
+        cwd: Working directory for subprocess
+
+    Returns:
+        True if comment was posted successfully, False otherwise
+    """
+    if not shutil.which("gh"):
+        return False
+
+    # Truncate output to avoid exceeding GitHub comment size limits
+    error_detail = output[:1000] if len(output) > 1000 else output
+
+    body = (
+        f"## Step {step_num}/{total_steps}: {description}\n\n"
+        f"**Status:** FAILED\n\n"
+        f"### Error Details\n"
+        f"```\n{error_detail}\n```\n\n"
+        f"---\n"
+        f"*Automated fallback comment — agent did not execute for this step.*"
+    )
+
+    try:
+        result = subprocess.run(
+            [
+                "gh", "issue", "comment", str(issue_number),
+                "--repo", f"{repo_owner}/{repo_name}",
+                "--body", body,
+            ],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            console.print(f"[yellow]Warning: Failed to post fallback comment for step {step_num}: {result.stderr}[/yellow]")
+            return False
+        return True
+    except Exception as e:
+        console.print(f"[yellow]Warning: Failed to post fallback comment for step {step_num}: {e}[/yellow]")
+        return False
