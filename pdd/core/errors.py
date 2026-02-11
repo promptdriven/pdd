@@ -53,8 +53,8 @@ def handle_error(exception: Exception, command_name: str, quiet: bool):
     elif isinstance(exception, (ValueError, IOError)):
         console.print(f"  [error]Input/Output Error:[/error] {exception}", style="error")
     elif isinstance(exception, click.UsageError):
-         console.print(f"  [error]Usage Error:[/error] {exception}", style="error")
-         raise exception
+        console.print(f"  [error]Usage Error:[/error] {exception}", style="error")
+        raise exception
     elif isinstance(exception, MarkupError):
         console.print("  [error]Markup Error:[/error] Invalid Rich markup encountered.", style="error")
         console.print(escape(str(exception)))

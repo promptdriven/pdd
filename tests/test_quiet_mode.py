@@ -5,7 +5,7 @@ Rich panels, warnings, and success messages across all output-producing modules.
 """
 
 import logging
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch
 from pathlib import Path
 
 import pytest
@@ -107,10 +107,10 @@ class TestLoadPromptTemplateQuietMode:
 
 
 class TestLlmInvokeQuietMode:
-    """Tests that llm_invoke logger level is raised to WARNING when quiet=True."""
+    """Tests that llm_invoke logger level is raised to CRITICAL when quiet=True."""
 
     def test_set_quiet_mode_raises_log_level(self):
-        """set_quiet_mode() should set both loggers to WARNING level."""
+        """set_quiet_mode() should set both loggers to CRITICAL level."""
         from pdd.llm_invoke import set_quiet_mode
 
         set_quiet_mode()

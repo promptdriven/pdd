@@ -7,7 +7,7 @@ because preprocess() unconditionally prints Rich panels regardless of --quiet.
 """
 
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from click.testing import CliRunner
 
 from pdd.cli import cli

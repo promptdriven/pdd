@@ -63,10 +63,7 @@ def _reset_quiet_mode():
     root_logger.setLevel(root_level)
     for handler, level in root_handler_levels:
         handler.setLevel(level)
-    if old_last_resort is not None:
-        logging.lastResort = old_last_resort
-    elif logging.lastResort is None:
-        logging.lastResort = logging.StreamHandler()
+    logging.lastResort = old_last_resort
 
 
 @pytest.fixture(autouse=True)

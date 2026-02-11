@@ -1136,7 +1136,8 @@ def code_generator_main(
                             console.print(f"[yellow]Warning: Could not inject architecture tags: {e}[/yellow]")
 
                 p_output.write_text(final_content, encoding="utf-8")
-                click.echo(f"Generated code saved to: {p_output.resolve()}")
+                if verbose or not quiet:
+                    click.echo(f"Generated code saved to: {p_output.resolve()}")
                 # Safety net: ensure architecture HTML is generated post-write if applicable
                 try:
                     # Prefer resolved script if available; else default for architecture outputs
