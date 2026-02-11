@@ -144,30 +144,31 @@ const NEW_CODE_LINES: CodeToken[][] = [
   ],
 ];
 
-// ── Animation phase timing (relative frame offsets within 450-frame sequence) ──
-// Matches the spec's seven phases exactly:
-//   Phase 1: Selection flash       frames 0-6     (0-0.2s)
-//   Phase 2: Delete sweep          frames 6-30    (0.2-1s)
-//   Phase 3: Empty beat + cursor   frames 30-60   (1-2s) "the emptiness is the point"
-//   Phase 4: Terminal activity     frames 60-66   (2-2.2s)
-//   Phase 5: Regeneration          frames 66-90   (2.2-3s)
-//   Phase 6: Terminal completion   frames 90-96   (3-3.2s)
-//   Phase 7: Hold on clean code    frames 96-450  (3.2-15s) narration lands here
+// ── Animation phase timing (relative frame offsets within 150-frame sequence) ──
+// Scaled from original 450-frame (15s) design to 150 frames (5s) — ratio 1/3.
+// Seven phases compressed:
+//   Phase 1: Selection flash       frames 0-2     (0-0.07s)
+//   Phase 2: Delete sweep          frames 2-10    (0.07-0.33s)
+//   Phase 3: Empty beat + cursor   frames 10-22   (0.33-0.73s)
+//   Phase 4: Terminal activity     frames 20-22   (0.67-0.73s)
+//   Phase 5: Regeneration          frames 22-30   (0.73-1.0s)
+//   Phase 6: Terminal completion   frames 30-32   (1.0-1.07s)
+//   Phase 7: Hold on clean code    frames 32-150  (1.07-5.0s)
 
 const PHASE = {
   SELECTION_START: 0,
-  SELECTION_END: 6,
-  DELETE_START: 6,
-  DELETE_END: 30,
-  EMPTY_START: 30,
-  EMPTY_END: 66,
-  TERMINAL_APPEAR: 30,    // terminal fades in during empty beat
-  TERMINAL_GENERATING: 60, // "Generating from prompt..."
-  REGEN_START: 66,
-  REGEN_END: 90,
-  TERMINAL_DONE: 90,      // "Done. (0.8s) checkmark"
-  HOLD_START: 96,
-  TITLE_FADE_START: 360,  // title crossfade begins in final ~3s (frame 360-450)
+  SELECTION_END: 2,
+  DELETE_START: 2,
+  DELETE_END: 10,
+  EMPTY_START: 10,
+  EMPTY_END: 22,
+  TERMINAL_APPEAR: 10,    // terminal fades in during empty beat
+  TERMINAL_GENERATING: 20, // "Generating from prompt..."
+  REGEN_START: 22,
+  REGEN_END: 30,
+  TERMINAL_DONE: 30,      // "Done. (0.8s) checkmark"
+  HOLD_START: 32,
+  TITLE_FADE_START: 999,  // disabled — TitleCardVisual handles title separately
 };
 
 const START_LINE_NUMBER = 47;
@@ -445,18 +446,19 @@ export const CodeRegeneratesVisual: React.FC<CodeRegeneratesVisualProps> = ({
   const fps = COLD_OPEN_FPS;
 
   // ── Phase 1: Selection flash (blue highlight over all old code lines) ──
-  // Opacity 0 -> 0.4 -> 0 over 6 frames. Easing: linear.
+  // Opacity 0 -> 0.4 -> 0. Midpoint at halfway between start and end.
+  const selectionMid = (PHASE.SELECTION_START + PHASE.SELECTION_END) / 2;
   const selectionOpacity = interpolate(
     localFrame,
-    [PHASE.SELECTION_START, 3, PHASE.SELECTION_END],
+    [PHASE.SELECTION_START, selectionMid, PHASE.SELECTION_END],
     [0, 0.4, 0],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
 
   // ── Phase 2: Delete sweep (staggered per line, top-first) ──
-  // 0.5-frame stagger per line, easeInQuad
+  // Stagger scaled to fit within delete phase (max stagger < phase length / line count)
   const deletePhaseLength = PHASE.DELETE_END - PHASE.DELETE_START;
-  const lineStagger = 0.5;
+  const lineStagger = deletePhaseLength / (OLD_CODE_LINES.length + 1);
 
   // Blame gutter + warning icon fade with deletion
   const blameOpacity = interpolate(

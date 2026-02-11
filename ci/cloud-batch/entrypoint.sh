@@ -67,6 +67,11 @@ if [ -n "${PDD_REFRESH_TOKEN:-}" ] && [ -n "${FIREBASE_API_KEY:-}" ]; then
     echo "JWT token obtained from refresh token (${#PDD_JWT_TOKEN} chars)"
 fi
 
+# ── Claude Code OAuth → set ANTHROPIC_API_KEY for test skip gates ─────
+if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+    export ANTHROPIC_API_KEY="claude-code-oauth"
+fi
+
 # ── Dispatch by task index ────────────────────────────────────────────────
 START_TIME=$(date +%s)
 

@@ -6,7 +6,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
     zsh \
+    fish \
+    tcsh \
+    nodejs \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Claude Code CLI (standalone binary, no npm required)
+RUN curl -fsSL https://claude.ai/install.sh | bash \
+    && ln -sf /root/.claude/bin/claude /usr/local/bin/claude
 
 # Git config needed by regression tests that do git init/commit
 RUN git config --global user.email "ci@pdd.dev" && \

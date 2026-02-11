@@ -5,6 +5,7 @@ __pycache__/
 *.vsix
 .tmp/
 .agentic_prompt*
+.cloud-image-hash
 sync_order.sh
 
 staging_data_dump.json

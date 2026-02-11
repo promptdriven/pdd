@@ -13,7 +13,7 @@ import { z } from "zod";
 //    14.1s [ 4] "So why are we still patching?"
 
 export const COLD_OPEN_FPS = 30;
-export const COLD_OPEN_DURATION_SECONDS = 54;
+export const COLD_OPEN_DURATION_SECONDS = 24;
 export const COLD_OPEN_DURATION_FRAMES = COLD_OPEN_FPS * COLD_OPEN_DURATION_SECONDS;
 export const COLD_OPEN_WIDTH = 1920;
 export const COLD_OPEN_HEIGHT = 1080;
@@ -30,37 +30,32 @@ export const BEATS = {
   VISUAL_01_START: s2f(5.24),  // 157 frames
   VISUAL_01_END: s2f(7.72),  // 232 frames
 
-  // Visual 1B: Hold on accumulated weight (01e) — 6-second static hold
-  // Spec: 0:32-0:38 mapped to production timeline. Contemplative beat where
-  // the viewer absorbs the full scope of accumulated work on both sides.
+  // Visual 1B: Hold on accumulated weight (01e) — 2-second brief visual punctuation
+  // Shortened from 6s to 2s to avoid absorbing narration segments 2-3.
   VISUAL_01B_START: s2f(7.72),  // 232 frames — immediately after zoom-out
-  VISUAL_01B_END: s2f(13.72),  // 412 frames — 6 seconds of hold
+  VISUAL_01B_END: s2f(9.72),   // 292 frames — 2 seconds of hold
 
   // Visual 2: veo:cold_open_01f_modern_sock_toss — "60 years ago, when Sox got cheap enough, she stopp..."
-  VISUAL_02_START: s2f(14.26),  // 428 frames
-  VISUAL_02_END: s2f(18.5),  // 555 frames
+  // Realigned to play during segment 2 narration (8.3-12.8s) instead of segment 4.
+  VISUAL_02_START: s2f(10.0),   // 300 frames — during segment 2
+  VISUAL_02_END: s2f(12.52),    // 376 frames — ends before segment 3
 
   // Visual 3: code_blinks:01f — "Code just got that cheap...."
-  // Spec 01f: ~10-second contemplative beat — full-frame patched code with blinking cursor.
-  // Static hold so the viewer absorbs accumulated technical debt before hard cut to regeneration.
-  VISUAL_03_START: s2f(18.78),  // 563 frames
-  VISUAL_03_END: s2f(28.78),   // 863 frames — 10 seconds (300 frames at 30fps)
+  // Shortened from 10s to 2s — brief visual punctuation during segment 3.
+  VISUAL_03_START: s2f(12.80),  // 384 frames
+  VISUAL_03_END: s2f(14.80),    // 444 frames — 2 seconds (60 frames at 30fps)
 
   // Visual 3B: code_regenerates:01g — Code deletion + empty beat + regeneration
-  // Spec 01g: ~15-second sequence (1:35-1:50). Seven animation phases:
-  //   selection flash (0.2s) -> delete sweep (0.8s) -> empty beat (1s) ->
-  //   terminal activity (0.2s) -> line-by-line regeneration (0.8s) ->
-  //   terminal completion (0.2s) -> hold on clean code (11.8s).
-  // "The empty beat is critical -- do not rush it." (visual thesis)
-  // Narration "So why are we still patching?" lands during hold on clean code.
-  // Crossfades into title card in final portion.
-  VISUAL_03B_START: s2f(28.78),  // 863 frames — immediately after 01f
-  VISUAL_03B_END: s2f(43.78),   // 1313 frames — 15 seconds (450 frames at 30fps)
+  // Shortened from 15s to 5s (150 frames). Seven animation phases compressed.
+  // Starts during segment 4 "So why are we still patching?" —
+  // code deletion begins as the question is asked (powerful visual answer).
+  VISUAL_03B_START: s2f(15.08),  // 452 frames
+  VISUAL_03B_END: s2f(20.08),   // 602 frames — 5 seconds (150 frames at 30fps)
 
-  // Visual 4: title_over_code:Prompt-Driven Development — "So why are we still patching?..."
-  // Spec: ~10 seconds. Code dims 0-2s, title fades 1-3s, hold 3-9s, prep 9-10s.
-  VISUAL_04_START: s2f(43.78),  // 1313 frames
-  VISUAL_04_END: s2f(53.78),   // 1613 frames — 10 seconds for contemplative title card
+  // Visual 4: title_over_code:Prompt-Driven Development
+  // Shortened from 10s to 3s (90 frames). Quick dim + fade-in + brief hold.
+  VISUAL_04_START: s2f(20.08),  // 602 frames
+  VISUAL_04_END: s2f(23.08),   // 692 frames — 3 seconds for title card
 };
 
 // Visual sequence: maps BEATS ranges to composition IDs

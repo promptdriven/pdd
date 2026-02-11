@@ -142,69 +142,66 @@ const TitleCardVisual: React.FC<{ parentFrame: number; startFrame: number }> = (
   // Local frame relative to VISUAL_04_START
   const f = parentFrame - startFrame;
 
-  // ── Frame 0-60 (0-2s): Background code dims from 1.0 to 0.15 ──
-  // Spec: easeInOutCubic — smooth, gradual recession
+  // Scaled from original 300-frame (10s) design to 90 frames (3s) — ratio 0.3.
+  // Frame 0-18: code dims, chrome/terminal fade. Frame 9-27: title fades in.
+  // Frame 27-90: hold with title at full opacity.
+
+  // ── Frame 0-18 (0-0.6s): Background code dims from 1.0 to 0.15 ──
   const codeDim = interpolate(
     f,
-    [0, 60],
+    [0, 18],
     [1, 0.15],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.inOut(Easing.cubic) }
   );
 
-  // ── Frame 0-45: Editor chrome (top bar, gutter) fades out ──
-  // Spec: easeOutCubic — quick fade, gets out of the way
+  // ── Frame 0-14: Editor chrome fades out ──
   const chromeFade = interpolate(
     f,
-    [0, 45],
+    [0, 14],
     [1, 0],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
   );
 
-  // ── Frame 0-30: Terminal snippet fades out completely ──
-  // Spec: easeOutCubic
+  // ── Frame 0-9: Terminal snippet fades out ──
   const terminalFade = interpolate(
     f,
-    [0, 30],
+    [0, 9],
     [1, 0],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
   );
 
-  // ── Frame 30-90 (1-3s): Title fades in with upward drift ──
-  // Spec: easeOutCubic — confident arrival, settles into place
+  // ── Frame 9-27 (0.3-0.9s): Title fades in with upward drift ──
   const titleOpacity = interpolate(
     f,
-    [30, 90],
+    [9, 27],
     [0, 1],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
   );
 
   const titleY = interpolate(
     f,
-    [30, 90],
+    [9, 27],
     [20, 0],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
   );
 
-  // ── Frame 45-90: Glow blooms gently (delayed accent) ──
-  // Spec: separate animation timeline, starts after title fade begins at frame 30
+  // ── Frame 14-27: Glow blooms gently ──
   const glowOpacity = interpolate(
     f,
-    [45, 90],
+    [14, 27],
     [0, 0.15],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
   );
 
-  // ── Frame 0-60: Vignette fades in ──
-  // Spec: linear (gradual, atmospheric)
+  // ── Frame 0-18: Vignette fades in ──
   const vignetteOpacity = interpolate(
     f,
-    [0, 60],
+    [0, 18],
     [0, 0.6],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
 
-  // Frames 90-270: Hold (pure stillness). Frames 270-300: Transition prep.
-  // No additional animation — all interpolations clamp at their final values.
+  // Frames 27-90: Hold (pure stillness) — title at full opacity at cut.
 
   return (
     <AbsoluteFill style={{ backgroundColor: "#1E1E2E" }}>
