@@ -1,20 +1,19 @@
 """
-E2E Test for Issue #485: Warning count causes false Success:False and unnecessary agentic fallback.
+E2E regression tests for Issue #485: Warning count causes false Success:False and
+unnecessary agentic fallback.
 
-This E2E test exercises the full code path from pytest subprocess execution through
-warning counting to success determination. It creates a real test file that passes but
-triggers Python warnings (via warnings.warn), which pytest displays in its output.
-The buggy naive `.lower().count("warning")` in pytest_output.py counts these non-pytest
-framework warnings, causing false failure.
+These tests exercise the full code path from pytest subprocess execution through
+warning counting to success determination. They create real test files that pass but
+trigger Python warnings (via warnings.warn) or emit warning-like strings in stdout,
+which pytest displays in its output.
 
-The test should FAIL on the current buggy code and PASS once the fix is applied.
+Historically, the naive `.lower().count("warning")` in pytest_output.py counted these
+non-pytest framework warnings, causing false failure. These tests now serve as
+regression coverage to ensure the fixed warning-counting logic continues to treat
+such output correctly and does not reintroduce the original Issue #485 behavior.
 """
 
-import os
-import sys
-import pytest
 import textwrap
-from pathlib import Path
 from unittest.mock import patch
 
 
