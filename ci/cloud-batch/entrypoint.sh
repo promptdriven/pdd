@@ -47,13 +47,6 @@ cd "${WORK_DIR}"
 # Install package in dev mode (deps already in image, --no-deps is fast ~5s)
 pip install -e ".[dev]" --no-deps --quiet 2>/dev/null || pip install -e . --no-deps --quiet
 
-# ── Override llm_model.csv with Gemini 3 Flash only ───────────────────────
-mkdir -p ~/.pdd
-cat > ~/.pdd/llm_model.csv <<'CSV'
-provider,model,input,output,coding_arena_elo,base_url,api_key,max_reasoning_tokens,structured_output,reasoning_type,location
-Google,vertex_ai/gemini-3-flash-preview,0.5,3.0,1442,,VERTEX_CREDENTIALS,0,True,effort,global
-CSV
-
 # ── Vertex AI auth via ADC (service account attached to VM) ───────────────
 export VERTEX_PROJECT="${VERTEX_PROJECT:-prompt-driven-development-stg}"
 export VERTEX_CREDENTIALS="/tmp/adc-fallback"
@@ -64,6 +57,15 @@ export PDD_RUN_REAL_LLM_TESTS=1
 export PDD_RUN_LLM_TESTS=1
 export PDD_PATH="${WORK_DIR}/pdd"
 export PYTHONPATH="${WORK_DIR}/pdd:${PYTHONPATH:-}"
+
+# ── Exchange refresh token for fresh JWT ──────────────────────────────────
+if [ -n "${PDD_REFRESH_TOKEN:-}" ] && [ -n "${FIREBASE_API_KEY:-}" ]; then
+    JWT_RESPONSE=$(curl -s "https://securetoken.googleapis.com/v1/token?key=${FIREBASE_API_KEY}" \
+        -H "Content-Type: application/x-www-form-urlencoded" \
+        -d "grant_type=refresh_token&refresh_token=${PDD_REFRESH_TOKEN}")
+    export PDD_JWT_TOKEN=$(echo "${JWT_RESPONSE}" | python3 -c "import sys,json; print(json.load(sys.stdin)['id_token'])")
+    echo "JWT token obtained from refresh token (${#PDD_JWT_TOKEN} chars)"
+fi
 
 # ── Dispatch by task index ────────────────────────────────────────────────
 START_TIME=$(date +%s)

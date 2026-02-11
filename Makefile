@@ -523,7 +523,7 @@ endif
 CLOUD_BATCH_DIR := ci/cloud-batch
 GCP_PROJECT_ID ?= prompt-driven-development-stg
 GCP_REGION ?= us-central1
-GCS_BUCKET ?= pdd-ci-results
+GCS_BUCKET ?= pdd-stg-ci-results
 AR_IMAGE := $(GCP_REGION)-docker.pkg.dev/$(GCP_PROJECT_ID)/pdd-ci/pdd-test:latest
 
 # Build + push + run all tests on Cloud Batch

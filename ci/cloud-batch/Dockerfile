@@ -4,6 +4,8 @@ FROM python:3.12-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     build-essential \
+    curl \
+    zsh \
     && rm -rf /var/lib/apt/lists/*
 
 # Git config needed by regression tests that do git init/commit
