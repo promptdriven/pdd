@@ -18,7 +18,7 @@ Each section is broken into batches of 3-5 scenes for manageable audit chunks.
 ## S02: Paradigm Shift
 
 **Video:** `outputs/sections/part2_paradigm_shift.mp4` (46.8 MB, ~180s at 30fps)
-**Script:** Lines 161-225 of `scripts/main_script.md` (PART 2: THE PARADIGM SHIFT, 6:30-10:30)
+**Script:** Lines 161-225 of `narrative/main_script.md` (PART 2: THE PARADIGM SHIFT, 6:30-10:30)
 **Specs:** `specs/02-paradigm-shift/`
 **Composition:** `remotion/src/remotion/S02-ParadigmShift/Part2ParadigmShift.tsx`
 **Constants:** `remotion/src/remotion/S02-ParadigmShift/constants.ts`
@@ -63,7 +63,7 @@ Each section is broken into batches of 3-5 scenes for manageable audit chunks.
 ## S03: Mold Has Three Parts
 
 **Video:** `outputs/sections/part3_mold.mp4` (38.2 MB, ~295s at 30fps)
-**Script:** Lines 228-380 of `scripts/main_script.md` (PART 3: THE MOLD HAS THREE PARTS, 10:30-16:00)
+**Script:** Lines 228-380 of `narrative/main_script.md` (PART 3: THE MOLD HAS THREE PARTS, 10:30-16:00)
 **Specs:** `specs/03-mold-has-three-parts/`
 **Composition:** `remotion/src/remotion/S03-MoldThreeParts/Part3MoldThreeParts.tsx`
 **Constants:** `remotion/src/remotion/S03-MoldThreeParts/constants.ts`
@@ -129,7 +129,7 @@ Each section is broken into batches of 3-5 scenes for manageable audit chunks.
 ## S04: Precision Tradeoff
 
 **Video:** `outputs/sections/part4_precision.mp4` (25 MB, ~61s at 30fps)
-**Script:** Lines 382-420 of `scripts/main_script.md` (PART 4: THE PRECISION TRADEOFF, 16:00-17:00)
+**Script:** Lines 382-420 of `narrative/main_script.md` (PART 4: THE PRECISION TRADEOFF, 16:00-17:00)
 **Specs:** `specs/04-precision-tradeoff/`
 **Composition:** `remotion/src/remotion/S04-PrecisionTradeoff/Part4PrecisionTradeoff.tsx`
 **Constants:** `remotion/src/remotion/S04-PrecisionTradeoff/constants.ts`
@@ -163,7 +163,7 @@ Each section is broken into batches of 3-5 scenes for manageable audit chunks.
 ## S05: Compound Returns
 
 **Video:** `outputs/sections/part5_compound.mp4` (11.9 MB, ~87s at 30fps)
-**Script:** Lines 422-480 of `scripts/main_script.md` (PART 5: COMPOUND RETURNS, 17:00-18:30)
+**Script:** Lines 422-480 of `narrative/main_script.md` (PART 5: COMPOUND RETURNS, 17:00-18:30)
 **Specs:** `specs/05-compound-returns/`
 **Composition:** `remotion/src/remotion/S05-CompoundReturns/Part5CompoundReturns.tsx`
 **Constants:** `remotion/src/remotion/S05-CompoundReturns/constants.ts`
@@ -197,7 +197,7 @@ Each section is broken into batches of 3-5 scenes for manageable audit chunks.
 ## S06: Closing
 
 **Video:** `outputs/sections/closing.mp4` (6.1 MB, ~39s at 30fps)
-**Script:** Lines 482-530 of `scripts/main_script.md` (CLOSING, 18:30-19:10)
+**Script:** Lines 482-530 of `narrative/main_script.md` (CLOSING, 18:30-19:10)
 **Specs:** `specs/06-closing/`
 **Composition:** `remotion/src/remotion/S06-Closing/ClosingSection.tsx`
 **Constants:** `remotion/src/remotion/S06-Closing/constants.ts`

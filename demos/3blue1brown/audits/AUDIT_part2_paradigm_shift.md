@@ -1,7 +1,7 @@
 # Part 2: The Paradigm Shift -- Post-Render Audit
 
 **Video:** `outputs/sections/part2_paradigm_shift.mp4` (180s / 3:00, 46.8 MB, 5400 frames @ 30fps)
-**Script:** `scripts/main_script.md` lines 161-226 (PART 2: THE PARADIGM SHIFT, 6:30-10:30)
+**Script:** `narrative/main_script.md` lines 161-226 (PART 2: THE PARADIGM SHIFT, 6:30-10:30)
 **Composition:** `remotion/src/remotion/S02-ParadigmShift/Part2ParadigmShift.tsx`
 **Date:** 2026-02-09
 **Auditor:** Critic Agent

@@ -1,7 +1,7 @@
 # Part 3: The Mold Has Three Parts -- Post-Render Audit
 
 **Video:** `outputs/sections/part3_mold.mp4` (295s / 4:55, 8850 frames @ 30fps)
-**Script:** `scripts/main_script.md` lines 226-335 (PART 3: THE MOLD HAS THREE PARTS, 10:30-16:00)
+**Script:** `narrative/main_script.md` lines 226-335 (PART 3: THE MOLD HAS THREE PARTS, 10:30-16:00)
 **Composition:** `remotion/src/remotion/S03-MoldThreeParts/Part3MoldThreeParts.tsx`
 **Date:** 2026-02-09
 **Auditor:** Critic Agent

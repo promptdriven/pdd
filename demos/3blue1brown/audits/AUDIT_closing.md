@@ -1,7 +1,7 @@
 # Closing -- Post-Render Audit
 
 **Video:** `outputs/sections/closing.mp4` (39s / 0:39, 1170 frames @ 30fps)
-**Script:** `scripts/main_script.md` lines 422-458 (CLOSING, 20:15-21:30)
+**Script:** `narrative/main_script.md` lines 422-458 (CLOSING, 20:15-21:30)
 **Composition:** `remotion/src/remotion/S06-Closing/Closing.tsx`
 **Date:** 2026-02-09
 **Auditor:** Critic Agent

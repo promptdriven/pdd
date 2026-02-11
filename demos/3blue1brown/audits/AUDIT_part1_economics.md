@@ -1,7 +1,7 @@
 # Part 1: Economics of Darning — Post-Fix Audit
 
 **Video:** `outputs/sections/part1_economics.mp4` (435s / 7:15, 70.1 MB, 13050 frames @ 30fps)
-**Script:** `scripts/main_script.md` lines 42-158 (PART 1: THE ECONOMICS OF DARNING, 2:00-6:30)
+**Script:** `narrative/main_script.md` lines 42-158 (PART 1: THE ECONOMICS OF DARNING, 2:00-6:30)
 **Prior Audit:** `PART1_AUDIT.md` (2026-02-08)
 **Date:** 2026-02-09
 **Auditor:** Critic Agent

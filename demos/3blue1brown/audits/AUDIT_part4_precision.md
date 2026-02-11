@@ -1,7 +1,7 @@
 # Part 4: The Precision Tradeoff -- Post-Render Audit
 
 **Video:** `outputs/sections/part4_precision.mp4` (61s / 1:01, 1830 frames @ 30fps)
-**Script:** `scripts/main_script.md` lines 335-374 (PART 4: THE PRECISION TRADEOFF, 16:00-18:00)
+**Script:** `narrative/main_script.md` lines 335-374 (PART 4: THE PRECISION TRADEOFF, 16:00-18:00)
 **Composition:** `remotion/src/remotion/S04-PrecisionTradeoff/Part4PrecisionTradeoff.tsx`
 **Date:** 2026-02-09
 **Auditor:** Critic Agent

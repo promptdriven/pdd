@@ -1,7 +1,7 @@
 # Part 5: Compound Returns -- Post-Render Audit
 
 **Video:** `outputs/sections/part5_compound.mp4` (87s / 1:27, 2610 frames @ 30fps)
-**Script:** `scripts/main_script.md` lines 374-421 (PART 5: COMPOUND RETURNS, 18:00-20:15)
+**Script:** `narrative/main_script.md` lines 374-421 (PART 5: COMPOUND RETURNS, 18:00-20:15)
 **Composition:** `remotion/src/remotion/S05-CompoundReturns/Part5CompoundReturns.tsx`
 **Date:** 2026-02-09
 **Auditor:** Critic Agent
