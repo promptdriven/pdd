@@ -20,7 +20,7 @@ print(f"Imports done in {time.time()-start:.1f}s", flush=True)
 
 # Parse script
 project_root = Path(__file__).resolve().parent.parent.parent
-script_path = project_root / "scripts" / "tts_script.md"
+script_path = project_root / "narrative" / "tts_script.md"
 content = script_path.read_text()
 
 # Extract speech segments

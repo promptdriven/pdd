@@ -117,7 +117,7 @@ def parse_tts_script(script_path):
 
 log("Step 1: Parsing script...")
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-script_path = PROJECT_ROOT / "scripts" / "tts_script.md"
+script_path = PROJECT_ROOT / "narrative" / "tts_script.md"
 segments = parse_tts_script(str(script_path))
 log(f"Step 2: Found {len(segments)} segments")
 

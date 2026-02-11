@@ -253,12 +253,12 @@ def main():
     global _LOG_FILE
     import argparse
     parser = argparse.ArgumentParser(description="Render TTS from annotated script")
-    parser.add_argument("--script", help="Path to TTS script (default: scripts/tts_script.md)")
+    parser.add_argument("--script", help="Path to TTS script (default: narrative/tts_script.md)")
     parser.add_argument("--start-segment", type=int, default=0, help="Starting segment number for output files")
     args = parser.parse_args()
 
     project_root = Path(__file__).resolve().parent.parent.parent
-    script_path = Path(args.script) if args.script else project_root / "scripts" / "tts_script.md"
+    script_path = Path(args.script) if args.script else project_root / "narrative" / "tts_script.md"
     output_dir = project_root / "outputs" / "tts"
     output_dir.mkdir(exist_ok=True)
 

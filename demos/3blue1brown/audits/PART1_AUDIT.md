@@ -1,7 +1,7 @@
 # Part 1: Economics of Darning — Frame-by-Frame Audit
 
 **Video:** `outputs/sections/part1_economics.mp4` (435s, 68.6 MB)
-**Method:** Frames extracted every 2s, compared against `scripts/main_script.md`
+**Method:** Frames extracted every 2s, compared against `narrative/main_script.md`
 **Date:** 2026-02-08
 
 ---

@@ -24,7 +24,7 @@ from render_tts import parse_tts_script, build_instruction
 log("Step 2: parse_tts_script imported")
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-script_path = PROJECT_ROOT / "scripts" / "tts_script.md"
+script_path = PROJECT_ROOT / "narrative" / "tts_script.md"
 
 log(f"Step 3: Parsing {script_path}...")
 segments = parse_tts_script(str(script_path))

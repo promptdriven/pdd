@@ -12,7 +12,7 @@ tts_script.md → TTS segments → concatenated audio → Whisper timestamps →
 
 ## Step 1: Identify the narration for the target section
 
-Each Remotion composition corresponds to a section of the video. Find the matching narration in `scripts/tts_script.md`.
+Each Remotion composition corresponds to a section of the video. Find the matching narration in `narrative/tts_script.md`.
 
 For the CodeCostChart composition (05), the relevant narration is in **Part 1: The Economics of Darning**, starting from "Now look at code." through "the debt ate the gains."
 
@@ -26,7 +26,7 @@ Use the existing TTS pipeline to generate audio for each segment:
 
 ```bash
 cd tools/tts
-python render_tts.py ../../scripts/tts_script.md ../../outputs/tts/
+python render_tts.py ../../narrative/tts_script.md ../../outputs/tts/
 ```
 
 This produces `outputs/tts/segment_NNN.wav` files. Each file is one spoken paragraph.

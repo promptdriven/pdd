@@ -29,7 +29,7 @@ SCRIPT_DIR = Path(__file__).parent
 PROJECT_ROOT = SCRIPT_DIR.parent.parent
 TTS_DIR = PROJECT_ROOT / "outputs" / "tts"
 REMOTION_PUBLIC = PROJECT_ROOT / "remotion" / "public"
-TTS_SCRIPT = PROJECT_ROOT / "scripts" / "tts_script.md"
+TTS_SCRIPT = PROJECT_ROOT / "narrative" / "tts_script.md"
 
 SAMPLE_RATE = 24000  # Qwen3-TTS output rate
 
