@@ -511,7 +511,6 @@ class TestGetCachedJWTExpiresAtNull:
 # =============================================================================
 
 from pdd.get_jwt_token import DeviceFlow
-from requests.exceptions import HTTPError
 
 
 class TestDeviceFlowSlowDown:
@@ -545,8 +544,6 @@ class TestDeviceFlowSlowDown:
 
         The fix should add 5 seconds to the current interval per GitHub spec.
         """
-        import requests
-
         # Create mock responses: slow_down (no interval field) -> success
         slow_down_resp = MagicMock()
         slow_down_resp.status_code = 200
@@ -582,8 +579,6 @@ class TestDeviceFlowSlowDown:
         GitHub may return HTTP 429 with {"error": "slow_down"} in the body.
         The fix should parse JSON before raise_for_status() to handle this.
         """
-        import requests
-
         # Create mock response: HTTP 429 with slow_down JSON body
         rate_limit_resp = MagicMock()
         rate_limit_resp.status_code = 429
@@ -623,8 +618,6 @@ class TestDeviceFlowSlowDown:
 
         Expected intervals: initial 5 -> slow_down -> 10 -> slow_down -> 15 -> success
         """
-        import requests
-
         # Create mock responses: slow_down -> slow_down -> success
         slow_down1 = MagicMock()
         slow_down1.status_code = 200
@@ -665,8 +658,6 @@ class TestDeviceFlowSlowDown:
         When GitHub returns a network-level 429 (not OAuth slow_down), the
         code should implement exponential backoff before retrying.
         """
-        import requests
-
         # Create mock response: HTTP 429 without parseable JSON
         rate_limit_resp = MagicMock()
         rate_limit_resp.status_code = 429
@@ -701,8 +692,6 @@ class TestDeviceFlowSlowDown:
         """
         Test: HTTP 429 with Retry-After header is respected.
         """
-        import requests
-
         rate_limit_resp = MagicMock()
         rate_limit_resp.status_code = 429
         rate_limit_resp.json.side_effect = ValueError("No JSON")
