@@ -28,6 +28,11 @@ help:
 	@echo "  make test-all-ci [PR_NUMBER=n] [PR_URL=url] - Run all tests with result capture"
 	@echo "  make test-all-with-infisical [PR_NUMBER=n] [PR_URL=url] - Run all tests with Infisical"
 	@echo "  make pr-test pr-url=URL      - Test any GitHub PR on GitHub Actions (e.g., https://github.com/owner/repo/pull/123)"
+	@echo "  make cloud-test              - Build image + push + run all tests on Cloud Batch"
+	@echo "  make cloud-test-quick        - Run tests on Cloud Batch (skip image rebuild)"
+	@echo "  make cloud-test-build        - Build Cloud Batch Docker image locally"
+	@echo "  make cloud-test-push         - Push image to Artifact Registry"
+	@echo "  make cloud-test-setup        - One-time GCP infrastructure setup"
 	@echo "  make analysis                - Run regression analysis"
 	@echo "  make verify MODULE=name      - Verify code functionality against prompt intent"
 	@echo "  make lint                    - Run pylint for static code analysis"
@@ -101,7 +106,7 @@ TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
 # All Example files in context directory (recursive)
 EXAMPLE_FILES := $(shell find $(CONTEXT_DIR) -name "*_example.py" 2>/dev/null)
 
-.PHONY: all clean test requirements production coverage staging regression sync-regression all-regression cloud-regression install build analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public publish-public-cap public-ensure public-update public-import public-diff sync-public ensure-dev-deps
+.PHONY: all clean test requirements production coverage staging regression sync-regression all-regression cloud-regression install build analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public publish-public-cap public-ensure public-update public-import public-diff sync-public ensure-dev-deps cloud-test cloud-test-quick cloud-test-build cloud-test-push cloud-test-setup
 
 all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 
@@ -513,6 +518,39 @@ ifdef TEST_NUM
 else
 	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH bash tests/cloud_regression.sh
 endif
+
+# Cloud Batch configuration
+CLOUD_BATCH_DIR := ci/cloud-batch
+GCP_PROJECT_ID ?= prompt-driven-development-stg
+GCP_REGION ?= us-central1
+GCS_BUCKET ?= pdd-ci-results
+AR_IMAGE := $(GCP_REGION)-docker.pkg.dev/$(GCP_PROJECT_ID)/pdd-ci/pdd-test:latest
+
+# Build + push + run all tests on Cloud Batch
+cloud-test: cloud-test-build cloud-test-push cloud-test-quick
+
+# Upload source and run tests (skip image rebuild — typical workflow)
+cloud-test-quick:
+	@echo "Running tests on Cloud Batch (quick mode — no image rebuild)"
+	@GCP_PROJECT_ID=$(GCP_PROJECT_ID) GCP_REGION=$(GCP_REGION) GCS_BUCKET=$(GCS_BUCKET) \
+		bash $(CLOUD_BATCH_DIR)/submit.sh
+
+# Build Docker image locally
+cloud-test-build:
+	@echo "Building Cloud Batch test image"
+	@docker build --platform linux/amd64 -t pdd-test -f $(CLOUD_BATCH_DIR)/Dockerfile .
+
+# Push Docker image to Artifact Registry
+cloud-test-push:
+	@echo "Pushing image to Artifact Registry"
+	@docker tag pdd-test $(AR_IMAGE)
+	@docker push $(AR_IMAGE)
+
+# One-time GCP infrastructure setup
+cloud-test-setup:
+	@echo "Setting up Cloud Batch infrastructure"
+	@GCP_PROJECT_ID=$(GCP_PROJECT_ID) GCP_REGION=$(GCP_REGION) GCS_BUCKET=$(GCS_BUCKET) \
+		bash $(CLOUD_BATCH_DIR)/setup-gcp.sh
 
 # Automated test runner with Infisical for CI/CD
 .PHONY: test-all-ci
