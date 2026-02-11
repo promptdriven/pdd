@@ -1,0 +1,73 @@
+{
+    "taskGroups": [
+        {
+            "taskSpec": {
+                "runnables": [
+                    {
+                        "container": {
+                            "imageUri": "{{REGION}}-docker.pkg.dev/{{PROJECT_ID}}/pdd-ci/pdd-test:latest",
+                            "entrypoint": "/entrypoint.sh"
+                        },
+                        "environment": {
+                            "variables": {
+                                "VERTEX_PROJECT": "{{PROJECT_ID}}",
+                                "PDD_TEST_HEADLESS": "1"
+                            },
+                            "secretVariables": {
+                                "OPENAI_API_KEY": "projects/{{PROJECT_ID}}/secrets/openai-api-key/versions/latest",
+                                "PDD_JWT_TOKEN": "projects/{{PROJECT_ID}}/secrets/pdd-jwt-token/versions/latest",
+                                "FIREBASE_API_KEY": "projects/{{PROJECT_ID}}/secrets/firebase-api-key/versions/latest",
+                                "GITHUB_CLIENT_ID": "projects/{{PROJECT_ID}}/secrets/github-client-id/versions/latest"
+                            }
+                        }
+                    }
+                ],
+                "volumes": [
+                    {
+                        "gcs": {
+                            "remotePath": "{{RESULTS_GCS_PATH}}"
+                        },
+                        "mountPath": "/mnt/disks/results"
+                    },
+                    {
+                        "gcs": {
+                            "remotePath": "{{SOURCE_GCS_PATH}}"
+                        },
+                        "mountPath": "/mnt/disks/source"
+                    }
+                ],
+                "maxRetryCount": 2,
+                "maxRunDuration": "1200s",
+                "lifecyclePolicies": [
+                    {
+                        "action": "RETRY_TASK",
+                        "actionCondition": {
+                            "exitCodes": [50001]
+                        }
+                    }
+                ]
+            },
+            "taskCount": "56",
+            "parallelism": "56"
+        }
+    ],
+    "allocationPolicy": {
+        "instances": [
+            {
+                "policy": {
+                    "machineType": "e2-standard-8",
+                    "provisioningModel": "SPOT"
+                }
+            }
+        ],
+        "serviceAccount": {
+            "email": "pdd-ci-batch@{{PROJECT_ID}}.iam.gserviceaccount.com"
+        },
+        "location": {
+            "allowedLocations": ["regions/{{REGION}}"]
+        }
+    },
+    "logsPolicy": {
+        "destination": "CLOUD_LOGGING"
+    }
+}
