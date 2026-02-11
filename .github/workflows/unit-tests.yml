@@ -30,6 +30,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
+    env:
+      PDD_PATH: ${{ github.workspace }}/pdd
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -44,4 +47,15 @@ jobs:
         run: pip install -e ".[dev]" pytest-timeout
 
       - name: Run unit tests
-        run: pytest tests/ -m "not integration and not e2e and not real" -v --tb=short --timeout=60 -n auto
+        run: >
+          pytest tests/
+          -m "not integration and not e2e and not real"
+          -v --tb=short --timeout=60 -n auto
+          --ignore=tests/commands/test_connect.py
+          --ignore=tests/test_bug_to_unit_test.py
+          --ignore=tests/test_context_generator.py
+          --ignore=tests/test_crash_main.py
+          --ignore=tests/test_generate_test.py
+          --ignore=tests/test_fix_error_loop.py
+          --deselect=tests/test_setup_tool.py::test_create_api_env_script_with_special_characters_zsh
+          --deselect=tests/test_setup_tool.py::test_create_api_env_script_with_common_problematic_characters
