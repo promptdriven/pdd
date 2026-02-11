@@ -533,56 +533,93 @@ def _candidate_prompt_path(input_files: Dict[str, Path]) -> Path | None:
 
 
 # New helper function to check if a language is known
-def _is_known_language(language_name: str) -> bool:
-    """Return True if the language is recognized.
+def _get_known_languages() -> set:
+    """Return the set of known language names (lowercase).
 
-    Prefer CSV in PDD_PATH if available; otherwise fall back to a built-in set
-    so basename/language inference does not fail when PDD_PATH is unset.
+    Prefer CSV in PDD_PATH if available; otherwise fall back to a built-in set.
     """
-    language_name_lower = (language_name or "").lower()
-    if not language_name_lower:
-        return False
-
     builtin_languages = {
         'python', 'javascript', 'typescript', 'typescriptreact', 'javascriptreact',
         'java', 'cpp', 'c', 'go', 'ruby', 'rust',
         'kotlin', 'swift', 'csharp', 'php', 'scala', 'r', 'lua', 'perl', 'bash', 'shell',
         'powershell', 'sql', 'prompt', 'html', 'css', 'makefile',
-        # Additional languages from language_format.csv
         'haskell', 'dart', 'elixir', 'clojure', 'julia', 'erlang', 'fortran',
         'nim', 'ocaml', 'groovy', 'coffeescript', 'fish', 'zsh',
-        'prisma', 'lean', 'agda',
-        # Frontend / templating
+        'prisma', 'lean', 'agda', 'lisp', 'scheme', 'ada',
         'svelte', 'vue', 'scss', 'sass', 'less',
         'jinja', 'handlebars', 'pug', 'ejs', 'twig',
-        # Modern / systems languages
         'zig', 'mojo', 'solidity',
-        # Config / query / infra
         'graphql', 'protobuf', 'terraform', 'hcl', 'nix',
         'glsl', 'wgsl', 'starlark', 'dockerfile',
-        # Common data and config formats for architecture prompts and configs
         'json', 'jsonl', 'yaml', 'yml', 'toml', 'ini'
     }
 
     pdd_path_str = os.getenv('PDD_PATH')
     if not pdd_path_str:
-        return language_name_lower in builtin_languages
+        return builtin_languages
 
     csv_file_path = Path(pdd_path_str) / 'data' / 'language_format.csv'
     if not csv_file_path.is_file():
-        return language_name_lower in builtin_languages
+        return builtin_languages
 
     try:
         with open(csv_file_path, mode='r', encoding='utf-8', newline='') as csvfile:
             reader = csv.DictReader(csvfile)
+            csv_languages = set()
             for row in reader:
-                if row.get('language', '').lower() == language_name_lower:
-                    return True
+                lang = row.get('language', '').strip().lower()
+                if lang:
+                    csv_languages.add(lang)
+            return (csv_languages | builtin_languages) if csv_languages else builtin_languages
     except csv.Error as e:
         console.print(f"[error]CSV Error reading {csv_file_path}: {e}", style="error")
-        return language_name_lower in builtin_languages
+        return builtin_languages
 
-    return language_name_lower in builtin_languages
+
+def _is_known_language(language_name: str) -> bool:
+    """Return True if the language is recognized."""
+    language_name_lower = (language_name or "").lower()
+    if not language_name_lower:
+        return False
+    return language_name_lower in _get_known_languages()
+
+
+def _levenshtein_distance(s1: str, s2: str) -> int:
+    """Compute the Levenshtein edit distance between two strings."""
+    if len(s1) < len(s2):
+        return _levenshtein_distance(s2, s1)
+    if not s2:
+        return len(s1)
+    prev_row = list(range(len(s2) + 1))
+    for i, c1 in enumerate(s1):
+        curr_row = [i + 1]
+        for j, c2 in enumerate(s2):
+            cost = 0 if c1 == c2 else 1
+            curr_row.append(min(curr_row[j] + 1, prev_row[j + 1] + 1, prev_row[j] + cost))
+        prev_row = curr_row
+    return prev_row[-1]
+
+
+def _closest_known_language(token: str, max_distance: int = 2) -> str | None:
+    """Return the closest known language if within max_distance, else None.
+
+    Only considers tokens with length >= 4 to avoid false positives on short
+    language names like 'r', 'd', 'go'.
+    """
+    if len(token) < 4:
+        return None
+    token_lower = token.lower()
+    known = _get_known_languages()
+    best_lang = None
+    best_dist = max_distance + 1
+    for lang in known:
+        if len(lang) < 4:
+            continue
+        dist = _levenshtein_distance(token_lower, lang)
+        if dist < best_dist:
+            best_dist = dist
+            best_lang = lang
+    return best_lang if best_dist <= max_distance else None
 
 
 def _strip_language_suffix(path_like: os.PathLike[str]) -> str:
@@ -753,12 +790,25 @@ def _determine_language(
                 # Check if the token is a known language using the new helper
                 if _is_known_language(token):
                     return token.lower()
+                # Warn if token looks like a misspelled language
+                close_match = _closest_known_language(token)
+                if close_match:
+                    click.echo(
+                        f"Warning: '{token}' in prompt filename is not a recognized language. "
+                        f"Did you mean '{close_match}'?",
+                        err=True,
+                    )
 
     # 4 - Special handling for detect command - default to prompt for LLM prompts
     if command == "detect" and "change_file" in input_file_paths:
         return "prompt"
 
-    # 5 - If no language determined, raise error
+    # 5 - Fallback to default_language from .pddrc
+    default_lang = command_options.get("default_language")
+    if default_lang:
+        return default_lang.lower()
+
+    # 6 - If no language determined, raise error
     raise ValueError("Could not determine language from input files or options.")
 
 

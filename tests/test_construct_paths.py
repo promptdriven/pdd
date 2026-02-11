@@ -284,7 +284,8 @@ def test_construct_paths_basename_extraction(tmpdir):
             with pytest.raises(ValueError) as excinfo:
                  with patch('pdd.construct_paths.get_extension', side_effect=dynamic_get_extension), \
                       patch('pdd.construct_paths.get_language', return_value=None), \
-                      patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str):
+                      patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str), \
+                      patch('pdd.construct_paths._find_pddrc_file', return_value=None):
                       construct_paths(
                           input_file_paths, force, quiet, command, command_options
                       )
@@ -386,7 +387,8 @@ def test_construct_paths_language_extraction(tmpdir):
     def dynamic_get_ext_case4(lang): return "" # Always return ""
     with patch('pdd.construct_paths.get_extension', side_effect=dynamic_get_ext_case4), \
          patch('pdd.construct_paths.get_language', return_value=None), \
-         patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str):
+         patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str), \
+         patch('pdd.construct_paths._find_pddrc_file', return_value=None):
         with pytest.raises(ValueError) as excinfo:
             construct_paths(input_file_paths_4, True, True, 'generate', command_options_4)
         assert "Could not determine language" in str(excinfo.value)
@@ -695,7 +697,8 @@ def test_construct_paths_unsupported_extension_error(tmpdir):
     def dynamic_get_ext_unsupported(lang): return "" # Always return ""
     with patch('pdd.construct_paths.get_extension', side_effect=dynamic_get_ext_unsupported), \
          patch('pdd.construct_paths.get_language', return_value=None), \
-         patch('pdd.construct_paths.generate_output_paths'): # Mock to prevent its errors
+         patch('pdd.construct_paths.generate_output_paths'), \
+         patch('pdd.construct_paths._find_pddrc_file', return_value=None):
         with pytest.raises(ValueError) as excinfo:
             construct_paths(
                 input_file_paths, force, quiet, command, command_options
@@ -1752,14 +1755,15 @@ def test_construct_paths_change_command_language_detection(tmpdir):
     # Test with a different command without language indicators
     with patch('pdd.construct_paths.get_extension', side_effect=lambda lang: '.py' if lang == 'python' else ''), \
          patch('pdd.construct_paths.get_language', side_effect=lambda ext: 'python' if ext == '.py' else ''), \
-         patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str):
-        
+         patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str), \
+         patch('pdd.construct_paths._find_pddrc_file', return_value=None):
+
         # The "generate" command should raise ValueError with no language indicators
         with pytest.raises(ValueError) as excinfo:
             _, input_strings, output_file_paths, language = construct_paths(
                 input_file_paths_no_lang, force, quiet, "generate", command_options
             )
-        
+
         # The error should be about not being able to determine language
         assert "Could not determine language" in str(excinfo.value)
 
@@ -1821,16 +1825,78 @@ def test_construct_paths_detect_command_language_detection(tmpdir):
     # Test with a different command without language indicators
     with patch('pdd.construct_paths.get_extension', side_effect=lambda lang: '.prompt' if lang == 'prompt' else '.py' if lang == 'python' else ''), \
          patch('pdd.construct_paths.get_language', side_effect=lambda ext: 'python' if ext == '.py' else ''), \
-         patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str):
-        
+         patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str), \
+         patch('pdd.construct_paths._find_pddrc_file', return_value=None):
+
         # The "generate" command should raise ValueError with no language indicators
         with pytest.raises(ValueError) as excinfo:
             _, input_strings, output_file_paths, language = construct_paths(
                 input_file_paths_no_lang, force, quiet, "generate", command_options
             )
-        
+
         # The error should be about not being able to determine language
         assert "Could not determine language" in str(excinfo.value)
+
+
+def test_construct_paths_default_language_fallback(tmpdir):
+    """
+    Test that _determine_language falls back to default_language from .pddrc
+    when no other language indicator is available (Issue #451).
+    """
+    tmp_path = Path(str(tmpdir))
+    prompt_file = tmp_path / 'test.prompt'
+    prompt_file.write_text('write a hello function')
+
+    mock_output_paths = {'output': str(tmp_path / 'output.py')}
+
+    # Case 1: default_language in command_options should be used as fallback
+    input_file_paths = {'prompt_file': str(prompt_file)}
+    command_options = {'default_language': 'python'}
+    with patch('pdd.construct_paths.get_extension', return_value='.py'), \
+         patch('pdd.construct_paths.get_language', return_value=None), \
+         patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths), \
+         patch('pdd.construct_paths._find_pddrc_file', return_value=None):
+        _, _, _, language = construct_paths(
+            input_file_paths, True, True, 'generate', command_options
+        )
+        assert language == 'python'
+
+    # Case 2: explicit --language flag overrides default_language
+    command_options_2 = {'language': 'typescript', 'default_language': 'python'}
+    with patch('pdd.construct_paths.get_extension', return_value='.ts'), \
+         patch('pdd.construct_paths.get_language', return_value=None), \
+         patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths), \
+         patch('pdd.construct_paths._find_pddrc_file', return_value=None):
+        _, _, _, language = construct_paths(
+            input_file_paths, True, True, 'generate', command_options_2
+        )
+        assert language == 'typescript'
+
+    # Case 3: prompt filename suffix overrides default_language
+    prompt_file_js = tmp_path / 'test_javascript.prompt'
+    prompt_file_js.write_text('write a hello function')
+    input_file_paths_3 = {'prompt_file': str(prompt_file_js)}
+    command_options_3 = {'default_language': 'python'}
+    with patch('pdd.construct_paths.get_extension', side_effect=lambda l: '.js' if l == 'javascript' else '.py' if l == 'python' else ''), \
+         patch('pdd.construct_paths.get_language', return_value=None), \
+         patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths), \
+         patch('pdd.construct_paths._find_pddrc_file', return_value=None):
+        _, _, _, language = construct_paths(
+            input_file_paths_3, True, True, 'generate', command_options_3
+        )
+        assert language == 'javascript'
+
+    # Case 4: default_language is case-insensitive
+    command_options_4 = {'default_language': 'Python'}
+    with patch('pdd.construct_paths.get_extension', return_value='.py'), \
+         patch('pdd.construct_paths.get_language', return_value=None), \
+         patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths), \
+         patch('pdd.construct_paths._find_pddrc_file', return_value=None):
+        _, _, _, language = construct_paths(
+            input_file_paths, True, True, 'generate', command_options_4
+        )
+        assert language == 'python'
+
 
 def test_construct_paths_bug_command_language_detection(tmpdir):
     """
@@ -3034,4 +3100,167 @@ def test_construct_paths_sync_mode_respects_env_prompts_dir(tmp_path, monkeypatc
     assert "prompts_dir" in resolved_config
     assert resolved_config["prompts_dir"] == "/custom/sync/prompts", \
         f"Expected prompts_dir='/custom/sync/prompts' from PDD_PROMPTS_DIR in sync mode, got '{resolved_config['prompts_dir']}'"
+
+
+# --- Tests for _get_known_languages, _levenshtein_distance, _closest_known_language ---
+
+from pdd.construct_paths import _get_known_languages, _levenshtein_distance, _closest_known_language
+
+
+class TestGetKnownLanguages:
+    """Tests for _get_known_languages helper."""
+
+    def test_returns_set(self):
+        result = _get_known_languages()
+        assert isinstance(result, set)
+
+    def test_contains_common_languages(self):
+        known = _get_known_languages()
+        for lang in ['python', 'javascript', 'typescript', 'rust', 'go', 'java']:
+            assert lang in known
+
+    def test_all_lowercase(self):
+        known = _get_known_languages()
+        for lang in known:
+            assert lang == lang.lower()
+
+
+class TestLevenshteinDistance:
+    """Tests for _levenshtein_distance."""
+
+    def test_identical_strings(self):
+        assert _levenshtein_distance("python", "python") == 0
+
+    def test_single_deletion(self):
+        assert _levenshtein_distance("python", "pythn") == 1
+
+    def test_single_insertion(self):
+        assert _levenshtein_distance("pythn", "python") == 1
+
+    def test_single_substitution(self):
+        assert _levenshtein_distance("python", "pxthon") == 1
+
+    def test_empty_strings(self):
+        assert _levenshtein_distance("", "") == 0
+        assert _levenshtein_distance("abc", "") == 3
+        assert _levenshtein_distance("", "abc") == 3
+
+    def test_completely_different(self):
+        assert _levenshtein_distance("abc", "xyz") == 3
+
+    def test_typscript_typo(self):
+        assert _levenshtein_distance("typscript", "typescript") == 1
+
+    def test_javasript_typo(self):
+        assert _levenshtein_distance("javasript", "javascript") == 1
+
+
+class TestClosestKnownLanguage:
+    """Tests for _closest_known_language fuzzy matching."""
+
+    def test_typscript_matches_typescript(self):
+        assert _closest_known_language("typscript") == "typescript"
+
+    def test_pythn_matches_python(self):
+        assert _closest_known_language("pythn") == "python"
+
+    def test_javasript_matches_javascript(self):
+        assert _closest_known_language("javasript") == "javascript"
+
+    def test_typescrit_matches_typescript(self):
+        assert _closest_known_language("typescrit") == "typescript"
+
+    def test_exact_match_returns_none(self):
+        # Exact matches are handled by _is_known_language, not this function
+        # But if called, distance is 0 which is <= 2, so it returns the match
+        assert _closest_known_language("typescript") == "typescript"
+
+    def test_gibberish_returns_none(self):
+        assert _closest_known_language("foobar") is None
+        assert _closest_known_language("xyzzy") is None
+
+    def test_short_tokens_return_none(self):
+        assert _closest_known_language("go") is None
+        assert _closest_known_language("r") is None
+        assert _closest_known_language("d") is None
+        assert _closest_known_language("abc") is None
+
+    def test_too_distant_returns_none(self):
+        assert _closest_known_language("abcdefgh") is None
+
+    def test_case_insensitive(self):
+        assert _closest_known_language("Typscript") == "typescript"
+        assert _closest_known_language("PYTHN") == "python"
+
+
+class TestMisspelledLanguageWarning:
+    """Tests for the warning when a prompt filename has a misspelled language suffix."""
+
+    def test_misspelled_suffix_warns_and_falls_back(self, tmpdir, capsys):
+        """A misspelled language suffix should warn and fall back to default_language."""
+        tmp_path = Path(str(tmpdir))
+        prompt_file = tmp_path / 'new_typscript.prompt'
+        prompt_file.write_text('write a hello function')
+
+        input_file_paths = {'prompt_file': str(prompt_file)}
+        command_options = {'default_language': 'python'}
+        mock_output_paths = {'output': str(tmp_path / 'output.py')}
+
+        with patch('pdd.construct_paths.get_extension', return_value='.py'), \
+             patch('pdd.construct_paths.get_language', return_value=None), \
+             patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths), \
+             patch('pdd.construct_paths._find_pddrc_file', return_value=None):
+            _, _, _, language = construct_paths(
+                input_file_paths, True, True, 'generate', command_options
+            )
+            # Falls back to default_language
+            assert language == 'python'
+
+        captured = capsys.readouterr()
+        assert "typscript" in captured.err
+        assert "typescript" in captured.err
+
+    def test_correct_suffix_no_warning(self, tmpdir, capsys):
+        """A correctly spelled language suffix should not produce a warning."""
+        tmp_path = Path(str(tmpdir))
+        prompt_file = tmp_path / 'new_typescript.prompt'
+        prompt_file.write_text('write a hello function')
+
+        input_file_paths = {'prompt_file': str(prompt_file)}
+        command_options = {}
+        mock_output_paths = {'output': str(tmp_path / 'output.ts')}
+
+        with patch('pdd.construct_paths.get_extension', side_effect=lambda l: '.ts' if l == 'typescript' else ''), \
+             patch('pdd.construct_paths.get_language', return_value=None), \
+             patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths), \
+             patch('pdd.construct_paths._find_pddrc_file', return_value=None):
+            _, _, _, language = construct_paths(
+                input_file_paths, True, True, 'generate', command_options
+            )
+            assert language == 'typescript'
+
+        captured = capsys.readouterr()
+        assert "Did you mean" not in captured.err
+
+    def test_no_warning_for_non_language_suffix(self, tmpdir, capsys):
+        """A suffix that's not close to any language should not warn."""
+        tmp_path = Path(str(tmpdir))
+        prompt_file = tmp_path / 'new_widgets.prompt'
+        prompt_file.write_text('write widgets')
+
+        input_file_paths = {'prompt_file': str(prompt_file)}
+        command_options = {'default_language': 'python'}
+        mock_output_paths = {'output': str(tmp_path / 'output.py')}
+
+        with patch('pdd.construct_paths.get_extension', return_value='.py'), \
+             patch('pdd.construct_paths.get_language', return_value=None), \
+             patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths), \
+             patch('pdd.construct_paths._find_pddrc_file', return_value=None):
+            _, _, _, language = construct_paths(
+                input_file_paths, True, True, 'generate', command_options
+            )
+            assert language == 'python'
+
+        captured = capsys.readouterr()
+        assert "Did you mean" not in captured.err
 
