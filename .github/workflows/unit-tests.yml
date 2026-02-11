@@ -41,7 +41,7 @@ jobs:
           cache: 'pip'
 
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev]" pytest-timeout
 
       - name: Run unit tests
-        run: pytest tests/ -m "not integration and not e2e and not real" -v --tb=short
+        run: pytest tests/ -m "not integration and not e2e and not real" -v --tb=short --timeout=60 -n auto
