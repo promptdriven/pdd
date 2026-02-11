@@ -1345,12 +1345,12 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "15" ]; then
   log "15. Testing 'auto-deps' command"
   AUTO_DEPS_CSV="project_dependencies.csv"
   # auto-deps takes a single glob/directory argument for context files.
-  # When running individually in CI, copy a small subset to a temp dir
-  # to avoid 15+ minute LLM processing time with all 128+ context/*.py files.
+  # When running individually in CI, copy a minimal subset (1 file) to a temp dir
+  # to avoid LLM call hangs. Even 3 files can take 15+ min if an API call stalls.
   if [ "$TARGET_TEST" != "all" ]; then
     CI_AUTODEPS_CONTEXT="$(pwd)/ci_context_subset"
     mkdir -p "$CI_AUTODEPS_CONTEXT"
-    ls "$CONTEXT_PATH"/*.py 2>/dev/null | head -3 | while IFS= read -r f; do
+    ls "$CONTEXT_PATH"/*.py 2>/dev/null | head -1 | while IFS= read -r f; do
       cp "$f" "$CI_AUTODEPS_CONTEXT/"
     done
     AUTODEPS_CONTEXT_ARG="$CI_AUTODEPS_CONTEXT/*.py"

@@ -98,7 +98,7 @@ if [ "${TASK_INDEX}" -ge "${PYTEST_START}" ] && [ "${TASK_INDEX}" -le "${PYTEST_
     CHUNK_INDEX="${TASK_INDEX}"
 
     # Dynamically list and chunk test files
-    mapfile -t ALL_TESTS < <(find tests/ -maxdepth 1 -name 'test_*.py' | sort)
+    mapfile -t ALL_TESTS < <(find tests/ -name 'test_*.py' | sort)
     TOTAL=${#ALL_TESTS[@]}
     CHUNK_SIZE=$(( (TOTAL + PYTEST_CHUNKS - 1) / PYTEST_CHUNKS ))
     START_IDX=$(( CHUNK_INDEX * CHUNK_SIZE ))
