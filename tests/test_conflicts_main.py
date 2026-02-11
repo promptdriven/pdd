@@ -263,10 +263,12 @@ def test_conflicts_in_prompts_error(mock_rprint, mock_construct_paths, mock_conf
     mock_rprint.assert_any_call("[bold red]Error:[/bold red] Model error occurred.")
 
 
+@patch('csv.DictWriter')
 @patch('pdd.conflicts_main.conflicts_in_prompts')
 @patch('pdd.conflicts_main.construct_paths')
 @patch('pdd.conflicts_main.rprint')
-def test_quiet_mode(mock_rprint, mock_construct_paths, mock_conflicts_in_prompts, mock_ctx):
+@patch('builtins.open', new_callable=mock_open)
+def test_quiet_mode(mock_file, mock_rprint, mock_construct_paths, mock_conflicts_in_prompts, mock_dict_writer, mock_ctx):
     """Test conflicts_main in quiet mode."""
     # Modify context to be quiet
     mock_ctx.obj['quiet'] = True
@@ -407,10 +409,12 @@ def test_force_option(mock_file, mock_rprint, mock_construct_paths, mock_conflic
     mock_rprint.assert_any_call("[bold]Results saved to:[/bold] output/output.csv")
 
 
+@patch('csv.DictWriter')
 @patch('pdd.conflicts_main.conflicts_in_prompts')
 @patch('pdd.conflicts_main.construct_paths')
 @patch('pdd.conflicts_main.rprint')
-def test_replace_prompt_names(mock_rprint, mock_construct_paths, mock_conflicts_in_prompts, mock_ctx):
+@patch('builtins.open', new_callable=mock_open)
+def test_replace_prompt_names(mock_file, mock_rprint, mock_construct_paths, mock_conflicts_in_prompts, mock_dict_writer, mock_ctx):
     """Test that prompt names are correctly replaced with actual file paths."""
     # Setup construct_paths
     mock_construct_paths.return_value = (

@@ -4,7 +4,7 @@ set -euo pipefail
 # ── Configuration ──────────────────────────────────────────────────────────
 PROJECT_ID="${GCP_PROJECT_ID:-prompt-driven-development-stg}"
 REGION="${GCP_REGION:-us-central1}"
-BUCKET="${GCS_BUCKET:-pdd-ci-results}"
+BUCKET="${GCS_BUCKET:-pdd-stg-ci-results}"
 JOB_RUN_ID="run-$(date +%Y%m%d-%H%M%S)-$(git rev-parse --short HEAD)"
 JOB_NAME="pdd-test-${JOB_RUN_ID}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
