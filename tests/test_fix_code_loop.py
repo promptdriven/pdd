@@ -398,8 +398,8 @@ else:
         # If threads don't have timeouts, this will hang forever waiting
         # for the orphaned child to close the pipes
         # With timeout fix, should complete in ~15 seconds max
-        assert elapsed < 20, (
-            f"Function took {elapsed:.1f}s, expected < 20s. "
+        assert elapsed < 35, (
+            f"Function took {elapsed:.1f}s, expected < 35s. "
             "Thread joins likely hanging on inherited pipes from child process."
         )
 

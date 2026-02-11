@@ -204,7 +204,9 @@ def calculate_total(prices: list[float], tax_rate: float = 0.1) -> float:
         # 2. Set up environment
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
-        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key-for-e2e-testing")
+        # Set a dummy API key to allow local execution (only if not already set)
+        if not os.environ.get("OPENAI_API_KEY"):
+            monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key-for-e2e-testing")
 
         output_path = tmp_path / "tests" / "test_formatting.py"
 
@@ -282,7 +284,9 @@ module.exports = { add };
         # 2. Set up environment
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
-        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key-for-e2e-testing")
+        # Set a dummy API key to allow local execution (only if not already set)
+        if not os.environ.get("OPENAI_API_KEY"):
+            monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key-for-e2e-testing")
 
         output_path = tmp_path / "tests" / "math.test.js"
 
@@ -301,7 +305,12 @@ module.exports = { add };
         ], catch_exceptions=False)
 
         assert result.exit_code == 0, f"Command failed: {result.output}"
-        assert output_path.exists(), f"Output not created: {result.output}"
+        if not output_path.exists():
+            # In CI, agentic CLI providers (Claude CLI, etc.) may not be installed,
+            # so non-Python test generation produces no output. Skip gracefully.
+            if "No agentic CLI providers detected" in result.output:
+                pytest.skip("Agentic CLI providers not available in this environment")
+            assert False, f"Output not created: {result.output}"
 
         generated_test = output_path.read_text()
 
@@ -367,7 +376,9 @@ def add(a: int, b: int) -> int:
         # 4. Set up environment
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
-        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key-for-e2e-testing")
+        # Set a dummy API key to allow local execution (only if not already set)
+        if not os.environ.get("OPENAI_API_KEY"):
+            monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key-for-e2e-testing")
 
         output_path = tmp_path / "tests" / "test_calculator.py"
 
