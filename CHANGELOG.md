@@ -1,3 +1,16 @@
+## v0.0.145 (2026-02-10)
+
+### Feat
+
+- add Cloud Batch parallel test infrastructure with Spot VMs
+
+### Fix
+
+- Return error signal (-1) instead of false success (0) on verify LLM failures (#305)
+- prevent CI auth hang by skipping auto_submit in local mode
+- Address Copilot review feedback on PR #462
+- Handle OAuth device flow rate limiting correctly (#309)
+
 ## v0.0.144 (2026-02-09)
 
 ### Feat

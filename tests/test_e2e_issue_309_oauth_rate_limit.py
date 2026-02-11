@@ -376,10 +376,12 @@ class TestAuthLoginE2EEnvironment:
     def runner(self):
         return CliRunner()
 
-    def test_auth_login_requires_firebase_api_key(self, runner, monkeypatch):
+    def test_auth_login_requires_firebase_api_key(self, runner, monkeypatch, tmp_path):
         """E2E: auth login fails gracefully when Firebase API key is missing."""
         from pdd import cli
 
+        # Isolate from repo .env file that may contain the key
+        monkeypatch.chdir(tmp_path)
         # Ensure no Firebase API key is set
         monkeypatch.delenv("NEXT_PUBLIC_FIREBASE_API_KEY", raising=False)
 
