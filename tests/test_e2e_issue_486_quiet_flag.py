@@ -42,7 +42,8 @@ class TestQuietFlagE2E:
         """Run generate command with mocked LLM generators so preprocess runs."""
         with patch("pdd.code_generator_main.local_code_generator_func") as mock_local, \
              patch("pdd.code_generator_main.incremental_code_generator_func") as mock_incr, \
-             patch("pdd.code_generator_main.requests") as mock_requests:
+             patch("pdd.code_generator_main.requests") as mock_requests, \
+             patch("pdd.core.cli.auto_update"):
             mock_local.return_value = ("def hello(): return 'hello'", 0.01, "mock-model")
             mock_incr.return_value = ("def hello(): return 'hello'", False, 0.01, "mock-model")
             # Make cloud check fail so it goes to local path
@@ -89,7 +90,8 @@ class TestQuietFlagE2E:
     def test_quiet_flag_still_shows_errors(self, tmp_path):
         """pdd --quiet generate with nonexistent file should still show error."""
         runner = CliRunner(mix_stderr=False)
-        result = runner.invoke(cli, ["--quiet", "generate", str(tmp_path / "nonexistent.prompt")])
+        with patch("pdd.core.cli.auto_update"):
+            result = runner.invoke(cli, ["--quiet", "generate", str(tmp_path / "nonexistent.prompt")])
 
         assert result.exit_code != 0, (
             f"Expected non-zero exit code for nonexistent file, got {result.exit_code}"
