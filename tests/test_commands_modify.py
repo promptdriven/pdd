@@ -354,3 +354,31 @@ def test_cli_update_command_simple_flag_default_false(mock_update_main, mock_aut
     call_kwargs = mock_update_main.call_args.kwargs
     assert call_kwargs['simple'] is False
     mock_auto_update.assert_called_once()
+
+
+# --- Tests for change command exit code on failure (agentic mode) ---
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.modify.run_agentic_change')
+def test_cli_change_agentic_exits_1_on_failure(mock_agentic, mock_auto_update, runner):
+    """Test that agentic change command exits with code 1 when success=False."""
+    mock_agentic.return_value = (False, "All agent providers failed", 0.0, "none", [])
+
+    result = runner.invoke(cli.cli, ["change", "https://github.com/owner/repo/issues/1"])
+
+    assert result.exit_code == 1
+    mock_agentic.assert_called_once()
+    mock_auto_update.assert_called_once()
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.modify.run_agentic_change')
+def test_cli_change_agentic_exits_0_on_success(mock_agentic, mock_auto_update, runner):
+    """Test that agentic change command exits with code 0 when success=True."""
+    mock_agentic.return_value = (True, "Changes applied", 1.50, "claude-sonnet", ["src/main.py"])
+
+    result = runner.invoke(cli.cli, ["change", "https://github.com/owner/repo/issues/1"])
+
+    assert result.exit_code == 0
+    mock_agentic.assert_called_once()
+    mock_auto_update.assert_called_once()

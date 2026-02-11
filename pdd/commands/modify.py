@@ -175,9 +175,12 @@ def change(
                     for f in changed_files:
                         click.echo(f"  - {f}")
             
+            if not success:
+                raise click.exceptions.Exit(1)
+
             return message, cost, model
 
-    except click.Abort:
+    except (click.Abort, click.exceptions.Exit):
         raise
     except Exception as e:
         handle_error(e, "change", ctx.obj.get("quiet", False))
