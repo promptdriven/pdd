@@ -47,8 +47,8 @@
                     }
                 ]
             },
-            "taskCount": "56",
-            "parallelism": "56"
+            "taskCount": "64",
+            "parallelism": "64"
         }
     ],
     "allocationPolicy": {
