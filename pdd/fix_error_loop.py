@@ -537,7 +537,7 @@ def fix_error_loop(unit_test_file: str,
     fails, errors, warnings = initial_fails, initial_errors, initial_warnings
     
     # Determine success state immediately
-    success = (fails == 0 and errors == 0 and warnings == 0)
+    success = (fails == 0 and errors == 0)
 
     # Track if tests were initially passing
     initially_passing = success
@@ -819,7 +819,7 @@ def fix_error_loop(unit_test_file: str,
             })
             
             # Update success status based on latest results
-            success = (fails == 0 and errors == 0 and warnings == 0)
+            success = (fails == 0 and errors == 0)
             
             # Update final stats
             stats["final_fails"] = fails
