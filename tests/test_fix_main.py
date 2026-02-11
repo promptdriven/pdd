@@ -2491,3 +2491,181 @@ def test_fix_main_code_checks_protect_tests_before_writing_test():
     # Check that the code includes "protect_tests" check when writing test file
     assert "if fixed_unit_test and not protect_tests:" in source, \
         "fix_main.py should check 'if fixed_unit_test and not protect_tests:' before writing test file"
+
+
+# --- CI auth hang regression tests (GitHub Actions #462) ---
+
+@patch('pdd.fix_main.run_pytest_on_file')
+@patch('pdd.fix_main.Path')
+@patch('pdd.fix_main.construct_paths')
+@patch('pdd.fix_main.fix_errors_from_unit_tests')
+@patch('pdd.fix_main.CloudConfig.get_jwt_token', return_value=None)
+@patch('pdd.fix_main.get_jwt_token')
+def test_fix_main_auto_submit_skipped_when_pdd_force_local(
+    mock_get_jwt_token,
+    mock_cloud_jwt,
+    mock_fix_errors,
+    mock_construct_paths,
+    mock_path,
+    mock_run_pytest,
+    mock_ctx,
+    monkeypatch
+):
+    """
+    Regression test for CI auth hang: when PDD_FORCE_LOCAL=1, auto_submit=True
+    must NOT call get_jwt_token, which would trigger the GitHub device code flow
+    and hang in CI for ~15 minutes.
+    """
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    mock_path.return_value.exists.return_value = True
+    mock_ctx.obj['local'] = True  # PDD_FORCE_LOCAL implies local mode
+
+    mock_construct_paths.return_value = (
+        {},
+        {
+            'prompt_file': 'Test prompt content',
+            'code_file': 'Test code content',
+            'unit_test_file': 'Test test content',
+            'error_file': 'Error content'
+        },
+        {
+            'output_test': 'output/test_fixed.py',
+            'output_code': 'output/code_fixed.py',
+            'output_results': 'results/fix.log'
+        },
+        None
+    )
+
+    mock_fix_errors.return_value = (
+        True,   # update_unit_test
+        True,   # update_code
+        "fixed test",
+        "fixed code",
+        "analysis",
+        0.50,
+        "gpt-4"
+    )
+
+    mock_run_pytest.return_value = (0, 0, 0, "All tests passed")
+
+    m_open = mock_open()
+    with patch('builtins.open', m_open):
+        success, fixed_test, fixed_code, attempts, total_cost, model_name = fix_main(
+            ctx=mock_ctx,
+            prompt_file="prompt.prompt",
+            code_file="code.py",
+            unit_test_file="test.py",
+            error_file="errors.log",
+            output_test=None,
+            output_code=None,
+            output_results=None,
+            loop=False,
+            verification_program=None,
+            max_attempts=3,
+            budget=5.0,
+            auto_submit=True
+        )
+
+    assert success is True
+    mock_get_jwt_token.assert_not_called(), \
+        "get_jwt_token must NOT be called when PDD_FORCE_LOCAL=1 (would hang CI)"
+
+
+@patch('pdd.fix_main.run_pytest_on_file')
+@patch('pdd.fix_main.Path')
+@patch('pdd.fix_main.construct_paths')
+@patch('pdd.fix_main.fix_errors_from_unit_tests')
+@patch('pdd.fix_main.CloudConfig.get_jwt_token', return_value=None)
+@patch('pdd.fix_main.asyncio')
+@patch('pdd.fix_main.get_jwt_token')
+def test_fix_main_auto_submit_calls_auth_when_not_local(
+    mock_get_jwt_token,
+    mock_asyncio,
+    mock_cloud_jwt,
+    mock_fix_errors,
+    mock_construct_paths,
+    mock_path,
+    mock_run_pytest,
+    mock_ctx,
+    monkeypatch
+):
+    """
+    Complementary test: when PDD_FORCE_LOCAL is NOT set and auto_submit=True,
+    the auth flow SHOULD be triggered (verifying the guard is specific to local mode).
+    """
+    monkeypatch.delenv("PDD_FORCE_LOCAL", raising=False)
+    mock_path.return_value.exists.return_value = True
+    mock_ctx.obj['local'] = False
+
+    mock_construct_paths.return_value = (
+        {},
+        {
+            'prompt_file': 'Test prompt content',
+            'code_file': 'Test code content',
+            'unit_test_file': 'Test test content',
+            'error_file': 'Error content'
+        },
+        {
+            'output_test': 'output/test_fixed.py',
+            'output_code': 'output/code_fixed.py',
+            'output_results': 'results/fix.log'
+        },
+        None
+    )
+
+    mock_fix_errors.return_value = (
+        True,
+        True,
+        "fixed test",
+        "fixed code",
+        "analysis",
+        0.50,
+        "gpt-4"
+    )
+
+    mock_run_pytest.return_value = (0, 0, 0, "All tests passed")
+
+    # Mock asyncio.run to return a fake JWT so submission proceeds without real auth
+    mock_asyncio.run.return_value = "fake_jwt_token"
+
+    m_open = mock_open()
+    with patch('builtins.open', m_open), \
+         patch('pdd.fix_main.preprocess', return_value="processed prompt"), \
+         patch('pdd.fix_main.requests') as mock_requests:
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_requests.post.return_value = mock_response
+
+        success, fixed_test, fixed_code, attempts, total_cost, model_name = fix_main(
+            ctx=mock_ctx,
+            prompt_file="prompt.prompt",
+            code_file="code.py",
+            unit_test_file="test.py",
+            error_file="errors.log",
+            output_test=None,
+            output_code=None,
+            output_results=None,
+            loop=False,
+            verification_program=None,
+            max_attempts=3,
+            budget=5.0,
+            auto_submit=True
+        )
+
+    assert success is True
+    mock_asyncio.run.assert_called_once(), \
+        "asyncio.run(get_jwt_token(...)) should be called when not in local mode"
+
+
+def test_fix_main_auto_submit_guard_exists_in_source():
+    """
+    Source-level regression test: the auto_submit block in fix_main.py must
+    include a PDD_FORCE_LOCAL guard to prevent CI auth hangs.
+    """
+    from pathlib import Path as RealPath
+
+    fix_main_path = RealPath(__file__).parent.parent / "pdd" / "fix_main.py"
+    source = fix_main_path.read_text()
+
+    assert 'auto_submit and not _env_flag_enabled("PDD_FORCE_LOCAL")' in source, \
+        "fix_main.py must guard auto_submit with _env_flag_enabled('PDD_FORCE_LOCAL') check"

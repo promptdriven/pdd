@@ -430,7 +430,7 @@ def fix_main(
                     rprint(f"  Results file: {output_file_paths['output_results']}")
 
                 # Auto-submit example if requested and successful
-                if auto_submit:
+                if auto_submit and not _env_flag_enabled("PDD_FORCE_LOCAL"):
                     try:
                         # Get JWT token for cloud authentication
                         jwt_token = asyncio.run(get_jwt_token(

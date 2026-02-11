@@ -68,7 +68,7 @@ def fix_verification_errors(
             "fixed_code": code,
             "total_cost": 0.0,
             "model_name": None,
-            "verification_issues_count": 0,
+            "verification_issues_count": -1,
         }
     if not (0.0 <= strength <= 1.0):
         rprint(f"[bold red]Error:[/bold red] Strength must be between 0.0 and 1.0, got {strength}.")
@@ -78,7 +78,7 @@ def fix_verification_errors(
             "fixed_code": code,
             "total_cost": 0.0,
             "model_name": None,
-            "verification_issues_count": 0,
+            "verification_issues_count": -1,
         }
 
     if verbose:
@@ -96,7 +96,7 @@ def fix_verification_errors(
             "fixed_code": code,
             "total_cost": total_cost,
             "model_name": model_name,
-            "verification_issues_count": verification_issues_count,
+            "verification_issues_count": -1,
         }
     if verbose:
         rprint("[green]Prompt templates loaded successfully.[/green]")
@@ -137,7 +137,7 @@ def fix_verification_errors(
             "fixed_code": code,
             "total_cost": total_cost,
             "model_name": model_name,
-            "verification_issues_count": 0, # Reset on LLM call error
+            "verification_issues_count": -1, # Signal error on LLM call failure
         }
 
     issues_found = False
@@ -180,7 +180,7 @@ def fix_verification_errors(
             "fixed_code": code,
             "total_cost": total_cost,
             "model_name": model_name,
-            "verification_issues_count": 0,
+            "verification_issues_count": -1,
         }
 
     if issues_found and verification_details:
