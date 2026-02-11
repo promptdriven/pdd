@@ -788,7 +788,8 @@ def code_generator_main(
                     if cloud_only:
                         console.print("[red]Cloud authentication failed.[/red]")
                         raise click.UsageError("Cloud authentication failed")
-                    console.print("[yellow]Cloud authentication failed. Falling back to local execution.[/yellow]")
+                    if not quiet:
+                        console.print("[yellow]Cloud authentication failed. Falling back to local execution.[/yellow]")
                     current_execution_is_local = True
 
                 if jwt_token and not current_execution_is_local:
@@ -828,7 +829,8 @@ def code_generator_main(
                             if cloud_only:
                                 console.print("[red]Cloud execution returned no code.[/red]")
                                 raise click.UsageError("Cloud execution returned no code")
-                            console.print("[yellow]Cloud execution returned no code. Falling back to local.[/yellow]")
+                            if not quiet:
+                                console.print("[yellow]Cloud execution returned no code. Falling back to local.[/yellow]")
                             current_execution_is_local = True
                         elif verbose:
                              # Display example info if available
@@ -843,7 +845,8 @@ def code_generator_main(
                         if cloud_only:
                             console.print(f"[red]Cloud execution timed out ({get_cloud_timeout()}s).[/red]")
                             raise click.UsageError("Cloud execution timed out")
-                        console.print(f"[yellow]Cloud execution timed out ({get_cloud_timeout()}s). Falling back to local.[/yellow]")
+                        if not quiet:
+                            console.print(f"[yellow]Cloud execution timed out ({get_cloud_timeout()}s). Falling back to local.[/yellow]")
                         current_execution_is_local = True
                     except requests.exceptions.HTTPError as e:
                         status_code = e.response.status_code if e.response else 0
@@ -873,19 +876,22 @@ def code_generator_main(
                             if cloud_only:
                                 console.print(f"[red]Cloud HTTP error ({status_code}): {err_content}[/red]")
                                 raise click.UsageError(f"Cloud HTTP error ({status_code}): {err_content}")
-                            console.print(f"[yellow]Cloud HTTP error ({status_code}): {err_content}. Falling back to local.[/yellow]")
+                            if not quiet:
+                                console.print(f"[yellow]Cloud HTTP error ({status_code}): {err_content}. Falling back to local.[/yellow]")
                             current_execution_is_local = True
                     except requests.exceptions.RequestException as e:
                         if cloud_only:
                             console.print(f"[red]Cloud network error: {e}[/red]")
                             raise click.UsageError(f"Cloud network error: {e}")
-                        console.print(f"[yellow]Cloud network error: {e}. Falling back to local.[/yellow]")
+                        if not quiet:
+                            console.print(f"[yellow]Cloud network error: {e}. Falling back to local.[/yellow]")
                         current_execution_is_local = True
                     except json.JSONDecodeError:
                         if cloud_only:
                             console.print("[red]Cloud returned invalid JSON.[/red]")
                             raise click.UsageError("Cloud returned invalid JSON")
-                        console.print("[yellow]Cloud returned invalid JSON. Falling back to local.[/yellow]")
+                        if not quiet:
+                            console.print("[yellow]Cloud returned invalid JSON. Falling back to local.[/yellow]")
                         current_execution_is_local = True
             
             if current_execution_is_local:
@@ -1130,8 +1136,7 @@ def code_generator_main(
                             console.print(f"[yellow]Warning: Could not inject architecture tags: {e}[/yellow]")
 
                 p_output.write_text(final_content, encoding="utf-8")
-                if verbose or not quiet:
-                    console.print(f"Generated code saved to: [green]{p_output.resolve()}[/green]")
+                click.echo(f"Generated code saved to: {p_output.resolve()}")
                 # Safety net: ensure architecture HTML is generated post-write if applicable
                 try:
                     # Prefer resolved script if available; else default for architecture outputs

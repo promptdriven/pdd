@@ -109,6 +109,10 @@ def _scan_risky_placeholders(text: str) -> Tuple[List[Tuple[int, str]], List[Tup
         pass
     return single_brace, template_brace
 
+def _is_quiet(quiet: bool) -> bool:
+    """Check if quiet mode is active via parameter or environment."""
+    return quiet or os.environ.get("PDD_QUIET", "") == "1"
+
 def preprocess(prompt: str, recursive: bool = False, double_curly_brackets: bool = True, exclude_keys: Optional[List[str]] = None, quiet: bool = False) -> str:
     try:
         if not prompt:
@@ -117,7 +121,7 @@ def preprocess(prompt: str, recursive: bool = False, double_curly_brackets: bool
         _DEBUG_EVENTS.clear()
         _dbg(f"Start preprocess(recursive={recursive}, double_curly={double_curly_brackets}, exclude_keys={exclude_keys})")
         _dbg(f"Initial length: {len(prompt)} characters")
-        if not quiet:
+        if not _is_quiet(quiet):
             console.print(Panel("Starting prompt preprocessing", style="bold blue"))
         prompt = process_backtick_includes(prompt, recursive)
         _dbg("After backtick includes processed")
@@ -137,7 +141,7 @@ def preprocess(prompt: str, recursive: bool = False, double_curly_brackets: bool
             for ln, frag in templates[:5]:
                 _dbg(f"  line {ln}: {frag}")
         # Don't trim whitespace that might be significant for the tests
-        if not quiet:
+        if not _is_quiet(quiet):
             console.print(Panel("Preprocessing complete", style="bold green"))
         _dbg(f"Final length: {len(prompt)} characters")
         _write_debug_report()
@@ -392,7 +396,7 @@ def double_curly(text: str, exclude_keys: Optional[List[str]] = None, quiet: boo
     if exclude_keys is None:
         exclude_keys = []
     
-    if not quiet:
+    if not _is_quiet(quiet):
         console.print("Doubling curly brackets...")
     _dbg("double_curly invoked")
     

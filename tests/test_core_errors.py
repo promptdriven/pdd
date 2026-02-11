@@ -89,9 +89,9 @@ def test_cli_handle_error_quiet(mock_main, mock_auto_update, runner, create_dumm
     # Expect exit code 0 because the exception is handled gracefully.
     assert result.exit_code == 0
     assert result.exception is None # Exception should be handled
-    # Error messages should be suppressed by handle_error when quiet=True
-    assert "Error during 'generate' command" not in result.output
-    assert "File not found" not in result.output
+    # Errors should still be shown even in quiet mode (users need to see errors)
+    assert "Error during 'generate' command" in result.output
+    assert "File not found" in result.output
     mock_main.assert_called_once()
     # Auto update still runs but prints nothing when quiet
     mock_auto_update.assert_called_once_with()

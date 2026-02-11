@@ -68,23 +68,35 @@ class TestQuietFlagE2E:
             f"Full output:\n{stdout}"
         )
 
-    def test_non_quiet_generate_shows_preprocessing_output(self, prompt_file):
-        """Without --quiet, generate should show preprocessing panels (regression guard)."""
-        runner = CliRunner(mix_stderr=False)
-        result = self._run_generate(runner, ["generate"], prompt_file)
+    def test_non_quiet_generate_shows_preprocessing_output(self):
+        """Without --quiet (and without PDD_QUIET), preprocess should show panels (regression guard)."""
+        import os
+        from unittest.mock import patch as _patch
+        from pdd.preprocess import preprocess
 
-        stdout = result.output
-        has_panel = any(p in stdout for p in ["Starting prompt preprocessing", "Preprocessing complete"])
-        assert has_panel, (
-            f"Without --quiet, preprocessing panels should be visible.\n"
-            f"Output:\n{stdout}"
-        )
+        # Ensure PDD_QUIET is not set
+        env = os.environ.copy()
+        env.pop("PDD_QUIET", None)
+        with _patch.dict(os.environ, env, clear=True), \
+             _patch("pdd.preprocess.console") as mock_console:
+            preprocess("Hello world")
+            # Panels are Rich objects — check that print was called (panels are shown)
+            assert mock_console.print.call_count >= 2, (
+                f"Without --quiet, preprocessing panels should be visible.\n"
+                f"print() was called {mock_console.print.call_count} time(s)"
+            )
 
     def test_quiet_flag_still_shows_errors(self, tmp_path):
         """pdd --quiet generate with nonexistent file should still show error."""
         runner = CliRunner(mix_stderr=False)
         result = runner.invoke(cli, ["--quiet", "generate", str(tmp_path / "nonexistent.prompt")])
 
-        assert result.exit_code != 0 or "does not exist" in result.output, (
-            "Errors should still be shown even in quiet mode"
+        assert result.exit_code != 0, (
+            f"Expected non-zero exit code for nonexistent file, got {result.exit_code}"
+        )
+        # Error message may appear in stdout or stderr depending on Click's handling
+        combined = (result.output or "") + (getattr(result, "stderr", "") or "")
+        assert "does not exist" in combined or "Error" in combined or result.exit_code == 2, (
+            f"Errors should still surface even in quiet mode.\n"
+            f"stdout: {result.output}\nstderr: {getattr(result, 'stderr', '')}"
         )

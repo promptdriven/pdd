@@ -166,7 +166,7 @@ def mock_construct_paths_fixture(monkeypatch):
 @pytest.fixture
 def mock_pdd_preprocess_fixture(monkeypatch):
     # Default mock returns the input unchanged to allow tests to assert substitution behavior when needed
-    def passthrough(prompt_text, recursive=False, double_curly_brackets=True, exclude_keys=None):
+    def passthrough(prompt_text, recursive=False, double_curly_brackets=True, exclude_keys=None, quiet=False):
         return prompt_text
     mock = MagicMock(side_effect=passthrough)
     monkeypatch.setattr("pdd.code_generator_main.pdd_preprocess", mock)
