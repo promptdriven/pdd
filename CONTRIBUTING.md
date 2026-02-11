@@ -80,6 +80,20 @@ With coverage reporting:
 pytest --cov=pdd
 ```
 
+### Continuous Integration
+Unit tests run automatically on every PR and push to `main` via GitHub Actions. The CI workflow:
+- Runs ~3,000 mock-based unit tests in ~3 minutes using parallel execution (`pytest-xdist`)
+- Excludes tests marked `integration`, `e2e`, or `real` (these require paid API keys)
+- Excludes a small number of tests that require platform-specific tools (e.g. `zsh`) or make unmocked network calls
+
+If CI fails on your PR, check the workflow output for the specific test failures. Most unit tests use mocks and should pass without any API keys configured.
+
+To run the same subset locally:
+```bash
+pip install pytest-timeout
+pytest tests/ -m "not integration and not e2e and not real" --timeout=60
+```
+
 ### Adding/Updating Tests (Strongly Encouraged)
 - Location: put tests in `tests/` using `pytest` style (`test_*.py`).
 - Red/green: commit a failing test first, then the fix that makes it pass.
@@ -150,6 +164,7 @@ Artifacts appear in `dist/`.
 3. Bump the version in `pyproject.toml` (SemVer) when appropriate; reflect changes in `README.md` as needed.
 4. Include tests in `tests/` that demonstrate the issue/feature and verify the behavior.
 5. Aim to include dev‑unit elements (prompt/code/example/tests) when applicable.
-6. Seek two maintainer reviews prior to merge, or request a reviewer to merge if you lack permissions.
+6. **Make sure CI passes (unit tests).** If your change affects modules that have integration/LLM tests, run those locally for the impacted areas before marking your PR ready. You do not need to run the full integration suite -- maintainers will do that before merging.
+7. Seek two maintainer reviews prior to merge, or request a reviewer to merge if you lack permissions.
 
 Thank you for your contributions!
