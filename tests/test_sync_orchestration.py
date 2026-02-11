@@ -4720,3 +4720,102 @@ def test_auto_fix_success_saves_complete_metadata(orchestration_fixture):
     assert result['operations_completed'] == ['generate', 'example', 'crash'], (
         "Expected all three operations to complete"
     )
+
+
+# --- CI auth hang regression tests (GitHub Actions #462) ---
+
+def test_fix_operation_passes_auto_submit_false_when_local(orchestration_fixture, tmp_path):
+    """
+    Regression test for CI auth hang: when local=True, sync_orchestration must
+    pass auto_submit=False to fix_main. Otherwise fix_main triggers the GitHub
+    device code flow which hangs in CI for ~15 minutes.
+    """
+    import subprocess
+
+    # Setup: test file exists so fix operation can proceed
+    test_file = tmp_path / 'tests' / 'test_calculator.py'
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    test_file.write_text('def test_fail(): assert False')
+
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_determine.side_effect = [
+        SyncDecision(operation='fix', reason='Tests failing'),
+        SyncDecision(operation='all_synced', reason='Done'),
+    ]
+
+    # Mock subprocess for the test execution phase
+    mock_result = MagicMock()
+    mock_result.stdout = "FAILED test_calculator.py::test_fail\n1 failed"
+    mock_result.stderr = ""
+    mock_result.returncode = 1
+
+    with patch('pdd.sync_orchestration.subprocess.run', return_value=mock_result), \
+         patch('pdd.sync_orchestration.detect_host_python_executable', return_value='python'), \
+         patch('pdd.get_test_command.get_test_command_for_file', return_value='pytest'):
+        result = sync_orchestration(basename="calculator", language="python", local=True)
+
+    fix_main_mock = orchestration_fixture['fix_main']
+    assert fix_main_mock.called, "fix_main should have been called"
+
+    call_kwargs = fix_main_mock.call_args[1] if fix_main_mock.call_args[1] else {}
+    assert 'auto_submit' in call_kwargs, \
+        "fix_main call must include auto_submit keyword argument"
+    assert call_kwargs['auto_submit'] is False, \
+        "auto_submit must be False when local=True (prevents CI auth hang)"
+
+
+def test_fix_operation_passes_auto_submit_true_when_not_local(orchestration_fixture, tmp_path):
+    """
+    Complementary test: when local=False (default), auto_submit should be True
+    so that successful fixes are uploaded to PDD cloud.
+    """
+    import subprocess
+
+    test_file = tmp_path / 'tests' / 'test_calculator.py'
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    test_file.write_text('def test_fail(): assert False')
+
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_determine.side_effect = [
+        SyncDecision(operation='fix', reason='Tests failing'),
+        SyncDecision(operation='all_synced', reason='Done'),
+    ]
+
+    mock_result = MagicMock()
+    mock_result.stdout = "FAILED test_calculator.py::test_fail\n1 failed"
+    mock_result.stderr = ""
+    mock_result.returncode = 1
+
+    with patch('pdd.sync_orchestration.subprocess.run', return_value=mock_result), \
+         patch('pdd.sync_orchestration.detect_host_python_executable', return_value='python'), \
+         patch('pdd.get_test_command.get_test_command_for_file', return_value='pytest'):
+        result = sync_orchestration(basename="calculator", language="python", local=False)
+
+    fix_main_mock = orchestration_fixture['fix_main']
+    assert fix_main_mock.called, "fix_main should have been called"
+
+    call_kwargs = fix_main_mock.call_args[1] if fix_main_mock.call_args[1] else {}
+    assert 'auto_submit' in call_kwargs, \
+        "fix_main call must include auto_submit keyword argument"
+    assert call_kwargs['auto_submit'] is True, \
+        "auto_submit must be True when local=False (uploads fix to PDD cloud)"
+
+
+def test_fix_main_call_uses_local_flag_for_auto_submit():
+    """
+    Source-level regression test: the fix_main() call in sync_orchestration.py
+    must use 'auto_submit=(not local)' instead of 'auto_submit=True'.
+    """
+    import inspect
+    from pdd import sync_orchestration as sync_mod
+
+    source = inspect.getsource(sync_mod.sync_orchestration)
+
+    # The old buggy pattern that caused the CI hang
+    assert 'auto_submit=True' not in source, \
+        "sync_orchestration must NOT hardcode auto_submit=True in fix_main call " \
+        "(causes CI auth hang when local=True)"
+
+    # The correct pattern
+    assert 'auto_submit=(not local)' in source, \
+        "sync_orchestration must pass auto_submit=(not local) to fix_main"
