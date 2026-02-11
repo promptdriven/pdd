@@ -314,17 +314,19 @@ class DeviceFlow:
                 data = None
                 try:
                     data = response.json()
-                except (ValueError, requests.exceptions.JSONDecodeError):
+                except ValueError:
                     pass
 
                 # Handle error responses in JSON body (may come with 200 or 4xx status)
                 if data and "error" in data:
                     if data["error"] == "authorization_pending":
+                        backoff_429 = 1  # Reset backoff after non-429 response
                         await asyncio.sleep(current_interval)
                         continue
                     elif data["error"] == "slow_down":
                         # Per GitHub spec: "add 5 seconds to the minimum polling interval"
                         # The slow_down response does NOT include an interval field
+                        backoff_429 = 1  # Reset backoff after non-429 response
                         current_interval += 5
                         await asyncio.sleep(current_interval)
                         continue
