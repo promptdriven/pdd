@@ -1338,9 +1338,17 @@ fi
 if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "15" ]; then
   log "15. Testing 'auto-deps' command"
   AUTO_DEPS_CSV="project_dependencies.csv"
+  # When running individually in CI, use a small subset of context files (3 files)
+  # instead of all 128+ context/*.py to avoid 15+ minute LLM processing time
+  if [ "$TARGET_TEST" != "all" ]; then
+    AUTODEPS_CONTEXT_FILES=$(ls "$CONTEXT_PATH"/*.py 2>/dev/null | head -3 | tr '\n' ' ')
+    log "Using reduced context files for isolated run: ${AUTODEPS_CONTEXT_FILES}"
+  else
+    AUTODEPS_CONTEXT_FILES="$CONTEXT_PATH_GLOB"
+  fi
   run_pdd_command auto-deps --output "$AUTO_DEPS_PROMPT" \
                             --csv "$AUTO_DEPS_CSV" \
-                            "$FIXTURES_PATH/$MATH_PROMPT" "$CONTEXT_PATH_GLOB" # Use quotes if glob pattern has spaces or special chars
+                            "$FIXTURES_PATH/$MATH_PROMPT" $AUTODEPS_CONTEXT_FILES
   check_exists "$AUTO_DEPS_PROMPT" "'auto-deps' modified prompt"
   check_exists "$AUTO_DEPS_CSV" "'auto-deps' dependency CSV"
 
@@ -1356,7 +1364,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "15" ]; then
   fi
   run_pdd_command auto-deps --force-scan --output "forced_scan_${AUTO_DEPS_PROMPT}" \
                              --csv "$AUTO_DEPS_CSV" \
-                             "$FIXTURES_PATH/$MATH_PROMPT" "$CONTEXT_PATH_GLOB"
+                             "$FIXTURES_PATH/$MATH_PROMPT" $AUTODEPS_CONTEXT_FILES
   check_exists "forced_scan_${AUTO_DEPS_PROMPT}" "'auto-deps --force-scan' output"
   # Check if CSV timestamp updated (simple check)
   if [ "$AUTO_DEPS_CSV" -ot "forced_scan_${AUTO_DEPS_PROMPT}" ]; then # Check if CSV is older
