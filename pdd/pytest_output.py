@@ -218,7 +218,13 @@ def run_pytest_and_capture_output(test_file: str, extra_files: list[str] | None 
         passed = parse_stdout.count(" PASSED")
         failures = parse_stdout.count(" FAILED") + parse_stdout.count(" ERROR")
         errors = 0  # Will be included in failures for subprocess execution
-        warnings = parse_stdout.lower().count("warning")
+        # Parse warnings from pytest's summary line only (e.g., "=== 2 passed, 1 warning in 0.05s ===")
+        # Avoid counting library warnings (LiteLLM, Pydantic, PDD logs) that appear in stdout
+        import re
+        warning_match = re.search(r"(\d+) warnings?",
+                                   "".join(line for line in parse_stdout.splitlines()
+                                           if re.match(r"^=+.*=+$", line.strip())))
+        warnings = int(warning_match.group(1)) if warning_match else 0
         
         # If return code is 2, it indicates a pytest error
         if return_code == 2:
