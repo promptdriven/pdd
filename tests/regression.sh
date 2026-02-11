@@ -298,6 +298,12 @@ run_pdd_command_base() {
     else
         log_error "Command failed with exit code $status."
         log_timestamped "Command: $full_command_str - Failed with exit code $status."
+        # Print last 30 lines of log file to help debug CI failures
+        if [ -f "$LOG_FILE" ]; then
+            log "--- Last 30 lines of log file ---"
+            tail -30 "$LOG_FILE" | while IFS= read -r line; do log "  $line"; done
+            log "--- End of log file tail ---"
+        fi
         if [ "$exit_on_fail" = "true" ]; then
             exit 1
         fi
@@ -1338,17 +1344,23 @@ fi
 if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "15" ]; then
   log "15. Testing 'auto-deps' command"
   AUTO_DEPS_CSV="project_dependencies.csv"
-  # When running individually in CI, use a small subset of context files (3 files)
-  # instead of all 128+ context/*.py to avoid 15+ minute LLM processing time
+  # auto-deps takes a single glob/directory argument for context files.
+  # When running individually in CI, copy a small subset to a temp dir
+  # to avoid 15+ minute LLM processing time with all 128+ context/*.py files.
   if [ "$TARGET_TEST" != "all" ]; then
-    AUTODEPS_CONTEXT_FILES=$(ls "$CONTEXT_PATH"/*.py 2>/dev/null | head -3 | tr '\n' ' ')
-    log "Using reduced context files for isolated run: ${AUTODEPS_CONTEXT_FILES}"
+    CI_AUTODEPS_CONTEXT="$(pwd)/ci_context_subset"
+    mkdir -p "$CI_AUTODEPS_CONTEXT"
+    ls "$CONTEXT_PATH"/*.py 2>/dev/null | head -3 | while IFS= read -r f; do
+      cp "$f" "$CI_AUTODEPS_CONTEXT/"
+    done
+    AUTODEPS_CONTEXT_ARG="$CI_AUTODEPS_CONTEXT/*.py"
+    log "Using reduced context dir for isolated run: ${AUTODEPS_CONTEXT_ARG}"
   else
-    AUTODEPS_CONTEXT_FILES="$CONTEXT_PATH_GLOB"
+    AUTODEPS_CONTEXT_ARG="$CONTEXT_PATH_GLOB"
   fi
   run_pdd_command auto-deps --output "$AUTO_DEPS_PROMPT" \
                             --csv "$AUTO_DEPS_CSV" \
-                            "$FIXTURES_PATH/$MATH_PROMPT" $AUTODEPS_CONTEXT_FILES
+                            "$FIXTURES_PATH/$MATH_PROMPT" "$AUTODEPS_CONTEXT_ARG"
   check_exists "$AUTO_DEPS_PROMPT" "'auto-deps' modified prompt"
   check_exists "$AUTO_DEPS_CSV" "'auto-deps' dependency CSV"
 
@@ -1364,7 +1376,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "15" ]; then
   fi
   run_pdd_command auto-deps --force-scan --output "forced_scan_${AUTO_DEPS_PROMPT}" \
                              --csv "$AUTO_DEPS_CSV" \
-                             "$FIXTURES_PATH/$MATH_PROMPT" $AUTODEPS_CONTEXT_FILES
+                             "$FIXTURES_PATH/$MATH_PROMPT" "$AUTODEPS_CONTEXT_ARG"
   check_exists "forced_scan_${AUTO_DEPS_PROMPT}" "'auto-deps --force-scan' output"
   # Check if CSV timestamp updated (simple check)
   if [ "$AUTO_DEPS_CSV" -ot "forced_scan_${AUTO_DEPS_PROMPT}" ]; then # Check if CSV is older

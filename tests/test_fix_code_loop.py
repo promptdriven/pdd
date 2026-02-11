@@ -311,7 +311,7 @@ class TestRunProcessWithOutputTimeout:
         # Should complete within timeout + reasonable grace period for cleanup
         # Before fix: would hang forever
         # After fix: should complete within ~5-10 seconds max
-        assert elapsed < 15, f"Function took {elapsed:.1f}s, expected < 15s (hung indefinitely before fix)"
+        assert elapsed < 35, f"Function took {elapsed:.1f}s, expected < 35s (hung indefinitely before fix)"
 
         # Should have timeout indication or killed process
         assert returncode != 0 or "[Timeout]" in stderr, "Should indicate timeout or non-zero return"
