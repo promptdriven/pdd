@@ -68,6 +68,24 @@ __all__ = ['PDD_DIR', 'META_DIR', 'LOCKS_DIR', 'Fingerprint', 'RunReport', 'Sync
            '_check_example_success_history']
 
 
+def _ensure_trailing_slash(path: str) -> str:
+    """Ensure a directory path ends with a trailing slash.
+
+    Parameters
+    ----------
+    path : str
+        The directory path to process.
+
+    Returns
+    -------
+    str
+        The path with a trailing slash if it didn't already have one.
+    """
+    if path and not path.endswith('/'):
+        return path + '/'
+    return path
+
+
 def _safe_basename(basename: str) -> str:
     """Sanitize basename for use in metadata filenames.
 
@@ -96,6 +114,101 @@ def _extract_name_part(basename: str) -> tuple:
         dir_part, name_part = basename.rsplit('/', 1)
         return dir_part + '/', name_part
     return '', basename
+
+
+def _find_architecture_json(start_path: Optional[Path] = None) -> Optional[Path]:
+    """Find architecture.json by searching upward from start_path.
+
+    Searches for architecture.json in the current directory and parent
+    directories, stopping at the filesystem root or when .pddrc is found.
+
+    Args:
+        start_path: Starting path for the search. Defaults to cwd.
+
+    Returns:
+        Path to architecture.json if found, None otherwise.
+    """
+    current = start_path or Path.cwd()
+
+    while current != current.parent:
+        arch_path = current / "architecture.json"
+        if arch_path.exists():
+            return arch_path
+        # Also check if we've reached a project root (contains .pddrc)
+        if (current / ".pddrc").exists():
+            # Check one more time in this directory
+            if arch_path.exists():
+                return arch_path
+            break
+        current = current.parent
+
+    return None
+
+
+def _get_filepath_from_architecture(
+    architecture_path: Path,
+    prompt_filename: str,
+    basename: Optional[str] = None,
+    language: Optional[str] = None
+) -> Optional[str]:
+    """Extract filepath for a prompt from architecture.json.
+
+    Looks up the module in architecture.json that matches the given prompt
+    filename and returns its filepath field if present.
+
+    Args:
+        architecture_path: Path to architecture.json file.
+        prompt_filename: The prompt filename to search for (e.g., "models_findings_Python.prompt").
+        basename: Optional basename for alternative matching (e.g., "models_findings").
+        language: Optional language for alternative matching (e.g., "Python").
+
+    Returns:
+        The filepath string if found, None otherwise.
+
+    Supports both architecture.json formats:
+        - {"modules": [...]} - nested structure
+        - [...] - flat array
+    """
+    try:
+        with open(architecture_path, 'r', encoding='utf-8') as f:
+            arch = json.load(f)
+
+        # Handle both nested and flat structures
+        modules = arch.get("modules", arch) if isinstance(arch, dict) else arch
+
+        if not isinstance(modules, list):
+            return None
+
+        # Try exact filename match first
+        for module in modules:
+            if not isinstance(module, dict):
+                continue
+            if module.get("filename") == prompt_filename:
+                return module.get("filepath")
+
+        # Try case-insensitive filename match
+        prompt_filename_lower = prompt_filename.lower()
+        for module in modules:
+            if not isinstance(module, dict):
+                continue
+            if module.get("filename", "").lower() == prompt_filename_lower:
+                return module.get("filepath")
+
+        # Try basename + language match if provided
+        if basename and language:
+            expected_filename = f"{basename}_{language}.prompt"
+            expected_filename_lower = expected_filename.lower()
+            for module in modules:
+                if not isinstance(module, dict):
+                    continue
+                module_filename = module.get("filename", "")
+                if module_filename.lower() == expected_filename_lower:
+                    return module.get("filepath")
+
+        return None
+
+    except (FileNotFoundError, json.JSONDecodeError, TypeError):
+        return None
 
 
 @dataclass
@@ -438,11 +551,22 @@ def _generate_paths_from_templates(
 
 
 def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts", context_override: Optional[str] = None) -> Dict[str, Path]:
-    """Returns a dictionary mapping file types to their expected Path objects."""
+    """Returns a dictionary mapping file types to their expected Path objects.
+
+    Issue #225: Now checks architecture.json for filepath field before falling
+    back to .pddrc configuration. This allows complex directory structures
+    defined in architecture.json to be respected by sync.
+
+    Priority order for code path resolution:
+    1. architecture.json filepath field (if present)
+    2. .pddrc outputs config (template-based paths)
+    3. .pddrc generate_output_path config
+    4. Default naming conventions
+    """
     import logging
     logger = logging.getLogger(__name__)
     logger.info(f"get_pdd_file_paths called: basename={basename}, language={language}, prompts_dir={prompts_dir}")
-    
+
     try:
         # Use construct_paths to get configuration-aware paths
         prompts_root = _resolve_prompts_root(prompts_dir)
@@ -451,6 +575,71 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         name = basename.split('/')[-1] if '/' in basename else basename
         prompt_filename = f"{name}_{language}.prompt"
         prompt_path = str(prompts_root / prompt_filename)
+
+        # Issue #225: Check architecture.json for filepath FIRST
+        # This takes priority over .pddrc configuration
+        arch_path = _find_architecture_json()
+        arch_filepath = None
+        if arch_path:
+            arch_filepath = _get_filepath_from_architecture(
+                arch_path,
+                prompt_filename,
+                basename=basename,
+                language=language
+            )
+            if arch_filepath:
+                logger.info(f"Found filepath in architecture.json: {arch_filepath}")
+                # Use the filepath from architecture.json
+                extension = get_extension(language)
+
+                # Resolve filepath relative to architecture.json's directory (project root)
+                # This ensures paths work correctly even when sync is run from a subdirectory
+                project_root = arch_path.parent
+                code_path = project_root / arch_filepath
+
+                # Derive example and test paths using basename (not code_path.stem)
+                # Per README naming convention:
+                # Example: <basename>_example.<ext> -> examples/models_findings_example.py
+                # Test: test_<basename>.<ext> -> tests/test_models_findings.py
+
+                # Get configured directories from .pddrc if available
+                pddrc_path = _find_pddrc_file()
+                example_dir = "examples/"
+                test_dir = "tests/"
+                if pddrc_path:
+                    try:
+                        config = _load_pddrc_config(pddrc_path)
+                        context_name = context_override or _detect_context(Path.cwd(), config, None)
+                        context_config = config.get('contexts', {}).get(context_name or '', {})
+                        defaults = context_config.get('defaults', {})
+                        example_dir = defaults.get('example_output_path', 'examples/')
+                        test_dir = defaults.get('test_output_path', 'tests/')
+                        example_dir = _ensure_trailing_slash(example_dir)
+                        test_dir = _ensure_trailing_slash(test_dir)
+                    except ValueError:
+                        pass
+
+                # Example and test paths are also relative to project root
+                example_path = project_root / f"{example_dir}{basename}_example.{extension}"
+                test_path = project_root / f"{test_dir}test_{basename}.{extension}"
+
+                # Find matching test files
+                test_dir_path = test_path.parent
+                test_stem = f"test_{basename}"
+                if test_dir_path.exists():
+                    matching_test_files = sorted(test_dir_path.glob(f"{test_stem}*.{extension}"))
+                else:
+                    matching_test_files = [test_path] if test_path.exists() else []
+
+                result = {
+                    'prompt': Path(prompt_path),
+                    'code': code_path,
+                    'example': example_path,
+                    'test': test_path,
+                    'test_files': matching_test_files or [test_path]
+                }
+                logger.info(f"get_pdd_file_paths returning (from architecture.json): {result}")
+                return result
         pddrc_path = _find_pddrc_file()
         if pddrc_path:
             try:
@@ -532,12 +721,9 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 logger.info(f"Extracted dirs - test: {test_dir}, example: {example_dir}, code: {code_dir}")
 
                 # Ensure directories end with /
-                if test_dir and not test_dir.endswith('/'):
-                    test_dir = test_dir + '/'
-                if example_dir and not example_dir.endswith('/'):
-                    example_dir = example_dir + '/'
-                if code_dir and not code_dir.endswith('/'):
-                    code_dir = code_dir + '/'
+                test_dir = _ensure_trailing_slash(test_dir)
+                example_dir = _ensure_trailing_slash(example_dir)
+                code_dir = _ensure_trailing_slash(code_dir)
 
                 # Extract directory and name parts for subdirectory basename support
                 dir_prefix, name_part = _extract_name_part(basename)
@@ -670,9 +856,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 code_path = f"{generate_output_path}{name_part}.{extension}"
             else:
                 # Old behavior - use path + dir_prefix
-                code_dir = generate_output_path or './'
-                if not code_dir.endswith('/'):
-                    code_dir = code_dir + '/'
+                code_dir = _ensure_trailing_slash(generate_output_path or './')
                 code_path = f"{code_dir}{dir_prefix}{name_part}.{extension}"
         
         # Get configured paths for example and test files using construct_paths
