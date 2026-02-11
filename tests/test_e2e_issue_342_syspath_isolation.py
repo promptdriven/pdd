@@ -105,8 +105,9 @@ def calculate_total(prices: list[float], tax_rate: float = 0.1) -> float:
         # 3. Set up environment
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
-        # Set a dummy API key to allow local execution
-        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key-for-e2e-testing")
+        # Set a dummy API key to allow local execution (only if not already set)
+        if not os.environ.get("OPENAI_API_KEY"):
+            monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key-for-e2e-testing")
 
         # 4. Define output path
         output_path = tmp_path / "tests" / "test_pricing.py"
