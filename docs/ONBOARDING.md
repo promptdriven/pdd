@@ -47,7 +47,7 @@ pdd --version
 ### 3. Clone the GitHub Repository
 
 ```bash
-git clone https://github.com/gltanaka/pdd.git
+git clone https://github.com/promptdriven/pdd.git
 cd pdd
 ```
 
@@ -74,7 +74,7 @@ To enable syntax highlighting for `.prompt` files in your editor, you'll need to
 
 1. **Download the Extension:**
 
-   - Navigate to the [project&#39;s GitHub Releases page](https://github.com/gltanaka/pdd/releases).
+   - Navigate to the [project&#39;s GitHub Releases page](https://github.com/promptdriven/pdd/releases).
    - Download the latest version of the extension, which will be a file named `prompt-*.vsix`.
 2. **Install in your IDE:**
 
@@ -329,11 +329,11 @@ pdd connect
 **Using CLI:**
 ```bash
 # For feature requests
-pdd change https://github.com/gltanaka/pdd/issues/XXX
+pdd change https://github.com/promptdriven/pdd/issues/XXX
 
 # For bug reports
-pdd bug https://github.com/gltanaka/pdd/issues/XXX
-pdd fix https://github.com/gltanaka/pdd/issues/XXX
+pdd bug https://github.com/promptdriven/pdd/issues/XXX
+pdd fix https://github.com/promptdriven/pdd/issues/XXX
 ```
 
 PDD will create an isolated worktree, implement changes, and generate a PR automatically. Review the PR, refine if needed, then request human review.
@@ -455,7 +455,7 @@ Fixes #123
 ## Next Steps
 
 1. **Launch the web interface**: `pdd connect` to explore PDD visually
-2. **Try implementing an issue**: Pick one from [GitHub Issues](https://github.com/gltanaka/pdd/issues)
+2. **Try implementing an issue**: Pick one from [GitHub Issues](https://github.com/promptdriven/pdd/issues)
 3. Join the PDD community on Discord
 4. For manual workflows, see examples in `examples/` directory
 5. Read the [Issue-Driven Development Tutorial](./TUTORIALS.md#issue-driven-development-tutorial)
@@ -959,12 +959,12 @@ If you're still having issues after trying the specific fixes above:
 2. **Clear all caches** (see **"Understanding PDD's File Structure → Cache Files"** above)
 3. **Check documentation:**
 
-   - [README](https://github.com/gltanaka/pdd/blob/main/README.md) - Detailed setup instructions
+   - [README](https://github.com/promptdriven/pdd/blob/main/README.md) - Detailed setup instructions
    - [Whitepaper](./whitepaper.md) - Core concepts and architecture
    - [Prompting Guide](./prompting_guide.md) - How to write effective prompts
 4. **Get help:**
 
-   - [GitHub Issues](https://github.com/gltanaka/pdd/issues) - Search existing issues
+   - [GitHub Issues](https://github.com/promptdriven/pdd/issues) - Search existing issues
    - [Discord Community](https://discord.gg/Q7Ts5Qt3) - Ask questions and get support
 
 ---
