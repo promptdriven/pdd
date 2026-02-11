@@ -43,6 +43,7 @@ class TestQuietFlagE2E:
         with patch("pdd.code_generator_main.local_code_generator_func") as mock_local, \
              patch("pdd.code_generator_main.incremental_code_generator_func") as mock_incr, \
              patch("pdd.code_generator_main.requests") as mock_requests, \
+             patch("pdd.code_generator_main.CloudConfig.get_jwt_token", return_value=None), \
              patch("pdd.core.cli.auto_update"):
             mock_local.return_value = ("def hello(): return 'hello'", 0.01, "mock-model")
             mock_incr.return_value = ("def hello(): return 'hello'", False, 0.01, "mock-model")
