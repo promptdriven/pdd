@@ -1742,3 +1742,51 @@ def test_protect_tests_prevents_unit_test_write(mock_subprocess, mock_fix, mock_
     with open(test, 'r') as f:
         assert f.read() == original_test_content, \
             "Test file should NOT be modified when protect_tests=True"
+
+
+# ============================================================================
+# Bug Fix Tests - Issue #485: Warnings block success gate
+# ============================================================================
+
+@patch("pdd.fix_error_loop.run_pytest_on_file")
+def test_success_gate_true_when_zero_fails_zero_errors_nonzero_warnings(mock_pytest, mock_files):
+    """
+    Issue #485: success should be True when fails=0 and errors=0,
+    regardless of warnings count. Warnings are informational, not failures.
+    """
+    code, test, prompt = mock_files
+    # 0 fails, 0 errors, but 3 warnings (from spurious library output)
+    mock_pytest.return_value = (0, 0, 3, "All tests passed but 3 warnings")
+
+    success, final_test, final_code, attempts, cost, model = fix_error_loop(
+        test, code, prompt, "prompt", "verify.py", 0.5, 0.1, 5, 1.0
+    )
+
+    # BUG: Current code sets success = (fails == 0 and errors == 0 and warnings == 0)
+    # which returns False when warnings > 0, even though all tests pass.
+    assert success is True, (
+        "BUG (Issue #485): success is False when fails=0, errors=0, warnings=3. "
+        "Warnings should not block the success gate."
+    )
+    assert attempts == 0  # Should exit immediately since tests pass
+    assert cost == 0.0
+
+
+@patch("pdd.fix_error_loop.run_pytest_on_file")
+def test_success_gate_false_on_actual_failures(mock_pytest, mock_files):
+    """
+    Issue #485 regression: success should still be False when there are actual failures,
+    even after removing warnings from the success gate.
+    """
+    code, test, prompt = mock_files
+    mock_pytest.return_value = (1, 0, 2, "1 failure, 2 warnings")
+
+    with patch("pdd.fix_error_loop.fix_errors_from_unit_tests") as mock_fix:
+        mock_fix.return_value = (False, False, "", "", "No fix", 0.1, "mock-model")
+
+        success, _, _, attempts, cost, model = fix_error_loop(
+            test, code, prompt, "prompt", "verify.py", 0.5, 0.1, 1, 1.0,
+            agentic_fallback=False
+        )
+
+    assert success is False, "success should be False when there are actual test failures"
