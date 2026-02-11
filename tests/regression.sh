@@ -282,10 +282,15 @@ run_pdd_command_base() {
 
     # Execute the command, redirecting stdout/stderr to log file
     # Temporarily disable set -e so we can capture the exit code and log properly
+    # Use timeout to prevent indefinite hangs (15 min max per command)
     set +e
-    "${cmd_array[@]}" >> "$LOG_FILE" 2>&1
+    timeout 900 "${cmd_array[@]}" >> "$LOG_FILE" 2>&1
     local status=$?
     set -e
+
+    if [ $status -eq 124 ]; then
+        log_error "Command timed out after 900 seconds"
+    fi
 
     if [ $status -eq 0 ]; then
         log "Command completed successfully."
