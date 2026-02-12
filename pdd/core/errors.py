@@ -46,22 +46,20 @@ def handle_error(exception: Exception, command_name: str, quiet: bool):
         }
     )
 
-    if not quiet:
-        console.print(f"[error]Error during '{command_name}' command:[/error]", style="error")
-        if isinstance(exception, FileNotFoundError):
-            console.print(f"  [error]File not found:[/error] {exception}", style="error")
-        elif isinstance(exception, (ValueError, IOError)):
-            console.print(f"  [error]Input/Output Error:[/error] {exception}", style="error")
-        elif isinstance(exception, click.UsageError): # Handle Click usage errors explicitly if needed
-             console.print(f"  [error]Usage Error:[/error] {exception}", style="error")
-             # click.UsageError should typically exit with 2, so we re-raise it
-             raise exception
-        elif isinstance(exception, MarkupError):
-            console.print("  [error]Markup Error:[/error] Invalid Rich markup encountered.", style="error")
-            # Print the error message safely escaped
-            console.print(escape(str(exception)))
-        else:
-            console.print(f"  [error]An unexpected error occurred:[/error] {exception}", style="error")
+    # Errors are always shown, even in quiet mode
+    console.print(f"[error]Error during '{command_name}' command:[/error]", style="error")
+    if isinstance(exception, FileNotFoundError):
+        console.print(f"  [error]File not found:[/error] {exception}", style="error")
+    elif isinstance(exception, (ValueError, IOError)):
+        console.print(f"  [error]Input/Output Error:[/error] {exception}", style="error")
+    elif isinstance(exception, click.UsageError):
+        console.print(f"  [error]Usage Error:[/error] {exception}", style="error")
+        raise exception
+    elif isinstance(exception, MarkupError):
+        console.print("  [error]Markup Error:[/error] Invalid Rich markup encountered.", style="error")
+        console.print(escape(str(exception)))
+    else:
+        console.print(f"  [error]An unexpected error occurred:[/error] {exception}", style="error")
     strict_exit = os.environ.get("PDD_STRICT_EXIT", "").strip().lower() in {"1", "true", "yes", "on"}
     if strict_exit:
         raise SystemExit(1)

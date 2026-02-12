@@ -56,6 +56,29 @@ if not logger.handlers:
     if not litellm_logger.handlers:
         litellm_logger.addHandler(console_handler)
 
+def set_quiet_mode():
+    """Suppress all log output, LiteLLM verbose output, and warnings in quiet mode."""
+    # Set all loggers to CRITICAL to suppress everything below
+    logger.setLevel(logging.CRITICAL)
+    litellm_logger.setLevel(logging.CRITICAL)
+    # Also raise handler levels so propagation doesn't leak through
+    for handler in logger.handlers:
+        handler.setLevel(logging.CRITICAL)
+    for handler in litellm_logger.handlers:
+        handler.setLevel(logging.CRITICAL)
+    # Suppress LiteLLM's own print-based verbose output
+    litellm.set_verbose = False
+    # Suppress the root logger and all its handlers
+    root = logging.getLogger()
+    root.setLevel(logging.CRITICAL)
+    for handler in root.handlers:
+        handler.setLevel(logging.CRITICAL)
+    # Disable the lastResort handler that prints WARNING: lines
+    logging.lastResort = None
+    # Suppress Python warnings (Pydantic serialization warnings, etc.)
+    import warnings
+    warnings.filterwarnings("ignore")
+
 # Function to set up file logging if needed
 def setup_file_logging(log_file_path=None):
     """Configure rotating file handler for logging"""
@@ -398,7 +421,7 @@ def _llm_invoke_cloud(
                 try:
                     result = _validate_with_pydantic(result, output_pydantic)
                 except (ValidationError, ValueError) as e:
-                    logger.warning(f"Cloud response validation failed: {e}")
+                    logger.debug(f"Cloud response validation failed: {e}")
                     # Return raw result if validation fails
                     pass
 
@@ -606,19 +629,19 @@ else:
 # Selection order
 if user_model_csv_path.is_file():
     LLM_MODEL_CSV_PATH = user_model_csv_path
-    logger.info(f"Using user-specific LLM model CSV: {LLM_MODEL_CSV_PATH}")
+    logger.debug(f"Using user-specific LLM model CSV: {LLM_MODEL_CSV_PATH}")
 elif PROJECT_ROOT_FROM_ENV and project_csv_from_env.is_file():
     # Honor an explicitly-set PDD_PATH pointing to a real project directory
     LLM_MODEL_CSV_PATH = project_csv_from_env
-    logger.info(f"Using project-specific LLM model CSV (from PDD_PATH): {LLM_MODEL_CSV_PATH}")
+    logger.debug(f"Using project-specific LLM model CSV (from PDD_PATH): {LLM_MODEL_CSV_PATH}")
 elif project_csv_from_cwd.is_file():
     # Otherwise, prefer the project relative to the current working directory
     LLM_MODEL_CSV_PATH = project_csv_from_cwd
-    logger.info(f"Using project-specific LLM model CSV (from CWD): {LLM_MODEL_CSV_PATH}")
+    logger.debug(f"Using project-specific LLM model CSV (from CWD): {LLM_MODEL_CSV_PATH}")
 else:
     # Neither exists, we'll use a marker path that _load_model_data will handle
     LLM_MODEL_CSV_PATH = None
-    logger.info("No local LLM model CSV found, will use package default")
+    logger.debug("No local LLM model CSV found, will use package default")
 # ---------------------------------
 
 # Load environment variables from .env file
@@ -669,7 +692,7 @@ if GCS_BUCKET_NAME and GCS_HMAC_ACCESS_KEY_ID and GCS_HMAC_SECRET_ACCESS_KEY:
             s3_endpoint_url=GCS_ENDPOINT_URL,
         )
         litellm.cache = configured_cache
-        logger.info(f"LiteLLM cache configured for GCS bucket (S3 compatible): {GCS_BUCKET_NAME}")
+        logger.debug(f"LiteLLM cache configured for GCS bucket (S3 compatible): {GCS_BUCKET_NAME}")
         cache_configured = True
 
     except Exception as e:
@@ -695,7 +718,7 @@ if GCS_BUCKET_NAME and GCS_HMAC_ACCESS_KEY_ID and GCS_HMAC_SECRET_ACCESS_KEY:
 
 # Check if caching is disabled via environment variable
 if os.getenv("LITELLM_CACHE_DISABLE") == "1":
-    logger.info("LiteLLM caching disabled via LITELLM_CACHE_DISABLE=1")
+    logger.debug("LiteLLM caching disabled via LITELLM_CACHE_DISABLE=1")
     litellm.cache = None
     cache_configured = True
 
@@ -705,7 +728,7 @@ if not cache_configured:
         sqlite_cache_path = PROJECT_ROOT / "litellm_cache.sqlite"
         configured_cache = Cache(type="disk", disk_cache_dir=str(sqlite_cache_path))
         litellm.cache = configured_cache
-        logger.info(f"LiteLLM disk cache configured at {sqlite_cache_path}")
+        logger.debug(f"LiteLLM disk cache configured at {sqlite_cache_path}")
         cache_configured = True
     except Exception as e2:
         warnings.warn(f"Failed to configure LiteLLM disk cache: {e2}. Caching is disabled.")
@@ -1746,16 +1769,20 @@ def llm_invoke(
             )
         except CloudFallbackError as e:
             # Notify user and fall back to local execution
-            console.print(f"[yellow]Cloud execution failed ({e}), falling back to local execution...[/yellow]")
-            logger.warning(f"Cloud fallback: {e}")
+            _quiet = os.environ.get("PDD_QUIET", "") == "1"
+            if not _quiet:
+                console.print(f"[yellow]Cloud execution failed ({e}), falling back to local execution...[/yellow]")
+            logger.debug(f"Cloud fallback: {e}")
             # Continue to local execution below
         except InsufficientCreditsError:
             # Re-raise credit errors - user needs to know
             raise
         except CloudInvocationError as e:
             # Non-recoverable cloud error - notify and fall back
-            console.print(f"[yellow]Cloud error ({e}), falling back to local execution...[/yellow]")
-            logger.warning(f"Cloud invocation error: {e}")
+            _quiet = os.environ.get("PDD_QUIET", "") == "1"
+            if not _quiet:
+                console.print(f"[yellow]Cloud error ({e}), falling back to local execution...[/yellow]")
+            logger.debug(f"Cloud invocation error: {e}")
             # Continue to local execution below
 
     # --- 1. Load Environment & Validate Inputs ---

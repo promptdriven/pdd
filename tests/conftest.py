@@ -36,6 +36,37 @@ def preserve_pdd_path():
 
 
 @pytest.fixture(autouse=True)
+def _reset_quiet_mode():
+    """Ensure quiet mode doesn't leak between tests."""
+    import logging
+    pdd_logger = logging.getLogger("pdd.llm_invoke")
+    root_logger = logging.getLogger()
+    # Capture state before test
+    pdd_level = pdd_logger.level
+    pdd_handler_levels = [(h, h.level) for h in pdd_logger.handlers]
+    root_level = root_logger.level
+    root_handler_levels = [(h, h.level) for h in root_logger.handlers]
+    old_last_resort = logging.lastResort
+    old_pdd_quiet = os.environ.get("PDD_QUIET")
+    yield
+    from pdd import quiet
+    quiet.disable_quiet_mode()
+    # Restore env var
+    if old_pdd_quiet is None:
+        os.environ.pop("PDD_QUIET", None)
+    else:
+        os.environ["PDD_QUIET"] = old_pdd_quiet
+    # Restore logger levels and handler levels
+    pdd_logger.setLevel(pdd_level)
+    for handler, level in pdd_handler_levels:
+        handler.setLevel(level)
+    root_logger.setLevel(root_level)
+    for handler, level in root_handler_levels:
+        handler.setLevel(level)
+    logging.lastResort = old_last_resort
+
+
+@pytest.fixture(autouse=True)
 def restore_standard_streams():
     """Ensure sys.stdout/stderr are restored after each test to prevent pollution.
 

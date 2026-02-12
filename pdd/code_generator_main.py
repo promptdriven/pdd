@@ -733,13 +733,13 @@ def code_generator_main(
                     git_add_files(files_to_stage_for_rollback, verbose=verbose)
             
             # Preprocess both prompts: expand includes, substitute vars, then double
-            orig_proc = pdd_preprocess(original_prompt_content_for_incremental, recursive=True, double_curly_brackets=False)
+            orig_proc = pdd_preprocess(original_prompt_content_for_incremental, recursive=True, double_curly_brackets=False, quiet=quiet)
             orig_proc = _expand_vars(orig_proc, env_vars)
-            orig_proc = pdd_preprocess(orig_proc, recursive=False, double_curly_brackets=True)
+            orig_proc = pdd_preprocess(orig_proc, recursive=False, double_curly_brackets=True, quiet=quiet)
 
-            new_proc = pdd_preprocess(prompt_content, recursive=True, double_curly_brackets=False)
+            new_proc = pdd_preprocess(prompt_content, recursive=True, double_curly_brackets=False, quiet=quiet)
             new_proc = _expand_vars(new_proc, env_vars)
-            new_proc = pdd_preprocess(new_proc, recursive=False, double_curly_brackets=True)
+            new_proc = pdd_preprocess(new_proc, recursive=False, double_curly_brackets=True, quiet=quiet)
 
             generated_code_content, was_incremental_operation, total_cost, model_name = incremental_code_generator_func(
                 original_prompt=orig_proc,
@@ -770,9 +770,9 @@ def code_generator_main(
             if not current_execution_is_local:
                 if verbose: console.print("Attempting cloud code generation...")
                 # Expand includes, substitute vars, then double
-                processed_prompt_for_cloud = pdd_preprocess(prompt_content, recursive=True, double_curly_brackets=False, exclude_keys=[])
+                processed_prompt_for_cloud = pdd_preprocess(prompt_content, recursive=True, double_curly_brackets=False, exclude_keys=[], quiet=quiet)
                 processed_prompt_for_cloud = _expand_vars(processed_prompt_for_cloud, env_vars)
-                processed_prompt_for_cloud = pdd_preprocess(processed_prompt_for_cloud, recursive=False, double_curly_brackets=True, exclude_keys=[])
+                processed_prompt_for_cloud = pdd_preprocess(processed_prompt_for_cloud, recursive=False, double_curly_brackets=True, exclude_keys=[], quiet=quiet)
                 if verbose: console.print(Panel(Text(processed_prompt_for_cloud, overflow="fold"), title="[cyan]Preprocessed Prompt for Cloud[/cyan]", expand=False))
 
                 # Extract and display pinned example ID if present in prompt
@@ -788,7 +788,8 @@ def code_generator_main(
                     if cloud_only:
                         console.print("[red]Cloud authentication failed.[/red]")
                         raise click.UsageError("Cloud authentication failed")
-                    console.print("[yellow]Cloud authentication failed. Falling back to local execution.[/yellow]")
+                    if not quiet:
+                        console.print("[yellow]Cloud authentication failed. Falling back to local execution.[/yellow]")
                     current_execution_is_local = True
 
                 if jwt_token and not current_execution_is_local:
@@ -828,7 +829,8 @@ def code_generator_main(
                             if cloud_only:
                                 console.print("[red]Cloud execution returned no code.[/red]")
                                 raise click.UsageError("Cloud execution returned no code")
-                            console.print("[yellow]Cloud execution returned no code. Falling back to local.[/yellow]")
+                            if not quiet:
+                                console.print("[yellow]Cloud execution returned no code. Falling back to local.[/yellow]")
                             current_execution_is_local = True
                         elif verbose:
                              # Display example info if available
@@ -843,7 +845,8 @@ def code_generator_main(
                         if cloud_only:
                             console.print(f"[red]Cloud execution timed out ({get_cloud_timeout()}s).[/red]")
                             raise click.UsageError("Cloud execution timed out")
-                        console.print(f"[yellow]Cloud execution timed out ({get_cloud_timeout()}s). Falling back to local.[/yellow]")
+                        if not quiet:
+                            console.print(f"[yellow]Cloud execution timed out ({get_cloud_timeout()}s). Falling back to local.[/yellow]")
                         current_execution_is_local = True
                     except requests.exceptions.HTTPError as e:
                         status_code = e.response.status_code if e.response else 0
@@ -873,27 +876,30 @@ def code_generator_main(
                             if cloud_only:
                                 console.print(f"[red]Cloud HTTP error ({status_code}): {err_content}[/red]")
                                 raise click.UsageError(f"Cloud HTTP error ({status_code}): {err_content}")
-                            console.print(f"[yellow]Cloud HTTP error ({status_code}): {err_content}. Falling back to local.[/yellow]")
+                            if not quiet:
+                                console.print(f"[yellow]Cloud HTTP error ({status_code}): {err_content}. Falling back to local.[/yellow]")
                             current_execution_is_local = True
                     except requests.exceptions.RequestException as e:
                         if cloud_only:
                             console.print(f"[red]Cloud network error: {e}[/red]")
                             raise click.UsageError(f"Cloud network error: {e}")
-                        console.print(f"[yellow]Cloud network error: {e}. Falling back to local.[/yellow]")
+                        if not quiet:
+                            console.print(f"[yellow]Cloud network error: {e}. Falling back to local.[/yellow]")
                         current_execution_is_local = True
                     except json.JSONDecodeError:
                         if cloud_only:
                             console.print("[red]Cloud returned invalid JSON.[/red]")
                             raise click.UsageError("Cloud returned invalid JSON")
-                        console.print("[yellow]Cloud returned invalid JSON. Falling back to local.[/yellow]")
+                        if not quiet:
+                            console.print("[yellow]Cloud returned invalid JSON. Falling back to local.[/yellow]")
                         current_execution_is_local = True
             
             if current_execution_is_local:
                 if verbose: console.print("Executing code generator locally...")
                 # Expand includes, substitute vars, then double; pass to local generator with preprocess_prompt=False
-                local_prompt = pdd_preprocess(prompt_content, recursive=True, double_curly_brackets=False, exclude_keys=[])
+                local_prompt = pdd_preprocess(prompt_content, recursive=True, double_curly_brackets=False, exclude_keys=[], quiet=quiet)
                 local_prompt = _expand_vars(local_prompt, env_vars)
-                local_prompt = pdd_preprocess(local_prompt, recursive=False, double_curly_brackets=True, exclude_keys=[])
+                local_prompt = pdd_preprocess(local_prompt, recursive=False, double_curly_brackets=True, exclude_keys=[], quiet=quiet)
                 # Language already resolved (front matter overrides detection if present)
                 gen_language = language
                 
@@ -1131,7 +1137,7 @@ def code_generator_main(
 
                 p_output.write_text(final_content, encoding="utf-8")
                 if verbose or not quiet:
-                    console.print(f"Generated code saved to: [green]{p_output.resolve()}[/green]")
+                    click.echo(f"Generated code saved to: {p_output.resolve()}")
                 # Safety net: ensure architecture HTML is generated post-write if applicable
                 try:
                     # Prefer resolved script if available; else default for architecture outputs

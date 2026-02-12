@@ -359,6 +359,12 @@ def cli(
     # Suppress verbose if quiet is enabled
     if quiet:
         ctx.obj["verbose"] = False
+        os.environ["PDD_QUIET"] = "1"
+        from ..llm_invoke import set_quiet_mode
+        set_quiet_mode()
+        # Monkey-patch Rich/Click output to suppress non-error output globally
+        from ..quiet import enable_quiet_mode
+        enable_quiet_mode()
 
     # Warn users who have not completed interactive setup unless they are running it now
     if _should_show_onboarding_reminder(ctx):

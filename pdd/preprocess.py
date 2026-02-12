@@ -110,7 +110,11 @@ def _scan_risky_placeholders(text: str) -> Tuple[List[Tuple[int, str]], List[Tup
         pass
     return single_brace, template_brace
 
-def preprocess(prompt: str, recursive: bool = False, double_curly_brackets: bool = True, exclude_keys: Optional[List[str]] = None) -> str:
+def _is_quiet(quiet: bool) -> bool:
+    """Check if quiet mode is active via parameter or environment."""
+    return quiet or os.environ.get("PDD_QUIET", "") == "1"
+
+def preprocess(prompt: str, recursive: bool = False, double_curly_brackets: bool = True, exclude_keys: Optional[List[str]] = None, quiet: bool = False) -> str:
     try:
         if not prompt:
             console.print("[bold red]Error:[/bold red] Empty prompt provided")
@@ -118,13 +122,14 @@ def preprocess(prompt: str, recursive: bool = False, double_curly_brackets: bool
         _DEBUG_EVENTS.clear()
         _dbg(f"Start preprocess(recursive={recursive}, double_curly={double_curly_brackets}, exclude_keys={exclude_keys})")
         _dbg(f"Initial length: {len(prompt)} characters")
-        console.print(Panel("Starting prompt preprocessing", style="bold blue"))
+        if not _is_quiet(quiet):
+            console.print(Panel("Starting prompt preprocessing", style="bold blue"))
         prompt = process_backtick_includes(prompt, recursive)
         _dbg("After backtick includes processed")
         prompt = process_xml_tags(prompt, recursive)
         _dbg("After XML-like tags processed")
         if double_curly_brackets:
-            prompt = double_curly(prompt, exclude_keys)
+            prompt = double_curly(prompt, exclude_keys, quiet=quiet)
             _dbg("After double_curly execution")
         # Scan for risky placeholders remaining outside code fences
         singles, templates = _scan_risky_placeholders(prompt)
@@ -137,7 +142,8 @@ def preprocess(prompt: str, recursive: bool = False, double_curly_brackets: bool
             for ln, frag in templates[:5]:
                 _dbg(f"  line {ln}: {frag}")
         # Don't trim whitespace that might be significant for the tests
-        console.print(Panel("Preprocessing complete", style="bold green"))
+        if not _is_quiet(quiet):
+            console.print(Panel("Preprocessing complete", style="bold green"))
         _dbg(f"Final length: {len(prompt)} characters")
         _write_debug_report()
         return prompt
@@ -408,11 +414,12 @@ def process_include_many_tags(text: str, recursive: bool) -> str:
         return replace_many(match)
     return re.sub(pattern, replace_many_with_spans, text, flags=re.DOTALL)
 
-def double_curly(text: str, exclude_keys: Optional[List[str]] = None) -> str:
+def double_curly(text: str, exclude_keys: Optional[List[str]] = None, quiet: bool = False) -> str:
     if exclude_keys is None:
         exclude_keys = []
     
-    console.print("Doubling curly brackets...")
+    if not _is_quiet(quiet):
+        console.print("Doubling curly brackets...")
     _dbg("double_curly invoked")
     
     # Protect ${IDENT} placeholders so we can safely double braces, then restore
