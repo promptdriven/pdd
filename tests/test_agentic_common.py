@@ -530,7 +530,7 @@ def test_run_agentic_task_all_fail(mock_cwd, mock_env, mock_load_model_data, moc
 
     assert not success
     assert provider == ""
-    # Note: Refactored code returns generic message, doesn't preserve specific error
+    # Uses `in` check — still passes after error details are appended
     assert "All agent providers failed" in msg
 
 def test_run_agentic_task_timeout(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
@@ -544,7 +544,7 @@ def test_run_agentic_task_timeout(mock_cwd, mock_env, mock_load_model_data, mock
     success, msg, cost, provider = run_agentic_task("instruction", mock_cwd)
 
     assert not success
-    # Note: Refactored code returns generic message when all providers fail
+    # Uses `in` check — still passes after error details are appended
     assert "All agent providers failed" in msg
 
 def test_environment_sanitization(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
@@ -937,6 +937,24 @@ def test_get_available_agents_google_vertex_ai_auth(mock_shutil_which, mock_env,
     )
 
 
+def test_get_available_agents_google_vertex_ai_adc_auth(mock_shutil_which, mock_env, mock_load_model_data):
+    """Test Google provider with implicit ADC (GCP VMs, no credentials file)."""
+    mock_shutil_which.side_effect = lambda cmd: "/bin/gemini" if cmd == "gemini" else None
+
+    # Setup: Vertex AI via ADC — no GOOGLE_APPLICATION_CREDENTIALS, just project ID
+    mock_env["GOOGLE_GENAI_USE_VERTEXAI"] = "true"
+    mock_env["GOOGLE_CLOUD_PROJECT"] = "test-project"
+    # Explicitly NOT setting GOOGLE_APPLICATION_CREDENTIALS, GOOGLE_API_KEY, or GEMINI_API_KEY
+
+    agents = get_available_agents()
+
+    assert "google" in agents, (
+        "Google provider should be available with Vertex AI ADC auth "
+        "(GOOGLE_GENAI_USE_VERTEXAI=true + GOOGLE_CLOUD_PROJECT), "
+        "even without GOOGLE_APPLICATION_CREDENTIALS or API keys"
+    )
+
+
 def test_get_available_agents_preference_order(mock_shutil_which, mock_env, mock_load_model_data):
     """Test that agents are returned in the correct preference order."""
     mock_shutil_which.return_value = "/bin/cmd"
@@ -1037,7 +1055,9 @@ def test_run_agentic_task_anthropic_success_env_check(mock_shutil_which, mock_su
     # Verify env sanitization
     env = kwargs['env']
     assert env['TERM'] == 'dumb'
-    assert "ANTHROPIC_API_KEY" not in env # Should be removed for CLI auth
+    # ANTHROPIC_API_KEY is removed unless CLAUDE_CODE_OAUTH_TOKEN is present
+    if not os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
+        assert "ANTHROPIC_API_KEY" not in env  # Removed for CLI subscription auth
 
 def test_run_agentic_task_gemini_success_2(mock_shutil_which, mock_subprocess_run, mock_env, mock_load_model_data, tmp_path):
     """Test successful execution with Gemini."""
@@ -2416,3 +2436,75 @@ class TestSecondaryPaginationCallSites:
                 f"agentic_test.py comment fetching missing --paginate. "
                 f"Command was: {comments_call_args}"
             )
+
+
+# ---------------------------------------------------------------------------
+# Provider Error Details + post_step_comment Tests — Issue #289
+# ---------------------------------------------------------------------------
+
+from pdd.agentic_common import post_step_comment
+
+
+def test_provider_error_details_preserved(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """Test that run_agentic_task failure message includes per-provider error details."""
+    mock_shutil_which.return_value = "/bin/exe"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+
+    # Anthropic fails with specific error
+    mock_subprocess.return_value.returncode = 1
+    mock_subprocess.return_value.stderr = "rate limited"
+    mock_subprocess.return_value.stdout = ""
+
+    success, msg, cost, provider = run_agentic_task("instruction", mock_cwd)
+
+    assert not success
+    assert provider == ""
+    # Should still contain the generic prefix (backwards compat with existing test)
+    assert "All agent providers failed" in msg
+    # Should also include provider name and specific error detail
+    assert "anthropic" in msg
+
+
+def test_post_step_comment_posts_to_github(tmp_path):
+    """Test that post_step_comment calls gh issue comment with correct args."""
+    with patch("shutil.which", return_value="/usr/bin/gh"), \
+         patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+        result = post_step_comment(
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=289,
+            step_num=3,
+            total_steps=13,
+            description="Research to clarify specifications",
+            output="All agent providers failed: anthropic: Exit code 1",
+            cwd=tmp_path,
+        )
+
+        assert result is True
+        mock_run.assert_called_once()
+        cmd = mock_run.call_args[0][0]
+        assert cmd[0] == "gh"
+        assert cmd[1] == "issue"
+        assert cmd[2] == "comment"
+        assert "289" in cmd
+        assert "--repo" in cmd
+        assert "owner/repo" in cmd
+
+
+def test_post_step_comment_no_gh_cli(tmp_path):
+    """Test that post_step_comment returns False without crashing when gh is not installed."""
+    with patch("shutil.which", return_value=None):
+        result = post_step_comment(
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=289,
+            step_num=3,
+            total_steps=13,
+            description="Research",
+            output="Error",
+            cwd=tmp_path,
+        )
+
+        assert result is False

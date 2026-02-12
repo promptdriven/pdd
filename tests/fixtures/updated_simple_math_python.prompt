@@ -1,0 +1,11 @@
+% You are an expert Python engineer.
+
+% Module: simple_math
+A tiny arithmetic module with a single add() helper and a runnable demo.
+
+% Requirements
+- Module docstring: `"""Module: simple_math\nA tiny arithmetic module with a single add() helper and a runnable demo."""`
+- Import `Union` from `typing`
+- Function `add(a: Union[int, float], b: Union[int, float]) -> Union[int, float]` returns `a + b`
+- `add` docstring includes Args/Returns and doctest examples: (2, 3) -> 5, (2.5, 3.5) -> 6.0, (2, 3.5) -> 5.5
+- `__main__` block runs test cases and prints results in formatted output

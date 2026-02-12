@@ -523,11 +523,24 @@ endif
 CLOUD_BATCH_DIR := ci/cloud-batch
 GCP_PROJECT_ID ?= prompt-driven-development-stg
 GCP_REGION ?= us-central1
-GCS_BUCKET ?= pdd-ci-results
+GCS_BUCKET ?= pdd-stg-ci-results
 AR_IMAGE := $(GCP_REGION)-docker.pkg.dev/$(GCP_PROJECT_ID)/pdd-ci/pdd-test:latest
 
-# Build + push + run all tests on Cloud Batch
-cloud-test: cloud-test-build cloud-test-push cloud-test-quick
+# Files baked into the Docker image — changes to these require a rebuild
+CLOUD_IMAGE_DEPS := requirements.txt pyproject.toml $(CLOUD_BATCH_DIR)/entrypoint.sh $(CLOUD_BATCH_DIR)/Dockerfile
+CLOUD_IMAGE_HASH_FILE := .cloud-image-hash
+
+# Smart run: auto-detects whether image rebuild is needed
+cloud-test:
+	@CURRENT_HASH=$$(cat $(CLOUD_IMAGE_DEPS) | shasum -a 256 | cut -d' ' -f1); \
+	STORED_HASH=$$(cat $(CLOUD_IMAGE_HASH_FILE) 2>/dev/null || echo "none"); \
+	if [ "$$CURRENT_HASH" != "$$STORED_HASH" ]; then \
+		echo "Image deps changed — rebuilding Docker image"; \
+		$(MAKE) cloud-test-build && $(MAKE) cloud-test-push; \
+	else \
+		echo "Image deps unchanged — skipping rebuild"; \
+	fi
+	@$(MAKE) cloud-test-quick
 
 # Upload source and run tests (skip image rebuild — typical workflow)
 cloud-test-quick:
@@ -545,6 +558,7 @@ cloud-test-push:
 	@echo "Pushing image to Artifact Registry"
 	@docker tag pdd-test $(AR_IMAGE)
 	@docker push $(AR_IMAGE)
+	@cat $(CLOUD_IMAGE_DEPS) | shasum -a 256 | cut -d' ' -f1 > $(CLOUD_IMAGE_HASH_FILE)
 
 # One-time GCP infrastructure setup
 cloud-test-setup:
