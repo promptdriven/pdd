@@ -12,6 +12,16 @@ TEMPERATURE=${TEMPERATURE:-0.0} # Default temperature
 TEST_LOCAL=${TEST_LOCAL:-false} # Default to cloud execution
 CLEANUP_ON_EXIT=false # Set to false to keep files for debugging
 
+# macOS compatibility: 'timeout' is GNU coreutils, not available by default
+if ! command -v timeout &>/dev/null; then
+    if command -v gtimeout &>/dev/null; then
+        timeout() { gtimeout "$@"; }
+    else
+        # Fallback: skip timeout, run command directly (drop the duration arg)
+        timeout() { shift; "$@"; }
+    fi
+fi
+
 # --- Helper Functions ---
 
 log() {
