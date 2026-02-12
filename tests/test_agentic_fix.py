@@ -131,10 +131,12 @@ def _mk_files(tmp_path: Path):
 
 @pytest.mark.parametrize("provider,env_key,cli", AGENTS)
 def test_run_agentic_fix_real_call_when_available(provider, env_key, cli, tmp_path, monkeypatch):
-    # Only run if API key (or Gemini alias for Google) + CLI are present
+    # Only run if API key (or Gemini alias for Google, or OAuth for Anthropic) + CLI are present
     detected_key = os.getenv(env_key)
     if provider == "google" and not detected_key:
         detected_key = os.getenv("GEMINI_API_KEY")
+    if provider == "anthropic" and not detected_key:
+        detected_key = os.getenv("CLAUDE_CODE_OAUTH_TOKEN")
 
     if not detected_key or not _has_cli(cli):
         pytest.skip(f"{provider} not available (missing API key and/or '{cli}' CLI).")

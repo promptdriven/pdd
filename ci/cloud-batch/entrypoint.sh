@@ -86,10 +86,10 @@ else:
     fi
 fi
 
-# ── Claude Code OAuth → set ANTHROPIC_API_KEY for test skip gates ─────
-if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
-    export ANTHROPIC_API_KEY="claude-code-oauth"
-fi
+# ── Claude Code OAuth ──────────────────────────────────────────────────
+# CLAUDE_CODE_OAUTH_TOKEN is injected by Cloud Batch secretVariables.
+# Do NOT set a dummy ANTHROPIC_API_KEY here — it causes LiteLLM auth
+# failures when non-agentic tests try to use it for direct API calls.
 
 # ── Dispatch by task index ────────────────────────────────────────────────
 START_TIME=$(date +%s)
