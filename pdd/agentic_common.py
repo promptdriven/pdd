@@ -316,8 +316,11 @@ def get_available_agents() -> List[str]:
     has_gemini_cli = _find_cli_binary("gemini") is not None
     has_google_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
     has_vertex_auth = (
-        os.environ.get("GOOGLE_APPLICATION_CREDENTIALS") and
         os.environ.get("GOOGLE_GENAI_USE_VERTEXAI") == "true"
+        and (
+            os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+            or os.environ.get("GOOGLE_CLOUD_PROJECT")  # ADC on GCP VMs
+        )
     )
 
     if has_gemini_cli and (has_google_key or has_vertex_auth):

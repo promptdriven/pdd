@@ -25,6 +25,17 @@ echo "=== Uploading source tarball ==="
 SOURCE_GCS="gs://${BUCKET}/${JOB_RUN_ID}/source/pdd-source.tar.gz"
 # Only include directories needed for tests (skip demos/, experiments/, examples/ etc.)
 git archive HEAD -- pdd/ tests/ data/ prompts/ context/ docs/ Makefile pyproject.toml requirements.txt .pdd/ .pddrc pdd-local.sh ci/ scripts/ | gzip > /tmp/pdd-source.tar.gz
+
+# Include pdd_cloud .pddrc if available (for TestActualPddrcConfiguration tests)
+PARENT_PDDRC="${REPO_ROOT}/../.pddrc"
+if [ -f "${PARENT_PDDRC}" ]; then
+    gunzip /tmp/pdd-source.tar.gz
+    cp "${PARENT_PDDRC}" /tmp/.pddrc_pddcloud
+    tar -C /tmp -rf /tmp/pdd-source.tar .pddrc_pddcloud
+    gzip /tmp/pdd-source.tar
+    rm /tmp/.pddrc_pddcloud
+fi
+
 gsutil -q cp /tmp/pdd-source.tar.gz "${SOURCE_GCS}"
 rm /tmp/pdd-source.tar.gz
 echo "Uploaded to ${SOURCE_GCS}"

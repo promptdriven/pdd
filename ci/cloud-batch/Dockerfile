@@ -9,7 +9,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fish \
     tcsh \
     nodejs \
+    npm \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Gemini CLI and Codex CLI for agentic fix tests
+RUN npm install -g @google/gemini-cli @openai/codex
 
 # Install Claude Code CLI (standalone binary, no npm required)
 # Installer puts binary at ~/.local/bin/claude

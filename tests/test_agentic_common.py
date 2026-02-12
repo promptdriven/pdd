@@ -937,6 +937,24 @@ def test_get_available_agents_google_vertex_ai_auth(mock_shutil_which, mock_env,
     )
 
 
+def test_get_available_agents_google_vertex_ai_adc_auth(mock_shutil_which, mock_env, mock_load_model_data):
+    """Test Google provider with implicit ADC (GCP VMs, no credentials file)."""
+    mock_shutil_which.side_effect = lambda cmd: "/bin/gemini" if cmd == "gemini" else None
+
+    # Setup: Vertex AI via ADC — no GOOGLE_APPLICATION_CREDENTIALS, just project ID
+    mock_env["GOOGLE_GENAI_USE_VERTEXAI"] = "true"
+    mock_env["GOOGLE_CLOUD_PROJECT"] = "test-project"
+    # Explicitly NOT setting GOOGLE_APPLICATION_CREDENTIALS, GOOGLE_API_KEY, or GEMINI_API_KEY
+
+    agents = get_available_agents()
+
+    assert "google" in agents, (
+        "Google provider should be available with Vertex AI ADC auth "
+        "(GOOGLE_GENAI_USE_VERTEXAI=true + GOOGLE_CLOUD_PROJECT), "
+        "even without GOOGLE_APPLICATION_CREDENTIALS or API keys"
+    )
+
+
 def test_get_available_agents_preference_order(mock_shutil_which, mock_env, mock_load_model_data):
     """Test that agents are returned in the correct preference order."""
     mock_shutil_which.return_value = "/bin/cmd"

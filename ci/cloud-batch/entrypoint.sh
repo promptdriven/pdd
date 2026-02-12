@@ -50,6 +50,9 @@ pip install -e ".[dev]" --no-deps --quiet 2>/dev/null || pip install -e . --no-d
 # ── Vertex AI auth via ADC (service account attached to VM) ───────────────
 export VERTEX_PROJECT="${VERTEX_PROJECT:-prompt-driven-development-stg}"
 export VERTEX_CREDENTIALS="/tmp/adc-fallback"
+export GOOGLE_GENAI_USE_VERTEXAI="true"
+export GOOGLE_CLOUD_PROJECT="${VERTEX_PROJECT}"
+export GOOGLE_CLOUD_LOCATION="us-central1"
 
 # ── Set common env vars ──────────────────────────────────────────────────
 export PDD_MODEL_DEFAULT="vertex_ai/gemini-3-flash-preview"
