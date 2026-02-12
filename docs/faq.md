@@ -476,3 +476,9 @@ The AI development landscape has a tool for every project size. PDD's strength i
 -   **Small Projects / Demos**: Tools like **Lovable** or **Bolt** are fantastic for getting quick results with minimal setup.
 -   **Medium-Sized Features / Prototyping**: Interactive, chat-based tools like **Cursor** or the **Claude Code** are excellent for iterative refinement and exploration.
 -   **Production-Scale, Long-Lived Systems**: **PDD** is the best choice when you need deterministic, maintainable, and version-controlled code generation that can scale with your team and project complexity."*
+
+---
+
+**Q: How do I see how much my project's LLM calls have cost?**
+
+A: Run `pdd summary` for a full dashboard showing total cost, timing, success rates, and per-module breakdowns. Use `pdd summary --days 7` to filter to a specific time window, or `pdd summary --json` for machine-readable output. For detailed breakdowns, try `pdd summary by-model` or `pdd summary by-command`.

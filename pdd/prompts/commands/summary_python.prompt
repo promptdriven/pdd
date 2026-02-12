@@ -1,0 +1,44 @@
+<include>context/python_preamble.prompt</include>
+
+<pdd-reason>Aggregates and displays project activity data from sync operation logs as a CLI dashboard.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "command",
+  "command": {
+    "commands": [
+      {"name": "summary", "description": "Project activity dashboard with cost, timing, and success rate aggregation"},
+      {"name": "summary history", "description": "Full operation history with error details"},
+      {"name": "summary by-model", "description": "Cost and time breakdown by LLM model"},
+      {"name": "summary by-command", "description": "Cost and time breakdown by PDD command"},
+      {"name": "summary by-module", "description": "Activity breakdown by prompt module"}
+    ]
+  }
+}
+</pdd-interface>
+
+% Goal
+Implement the `pdd summary` CLI command that aggregates and displays project activity data from `.pdd/meta/*_sync.log` JSONL files.
+
+% Role & Scope
+A Click command group providing a project activity dashboard and breakdown subcommands. Reads existing sync log data (no LLM calls, no state mutations). Outputs rich terminal tables by default, with JSON and CSV export options.
+
+% Requirements
+1. `summary` is a Click group with `invoke_without_command=True`; when invoked alone, display the full dashboard
+2. Dashboard panels: project info (PDD version, context, .pddrc status, prompt count), stat panels (total cost, total time, success rate, active modules), highlights (slowest and costliest operation), by-command table, by-model table, recent operations (last 5)
+3. Data source: glob all `.pdd/meta/*_sync.log` JSONL files; parse each line as JSON; filter out event-type entries (entries without an `operation` field)
+4. `--days N` option on the group: filter entries to last N days via ISO timestamp comparison; default shows all time
+5. `--json` flag: output all aggregated data as JSON to stdout (no rich formatting)
+6. `--csv` flag: output tabular data as CSV to stdout (consistent with `--output-cost` pattern)
+7. `history` subcommand: display full operation log with error details; `-n N` option limits to last N entries
+8. `by-model`, `by-command`, `by-module` subcommands: show cost, runs, success rate, avg time, total time grouped by the respective dimension
+9. Guard against zero-division errors on empty data; handle missing fields via `.get()` with sensible defaults
+10. Use `rich` for tables and panels in terminal output
+
+% Dependencies
+<operation_log>
+<include>context/operation_log_example.py</include>
+</operation_log>
+
+% Deliverables
+- Code: `pdd/commands/summary.py`

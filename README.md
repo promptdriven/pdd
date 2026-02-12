@@ -2469,7 +2469,44 @@ pdd sessions cleanup --all --force
 
 **When to use**: Use `sessions list` to discover available remote sessions, `sessions info` to check session details, and `sessions cleanup` to remove stale or orphaned sessions.
 
-### 20. Firecrawl Web Scraping Cache
+### 20. `pdd summary` - Project Activity Dashboard
+
+View aggregated project activity data from sync operation logs — cost, timing, success rates, and per-module breakdown. No LLM calls; reads existing `.pdd/meta/*_sync.log` files.
+
+```bash
+pdd summary                  # Full dashboard
+pdd summary --days 7         # Filter to last N days
+pdd summary --json           # Machine-readable JSON output
+pdd summary --csv            # CSV export
+pdd summary history          # Full operation history with errors
+pdd summary history -n 10    # Last N operations
+pdd summary by-model         # Cost/time breakdown by LLM model
+pdd summary by-command       # Cost/time breakdown by command
+pdd summary by-module        # Activity breakdown by prompt module
+```
+
+**Default dashboard output includes:**
+- Project info — PDD version, current context, .pddrc status, prompt count
+- Stat panels — total cost, total time, success rate, active modules
+- Highlights — slowest and costliest single operation
+- By Command table — cost, runs, success rate, avg/total time per command
+- By Model table — cost, runs, % of total cost per model
+- Recent Operations — last 5 operations with cost, duration, model, status
+
+**Options:**
+- `--days INT`: Filter operations to the last N days
+- `--json`: Output in JSON format (for automation)
+- `--csv`: Output in CSV format (for spreadsheet analysis)
+
+**Subcommands:**
+- `history`: Show full operation log with error details. Use `-n INT` to limit entries.
+- `by-model`: Break down cost and time by LLM model.
+- `by-command`: Break down cost and time by PDD command (generate, fix, etc.).
+- `by-module`: Break down activity by prompt module.
+
+**When to use**: Use `pdd summary` to understand project-wide LLM costs, identify expensive modules, track success rates, and export activity data for reporting.
+
+### 21. Firecrawl Web Scraping Cache
 
 **Automatic caching** for web content scraped via `<web>` tags in prompts. Reduces API credit usage by caching results for 24 hours by default.
 
