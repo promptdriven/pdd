@@ -1,3 +1,38 @@
+## v0.0.146 (2026-02-11)
+
+### Feat
+
+- rebalance Cold Open visual timings and extend various visual sections to fill their duration, and add cloud batch test results.
+- Integrate Claude API token for agentic code generation and update Remotion cold open animation timings.
+
+### Fix
+
+- clear Vertex AI env vars for non-google agentic fix tests
+- reduce Cloud Batch skips from 11 to 3 — add parent .pddrc + Gemini/Codex CLIs + Vertex AI ADC
+- update remaining claude-opus-4-5 references to claude-opus-4-6
+- reduce Cloud Batch test skips — update model name and improve .pddrc fixture
+- reduce Cloud Batch test skips by fixing model name, adding npm, and improving .pddrc fixture
+- remove dummy ANTHROPIC_API_KEY that caused LiteLLM auth failures
+- address 2 remaining Cloud Batch test failures
+- resolve 3 Cloud Batch test failures and improve CLI detection
+- derive task count dynamically in collect-results.sh
+- include subdirectory tests in Cloud Batch and reduce auto-deps context
+- resolve remaining 2 Cloud Batch failures
+- limit auto-deps context files in isolated CI runs
+- add 15-minute timeout to regression test commands to prevent hangs
+- resolve remaining 3 Cloud Batch test failures
+- resolve 12 remaining Cloud Batch CI test failures
+- update stale scripts/ → narrative/ references in audit files
+- resolve Cloud Batch CI environment failures (31/56 → 44/56)
+
+### Refactor
+
+- reorganize 3blue1brown demo directory structure
+
+### Perf
+
+- increase pytest chunks from 16 to 24 for better parallelism
+
 ## v0.0.145 (2026-02-10)
 
 ### Feat
