@@ -1,23 +1,13 @@
 <pytest_output iteration=1>
-FAILED test
+1 failure, 2 warnings
 </pytest_output>
 
 === Attempt iteration 1 ===
 
 <fix_attempt iteration=1>
-Model: gpt-4
-analysis
+Model: mock-model
+No fix
 </fix_attempt>
 
-<verification_output iteration=1>
-<MagicMock name='run().stderr.__radd__()' id='5203570768'>
-</verification_output>
-
-<pytest_output iteration=2>
-PASSED
-</pytest_output>
-
-=== Attempt iteration 2 ===
-
 === Final Pytest Run ===
-PASSED
+1 failure, 2 warnings
