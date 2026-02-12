@@ -138,6 +138,12 @@ def test_run_agentic_fix_real_call_when_available(provider, env_key, cli, tmp_pa
     if provider == "anthropic" and not detected_key:
         detected_key = os.getenv("CLAUDE_CODE_OAUTH_TOKEN")
 
+    # Also accept Vertex AI auth for Google provider (GCP VMs with ADC)
+    if provider == "google" and not detected_key:
+        if (os.environ.get("GOOGLE_GENAI_USE_VERTEXAI") == "true"
+                and os.environ.get("GOOGLE_CLOUD_PROJECT")):
+            detected_key = "vertex-ai-auth"
+
     if not detected_key or not _has_cli(cli):
         pytest.skip(f"{provider} not available (missing API key and/or '{cli}' CLI).")
 

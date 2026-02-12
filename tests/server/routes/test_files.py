@@ -974,6 +974,7 @@ class TestActualPddrcConfiguration:
             Path(__file__).parents[4] / ".pddrc",  # pdd_cloud root (local dev)
             Path(__file__).parents[3] / ".pddrc",  # pdd root
             Path.cwd() / ".pddrc",                  # CWD fallback
+            Path.cwd() / ".pddrc_pddcloud",          # Cloud Batch: parent .pddrc
         ]
         for pddrc_path in candidates:
             if pddrc_path.exists():
