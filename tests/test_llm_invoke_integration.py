@@ -199,7 +199,7 @@ def test_opus_validation_failure_triggers_fallback_integration():
     # Filter to include both Opus (primary) and Sonnet (fallback)
     opus_and_sonnet = real_data[
         real_data['model'].isin([
-            'vertex_ai/claude-opus-4-5',
+            'vertex_ai/claude-opus-4-6',
             'vertex_ai/claude-sonnet-4-5'
         ])
     ].copy()
