@@ -145,29 +145,34 @@ const NEW_CODE_LINES: CodeToken[][] = [
 ];
 
 // ── Animation phase timing (relative frame offsets within 150-frame sequence) ──
-// Scaled from original 450-frame (15s) design to 150 frames (5s) — ratio 1/3.
-// Seven phases compressed:
-//   Phase 1: Selection flash       frames 0-2     (0-0.07s)
-//   Phase 2: Delete sweep          frames 2-10    (0.07-0.33s)
-//   Phase 3: Empty beat + cursor   frames 10-22   (0.33-0.73s)
-//   Phase 4: Terminal activity     frames 20-22   (0.67-0.73s)
-//   Phase 5: Regeneration          frames 22-30   (0.73-1.0s)
-//   Phase 6: Terminal completion   frames 30-32   (1.0-1.07s)
-//   Phase 7: Hold on clean code    frames 32-150  (1.07-5.0s)
+// Rebalanced from original over-compressed timing to give action phases proper weight.
+// Target: selection 5%, delete 15%, empty beat 15%, regen 15%, hold 50%.
+// Narration context: V3B starts at 15.08s. "So why are we still patching?" ends at 15.96s.
+//   At local frame 26 (~15.95s), we're in DELETE phase — code disappears as question lands.
+//   Empty beat (frames 30-52) holds dramatic silence after narration ends.
+//   Regeneration (frames 52-75) plays during silence — visual answer to the question.
+//
+//   Phase 1: Selection flash       frames 0-8     (0-0.27s)
+//   Phase 2: Delete sweep          frames 8-30    (0.27-1.0s)
+//   Phase 3: Empty beat + cursor   frames 30-52   (1.0-1.73s)
+//   Phase 4: Terminal activity     frames 30-46   (1.0-1.53s)
+//   Phase 5: Regeneration          frames 52-75   (1.73-2.5s)
+//   Phase 6: Terminal completion   frames 75-77   (2.5-2.57s)
+//   Phase 7: Hold on clean code    frames 77-150  (2.57-5.0s)
 
 const PHASE = {
   SELECTION_START: 0,
-  SELECTION_END: 2,
-  DELETE_START: 2,
-  DELETE_END: 10,
-  EMPTY_START: 10,
-  EMPTY_END: 22,
-  TERMINAL_APPEAR: 10,    // terminal fades in during empty beat
-  TERMINAL_GENERATING: 20, // "Generating from prompt..."
-  REGEN_START: 22,
-  REGEN_END: 30,
-  TERMINAL_DONE: 30,      // "Done. (0.8s) checkmark"
-  HOLD_START: 32,
+  SELECTION_END: 8,
+  DELETE_START: 8,
+  DELETE_END: 30,
+  EMPTY_START: 30,
+  EMPTY_END: 52,
+  TERMINAL_APPEAR: 30,    // terminal fades in during empty beat
+  TERMINAL_GENERATING: 46, // "Generating from prompt..."
+  REGEN_START: 52,
+  REGEN_END: 75,
+  TERMINAL_DONE: 75,      // "Done. (0.8s) checkmark"
+  HOLD_START: 77,
   TITLE_FADE_START: 999,  // disabled — TitleCardVisual handles title separately
 };
 
@@ -480,8 +485,8 @@ export const CodeRegeneratesVisual: React.FC<CodeRegeneratesVisualProps> = ({
     Math.floor((localFrame - PHASE.EMPTY_START) / halfCycle) % 2 === 0;
 
   // ── Phase 5: Regeneration (line-by-line reveal) ──
-  const regenLength = PHASE.REGEN_END - PHASE.REGEN_START; // 24 frames
-  const framesPerLine = regenLength / NEW_CODE_LINES.length; // ~1.33 frames/line
+  const regenLength = PHASE.REGEN_END - PHASE.REGEN_START; // 23 frames
+  const framesPerLine = regenLength / NEW_CODE_LINES.length; // ~1.44 frames/line
 
   // ── Phase 7: Title crossfade in final portion ──
   const titleOpacity = interpolate(
@@ -659,7 +664,7 @@ export const CodeRegeneratesVisual: React.FC<CodeRegeneratesVisualProps> = ({
         </div>
       )}
 
-      {/* ── Empty editor cursor (during empty beat: frames 30-66) ── */}
+      {/* ── Empty editor cursor (during empty beat: frames 30-52) ── */}
       {inEmptyBeat && (
         <BlinkingCursor lineIndex={0} column={0} visible={cursorVisible} />
       )}

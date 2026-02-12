@@ -62,8 +62,9 @@ export const BEATS = {
   VISUAL_06_END: s2f(52.02),  // 1561 frames
 
   // Visual 7: BothGenerateFinal — "The more walls you have, the less you need to spec..."
+  // Extended to fill remaining section duration (was 58.58s, now 61s).
   VISUAL_07_START: s2f(52.8),  // 1584 frames
-  VISUAL_07_END: s2f(58.58),  // 1757 frames
+  VISUAL_07_END: s2f(61.0),   // 1830 frames — fills to end of section
 };
 
 // Visual sequence: maps BEATS ranges to composition IDs

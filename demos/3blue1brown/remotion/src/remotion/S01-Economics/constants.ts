@@ -227,8 +227,9 @@ export const BEATS = {
   VISUAL_22_END: s2f(420.36),  // 12611 frames
 
   // Visual 23: PieToCurve — "And those costs compound literally...."
+  // Extended to fill remaining section duration (was 432.64s, now 435s).
   VISUAL_23_START: s2f(421.76),  // 12653 frames
-  VISUAL_23_END: s2f(432.64),  // 12979 frames
+  VISUAL_23_END: s2f(435.0),   // 13050 frames — fills to end of section
 };
 
 // Visual sequence: maps BEATS ranges to composition IDs

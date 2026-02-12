@@ -32,14 +32,13 @@ export const ColdOpenSection: React.FC<ColdOpenSectionPropsType> = () => {
       {/* Narration audio */}
       <Audio src={staticFile("cold_open_narration.wav")} />
 
-      {/* Visual compositions sequenced by BEATS */}
-      
-      {/* Visual 0: Veo clip - If you use Cursor, Claude Code, Copilot, getting g */}
-      {activeVisual === 0 && (
+      {/* ===== Group A: Frame-range rendering with crossfade (V0, V1, V1B, V2) ===== */}
+
+      {/* Visual 0: Veo clip - If you use Cursor, Claude Code, Copilot, getting good */}
+      {frame < BEATS.VISUAL_01_START && (
         <Sequence from={BEATS.VISUAL_00_START}>
           <AbsoluteFill>
             <OffthreadVideo
-              loop
               src={staticFile("cold_open_01a_establish.mp4")}
               style={{ width: "100%", height: "100%" }}
             />
@@ -48,11 +47,20 @@ export const ColdOpenSection: React.FC<ColdOpenSectionPropsType> = () => {
       )}
 
       {/* Visual 1: Veo clip - Great-grandmother figured out sixty years ago */}
-      {activeVisual === 1 && (
+      {/* Fades out during last 0.5s to crossfade into V1B */}
+      {frame >= BEATS.VISUAL_01_START && frame < BEATS.VISUAL_01_END && (
         <Sequence from={BEATS.VISUAL_01_START}>
-          <AbsoluteFill>
+          <AbsoluteFill
+            style={{
+              opacity: interpolate(
+                frame,
+                [BEATS.VISUAL_01B_START, BEATS.VISUAL_01_END],
+                [1, 0],
+                { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
+              ),
+            }}
+          >
             <OffthreadVideo
-              loop
               src={staticFile("cold_open_01d_zoom_out.mp4")}
               style={{ width: "100%", height: "100%" }}
             />
@@ -60,10 +68,20 @@ export const ColdOpenSection: React.FC<ColdOpenSectionPropsType> = () => {
         </Sequence>
       )}
 
-      {/* Visual 1B: Hold on accumulated weight (01e) - 6 second contemplative hold */}
-      {activeVisual === 2 && (
+      {/* Visual 1B: Hold on accumulated weight (01e) - 3.5 second contemplative hold */}
+      {/* Fades in over V1 tail, holds, fades out into V2 */}
+      {frame >= BEATS.VISUAL_01B_START && frame < BEATS.VISUAL_01B_END && (
         <Sequence from={BEATS.VISUAL_01B_START}>
-          <AbsoluteFill>
+          <AbsoluteFill
+            style={{
+              opacity: interpolate(
+                frame,
+                [BEATS.VISUAL_01B_START, BEATS.VISUAL_01_END, BEATS.VISUAL_02_START, BEATS.VISUAL_01B_END],
+                [0, 1, 1, 0],
+                { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
+              ),
+            }}
+          >
             <HoldAccumulatedWeight
               durationFrames={BEATS.VISUAL_01B_END - BEATS.VISUAL_01B_START}
             />
@@ -72,17 +90,28 @@ export const ColdOpenSection: React.FC<ColdOpenSectionPropsType> = () => {
       )}
 
       {/* Visual 2: Veo clip - When socks got cheap enough she stopped */}
-      {activeVisual === 3 && (
+      {/* Fades in over V1B tail, renders until V3 starts (covers 8-frame gap) */}
+      {frame >= BEATS.VISUAL_02_START && frame < BEATS.VISUAL_03_START && (
         <Sequence from={BEATS.VISUAL_02_START}>
-          <AbsoluteFill>
+          <AbsoluteFill
+            style={{
+              opacity: interpolate(
+                frame,
+                [BEATS.VISUAL_02_START, BEATS.VISUAL_01B_END],
+                [0, 1],
+                { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
+              ),
+            }}
+          >
             <OffthreadVideo
-              loop
               src={staticFile("cold_open_01f_modern_sock_toss.mp4")}
               style={{ width: "100%", height: "100%" }}
             />
           </AbsoluteFill>
         </Sequence>
       )}
+
+      {/* ===== Group B: activeVisual mutual-exclusion rendering (V3, V3B, V4) ===== */}
 
       {/* Visual 3: Code Blinks (01f) - Code just got that cheap */}
       {/* Standalone contemplative beat: full-frame patched code with blinking cursor. */}
@@ -142,9 +171,9 @@ const TitleCardVisual: React.FC<{ parentFrame: number; startFrame: number }> = (
   // Local frame relative to VISUAL_04_START
   const f = parentFrame - startFrame;
 
-  // Scaled from original 300-frame (10s) design to 90 frames (3s) — ratio 0.3.
+  // Scaled from original 300-frame (10s) design. ~118 frames (~4s) to fill section end.
   // Frame 0-18: code dims, chrome/terminal fade. Frame 9-27: title fades in.
-  // Frame 27-90: hold with title at full opacity.
+  // Frame 27+: hold with title at full opacity until section ends.
 
   // ── Frame 0-18 (0-0.6s): Background code dims from 1.0 to 0.15 ──
   const codeDim = interpolate(
@@ -201,7 +230,7 @@ const TitleCardVisual: React.FC<{ parentFrame: number; startFrame: number }> = (
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
 
-  // Frames 27-90: Hold (pure stillness) — title at full opacity at cut.
+  // Frames 27+: Hold (pure stillness) — title at full opacity until section cut.
 
   return (
     <AbsoluteFill style={{ backgroundColor: "#1E1E2E" }}>

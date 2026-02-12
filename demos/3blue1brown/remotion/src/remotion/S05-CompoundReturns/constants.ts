@@ -69,8 +69,9 @@ export const BEATS = {
   VISUAL_06_END: s2f(73.92),  // 2218 frames
 
   // Visual 7: CrossingPoint — "But the economics changed, and when economics chan..."
+  // Extended to fill remaining section duration (was 84.5s, now 87s).
   VISUAL_07_START: s2f(76.38),  // 2291 frames
-  VISUAL_07_END: s2f(84.5),  // 2535 frames
+  VISUAL_07_END: s2f(87.0),   // 2610 frames — fills to end of section
 };
 
 // Visual sequence: maps BEATS ranges to composition IDs

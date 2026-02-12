@@ -101,8 +101,9 @@ export const BEATS = {
   VISUAL_12_END: s2f(155.2),  // 4656 frames
 
   // Visual 13: PromptGeneratesCode — "But this is that same transition for software...."
+  // Extended to fill remaining section duration (was 176.98s, now 180s).
   VISUAL_13_START: s2f(155.2),  // 4656 frames
-  VISUAL_13_END: s2f(176.98),  // 5309 frames
+  VISUAL_13_END: s2f(180.0),   // 5400 frames — fills to end of section
 };
 
 // Visual sequence: maps BEATS ranges to composition IDs
