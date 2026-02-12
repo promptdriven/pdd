@@ -969,13 +969,22 @@ class TestActualPddrcConfiguration:
         import yaml
         from pathlib import Path
 
-        # Navigate to project root (pdd_cloud)
-        pddrc_path = Path(__file__).parents[4] / ".pddrc"
-        if not pddrc_path.exists():
-            pytest.skip(f".pddrc not found at {pddrc_path}")
+        # Try multiple locations: pdd_cloud root, then pdd root, then CWD
+        candidates = [
+            Path(__file__).parents[4] / ".pddrc",  # pdd_cloud root (local dev)
+            Path(__file__).parents[3] / ".pddrc",  # pdd root
+            Path.cwd() / ".pddrc",                  # CWD fallback
+            Path.cwd() / ".pddrc_pddcloud",          # Cloud Batch: parent .pddrc
+        ]
+        for pddrc_path in candidates:
+            if pddrc_path.exists():
+                with open(pddrc_path) as f:
+                    config = yaml.safe_load(f)
+                # Verify it has the pdd_cloud-specific contexts we're testing
+                if "frontend-components" in config.get("contexts", {}):
+                    return config
 
-        with open(pddrc_path) as f:
-            return yaml.safe_load(f)
+        pytest.skip("pdd_cloud .pddrc with frontend contexts not found")
 
     def test_frontend_context_includes_prompts_path(self, actual_pddrc):
         """Verify frontend context has prompts/frontend/** pattern."""
