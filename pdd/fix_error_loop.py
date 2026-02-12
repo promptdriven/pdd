@@ -537,7 +537,7 @@ def fix_error_loop(unit_test_file: str,
     fails, errors, warnings = initial_fails, initial_errors, initial_warnings
     
     # Determine success state immediately
-    success = (fails == 0 and errors == 0 and warnings == 0)
+    success = (fails == 0 and errors == 0)
 
     # Track if tests were initially passing
     initially_passing = success
@@ -612,8 +612,8 @@ def fix_error_loop(unit_test_file: str,
         stats["iterations_info"].append(iteration_stats)
 
         # If tests are fully successful, we break out:
-        if fails == 0 and errors == 0 and warnings == 0:
-            rprint("[green]All tests passed with no warnings! Exiting loop.[/green]")
+        if fails == 0 and errors == 0:
+            rprint("[green]All tests passed! Exiting loop.[/green]")
             success = True  # Set success flag
             stats["final_fails"] = 0  # Explicitly set to 0
             stats["final_errors"] = 0  # Explicitly set to 0
@@ -819,7 +819,7 @@ def fix_error_loop(unit_test_file: str,
             })
             
             # Update success status based on latest results
-            success = (fails == 0 and errors == 0 and warnings == 0)
+            success = (fails == 0 and errors == 0)
             
             # Update final stats
             stats["final_fails"] = fails
