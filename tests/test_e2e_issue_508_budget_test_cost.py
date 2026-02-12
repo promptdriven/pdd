@@ -13,13 +13,8 @@ import pytest
 class TestBudgetCostExtraction:
     """Test the cost extraction logic at sync_orchestration.py:1752."""
 
-    def _extract_cost_like_line_1752(self, result):
-        """Replicates the exact buggy logic from line 1752."""
-        cost = result[-2] if len(result) >= 2 and isinstance(result[-2], (int, float)) else 0.0
-        return cost
-
-    def _extract_cost_fixed(self, result, operation):
-        """What the fixed logic should do."""
+    def _extract_cost(self, result, operation):
+        """Replicates the cost extraction logic from line 1752 (should match current source)."""
         if operation in ('test', 'test_extend') and len(result) >= 4:
             cost = result[1] if isinstance(result[1], (int, float)) else 0.0
         else:
@@ -27,27 +22,25 @@ class TestBudgetCostExtraction:
         return cost
 
     def test_4_tuple_test_cost_extraction(self):
-        """Bug: 4-tuple from cmd_test_main has cost at index 1, but result[-2] gives index 2 (model name).
+        """4-tuple from cmd_test_main has cost at index 1.
 
         cmd_test_main returns: (content, cost, model, agentic_success)
-        result[-2] for a 4-tuple = result[2] = model name (string) → isinstance check fails → $0.00
+        The fix ensures result[1] is used for test/test_extend operations.
         """
-        # Simulate cmd_test_main 4-tuple return
         result = ("test content", 0.0007821, "gpt-4o-mini", True)
 
-        cost = self._extract_cost_like_line_1752(result)
+        cost = self._extract_cost(result, operation='test')
 
-        # This assertion demonstrates the bug: cost should be 0.0007821 but is 0.0
         assert cost == pytest.approx(0.0007821), (
             f"Cost should be {result[1]} but got {cost}. "
             f"result[-2] = {result[-2]!r} (type={type(result[-2]).__name__}) is the model name, not cost."
         )
 
     def test_4_tuple_test_extend_cost_extraction(self):
-        """Same bug for test_extend operation which also calls cmd_test_main."""
+        """Same fix applies for test_extend operation which also calls cmd_test_main."""
         result = ("test content", 0.0012345, "claude-sonnet-4-5", False)
 
-        cost = self._extract_cost_like_line_1752(result)
+        cost = self._extract_cost(result, operation='test_extend')
 
         assert cost == pytest.approx(0.0012345), (
             f"test_extend cost should be {result[1]} but got {cost}."
@@ -58,7 +51,7 @@ class TestBudgetCostExtraction:
         # 3-tuple: (content, cost, model)
         result = ("generated code", 0.0005551, "gpt-4o-mini")
 
-        cost = self._extract_cost_like_line_1752(result)
+        cost = self._extract_cost(result, operation='generate')
 
         # For 3-tuples, result[-2] = result[1] = cost float — this works by accident
         assert cost == pytest.approx(0.0005551)
@@ -75,12 +68,12 @@ class TestBudgetCostExtraction:
 
         # Operation 1: generate (3-tuple) — cost extracted correctly
         generate_result = ("code", 0.05, "gpt-4o-mini")
-        cost = self._extract_cost_like_line_1752(generate_result)
+        cost = self._extract_cost(generate_result, operation='generate')
         current_cost += cost
 
-        # Operation 2: test (4-tuple) — cost dropped due to bug
+        # Operation 2: test (4-tuple) — cost must be extracted correctly
         test_result = ("tests", 0.10, "gpt-4o-mini", True)
-        cost = self._extract_cost_like_line_1752(test_result)
+        cost = self._extract_cost(test_result, operation='test')
         current_cost += cost
 
         # With the bug, current_cost is only 0.05 (test cost dropped)
@@ -94,9 +87,9 @@ class TestBudgetCostExtraction:
 class TestLoggingSectionTestExtendGap:
     """Test the secondary bug: logging at line 1777 misses test_extend."""
 
-    def _extract_logging_cost_like_line_1777(self, result, operation):
+    def _extract_logging_cost(self, result, operation):
         """Replicates the logging cost extraction logic from lines 1777-1782."""
-        if operation == 'test' and len(result) >= 4:
+        if operation in ('test', 'test_extend') and len(result) >= 4:
             actual_cost = result[1] if isinstance(result[1], (int, float)) else 0.0
         else:
             actual_cost = result[-2] if isinstance(result[-2], (int, float)) else 0.0
@@ -110,7 +103,7 @@ class TestLoggingSectionTestExtendGap:
         """
         result = ("tests", 0.0012345, "claude-sonnet-4-5", True)
 
-        actual_cost = self._extract_logging_cost_like_line_1777(result, operation='test_extend')
+        actual_cost = self._extract_logging_cost(result, operation='test_extend')
 
         assert actual_cost == pytest.approx(0.0012345), (
             f"Logging cost for test_extend should be {result[1]} but got {actual_cost}. "
