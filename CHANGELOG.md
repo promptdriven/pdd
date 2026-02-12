@@ -2,36 +2,32 @@
 
 ### Feat
 
-- rebalance Cold Open visual timings and extend various visual sections to fill their duration, and add cloud batch test results.
-- Integrate Claude API token for agentic code generation and update Remotion cold open animation timings.
+- **Agentic orchestrator fallback comments**: When an agent step fails (e.g., all providers unavailable), a fallback comment is now posted to the GitHub issue so users can see which steps failed and why. Previously, failed steps were silent when the agent never executed.
+- **Agentic orchestrator early abort**: The change orchestrator now aborts after 3 consecutive provider failures instead of blindly retrying all 13 steps, saving time and API cost when providers are down.
+- **Provider error details in failure messages**: `run_agentic_task` now includes per-provider error snippets in the failure message (e.g., `"All agent providers failed: anthropic: rate limited; google: timeout"`) instead of a generic message.
+- **Claude Code OAuth token support**: The Anthropic provider now preserves `ANTHROPIC_API_KEY` when `CLAUDE_CODE_OAUTH_TOKEN` is present, enabling Claude Code CLI authentication in CI environments.
+- **Vertex AI ADC authentication**: `get_available_agents()` now recognizes Application Default Credentials on GCP VMs (`GOOGLE_CLOUD_PROJECT` without `GOOGLE_APPLICATION_CREDENTIALS`), enabling the Google provider on Cloud Batch.
 
 ### Fix
 
-- clear Vertex AI env vars for non-google agentic fix tests
-- reduce Cloud Batch skips from 11 to 3 — add parent .pddrc + Gemini/Codex CLIs + Vertex AI ADC
-- update remaining claude-opus-4-5 references to claude-opus-4-6
-- reduce Cloud Batch test skips — update model name and improve .pddrc fixture
-- reduce Cloud Batch test skips by fixing model name, adding npm, and improving .pddrc fixture
-- remove dummy ANTHROPIC_API_KEY that caused LiteLLM auth failures
-- address 2 remaining Cloud Batch test failures
-- resolve 3 Cloud Batch test failures and improve CLI detection
-- derive task count dynamically in collect-results.sh
-- include subdirectory tests in Cloud Batch and reduce auto-deps context
-- resolve remaining 2 Cloud Batch failures
-- limit auto-deps context files in isolated CI runs
-- add 15-minute timeout to regression test commands to prevent hangs
-- resolve remaining 3 Cloud Batch test failures
-- resolve 12 remaining Cloud Batch CI test failures
-- update stale scripts/ → narrative/ references in audit files
-- resolve Cloud Batch CI environment failures (31/56 → 44/56)
+- **Warning count false negatives (#485)**: `pytest_output.py` now parses warning counts only from the pytest summary line (e.g., `"2 warnings"` in `=== 1 passed, 2 warnings ===`) instead of naively counting all occurrences of "warning" in stdout. Library warnings from LiteLLM, Pydantic, and PDD log messages no longer inflate the count. Thanks Serhan Asad (#490)!
+- **Warnings no longer block success gate (#485)**: `fix_error_loop` success condition changed from `fails == 0 and errors == 0 and warnings == 0` to `fails == 0 and errors == 0`. Warnings are informational and no longer cause false test failures or trigger unnecessary agentic fallback.
+- **Workflow state preserved on partial failure**: When the change orchestrator completes with some failed steps, workflow state is no longer cleared, preserving debugging info for investigation.
+- **macOS regression test compatibility**: `regression.sh` now detects macOS and falls back to `gtimeout` or a no-op wrapper when GNU `timeout` is unavailable.
 
-### Refactor
+### Build
 
-- reorganize 3blue1brown demo directory structure
+- **Cloud Batch scale-up (56 → 64 tasks)**: Increased pytest chunks from 16 to 24 and total task count from 56 to 64 for better parallelism. Max run duration increased from 1200s to 1500s.
+- **Cloud Batch CI environment hardening**: Install Gemini CLI, Codex CLI, and Claude Code CLI in the Docker image. Add `zsh`, `fish`, `tcsh`, `nodejs`, `npm` for shell detection tests. Include parent `.pddrc`, `context/`, `docs/` in source tarball. Set Vertex AI ADC env vars. Exchange Firebase refresh token for JWT at runtime. Inject `CLAUDE_CODE_OAUTH_TOKEN` via Secret Manager.
+- **Dynamic task count in collect-results.sh**: Task count is now derived from the Cloud Batch job descriptor instead of being hardcoded, preventing mismatches when the job template changes.
+- **Regression test isolation**: Individual regression test cases can now run independently in CI parallel mode. Prerequisite files (e.g., `simple_math.py`, `sub_simple_math.prompt`) are seeded from fixtures when not running sequentially. Added 15-minute timeout per command and tail-30 log output on failure for CI debugging.
+- **Smart Docker image rebuild**: `make cloud-test` now auto-detects whether image-affecting files changed (via SHA-256 hash) and skips rebuild when unnecessary.
+- **Subdirectory test discovery**: Cloud Batch entrypoint now uses `find tests/ -name 'test_*.py'` (recursive) instead of `find tests/ -maxdepth 1`, picking up tests in `tests/server/` and other subdirectories.
+- **GCS bucket rename**: Default CI results bucket changed from `pdd-ci-results` to `pdd-stg-ci-results`.
 
-### Perf
+### Docs
 
-- increase pytest chunks from 16 to 24 for better parallelism
+- **New test fixtures**: Added `tests/fixtures/simple_math.py`, `simple_math_example.py`, `sub_simple_math.prompt`, and `updated_simple_math_python.prompt` to support isolated regression test execution.
 
 ## v0.0.145 (2026-02-10)
 
