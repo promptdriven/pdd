@@ -155,6 +155,12 @@ def test_run_agentic_fix_real_call_when_available(provider, env_key, cli, tmp_pa
         if k != env_key:
             monkeypatch.delenv(k, raising=False)
 
+    # For non-google providers, also hide Vertex AI auth so google doesn't interfere
+    if provider != "google":
+        monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
+        monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+        monkeypatch.delenv("GOOGLE_CLOUD_LOCATION", raising=False)
+
     # For non-anthropic providers, hide Claude CLI so subscription auth isn't used
     # Must mock _find_cli_binary since it checks common paths beyond shutil.which
     if provider != "anthropic":
