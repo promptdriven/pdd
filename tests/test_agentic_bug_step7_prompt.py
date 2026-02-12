@@ -205,6 +205,118 @@ class TestStep7PromptEnforcesStep6Strategy:
         )
 
 
+class TestStep7PromptStructuralTestAntiPattern:
+    """
+    Issue #507: Verify the Step 7 prompt warns against generating structural tests
+    (e.g., inspect.signature checks) instead of behavioral tests.
+
+    The bug: pdd bug generated tests that only check whether a function *accepts*
+    a parameter (via inspect.signature / sig.parameters) instead of testing whether
+    the feature *actually works* (e.g., quiet mode suppresses output).
+    """
+
+    def test_prompt_warns_against_structural_checks(self, step7_prompt_content: str) -> None:
+        """Verify the prompt warns against structural checks instead of behavioral tests."""
+        content_lower = step7_prompt_content.lower()
+        has_warning = any([
+            "inspect.signature" in content_lower,
+            "sig.parameters" in content_lower,
+            # The prompt warns against testing signatures via the anti-pattern section
+            "anti-pattern" in content_lower and "signature" in content_lower,
+            # General guidance against non-behavioral testing
+            "testing behavior, not implementation" in content_lower,
+            "behavior, not implementation details" in content_lower,
+        ])
+        assert has_warning, (
+            "Step 7 prompt should warn against structural checks (like inspect.signature) "
+            "or at minimum instruct to test behavior, not implementation details."
+        )
+
+    def test_prompt_warns_against_parameter_existence_checks(self, step7_prompt_content: str) -> None:
+        """Verify the prompt warns against testing parameter existence instead of behavior."""
+        content_lower = step7_prompt_content.lower()
+        has_warning = any([
+            "parameter existence" in content_lower,
+            "parameter accepts" in content_lower,
+            "function accepts" in content_lower and "parameter" in content_lower,
+            "signature check" in content_lower,
+            "structural" in content_lower and "test" in content_lower,
+            # The prompt has an anti-pattern section warning against testing callee's signature
+            "anti-pattern" in content_lower and "callee" in content_lower,
+            # Testing the signature vs testing behavior
+            "callee's signature" in content_lower or "callee rejects" in content_lower,
+        ])
+        assert has_warning, (
+            "Step 7 prompt should warn against testing parameter existence instead of "
+            "actual behavior. A test that only checks if a function accepts a parameter "
+            "passes without any real implementation."
+        )
+
+    def test_prompt_requires_behavioral_verification(self, step7_prompt_content: str) -> None:
+        """Verify the prompt requires tests to verify actual behavior, not just structure."""
+        content_lower = step7_prompt_content.lower()
+        has_behavioral_guidance = any([
+            "verify" in content_lower and "behavior" in content_lower and "actual" in content_lower,
+            "test the actual" in content_lower and "behavior" in content_lower,
+            "behavioral" in content_lower and "not structural" in content_lower,
+            "behavioral test" in content_lower,
+            # The prompt says "testing behavior, not implementation details"
+            "testing behavior" in content_lower,
+            "behavior, not implementation" in content_lower,
+            # The prompt instructs to verify caller behavior via mocking
+            "verify caller behavior" in content_lower,
+        ])
+        assert has_behavioral_guidance, (
+            "Step 7 prompt should require behavioral verification — tests must verify "
+            "the feature actually works, not just that the code structure changed."
+        )
+
+    def test_prompt_mentions_mocking_for_output_verification(self, step7_prompt_content: str) -> None:
+        """Verify the prompt mentions using mocks to verify output suppression and similar behaviors."""
+        content_lower = step7_prompt_content.lower()
+        has_output_mock_guidance = any([
+            "mock" in content_lower and "output" in content_lower,
+            "mock" in content_lower and "console" in content_lower,
+            "mock" in content_lower and "suppress" in content_lower,
+            "capture" in content_lower and "output" in content_lower,
+            "patch" in content_lower and "verify" in content_lower and "output" in content_lower,
+        ])
+        assert has_output_mock_guidance, (
+            "Step 7 prompt should mention mocking for output verification. "
+            "For bugs like 'quiet mode not suppressing output', tests need to mock "
+            "console/logging and verify output is suppressed."
+        )
+
+    def test_prompt_includes_anti_pattern_examples(self, step7_prompt_content: str) -> None:
+        """Verify the prompt shows examples of anti-patterns to avoid."""
+        content_lower = step7_prompt_content.lower()
+        has_anti_pattern_example = any([
+            "inspect.signature" in content_lower and ("wrong" in content_lower or "anti" in content_lower or "do not" in content_lower or "don't" in content_lower),
+            "sig.parameters" in content_lower and ("wrong" in content_lower or "anti" in content_lower or "do not" in content_lower or "don't" in content_lower),
+            # The prompt includes a concrete wrong-approach example with pytest.raises
+            "wrong" in content_lower and "anti-pattern" in content_lower,
+            "example of wrong" in content_lower,
+            # DO NOT section with wrong approach example
+            "do not" in content_lower and "wrong" in content_lower and "approach" in content_lower,
+        ])
+        assert has_anti_pattern_example, (
+            "Step 7 prompt should include explicit anti-pattern examples showing "
+            "wrong testing approaches to avoid."
+        )
+
+    def test_prompt_includes_behavioral_test_example(self, step7_prompt_content: str) -> None:
+        """Verify the prompt includes a positive example of a behavioral test."""
+        content_lower = step7_prompt_content.lower()
+        # Check for a behavioral test example that uses mocking to verify behavior
+        has_behavioral_example = any([
+            "mock" in content_lower and "assert" in content_lower and ("suppress" in content_lower or "output" in content_lower or "call_args" in content_lower),
+        ])
+        assert has_behavioral_example, (
+            "Step 7 prompt should include a positive behavioral test example showing "
+            "how to use mocks/patches to verify actual behavior instead of structure."
+        )
+
+
 # --- Integration Test Fixtures and Helpers ---
 
 
