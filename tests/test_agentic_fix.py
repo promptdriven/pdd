@@ -113,7 +113,8 @@ AGENTS = [
 
 
 def _has_cli(cmd: str) -> bool:
-    return shutil.which(cmd) is not None
+    from pdd.agentic_common import _find_cli_binary
+    return _find_cli_binary(cmd) is not None
 
 
 def _mk_files(tmp_path: Path):
