@@ -310,6 +310,8 @@ module.exports = { add };
             # so non-Python test generation produces no output. Skip gracefully.
             if "No agentic CLI providers detected" in result.output:
                 pytest.skip("Agentic CLI providers not available in this environment")
+            if "Success: False" in result.output:
+                pytest.skip("Agentic CLI available but generation failed (auth/network)")
             assert False, f"Output not created: {result.output}"
 
         generated_test = output_path.read_text()

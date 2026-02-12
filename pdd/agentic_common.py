@@ -576,8 +576,10 @@ def _run_with_provider(
 
     # Construct Command using discovered cli_path (Issue #234 fix)
     if provider == "anthropic":
-        # Remove API key to force subscription auth if configured that way
-        env.pop("ANTHROPIC_API_KEY", None)
+        # In CI with OAuth token, keep it for authentication;
+        # otherwise remove API key to force subscription auth
+        if not env.get("CLAUDE_CODE_OAUTH_TOKEN"):
+            env.pop("ANTHROPIC_API_KEY", None)
         # Use -p - to pipe prompt as direct user message via stdin.
         # This prevents Claude from interpreting file-discovered instructions
         # as "automated bot workflow" and refusing to execute.

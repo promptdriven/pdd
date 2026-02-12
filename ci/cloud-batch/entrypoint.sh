@@ -63,8 +63,27 @@ if [ -n "${PDD_REFRESH_TOKEN:-}" ] && [ -n "${FIREBASE_API_KEY:-}" ]; then
     JWT_RESPONSE=$(curl -s "https://securetoken.googleapis.com/v1/token?key=${FIREBASE_API_KEY}" \
         -H "Content-Type: application/x-www-form-urlencoded" \
         -d "grant_type=refresh_token&refresh_token=${PDD_REFRESH_TOKEN}")
-    export PDD_JWT_TOKEN=$(echo "${JWT_RESPONSE}" | python3 -c "import sys,json; print(json.load(sys.stdin)['id_token'])")
-    echo "JWT token obtained from refresh token (${#PDD_JWT_TOKEN} chars)"
+
+    # Check for error in response before extracting token
+    JWT_ERROR=$(echo "${JWT_RESPONSE}" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+err = d.get('error', {})
+if isinstance(err, dict):
+    print(err.get('message', ''))
+elif err:
+    print(err)
+else:
+    print('')
+" 2>/dev/null || echo "parse_failed")
+
+    if [ -n "${JWT_ERROR}" ] && [ "${JWT_ERROR}" != "" ]; then
+        echo "WARNING: JWT token exchange failed: ${JWT_ERROR}"
+        echo "Cloud regression tests will likely fail."
+    else
+        export PDD_JWT_TOKEN=$(echo "${JWT_RESPONSE}" | python3 -c "import sys,json; print(json.load(sys.stdin)['id_token'])")
+        echo "JWT token obtained from refresh token (${#PDD_JWT_TOKEN} chars)"
+    fi
 fi
 
 # ── Claude Code OAuth → set ANTHROPIC_API_KEY for test skip gates ─────

@@ -1827,6 +1827,10 @@ EOF
   # 1. Generate WITH --exclude-tests (no test context, expect failure)
   log "Generating with --exclude-tests (no auto-discovery)..."
   run_pdd_command generate --exclude-tests --output "encode_message.py" "$FIXTURES_PATH/encode_message_python.prompt"
+  if [ ! -s "encode_message.py" ]; then
+    log "WARNING: generate --exclude-tests produced no output (LLM flakiness). Retrying..."
+    run_pdd_command generate --exclude-tests --output "encode_message.py" "$FIXTURES_PATH/encode_message_python.prompt"
+  fi
   check_exists "encode_message.py" "'generate' with --exclude-tests"
 
   # Run pytest - expect FAILURE
