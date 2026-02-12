@@ -55,7 +55,7 @@ def test_vertex_ai_claude_opus_structured_output_integration():
 
     # Filter to only include Vertex AI Claude Opus
     real_data = _load_model_data(None)
-    opus_data = real_data[real_data['model'] == 'vertex_ai/claude-opus-4-5'].copy()
+    opus_data = real_data[real_data['model'] == 'vertex_ai/claude-opus-4-6'].copy()
 
     if len(opus_data) == 0:
         pytest.skip("Vertex AI Claude Opus model not found in CSV")
