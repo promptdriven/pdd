@@ -1037,7 +1037,9 @@ def test_run_agentic_task_anthropic_success_env_check(mock_shutil_which, mock_su
     # Verify env sanitization
     env = kwargs['env']
     assert env['TERM'] == 'dumb'
-    assert "ANTHROPIC_API_KEY" not in env # Should be removed for CLI auth
+    # ANTHROPIC_API_KEY is removed unless CLAUDE_CODE_OAUTH_TOKEN is present
+    if not os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
+        assert "ANTHROPIC_API_KEY" not in env  # Removed for CLI subscription auth
 
 def test_run_agentic_task_gemini_success_2(mock_shutil_which, mock_subprocess_run, mock_env, mock_load_model_data, tmp_path):
     """Test successful execution with Gemini."""
