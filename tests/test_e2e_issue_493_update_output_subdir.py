@@ -9,11 +9,13 @@ but exercises all real path resolution logic including .pddrc context detection,
 git repo discovery, and subdirectory structure preservation.
 
 Bug: resolve_prompt_code_pair() defines context_config only in the else branch
-(when --output is NOT provided) but references it unconditionally when computing
-code_root. When --output IS provided and the code file is in a subdirectory
-(rel_dir != "."), this causes an UnboundLocalError.
+(when --output is NOT provided) but references it unconditionally at line 91.
+When --output IS provided and the code file is in a subdirectory (rel_dir != "."),
+this causes an UnboundLocalError.
 """
 
+import os
+import pytest
 import git
 import click
 from pathlib import Path
