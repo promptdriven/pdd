@@ -265,11 +265,14 @@ def run_agentic_bug_orchestrator(
             actual_last_success: Union[int, float] = 0
             for sn in step_order:
                 output_val = cached_outputs.get(str(sn), "")
-                if output_val and not output_val.startswith("FAILED:"):
-                    actual_last_success = sn
-                elif output_val.startswith("FAILED:"):
-                    # First failed step found — stop here
+                # Stop at the first missing/empty entry to avoid skipping gaps
+                if not output_val:
                     break
+                # Stop at the first explicitly failed step
+                if output_val.startswith("FAILED:"):
+                    break
+                # Otherwise, count this step as successfully completed
+                actual_last_success = sn
             if actual_last_success < last_completed_step:
                 if not quiet:
                     console.print(f"[yellow]State validation: correcting last_completed_step from {last_completed_step} to {actual_last_success} (found FAILED steps in cache)[/yellow]")
@@ -568,7 +571,7 @@ def run_agentic_bug_orchestrator(
                         repo_owner=repo_owner, repo_name=repo_name,
                         use_github_state=use_github_state, github_comment_id=github_comment_id
                     )
-                    return False, f"Aborting: {consecutive_provider_failures} consecutive steps failed — agent providers unavailable", total_cost, last_model_used, []
+                    return False, f"Aborting: {consecutive_provider_failures} consecutive steps failed — agent providers unavailable", total_cost, last_model_used, changed_files
             else:
                 consecutive_provider_failures = 0
 

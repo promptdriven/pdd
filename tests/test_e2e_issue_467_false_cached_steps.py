@@ -70,7 +70,8 @@ class TestIssue467FalseCachedStepsE2E:
         """
         E2E test: Two consecutive orchestrator runs with the fix applied.
 
-        Run 1: All LLM providers fail -> state saved with last_completed_step=0
+        Run 1: All LLM providers fail -> early abort after 3 consecutive failures,
+               state saved with last_completed_step=0
         Run 2: Orchestrator loads state -> re-runs ALL steps from step 1
 
         Uses REAL save_workflow_state (local file) and REAL load_workflow_state.
@@ -123,7 +124,7 @@ class TestIssue467FalseCachedStepsE2E:
             f"got {saved_state['last_completed_step']}"
         )
 
-        # Verify all step outputs have FAILED: prefix
+        # Verify all step outputs (from the 3 steps before early abort) have FAILED: prefix
         for step_key, output in saved_state["step_outputs"].items():
             assert output.startswith("FAILED:"), (
                 f"Step {step_key} should have FAILED prefix, got: {output[:50]}"
@@ -273,8 +274,9 @@ class TestIssue467FalseCachedStepsE2E:
         """
         E2E test: Verify state file content is correct after consecutive failures.
 
-        Exercises a single run where all steps fail and reads the persisted
-        state file to confirm last_completed_step=0 and all outputs are FAILED.
+        Exercises a single run where 3 consecutive steps fail (triggering early
+        abort) and reads the persisted state file to confirm last_completed_step=0
+        and all step outputs are FAILED.
         """
         from pdd.agentic_bug_orchestrator import (
             run_agentic_bug_orchestrator,
