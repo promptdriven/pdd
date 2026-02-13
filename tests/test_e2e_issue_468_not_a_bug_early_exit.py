@@ -1,27 +1,24 @@
 """
-E2E Test for Issue #468: PDD fix didn't pause even though the agent reported no bug to fix.
+E2E regression tests for Issue #468: ensure NOT_A_BUG causes an early exit.
 
-Bug: When Step 3 returns NOT_A_BUG, the orchestrator should stop the workflow
-immediately. Instead, it continues executing Steps 4-9 because there is no
-early exit check after Step 3.
+Historically, when Step 3 returned NOT_A_BUG, the orchestrator incorrectly
+continued executing later steps instead of stopping the workflow immediately.
+These tests guard against regression by verifying that:
 
-The root cause has two parts:
-1. The Step 3 prompt now includes NOT_A_BUG as a category (fixed in step 5.5),
-   so the agent CAN classify issues as not-a-bug.
-2. The orchestrator (agentic_e2e_fix_orchestrator.py:504-522) does NOT check
-   for NOT_A_BUG after Step 3, so it continues through all 9 steps.
+1. When Step 3 returns NOT_A_BUG, the orchestrator stops after Step 3
+   (the tests would fail if the Step 3 NOT_A_BUG early-exit behavior were
+   removed or broken).
+2. The Step 3 prompt template includes NOT_A_BUG as a root-cause category and
+   can be loaded and formatted via the real prompt-processing pipeline.
 
-This E2E test exercises the REAL orchestrator code path:
+This E2E module exercises the real orchestrator code path:
 - Real prompt template loading (load_prompt_template is NOT mocked)
 - Real prompt formatting with context variables
 - Real orchestrator loop logic with early exit checks
-- Only LLM execution (run_agentic_task) and state/git ops are mocked
+- Only LLM execution (run_agentic_task) and state/git operations are mocked
 
-This differs from the unit tests in test_agentic_e2e_fix_orchestrator.py which
+This differs from the unit tests in test_agentic_e2e_fix_orchestrator.py, which
 mock load_prompt_template and test the orchestrator in isolation.
-
-The test should FAIL on the current buggy code (orchestrator runs all 9 steps)
-and PASS once the NOT_A_BUG early exit check is added.
 """
 
 import re

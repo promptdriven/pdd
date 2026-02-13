@@ -576,7 +576,10 @@ def run_agentic_e2e_fix_orchestrator(
         else:
             if not final_message:
                 final_message = f"Max cycles ({max_cycles}) reached without all tests passing"
-            console.print(f"\n[bold red]E2E fix incomplete[/bold red]")
+            if "not a bug" in final_message.lower():
+                console.print(f"\n[bold yellow]E2E fix stopped: not a bug[/bold yellow]")
+            else:
+                console.print(f"\n[bold red]E2E fix incomplete[/bold red]")
             console.print(f"   Total cost: ${total_cost:.4f}")
             remaining = [u for u, s in dev_unit_states.items() if not s.get("fixed")]
             if remaining:

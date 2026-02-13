@@ -8,7 +8,7 @@ Additionally, tests verify the orchestrator's runtime behavior including
 early exit conditions (issue #468).
 """
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from pathlib import Path
 
 from pdd.load_prompt_template import load_prompt_template
