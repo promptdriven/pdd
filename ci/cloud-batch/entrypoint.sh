@@ -124,15 +124,36 @@ run_test() {
 if [ "${TASK_INDEX}" -ge "${PYTEST_START}" ] && [ "${TASK_INDEX}" -le "${PYTEST_END}" ]; then
     # ── Pytest chunk ──────────────────────────────────────────────────
     CHUNK_INDEX="${TASK_INDEX}"
+    DURATIONS_FILE="${WORK_DIR}/ci/cloud-batch/test-durations.json"
 
-    # Dynamically list and chunk test files
-    mapfile -t ALL_TESTS < <(find tests/ -name 'test_*.py' | sort)
-    TOTAL=${#ALL_TESTS[@]}
-    CHUNK_SIZE=$(( (TOTAL + PYTEST_CHUNKS - 1) / PYTEST_CHUNKS ))
-    START_IDX=$(( CHUNK_INDEX * CHUNK_SIZE ))
-
-    # Slice the array for this chunk
-    CHUNK_TESTS=("${ALL_TESTS[@]:${START_IDX}:${CHUNK_SIZE}}")
+    if [ -f "${DURATIONS_FILE}" ]; then
+        # Duration-based bin packing for balanced chunks
+        echo "=== Using duration-based chunk balancing ==="
+        ASSIGN_OUTPUT=$(mktemp)
+        if python3 "${WORK_DIR}/ci/cloud-batch/balance-chunks.py" assign \
+            --chunk-index "${CHUNK_INDEX}" \
+            --num-chunks "${PYTEST_CHUNKS}" \
+            --durations "${DURATIONS_FILE}" \
+            --test-dir tests/ > "${ASSIGN_OUTPUT}"; then
+            mapfile -t CHUNK_TESTS < "${ASSIGN_OUTPUT}"
+        else
+            echo "=== balance-chunks.py failed, falling back to alphabetical split ==="
+            mapfile -t ALL_TESTS < <(find tests/ -name 'test_*.py' | sort)
+            TOTAL=${#ALL_TESTS[@]}
+            CHUNK_SIZE=$(( (TOTAL + PYTEST_CHUNKS - 1) / PYTEST_CHUNKS ))
+            START_IDX=$(( CHUNK_INDEX * CHUNK_SIZE ))
+            CHUNK_TESTS=("${ALL_TESTS[@]:${START_IDX}:${CHUNK_SIZE}}")
+        fi
+        rm -f "${ASSIGN_OUTPUT}"
+    else
+        # Fallback: alphabetical split
+        echo "=== No durations file, using alphabetical split ==="
+        mapfile -t ALL_TESTS < <(find tests/ -name 'test_*.py' | sort)
+        TOTAL=${#ALL_TESTS[@]}
+        CHUNK_SIZE=$(( (TOTAL + PYTEST_CHUNKS - 1) / PYTEST_CHUNKS ))
+        START_IDX=$(( CHUNK_INDEX * CHUNK_SIZE ))
+        CHUNK_TESTS=("${ALL_TESTS[@]:${START_IDX}:${CHUNK_SIZE}}")
+    fi
 
     if [ ${#CHUNK_TESTS[@]} -eq 0 ]; then
         echo "=== No test files in chunk ${CHUNK_INDEX}, marking pass ==="
@@ -141,11 +162,12 @@ if [ "${TASK_INDEX}" -ge "${PYTEST_START}" ] && [ "${TASK_INDEX}" -le "${PYTEST_
         exit 0
     fi
 
-    echo "=== Pytest chunk ${CHUNK_INDEX}: ${#CHUNK_TESTS[@]} files (of ${TOTAL} total) ==="
+    TOTAL_FILES=$(find tests/ -name 'test_*.py' | wc -l)
+    echo "=== Pytest chunk ${CHUNK_INDEX}: ${#CHUNK_TESTS[@]} files (of ${TOTAL_FILES} total) ==="
     printf '  %s\n' "${CHUNK_TESTS[@]}"
 
     run_test "pytest" "chunk_${CHUNK_INDEX}" \
-        python -m pytest -vv -n auto --dist loadfile "${CHUNK_TESTS[@]}"
+        python -m pytest -vv --durations=0 -n auto --dist loadfile "${CHUNK_TESTS[@]}"
 
 elif [ "${TASK_INDEX}" -ge "${REGRESSION_START}" ] && [ "${TASK_INDEX}" -le "${REGRESSION_END}" ]; then
     # ── Regression test ───────────────────────────────────────────────
