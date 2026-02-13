@@ -171,6 +171,98 @@ class TestConcurrentAutoDeps:
             f"No artifacts should be created in CWD. Found: {artifact_files}"
 
 
+class TestFilelockVersionIndependence:
+    """Tests ensuring locking works regardless of filelock version behavior."""
+
+    @patch("pdd.auto_deps_main.insert_includes")
+    @patch("pdd.auto_deps_main.construct_paths")
+    def test_lock_file_behavior_version_independent(
+        self, mock_construct_paths, mock_insert_includes, tmp_path, mock_ctx
+    ):
+        """
+        Verify that auto_deps_main serializes correctly without depending on
+        lock file existence after release. filelock >= 3.21.0 deletes lock
+        files on release; older versions leave them. The code must work either way.
+        """
+        csv_path = str(tmp_path / "deps.csv")
+        output_path = str(tmp_path / "output.prompt")
+
+        mock_construct_paths.return_value = (
+            {},
+            {"prompt_file": "Prompt content"},
+            {"output": output_path, "csv": csv_path},
+            None,
+        )
+        mock_insert_includes.return_value = (
+            "Modified prompt", "full_path,file_summary,content_hash\n/f.py,s,h\n", 0.01, "test-model"
+        )
+
+        # Run auto_deps_main — should acquire and release lock without error
+        result = auto_deps_main(
+            ctx=mock_ctx,
+            prompt_file="test.prompt",
+            directory_path=str(tmp_path),
+            auto_deps_csv_path=None,
+            output=None,
+            force_scan=False,
+        )
+
+        assert result[0] == "Modified prompt", f"Should return modified prompt: {result}"
+        # CSV should be written regardless of lock file behavior
+        assert Path(csv_path).exists(), "CSV file should exist after execution"
+        # We intentionally do NOT assert lock file existence — it's version-dependent
+
+
+class TestForceScan:
+    """Tests for the force_scan option with locking."""
+
+    @patch("pdd.auto_deps_main.insert_includes")
+    @patch("pdd.auto_deps_main.construct_paths")
+    def test_force_scan_deletes_csv_and_rescans(
+        self, mock_construct_paths, mock_insert_includes, tmp_path, mock_ctx
+    ):
+        """
+        Verify that force_scan=True removes existing CSV and produces fresh output,
+        while the lock prevents concurrent corruption.
+        """
+        csv_path = tmp_path / "deps.csv"
+        output_path = str(tmp_path / "output.prompt")
+
+        # Create a pre-existing CSV to be deleted by force_scan
+        csv_path.write_text("full_path,file_summary,content_hash\n/old.py,old summary,oldhash\n")
+        assert csv_path.exists(), "Pre-existing CSV should exist before test"
+
+        mock_construct_paths.return_value = (
+            {},
+            {"prompt_file": "Prompt content"},
+            {"output": output_path, "csv": str(csv_path)},
+            None,
+        )
+        mock_insert_includes.return_value = (
+            "Fresh prompt", "full_path,file_summary,content_hash\n/new.py,new summary,newhash\n", 0.02, "test-model"
+        )
+
+        # Enable force_scan in context
+        mock_ctx.obj['force'] = False
+        mock_ctx.params['force'] = False
+
+        result = auto_deps_main(
+            ctx=mock_ctx,
+            prompt_file="test.prompt",
+            directory_path=str(tmp_path),
+            auto_deps_csv_path=None,
+            output=None,
+            force_scan=True,
+        )
+
+        assert result[0] == "Fresh prompt", f"Should return fresh prompt: {result}"
+        # CSV should contain new content, not old
+        assert csv_path.exists(), "CSV should be re-created after force scan"
+        csv_content = csv_path.read_text()
+        assert "/new.py" in csv_content, f"CSV should contain new scan results: {csv_content}"
+        assert "/old.py" not in csv_content, f"CSV should not contain old data: {csv_content}"
+
+
 class TestCacheSharing:
     """Tests verifying cache is properly shared between calls."""
 
