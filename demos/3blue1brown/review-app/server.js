@@ -718,6 +718,7 @@ async function runResolvePipeline(job) {
     });
   } catch (err) {
     const errMsg = err.message || String(err);
+    console.error(`Resolve pipeline error [job=${job.id}, annotation=${job.annotationId}]:`, errMsg);
     emitJobUpdate(job, { status: 'error', error: errMsg, completedAt: new Date().toISOString() });
 
     await safeWriteAnnotations((d) => {
@@ -740,12 +741,14 @@ function enqueueResolve(job, sectionId) {
     sectionQueues.set(sectionId, Promise.resolve());
   }
   const prev = sectionQueues.get(sectionId);
-  const next = prev.then(() => runResolvePipeline(job)).catch(() => {});
+  const next = prev.then(() => runResolvePipeline(job)).catch(err => {
+    console.error(`Resolve queue error [job=${job.id}]:`, err);
+  });
   sectionQueues.set(sectionId, next);
 }
 
 // POST /api/annotations/:id/resolve — kick off resolve pipeline
-app.post('/api/annotations/:id/resolve', (req, res) => {
+app.post('/api/annotations/:id/resolve', async (req, res) => {
   const data = readAnnotations();
   const ann = data.annotations.find(a => a.id === req.params.id);
   if (!ann) return res.status(404).json({ error: 'Not found' });
@@ -760,7 +763,7 @@ app.post('/api/annotations/:id/resolve', (req, res) => {
   const job = createJob(ann.id, sectionId);
 
   // Save job reference to annotation
-  safeWriteAnnotations((d) => {
+  await safeWriteAnnotations((d) => {
     const idx = d.annotations.findIndex(a => a.id === req.params.id);
     if (idx !== -1) {
       d.annotations[idx].resolveJob = { jobId: job.id, status: 'pending' };
