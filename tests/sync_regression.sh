@@ -481,6 +481,10 @@ else
     log "Warning: Source llm_model.csv not found at $PDD_BASE_DIR/pdd/data/llm_model.csv"
 fi
 
+# Force cheap models for regression tests to minimize cost
+export PDD_MODEL_DEFAULT="vertex_ai/gemini-3-flash-preview"
+export PDD_AGENTIC_PROVIDER="google,anthropic,openai"
+
 # Create a local .pddrc with explicit sync test contexts
 cat > ./.pddrc << 'EOF'
 contexts:

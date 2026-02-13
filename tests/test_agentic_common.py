@@ -6,6 +6,7 @@ from pathlib import Path
 
 from pdd.agentic_common import (
     get_available_agents,
+    get_agent_provider_preference,
     run_agentic_task,
     _calculate_gemini_cost,
     _calculate_codex_cost,
@@ -581,7 +582,7 @@ def test_gemini_cached_cost_logic(mock_cwd, mock_env, mock_load_model_data, mock
     mock_shutil_which.return_value = "/bin/gemini"
     os.environ["GEMINI_API_KEY"] = "key"
     # Force only google to be available
-    with patch('pdd.agentic_common.AGENT_PROVIDER_PREFERENCE', ["google"]):
+    with patch('pdd.agentic_common.get_agent_provider_preference', return_value=["google"]):
         # 1M cached tokens.
         # Cost should be 1M * 0.35 * 0.5 = $0.175
         mock_output = {
@@ -611,7 +612,7 @@ def test_codex_cached_cost_logic(mock_cwd, mock_env, mock_load_model_data, mock_
     """
     mock_shutil_which.return_value = "/bin/codex"
     os.environ["OPENAI_API_KEY"] = "key"
-    with patch('pdd.agentic_common.AGENT_PROVIDER_PREFERENCE', ["openai"]):
+    with patch('pdd.agentic_common.get_agent_provider_preference', return_value=["openai"]):
         # 1M cached tokens.
         # Cost should be 1M * 1.50 * 0.25 = $0.375
         jsonl_output = [
@@ -2508,3 +2509,37 @@ def test_post_step_comment_no_gh_cli(tmp_path):
         )
 
         assert result is False
+
+
+# ---------------------------------------------------------------------------
+# get_agent_provider_preference() tests
+# ---------------------------------------------------------------------------
+
+def test_get_agent_provider_preference_default(mock_env):
+    """Default preference when PDD_AGENTIC_PROVIDER is not set."""
+    mock_env.pop("PDD_AGENTIC_PROVIDER", None)
+    assert get_agent_provider_preference() == ["anthropic", "google", "openai"]
+
+
+def test_get_agent_provider_preference_single(mock_env):
+    """Single provider override."""
+    mock_env["PDD_AGENTIC_PROVIDER"] = "google"
+    assert get_agent_provider_preference() == ["google"]
+
+
+def test_get_agent_provider_preference_reordered(mock_env):
+    """Full list with different order."""
+    mock_env["PDD_AGENTIC_PROVIDER"] = "google,anthropic,openai"
+    assert get_agent_provider_preference() == ["google", "anthropic", "openai"]
+
+
+def test_get_agent_provider_preference_with_spaces(mock_env):
+    """Handles whitespace around provider names."""
+    mock_env["PDD_AGENTIC_PROVIDER"] = " google , anthropic , openai "
+    assert get_agent_provider_preference() == ["google", "anthropic", "openai"]
+
+
+def test_get_agent_provider_preference_empty_string(mock_env):
+    """Empty string falls back to default."""
+    mock_env["PDD_AGENTIC_PROVIDER"] = ""
+    assert get_agent_provider_preference() == ["anthropic", "google", "openai"]

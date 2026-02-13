@@ -319,7 +319,11 @@ app.get('/api/export', (req, res) => {
 
 // --- Start ---
 
-app.listen(PORT, () => {
-  console.log(`Review app running at http://localhost:${PORT}`);
-  console.log(`Serving videos from: ${OUTPUTS_DIR}`);
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Review app running at http://localhost:${PORT}`);
+    console.log(`Serving videos from: ${OUTPUTS_DIR}`);
+  });
+}
+
+module.exports = app;
