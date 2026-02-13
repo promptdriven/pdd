@@ -63,13 +63,13 @@
     - 'thinking_output': Reasoning output if available.
 
 % Model Selection:
-    - Base model: `$PDD_MODEL_DEFAULT` or `DEFAULT_LLM_MODEL` constant from `pdd/__init__.py`.
-    - CSV columns: model, provider, input/output costs ($/M tokens), coding_arena_elo, api_key, structured_output, reasoning_type, max_reasoning_tokens, optional 'location' for Vertex AI override.
+    - Base model: `$PDD_MODEL_DEFAULT` env var, or None (first available model in CSV used as surrogate).
+    - CSV columns: model, provider, input/output costs ($/M tokens), coding_arena_elo, api_key, structured_output, reasoning_type, max_reasoning_tokens, optional 'location' for Vertex AI override, optional 'base_url' for custom API endpoints.
     - Filter by api_key presence. Skip interactive check if api_key is empty or "EXISTING_KEY".
     - strength < 0.5: Interpolate by cost from base down to cheapest.
     - strength > 0.5: Interpolate by ELO from base up to highest.
     - strength = 0.5: Use base model, fallback to next highest ELO on failure.
-    - Soft fallback: If base model not in CSV, use first available model as surrogate and log warning.
+    - Soft fallback: If base model not in CSV, use first available model as surrogate (silently, no warning).
 
 % API Key Management:
     - Check `os.getenv(key_name)` for the required API key.
@@ -81,20 +81,22 @@
 
 % Reasoning Parameters:
     - CSV columns: reasoning_type ('budget', 'effort', 'none'), max_reasoning_tokens.
-    - 'budget': Calculate budget_tokens = int(time * max_reasoning_tokens), pass provider-specific thinking parameters (e.g., Anthropic 'thinking' param).
-    - 'effort': Map time to "low"/"medium"/"high", pass reasoning_effort or provider-specific params.
+    - 'budget': Calculate budget_tokens = int(time * max_reasoning_tokens), pass provider-specific thinking parameters (e.g., Anthropic 'thinking' param with type="enabled").
+    - 'effort': Map time to "low"/"medium"/"high". OpenAI gpt-5*: pass reasoning={effort, summary:"auto"} for Responses API. Other models: pass reasoning_effort.
     - 'none': No reasoning parameters.
 
 % LLM Invocation:
-    - For OpenAI gpt-5* models: Call litellm.responses() API to support 'reasoning' parameter. Build text.format block for structured output.
+    - For OpenAI gpt-5* models: Call litellm.responses() API to support 'reasoning' parameter. Build text.format block for structured output (type=json_schema when output_pydantic/output_schema, else type=text). Skip temperature for Responses API.
     - For other models: Call litellm.completion() or litellm.batch_completion().
-    - Pass: model, messages, temperature, num_retries=2.
+    - Pass: model, messages, temperature, num_retries=2, timeout=LLM_CALL_TIMEOUT (120s).
     - Do NOT set max_tokens/max_completion_tokens; rely on provider defaults.
     - Anthropic with thinking enabled: Force temperature=1.
+    - LM Studio: Set base_url from LM_STUDIO_API_BASE env (default http://localhost:1234/v1) and api_key placeholder "lm-studio".
 
 % Structured Output:
     - Check 'structured_output' CSV flag.
     - Use response_format with type='json_schema', json_schema containing name, schema, and strict=True to enforce all required fields.
+    - Recursively ensure ALL properties are in required arrays (_ensure_all_properties_required) and add additionalProperties: false on ALL object schemas (_add_additional_properties_false), including nested objects, array items, anyOf/oneOf/allOf, and $defs.
     - LM Studio: Use extra_body to bypass drop_params stripping the schema.
     - Groq: Use simple json_object mode with schema instruction in system prompt.
     - If model doesn't support structured output, parse response as JSON and validate.
@@ -121,13 +123,13 @@
 
 % Cloud Execution:
     - Define three cloud-related exceptions:
-      - CloudFallbackError: Raised for recoverable errors (network, timeout, auth). Triggers fallback to local.
+      - CloudFallbackError: Raised for recoverable errors (network, timeout, auth, 5xx). Triggers fallback to local. On 401/403, clear JWT cache.
       - CloudInvocationError: Raised for non-recoverable cloud errors.
       - InsufficientCreditsError: Raised for 402 Payment Required. Does NOT fall back to local.
     - Helper functions:
-      - `_pydantic_to_json_schema(pydantic_class)`: Convert Pydantic model to JSON Schema for cloud transport. Include `__pydantic_class_name__` for debugging.
+      - `_pydantic_to_json_schema(pydantic_class)`: Convert Pydantic model to JSON Schema for cloud transport. Calls _ensure_all_properties_required. Include `__pydantic_class_name__` for debugging.
       - `_validate_with_pydantic(result, pydantic_class)`: Validate cloud response (dict or str) using the Pydantic model.
-      - `_llm_invoke_cloud(...)`: Execute llm_invoke via cloud endpoint `llmInvoke`. 
+      - `_llm_invoke_cloud(...)`: Execute llm_invoke via cloud endpoint `llmInvoke`. 5-minute timeout.
 
     - Cloud execution path (at start of llm_invoke, before local validation):
       - If use_cloud is None: Check `PDD_FORCE_LOCAL` env var. If not set, check `CloudConfig.is_cloud_enabled()`.
