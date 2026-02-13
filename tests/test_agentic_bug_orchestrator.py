@@ -1696,3 +1696,322 @@ def test_step_5_5_context_key_restoration_unit():
         assert "Step 5.5 classification output" in formatted
     except KeyError as e:
         pytest.fail(f"Template formatting failed with KeyError: {e}. Context keys: {list(context.keys())}")
+
+
+# ============================================================================
+# Issue #467: False Cache / Ratchet Effect on last_completed_step
+# ============================================================================
+
+
+def test_consecutive_failures_do_not_advance_last_completed_step(mock_dependencies, default_args, tmp_path):
+    """
+    Issue #467: When ALL steps fail, last_completed_step should remain 0, not ratchet to 5.5.
+
+    Bug: Each failed step sets last_completed_step_to_save = step_num - 1, which means:
+      - Step 1 fails → saves last_completed_step = 0
+      - Step 2 fails → saves last_completed_step = 1  (BUG: step 1 also failed!)
+      - Step 3 fails → saves last_completed_step = 2  (BUG: step 2 also failed!)
+      - ... continues until step 6 fails → saves last_completed_step = 5.5
+
+    This "ratchet effect" means a subsequent run resumes from step 6, skipping
+    steps 1-5.5 even though none of them succeeded.
+
+    Expected: last_completed_step should remain 0 when all steps fail.
+    """
+    import json
+    from pdd.agentic_bug_orchestrator import _get_state_dir
+
+    mock_run, mock_load, _ = mock_dependencies
+    default_args["cwd"] = tmp_path
+
+    # ALL steps fail with provider errors
+    def side_effect_run(*args, **kwargs):
+        return (False, "All agent providers failed", 0.0, "")
+
+    mock_run.side_effect = side_effect_run
+
+    saved_states = []
+
+    def capture_state(cwd, issue_number, workflow_type, state, state_dir, repo_owner, repo_name, use_github_state=True, github_comment_id=None):
+        saved_states.append(state.copy())
+        return None
+
+    with patch("pdd.agentic_bug_orchestrator.save_workflow_state", side_effect=capture_state):
+        run_agentic_bug_orchestrator(**default_args)
+
+    # The final saved state (after the last step) should have last_completed_step = 0
+    # because no step actually succeeded
+    final_state = saved_states[-1]
+    assert final_state["last_completed_step"] == 0, (
+        f"When all steps fail, last_completed_step should be 0, "
+        f"but got {final_state['last_completed_step']}. "
+        f"This is the 'ratchet effect' bug from issue #467."
+    )
+
+    # All step outputs should be prefixed with "FAILED:"
+    for step_key, output in final_state["step_outputs"].items():
+        assert output.startswith("FAILED:"), (
+            f"Step {step_key} output should start with 'FAILED:' but got: {output[:50]}"
+        )
+
+
+def test_resume_from_all_failed_state_reruns_from_step_1(mock_dependencies, default_args, tmp_path):
+    """
+    Issue #467: When resuming from a state where all steps failed,
+    the workflow should re-run from step 1, not skip to step 6.
+
+    Bug: A previous run where all steps failed saves last_completed_step=5.5
+    (due to the ratchet effect). On resume, load_workflow_state returns this
+    corrupted state, and the orchestrator skips to step 6, printing
+    "Resuming from step 6 (steps 1-5.5 cached)" even though nothing succeeded.
+
+    This test creates the exact corrupted state observed in issue #467 and
+    verifies that resume correctly detects all outputs are FAILED and
+    re-runs from step 1.
+    """
+    import json
+    from pdd.agentic_bug_orchestrator import _get_state_dir
+
+    mock_run, mock_load, _ = mock_dependencies
+    default_args["cwd"] = tmp_path
+
+    # Create the exact corrupted state observed in issue #467:
+    # last_completed_step=5.5 but ALL step outputs have FAILED: prefix
+    state_dir = _get_state_dir(tmp_path)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_file = state_dir / f"bug_state_{default_args['issue_number']}.json"
+
+    corrupted_state = {
+        "workflow": "bug",
+        "issue_number": default_args["issue_number"],
+        "issue_url": default_args["issue_url"],
+        "last_completed_step": 5.5,  # Ratcheted value from bug
+        "step_outputs": {
+            "1": "FAILED: All agent providers failed",
+            "2": "FAILED: All agent providers failed",
+            "3": "FAILED: All agent providers failed",
+            "4": "FAILED: All agent providers failed",
+            "5": "FAILED: All agent providers failed",
+            "5.5": "FAILED: All agent providers failed",
+        },
+        "total_cost": 0.0,
+        "model_used": "",
+        "changed_files": [],
+        "worktree_path": None,
+    }
+    with open(state_file, "w") as f:
+        json.dump(corrupted_state, f)
+
+    # Track which steps are actually executed
+    executed_steps = []
+
+    def side_effect_run(*args, **kwargs):
+        label = kwargs.get('label', '')
+        executed_steps.append(label)
+        if label == 'step7':
+            return (True, "FILES_CREATED: test.py", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    # The orchestrator should re-run from step 1 since all cached outputs are FAILED
+    assert "step1" in executed_steps, (
+        f"Step 1 should be re-executed because its cached output is FAILED, "
+        f"but executed steps were: {executed_steps}. "
+        f"This is the 'blind resume' bug from issue #467."
+    )
+
+    # All 11 steps should be executed (none should be skipped)
+    assert mock_run.call_count == 11, (
+        f"All 11 steps should be executed when all cached outputs are FAILED, "
+        f"but only {mock_run.call_count} steps were executed: {executed_steps}"
+    )
+
+
+def test_partial_failure_preserves_last_successful_step(mock_dependencies, default_args, tmp_path):
+    """
+    Issue #467: When steps 1-3 succeed and steps 4+ fail,
+    last_completed_step should be 3 (last successful step).
+
+    Bug: With the ratchet effect, step 4 fails → saves 3, step 5 fails → saves 4,
+    step 6 fails → saves 5.5, etc. The final saved value is higher than the
+    actual last successful step (3).
+
+    Expected: last_completed_step should remain 3 throughout all subsequent failures.
+    """
+    import json
+    from pdd.agentic_bug_orchestrator import _get_state_dir
+
+    mock_run, mock_load, _ = mock_dependencies
+    default_args["cwd"] = tmp_path
+
+    # Steps 1-3 succeed, steps 4+ fail
+    def side_effect_run(*args, **kwargs):
+        label = kwargs.get('label', '')
+        step_str = label.replace('step', '').replace('_', '.')
+        try:
+            step_num = float(step_str)
+        except ValueError:
+            step_num = 0
+        if step_num <= 3:
+            return (True, f"Step {step_num} succeeded", 0.1, "gpt-4")
+        else:
+            return (False, "All agent providers failed", 0.0, "")
+
+    mock_run.side_effect = side_effect_run
+
+    saved_states = []
+
+    def capture_state(cwd, issue_number, workflow_type, state, state_dir, repo_owner, repo_name, use_github_state=True, github_comment_id=None):
+        saved_states.append(state.copy())
+        return None
+
+    with patch("pdd.agentic_bug_orchestrator.save_workflow_state", side_effect=capture_state):
+        run_agentic_bug_orchestrator(**default_args)
+
+    # The final saved state should have last_completed_step = 3
+    # (the last step that actually succeeded)
+    final_state = saved_states[-1]
+    assert final_state["last_completed_step"] == 3, (
+        f"When steps 1-3 succeed and 4+ fail, last_completed_step should be 3, "
+        f"but got {final_state['last_completed_step']}. "
+        f"The ratchet effect advanced it beyond the last successful step."
+    )
+
+
+def test_resume_from_partial_failure_state_reruns_failed_steps(mock_dependencies, default_args, tmp_path):
+    """
+    Issue #467: When resuming from a state where steps 1-3 succeeded but 4-5.5 failed,
+    the workflow should resume from step 4 (re-run the first failed step), not step 6.
+
+    Bug: Due to the ratchet effect, the saved state has last_completed_step=5.5
+    even though only steps 1-3 actually succeeded. On resume, steps 4 and 5 are
+    skipped even though they failed.
+
+    This test creates a state with mixed success/failure outputs and verifies
+    that resume correctly identifies the actual last successful step.
+    """
+    import json
+    from pdd.agentic_bug_orchestrator import _get_state_dir
+
+    mock_run, mock_load, _ = mock_dependencies
+    default_args["cwd"] = tmp_path
+
+    # Create state where steps 1-3 succeeded, steps 4-5.5 failed,
+    # but last_completed_step is incorrectly set to 5.5 (ratchet effect)
+    state_dir = _get_state_dir(tmp_path)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_file = state_dir / f"bug_state_{default_args['issue_number']}.json"
+
+    corrupted_state = {
+        "workflow": "bug",
+        "issue_number": default_args["issue_number"],
+        "issue_url": default_args["issue_url"],
+        "last_completed_step": 5.5,  # Ratcheted: should be 3
+        "step_outputs": {
+            "1": "No duplicates found",
+            "2": "Confirmed bug",
+            "3": "Sufficient info",
+            "4": "FAILED: All agent providers failed",
+            "5": "FAILED: All agent providers failed",
+            "5.5": "FAILED: All agent providers failed",
+        },
+        "total_cost": 0.3,
+        "model_used": "gpt-4",
+        "changed_files": [],
+        "worktree_path": None,
+    }
+    with open(state_file, "w") as f:
+        json.dump(corrupted_state, f)
+
+    # Track which steps are executed
+    executed_steps = []
+
+    def side_effect_run(*args, **kwargs):
+        label = kwargs.get('label', '')
+        executed_steps.append(label)
+        if label == 'step7':
+            return (True, "FILES_CREATED: test.py", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    # Step 4 should be re-executed because its cached output is FAILED
+    assert "step4" in executed_steps, (
+        f"Step 4 should be re-executed because its cached output is FAILED, "
+        f"but executed steps were: {executed_steps}. "
+        f"The blind resume skipped failed steps."
+    )
+
+    # Steps 1-3 should NOT be re-executed (they succeeded)
+    assert "step1" not in executed_steps, "Step 1 succeeded and should not be re-run"
+    assert "step2" not in executed_steps, "Step 2 succeeded and should not be re-run"
+    assert "step3" not in executed_steps, "Step 3 succeeded and should not be re-run"
+
+    # Steps 4, 5, 5.5, 6-10 should all be executed (8 steps)
+    assert mock_run.call_count == 8, (
+        f"Expected 8 steps (4, 5, 5.5, 6-10) but got {mock_run.call_count}: {executed_steps}"
+    )
+
+
+def test_failure_handling_does_not_use_step_num_minus_one(mock_dependencies, default_args, tmp_path):
+    """
+    Issue #467: Directly tests the step_num - 1 formula bug with consecutive failures.
+
+    Bug: When step 1 fails, last_completed_step_to_save = 1 - 1 = 0 (correct).
+    When step 2 then fails, last_completed_step_to_save = 2 - 1 = 1 (WRONG: step 1 failed too).
+
+    The step_num - 1 formula assumes the previous step succeeded, which is false
+    when consecutive steps fail.
+
+    Expected: After both steps 1 and 2 fail, last_completed_step should be 0.
+    """
+    import json
+    from pdd.agentic_bug_orchestrator import _get_state_dir
+
+    mock_run, mock_load, _ = mock_dependencies
+    default_args["cwd"] = tmp_path
+
+    # Steps 1 and 2 both fail, step 3 triggers hard stop for clean exit
+    def side_effect_run(*args, **kwargs):
+        label = kwargs.get('label', '')
+        if label == 'step1':
+            return (False, "All agent providers failed", 0.0, "")
+        if label == 'step2':
+            return (False, "All agent providers failed", 0.0, "")
+        if label == 'step3':
+            # Trigger hard stop to exit the loop cleanly
+            return (True, "Needs More Info", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    saved_states = []
+
+    def capture_state(cwd, issue_number, workflow_type, state, state_dir, repo_owner, repo_name, use_github_state=True, github_comment_id=None):
+        saved_states.append(state.copy())
+        return None
+
+    with patch("pdd.agentic_bug_orchestrator.save_workflow_state", side_effect=capture_state):
+        run_agentic_bug_orchestrator(**default_args)
+
+    # Find the state saved after step 2 failed
+    step2_state = None
+    for s in saved_states:
+        if "2" in s.get("step_outputs", {}):
+            step2_state = s
+            break
+
+    assert step2_state is not None, "State should have been saved after step 2"
+
+    # Key assertion: After steps 1 AND 2 both fail, last_completed_step should be 0
+    # (not 1, which is what step_num - 1 gives when step 2 fails)
+    assert step2_state["last_completed_step"] == 0, (
+        f"After steps 1 and 2 both fail, last_completed_step should be 0, "
+        f"but got {step2_state['last_completed_step']}. "
+        f"The step_num - 1 formula incorrectly assumed step 1 succeeded."
+    )

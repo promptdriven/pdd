@@ -212,13 +212,14 @@ To avoid re-running completed steps when the workflow is paused (e.g., needs mor
    - State directory: `_get_state_dir(cwd) -> Path` returns `.pdd/bug-state/` relative to git root
 
 4. **Orchestrator logic**:
-   - On start: Call `load_workflow_state()`, determine `start_step = last_completed_step + 1`
+   - On start: Call `load_workflow_state()`, validate cached state, determine `start_step`
    - Track `github_comment_id` from load result for subsequent saves
+   - **State validation on load**: After loading state, find the actual last *successfully* completed step by scanning `step_outputs` for entries that do NOT start with "FAILED:". Set `last_completed_step` to the highest step number whose output is not a FAILED entry (or 0 if all are failed). This prevents resuming past failed steps.
    - If state exists: Print `"Resuming from step {start_step} (steps 1-{last_completed_step} cached)"`
    - For steps < start_step: Use cached output from `state["step_outputs"]`
    - For steps >= start_step: Execute normally, call `save_workflow_state()` after each
      - On success: Store output in step_outputs, set `last_completed_step = step_num`
-     - On failure (not hard stop): Store "FAILED: {output}" in step_outputs, keep `last_completed_step = step_num - 1` (ensures resume re-runs the failed step)
+     - On failure (not hard stop): Store "FAILED: {output}" in step_outputs, keep `last_completed_step` unchanged from its current value (do NOT set to `step_num - 1`, as that step may also have failed)
    - On successful completion (step 10 completes): Call `clear_workflow_state()`
    - On hard stop (e.g., needs more info): State remains for next run
 
