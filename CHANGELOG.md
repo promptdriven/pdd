@@ -2,16 +2,30 @@
 
 ### Feat
 
-- Implement robust JSON extraction from LLM outputs to handle varied text formats and update the Fireworks model entry.
-- enhance agentic test command discovery via `language_format.csv` and expand analysis context for the review app.
-- Allow agent provider preference to be configured via environment variable and add tests for the review app.
-- Implement new grounding experiment infrastructure and a 3blue1brown review application demo.
-- Add Cloud Batch test results and update changelog with recent features, fixes, and build improvements.
+- **CSV-driven test command discovery**: `default_verify_cmd_for()` now reads `run_test_command` from `language_format.csv` instead of hardcoding per-language commands. JavaScript, TypeScript, TypeScript React, JavaScriptReact, Go, Rust, Swift, and C# now resolve test commands from CSV, reducing agentic fallback for common languages.
+- **Configurable agent provider preference**: New `PDD_AGENTIC_PROVIDER` environment variable overrides the default `anthropic,google,openai` provider order (e.g., `PDD_AGENTIC_PROVIDER=google` to use only Google). Replaces the former `AGENT_PROVIDER_PREFERENCE` constant with `get_agent_provider_preference()`.
+- **Gemini and Codex model override**: `GEMINI_MODEL` and `CODEX_MODEL` environment variables now pass `--model` to the Gemini CLI and Codex CLI respectively, mirroring the existing `CLAUDE_MODEL` support for Anthropic.
+- **LLM call timeout**: All `litellm.completion()` calls now enforce a 120-second timeout (`LLM_CALL_TIMEOUT`), preventing indefinite hangs on unresponsive providers.
+- **Grounding experiment infrastructure**: New `experiments/grounding/` directory with retrieval quality (Phase 1) and generation stability (Phase 2) experiments, including seed data, query sets, Makefile-driven automation, and CSV result tracking.
 
 ### Fix
 
-- update JS/TS test to expect explicit run_test_command values
-- resolve 4 cloud test failures (env fixtures, lock assertion, LLM timeout)
+- **JS/TS test expectations updated**: Tests now assert explicit `run_test_command` values (`node {file}`, `npx tsx {file}`) instead of expecting empty strings, matching the new CSV-driven discovery.
+- **Lock file assertion removed**: `test_auto_deps_lock.py` no longer asserts lock file existence after release, which was filelock-version-dependent. Serialization is still verified via execution order assertions.
+- **LLM timeout for cloud tests**: Added 120s timeout to all LLM retry paths in `llm_invoke.py`, fixing cloud test hangs on unresponsive providers.
+- **Test fixture parameters**: Added missing `mock_env` and `mock_load_model_data` fixtures to `TestAgenticDebugLogging` test that was failing in isolation.
+
+### Build
+
+- **PDD secrets dispatch workflow**: New `.github/workflows/pdd-secrets-dispatch.yml` for encrypted secret exchange between GitHub Actions runners via RSA+AES envelope encryption.
+- **Regression test cost control**: `regression.sh` and `sync_regression.sh` now set `PDD_MODEL_DEFAULT=vertex_ai/gemini-3-flash-preview` and `PDD_AGENTIC_PROVIDER=google,anthropic,openai` to force cheaper models during regression runs.
+- **Cloud Batch provider config**: `ci/cloud-batch/entrypoint.sh` now sets `PDD_AGENTIC_PROVIDER=google,anthropic,openai` to prefer Google's Gemini on Vertex AI in CI.
+- **GLM-5 model update**: Replaced Fireworks `glm-4p7` (Elo 1441, $0.60/$2.20) with `glm-5` (Elo 1451, $1.00/$3.20). Enabled `structured_output` for DeepSeek v3.2. Added `global` location for Gemini 3 Flash Preview and Claude Opus 4.6 on Vertex AI.
+
+### Refactor
+
+- **`AGENT_PROVIDER_PREFERENCE` → `get_agent_provider_preference()`**: Constant replaced with a function that reads from `PDD_AGENTIC_PROVIDER` env var, enabling runtime configuration without code changes.
+- **`default_verify_cmd_for()` resolution chain**: Refactored from a Python-only hardcoded function to a three-step resolution: CSV lookup → Python fallback → None (agentic mode).
 
 ## v0.0.146 (2026-02-11)
 
