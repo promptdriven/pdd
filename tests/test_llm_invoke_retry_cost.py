@@ -1,7 +1,7 @@
-"""Tests for issue #509: Cost under-reporting when retry calls overwrite _LAST_CALLBACK_DATA.
+"""Tests for issue #509: Cost under-reporting when retry calls overwrite _llm_mod._LAST_CALLBACK_DATA.
 
 When llm_invoke() retries due to None content, malformed JSON, or invalid Python syntax,
-the success callback overwrites _LAST_CALLBACK_DATA["cost"] with only the retry's cost,
+the success callback overwrites _llm_mod._LAST_CALLBACK_DATA["cost"] with only the retry's cost,
 silently losing the original call's cost.
 """
 
@@ -9,7 +9,7 @@ import pytest
 import os
 import pandas as pd
 from unittest.mock import patch, MagicMock
-from pdd.llm_invoke import _LAST_CALLBACK_DATA
+import pdd.llm_invoke as _llm_mod
 
 
 def _make_mock_model():
@@ -43,7 +43,7 @@ def _make_response(content, prompt_tokens=100, completion_tokens=50):
 
 
 def _make_completion_side_effect(responses_and_costs):
-    """Create a side_effect function that sets _LAST_CALLBACK_DATA on each call.
+    """Create a side_effect function that sets _llm_mod._LAST_CALLBACK_DATA on each call.
 
     responses_and_costs: list of (response, cost) tuples
     """
@@ -53,10 +53,10 @@ def _make_completion_side_effect(responses_and_costs):
         idx = call_count[0]
         call_count[0] += 1
         resp, cost = responses_and_costs[idx]
-        # Simulate the callback overwriting _LAST_CALLBACK_DATA
-        _LAST_CALLBACK_DATA["cost"] = cost
-        _LAST_CALLBACK_DATA["input_tokens"] = resp.usage.prompt_tokens
-        _LAST_CALLBACK_DATA["output_tokens"] = resp.usage.completion_tokens
+        # Simulate the callback overwriting _llm_mod._LAST_CALLBACK_DATA
+        _llm_mod._LAST_CALLBACK_DATA["cost"] = cost
+        _llm_mod._LAST_CALLBACK_DATA["input_tokens"] = resp.usage.prompt_tokens
+        _llm_mod._LAST_CALLBACK_DATA["output_tokens"] = resp.usage.completion_tokens
         return resp
 
     return side_effect
@@ -64,11 +64,11 @@ def _make_completion_side_effect(responses_and_costs):
 
 @pytest.fixture(autouse=True)
 def reset_callback_data():
-    """Reset _LAST_CALLBACK_DATA before each test."""
-    _LAST_CALLBACK_DATA["cost"] = 0.0
-    _LAST_CALLBACK_DATA["input_tokens"] = 0
-    _LAST_CALLBACK_DATA["output_tokens"] = 0
-    _LAST_CALLBACK_DATA["finish_reason"] = None
+    """Reset _llm_mod._LAST_CALLBACK_DATA before each test."""
+    _llm_mod._LAST_CALLBACK_DATA["cost"] = 0.0
+    _llm_mod._LAST_CALLBACK_DATA["input_tokens"] = 0
+    _llm_mod._LAST_CALLBACK_DATA["output_tokens"] = 0
+    _llm_mod._LAST_CALLBACK_DATA["finish_reason"] = None
     yield
 
 

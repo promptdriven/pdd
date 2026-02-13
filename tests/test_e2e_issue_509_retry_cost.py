@@ -1,12 +1,12 @@
 """
-E2E Test for Issue #509: Cost under-reporting when retry calls overwrite _LAST_CALLBACK_DATA.
+E2E Test for Issue #509: Cost under-reporting when retry calls overwrite _llm_mod._LAST_CALLBACK_DATA.
 
 This test exercises the generate command through Click's CliRunner, simulating a scenario
 where llm_invoke retries due to None content. The test verifies that the cost returned
 by llm_invoke (and ultimately reported by the CLI) includes BOTH the original and retry
 call costs, not just the retry cost.
 
-The bug: _LAST_CALLBACK_DATA["cost"] gets overwritten (not accumulated) on retry,
+The bug: _llm_mod._LAST_CALLBACK_DATA["cost"] gets overwritten (not accumulated) on retry,
 so the cost from the first LLM call is silently lost.
 """
 
@@ -17,7 +17,7 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 from click.testing import CliRunner
 
-from pdd.llm_invoke import _LAST_CALLBACK_DATA
+import pdd.llm_invoke as _llm_mod
 
 
 @pytest.fixture(autouse=True)
@@ -30,11 +30,11 @@ def set_pdd_path(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def reset_callback_data():
-    """Reset _LAST_CALLBACK_DATA before each test."""
-    _LAST_CALLBACK_DATA["cost"] = 0.0
-    _LAST_CALLBACK_DATA["input_tokens"] = 0
-    _LAST_CALLBACK_DATA["output_tokens"] = 0
-    _LAST_CALLBACK_DATA["finish_reason"] = None
+    """Reset _llm_mod._LAST_CALLBACK_DATA before each test."""
+    _llm_mod._LAST_CALLBACK_DATA["cost"] = 0.0
+    _llm_mod._LAST_CALLBACK_DATA["input_tokens"] = 0
+    _llm_mod._LAST_CALLBACK_DATA["output_tokens"] = 0
+    _llm_mod._LAST_CALLBACK_DATA["finish_reason"] = None
     yield
 
 
@@ -100,14 +100,14 @@ class TestE2ERetryCostAccumulation:
         def mock_completion(**kwargs):
             call_count[0] += 1
             if call_count[0] == 1:
-                _LAST_CALLBACK_DATA["cost"] = first_call_cost
-                _LAST_CALLBACK_DATA["input_tokens"] = 100
-                _LAST_CALLBACK_DATA["output_tokens"] = 50
+                _llm_mod._LAST_CALLBACK_DATA["cost"] = first_call_cost
+                _llm_mod._LAST_CALLBACK_DATA["input_tokens"] = 100
+                _llm_mod._LAST_CALLBACK_DATA["output_tokens"] = 50
                 return first_resp
             else:
-                _LAST_CALLBACK_DATA["cost"] = retry_call_cost
-                _LAST_CALLBACK_DATA["input_tokens"] = 100
-                _LAST_CALLBACK_DATA["output_tokens"] = 50
+                _llm_mod._LAST_CALLBACK_DATA["cost"] = retry_call_cost
+                _llm_mod._LAST_CALLBACK_DATA["input_tokens"] = 100
+                _llm_mod._LAST_CALLBACK_DATA["output_tokens"] = 50
                 return retry_resp
 
         # Patch at the llm_invoke level to control LLM behavior
@@ -194,14 +194,14 @@ class TestE2ERetryCostAccumulation:
             call_count[0] += 1
             # Only first call can trigger cache-bypass retry; subsequent are direct
             if idx < len(costs):
-                _LAST_CALLBACK_DATA["cost"] = costs[idx]
-                _LAST_CALLBACK_DATA["input_tokens"] = 100
-                _LAST_CALLBACK_DATA["output_tokens"] = 50
+                _llm_mod._LAST_CALLBACK_DATA["cost"] = costs[idx]
+                _llm_mod._LAST_CALLBACK_DATA["input_tokens"] = 100
+                _llm_mod._LAST_CALLBACK_DATA["output_tokens"] = 50
                 return responses[idx]
             # Fallback
-            _LAST_CALLBACK_DATA["cost"] = 0.05
-            _LAST_CALLBACK_DATA["input_tokens"] = 100
-            _LAST_CALLBACK_DATA["output_tokens"] = 50
+            _llm_mod._LAST_CALLBACK_DATA["cost"] = 0.05
+            _llm_mod._LAST_CALLBACK_DATA["input_tokens"] = 100
+            _llm_mod._LAST_CALLBACK_DATA["output_tokens"] = 50
             return responses[-1]
 
         with patch("pdd.llm_invoke._load_model_data") as mock_load, \
