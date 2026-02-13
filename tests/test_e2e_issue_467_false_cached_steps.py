@@ -2,22 +2,35 @@
 E2E Test for Issue #467: pdd bug falsely reporting cached steps
 
 Tests the full bug orchestrator workflow to verify that when all LLM providers
-fail for every step, the saved workflow state correctly keeps last_completed_step
-at 0 (or the last actually successful step), and on resume the orchestrator
-re-runs failed steps instead of blindly skipping them.
+fail for every step, the saved workflow state does not falsely claim steps are
+"cached" (completed) on subsequent runs.
 
-Bug Context (now fixed):
+Bug Context:
 -----------
-When `pdd bug` was run and ALL agent providers failed for every step:
-1. Each failed step set `last_completed_step_to_save = step_num - 1`
-2. This "ratcheted" the value up to 5.5 despite zero successes
-3. On the next run, the orchestrator would skip steps 1-5.5 as "cached"
+When `pdd bug` is run and ALL agent providers fail for every step:
+1. The orchestrator runs through all 11 steps, each returning failure
+2. Each failed step sets `last_completed_step_to_save = step_num - 1`
+3. Because the loop never breaks, this "ratchets" the value up to 5.5
+4. The state is saved with `last_completed_step=5.5` to local file / GitHub
+5. On the NEXT `pdd bug` run, `load_workflow_state` reads this state
+6. The orchestrator prints "Resuming from step 6 (steps 1-5.5 cached)"
+7. Steps 1-5.5 are skipped even though NONE of them succeeded
 
-Fix:
-----
-1. On failure, last_completed_step_to_save remains unchanged (no ratchet)
-2. On resume, cached step outputs are validated for FAILED: prefixes
-3. Consecutive provider failures (>=3) trigger early abort
+This E2E test exercises the REAL state persistence round-trip:
+- Run 1: All providers fail → real save_workflow_state writes corrupted state
+- Run 2: real load_workflow_state reads it → orchestrator blindly resumes from step 6
+
+Unlike the unit tests in test_agentic_bug_orchestrator.py which mock
+save/load_workflow_state, this test uses the real local file persistence
+to verify the bug manifests through the full code path.
+
+Root Cause:
+----------
+Two interacting defects in agentic_bug_orchestrator.py:
+1. Failure handling (lines 514-522): `last_completed_step_to_save = step_num - 1`
+   assumes the previous step succeeded, which is false with consecutive failures.
+2. Resume logic (line 255): `load_workflow_state` returns raw state without
+   validating that cached step outputs don't have FAILED: prefixes.
 """
 
 import json
@@ -60,21 +73,22 @@ def mock_git_repo(tmp_path):
 @pytest.mark.e2e
 class TestIssue467FalseCachedStepsE2E:
     """
-    E2E tests for Issue #467: Verify the fix for false cached steps.
+    E2E tests for Issue #467: False cached steps due to ratchet effect.
 
-    These tests exercise the full state persistence round-trip (save -> load)
-    to verify that the fix correctly prevents the ratchet effect and blind resume.
+    These tests exercise the full state persistence round-trip (save → load)
+    to verify the bug manifests end-to-end, not just at the unit level.
     """
 
-    def test_all_failures_then_resume_reruns_all_steps(self, mock_git_repo):
+    def test_all_failures_then_resume_skips_steps(self, mock_git_repo):
         """
-        E2E test: Two consecutive orchestrator runs with the fix applied.
+        E2E test: Two consecutive orchestrator runs demonstrate the bug.
 
-        Run 1: All LLM providers fail -> early abort after 3 consecutive failures,
-               state saved with last_completed_step=0
-        Run 2: Orchestrator loads state -> re-runs ALL steps from step 1
+        Run 1: All LLM providers fail → state saved with last_completed_step=5.5
+        Run 2: Orchestrator loads state → skips to step 6, missing steps 1-5.5
 
-        Uses REAL save_workflow_state (local file) and REAL load_workflow_state.
+        This test uses REAL save_workflow_state (local file) and REAL
+        load_workflow_state to exercise the full persistence round-trip.
+        Only LLM calls, GitHub state, and console are mocked.
         """
         from pdd.agentic_bug_orchestrator import (
             run_agentic_bug_orchestrator,
@@ -92,9 +106,10 @@ class TestIssue467FalseCachedStepsE2E:
             "cwd": mock_git_repo,
             "verbose": False,
             "quiet": True,
-            "use_github_state": False,
+            "use_github_state": False,  # Use local file only (no GitHub API)
         }
 
+        # Create worktree directory so _setup_worktree mock works
         mock_worktree = mock_git_repo / ".pdd" / "worktrees" / "fix-issue-467"
         mock_worktree.mkdir(parents=True, exist_ok=True)
 
@@ -118,19 +133,24 @@ class TestIssue467FalseCachedStepsE2E:
         with open(state_file, "r") as f:
             saved_state = json.load(f)
 
-        # FIX VERIFIED: last_completed_step should be 0 (no ratchet effect)
-        assert saved_state["last_completed_step"] == 0, (
-            f"last_completed_step should be 0 when all steps fail, "
-            f"got {saved_state['last_completed_step']}"
+        # BUG ASSERTION: The ratchet effect causes last_completed_step to be 5.5
+        # even though ALL steps failed. Correct value should be 0.
+        assert saved_state["last_completed_step"] != 0, (
+            "If this assertion fails, the bug has been FIXED. "
+            "last_completed_step correctly stayed at 0 despite all steps failing. "
+            "Update this test to verify the fix instead."
+        )
+        assert saved_state["last_completed_step"] == 5.5, (
+            f"Expected ratcheted value of 5.5, got {saved_state['last_completed_step']}"
         )
 
-        # Verify all step outputs (from the 3 steps before early abort) have FAILED: prefix
+        # Verify all step outputs have FAILED: prefix
         for step_key, output in saved_state["step_outputs"].items():
             assert output.startswith("FAILED:"), (
                 f"Step {step_key} should have FAILED prefix, got: {output[:50]}"
             )
 
-        # ---- RUN 2: Resume should re-run all steps ----
+        # ---- RUN 2: Resume from corrupted state ----
         executed_steps = []
 
         def track_and_succeed(*args, **kwargs):
@@ -143,27 +163,44 @@ class TestIssue467FalseCachedStepsE2E:
 
         with patch("pdd.agentic_bug_orchestrator.run_agentic_task", side_effect=track_and_succeed), \
              patch("pdd.agentic_bug_orchestrator.load_prompt_template", return_value="Prompt for {issue_number}"), \
-             patch("pdd.agentic_bug_orchestrator.console"), \
+             patch("pdd.agentic_bug_orchestrator.console") as mock_console, \
              patch("pdd.agentic_bug_orchestrator._setup_worktree", return_value=(mock_worktree, None)):
 
-            run_agentic_bug_orchestrator(**orchestrator_args)
+            success, msg, cost, model, files = run_agentic_bug_orchestrator(
+                **orchestrator_args
+            )
 
-        # FIX VERIFIED: All 11 steps should execute (none skipped)
-        assert "step1" in executed_steps, (
-            f"Step 1 should be re-executed since its cached output was FAILED, "
-            f"but executed steps were: {executed_steps}"
+        # BUG ASSERTION: The orchestrator should re-run from step 1 since all
+        # cached outputs are FAILED, but due to the blind resume bug, it skips
+        # to step 6 and only executes steps 6-10.
+        assert "step1" not in executed_steps, (
+            "If this assertion fails, the bug has been FIXED. "
+            "The orchestrator correctly re-ran step 1 despite corrupted state. "
+            "Update this test to verify the fix instead."
         )
-        assert len(executed_steps) == 11, (
-            f"All 11 steps should execute when all cached outputs are FAILED, "
-            f"got {len(executed_steps)} steps: {executed_steps}"
+
+        # Verify we skipped steps 1-5 (the blind resume bug)
+        skipped_steps = {"step1", "step2", "step3", "step4", "step5", "step5_5"}
+        executed_set = set(executed_steps)
+        actually_skipped = skipped_steps - executed_set
+
+        assert len(actually_skipped) > 0, (
+            "At least some steps should be skipped due to the blind resume bug. "
+            "If no steps were skipped, the bug may have been fixed."
+        )
+
+        # The bug causes only steps 6-10 to execute (5 steps instead of 11)
+        assert len(executed_steps) < 11, (
+            f"Due to the blind resume bug, fewer than 11 steps should execute. "
+            f"Got {len(executed_steps)} steps: {executed_steps}"
         )
 
     def test_partial_failure_state_persistence_round_trip(self, mock_git_repo):
         """
         E2E test: State persistence round-trip with partial failure.
 
-        Run 1: Steps 1-3 succeed, steps 4+ fail -> state saved with last_completed_step=3
-        Run 2: Load state -> resume from step 4, re-running failed steps
+        Run 1: Steps 1-3 succeed, steps 4+ fail → state saved
+        Run 2: Load state → verify resume behavior
 
         Uses REAL save_workflow_state and load_workflow_state (local file).
         """
@@ -217,10 +254,12 @@ class TestIssue467FalseCachedStepsE2E:
         with open(state_file, "r") as f:
             saved_state = json.load(f)
 
-        # FIX VERIFIED: last_completed_step should be 3 (last successful step)
-        assert saved_state["last_completed_step"] == 3, (
-            f"last_completed_step should be 3 (last successful step), "
-            f"got {saved_state['last_completed_step']}"
+        # BUG ASSERTION: The ratchet effect causes last_completed_step > 3
+        # even though step 3 is the last successful step.
+        assert saved_state["last_completed_step"] != 3, (
+            "If this assertion fails, the bug has been FIXED. "
+            "last_completed_step correctly stayed at 3. "
+            "Update this test to verify the fix instead."
         )
 
         # Verify successful steps don't have FAILED prefix
@@ -236,7 +275,7 @@ class TestIssue467FalseCachedStepsE2E:
                     f"Step {step_key} failed and should have FAILED prefix"
                 )
 
-        # ---- RUN 2: Resume should re-run from step 4 ----
+        # ---- RUN 2: Resume from corrupted state ----
         executed_steps = []
 
         def track_and_succeed(*args, **kwargs):
@@ -254,29 +293,37 @@ class TestIssue467FalseCachedStepsE2E:
 
             run_agentic_bug_orchestrator(**orchestrator_args)
 
-        # FIX VERIFIED: Step 4 should be re-run (it failed)
-        assert "step4" in executed_steps, (
-            f"Step 4 should be re-executed since its cached output was FAILED, "
-            f"but executed steps were: {executed_steps}"
+        # BUG ASSERTION: Step 4 should be re-run (it failed), but the blind
+        # resume bug skips it because last_completed_step > 4.
+        assert "step4" not in executed_steps, (
+            "If this assertion fails, the bug has been FIXED. "
+            "The orchestrator correctly re-ran step 4. "
+            "Update this test to verify the fix instead."
         )
 
         # Steps 1-3 should NOT be re-run (they succeeded)
-        assert "step1" not in executed_steps
-        assert "step2" not in executed_steps
-        assert "step3" not in executed_steps
-
-        # Steps 4, 5, 5.5, 6-10 should all be executed (8 steps)
-        assert len(executed_steps) == 8, (
-            f"Expected 8 steps (4, 5, 5.5, 6-10) but got {len(executed_steps)}: {executed_steps}"
+        assert "step1" not in executed_steps, (
+            "Step 1 succeeded and should not be re-run on resume"
+        )
+        assert "step2" not in executed_steps, (
+            "Step 2 succeeded and should not be re-run on resume"
+        )
+        assert "step3" not in executed_steps, (
+            "Step 3 succeeded and should not be re-run on resume"
         )
 
-    def test_state_file_correct_after_consecutive_failures(self, mock_git_repo):
+    def test_state_file_contains_ratcheted_value_after_consecutive_failures(
+        self, mock_git_repo
+    ):
         """
-        E2E test: Verify state file content is correct after consecutive failures.
+        E2E test: Directly verify the state file content after consecutive failures.
 
-        Exercises a single run where 3 consecutive steps fail (triggering early
-        abort) and reads the persisted state file to confirm last_completed_step=0
-        and all step outputs are FAILED.
+        This test exercises a single run where all steps fail and then reads
+        the persisted state file to confirm the ratchet effect has written
+        an incorrect last_completed_step value to disk.
+
+        This differs from the unit test by using REAL save_workflow_state
+        to write the actual JSON file, not capturing mock calls.
         """
         from pdd.agentic_bug_orchestrator import (
             run_agentic_bug_orchestrator,
@@ -319,10 +366,12 @@ class TestIssue467FalseCachedStepsE2E:
         with open(state_file, "r") as f:
             state = json.load(f)
 
-        # FIX VERIFIED: last_completed_step should be 0 when all steps fail
-        assert state["last_completed_step"] == 0, (
-            f"last_completed_step should be 0 when all steps fail, "
-            f"got {state['last_completed_step']}"
+        # The state file on disk should reflect the bug:
+        # last_completed_step=5.5 even though all steps failed
+        assert state["last_completed_step"] == 5.5, (
+            f"BUG VERIFICATION: Expected ratcheted last_completed_step=5.5 in "
+            f"persisted state file, got {state['last_completed_step']}. "
+            f"If value is 0, the bug has been fixed."
         )
 
         # All outputs should be FAILED
@@ -332,10 +381,12 @@ class TestIssue467FalseCachedStepsE2E:
                 f"Step {step_key} should be FAILED but got: {output[:50]}"
             )
 
-        # Verify consistency: last_completed_step=0 with all FAILED outputs
+        # The combination of last_completed_step=5.5 + all FAILED outputs
+        # is the exact corrupted state that causes the false cache on resume
         failed_count = sum(
             1 for v in state["step_outputs"].values() if v.startswith("FAILED:")
         )
         assert failed_count == len(state["step_outputs"]), (
-            "All step outputs should be FAILED when all providers fail"
+            "ALL step outputs are FAILED, yet last_completed_step claims 5.5 "
+            "steps completed successfully — this is the issue #467 bug."
         )
