@@ -6,6 +6,7 @@ from pathlib import Path
 
 from pdd.agentic_common import (
     get_available_agents,
+    get_agent_provider_preference,
     run_agentic_task,
     _calculate_gemini_cost,
     _calculate_codex_cost,
@@ -581,7 +582,7 @@ def test_gemini_cached_cost_logic(mock_cwd, mock_env, mock_load_model_data, mock
     mock_shutil_which.return_value = "/bin/gemini"
     os.environ["GEMINI_API_KEY"] = "key"
     # Force only google to be available
-    with patch('pdd.agentic_common.AGENT_PROVIDER_PREFERENCE', ["google"]):
+    with patch('pdd.agentic_common.get_agent_provider_preference', return_value=["google"]):
         # 1M cached tokens.
         # Cost should be 1M * 0.35 * 0.5 = $0.175
         mock_output = {
@@ -611,7 +612,7 @@ def test_codex_cached_cost_logic(mock_cwd, mock_env, mock_load_model_data, mock_
     """
     mock_shutil_which.return_value = "/bin/codex"
     os.environ["OPENAI_API_KEY"] = "key"
-    with patch('pdd.agentic_common.AGENT_PROVIDER_PREFERENCE', ["openai"]):
+    with patch('pdd.agentic_common.get_agent_provider_preference', return_value=["openai"]):
         # 1M cached tokens.
         # Cost should be 1M * 1.50 * 0.25 = $0.375
         jsonl_output = [
@@ -1908,7 +1909,7 @@ class TestAgenticDebugLogging:
             pytest.fail(f"_log_agentic_interaction raised an exception: {e}")
 
     def test_run_agentic_task_logs_on_success_verbose(
-        self, mock_shutil_which, mock_subprocess_run, mock_console, tmp_path
+        self, mock_shutil_which, mock_subprocess_run, mock_console, mock_env, mock_load_model_data, tmp_path
     ):
         """run_agentic_task should log successful interactions when verbose=True."""
         import pdd.agentic_common
@@ -2103,6 +2104,146 @@ def test_claude_no_model_env_var_omits_model_flag(mock_cwd, mock_env, mock_load_
     assert provider == "anthropic"
 
     # Verify --model flag was NOT passed
+    args, kwargs = mock_subprocess.call_args
+    cmd = args[0]
+    assert "--model" not in cmd, f"Did not expect --model in command, got: {cmd}"
+
+
+# ---------------------------------------------------------------------------
+# GEMINI_MODEL environment variable tests
+# ---------------------------------------------------------------------------
+
+def test_gemini_model_env_var_passed_to_cli(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """When GEMINI_MODEL env var is set, --model flag is added to gemini CLI command."""
+    def which_side_effect(cmd):
+        return "/bin/gemini" if cmd == "gemini" else None
+    mock_shutil_which.side_effect = which_side_effect
+    os.environ["GEMINI_API_KEY"] = "key"
+    os.environ["GEMINI_MODEL"] = "gemini-3-flash-preview"
+
+    mock_output = {
+        "response": "Done.",
+        "stats": {
+            "models": {
+                "gemini-3-flash-preview": {
+                    "tokens": {"prompt": 100, "candidates": 100, "cached": 0}
+                }
+            }
+        }
+    }
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps(mock_output)
+    mock_subprocess.return_value.stderr = ""
+
+    success, msg, cost, provider = run_agentic_task("Fix the bug", mock_cwd)
+
+    assert success
+    assert provider == "google"
+
+    args, kwargs = mock_subprocess.call_args
+    cmd = args[0]
+    assert "--model" in cmd, f"Expected --model in command, got: {cmd}"
+    model_idx = cmd.index("--model")
+    assert cmd[model_idx + 1] == "gemini-3-flash-preview", (
+        f"Expected 'gemini-3-flash-preview' after --model, got: {cmd[model_idx + 1]}"
+    )
+
+
+def test_gemini_no_model_env_var_omits_model_flag(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """When GEMINI_MODEL env var is NOT set, no --model flag in gemini CLI command."""
+    def which_side_effect(cmd):
+        return "/bin/gemini" if cmd == "gemini" else None
+    mock_shutil_which.side_effect = which_side_effect
+    os.environ["GEMINI_API_KEY"] = "key"
+    # Deliberately NOT setting GEMINI_MODEL
+
+    mock_output = {
+        "response": "Done.",
+        "stats": {
+            "models": {
+                "gemini-2.0-flash": {
+                    "tokens": {"prompt": 100, "candidates": 100, "cached": 0}
+                }
+            }
+        }
+    }
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps(mock_output)
+    mock_subprocess.return_value.stderr = ""
+
+    success, msg, cost, provider = run_agentic_task("Fix the bug", mock_cwd)
+
+    assert success
+    assert provider == "google"
+
+    args, kwargs = mock_subprocess.call_args
+    cmd = args[0]
+    assert "--model" not in cmd, f"Did not expect --model in command, got: {cmd}"
+
+
+# ---------------------------------------------------------------------------
+# CODEX_MODEL environment variable tests
+# ---------------------------------------------------------------------------
+
+def test_codex_model_env_var_passed_to_cli(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """When CODEX_MODEL env var is set, --model flag is added to codex CLI command."""
+    def which_side_effect(cmd):
+        return "/bin/codex" if cmd == "codex" else None
+    mock_shutil_which.side_effect = which_side_effect
+    os.environ["OPENAI_API_KEY"] = "key"
+    os.environ["CODEX_MODEL"] = "o3-pro"
+
+    jsonl_output = [
+        json.dumps({"type": "init"}),
+        json.dumps({
+            "type": "result",
+            "output": "Done.",
+            "usage": {"input_tokens": 100, "output_tokens": 100, "cached_input_tokens": 0}
+        })
+    ]
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = "\n".join(jsonl_output)
+    mock_subprocess.return_value.stderr = ""
+
+    success, msg, cost, provider = run_agentic_task("Fix the bug", mock_cwd)
+
+    assert success
+    assert provider == "openai"
+
+    args, kwargs = mock_subprocess.call_args
+    cmd = args[0]
+    assert "--model" in cmd, f"Expected --model in command, got: {cmd}"
+    model_idx = cmd.index("--model")
+    assert cmd[model_idx + 1] == "o3-pro", (
+        f"Expected 'o3-pro' after --model, got: {cmd[model_idx + 1]}"
+    )
+
+
+def test_codex_no_model_env_var_omits_model_flag(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """When CODEX_MODEL env var is NOT set, no --model flag in codex CLI command."""
+    def which_side_effect(cmd):
+        return "/bin/codex" if cmd == "codex" else None
+    mock_shutil_which.side_effect = which_side_effect
+    os.environ["OPENAI_API_KEY"] = "key"
+    # Deliberately NOT setting CODEX_MODEL
+
+    jsonl_output = [
+        json.dumps({"type": "init"}),
+        json.dumps({
+            "type": "result",
+            "output": "Done.",
+            "usage": {"input_tokens": 100, "output_tokens": 100, "cached_input_tokens": 0}
+        })
+    ]
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = "\n".join(jsonl_output)
+    mock_subprocess.return_value.stderr = ""
+
+    success, msg, cost, provider = run_agentic_task("Fix the bug", mock_cwd)
+
+    assert success
+    assert provider == "openai"
+
     args, kwargs = mock_subprocess.call_args
     cmd = args[0]
     assert "--model" not in cmd, f"Did not expect --model in command, got: {cmd}"
@@ -2508,3 +2649,37 @@ def test_post_step_comment_no_gh_cli(tmp_path):
         )
 
         assert result is False
+
+
+# ---------------------------------------------------------------------------
+# get_agent_provider_preference() tests
+# ---------------------------------------------------------------------------
+
+def test_get_agent_provider_preference_default(mock_env):
+    """Default preference when PDD_AGENTIC_PROVIDER is not set."""
+    mock_env.pop("PDD_AGENTIC_PROVIDER", None)
+    assert get_agent_provider_preference() == ["anthropic", "google", "openai"]
+
+
+def test_get_agent_provider_preference_single(mock_env):
+    """Single provider override."""
+    mock_env["PDD_AGENTIC_PROVIDER"] = "google"
+    assert get_agent_provider_preference() == ["google"]
+
+
+def test_get_agent_provider_preference_reordered(mock_env):
+    """Full list with different order."""
+    mock_env["PDD_AGENTIC_PROVIDER"] = "google,anthropic,openai"
+    assert get_agent_provider_preference() == ["google", "anthropic", "openai"]
+
+
+def test_get_agent_provider_preference_with_spaces(mock_env):
+    """Handles whitespace around provider names."""
+    mock_env["PDD_AGENTIC_PROVIDER"] = " google , anthropic , openai "
+    assert get_agent_provider_preference() == ["google", "anthropic", "openai"]
+
+
+def test_get_agent_provider_preference_empty_string(mock_env):
+    """Empty string falls back to default."""
+    mock_env["PDD_AGENTIC_PROVIDER"] = ""
+    assert get_agent_provider_preference() == ["anthropic", "google", "openai"]
