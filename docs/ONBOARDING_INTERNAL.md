@@ -71,6 +71,39 @@ infisical run -- pdd generate module_name
 infisical run -- pdd sync module_name
 ```
 
+## Cloud Testing
+
+The full test suite takes 40+ minutes locally (sequential, single machine). Cloud testing runs the same suite across 64 spot VMs in parallel and finishes in ~7 minutes — while keeping your laptop free.
+
+### Daily Use
+
+```bash
+# Smart build + run: auto-rebuilds Docker image if deps changed
+make cloud-test
+
+# Skip image rebuild (typical workflow once image is built)
+make cloud-test-quick
+```
+
+### One-Time Setup
+
+**Prerequisites:** Docker and `gcloud` CLI authenticated to `prompt-driven-development-stg`.
+
+```bash
+# Provision GCP infrastructure (Artifact Registry, GCS bucket, IAM)
+make cloud-test-setup
+
+# Build and push the Docker image
+make cloud-test-build
+make cloud-test-push
+```
+
+After initial setup, `make cloud-test` handles image rebuilds automatically when dependencies change.
+
+### Results
+
+A summary prints to the terminal when the job finishes. The full report (pass/fail per shard, failure logs) is saved to `test-results/cloud-batch-results.md`.
+
 ## What's in Infisical
 
 The following secrets are managed centrally:
@@ -429,6 +462,8 @@ Before merging a PR, ensure it contains:
 | `pdd update` | Check if prompt needs changes | After fix, before PR |
 | `pdd test` | Generate tests to increase coverage | Before regeneration (target: 80%) |
 | `pdd sync` | Regenerate code, example & update few-shot DB | After fixes succeed |
+| `make cloud-test` | Run full test suite on Cloud Batch (auto-rebuilds image) | CI validation before merging |
+| `make cloud-test-quick` | Run tests on Cloud Batch (skip image rebuild) | Typical day-to-day test runs |
 
 ### Important Notes
 
