@@ -662,3 +662,115 @@ class TestPromptNotABugCategory:
             "Orchestrator prompt must document NOT_A_BUG as a loop control token. "
             "This ensures the generated code includes the NOT_A_BUG check."
         )
+
+
+class TestDetectChangedFiles:
+    """Tests for issue #355: Summary should report actual file changes.
+
+    When pdd fix exits early (e.g. ALL_TESTS_PASS at Step 2), the summary
+    reported empty "Files changed:" because it relied on LLM output parsing
+    (FILES_MODIFIED/FILES_CREATED markers) rather than actual git state.
+
+    The fix uses hash-based file change detection (_detect_changed_files)
+    to accurately report files modified during the workflow.
+    """
+
+    def test_detect_changed_files_finds_modified_file(self, tmp_path):
+        """_detect_changed_files should detect files modified after snapshot."""
+        from pdd.agentic_e2e_fix_orchestrator import _detect_changed_files, _get_file_hashes
+        import subprocess
+
+        # Set up a git repo
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmp_path, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, capture_output=True, check=True)
+
+        # Create and commit a file
+        test_file = tmp_path / "module.py"
+        test_file.write_text("x = 1\n")
+        subprocess.run(["git", "add", "."], cwd=tmp_path, capture_output=True, check=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=tmp_path, capture_output=True, check=True)
+
+        # Take snapshot (simulating workflow start)
+        initial_hashes = _get_file_hashes(tmp_path)
+
+        # Modify the file (simulating what pdd fix does)
+        test_file.write_text("x = 2\n")
+
+        # _detect_changed_files should find the modification
+        changed = _detect_changed_files(tmp_path, initial_hashes)
+        assert "module.py" in changed, (
+            f"Should detect modified file. Got: {changed}"
+        )
+
+    def test_detect_changed_files_finds_new_file(self, tmp_path):
+        """_detect_changed_files should detect files created after snapshot."""
+        from pdd.agentic_e2e_fix_orchestrator import _detect_changed_files, _get_file_hashes
+        import subprocess
+
+        # Set up a git repo
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmp_path, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, capture_output=True, check=True)
+
+        # Create and commit a file
+        existing = tmp_path / "existing.py"
+        existing.write_text("x = 1\n")
+        subprocess.run(["git", "add", "."], cwd=tmp_path, capture_output=True, check=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=tmp_path, capture_output=True, check=True)
+
+        # Take snapshot
+        initial_hashes = _get_file_hashes(tmp_path)
+
+        # Create a new file (simulating workflow creating a new file)
+        new_file = tmp_path / "new_module.py"
+        new_file.write_text("y = 2\n")
+
+        # _detect_changed_files should find the new file
+        changed = _detect_changed_files(tmp_path, initial_hashes)
+        assert "new_module.py" in changed, (
+            f"Should detect newly created file. Got: {changed}"
+        )
+
+    def test_detect_changed_files_ignores_unchanged(self, tmp_path):
+        """_detect_changed_files should not report unchanged files."""
+        from pdd.agentic_e2e_fix_orchestrator import _detect_changed_files, _get_file_hashes
+        import subprocess
+
+        # Set up a git repo with a modified-but-pre-existing file
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmp_path, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, capture_output=True, check=True)
+
+        test_file = tmp_path / "module.py"
+        test_file.write_text("x = 1\n")
+        subprocess.run(["git", "add", "."], cwd=tmp_path, capture_output=True, check=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=tmp_path, capture_output=True, check=True)
+
+        # Take snapshot AFTER file already exists and is committed
+        initial_hashes = _get_file_hashes(tmp_path)
+
+        # Don't modify anything
+        changed = _detect_changed_files(tmp_path, initial_hashes)
+        assert changed == [], (
+            f"Should report no changes when nothing changed. Got: {changed}"
+        )
+
+    def test_parse_changed_files_returns_empty_without_markers(self):
+        """_parse_changed_files returns empty list when LLM output has no markers.
+
+        This demonstrates the root cause of issue #355: Steps 1 and 2 don't
+        output FILES_MODIFIED/FILES_CREATED markers, so the parser finds nothing.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import _parse_changed_files
+
+        # Simulated Step 2 output with ALL_TESTS_PASS but no file markers
+        step2_output = """Running e2e tests...
+pytest tests/ -v
+ALL_TESTS_PASS
+All 42 tests passed."""
+
+        result = _parse_changed_files(step2_output)
+        assert result == [], (
+            "LLM output without FILES_MODIFIED markers should return empty list"
+        )
