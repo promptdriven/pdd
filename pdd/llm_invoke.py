@@ -514,6 +514,8 @@ def _get_environment_info() -> Dict[str, str]:
 # <<< SET LITELLM DEBUG LOGGING >>>
 # os.environ['LITELLM_LOG'] = 'DEBUG' # Keep commented out unless debugging LiteLLM itself
 
+LLM_CALL_TIMEOUT = 120  # seconds per LLM API call
+
 # --- Constants and Configuration ---
 
 # Determine project root: use PathResolver to ignore package-root PDD_PATH values.
@@ -2397,7 +2399,7 @@ def llm_invoke(
                         pass
                     if verbose:
                         logger.info(f"[INFO] Calling litellm.completion for {model_name_litellm}...")
-                    response = litellm.completion(**litellm_kwargs)
+                    response = litellm.completion(**litellm_kwargs, timeout=LLM_CALL_TIMEOUT)
 
                 end_time = time_module.time()
 
@@ -2464,6 +2466,7 @@ def llm_invoke(
                                         messages=retry_messages,
                                         temperature=current_temperature,
                                         response_format=response_format,
+                                        timeout=LLM_CALL_TIMEOUT,
                                         **time_kwargs,
                                         **retry_provider_kwargs  # Issue #185: Pass Vertex AI credentials
                                     )
@@ -2512,6 +2515,7 @@ def llm_invoke(
                                         messages=retry_messages,
                                         temperature=current_temperature,
                                         response_format=response_format,
+                                        timeout=LLM_CALL_TIMEOUT,
                                         **time_kwargs,
                                         **retry_provider_kwargs  # Issue #185: Pass Vertex AI credentials
                                     )
@@ -2758,6 +2762,7 @@ def llm_invoke(
                                             messages=retry_messages,
                                             temperature=current_temperature,
                                             response_format=response_format,
+                                            timeout=LLM_CALL_TIMEOUT,
                                             **time_kwargs,
                                             **retry_provider_kwargs  # Issue #185: Pass Vertex AI credentials
                                         )
