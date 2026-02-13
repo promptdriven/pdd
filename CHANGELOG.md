@@ -1,3 +1,18 @@
+## v0.0.147 (2026-02-12)
+
+### Feat
+
+- Implement robust JSON extraction from LLM outputs to handle varied text formats and update the Fireworks model entry.
+- enhance agentic test command discovery via `language_format.csv` and expand analysis context for the review app.
+- Allow agent provider preference to be configured via environment variable and add tests for the review app.
+- Implement new grounding experiment infrastructure and a 3blue1brown review application demo.
+- Add Cloud Batch test results and update changelog with recent features, fixes, and build improvements.
+
+### Fix
+
+- update JS/TS test to expect explicit run_test_command values
+- resolve 4 cloud test failures (env fixtures, lock assertion, LLM timeout)
+
 ## v0.0.146 (2026-02-11)
 
 ### Feat
