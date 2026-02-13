@@ -3,23 +3,40 @@
 Language-specific test command utilities.
 
 This module provides the default_verify_cmd_for function which returns
-test commands for different languages. Non-Python languages now use
-agentic mode for test discovery and execution.
+test commands for different languages. It first checks the language_format.csv
+for a run_test_command, then falls back to a hardcoded Python command,
+and finally returns None to trigger agentic mode.
 """
 from __future__ import annotations
 
+import csv
 import os
 from pathlib import Path
+
+
+def _load_language_format_by_name() -> dict:
+    """Load language_format.csv into a dict keyed by lowercase language name."""
+    csv_path = Path(__file__).parent / "data" / "language_format.csv"
+    if not csv_path.exists():
+        return {}
+    result = {}
+    with open(csv_path, 'r') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            lang_name = row.get('language', '').strip().lower()
+            if lang_name:
+                result[lang_name] = row
+    return result
 
 
 def default_verify_cmd_for(lang: str, unit_test_file: str) -> str | None:
     """
     Return a test command for the given language and test file.
 
-    For Python, returns a pytest command. For all other languages, returns None
-    to signal that agentic mode should handle test discovery and execution.
-    The agent can explore the project structure and determine the appropriate
-    test runner (Jest, JUnit, Go test, Cargo test, etc.) dynamically.
+    Resolution order:
+    1. CSV run_test_command lookup by language name
+    2. Hardcoded Python fallback (for robustness if CSV is missing)
+    3. Return None (triggers agentic fallback)
 
     Users can override this behavior with PDD_AGENTIC_VERIFY_CMD environment variable.
 
@@ -28,14 +45,22 @@ def default_verify_cmd_for(lang: str, unit_test_file: str) -> str | None:
         unit_test_file: Path to the unit test file.
 
     Returns:
-        Test command for Python, None for other languages (triggers agentic fallback).
+        Test command string, or None for languages without a known test command.
     """
     lang = lang.lower()
 
+    # 1. CSV lookup by language name
+    lang_formats = _load_language_format_by_name()
+    if lang in lang_formats:
+        csv_cmd = lang_formats[lang].get('run_test_command', '').strip()
+        if csv_cmd:
+            return csv_cmd.replace('{file}', unit_test_file)
+
+    # 2. Hardcoded Python fallback
     if lang == "python":
         return f'{os.sys.executable} -m pytest "{unit_test_file}" -q'
 
-    # Non-Python languages: return None to indicate agentic mode should handle it.
+    # 3. No command available — triggers agentic fallback
     return None
 
 
