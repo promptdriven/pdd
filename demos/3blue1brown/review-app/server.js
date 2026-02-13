@@ -195,6 +195,56 @@ function safeWriteAnnotations(mutate) {
   return op;
 }
 
+// --- JSON extraction helper ---
+
+function extractJsonFromText(text) {
+  if (typeof text !== 'string') return null;
+
+  // Strategy A: Direct parse (text is pure JSON)
+  try {
+    const obj = JSON.parse(text);
+    if (obj && typeof obj === 'object' && !Array.isArray(obj)) return obj;
+  } catch { /* not pure JSON */ }
+
+  // Strategy B: Extract from markdown code fence
+  // Handles both ```json\n{...}\n``` and ```json\n{...}EOF (no closing fence)
+  const fenceOpenRegex = /```(?:json)?\s*\n/g;
+  let fenceOpen;
+  while ((fenceOpen = fenceOpenRegex.exec(text)) !== null) {
+    const afterFence = text.slice(fenceOpen.index + fenceOpen[0].length);
+    const closingIdx = afterFence.indexOf('\n```');
+    const content = (closingIdx >= 0 ? afterFence.slice(0, closingIdx) : afterFence).trim();
+
+    // Try direct parse
+    try {
+      const obj = JSON.parse(content);
+      if (obj && typeof obj === 'object' && !Array.isArray(obj)) return obj;
+    } catch { /* try brace matching within fence content */ }
+
+    // Brace matching scoped to fence content (avoids prose {…} before fence)
+    const firstBrace = content.indexOf('{');
+    const lastBrace = content.lastIndexOf('}');
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      try {
+        const obj = JSON.parse(content.slice(firstBrace, lastBrace + 1));
+        if (obj && typeof obj === 'object' && !Array.isArray(obj)) return obj;
+      } catch { /* not valid JSON in this fence */ }
+    }
+  }
+
+  // Strategy C: Brace matching — find outermost { } pair
+  const firstBrace = text.indexOf('{');
+  const lastBrace = text.lastIndexOf('}');
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    try {
+      const obj = JSON.parse(text.slice(firstBrace, lastBrace + 1));
+      if (obj && typeof obj === 'object' && !Array.isArray(obj)) return obj;
+    } catch { /* extraction failed */ }
+  }
+
+  return null;
+}
+
 // --- Claude analysis ---
 
 function buildAnalysisPrompt(text, sectionId, timestamp, { annotation } = {}) {
@@ -342,24 +392,25 @@ function runClaude(prompt) {
         }
       } catch { /* fall through to stdout */ }
 
-      // Strategy 2: Parse from stdout (fallback — improved regex handles prose around JSON)
+      // Strategy 2: Parse from stdout (fallback — extract JSON via brace matching)
+      let text = stdout;
       try {
         const wrapper = JSON.parse(stdout);
-        let text = wrapper.result || stdout;
-        // Try to extract JSON from markdown fencing anywhere in text
-        const fenceMatch = text.match(/```(?:json)?\s*\n([\s\S]*?)\n\s*```/i);
-        if (fenceMatch) {
-          text = fenceMatch[1].trim();
+        if (typeof wrapper.result === 'string') {
+          text = wrapper.result;
+        } else if (wrapper.result && typeof wrapper.result === 'object') {
+          const blocks = wrapper.result.content || [];
+          const textBlock = blocks.find(b => b.type === 'text');
+          if (textBlock) text = textBlock.text;
         }
-        try {
-          const analysis = JSON.parse(text);
-          analysis.status = 'completed';
-          resolve(analysis);
-        } catch {
-          resolve({ status: 'completed', summary: text, raw: true });
-        }
-      } catch {
-        resolve({ status: 'completed', summary: stdout, raw: true });
+      } catch { /* stdout isn't a JSON wrapper — use raw stdout as text */ }
+
+      const analysis = extractJsonFromText(text);
+      if (analysis) {
+        analysis.status = 'completed';
+        resolve(analysis);
+      } else {
+        resolve({ status: 'completed', summary: text, raw: true });
       }
     });
 
