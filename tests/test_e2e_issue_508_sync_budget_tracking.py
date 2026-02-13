@@ -133,7 +133,7 @@ class TestE2ESyncBudgetTracking:
                 _make_decision('test_extend', 'More coverage'),
             ],
             op_results={
-                'generate': ("code", False, 0.05, "gpt-4o-mini"),
+                'generate': ("code", 0.05, "gpt-4o-mini"),
                 'test': ("tests", 0.10, "gpt-4o-mini", True),
             },
             budget=0.12,
