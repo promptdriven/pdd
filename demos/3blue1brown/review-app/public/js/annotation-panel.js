@@ -32,6 +32,33 @@ const AnnotationPanel = {
     const data = await ApiClient.getAnnotations();
     this.annotations = data.annotations || [];
     this.renderList();
+    this._reconnectActiveJobs();
+  },
+
+  _reconnectActiveJobs() {
+    for (const ann of this.annotations) {
+      if (ann.resolveJob && ann.resolveJob.jobId &&
+          (ann.resolveJob.status === 'pending' || ann.resolveJob.status === 'running')) {
+        // Check if job is still active, reconnect SSE
+        ApiClient.getJob(ann.resolveJob.jobId).then(data => {
+          if (data.status === 'done') {
+            ann.resolved = true;
+            ann.resolveJob = { jobId: ann.resolveJob.jobId, status: 'done' };
+            this.renderList();
+          } else if (data.status === 'error') {
+            ann.resolveJob = { jobId: ann.resolveJob.jobId, status: 'error', error: data.error };
+            this.renderList();
+          } else {
+            // Still running — reconnect SSE stream
+            this._streamResolveJob(ann.id, ann.resolveJob.jobId);
+          }
+        }).catch(() => {
+          // Job not found on server (server restarted) — mark as error
+          ann.resolveJob = { jobId: ann.resolveJob.jobId, status: 'error', error: 'Job lost (server restarted)' };
+          this.renderList();
+        });
+      }
+    }
   },
 
   renderList() {
@@ -92,6 +119,8 @@ const AnnotationPanel = {
     const resolvedClass = a.resolved ? ' resolved' : '';
     const editingClass = a.id === this.editingId ? ' editing' : '';
 
+    const resolveBtn = this._renderResolveButton(a);
+
     return `
       <div class="annotation-item${resolvedClass}${editingClass}" data-id="${a.id}">
         ${thumb}
@@ -102,14 +131,35 @@ const AnnotationPanel = {
           </div>
           <div class="preview">${this._escapeHtml(preview)}</div>
           <div class="actions">
-            <button class="action-btn" data-action="resolve" data-id="${a.id}">
-              ${a.resolved ? 'Unresolve' : 'Resolve'}
-            </button>
+            ${resolveBtn}
             <button class="action-btn" data-action="delete" data-id="${a.id}">Delete</button>
           </div>
         </div>
       </div>
     `;
+  },
+
+  _renderResolveButton(a) {
+    const job = a.resolveJob;
+
+    if (job && (job.status === 'pending')) {
+      return `<button class="action-btn resolving" data-action="resolve" data-id="${a.id}" disabled>Queued...</button>`;
+    }
+
+    if (job && job.status === 'running') {
+      const stepLabel = job.step === 'fixing' ? 'Fixing'
+        : job.step === 'rendering' ? 'Rendering'
+        : job.step === 'stitching' ? 'Stitching'
+        : 'Working';
+      const pct = typeof job.progress === 'number' ? ` ${job.progress}%` : '';
+      return `<button class="action-btn resolving" data-action="resolve" data-id="${a.id}" disabled>${stepLabel}...${pct}</button>`;
+    }
+
+    if (job && job.status === 'error') {
+      return `<button class="action-btn resolve-error" data-action="resolve" data-id="${a.id}" title="${this._escapeHtml(job.error || 'Unknown error')}">Retry</button>`;
+    }
+
+    return `<button class="action-btn" data-action="resolve" data-id="${a.id}">${a.resolved ? 'Unresolve' : 'Resolve'}</button>`;
   },
 
   _escapeHtml(str) {
@@ -456,9 +506,77 @@ const AnnotationPanel = {
   async _toggleResolved(id) {
     const ann = this.annotations.find(a => a.id === id);
     if (!ann) return;
-    ann.resolved = !ann.resolved;
-    await ApiClient.updateAnnotation(id, { resolved: ann.resolved });
-    this.renderList();
+
+    // If already resolved, just unresolve (toggle back)
+    if (ann.resolved === true) {
+      ann.resolved = false;
+      ann.resolveJob = null;
+      await ApiClient.updateAnnotation(id, { resolved: false, resolveJob: null });
+      this.renderList();
+      return;
+    }
+
+    // If job is already pending or running, ignore
+    if (ann.resolveJob && (ann.resolveJob.status === 'pending' || ann.resolveJob.status === 'running')) {
+      return;
+    }
+
+    // Require completed analysis
+    if (!ann.analysis || ann.analysis.status !== 'completed') {
+      alert('Please run analysis first before resolving.');
+      return;
+    }
+
+    // Start resolve pipeline
+    try {
+      const { jobId } = await ApiClient.resolveAnnotation(id);
+      ann.resolveJob = { jobId, status: 'pending' };
+      this.renderList();
+
+      this._streamResolveJob(id, jobId);
+    } catch (err) {
+      console.error('Resolve failed:', err);
+      ann.resolveJob = { status: 'error', error: err.message };
+      this.renderList();
+    }
+  },
+
+  _streamResolveJob(annotationId, jobId) {
+    ApiClient.streamJob(
+      jobId,
+      // onUpdate
+      (data) => {
+        const ann = this.annotations.find(a => a.id === annotationId);
+        if (!ann) return;
+        ann.resolveJob = { jobId, ...data };
+        this.renderList();
+      },
+      // onDone
+      (data) => {
+        const ann = this.annotations.find(a => a.id === annotationId);
+        if (ann) {
+          ann.resolved = true;
+          ann.resolveJob = { jobId, status: 'done' };
+          this.renderList();
+        }
+        this._reloadVideo();
+      },
+      // onError
+      (errMsg) => {
+        const ann = this.annotations.find(a => a.id === annotationId);
+        if (ann) {
+          ann.resolveJob = { jobId, status: 'error', error: errMsg };
+          this.renderList();
+        }
+      }
+    );
+  },
+
+  _reloadVideo() {
+    if (typeof VideoPlayer !== 'undefined' && VideoPlayer.switchToSection) {
+      const currentId = VideoPlayer.getCurrentSectionId ? VideoPlayer.getCurrentSectionId() : null;
+      VideoPlayer.switchToSection(currentId);
+    }
   },
 
   async _delete(id) {

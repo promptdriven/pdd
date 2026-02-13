@@ -1909,7 +1909,7 @@ class TestAgenticDebugLogging:
             pytest.fail(f"_log_agentic_interaction raised an exception: {e}")
 
     def test_run_agentic_task_logs_on_success_verbose(
-        self, mock_shutil_which, mock_subprocess_run, mock_console, tmp_path
+        self, mock_shutil_which, mock_subprocess_run, mock_console, mock_env, mock_load_model_data, tmp_path
     ):
         """run_agentic_task should log successful interactions when verbose=True."""
         import pdd.agentic_common

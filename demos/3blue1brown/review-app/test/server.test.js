@@ -402,6 +402,24 @@ describe('Group D: Enhanced analysis context', () => {
     expect(writtenPrompt).toContain('narrative/main_script.md');
   });
 
+  test('Wrapper with multi-line formatted JSON extracts correctly', async () => {
+    const ann = makeAnnotation({ id: 'ann_multiline' });
+    seedAnnotations([ann]);
+
+    const analysis = { severity: 'high', category: 'layout', summary: 'Multi-line formatted' };
+    const proseWrapped = JSON.stringify({
+      result: 'I analyzed the scene.\n\n```json\n' + JSON.stringify(analysis, null, 2) + '\n```'
+    });
+    setupMockClaude({ stdout: proseWrapped });
+
+    const res = await request(app).post('/api/annotations/ann_multiline/analyze').send();
+
+    expect(res.status).toBe(200);
+    expect(res.body.analysis.severity).toBe('high');
+    expect(res.body.analysis.summary).toBe('Multi-line formatted');
+    expect(res.body.analysis.raw).toBeUndefined();
+  });
+
   test('Image paths omitted when thumbnail files do not exist on disk', async () => {
     const ann = makeAnnotation({
       id: 'ann_nothumb',
@@ -456,6 +474,24 @@ describe('Group D: Enhanced analysis context', () => {
     expect(res.body.analysis.raw).toBeUndefined();
   });
 
+  test('Prose with bare JSON (no fencing) parses correctly', async () => {
+    const ann = makeAnnotation({ id: 'ann_bare' });
+    seedAnnotations([ann]);
+
+    const analysis = { severity: 'low', category: 'layout', summary: 'Bare JSON result' };
+    const proseWithBareJson = JSON.stringify({
+      result: 'Here is my analysis of the scene.\n\n' + JSON.stringify(analysis)
+    });
+    setupMockClaude({ stdout: proseWithBareJson });
+
+    const res = await request(app).post('/api/annotations/ann_bare/analyze').send();
+
+    expect(res.status).toBe(200);
+    expect(res.body.analysis.severity).toBe('low');
+    expect(res.body.analysis.summary).toBe('Bare JSON result');
+    expect(res.body.analysis.raw).toBeUndefined();
+  });
+
   test('Prose-wrapped stdout with fenced JSON parses correctly', async () => {
     const ann = makeAnnotation({ id: 'ann_prose' });
     seedAnnotations([ann]);
@@ -472,5 +508,93 @@ describe('Group D: Enhanced analysis context', () => {
     expect(res.body.analysis.severity).toBe('medium');
     expect(res.body.analysis.summary).toBe('Fenced result');
     expect(res.body.analysis.raw).toBeUndefined();
+  });
+});
+
+// =============================================================================
+// Group E: Robust JSON extraction (no wrapper / raw stdout)
+// =============================================================================
+
+describe('Group E: Robust JSON extraction', () => {
+  test('Raw stdout (no JSON wrapper) with fenced JSON extracts correctly', async () => {
+    const ann = makeAnnotation({ id: 'ann_raw_fenced' });
+    seedAnnotations([ann]);
+
+    const analysis = { severity: 'high', category: 'layout', summary: 'Raw fenced' };
+    const rawStdout = 'Here is my analysis:\n\n```json\n' + JSON.stringify(analysis, null, 2) + '\n```';
+    setupMockClaude({ stdout: rawStdout });
+
+    const res = await request(app).post('/api/annotations/ann_raw_fenced/analyze').send();
+
+    expect(res.status).toBe(200);
+    expect(res.body.analysis.severity).toBe('high');
+    expect(res.body.analysis.summary).toBe('Raw fenced');
+    expect(res.body.analysis.raw).toBeUndefined();
+  });
+
+  test('Raw stdout (no wrapper) with bare JSON extracts correctly', async () => {
+    const ann = makeAnnotation({ id: 'ann_raw_bare' });
+    seedAnnotations([ann]);
+
+    const analysis = { severity: 'medium', category: 'typography', summary: 'Raw bare' };
+    const rawStdout = 'Analysis complete:\n\n' + JSON.stringify(analysis, null, 2);
+    setupMockClaude({ stdout: rawStdout });
+
+    const res = await request(app).post('/api/annotations/ann_raw_bare/analyze').send();
+
+    expect(res.status).toBe(200);
+    expect(res.body.analysis.severity).toBe('medium');
+    expect(res.body.analysis.summary).toBe('Raw bare');
+    expect(res.body.analysis.raw).toBeUndefined();
+  });
+
+  test('Prose with code braces before fenced JSON extracts correctly', async () => {
+    const ann = makeAnnotation({ id: 'ann_braces_in_prose' });
+    seedAnnotations([ann]);
+
+    const analysis = { severity: 'medium', category: 'transition', summary: 'Flash frame at loop boundary' };
+    // Simulates real Claude output: prose with JSX {…} references, then fenced JSON
+    const rawStdout = 'The component uses `<Loop durationInFrames={240}>` and `from={BEATS.START}`.\n\n```json\n' +
+      JSON.stringify(analysis, null, 2) + '\n```';
+    setupMockClaude({ stdout: rawStdout });
+
+    const res = await request(app).post('/api/annotations/ann_braces_in_prose/analyze').send();
+
+    expect(res.status).toBe(200);
+    expect(res.body.analysis.severity).toBe('medium');
+    expect(res.body.analysis.summary).toBe('Flash frame at loop boundary');
+    expect(res.body.analysis.raw).toBeUndefined();
+  });
+
+  test('Prose with code braces before fenced JSON WITHOUT closing fence extracts correctly', async () => {
+    const ann = makeAnnotation({ id: 'ann_no_closing_fence' });
+    seedAnnotations([ann]);
+
+    const analysis = { severity: 'high', category: 'transition', summary: 'Gap between visuals' };
+    // Simulates real Claude output: prose with {…} refs, fenced JSON, NO closing ```
+    const rawStdout = 'The component uses `<Loop durationInFrames={240}>` and `from={BEATS.START}`.\n\n```json\n' +
+      JSON.stringify(analysis, null, 2);
+    setupMockClaude({ stdout: rawStdout });
+
+    const res = await request(app).post('/api/annotations/ann_no_closing_fence/analyze').send();
+
+    expect(res.status).toBe(200);
+    expect(res.body.analysis.severity).toBe('high');
+    expect(res.body.analysis.summary).toBe('Gap between visuals');
+    expect(res.body.analysis.raw).toBeUndefined();
+  });
+
+  test('Raw stdout with no JSON falls back gracefully', async () => {
+    const ann = makeAnnotation({ id: 'ann_raw_nojson' });
+    seedAnnotations([ann]);
+
+    setupMockClaude({ stdout: 'Could not complete analysis.' });
+
+    const res = await request(app).post('/api/annotations/ann_raw_nojson/analyze').send();
+
+    expect(res.status).toBe(200);
+    expect(res.body.analysis.status).toBe('completed');
+    expect(res.body.analysis.raw).toBe(true);
+    expect(res.body.analysis.summary).toContain('Could not complete analysis');
   });
 });

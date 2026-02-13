@@ -1,28 +1,31 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, abort
+import uuid
 
 app = Flask(__name__)
 
-# In-memory storage for items
-items = []
+# In-memory storage
+items = [
+    {"id": "1", "name": "Laptop", "price": 999.99},
+    {"id": "2", "name": "Mouse", "price": 25.50}
+]
 
 @app.route('/items', methods=['GET'])
 def get_items():
-    """Returns a list of all items."""
+    """Returns the list of all items."""
     return jsonify(items), 200
 
 @app.route('/items', methods=['POST'])
 def create_item():
-    """Creates a new item with id, name, and price."""
-    data = request.get_json()
-    
-    # Basic validation
-    if not all(k in data for k in ("id", "name", "price")):
-        return jsonify({"error": "Missing required fields"}), 400
-    
+    """Creates a new item."""
+    # Check if request body is JSON
+    if not request.json or 'name' not in request.json or 'price' not in request.json:
+        abort(400, description="Missing 'name' or 'price' in request body")
+
+    # Create new item object
     new_item = {
-        "id": data["id"],
-        "name": data["name"],
-        "price": data["price"]
+        "id": str(uuid.uuid4()), # Generates a unique ID
+        "name": request.json['name'],
+        "price": float(request.json['price'])
     }
     
     items.append(new_item)

@@ -12,7 +12,7 @@ Fireworks,fireworks_ai/accounts/fireworks/models/qwen3-coder-480b-a35b-instruct,
 Google,vertex_ai/claude-opus-4-6,5.0,25.0,1576,,VERTEX_CREDENTIALS,128000,True,budget,global
 lm_studio,lm_studio/qwen3-coder-next,0,0,1040,http://localhost:1234/v1,,0,True,none,
 lm_studio,lm_studio/openai-gpt-oss-120b-mlx-6,0.0001,0,1082,http://localhost:1234/v1,,0,True,effort,
-Fireworks,fireworks_ai/accounts/fireworks/models/glm-4p7,0.60,2.20,1441,,FIREWORKS_API_KEY,0,False,none,
+Fireworks,fireworks_ai/accounts/fireworks/models/glm-5,1.00,3.20,1451,,FIREWORKS_API_KEY,0,False,none,
 Fireworks,fireworks_ai/accounts/fireworks/models/kimi-k2p5,0.60,3.00,1449,,FIREWORKS_API_KEY,0,False,none,
 Anthropic,anthropic/claude-sonnet-4-5-20250929,3.0,15.0,1386,,ANTHROPIC_API_KEY,128000,True,budget,
 Anthropic,anthropic/claude-opus-4-6,5.0,25.0,1576,,ANTHROPIC_API_KEY,128000,True,budget,
