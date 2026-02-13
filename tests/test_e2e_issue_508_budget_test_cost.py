@@ -46,14 +46,14 @@ class TestBudgetCostExtraction:
             f"test_extend cost should be {result[1]} but got {cost}."
         )
 
-    def test_3_tuple_generate_cost_extraction(self):
-        """3-tuple operations (generate, etc.) work correctly with result[-2] — regression guard."""
-        # 3-tuple: (content, cost, model)
-        result = ("generated code", 0.0005551, "gpt-4o-mini")
+    def test_4_tuple_generate_cost_extraction(self):
+        """4-tuple generate operation works correctly with result[-2] — regression guard."""
+        # 4-tuple from code_generator_main: (content, was_incremental, cost, model_name)
+        result = ("generated code", False, 0.0005551, "gpt-4o-mini")
 
         cost = self._extract_cost(result, operation='generate')
 
-        # For 3-tuples, result[-2] = result[1] = cost float — this works by accident
+        # For this 4-tuple, result[-2] is the cost at index 2
         assert cost == pytest.approx(0.0005551)
 
     def test_budget_enforcement_with_test_costs(self):

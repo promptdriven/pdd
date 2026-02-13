@@ -1775,8 +1775,10 @@ def sync_orchestration(
                                  model_name = result.get('model', 'unknown')
                             elif isinstance(result, tuple) and len(result) >= 3:
                                  # cmd_test_main returns 4-tuple: (content, cost, model, agentic_success)
-                                 # Other commands return 3-tuple: (content, cost, model)
-                                 # Use explicit indexing for test operation to handle 4-tuple correctly
+                                 # Other commands may return either:
+                                 #   - 3-tuple: (content, cost, model), e.g. some context operations
+                                 #   - 4-tuple: (content, was_incremental, cost, model_name), e.g. code_generator_main
+                                 # For tests, cost is at index 1; for most other 4+ tuples, cost is at index -2 and model at -1.
                                  if operation in ('test', 'test_extend') and len(result) >= 4:
                                      actual_cost = result[1] if isinstance(result[1], (int, float)) else 0.0
                                      model_name = result[2] if isinstance(result[2], str) else 'unknown'
