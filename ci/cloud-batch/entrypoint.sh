@@ -167,7 +167,7 @@ if [ "${TASK_INDEX}" -ge "${PYTEST_START}" ] && [ "${TASK_INDEX}" -le "${PYTEST_
     printf '  %s\n' "${CHUNK_TESTS[@]}"
 
     run_test "pytest" "chunk_${CHUNK_INDEX}" \
-        python -m pytest -vv --durations=0 -n auto --dist loadfile "${CHUNK_TESTS[@]}"
+        python -m pytest -vv -n auto --dist loadfile "${CHUNK_TESTS[@]}"
 
 elif [ "${TASK_INDEX}" -ge "${REGRESSION_START}" ] && [ "${TASK_INDEX}" -le "${REGRESSION_END}" ]; then
     # ── Regression test ───────────────────────────────────────────────

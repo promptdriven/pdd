@@ -81,7 +81,12 @@ def cmd_assign(args: argparse.Namespace) -> None:
 
 
 def cmd_record(args: argparse.Namespace) -> None:
-    """Record per-file durations from pytest logs containing --durations output."""
+    """Record per-file durations from pytest chunk logs.
+
+    Distributes each chunk's wall-clock time across files proportionally
+    by test count (since --durations=0 doesn't work with pytest-xdist).
+    Reads chunk duration from companion task_N.json files.
+    """
     durations: dict[str, float] = {}
 
     # Load existing durations if updating
@@ -90,23 +95,44 @@ def cmd_record(args: argparse.Namespace) -> None:
             durations = json.load(f)
 
     log_dir = Path(args.log_dir)
-    # Parse all task_*.log files looking for pytest duration lines
     new_durations: dict[str, float] = {}
+
     for log_file in sorted(log_dir.glob("task_*.log")):
+        # Only process pytest chunk logs (skip regression/sync logs)
+        json_file = log_file.with_suffix(".json")
+        if not json_file.exists():
+            continue
+        with open(json_file) as f:
+            meta = json.load(f)
+        if meta.get("suite") != "pytest":
+            continue
+
+        chunk_duration = meta.get("duration_seconds", 0)
+        if chunk_duration <= 0:
+            continue
+
         content = log_file.read_text(errors="replace")
 
-        # Match pytest --durations=0 output lines like:
-        # 3.05s call     tests/test_foo.py::test_bar
-        # or the verbose format:
-        # 3.05s setup    tests/test_foo.py::test_bar
+        # Count tests per file from xdist verbose output:
+        # [gw0] [ 50%] PASSED tests/test_foo.py::test_bar
+        file_test_counts: dict[str, int] = {}
         for match in re.finditer(
-            r"(\d+\.\d+)s\s+(?:call|setup|teardown)\s+(tests/\S+\.py)::",
+            r"\[gw\d+\]\s+\[\s*\d+%\]\s+(?:PASSED|FAILED)\s+(tests/\S+\.py)::",
             content,
         ):
-            secs = float(match.group(1))
-            filepath = match.group(2)
-            # Accumulate per-file (sum of all test durations in the file)
-            new_durations[filepath] = new_durations.get(filepath, 0) + secs
+            filepath = match.group(1)
+            file_test_counts[filepath] = file_test_counts.get(filepath, 0) + 1
+
+        total_tests = sum(file_test_counts.values())
+        if total_tests == 0:
+            continue
+
+        # Distribute chunk time proportionally by test count
+        for filepath, count in file_test_counts.items():
+            file_duration = round(chunk_duration * count / total_tests, 2)
+            # Accumulate across chunks (a file shouldn't appear in multiple
+            # chunks, but handle it gracefully)
+            new_durations[filepath] = new_durations.get(filepath, 0) + file_duration
 
     # New data replaces old; old data kept for files not in new logs
     durations.update(new_durations)
@@ -116,8 +142,8 @@ def cmd_record(args: argparse.Namespace) -> None:
     with open(output_path, "w") as f:
         json.dump(durations, f, indent=2, sort_keys=True)
 
-    print(f"Recorded durations for {len(durations)} files -> {output_path}",
-          file=sys.stderr)
+    print(f"Recorded durations for {len(new_durations)} files "
+          f"({len(durations)} total) -> {output_path}", file=sys.stderr)
 
 
 def cmd_estimate(args: argparse.Namespace) -> None:
