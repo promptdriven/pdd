@@ -719,9 +719,9 @@ from pdd.update_main import resolve_prompt_code_pair
 def test_resolve_prompt_code_pair_output_dir_with_subdirectory_code_file(tmp_path, monkeypatch):
     """
     Regression test for GitHub issue #493.
-    resolve_prompt_code_pair() crashes with NameError when --output is provided
+    resolve_prompt_code_pair() crashes with UnboundLocalError when --output is provided
     and the code file is in a subdirectory (rel_dir != "."), because context_config
-    is only defined in the else branch but used unconditionally at line 91.
+    is only defined in the else branch but used unconditionally when computing code_root.
     """
     # Setup: git repo with code file in a subdirectory
     repo_path = tmp_path / "test_repo"
@@ -747,14 +747,14 @@ def test_resolve_prompt_code_pair_output_dir_with_subdirectory_code_file(tmp_pat
 
     # The prompt file should be created under the output directory
     assert os.path.exists(prompt_path)
-    assert str(output_dir) in prompt_path
+    assert Path(prompt_path).is_relative_to(output_dir)
     assert prompt_path.endswith("module_python.prompt")
 
 
 def test_resolve_prompt_code_pair_output_dir_with_root_level_code_file(tmp_path, monkeypatch):
     """
     Edge case for issue #493: code file at repo root with --output should work
-    (this path doesn't hit the bug since rel_dir == "." skips line 91).
+    (this path doesn't hit the bug since rel_dir == "." skips the code_root logic).
     """
     repo_path = tmp_path / "test_repo"
     repo_path.mkdir()
