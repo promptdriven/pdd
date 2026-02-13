@@ -202,6 +202,7 @@ def _call_generate_cloud(
     headers: Dict[str, str],
     resolved_prompt: str,
     temperature: float,
+    raw_prompt: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Call POST /generateCode (grounded arm) and return parsed result."""
     payload = {
@@ -209,6 +210,8 @@ def _call_generate_cloud(
         "language": "Python",
         "temperature": temperature,
     }
+    if raw_prompt:
+        payload["searchInput"] = raw_prompt
 
     url = f"{base_url}/generateCode"
     start = time.monotonic()
@@ -343,6 +346,10 @@ def run_experiment(
     if base_url is None:
         base_url = STAGING_BASE_URL if env == "staging" else PROD_BASE_URL
 
+    # Read raw prompt before expansion (concise semantic content for embedding search)
+    raw_prompt = PROMPT_FILE.read_text(encoding="utf-8")
+    print(f"Raw prompt: {len(raw_prompt):,} chars, {len(raw_prompt.splitlines()):,} lines")
+
     # Resolve prompt once (used by grounded arm; local arm resolves via CLI)
     print("Resolving llm_invoke prompt (expanding includes)...")
     resolved_prompt = _resolve_prompt()
@@ -388,6 +395,7 @@ def run_experiment(
                 result = _call_generate_cloud(
                     base_url, headers, resolved_prompt,
                     temperature=temperature,
+                    raw_prompt=raw_prompt,
                 )
             else:
                 result = _call_generate_local(
