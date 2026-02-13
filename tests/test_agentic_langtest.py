@@ -1,12 +1,13 @@
 """
 Tests for the agentic_langtest module.
 
-Note: Non-Python languages now use agentic mode for test discovery and execution.
-The default_verify_cmd_for function returns None for non-Python languages, which
-signals that agentic mode should handle the test running.
+The default_verify_cmd_for function checks language_format.csv for a
+run_test_command first, falls back to a hardcoded Python command, and
+returns None for languages without a known test command.
 """
 import os
 from pathlib import Path
+from unittest.mock import patch
 import shutil
 import pytest
 
@@ -41,40 +42,49 @@ def test_default_verify_cmd_for_python_uppercase():
     assert "pytest" in cmd
 
 
-def test_default_verify_cmd_for_javascript_returns_none():
-    """JavaScript returns None to trigger agentic mode."""
+def test_default_verify_cmd_for_javascript_returns_csv_command():
+    """JavaScript returns a node command from CSV."""
     cmd = default_verify_cmd_for("javascript", "test.js")
-    assert cmd is None
+    assert cmd is not None
+    assert "node" in cmd
+    assert "test.js" in cmd
 
 
-def test_default_verify_cmd_for_typescript_returns_none():
-    """TypeScript returns None to trigger agentic mode."""
+def test_default_verify_cmd_for_typescript_returns_csv_command():
+    """TypeScript returns a tsx command from CSV."""
     cmd = default_verify_cmd_for("typescript", "test.ts")
-    assert cmd is None
+    assert cmd is not None
+    assert "tsx" in cmd
+    assert "test.ts" in cmd
 
 
-def test_default_verify_cmd_for_typescriptreact_returns_none():
-    """TypeScript React returns None to trigger agentic mode."""
+def test_default_verify_cmd_for_typescriptreact_returns_csv_command():
+    """TypeScript React returns a tsx command from CSV."""
     cmd = default_verify_cmd_for("typescriptreact", "test.tsx")
-    assert cmd is None
+    assert cmd is not None
+    assert "tsx" in cmd
+    assert "test.tsx" in cmd
 
 
 def test_default_verify_cmd_for_java_returns_none():
-    """Java returns None to trigger agentic mode."""
+    """Java returns None to trigger agentic mode (no CSV run_test_command)."""
     cmd = default_verify_cmd_for("java", "TestMain.java")
     assert cmd is None
 
 
-def test_default_verify_cmd_for_go_returns_none():
-    """Go returns None to trigger agentic mode."""
+def test_default_verify_cmd_for_go_returns_csv_command():
+    """Go returns a go test command from CSV."""
     cmd = default_verify_cmd_for("go", "main_test.go")
-    assert cmd is None
+    assert cmd is not None
+    assert "go test" in cmd
+    assert "main_test.go" in cmd
 
 
-def test_default_verify_cmd_for_rust_returns_none():
-    """Rust returns None to trigger agentic mode."""
+def test_default_verify_cmd_for_rust_returns_csv_command():
+    """Rust returns a cargo test command from CSV."""
     cmd = default_verify_cmd_for("rust", "tests.rs")
-    assert cmd is None
+    assert cmd is not None
+    assert "cargo test" in cmd
 
 
 def test_default_verify_cmd_for_cpp_returns_none():
@@ -87,6 +97,14 @@ def test_default_verify_cmd_for_unknown_returns_none():
     """Unknown languages return None to trigger agentic mode."""
     cmd = default_verify_cmd_for("unknown_lang", "test.xyz")
     assert cmd is None
+
+
+def test_default_verify_cmd_for_csv_not_found_falls_back_to_python():
+    """When CSV is not found, Python still works via hardcoded fallback."""
+    with patch('pdd.agentic_langtest._load_language_format_by_name', return_value={}):
+        cmd = default_verify_cmd_for("python", "test.py")
+    assert cmd is not None
+    assert "pytest" in cmd
 
 
 # ---------- missing_tool_hints tests ----------

@@ -18,18 +18,22 @@ app.use(express.static(path.join(__dirname, 'public')));
 // --- Thumbnail storage ---
 const THUMBNAILS_DIR = path.join(__dirname, 'data', 'thumbnails');
 fs.mkdirSync(THUMBNAILS_DIR, { recursive: true });
+
+// --- Temp directory for Claude analysis output ---
+const ANALYSIS_TEMP_DIR = path.join(__dirname, 'data', '.analysis-temp');
+fs.mkdirSync(ANALYSIS_TEMP_DIR, { recursive: true });
 app.use('/thumbnails', express.static(THUMBNAILS_DIR));
 
 // --- Section metadata ---
 
 const SECTIONS = [
-  { id: 'cold_open', file: 'cold_open.mp4', label: 'Cold Open', specDir: '00-cold-open' },
-  { id: 'part1_economics', file: 'part1_economics.mp4', label: 'Part 1: Economics', specDir: '01-economics' },
-  { id: 'part2_paradigm_shift', file: 'part2_paradigm_shift.mp4', label: 'Part 2: Paradigm Shift', specDir: '02-paradigm-shift' },
-  { id: 'part3_mold', file: 'part3_mold.mp4', label: 'Part 3: Mold Has Three Parts', specDir: '03-mold-has-three-parts' },
-  { id: 'part4_precision', file: 'part4_precision.mp4', label: 'Part 4: Precision Tradeoff', specDir: '04-precision-tradeoff' },
-  { id: 'part5_compound', file: 'part5_compound.mp4', label: 'Part 5: Compound Returns', specDir: '05-compound-returns' },
-  { id: 'closing', file: 'closing.mp4', label: 'Closing', specDir: '06-closing' },
+  { id: 'cold_open', file: 'cold_open.mp4', label: 'Cold Open', specDir: '00-cold-open', remotionDir: 'S00-ColdOpen' },
+  { id: 'part1_economics', file: 'part1_economics.mp4', label: 'Part 1: Economics', specDir: '01-economics', remotionDir: 'S01-Economics' },
+  { id: 'part2_paradigm_shift', file: 'part2_paradigm_shift.mp4', label: 'Part 2: Paradigm Shift', specDir: '02-paradigm-shift', remotionDir: 'S02-ParadigmShift' },
+  { id: 'part3_mold', file: 'part3_mold.mp4', label: 'Part 3: Mold Has Three Parts', specDir: '03-mold-has-three-parts', remotionDir: 'S03-MoldThreeParts' },
+  { id: 'part4_precision', file: 'part4_precision.mp4', label: 'Part 4: Precision Tradeoff', specDir: '04-precision-tradeoff', remotionDir: 'S04-PrecisionTradeoff' },
+  { id: 'part5_compound', file: 'part5_compound.mp4', label: 'Part 5: Compound Returns', specDir: '05-compound-returns', remotionDir: 'S05-CompoundReturns' },
+  { id: 'closing', file: 'closing.mp4', label: 'Closing', specDir: '06-closing', remotionDir: 'S06-Closing' },
 ];
 
 const ALLOWED_SECTION_FILES = new Set(SECTIONS.map(s => s.file));
@@ -193,20 +197,56 @@ function safeWriteAnnotations(mutate) {
 
 // --- Claude analysis ---
 
-function buildAnalysisPrompt(text, sectionId, timestamp) {
-  const specs = loadSectionSpecs(sectionId);
+function buildAnalysisPrompt(text, sectionId, timestamp, { annotation } = {}) {
   const section = SECTIONS.find(s => s.id === sectionId);
   const sectionLabel = section ? section.label : 'Unknown section';
+  const specDir = section ? section.specDir : null;
+  const remotionDir = section ? section.remotionDir : null;
+
+  const resources = [];
+  let resourceNum = 1;
+
+  if (specDir) {
+    resources.push(`${resourceNum}. SPEC FILES — read all .md files (excluding AUDIT_* files) in:\n   specs/${specDir}/`);
+    resourceNum++;
+  }
+
+  resources.push(`${resourceNum}. MAIN SCRIPT — read the "${sectionLabel}" section from:\n   narrative/main_script.md`);
+  resourceNum++;
+
+  if (remotionDir) {
+    resources.push(`${resourceNum}. REMOTION SOURCE — read the main component .tsx and constants.ts from:\n   remotion/src/remotion/${remotionDir}/`);
+    resourceNum++;
+  }
+
+  if (annotation && annotation.video) {
+    if (annotation.video.frameThumbnail) {
+      const thumbBasename = path.basename(annotation.video.frameThumbnail);
+      const thumbPath = path.join(__dirname, 'data', 'thumbnails', thumbBasename);
+      if (fs.existsSync(thumbPath)) {
+        resources.push(`${resourceNum}. SCREENSHOT — read this image to see the exact frame the reviewer paused on:\n   review-app/data/thumbnails/${thumbBasename}`);
+        resourceNum++;
+      }
+    }
+    if (annotation.video.compositeImage) {
+      const compBasename = path.basename(annotation.video.compositeImage);
+      const compPath = path.join(__dirname, 'data', 'thumbnails', compBasename);
+      if (fs.existsSync(compPath)) {
+        resources.push(`${resourceNum}. REVIEWER'S MARKUP — read this image showing the reviewer's drawn annotations:\n   review-app/data/thumbnails/${compBasename}`);
+        resourceNum++;
+      }
+    }
+  }
 
   return `You are reviewing an animated video for a 3Blue1Brown-style educational video called "Why You're Still Darning Socks". A reviewer has paused at timestamp ${timestamp || 'unknown'} in the "${sectionLabel}" section and left this annotation:
 
 "${text}"
 
-Here are the scene specification files for this section to help you understand what was intended:
+Use your Read and Glob tools to examine the following resources before analyzing:
 
-${specs || '(No specs available for this section)'}
+${resources.join('\n\n')}
 
-Based on the annotation and the specs, provide a structured analysis. Return ONLY valid JSON (no markdown fencing) with these fields:
+After reading the resources above, produce your analysis as a JSON object with these fields:
 {
   "severity": "critical|high|medium|low|informational",
   "category": "one of: animation-timing, visual-design, readability, audio-sync, color-contrast, layout, typography, data-accuracy, transition, continuity, other",
@@ -241,7 +281,7 @@ app.post('/api/annotations/:id/analyze', async (req, res) => {
   if (!text) return res.status(400).json({ error: 'No annotation text' });
 
   try {
-    const prompt = buildAnalysisPrompt(text, ann.video && ann.video.sectionId, ann.video && ann.video.timestampFormatted);
+    const prompt = buildAnalysisPrompt(text, ann.video && ann.video.sectionId, ann.video && ann.video.timestampFormatted, { annotation: ann });
     const result = await runClaude(prompt);
 
     const freshData = await safeWriteAnnotations((d) => {
@@ -258,7 +298,13 @@ app.post('/api/annotations/:id/analyze', async (req, res) => {
 
 function runClaude(prompt) {
   return new Promise((resolve, reject) => {
-    const args = ['-p', '--model', 'claude-opus-4-6', '--output-format', 'json', '--no-session-persistence'];
+    const outputFile = path.join(ANALYSIS_TEMP_DIR, `analysis_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.json`);
+    const fullPrompt = prompt + `\n\nIMPORTANT: After your analysis, use the Write tool to save ONLY the JSON object (no other text) to this exact file path:\n${outputFile}`;
+
+    const args = [
+      '-p', '--model', 'claude-opus-4-6', '--output-format', 'json', '--no-session-persistence',
+      '--allowedTools', 'Read,Glob,Write',
+    ];
     const child = spawn('claude', args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       cwd: path.join(__dirname, '..'),
@@ -283,27 +329,41 @@ function runClaude(prompt) {
         reject(new Error(`claude exited with code ${code}: ${stderr}`));
         return;
       }
+
+      // Strategy 1: Read from temp file (Claude wrote JSON directly via Write tool)
+      try {
+        if (fs.existsSync(outputFile)) {
+          const fileContent = fs.readFileSync(outputFile, 'utf-8');
+          fs.unlinkSync(outputFile);
+          const analysis = JSON.parse(fileContent);
+          analysis.status = 'completed';
+          resolve(analysis);
+          return;
+        }
+      } catch { /* fall through to stdout */ }
+
+      // Strategy 2: Parse from stdout (fallback — improved regex handles prose around JSON)
       try {
         const wrapper = JSON.parse(stdout);
         let text = wrapper.result || stdout;
-        // Strip markdown fencing (```json ... ```) that Claude often wraps around JSON
-        text = text.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
-        // Try to parse the result as JSON (Claude's response)
+        // Try to extract JSON from markdown fencing anywhere in text
+        const fenceMatch = text.match(/```(?:json)?\s*\n([\s\S]*?)\n\s*```/i);
+        if (fenceMatch) {
+          text = fenceMatch[1].trim();
+        }
         try {
           const analysis = JSON.parse(text);
           analysis.status = 'completed';
           resolve(analysis);
         } catch {
-          // If Claude's response isn't valid JSON, return it as a summary
           resolve({ status: 'completed', summary: text, raw: true });
         }
       } catch {
-        // stdout wasn't valid JSON wrapper either
         resolve({ status: 'completed', summary: stdout, raw: true });
       }
     });
 
-    child.stdin.write(prompt);
+    child.stdin.write(fullPrompt);
     child.stdin.end();
   });
 }

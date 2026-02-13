@@ -13,6 +13,7 @@ jest.mock('child_process', () => ({
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const DATA_FILE = path.join(DATA_DIR, 'annotations.json');
 const THUMBNAILS_DIR = path.join(DATA_DIR, 'thumbnails');
+const ANALYSIS_TEMP_DIR = path.join(DATA_DIR, '.analysis-temp');
 
 function seedAnnotations(annotations = []) {
   const data = { version: '1.0', annotations };
@@ -89,6 +90,7 @@ let originalAnnotations;
 beforeAll(() => {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   fs.mkdirSync(THUMBNAILS_DIR, { recursive: true });
+  fs.mkdirSync(ANALYSIS_TEMP_DIR, { recursive: true });
   if (fs.existsSync(DATA_FILE)) {
     originalAnnotations = fs.readFileSync(DATA_FILE, 'utf-8');
   }
@@ -316,5 +318,159 @@ describe('Group C: Edge cases', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/no annotation text/i);
+  });
+});
+
+// =============================================================================
+// Group D: Enhanced analysis context
+// =============================================================================
+
+describe('Group D: Enhanced analysis context', () => {
+  test('Spawn args include --allowedTools with Read,Glob,Write', async () => {
+    const ann = makeAnnotation({ id: 'ann_tools' });
+    seedAnnotations([ann]);
+
+    setupMockClaude({ stdout: claudeOutput({ severity: 'low', summary: 'test' }) });
+
+    await request(app)
+      .post('/api/annotations/ann_tools/analyze')
+      .send();
+
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    const spawnArgs = mockSpawn.mock.calls[0][1];
+    expect(spawnArgs).toContain('--allowedTools');
+    expect(spawnArgs).toContain('Read,Glob,Write');
+  });
+
+  test('Prompt includes image paths when annotation has thumbnails', async () => {
+    // Create a dummy thumbnail file
+    const dummyThumb = 'thumb_test_dummy.jpg';
+    fs.writeFileSync(path.join(THUMBNAILS_DIR, dummyThumb), 'fake-image-data');
+
+    const ann = makeAnnotation({
+      id: 'ann_thumb',
+      video: {
+        source: 'full',
+        sectionId: 'cold_open',
+        file: 'full_video.mp4',
+        timestamp: 5.0,
+        timestampFormatted: '00:05.0',
+        frameThumbnail: `/thumbnails/${dummyThumb}`,
+      },
+    });
+    seedAnnotations([ann]);
+
+    setupMockClaude({ stdout: claudeOutput({ severity: 'low', summary: 'test' }) });
+
+    await request(app)
+      .post('/api/annotations/ann_thumb/analyze')
+      .send();
+
+    const writtenPrompt = mockSpawn.mock.results[0].value.stdin.write.mock.calls[0][0];
+    expect(writtenPrompt).toContain(`review-app/data/thumbnails/${dummyThumb}`);
+    expect(writtenPrompt).toContain('SCREENSHOT');
+
+    // Clean up
+    fs.unlinkSync(path.join(THUMBNAILS_DIR, dummyThumb));
+  });
+
+  test('Prompt references Remotion dir for the section', async () => {
+    const ann = makeAnnotation({ id: 'ann_remotion' });
+    seedAnnotations([ann]);
+
+    setupMockClaude({ stdout: claudeOutput({ severity: 'low', summary: 'test' }) });
+
+    await request(app)
+      .post('/api/annotations/ann_remotion/analyze')
+      .send();
+
+    const writtenPrompt = mockSpawn.mock.results[0].value.stdin.write.mock.calls[0][0];
+    expect(writtenPrompt).toContain('remotion/src/remotion/S00-ColdOpen/');
+  });
+
+  test('Prompt references main script', async () => {
+    const ann = makeAnnotation({ id: 'ann_script' });
+    seedAnnotations([ann]);
+
+    setupMockClaude({ stdout: claudeOutput({ severity: 'low', summary: 'test' }) });
+
+    await request(app)
+      .post('/api/annotations/ann_script/analyze')
+      .send();
+
+    const writtenPrompt = mockSpawn.mock.results[0].value.stdin.write.mock.calls[0][0];
+    expect(writtenPrompt).toContain('narrative/main_script.md');
+  });
+
+  test('Image paths omitted when thumbnail files do not exist on disk', async () => {
+    const ann = makeAnnotation({
+      id: 'ann_nothumb',
+      video: {
+        source: 'full',
+        sectionId: 'cold_open',
+        file: 'full_video.mp4',
+        timestamp: 5.0,
+        timestampFormatted: '00:05.0',
+        frameThumbnail: '/thumbnails/nonexistent_thumb.jpg',
+      },
+    });
+    seedAnnotations([ann]);
+
+    setupMockClaude({ stdout: claudeOutput({ severity: 'low', summary: 'test' }) });
+
+    await request(app)
+      .post('/api/annotations/ann_nothumb/analyze')
+      .send();
+
+    const writtenPrompt = mockSpawn.mock.results[0].value.stdin.write.mock.calls[0][0];
+    expect(writtenPrompt).not.toContain('SCREENSHOT');
+    expect(writtenPrompt).not.toContain('nonexistent_thumb.jpg');
+  });
+
+  test('File-based output is preferred when temp file exists', async () => {
+    const ann = makeAnnotation({ id: 'ann_filebased' });
+    seedAnnotations([ann]);
+
+    const fileAnalysis = { severity: 'high', category: 'layout', summary: 'From file' };
+
+    mockSpawn.mockImplementationOnce(() => {
+      const fakeChild = createFakeChild();
+      process.nextTick(() => {
+        // Extract temp file path from the prompt Claude received
+        const prompt = fakeChild.stdin.write.mock.calls[0][0];
+        const match = prompt.match(/Write tool to save.*:\n(.+\.json)/);
+        expect(match).not.toBeNull();
+        fs.writeFileSync(match[1], JSON.stringify(fileAnalysis));
+        // Emit stdout with different data to prove file takes priority
+        fakeChild.emitStdout(claudeOutput({ severity: 'low', summary: 'From stdout' }));
+        fakeChild.close(0);
+      });
+      return fakeChild;
+    });
+
+    const res = await request(app).post('/api/annotations/ann_filebased/analyze').send();
+
+    expect(res.status).toBe(200);
+    expect(res.body.analysis.severity).toBe('high');
+    expect(res.body.analysis.summary).toBe('From file');
+    expect(res.body.analysis.raw).toBeUndefined();
+  });
+
+  test('Prose-wrapped stdout with fenced JSON parses correctly', async () => {
+    const ann = makeAnnotation({ id: 'ann_prose' });
+    seedAnnotations([ann]);
+
+    const analysis = { severity: 'medium', category: 'visual-design', summary: 'Fenced result' };
+    const proseWrapped = JSON.stringify({
+      result: 'I analyzed the scene.\n\n```json\n' + JSON.stringify(analysis) + '\n```'
+    });
+    setupMockClaude({ stdout: proseWrapped });
+
+    const res = await request(app).post('/api/annotations/ann_prose/analyze').send();
+
+    expect(res.status).toBe(200);
+    expect(res.body.analysis.severity).toBe('medium');
+    expect(res.body.analysis.summary).toBe('Fenced result');
+    expect(res.body.analysis.raw).toBeUndefined();
   });
 });
