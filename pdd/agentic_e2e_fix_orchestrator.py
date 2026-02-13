@@ -196,6 +196,23 @@ def _get_file_hashes(cwd: Path) -> Dict[str, Optional[str]]:
     return hashes
 
 
+def _detect_changed_files(cwd: Path, initial_file_hashes: Dict[str, Optional[str]]) -> List[str]:
+    """Detects files actually changed during the workflow using hash comparison.
+
+    Compares current file hashes against the snapshot taken before the workflow
+    started to find files that were created or modified on disk, regardless of
+    whether the LLM output included FILES_MODIFIED/FILES_CREATED markers.
+    """
+    current_hashes = _get_file_hashes(cwd)
+    changed: List[str] = []
+    for filepath, current_hash in current_hashes.items():
+        if filepath not in initial_file_hashes:
+            changed.append(filepath)
+        elif initial_file_hashes[filepath] != current_hash:
+            changed.append(filepath)
+    return changed
+
+
 def _has_unpushed_commits(cwd: Path) -> bool:
     """Check if there are commits ahead of the remote tracking branch."""
     result = subprocess.run(
@@ -552,6 +569,14 @@ def run_agentic_e2e_fix_orchestrator(
 
         if success:
             clear_workflow_state(cwd, issue_number, workflow_name, state_dir, repo_owner, repo_name, use_github_state)
+
+            # Detect actual file changes via hash comparison (not LLM output parsing)
+            # This fixes issue #355: summary showing empty "Files changed" despite
+            # real modifications, especially on early exit at Step 2.
+            actual_changed_files = _detect_changed_files(cwd, initial_file_hashes)
+            if actual_changed_files:
+                changed_files = actual_changed_files
+
             console.print("\n[bold green]E2E fix complete[/bold green]")
             console.print(f"   Total cost: ${total_cost:.4f}")
             console.print(f"   Cycles used: {current_cycle if current_cycle <= max_cycles else max_cycles}/{max_cycles}")

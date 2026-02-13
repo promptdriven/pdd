@@ -9,3 +9,7 @@ timestamp_utc,env,arm,run_number,http_status,generated_code_hash,generated_code_
 2026-02-13T19:54:56.035833+00:00,prod,ungrounded,3,0,a5d9633f2ca7f304,262,8,4,True,,0.01079345,gemini/gemini-3-flash-preview,13661
 2026-02-13T19:55:09.610243+00:00,prod,ungrounded,4,0,58b62e19c18ed437,265,6,4,True,,0.01097045,gemini/gemini-3-flash-preview,13568
 2026-02-13T19:55:29.771897+00:00,prod,ungrounded,5,0,55adb1dbb896ac4d,396,13,4,True,,0.01537745,gemini/gemini-3-flash-preview,20148
+2026-02-13T21:27:30.873464+00:00,staging,grounded,1,200,9466a883950bc694,326,10,4,True,,0.014604299999999999,vertex_ai/gemini-3-flash-preview,79534
+2026-02-13T21:27:38.210769+00:00,staging,grounded,2,200,9466a883950bc694,326,10,4,True,,0.0634228,vertex_ai/gemini-3-flash-preview,7329
+2026-02-13T21:28:04.607311+00:00,staging,ungrounded,1,0,662fcc0679db3e68,368,10,4,True,,0.01447745,gemini/gemini-3-flash-preview,25329
+2026-02-13T21:28:27.341740+00:00,staging,ungrounded,2,0,ae65c32b3f6a3516,383,9,4,True,,0.013679450000000001,gemini/gemini-3-flash-preview,22703
