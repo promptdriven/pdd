@@ -501,11 +501,18 @@ def run_agentic_e2e_fix_orchestrator(
                 if new_gh_id:
                     github_comment_id = new_gh_id
 
-                # Check Early Exit (Step 2)
+                # Check Early Exit (Step 2): ALL_TESTS_PASS
                 if step_num == 2 and "ALL_TESTS_PASS" in step_output:
                     console.print("[green]ALL_TESTS_PASS detected in Step 2. Exiting loop.[/green]")
                     success = True
                     final_message = "All tests passed during e2e check."
+                    break
+
+                # Check Early Exit (Step 3): NOT_A_BUG
+                if step_num == 3 and "NOT_A_BUG" in step_output:
+                    console.print("[yellow]NOT_A_BUG detected in Step 3. Issue is not a bug, stopping workflow.[/yellow]")
+                    success = False
+                    final_message = "Issue determined to be not a bug."
                     break
 
                 # Check Loop Control (Step 9)
@@ -520,7 +527,12 @@ def run_agentic_e2e_fix_orchestrator(
                     elif "CONTINUE_CYCLE" not in step_output:
                         console.print("[yellow]Warning: No loop control token found in Step 9. Defaulting to CONTINUE_CYCLE.[/yellow]")
 
+            # Check if we should exit the outer loop
             if success:
+                break
+            
+            # Check if NOT_A_BUG was detected (exit outer loop too)
+            if step_num == 3 and "NOT_A_BUG" in step_outputs.get("3", ""):
                 break
             
             # Prepare for next cycle
@@ -562,11 +574,13 @@ def run_agentic_e2e_fix_orchestrator(
 
             return True, final_message, total_cost, model_used, changed_files
         else:
-            final_message = f"Max cycles ({max_cycles}) reached without all tests passing"
-            console.print("\n[bold red]E2E fix incomplete (max cycles reached)[/bold red]")
+            if not final_message:
+                final_message = f"Max cycles ({max_cycles}) reached without all tests passing"
+            console.print(f"\n[bold red]E2E fix incomplete[/bold red]")
             console.print(f"   Total cost: ${total_cost:.4f}")
             remaining = [u for u, s in dev_unit_states.items() if not s.get("fixed")]
-            console.print(f"   Remaining failures: {', '.join(remaining)}")
+            if remaining:
+                console.print(f"   Remaining failures: {', '.join(remaining)}")
             return False, final_message, total_cost, model_used, changed_files
 
     except KeyboardInterrupt:
