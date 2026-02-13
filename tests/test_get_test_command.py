@@ -244,11 +244,11 @@ class TestIntegrationWithRealCSV:
         """Integration test with real CSV for JavaScript file."""
         test_file = "/tmp/test_integration.js"
         result = get_test_command_for_file(test_file, language="javascript")
-        
-        # JavaScript should get a command from smart detection
-        # Result may be None if npm detection fails, which is acceptable
-        if result is not None:
-            assert "{file}" not in result
+
+        # JavaScript should get a command from CSV run_test_command
+        assert result is not None
+        assert "node" in result
+        assert test_file in result
 
     def test_unknown_extension_integration(self):
         """Integration test with unknown file extension."""

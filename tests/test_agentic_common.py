@@ -2110,6 +2110,146 @@ def test_claude_no_model_env_var_omits_model_flag(mock_cwd, mock_env, mock_load_
 
 
 # ---------------------------------------------------------------------------
+# GEMINI_MODEL environment variable tests
+# ---------------------------------------------------------------------------
+
+def test_gemini_model_env_var_passed_to_cli(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """When GEMINI_MODEL env var is set, --model flag is added to gemini CLI command."""
+    def which_side_effect(cmd):
+        return "/bin/gemini" if cmd == "gemini" else None
+    mock_shutil_which.side_effect = which_side_effect
+    os.environ["GEMINI_API_KEY"] = "key"
+    os.environ["GEMINI_MODEL"] = "gemini-3-flash-preview"
+
+    mock_output = {
+        "response": "Done.",
+        "stats": {
+            "models": {
+                "gemini-3-flash-preview": {
+                    "tokens": {"prompt": 100, "candidates": 100, "cached": 0}
+                }
+            }
+        }
+    }
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps(mock_output)
+    mock_subprocess.return_value.stderr = ""
+
+    success, msg, cost, provider = run_agentic_task("Fix the bug", mock_cwd)
+
+    assert success
+    assert provider == "google"
+
+    args, kwargs = mock_subprocess.call_args
+    cmd = args[0]
+    assert "--model" in cmd, f"Expected --model in command, got: {cmd}"
+    model_idx = cmd.index("--model")
+    assert cmd[model_idx + 1] == "gemini-3-flash-preview", (
+        f"Expected 'gemini-3-flash-preview' after --model, got: {cmd[model_idx + 1]}"
+    )
+
+
+def test_gemini_no_model_env_var_omits_model_flag(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """When GEMINI_MODEL env var is NOT set, no --model flag in gemini CLI command."""
+    def which_side_effect(cmd):
+        return "/bin/gemini" if cmd == "gemini" else None
+    mock_shutil_which.side_effect = which_side_effect
+    os.environ["GEMINI_API_KEY"] = "key"
+    # Deliberately NOT setting GEMINI_MODEL
+
+    mock_output = {
+        "response": "Done.",
+        "stats": {
+            "models": {
+                "gemini-2.0-flash": {
+                    "tokens": {"prompt": 100, "candidates": 100, "cached": 0}
+                }
+            }
+        }
+    }
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps(mock_output)
+    mock_subprocess.return_value.stderr = ""
+
+    success, msg, cost, provider = run_agentic_task("Fix the bug", mock_cwd)
+
+    assert success
+    assert provider == "google"
+
+    args, kwargs = mock_subprocess.call_args
+    cmd = args[0]
+    assert "--model" not in cmd, f"Did not expect --model in command, got: {cmd}"
+
+
+# ---------------------------------------------------------------------------
+# CODEX_MODEL environment variable tests
+# ---------------------------------------------------------------------------
+
+def test_codex_model_env_var_passed_to_cli(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """When CODEX_MODEL env var is set, --model flag is added to codex CLI command."""
+    def which_side_effect(cmd):
+        return "/bin/codex" if cmd == "codex" else None
+    mock_shutil_which.side_effect = which_side_effect
+    os.environ["OPENAI_API_KEY"] = "key"
+    os.environ["CODEX_MODEL"] = "o3-pro"
+
+    jsonl_output = [
+        json.dumps({"type": "init"}),
+        json.dumps({
+            "type": "result",
+            "output": "Done.",
+            "usage": {"input_tokens": 100, "output_tokens": 100, "cached_input_tokens": 0}
+        })
+    ]
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = "\n".join(jsonl_output)
+    mock_subprocess.return_value.stderr = ""
+
+    success, msg, cost, provider = run_agentic_task("Fix the bug", mock_cwd)
+
+    assert success
+    assert provider == "openai"
+
+    args, kwargs = mock_subprocess.call_args
+    cmd = args[0]
+    assert "--model" in cmd, f"Expected --model in command, got: {cmd}"
+    model_idx = cmd.index("--model")
+    assert cmd[model_idx + 1] == "o3-pro", (
+        f"Expected 'o3-pro' after --model, got: {cmd[model_idx + 1]}"
+    )
+
+
+def test_codex_no_model_env_var_omits_model_flag(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """When CODEX_MODEL env var is NOT set, no --model flag in codex CLI command."""
+    def which_side_effect(cmd):
+        return "/bin/codex" if cmd == "codex" else None
+    mock_shutil_which.side_effect = which_side_effect
+    os.environ["OPENAI_API_KEY"] = "key"
+    # Deliberately NOT setting CODEX_MODEL
+
+    jsonl_output = [
+        json.dumps({"type": "init"}),
+        json.dumps({
+            "type": "result",
+            "output": "Done.",
+            "usage": {"input_tokens": 100, "output_tokens": 100, "cached_input_tokens": 0}
+        })
+    ]
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = "\n".join(jsonl_output)
+    mock_subprocess.return_value.stderr = ""
+
+    success, msg, cost, provider = run_agentic_task("Fix the bug", mock_cwd)
+
+    assert success
+    assert provider == "openai"
+
+    args, kwargs = mock_subprocess.call_args
+    cmd = args[0]
+    assert "--model" not in cmd, f"Did not expect --model in command, got: {cmd}"
+
+
+# ---------------------------------------------------------------------------
 # PDD_USER_FEEDBACK Injection Tests
 # ---------------------------------------------------------------------------
 

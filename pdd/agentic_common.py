@@ -621,6 +621,10 @@ def _run_with_provider(
             "--yolo",
             "--output-format", "json"
         ]
+        # Allow model override via GEMINI_MODEL env var (mirrors CLAUDE_MODEL for anthropic)
+        gemini_model = env.get("GEMINI_MODEL")
+        if gemini_model:
+            cmd.extend(["--model", gemini_model])
     elif provider == "openai":
         cmd = [
             cli_path,
@@ -629,6 +633,10 @@ def _run_with_provider(
             "--json",
             str(prompt_path)
         ]
+        # Allow model override via CODEX_MODEL env var (mirrors CLAUDE_MODEL for anthropic)
+        codex_model = env.get("CODEX_MODEL")
+        if codex_model:
+            cmd.extend(["--model", codex_model])
     else:
         return False, f"Unknown provider {provider}", 0.0
 
