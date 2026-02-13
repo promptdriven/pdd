@@ -1,10 +1,16 @@
-"""Tests for agentic_e2e_fix_orchestrator prompt formatting.
+"""Tests for agentic_e2e_fix_orchestrator prompt formatting and runtime behavior.
 
 These tests verify that all e2e fix workflow prompts can be formatted
 with the context variables provided by the orchestrator, without
 raising KeyError on undefined placeholders.
+
+Additionally, tests verify the orchestrator's runtime behavior including
+early exit conditions (issue #468).
 """
 import pytest
+from unittest.mock import patch, MagicMock
+from pathlib import Path
+
 from pdd.load_prompt_template import load_prompt_template
 
 
@@ -386,4 +392,273 @@ def test_add():
         assert "/2" not in result.output or "Processing test file" not in result.output, (
             f"Should only process 1 test file, not 2.\n"
             f"Output: {result.output}"
+        )
+
+
+# ============================================================================
+# Issue #468: NOT_A_BUG Early Exit Tests
+#
+# Bug: When Step 3 returns NOT_A_BUG, the orchestrator should stop the
+# workflow immediately. Instead, it continues executing Steps 4-9.
+#
+# Root cause: The orchestrator only checks for ALL_TESTS_PASS (Step 2)
+# and loop control tokens (Step 9). There is no check after Step 3 for
+# the NOT_A_BUG token, even though the prompt specification and Step 3
+# prompt both define it.
+#
+# Pattern reference: agentic_bug_orchestrator.py:416-425 has the correct
+# pattern (checking for "Feature Request" / "User Error" at Step 2).
+# ============================================================================
+
+
+from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+
+
+@pytest.fixture
+def e2e_fix_mock_dependencies(tmp_path):
+    """Mocks external dependencies for the e2e fix orchestrator.
+
+    Mocks:
+    - run_agentic_task: LLM task execution
+    - load_prompt_template: Prompt loading
+    - console: Suppress Rich output during tests
+    - load_workflow_state: Returns no saved state (fresh run)
+    - save_workflow_state: No-op
+    - clear_workflow_state: No-op
+    - _get_file_hashes: Returns empty dict (skip git operations)
+    - _commit_and_push: No-op (skip git operations)
+    """
+    with patch("pdd.agentic_e2e_fix_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_e2e_fix_orchestrator.load_prompt_template") as mock_load, \
+         patch("pdd.agentic_e2e_fix_orchestrator.console") as mock_console, \
+         patch("pdd.agentic_e2e_fix_orchestrator.load_workflow_state") as mock_load_state, \
+         patch("pdd.agentic_e2e_fix_orchestrator.save_workflow_state") as mock_save_state, \
+         patch("pdd.agentic_e2e_fix_orchestrator.clear_workflow_state") as mock_clear_state, \
+         patch("pdd.agentic_e2e_fix_orchestrator._get_file_hashes") as mock_hashes, \
+         patch("pdd.agentic_e2e_fix_orchestrator._commit_and_push") as mock_commit:
+
+        # Default: successful run, generic output
+        mock_run.return_value = (True, "Step output", 0.1, "gpt-4")
+        # Default: simple template
+        mock_load.return_value = "Prompt for {issue_number}"
+        # Default: no saved state (fresh run)
+        mock_load_state.return_value = (None, None)
+        # Default: save returns no GitHub comment ID
+        mock_save_state.return_value = None
+        # Default: no file hashes
+        mock_hashes.return_value = {}
+        # Default: commit succeeds
+        mock_commit.return_value = (True, "No changes to commit")
+
+        yield mock_run, mock_load, mock_console
+
+
+@pytest.fixture
+def e2e_fix_default_args(tmp_path):
+    """Default arguments for run_agentic_e2e_fix_orchestrator."""
+    return {
+        "issue_url": "http://github.com/owner/repo/issues/1",
+        "issue_content": "Bug description",
+        "repo_owner": "owner",
+        "repo_name": "repo",
+        "issue_number": 1,
+        "issue_author": "user",
+        "issue_title": "Bug Title",
+        "cwd": tmp_path,
+        "verbose": False,
+        "quiet": True,
+        "resume": False,
+        "use_github_state": False,
+    }
+
+
+class TestNotABugEarlyExit:
+    """Tests for issue #468: NOT_A_BUG should cause early exit after Step 3.
+
+    The e2e fix orchestrator should stop the workflow when the agent
+    determines the reported issue is not actually a bug.
+    """
+
+    def test_not_a_bug_early_exit_step3(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """Primary bug test: NOT_A_BUG in Step 3 output should stop the workflow.
+
+        Issue #468: When Step 3 returns NOT_A_BUG, the orchestrator should
+        exit immediately after Step 3, executing only Steps 1-3 (3 calls).
+
+        This test FAILS on the buggy code because the orchestrator has no
+        check for NOT_A_BUG after Step 3 — it continues through all 9 steps.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        # Step 3 returns NOT_A_BUG classification
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step3' in label:
+                return (True, "Root cause: NOT_A_BUG - This is expected behavior, not a bug.", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+            **e2e_fix_default_args
+        )
+
+        # The orchestrator should have stopped after Step 3
+        # Only 3 calls: Step 1, Step 2, Step 3
+        assert mock_run.call_count == 3, (
+            f"Expected 3 step calls (Steps 1-3) but got {mock_run.call_count}. "
+            f"The orchestrator should stop after Step 3 returns NOT_A_BUG. "
+            f"Called labels: {[c.kwargs.get('label', '') for c in mock_run.call_args_list]}"
+        )
+
+    def test_not_a_bug_with_surrounding_text(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """Edge case: NOT_A_BUG token should be detected even in verbose output.
+
+        The agent may embed the NOT_A_BUG token within verbose analysis text.
+        The orchestrator should still detect it and stop.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step3' in label:
+                return (True, (
+                    "## Root Cause Analysis\n"
+                    "After thorough investigation, I've determined this is user error.\n"
+                    "**Status:** NOT_A_BUG\n"
+                    "The reported behavior is actually the expected behavior per the docs."
+                ), 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+            **e2e_fix_default_args
+        )
+
+        # Should still detect NOT_A_BUG and stop after 3 steps
+        assert mock_run.call_count == 3, (
+            f"Expected 3 step calls but got {mock_run.call_count}. "
+            f"NOT_A_BUG should be detected even in verbose output."
+        )
+
+
+class TestExistingEarlyExits:
+    """Tests for existing early exit conditions that had zero coverage.
+
+    These regression tests ensure the existing ALL_TESTS_PASS early exits
+    continue to work correctly.
+    """
+
+    def test_all_tests_pass_early_exit_step2(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """ALL_TESTS_PASS in Step 2 should exit the workflow successfully.
+
+        This tests the existing early exit at Step 2 (lines 504-509 in
+        agentic_e2e_fix_orchestrator.py).
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step2' in label:
+                return (True, "All tests pass. ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+            **e2e_fix_default_args
+        )
+
+        assert success is True, f"Should succeed when ALL_TESTS_PASS at Step 2: {msg}"
+        assert mock_run.call_count == 2, (
+            f"Expected 2 step calls (Steps 1-2) but got {mock_run.call_count}."
+        )
+
+    def test_all_tests_pass_step9_exits_loop(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """ALL_TESTS_PASS in Step 9 should exit the loop successfully.
+
+        This tests the existing early exit at Step 9 (lines 513-517 in
+        agentic_e2e_fix_orchestrator.py).
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step9' in label:
+                return (True, "Verification complete. ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+            **e2e_fix_default_args
+        )
+
+        assert success is True, f"Should succeed when ALL_TESTS_PASS at Step 9: {msg}"
+        assert mock_run.call_count == 9, (
+            f"Expected 9 step calls (all steps in one cycle) but got {mock_run.call_count}."
+        )
+
+    def test_happy_path_all_9_steps_execute(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """Regression test: Normal flow should execute all 9 steps per cycle.
+
+        When no early exit tokens are present, the orchestrator should run
+        all 9 steps. This ensures the NOT_A_BUG fix doesn't break the
+        normal workflow.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 1
+
+        # No early exit tokens in any step output
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step9' in label:
+                return (True, "Some tests still failing. CONTINUE_CYCLE", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+            **e2e_fix_default_args
+        )
+
+        # All 9 steps should execute
+        assert mock_run.call_count == 9, (
+            f"Expected 9 step calls but got {mock_run.call_count}. "
+            f"Normal flow should execute all 9 steps."
+        )
+
+
+class TestPromptNotABugCategory:
+    """Prompt verification tests: Ensure NOT_A_BUG exists in prompt templates.
+
+    These tests prevent prompt regression — if someone removes the NOT_A_BUG
+    category from the prompts, these tests will catch it.
+    """
+
+    def test_step3_prompt_has_not_a_bug_category(self):
+        """Step 3 prompt must include NOT_A_BUG as a root cause category.
+
+        Without NOT_A_BUG in the prompt, the agent has no structured way
+        to signal that the issue isn't a bug.
+        """
+        template = load_prompt_template("agentic_e2e_fix_step3_root_cause_LLM")
+        assert template is not None, "Step 3 template should load"
+        assert "NOT_A_BUG" in template, (
+            "Step 3 prompt must include NOT_A_BUG as a root cause category. "
+            "Without it, the agent cannot signal that the issue is not a bug."
+        )
+
+    def test_orchestrator_prompt_has_not_a_bug_in_loop_control(self):
+        """Orchestrator prompt must document NOT_A_BUG as a loop control token.
+
+        The orchestrator prompt specification should document NOT_A_BUG
+        alongside ALL_TESTS_PASS and CONTINUE_CYCLE.
+        """
+        template = load_prompt_template("agentic_e2e_fix_orchestrator_python")
+        assert template is not None, "Orchestrator prompt should load"
+        assert "NOT_A_BUG" in template, (
+            "Orchestrator prompt must document NOT_A_BUG as a loop control token. "
+            "This ensures the generated code includes the NOT_A_BUG check."
         )
