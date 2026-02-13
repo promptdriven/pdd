@@ -23,7 +23,21 @@ except ImportError:
         return None
 
 # Constants
-AGENT_PROVIDER_PREFERENCE: List[str] = ["anthropic", "google", "openai"]
+_DEFAULT_PROVIDER_PREFERENCE: List[str] = ["anthropic", "google", "openai"]
+
+
+def get_agent_provider_preference() -> List[str]:
+    """Return provider preference order, overridable via PDD_AGENTIC_PROVIDER env var.
+
+    Examples:
+        PDD_AGENTIC_PROVIDER=google,anthropic,openai  ->  ["google", "anthropic", "openai"]
+        PDD_AGENTIC_PROVIDER=google                    ->  ["google"]
+        (unset)                                        ->  ["anthropic", "google", "openai"]
+    """
+    env_val = os.environ.get("PDD_AGENTIC_PROVIDER", "")
+    if env_val:
+        return [p.strip() for p in env_val.split(",") if p.strip()]
+    return _DEFAULT_PROVIDER_PREFERENCE
 
 # CLI command mapping for each provider
 CLI_COMMANDS: Dict[str, str] = {
@@ -407,7 +421,7 @@ def run_agentic_task(
     agents = get_available_agents()
 
     # Filter agents based on preference order
-    candidates = [p for p in AGENT_PROVIDER_PREFERENCE if p in agents]
+    candidates = [p for p in get_agent_provider_preference() if p in agents]
 
     if not candidates:
         msg = "No agent providers are available (check CLI installation and API keys)"
@@ -607,6 +621,10 @@ def _run_with_provider(
             "--yolo",
             "--output-format", "json"
         ]
+        # Allow model override via GEMINI_MODEL env var (mirrors CLAUDE_MODEL for anthropic)
+        gemini_model = env.get("GEMINI_MODEL")
+        if gemini_model:
+            cmd.extend(["--model", gemini_model])
     elif provider == "openai":
         cmd = [
             cli_path,
@@ -615,6 +633,10 @@ def _run_with_provider(
             "--json",
             str(prompt_path)
         ]
+        # Allow model override via CODEX_MODEL env var (mirrors CLAUDE_MODEL for anthropic)
+        codex_model = env.get("CODEX_MODEL")
+        if codex_model:
+            cmd.extend(["--model", codex_model])
     else:
         return False, f"Unknown provider {provider}", 0.0
 
