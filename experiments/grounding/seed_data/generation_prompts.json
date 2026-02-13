@@ -1,0 +1,39 @@
+{
+  "prompts": [
+    {
+      "id": "gen-factorial",
+      "domain": "math",
+      "language": "Python",
+      "promptContent": "Write a Python function called factorial that computes the factorial of a non-negative integer n. Include input validation that raises ValueError for negative inputs.",
+      "description": "Math domain — likely matches a math example (seeded or existing)"
+    },
+    {
+      "id": "gen-fibonacci",
+      "domain": "math",
+      "language": "Python",
+      "promptContent": "Write a Python function called fibonacci that returns the nth Fibonacci number using an iterative approach. Handle edge cases for n=0 and n=1.",
+      "description": "Math domain — likely matches a math example (seeded or existing)"
+    },
+    {
+      "id": "gen-csv-parser",
+      "domain": "data",
+      "language": "Python",
+      "promptContent": "Write a Python class CsvParser that reads a CSV file and provides methods to get headers, row count, and filter rows by column value.",
+      "description": "Data domain — likely matches a data-processing example"
+    },
+    {
+      "id": "gen-flask-api",
+      "domain": "web",
+      "language": "Python",
+      "promptContent": "Write a Flask REST API with GET /items and POST /items endpoints. Items have id, name, and price fields. Store items in memory.",
+      "description": "Web domain — likely matches a web/API example"
+    },
+    {
+      "id": "gen-no-match",
+      "domain": "other",
+      "language": "Python",
+      "promptContent": "Write a Python function that converts a color from RGB tuple (0-255) to hex string format like '#FF00AA'.",
+      "description": "Unlikely to match seeded examples — tests grounding with weak/no match"
+    }
+  ]
+}

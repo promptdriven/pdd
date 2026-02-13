@@ -1,0 +1,12 @@
+{
+  "name": "video-annotation-review",
+  "version": "1.0.0",
+  "description": "Video annotation review tool for 3Blue1Brown demo",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0"
+  }
+}

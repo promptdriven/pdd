@@ -29,11 +29,11 @@ export const BEATS = {
   CLAUDE37_START: 330,
   CLAUDE37_END: 390,
 
-  // Frame 390-450: Frontier cluster (staggered by 15 frames)
+  // Frame 390-450: Frontier cluster (staggered by 15 frames, chronological order)
   FRONTIER_START: 390,
-  OPUS_START: 390,
-  GPT52_START: 405,
-  GEMINI3_START: 420,
+  GEMINI3_START: 390,
+  OPUS_START: 405,
+  GPT53_START: 420,
   FRONTIER_END: 450,
 
   // Frame 450-540: Hold with subtle pulse
@@ -56,7 +56,7 @@ export const COLORS = {
   // Milestone marker colors
   CODEX: "#3B82F6",     // Blue
   GPT4: "#8B5CF6",      // Purple
-  CLAUDE: "#F59E0B",    // Orange (Claude 3.5, 3.7, Opus 4.5)
+  CLAUDE: "#F59E0B",    // Orange (Claude 3.5, 3.7, Opus 4.6)
   GEMINI: "#EF4444",    // Red
 
   // Faded state for non-zoom regions
@@ -78,9 +78,9 @@ export const MILESTONES: Milestone[] = [
   { id: "gpt4", name: "GPT-4", year: 2023.25, color: COLORS.GPT4, startFrame: BEATS.GPT4_START, impactScale: 1.5 },
   { id: "claude35", name: "Claude 3.5 Sonnet", year: 2024.5, color: COLORS.CLAUDE, startFrame: BEATS.CLAUDE35_START, impactScale: 1.8 },
   { id: "claude37", name: "Claude 3.7 Sonnet", year: 2025.15, color: COLORS.CLAUDE, startFrame: BEATS.CLAUDE37_START, impactScale: 1.2 },
-  { id: "opus45", name: "Opus 4.5", year: 2025.7, color: COLORS.CLAUDE, startFrame: BEATS.OPUS_START, impactScale: 1.0 },
-  { id: "gpt52", name: "GPT 5.2", year: 2025.8, color: COLORS.GPT4, startFrame: BEATS.GPT52_START, impactScale: 1.0 },
-  { id: "gemini3", name: "Gemini 3", year: 2025.9, color: COLORS.GEMINI, startFrame: BEATS.GEMINI3_START, impactScale: 1.0 },
+  { id: "gemini3", name: "Gemini 3", year: 2025.88, color: COLORS.GEMINI, startFrame: BEATS.GEMINI3_START, impactScale: 1.0 },
+  { id: "opus46", name: "Opus 4.6", year: 2026.1, color: COLORS.CLAUDE, startFrame: BEATS.OPUS_START, impactScale: 1.0 },
+  { id: "gpt53", name: "GPT 5.3", year: 2026.1, color: COLORS.GPT4, startFrame: BEATS.GPT53_START, impactScale: 1.0 },
 ];
 
 // Chart dimensions
@@ -92,30 +92,29 @@ export const CHART_MARGINS = {
 };
 
 // Year range for the zoomed view (2020-2026)
-export const YEAR_RANGE = { min: 2020, max: 2026 };
+export const YEAR_RANGE = { min: 2020, max: 2026.5 };
 
 // Cost data in Developer Hours — uneven staircase descent
 // Each milestone causes a drop of different size
 export const COST_DATA = [
-  { year: 2020, cost: 30 },
-  { year: 2020.5, cost: 29 },
-  { year: 2021, cost: 28 },       // Codex: small drop
-  { year: 2022, cost: 27 },
-  { year: 2023, cost: 26 },
-  { year: 2023.25, cost: 20 },    // GPT-4: moderate drop
-  { year: 2023.75, cost: 18 },
-  { year: 2024, cost: 16 },
-  { year: 2024.5, cost: 7 },      // Claude 3.5 Sonnet: LARGE drop (the cliff)
-  { year: 2024.75, cost: 6 },
-  { year: 2025, cost: 5.5 },
-  { year: 2025.15, cost: 4.5 },   // Claude 3.7 Sonnet: moderate drop
+  { year: 2020, cost: 50 },       // Pre-AI baseline: ~50hrs to generate a 250-line module
+  { year: 2020.99, cost: 50 },   // Flat before AI coding tools existed
+  { year: 2021, cost: 45 },       // Codex: sudden drop (~10%, matches 7-12% enterprise data)
+  { year: 2022, cost: 42 },
+  { year: 2023, cost: 40 },
+  { year: 2023.25, cost: 30 },    // GPT-4: steep plunge (~25% drop, matches 21-26% studies)
+  { year: 2023.75, cost: 25 },
+  { year: 2024, cost: 18 },
+  { year: 2024.5, cost: 8 },      // Claude 3.5 Sonnet: THE CLIFF (agentic coding, 64% SWE-bench)
+  { year: 2024.75, cost: 7 },
+  { year: 2025, cost: 6 },
+  { year: 2025.15, cost: 5 },     // Claude 3.7 Sonnet
   { year: 2025.5, cost: 4 },
-  { year: 2025.7, cost: 3.5 },    // Opus 4.5
-  { year: 2025.8, cost: 3.2 },    // GPT 5.2
-  { year: 2025.9, cost: 3 },      // Gemini 3: settled
+  { year: 2025.88, cost: 3 },     // Gemini 3 (Nov 2025)
+  { year: 2026.1, cost: 2 },      // Opus 4.6 + GPT 5.3 (Feb 2026)
 ];
 
-export const COST_RANGE = { min: 0, max: 35 };
+export const COST_RANGE = { min: 0, max: 60 };
 
 // Spring animation config as specified
 export const SPRING_CONFIG = {

@@ -29,13 +29,8 @@ export const AIMilestones: React.FC<AIMilestonesPropsType> = ({
     { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.inOut(Easing.cubic) }
   );
 
-  // Background elements fade to 30% during zoom
-  const backgroundOpacity = interpolate(
-    frame,
-    [BEATS.ZOOM_START, BEATS.ZOOM_END],
-    [1, 0.3],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-  );
+  // Background elements opacity (no fade)
+  const backgroundOpacity = 1;
 
   // Helper functions for positioning
   const getXPosition = (year: number) => {
@@ -96,9 +91,9 @@ export const AIMilestones: React.FC<AIMilestonesPropsType> = ({
       "top",     // GPT-4 (2023.25)
       "top",     // Claude 3.5 Sonnet (2024.5) — biggest marker
       "bottom",  // Claude 3.7 Sonnet (2025.15)
-      "top",     // Opus 4.5 (2025.7)
-      "bottom",  // GPT 5.2 (2025.8)
-      "right",   // Gemini 3 (2025.9)
+      "top",     // Gemini 3 (Nov 2025)
+      "bottom",  // Opus 4.6 (Feb 2026)
+      "right",   // GPT 5.3 (Feb 2026)
     ];
     return positions[index] || "top";
   };
@@ -109,10 +104,10 @@ export const AIMilestones: React.FC<AIMilestonesPropsType> = ({
   };
 
   // Year ticks for x-axis
-  const yearTicks = [2020, 2021, 2022, 2023, 2024, 2025];
+  const yearTicks = [2020, 2021, 2022, 2023, 2024, 2025, 2026];
 
   // Cost ticks for y-axis
-  const costTicks = [0, 5, 10, 15, 20, 25, 30, 35];
+  const costTicks = [0, 10, 20, 30, 40, 50];
 
   // Title fade in
   const titleOpacity = interpolate(
@@ -156,7 +151,7 @@ export const AIMilestones: React.FC<AIMilestonesPropsType> = ({
           left: 0,
           width: "100%",
           height: "100%",
-          transform: `scale(${1 + zoomProgress * 0.15})`,
+          transform: "scale(1)",
           transformOrigin: "center center",
         }}
       >
@@ -327,6 +322,25 @@ export const AIMilestones: React.FC<AIMilestonesPropsType> = ({
             filter="url(#lineGlow)"
           />
         </svg>
+
+        {/* Inline label for the cost line */}
+        <div
+          style={{
+            position: "absolute",
+            left: getXPosition(2020) + 10,
+            top: getYPosition(50) - 30,
+            fontFamily: "Inter, system-ui, sans-serif",
+            fontSize: 20,
+            fontWeight: 600,
+            color: COLORS.LINE_COST,
+            opacity: lineDrawProgress,
+            textShadow: "0 1px 4px rgba(0,0,0,0.7)",
+            pointerEvents: "none",
+            whiteSpace: "nowrap",
+          }}
+        >
+          Cost to Generate
+        </div>
 
         {/* Milestone markers */}
         {MILESTONES.map((milestone, index) => (

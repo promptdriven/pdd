@@ -1,0 +1,88 @@
+{
+  "examples": [
+    {
+      "id": "grnd-math-factorial-py",
+      "slug": "grnd-math-factorial-py",
+      "domain": "math",
+      "language": "Python",
+      "title": "Factorial",
+      "command": "generate",
+      "prompt_text": "Write a Python function to calculate the factorial of a number recursively",
+      "code_content": "def factorial(n):\n    \"\"\"Calculate factorial of n recursively.\"\"\"\n    if n <= 1:\n        return 1\n    return n * factorial(n - 1)",
+      "is_public": true,
+      "lifecycle_state": "Verified"
+    },
+    {
+      "id": "grnd-math-factorial-js",
+      "slug": "grnd-math-factorial-js",
+      "domain": "math",
+      "language": "JavaScript",
+      "title": "Factorial JS",
+      "command": "generate",
+      "prompt_text": "Write a JavaScript function to calculate the factorial of a number",
+      "code_content": "function factorial(n) {\n  if (n <= 1) return 1;\n  return n * factorial(n - 1);\n}",
+      "is_public": true,
+      "lifecycle_state": "Verified"
+    },
+    {
+      "id": "grnd-math-fibonacci-py",
+      "slug": "grnd-math-fibonacci-py",
+      "domain": "math",
+      "language": "Python",
+      "title": "Fibonacci",
+      "command": "generate",
+      "prompt_text": "Write a Python function to compute the nth Fibonacci number using dynamic programming",
+      "code_content": "def fibonacci(n):\n    \"\"\"Compute nth Fibonacci number with memoization.\"\"\"\n    if n <= 1:\n        return n\n    a, b = 0, 1\n    for _ in range(2, n + 1):\n        a, b = b, a + b\n    return b",
+      "is_public": true,
+      "lifecycle_state": "Verified"
+    },
+    {
+      "id": "grnd-math-gcd-py",
+      "slug": "grnd-math-gcd-py",
+      "domain": "math",
+      "language": "Python",
+      "title": "GCD",
+      "command": "fix",
+      "prompt_text": "Fix the GCD function to handle edge cases with zero and negative numbers",
+      "code_content": "def gcd(a, b):\n    \"\"\"Compute greatest common divisor using Euclidean algorithm.\"\"\"\n    a, b = abs(a), abs(b)\n    while b:\n        a, b = b, a % b\n    return a",
+      "is_public": true,
+      "lifecycle_state": "Verified"
+    },
+    {
+      "id": "grnd-web-flask-api-py",
+      "slug": "grnd-web-flask-api-py",
+      "domain": "web",
+      "language": "Python",
+      "title": "Flask REST API",
+      "command": "generate",
+      "prompt_text": "Create a Flask REST API with CRUD endpoints for a todo list application",
+      "code_content": "from flask import Flask, jsonify, request\n\napp = Flask(__name__)\ntodos = []\n\n@app.route('/todos', methods=['GET'])\ndef get_todos():\n    return jsonify(todos)\n\n@app.route('/todos', methods=['POST'])\ndef create_todo():\n    todo = request.get_json()\n    todos.append(todo)\n    return jsonify(todo), 201",
+      "is_public": true,
+      "lifecycle_state": "Verified"
+    },
+    {
+      "id": "grnd-data-csv-parser-py",
+      "slug": "grnd-data-csv-parser-py",
+      "domain": "data",
+      "language": "Python",
+      "title": "CSV Parser",
+      "command": "fix",
+      "prompt_text": "Fix the CSV parser to correctly handle quoted fields with embedded commas and newlines",
+      "code_content": "import csv\nfrom io import StringIO\n\ndef parse_csv(text):\n    \"\"\"Parse CSV text handling quoted fields correctly.\"\"\"\n    reader = csv.reader(StringIO(text))\n    return [row for row in reader]",
+      "is_public": true,
+      "lifecycle_state": "Verified"
+    },
+    {
+      "id": "grnd-data-json-schema-py",
+      "slug": "grnd-data-json-schema-py",
+      "domain": "data",
+      "language": "Python",
+      "title": "JSON Schema Validator",
+      "command": "generate",
+      "prompt_text": "Write a Python JSON schema validator that checks nested objects and arrays",
+      "code_content": "import jsonschema\n\ndef validate_json(data, schema):\n    \"\"\"Validate JSON data against a schema.\"\"\"\n    try:\n        jsonschema.validate(instance=data, schema=schema)\n        return True, None\n    except jsonschema.ValidationError as e:\n        return False, str(e.message)",
+      "is_public": true,
+      "lifecycle_state": "Verified"
+    }
+  ]
+}

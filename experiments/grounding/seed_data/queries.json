@@ -1,0 +1,163 @@
+{
+  "queries": [
+    {
+      "id": "same-domain-math",
+      "experiment_type": "same_domain",
+      "staging_only": true,
+      "command": "generate",
+      "language": "Python",
+      "input_text": "Write a function to compute the sum of digits of a number",
+      "limit": 5,
+      "pin_slugs": [],
+      "exclude_slugs": [],
+      "assertions": {
+        "top_k_domain": "math",
+        "top_k": 3,
+        "expected_ids_in_top_k": [
+          "grnd-math-factorial-py",
+          "grnd-math-fibonacci-py",
+          "grnd-math-gcd-py"
+        ]
+      }
+    },
+    {
+      "id": "same-domain-web",
+      "experiment_type": "same_domain",
+      "staging_only": true,
+      "command": "generate",
+      "language": "Python",
+      "input_text": "Build a REST API endpoint that returns user profiles as JSON",
+      "limit": 5,
+      "pin_slugs": [],
+      "exclude_slugs": [],
+      "assertions": {
+        "top_k_domain": "web",
+        "top_k": 3,
+        "expected_ids_in_top_k": [
+          "grnd-web-flask-api-py"
+        ]
+      }
+    },
+    {
+      "id": "cross-domain",
+      "experiment_type": "cross_domain",
+      "staging_only": true,
+      "command": "generate",
+      "language": "Python",
+      "input_text": "Write a recursive mathematical function in Python",
+      "limit": 5,
+      "pin_slugs": [],
+      "exclude_slugs": [],
+      "assertions": {
+        "primary_domain": "math",
+        "low_score_ids": [
+          "grnd-web-flask-api-py",
+          "grnd-data-csv-parser-py",
+          "grnd-data-json-schema-py"
+        ]
+      }
+    },
+    {
+      "id": "self-retrieval",
+      "experiment_type": "self_retrieval",
+      "staging_only": true,
+      "command": "generate",
+      "language": "Python",
+      "input_text": "Write a Python function to calculate the factorial of a number recursively",
+      "limit": 5,
+      "pin_slugs": [],
+      "exclude_slugs": [],
+      "assertions": {
+        "expected_rank_1": "grnd-math-factorial-py"
+      }
+    },
+    {
+      "id": "lang-filter-python",
+      "experiment_type": "language_filter",
+      "staging_only": true,
+      "command": "generate",
+      "language": "Python",
+      "input_text": "Calculate the factorial of a number",
+      "limit": 5,
+      "pin_slugs": [],
+      "exclude_slugs": [],
+      "assertions": {
+        "higher_id": "grnd-math-factorial-py",
+        "lower_id": "grnd-math-factorial-js"
+      }
+    },
+    {
+      "id": "validated-boost",
+      "experiment_type": "validated_boost",
+      "staging_only": true,
+      "command": "generate",
+      "language": "Python",
+      "input_text": "Write a mathematical utility function in Python",
+      "limit": 5,
+      "pin_slugs": [],
+      "exclude_slugs": [],
+      "assertions": {
+        "validated_id": "grnd-math-gcd-py",
+        "note": "GCD has command=fix so gets +0.1 validated boost; should rank higher than unvalidated math examples with similar relevance"
+      }
+    },
+    {
+      "id": "pin-override",
+      "experiment_type": "pin",
+      "staging_only": false,
+      "command": "generate",
+      "language": "Python",
+      "input_text": "Something completely unrelated to data parsing",
+      "limit": 5,
+      "pin_slugs": ["grnd-data-csv-parser-py"],
+      "exclude_slugs": [],
+      "assertions": {
+        "pinned_id": "grnd-data-csv-parser-py",
+        "expected_score": 1.0
+      }
+    },
+    {
+      "id": "exclude-override",
+      "experiment_type": "exclude",
+      "staging_only": false,
+      "command": "generate",
+      "language": "Python",
+      "input_text": "Write a Python function to calculate the factorial of a number recursively",
+      "limit": 5,
+      "pin_slugs": [],
+      "exclude_slugs": ["grnd-math-factorial-py"],
+      "assertions": {
+        "excluded_id": "grnd-math-factorial-py"
+      }
+    },
+    {
+      "id": "pin-exclude-conflict",
+      "experiment_type": "conflict",
+      "staging_only": false,
+      "command": "generate",
+      "language": "Python",
+      "input_text": "Calculate factorial",
+      "limit": 5,
+      "pin_slugs": ["grnd-math-factorial-py"],
+      "exclude_slugs": ["grnd-math-factorial-py"],
+      "assertions": {
+        "expected_status": 400
+      }
+    },
+    {
+      "id": "ranking-stability",
+      "experiment_type": "stability",
+      "staging_only": false,
+      "command": "generate",
+      "language": "Python",
+      "input_text": "Write a Python function to calculate the factorial of a number recursively",
+      "limit": 5,
+      "pin_slugs": [],
+      "exclude_slugs": [],
+      "repeat": 3,
+      "assertions": {
+        "same_ranking": true
+      }
+    }
+  ]
+}

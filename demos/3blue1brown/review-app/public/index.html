@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Video Annotation Review</title>
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <!-- Toolbar -->
+  <header class="toolbar">
+    <div class="toolbar-left">
+      <select id="section-select" title="Select video section">
+        <option value="full">Full Video</option>
+      </select>
+      <div class="tool-group" id="draw-tools">
+        <button class="tool-btn" data-tool="freehand" title="Freehand (F)">
+          <svg width="16" height="16" viewBox="0 0 16 16"><path d="M2 14c2-4 4-6 6-8s4-3 6-4" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round"/></svg>
+        </button>
+        <button class="tool-btn" data-tool="rectangle" title="Rectangle (R)">
+          <svg width="16" height="16" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" stroke="currentColor" fill="none" stroke-width="1.5"/></svg>
+        </button>
+        <button class="tool-btn" data-tool="circle" title="Circle (C)">
+          <svg width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" stroke="currentColor" fill="none" stroke-width="1.5"/></svg>
+        </button>
+        <button class="tool-btn" data-tool="arrow" title="Arrow (A)">
+          <svg width="16" height="16" viewBox="0 0 16 16"><line x1="2" y1="14" x2="14" y2="2" stroke="currentColor" stroke-width="1.5"/><polyline points="8,2 14,2 14,8" stroke="currentColor" fill="none" stroke-width="1.5"/></svg>
+        </button>
+        <button class="tool-btn" data-tool="text" title="Text Label (T)">
+          <svg width="16" height="16" viewBox="0 0 16 16"><text x="3" y="12" font-size="12" font-weight="bold" fill="currentColor">T</text></svg>
+        </button>
+      </div>
+      <input type="color" id="draw-color" value="#ff4444" title="Drawing color">
+      <select id="stroke-width" title="Stroke width">
+        <option value="2">Thin</option>
+        <option value="4" selected>Medium</option>
+        <option value="8">Thick</option>
+      </select>
+      <button id="undo-btn" class="toolbar-btn" title="Undo (Ctrl+Z)">Undo</button>
+    </div>
+    <div class="toolbar-right">
+      <button id="draw-toggle" class="toolbar-btn" title="Toggle Draw Mode (D)">Draw Mode</button>
+      <button id="mic-btn" class="toolbar-btn" title="Speech Input (M)">Mic</button>
+      <button id="export-btn" class="toolbar-btn" title="Export annotations">Export</button>
+    </div>
+  </header>
+
+  <!-- Main content -->
+  <main class="main-layout">
+    <!-- Video area -->
+    <section class="video-area">
+      <div class="video-container" id="video-container">
+        <video id="video-player" preload="metadata">
+          <source src="/video/full" type="video/mp4">
+        </video>
+        <canvas id="draw-canvas"></canvas>
+      </div>
+      <div class="video-controls">
+        <button id="play-btn" class="ctrl-btn" title="Play/Pause (K)">Play</button>
+        <input type="range" id="seek-bar" class="seek-bar" min="0" max="100" step="0.1" value="0">
+        <span id="time-display" class="time-display">00:00.0 / 00:00.0</span>
+        <select id="speed-select" title="Playback speed">
+          <option value="0.25">0.25x</option>
+          <option value="0.5">0.5x</option>
+          <option value="1" selected>1x</option>
+          <option value="1.5">1.5x</option>
+          <option value="2">2x</option>
+        </select>
+      </div>
+    </section>
+
+    <!-- Annotation panel -->
+    <aside class="annotation-panel">
+      <div class="panel-header">
+        <h2>Annotations</h2>
+        <div class="panel-filters">
+          <select id="filter-section" title="Filter by section">
+            <option value="">All Sections</option>
+          </select>
+          <select id="filter-severity" title="Filter by severity">
+            <option value="">All Severities</option>
+            <option value="critical">Critical</option>
+            <option value="high">High</option>
+            <option value="medium">Medium</option>
+            <option value="low">Low</option>
+            <option value="informational">Info</option>
+          </select>
+          <label class="filter-resolved">
+            <input type="checkbox" id="filter-hide-resolved"> Hide resolved
+          </label>
+        </div>
+      </div>
+
+      <div id="annotation-list" class="annotation-list"></div>
+
+      <div class="new-annotation" id="new-annotation-form">
+        <h3>New Annotation</h3>
+        <div class="form-row" id="section-context-row" style="display:none">
+          <label for="section-context">Section context:</label>
+          <select id="section-context"></select>
+        </div>
+        <div class="form-row">
+          <textarea id="annotation-text" placeholder="Describe the issue..." rows="4"></textarea>
+        </div>
+        <div class="form-actions">
+          <button id="analyze-btn" class="btn btn-analyze" title="Analyze with Claude">Analyze with Claude</button>
+          <button id="save-btn" class="btn btn-save" title="Save Annotation (Ctrl+S)">Save</button>
+          <button id="cancel-edit-btn" class="btn" style="display:none">Cancel</button>
+        </div>
+        <div id="analysis-result" class="analysis-result" style="display:none"></div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- Text label input dialog -->
+  <div id="text-dialog" class="text-dialog" style="display:none">
+    <input type="text" id="text-dialog-input" placeholder="Enter label text...">
+    <button id="text-dialog-ok">OK</button>
+    <button id="text-dialog-cancel">Cancel</button>
+  </div>
+
+  <script src="js/api-client.js"></script>
+  <script src="js/video-player.js"></script>
+  <script src="js/canvas-overlay.js"></script>
+  <script src="js/annotation-panel.js"></script>
+  <script src="js/speech-input.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
