@@ -81,7 +81,7 @@ Your comment should follow this format:
 [If NOT_A_BUG: Explain why this is not a bug and the workflow should stop]
 
 ---
-*Proceeding to Step 4: Fix E2E Tests (if needed)*
+*If status is NOT_A_BUG: workflow complete, stopping here. Otherwise: proceeding to Step 4 – Fix E2E Tests (if needed).*
 ```
 
 % Important
