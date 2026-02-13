@@ -456,6 +456,7 @@ def test_full_gen_cloud_success(
         json={
             # With the default passthrough side_effect, promptContent remains original
             "promptContent": "Cloud test prompt",
+            "searchInput": "Cloud test prompt",
             "language": "python",
             "strength": mock_ctx.obj['strength'],
             "temperature": mock_ctx.obj['temperature'],
