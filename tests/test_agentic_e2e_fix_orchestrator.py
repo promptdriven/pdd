@@ -643,8 +643,8 @@ class TestPromptNotABugCategory:
         Without NOT_A_BUG in the prompt, the agent has no structured way
         to signal that the issue isn't a bug.
         """
-        template = load_prompt_template("agentic_e2e_fix_step3_root_cause_LLM")
-        assert template is not None, "Step 3 template should load"
+        prompt_path = Path(__file__).parent.parent / "prompts" / "agentic_e2e_fix_step3_root_cause_LLM.prompt"
+        template = prompt_path.read_text()
         assert "NOT_A_BUG" in template, (
             "Step 3 prompt must include NOT_A_BUG as a root cause category. "
             "Without it, the agent cannot signal that the issue is not a bug."
@@ -656,8 +656,8 @@ class TestPromptNotABugCategory:
         The orchestrator prompt specification should document NOT_A_BUG
         alongside ALL_TESTS_PASS and CONTINUE_CYCLE.
         """
-        template = load_prompt_template("agentic_e2e_fix_orchestrator_python")
-        assert template is not None, "Orchestrator prompt should load"
+        prompt_path = Path(__file__).parent.parent / "prompts" / "agentic_e2e_fix_orchestrator_python.prompt"
+        template = prompt_path.read_text()
         assert "NOT_A_BUG" in template, (
             "Orchestrator prompt must document NOT_A_BUG as a loop control token. "
             "This ensures the generated code includes the NOT_A_BUG check."

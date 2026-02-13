@@ -265,11 +265,10 @@ class TestIssue468NotABugEarlyExitE2E:
         checks raw template content, this exercises the real preprocess
         and format pipeline.
         """
-        from pdd.load_prompt_template import load_prompt_template
         from pdd.preprocess import preprocess
 
-        template = load_prompt_template("agentic_e2e_fix_step3_root_cause_LLM")
-        assert template is not None, "Step 3 template should load"
+        prompt_path = Path(__file__).parent.parent / "prompts" / "agentic_e2e_fix_step3_root_cause_LLM.prompt"
+        template = prompt_path.read_text()
 
         # Verify NOT_A_BUG exists in the raw template
         assert "NOT_A_BUG" in template, (
