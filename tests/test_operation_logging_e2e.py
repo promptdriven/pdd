@@ -191,7 +191,8 @@ class TestOperationLoggingE2E:
         # Run example generation
         result = self.run_pdd_command(
             ["example", str(prompt_file), str(code_file), "--output", str(output_file)],
-            cwd=project_dir
+            cwd=project_dir,
+            timeout=300  # 5 minutes for LLM API call (matches other E2E tests)
         )
 
         # Verify command succeeded
@@ -338,7 +339,8 @@ class TestOperationLoggingE2E:
         # Run fix in manual mode
         result = self.run_pdd_command(
             ["fix", "--manual", str(prompt_file), str(code_file), str(test_file), str(error_file)],
-            cwd=project_dir
+            cwd=project_dir,
+            timeout=300  # 5 minutes for LLM API call (matches other E2E tests)
         )
 
         # Verify log entry exists
@@ -366,7 +368,8 @@ class TestOperationLoggingE2E:
         # Run update on single file
         result = self.run_pdd_command(
             ["update", str(code_file)],
-            cwd=project_dir
+            cwd=project_dir,
+            timeout=300  # 5 minutes for LLM API call (matches other E2E tests)
         )
 
         # Command should complete (may succeed or fail, but not crash)
