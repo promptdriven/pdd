@@ -365,9 +365,10 @@ class TestOperationLoggingE2E:
             "    return 'sample'\n"
         )
 
-        # Run update on single file
+        # Run update on single file (--simple skips the 600s agentic path,
+        # using only the legacy 2-LLM-call path which fits within 300s)
         result = self.run_pdd_command(
-            ["update", str(code_file)],
+            ["update", "--simple", str(code_file)],
             cwd=project_dir,
             timeout=300  # 5 minutes for LLM API call (matches other E2E tests)
         )
