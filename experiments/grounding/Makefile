@@ -2,7 +2,8 @@ SHELL := /bin/bash
 
 .PHONY: seed-local seed-staging run-local run-staging cleanup-local cleanup-staging \
         experiment-local experiment-staging summarize clean \
-        gen-stability-staging gen-stability-prod gen-summarize gen-experiment-staging clean-gen
+        gen-stability-staging gen-stability-prod gen-summarize gen-experiment-staging clean-gen \
+        llm-invoke-prod llm-invoke-evaluate llm-invoke-summarize llm-invoke-experiment-prod clean-llm-invoke
 
 # ---------------------------------------------------------------------------
 # Seed test examples
@@ -73,6 +74,26 @@ gen-experiment-staging: clean-gen seed-staging gen-stability-staging cleanup-sta
 clean-gen:
 	rm -rf results/generation_stability.csv results/generations/
 	@echo "Cleaned generation results."
+
+# ---------------------------------------------------------------------------
+# llm_invoke regeneration experiment
+# ---------------------------------------------------------------------------
+
+llm-invoke-prod:
+	python3 scripts/run_llm_invoke_stability.py --env prod --runs 5 --temperature 1.0
+
+llm-invoke-evaluate:
+	python3 scripts/evaluate_llm_invoke.py
+
+llm-invoke-summarize:
+	python3 scripts/summarize_llm_invoke.py
+
+llm-invoke-experiment-prod: clean-llm-invoke llm-invoke-prod llm-invoke-evaluate llm-invoke-summarize
+	@echo "llm_invoke regeneration experiment complete (prod)."
+
+clean-llm-invoke:
+	rm -rf results/llm_invoke_stability.csv results/llm_invoke_evaluation.csv results/llm_invoke_generations/
+	@echo "Cleaned llm_invoke experiment results."
 
 # ---------------------------------------------------------------------------
 # Clean results
