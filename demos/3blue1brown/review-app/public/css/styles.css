@@ -633,3 +633,20 @@ html, body {
   border-color: var(--accent);
   outline: none;
 }
+
+/* Resolve pipeline button states */
+.annotation-item .action-btn.resolving {
+  background: var(--accent-blue);
+  color: white;
+  cursor: wait;
+  animation: pulse 1.2s infinite;
+}
+
+.annotation-item .action-btn.resolve-error {
+  background: var(--severity-critical);
+  color: white;
+}
+
+.annotation-item .action-btn.resolve-error:hover {
+  background: var(--severity-high);
+}

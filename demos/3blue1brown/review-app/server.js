@@ -27,13 +27,13 @@ app.use('/thumbnails', express.static(THUMBNAILS_DIR));
 // --- Section metadata ---
 
 const SECTIONS = [
-  { id: 'cold_open', file: 'cold_open.mp4', label: 'Cold Open', specDir: '00-cold-open', remotionDir: 'S00-ColdOpen' },
-  { id: 'part1_economics', file: 'part1_economics.mp4', label: 'Part 1: Economics', specDir: '01-economics', remotionDir: 'S01-Economics' },
-  { id: 'part2_paradigm_shift', file: 'part2_paradigm_shift.mp4', label: 'Part 2: Paradigm Shift', specDir: '02-paradigm-shift', remotionDir: 'S02-ParadigmShift' },
-  { id: 'part3_mold', file: 'part3_mold.mp4', label: 'Part 3: Mold Has Three Parts', specDir: '03-mold-has-three-parts', remotionDir: 'S03-MoldThreeParts' },
-  { id: 'part4_precision', file: 'part4_precision.mp4', label: 'Part 4: Precision Tradeoff', specDir: '04-precision-tradeoff', remotionDir: 'S04-PrecisionTradeoff' },
-  { id: 'part5_compound', file: 'part5_compound.mp4', label: 'Part 5: Compound Returns', specDir: '05-compound-returns', remotionDir: 'S05-CompoundReturns' },
-  { id: 'closing', file: 'closing.mp4', label: 'Closing', specDir: '06-closing', remotionDir: 'S06-Closing' },
+  { id: 'cold_open', file: 'cold_open.mp4', label: 'Cold Open', specDir: '00-cold-open', remotionDir: 'S00-ColdOpen', compositionId: 'ColdOpenSection' },
+  { id: 'part1_economics', file: 'part1_economics.mp4', label: 'Part 1: Economics', specDir: '01-economics', remotionDir: 'S01-Economics', compositionId: 'Part1Economics' },
+  { id: 'part2_paradigm_shift', file: 'part2_paradigm_shift.mp4', label: 'Part 2: Paradigm Shift', specDir: '02-paradigm-shift', remotionDir: 'S02-ParadigmShift', compositionId: 'Part2ParadigmShift' },
+  { id: 'part3_mold', file: 'part3_mold.mp4', label: 'Part 3: Mold Has Three Parts', specDir: '03-mold-has-three-parts', remotionDir: 'S03-MoldThreeParts', compositionId: 'Part3MoldThreeParts' },
+  { id: 'part4_precision', file: 'part4_precision.mp4', label: 'Part 4: Precision Tradeoff', specDir: '04-precision-tradeoff', remotionDir: 'S04-PrecisionTradeoff', compositionId: 'Part4PrecisionTradeoff' },
+  { id: 'part5_compound', file: 'part5_compound.mp4', label: 'Part 5: Compound Returns', specDir: '05-compound-returns', remotionDir: 'S05-CompoundReturns', compositionId: 'Part5CompoundReturns' },
+  { id: 'closing', file: 'closing.mp4', label: 'Closing', specDir: '06-closing', remotionDir: 'S06-Closing', compositionId: 'ClosingSection' },
 ];
 
 const ALLOWED_SECTION_FILES = new Set(SECTIONS.map(s => s.file));
@@ -419,6 +419,408 @@ function runClaude(prompt) {
   });
 }
 
+// --- Resolve pipeline: job manager + endpoints ---
+
+const jobs = new Map();
+const sectionQueues = new Map();
+
+function createJob(annotationId, sectionId) {
+  const id = `job_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+  const job = {
+    id,
+    annotationId,
+    sectionId,
+    status: 'pending',
+    step: null,
+    progress: 0,
+    error: null,
+    log: [],
+    startedAt: new Date().toISOString(),
+    completedAt: null,
+    subscribers: [],
+  };
+  jobs.set(id, job);
+  return job;
+}
+
+function emitJobUpdate(job, update) {
+  Object.assign(job, update);
+  const payload = {
+    id: job.id,
+    status: job.status,
+    step: job.step,
+    progress: job.progress,
+    error: job.error,
+    completedAt: job.completedAt,
+  };
+  const msg = `data: ${JSON.stringify(payload)}\n\n`;
+  job.subscribers = job.subscribers.filter(res => {
+    try { res.write(msg); return true; } catch { return false; }
+  });
+}
+
+function buildFixPrompt(annotation, section) {
+  const text = annotation.text && annotation.text.content;
+  const timestamp = annotation.video && annotation.video.timestampFormatted;
+  const analysis = annotation.analysis || {};
+
+  const resources = [];
+  let n = 1;
+
+  if (section.specDir) {
+    resources.push(`${n}. SPEC FILES — read all .md files (excluding AUDIT_* files) in:\n   specs/${section.specDir}/`);
+    n++;
+  }
+
+  if (section.remotionDir) {
+    resources.push(`${n}. REMOTION SOURCE — read all .tsx and .ts files in:\n   remotion/src/remotion/${section.remotionDir}/`);
+    n++;
+  }
+
+  if (annotation.video && annotation.video.frameThumbnail) {
+    const thumbBasename = path.basename(annotation.video.frameThumbnail);
+    const thumbPath = path.join(__dirname, 'data', 'thumbnails', thumbBasename);
+    if (fs.existsSync(thumbPath)) {
+      resources.push(`${n}. SCREENSHOT — read this image to see the exact frame:\n   review-app/data/thumbnails/${thumbBasename}`);
+      n++;
+    }
+  }
+
+  if (annotation.drawing && annotation.drawing.compositeImage) {
+    const compBasename = path.basename(annotation.drawing.compositeImage);
+    const compPath = path.join(__dirname, 'data', 'thumbnails', compBasename);
+    if (fs.existsSync(compPath)) {
+      resources.push(`${n}. REVIEWER'S MARKUP — read this image showing drawn annotations:\n   review-app/data/thumbnails/${compBasename}`);
+      n++;
+    }
+  }
+
+  return `You are fixing an issue in the Remotion source code for a 3Blue1Brown-style educational video called "Why You're Still Darning Socks".
+
+A reviewer paused at timestamp ${timestamp || 'unknown'} in the "${section.label}" section and reported:
+
+"${text}"
+
+## Analysis
+- Severity: ${analysis.severity || 'unknown'}
+- Category: ${analysis.category || 'unknown'}
+- Technical Assessment: ${analysis.technicalAssessment || 'N/A'}
+- Suggested Fixes: ${analysis.suggestedFixes ? analysis.suggestedFixes.join('; ') : 'N/A'}
+- Relevant Files: ${analysis.relevantFiles ? analysis.relevantFiles.join(', ') : 'N/A'}
+
+## Instructions
+1. Read the following resources:
+
+${resources.join('\n\n')}
+
+2. Based on the analysis and resources, edit the Remotion source files to fix the issue.
+3. Only edit files within remotion/src/remotion/${section.remotionDir}/ — do not modify files outside this directory.
+4. Keep changes minimal and focused on the reported issue.
+5. Preserve timing and animation structure unless timing IS the reported issue.
+
+After making your fixes, output a JSON summary:
+{
+  "filesModified": ["array of modified file paths"],
+  "changeDescription": "brief description of what was changed",
+  "confidence": "high|medium|low"
+}`;
+}
+
+function fixWithClaude(job, annotation, section) {
+  return new Promise((resolve, reject) => {
+    emitJobUpdate(job, { status: 'running', step: 'fixing', progress: 0 });
+
+    const outputFile = path.join(ANALYSIS_TEMP_DIR, `fix_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.json`);
+    const prompt = buildFixPrompt(annotation, section);
+    const fullPrompt = prompt + `\n\nIMPORTANT: After making your fixes, use the Write tool to save ONLY the JSON summary (no other text) to this exact file path:\n${outputFile}`;
+
+    const args = [
+      '-p', '--model', 'claude-opus-4-6', '--output-format', 'json', '--no-session-persistence',
+      '--allowedTools', 'Read,Write,Edit,Glob,Grep',
+    ];
+    const child = spawn('claude', args, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      cwd: path.join(__dirname, '..'),
+    });
+
+    let stdout = '';
+
+    child.stdout.on('data', chunk => { stdout += chunk.toString(); });
+    child.stderr.on('data', chunk => {
+      const line = chunk.toString();
+      job.log.push(line);
+      // Try to parse progress from claude output
+      const pctMatch = line.match(/(\d+)%/);
+      if (pctMatch) {
+        emitJobUpdate(job, { progress: parseInt(pctMatch[1], 10) });
+      }
+    });
+
+    child.on('error', err => {
+      if (err.code === 'ENOENT') {
+        reject(new Error('claude CLI not found'));
+      } else {
+        reject(err);
+      }
+    });
+
+    child.on('close', code => {
+      if (code !== 0) {
+        reject(new Error(`claude exited with code ${code}`));
+        return;
+      }
+
+      // Try reading from temp file first
+      let result = null;
+      try {
+        if (fs.existsSync(outputFile)) {
+          const content = fs.readFileSync(outputFile, 'utf-8');
+          fs.unlinkSync(outputFile);
+          result = JSON.parse(content);
+        }
+      } catch { /* fall through */ }
+
+      if (!result) {
+        let text = stdout;
+        try {
+          const wrapper = JSON.parse(stdout);
+          if (typeof wrapper.result === 'string') {
+            text = wrapper.result;
+          } else if (wrapper.result && typeof wrapper.result === 'object') {
+            const blocks = wrapper.result.content || [];
+            const textBlock = blocks.find(b => b.type === 'text');
+            if (textBlock) text = textBlock.text;
+          }
+        } catch { /* use raw stdout */ }
+        result = extractJsonFromText(text) || { filesModified: [], changeDescription: 'Fix applied', confidence: 'medium' };
+      }
+
+      emitJobUpdate(job, { step: 'fixing', progress: 100 });
+      resolve(result);
+    });
+
+    child.stdin.write(fullPrompt);
+    child.stdin.end();
+  });
+}
+
+function renderSection(job, section) {
+  return new Promise((resolve, reject) => {
+    emitJobUpdate(job, { step: 'rendering', progress: 0 });
+
+    const outputPath = path.join('..', 'outputs', 'sections', section.file);
+    const args = [
+      'remotion', 'render', 'src/remotion/index.ts', section.compositionId,
+      '--output', outputPath, '--overwrite',
+    ];
+    const child = spawn('npx', args, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      cwd: path.join(__dirname, '..', 'remotion'),
+    });
+
+    child.stdout.on('data', chunk => {
+      const line = chunk.toString();
+      job.log.push(line);
+      const pctMatch = line.match(/(\d+)%/);
+      if (pctMatch) {
+        emitJobUpdate(job, { progress: parseInt(pctMatch[1], 10) });
+      }
+    });
+
+    child.stderr.on('data', chunk => {
+      const line = chunk.toString();
+      job.log.push(line);
+      const pctMatch = line.match(/(\d+)%/);
+      if (pctMatch) {
+        emitJobUpdate(job, { progress: parseInt(pctMatch[1], 10) });
+      }
+    });
+
+    child.on('error', err => reject(err));
+    child.on('close', code => {
+      if (code !== 0) {
+        reject(new Error(`Remotion render exited with code ${code}`));
+        return;
+      }
+      emitJobUpdate(job, { step: 'rendering', progress: 100 });
+      resolve();
+    });
+  });
+}
+
+function stitchFullVideo(job) {
+  return new Promise((resolve, reject) => {
+    emitJobUpdate(job, { step: 'stitching', progress: 0 });
+
+    const sectionsDir = path.join(OUTPUTS_DIR, 'sections');
+    const concatListPath = path.join(sectionsDir, 'concat_list.txt');
+
+    if (!fs.existsSync(concatListPath)) {
+      reject(new Error('concat_list.txt not found in outputs/sections/'));
+      return;
+    }
+
+    const args = [
+      '-y', '-f', 'concat', '-safe', '0',
+      '-i', 'concat_list.txt',
+      '-c', 'copy',
+      path.join('..', 'full_video.mp4'),
+    ];
+    const child = spawn('ffmpeg', args, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      cwd: sectionsDir,
+    });
+
+    child.stdout.on('data', () => {});
+    child.stderr.on('data', chunk => {
+      job.log.push(chunk.toString());
+    });
+
+    child.on('error', err => reject(err));
+    child.on('close', code => {
+      if (code !== 0) {
+        reject(new Error(`ffmpeg stitch exited with code ${code}`));
+        return;
+      }
+      emitJobUpdate(job, { step: 'stitching', progress: 100 });
+      resolve();
+    });
+  });
+}
+
+async function runResolvePipeline(job) {
+  try {
+    const data = readAnnotations();
+    const ann = data.annotations.find(a => a.id === job.annotationId);
+    if (!ann) throw new Error('Annotation not found');
+
+    const section = SECTIONS.find(s => s.id === (ann.video && ann.video.sectionId));
+    if (!section) throw new Error('Section not found');
+
+    // Step 1: Fix with Claude
+    await fixWithClaude(job, ann, section);
+
+    // Step 2: Render the section
+    await renderSection(job, section);
+
+    // Step 3: Stitch full video
+    await stitchFullVideo(job);
+
+    // Mark done
+    emitJobUpdate(job, { status: 'done', step: null, progress: 100, completedAt: new Date().toISOString() });
+
+    await safeWriteAnnotations((d) => {
+      const idx = d.annotations.findIndex(a => a.id === job.annotationId);
+      if (idx !== -1) {
+        d.annotations[idx].resolved = true;
+        d.annotations[idx].resolveJob = { jobId: job.id, status: 'done' };
+      }
+    });
+  } catch (err) {
+    const errMsg = err.message || String(err);
+    emitJobUpdate(job, { status: 'error', error: errMsg, completedAt: new Date().toISOString() });
+
+    await safeWriteAnnotations((d) => {
+      const idx = d.annotations.findIndex(a => a.id === job.annotationId);
+      if (idx !== -1) {
+        d.annotations[idx].resolveJob = { jobId: job.id, status: 'error', error: errMsg };
+      }
+    });
+  } finally {
+    // Close all SSE connections
+    for (const sub of job.subscribers) {
+      try { sub.end(); } catch { /* ignore */ }
+    }
+    job.subscribers = [];
+  }
+}
+
+function enqueueResolve(job, sectionId) {
+  if (!sectionQueues.has(sectionId)) {
+    sectionQueues.set(sectionId, Promise.resolve());
+  }
+  const prev = sectionQueues.get(sectionId);
+  const next = prev.then(() => runResolvePipeline(job)).catch(() => {});
+  sectionQueues.set(sectionId, next);
+}
+
+// POST /api/annotations/:id/resolve — kick off resolve pipeline
+app.post('/api/annotations/:id/resolve', (req, res) => {
+  const data = readAnnotations();
+  const ann = data.annotations.find(a => a.id === req.params.id);
+  if (!ann) return res.status(404).json({ error: 'Not found' });
+
+  if (!ann.analysis || ann.analysis.status !== 'completed') {
+    return res.status(400).json({ error: 'Analysis must be completed before resolving' });
+  }
+
+  const sectionId = ann.video && ann.video.sectionId;
+  if (!sectionId) return res.status(400).json({ error: 'Annotation has no section' });
+
+  const job = createJob(ann.id, sectionId);
+
+  // Save job reference to annotation
+  safeWriteAnnotations((d) => {
+    const idx = d.annotations.findIndex(a => a.id === req.params.id);
+    if (idx !== -1) {
+      d.annotations[idx].resolveJob = { jobId: job.id, status: 'pending' };
+    }
+  });
+
+  enqueueResolve(job, sectionId);
+
+  res.status(202).json({ jobId: job.id });
+});
+
+// GET /api/jobs/:id/stream — SSE stream for job progress
+app.get('/api/jobs/:id/stream', (req, res) => {
+  const job = jobs.get(req.params.id);
+  if (!job) return res.status(404).json({ error: 'Job not found' });
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+  });
+
+  // Send current state immediately
+  const payload = {
+    id: job.id,
+    status: job.status,
+    step: job.step,
+    progress: job.progress,
+    error: job.error,
+    completedAt: job.completedAt,
+  };
+  res.write(`data: ${JSON.stringify(payload)}\n\n`);
+
+  // If already terminal, close
+  if (job.status === 'done' || job.status === 'error') {
+    res.end();
+    return;
+  }
+
+  job.subscribers.push(res);
+  req.on('close', () => {
+    job.subscribers = job.subscribers.filter(s => s !== res);
+  });
+});
+
+// GET /api/jobs/:id — polling fallback
+app.get('/api/jobs/:id', (req, res) => {
+  const job = jobs.get(req.params.id);
+  if (!job) return res.status(404).json({ error: 'Job not found' });
+
+  res.json({
+    id: job.id,
+    status: job.status,
+    step: job.step,
+    progress: job.progress,
+    error: job.error,
+    completedAt: job.completedAt,
+  });
+});
+
 // --- Export ---
 
 app.get('/api/export', (req, res) => {
@@ -427,6 +829,23 @@ app.get('/api/export', (req, res) => {
   res.setHeader('Content-Type', 'application/json');
   res.json(data);
 });
+
+// --- Recover stale jobs on startup ---
+
+(function recoverStaleJobs() {
+  try {
+    const data = readAnnotations();
+    let changed = false;
+    for (const ann of data.annotations) {
+      if (ann.resolveJob && (ann.resolveJob.status === 'pending' || ann.resolveJob.status === 'running')) {
+        ann.resolveJob.status = 'error';
+        ann.resolveJob.error = 'Server restarted during pipeline';
+        changed = true;
+      }
+    }
+    if (changed) writeAnnotations(data);
+  } catch { /* no annotations file yet */ }
+})();
 
 // --- Start ---
 
