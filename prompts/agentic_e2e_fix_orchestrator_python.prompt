@@ -96,6 +96,9 @@ while cycle < max_cycles:
 
     # Steps 3-8: Fix cycle
     step3_output = run_step_3()  # Root cause
+    if "NOT_A_BUG" in step3_output:
+        break  # Not a bug, stop workflow early
+
     step4_output = run_step_4()  # Fix e2e tests if needed
     step5_output = run_step_5()  # Identify dev units
     step6_output = run_step_6()  # Create unit tests
@@ -121,8 +124,9 @@ if cycle >= max_cycles and "ALL_TESTS_PASS" not in step9_output:
 ```
 
 % Loop Control Tokens
-Step 2 and Step 9 output specific tokens to control the outer loop:
+Steps 2, 3, and 9 output specific tokens to control the outer loop:
 - `ALL_TESTS_PASS`: All tests pass, exit loop successfully (checked in both Step 2 and Step 9)
+- `NOT_A_BUG`: Step 3 determined the issue is not a bug, exit workflow early (Step 3 only)
 - `CONTINUE_CYCLE`: Some tests still failing, continue to next cycle (Step 9 only)
 - `MAX_CYCLES_REACHED`: Step 9 detected we're at max cycles (Step 9 only, informational)
 
