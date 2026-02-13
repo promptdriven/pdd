@@ -1705,18 +1705,14 @@ def test_step_5_5_context_key_restoration_unit():
 
 def test_consecutive_failures_do_not_advance_last_completed_step(mock_dependencies, default_args, tmp_path):
     """
-    Issue #467: When ALL steps fail, last_completed_step should remain 0, not ratchet to 5.5.
+    Issue #467: When consecutive steps fail, last_completed_step should remain 0.
 
-    Bug: Each failed step sets last_completed_step_to_save = step_num - 1, which means:
-      - Step 1 fails → saves last_completed_step = 0
-      - Step 2 fails → saves last_completed_step = 1  (BUG: step 1 also failed!)
-      - Step 3 fails → saves last_completed_step = 2  (BUG: step 2 also failed!)
-      - ... continues until step 6 fails → saves last_completed_step = 5.5
+    Bug (now fixed): Each failed step set last_completed_step_to_save = step_num - 1,
+    causing a "ratchet effect" that advanced the cursor despite zero successes.
 
-    This "ratchet effect" means a subsequent run resumes from step 6, skipping
-    steps 1-5.5 even though none of them succeeded.
-
-    Expected: last_completed_step should remain 0 when all steps fail.
+    With the fix: failures don't advance last_completed_step_to_save, and 3
+    consecutive provider failures trigger early abort. The final saved state
+    should have last_completed_step=0 with only the aborted steps' FAILED outputs.
     """
     import json
     from pdd.agentic_bug_orchestrator import _get_state_dir
