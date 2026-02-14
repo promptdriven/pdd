@@ -1,6 +1,6 @@
 # Experiment Log: Grounding Validation
 
-Updated: 2026-02-13
+Updated: 2026-02-14
 Experiment directory: `experiments/grounding/`
 Retrieval CSV: `experiments/grounding/results/retrieval_results.csv`
 Generation CSV: `experiments/grounding/results/generation_stability.csv`
@@ -204,8 +204,110 @@ This is the strongest finding. Without grounding, the model invents plausible-bu
 ### 5. Cost and latency tradeoff
 Grounding costs ~7x more ($0.131 vs $0.019 per call) and takes ~2.6x longer (65.6s vs 25.2s). The cost is driven by the few-shot example inflating the prompt token count.
 
+## Phase 4: Fair Comparison — pdd generate --local (with tests) vs Grounded
+
+### Motivation
+
+Phase 3 compared the grounded arm (cloud endpoint with few-shot examples) against a bare litellm call with the resolved prompt. But `pdd generate --local` does more than litellm alone: it auto-discovers test files (e.g., `tests/test_llm_invoke*.py`) and injects them as `<unit_test_content>` tags, giving the LLM visibility into the test suite. Phase 4 adds this "ungrounded-pdd" arm to control for test visibility when measuring the grounding effect.
+
+### Run 1 — Production (2026-02-14)
+
+- **Environment**: Production (`prompt-driven-development`)
+- **Prompt**: `llm_invoke_python.prompt` (12,132 chars raw; expanded by pdd preprocessor with `<include>`, `<shell>`, `<web>` tags)
+- **Generation model**: `vertex_ai/gemini-3-flash-preview` (all three arms)
+- **Temperature**: 1.0 (maximum nondeterminism)
+- **Runs per arm**: 5 (grounded + ungrounded from Phase 3, ungrounded-pdd new)
+- **Cache busting**: UUID nonce per run (pdd arm: appended to temp prompt file)
+- **Auth**: Production JWT via keyring refresh token (grounded arm only)
+- **pdd flags**: `--local --force --no-core-dump --strength 0.5 --temperature 1.0`
+- **Total calls**: 15 (14 succeeded, 1 rate-limited on ungrounded arm run 4)
+
+#### Quantitative Results (3-Arm Comparison)
+
+| Metric | Grounded | Ungrounded | Ungrounded-PDD |
+|---|---|---|---|
+| N (successful runs) | 5 | 4 | 5 |
+| Syntax valid | 5/5 | 4/5 | 5/5 |
+| Avg lines | 467.6 +/- 149.7 | 343.0 +/- 200.2 | 485.6 +/- 45.8 |
+| Avg functions | 17.4 +/- 2.1 | 11.0 +/- 6.5 | 15.8 +/- 0.8 |
+| Avg classes | 4.2 +/- 0.4 | 3.2 +/- 1.8 | 4.2 +/- 0.4 |
+| Pairwise similarity (within-arm) | **0.189** | 0.162 | 0.106 |
+| Reference similarity (vs canonical) | **0.030 +/- 0.004** | 0.019 +/- 0.002 | 0.021 +/- 0.010 |
+| Reference recall | **0.206 +/- 0.015** | 0.162 +/- 0.009 | 0.151 +/- 0.002 |
+| Test pass rate (217 tests) | **100%** | **100%** | **100%** |
+| Exact match rate | 0/5 | 0/5 | 0/5 |
+| Avg cost per call | $0.131 | $0.015 | $0.057 |
+| Avg response time | 65.6s | 20.2s | 64.1s |
+| Examples used | `Hp7oK65bRdCyrJYnABWE` (all 5) | (none) | (none) |
+
+#### Response Hashes (all unique — cache busting confirmed)
+
+| Arm | Run 1 | Run 2 | Run 3 | Run 4 | Run 5 |
+|---|---|---|---|---|---|
+| grounded | `6b3e5a2f` | `92842649` | `deec3baf` | `57fd1ec0` | `0d3a52ba` |
+| ungrounded | `60776433` | `edf8f6a6` | `040a96a2` | (rate limit) | `6d454407` |
+| ungrounded-pdd | `bb754d88` | `3ba2a80a` | `fb6e96b8` | `fa57079e` | `d7b86e7a` |
+
+#### Qualitative Code Review: Ungrounded-PDD Arm
+
+Manual inspection of all 5 `ungrounded-pdd` generated files:
+
+| Issue | Ungrounded-PDD (5 runs) | Ungrounded (4 runs, Phase 3) | Grounded (5 runs) |
+|---|---|---|---|
+| Hallucinated imports (`from . import DEFAULT_STRENGTH`) | **5/5 FAIL** | 3/4 FAIL | 0/5 |
+| CSV column names (`input`/`output`) | 5/5 PASS | 2/4 wrong (`input_cost_per_m`) | 5/5 PASS |
+| Auth pattern (invented `PDD_CLOUD_TOKEN`) | **5/5 FAIL** | 4/4 wrong (various invented env vars) | 0/5 |
+| Rate map type (`Dict[str, Tuple]` correct) | **5/5 FAIL** (use `Dict[str, Dict]`) | 4/4 wrong | 5/5 PASS |
+| Caching (GCS S3 + SQLite) | **2/5 missing, 3/5 partial** (wrong params, wrong location) | 0/4 | 5/5 PASS |
+| Cloud URL hardcoded | 5/5 FAIL (hardcode URL) | 4/4 FAIL | 0/5 |
+
+**Key observation:** The ungrounded-pdd arm produces the **same categories of errors** as the bare ungrounded arm. Test file visibility does NOT prevent interface hallucination — the model still invents `PDD_CLOUD_TOKEN`, uses wrong rate map types, and hallucinates relative imports. The test files test functional behavior (does `llm_invoke()` return correct output?) but don't expose internal implementation details like auth patterns, CSV column names, or cache architecture.
+
+**One improvement over bare ungrounded:** CSV column names are correct in all 5 ungrounded-pdd runs (vs 2/4 wrong in bare ungrounded). The test files may contain assertions that reference the correct column format, providing indirect signal.
+
+**Structural stability:** Ungrounded-pdd has the **lowest** pairwise similarity (0.106) of all three arms, despite having the **lowest** function count std dev (0.8). This paradox arises because pdd's preprocessor adds web-scraped content (LiteLLM docs) that varies between runs, injecting non-determinism beyond temperature alone.
+
+**Additional issues unique to ungrounded-pdd:**
+- Run 3: Recursive `llm_invoke()` self-call on auth failure — potential infinite recursion
+- Run 4: Invents entire `PathResolver` class instead of importing from `pdd.path_resolution`
+- All runs: `litellm.responses()` handling inconsistent (2/5 use it, 3/5 fall back to `completion()`)
+
+## Key Findings (Updated)
+
+### 1. Cache busting works — all hashes unique
+With the UUID nonce appended, no two runs produce identical output. The prior run's 100% exact-match rate for grounded was entirely due to LiteLLM cache hits.
+
+### 2. Grounding stabilizes structure at temperature 1.0
+Function count std dev: 2.1 (grounded) vs 2.5 (ungrounded) vs **0.8 (ungrounded-pdd)**. The pdd arm shows the lowest function-count variance, likely because the test file constrains the expected interface. However, within-arm pairwise similarity tells a different story: 0.189 (grounded) > 0.162 (ungrounded) > 0.106 (ungrounded-pdd). The grounded arm is the most self-consistent overall.
+
+### 3. Grounding improves reference fidelity
+Reference similarity: 0.030 (grounded) vs 0.019 (ungrounded) vs 0.021 (ungrounded-pdd). Reference recall: 0.206 (grounded) vs 0.162 (ungrounded) vs 0.151 (ungrounded-pdd). Grounding produces code closest to the canonical implementation regardless of test visibility.
+
+### 4. Grounding prevents interface hallucination — test visibility does NOT
+**This is the central Phase 4 finding.** The ungrounded-pdd arm has full visibility into the test suite (217 tests auto-injected via `<unit_test_content>` tags) yet still hallucinates:
+- Nonexistent imports in 5/5 runs
+- Wrong auth patterns in 5/5 runs
+- Wrong rate map types in 5/5 runs
+- Missing or broken caching in 5/5 runs
+
+The grounded arm (with a single few-shot example) has 0% hallucination on all these dimensions. **Conclusion: one relevant code example is more powerful than an entire test suite for anchoring the model to real interfaces.**
+
+### 5. All three arms pass all 217 tests
+Test pass rate is 100% across all arms. This confirms that the test suite validates functional behavior (correct return types, error handling, API contracts) but does **not** catch implementation-level issues like wrong auth patterns, hallucinated imports, or missing caching. Tests are necessary but not sufficient for code quality — grounding addresses the gap.
+
+### 6. Cost and latency tradeoff
+| Arm | Avg Cost | Avg Time | Cost vs Grounded |
+|---|---|---|---|
+| Grounded | $0.131 | 65.6s | 1.0x (baseline) |
+| Ungrounded-PDD | $0.057 | 64.1s | 0.44x |
+| Ungrounded | $0.015 | 20.2s | 0.11x |
+
+The pdd arm is similar in latency to grounded (due to prompt preprocessing + web scraping overhead) but ~2.3x cheaper (smaller effective prompt after preprocessing vs the grounded arm's few-shot example inflation).
+
 ## Next Steps
 
 1. **Investigate coverage gaps**: Why did factorial and flask-api not find examples in Phase 2? Check the 1025 prod `few_shot` documents for math/algorithm and web/API coverage.
 2. **Test with more examples**: Run the Phase 3 experiment with prompts that have multiple candidate examples to measure retrieval's effect on quality.
 3. **Cost optimization**: Evaluate whether truncating the few-shot example or using a shorter prompt reduces cost without sacrificing the anti-hallucination benefit.
+4. **Test suite enhancement**: Investigate whether adding implementation-detail tests (e.g., asserting `CloudConfig.get_jwt_token()` is called, checking rate map is `Tuple` type) would close the gap between ungrounded-pdd and grounded arms.
+5. **Prompt-level grounding**: Test injecting the few-shot example directly into the pdd prompt (via `<include>` tag) to see if this recovers the anti-hallucination benefit without the cloud endpoint overhead.

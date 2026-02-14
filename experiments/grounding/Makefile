@@ -4,6 +4,7 @@ SHELL := /bin/bash
         experiment-local experiment-staging summarize clean \
         gen-stability-staging gen-stability-prod gen-summarize gen-experiment-staging clean-gen \
         llm-invoke-prod llm-invoke-staging llm-invoke-seed-staging \
+        llm-invoke-pdd-local-prod \
         llm-invoke-evaluate llm-invoke-summarize \
         llm-invoke-experiment-prod llm-invoke-experiment-staging clean-llm-invoke
 
@@ -86,6 +87,10 @@ llm-invoke-prod:
 
 llm-invoke-staging:
 	infisical run --env=staging -- python3 scripts/run_llm_invoke_stability.py --env staging --runs 5 --temperature 1.0
+
+llm-invoke-pdd-local-prod:
+	python3 scripts/run_llm_invoke_stability.py \
+		--env prod --runs 5 --temperature 1.0 --arms ungrounded-pdd
 
 llm-invoke-seed-staging:
 	infisical run --env=staging -- python3 scripts/seed_llm_invoke_staging.py

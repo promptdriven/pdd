@@ -212,8 +212,8 @@ def main() -> int:
 
     canonical_code = CANONICAL_FILE.read_text(encoding="utf-8")
 
-    # Collect generated files grouped by arm
-    arms = ["grounded", "ungrounded"]
+    # Collect generated files grouped by arm (dynamically from CSV)
+    arms = sorted(set(row["arm"] for row in stability_rows if row.get("arm")))
     files_by_arm: Dict[str, List[Tuple[int, Path]]] = {arm: [] for arm in arms}
 
     for row in stability_rows:

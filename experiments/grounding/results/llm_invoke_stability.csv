@@ -9,3 +9,8 @@ timestamp_utc,env,arm,run_number,http_status,generated_code_hash,generated_code_
 2026-02-14T09:57:50.985253+00:00,prod,ungrounded,3,0,040a96a2b15bdef7,527,13,4,True,,0.01908885,gemini/gemini-3-flash-preview,30199
 2026-02-14T09:57:51.168828+00:00,prod,ungrounded,4,0,EMPTY,0,0,0,False,,0.0,gemini/gemini-3-flash-preview,183
 2026-02-14T09:58:16.107438+00:00,prod,ungrounded,5,0,6d45440720d07e51,410,17,4,True,,0.01604335,gemini/gemini-3-flash-preview,24926
+2026-02-14T17:13:45.254242+00:00,prod,ungrounded-pdd,1,0,bb754d8825bdee39,526,16,4,True,,0.081759,vertex_ai/gemini-3-flash-preview,67926
+2026-02-14T17:14:52.349260+00:00,prod,ungrounded-pdd,2,0,3ba2a80a54901fc2,517,17,4,True,,0.079595,vertex_ai/gemini-3-flash-preview,67075
+2026-02-14T17:16:01.104899+00:00,prod,ungrounded-pdd,3,0,fb6e96b825d29dc3,502,16,4,True,,0.031712,vertex_ai/gemini-3-flash-preview,68746
+2026-02-14T17:17:01.138438+00:00,prod,ungrounded-pdd,4,0,fa57079ed53801b4,470,15,5,True,,0.047544,vertex_ai/gemini-3-flash-preview,60026
+2026-02-14T17:17:58.038139+00:00,prod,ungrounded-pdd,5,0,d7b86e7a45bbd85a,413,15,4,True,,0.04657,vertex_ai/gemini-3-flash-preview,56892

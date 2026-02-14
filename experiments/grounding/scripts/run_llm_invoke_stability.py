@@ -4,11 +4,13 @@
 Grounded arm: POST /generateCode on prod/staging (vector search finds llm_invoke
 few-shot example, injects it as XML, calls code_generator()).
 Ungrounded arm: litellm direct call with same model but no few-shot examples.
+Ungrounded-pdd arm: `pdd generate --local` (auto-discovers test files, no few-shot).
 
-Both arms use vertex_ai/gemini-3-flash-preview at temperature 1.0 by default.
+All arms use vertex_ai/gemini-3-flash-preview at temperature 1.0 by default.
 
 Usage:
     python3 scripts/run_llm_invoke_stability.py --env prod --runs 5 --temperature 1.0
+    python3 scripts/run_llm_invoke_stability.py --env prod --runs 5 --arms ungrounded-pdd
 """
 
 from __future__ import annotations
@@ -356,6 +358,137 @@ def _call_generate_local(
         }
 
 
+def _call_generate_pdd_local(
+    temperature: float,
+) -> Dict[str, Any]:
+    """Run `pdd generate --local` as a subprocess (ungrounded-pdd arm).
+
+    Uses the same model as the grounded arm but without few-shot example
+    injection. Unlike the litellm ungrounded arm, pdd auto-discovers and
+    appends test files in <unit_test_content> tags, giving the LLM visibility
+    into the test suite.
+    """
+    import re as _re
+
+    # Create temp prompt file with cache-busting nonce inside PDD_REPO_ROOT
+    # so that <include> tags resolve correctly via PathResolver.
+    nonce = f"\n# experiment-run-seed: {uuid.uuid4()}\n"
+    tmp_prompt = PDD_REPO_ROOT / "prompts" / "_tmp_experiment_python.prompt"
+    tmp_output = None
+
+    start = time.monotonic()
+    try:
+        # Write prompt with nonce
+        original_prompt = PROMPT_FILE.read_text(encoding="utf-8")
+        tmp_prompt.write_text(original_prompt + nonce, encoding="utf-8")
+
+        # Output file must be named llm_invoke.py so _find_default_test_files()
+        # auto-discovers tests/test_llm_invoke*.py
+        tmp_dir = tempfile.mkdtemp(prefix="pdd_exp_")
+        tmp_output = Path(tmp_dir) / "llm_invoke.py"
+
+        cmd = [
+            sys.executable, "-c", "from pdd.cli import cli; cli()",
+            "--local", "--force", "--no-core-dump",
+            "--strength", "0.5",
+            "--temperature", str(temperature),
+            "generate",
+            "--output", str(tmp_output),
+            str(tmp_prompt),
+        ]
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=TIMEOUT_PER_RUN,
+            cwd=str(PDD_REPO_ROOT),
+        )
+
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+
+        if result.returncode != 0:
+            error_msg = (result.stderr or result.stdout or "unknown error")[:500]
+            return {
+                "http_status": 0,
+                "generated_code": "",
+                "examples_used": [],
+                "total_cost": 0.0,
+                "model_name": "",
+                "response_time_ms": elapsed_ms,
+                "error": f"pdd exit code {result.returncode}: {error_msg}",
+            }
+
+        # Read generated code
+        generated_code = ""
+        if tmp_output.exists():
+            generated_code = tmp_output.read_text(encoding="utf-8")
+
+        # Parse cost and model from Rich Panel output in stdout
+        # Format: "Full generation successful. Model: <name>, Cost: $<cost>"
+        stdout = result.stdout + "\n" + result.stderr
+        total_cost = 0.0
+        model_name = ""
+
+        # Parse from "Step 1 (generate): Cost: $X, Model: Y" format
+        cost_match = _re.search(
+            r"Cost:\s*\$([0-9.]+),\s*Model:\s*(\S+)",
+            stdout,
+        )
+        if cost_match:
+            try:
+                total_cost = float(cost_match.group(1))
+            except ValueError:
+                pass
+            model_name = cost_match.group(2).strip()
+
+        return {
+            "http_status": 0,
+            "generated_code": generated_code,
+            "examples_used": [],
+            "total_cost": total_cost,
+            "model_name": model_name,
+            "response_time_ms": elapsed_ms,
+            "error": None,
+        }
+
+    except subprocess.TimeoutExpired:
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+        return {
+            "http_status": 0,
+            "generated_code": "",
+            "examples_used": [],
+            "total_cost": 0.0,
+            "model_name": "",
+            "response_time_ms": elapsed_ms,
+            "error": f"pdd generate timed out after {TIMEOUT_PER_RUN}s",
+        }
+    except Exception as e:
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+        return {
+            "http_status": 0,
+            "generated_code": "",
+            "examples_used": [],
+            "total_cost": 0.0,
+            "model_name": "",
+            "response_time_ms": elapsed_ms,
+            "error": str(e)[:500],
+        }
+    finally:
+        # Cleanup temp files
+        if tmp_prompt.exists():
+            try:
+                tmp_prompt.unlink()
+            except OSError:
+                pass
+        if tmp_output is not None:
+            try:
+                import shutil
+                shutil.rmtree(tmp_output.parent, ignore_errors=True)
+            except OSError:
+                pass
+
+
 # ---------------------------------------------------------------------------
 # Main runner
 # ---------------------------------------------------------------------------
@@ -365,8 +498,11 @@ def run_experiment(
     runs: int = 5,
     temperature: float = 1.0,
     base_url: Optional[str] = None,
+    arms: Optional[List[str]] = None,
 ) -> int:
     """Run llm_invoke regeneration stability experiment. Returns 0 on success."""
+    if arms is None:
+        arms = ["grounded", "ungrounded", "ungrounded-pdd"]
     if base_url is None:
         base_url = STAGING_BASE_URL if env == "staging" else PROD_BASE_URL
 
@@ -374,63 +510,82 @@ def run_experiment(
     raw_prompt = PROMPT_FILE.read_text(encoding="utf-8")
     print(f"Raw prompt: {len(raw_prompt):,} chars, {len(raw_prompt.splitlines()):,} lines")
 
-    # Resolve prompt once (used by grounded arm; local arm resolves via CLI)
-    print("Resolving llm_invoke prompt (expanding includes)...")
-    resolved_prompt = _resolve_prompt()
-    print(f"  Resolved prompt: {len(resolved_prompt):,} chars, {len(resolved_prompt.splitlines()):,} lines")
+    # Resolve prompt once (used by grounded and ungrounded arms)
+    needs_resolved = "grounded" in arms or "ungrounded" in arms
+    resolved_prompt = ""
+    if needs_resolved:
+        print("Resolving llm_invoke prompt (expanding includes)...")
+        resolved_prompt = _resolve_prompt()
+        print(f"  Resolved prompt: {len(resolved_prompt):,} chars, {len(resolved_prompt.splitlines()):,} lines")
 
-    # Get JWT
-    print(f"\nObtaining JWT for {env}...")
-    if env == "staging":
-        jwt = _get_staging_jwt()
-    else:
-        jwt = _get_prod_jwt()
-
-    headers = {
-        "Authorization": f"Bearer {jwt}",
-        "Content-Type": "application/json",
-    }
+    # Get JWT (only needed for grounded arm)
+    headers = {}
+    if "grounded" in arms:
+        print(f"\nObtaining JWT for {env}...")
+        if env == "staging":
+            jwt = _get_staging_jwt()
+        else:
+            jwt = _get_prod_jwt()
+        headers = {
+            "Authorization": f"Bearer {jwt}",
+            "Content-Type": "application/json",
+        }
 
     _init_csv()
 
-    total_calls = 2 * runs
+    total_calls = len(arms) * runs
     completed = 0
     errors = 0
     grounded_no_example = 0
 
+    arm_descriptions = {
+        "grounded": f"POST {base_url}/generateCode",
+        "ungrounded": "litellm gemini/gemini-3-flash-preview (no examples)",
+        "ungrounded-pdd": "pdd generate --local (auto-discovers tests, no few-shot)",
+    }
+
     print(f"\nllm_invoke Regeneration Stability Experiment")
     print(f"{'=' * 70}")
     print(f"Environment:  {env}")
-    print(f"Grounded:     POST {base_url}/generateCode")
-    print(f"Ungrounded:   litellm gemini/gemini-3-flash-preview (no examples)")
-    print(f"Prompt:       {PROMPT_FILE.name} ({len(resolved_prompt):,} chars resolved)")
+    for arm in arms:
+        print(f"  {arm:18s} {arm_descriptions.get(arm, '')}")
+    if resolved_prompt:
+        print(f"Prompt:       {PROMPT_FILE.name} ({len(resolved_prompt):,} chars resolved)")
     print(f"Runs per arm: {runs}")
     print(f"Temperature:  {temperature}")
+    print(f"Arms:         {', '.join(arms)}")
     print(f"Total calls:  {total_calls}")
     print(f"{'=' * 70}\n")
 
-    for arm in ["grounded", "ungrounded"]:
+    for arm in arms:
         print(f"Arm: {arm}")
 
         for run_num in range(1, runs + 1):
             print(f"  Run {run_num}/{runs}...", end="", flush=True)
 
-            # Cache-busting nonce: each run gets a unique comment appended
-            # so LiteLLM's GCS/SQLite cache sees a distinct prompt key.
-            nonce = f"\n# experiment-run-seed: {uuid.uuid4()}\n"
-            run_prompt = resolved_prompt + nonce
-
             if arm == "grounded":
+                # Cache-busting nonce
+                nonce = f"\n# experiment-run-seed: {uuid.uuid4()}\n"
+                run_prompt = resolved_prompt + nonce
                 result = _call_generate_cloud(
                     base_url, headers, run_prompt,
                     temperature=temperature,
                     raw_prompt=raw_prompt,
                 )
-            else:
+            elif arm == "ungrounded":
+                nonce = f"\n# experiment-run-seed: {uuid.uuid4()}\n"
+                run_prompt = resolved_prompt + nonce
                 result = _call_generate_local(
                     resolved_prompt=run_prompt,
                     temperature=temperature,
                 )
+            elif arm == "ungrounded-pdd":
+                result = _call_generate_pdd_local(
+                    temperature=temperature,
+                )
+            else:
+                print(f" [SKIP] unknown arm: {arm}")
+                continue
 
             code = result["generated_code"]
             code_hash = _hash_code(code) if code else "EMPTY"
@@ -545,6 +700,13 @@ def main() -> int:
         default=None,
         help="Override base URL for generateCode endpoint (grounded arm)",
     )
+    parser.add_argument(
+        "--arms",
+        nargs="+",
+        default=["grounded", "ungrounded", "ungrounded-pdd"],
+        choices=["grounded", "ungrounded", "ungrounded-pdd"],
+        help="Which arms to run (default: all three)",
+    )
     args = parser.parse_args()
 
     return run_experiment(
@@ -552,6 +714,7 @@ def main() -> int:
         runs=args.runs,
         temperature=args.temperature,
         base_url=args.base_url,
+        arms=args.arms,
     )
 
 

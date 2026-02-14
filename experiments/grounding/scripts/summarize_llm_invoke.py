@@ -98,7 +98,7 @@ def main() -> int:
         print("Run evaluation first: make llm-invoke-evaluate")
         return 1
 
-    arms = ["grounded", "ungrounded"]
+    arms = sorted(set(row.get("arm", "") for row in stab_rows if row.get("arm")))
 
     # Group stability rows by arm
     stab_by_arm: Dict[str, List[Dict[str, str]]] = {arm: [] for arm in arms}
@@ -188,163 +188,162 @@ def main() -> int:
             "examples": examples_set,
         }
 
-    # Print comparison table
+    # Print comparison table (dynamic N-arm layout)
     print()
-    print("llm_invoke Regeneration Stability: Grounded vs Ungrounded")
+    arm_title = " vs ".join(a.capitalize() for a in arms)
+    print(f"llm_invoke Regeneration Stability: {arm_title}")
     print("=" * 80)
     print()
 
-    col_w = 24
-    header = f"{'Metric':<26} | {'Grounded':>{col_w}} | {'Ungrounded':>{col_w}} | {'Delta':>{col_w}}"
+    col_w = max(20, max(len(a) + 2 for a in arms))
+
+    # Header: Metric | arm1 | arm2 | ...
+    header_parts = [f"{'Metric':<26}"]
+    for arm in arms:
+        header_parts.append(f"{arm:>{col_w}}")
+    header = " | ".join(header_parts)
     print(header)
     print("-" * len(header))
 
-    def _row(label: str, g_val: str, u_val: str, delta: str = "") -> None:
-        print(f"{label:<26} | {g_val:>{col_w}} | {u_val:>{col_w}} | {delta:>{col_w}}")
-
-    g = metrics["grounded"]
-    u = metrics["ungrounded"]
+    def _row(label: str, values: Dict[str, str]) -> None:
+        parts = [f"{label:<26}"]
+        for arm in arms:
+            parts.append(f"{values.get(arm, 'N/A'):>{col_w}}")
+        print(" | ".join(parts))
 
     # N
-    _row("N (runs)", str(g["n"]), str(u["n"]))
+    _row("N (runs)", {a: str(metrics[a]["n"]) for a in arms})
 
     # Syntax valid
-    _row(
-        "Syntax valid",
-        f"{g['syntax_valid']}/{g['n']}",
-        f"{u['syntax_valid']}/{u['n']}",
-        f"{g['syntax_valid'] - u['syntax_valid']:+d}",
-    )
+    _row("Syntax valid", {
+        a: f"{metrics[a]['syntax_valid']}/{metrics[a]['n']}" for a in arms
+    })
 
     # Avg lines
-    _row(
-        "Avg lines",
-        _mean_std_int([float(x) for x in g["lines"]]),
-        _mean_std_int([float(x) for x in u["lines"]]),
-    )
+    _row("Avg lines", {
+        a: _mean_std_int([float(x) for x in metrics[a]["lines"]]) for a in arms
+    })
 
     # Avg functions
-    _row(
-        "Avg functions",
-        _mean_std_int([float(x) for x in g["funcs"]]),
-        _mean_std_int([float(x) for x in u["funcs"]]),
-    )
+    _row("Avg functions", {
+        a: _mean_std_int([float(x) for x in metrics[a]["funcs"]]) for a in arms
+    })
 
     # Avg classes
-    _row(
-        "Avg classes",
-        _mean_std_int([float(x) for x in g["classes"]]),
-        _mean_std_int([float(x) for x in u["classes"]]),
-    )
+    _row("Avg classes", {
+        a: _mean_std_int([float(x) for x in metrics[a]["classes"]]) for a in arms
+    })
 
     # Pairwise similarity
-    g_pair = f"{g['pair_sim']:.3f}" if g["pair_sim"] is not None else "N/A"
-    u_pair = f"{u['pair_sim']:.3f}" if u["pair_sim"] is not None else "N/A"
-    delta_pair = ""
-    if g["pair_sim"] is not None and u["pair_sim"] is not None:
-        delta_pair = f"{g['pair_sim'] - u['pair_sim']:+.3f}"
-    _row("Pairwise similarity", g_pair, u_pair, delta_pair)
+    _row("Pairwise similarity", {
+        a: (f"{metrics[a]['pair_sim']:.3f}" if metrics[a]["pair_sim"] is not None else "N/A")
+        for a in arms
+    })
 
     # Reference similarity
-    _row(
-        "Reference similarity",
-        _mean_std(g["ref_sims"]),
-        _mean_std(u["ref_sims"]),
-    )
+    _row("Reference similarity", {
+        a: _mean_std(metrics[a]["ref_sims"]) for a in arms
+    })
 
     # Reference recall
-    _row(
-        "Reference recall",
-        _mean_std(g["ref_recalls"]),
-        _mean_std(u["ref_recalls"]),
-    )
+    _row("Reference recall", {
+        a: _mean_std(metrics[a]["ref_recalls"]) for a in arms
+    })
 
     # Test pass rate
-    _row(
-        "Test pass rate",
-        _mean_std(g["pass_rates"]),
-        _mean_std(u["pass_rates"]),
-    )
+    _row("Test pass rate", {
+        a: _mean_std(metrics[a]["pass_rates"]) for a in arms
+    })
 
     # Raw test passes
-    g_passes_str = ", ".join(
-        f"{p}/{t}" for p, t in zip(g["test_passes"], g["test_totals"])
-    )
-    u_passes_str = ", ".join(
-        f"{p}/{t}" for p, t in zip(u["test_passes"], u["test_totals"])
-    )
-    _row("Test passes (per run)", g_passes_str[:col_w], u_passes_str[:col_w])
+    _row("Test passes (per run)", {
+        a: ", ".join(
+            f"{p}/{t}" for p, t in zip(metrics[a]["test_passes"], metrics[a]["test_totals"])
+        )[:col_w]
+        for a in arms
+    })
 
     # Exact match
-    _row(
-        "Exact match rate",
-        f"{g['exact_match']}/{g['n']}",
-        f"{u['exact_match']}/{u['n']}",
-    )
+    _row("Exact match rate", {
+        a: f"{metrics[a]['exact_match']}/{metrics[a]['n']}" for a in arms
+    })
 
     # Avg cost
-    g_cost = f"${statistics.mean(g['costs']):.4f}" if g["costs"] else "N/A"
-    u_cost = f"${statistics.mean(u['costs']):.4f}" if u["costs"] else "N/A"
-    _row("Avg cost", g_cost, u_cost)
+    _row("Avg cost", {
+        a: (f"${statistics.mean(metrics[a]['costs']):.4f}" if metrics[a]["costs"] else "N/A")
+        for a in arms
+    })
 
     # Avg response time
-    g_time = f"{statistics.mean(g['times']) / 1000:.1f}s" if g["times"] else "N/A"
-    u_time = f"{statistics.mean(u['times']) / 1000:.1f}s" if u["times"] else "N/A"
-    _row("Avg response time", g_time, u_time)
+    _row("Avg response time", {
+        a: (f"{statistics.mean(metrics[a]['times']) / 1000:.1f}s" if metrics[a]["times"] else "N/A")
+        for a in arms
+    })
 
     # Examples used
-    g_ex = ", ".join(sorted(g["examples"])) if g["examples"] else "(none)"
-    _row("Examples used", g_ex[:col_w], "-")
+    _row("Examples used", {
+        a: (", ".join(sorted(metrics[a]["examples"]))[:col_w]
+            if metrics[a]["examples"] else "(none)")
+        for a in arms
+    })
 
     print()
     print("=" * 80)
 
-    # Highlight key findings
+    # Highlight key findings (pairwise comparisons against grounded if present)
     print("\nKey Findings:")
 
-    # Grounding effect on test pass rate
-    if g["pass_rates"] and u["pass_rates"]:
-        g_avg_pr = statistics.mean(g["pass_rates"])
-        u_avg_pr = statistics.mean(u["pass_rates"])
-        delta_pr = g_avg_pr - u_avg_pr
-        direction = "higher" if delta_pr > 0 else "lower"
-        print(
-            f"  - Grounded test pass rate is {abs(delta_pr):.1%} {direction} "
-            f"({g_avg_pr:.1%} vs {u_avg_pr:.1%})"
-        )
+    ref_arm = "grounded" if "grounded" in arms else arms[0]
+    ref = metrics[ref_arm]
+    other_arms = [a for a in arms if a != ref_arm]
 
-    # Grounding effect on reference similarity
-    if g["ref_sims"] and u["ref_sims"]:
-        g_avg_rs = statistics.mean(g["ref_sims"])
-        u_avg_rs = statistics.mean(u["ref_sims"])
-        delta_rs = g_avg_rs - u_avg_rs
-        direction = "higher" if delta_rs > 0 else "lower"
-        print(
-            f"  - Grounded reference similarity is {abs(delta_rs):.3f} {direction} "
-            f"({g_avg_rs:.3f} vs {u_avg_rs:.3f})"
-        )
+    for other_arm in other_arms:
+        o = metrics[other_arm]
+        print(f"\n  {ref_arm} vs {other_arm}:")
 
-    # Grounding effect on reference recall
-    if g["ref_recalls"] and u["ref_recalls"]:
-        g_avg_rr = statistics.mean(g["ref_recalls"])
-        u_avg_rr = statistics.mean(u["ref_recalls"])
-        delta_rr = g_avg_rr - u_avg_rr
-        direction = "higher" if delta_rr > 0 else "lower"
-        print(
-            f"  - Grounded reference recall is {abs(delta_rr):.3f} {direction} "
-            f"({g_avg_rr:.3f} vs {u_avg_rr:.3f})"
-        )
+        # Test pass rate
+        if ref["pass_rates"] and o["pass_rates"]:
+            ref_avg = statistics.mean(ref["pass_rates"])
+            o_avg = statistics.mean(o["pass_rates"])
+            delta = ref_avg - o_avg
+            direction = "higher" if delta > 0 else "lower"
+            print(
+                f"    - {ref_arm} test pass rate is {abs(delta):.1%} {direction} "
+                f"({ref_avg:.1%} vs {o_avg:.1%})"
+            )
 
-    # Consistency (pairwise similarity)
-    if g["pair_sim"] is not None and u["pair_sim"] is not None:
-        direction = "more" if g["pair_sim"] > u["pair_sim"] else "less"
-        print(
-            f"  - Grounded arm is {direction} consistent "
-            f"(pairwise sim: {g['pair_sim']:.3f} vs {u['pair_sim']:.3f})"
-        )
+        # Reference similarity
+        if ref["ref_sims"] and o["ref_sims"]:
+            ref_avg = statistics.mean(ref["ref_sims"])
+            o_avg = statistics.mean(o["ref_sims"])
+            delta = ref_avg - o_avg
+            direction = "higher" if delta > 0 else "lower"
+            print(
+                f"    - {ref_arm} reference similarity is {abs(delta):.3f} {direction} "
+                f"({ref_avg:.3f} vs {o_avg:.3f})"
+            )
 
-    # Warning: no examples
-    if g["examples"] == set():
+        # Reference recall
+        if ref["ref_recalls"] and o["ref_recalls"]:
+            ref_avg = statistics.mean(ref["ref_recalls"])
+            o_avg = statistics.mean(o["ref_recalls"])
+            delta = ref_avg - o_avg
+            direction = "higher" if delta > 0 else "lower"
+            print(
+                f"    - {ref_arm} reference recall is {abs(delta):.3f} {direction} "
+                f"({ref_avg:.3f} vs {o_avg:.3f})"
+            )
+
+        # Consistency
+        if ref["pair_sim"] is not None and o["pair_sim"] is not None:
+            direction = "more" if ref["pair_sim"] > o["pair_sim"] else "less"
+            print(
+                f"    - {ref_arm} arm is {direction} consistent "
+                f"(pairwise sim: {ref['pair_sim']:.3f} vs {o['pair_sim']:.3f})"
+            )
+
+    # Warning: no examples in grounded arm
+    if "grounded" in metrics and metrics["grounded"]["examples"] == set():
         print(
             "\n  WARNING: No examples were used in the grounded arm! "
             "Results may not reflect true grounding effect."
