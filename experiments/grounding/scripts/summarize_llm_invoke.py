@@ -139,6 +139,9 @@ def main() -> int:
         # Reference similarity
         ref_sims = [_safe_float(r.get("reference_similarity", "0")) for r in e_rows]
 
+        # Reference recall
+        ref_recalls = [_safe_float(r.get("reference_recall", "0")) for r in e_rows]
+
         # Test pass rate
         test_passes = [_safe_int(r.get("tests_passed", "0")) for r in e_rows]
         test_totals = [_safe_int(r.get("tests_total", "0")) for r in e_rows]
@@ -174,6 +177,7 @@ def main() -> int:
             "funcs": funcs,
             "classes": classes,
             "ref_sims": ref_sims,
+            "ref_recalls": ref_recalls,
             "pair_sim": pair_sim,
             "pass_rates": pass_rates,
             "test_passes": test_passes,
@@ -248,6 +252,13 @@ def main() -> int:
         _mean_std(u["ref_sims"]),
     )
 
+    # Reference recall
+    _row(
+        "Reference recall",
+        _mean_std(g["ref_recalls"]),
+        _mean_std(u["ref_recalls"]),
+    )
+
     # Test pass rate
     _row(
         "Test pass rate",
@@ -311,6 +322,17 @@ def main() -> int:
         print(
             f"  - Grounded reference similarity is {abs(delta_rs):.3f} {direction} "
             f"({g_avg_rs:.3f} vs {u_avg_rs:.3f})"
+        )
+
+    # Grounding effect on reference recall
+    if g["ref_recalls"] and u["ref_recalls"]:
+        g_avg_rr = statistics.mean(g["ref_recalls"])
+        u_avg_rr = statistics.mean(u["ref_recalls"])
+        delta_rr = g_avg_rr - u_avg_rr
+        direction = "higher" if delta_rr > 0 else "lower"
+        print(
+            f"  - Grounded reference recall is {abs(delta_rr):.3f} {direction} "
+            f"({g_avg_rr:.3f} vs {u_avg_rr:.3f})"
         )
 
     # Consistency (pairwise similarity)

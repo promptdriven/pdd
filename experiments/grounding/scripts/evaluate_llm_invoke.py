@@ -40,6 +40,7 @@ EVAL_FIELDS = [
     "function_count",
     "class_count",
     "reference_similarity",
+    "reference_recall",
     "tests_total",
     "tests_passed",
     "tests_failed",
@@ -73,6 +74,18 @@ def _sequence_matcher_ratio(a: str, b: str) -> float:
     if not a or not b:
         return 0.0
     return difflib.SequenceMatcher(None, a, b).ratio()
+
+
+def _line_recall(generated: str, canonical: str, min_length: int = 20) -> float:
+    """Fraction of generated lines (stripped, >= min_length) found in canonical."""
+    gen_lines = [l.strip() for l in generated.splitlines()
+                 if l.strip() and len(l.strip()) >= min_length]
+    can_lines_set = set(l.strip() for l in canonical.splitlines()
+                        if l.strip() and len(l.strip()) >= min_length)
+    if not gen_lines:
+        return 0.0
+    matches = sum(1 for l in gen_lines if l in can_lines_set)
+    return matches / len(gen_lines)
 
 
 # ---------------------------------------------------------------------------
@@ -257,6 +270,7 @@ def main() -> int:
 
             # Reference similarity (difflib — O(n) average, safe for 100KB files)
             ref_sim = _sequence_matcher_ratio(code, canonical_code)
+            ref_recall = _line_recall(code, canonical_code)
 
             # Test execution
             if syntax_valid:
@@ -279,6 +293,7 @@ def main() -> int:
                 "function_count": func_count,
                 "class_count": cls_count,
                 "reference_similarity": round(ref_sim, 4),
+                "reference_recall": round(ref_recall, 4),
                 "tests_total": test_result["tests_total"],
                 "tests_passed": test_result["tests_passed"],
                 "tests_failed": test_result["tests_failed"],
@@ -296,7 +311,7 @@ def main() -> int:
             t_pass = test_result["tests_passed"]
             t_total = test_result["tests_total"]
             print(
-                f" ref_sim={ref_sim:.3f} "
+                f" ref_sim={ref_sim:.3f} recall={ref_recall:.3f} "
                 f"tests={t_pass}/{t_total} "
                 f"time={test_result['test_runtime_seconds']}s"
             )

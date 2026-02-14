@@ -302,12 +302,35 @@ def _call_generate_local(
                 lines = lines[:-1]
             generated_code = "\n".join(lines)
 
-        # Extract cost from response
+        # Extract cost from response (3-tier fallback, cf. llm_invoke.py)
         total_cost = 0.0
         try:
-            total_cost = litellm.completion_cost(completion_response=response)
-        except Exception:
-            pass
+            cost_val = litellm.completion_cost(completion_response=response)
+            total_cost = cost_val if cost_val is not None else 0.0
+        except Exception as e1:
+            print(f"      Cost attempt 1 failed: {e1}")
+            usage = getattr(response, "usage", None)
+            if usage:
+                in_tok = getattr(usage, "prompt_tokens", 0) or 0
+                out_tok = (
+                    getattr(usage, "completion_tokens", 0)
+                    or getattr(usage, "output_tokens", 0)
+                    or 0
+                )
+                try:
+                    cost_val = litellm.completion_cost(
+                        model=model,
+                        prompt_tokens=in_tok,
+                        completion_tokens=out_tok,
+                    )
+                    total_cost = cost_val if cost_val is not None else 0.0
+                except Exception:
+                    # Manual: Gemini 3 Flash = $0.50/M input, $3.00/M output
+                    total_cost = (in_tok * 0.5 + out_tok * 3.0) / 1_000_000
+                    print(
+                        f"      Cost fallback: {in_tok} in + {out_tok} out "
+                        f"= ${total_cost:.6f}"
+                    )
 
         return {
             "http_status": 0,
