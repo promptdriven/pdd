@@ -24,18 +24,15 @@ These tests verify:
 - Various output patterns that mention related issues conversationally
 """
 
-import os
 import pytest
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from pdd.agentic_bug_orchestrator import run_agentic_bug_orchestrator
 from pdd.agentic_change_orchestrator import (
-    run_agentic_change_orchestrator,
     _check_hard_stop as change_check_hard_stop,
 )
 from pdd.agentic_test_orchestrator import (
-    run_agentic_test_orchestrator,
     _check_hard_stop as _testorch_check_hard_stop,
 )
 
@@ -86,77 +83,8 @@ def bug_default_args(tmp_path):
         "cwd": tmp_path,
         "verbose": False,
         "quiet": True,
+        "use_github_state": False,
     }
-
-
-@pytest.fixture
-def change_mock_dependencies(tmp_path):
-    """Mocks for the change orchestrator."""
-    with patch("pdd.agentic_change_orchestrator.run_agentic_task") as mock_run, \
-         patch("pdd.agentic_change_orchestrator.load_prompt_template") as mock_tpl, \
-         patch("pdd.agentic_change_orchestrator.load_workflow_state") as mock_load, \
-         patch("pdd.agentic_change_orchestrator.save_workflow_state") as mock_save, \
-         patch("pdd.agentic_change_orchestrator.clear_workflow_state") as mock_clear, \
-         patch("pdd.agentic_change_orchestrator.subprocess.run") as mock_sub, \
-         patch("pdd.agentic_change_orchestrator.post_step_comment") as mock_post, \
-         patch("pdd.agentic_change_orchestrator.console") as mock_console:
-
-        mock_run.return_value = (True, "Default Agent Output", 0.1, "gpt-4")
-        mock_template = MagicMock()
-        mock_template.format.return_value = "Formatted Prompt"
-        mock_tpl.return_value = mock_template
-        mock_load.return_value = (None, None)
-        mock_sub.return_value.stdout = str(tmp_path)
-        mock_sub.return_value.returncode = 0
-        mock_post.return_value = True
-
-        yield {
-            "run": mock_run,
-            "template_loader": mock_tpl,
-            "load_state": mock_load,
-            "save_state": mock_save,
-            "clear_state": mock_clear,
-            "subprocess": mock_sub,
-            "post_comment": mock_post,
-            "console": mock_console,
-        }
-
-
-@pytest.fixture
-def test_mock_dependencies():
-    """Mocks for the test orchestrator."""
-    with patch("pdd.agentic_test_orchestrator.run_agentic_task") as mock_run, \
-         patch("pdd.agentic_test_orchestrator.load_workflow_state") as mock_load, \
-         patch("pdd.agentic_test_orchestrator.save_workflow_state") as mock_save, \
-         patch("pdd.agentic_test_orchestrator.clear_workflow_state") as mock_clear, \
-         patch("pdd.agentic_test_orchestrator.load_prompt_template") as mock_tpl, \
-         patch("pdd.agentic_test_orchestrator._setup_worktree") as mock_wt, \
-         patch("pdd.agentic_test_orchestrator.Console") as mock_console, \
-         patch("pdd.agentic_test_orchestrator._get_git_root") as mock_root, \
-         patch("subprocess.run") as mock_sub:
-
-        mock_load.return_value = (None, None)
-        mock_save.return_value = 12345
-        mock_template_obj = MagicMock()
-        mock_template_obj.format.return_value = "Formatted Prompt"
-        mock_tpl.return_value = mock_template_obj
-        mock_wt.return_value = (Path("/tmp/worktree"), None)
-        mock_root.return_value = Path("/repo/root")
-        mock_run.return_value = (True, "Step Output", 0.1, "gpt-4")
-        mock_sub.return_value.stdout = "main"
-        mock_sub.return_value.returncode = 0
-
-        yield {
-            "run": mock_run,
-            "load": mock_load,
-            "save": mock_save,
-            "clear": mock_clear,
-            "template": mock_tpl,
-            "setup_wt": mock_wt,
-            "console": mock_console,
-            "git_root": mock_root,
-            "subprocess": mock_sub,
-        }
 
 
 @pytest.fixture
