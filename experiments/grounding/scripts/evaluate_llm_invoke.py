@@ -18,6 +18,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -110,7 +111,7 @@ def _run_tests_isolated(generated_file: Path) -> Dict[str, Any]:
         try:
             result = subprocess.run(
                 [
-                    "pytest", "--tb=line", "-q",
+                    sys.executable, "-m", "pytest", "--tb=line", "-q",
                     str(TEST_FILE),
                 ],
                 capture_output=True,

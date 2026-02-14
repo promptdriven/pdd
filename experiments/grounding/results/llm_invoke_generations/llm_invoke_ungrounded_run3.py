@@ -7,16 +7,17 @@ import re
 import sys
 import time as time_module
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Type, Union, cast
+from typing import Any, Dict, List, Optional, Type, Union, TYPE_CHECKING
 
 import litellm
 import pandas as pd
+import requests
 from dotenv import load_dotenv, set_key
-from litellm import batch_completion, completion, completion_cost
+from litellm import completion, batch_completion, completion_cost
 from pydantic import BaseModel
 from rich.console import Console
 
-# Internal relative imports as per requirements
+# Internal relative imports as required
 from . import (
     DEFAULT_STRENGTH,
     DEFAULT_TIME,
@@ -24,186 +25,205 @@ from . import (
 )
 from .path_resolution import get_default_resolver
 
+if TYPE_CHECKING:
+    from pydantic import BaseModel
+
 # Constants
 LLM_CALL_TIMEOUT = 120
-LITELLM_CACHE_FILE = "litellm_cache.sqlite"
-
-# Logging setup
-logger = logging.getLogger("pdd.llm_invoke")
-litellm_logger = logging.getLogger("litellm")
+PDD_LOG_NAME = "pdd.llm_invoke"
 console = Console()
 
 # Global state for cost tracking
 _LAST_CALLBACK_DATA: Dict[str, Any] = {}
 _MODEL_RATE_MAP: Dict[str, Dict[str, float]] = {}
 
+# Exception Classes
 class SchemaValidationError(Exception):
-    """Raised when LLM output fails Pydantic or Schema validation."""
+    """Raised when the LLM output fails Pydantic/Schema validation."""
     pass
 
 class CloudFallbackError(Exception):
-    """Recoverable cloud error triggering local fallback."""
+    """Recoverable errors that trigger a fallback to local LLM."""
     pass
 
 class CloudInvocationError(Exception):
-    """Non-recoverable cloud error."""
+    """Non-recoverable cloud errors."""
     pass
 
 class InsufficientCreditsError(Exception):
     """Raised for 402 Payment Required."""
     pass
 
-def setup_logging():
-    level = os.getenv("PDD_LOG_LEVEL", "INFO").upper()
-    if os.getenv("PDD_VERBOSE_LOGGING") == "1":
-        level = "DEBUG"
+# --- Logging Setup ---
+
+def setup_file_logging():
+    """Configures rotating file handlers (10MB, 5 backups)."""
+    from logging.handlers import RotatingFileHandler
+    log_file = Path.cwd() / "pdd_llm.log"
+    handler = RotatingFileHandler(log_file, maxBytes=10 * 1024 * 1024, backupCount=5)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
     
-    logging.basicConfig(level=level)
-    logger.setLevel(level)
+    logger = logging.getLogger(PDD_LOG_NAME)
+    logger.addHandler(handler)
     
-    lt_level = os.getenv("LITELLM_LOG_LEVEL", "WARNING").upper()
+    litellm_logger = logging.getLogger("litellm")
+    litellm_logger.addHandler(handler)
+
+def set_verbose_logging(verbose: bool):
+    """Toggles DEBUG level."""
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.getLogger(PDD_LOG_NAME).setLevel(level)
+
+def _configure_loggers():
+    pdd_level = os.getenv("PDD_LOG_LEVEL", "INFO").upper()
+    llm_level = os.getenv("LITELLM_LOG_LEVEL", "WARNING").upper()
+    
     if os.getenv("PDD_ENVIRONMENT") == "production":
-        lt_level = "WARNING"
-    litellm_logger.setLevel(lt_level)
+        llm_level = "WARNING"
+    if os.getenv("PDD_VERBOSE_LOGGING") == "1":
+        pdd_level = "DEBUG"
 
-def _init_litellm_config():
-    litellm.drop_params = os.getenv("LITELLM_DROP_PARAMS", "True").lower() == "true"
+    logging.basicConfig(level=logging.WARNING)
+    logging.getLogger(PDD_LOG_NAME).setLevel(pdd_level)
+    logging.getLogger("litellm").setLevel(llm_level)
     
-    # Cache Configuration
-    if os.getenv("LITELLM_CACHE_DISABLE") != "1":
-        try:
-            if os.getenv("GCS_BUCKET_NAME"):
-                # S3-compatible GCS cache
-                from litellm.caching import Cache
-                litellm.cache = Cache(
-                    type="s3",
-                    s3_bucket_name=os.getenv("GCS_BUCKET_NAME"),
-                    s3_region_name="us-central1",
-                    s3_api_version="v2"
-                )
-            else:
-                # Local SQLite
-                resolver = get_default_resolver()
-                cache_path = resolver.resolve_project_root() / LITELLM_CACHE_FILE
-                litellm.cache = litellm.Cache(type="disk", disk_cache_dir=str(cache_path))
-        except Exception as e:
-            logger.warning(f"Failed to initialize LiteLLM cache: {e}")
+    litellm.drop_params = os.getenv("LITELLM_DROP_PARAMS", "True").lower() == "true"
 
-def _success_callback(kwargs, response_obj, start_time, end_time):
-    global _LAST_CALLBACK_DATA
-    try:
-        usage = getattr(response_obj, "usage", {})
-        cost = completion_cost(completion_response=response_obj)
-        _LAST_CALLBACK_DATA = {
-            "cost": cost,
-            "usage": usage,
-            "finish_reason": response_obj.choices[0].finish_reason if response_obj.choices else None
-        }
-    except Exception:
-        pass
+# --- Path & Model CSV Handling ---
 
-litellm.success_callback = [_success_callback]
-
-def _get_model_from_csv(strength: float, use_cloud: bool = False) -> Dict[str, Any]:
+def _load_model_csv() -> pd.DataFrame:
     resolver = get_default_resolver()
-    paths = [
+    project_root = resolver.resolve_project_root()
+    
+    search_paths = [
         Path.home() / ".pdd" / "llm_model.csv",
-        resolver.resolve_project_root() / ".pdd" / "llm_model.csv",
+        project_root / ".pdd" / "llm_model.csv",
         Path.cwd() / ".pdd" / "llm_model.csv",
-        resolver.resolve_data_file("llm_model.csv")
+        Path(__file__).parent / "data" / "llm_model.csv"
     ]
     
-    df = None
-    for p in paths:
-        if p.exists():
-            df = pd.read_csv(p)
-            break
-            
-    if df is None:
-        raise RuntimeError("llm_model.csv not found in any expected location.")
+    for path in search_paths:
+        if path.exists():
+            df = pd.read_csv(path)
+            # Cache rates for fallback
+            for _, row in df.iterrows():
+                _MODEL_RATE_MAP[row['model']] = {
+                    "input": row.get('input_cost_per_m', 0) / 1_000_000,
+                    "output": row.get('output_cost_per_m', 0) / 1_000_000
+                }
+            return df
+    raise FileNotFoundError("Could not locate llm_model.csv")
 
-    # Global map for cost fallback
-    global _MODEL_RATE_MAP
-    for _, row in df.iterrows():
-        _MODEL_RATE_MAP[row['model']] = {
-            "input": row.get('input_cost_per_m', 0) / 1_000_000,
-            "output": row.get('output_cost_per_m', 0) / 1_000_000
-        }
+# --- Key Management ---
 
-    # Selection Logic
-    base_model_name = os.getenv("PDD_MODEL_DEFAULT")
-    available_models = df[df['api_key'].notna() | (df['provider'] == 'lm_studio')]
+def _manage_api_key(key_name: str, provider: str) -> bool:
+    """Interactively fetches and saves missing API keys."""
+    current_val = os.getenv(key_name)
+    if current_val and current_val not in ["", "EXISTING_KEY", "lm-studio"]:
+        return True
     
-    if available_models.empty:
-        raise RuntimeError("No models with API keys available in CSV.")
-
-    if base_model_name and base_model_name in available_models['model'].values:
-        base_model = available_models[available_models['model'] == base_model_name].iloc[0]
-    else:
-        # Surrogate fallback
-        available_models = available_models.sort_values('coding_arena_elo', ascending=False)
-        base_model = available_models.iloc[len(available_models)//2]
-
-    if strength == 0.5:
-        return base_model.to_dict()
-    
-    if strength < 0.5:
-        # Cheapest to Base
-        candidates = available_models[available_models['input_cost_per_m'] <= base_model['input_cost_per_m']]
-        candidates = candidates.sort_values('input_cost_per_m')
-    else:
-        # Base to ELO max
-        candidates = available_models[available_models['coding_arena_elo'] >= base_model['coding_arena_elo']]
-        candidates = candidates.sort_values('coding_arena_elo')
-
-    idx = int(strength * (len(candidates) - 1))
-    return candidates.iloc[idx].to_dict()
-
-def _ensure_api_key(model_info: Dict[str, Any]) -> str:
-    key_name = model_info.get('api_key')
-    if not key_name or key_name == "EXISTING_KEY" or model_info['provider'] == 'lm_studio':
-        return ""
-
-    val = os.getenv(key_name)
-    if val:
-        return val.strip()
+    if provider.lower() == "lm-studio":
+        os.environ[key_name] = "lm-studio"
+        return True
 
     if os.getenv("PDD_FORCE"):
-        return ""
+        return False
 
-    console.print(f"[yellow]Missing API Key for {model_info['model']} ({key_name})[/yellow]")
-    new_key = input(f"Enter {key_name}: ").strip()
+    console.print(f"[bold yellow]Missing API Key for {provider} ({key_name})[/bold yellow]")
+    new_key = console.input(f"Enter {key_name}: ").strip()
+    
+    # Sanitize for WSL/Carriage returns
+    new_key = new_key.replace("\r", "").replace("\n", "")
+    
+    if not new_key:
+        return False
+
+    os.environ[key_name] = new_key
     
     # Save to .env
     resolver = get_default_resolver()
     env_path = resolver.resolve_project_root() / ".env"
     set_key(str(env_path), key_name, new_key)
-    os.environ[key_name] = new_key
     
-    console.print(f"[bold green]Key saved to {env_path}[/bold green]")
-    return new_key
+    console.print(f"[cyan]Key saved to {env_path}. Ensure this file is .gitignored![/cyan]")
+    return True
 
-def _repair_json(s: str) -> str:
-    """Basic JSON recovery for truncated responses."""
-    s = s.strip()
-    if not s: return s
-    # Find start/end fences
-    if "```json" in s:
-        s = s.split("```json")[-1].split("```")[0]
-    elif "```" in s:
-        s = s.split("```")[-1].split("```")[0]
-        
-    # Balance braces logic (simplified)
-    open_braces = s.count('{')
-    close_braces = s.count('}')
-    if open_braces > close_braces:
-        s += '}' * (open_braces - close_braces)
-    return s
+# --- Structured Output Helpers ---
+
+def _ensure_all_properties_required(schema: Dict[str, Any]) -> None:
+    if schema.get("type") == "object":
+        props = schema.get("properties", {})
+        if props:
+            schema["required"] = list(props.keys())
+        for prop in props.values():
+            _ensure_all_properties_required(prop)
+    elif schema.get("type") == "array" and "items" in schema:
+        _ensure_all_properties_required(schema["items"])
+    
+    for key in ["anyOf", "oneOf", "allOf"]:
+        if key in schema:
+            for sub in schema[key]:
+                _ensure_all_properties_required(sub)
+
+def _add_additional_properties_false(schema: Dict[str, Any]) -> None:
+    if schema.get("type") == "object":
+        schema["additionalProperties"] = False
+        for prop in schema.get("properties", {}).values():
+            _add_additional_properties_false(prop)
+    elif schema.get("type") == "array" and "items" in schema:
+        _add_additional_properties_false(schema["items"])
+    
+    if "$defs" in schema:
+        for d in schema["$defs"].values():
+            _add_additional_properties_false(d)
+
+# --- Repair Logic ---
+
+def _repair_python_syntax(code: str) -> str:
+    """Basic fixes for truncated code or common LLM syntax errors."""
+    code = code.strip()
+    if code.count('"""') % 2 != 0:
+        code += '\n"""'
+    if code.count("'''") % 2 != 0:
+        code += "\n'''"
+    return code
+
+def _smart_unescape_code(text: str) -> str:
+    """Fixes double escaped newlines in code fields."""
+    return text.replace("\\n", "\n").replace("\\\"", "\"")
+
+# --- Cloud Invocation ---
+
+def _pydantic_to_json_schema(pydantic_class: Type[BaseModel]) -> Dict[str, Any]:
+    schema = pydantic_class.model_json_schema()
+    _ensure_all_properties_required(schema)
+    _add_additional_properties_false(schema)
+    schema["title"] = pydantic_class.__name__
+    return schema
 
 def _llm_invoke_cloud(payload: Dict[str, Any]) -> Dict[str, Any]:
-    # Placeholder for cloud logic using requests/httpx to Firebase endpoint
-    # Must handle 402 (InsufficientCreditsError), 401/5xx (CloudFallbackError)
-    raise CloudFallbackError("Cloud execution not implemented in this stub")
+    """Calls the PDD Cloud llmInvoke endpoint."""
+    token = os.getenv("PDD_CLOUD_TOKEN")
+    if not token:
+        raise CloudFallbackError("No PDD_CLOUD_TOKEN found.")
+
+    url = "https://us-central1-prompt-driven-development.cloudfunctions.net/llmInvoke"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    
+    try:
+        response = requests.post(url, json=payload, headers=headers, timeout=300)
+        if response.status_code == 402:
+            raise InsufficientCreditsError("Insufficient PDD Cloud credits.")
+        if response.status_code in [401, 403]:
+            raise CloudFallbackError("Cloud authentication/approval error.")
+        
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        raise CloudFallbackError(f"Cloud request failed: {str(e)}")
+
+# --- Core Function ---
 
 def llm_invoke(
     prompt: Optional[str] = None,
@@ -219,101 +239,176 @@ def llm_invoke(
     language: Optional[str] = None,
     use_cloud: Optional[bool] = None,
 ) -> Dict[str, Any]:
-    """Execute LLM call via LiteLLM with fallback and key management."""
-    setup_logging()
-    _init_litellm_config()
+    """
+    Main entry point for running LLM prompts with LiteLLM and PDD logic.
+    """
+    _configure_loggers()
+    set_verbose_logging(verbose)
+    logger = logging.getLogger(PDD_LOG_NAME)
 
-    # Cloud logic check
-    if use_cloud is True or (use_cloud is None and os.getenv("PDD_FORCE_LOCAL") != "1"):
+    # 1. Cloud Execution Path
+    force_local = os.getenv("PDD_FORCE_LOCAL") == "1"
+    if use_cloud is None:
+        use_cloud = not force_local # Simplified logic for example
+
+    if use_cloud and not os.getenv("_PDD_INTERNAL_CLOUD_CALL"):
         try:
-            # Prepare payload and call _llm_invoke_cloud
-            pass 
-        except CloudFallbackError as e:
-            console.print(f"[yellow]Cloud failed, falling back to local: {e}[/yellow]")
+            cloud_payload = {
+                "prompt": prompt,
+                "inputJson": input_json,
+                "messages": messages,
+                "strength": strength,
+                "temperature": temperature,
+                "time": time,
+                "verbose": verbose,
+                "outputSchema": output_schema or (_pydantic_to_json_schema(output_pydantic) if output_pydantic else None),
+                "useBatchMode": use_batch_mode,
+                "language": language
+            }
+            res = _llm_invoke_cloud(cloud_payload)
+            if output_pydantic:
+                res["result"] = output_pydantic.model_validate(res["result"])
+            return res
+        except (CloudFallbackError, CloudInvocationError) as e:
+            console.print(f"[yellow]Cloud execution failed, falling back to local: {e}[/yellow]")
+        except InsufficientCreditsError:
+            raise
 
-    # Select Model
-    model_info = _get_model_from_csv(strength)
-    model_name = model_info['model']
-    provider = model_info['provider']
+    # 2. Local Execution Path
+    df_models = _load_model_csv()
+    base_model_name = os.getenv("PDD_MODEL_DEFAULT")
     
-    # Auth
-    api_key = _ensure_api_key(model_info)
+    # Filter by API key availability
+    available_models = []
+    for _, row in df_models.iterrows():
+        if _manage_api_key(row['api_key'], row['provider']):
+            available_models.append(row)
+    
+    if not available_models:
+        raise RuntimeError("No models available with valid API keys.")
+
+    # Model Interpolation Logic
+    df_avail = pd.DataFrame(available_models)
+    base_row = df_avail[df_avail['model'] == base_model_name]
+    if base_row.empty:
+        base_row = df_avail.iloc[0:1] # Fallback surrogate
+
+    if strength == 0.5:
+        candidates = base_row.to_dict('records')
+    elif strength < 0.5:
+        # Interpolate by cost (cheapest to base)
+        df_range = df_avail[df_avail['input_cost_per_m'] <= base_row.iloc[0]['input_cost_per_m']]
+        candidates = df_range.sort_values('input_cost_per_m', ascending=False).to_dict('records')
+    else:
+        # Interpolate by ELO (base to highest)
+        df_range = df_avail[df_avail['coding_arena_elo'] >= base_row.iloc[0]['coding_arena_elo']]
+        candidates = df_range.sort_values('coding_arena_elo', ascending=True).to_dict('records')
 
     # Prepare Messages
     if not messages:
-        if not prompt:
-            raise ValueError("Prompt is required if messages are not provided.")
-        # Simple template replacement
-        content = prompt
-        if input_json:
-            if isinstance(input_json, dict):
-                for k, v in input_json.items():
-                    content = content.replace(f"{{{{{k}}}}}", str(v))
-        messages = [{"role": "user", "content": content}]
+        # Simple templating
+        final_prompt = prompt or ""
+        if isinstance(input_json, dict):
+            for k, v in input_json.items():
+                final_prompt = final_prompt.replace(f"{{{{{k}}}}}", str(v))
+        msgs = [{"role": "user", "content": final_prompt}]
+    else:
+        msgs = messages
 
-    # Reasoning Logic
-    reasoning_type = model_info.get('reasoning_type', 'none')
-    kwargs: Dict[str, Any] = {
-        "model": f"{provider}/{model_name}" if provider != "openai" else model_name,
-        "messages": messages,
-        "temperature": temperature,
-        "api_key": api_key,
-        "num_retries": 2,
-        "timeout": LLM_CALL_TIMEOUT,
-    }
+    # 3. Invocation Loop (Fallbacks)
+    last_err = None
+    for model_info in candidates:
+        try:
+            model_id = model_info['model']
+            provider = model_info['provider']
+            
+            # Setup Reasoning
+            reasoning_args = {}
+            r_type = model_info.get('reasoning_type', 'none')
+            max_r = model_info.get('max_reasoning_tokens', 0)
+            
+            if r_type == 'budget':
+                budget = int(time * max_r)
+                if "anthropic" in provider.lower():
+                    reasoning_args["thinking"] = {"type": "enabled", "budget_tokens": budget}
+                    temperature = 1.0 # Required for Anthropic thinking
+            elif r_type == 'effort':
+                effort = "medium"
+                if time < 0.3: effort = "low"
+                elif time > 0.7: effort = "high"
+                reasoning_args["reasoning_effort"] = effort
 
-    if reasoning_type == "budget":
-        max_t = model_info.get('max_reasoning_tokens', 1024)
-        kwargs["thinking"] = {"type": "enabled", "budget_tokens": int(time * max_t)}
-        kwargs["temperature"] = 1.0 # Anthropic requirement
-    elif reasoning_type == "effort":
-        effort = "low" if time < 0.3 else "medium" if time < 0.7 else "high"
-        kwargs["reasoning_effort"] = effort
+            # Structured Output
+            resp_format = None
+            if output_pydantic or output_schema:
+                schema = output_schema or _pydantic_to_json_schema(output_pydantic)
+                if model_info.get('structured_output'):
+                    resp_format = {
+                        "type": "json_schema",
+                        "json_schema": {"name": "pdd_output", "strict": True, "schema": schema}
+                    }
 
-    # Structured Output Config
-    if output_pydantic or output_schema:
-        if model_info.get('structured_output') == 1:
-            kwargs["response_format"] = output_pydantic or output_schema
-        else:
-            # Fallback: prompt instruction
-            messages.append({"role": "system", "content": "Return output in valid JSON matching the requested schema."})
+            # API Call
+            call_kwargs = {
+                "model": model_id,
+                "messages": msgs,
+                "temperature": temperature,
+                "timeout": LLM_CALL_TIMEOUT,
+                "num_retries": 2,
+                "response_format": resp_format,
+                **reasoning_args
+            }
 
-    try:
-        if use_batch_mode:
-            response = batch_completion(**kwargs)
-            # Handle list of results...
-            return {"result": response}
-        
-        # Responses API for GPT-o1/o3
-        if model_name.startswith("o1") or model_name.startswith("o3"):
-            response = litellm.completion(**kwargs)
-        else:
-            response = completion(**kwargs)
+            # Vertex specific
+            if "vertex" in provider.lower():
+                call_kwargs["vertex_project"] = os.getenv("VERTEX_PROJECT")
+                call_kwargs["vertex_location"] = model_info.get("location") or os.getenv("VERTEX_LOCATION")
 
-        result_text = response.choices[0].message.content
-        thinking = getattr(response.choices[0].message, "reasoning_content", None)
+            # Execute
+            if "gpt-5" in model_id: # Placeholder for Responses API logic
+                # responses() logic here
+                response = completion(**call_kwargs)
+            elif use_batch_mode:
+                response = batch_completion(**call_kwargs)
+            else:
+                response = completion(**call_kwargs)
 
-        # Parse / Validate
-        result = result_text
-        if output_pydantic:
-            parsed = json.loads(_repair_json(result_text))
-            result = output_pydantic(**parsed)
-        elif output_schema:
-            result = json.loads(_repair_json(result_text))
+            # Extract Result
+            raw_content = response.choices[0].message.content
+            thinking = getattr(response.choices[0].message, 'reasoning_content', None)
+            
+            result = raw_content
+            if output_pydantic or output_schema:
+                try:
+                    # Logic to parse/repair JSON if content is string
+                    parsed = json.loads(raw_content)
+                    if output_pydantic:
+                        result = output_pydantic.model_validate(parsed)
+                    else:
+                        result = parsed
+                except Exception as e:
+                    raise SchemaValidationError(f"JSON/Schema validation failed: {e}")
 
-        return {
-            "result": result,
-            "cost": _LAST_CALLBACK_DATA.get("cost", 0.0),
-            "model_name": model_name,
-            "thinking_output": thinking
-        }
+            return {
+                "result": result,
+                "cost": completion_cost(response),
+                "model_name": model_id,
+                "thinking_output": thinking
+            }
 
-    except Exception as e:
-        logger.error(f"LLM Invoke failed: {e}")
-        # Logic for model fallback would go here
-        raise RuntimeError(f"All model candidates failed: {e}")
+        except Exception as e:
+            logger.warning(f"Model {model_info['model']} failed: {e}")
+            last_err = e
+            continue
+
+    raise RuntimeError(f"All model candidates failed. Last error: {last_err}")
 
 if __name__ == "__main__":
-    # Test call
-    res = llm_invoke(prompt="Say hello in {{language}}", input_json={"language": "Python"})
-    console.print(res)
+    # Example usage
+    load_dotenv()
+    setup_file_logging()
+    try:
+        out = llm_invoke(prompt="Say hello to {{name}}", input_json={"name": "World"}, verbose=True)
+        console.print(out)
+    except Exception as exc:
+        console.print(f"[red]Error: {exc}[/red]")
