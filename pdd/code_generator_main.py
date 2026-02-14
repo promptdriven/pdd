@@ -792,7 +792,7 @@ def code_generator_main(
                     current_execution_is_local = True
 
                 if jwt_token and not current_execution_is_local:
-                    payload = {"promptContent": processed_prompt_for_cloud, "language": language, "strength": strength, "temperature": temperature, "verbose": verbose}
+                    payload = {"promptContent": processed_prompt_for_cloud, "searchInput": prompt_content, "language": language, "strength": strength, "temperature": temperature, "verbose": verbose}
                     headers = {"Authorization": f"Bearer {jwt_token}", "Content-Type": "application/json"}
                     cloud_url = CloudConfig.get_endpoint_url("generateCode")
                     try:

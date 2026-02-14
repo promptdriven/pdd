@@ -46,6 +46,7 @@ You are working on step 3 of 9 in an agentic e2e fix workflow. E2e tests are fai
    - **CODE_BUG**: Code behavior doesn't match documented/expected behavior
    - **TEST_BUG**: Test expectations don't match documented/expected behavior
    - **BOTH**: Both code and tests have issues
+   - **NOT_A_BUG**: The reported issue is not actually a bug (e.g., expected behavior, user error, or feature request). The workflow should stop here.
    - **UNCLEAR**: Need more investigation
 
 % Output
@@ -61,7 +62,7 @@ Your comment should follow this format:
 ```markdown
 ## Step 3: Root Cause Analysis (Cycle {cycle_number})
 
-**Status:** [CODE_BUG | TEST_BUG | BOTH | UNCLEAR]
+**Status:** [CODE_BUG | TEST_BUG | BOTH | NOT_A_BUG | UNCLEAR]
 
 ### Failure Analysis
 
@@ -77,9 +78,10 @@ Your comment should follow this format:
 [If CODE_BUG: Which dev units need fixing]
 [If TEST_BUG: Which test assertions need updating]
 [If BOTH: Both fixes needed]
+[If NOT_A_BUG: Explain why this is not a bug and the workflow should stop]
 
 ---
-*Proceeding to Step 4: Fix E2E Tests (if needed)*
+*If status is NOT_A_BUG: workflow complete, stopping here. Otherwise: proceeding to Step 4 – Fix E2E Tests (if needed).*
 ```
 
 % Important

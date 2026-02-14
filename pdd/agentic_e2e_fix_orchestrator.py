@@ -196,6 +196,23 @@ def _get_file_hashes(cwd: Path) -> Dict[str, Optional[str]]:
     return hashes
 
 
+def _detect_changed_files(cwd: Path, initial_file_hashes: Dict[str, Optional[str]]) -> List[str]:
+    """Detects files actually changed during the workflow using hash comparison.
+
+    Compares current file hashes against the snapshot taken before the workflow
+    started to find files that were created or modified on disk, regardless of
+    whether the LLM output included FILES_MODIFIED/FILES_CREATED markers.
+    """
+    current_hashes = _get_file_hashes(cwd)
+    changed: List[str] = []
+    for filepath, current_hash in current_hashes.items():
+        if filepath not in initial_file_hashes:
+            changed.append(filepath)
+        elif initial_file_hashes[filepath] != current_hash:
+            changed.append(filepath)
+    return changed
+
+
 def _has_unpushed_commits(cwd: Path) -> bool:
     """Check if there are commits ahead of the remote tracking branch."""
     result = subprocess.run(
@@ -501,11 +518,18 @@ def run_agentic_e2e_fix_orchestrator(
                 if new_gh_id:
                     github_comment_id = new_gh_id
 
-                # Check Early Exit (Step 2)
+                # Check Early Exit (Step 2): ALL_TESTS_PASS
                 if step_num == 2 and "ALL_TESTS_PASS" in step_output:
                     console.print("[green]ALL_TESTS_PASS detected in Step 2. Exiting loop.[/green]")
                     success = True
                     final_message = "All tests passed during e2e check."
+                    break
+
+                # Check Early Exit (Step 3): NOT_A_BUG
+                if step_num == 3 and "NOT_A_BUG" in step_output:
+                    console.print("[yellow]NOT_A_BUG detected in Step 3. Issue is not a bug, stopping workflow.[/yellow]")
+                    success = False
+                    final_message = "Issue determined to be not a bug."
                     break
 
                 # Check Loop Control (Step 9)
@@ -520,7 +544,12 @@ def run_agentic_e2e_fix_orchestrator(
                     elif "CONTINUE_CYCLE" not in step_output:
                         console.print("[yellow]Warning: No loop control token found in Step 9. Defaulting to CONTINUE_CYCLE.[/yellow]")
 
+            # Check if we should exit the outer loop
             if success:
+                break
+            
+            # Check if NOT_A_BUG was detected (exit outer loop too)
+            if step_num == 3 and "NOT_A_BUG" in step_outputs.get("3", ""):
                 break
             
             # Prepare for next cycle
@@ -540,6 +569,14 @@ def run_agentic_e2e_fix_orchestrator(
 
         if success:
             clear_workflow_state(cwd, issue_number, workflow_name, state_dir, repo_owner, repo_name, use_github_state)
+
+            # Detect actual file changes via hash comparison (not LLM output parsing)
+            # This fixes issue #355: summary showing empty "Files changed" despite
+            # real modifications, especially on early exit at Step 2.
+            actual_changed_files = _detect_changed_files(cwd, initial_file_hashes)
+            if actual_changed_files:
+                changed_files = actual_changed_files
+
             console.print("\n[bold green]E2E fix complete[/bold green]")
             console.print(f"   Total cost: ${total_cost:.4f}")
             console.print(f"   Cycles used: {current_cycle if current_cycle <= max_cycles else max_cycles}/{max_cycles}")
@@ -562,11 +599,16 @@ def run_agentic_e2e_fix_orchestrator(
 
             return True, final_message, total_cost, model_used, changed_files
         else:
-            final_message = f"Max cycles ({max_cycles}) reached without all tests passing"
-            console.print("\n[bold red]E2E fix incomplete (max cycles reached)[/bold red]")
+            if not final_message:
+                final_message = f"Max cycles ({max_cycles}) reached without all tests passing"
+            if "not a bug" in final_message.lower():
+                console.print(f"\n[bold yellow]E2E fix stopped: not a bug[/bold yellow]")
+            else:
+                console.print(f"\n[bold red]E2E fix incomplete[/bold red]")
             console.print(f"   Total cost: ${total_cost:.4f}")
             remaining = [u for u, s in dev_unit_states.items() if not s.get("fixed")]
-            console.print(f"   Remaining failures: {', '.join(remaining)}")
+            if remaining:
+                console.print(f"   Remaining failures: {', '.join(remaining)}")
             return False, final_message, total_cost, model_used, changed_files
 
     except KeyboardInterrupt:
