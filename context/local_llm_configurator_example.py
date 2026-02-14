@@ -14,38 +14,29 @@ def main() -> None:
     """
     Demonstrates how to use the local_llm_configurator module to:
     1. Configure Ollama with auto-detection of installed models
-    2. Configure LM Studio with custom port
+    2. Configure LM Studio with default base URL
     3. Add custom local LLM endpoints
     """
 
-    print("Local LLM Configuration Example\n")
+    # Run the interactive configuration
+    # was_added = configure_local_llm()  # Uncomment to run interactively
 
-    print("This would present an interactive menu:")
-    print()
-    print("What tool are you using?")
-    print("  1. LM Studio (default: localhost:1234)")
-    print("  2. Ollama (default: localhost:11434)")
-    print("  3. Other (custom base URL)")
-    print("  Choice: 2")
-    print()
-    print("Querying Ollama at http://localhost:11434...")
-    print("Found installed models:")
-    print("  1. llama3:70b")
-    print("  2. codellama:34b")
-    print("  3. mistral:7b")
-    print()
-    print("Which models do you want to add? [1,2,3]: 1,2")
-    print("✓ Added ollama_chat/llama3:70b and ollama_chat/codellama:34b to llm_model.csv")
-
-    # Run the actual configuration
-    # configure_local_llm()  # Uncomment to run interactively
-
-    print("\n\nKey Features:")
-    print("  • Ollama auto-detection: Queries API for installed models")
-    print("  • LM Studio defaults: Pre-filled localhost:1234 base URL")
-    print("  • Custom endpoints: Support for any LiteLLM-compatible provider")
-    print("  • Multiple models: Add several models in one session")
-    print("  • Zero cost: Local models set to $0.0001 or $0 costs")
+    # Example flow for Ollama:
+    #   What tool are you using?
+    #     1. LM Studio (default: localhost:1234)
+    #     2. Ollama (default: localhost:11434)
+    #     3. Other (custom base URL)
+    #   Choice: 2
+    #
+    #   Querying Ollama at http://localhost:11434...
+    #   Found installed models:
+    #     1. llama3:70b
+    #     2. codellama:34b
+    #     3. mistral:7b
+    #
+    #   Which models do you want to add? [1,2,3]: 1,2
+    #   ✓ Added ollama_chat/llama3:70b and ollama_chat/codellama:34b to llm_model.csv
+    pass
 
 
 if __name__ == "__main__":

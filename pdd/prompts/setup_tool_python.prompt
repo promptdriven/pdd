@@ -1,4 +1,4 @@
-<pdd-reason>Orchestrates comprehensive PDD setup: API key scanning, provider management, and configuration.</pdd-reason>
+<pdd-reason>Orchestrates pdd setup: environment scanning, provider management, model testing, CLI detection, and configuration.</pdd-reason>
 
 <pdd-interface>
 {
@@ -12,78 +12,62 @@
 </pdd-interface>
 
 <pdd-dependency>api_key_scanner_python.prompt</pdd-dependency>
-<pdd-dependency>api_key_validator_python.prompt</pdd-dependency>
 <pdd-dependency>provider_manager_python.prompt</pdd-dependency>
-<pdd-dependency>model_selector_python.prompt</pdd-dependency>
 <pdd-dependency>local_llm_configurator_python.prompt</pdd-dependency>
+<pdd-dependency>model_tester_python.prompt</pdd-dependency>
+<pdd-dependency>cli_detector_python.prompt</pdd-dependency>
 <pdd-dependency>pddrc_initializer_python.prompt</pdd-dependency>
 
 % You are an expert Python engineer. Your goal is to write the pdd/setup/setup_tool.py module.
 
 % Role & Scope
-This module is the main orchestrator for the comprehensive `pdd setup` command. It scans the environment for API keys, presents an interactive menu, and coordinates with helper modules to guide users through PDD configuration including API key management, local LLM setup, custom providers, model selection, and .pddrc initialization.
+Main orchestrator for `pdd setup`. Auto-scans the environment for API keys (existence only — no API calls), then presents an interactive menu. After any action, the menu re-displays with an updated scan.
 
 % Requirements
-1. Function: `run_setup()` - Main entry point that orchestrates the entire setup flow
-2. Environment scanning: Auto-detect all API keys from CSV providers, check all sources (.env, shell environment, ~/.pdd/api-env.*)
-3. Interactive menu: Present 5 options after scan (Add/fix keys, Add local LLM, Add custom provider, Remove provider, Continue)
-4. Menu loop: After options 1-4, re-scan and show updated menu; option 5 proceeds to model selection
-5. Delegate to modules: Use api_key_scanner for discovery, api_key_validator for testing, provider_manager for add/remove, model_selector for tier selection
-6. Model selection flow: After menu (option 5), call model_selector for interactive tier selection with cost guidance
-7. CLI harness detection: After model selection, detect agentic CLI tools (claude, gemini, codex) and offer installation
-8. .pddrc initialization: Offer to create .pddrc if none exists in current directory
-9. Smart key storage: Save newly entered keys to ~/.pdd/api-env.{{shell}}, skip keys already in environment
-10. Output clarity: Use rich Console for formatted output, show ✓/✗ status, display key sources transparently
+1. Function: `run_setup()` — main entry point
+2. On entry, call `api_key_scanner.scan_environment()` and display each key with `✓ Found (source)` or `— Not found`, plus a summary line: `Models configured: N (from M API keys + K local)`
+3. Present a 6-option menu after the scan:
+   1. Add a provider (sub-menu: a. Enter an API key, b. Add a local LLM, c. Add a custom provider)
+   2. Remove models (sub-menu: a. By provider, b. Individual models)
+   3. Test a model
+   4. Detect CLI tools
+   5. Initialize .pddrc
+   6. Done
+4. Delegate to: `provider_manager.add_api_key`, `local_llm_configurator.configure_local_llm`, `provider_manager.add_custom_provider`, `provider_manager.remove_models_by_provider`, `provider_manager.remove_individual_models`, `model_tester.test_model_interactive`, `cli_detector.detect_cli_tools`, `pddrc_initializer.offer_pddrc_init`
+5. After options 1–5, re-scan and re-display the menu
+6. Option 6 exits the loop
+7. Handle KeyboardInterrupt for clean exit at any point
 
 % Dependencies
 <api_key_scanner_example>
   <include>context/api_key_scanner_example.py</include>
 </api_key_scanner_example>
 
-<api_key_validator_example>
-  <include>context/api_key_validator_example.py</include>
-</api_key_validator_example>
-
 <provider_manager_example>
   <include>context/provider_manager_example.py</include>
 </provider_manager_example>
-
-<model_selector_example>
-  <include>context/model_selector_example.py</include>
-</model_selector_example>
 
 <local_llm_configurator_example>
   <include>context/local_llm_configurator_example.py</include>
 </local_llm_configurator_example>
 
+<model_tester_example>
+  <include>context/model_tester_example.py</include>
+</model_tester_example>
+
+<cli_detector_example>
+  <include>context/cli_detector_example.py</include>
+</cli_detector_example>
+
 <pddrc_initializer_example>
   <include>context/pddrc_initializer_example.py</include>
 </pddrc_initializer_example>
 
-<agentic_common_example>
-  <include>context/agentic_common_example.py</include>
-</agentic_common_example>
-
 <llm_model_csv_schema>
-The CSV at $PDD_PATH/data/llm_model.csv has columns:
+The CSV at pdd/data/llm_model.csv has columns:
 provider,model,input,output,coding_arena_elo,base_url,api_key,max_reasoning_tokens,structured_output,reasoning_type,location
-
-Key field: api_key (e.g., "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "VERTEX_CREDENTIALS", "FIREWORKS_API_KEY", "GROQ_API_KEY")
-
-Note: At runtime, the CSV is located at pdd/data/llm_model.csv relative to the installed package.
+The user-level CSV is at ~/.pdd/llm_model.csv.
 </llm_model_csv_schema>
 
-% Instructions
-- Use rich.console.Console for all interactive prompts and status display
-- Preserve the overall flow of the existing setup_tool.py but reorganize to use the new modular architecture
-- For key validation, delegate to api_key_validator.validate_key() instead of HTTP requests
-- For menu option handlers, delegate to respective modules (provider_manager, local_llm_configurator, etc.)
-- Display scan results with ✓ Valid (source), ✗ Invalid (source), — Not found format
-- After any menu action (1-4), call api_key_scanner.scan_environment() again to refresh the display
-- Implement simple input() prompts for menu selection (1-5)
-- Handle Ctrl+C gracefully, allow exit at any point
-
 % Deliverables
-- A Python module located at `pdd/setup/setup_tool.py`.
-- The module must export the following symbol:
-  - `run_setup`: The main entry point that orchestrates the entire setup flow.
+- Module at `pdd/setup/setup_tool.py` exporting `run_setup`.

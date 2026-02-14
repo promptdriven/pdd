@@ -1,0 +1,37 @@
+<pdd-reason>Tests individual models via litellm.completion() with direct API key passing and diagnostics.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "test_model_interactive", "signature": "() -> None", "returns": "None"}
+    ]
+  }
+}
+</pdd-interface>
+
+% You are an expert Python engineer. Your goal is to write the pdd/setup/model_tester.py module.
+
+% Role & Scope
+Tests a single configured model by making one `litellm.completion()` call with a minimal prompt. Only runs when the user explicitly chooses it — no surprise API costs. Uses `litellm.completion()` directly (not `llm_invoke`) because `llm_invoke` doesn't allow choosing a specific model or key.
+
+% Requirements
+1. Function: `test_model_interactive()` — show models from `~/.pdd/llm_model.csv`, let user pick one, test it, loop until user exits (empty input or "q")
+2. Test call: `litellm.completion(model=..., messages=[{"role": "user", "content": "Say OK"}], api_key=..., api_base=..., timeout=30)`
+3. Before calling, show diagnostics: API key status (`✓ Found (source)` / `✗ Not found` / `(local — no key required)`) and base URL if applicable
+4. After calling, show: `LLM call  ✓ OK (0.3s, $0.0001)` or `LLM call  ✗ error description`
+5. Calculate cost from token usage × CSV row's input/output prices per 1M tokens
+6. Persist test results in the model list display across picks within a session
+7. Distinguish errors: authentication, connection refused (local), model not found, timeout
+8. For local models (empty api_key): pass api_base, omit api_key
+9. If no user CSV exists or is empty, inform user and return
+
+% Dependencies
+<llm_model_csv_schema>
+The user's CSV at ~/.pdd/llm_model.csv has columns:
+provider,model,input,output,coding_arena_elo,base_url,api_key,max_reasoning_tokens,structured_output,reasoning_type,location
+</llm_model_csv_schema>
+
+% Deliverables
+- Module at `pdd/setup/model_tester.py` exporting `test_model_interactive`.

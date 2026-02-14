@@ -7,34 +7,35 @@ from pathlib import Path
 project_root = Path(__file__).resolve().parent.parent
 sys.path.append(str(project_root))
 
-from pdd.setup.api_key_scanner import scan_environment, KeyInfo
+from pdd.setup.api_key_scanner import scan_environment, get_provider_key_names, KeyInfo
 
 
 def main() -> None:
     """
     Demonstrates how to use the api_key_scanner module to:
-    1. Dynamically discover all API keys from llm_model.csv
-    2. Check multiple sources (shell env, .env file, ~/.pdd/api-env.*)
-    3. Get transparency about where each key is loaded from
+    1. Discover all API key variable names from llm_model.csv
+    2. Scan multiple sources (shell env, .env file, ~/.pdd/api-env.*)
+    3. Report existence and source without storing key values
     """
 
-    print("Scanning environment for API keys...\n")
+    # Get all provider key names from the master CSV
+    all_keys = get_provider_key_names()
+    print(f"Provider key names from CSV: {all_keys}\n")
 
-    # Scan the environment for all API keys defined in llm_model.csv
+    # Scan the environment for all API keys
+    print("Scanning environment for API keys...\n")
     scan_results = scan_environment()
 
-    # Display results
+    # Display results — note: KeyInfo only has source and is_set, no value
     for key_name, key_info in scan_results.items():
-        status = "✓ Set" if key_info.is_set else "✗ Not set"
-        source = f"({key_info.source})" if key_info.is_set else ""
-        masked_value = key_info.value if key_info.is_set else "—"
-
-        print(f"  {key_name:25s} {status:12s} {source:30s}")
         if key_info.is_set:
-            print(f"    Value: {masked_value}")
+            print(f"  {key_name:25s} ✓ Found  ({key_info.source})")
+        else:
+            print(f"  {key_name:25s} — Not found")
 
-    print(f"\nTotal keys found: {len([k for k in scan_results.values() if k.is_set])}")
-    print(f"Total keys missing: {len([k for k in scan_results.values() if not k.is_set])}")
+    found = sum(1 for k in scan_results.values() if k.is_set)
+    missing = sum(1 for k in scan_results.values() if not k.is_set)
+    print(f"\nFound: {found}  Missing: {missing}")
 
 
 if __name__ == "__main__":

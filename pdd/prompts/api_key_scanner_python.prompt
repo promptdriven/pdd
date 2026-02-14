@@ -1,11 +1,12 @@
-<pdd-reason>Dynamically discovers API keys from CSV, shell, .env, and PDD config files with source transparency.</pdd-reason>
+<pdd-reason>Discovers API keys from CSV providers, checking existence across shell, .env, and PDD config with source transparency.</pdd-reason>
 
 <pdd-interface>
 {
   "type": "module",
   "module": {
     "functions": [
-      {"name": "scan_environment", "signature": "() -> Dict[str, KeyInfo]", "returns": "Dict[str, KeyInfo]"}
+      {"name": "scan_environment", "signature": "() -> Dict[str, KeyInfo]", "returns": "Dict[str, KeyInfo]"},
+      {"name": "get_provider_key_names", "signature": "() -> List[str]", "returns": "List[str]"}
     ]
   }
 }
@@ -14,57 +15,24 @@
 % You are an expert Python engineer. Your goal is to write the pdd/setup/api_key_scanner.py module.
 
 % Role & Scope
-This module dynamically discovers API keys from all sources and determines their availability. It reads llm_model.csv to find all unique API key environment variable names, then checks shell environment, .env files, and ~/.pdd/api-env.* files to determine which keys are present and where they come from.
+Dynamically discovers API keys from all sources and reports their existence. Reads pdd/data/llm_model.csv to find all unique API key environment variable names, then checks .env files, shell environment, and ~/.pdd/api-env.* files. Only checks **existence** — never makes API calls or stores key values.
 
 % Requirements
-1. Function: `scan_environment() -> Dict[str, KeyInfo]` - Returns mapping of key name to KeyInfo (value, source, is_set)
-2. Dynamic provider discovery: Read pdd/data/llm_model.csv, extract all unique api_key column values
-3. Multi-source detection: Check shell environment (os.environ), .env file (if exists), ~/.pdd/api-env.* files
-4. Source transparency: For each key found, record whether it came from "shell environment", ".env file", or "~/.pdd/api-env.zsh"
-5. Priority handling: If key exists in multiple sources, record the effective source based on loading order (shell overrides .env)
-6. CSV parsing: Use csv.DictReader to read llm_model.csv, handle missing or malformed data gracefully
-7. .env loading: Use python-dotenv's load_dotenv to read .env, compare os.environ before/after to determine source
-8. Shell detection: Detect user's shell (zsh, bash) from SHELL environment variable to check correct api-env file
-9. KeyInfo structure: Return namedtuple or dataclass with fields: value (str), source (str), is_set (bool)
-10. Performance: Cache CSV reading, don't re-parse on every call unless file changes
+1. Function: `scan_environment() -> Dict[str, KeyInfo]` — returns mapping of key name to KeyInfo(source, is_set). Does not store key values.
+2. Function: `get_provider_key_names() -> List[str]` — returns deduplicated sorted list of all non-empty api_key values from the master CSV
+3. Dynamic discovery: extract all unique api_key column values from pdd/data/llm_model.csv — no hardcoded provider list
+4. Check sources in priority order: .env file (via python-dotenv `dotenv_values`, read-only), shell environment (`os.environ`), ~/.pdd/api-env.{shell} (parse uncommented `export KEY=` lines)
+5. KeyInfo: dataclass with fields `source` (str) and `is_set` (bool). Report source as "shell environment", ".env file", or "~/.pdd/api-env.zsh" (etc.)
+6. Detect shell from SHELL env var for correct api-env file
+7. Never raise exceptions — return best-effort results with logging for errors
+8. Handle missing/malformed CSV gracefully (return empty dict)
 
 % Dependencies
 <llm_model_csv_schema>
 The CSV at pdd/data/llm_model.csv has columns:
 provider,model,input,output,coding_arena_elo,base_url,api_key,max_reasoning_tokens,structured_output,reasoning_type,location
-
-Key field: api_key (e.g., "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "VERTEX_CREDENTIALS", "FIREWORKS_API_KEY", "GROQ_API_KEY")
+Rows with empty api_key are local LLMs (no key needed).
 </llm_model_csv_schema>
 
-<dotenv_example>
-# Standard usage of python-dotenv
-from dotenv import load_dotenv
-import os
-
-# Capture state before loading .env
-before_env = set(os.environ.keys())
-
-# Load .env file (doesn't override existing environment variables by default)
-load_dotenv(dotenv_path=".env", override=False)
-
-# Capture state after loading .env
-after_env = set(os.environ.keys())
-
-# Keys that came from .env are those added during load
-env_file_keys = after_env - before_env
-</dotenv_example>
-
-% Instructions
-- Return a dictionary mapping key name (e.g., "ANTHROPIC_API_KEY") to KeyInfo
-- Use dataclass for KeyInfo with fields: value (masked), source, is_set
-- Mask key values in returned data (show first 8 chars + "..." + last 4 chars)
-- Handle case where CSV doesn't exist or is malformed (return empty dict)
-- For source determination: shell env takes precedence over .env per industry standard
-- Check ~/.pdd/api-env.zsh or ~/.pdd/api-env.bash depending on detected shell
-- Don't raise exceptions, return best-effort results with logging for errors
-
 % Deliverables
-- A Python module located at `pdd/setup/api_key_scanner.py`.
-- The module must export the following symbols:
-  - `scan_environment`: Scans all sources for API keys and returns their status.
-  - `KeyInfo`: A dataclass containing information about a discovered API key.
+- Module at `pdd/setup/api_key_scanner.py` exporting `scan_environment`, `get_provider_key_names`, and `KeyInfo`.

@@ -1,66 +1,45 @@
-<pdd-reason>Manages LLM providers: adding/fixing API keys, custom providers, and safe key removal.</pdd-reason>
+<pdd-reason>Manages LLM providers: adding API keys with auto-loaded models, custom providers, and model removal.</pdd-reason>
 
 <pdd-interface>
 {
   "type": "module",
   "module": {
     "functions": [
-      {"name": "add_or_fix_keys", "signature": "(scan_results: Dict[str, KeyInfo]) -> bool", "returns": "bool"},
+      {"name": "add_api_key", "signature": "(scan_results: Dict[str, KeyInfo]) -> bool", "returns": "bool"},
       {"name": "add_custom_provider", "signature": "() -> bool", "returns": "bool"},
-      {"name": "remove_provider", "signature": "(scan_results: Dict[str, KeyInfo]) -> bool", "returns": "bool"}
+      {"name": "remove_models_by_provider", "signature": "() -> bool", "returns": "bool"},
+      {"name": "remove_individual_models", "signature": "() -> bool", "returns": "bool"}
     ]
   }
 }
 </pdd-interface>
 
-<pdd-dependency>api_key_validator_python.prompt</pdd-dependency>
+<pdd-dependency>api_key_scanner_python.prompt</pdd-dependency>
 
 % You are an expert Python engineer. Your goal is to write the pdd/setup/provider_manager.py module.
 
 % Role & Scope
-This module handles adding, removing, and managing LLM providers in PDD setup. It supports adding/fixing API keys for existing providers, adding custom LiteLLM-compatible providers, and removing providers (commenting out keys and removing model rows from CSV).
+Handles adding and removing LLM providers and models in PDD setup. Supports entering API keys for known providers (auto-loading all their models), adding custom LiteLLM-compatible providers, and two modes of model removal.
 
 % Requirements
-1. Function: `add_or_fix_keys(scan_results: Dict[str, KeyInfo]) -> bool` - Prompt for missing/invalid keys, validate, and save
-2. Function: `add_custom_provider() -> bool` - Guide user through adding custom provider (provider prefix, model name, API key, base URL, costs)
-3. Function: `remove_provider(scan_results: Dict[str, KeyInfo]) -> bool` - Show configured providers, let user select one, comment out key and remove CSV rows
-4. Smart storage: Save newly entered keys to ~/.pdd/api-env.{{shell}}, skip keys already in shell or .env
-5. Key commenting: When removing, add comment with timestamp, don't delete (# Commented out by pdd setup on YYYY-MM-DD)
-6. CSV updates: For custom provider, append row to llm_model.csv; for removal, delete all rows with matching api_key field
-7. Atomic CSV writes: Use temp file + rename to prevent corruption on partial writes
-8. Shell detection: Determine shell from SHELL env var, write to correct api-env file (.zsh or .bash)
-9. Validation: After adding keys, call api_key_validator to test before saving
-10. Interactive prompts: Use input() for all user prompts, handle empty input as skip/cancel
+
+1. `add_api_key(scan_results)` — show missing keys from scan_results, prompt user for one, save to `~/.pdd/api-env.{shell}`, then copy ALL matching rows from master CSV (pdd/data/llm_model.csv) into user CSV (`~/.pdd/llm_model.csv`). No interactive model selection. If key already exists (replacing), update api-env only. If key name has no CSV rows, tell user to use "Add a custom provider" instead. Skip saving keys already in environment.
+2. `add_custom_provider()` — prompt for provider prefix, model name, API key env var, base URL (optional), costs (optional). Append row to user CSV with sensible defaults. Save API key to api-env if provided.
+3. `remove_models_by_provider()` — group user CSV models by api_key, show numbered list with counts, remove all rows for selected provider. Comment out (never delete) the key in api-env: `# Commented out by pdd setup on YYYY-MM-DD`.
+4. `remove_individual_models()` — list all models from user CSV, let user select by comma-separated numbers, remove selected rows.
+5. All CSV writes must be atomic (temp file + rename)
+6. Detect shell from SHELL env var for api-env file path
+7. Handle empty input as cancel/back
 
 % Dependencies
-<api_key_validator_example>
-  <include>context/api_key_validator_example.py</include>
-</api_key_validator_example>
+<api_key_scanner_example>
+  <include>context/api_key_scanner_example.py</include>
+</api_key_scanner_example>
 
 <llm_model_csv_schema>
-The CSV at pdd/data/llm_model.csv has columns:
+The master CSV at pdd/data/llm_model.csv and user CSV at ~/.pdd/llm_model.csv share columns:
 provider,model,input,output,coding_arena_elo,base_url,api_key,max_reasoning_tokens,structured_output,reasoning_type,location
-
-Example rows:
-- OpenAI,gpt-4o-mini,0.15,0.6,1249,,OPENAI_API_KEY,0,True,none,
-- Fireworks,fireworks_ai/accounts/fireworks/models/qwen3-coder-480b-a35b-instruct,0.45,1.80,1363,,FIREWORKS_API_KEY,0,False,none,
-- lm_studio,lm_studio/openai-gpt-oss-120b-mlx-6,0.0001,0,1082,http://localhost:1234/v1,,0,True,effort,
 </llm_model_csv_schema>
 
-% Instructions
-- For add_or_fix_keys: Only prompt for keys that are missing or invalid in scan_results
-- For each key to add: Prompt user, validate with api_key_validator, save only if valid
-- Determine storage location: If key already in environment (not from api-env file), don't save to avoid duplicates
-- For api-env file writes: Use shell-appropriate export format (export KEY="value")
-- For remove_provider: Show numbered list of providers with model counts, let user pick, confirm before removal
-- CSV atomic writes: Write to temp file, validate it's parseable, then rename over original
-- Handle missing ~/.pdd directory (create it with mkdir -p)
-- For custom provider: Use sensible defaults (structured_output=True, reasoning_type=none, location=empty)
-- Return bool indicating success/failure for each function
-
 % Deliverables
-- A Python module located at `pdd/setup/provider_manager.py`.
-- The module must export the following symbols:
-  - `add_or_fix_keys`: Prompts the user to add or fix missing/invalid API keys.
-  - `add_custom_provider`: Guides the user through adding a new custom provider.
-  - `remove_provider`: Interactively removes a configured provider.
+- Module at `pdd/setup/provider_manager.py` exporting `add_api_key`, `add_custom_provider`, `remove_models_by_provider`, `remove_individual_models`.

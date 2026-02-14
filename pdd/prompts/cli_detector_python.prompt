@@ -1,0 +1,41 @@
+<pdd-reason>Detects installed agentic CLI tools and offers installation guidance for missing ones.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "detect_cli_tools", "signature": "() -> None", "returns": "None"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>agentic_common_python.prompt</pdd-dependency>
+
+% You are an expert Python engineer. Your goal is to write the pdd/setup/cli_detector.py module.
+
+% Role & Scope
+Detects installed agentic CLI harnesses (Claude CLI, Codex CLI, Gemini CLI) required for `pdd fix`, `pdd change`, and `pdd bug`. Leverages `get_available_agents()` from `pdd.agentic_common` and cross-references with API keys to suggest installations.
+
+% Requirements
+1. Function: `detect_cli_tools()` — check for CLI tools, display results, offer installation
+2. For each CLI (claude, codex, gemini): show `✓ Found at /path` or `✗ Not found`
+3. Cross-reference with API keys: if user has OPENAI_API_KEY but not codex CLI, highlight and suggest `npm install -g @openai/codex`
+4. Offer `Install now? [y/N]` for missing CLIs that have a matching API key; run via subprocess if accepted
+5. Show context: `(Required for: pdd fix, pdd change, pdd bug)`
+6. Handle npm not being installed (suggest manual installation)
+
+% Dependencies
+<agentic_common_example>
+  <include>context/agentic_common_example.py</include>
+</agentic_common_example>
+
+<agentic_common_api>
+from pdd.agentic_common import get_available_agents, CLI_COMMANDS
+# CLI_COMMANDS: {"anthropic": "claude", "google": "gemini", "openai": "codex"}
+# get_available_agents() checks CLI existence + API key availability
+</agentic_common_api>
+
+% Deliverables
+- Module at `pdd/setup/cli_detector.py` exporting `detect_cli_tools`.

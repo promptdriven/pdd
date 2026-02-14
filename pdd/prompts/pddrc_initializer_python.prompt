@@ -1,4 +1,4 @@
-<pdd-reason>Creates .pddrc configuration files with language-aware defaults and project detection.</pdd-reason>
+<pdd-reason>Creates .pddrc configuration files with sensible defaults for the current project directory.</pdd-reason>
 
 <pdd-interface>
 {
@@ -14,23 +14,19 @@
 % You are an expert Python engineer. Your goal is to write the pdd/setup/pddrc_initializer.py module.
 
 % Role & Scope
-This module offers to create a basic .pddrc configuration file in the current project directory if one doesn't exist. It sets sensible defaults for output paths, language, and strength/temperature based on detected project type.
+Offers to create a basic `.pddrc` configuration file in the current project directory if one doesn't exist. Sets sensible defaults based on detected project type.
 
 % Requirements
-1. Function: `offer_pddrc_init() -> bool` - Check if .pddrc exists, offer to create with defaults
-2. Existence check: Look for .pddrc in current working directory (os.getcwd())
-3. Language detection: Detect project type (Python if setup.py/pyproject.toml, TypeScript if package.json with typescript dep, else ask user)
-4. Default paths: Set generate_output_path, test_output_path, example_output_path based on language (Python: pdd/, tests/, context/ | TypeScript: src/, __tests__/, examples/)
-5. Strength defaults: Set strength=1.0, temperature=0.0, target_coverage=80.0 as sensible defaults
-6. Interactive prompt: Ask "Would you like to create one with default settings? [Y/n]" before creating
-7. File format: Write YAML format matching .pddrc specification (version, contexts, defaults)
-8. Show preview: Display the default settings before creating (language, output paths)
-9. Skip if exists: Don't overwrite existing .pddrc, just inform user it already exists
-10. Return bool: Indicate whether file was created
+1. Function: `offer_pddrc_init() -> bool` — returns True if file was created, False otherwise
+2. If .pddrc exists in cwd: inform user and return False
+3. If no .pddrc: show preview of defaults, prompt `Create .pddrc? [Y/n]` (Enter = yes)
+4. Language detection: Python (setup.py/pyproject.toml), TypeScript (package.json with typescript dep), Go (go.mod). Prompt user if unclear.
+5. Path defaults by language: Python: pdd/, tests/, context/ | TypeScript: src/, __tests__/, examples/ | Go: ., ., examples/
+6. Standard defaults: strength=1.0, temperature=0.0, target_coverage=80.0, budget=10.0, max_attempts=3
+7. Write YAML format matching .pddrc specification
 
 % Dependencies
 <pddrc_example>
-# Example .pddrc file structure
 version: "1.0"
 
 contexts:
@@ -47,18 +43,5 @@ contexts:
       max_attempts: 3
 </pddrc_example>
 
-% Instructions
-- Check for project indicators: setup.py, pyproject.toml (Python), package.json (TypeScript/JavaScript), go.mod (Go), etc.
-- If language unclear, prompt user: "What is your primary language? (python/typescript/go/etc.)"
-- Map language to conventional paths:
-  - Python: generate="pdd/", test="tests/", example="context/"
-  - TypeScript: generate="src/", test="__tests__/", example="examples/"
-  - Go: generate=".", test=".", example="examples/"
-- Use YAML format for .pddrc file (preserve comments for user guidance)
-- After creation, print success message: "✓ Created .pddrc with default settings"
-- If .pddrc already exists, print: "Found existing .pddrc - skipping initialization"
-
 % Deliverables
-- A Python module located at `pdd/setup/pddrc_initializer.py`.
-- The module must export the following symbol:
-  - `offer_pddrc_init`: Checks for an existing `.pddrc` and offers to create one with default settings.
+- Module at `pdd/setup/pddrc_initializer.py` exporting `offer_pddrc_init`.
