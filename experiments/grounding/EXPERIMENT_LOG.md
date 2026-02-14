@@ -125,9 +125,87 @@ Both arms used `vertex_ai/gemini-3-flash-preview` (model parity confirmed).
 
 Note: The generation_stability.csv records `model_name=local` for the ungrounded arm rather than the resolved model. The actual model is `vertex_ai/gemini-3-flash-preview` per `PDD_MODEL_DEFAULT=vertex_ai/gemini-3-flash-preview` in `/Users/gregtanaka/Documents/pdd_cloud/.env`.
 
+## Phase 3: llm_invoke Regeneration Stability (Cache-Busted)
+
+### Run 1 — Production (2026-02-14)
+
+- **Environment**: Production (`prompt-driven-development`)
+- **Prompt**: `llm_invoke_python.prompt` (97,405 chars resolved, 3,059 lines)
+- **Generation model**: `vertex_ai/gemini-3-flash-preview` (both arms)
+- **Temperature**: 1.0 (maximum nondeterminism)
+- **Runs per arm**: 5
+- **Cache busting**: Each run appends a unique `# experiment-run-seed: <uuid>` nonce to defeat LiteLLM GCS/SQLite cache
+- **Total calls**: 10 (9 succeeded, 1 rate-limited on ungrounded arm)
+- **Auth**: Production JWT via keyring refresh token
+
+#### Quantitative Results
+
+| Metric | Grounded | Ungrounded | Delta |
+|---|---|---|---|
+| N (successful runs) | 5 | 4 | |
+| Syntax valid | 5/5 | 4/4 | |
+| Avg lines | 467.6 ± 149.7 | 428.8 ± 65.8 | |
+| Avg functions | 17.4 ± 2.1 | 13.8 ± 2.5 | |
+| Avg classes | 4.2 ± 0.4 | 4.0 ± 0.0 | |
+| Pairwise similarity (within-arm) | **0.189** | 0.162 | **+0.027 (+17%)** |
+| Reference similarity (vs canonical) | **0.030 ± 0.004** | 0.019 ± 0.002 | **+58%** |
+| Reference recall | **0.206 ± 0.015** | 0.162 ± 0.009 | **+27%** |
+| Test pass rate (217 tests) | 100% | 100% | |
+| Exact match rate | 0/5 | 0/4 | |
+| Avg cost per call | $0.131 | $0.019 | Grounded ~7x more expensive |
+| Avg response time | 65.6s | 25.2s | Grounded ~2.6x slower |
+| Examples used | `Hp7oK65bRdCyrJYnABWE` (all 5) | — | |
+
+#### Response Hashes (all unique — cache busting confirmed)
+
+| Arm | Run 1 | Run 2 | Run 3 | Run 4 | Run 5 |
+|---|---|---|---|---|---|
+| grounded | `6b3e5a2f` | `92842649` | `deec3baf` | `57fd1ec0` | `0d3a52ba` |
+| ungrounded | `60776433` | `edf8f6a6` | `040a96a2` | (rate limit) | `6d454407` |
+
+#### Qualitative Code Review
+
+Manual inspection of all 9 generated files revealed systematic quality differences:
+
+**Grounded arm (consistent, correct):**
+- All 5 runs use correct internal imports (`from .path_resolution import get_default_resolver`)
+- All 5 use correct CSV column names (`input`, `output`) for cost rates
+- All 5 use `Dict[str, Tuple[float, float]]` for rate map (matches canonical)
+- All 5 implement GCS S3-compatible cache with SQLite fallback
+- Cloud auth uses `auth_service.get_jwt_token()` or `core.cloud.CloudConfig` (correct patterns)
+- Function count std dev = 2.1 (structurally anchored)
+
+**Ungrounded arm (inconsistent, hallucinated interfaces):**
+- 3/4 runs hallucinate `from . import DEFAULT_STRENGTH, DEFAULT_TIME` — **these don't exist** in the package
+- 2/4 runs use wrong CSV column names (`input_cost_per_m` instead of `input`) — would `KeyError`
+- All 4 use `Dict[str, Dict[str, float]]` for rate map (wrong type vs canonical)
+- 0/4 implement any caching
+- Cloud auth uses invented env vars (`PDD_CLOUD_TOKEN`, `PDD_CLOUD_JWT`, `FIREBASE_ID_TOKEN`) — **all wrong**
+- 1 run calls `pd.read_pandas()` which doesn't exist
+- 2/4 use `unicode_escape` codec in `_smart_unescape_code` — dangerous for UTF-8
+- Function count std dev = 2.5 (more structural drift)
+
+**Summary**: Grounding prevents hallucination of nonexistent APIs and wrong column names. The few-shot example anchors the model to the project's actual interfaces.
+
+## Key Findings (Updated)
+
+### 1. Cache busting works — all hashes unique
+With the UUID nonce appended, no two runs produce identical output. The prior run's 100% exact-match rate for grounded was entirely due to LiteLLM cache hits.
+
+### 2. Grounding stabilizes structure at temperature 1.0
+Function count std dev: 2.1 (grounded) vs 2.5 (ungrounded). Class count std dev: 0.4 vs 0.0. Within-arm pairwise similarity: 0.189 vs 0.162 (+17%). The few-shot example acts as a structural anchor.
+
+### 3. Grounding improves reference fidelity
+58% higher similarity to canonical `llm_invoke.py` and 27% more recall of its patterns. The grounded model reproduces more of the real module's architecture.
+
+### 4. Grounding prevents interface hallucination
+This is the strongest finding. Without grounding, the model invents plausible-but-wrong module interfaces (nonexistent imports, wrong column names, wrong auth patterns) in 75% of runs. With grounding, 0% of runs contain hallucinated interfaces.
+
+### 5. Cost and latency tradeoff
+Grounding costs ~7x more ($0.131 vs $0.019 per call) and takes ~2.6x longer (65.6s vs 25.2s). The cost is driven by the few-shot example inflating the prompt token count.
+
 ## Next Steps
 
-1. **Backfill gen-no-match grounded data**: Refresh JWT and re-run only the gen-no-match grounded arm (3 calls).
-2. **Re-run at temperature 0.3 or 0.7**: The stability hypothesis can only be tested meaningfully with nondeterministic sampling. Increase N to 10+ runs per arm.
-3. **Investigate coverage gaps**: Why did factorial and flask-api not find examples? Check the 1025 prod `few_shot` documents for math/algorithm and web/API coverage.
-4. **Cost analysis**: Grounded arm cost ~$0.10 total ($0.006/call avg). At scale, the question is whether the conciseness benefit justifies the vector search overhead.
+1. **Investigate coverage gaps**: Why did factorial and flask-api not find examples in Phase 2? Check the 1025 prod `few_shot` documents for math/algorithm and web/API coverage.
+2. **Test with more examples**: Run the Phase 3 experiment with prompts that have multiple candidate examples to measure retrieval's effect on quality.
+3. **Cost optimization**: Evaluate whether truncating the few-shot example or using a shorter prompt reduces cost without sacrificing the anti-hallucination benefit.

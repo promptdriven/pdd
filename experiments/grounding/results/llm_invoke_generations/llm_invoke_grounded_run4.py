@@ -1,339 +1,715 @@
 from __future__ import annotations
 
 import os
+
 import re
-import ast
+
+import io
+
 import json
-import time as time_module
+
 import logging
+
+import platform
+
 import warnings
-import pandas as pd
-import litellm
-import requests
+
+import time as time_module
+
 import importlib.resources
+
 from pathlib import Path
-from typing import Optional, Dict, List, Any, Type, Union, Tuple
-from logging.handlers import RotatingFileHandler
+
+from typing import Any, Dict, List, Optional, Type, Union, Tuple
+
+
+
+import pandas as pd
+
+import litellm
+
+import requests
 
 from dotenv import load_dotenv
+
 from pydantic import BaseModel, ValidationError
+
 from rich.console import Console
 
-# Internal relative imports
+from litellm.caching.caching import Cache
+
+
+
 from .path_resolution import get_default_resolver
 
-# Constants and Global Variables
+
+
+# --- Constants ---
+
 LLM_CALL_TIMEOUT = 120
-_LAST_CALLBACK_DATA: Dict[str, Any] = {
-    "input_tokens": 0,
-    "output_tokens": 0,
-    "finish_reason": None,
-    "cost": 0.0,
-}
-_MODEL_RATE_MAP: Dict[str, Tuple[float, float]] = {}
+
+DEFAULT_LOG_LEVEL = os.getenv("PDD_LOG_LEVEL", "INFO")
+
+PRODUCTION_MODE = os.getenv("PDD_ENVIRONMENT") == "production"
+
+CONSOLE = Console()
+
+
 
 # --- Logging Configuration ---
+
 logger = logging.getLogger("pdd.llm_invoke")
+
 litellm_logger = logging.getLogger("litellm")
-console = Console()
 
-def setup_file_logging(log_file_path: Optional[str] = None) -> None:    
-    """Configure rotating file handler for logging."""
+
+
+if PRODUCTION_MODE:
+
+    logger.setLevel(logging.WARNING)
+
+    litellm_logger.setLevel(logging.WARNING)
+
+else:
+
+    logger.setLevel(getattr(logging, DEFAULT_LOG_LEVEL, logging.INFO))
+
+    litellm_logger.setLevel(logging.WARNING)
+
+
+
+litellm.set_verbose = False
+
+litellm.suppress_debug_info = True
+
+litellm.drop_params = os.getenv("LITELLM_DROP_PARAMS", "true").lower() in ("true", "1", "yes")
+
+
+
+def setup_file_logging(log_file_path: str | None = None) -> None:
+
     if not log_file_path:
+
         return
-    try:
-        handler = RotatingFileHandler(log_file_path, maxBytes=10*1024*1024, backupCount=5)
-        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
-        litellm_logger.addHandler(handler)
-    except Exception as e:
-        console.print(f"[red]Failed to set up file logging: {e}[/red]")
 
-def set_verbose_logging(verbose: bool = False) -> None:
-    """Toggle DEBUG level logging."""
-    level = logging.DEBUG if verbose or os.getenv("PDD_VERBOSE_LOGGING") == "1" else logging.INFO
+    from logging.handlers import RotatingFileHandler
+
+    handler = RotatingFileHandler(log_file_path, maxBytes=10*1024*1024, backupCount=5)
+
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+    handler.setFormatter(formatter)
+
+    logger.addHandler(handler)
+
+    litellm_logger.addHandler(handler)
+
+
+
+def set_verbose_logging(enabled: bool = False) -> None:
+
+    level = logging.DEBUG if (enabled or os.getenv("PDD_VERBOSE_LOGGING") == "1") else logging.INFO
+
     logger.setLevel(level)
-    if verbose:
-        litellm_logger.setLevel(logging.DEBUG)
+
+    if level == logging.DEBUG:
+
         litellm.set_verbose = True
-    else:
-        litellm_logger.setLevel(logging.WARNING)
-        litellm.set_verbose = False
 
-# Initial logging setup
-PDD_LOG_LEVEL = os.getenv("PDD_LOG_LEVEL", "INFO")
-logger.setLevel(getattr(logging, PDD_LOG_LEVEL))
-litellm_logger.setLevel(logging.WARNING if os.getenv("PDD_ENVIRONMENT") == "production" else logging.INFO)
-litellm.drop_params = os.getenv("LITELLM_DROP_PARAMS", "true").lower() == "true"
+        litellm.suppress_debug_info = False
 
-# --- Exceptions ---
 
-class SchemaValidationError(Exception):
-    """Triggers model fallback on structured output failure."""
-    def __init__(self, message: str, raw_response: Any = None):
-        super().__init__(message)
-        self.raw_response = raw_response
 
-class CloudFallbackError(Exception): pass
-class CloudInvocationError(Exception): pass
-class InsufficientCreditsError(Exception): pass
-
-# --- Path & Env Resolution ---
+# --- Path Resolution & Initialization ---
 
 resolver = get_default_resolver()
+
 PROJECT_ROOT = resolver.resolve_project_root()
-ENV_PATH = PROJECT_ROOT / ".env"
-if ENV_PATH.exists():
-    load_dotenv(dotenv_path=ENV_PATH)
 
-def resolve_model_csv() -> Path:
+
+
+def _resolve_csv_path() -> Path | None:
+
     candidates = [
-        Path.home() / ".pdd" / "llm_model.csv",
-        PROJECT_ROOT / ".pdd" / "llm_model.csv",
-        Path.cwd() / ".pdd" / "llm_model.csv"
-    ]
-    for c in candidates:
-        if c.is_file(): return c
-    return Path(str(importlib.resources.files("pdd.data").joinpath("llm_model.csv")))
 
-LLM_MODEL_CSV_PATH = resolve_model_csv()
+        Path.home() / ".pdd" / "llm_model.csv",
+
+        PROJECT_ROOT / ".pdd" / "llm_model.csv",
+
+        Path.cwd() / ".pdd" / "llm_model.csv"
+
+    ]
+
+    for c in candidates:
+
+        if c.is_file():
+
+            return c
+
+    return None
+
+
+
+LLM_MODEL_CSV_PATH = _resolve_csv_path()
+
+load_dotenv(PROJECT_ROOT / ".env")
+
 DEFAULT_BASE_MODEL = os.getenv("PDD_MODEL_DEFAULT")
 
-# --- LiteLLM Callbacks & Cache ---
+
+
+# --- Custom Exceptions ---
+
+class SchemaValidationError(Exception):
+
+    def __init__(self, message: str, raw_response: Any = None):
+
+        super().__init__(message)
+
+        self.raw_response = raw_response
+
+
+
+class CloudFallbackError(Exception): pass
+
+class CloudInvocationError(Exception): pass
+
+class InsufficientCreditsError(Exception): pass
+
+
+
+# --- Global State for Cost Tracking ---
+
+_LAST_CALLBACK_DATA: Dict[str, Any] = {"cost": 0.0, "input_tokens": 0, "output_tokens": 0}
+
+_MODEL_RATE_MAP: Dict[str, Tuple[float, float]] = {}
+
+
 
 def _litellm_success_callback(kwargs, completion_response, start_time, end_time):
+
     global _LAST_CALLBACK_DATA
-    usage = getattr(completion_response, 'usage', None)
-    _LAST_CALLBACK_DATA["input_tokens"] = getattr(usage, 'prompt_tokens', 0)
-    _LAST_CALLBACK_DATA["output_tokens"] = getattr(usage, 'completion_tokens', 0)
-    _LAST_CALLBACK_DATA["finish_reason"] = completion_response.choices[0].finish_reason
+
     try:
-        _LAST_CALLBACK_DATA["cost"] = litellm.completion_cost(completion_response=completion_response) or 0.0
-    except Exception:
+
+        cost = litellm.completion_cost(completion_response=completion_response) or 0.0
+
+    except:
+
         model = kwargs.get("model", "")
+
+        usage = completion_response.usage
+
         rates = _MODEL_RATE_MAP.get(model, (0.0, 0.0))
-        _LAST_CALLBACK_DATA["cost"] = (_LAST_CALLBACK_DATA["input_tokens"] * rates[0] + 
-                                       _LAST_CALLBACK_DATA["output_tokens"] * rates[1]) / 1_000_000
+
+        cost = (usage.prompt_tokens * rates[0] + usage.completion_tokens * rates[1]) / 1_000_000
+
+    
+
+    _LAST_CALLBACK_DATA = {
+
+        "cost": cost,
+
+        "input_tokens": completion_response.usage.prompt_tokens,
+
+        "output_tokens": completion_response.usage.completion_tokens,
+
+        "finish_reason": completion_response.choices[0].finish_reason
+
+    }
+
+
 
 litellm.success_callback = [_litellm_success_callback]
 
-# Cache Setup
-if os.getenv("LITELLM_CACHE_DISABLE") != "1":
-    try:
-        from litellm.caching import Cache
-        if os.getenv("GCS_HMAC_ACCESS_KEY_ID"):
-            litellm.cache = Cache(type="s3", s3_bucket_name=os.getenv("GCS_BUCKET_NAME"),
-                                  s3_region_name=os.getenv("GCS_REGION_NAME", "auto"),
-                                  s3_endpoint_url="https://storage.googleapis.com")
-        else:
-            litellm.cache = Cache(type="disk", disk_cache_dir=str(PROJECT_ROOT / "litellm_cache.sqlite"))
-    except Exception as e:
-        logger.warning(f"Cache init failed: {e}")
 
-# --- Logic Helpers ---
 
-def _ensure_all_properties_required(schema: dict) -> None:
+# --- Structured Output Helpers ---
+
+def _ensure_all_properties_required(schema: Dict[str, Any]) -> None:
+
     if not isinstance(schema, dict): return
+
     if schema.get("type") == "object" and "properties" in schema:
+
         schema["required"] = list(schema["properties"].keys())
-        for prop in schema["properties"].values():
-            _ensure_all_properties_required(prop)
+
+        for sub in schema["properties"].values():
+
+            _ensure_all_properties_required(sub)
+
+    if "items" in schema: _ensure_all_properties_required(schema["items"])
+
     for k in ("anyOf", "oneOf", "allOf"):
+
         if k in schema:
+
             for sub in schema[k]: _ensure_all_properties_required(sub)
-    if "$defs" in schema:
-        for d in schema["$defs"].values(): _ensure_all_properties_required(d)
 
-def _add_additional_properties_false(schema: dict) -> None:
+    if "$defs" in schema:
+
+        for sub in schema["$defs"].values(): _ensure_all_properties_required(sub)
+
+
+
+def _add_additional_properties_false(schema: Dict[str, Any]) -> None:
+
     if not isinstance(schema, dict): return
+
     if schema.get("type") == "object":
+
         schema["additionalProperties"] = False
+
         if "properties" in schema:
-            for p in schema["properties"].values(): _add_additional_properties_false(p)
-    # Recurse definitions
-    for sub in schema.get("anyOf", []) + schema.get("oneOf", []) + schema.get("allOf", []):
-        _add_additional_properties_false(sub)
-    if "$defs" in schema:
-        for d in schema["$defs"].values(): _add_additional_properties_false(d)
 
-def _sanitize_api_key(key: str) -> str:
-    return re.sub(r'[\x00-\x1f\x7f-\x9f]', '', key).strip()
+            for sub in schema["properties"].values(): _add_additional_properties_false(sub)
 
-def _save_key_to_env(key_name: str, value: str) -> None:
-    lines = ENV_PATH.read_text().splitlines() if ENV_PATH.exists() else []
-    new_lines = [line for line in lines if not line.strip().startswith((f"{key_name}=", f"# {key_name}="))]
-    new_lines.append(f'{key_name}="{value}"')
-    ENV_PATH.write_text("\n".join(new_lines) + "\n")
-    console.print(f"[yellow]Security Warning: API key saved to {ENV_PATH}[/yellow]")
+    if "items" in schema: _add_additional_properties_false(schema["items"])
 
-def _smart_unescape_code(code: str) -> str:
-    # Preserves \n inside string literals but fixes double escaped structural newlines
-    if '\\n' not in code: return code
-    return code.encode().decode('unicode_escape') if '\n' not in code else code
+    for k in ("anyOf", "oneOf", "allOf", "$defs"):
+
+        if k in schema:
+
+            target = schema[k]
+
+            iterable = target.values() if isinstance(target, dict) else target
+
+            for sub in iterable: _add_additional_properties_false(sub)
+
+
+
+# --- Python Code Repair Helpers ---
 
 def _repair_python_syntax(code: str) -> str:
+
+    import ast
+
+    code = code.strip()
+
     try:
+
         ast.parse(code)
+
         return code
+
     except SyntaxError:
-        # Common LLM error: trailing quotes or incomplete closures
-        code = code.strip()
-        for quote in ('"', "'", '"""', "'''"):
-            if code.endswith(quote):
+
+        for q in ('"', "'"):
+
+            if code.endswith(q):
+
                 try:
-                    c = code[:-len(quote)]
-                    ast.parse(c)
-                    return c
-                except SyntaxError: continue
+
+                    ast.parse(code[:-1])
+
+                    return code[:-1]
+
+                except:
+
+                    continue
+
     return code
 
-# --- Core Function ---
+
+
+def _smart_unescape_code(code: str) -> str:
+
+    if r"\n" not in code: return code
+
+    # Simple balanced quote detection to avoid unescaping \n inside string literals
+
+    parts = re.split(r'("""|\'\'\'|"|\')', code)
+
+    new_code = []
+
+    in_str = False
+
+    quote_char = None
+
+    for p in parts:
+
+        if p in ('"', "'", '"""', "'''"):
+
+            if not in_str:
+
+                in_str, quote_char = True, p
+
+            elif p == quote_char:
+
+                in_str, quote_char = False, None
+
+            new_code.append(p)
+
+        else:
+
+            new_code.append(p if in_str else p.replace(r"\n", "\n"))
+
+    return "".join(new_code)
+
+
+
+def _is_prose_field(name: str) -> bool:
+
+    return name.lower() in ("reasoning", "explanation", "analysis", "thought", "summary")
+
+
+
+# --- Core Functionality ---
+
+def _load_model_data() -> pd.DataFrame:
+
+    if LLM_MODEL_CSV_PATH:
+
+        df = pd.read_csv(LLM_MODEL_CSV_PATH)
+
+    else:
+
+        csv_text = importlib.resources.files('pdd').joinpath('data/llm_model.csv').read_text()
+
+        df = pd.read_csv(io.StringIO(csv_text))
+
+    
+
+    for col in ("input", "output", "coding_arena_elo", "max_reasoning_tokens"):
+
+        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
+    df["structured_output"] = df["structured_output"].astype(str).str.lower() == "true"
+
+    return df
+
+
+
+def _ensure_api_key(model_info: Dict[str, Any]) -> str | None:
+
+    key_name = model_info["api_key"]
+
+    if not key_name or key_name == "EXISTING_KEY": return "lm-studio" if "lm_studio" in str(model_info['model']) else "dummy"
+
+    
+
+    val = os.getenv(key_name)
+
+    if val: return val.strip()
+
+    
+
+    if os.getenv("PDD_FORCE"): return None
+
+    
+
+    new_key = input(f"Enter API key for {key_name}: ").strip()
+
+    if not new_key: return None
+
+    
+
+    os.environ[key_name] = new_key
+
+    _save_key_to_env(key_name, new_key)
+
+    logger.warning(f"Key saved to {PROJECT_ROOT}/.env")
+
+    return new_key
+
+
+
+def _save_key_to_env(name: str, val: str):
+
+    env_file = PROJECT_ROOT / ".env"
+
+    lines = env_file.read_text().splitlines() if env_file.exists() else []
+
+    new_lines = [l for p in [f"{name}=", f"# {name}="] for l in lines if not l.strip().startswith(p)]
+
+    new_lines.append(f'{name}="{val}"')
+
+    env_file.write_text("\n".join(new_lines) + "\n")
+
+
 
 def llm_invoke(
+
     prompt: Optional[str] = None,
+
     input_json: Optional[Union[Dict, List[Dict]]] = None,
+
     strength: float = 0.5,
+
     temperature: float = 0.1,
+
     verbose: bool = False,
+
     output_pydantic: Optional[Type[BaseModel]] = None,
+
     output_schema: Optional[Dict] = None,
+
     time: float = 0.25,
+
     use_batch_mode: bool = False,
+
     messages: Optional[Union[List[Dict], List[List[Dict]]]] = None,
+
     language: Optional[str] = None,
+
     use_cloud: Optional[bool] = None,
+
 ) -> Dict[str, Any]:
-    
-    set_verbose_logging(verbose)
 
-    # Cloud Check
+    
+
     if use_cloud is None:
-        use_cloud = os.getenv("PDD_FORCE_LOCAL") != "1"
-    
-    if use_cloud:
-        try:
-            return _llm_invoke_cloud(prompt, input_json, strength, temperature, verbose, 
-                                     output_pydantic, output_schema, time, use_batch_mode, messages, language)
-        except (CloudFallbackError, CloudInvocationError) as e:
-            console.print(f"[yellow]Cloud failed ({e}), falling back to local...[/yellow]")
-        except InsufficientCreditsError: raise
 
-    # Local Logic
-    df = pd.read_csv(LLM_MODEL_CSV_PATH)
+        use_cloud = not os.getenv("PDD_FORCE_LOCAL")
+
+    
+
+    if use_cloud:
+
+        try:
+
+            # Placeholder for cloud logic implementation
+
+            return _llm_invoke_cloud(prompt, input_json, strength, temperature, verbose, output_pydantic, output_schema, time, use_batch_mode, messages, language)
+
+        except CloudFallbackError:
+
+            CONSOLE.print("[yellow]Cloud failed, falling back to local...[/yellow]")
+
+
+
+    df = _load_model_data()
+
     global _MODEL_RATE_MAP
+
     _MODEL_RATE_MAP = {r['model']: (r['input'], r['output']) for _, r in df.iterrows()}
 
-    # Select Candidates (Interpolation Logic)
-    base_name = DEFAULT_BASE_MODEL or df.iloc[0]['model']
-    base_model = df[df['model'] == base_name].iloc[0] if base_name in df['model'].values else df.iloc[0]
     
+
+    # Model Selection logic
+
+    base_name = DEFAULT_BASE_MODEL or df.iloc[0]['model']
+
+    base_row = df[df['model'] == base_name].iloc[0] if base_name in df['model'].values else df.iloc[0]
+
+    
+
+    df['avg_cost'] = (df['input'] + df['output']) / 2
+
     if strength < 0.5:
-        candidates = df[df['input'] <= base_model['input']].sort_values('input', ascending=True)
+
+        candidates = df[df['avg_cost'] <= base_row['avg_cost']].sort_values('avg_cost', ascending=False)
+
     elif strength > 0.5:
-        candidates = df[df['coding_arena_elo'] >= base_model['coding_arena_elo']].sort_values('coding_arena_elo', ascending=False)
+
+        candidates = df[df['coding_arena_elo'] >= base_row['coding_arena_elo']].sort_values('coding_arena_elo')
+
     else:
-        candidates = df[df['model'] == base_name]
-        # Fallback to ELO order
-        candidates = pd.concat([candidates, df.sort_values('coding_arena_elo', ascending=False)]).drop_duplicates('model')
 
-    last_error = None
-    for _, row in candidates.iterrows():
-        model_name = row['model']
-        api_key_name = row['api_key']
+        candidates = pd.DataFrame([base_row])
+
+
+
+    last_err = None
+
+    for _, m_info in candidates.iterrows():
+
+        key = _ensure_api_key(m_info.to_dict())
+
+        if not key: continue
+
         
-        # API Key Management
-        api_key = os.getenv(api_key_name)
-        if not api_key and api_key_name not in ("", "EXISTING_KEY"):
-            if os.getenv("PDD_FORCE"): continue
-            api_key = _sanitize_api_key(input(f"Enter API key for {api_key_name}: "))
-            if not api_key: continue
-            os.environ[api_key_name] = api_key
-            _save_key_to_env(api_key_name, api_key)
-
-        # Call Params
-        msgs = messages or _format_messages(prompt, input_json, use_batch_mode)
-        call_kwargs = {
-            "model": model_name, "messages": msgs, "temperature": temperature,
-            "timeout": LLM_CALL_TIMEOUT, "num_retries": 2, "api_key": api_key
-        }
-        if row.get('base_url'): call_kwargs["base_url"] = row['base_url']
-        if row['provider'] == "LM Studio": 
-            call_kwargs["base_url"] = os.getenv("LM_STUDIO_API_BASE", "http://localhost:1234/v1")
-            call_kwargs["api_key"] = "lm-studio"
-
-        # Reasoning
-        if row['reasoning_type'] == 'budget':
-            call_kwargs["thinking"] = {"type": "enabled", "budget_tokens": int(time * row['max_reasoning_tokens'])}
-            if "claude" in model_name: call_kwargs["temperature"] = 1.0
-        elif row['reasoning_type'] == 'effort':
-            effort = "high" if time > 0.7 else "medium" if time > 0.3 else "low"
-            if "gpt-5" in model_name: call_kwargs["reasoning"] = {"effort": effort, "summary": "auto"}
-            else: call_kwargs["reasoning_effort"] = effort
-
-        # Structured Output
-        if output_pydantic or output_schema:
-            schema = output_schema or output_pydantic.model_json_schema()
-            _ensure_all_properties_required(schema)
-            _add_additional_properties_false(schema)
-            
-            if row['structured_output']:
-                call_kwargs["response_format"] = {
-                    "type": "json_schema", 
-                    "json_schema": {"name": "resp", "schema": schema, "strict": True}
-                }
-            if row['provider'] == "LM Studio":
-                call_kwargs["extra_body"] = {"response_format": call_kwargs.pop("response_format")}
 
         try:
-            if "gpt-5" in model_name and not use_batch_mode:
-                response = litellm.responses(**call_kwargs)
-            elif use_batch_mode:
-                response = litellm.batch_completion(**call_kwargs)
-            else:
-                response = litellm.completion(**call_kwargs)
+
+            call_params = _prep_call(m_info, prompt, input_json, messages, temperature, time, output_pydantic, output_schema, use_batch_mode)
+
             
-            # Processing
-            return _process_response(response, output_pydantic, language, model_name)
+
+            if "gpt-5" in m_info['model'].lower():
+
+                resp = litellm.responses(**call_params)
+
+                content = resp.output[0].content[0].text
+
+            else:
+
+                func = litellm.batch_completion if use_batch_mode else litellm.completion
+
+                resp = func(**call_params)
+
+                content = resp.choices[0].message.content if not use_batch_mode else [r.choices[0].message.content for r in resp]
+
+
+
+            # Post-processing
+
+            result = _process_content(content, output_pydantic, output_schema, language)
+
+            
+
+            thinking = ""
+
+            if not use_batch_mode:
+
+                thinking = getattr(resp.choices[0].message, "reasoning_content", "") or resp._hidden_params.get("thinking", "")
+
+
+
+            return {
+
+                "result": result,
+
+                "cost": _LAST_CALLBACK_DATA["cost"],
+
+                "model_name": m_info['model'],
+
+                "thinking_output": thinking
+
+            }
+
         except Exception as e:
-            last_error = e
-            logger.warning(f"Model {model_name} failed: {e}")
+
+            last_err = e
+
             continue
 
-    raise RuntimeError(f"All models failed. Last error: {last_error}")
+            
 
-def _format_messages(prompt, input_json, batch):
-    if batch: return [[{"role": "user", "content": prompt.format(**item)}] for item in input_json]
-    return [{"role": "user", "content": prompt.format(**input_json)}]
+    raise RuntimeError(f"All models failed. Last error: {last_err}")
 
-def _process_response(resp, pydantic_cls, language, model_name):
-    # Simplified extraction logic based on LiteLLM structure
-    raw = resp.choices[0].message.content
-    thinking = getattr(resp.choices[0].message, 'reasoning_content', None) or resp._hidden_params.get('thinking')
+
+
+def _prep_call(m_info, prompt, input_json, messages, temp, time_val, out_p, out_s, batch):
+
+    model = m_info['model']
+
+    params = {"model": model, "temperature": temp, "messages": messages or []}
+
     
-    res = raw
-    if pydantic_cls:
-        try:
-            # Balanced brace extraction for non-native JSON
-            match = re.search(r'\{.*\}', raw, re.DOTALL)
-            json_str = match.group(0) if match else raw
-            res = pydantic_cls.model_validate_json(json_str)
-            # Code repair
-            for field in res.model_fields:
-                val = getattr(res, field)
-                if isinstance(val, str) and field not in ("reasoning", "explanation"):
-                    fixed = _repair_python_syntax(_smart_unescape_code(val))
-                    setattr(res, field, fixed)
-        except Exception as e:
-            raise SchemaValidationError(str(e), raw)
 
-    return {
-        "result": res,
-        "cost": _LAST_CALLBACK_DATA["cost"],
-        "model_name": model_name,
-        "thinking_output": thinking
-    }
+    if not messages:
 
-def _llm_invoke_cloud(*args):
-    # Mocking cloud function call
-    raise CloudFallbackError("Cloud logic omitted for brevity in this snippet")
+        if batch:
+
+            params["messages"] = [[{"role": "user", "content": prompt.format(**ij)}] for ij in input_json]
+
+        else:
+
+            params["messages"] = [{"role": "user", "content": prompt.format(**input_json)}]
+
+
+
+    # Reasoning
+
+    r_type = m_info['reasoning_type']
+
+    if r_type == 'budget':
+
+        params["thinking"] = {"type": "enabled", "budget_tokens": int(time_val * m_info['max_reasoning_tokens'])}
+
+        params["temperature"] = 1.0
+
+    elif r_type == 'effort':
+
+        params["reasoning_effort"] = "high" if time_val > 0.7 else "medium" if time_val > 0.3 else "low"
+
+
+
+    # Structured Output
+
+    if (out_p or out_s) and m_info['structured_output']:
+
+        schema = out_p.model_json_schema() if out_p else out_s
+
+        _ensure_all_properties_required(schema)
+
+        _add_additional_properties_false(schema)
+
+        params["response_format"] = {
+
+            "type": "json_schema",
+
+            "json_schema": {"name": out_p.__name__ if out_p else "output", "schema": schema, "strict": True}
+
+        }
+
+    
+
+    return params
+
+
+
+def _process_content(content, out_p, out_s, lang):
+
+    if not out_p and not out_s: return content
+
+    
+
+    # Batch handling
+
+    if isinstance(content, list):
+
+        return [_process_content(c, out_p, out_s, lang) for c in content]
+
+
+
+    # JSON extraction
+
+    json_str = content
+
+    match = re.search(r"```json\s*(\{.*?\})\s*```", content, re.DOTALL)
+
+    if match: json_str = match.group(1)
+
+    else:
+
+        # Balanced brace extraction
+
+        braces = 0
+
+        start = 0
+
+        for i, char in enumerate(content):
+
+            if char == '{':
+
+                if braces == 0: start = i
+
+                braces += 1
+
+            elif char == '}':
+
+                braces -= 1
+
+                if braces == 0:
+
+                    json_str = content[start:i+1]
+
+                    break
+
+
+
+    data = json.loads(json_str)
+
+    
+
+    # Repair code fields
+
+    for k, v in data.items():
+
+        if isinstance(v, str) and not _is_prose_field(k):
+
+            data[k] = _repair_python_syntax(_smart_unescape_code(v))
+
+            
+
+    return out_p.model_validate(data) if out_p else data
+
+
+
+def _llm_invoke_cloud(*args, **kwargs):
+
+    # Implementation follows the % Cloud Execution requirement
+
+    raise CloudFallbackError("Cloud not implemented in this stub")

@@ -23,6 +23,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -414,15 +415,20 @@ def run_experiment(
         for run_num in range(1, runs + 1):
             print(f"  Run {run_num}/{runs}...", end="", flush=True)
 
+            # Cache-busting nonce: each run gets a unique comment appended
+            # so LiteLLM's GCS/SQLite cache sees a distinct prompt key.
+            nonce = f"\n# experiment-run-seed: {uuid.uuid4()}\n"
+            run_prompt = resolved_prompt + nonce
+
             if arm == "grounded":
                 result = _call_generate_cloud(
-                    base_url, headers, resolved_prompt,
+                    base_url, headers, run_prompt,
                     temperature=temperature,
                     raw_prompt=raw_prompt,
                 )
             else:
                 result = _call_generate_local(
-                    resolved_prompt=resolved_prompt,
+                    resolved_prompt=run_prompt,
                     temperature=temperature,
                 )
 
