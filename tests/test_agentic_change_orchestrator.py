@@ -1801,7 +1801,9 @@ def test_step9_output_saved_on_failure(mock_dependencies, temp_cwd):
         if len(args) >= 4:
             state_arg = args[3]
             if isinstance(state_arg, dict) and "step_outputs" in state_arg:
-                if state_arg["step_outputs"].get("9") == step9_output_text:
+                step9_val = state_arg["step_outputs"].get("9", "")
+                # Issue #467: failed step outputs now have "FAILED:" prefix
+                if step9_val == step9_output_text or step9_val == f"FAILED: {step9_output_text}":
                     found_step9_output = True
                     break
     assert found_step9_output, "Step 9 output should be saved to state on failure"

@@ -224,7 +224,7 @@ def run_agentic_architecture_orchestrator(
             last_completed_step, step_outputs, quiet=quiet
         )
     else:
-        state = {"step_outputs": {}}
+        state = {"step_outputs": {}, "last_completed_step": 0}
         last_completed_step = 0
         step_outputs = state["step_outputs"]
         total_cost = 0.0

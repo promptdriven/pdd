@@ -484,7 +484,7 @@ def run_agentic_change_orchestrator(
             last_completed_step, step_outputs, quiet=quiet
         )
     else:
-        state = {"step_outputs": {}, "issue_updated_at": issue_updated_at}
+        state = {"step_outputs": {}, "issue_updated_at": issue_updated_at, "last_completed_step": 0}
         last_completed_step = 0
         step_outputs = state["step_outputs"]
         total_cost = 0.0
