@@ -158,6 +158,91 @@ print(f'| Total pytest chunks | | {len(chunk_durations)} |')
         echo "${BALANCE_OUTPUT}"
     fi
 
+    # ── Profiling: per-suite summary & slowest tests ────────────────────
+    PROFILING_OUTPUT=$(python3 -c "
+import json, os, sys
+from collections import defaultdict
+
+results_dir = '${RESULTS_LOCAL}'
+total = ${TOTAL}
+
+# Group task durations by suite
+suite_durations = defaultdict(list)
+for i in range(total):
+    try:
+        with open(f'{results_dir}/task_{i}.json') as f:
+            d = json.load(f)
+        suite = d.get('suite', 'unknown')
+        dur = d.get('duration_seconds', 0)
+        if dur > 0:
+            suite_durations[suite].append(dur)
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+
+if not suite_durations:
+    sys.exit(0)
+
+# Per-suite summary
+print('## Profiling')
+print()
+print('### Per-Suite Summary')
+print()
+print('| Suite | Min | Max | Avg | Count |')
+print('|-------|-----|-----|-----|-------|')
+for suite in sorted(suite_durations):
+    durations = suite_durations[suite]
+    mn = min(durations)
+    mx = max(durations)
+    avg = sum(durations) / len(durations)
+    print(f'| {suite} | {mn:.0f}s | {mx:.0f}s | {avg:.0f}s | {len(durations)} |')
+
+# Pytest chunk histogram
+if 'pytest' in suite_durations:
+    times = sorted(suite_durations['pytest'])
+    print()
+    print('### Pytest Chunk Distribution')
+    print()
+    max_dur = max(times)
+    bar_max = 40
+    for idx, t in enumerate(times):
+        bar_len = int(t / max_dur * bar_max) if max_dur > 0 else 0
+        bar = '#' * bar_len
+        print(f'| {t:>5.0f}s | {bar} |')
+
+# Top 20 slowest individual tests from junitxml
+try:
+    import xml.etree.ElementTree as ET
+    slowest_tests = []
+    for i in range(total):
+        xml_path = f'{results_dir}/task_{i}_junit.xml'
+        try:
+            tree = ET.parse(xml_path)
+            for tc in tree.iter('testcase'):
+                t = float(tc.get('time', '0'))
+                name = tc.get('name', '?')
+                classname = tc.get('classname', '?')
+                slowest_tests.append((t, classname, name))
+        except (FileNotFoundError, ET.ParseError):
+            pass
+
+    if slowest_tests:
+        slowest_tests.sort(reverse=True)
+        print()
+        print('### Top 20 Slowest Tests')
+        print()
+        print('| Duration | Module | Test |')
+        print('|----------|--------|------|')
+        for t, cls, name in slowest_tests[:20]:
+            print(f'| {t:.1f}s | {cls} | {name} |')
+except Exception:
+    pass
+" 2>/dev/null || true)
+
+    if [ -n "${PROFILING_OUTPUT}" ]; then
+        echo ""
+        echo "${PROFILING_OUTPUT}"
+    fi
+
     if [ ${#FAILURE_LOGS[@]} -gt 0 ]; then
         echo ""
         echo "## Failures"
@@ -180,6 +265,13 @@ echo "  ${PASSED} passed, ${FAILED} failed, ${ERRORS} errors (of ${TOTAL} tasks)
 echo "=============================================="
 echo ""
 echo "Full report: ${OUTPUT_FILE}"
+
+# Preserve raw results for profiling analysis
+RAW_RESULTS_DIR="${REPO_ROOT}/test-results/cloud-batch-raw"
+rm -rf "${RAW_RESULTS_DIR}"
+mkdir -p "${RAW_RESULTS_DIR}"
+cp "${RESULTS_LOCAL}"/task_*.json "${RAW_RESULTS_DIR}/" 2>/dev/null || true
+cp "${RESULTS_LOCAL}"/task_*_junit.xml "${RAW_RESULTS_DIR}/" 2>/dev/null || true
 
 # Clean up
 rm -rf "${RESULTS_LOCAL}"

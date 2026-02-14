@@ -1,25 +1,29 @@
 #!/usr/bin/env python3
-"""Summarize llm_invoke regeneration stability experiment results.
+"""Summarize module regeneration stability experiment results.
 
-Reads results/llm_invoke_stability.csv and results/llm_invoke_evaluation.csv,
+Reads results/{module}_stability.csv and results/{module}_evaluation.csv,
 computes per-arm statistics, and prints a comparison table.
 
 Usage:
     python3 scripts/summarize_llm_invoke.py
+    python3 scripts/summarize_llm_invoke.py --module sync_orchestration
 """
 
 from __future__ import annotations
 
+import argparse
 import csv
 import difflib
 import statistics
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+MODULE_NAME = "llm_invoke"
+
 RESULTS_DIR = Path(__file__).resolve().parent.parent / "results"
-STABILITY_CSV = RESULTS_DIR / "llm_invoke_stability.csv"
-EVALUATION_CSV = RESULTS_DIR / "llm_invoke_evaluation.csv"
-GENERATIONS_DIR = RESULTS_DIR / "llm_invoke_generations"
+STABILITY_CSV = RESULTS_DIR / f"{MODULE_NAME}_stability.csv"
+EVALUATION_CSV = RESULTS_DIR / f"{MODULE_NAME}_evaluation.csv"
+GENERATIONS_DIR = RESULTS_DIR / f"{MODULE_NAME}_generations"
 
 
 def _load_csv(path: Path) -> List[Dict[str, str]]:
@@ -70,7 +74,7 @@ def _mean_std_int(values: List[float]) -> str:
 
 def _pairwise_similarity(arm: str) -> Optional[float]:
     """Compute average pairwise SequenceMatcher similarity for an arm."""
-    files = sorted(GENERATIONS_DIR.glob(f"llm_invoke_{arm}_run*.py"))
+    files = sorted(GENERATIONS_DIR.glob(f"{MODULE_NAME}_{arm}_run*.py"))
     if len(files) < 2:
         return None
 
@@ -85,6 +89,22 @@ def _pairwise_similarity(arm: str) -> Optional[float]:
 
 def main() -> int:
     """Summarize experiment results."""
+    parser = argparse.ArgumentParser(
+        description="Summarize module regeneration stability experiment results"
+    )
+    parser.add_argument(
+        "--module",
+        default="llm_invoke",
+        help="Module name to summarize (default: llm_invoke)",
+    )
+    args = parser.parse_args()
+
+    global MODULE_NAME, STABILITY_CSV, EVALUATION_CSV, GENERATIONS_DIR
+    MODULE_NAME = args.module
+    STABILITY_CSV = RESULTS_DIR / f"{MODULE_NAME}_stability.csv"
+    EVALUATION_CSV = RESULTS_DIR / f"{MODULE_NAME}_evaluation.csv"
+    GENERATIONS_DIR = RESULTS_DIR / f"{MODULE_NAME}_generations"
+
     stab_rows = _load_csv(STABILITY_CSV)
     eval_rows = _load_csv(EVALUATION_CSV)
 
@@ -191,7 +211,7 @@ def main() -> int:
     # Print comparison table (dynamic N-arm layout)
     print()
     arm_title = " vs ".join(a.capitalize() for a in arms)
-    print(f"llm_invoke Regeneration Stability: {arm_title}")
+    print(f"{MODULE_NAME} Regeneration Stability: {arm_title}")
     print("=" * 80)
     print()
 

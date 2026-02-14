@@ -1,0 +1,16 @@
+timestamp_utc,env,arm,run_number,http_status,generated_code_hash,generated_code_lines,function_count,class_count,syntax_valid,examples_used,total_cost,model_name,response_time_ms
+2026-02-14T20:18:42.916719+00:00,prod,grounded,1,200,152be8ad6bc73df2,472,0,0,False,ICqQQrD8O5CeWLa2y6fX,0.169505,vertex_ai/gemini-3-flash-preview,132893
+2026-02-14T20:20:01.754615+00:00,prod,grounded,2,200,4420b5ebf70012b6,435,25,2,True,ICqQQrD8O5CeWLa2y6fX,0.185111,vertex_ai/gemini-3-flash-preview,78823
+2026-02-14T20:21:24.671321+00:00,prod,grounded,3,200,7276e512664e9576,452,26,2,True,ICqQQrD8O5CeWLa2y6fX,0.048062999999999995,vertex_ai/gemini-3-flash-preview,82905
+2026-02-14T20:22:34.862101+00:00,prod,grounded,4,200,44fce8832025374e,385,25,1,True,ICqQQrD8O5CeWLa2y6fX,0.0450415,vertex_ai/gemini-3-flash-preview,70177
+2026-02-14T20:23:43.592669+00:00,prod,grounded,5,200,376e468cd4a11c2c,389,23,2,True,ICqQQrD8O5CeWLa2y6fX,0.15768649999999998,vertex_ai/gemini-3-flash-preview,68718
+2026-02-14T20:25:50.502285+00:00,prod,ungrounded,1,0,79ea168282141c9d,486,0,0,False,,0.048191,vertex_ai/gemini-3-flash-preview,31995
+2026-02-14T20:26:23.146438+00:00,prod,ungrounded,2,0,1cd24d0767de6bf8,480,14,1,True,,0.049079,vertex_ai/gemini-3-flash-preview,32628
+2026-02-14T20:26:56.264917+00:00,prod,ungrounded,3,0,b5f356be771070ce,567,16,1,True,,0.0500845,vertex_ai/gemini-3-flash-preview,33106
+2026-02-14T20:27:27.543032+00:00,prod,ungrounded,4,0,63b53efb2cde22a8,490,16,1,True,,0.048897499999999997,vertex_ai/gemini-3-flash-preview,31268
+2026-02-14T20:27:58.011645+00:00,prod,ungrounded,5,0,e121ac21f2488dd9,542,15,1,True,,0.0488785,vertex_ai/gemini-3-flash-preview,30451
+2026-02-14T20:08:04.871569+00:00,prod,ungrounded-pdd,1,0,b51f7fd31c01ddae,588,17,1,True,,0.078051,vertex_ai/gemini-3-flash-preview,75477
+2026-02-14T20:09:01.242771+00:00,prod,ungrounded-pdd,2,0,566530638b40519c,445,14,1,True,,0.019572,vertex_ai/gemini-3-flash-preview,56364
+2026-02-14T20:10:01.992588+00:00,prod,ungrounded-pdd,3,0,0bda3659eb50e25f,480,12,1,True,,0.069009,vertex_ai/gemini-3-flash-preview,60742
+2026-02-14T20:11:05.578980+00:00,prod,ungrounded-pdd,4,0,2a7a2f3dd5de5a53,480,13,1,True,,0.049956,vertex_ai/gemini-3-flash-preview,63578
+2026-02-14T20:12:02.741015+00:00,prod,ungrounded-pdd,5,0,294a6b49939d3df8,450,15,2,True,,0.038446,vertex_ai/gemini-3-flash-preview,57154

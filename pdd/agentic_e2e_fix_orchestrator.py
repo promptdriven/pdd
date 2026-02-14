@@ -17,6 +17,7 @@ from .agentic_common import (
     load_workflow_state,
     save_workflow_state,
     clear_workflow_state,
+    validate_cached_state,
     DEFAULT_MAX_RETRIES,
 )
 from .load_prompt_template import load_prompt_template
@@ -370,9 +371,15 @@ def run_agentic_e2e_fix_orchestrator(
             changed_files = loaded_state.get("changed_files", [])
             dev_unit_states = loaded_state.get("dev_unit_states", {})
             github_comment_id = gh_id
-            
+
+            # Issue #467: Validate cached state — correct last_completed_step
+            # if any cached step outputs have "FAILED:" prefix.
+            last_completed_step = validate_cached_state(
+                last_completed_step, step_outputs, quiet=quiet
+            )
+
             _check_staleness(loaded_state, cwd)
-            
+
             # If we finished a cycle but didn't exit, prepare for next cycle
             if last_completed_step >= 9:
                 current_cycle += 1

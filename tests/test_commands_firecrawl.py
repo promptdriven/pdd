@@ -716,27 +716,20 @@ class TestIntegration:
             result = runner.invoke(cli, ["firecrawl-cache", "clear"])
             assert result.exit_code == 0
 
-    def test_help_text_for_all_commands(self, runner):
-        """Test that help text is available for all subcommands."""
-        # Test stats help
-        result = runner.invoke(cli, ["firecrawl-cache", "stats", "--help"])
-        assert result.exit_code == 0
-        assert "stats" in result.output.lower() or "statistics" in result.output.lower()
-
-        # Test clear help
-        result = runner.invoke(cli, ["firecrawl-cache", "clear", "--help"])
-        assert result.exit_code == 0
-        assert "clear" in result.output.lower()
-
-        # Test info help
-        result = runner.invoke(cli, ["firecrawl-cache", "info", "--help"])
-        assert result.exit_code == 0
-        assert "info" in result.output.lower() or "configuration" in result.output.lower()
-
-        # Test check help
-        result = runner.invoke(cli, ["firecrawl-cache", "check", "--help"])
-        assert result.exit_code == 0
-        assert "check" in result.output.lower() or "url" in result.output.lower()
+    @pytest.mark.parametrize("subcmd,expected_words", [
+        ("stats", ["stats", "statistics"]),
+        ("clear", ["clear"]),
+        ("info", ["info", "configuration"]),
+        ("check", ["check", "url"]),
+    ])
+    def test_help_text_for_subcommand(self, runner, subcmd, expected_words):
+        """Test that help text is available for each subcommand."""
+        result = runner.invoke(cli, ["firecrawl-cache", subcmd, "--help"])
+        assert result.exit_code == 0, (
+            f"firecrawl-cache {subcmd} --help failed with exit code "
+            f"{result.exit_code}: {result.output}"
+        )
+        assert any(w in result.output.lower() for w in expected_words)
 
 
 if __name__ == "__main__":

@@ -883,6 +883,67 @@ def _should_use_github_state(use_github_state: bool) -> bool:
         return False
     return True
 
+# --- Cached State Validation (Issue #467) ---
+
+def validate_cached_state(
+    last_completed_step: Union[int, float],
+    step_outputs: Dict[str, str],
+    step_order: Optional[List[Union[int, float]]] = None,
+    quiet: bool = False,
+) -> Union[int, float]:
+    """Validate cached state and return actual last successful step.
+
+    Scans step_outputs for entries with "FAILED:" prefix and corrects
+    last_completed_step to the actual last successfully completed step.
+    This prevents the "blind resume" bug (Issue #467) where the orchestrator
+    trusts a corrupted last_completed_step and skips failed steps.
+
+    Args:
+        last_completed_step: The stored last_completed_step value.
+        step_outputs: Dict mapping step number strings to output strings.
+        step_order: Ordered list of step numbers. If None, derived from
+            step_outputs keys sorted numerically.
+        quiet: If False, prints a warning when correction is applied.
+
+    Returns:
+        The corrected last_completed_step value.
+    """
+    if not step_outputs:
+        return last_completed_step
+
+    if step_order is None:
+        # Derive order from keys, sorted numerically
+        step_order = sorted(step_outputs.keys(), key=lambda k: float(k))
+    else:
+        # Convert to string keys for lookup
+        step_order = [str(s) if not isinstance(s, str) else s for s in step_order]
+
+    actual_last_success: Union[int, float] = 0
+    for sn in step_order:
+        key = str(sn)
+        output_val = step_outputs.get(key, "")
+        if not output_val:
+            break
+        if str(output_val).startswith("FAILED:"):
+            break
+        # Parse back to numeric for comparison
+        try:
+            actual_last_success = float(key) if "." in key else int(key)
+        except ValueError:
+            actual_last_success = 0
+
+    if actual_last_success < last_completed_step:
+        if not quiet:
+            console.print(
+                f"[yellow]State validation: correcting last_completed_step "
+                f"from {last_completed_step} to {actual_last_success} "
+                f"(found FAILED steps in cache)[/yellow]"
+            )
+        return actual_last_success
+
+    return last_completed_step
+
+
 # --- High Level State Wrappers ---
 
 def load_workflow_state(
