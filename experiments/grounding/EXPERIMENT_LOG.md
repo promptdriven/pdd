@@ -425,6 +425,308 @@ All three arms consistently pass 96/99 tests when the generated code is syntacti
 #### 6. Cost/latency tradeoff scales linearly
 Grounded: $0.121/call, 86.7s. Ungrounded: $0.049/call, 31.9s. The grounded overhead ratio (~2.5x cost, ~2.7x latency) is comparable to Phase 3-4, confirming the cost scales linearly with prompt size rather than exponentially.
 
+## Phase 5 Deep Dive: Canonical vs Grounded Regeneration Quality
+
+### Motivation
+
+The Phase 5 quantitative metrics show grounding improves similarity and prevents hallucination. But the metrics don't answer: **what exactly changes when you regenerate a 1,973-line production module?** This deep dive compares the canonical `sync_orchestration.py` line-by-line against all 5 grounded generations to characterize the nature and severity of regeneration loss.
+
+### Scale of Compression
+
+| | Canonical | Grounded Run 1 | Run 2 | Run 3 | Run 4 | Run 5 | Avg |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Lines | 1,973 | 472 | 435 | 452 | 385 | 389 | 426.6 |
+| Functions | ~45 | 0* | 25 | 26 | 25 | 23 | 19.8 |
+| Classes | 2 | 0* | 2 | 2 | 1 | 2 | 1.4 |
+
+*Run 1 has a syntax error (`typing import Dict` missing `from` on line 17) so the parser reports 0 functions/classes despite the code structure being present.
+
+The grounded generations are **4.6x smaller** on average. Nearly 80% of the canonical's code is omitted.
+
+### What Grounding Preserves Correctly
+
+**1. AtomicStateUpdate pattern (all 5 runs)**
+
+Canonical (lines 86–175):
+- `@dataclass PendingStateUpdate` with 4 Optional fields
+- `AtomicStateUpdate` context manager with `__enter__`/`__exit__`
+- `_atomic_write()` using `tempfile.mkstemp()` + `os.replace()` (POSIX atomic rename)
+- `_commit()` writes fingerprint then run_report; `_rollback()` cleans temp files
+
+All 5 grounded runs reproduce this pattern faithfully. Run 4 uses the `PendingStateUpdate` dataclass exactly like the canonical. Runs 2, 3, 5 inline the pending state as direct attributes but maintain the same commit/rollback semantics. The tempfile + os.replace atomic write is present in all runs.
+
+**2. Result unpacking dispatch (all 5 runs)**
+
+Canonical (lines 1770–1782):
+```python
+if isinstance(result, dict):
+    success = result.get('success', False)
+    cost = result.get('cost', 0.0)
+    model = result.get('model', '')
+elif isinstance(result, tuple):
+    success = result[0]
+    cost = result[1] if len(result) > 1 else 0.0
+```
+
+All 5 grounded runs use `isinstance(res, dict)` / `isinstance(res, tuple)` dispatch. This is the most hallucination-sensitive pattern — ungrounded arms invent fake tuple positions like `_, op_cost, op_model = auto_deps_main(...)` (6-tuple unpacking that doesn't match the actual API). Grounding completely prevents this class of error.
+
+**3. Cycle detection (4/5 runs)**
+
+Canonical (lines 1189–1198):
+```python
+if len(operation_history) >= 4:
+    recent_ops = operation_history[-4:]
+    if (recent_ops == ['crash', 'verify', 'crash', 'verify'] or
+        recent_ops == ['verify', 'crash', 'verify', 'crash']):
+```
+
+Runs 2–5 all check `history[-4:]` against the same 4-element patterns (some also add `['test','fix','test','fix']`). Run 1 has a syntax error preventing verification, but the code text contains the same pattern.
+
+**4. Thread-safe state refs (all 5 runs)**
+
+Canonical (lines 1013–1033):
+```python
+current_function_name_ref = ["initializing"]
+current_cost_ref = [0.0]
+stop_event = threading.Event()
+app_ref = [None]
+```
+
+All 5 grounded runs use single-element lists for cross-thread mutation. Run 3 uses a `state_refs` dict grouping all refs together (a minor organizational variant, still correct). Run 4 names them `cur_fn`, `cur_cost` (shorter names, same pattern).
+
+**5. Operation dispatch (all 5 runs)**
+
+All 8 canonical operation types are present in all grounded runs: `auto-deps`, `generate`, `example`, `crash`, `verify`, `test`, `fix`, `update`. Each dispatches to the correct handler function (`auto_deps_main`, `code_generator_main`, `context_generator_main`, `crash_main`, `fix_verification_main`, `cmd_test_main`, `fix_main`, `update_main`).
+
+### What Grounding Loses
+
+**1. SyncApp instantiation — inconsistent and often broken**
+
+Canonical passes 14 named keyword arguments to `SyncApp()`:
+```
+basename, budget, worker_func, function_name_ref, cost_ref,
+prompt_path_ref, code_path_ref, example_path_ref, tests_path_ref,
+prompt_color_ref, code_color_ref, example_color_ref, tests_color_ref,
+stop_event, progress_callback_ref
+```
+
+Each grounded run takes a different approach:
+
+| Run | SyncApp args | Runtime viable? |
+|---|---|---|
+| Run 1 | Syntax error prevents evaluation | No |
+| Run 2 | References `prompt_path_ref`, `code_path_ref` etc. but **never defines them** | **No — NameError** |
+| Run 3 | Passes inline `[str(pdd_files['prompt'])]` for each path arg | Likely yes |
+| Run 4 | Only 6 args: `basename, budget, worker, cur_fn, cur_cost, stop_event, progress_callback_ref=progress_ref` — missing all path/color refs | **No — TypeError** |
+| Run 5 | Same as Run 4 — missing path/color refs | **No — TypeError** |
+
+Only Run 3 would plausibly instantiate SyncApp correctly. This is a **production-breaking** issue that tests don't catch because test mocking bypasses the real SyncApp constructor.
+
+**2. Helper function stubs**
+
+| Helper | Canonical (lines) | Grounded |
+|---|---|---|
+| `_try_auto_fix_import_error` | ~10 lines: detects `ModuleNotFoundError`, injects `sys.path.insert` | Stub: `return False, "Not implemented"` |
+| `_python_cov_target_for_code_file` | ~20 lines: stem matching with project root detection | 1-liner: `return code_file.stem if code_file else fallback` |
+| `_display_sync_log` | ~20 lines: formatted console output with icons, timestamps | 2-liner: `return {"success": True, "log_entries": entries}` |
+| `_detect_example_errors` | Part of 30-line verification pipeline | Simplified `if "Traceback" in output` check |
+
+**3. Missing features entirely**
+
+| Feature | Canonical Location | Impact |
+|---|---|---|
+| Audit logging (`create_log_entry`, `update_log_entry`) | Lines 1070-1080, 1800-1820 | No operation audit trail |
+| Budget warnings (80% consumed) | Lines 1150-1160 | User gets no budget warnings |
+| Post-crash verify trigger | Lines 1400-1450 | Crash recovery path broken |
+| Example review flow (`review_examples`) | Lines 1600-1650 | Feature non-functional |
+| Worker exception capture + log dump | Lines 1938-1950 | Crash diagnosis unavailable |
+| Multi-test-file discovery | Lines 1500-1530 | Assumes single test file |
+| Skip handling (`skip:verify`, `skip:test`) | Lines 1100-1130 | Skip fingerprints not saved |
+| `_create_mock_context` completeness | Line 1010 (12 kwargs) | Grounded passes ~8 kwargs |
+
+**4. Docstrings and comments**
+
+The canonical has extensive docstrings (every function), inline comments explaining non-obvious logic (e.g., "Bug #4 fix: Detect crash-verify cycle pattern"), and Issue references (e.g., "Issue #159 Fix"). All grounded runs have minimal or no docstrings and no issue references.
+
+### Quality Assessment
+
+**Structurally correct, not production-ready.** The grounded generations reproduce the canonical's architectural skeleton — the operation state machine, atomic writes, thread-safe refs, and result dispatch are all present and correct. This is sufficient to pass 96/99 tests.
+
+However, the generated code would fail in production at multiple points:
+- SyncApp constructor mismatch (3/5 runs)
+- No audit logging
+- Stub helper functions
+- Missing edge case handling (budget warnings, skip logic, crash recovery)
+
+**The grounded output is a correct interface layer, not a complete implementation.** It answers "what functions exist and how do they connect?" correctly, but not "what happens in every edge case?"
+
+### Regeneration Impact Summary
+
+| Dimension | Preserved? | Notes |
+|---|---|---|
+| Module interface (function names, signatures) | Yes | All 8 operations present with correct handler functions |
+| Architectural patterns (AtomicStateUpdate, thread refs) | Yes | Faithful reproduction from few-shot example anchoring |
+| Result type conventions (dict vs tuple dispatch) | Yes | 5/5 correct — the key hallucination-prevention win |
+| Cycle detection logic | Mostly (4/5) | Pattern-matching approach preserved, details vary |
+| TUI integration (SyncApp) | Partially (1/5 viable) | Constructor call is the weakest point |
+| Helper implementations | No | All stubs or heavily simplified |
+| Edge case handling | No | Budget, skip, audit, multi-test all missing |
+| Documentation | No | Docstrings, comments, issue refs all stripped |
+| Production readiness | No | Would fail on first TUI launch (3/5 runs) |
+
+## Cross-Arm Code Pattern Analysis (All 15 Files)
+
+### Return Type Handling
+
+The most discriminating pattern across arms. The canonical's operation functions return either `dict` (with `success`, `cost`, `model` keys) or `tuple` (legacy operations). Correct handling requires `isinstance` dispatch.
+
+| Arm | Correct dict dispatch | Hallucinated tuple unpacking | Invented return shapes |
+|---|---|---|---|
+| Grounded (5 runs) | **5/5** | 0/5 | 0/5 |
+| Ungrounded (5 runs) | 2/5 | **3/5** | 2/5 (6-tuple, named tuple) |
+| Ungrounded-PDD (5 runs) | 2/5 | **3/5** | 2/5 (indexing `res[1]`, `res[2]`) |
+
+Ungrounded examples of hallucinated unpacking:
+- `_, op_cost, op_model = auto_deps_main(ctx, ...)` — invents 3-tuple return
+- `op_success, _, _, _, op_cost, op_model = crash_main(...)` — invents 6-tuple return
+- `success, op_cost, op_model = True, res[1], res[2]` — invents tuple indexing
+
+### AtomicStateUpdate Implementation
+
+| Feature | Grounded | Ungrounded | Ungrounded-PDD |
+|---|---|---|---|
+| Has AtomicStateUpdate class | 5/5 | 3/5 | 3/5 |
+| Uses PendingStateUpdate dataclass | 1/5 | 0/5 | 0/5 |
+| `tempfile.mkstemp` + `os.replace` | **5/5** | 2/5 | 2/5 |
+| `_commit()`/`_rollback()` pattern | **5/5** | 2/5 | 2/5 |
+| `__exit__` does actual cleanup | **5/5** | 3/5 | 2/5 (1 run: `__exit__` is `pass`) |
+
+The ungrounded-pdd run where `__exit__` is literally `pass` means atomic writes never happen — the entire crash-safety mechanism is non-functional.
+
+### Cycle Detection Strategy
+
+| Strategy | Grounded | Ungrounded | Ungrounded-PDD |
+|---|---|---|---|
+| 4-element pattern matching (canonical) | **4/5** | 1/5 | 2/5 |
+| Counter-based (`consecutive_ops` dict) | 0/5 | 2/5 | 2/5 |
+| Sliding window (last N ops) | 1/5 | 2/5 | 1/5 |
+| No cycle detection | 0/5 | 0/5 | 0/5 |
+
+The canonical uses exact 4-element list comparison (`['crash','verify','crash','verify']`). Counter-based approaches (common in ungrounded) miss alternating patterns — they'd detect "3 crashes in a row" but not "crash-verify-crash-verify" oscillation.
+
+### SyncApp Constructor Call
+
+| Pattern | Grounded | Ungrounded | Ungrounded-PDD |
+|---|---|---|---|
+| 14 named kwargs (canonical) | 0/5 | 0/5 | 0/5 |
+| Close (10+ args, includes paths) | 2/5 | 0/5 | 1/5 |
+| Partial (6-8 args, missing paths/colors) | 2/5 | 2/5 | 2/5 |
+| Minimal (3-4 args, invented params) | 0/5 | 3/5 | 2/5 |
+| Syntax error | 1/5 | 0/5 | 0/5 |
+
+No arm fully reproduces the 14-arg SyncApp call. The grounded arm gets closest (Run 3 passes inline path lists). Ungrounded runs invent params like `state=state` and `worker_func=sync_worker_logic, state=state, stop_event=stop_event` (3 kwargs — SyncApp doesn't accept `state`).
+
+### Import Correctness
+
+All arms import from the correct submodules (`.sync_tui`, `.operation_log`, `.sync_determine_operation`, etc.). The few differences:
+
+| Issue | Grounded | Ungrounded | Ungrounded-PDD |
+|---|---|---|---|
+| Syntax error in imports | 1/5 (Run 1: `typing import` missing `from`) | 1/5 | 0/5 |
+| Imports `get_extension` from wrong location | 0/5 | 1/5 | 0/5 |
+| Missing `shutil` import (used by canonical) | 3/5 | 4/5 | 4/5 |
+| Extra unused imports | 1/5 | 2/5 | 1/5 |
+
+Import accuracy is high across all arms because the resolved prompt includes the full module structure. This is not a grounding-specific benefit.
+
+## Experiment-Wide Conclusions (Phases 1–5)
+
+### Decisive Findings
+
+These conclusions are supported by consistent evidence across multiple phases and are unlikely to change with additional runs.
+
+**1. Grounding prevents specific, categorizable hallucinations.**
+
+Across 2 modules (llm_invoke, sync_orchestration) and 10 grounded runs, the grounded arm produces 0 instances of:
+- Hallucinated return type conventions (0/10 vs 6/10 ungrounded, 6/10 ungrounded-pdd)
+- Invented authentication patterns (0/10 vs 8/9 ungrounded, 10/10 ungrounded-pdd)
+- Wrong CSV column names / data structure types (0/10 vs 6/9 ungrounded, 5/10 ungrounded-pdd)
+
+The few-shot example acts as a type-level constraint: when the model sees a concrete example of `isinstance(res, dict)` dispatch, it doesn't invent tuple unpacking. When it sees `auth_service.get_jwt_token()`, it doesn't invent `PDD_CLOUD_TOKEN`. This is a **pattern anchoring** effect, not just additional context.
+
+**2. Test suites do not catch grounding-preventable hallucinations.**
+
+All 3 arms pass the same tests (217/217 for llm_invoke, 96/99 for sync_orchestration) regardless of whether they contain hallucinated interfaces. The test suites validate functional behavior (correct outputs for given inputs) but not implementation fidelity (correct internal patterns). This means:
+- 100% test pass rate does not imply production readiness
+- Hallucinated code that produces correct outputs is invisible to tests
+- Grounding addresses a quality dimension orthogonal to test coverage
+
+**3. Test visibility does not substitute for grounding.**
+
+The ungrounded-pdd arm has full test suite access (4 test files / ~5,750 lines for llm_invoke; 99 tests for sync_orchestration) yet produces the **same categories of hallucination** as bare ungrounded. In some cases worse: ungrounded-pdd has the lowest pairwise similarity (0.106 for llm_invoke) due to web-scraped content variability. One relevant code example outperforms an entire test suite for implementation anchoring.
+
+**4. Grounding's effect scales with module complexity.**
+
+| Module | Canonical Lines | Grounded Ref Similarity | Ungrounded Ref Similarity | Grounding Lift |
+|---|---|---|---|---|
+| llm_invoke | ~700 | 0.030 | 0.019 | +58% |
+| sync_orchestration | 1,973 | 0.145 | 0.037 | **+292%** |
+
+The more complex the module, the more grounding helps. This is intuitive: larger modules have more internal conventions (return types, class patterns, cycle detection strategies) that can drift without anchoring.
+
+**5. Regeneration is lossy even with grounding.**
+
+Grounded regeneration of sync_orchestration produces a 4.6x compression (1,973 → ~426 lines). The preserved code is architecturally correct but production-incomplete:
+- SyncApp constructor broken in 3/5 runs
+- All helper functions stubbed
+- No audit logging, budget warnings, skip handling, or crash recovery
+- No docstrings or issue references
+
+Grounding ensures the skeleton is correct but cannot recover the accumulated engineering decisions in 1,973 lines of battle-tested code. Regenerated code should be treated as a starting point, not a replacement.
+
+### Suggestive but Not Statistically Proven
+
+These observations are directionally consistent but cannot be confirmed with N=5 runs per arm.
+
+**1. Quantitative consistency metrics favor grounding.**
+
+Pairwise similarity: 0.189/0.391 (grounded) vs 0.162/0.284 (ungrounded) across llm_invoke/sync_orchestration. The grounded arm is 17-38% more self-consistent. However, with N=5 and high variance, these differences are not statistically significant (would need N≥20 for a reliable t-test at p<0.05).
+
+**2. Grounding produces more concise code.**
+
+Grounded avg lines: 467.6 (llm_invoke), 426.6 (sync_orchestration) vs ungrounded: 428.8, 513.0. The grounded arm trends shorter, consistent with Phase 2 findings. But the variance is high (std dev 38–150 lines).
+
+**3. Cost overhead is ~2.5x with linear scaling.**
+
+Grounded costs $0.121–0.131/call vs $0.015–0.049 ungrounded. The overhead ratio is consistent across prompt sizes, suggesting it scales linearly. But we have only 2 data points (2 modules).
+
+### Cannot Conclude
+
+**1. Why grounding helps (mechanism).**
+
+The grounded arm differs from ungrounded in multiple ways simultaneously:
+- Few-shot example injection (the hypothesized mechanism)
+- Cloud endpoint system prompt (may contain additional instructions)
+- `reviewExamples` vector search overhead (may warm up the model's context)
+- Different execution path (HTTP POST vs direct litellm call)
+
+We cannot isolate which factor(s) drive the improvement. Phase 5 "Prompt-level grounding" (injecting the example directly into the prompt) would test whether the few-shot example alone is sufficient.
+
+**2. Generalizability beyond PDD.**
+
+All experiments use PDD modules, PDD's prompt format, and PDD's few-shot collection. The anti-hallucination effect may depend on:
+- The quality of the few-shot examples (PDD's are curated production code)
+- The similarity between the example and target module
+- The prompt structure (PDD uses `<include>`, `<shell>`, `<web>` preprocessing)
+
+**3. Optimal example count.**
+
+All grounded runs used a single example (the top vector search result). We don't know whether 2–3 examples would further improve quality, or whether the benefit plateaus after 1 example.
+
+**4. Temperature sensitivity.**
+
+All non-trivial phases used temperature 1.0 (maximum nondeterminism). Phase 2 at temperature 0.0 showed trivially perfect stability for both arms. The grounding benefit at intermediate temperatures (0.3–0.7) is unknown.
+
 ## Next Steps
 
 1. **Investigate coverage gaps**: Why did factorial and flask-api not find examples in Phase 2? Check the 1025 prod `few_shot` documents for math/algorithm and web/API coverage.
