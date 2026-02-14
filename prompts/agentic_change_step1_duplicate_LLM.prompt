@@ -28,12 +28,24 @@ You are working on step 1 of 12 in an agentic change workflow. Your findings wil
    - Consider: same feature request? same affected modules? same desired outcome?
    - A true duplicate requests the same change, not just uses similar keywords
 
-3. **Handle duplicates**
-   If duplicates are found:
+3. **Verify original issue resolution status**
+   For each potential duplicate, check if the original issue was actually resolved:
+   - Use `gh issue view <number> --repo {repo_owner}/{repo_name}` to check the original issue's state
+   - Check the workflow state comment for step outcomes (look for "FAILED" in step_outputs)
+   - An issue is considered **unresolved** if: it is still open, all workflow steps failed, or no fix was merged
+   - An issue is considered **resolved** if: it is closed with a merged fix, or workflow steps completed successfully
+
+4. **Handle duplicates**
+   If duplicates are found AND the original issue was **resolved**:
    - Merge any unique information from this issue into the original
    - Add a comment to the original issue noting the additional context
    - Close this issue with a comment linking to the original
    - Report which issue is the canonical one
+
+   If duplicates are found BUT the original issue is **unresolved**:
+   - Note the relationship to the original issue but DO NOT close this issue
+   - Report that the original was not resolved and this issue should proceed
+   - Treat as a new change request for investigation purposes
 
    If no duplicates:
    - Report that this appears to be a new change request
