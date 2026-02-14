@@ -208,10 +208,11 @@ The orchestrator must parse certain step outputs to extract machine-readable dat
 4. **Resume logic**:
    - If `resume=True`: Call `load_workflow_state()` to check for existing state (GitHub first, then local)
    - Track `github_comment_id` from load result for subsequent saves
+   - **State validation on load**: After loading state, call `validate_cached_state()` to find the actual last *successfully* completed step by scanning `step_outputs` for entries that do NOT start with "FAILED:". This prevents resuming past failed steps.
    - If `resume=False`: Start fresh, call `clear_workflow_state()` to clear any existing state
    - When saving state after each step:
      - On success: Store output in step_outputs, set `last_completed_step = step_num`
-     - On failure (not fatal): Store "FAILED: {output}" in step_outputs, keep `last_completed_step = step_num - 1` (ensures resume re-runs the failed step)
+     - On failure (not fatal): Store "FAILED: {output}" in step_outputs, keep `last_completed_step` unchanged from its current value (do NOT set to `step_num - 1`, as that step may also have failed)
    - On successful completion (`ALL_TESTS_PASS`): Call `clear_workflow_state()`
    - On max cycles reached: State remains for inspection
    - On user interrupt (KeyboardInterrupt): Call `save_workflow_state()` before exiting
