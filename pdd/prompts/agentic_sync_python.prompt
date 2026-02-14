@@ -1,0 +1,47 @@
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write the `pdd/agentic_sync.py` module.
+
+% Role & Scope
+Entry point for the agentic sync workflow. Accepts a GitHub issue URL, fetches issue content, uses an LLM to identify which modules need syncing and validate architecture.json dependencies, then dispatches to the AsyncSyncRunner for parallel execution with dependency-aware scheduling.
+
+% Requirements
+1. Function: `run_agentic_sync(issue_url: str, *, verbose: bool = False, quiet: bool = False, budget: Optional[float] = None, skip_verify: bool = False, skip_tests: bool = False, agentic_mode: bool = True, no_steer: bool = True, max_attempts: Optional[int] = None, timeout_adder: float = 0.0, use_github_state: bool = True) -> Tuple[bool, str, float, str]`
+2. Return 4-tuple: (success, message, total_cost, model_used)
+3. Parse GitHub issue URL to extract: owner, repo, issue_number (reuse `_parse_issue_url` from `agentic_change.py`)
+4. Fetch issue content and comments via `gh api` (reuse `_run_gh_command` from `agentic_change.py`)
+5. Escape curly braces in issue content for safe `.format()` calls (reuse `_escape_format_braces`)
+6. Load `architecture.json` from project root; return None if missing or invalid
+7. Build LLM prompt using `load_prompt_template("agentic_sync_identify_modules_LLM")` with `{issue_content}` and `{architecture_json}` placeholders
+8. Call `run_agentic_task()` to identify modules and validate dependencies
+9. Parse LLM response for `MODULES_TO_SYNC: [...]`, `DEPS_VALID: true|false`, and optional `DEPS_CORRECTIONS: [...]`
+10. If LLM flags dependency corrections: update architecture.json in-place before building the graph
+11. Build dependency subgraph from architecture.json (via `build_dep_graph_from_architecture`)
+12. Fallback: if no architecture.json, use `build_dependency_graph(prompts_dir)` from `sync_order.py`
+13. Dispatch to `AsyncSyncRunner` with basenames, dep graph, sync options, and GitHub info
+14. Aggregate costs from LLM identification + runner execution
+
+% Helper Functions
+- `_is_github_issue_url(s: str) -> bool`: regex check for `github\.com/.+/issues/\d+`
+- `_find_project_root(start: Path) -> Path`: walk up to find `.pddrc` or `.git`
+- `_load_architecture_json(project_root: Path) -> Tuple[Optional[List], Path]`: load and validate architecture.json
+- `_parse_llm_response(response: str) -> Tuple[List[str], bool, List[Dict]]`: extract modules, deps validity, corrections
+- `_apply_architecture_corrections(arch_path, architecture, corrections, quiet) -> List[Dict]`: patch and write architecture.json
+- `_post_error_comment(owner, repo, issue_number, message)`: post error to GitHub issue
+
+% Dependencies
+<pdd.agentic_change><include>context/agentic_change_example.py</include></pdd.agentic_change>
+<pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
+<pdd.agentic_sync_runner><include>context/agentic_sync_runner_example.py</include></pdd.agentic_sync_runner>
+<pdd.sync_order><include>context/sync_order_example.py</include></pdd.sync_order>
+
+% Error Handling
+- Return `(False, "gh CLI not found...", 0.0, "")` if `gh` command not available
+- Return `(False, "Invalid GitHub issue URL: {url}", 0.0, "")` if URL parsing fails
+- Return `(False, "Failed to fetch issue: {error}", 0.0, "")` if GitHub API fails
+- Return `(False, "LLM identified no modules to sync", cost, provider)` if LLM returns empty list
+- Post error comment on GitHub issue when LLM fails (if `use_github_state` is True)
+
+% Deliverables
+- Code: `pdd/agentic_sync.py`

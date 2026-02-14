@@ -7031,5 +7031,101 @@
         ]
       }
     }
+  },
+  {
+    "reason": "LLM-driven module identification and parallel sync orchestration from GitHub issues.",
+    "description": "Entry point for agentic sync. Parses a GitHub issue URL, uses an LLM to identify which modules need syncing and validate architecture.json dependencies, then dispatches to AsyncSyncRunner for parallel execution.",
+    "dependencies": [
+      "agentic_change_python.prompt",
+      "agentic_common_python.prompt",
+      "agentic_sync_runner_python.prompt",
+      "sync_order_python.prompt"
+    ],
+    "priority": 215,
+    "filename": "agentic_sync_python.prompt",
+    "filepath": "pdd/agentic_sync.py",
+    "tags": [
+      "agentic",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "run_agentic_sync",
+            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], timeout_adder: float, use_github_state: bool) -> Tuple[bool, str, float, str]",
+            "returns": "Tuple[bool, str, float, str]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "_is_github_issue_url",
+            "signature": "(s: str) -> bool",
+            "returns": "bool",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "_parse_llm_response",
+            "signature": "(response: str) -> Tuple[List[str], bool, List[Dict]]",
+            "returns": "Tuple[List[str], bool, List[Dict]]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Parallel sync engine with dependency-aware scheduling and live GitHub progress updates.",
+    "description": "Manages concurrent pdd sync subprocesses using ThreadPoolExecutor, respects dependency ordering from architecture.json, posts live progress to GitHub issue comments, and pauses on failure.",
+    "dependencies": [
+      "agentic_change_python.prompt",
+      "sync_order_python.prompt"
+    ],
+    "priority": 216,
+    "filename": "agentic_sync_runner_python.prompt",
+    "filepath": "pdd/agentic_sync_runner.py",
+    "tags": [
+      "agentic",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "AsyncSyncRunner",
+            "signature": "(basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict, github_info: Optional[Dict], quiet: bool, verbose: bool)",
+            "returns": "AsyncSyncRunner",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "AsyncSyncRunner.run",
+            "signature": "() -> Tuple[bool, str, float]",
+            "returns": "Tuple[bool, str, float]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "build_dep_graph_from_architecture",
+            "signature": "(arch_path: Path, target_basenames: List[str]) -> Dict[str, List[str]]",
+            "returns": "Dict[str, List[str]]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
   }
 ]
