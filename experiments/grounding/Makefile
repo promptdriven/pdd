@@ -6,7 +6,9 @@ SHELL := /bin/bash
         llm-invoke-prod llm-invoke-staging llm-invoke-seed-staging \
         llm-invoke-pdd-local-prod \
         llm-invoke-evaluate llm-invoke-summarize \
-        llm-invoke-experiment-prod llm-invoke-experiment-staging clean-llm-invoke
+        llm-invoke-experiment-prod llm-invoke-experiment-staging clean-llm-invoke \
+        sync-orch-prod sync-orch-staging sync-orch-evaluate sync-orch-summarize \
+        sync-orch-experiment-prod sync-orch-experiment-staging clean-sync-orch
 
 # ---------------------------------------------------------------------------
 # Seed test examples
@@ -110,6 +112,32 @@ llm-invoke-experiment-staging: clean-llm-invoke llm-invoke-staging llm-invoke-ev
 clean-llm-invoke:
 	rm -rf results/llm_invoke_stability.csv results/llm_invoke_evaluation.csv results/llm_invoke_generations/
 	@echo "Cleaned llm_invoke experiment results."
+
+# ---------------------------------------------------------------------------
+# sync_orchestration regeneration experiment
+# ---------------------------------------------------------------------------
+
+sync-orch-prod:
+	python3 scripts/run_llm_invoke_stability.py --env prod --runs 5 --temperature 1.0 --module sync_orchestration
+
+sync-orch-staging:
+	infisical run --env=staging -- python3 scripts/run_llm_invoke_stability.py --env staging --runs 5 --temperature 1.0 --module sync_orchestration
+
+sync-orch-evaluate:
+	python3 scripts/evaluate_llm_invoke.py --module sync_orchestration
+
+sync-orch-summarize:
+	python3 scripts/summarize_llm_invoke.py --module sync_orchestration
+
+sync-orch-experiment-prod: clean-sync-orch sync-orch-prod sync-orch-evaluate sync-orch-summarize
+	@echo "sync_orchestration regeneration experiment complete (prod)."
+
+sync-orch-experiment-staging: clean-sync-orch sync-orch-staging sync-orch-evaluate sync-orch-summarize
+	@echo "sync_orchestration regeneration experiment complete (staging)."
+
+clean-sync-orch:
+	rm -rf results/sync_orchestration_stability.csv results/sync_orchestration_evaluation.csv results/sync_orchestration_generations/
+	@echo "Cleaned sync_orchestration experiment results."
 
 # ---------------------------------------------------------------------------
 # Clean results

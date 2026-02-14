@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Run llm_invoke regeneration stability experiment: grounded vs ungrounded.
+"""Run module regeneration stability experiment: grounded vs ungrounded.
 
-Grounded arm: POST /generateCode on prod/staging (vector search finds llm_invoke
+Grounded arm: POST /generateCode on prod/staging (vector search finds
 few-shot example, injects it as XML, calls code_generator()).
 Ungrounded arm: litellm direct call with same model but no few-shot examples.
 Ungrounded-pdd arm: `pdd generate --local` (auto-discovers test files, no few-shot).
@@ -10,6 +10,7 @@ All arms use vertex_ai/gemini-3-flash-preview at temperature 1.0 by default.
 
 Usage:
     python3 scripts/run_llm_invoke_stability.py --env prod --runs 5 --temperature 1.0
+    python3 scripts/run_llm_invoke_stability.py --env prod --runs 5 --module sync_orchestration
     python3 scripts/run_llm_invoke_stability.py --env prod --runs 5 --arms ungrounded-pdd
 """
 
@@ -40,11 +41,13 @@ STAGING_BASE_URL = "https://us-central1-prompt-driven-development-stg.cloudfunct
 PROD_BASE_URL = "https://us-central1-prompt-driven-development.cloudfunctions.net"
 
 PDD_REPO_ROOT = Path("/Users/gregtanaka/Documents/pdd_cloud/pdd")
-PROMPT_FILE = PDD_REPO_ROOT / "prompts" / "llm_invoke_python.prompt"
+
+MODULE_NAME = "llm_invoke"
+PROMPT_FILE = PDD_REPO_ROOT / "prompts" / f"{MODULE_NAME}_python.prompt"
 
 RESULTS_DIR = Path(__file__).resolve().parent.parent / "results"
-CSV_PATH = RESULTS_DIR / "llm_invoke_stability.csv"
-GENERATIONS_DIR = RESULTS_DIR / "llm_invoke_generations"
+CSV_PATH = RESULTS_DIR / f"{MODULE_NAME}_stability.csv"
+GENERATIONS_DIR = RESULTS_DIR / f"{MODULE_NAME}_generations"
 
 CSV_FIELDS = [
     "timestamp_utc",
@@ -181,7 +184,7 @@ def _count_ast_nodes(code: str) -> Dict[str, int]:
 # ---------------------------------------------------------------------------
 
 def _resolve_prompt() -> str:
-    """Resolve the llm_invoke prompt by running preprocess from the pdd repo root.
+    """Resolve the module prompt by running preprocess from the pdd repo root.
 
     Changes CWD to pdd repo root so <include>, <shell>, and <web> tags resolve
     correctly via PathResolver.
@@ -263,7 +266,7 @@ def _call_generate_cloud(
 def _call_generate_local(
     resolved_prompt: str,
     temperature: float,
-    model: str = "gemini/gemini-3-flash-preview",
+    model: str = "vertex_ai/gemini-3-flash-preview",
 ) -> Dict[str, Any]:
     """Call litellm directly with the resolved prompt (ungrounded arm).
 
@@ -382,10 +385,10 @@ def _call_generate_pdd_local(
         original_prompt = PROMPT_FILE.read_text(encoding="utf-8")
         tmp_prompt.write_text(original_prompt + nonce, encoding="utf-8")
 
-        # Output file must be named llm_invoke.py so _find_default_test_files()
-        # auto-discovers tests/test_llm_invoke*.py
+        # Output file must be named {MODULE_NAME}.py so _find_default_test_files()
+        # auto-discovers tests/test_{MODULE_NAME}*.py
         tmp_dir = tempfile.mkdtemp(prefix="pdd_exp_")
-        tmp_output = Path(tmp_dir) / "llm_invoke.py"
+        tmp_output = Path(tmp_dir) / f"{MODULE_NAME}.py"
 
         cmd = [
             sys.executable, "-c", "from pdd.cli import cli; cli()",
@@ -500,7 +503,7 @@ def run_experiment(
     base_url: Optional[str] = None,
     arms: Optional[List[str]] = None,
 ) -> int:
-    """Run llm_invoke regeneration stability experiment. Returns 0 on success."""
+    """Run module regeneration stability experiment. Returns 0 on success."""
     if arms is None:
         arms = ["grounded", "ungrounded", "ungrounded-pdd"]
     if base_url is None:
@@ -514,7 +517,7 @@ def run_experiment(
     needs_resolved = "grounded" in arms or "ungrounded" in arms
     resolved_prompt = ""
     if needs_resolved:
-        print("Resolving llm_invoke prompt (expanding includes)...")
+        print(f"Resolving {MODULE_NAME} prompt (expanding includes)...")
         resolved_prompt = _resolve_prompt()
         print(f"  Resolved prompt: {len(resolved_prompt):,} chars, {len(resolved_prompt.splitlines()):,} lines")
 
@@ -540,11 +543,11 @@ def run_experiment(
 
     arm_descriptions = {
         "grounded": f"POST {base_url}/generateCode",
-        "ungrounded": "litellm gemini/gemini-3-flash-preview (no examples)",
+        "ungrounded": "litellm vertex_ai/gemini-3-flash-preview (no examples)",
         "ungrounded-pdd": "pdd generate --local (auto-discovers tests, no few-shot)",
     }
 
-    print(f"\nllm_invoke Regeneration Stability Experiment")
+    print(f"\n{MODULE_NAME} Regeneration Stability Experiment")
     print(f"{'=' * 70}")
     print(f"Environment:  {env}")
     for arm in arms:
@@ -606,7 +609,7 @@ def run_experiment(
 
             # Save generated code
             if code:
-                gen_file = GENERATIONS_DIR / f"llm_invoke_{arm}_run{run_num}.py"
+                gen_file = GENERATIONS_DIR / f"{MODULE_NAME}_{arm}_run{run_num}.py"
                 gen_file.write_text(code, encoding="utf-8")
 
             row = {
@@ -661,7 +664,7 @@ def run_experiment(
     if grounded_no_example > 0:
         print(
             f"\nWARNING: {grounded_no_example} grounded run(s) had no example selected. "
-            f"These are effectively ungrounded. Check that the llm_invoke few-shot "
+            f"These are effectively ungrounded. Check that the {MODULE_NAME} few-shot "
             f"example exists in Firestore and was not rejected by judge."
         )
 
@@ -675,7 +678,7 @@ def run_experiment(
 def main() -> int:
     """Parse args and run experiment."""
     parser = argparse.ArgumentParser(
-        description="Run llm_invoke regeneration stability experiment (grounded vs ungrounded)"
+        description="Run module regeneration stability experiment (grounded vs ungrounded)"
     )
     parser.add_argument(
         "--env",
@@ -707,7 +710,18 @@ def main() -> int:
         choices=["grounded", "ungrounded", "ungrounded-pdd"],
         help="Which arms to run (default: all three)",
     )
+    parser.add_argument(
+        "--module",
+        default="llm_invoke",
+        help="Module name to test (default: llm_invoke)",
+    )
     args = parser.parse_args()
+
+    global MODULE_NAME, PROMPT_FILE, CSV_PATH, GENERATIONS_DIR
+    MODULE_NAME = args.module
+    PROMPT_FILE = PDD_REPO_ROOT / "prompts" / f"{MODULE_NAME}_python.prompt"
+    CSV_PATH = RESULTS_DIR / f"{MODULE_NAME}_stability.csv"
+    GENERATIONS_DIR = RESULTS_DIR / f"{MODULE_NAME}_generations"
 
     return run_experiment(
         env=args.env,

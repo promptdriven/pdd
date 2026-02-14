@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
-"""Evaluate llm_invoke regeneration results: test suite execution and similarity metrics.
+"""Evaluate module regeneration results: test suite execution and similarity metrics.
 
 Runs after run_llm_invoke_stability.py. For each generated file:
-  1. Reference similarity (difflib.SequenceMatcher) vs canonical llm_invoke.py
+  1. Reference similarity (difflib.SequenceMatcher) vs canonical module.py
   2. Pairwise similarity between runs within each arm
   3. Test suite execution with PYTHONPATH isolation
 
 Usage:
     python3 scripts/evaluate_llm_invoke.py
+    python3 scripts/evaluate_llm_invoke.py --module sync_orchestration
 """
 
 from __future__ import annotations
 
+import argparse
 import csv
 import difflib
 import os
@@ -23,14 +25,16 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
+MODULE_NAME = "llm_invoke"
+
 RESULTS_DIR = Path(__file__).resolve().parent.parent / "results"
-GENERATIONS_DIR = RESULTS_DIR / "llm_invoke_generations"
-EVAL_CSV_PATH = RESULTS_DIR / "llm_invoke_evaluation.csv"
-STABILITY_CSV_PATH = RESULTS_DIR / "llm_invoke_stability.csv"
+GENERATIONS_DIR = RESULTS_DIR / f"{MODULE_NAME}_generations"
+EVAL_CSV_PATH = RESULTS_DIR / f"{MODULE_NAME}_evaluation.csv"
+STABILITY_CSV_PATH = RESULTS_DIR / f"{MODULE_NAME}_stability.csv"
 
 PDD_REPO_ROOT = Path("/Users/gregtanaka/Documents/pdd_cloud/pdd")
-CANONICAL_FILE = PDD_REPO_ROOT / "pdd" / "llm_invoke.py"
-TEST_FILE = PDD_REPO_ROOT / "tests" / "test_llm_invoke.py"
+CANONICAL_FILE = PDD_REPO_ROOT / "pdd" / f"{MODULE_NAME}.py"
+TEST_FILES = sorted(PDD_REPO_ROOT.glob(f"tests/test_{MODULE_NAME}*.py"))
 
 EVAL_FIELDS = [
     "arm",
@@ -93,39 +97,42 @@ def _line_recall(generated: str, canonical: str, min_length: int = 20) -> float:
 # ---------------------------------------------------------------------------
 
 def _run_tests_isolated(generated_file: Path) -> Dict[str, Any]:
-    """Run test_llm_invoke.py with the generated file replacing llm_invoke.py.
+    """Run test files with the generated file replacing the module source.
 
     Creates a temp directory with symlinked pdd package, swapping only
-    llm_invoke.py, then runs pytest with PYTHONPATH override.
+    {MODULE_NAME}.py, then runs pytest with PYTHONPATH override.
     """
     pdd_src = PDD_REPO_ROOT / "pdd"
+    module_filename = f"{MODULE_NAME}.py"
 
-    with tempfile.TemporaryDirectory(prefix="llm_invoke_eval_") as tmp:
+    with tempfile.TemporaryDirectory(prefix=f"{MODULE_NAME}_eval_") as tmp:
         tmp_path = Path(tmp)
         pdd_pkg = tmp_path / "pdd"
         pdd_pkg.mkdir()
 
-        # Symlink all pdd source files/dirs except llm_invoke.py and __pycache__
+        # Symlink all pdd source files/dirs except the module file and __pycache__
         for item in pdd_src.iterdir():
-            if item.name in ("llm_invoke.py", "__pycache__"):
+            if item.name in (module_filename, "__pycache__"):
                 continue
             target = pdd_pkg / item.name
             target.symlink_to(item)
 
-        # Copy generated llm_invoke.py into the temp package
-        shutil.copy2(generated_file, pdd_pkg / "llm_invoke.py")
+        # Copy generated module file into the temp package
+        shutil.copy2(generated_file, pdd_pkg / module_filename)
 
-        # Run pytest with PYTHONPATH override so `from pdd.llm_invoke import ...`
+        # Run pytest with PYTHONPATH override so `from pdd.{MODULE_NAME} import ...`
         # picks up the generated version
         env = os.environ.copy()
         env["PYTHONPATH"] = str(tmp_path) + ":" + env.get("PYTHONPATH", "")
+
+        test_file_args = [str(f) for f in TEST_FILES]
 
         start = __import__("time").monotonic()
         try:
             result = subprocess.run(
                 [
                     sys.executable, "-m", "pytest", "--tb=line", "-q",
-                    str(TEST_FILE),
+                    *test_file_args,
                 ],
                 capture_output=True,
                 text=True,
@@ -199,7 +206,26 @@ def _parse_pytest_output(result: subprocess.CompletedProcess) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def main() -> int:
-    """Evaluate all generated llm_invoke files."""
+    """Evaluate all generated module files."""
+    parser = argparse.ArgumentParser(
+        description="Evaluate module regeneration results (tests + similarity)"
+    )
+    parser.add_argument(
+        "--module",
+        default="llm_invoke",
+        help="Module name to evaluate (default: llm_invoke)",
+    )
+    args = parser.parse_args()
+
+    global MODULE_NAME, GENERATIONS_DIR, EVAL_CSV_PATH, STABILITY_CSV_PATH
+    global CANONICAL_FILE, TEST_FILES
+    MODULE_NAME = args.module
+    GENERATIONS_DIR = RESULTS_DIR / f"{MODULE_NAME}_generations"
+    EVAL_CSV_PATH = RESULTS_DIR / f"{MODULE_NAME}_evaluation.csv"
+    STABILITY_CSV_PATH = RESULTS_DIR / f"{MODULE_NAME}_stability.csv"
+    CANONICAL_FILE = PDD_REPO_ROOT / "pdd" / f"{MODULE_NAME}.py"
+    TEST_FILES = sorted(PDD_REPO_ROOT.glob(f"tests/test_{MODULE_NAME}*.py"))
+
     stability_rows = _load_stability_csv()
     if not stability_rows:
         print(f"No stability results found at {STABILITY_CSV_PATH}")
@@ -219,7 +245,7 @@ def main() -> int:
     for row in stability_rows:
         arm = row["arm"]
         run_num = int(row["run_number"])
-        gen_file = GENERATIONS_DIR / f"llm_invoke_{arm}_run{run_num}.py"
+        gen_file = GENERATIONS_DIR / f"{MODULE_NAME}_{arm}_run{run_num}.py"
         if gen_file.exists():
             files_by_arm[arm].append((run_num, gen_file))
 
@@ -228,10 +254,10 @@ def main() -> int:
         print(f"No generated files found in {GENERATIONS_DIR}")
         return 1
 
-    print(f"\nllm_invoke Evaluation")
+    print(f"\n{MODULE_NAME} Evaluation")
     print(f"{'=' * 70}")
     print(f"Canonical:    {CANONICAL_FILE} ({len(canonical_code.splitlines())} lines)")
-    print(f"Test file:    {TEST_FILE}")
+    print(f"Test files:   {', '.join(f.name for f in TEST_FILES)}")
     print(f"Generations:  {total_files} files")
     print(f"{'=' * 70}\n")
 
