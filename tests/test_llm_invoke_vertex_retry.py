@@ -55,7 +55,7 @@ def create_vertex_model_dataframe():
     """Create a mock DataFrame with a Vertex AI model configuration."""
     mock_data = [{
         'provider': 'Google',
-        'model': 'vertex_ai/claude-opus-4-5',
+        'model': 'vertex_ai/claude-opus-4-6',
         'input': 5.0,
         'output': 25.0,
         'coding_arena_elo': 1465,

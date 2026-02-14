@@ -1,15 +1,124 @@
+## v0.0.148 (2026-02-13)
+
+### Feat
+
+- Add prod llm_invoke grounding experiment results
+- Implement comprehensive unit and integration tests for `llm_invoke` utilities and establish cloud batch test reporting.
+- Send raw prompt as `searchInput` to the cloud `generateCode` endpoint and include cloud batch test results.
+- Add llm_invoke regeneration stability experiment scripts and results
+- update LLM invocation prompt with enhanced model selection, structured output, error handling, and add cloud batch test results.
+- Add resolve pipeline (fix→render→stitch) with SSE job tracking
+- document cloud testing process and add example batch results file.
+
+### Fix
+
+- address Copilot review — remove unused imports/fixtures, add use_github_state, drop e2e markers
+- add failing tests and prompt fixes for duplicate detection closing unresolved issues (#469)
+- update test-durations.json from balanced cloud batch run
+- add missing searchInput field to test_full_gen_cloud_success assertion
+- address Copilot review — return changed_files on abort, break on missing steps
+- prevent false cached steps on resume when all providers fail (#467)
+- address PR review feedback (#468)
+- load prompt templates from local repo in tests (#468)
+- add NOT_A_BUG early exit check in e2e fix orchestrator (#468)
+- use --simple flag in test_update_silently_skips_logging to avoid 600s agentic timeout
+- update test-durations.json from balanced cloud batch run
+- increase timeout to 300s for three flaky E2E tests
+- update test-durations.json with actual profiled data, fix record cmd
+- cloud-batch bug fixes and duration-based chunk balancing
+- await safeWriteAnnotations in resolve endpoint to persist job before response
+
+### Refactor
+
+- overhaul LLM invocation logic, logging, error handling, and experiment setup, adding a prompting guide and new experiment scripts.
+- streamline LLM invocation setup by removing interactive API key management, refactoring logging, and updating JSON schema utilities.
+
+## v0.0.147 (2026-02-12)
+
+### Feat
+
+- **CSV-driven test command discovery**: `default_verify_cmd_for()` now reads `run_test_command` from `language_format.csv` instead of hardcoding per-language commands. JavaScript, TypeScript, TypeScript React, JavaScriptReact, Go, Rust, Swift, and C# now resolve test commands from CSV, reducing agentic fallback for common languages.
+- **Configurable agent provider preference**: New `PDD_AGENTIC_PROVIDER` environment variable overrides the default `anthropic,google,openai` provider order (e.g., `PDD_AGENTIC_PROVIDER=google` to use only Google). Replaces the former `AGENT_PROVIDER_PREFERENCE` constant with `get_agent_provider_preference()`.
+- **Gemini and Codex model override**: `GEMINI_MODEL` and `CODEX_MODEL` environment variables now pass `--model` to the Gemini CLI and Codex CLI respectively, mirroring the existing `CLAUDE_MODEL` support for Anthropic.
+- **LLM call timeout**: All `litellm.completion()` calls now enforce a 120-second timeout (`LLM_CALL_TIMEOUT`), preventing indefinite hangs on unresponsive providers.
+- **Grounding experiment infrastructure**: New `experiments/grounding/` directory with retrieval quality (Phase 1) and generation stability (Phase 2) experiments, including seed data, query sets, Makefile-driven automation, and CSV result tracking.
+
+### Fix
+
+- **JS/TS test expectations updated**: Tests now assert explicit `run_test_command` values (`node {file}`, `npx tsx {file}`) instead of expecting empty strings, matching the new CSV-driven discovery.
+- **Lock file assertion removed**: `test_auto_deps_lock.py` no longer asserts lock file existence after release, which was filelock-version-dependent. Serialization is still verified via execution order assertions.
+- **LLM timeout for cloud tests**: Added 120s timeout to all LLM retry paths in `llm_invoke.py`, fixing cloud test hangs on unresponsive providers.
+- **Test fixture parameters**: Added missing `mock_env` and `mock_load_model_data` fixtures to `TestAgenticDebugLogging` test that was failing in isolation.
+
+### Build
+
+- **PDD secrets dispatch workflow**: New `.github/workflows/pdd-secrets-dispatch.yml` for encrypted secret exchange between GitHub Actions runners via RSA+AES envelope encryption.
+- **Regression test cost control**: `regression.sh` and `sync_regression.sh` now set `PDD_MODEL_DEFAULT=vertex_ai/gemini-3-flash-preview` and `PDD_AGENTIC_PROVIDER=google,anthropic,openai` to force cheaper models during regression runs.
+- **Cloud Batch provider config**: `ci/cloud-batch/entrypoint.sh` now sets `PDD_AGENTIC_PROVIDER=google,anthropic,openai` to prefer Google's Gemini on Vertex AI in CI.
+- **GLM-5 model update**: Replaced Fireworks `glm-4p7` (Elo 1441, $0.60/$2.20) with `glm-5` (Elo 1451, $1.00/$3.20). Enabled `structured_output` for DeepSeek v3.2. Added `global` location for Gemini 3 Flash Preview and Claude Opus 4.6 on Vertex AI.
+
+### Refactor
+
+- **`AGENT_PROVIDER_PREFERENCE` → `get_agent_provider_preference()`**: Constant replaced with a function that reads from `PDD_AGENTIC_PROVIDER` env var, enabling runtime configuration without code changes.
+- **`default_verify_cmd_for()` resolution chain**: Refactored from a Python-only hardcoded function to a three-step resolution: CSV lookup → Python fallback → None (agentic mode).
+
+## v0.0.146 (2026-02-11)
+
+### Feat
+
+- **Agentic orchestrator fallback comments**: When an agent step fails (e.g., all providers unavailable), a fallback comment is now posted to the GitHub issue so users can see which steps failed and why. Previously, failed steps were silent when the agent never executed.
+- **Agentic orchestrator early abort**: The change orchestrator now aborts after 3 consecutive provider failures instead of blindly retrying all 13 steps, saving time and API cost when providers are down.
+- **Provider error details in failure messages**: `run_agentic_task` now includes per-provider error snippets in the failure message (e.g., `"All agent providers failed: anthropic: rate limited; google: timeout"`) instead of a generic message.
+- **Claude Code OAuth token support**: The Anthropic provider now preserves `ANTHROPIC_API_KEY` when `CLAUDE_CODE_OAUTH_TOKEN` is present, enabling Claude Code CLI authentication in CI environments.
+- **Vertex AI ADC authentication**: `get_available_agents()` now recognizes Application Default Credentials on GCP VMs (`GOOGLE_CLOUD_PROJECT` without `GOOGLE_APPLICATION_CREDENTIALS`), enabling the Google provider on Cloud Batch.
+
+### Fix
+
+- **Warning count false negatives (#485)**: `pytest_output.py` now parses warning counts only from the pytest summary line (e.g., `"2 warnings"` in `=== 1 passed, 2 warnings ===`) instead of naively counting all occurrences of "warning" in stdout. Library warnings from LiteLLM, Pydantic, and PDD log messages no longer inflate the count. Thanks Serhan Asad (#490)!
+- **Warnings no longer block success gate (#485)**: `fix_error_loop` success condition changed from `fails == 0 and errors == 0 and warnings == 0` to `fails == 0 and errors == 0`. Warnings are informational and no longer cause false test failures or trigger unnecessary agentic fallback.
+- **Workflow state preserved on partial failure**: When the change orchestrator completes with some failed steps, workflow state is no longer cleared, preserving debugging info for investigation.
+- **macOS regression test compatibility**: `regression.sh` now detects macOS and falls back to `gtimeout` or a no-op wrapper when GNU `timeout` is unavailable.
+
+### Build
+
+- **Cloud Batch scale-up (56 → 64 tasks)**: Increased pytest chunks from 16 to 24 and total task count from 56 to 64 for better parallelism. Max run duration increased from 1200s to 1500s.
+- **Cloud Batch CI environment hardening**: Install Gemini CLI, Codex CLI, and Claude Code CLI in the Docker image. Add `zsh`, `fish`, `tcsh`, `nodejs`, `npm` for shell detection tests. Include parent `.pddrc`, `context/`, `docs/` in source tarball. Set Vertex AI ADC env vars. Exchange Firebase refresh token for JWT at runtime. Inject `CLAUDE_CODE_OAUTH_TOKEN` via Secret Manager.
+- **Dynamic task count in collect-results.sh**: Task count is now derived from the Cloud Batch job descriptor instead of being hardcoded, preventing mismatches when the job template changes.
+- **Regression test isolation**: Individual regression test cases can now run independently in CI parallel mode. Prerequisite files (e.g., `simple_math.py`, `sub_simple_math.prompt`) are seeded from fixtures when not running sequentially. Added 15-minute timeout per command and tail-30 log output on failure for CI debugging.
+- **Smart Docker image rebuild**: `make cloud-test` now auto-detects whether image-affecting files changed (via SHA-256 hash) and skips rebuild when unnecessary.
+- **Subdirectory test discovery**: Cloud Batch entrypoint now uses `find tests/ -name 'test_*.py'` (recursive) instead of `find tests/ -maxdepth 1`, picking up tests in `tests/server/` and other subdirectories.
+- **GCS bucket rename**: Default CI results bucket changed from `pdd-ci-results` to `pdd-stg-ci-results`.
+
+### Docs
+
+- **New test fixtures**: Added `tests/fixtures/simple_math.py`, `simple_math_example.py`, `sub_simple_math.prompt`, and `updated_simple_math_python.prompt` to support isolated regression test execution.
+
 ## v0.0.145 (2026-02-10)
 
 ### Feat
 
-- add Cloud Batch parallel test infrastructure with Spot VMs
+- **Cloud Batch CI**: Add parallel test infrastructure running 56 Spot VM tasks on GCP Cloud Batch. Includes Dockerfile, entrypoint dispatching pytest chunks / regression / sync / cloud suites by task index, JSON job template with Secret Manager integration, GCS-based result collection with markdown report generation, and one-time GCP setup script. New Makefile targets: `cloud-test`, `cloud-test-quick`, `cloud-test-build`, `cloud-test-push`, `cloud-test-setup`.
 
 ### Fix
 
-- Return error signal (-1) instead of false success (0) on verify LLM failures (#305)
-- prevent CI auth hang by skipping auto_submit in local mode
-- Address Copilot review feedback on PR #462
-- Handle OAuth device flow rate limiting correctly (#309)
+- **fix_verification_errors**: Return error signal (`-1`) instead of false success (`0`) on all LLM failure paths, preventing the verify loop from misinterpreting errors as "0 issues found" (#305). All five early-return error paths (`verification_issues_count: 0`) changed to `-1`. Thanks James Levin!
+- **fix_main / sync_orchestration**: Skip `auto_submit` when running in local mode (`PDD_FORCE_LOCAL` env flag or `--local` sync flag), preventing CI auth hangs that blocked headless test runs.
+- **get_jwt_token**: Rewrite OAuth device flow polling to handle rate limiting correctly (#309). Parse JSON body before `raise_for_status()` so `slow_down` errors in HTTP 429 responses are handled per GitHub spec (increment interval by 5s). Add exponential backoff with cap for HTTP 429 responses without JSON body. Respect `Retry-After` header. Clean up redundant `JSONDecodeError` catch and unused imports. Thanks James Levin!
+- **commands/modify**: `pdd change` now raises `Exit(1)` on failure instead of silently returning, so callers and CI detect unsuccessful modifications.
+
+### Docs
+
+- **CONTRIBUTING.md**: Add Continuous Integration section documenting the GitHub Actions unit test workflow, how to reproduce the CI test subset locally (`pytest -m "not integration and not e2e and not real" --timeout=60`), and a new checklist item requiring CI to pass before merge.
+
+### Tests
+
+- **test_e2e_issue_305_false_success**: New 365-line E2E test suite exercising the full `fix_verification_errors` → verify loop path with simulated LLM failures, confirming `-1` error signal propagation and correct failure reporting.
+- **test_e2e_issue_309_oauth_rate_limit**: New 406-line E2E test suite covering OAuth device flow rate limiting: `slow_down` interval increment, HTTP 429 exponential backoff, `Retry-After` header, mixed 429-then-success sequences, and backoff cap behavior.
+- **test_fix_verification_errors**: Add 169 lines of tests for all error-signal return paths.
+- **test_fix_main**: Add 178 lines of tests covering `auto_submit` suppression under `PDD_FORCE_LOCAL`.
+- **test_get_jwt_token**: Expand with 273 lines of new rate-limiting and backoff tests.
+- **test_sync_orchestration**: Add 99 lines testing `auto_submit=(not local)` propagation in sync fix calls.
+- **test_commands_modify**: Add 28 lines testing `Exit(1)` on change failure.
 
 ## v0.0.144 (2026-02-09)
 

@@ -486,3 +486,137 @@ def test_extract_failing_files_mixed_formats():
     # Pattern 1 (FAILED prefix) matches first, then pattern 2 (FAILED suffix)
     assert result == ["tests/test_b.py", "tests/test_d.py", "tests/test_c.py"]
 
+
+# ============================================================================
+# Regression Tests - Issue #485: Naive warning counting
+# ============================================================================
+
+def test_warning_count_ignores_litellm_and_pydantic_warnings(tmp_path):
+    """
+    Issue #485: warnings count should only reflect pytest warnings,
+    not library warnings (LiteLLM UserWarning, Pydantic, PDD log messages)
+    that appear in subprocess stdout.
+    """
+    import subprocess as real_subprocess
+
+    test_file = tmp_path / "test_pass.py"
+    test_file.write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+
+    # Simulate pytest output that has all tests passing (return code 0)
+    # but contains library warning strings in stdout
+    fake_stdout = (
+        "test_pass.py::test_ok PASSED [100%]\n"
+        "/usr/lib/python3.11/site-packages/litellm/utils.py:123: UserWarning: client is not initialized\n"
+        "  warnings.warn(\"client is not initialized\")\n"
+        "/usr/lib/python3.11/site-packages/pydantic/main.py:45: PydanticSerializationUnexpectedValue: warning unexpected\n"
+        "WARNING: Cloud fallback is disabled\n"
+        "\n"
+        "========================= 1 passed in 0.03s =========================\n"
+    )
+    fake_completed = real_subprocess.CompletedProcess(
+        args=["pytest"], returncode=0, stdout=fake_stdout, stderr=""
+    )
+
+    with patch("pdd.pytest_output.subprocess.run", return_value=fake_completed):
+        result = run_pytest_and_capture_output(str(test_file))
+
+    results = result["test_results"][0]
+    assert results["return_code"] == 0
+    assert results["passed"] == 1
+    assert results["failures"] == 0
+    assert results["errors"] == 0
+    # BUG: Current code counts 4+ warnings from library output.
+    # After fix, this should be 0 (no pytest summary warnings).
+    assert results["warnings"] == 0, (
+        f"Expected 0 warnings (no pytest warnings in summary line), "
+        f"but got {results['warnings']}. Library warnings should not be counted."
+    )
+
+
+def test_warning_count_parses_pytest_summary_line(tmp_path):
+    """
+    Issue #485: When pytest summary line reports warnings (e.g., '1 passed, 2 warnings'),
+    those should be counted correctly.
+    """
+    import subprocess as real_subprocess
+
+    test_file = tmp_path / "test_warn.py"
+    test_file.write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+
+    fake_stdout = (
+        "test_warn.py::test_ok PASSED [100%]\n"
+        "\n"
+        "===================== 1 passed, 2 warnings in 0.05s =====================\n"
+    )
+    fake_completed = real_subprocess.CompletedProcess(
+        args=["pytest"], returncode=0, stdout=fake_stdout, stderr=""
+    )
+
+    with patch("pdd.pytest_output.subprocess.run", return_value=fake_completed):
+        result = run_pytest_and_capture_output(str(test_file))
+
+    results = result["test_results"][0]
+    # After fix, should parse "2 warnings" from summary line
+    assert results["warnings"] == 2, (
+        f"Expected 2 warnings from pytest summary line, got {results['warnings']}"
+    )
+
+
+def test_warning_count_zero_for_clean_output(tmp_path):
+    """
+    Issue #485: Clean pytest output with no warnings anywhere should yield 0 warnings.
+    """
+    import subprocess as real_subprocess
+
+    test_file = tmp_path / "test_clean.py"
+    test_file.write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+
+    fake_stdout = (
+        "test_clean.py::test_ok PASSED [100%]\n"
+        "\n"
+        "========================= 1 passed in 0.02s =========================\n"
+    )
+    fake_completed = real_subprocess.CompletedProcess(
+        args=["pytest"], returncode=0, stdout=fake_stdout, stderr=""
+    )
+
+    with patch("pdd.pytest_output.subprocess.run", return_value=fake_completed):
+        result = run_pytest_and_capture_output(str(test_file))
+
+    results = result["test_results"][0]
+    assert results["warnings"] == 0
+
+
+def test_warning_count_mixed_library_and_pytest_warnings(tmp_path):
+    """
+    Issue #485 end-to-end: Output has both library warning strings AND
+    a real pytest warning in the summary. Only the summary count should matter.
+    """
+    import subprocess as real_subprocess
+
+    test_file = tmp_path / "test_mixed.py"
+    test_file.write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+
+    fake_stdout = (
+        "test_mixed.py::test_ok PASSED [100%]\n"
+        "/site-packages/litellm/utils.py:10: UserWarning: something\n"
+        "  warnings.warn('something')\n"
+        "WARNING: PDD cloud fallback disabled\n"
+        "\n"
+        "================== 1 passed, 1 warning in 0.04s ==================\n"
+    )
+    fake_completed = real_subprocess.CompletedProcess(
+        args=["pytest"], returncode=0, stdout=fake_stdout, stderr=""
+    )
+
+    with patch("pdd.pytest_output.subprocess.run", return_value=fake_completed):
+        result = run_pytest_and_capture_output(str(test_file))
+
+    results = result["test_results"][0]
+    # BUG: Current code counts 3+ warnings from naive substring matching.
+    # After fix, should be 1 (from pytest summary "1 warning").
+    assert results["warnings"] == 1, (
+        f"Expected 1 warning (from pytest summary), got {results['warnings']}. "
+        f"Library warnings in stdout should not inflate the count."
+    )
+
