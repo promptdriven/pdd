@@ -1749,7 +1749,10 @@ def sync_orchestration(
                                         success = pdd_files['test'].exists()
                                 else:
                                     success = bool(result[0])
-                                cost = result[-2] if len(result) >= 2 and isinstance(result[-2], (int, float)) else 0.0
+                                if operation in ('test', 'test_extend') and len(result) >= 4:
+                                    cost = result[1] if isinstance(result[1], (int, float)) else 0.0
+                                else:
+                                    cost = result[-2] if len(result) >= 2 and isinstance(result[-2], (int, float)) else 0.0
                                 current_cost_ref[0] += cost
                             else:
                                 success = result is not None
@@ -1772,9 +1775,11 @@ def sync_orchestration(
                                  model_name = result.get('model', 'unknown')
                             elif isinstance(result, tuple) and len(result) >= 3:
                                  # cmd_test_main returns 4-tuple: (content, cost, model, agentic_success)
-                                 # Other commands return 3-tuple: (content, cost, model)
-                                 # Use explicit indexing for test operation to handle 4-tuple correctly
-                                 if operation == 'test' and len(result) >= 4:
+                                 # Other commands may return either:
+                                 #   - 3-tuple: (content, cost, model), e.g. some context operations
+                                 #   - 4-tuple: (content, was_incremental, cost, model_name), e.g. code_generator_main
+                                 # For tests, cost is at index 1; for most other 4+ tuples, cost is at index -2 and model at -1.
+                                 if operation in ('test', 'test_extend') and len(result) >= 4:
                                      actual_cost = result[1] if isinstance(result[1], (int, float)) else 0.0
                                      model_name = result[2] if isinstance(result[2], str) else 'unknown'
                                  else:
