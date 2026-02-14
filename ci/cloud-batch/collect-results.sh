@@ -17,6 +17,15 @@ echo "=== Downloading results from GCS ==="
 mkdir -p "${RESULTS_LOCAL}"
 gsutil -q -m cp "gs://${BUCKET}/${JOB_RUN_ID}/results/*" "${RESULTS_LOCAL}/" 2>/dev/null || true
 
+# ── Auto-update test durations from junitxml ─────────────────────────────
+DURATIONS_FILE="${REPO_ROOT}/ci/cloud-batch/test-durations.json"
+if ls "${RESULTS_LOCAL}"/task_*_junit.xml >/dev/null 2>&1 || ls "${RESULTS_LOCAL}"/task_*.log >/dev/null 2>&1; then
+    echo "=== Updating test durations ==="
+    python3 "${SCRIPT_DIR}/balance-chunks.py" record \
+        --log-dir "${RESULTS_LOCAL}" \
+        --output "${DURATIONS_FILE}" || echo "WARNING: Failed to update test durations"
+fi
+
 # ── Generate markdown report ──────────────────────────────────────────────
 mkdir -p "${REPO_ROOT}/test-results"
 
@@ -47,11 +56,13 @@ for i in $(seq 0 $((TOTAL - 1))); do
         SUITE=$(python3 -c "import json; d=json.load(open('${JSON_FILE}')); print(d.get('suite','unknown'))" 2>/dev/null || echo "unknown")
         DETAIL=$(python3 -c "import json; d=json.load(open('${JSON_FILE}')); print(d.get('detail',''))" 2>/dev/null || echo "")
         DURATION=$(python3 -c "import json; d=json.load(open('${JSON_FILE}')); print(d.get('duration_seconds',0))" 2>/dev/null || echo "0")
+        SETUP=$(python3 -c "import json; d=json.load(open('${JSON_FILE}')); print(d.get('setup_seconds',''))" 2>/dev/null || echo "")
     else
         STATUS="missing"
         SUITE="unknown"
         DETAIL="no result file"
         DURATION="0"
+        SETUP=""
     fi
 
     case "${STATUS}" in
@@ -60,7 +71,12 @@ for i in $(seq 0 $((TOTAL - 1))); do
         *)      ERRORS=$((ERRORS + 1)); STATUS_ICON="ERR"  ;;
     esac
 
-    TABLE_ROWS+=("| ${i} | ${SUITE} | ${DETAIL} | ${STATUS_ICON} | ${DURATION}s |")
+    if [ -n "${SETUP}" ] && [ "${SETUP}" != "0" ]; then
+        DURATION_COL="${DURATION}s (setup: ${SETUP}s)"
+    else
+        DURATION_COL="${DURATION}s"
+    fi
+    TABLE_ROWS+=("| ${i} | ${SUITE} | ${DETAIL} | ${STATUS_ICON} | ${DURATION_COL} |")
 
     # Collect failure logs
     if [ "${STATUS}" != "passed" ] && [ -f "${LOG_FILE}" ]; then
@@ -97,6 +113,49 @@ done
         for row in "${TABLE_ROWS[@]}"; do
             echo "${row}"
         done
+    fi
+
+    # ── Chunk balance metrics ────────────────────────────────────────────
+    BALANCE_OUTPUT=$(python3 -c "
+import json, sys
+results_dir = '${RESULTS_LOCAL}'
+durations_file = '${DURATIONS_FILE}'
+
+# Gather actual pytest chunk durations
+chunk_durations = {}
+for i in range(${TOTAL}):
+    try:
+        with open(f'{results_dir}/task_{i}.json') as f:
+            d = json.load(f)
+        if d.get('suite') == 'pytest':
+            chunk_durations[d.get('detail', '')] = d.get('duration_seconds', 0)
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+
+if len(chunk_durations) < 2:
+    sys.exit(0)
+
+times = list(chunk_durations.values())
+slowest = max(times)
+fastest = min(t for t in times if t > 0) if any(t > 0 for t in times) else 1
+ratio = slowest / fastest if fastest > 0 else 0
+
+slowest_name = [k for k, v in chunk_durations.items() if v == slowest][0]
+fastest_name = [k for k, v in chunk_durations.items() if v == fastest][0]
+
+print(f'| Slowest chunk | {slowest_name} | {slowest}s |')
+print(f'| Fastest chunk | {fastest_name} | {fastest}s |')
+print(f'| Slowest/fastest ratio | | {ratio:.1f}x |')
+print(f'| Total pytest chunks | | {len(chunk_durations)} |')
+" 2>/dev/null || true)
+
+    if [ -n "${BALANCE_OUTPUT}" ]; then
+        echo ""
+        echo "## Chunk Balance"
+        echo ""
+        echo "| Metric | Chunk | Value |"
+        echo "|--------|-------|-------|"
+        echo "${BALANCE_OUTPUT}"
     fi
 
     if [ ${#FAILURE_LOGS[@]} -gt 0 ]; then

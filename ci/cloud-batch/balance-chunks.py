@@ -19,6 +19,7 @@ import json
 import os
 import re
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 
@@ -80,25 +81,65 @@ def cmd_assign(args: argparse.Namespace) -> None:
         print(filepath)
 
 
-def cmd_record(args: argparse.Namespace) -> None:
-    """Record per-file durations from pytest chunk logs.
+def _parse_junitxml_durations(xml_path: Path) -> dict[str, float]:
+    """Parse a junitxml file and return per-file durations.
 
-    Distributes each chunk's wall-clock time across files proportionally
-    by test count (since --durations=0 doesn't work with pytest-xdist).
-    Reads chunk duration from companion task_N.json files.
+    Sums <testcase time="..."> grouped by the test file path derived
+    from the classname attribute (e.g. "tests.test_foo" -> "tests/test_foo.py").
     """
-    durations: dict[str, float] = {}
+    file_durations: dict[str, float] = {}
+    try:
+        tree = ET.parse(xml_path)
+    except ET.ParseError:
+        return {}
 
-    # Load existing durations if updating
-    if args.output and os.path.exists(args.output):
-        with open(args.output) as f:
-            durations = json.load(f)
+    for testcase in tree.iter("testcase"):
+        time_str = testcase.get("time", "0")
+        try:
+            duration = float(time_str)
+        except ValueError:
+            continue
 
-    log_dir = Path(args.log_dir)
+        # Prefer 'file' attribute (pytest sets this); fall back to classname
+        filepath = testcase.get("file", "")
+        if not filepath:
+            classname = testcase.get("classname", "")
+            if classname:
+                # Convert dotted classname to path: tests.core.test_cli -> tests/core/test_cli.py
+                filepath = classname.replace(".", "/") + ".py"
+                # Handle case where classname includes the test class name
+                # e.g. "tests.test_foo.TestBar" -> try "tests/test_foo.py"
+                if not os.path.basename(filepath).startswith("test_"):
+                    parts = filepath.rsplit("/", 1)
+                    if len(parts) == 2:
+                        filepath = parts[0] + ".py"
+
+        if not filepath:
+            continue
+
+        file_durations[filepath] = file_durations.get(filepath, 0) + duration
+
+    return file_durations
+
+
+def _record_from_junitxml(log_dir: Path) -> dict[str, float]:
+    """Parse all junitxml files in log_dir for accurate per-file durations."""
+    new_durations: dict[str, float] = {}
+    xml_files = sorted(log_dir.glob("task_*_junit.xml"))
+
+    for xml_file in xml_files:
+        file_durations = _parse_junitxml_durations(xml_file)
+        for filepath, duration in file_durations.items():
+            new_durations[filepath] = new_durations.get(filepath, 0) + round(duration, 2)
+
+    return new_durations
+
+
+def _record_from_logs(log_dir: Path) -> dict[str, float]:
+    """Fallback: distribute chunk wall-clock time proportionally by test count."""
     new_durations: dict[str, float] = {}
 
     for log_file in sorted(log_dir.glob("task_*.log")):
-        # Only process pytest chunk logs (skip regression/sync logs)
         json_file = log_file.with_suffix(".json")
         if not json_file.exists():
             continue
@@ -113,8 +154,6 @@ def cmd_record(args: argparse.Namespace) -> None:
 
         content = log_file.read_text(errors="replace")
 
-        # Count tests per file from xdist verbose output:
-        # [gw0] [ 50%] PASSED tests/test_foo.py::test_bar
         file_test_counts: dict[str, int] = {}
         for match in re.finditer(
             r"\[gw\d+\]\s+\[\s*\d+%\]\s+(?:PASSED|FAILED)\s+(tests/\S+\.py)::",
@@ -127,12 +166,37 @@ def cmd_record(args: argparse.Namespace) -> None:
         if total_tests == 0:
             continue
 
-        # Distribute chunk time proportionally by test count
         for filepath, count in file_test_counts.items():
             file_duration = round(chunk_duration * count / total_tests, 2)
-            # Accumulate across chunks (a file shouldn't appear in multiple
-            # chunks, but handle it gracefully)
             new_durations[filepath] = new_durations.get(filepath, 0) + file_duration
+
+    return new_durations
+
+
+def cmd_record(args: argparse.Namespace) -> None:
+    """Record per-file durations from junitxml output (or logs as fallback).
+
+    Prefers junitxml files (task_*_junit.xml) which have accurate per-test
+    durations. Falls back to proportional distribution from xdist verbose
+    output if no junitxml files are found.
+    """
+    durations: dict[str, float] = {}
+
+    # Load existing durations if updating
+    if args.output and os.path.exists(args.output):
+        with open(args.output) as f:
+            durations = json.load(f)
+
+    log_dir = Path(args.log_dir)
+
+    # Try junitxml first (accurate per-test durations)
+    new_durations = _record_from_junitxml(log_dir)
+    source = "junitxml"
+
+    # Fall back to proportional log-based method
+    if not new_durations:
+        new_durations = _record_from_logs(log_dir)
+        source = "log-proportional"
 
     # New data replaces old; old data kept for files not in new logs
     durations.update(new_durations)
@@ -143,7 +207,8 @@ def cmd_record(args: argparse.Namespace) -> None:
         json.dump(durations, f, indent=2, sort_keys=True)
 
     print(f"Recorded durations for {len(new_durations)} files "
-          f"({len(durations)} total) -> {output_path}", file=sys.stderr)
+          f"({len(durations)} total) via {source} -> {output_path}",
+          file=sys.stderr)
 
 
 def cmd_estimate(args: argparse.Namespace) -> None:
@@ -154,7 +219,7 @@ def cmd_estimate(args: argparse.Namespace) -> None:
     # Parse chunk durations from the results table
     chunk_durations: dict[int, float] = {}
     for match in re.finditer(
-        r"\|\s*(\d+)\s*\|\s*pytest\s*\|\s*chunk_(\d+)\s*\|\s*PASS\s*\|\s*(\d+)s\s*\|",
+        r"\|\s*(\d+)\s*\|\s*pytest\s*\|\s*chunk_(\d+)\s*\|\s*PASS\s*\|\s*(\d+)s[^|]*\|",
         content,
     ):
         chunk_idx = int(match.group(2))

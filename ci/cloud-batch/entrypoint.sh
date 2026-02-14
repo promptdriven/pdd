@@ -33,12 +33,14 @@ write_result() {
     "detail": "${detail}",
     "status": "${status}",
     "duration_seconds": ${duration},
+    "setup_seconds": ${SETUP_SECONDS:-0},
     "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 JSONEOF
 }
 
 # ── Extract source code ───────────────────────────────────────────────────
+SETUP_START=$(date +%s)
 echo "=== Task ${TASK_INDEX}: extracting source ==="
 mkdir -p "${WORK_DIR}"
 tar xzf "${SOURCE_DIR}/pdd-source.tar.gz" -C "${WORK_DIR}"
@@ -46,6 +48,8 @@ cd "${WORK_DIR}"
 
 # Install package in dev mode (deps already in image, --no-deps is fast ~5s)
 pip install -e ".[dev]" --no-deps --quiet 2>/dev/null || pip install -e . --no-deps --quiet
+SETUP_END=$(date +%s)
+SETUP_SECONDS=$((SETUP_END - SETUP_START))
 
 # ── Vertex AI auth via ADC (service account attached to VM) ───────────────
 export VERTEX_PROJECT="${VERTEX_PROJECT:-prompt-driven-development-stg}"
@@ -166,8 +170,10 @@ if [ "${TASK_INDEX}" -ge "${PYTEST_START}" ] && [ "${TASK_INDEX}" -le "${PYTEST_
     echo "=== Pytest chunk ${CHUNK_INDEX}: ${#CHUNK_TESTS[@]} files (of ${TOTAL_FILES} total) ==="
     printf '  %s\n' "${CHUNK_TESTS[@]}"
 
+    JUNIT_XML="${RESULTS_DIR}/task_${TASK_INDEX}_junit.xml"
     run_test "pytest" "chunk_${CHUNK_INDEX}" \
-        python -m pytest -vv -n auto --dist loadfile "${CHUNK_TESTS[@]}"
+        python -m pytest -vv -n auto --dist loadfile \
+        --junitxml="${JUNIT_XML}" "${CHUNK_TESTS[@]}"
 
 elif [ "${TASK_INDEX}" -ge "${REGRESSION_START}" ] && [ "${TASK_INDEX}" -le "${REGRESSION_END}" ]; then
     # ── Regression test ───────────────────────────────────────────────
