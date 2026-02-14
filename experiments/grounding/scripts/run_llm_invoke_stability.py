@@ -288,11 +288,16 @@ def _call_generate_local(
 
     start = time.monotonic()
     try:
+        # Pass vertex_location for vertex_ai models that need global endpoint
+        extra_kwargs = {}
+        if model.startswith("vertex_ai/"):
+            extra_kwargs["vertex_location"] = "global"
         response = litellm.completion(
             model=model,
             messages=[{"role": "user", "content": resolved_prompt}],
             temperature=temperature,
             timeout=TIMEOUT_PER_RUN,
+            **extra_kwargs,
         )
         elapsed_ms = int((time.monotonic() - start) * 1000)
 
