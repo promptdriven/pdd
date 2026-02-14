@@ -20,6 +20,7 @@ from pdd.agentic_common import (
     load_workflow_state,
     save_workflow_state,
     clear_workflow_state,
+    validate_cached_state,
     DEFAULT_MAX_RETRIES,
     post_step_comment,
 )
@@ -476,6 +477,12 @@ def run_agentic_change_orchestrator(
         # Ensure issue_updated_at is in state for future staleness checks
         if issue_updated_at:
             state["issue_updated_at"] = issue_updated_at
+
+        # Issue #467: Validate cached state — correct last_completed_step
+        # if any cached step outputs have "FAILED:" prefix.
+        last_completed_step = validate_cached_state(
+            last_completed_step, step_outputs, quiet=quiet
+        )
     else:
         state = {"step_outputs": {}, "issue_updated_at": issue_updated_at}
         last_completed_step = 0
@@ -702,8 +709,9 @@ def run_agentic_change_orchestrator(
             context["direct_edits"] = direct_edits_match.group(1).strip() if direct_edits_match else ""
             if not changed_files:
                 # Save step output for debugging before failing
-                state["step_outputs"][str(step_num)] = step_output
-                state["last_completed_step"] = step_num - 1
+                # Issue #467: Mark as FAILED instead of using step_num - 1
+                state["step_outputs"][str(step_num)] = f"FAILED: {step_output}"
+                # Don't advance last_completed_step — keep it at its current value
                 save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
                 return False, "Stopped at step 9: Implementation produced no file changes", total_cost, model_used, []
 
