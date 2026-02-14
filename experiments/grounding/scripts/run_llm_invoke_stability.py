@@ -424,8 +424,8 @@ def _call_generate_pdd_local(
         if tmp_output.exists():
             generated_code = tmp_output.read_text(encoding="utf-8")
 
-        # Parse cost and model from Rich Panel output in stdout
-        # Format: "Full generation successful. Model: <name>, Cost: $<cost>"
+        # Parse cost and model from pdd's Command Execution Summary
+        # Format: "Step 1 (generate): Cost: $X, Model: Y"
         stdout = result.stdout + "\n" + result.stderr
         total_cost = 0.0
         model_name = ""

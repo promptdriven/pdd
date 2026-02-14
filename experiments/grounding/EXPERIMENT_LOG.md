@@ -176,7 +176,7 @@ Manual inspection of all 9 generated files revealed systematic quality differenc
 - Function count std dev = 2.1 (structurally anchored)
 
 **Ungrounded arm (inconsistent, hallucinated interfaces):**
-- 3/4 runs hallucinate `from . import DEFAULT_STRENGTH, DEFAULT_TIME` — **these don't exist** in the package
+- 3/4 runs hallucinate `from . import DEFAULT_STRENGTH, DEFAULT_TIME` — **these are never imported by `llm_invoke.py`** (they exist in `pdd/__init__.py` but the canonical file doesn't use them)
 - 2/4 runs use wrong CSV column names (`input_cost_per_m` instead of `input`) — would `KeyError`
 - All 4 use `Dict[str, Dict[str, float]]` for rate map (wrong type vs canonical)
 - 0/4 implement any caching
@@ -204,7 +204,7 @@ This is the strongest finding. Without grounding, the model invents plausible-bu
 ### 5. Cost and latency tradeoff
 Grounding costs ~7x more ($0.131 vs $0.019 per call) and takes ~2.6x longer (65.6s vs 25.2s). The cost is driven by the few-shot example inflating the prompt token count.
 
-## Phase 4: Fair Comparison — pdd generate --local (with tests) vs Grounded
+## Phase 4: pdd generate --local (with tests) vs Grounded
 
 ### Motivation
 
@@ -214,7 +214,7 @@ Phase 3 compared the grounded arm (cloud endpoint with few-shot examples) agains
 
 - **Environment**: Production (`prompt-driven-development`)
 - **Prompt**: `llm_invoke_python.prompt` (12,132 chars raw; expanded by pdd preprocessor with `<include>`, `<shell>`, `<web>` tags)
-- **Generation model**: `vertex_ai/gemini-3-flash-preview` (all three arms)
+- **Generation model**: `vertex_ai/gemini-3-flash-preview` (grounded + ungrounded-pdd), `gemini/gemini-3-flash-preview` (ungrounded — Google AI Studio endpoint)
 - **Temperature**: 1.0 (maximum nondeterminism)
 - **Runs per arm**: 5 (grounded + ungrounded from Phase 3, ungrounded-pdd new)
 - **Cache busting**: UUID nonce per run (pdd arm: appended to temp prompt file)
@@ -226,7 +226,7 @@ Phase 3 compared the grounded arm (cloud endpoint with few-shot examples) agains
 
 | Metric | Grounded | Ungrounded | Ungrounded-PDD |
 |---|---|---|---|
-| N (successful runs) | 5 | 4 | 5 |
+| N (runs)* | 5 | 5 | 5 |
 | Syntax valid | 5/5 | 4/5 | 5/5 |
 | Avg lines | 467.6 +/- 149.7 | 343.0 +/- 200.2 | 485.6 +/- 45.8 |
 | Avg functions | 17.4 +/- 2.1 | 11.0 +/- 6.5 | 15.8 +/- 0.8 |
@@ -239,6 +239,8 @@ Phase 3 compared the grounded arm (cloud endpoint with few-shot examples) agains
 | Avg cost per call | $0.131 | $0.015 | $0.057 |
 | Avg response time | 65.6s | 20.2s | 64.1s |
 | Examples used | `Hp7oK65bRdCyrJYnABWE` (all 5) | (none) | (none) |
+
+*Ungrounded run 4 was rate-limited (EMPTY). Averages include this run; excluding it: 428.8 lines, 13.8 funcs, $0.019 cost.
 
 #### Response Hashes (all unique — cache busting confirmed)
 
@@ -272,6 +274,14 @@ Manual inspection of all 5 `ungrounded-pdd` generated files:
 - Run 4: Invents entire `PathResolver` class instead of importing from `pdd.path_resolution`
 - All runs: `litellm.responses()` handling inconsistent (2/5 use it, 3/5 fall back to `completion()`)
 
+#### Confounding Variables
+
+This comparison has known confounds that prevent attributing all differences solely to grounding:
+
+1. **Different model endpoints**: The ungrounded arm uses `gemini/gemini-3-flash-preview` (Google AI Studio) while grounded and ungrounded-pdd use `vertex_ai/gemini-3-flash-preview` (Vertex AI). These may differ in behavior despite being the same underlying model.
+2. **Post-processing pipeline**: The pdd arm runs 2-3 additional LLM calls (prompt expansion, `<web>` tag resolution) beyond the single generation call, which inflates cost and latency.
+3. **Web scraping variability**: The pdd preprocessor fetches live web content (e.g., LiteLLM docs) that varies between runs, injecting non-determinism beyond temperature alone.
+
 ## Key Findings (Updated)
 
 ### 1. Cache busting works — all hashes unique
@@ -284,7 +294,7 @@ Function count std dev: 2.1 (grounded) vs 2.5 (ungrounded) vs **0.8 (ungrounded-
 Reference similarity: 0.030 (grounded) vs 0.019 (ungrounded) vs 0.021 (ungrounded-pdd). Reference recall: 0.206 (grounded) vs 0.162 (ungrounded) vs 0.151 (ungrounded-pdd). Grounding produces code closest to the canonical implementation regardless of test visibility.
 
 ### 4. Grounding prevents interface hallucination — test visibility does NOT
-**This is the central Phase 4 finding.** The ungrounded-pdd arm has full visibility into the test suite (217 tests auto-injected via `<unit_test_content>` tags) yet still hallucinates:
+**This is the central Phase 4 finding.** The ungrounded-pdd arm has full visibility into the test suite (4 test files, ~5,750 lines, auto-injected via `<unit_test_content>` tags) yet still hallucinates:
 - Nonexistent imports in 5/5 runs
 - Wrong auth patterns in 5/5 runs
 - Wrong rate map types in 5/5 runs
