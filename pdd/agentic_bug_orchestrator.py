@@ -253,6 +253,31 @@ def run_agentic_bug_orchestrator(
 
     if state is not None:
         last_completed_step = state.get("last_completed_step", 0)
+        cached_outputs = state.get("step_outputs", {})
+
+        # Issue #467: Validate cached state — find actual last successful step
+        # by scanning step_outputs for entries without "FAILED:" prefix.
+        # This prevents resuming past failed steps when the state was corrupted
+        # by the ratchet effect (now fixed) or by other state corruption.
+        if cached_outputs:
+            # Step order for validation
+            step_order = [1, 2, 3, 4, 5, 5.5, 6, 7, 8, 9, 10]
+            actual_last_success: Union[int, float] = 0
+            for sn in step_order:
+                output_val = cached_outputs.get(str(sn), "")
+                # Stop at the first missing/empty entry to avoid skipping gaps
+                if not output_val:
+                    break
+                # Stop at the first explicitly failed step
+                if output_val.startswith("FAILED:"):
+                    break
+                # Otherwise, count this step as successfully completed
+                actual_last_success = sn
+            if actual_last_success < last_completed_step:
+                if not quiet:
+                    console.print(f"[yellow]State validation: correcting last_completed_step from {last_completed_step} to {actual_last_success} (found FAILED steps in cache)[/yellow]")
+                last_completed_step = actual_last_success
+
         # Calculate actual start step before printing resume message (handle step 5.5)
         if last_completed_step == 5:
             resume_start_step: Union[int, float] = 5.5
@@ -318,6 +343,12 @@ def run_agentic_bug_orchestrator(
         start_step = 6
     else:
         start_step = last_completed_step + 1
+
+    # Track the actual last successfully completed step for state saving.
+    # Issue #467: This prevents the "ratchet effect" where consecutive failures
+    # advance last_completed_step via the step_num - 1 formula.
+    last_completed_step_to_save: Union[int, float] = last_completed_step
+    consecutive_provider_failures = 0
 
     for step_num, name, description in steps:
 
@@ -507,19 +538,42 @@ def run_agentic_bug_orchestrator(
 
         # Save state after each step (for resume support)
         # Only mark step completed if it succeeded; failed steps get "FAILED:" prefix
-        # and last_completed_step stays at previous step (ensures resume re-runs failed step)
+        # and last_completed_step_to_save stays unchanged (ensures resume re-runs failed step)
+        # Issue #467: On failure, keep last_completed_step_to_save at its current value
+        # instead of setting to step_num - 1, which caused a "ratchet effect" where
+        # consecutive failures advanced the cursor through failed steps.
         if success:
             step_outputs[str(step_num)] = output
             last_completed_step_to_save = step_num
+            consecutive_provider_failures = 0
         else:
             step_outputs[str(step_num)] = f"FAILED: {output}"
-            # Handle step 5.5 specially: previous step is 5, not 4.5
-            if step_num == 5.5:
-                last_completed_step_to_save = 5
-            elif step_num == 6:
-                last_completed_step_to_save = 5.5
+            # last_completed_step_to_save remains unchanged (no ratchet)
+            # Track consecutive provider failures for early abort
+            if "All agent providers failed" in output:
+                consecutive_provider_failures += 1
+                if consecutive_provider_failures >= 3:
+                    new_state = {
+                        "workflow": "bug",
+                        "issue_number": issue_number,
+                        "issue_url": issue_url,
+                        "last_completed_step": last_completed_step_to_save,
+                        "step_outputs": step_outputs.copy(),
+                        "total_cost": total_cost,
+                        "model_used": last_model_used,
+                        "changed_files": changed_files.copy(),
+                        "worktree_path": str(worktree_path) if worktree_path else None,
+                        "github_comment_id": github_comment_id
+                    }
+                    save_workflow_state(
+                        cwd=cwd, issue_number=issue_number, workflow_type="bug",
+                        state=new_state, state_dir=state_dir,
+                        repo_owner=repo_owner, repo_name=repo_name,
+                        use_github_state=use_github_state, github_comment_id=github_comment_id
+                    )
+                    return False, f"Aborting: {consecutive_provider_failures} consecutive steps failed — agent providers unavailable", total_cost, last_model_used, changed_files
             else:
-                last_completed_step_to_save = step_num - 1
+                consecutive_provider_failures = 0
 
         new_state = {
             "workflow": "bug",
