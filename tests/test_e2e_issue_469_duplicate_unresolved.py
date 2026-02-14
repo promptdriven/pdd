@@ -80,6 +80,7 @@ def mock_git_repo(tmp_path):
     return repo_path
 
 
+@pytest.mark.e2e
 class TestIssue469DuplicateUnresolvedE2E:
     """
     E2E tests for Issue #469: Duplicate detection should check resolution status.
@@ -310,6 +311,7 @@ class TestIssue469DuplicateUnresolvedE2E:
         )
 
 
+@pytest.mark.e2e
 class TestIssue469AllPromptPipelinesE2E:
     """
     E2E tests verifying all three workflow prompt files (bug, change, test)
