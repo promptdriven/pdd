@@ -1,3 +1,38 @@
+## v0.0.148 (2026-02-13)
+
+### Feat
+
+- Add prod llm_invoke grounding experiment results
+- Implement comprehensive unit and integration tests for `llm_invoke` utilities and establish cloud batch test reporting.
+- Send raw prompt as `searchInput` to the cloud `generateCode` endpoint and include cloud batch test results.
+- Add llm_invoke regeneration stability experiment scripts and results
+- update LLM invocation prompt with enhanced model selection, structured output, error handling, and add cloud batch test results.
+- Add resolve pipeline (fix→render→stitch) with SSE job tracking
+- document cloud testing process and add example batch results file.
+
+### Fix
+
+- address Copilot review — remove unused imports/fixtures, add use_github_state, drop e2e markers
+- add failing tests and prompt fixes for duplicate detection closing unresolved issues (#469)
+- update test-durations.json from balanced cloud batch run
+- add missing searchInput field to test_full_gen_cloud_success assertion
+- address Copilot review — return changed_files on abort, break on missing steps
+- prevent false cached steps on resume when all providers fail (#467)
+- address PR review feedback (#468)
+- load prompt templates from local repo in tests (#468)
+- add NOT_A_BUG early exit check in e2e fix orchestrator (#468)
+- use --simple flag in test_update_silently_skips_logging to avoid 600s agentic timeout
+- update test-durations.json from balanced cloud batch run
+- increase timeout to 300s for three flaky E2E tests
+- update test-durations.json with actual profiled data, fix record cmd
+- cloud-batch bug fixes and duration-based chunk balancing
+- await safeWriteAnnotations in resolve endpoint to persist job before response
+
+### Refactor
+
+- overhaul LLM invocation logic, logging, error handling, and experiment setup, adding a prompting guide and new experiment scripts.
+- streamline LLM invocation setup by removing interactive API key management, refactoring logging, and updating JSON schema utilities.
+
 ## v0.0.147 (2026-02-12)
 
 ### Feat
