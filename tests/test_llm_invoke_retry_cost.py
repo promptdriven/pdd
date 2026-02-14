@@ -234,3 +234,13 @@ class TestRetryCostAccumulation:
         assert reported_cost == pytest.approx(0.08), (
             f"Expected accumulated cost of 0.08, got {reported_cost}"
         )
+
+        # Verify that input/output token counts are also accumulated across retries.
+        assert _llm_mod._LAST_CALLBACK_DATA["input_tokens"] == 2000, (
+            f"Expected accumulated input tokens of 2000, "
+            f"got {_llm_mod._LAST_CALLBACK_DATA['input_tokens']}"
+        )
+        assert _llm_mod._LAST_CALLBACK_DATA["output_tokens"] == 1000, (
+            f"Expected accumulated output tokens of 1000, "
+            f"got {_llm_mod._LAST_CALLBACK_DATA['output_tokens']}"
+        )

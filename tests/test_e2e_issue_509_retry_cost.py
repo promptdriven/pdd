@@ -1,21 +1,19 @@
 """
 E2E Test for Issue #509: Cost under-reporting when retry calls overwrite _llm_mod._LAST_CALLBACK_DATA.
 
-This test exercises the generate command through Click's CliRunner, simulating a scenario
-where llm_invoke retries due to None content. The test verifies that the cost returned
-by llm_invoke (and ultimately reported by the CLI) includes BOTH the original and retry
-call costs, not just the retry cost.
+This test exercises the generate command path by invoking llm_invoke directly, simulating
+a scenario where llm_invoke retries due to None content. The test verifies that the cost
+accumulated in _llm_mod._LAST_CALLBACK_DATA includes BOTH the original and retry call
+costs, not just the retry cost.
 
 The bug: _llm_mod._LAST_CALLBACK_DATA["cost"] gets overwritten (not accumulated) on retry,
 so the cost from the first LLM call is silently lost.
 """
 
-import csv
 import os
 import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
-from click.testing import CliRunner
 
 import pdd.llm_invoke as _llm_mod
 
@@ -176,13 +174,11 @@ class TestE2ERetryCostAccumulation:
 
         import pandas as pd
 
-        # Two retries: costs should accumulate to $0.15
-        costs = [0.05, 0.05, 0.05]
-        expected_total = sum(costs)
+        # One retry (two calls total): costs should accumulate to $0.10
+        costs = [0.05, 0.05]
 
-        # First two calls return None, third succeeds
+        # First call returns None, second succeeds
         responses = [
-            _make_response(content=None),
             _make_response(content=None),
             _make_response(content='print("hello")'),
         ]

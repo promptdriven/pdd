@@ -868,7 +868,7 @@ def _is_malformed_json_response(content: str, threshold: int = 100) -> bool:
     # Also check for excessive actual trailing newlines (not just escaped \\n)
     # This catches cases where raw newlines cause truncation
     actual_newline_count = len(content) - len(content.rstrip('\n'))
-    if actual_newline_count >= threshold and not stripped.endswith('}'):
+    if actual_newline_count >= threshold:
         return True
 
     # Also check for response that looks truncated mid-string
