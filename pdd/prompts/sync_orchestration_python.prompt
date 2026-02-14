@@ -20,7 +20,7 @@ This module works in conjunction with related modules:
 
 - **sync_main**: Handles CLI parameter extraction, validation, language detection, path resolution via `construct_paths()`, and .pddrc configuration management
 - **sync_orchestration**: Focuses solely on workflow orchestration, TUI coordination, and operation execution using the resolved paths provided by sync_main
-- **sync_tui**: Provides the Textual-based TUI components (`SyncApp`, `show_exit_animation`) that display real-time animation and log output
+- **sync_tui**: Provides the Textual-based TUI components (`SyncApp`, `show_exit_animation`, `maybe_steer_operation`) that display real-time animation, log output, and interactive steering
 
 ## Requirements
 
@@ -52,9 +52,13 @@ def sync_orchestration(
     context_config: Optional[Dict[str, str]] = None,
     context_override: Optional[str] = None,
     confirm_callback: Optional[Callable[[str, str], bool]] = None,
+    no_steer: bool = False,
+    steer_timeout: float = DEFAULT_STEER_TIMEOUT_S,
     agentic_mode: bool = False,
 ) -> Dict[str, Any]:
 ```
+
+Defense in depth: at the top of `sync_orchestration()`, replace `None` values for `target_coverage`, `budget`, and `max_attempts` with their defaults (CLI may pass None).
 
 ### Return Value
 
@@ -111,6 +115,7 @@ Returns a dictionary containing:
 ### Module-Level Imports
 
 ```python
+from .sync_tui import maybe_steer_operation, DEFAULT_STEER_TIMEOUT_S
 from .sync_tui import SyncApp
 from .operation_log import (
     load_operation_log,
@@ -145,7 +150,7 @@ from .fix_main import fix_main
 from .update_main import update_main
 from .python_env_detector import detect_host_python_executable
 from .get_run_command import get_run_command_for_file
-from .pytest_output import extract_failing_files_from_output
+from .pytest_output import extract_failing_files_from_output, _find_project_root
 from . import DEFAULT_STRENGTH
 ```
 
@@ -189,15 +194,24 @@ Terminal states: `all_synced`, `nothing`, `fail_and_request_manual_merge`, `erro
 
 When `dry_run=True`, display the sync log at `.pdd/meta/{basename}_{language.lower()}_sync.log` (JSONL format) and return immediately. Normal mode shows concise output; verbose mode shows full details including decision type, confidence, and budget info.
 
+### Interactive Steering
+
+After each `sync_determine_operation` call, allow the user to override the recommended operation via `maybe_steer_operation()`:
+- When `no_steer=True`, skip steering and use the recommended operation directly
+- Otherwise call `maybe_steer_operation(operation, reason, app_ref, quiet, skip_tests, skip_verify, timeout_s=steer_timeout)` which returns `(steered_op, should_abort)`
+- If `should_abort` is True, break the workflow loop with a steering abort error
+- If `steered_op != operation`, log a `steering_override` event and update the decision's operation to match
+
 ### TUI Integration
 
 1. Instantiate `SyncApp` with `worker_func` containing the main workflow loop
 2. Use mutable reference lists (`function_name_ref`, `cost_ref`, `*_color_ref`, `*_path_ref`) and `stop_event` (threading.Event) to coordinate with TUI
 3. Store app reference in `app_ref` list for confirmation dialogs via `app.request_confirmation()`
 4. Track `user_confirmed_overwrite` to avoid repeated confirmation prompts
-5. Call `show_exit_animation()` after completion (unless quiet mode)
-6. After `app.run()` completes, check `app.worker_exception` for worker thread crashes; print error and traceback to stderr
-7. If `app.run()` returns None, return error dict indicating sync was interrupted
+5. Maintain `progress_callback_ref` for TUI ProgressBar updates during auto-deps
+6. Call `show_exit_animation()` after completion (unless quiet mode)
+7. After `app.run()` completes, check `app.worker_exception` for worker thread crashes; print error and traceback to stderr
+8. If `app.run()` returns None, return error dict indicating sync was interrupted
 
 ### Headless Mode
 
@@ -241,6 +255,10 @@ For non-Python languages, skip Python-based program verification during crash de
 ### Multi-Language Test Support
 
 For non-Python languages, use `get_test_command_for_file()` to determine the appropriate test runner command. The `_parse_test_output()` helper parses output from pytest, Jest/Vitest/Mocha, go test, and cargo test.
+
+### Pytest Project Root Discovery
+
+For Python test execution (both in `_execute_tests_and_create_run_report()` and the fix operation's pre-test run), use `_find_project_root(test_file)` to discover the project root. When found, set `PYTHONPATH` to include the root and its `src/` subdirectory, and pass `--rootdir` and `-c /dev/null` to pytest to prevent parent config interference.
 
 ### Multiple Test Files Support
 
@@ -347,10 +365,9 @@ For non-Python languages (or when `agentic_mode=True` for Python), set `max_atte
 
 ### Agentic Test Generation Success Handling
 
-For non-Python languages (or agentic mode), `cmd_test_main` returns a 4-tuple: `(content, cost, model, agentic_success)`. When `agentic_success is True`:
-1. Create a synthetic RunReport using `_create_synthetic_run_report_for_agentic_success()` instead of executing tests
-2. The synthetic report uses a sentinel `test_hash="agentic_test_success"` when the expected test file doesn't exist (agent may have created it at a different path)
-3. Trust the agent's success report for determining operation success
+For the **test** operation: when `agentic_success is True`, create a synthetic RunReport using `_create_synthetic_run_report_for_agentic_success()` instead of executing tests. This applies regardless of language.
+
+For the **test_extend** operation: only use synthetic reports for languages other than Python and TypeScript (`lang_lower not in ('python', 'typescript')`). Python and TypeScript test_extend results are always verified by running tests locally.
 
 Implement `_create_synthetic_run_report_for_agentic_success(test_file, basename, language, *, atomic_state=None)` that:
 - Creates a RunReport with exit_code=0, tests_passed=1, tests_failed=0

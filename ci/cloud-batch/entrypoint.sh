@@ -172,7 +172,7 @@ if [ "${TASK_INDEX}" -ge "${PYTEST_START}" ] && [ "${TASK_INDEX}" -le "${PYTEST_
 
     JUNIT_XML="${RESULTS_DIR}/task_${TASK_INDEX}_junit.xml"
     run_test "pytest" "chunk_${CHUNK_INDEX}" \
-        python -m pytest -vv -n auto --dist loadfile \
+        python -m pytest -vv -n auto --dist load \
         --junitxml="${JUNIT_XML}" "${CHUNK_TESTS[@]}"
 
 elif [ "${TASK_INDEX}" -ge "${REGRESSION_START}" ] && [ "${TASK_INDEX}" -le "${REGRESSION_END}" ]; then
