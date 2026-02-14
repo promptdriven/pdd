@@ -1801,7 +1801,9 @@ def test_step9_output_saved_on_failure(mock_dependencies, temp_cwd):
         if len(args) >= 4:
             state_arg = args[3]
             if isinstance(state_arg, dict) and "step_outputs" in state_arg:
-                if state_arg["step_outputs"].get("9") == step9_output_text:
+                step9_val = state_arg["step_outputs"].get("9", "")
+                # Issue #467: failed step outputs now have "FAILED:" prefix
+                if step9_val == step9_output_text or step9_val == f"FAILED: {step9_output_text}":
                     found_step9_output = True
                     break
     assert found_step9_output, "Step 9 output should be saved to state on failure"
@@ -2420,3 +2422,182 @@ def test_state_preserved_when_steps_failed(mock_dependencies, temp_cwd):
     assert success is True
     # State should NOT be cleared because some steps have FAILED: prefix
     mock_clear_state.assert_not_called()
+
+
+# ============================================================================
+# Issue #467: Blind Resume + step_num - 1 fix
+# ============================================================================
+
+
+def test_resume_from_all_failed_state_reruns_from_step_1(mock_dependencies, temp_cwd):
+    """
+    Issue #467: When resuming from a state where all steps failed,
+    the workflow should re-run from step 1, not skip past them.
+    """
+    mocks = mock_dependencies
+
+    corrupted_state = {
+        "last_completed_step": 6,
+        "step_outputs": {
+            "1": "FAILED: All agent providers failed",
+            "2": "FAILED: All agent providers failed",
+            "3": "FAILED: All agent providers failed",
+            "4": "FAILED: All agent providers failed",
+            "5": "FAILED: All agent providers failed",
+            "6": "FAILED: All agent providers failed",
+        },
+        "total_cost": 0.0,
+        "model_used": "unknown",
+    }
+    mocks["load_state"].return_value = (corrupted_state, None)
+
+    executed_labels = []
+
+    def track_run(**kwargs):
+        label = kwargs.get("label", "")
+        executed_labels.append(label)
+        if label == "step9":
+            return (True, "FILES_MODIFIED: file.py", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/1", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mocks["run"].side_effect = track_run
+
+    success, msg, cost, model, files = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="content",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=467,
+        issue_author="user",
+        issue_title="Blind resume test",
+        cwd=temp_cwd,
+        quiet=True,
+        use_github_state=False,
+    )
+
+    assert "step1" in executed_labels, (
+        f"Step 1 should be re-executed when its cached output is FAILED, "
+        f"but executed steps were: {executed_labels}. "
+        f"This is the 'blind resume' bug from issue #467."
+    )
+
+
+def test_resume_from_partial_failure_reruns_failed_steps(mock_dependencies, temp_cwd):
+    """
+    Issue #467: When resuming from state where steps 1-4 succeeded but 5-6 failed,
+    resume should re-run from step 5, not step 7.
+    """
+    mocks = mock_dependencies
+
+    corrupted_state = {
+        "last_completed_step": 6,
+        "step_outputs": {
+            "1": "No duplicates",
+            "2": "Not implemented yet",
+            "3": "Research done",
+            "4": "Requirements clear",
+            "5": "FAILED: All agent providers failed",
+            "6": "FAILED: All agent providers failed",
+        },
+        "total_cost": 0.4,
+        "model_used": "gpt-4",
+    }
+    mocks["load_state"].return_value = (corrupted_state, None)
+
+    executed_labels = []
+
+    def track_run(**kwargs):
+        label = kwargs.get("label", "")
+        executed_labels.append(label)
+        if label == "step9":
+            return (True, "FILES_MODIFIED: file.py", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/1", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mocks["run"].side_effect = track_run
+
+    success, msg, cost, model, files = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="content",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=467,
+        issue_author="user",
+        issue_title="Partial failure test",
+        cwd=temp_cwd,
+        quiet=True,
+        use_github_state=False,
+    )
+
+    # Steps 1-4 should be skipped
+    assert "step1" not in executed_labels, "Step 1 succeeded and should not be re-run"
+    assert "step2" not in executed_labels, "Step 2 succeeded and should not be re-run"
+    assert "step3" not in executed_labels, "Step 3 succeeded and should not be re-run"
+    assert "step4" not in executed_labels, "Step 4 succeeded and should not be re-run"
+    # Step 5 should be re-run
+    assert "step5" in executed_labels, (
+        f"Step 5 should be re-executed because its cached output is FAILED, "
+        f"but executed steps were: {executed_labels}."
+    )
+
+
+def test_step9_no_files_marks_failed_not_step_num_minus_1(mock_dependencies, temp_cwd):
+    """
+    Issue #467: Step 9 with no changed files should mark the step as FAILED
+    and NOT use the step_num - 1 formula for last_completed_step.
+    """
+    mocks = mock_dependencies
+    mock_save = mocks["save_state"]
+
+    saved_states = []
+
+    def capture_save(cwd, issue_number, wf_type, state, state_dir, repo_owner, repo_name, use_github_state=True, github_comment_id=None):
+        saved_states.append(dict(state))
+        return None
+
+    mock_save.side_effect = capture_save
+
+    def run_side_effect(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            # Step 9 succeeds but reports no FILES_CREATED/MODIFIED
+            return (True, "No files changed", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mocks["run"].side_effect = run_side_effect
+
+    success, msg, cost, model, files = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="content",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=467,
+        issue_author="user",
+        issue_title="No files test",
+        cwd=temp_cwd,
+        quiet=True,
+        use_github_state=False,
+    )
+
+    assert not success
+    assert "no file changes" in msg.lower()
+
+    # Find the state saved when step 9 early-returns
+    step9_states = [s for s in saved_states if "9" in s.get("step_outputs", {})]
+    if step9_states:
+        last = step9_states[-1]
+        assert last["step_outputs"]["9"].startswith("FAILED:"), (
+            "Step 9 with no files should be marked as FAILED, not stored as raw output"
+        )
+        # last_completed_step should be 8 (last successful step), NOT step_num - 1 = 8
+        # which happens to be the same value but for the right reason (step 8 succeeded)
+        assert last["last_completed_step"] == 8, (
+            f"last_completed_step should be 8 (last success), got {last['last_completed_step']}"
+        )

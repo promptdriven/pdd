@@ -488,3 +488,90 @@ def test_orchestrator_provides_test_results_context(mock_dependencies, default_a
     instruction = step8_call[0][1]['instruction']
     assert "TEST_RESULTS: FAIL" in instruction
     assert "test.py" in instruction
+
+
+# ============================================================================
+# Issue #467: Blind Resume — validate cached state on load
+# ============================================================================
+
+
+def test_resume_from_all_failed_state_reruns_from_step_1(mock_dependencies, default_args):
+    """
+    Issue #467: When resuming from a state where all steps failed,
+    the workflow should re-run from step 1, not skip past them.
+    """
+    mocks = mock_dependencies
+
+    corrupted_state = {
+        "last_completed_step": 5,
+        "step_outputs": {
+            "1": "FAILED: All agent providers failed",
+            "2": "FAILED: All agent providers failed",
+            "3": "FAILED: All agent providers failed",
+            "4": "FAILED: All agent providers failed",
+            "5": "FAILED: All agent providers failed",
+        },
+        "total_cost": 0.0,
+        "model_used": "unknown",
+    }
+    mocks['load'].return_value = (corrupted_state, None)
+
+    executed_labels = []
+
+    def track_run(*args, **kwargs):
+        label = kwargs.get("label", "")
+        executed_labels.append(label)
+        return (True, "Step Output", 0.1, "gpt-4")
+
+    mocks['run'].side_effect = track_run
+
+    run_agentic_test_orchestrator(**default_args)
+
+    assert "step1" in executed_labels, (
+        f"Step 1 should be re-executed when its cached output is FAILED, "
+        f"but executed steps were: {executed_labels}. "
+        f"This is the 'blind resume' bug from issue #467."
+    )
+
+
+def test_resume_from_partial_failure_reruns_failed_steps(mock_dependencies, default_args):
+    """
+    Issue #467: When resuming from state where steps 1-3 succeeded but 4-5 failed,
+    resume should re-run from step 4, not step 6.
+    """
+    mocks = mock_dependencies
+
+    corrupted_state = {
+        "last_completed_step": 5,
+        "step_outputs": {
+            "1": "No duplicates found",
+            "2": "Codebase reviewed",
+            "3": "Enough info",
+            "4": "FAILED: All agent providers failed",
+            "5": "FAILED: All agent providers failed",
+        },
+        "total_cost": 0.3,
+        "model_used": "gpt-4",
+    }
+    mocks['load'].return_value = (corrupted_state, None)
+
+    executed_labels = []
+
+    def track_run(*args, **kwargs):
+        label = kwargs.get("label", "")
+        executed_labels.append(label)
+        return (True, "Step Output", 0.1, "gpt-4")
+
+    mocks['run'].side_effect = track_run
+
+    run_agentic_test_orchestrator(**default_args)
+
+    # Steps 1-3 should be skipped
+    assert "step1" not in executed_labels, "Step 1 succeeded and should not be re-run"
+    assert "step2" not in executed_labels, "Step 2 succeeded and should not be re-run"
+    assert "step3" not in executed_labels, "Step 3 succeeded and should not be re-run"
+    # Step 4 should be re-run
+    assert "step4" in executed_labels, (
+        f"Step 4 should be re-executed because its cached output is FAILED, "
+        f"but executed steps were: {executed_labels}."
+    )

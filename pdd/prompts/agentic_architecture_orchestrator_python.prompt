@@ -103,7 +103,16 @@ Use shared functions from agentic_common:
 - `load_workflow_state(cwd, issue_number, "architecture", state_dir, repo_owner, repo_name, use_github_state)`
 - `save_workflow_state(cwd, issue_number, "architecture", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)`
 - `clear_workflow_state(cwd, issue_number, "architecture", state_dir, repo_owner, repo_name, use_github_state)`
+- `validate_cached_state(last_completed_step, step_outputs, quiet=quiet)` - Validate cached state on load
 - State directory: `.pdd/arch-state/`
+
+Orchestrator logic:
+- On start: Call `load_workflow_state()`, validate cached state, determine `start_step`
+- **State validation on load**: After loading state, call `validate_cached_state()` to find the actual last *successfully* completed step by scanning `step_outputs` for entries that do NOT start with "FAILED:". This prevents resuming past failed steps.
+- For steps >= start_step: Execute normally, call `save_workflow_state()` after each
+  - On success: Store output in step_outputs, set `last_completed_step = step_num`
+  - On failure (not hard stop): Store "FAILED: {output}" in step_outputs, keep `last_completed_step` unchanged from its current value (do NOT set to `step_num - 1`, as that step may also have failed)
+- On successful completion: Call `clear_workflow_state()`
 
 % Console Output
 1. Header: `Generating architecture for issue #{issue_number}: "{issue_title}"`
@@ -112,7 +121,7 @@ Use shared functions from agentic_common:
 4. Final summary with total cost and output files
 
 % Dependencies
-Import from `agentic_common`: `run_agentic_task`, `DEFAULT_MAX_RETRIES`, `load_workflow_state`, `save_workflow_state`, `clear_workflow_state`
+Import from `agentic_common`: `run_agentic_task`, `DEFAULT_MAX_RETRIES`, `load_workflow_state`, `save_workflow_state`, `clear_workflow_state`, `validate_cached_state`
 <pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
 <pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
 <pdd.render_mermaid><include>context/render_mermaid_example.py</include></pdd.render_mermaid>
