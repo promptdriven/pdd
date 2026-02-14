@@ -22,6 +22,7 @@ on:
       - 'LICENSE'
   pull_request:
     branches: [main]
+    types: [opened, synchronize, ready_for_review]
 
 jobs:
   unit-tests:

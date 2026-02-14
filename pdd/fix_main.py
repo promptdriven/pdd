@@ -446,6 +446,7 @@ def fix_main(
                         # Prepare the submission payload
                         payload = {
                             "command": "fix",
+                            "searchInput": input_strings["prompt_file"],
                             "input": {
                                 "prompts": [{
                                     "content": processed_prompt,

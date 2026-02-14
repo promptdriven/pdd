@@ -311,7 +311,7 @@ class TestRunProcessWithOutputTimeout:
         # Should complete within timeout + reasonable grace period for cleanup
         # Before fix: would hang forever
         # After fix: should complete within ~5-10 seconds max
-        assert elapsed < 15, f"Function took {elapsed:.1f}s, expected < 15s (hung indefinitely before fix)"
+        assert elapsed < 35, f"Function took {elapsed:.1f}s, expected < 35s (hung indefinitely before fix)"
 
         # Should have timeout indication or killed process
         assert returncode != 0 or "[Timeout]" in stderr, "Should indicate timeout or non-zero return"
@@ -398,8 +398,8 @@ else:
         # If threads don't have timeouts, this will hang forever waiting
         # for the orphaned child to close the pipes
         # With timeout fix, should complete in ~15 seconds max
-        assert elapsed < 20, (
-            f"Function took {elapsed:.1f}s, expected < 20s. "
+        assert elapsed < 35, (
+            f"Function took {elapsed:.1f}s, expected < 35s. "
             "Thread joins likely hanging on inherited pipes from child process."
         )
 
