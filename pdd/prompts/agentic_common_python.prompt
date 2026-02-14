@@ -199,6 +199,16 @@ GitHub API Functions (use `gh` CLI):
 - Find state comment, DELETE via `gh api -X DELETE repos/{owner}/{repo}/issues/comments/{comment_id}`
 - Return True on success or if no comment found, False on error
 
+State Validation (Issue #467):
+
+`validate_cached_state(last_completed_step: Union[int, float], step_outputs: Dict[str, str], step_order: Optional[List[Union[int, float]]] = None, quiet: bool = False) -> Union[int, float]`
+- Scans step_outputs for entries with "FAILED:" prefix and corrects last_completed_step to the actual last successfully completed step
+- Prevents the "blind resume" bug where the orchestrator trusts a corrupted last_completed_step and skips failed steps
+- If step_order is None, derives order from step_outputs keys sorted numerically
+- Iterates steps in order; stops at the first missing or "FAILED:"-prefixed entry
+- Returns the corrected last_completed_step (unchanged if no correction needed)
+- Prints a warning when correction is applied (unless quiet=True)
+
 High-Level Wrapper Functions (used by orchestrators):
 
 `load_workflow_state(cwd: Path, issue_number: int, workflow_type: str, state_dir: Path, repo_owner: str, repo_name: str, use_github_state: bool = True) -> Tuple[Optional[Dict], Optional[int]]`
