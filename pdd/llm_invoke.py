@@ -2461,21 +2461,23 @@ def llm_invoke(
                                     _accumulated_cost = _LAST_CALLBACK_DATA.get("cost", 0.0)
                                     _accumulated_input_tokens = _LAST_CALLBACK_DATA.get("input_tokens", 0)
                                     _accumulated_output_tokens = _LAST_CALLBACK_DATA.get("output_tokens", 0)
-                                    retry_response = litellm.completion(
-                                        model=model_name_litellm,
-                                        messages=retry_messages,
-                                        temperature=current_temperature,
-                                        response_format=response_format,
-                                        timeout=LLM_CALL_TIMEOUT,
-                                        **time_kwargs,
-                                        **retry_provider_kwargs  # Issue #185: Pass Vertex AI credentials
-                                    )
+                                    try:
+                                        retry_response = litellm.completion(
+                                            model=model_name_litellm,
+                                            messages=retry_messages,
+                                            temperature=current_temperature,
+                                            response_format=response_format,
+                                            timeout=LLM_CALL_TIMEOUT,
+                                            **time_kwargs,
+                                            **retry_provider_kwargs  # Issue #185: Pass Vertex AI credentials
+                                        )
+                                    finally:
+                                        # Always restore cache, even if retry raises
+                                        litellm.cache = configured_cache
                                     # Issue #509: Accumulate cost/tokens from original call + retry
                                     _LAST_CALLBACK_DATA["cost"] = _LAST_CALLBACK_DATA.get("cost", 0.0) + _accumulated_cost
                                     _LAST_CALLBACK_DATA["input_tokens"] = _LAST_CALLBACK_DATA.get("input_tokens", 0) + _accumulated_input_tokens
                                     _LAST_CALLBACK_DATA["output_tokens"] = _LAST_CALLBACK_DATA.get("output_tokens", 0) + _accumulated_output_tokens
-                                    # Re-enable cache - restore original configured cache (restore to original state, even if None)
-                                    litellm.cache = configured_cache
                                     # Extract result from retry
                                     retry_raw_result = retry_response.choices[0].message.content
                                     if retry_raw_result is not None:
@@ -2510,21 +2512,23 @@ def llm_invoke(
                                     _accumulated_cost = _LAST_CALLBACK_DATA.get("cost", 0.0)
                                     _accumulated_input_tokens = _LAST_CALLBACK_DATA.get("input_tokens", 0)
                                     _accumulated_output_tokens = _LAST_CALLBACK_DATA.get("output_tokens", 0)
-                                    retry_response = litellm.completion(
-                                        model=model_name_litellm,
-                                        messages=retry_messages,
-                                        temperature=current_temperature,
-                                        response_format=response_format,
-                                        timeout=LLM_CALL_TIMEOUT,
-                                        **time_kwargs,
-                                        **retry_provider_kwargs  # Issue #185: Pass Vertex AI credentials
-                                    )
+                                    try:
+                                        retry_response = litellm.completion(
+                                            model=model_name_litellm,
+                                            messages=retry_messages,
+                                            temperature=current_temperature,
+                                            response_format=response_format,
+                                            timeout=LLM_CALL_TIMEOUT,
+                                            **time_kwargs,
+                                            **retry_provider_kwargs  # Issue #185: Pass Vertex AI credentials
+                                        )
+                                    finally:
+                                        # Always restore cache, even if retry raises
+                                        litellm.cache = original_cache
                                     # Issue #509: Accumulate cost/tokens from original call + retry
                                     _LAST_CALLBACK_DATA["cost"] = _LAST_CALLBACK_DATA.get("cost", 0.0) + _accumulated_cost
                                     _LAST_CALLBACK_DATA["input_tokens"] = _LAST_CALLBACK_DATA.get("input_tokens", 0) + _accumulated_input_tokens
                                     _LAST_CALLBACK_DATA["output_tokens"] = _LAST_CALLBACK_DATA.get("output_tokens", 0) + _accumulated_output_tokens
-                                    # Re-enable cache
-                                    litellm.cache = original_cache
                                     # Extract result from retry
                                     retry_raw_result = retry_response.choices[0].message.content
                                     if retry_raw_result is not None and not _is_malformed_json_response(retry_raw_result):
@@ -2757,21 +2761,23 @@ def llm_invoke(
                                         _accumulated_cost = _LAST_CALLBACK_DATA.get("cost", 0.0)
                                         _accumulated_input_tokens = _LAST_CALLBACK_DATA.get("input_tokens", 0)
                                         _accumulated_output_tokens = _LAST_CALLBACK_DATA.get("output_tokens", 0)
-                                        retry_response = litellm.completion(
-                                            model=model_name_litellm,
-                                            messages=retry_messages,
-                                            temperature=current_temperature,
-                                            response_format=response_format,
-                                            timeout=LLM_CALL_TIMEOUT,
-                                            **time_kwargs,
-                                            **retry_provider_kwargs  # Issue #185: Pass Vertex AI credentials
-                                        )
+                                        try:
+                                            retry_response = litellm.completion(
+                                                model=model_name_litellm,
+                                                messages=retry_messages,
+                                                temperature=current_temperature,
+                                                response_format=response_format,
+                                                timeout=LLM_CALL_TIMEOUT,
+                                                **time_kwargs,
+                                                **retry_provider_kwargs  # Issue #185: Pass Vertex AI credentials
+                                            )
+                                        finally:
+                                            # Always restore cache, even if retry raises
+                                            litellm.cache = original_cache
                                         # Issue #509: Accumulate cost/tokens from original call + retry
                                         _LAST_CALLBACK_DATA["cost"] = _LAST_CALLBACK_DATA.get("cost", 0.0) + _accumulated_cost
                                         _LAST_CALLBACK_DATA["input_tokens"] = _LAST_CALLBACK_DATA.get("input_tokens", 0) + _accumulated_input_tokens
                                         _LAST_CALLBACK_DATA["output_tokens"] = _LAST_CALLBACK_DATA.get("output_tokens", 0) + _accumulated_output_tokens
-                                        # Re-enable cache
-                                        litellm.cache = original_cache
                                         # Extract and re-parse the retry result
                                         retry_raw_result = retry_response.choices[0].message.content
                                         if retry_raw_result is not None:
