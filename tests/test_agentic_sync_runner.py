@@ -1,6 +1,7 @@
 """Tests for pdd.agentic_sync_runner module."""
 from __future__ import annotations
 
+import io
 import json
 import time
 from pathlib import Path
@@ -11,12 +12,23 @@ import pytest
 
 from pdd.agentic_sync_runner import (
     MAX_WORKERS,
+    STATE_FILE_PATH,
     AsyncSyncRunner,
     ModuleState,
+    _BOX_CHARS_RE,
     _format_duration,
     _parse_cost_from_csv,
     build_dep_graph_from_architecture,
 )
+
+
+def _make_mock_popen(stdout_text: str = "", stderr_text: str = "", exit_code: int = 0):
+    """Create a mock Popen object with file-like stdout/stderr streams."""
+    mock_proc = MagicMock()
+    mock_proc.stdout = io.StringIO(stdout_text)
+    mock_proc.stderr = io.StringIO(stderr_text)
+    mock_proc.wait.return_value = exit_code
+    return mock_proc
 
 
 # ---------------------------------------------------------------------------
@@ -31,6 +43,15 @@ class TestModuleState:
         assert state.end_time is None
         assert state.cost == 0.0
         assert state.error is None
+        assert state.current_phase is None
+        assert state.completed_phases == []
+
+    def test_completed_phases_independent(self):
+        """Verify each ModuleState gets its own completed_phases list."""
+        a = ModuleState()
+        b = ModuleState()
+        a.completed_phases.append("generate")
+        assert b.completed_phases == []
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +212,7 @@ class TestBuildCommentBody:
         assert "Issue: #42" in body
         assert "Pending" in body
         assert "In Progress (0/2 complete)" in body
+        assert "| Phase |" in body
 
     def test_mixed_states(self):
         runner = AsyncSyncRunner(
@@ -246,6 +268,275 @@ class TestBuildCommentBody:
 
         body = runner._build_comment_body(1)
         assert "All 1 modules synced successfully" in body
+
+    def test_phase_column_running_with_phase(self):
+        """Running module shows current phase with done count."""
+        runner = AsyncSyncRunner(
+            basenames=["m"],
+            dep_graph={"m": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        runner.module_states["m"].status = "running"
+        runner.module_states["m"].start_time = 100.0
+        runner.module_states["m"].current_phase = "test"
+        runner.module_states["m"].completed_phases = ["generate", "auto-deps"]
+
+        body = runner._build_comment_body(1)
+        assert "`test` (2 done)" in body
+
+    def test_phase_column_running_no_phase(self):
+        """Running module with no phase yet shows dash."""
+        runner = AsyncSyncRunner(
+            basenames=["m"],
+            dep_graph={"m": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        runner.module_states["m"].status = "running"
+        runner.module_states["m"].start_time = 100.0
+
+        body = runner._build_comment_body(1)
+        # The row for 'm' should have "- |" for phase (between Running and duration)
+        for line in body.splitlines():
+            if "| m |" in line:
+                # Split into columns
+                cols = [c.strip() for c in line.split("|")]
+                # cols: ['', 'm', 'Running', '-', duration, '-', '']
+                phase_col = cols[3]  # Phase column
+                assert phase_col == "-"
+
+    def test_phase_column_success_with_phases(self):
+        """Completed module shows total phase count."""
+        runner = AsyncSyncRunner(
+            basenames=["m"],
+            dep_graph={"m": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        runner.module_states["m"].status = "success"
+        runner.module_states["m"].start_time = 0.0
+        runner.module_states["m"].end_time = 60.0
+        runner.module_states["m"].cost = 0.10
+        runner.module_states["m"].completed_phases = ["generate", "test", "verify"]
+
+        body = runner._build_comment_body(1)
+        assert "3 phases" in body
+
+    def test_phase_column_success_no_phases(self):
+        """Completed module with no tracked phases shows dash."""
+        runner = AsyncSyncRunner(
+            basenames=["m"],
+            dep_graph={"m": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        runner.module_states["m"].status = "success"
+        runner.module_states["m"].start_time = 0.0
+        runner.module_states["m"].end_time = 10.0
+        runner.module_states["m"].cost = 0.05
+
+        body = runner._build_comment_body(1)
+        for line in body.splitlines():
+            if "| m |" in line:
+                cols = [c.strip() for c in line.split("|")]
+                phase_col = cols[3]
+                assert phase_col == "-"
+
+    def test_phase_column_skip_shows_tilde(self):
+        """Running module in a skip phase shows tilde prefix."""
+        runner = AsyncSyncRunner(
+            basenames=["m"],
+            dep_graph={"m": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        runner.module_states["m"].status = "running"
+        runner.module_states["m"].start_time = 100.0
+        runner.module_states["m"].current_phase = "skip:verify"
+        runner.module_states["m"].completed_phases = ["generate"]
+
+        body = runner._build_comment_body(1)
+        assert "`~verify` (1 done)" in body
+
+
+# ---------------------------------------------------------------------------
+# AsyncSyncRunner._on_phase_change
+# ---------------------------------------------------------------------------
+
+class TestOnPhaseChange:
+    def _make_runner(self, basenames):
+        runner = AsyncSyncRunner(
+            basenames=basenames,
+            dep_graph={b: [] for b in basenames},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        return runner
+
+    def test_first_phase_sets_current(self):
+        runner = self._make_runner(["a"])
+        runner.module_states["a"].status = "running"
+        runner._on_phase_change("a", "generate")
+        assert runner.module_states["a"].current_phase == "generate"
+        assert runner.module_states["a"].completed_phases == []
+
+    def test_phase_transition_moves_old_to_completed(self):
+        runner = self._make_runner(["a"])
+        runner.module_states["a"].status = "running"
+        runner._on_phase_change("a", "generate")
+        runner._on_phase_change("a", "test")
+        assert runner.module_states["a"].current_phase == "test"
+        assert runner.module_states["a"].completed_phases == ["generate"]
+
+    def test_skip_phase_not_added_to_completed(self):
+        """Phases prefixed with skip: should not appear in completed_phases."""
+        runner = self._make_runner(["a"])
+        runner.module_states["a"].status = "running"
+        runner._on_phase_change("a", "generate")
+        runner._on_phase_change("a", "skip:test")
+        runner._on_phase_change("a", "verify")
+        assert runner.module_states["a"].current_phase == "verify"
+        assert runner.module_states["a"].completed_phases == ["generate"]
+
+    def test_same_phase_again_no_duplicate(self):
+        """Setting same phase repeatedly doesn't add duplicates."""
+        runner = self._make_runner(["a"])
+        runner.module_states["a"].status = "running"
+        runner._on_phase_change("a", "generate")
+        runner._on_phase_change("a", "generate")
+        assert runner.module_states["a"].completed_phases == []
+
+    def test_multiple_transitions(self):
+        """Full lifecycle through multiple phases."""
+        runner = self._make_runner(["a"])
+        runner.module_states["a"].status = "running"
+        runner._on_phase_change("a", "auto-deps")
+        runner._on_phase_change("a", "generate")
+        runner._on_phase_change("a", "test")
+        runner._on_phase_change("a", "verify")
+        runner._on_phase_change("a", "synced")
+        assert runner.module_states["a"].current_phase == "synced"
+        assert runner.module_states["a"].completed_phases == [
+            "auto-deps", "generate", "test", "verify"
+        ]
+
+
+# ---------------------------------------------------------------------------
+# AsyncSyncRunner._update_github_comment_throttled
+# ---------------------------------------------------------------------------
+
+class TestUpdateGithubCommentThrottled:
+    def test_throttle_respects_interval(self):
+        """Comment updates are skipped when called faster than interval."""
+        runner = AsyncSyncRunner(
+            basenames=["a"],
+            dep_graph={"a": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        runner._comment_update_interval = 10.0
+        call_count = [0]
+        original = runner._update_github_comment
+
+        def counting_update():
+            call_count[0] += 1
+
+        runner._update_github_comment = counting_update
+
+        # First call should go through (last_update=0.0, now>15.0)
+        runner._update_github_comment_throttled()
+        assert call_count[0] == 1
+
+        # Immediately after, should be throttled
+        runner._update_github_comment_throttled()
+        assert call_count[0] == 1  # Still 1
+
+    def test_throttle_allows_after_interval(self):
+        """After interval passes, update goes through again."""
+        runner = AsyncSyncRunner(
+            basenames=["a"],
+            dep_graph={"a": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        runner._comment_update_interval = 0.0  # No throttle
+        call_count = [0]
+
+        def counting_update():
+            call_count[0] += 1
+
+        runner._update_github_comment = counting_update
+
+        runner._update_github_comment_throttled()
+        runner._update_github_comment_throttled()
+        assert call_count[0] == 2
+
+
+# ---------------------------------------------------------------------------
+# AsyncSyncRunner._record_result phase finalization
+# ---------------------------------------------------------------------------
+
+class TestRecordResultPhaseFinalization:
+    def test_record_result_finalizes_current_phase(self):
+        """When recording result, current_phase is moved to completed and cleared."""
+        runner = AsyncSyncRunner(
+            basenames=["a"],
+            dep_graph={"a": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        runner.module_states["a"].status = "running"
+        runner.module_states["a"].current_phase = "verify"
+        runner.module_states["a"].completed_phases = ["generate", "test"]
+
+        runner._record_result("a", True, 0.10, "")
+
+        assert runner.module_states["a"].current_phase is None
+        assert runner.module_states["a"].completed_phases == ["generate", "test", "verify"]
+
+    def test_record_result_skip_phase_not_finalized(self):
+        """A skip: phase is not added to completed when recording result."""
+        runner = AsyncSyncRunner(
+            basenames=["a"],
+            dep_graph={"a": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        runner.module_states["a"].status = "running"
+        runner.module_states["a"].current_phase = "skip:test"
+        runner.module_states["a"].completed_phases = ["generate"]
+
+        runner._record_result("a", True, 0.05, "")
+
+        assert runner.module_states["a"].current_phase is None
+        assert runner.module_states["a"].completed_phases == ["generate"]
+
+    def test_record_result_no_phase(self):
+        """Recording result with no current_phase doesn't crash."""
+        runner = AsyncSyncRunner(
+            basenames=["a"],
+            dep_graph={"a": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        runner.module_states["a"].status = "running"
+
+        runner._record_result("a", True, 0.05, "")
+
+        assert runner.module_states["a"].current_phase is None
+        assert runner.module_states["a"].completed_phases == []
 
 
 # ---------------------------------------------------------------------------
@@ -386,13 +677,12 @@ class TestAsyncSyncRunnerRun:
 class TestSyncOneModule:
     @patch("pdd.agentic_sync_runner.os.unlink")
     @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.15)
-    @patch("pdd.agentic_sync_runner.subprocess.run")
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
     @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
-    def test_successful_sync(self, mock_find, mock_run, mock_cost, mock_unlink):
-        mock_run.return_value = MagicMock(
-            returncode=0,
-            stdout="Overall status: Success\n",
-            stderr="",
+    def test_successful_sync(self, mock_find, mock_popen, mock_cost, mock_unlink):
+        mock_popen.return_value = _make_mock_popen(
+            stdout_text="Overall status: Success\n",
+            exit_code=0,
         )
 
         runner = AsyncSyncRunner(
@@ -409,7 +699,7 @@ class TestSyncOneModule:
         assert error == ""
 
         # Verify command construction
-        cmd = mock_run.call_args[0][0]
+        cmd = mock_popen.call_args[0][0]
         assert "/usr/bin/pdd" in cmd[0]
         assert "--force" in cmd
         assert "sync" in cmd
@@ -420,13 +710,12 @@ class TestSyncOneModule:
 
     @patch("pdd.agentic_sync_runner.os.unlink")
     @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
-    @patch("pdd.agentic_sync_runner.subprocess.run")
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
     @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
-    def test_failed_sync_nonzero_exit(self, mock_find, mock_run, mock_cost, mock_unlink):
-        mock_run.return_value = MagicMock(
-            returncode=1,
-            stdout="",
-            stderr="Error: compilation failed",
+    def test_failed_sync_nonzero_exit(self, mock_find, mock_popen, mock_cost, mock_unlink):
+        mock_popen.return_value = _make_mock_popen(
+            stderr_text="Error: compilation failed\n",
+            exit_code=1,
         )
 
         runner = AsyncSyncRunner(
@@ -443,13 +732,12 @@ class TestSyncOneModule:
 
     @patch("pdd.agentic_sync_runner.os.unlink")
     @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
-    @patch("pdd.agentic_sync_runner.subprocess.run")
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
     @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
-    def test_failed_sync_overall_status_check(self, mock_find, mock_run, mock_cost, mock_unlink):
-        mock_run.return_value = MagicMock(
-            returncode=0,
-            stdout="Step 1 done\nOverall status: Failed\n",
-            stderr="",
+    def test_failed_sync_overall_status_check(self, mock_find, mock_popen, mock_cost, mock_unlink):
+        mock_popen.return_value = _make_mock_popen(
+            stdout_text="Step 1 done\nOverall status: Failed\n",
+            exit_code=0,
         )
 
         runner = AsyncSyncRunner(
@@ -465,10 +753,10 @@ class TestSyncOneModule:
 
     @patch("pdd.agentic_sync_runner.os.unlink")
     @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
-    @patch("pdd.agentic_sync_runner.subprocess.run")
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
     @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value=None)
-    def test_fallback_to_python_m_pdd(self, mock_find, mock_run, mock_cost, mock_unlink):
-        mock_run.return_value = MagicMock(returncode=0, stdout="OK", stderr="")
+    def test_fallback_to_python_m_pdd(self, mock_find, mock_popen, mock_cost, mock_unlink):
+        mock_popen.return_value = _make_mock_popen(stdout_text="OK\n", exit_code=0)
 
         runner = AsyncSyncRunner(
             basenames=["mod"],
@@ -479,6 +767,428 @@ class TestSyncOneModule:
         )
 
         runner._sync_one_module("mod")
-        cmd = mock_run.call_args[0][0]
+        cmd = mock_popen.call_args[0][0]
         assert "-m" in cmd
         assert "pdd" in cmd
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_timeout_terminates_process(self, mock_find, mock_popen, mock_cost, mock_unlink):
+        """Verify timeout handling with Popen."""
+        timeout_exc = __import__("subprocess").TimeoutExpired(cmd="pdd", timeout=900)
+        mock_proc = _make_mock_popen()
+        # First wait() (heartbeat poll) raises TimeoutExpired, then cleanup wait() returns 0
+        mock_proc.wait.side_effect = [timeout_exc, 0]
+        mock_popen.return_value = mock_proc
+
+        runner = AsyncSyncRunner(
+            basenames=["slow"],
+            dep_graph={"slow": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+
+        # Mock time so elapsed_total immediately exceeds MODULE_TIMEOUT
+        # after the first heartbeat poll TimeoutExpired
+        call_count = [0]
+        base_time = 1000.0
+
+        def fake_time():
+            call_count[0] += 1
+            if call_count[0] <= 2:
+                return base_time
+            return base_time + 2000  # Well past MODULE_TIMEOUT
+
+        with patch("pdd.agentic_sync_runner.time.time", side_effect=fake_time):
+            success, cost, error = runner._sync_one_module("slow")
+        assert not success
+        assert "Timeout" in error
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.05)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_phase_markers_parsed_from_stdout(self, mock_find, mock_popen, mock_cost, mock_unlink):
+        """PDD_PHASE markers in stdout are parsed and update module phase state."""
+        mock_popen.return_value = _make_mock_popen(
+            stdout_text=(
+                "Starting sync...\n"
+                "PDD_PHASE: generate\n"
+                "Generating code...\n"
+                "PDD_PHASE: test\n"
+                "Running tests...\n"
+                "PDD_PHASE: verify\n"
+                "Verifying...\n"
+                "PDD_PHASE: synced\n"
+                "Overall status: Success\n"
+            ),
+            exit_code=0,
+        )
+
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        runner.module_states["foo"].status = "running"
+        runner.module_states["foo"].start_time = time.time()
+
+        success, cost, error = runner._sync_one_module("foo")
+        assert success
+
+        # After sync completes, phases should have been tracked
+        state = runner.module_states["foo"]
+        # _read_stream saw: generate -> test -> verify -> synced
+        # So completed_phases should have: generate, test, verify
+        # and current_phase should be "synced" (last seen)
+        assert "generate" in state.completed_phases
+        assert "test" in state.completed_phases
+        assert "verify" in state.completed_phases
+        assert state.current_phase == "synced"
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.05)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_env_has_pythonunbuffered(self, mock_find, mock_popen, mock_cost, mock_unlink):
+        """Child process environment includes PYTHONUNBUFFERED=1."""
+        mock_popen.return_value = _make_mock_popen(stdout_text="OK\n", exit_code=0)
+
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+
+        runner._sync_one_module("foo")
+        env = mock_popen.call_args[1]["env"]
+        assert env.get("PYTHONUNBUFFERED") == "1"
+
+
+# ---------------------------------------------------------------------------
+# Resumability: state file persistence
+# ---------------------------------------------------------------------------
+
+class TestResumability:
+    def _make_runner(self, basenames, dep_graph=None, issue_url=None, tmp_path=None):
+        """Create a runner, optionally with a custom project_root."""
+        runner = AsyncSyncRunner(
+            basenames=basenames,
+            dep_graph=dep_graph or {b: [] for b in basenames},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            issue_url=issue_url,
+        )
+        if tmp_path:
+            runner.project_root = tmp_path
+        return runner
+
+    def test_save_and_load_state(self, tmp_path):
+        """State file is written and can be loaded by a new runner."""
+        url = "https://github.com/o/r/issues/1"
+        runner = self._make_runner(["a", "b"], issue_url=url, tmp_path=tmp_path)
+        runner.project_root = tmp_path
+
+        # Simulate a successful module
+        runner._record_result("a", True, 0.12, "")
+
+        state_path = tmp_path / STATE_FILE_PATH
+        assert state_path.exists()
+
+        data = json.loads(state_path.read_text())
+        assert data["issue_url"] == url
+        assert data["modules"]["a"]["status"] == "success"
+        assert data["modules"]["a"]["cost"] == pytest.approx(0.12)
+        assert data["modules"]["b"]["status"] == "pending"
+
+    def test_resume_skips_succeeded_modules(self, tmp_path):
+        """A new runner loading state skips already-succeeded modules."""
+        url = "https://github.com/o/r/issues/2"
+
+        # Write a state file with 'a' succeeded
+        state_dir = tmp_path / ".pdd"
+        state_dir.mkdir(parents=True)
+        state_file = state_dir / "agentic_sync_state.json"
+        state_file.write_text(json.dumps({
+            "issue_url": url,
+            "modules": {
+                "a": {"status": "success", "cost": 0.10},
+                "b": {"status": "pending", "cost": 0.0},
+            },
+            "total_cost": 0.10,
+            "comment_id": 999,
+        }))
+
+        runner = self._make_runner(["a", "b"], issue_url=url, tmp_path=tmp_path)
+        runner.project_root = tmp_path
+        # Re-trigger load since project_root was set after init
+        runner._load_state()
+
+        assert runner.module_states["a"].status == "success"
+        assert runner.module_states["a"].cost == pytest.approx(0.10)
+        assert runner.module_states["b"].status == "pending"
+        assert "a" in runner._resumed_modules
+        assert runner.comment_id == 999
+
+    def test_no_resume_without_issue_url(self, tmp_path):
+        """No state loading when issue_url is None."""
+        state_dir = tmp_path / ".pdd"
+        state_dir.mkdir(parents=True)
+        state_file = state_dir / "agentic_sync_state.json"
+        state_file.write_text(json.dumps({
+            "issue_url": "https://github.com/o/r/issues/3",
+            "modules": {"a": {"status": "success", "cost": 0.10}},
+        }))
+
+        runner = self._make_runner(["a"], issue_url=None, tmp_path=tmp_path)
+        runner.project_root = tmp_path
+        runner._load_state()
+
+        assert runner.module_states["a"].status == "pending"
+
+    def test_no_resume_different_issue_url(self, tmp_path):
+        """State file for a different issue URL is ignored."""
+        state_dir = tmp_path / ".pdd"
+        state_dir.mkdir(parents=True)
+        state_file = state_dir / "agentic_sync_state.json"
+        state_file.write_text(json.dumps({
+            "issue_url": "https://github.com/o/r/issues/99",
+            "modules": {"a": {"status": "success", "cost": 0.10}},
+        }))
+
+        runner = self._make_runner(
+            ["a"], issue_url="https://github.com/o/r/issues/100", tmp_path=tmp_path
+        )
+        runner.project_root = tmp_path
+        runner._load_state()
+
+        assert runner.module_states["a"].status == "pending"
+
+    def test_no_resume_different_module_list(self, tmp_path):
+        """State file with different modules is ignored."""
+        url = "https://github.com/o/r/issues/4"
+        state_dir = tmp_path / ".pdd"
+        state_dir.mkdir(parents=True)
+        state_file = state_dir / "agentic_sync_state.json"
+        state_file.write_text(json.dumps({
+            "issue_url": url,
+            "modules": {
+                "a": {"status": "success", "cost": 0.10},
+                "c": {"status": "pending", "cost": 0.0},  # different set
+            },
+        }))
+
+        runner = self._make_runner(["a", "b"], issue_url=url, tmp_path=tmp_path)
+        runner.project_root = tmp_path
+        runner._load_state()
+
+        assert runner.module_states["a"].status == "pending"
+
+    @patch.object(AsyncSyncRunner, "_sync_one_module")
+    @patch.object(AsyncSyncRunner, "_update_github_comment")
+    def test_state_deleted_on_full_success(self, mock_comment, mock_sync, tmp_path):
+        """State file is deleted when all modules succeed."""
+        url = "https://github.com/o/r/issues/5"
+        mock_sync.return_value = (True, 0.05, "")
+
+        runner = self._make_runner(["a"], issue_url=url, tmp_path=tmp_path)
+        runner.project_root = tmp_path
+
+        runner.run()
+
+        state_path = tmp_path / STATE_FILE_PATH
+        assert not state_path.exists()
+
+    @patch.object(AsyncSyncRunner, "_sync_one_module")
+    @patch.object(AsyncSyncRunner, "_update_github_comment")
+    def test_state_kept_on_failure(self, mock_comment, mock_sync, tmp_path):
+        """State file is preserved when a module fails."""
+        url = "https://github.com/o/r/issues/6"
+        mock_sync.return_value = (False, 0.03, "error")
+
+        runner = self._make_runner(["a"], issue_url=url, tmp_path=tmp_path)
+        runner.project_root = tmp_path
+
+        runner.run()
+
+        state_path = tmp_path / STATE_FILE_PATH
+        assert state_path.exists()
+        data = json.loads(state_path.read_text())
+        assert data["modules"]["a"]["status"] == "failed"
+
+    def test_delete_state_noop_when_missing(self, tmp_path):
+        """Deleting state when no file exists does not raise."""
+        runner = self._make_runner(
+            ["a"], issue_url="https://github.com/o/r/issues/7", tmp_path=tmp_path
+        )
+        runner.project_root = tmp_path
+        runner._delete_state()  # Should not raise
+
+
+# ---------------------------------------------------------------------------
+# build_dep_graph_from_architecture
+# ---------------------------------------------------------------------------
+
+class TestBuildDepGraphFromArchitecture:
+    """Tests for build_dep_graph_from_architecture()."""
+
+    def test_basic_deps(self, tmp_path):
+        """Modules with dependencies are correctly linked."""
+        arch = [
+            {"filename": "module_a_Python.prompt", "dependencies": ["module_b_Python.prompt"]},
+            {"filename": "module_b_Python.prompt", "dependencies": []},
+        ]
+        arch_path = tmp_path / "architecture.json"
+        arch_path.write_text(json.dumps(arch))
+
+        graph = build_dep_graph_from_architecture(
+            arch_path, ["module_a_Python", "module_b_Python"]
+        )
+        assert graph == {"module_a_Python": ["module_b_Python"], "module_b_Python": []}
+
+    def test_missing_file_returns_empty_deps(self, tmp_path):
+        """Non-existent architecture.json gives empty deps for all."""
+        graph = build_dep_graph_from_architecture(
+            tmp_path / "nonexistent.json", ["x", "y"]
+        )
+        assert graph == {"x": [], "y": []}
+
+    def test_language_suffix_targets(self, tmp_path):
+        """Target basenames with language suffix (e.g. crm_models_Python)
+        correctly match architecture entries that strip the suffix."""
+        arch = [
+            {"filename": "crm_models_Python.prompt", "dependencies": ["base_config_Python.prompt"]},
+            {"filename": "base_config_Python.prompt", "dependencies": []},
+            {"filename": "api_client_Python.prompt", "dependencies": ["crm_models_Python.prompt"]},
+        ]
+        arch_path = tmp_path / "architecture.json"
+        arch_path.write_text(json.dumps(arch))
+
+        targets = ["crm_models_Python", "base_config_Python", "api_client_Python"]
+        graph = build_dep_graph_from_architecture(arch_path, targets)
+
+        assert graph["crm_models_Python"] == ["base_config_Python"]
+        assert graph["base_config_Python"] == []
+        assert graph["api_client_Python"] == ["crm_models_Python"]
+
+    def test_only_target_deps_included(self, tmp_path):
+        """Dependencies outside the target set are excluded."""
+        arch = [
+            {"filename": "mod_a_Python.prompt", "dependencies": ["mod_b_Python.prompt", "mod_c_Python.prompt"]},
+            {"filename": "mod_b_Python.prompt", "dependencies": []},
+            {"filename": "mod_c_Python.prompt", "dependencies": []},
+        ]
+        arch_path = tmp_path / "architecture.json"
+        arch_path.write_text(json.dumps(arch))
+
+        graph = build_dep_graph_from_architecture(
+            arch_path, ["mod_a_Python", "mod_b_Python"]
+        )
+        # mod_c_Python is not in target set, so mod_a's dep on it is excluded
+        assert graph == {"mod_a_Python": ["mod_b_Python"], "mod_b_Python": []}
+
+    def test_self_dep_excluded(self, tmp_path):
+        """A module depending on itself is not included in its deps."""
+        arch = [
+            {"filename": "mod_a_Python.prompt", "dependencies": ["mod_a_Python.prompt"]},
+        ]
+        arch_path = tmp_path / "architecture.json"
+        arch_path.write_text(json.dumps(arch))
+
+        graph = build_dep_graph_from_architecture(arch_path, ["mod_a_Python"])
+        assert graph == {"mod_a_Python": []}
+
+
+# ---------------------------------------------------------------------------
+# _BOX_CHARS_RE — heartbeat line filtering
+# ---------------------------------------------------------------------------
+
+class TestBoxCharsRegex:
+    """Verify _BOX_CHARS_RE matches Rich box-drawing lines and skips real content."""
+
+    @pytest.mark.parametrize("line", [
+        "╰──────────────────────────────────────────────────────────────────────────────╯",
+        "╭───────────────────────────────────────╮",
+        "│                                       │",
+        "├───┼───┤",
+        "┌────┐",
+        "└────┘",
+        "═══════════",
+        "  ╭──╮  ",
+        "---+---+---",
+        "| | |",
+        "",
+        "   ",
+    ])
+    def test_matches_box_drawing_lines(self, line):
+        assert _BOX_CHARS_RE.match(line.strip() if line.strip() else line) is not None or line.strip() == ""
+
+    @pytest.mark.parametrize("line", [
+        "Attempting provider: anthropic for task 'agentic_crash_explore'",
+        "Successfully loaded prompt: agentic_test_generate_LLM",
+        "Overall status: Success",
+        "PDD_PHASE: generate",
+        "Step 3/5 complete",
+        "│ some actual content │",
+    ])
+    def test_does_not_match_content_lines(self, line):
+        assert _BOX_CHARS_RE.match(line.strip()) is None
+
+
+class TestHeartbeatLineFiltering:
+    """Verify heartbeat skips box-drawing lines and finds informative content."""
+
+    def _last_informative_line(self, stdout_lines: list) -> str:
+        """Replicate the heartbeat line-finding logic."""
+        for line in reversed(stdout_lines):
+            stripped = line.strip()
+            if stripped and not _BOX_CHARS_RE.match(stripped):
+                return stripped
+        return ""
+
+    def test_skips_trailing_box_chars(self):
+        lines = [
+            "Attempting provider: anthropic\n",
+            "╭──────────────────────╮\n",
+            "│                      │\n",
+            "╰──────────────────────╯\n",
+        ]
+        assert self._last_informative_line(lines) == "Attempting provider: anthropic"
+
+    def test_returns_last_real_line(self):
+        lines = [
+            "Step 1\n",
+            "Step 2\n",
+            "Step 3\n",
+        ]
+        assert self._last_informative_line(lines) == "Step 3"
+
+    def test_empty_list(self):
+        assert self._last_informative_line([]) == ""
+
+    def test_only_box_chars(self):
+        lines = [
+            "╭───╮\n",
+            "│   │\n",
+            "╰───╯\n",
+        ]
+        assert self._last_informative_line(lines) == ""
+
+    def test_mixed_content_and_boxes(self):
+        lines = [
+            "╭───╮\n",
+            "│   │\n",
+            "╰───╯\n",
+            "Successfully loaded prompt: agentic_test_generate_LLM\n",
+            "╭──────────────────────╮\n",
+            "╰──────────────────────╯\n",
+        ]
+        assert self._last_informative_line(lines) == "Successfully loaded prompt: agentic_test_generate_LLM"

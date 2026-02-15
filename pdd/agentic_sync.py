@@ -286,6 +286,15 @@ def run_agentic_sync(
     if not modules_to_sync:
         return False, "LLM identified no modules to sync", llm_cost, provider
 
+    # LLM returns basenames from architecture.json filenames (e.g., "crm_models_Python").
+    # pdd sync expects basenames without the language suffix (e.g., "crm_models").
+    # Strip language suffixes using the same logic as the step 10 dry-run guide.
+    stripped_modules = []
+    for m in modules_to_sync:
+        stripped = extract_module_from_include(m + ".prompt")
+        stripped_modules.append(stripped if stripped else m)
+    modules_to_sync = stripped_modules
+
     if not quiet:
         console.print(f"[green]Modules to sync: {modules_to_sync}[/green]")
 
@@ -331,6 +340,7 @@ def run_agentic_sync(
         github_info=github_info,
         quiet=quiet,
         verbose=verbose,
+        issue_url=issue_url,
     )
 
     runner_success, runner_msg, runner_cost = runner.run()
