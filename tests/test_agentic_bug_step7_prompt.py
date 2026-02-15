@@ -280,16 +280,21 @@ def extract_python_code_blocks(text: str) -> list[str]:
     2. ```py blocks
     3. Bash heredocs (cat <<EOF > file.py ... EOF)
     4. Generic ``` blocks containing Python-like code (imports, def, class)
+    5. Shell-escaped backticks (\\`\\`\\`python blocks from gh issue comment output)
     """
     results = []
 
+    # 0. Pre-process: unescape shell-escaped backticks (e.g., from gh issue comment output)
+    #    LLMs sometimes wrap output in shell commands where backticks become \`
+    unescaped_text = text.replace('\\`', '`')
+
     # 1. Standard ```python blocks - use word boundary to ensure full match
     python_pattern = r'```python\b\s*(.*?)```'
-    results.extend(re.findall(python_pattern, text, re.DOTALL))
+    results.extend(re.findall(python_pattern, unescaped_text, re.DOTALL))
 
     # 2. ```py blocks - word boundary prevents matching ```python
     py_pattern = r'```py\b\s*(.*?)```'
-    py_matches = re.findall(py_pattern, text, re.DOTALL)
+    py_matches = re.findall(py_pattern, unescaped_text, re.DOTALL)
     # Filter out duplicates (in case both patterns match same content)
     for match in py_matches:
         if match not in results:
@@ -297,12 +302,12 @@ def extract_python_code_blocks(text: str) -> list[str]:
 
     # 3. Bash heredocs: cat <<EOF > *.py ... EOF or cat <<'EOF' > *.py ... EOF
     heredoc_pattern = r"cat\s+<<'?EOF'?\s*>\s*\S+\.py\s*(.*?)EOF"
-    results.extend(re.findall(heredoc_pattern, text, re.DOTALL))
+    results.extend(re.findall(heredoc_pattern, unescaped_text, re.DOTALL))
 
     # 4. Generic ``` blocks that look like Python (fallback)
     if not results:
         generic_pattern = r'```\s*(.*?)```'
-        generic_matches = re.findall(generic_pattern, text, re.DOTALL)
+        generic_matches = re.findall(generic_pattern, unescaped_text, re.DOTALL)
         for match in generic_matches:
             # Check if it looks like Python code
             python_indicators = [
@@ -431,6 +436,22 @@ pytest tests/test_recommendations.py -v
         # Should get exactly 1 match (from python pattern), not 2
         assert len(result) == 1
         assert "from os import path" in result[0]
+
+    def test_extracts_from_shell_escaped_backticks(self) -> None:
+        """Test extraction when LLM wraps output in gh issue comment with escaped backticks."""
+        text = (
+            'gh issue comment 999 --repo example/repo --body "'
+            '## Step 7: Generated Test\n\n'
+            '\\`\\`\\`python\n'
+            'from unittest.mock import patch\n\n'
+            'def test_example():\n'
+            '    assert True\n'
+            '\\`\\`\\`\n"'
+        )
+        result = extract_python_code_blocks(text)
+        assert len(result) == 1
+        assert "from unittest.mock import patch" in result[0]
+        assert "def test_example():" in result[0]
 
 
 def analyze_test_code_for_mocking_patterns(code: str) -> dict:
