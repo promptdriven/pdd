@@ -10,6 +10,10 @@ llm_invoke Pro CSV: `experiments/grounding/results/llm_invoke_pro_stability.csv`
 llm_invoke Pro Evaluation: `experiments/grounding/results/llm_invoke_pro_evaluation.csv`
 sync_orchestration Pro CSV: `experiments/grounding/results/sync_orchestration_pro_stability.csv`
 sync_orchestration Pro Evaluation: `experiments/grounding/results/sync_orchestration_pro_evaluation.csv`
+llm_invoke PDD v2 CSV: `experiments/grounding/results/llm_invoke_pdd_v2_stability.csv`
+llm_invoke PDD v2 Evaluation: `experiments/grounding/results/llm_invoke_pdd_v2_evaluation.csv`
+sync_orchestration PDD v2 CSV: `experiments/grounding/results/sync_orchestration_pdd_v2_stability.csv`
+sync_orchestration PDD v2 Evaluation: `experiments/grounding/results/sync_orchestration_pdd_v2_evaluation.csv`
 
 ## Scope
 
@@ -20,6 +24,7 @@ This log captures recorded runs for the grounding validation experiment, which m
 4. **Phase 4 — pdd generate --local**: Does test visibility substitute for grounding?
 5. **Phase 5 — sync_orchestration**: Does grounding's effect scale to PDD's largest module (1,973 lines)?
 6. **Phase 6 — Pro vs Flash**: Does a stronger model interact differently with grounding?
+7. **Phase 7 — Improved test prompting**: Can better prompt framing extract more implementation signal from tests?
 
 ## Phase 1: Retrieval Quality
 
@@ -869,7 +874,124 @@ Yes, multiplicatively. The grounding lift is 7.6–9.5x larger for Pro than Flas
 **Q3: Is Pro worth the cost/latency tradeoff?**
 Only with grounding. Pro + grounded: dramatically better quality (sync_orchestration: +516% ref_sim). Cost increase is variable ($0.126 typical, $1.38 on rerun due to platform issues). Pro + ungrounded: strictly worse across all dimensions. **Recommendation: use Pro exclusively through the grounded endpoint.**
 
-## Experiment-Wide Conclusions (Phases 1–6)
+## Phase 7: Improved Test Prompt Framing
+
+### Motivation
+
+Phase 4-5 showed the ungrounded-pdd arm (with full test suite visibility) produced the same hallucination categories as bare ungrounded. However, the test injection prompt was minimal: "The following is the unit test content that the generated code must pass." This purely behavioral framing tells the model *what* to do but not *what to learn from* the tests. Phase 7 tests whether more descriptive prompting can help the model extract implementation signals from test assertions, mock patterns, and fixture setup.
+
+### Prompt Change
+
+The `<unit_test_content>` framing in `code_generator_main.py` was updated from:
+
+```
+The following is the unit test content that the generated code must pass:
+```
+
+To:
+
+```
+Study these test files carefully before generating code. Pay special attention to:
+- What specific types and data structures the assertions reveal
+  (e.g., if a test asserts `x == (1.0, 2.0)`, the value is a tuple, not a dict)
+- What mock patterns show about the real interfaces being called
+  (e.g., `mock_config.get_jwt_token.return_value` reveals the auth API)
+- What import paths are used for internal modules
+- What fixture setup reveals about expected data formats
+  (e.g., DataFrame column names, namedtuple fields)
+
+The generated code must pass these tests, but also match the
+implementation patterns they imply.
+```
+
+### Experimental Setup
+
+- **Arm**: Ungrounded-PDD only (suffix `_pdd_v2`)
+- **Model**: `vertex_ai/gemini-3-flash-preview`
+- **Temperature**: 1.0
+- **Runs per module**: 5
+- **Modules**: llm_invoke, sync_orchestration
+- **Cache busting**: UUID nonce per run
+
+### llm_invoke Results
+
+#### Quantitative (v1 vs v2 vs Grounded)
+
+| Metric | v1 (Phase 4) | v2 (Phase 7) | Grounded (Phase 3) |
+|---|---|---|---|
+| Syntax valid | 5/5 | 5/5 | 5/5 |
+| Avg lines | 485.6 ± 45.8 | 456.8 ± 65.0 | 467.6 ± 149.7 |
+| Avg functions | 15.8 ± 0.8 | 12.8 ± 2.3 | 17.4 ± 2.1 |
+| Pairwise similarity | 0.106 | 0.096 | **0.189** |
+| Ref similarity | 0.021 ± 0.010 | 0.020 ± 0.005 | **0.030 ± 0.004** |
+| Ref recall | 0.151 ± 0.002 | 0.125 ± 0.053 | **0.206 ± 0.015** |
+| Test pass rate | 100% (217) | 100% (240) | 100% (217) |
+| Avg cost | $0.057 | $0.041 | $0.131 |
+
+Note: Test suite grew from 217 to 240 tests between experiments.
+
+#### Hallucination Categories
+
+| Category | v1 (Phase 4) | v2 (Phase 7) | Grounded | Signal in Tests? |
+|---|---|---|---|---|
+| Hallucinated imports (`DEFAULT_STRENGTH`) | 5/5 FAIL | 5/5 FAIL | 0/5 | Absent |
+| Auth pattern (invented `PDD_CLOUD_TOKEN`) | 5/5 FAIL | 5/5 FAIL | 0/5 | Weak (in mocks) |
+| Rate map type (`Tuple` vs `Dict`) | 5/5 FAIL | 5/5 FAIL | 0/5 | Strong (explicit assertion) |
+| CSV column names | 5/5 PASS | 5/5 PASS | 5/5 | Strong |
+| Caching (GCS S3 + SQLite) | 2/5 partial | 0/5 | 5/5 | Absent |
+
+### sync_orchestration Results
+
+#### Quantitative (v1 vs v2 vs Grounded)
+
+| Metric | v1 (Phase 5) | v2 (Phase 7) | Grounded (Phase 5) |
+|---|---|---|---|
+| Syntax valid | 5/5 | 4/5 | 4/5 |
+| Avg lines | 488.6 ± 57.9 | 501.0 ± 51.3 | 426.6 ± 38.5 |
+| Avg functions | 14.2 ± 1.9 | 11.4 ± 5.5 | 19.8 ± 11.1 |
+| Pairwise similarity | 0.281 | 0.307 | **0.391** |
+| Ref similarity | 0.040 ± 0.018 | 0.030 ± 0.004 | **0.145 ± 0.069** |
+| Ref recall | 0.268 ± 0.026 | 0.259 ± 0.024 | **0.360 ± 0.080** |
+| Test pass rate | 97.0% | 77.6% (1 syntax fail) | 77.6% |
+| Avg cost | $0.051 | $0.068 | $0.121 |
+
+#### Hallucination Categories
+
+| Category | v1 (Phase 5) | v2 (Phase 7) | Grounded | Signal in Tests? |
+|---|---|---|---|---|
+| Return type dispatch (isinstance) | 2/5 | 2/5 | **5/5** | Weak |
+| AtomicStateUpdate present | 3/5 | **4/5** | **5/5** | Moderate (mocked) |
+| Cycle detection (4-element) | 2/5 | 2/5 | **4/5** | Absent |
+| Function signatures consistent | 1/5 | **3/5** | **5/5** | Strong (imports) |
+| SyncApp constructor (14 kwargs) | 1/5 | 0/5 | 2/5 | Absent (fully mocked) |
+
+### Key Findings (Phase 7)
+
+#### 1. Improved prompting had marginal impact on quantitative metrics
+
+Reference similarity, recall, and pairwise similarity are statistically indistinguishable between v1 and v2 for both modules. The prompt change did not produce a measurable improvement in overall code fidelity.
+
+#### 2. Improved prompting helped where strong test signal exists — but only for sync_orchestration
+
+For sync_orchestration, two categories improved:
+- **AtomicStateUpdate** (3/5 → 4/5): Tests mock this class, revealing its interface
+- **Function signatures** (1/5 → 3/5): Tests import specific functions by name
+
+For llm_invoke, **zero categories improved** — even rate map type stayed wrong 5/5 despite the test literally asserting `== (30.0, 60.0)` which unambiguously reveals a tuple.
+
+#### 3. The rate map type result is the most surprising
+
+`test_populates_rate_map()` asserts `assert llm_mod._MODEL_RATE_MAP["gpt-4"] == (30.0, 60.0)` — an explicit tuple. The improved prompt specifically says "if a test asserts `x == (1.0, 2.0)`, the value is a tuple, not a dict." Yet all 5 v2 runs still used `Dict[str, Dict[str, float]]`. This suggests the model is not performing the multi-step reasoning needed: (1) find the assertion, (2) infer the type, (3) apply it to the type annotation. The assertion is buried among ~5,750 lines of test code, and the model's attention may not reach it.
+
+#### 4. Prompting cannot manufacture absent signal
+
+Categories where test signal is absent (hallucinated imports, caching architecture, SyncApp constructor, cycle detection) remained unchanged at 0% or near-0% improvement. This confirms the fundamental limitation: better prompting extracts more from available signal but cannot create signal that doesn't exist.
+
+#### 5. The grounded arm remains dominant
+
+Across all categories and both modules, the grounded arm (with one few-shot example but no tests) outperforms even the improved ungrounded-pdd arm (with full test suite + better prompting). The conclusion from Phase 4 stands: **one relevant code example outperforms an entire test suite for anchoring implementation fidelity**, and improved prompting does not meaningfully close this gap.
+
+## Experiment-Wide Conclusions (Phases 1-7)
 
 ### Decisive Findings
 
@@ -891,9 +1013,9 @@ All 3 arms pass the same tests (217/217 for llm_invoke, 96/99 for sync_orchestra
 - Hallucinated code that produces correct outputs is invisible to tests
 - Grounding addresses a quality dimension orthogonal to test coverage
 
-**3. Test visibility does not substitute for grounding.**
+**3. Test visibility does not substitute for grounding, even with improved prompting.**
 
-The ungrounded-pdd arm has full test suite access (4 test files / ~5,750 lines for llm_invoke; 99 tests for sync_orchestration) yet produces the **same categories of hallucination** as bare ungrounded. In some cases worse: ungrounded-pdd has the lowest pairwise similarity (0.106 for llm_invoke) due to web-scraped content variability. One relevant code example outperforms an entire test suite for implementation anchoring.
+The ungrounded-pdd arm has full test suite access (4 test files / ~5,750 lines for llm_invoke; 99 tests for sync_orchestration) yet produces the **same categories of hallucination** as bare ungrounded. Phase 7 tested whether improved prompt framing (instructing the model to study assertion types, mock patterns, and fixture setup) could extract more signal from tests. Result: marginal improvement on 2 of 10 hallucination categories (AtomicStateUpdate 3/5→4/5, function signatures 1/5→3/5 for sync_orchestration), zero improvement for llm_invoke. The rate map type remained wrong 5/5 despite a test literally asserting on tuples. One relevant code example still outperforms an entire test suite + optimized prompting for implementation anchoring.
 
 **4. Grounding's effect scales with module complexity and model capability.**
 

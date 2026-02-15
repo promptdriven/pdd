@@ -1,0 +1,6 @@
+arm,run_number,syntax_valid,line_count,function_count,class_count,reference_similarity,reference_recall,tests_total,tests_passed,tests_failed,tests_error,test_runtime_seconds
+ungrounded-pdd,1,True,410,12,1,0.0122,0.0298,240,240,0,0,15.6
+ungrounded-pdd,2,True,582,14,4,0.0207,0.1643,240,240,0,0,11.8
+ungrounded-pdd,3,True,435,16,5,0.0177,0.1558,240,240,0,0,11.9
+ungrounded-pdd,4,True,420,12,4,0.0274,0.1299,240,240,0,0,14.8
+ungrounded-pdd,5,True,437,10,4,0.0207,0.1429,240,240,0,0,14.8
