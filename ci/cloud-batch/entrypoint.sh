@@ -53,7 +53,7 @@ SETUP_SECONDS=$((SETUP_END - SETUP_START))
 
 # ── Vertex AI auth via ADC (service account attached to VM) ───────────────
 export VERTEX_PROJECT="${VERTEX_PROJECT:-prompt-driven-development-stg}"
-export VERTEX_CREDENTIALS="/tmp/adc-fallback"
+export VERTEX_LOCATION="global"
 export GOOGLE_GENAI_USE_VERTEXAI="true"
 export GOOGLE_CLOUD_PROJECT="${VERTEX_PROJECT}"
 export GOOGLE_CLOUD_LOCATION="us-central1"
