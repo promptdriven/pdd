@@ -266,12 +266,16 @@ echo "=============================================="
 echo ""
 echo "Full report: ${OUTPUT_FILE}"
 
-# Preserve raw results for profiling analysis
-RAW_RESULTS_DIR="${REPO_ROOT}/test-results/cloud-batch-raw"
-rm -rf "${RAW_RESULTS_DIR}"
-mkdir -p "${RAW_RESULTS_DIR}"
-cp "${RESULTS_LOCAL}"/task_*.json "${RAW_RESULTS_DIR}/" 2>/dev/null || true
-cp "${RESULTS_LOCAL}"/task_*_junit.xml "${RAW_RESULTS_DIR}/" 2>/dev/null || true
+if [ "${KEEP_RAW:-0}" = "1" ]; then
+    RAW_RESULTS_DIR="${REPO_ROOT}/test-results/cloud-batch-raw"
+    rm -rf "${RAW_RESULTS_DIR}"
+    mkdir -p "${RAW_RESULTS_DIR}"
+    cp "${RESULTS_LOCAL}"/task_*.json "${RAW_RESULTS_DIR}/" 2>/dev/null || true
+    cp "${RESULTS_LOCAL}"/task_*_junit.xml "${RAW_RESULTS_DIR}/" 2>/dev/null || true
+else
+    rm -rf "${REPO_ROOT}/test-results/cloud-batch-raw"
+    echo "(Raw JSON/XML not saved. Set KEEP_RAW=1 to preserve.)"
+fi
 
 # Clean up
 rm -rf "${RESULTS_LOCAL}"

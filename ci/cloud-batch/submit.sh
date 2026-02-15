@@ -65,6 +65,14 @@ rm /tmp/pdd-batch-job.json
 # ── Poll for completion ───────────────────────────────────────────────────
 echo "=== Polling for completion (${POLL_INTERVAL}s intervals, ${POLL_TIMEOUT}s timeout) ==="
 ELAPSED=0
+STREAMING_DIR=$(mktemp -d)
+trap 'rm -rf "${STREAMING_DIR}"' EXIT
+
+TOTAL=$(gcloud batch jobs describe "${JOB_NAME}" \
+    --project="${PROJECT_ID}" --location="${REGION}" \
+    --format="value(taskGroups[0].taskCount)" 2>/dev/null || echo "72")
+TOTAL=${TOTAL:-72}
+STREAM_FAILURES=0
 
 while [ "${ELAPSED}" -lt "${POLL_TIMEOUT}" ]; do
     STATUS=$(gcloud batch jobs describe "${JOB_NAME}" \
@@ -72,7 +80,38 @@ while [ "${ELAPSED}" -lt "${POLL_TIMEOUT}" ]; do
         --location="${REGION}" \
         --format="value(status.state)" 2>/dev/null || echo "UNKNOWN")
 
-    echo "[$(date +%H:%M:%S)] Job status: ${STATUS} (${ELAPSED}s elapsed)"
+    # ── Stream completed task results ─────────────────────────────────
+    gsutil -q -m cp "gs://${BUCKET}/${JOB_RUN_ID}/results/task_*.json" "${STREAMING_DIR}/" 2>/dev/null || true
+    COMPLETED=$(find "${STREAMING_DIR}" -maxdepth 1 -name "task_*.json" | wc -l | tr -d ' ')
+    COMPLETED=${COMPLETED:-0}
+
+    # Check for new failures
+    for json_file in "${STREAMING_DIR}"/task_*.json; do
+        [ -f "${json_file}" ] || continue
+        basename_file=$(basename "${json_file}")
+        # Skip if already seen
+        [ -f "${STREAMING_DIR}/seen_${basename_file}" ] && continue
+        touch "${STREAMING_DIR}/seen_${basename_file}"
+
+        TASK_STATUS=$(python3 -c "import json; d=json.load(open('${json_file}')); print(d.get('status','error'))" 2>/dev/null || echo "unknown")
+        if [ "${TASK_STATUS}" != "passed" ]; then
+            STREAM_FAILURES=$((STREAM_FAILURES + 1))
+            TASK_NUM=$(echo "${basename_file}" | sed 's/task_\([0-9]*\)\.json/\1/')
+            TASK_SUITE=$(python3 -c "import json; d=json.load(open('${json_file}')); print(d.get('suite','unknown'))" 2>/dev/null || echo "unknown")
+            TASK_DETAIL=$(python3 -c "import json; d=json.load(open('${json_file}')); print(d.get('detail',''))" 2>/dev/null || echo "")
+            echo ""
+            echo "!! FAILURE: Task ${TASK_NUM} (${TASK_SUITE} / ${TASK_DETAIL}) !!"
+            gsutil cat "gs://${BUCKET}/${JOB_RUN_ID}/results/task_${TASK_NUM}.log" 2>/dev/null || echo "(log not available)"
+            echo ""
+        fi
+    done
+
+    # ── Progress line ─────────────────────────────────────────────────
+    if [ "${STREAM_FAILURES}" -gt 0 ]; then
+        echo "[$(date +%H:%M:%S)] Job: ${STATUS} | ${COMPLETED}/${TOTAL} complete (${STREAM_FAILURES} failed) (${ELAPSED}s elapsed)"
+    else
+        echo "[$(date +%H:%M:%S)] Job: ${STATUS} | ${COMPLETED}/${TOTAL} complete (${ELAPSED}s elapsed)"
+    fi
 
     case "${STATUS}" in
         SUCCEEDED)
