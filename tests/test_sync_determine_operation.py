@@ -34,7 +34,8 @@ from sync_determine_operation import (
     validate_expected_files,
     _handle_missing_expected_files,
     _is_workflow_complete,
-    get_pdd_file_paths
+    get_pdd_file_paths,
+    calculate_prompt_hash
 )
 
 # --- Test Plan ---
@@ -3551,7 +3552,9 @@ class TestFingerprintIncludeDependencies:
         # Create prompt that includes the dependency
         prompt_path = prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt"
         prompt_content = "Create a helper.\n<include>shared_types.py</include>\n"
-        prompt_hash = create_file(prompt_path, prompt_content)
+        create_file(prompt_path, prompt_content)
+        # Use composite hash (prompt + includes) to simulate a fingerprint saved by fixed code
+        prompt_hash = calculate_prompt_hash(prompt_path)
 
         # Fingerprint matches current state exactly
         fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
