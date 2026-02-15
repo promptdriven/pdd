@@ -255,3 +255,45 @@ def test_get_pdd_command_fallback():
     # but we can test the fallback for an unknown name.
     cmd = get_pdd_command("definitely_not_a_real_command")
     assert cmd is None
+
+
+def test_executor_default_strength_matches_canonical():
+    """Issue #505: executor.DEFAULT_STRENGTH must match pdd.DEFAULT_STRENGTH.
+
+    The ImportError fallback at pdd/server/executor.py:16 hardcodes
+    DEFAULT_STRENGTH = 0.5, but the canonical constant in pdd/__init__.py
+    is 1.0.  This test inspects the source code to verify the fallback
+    value matches, catching drift even when the import succeeds at runtime.
+    """
+    import ast
+    import pdd
+    import inspect
+
+    # Runtime check: the loaded value must match canonical
+    assert executor_module.DEFAULT_STRENGTH == pdd.DEFAULT_STRENGTH, (
+        f"executor.DEFAULT_STRENGTH={executor_module.DEFAULT_STRENGTH} != "
+        f"pdd.DEFAULT_STRENGTH={pdd.DEFAULT_STRENGTH}"
+    )
+
+    # Source-level check: the hardcoded fallback in the except ImportError
+    # block must also match the canonical value.  This catches the case where
+    # the import succeeds at test time but the fallback would be wrong in a
+    # different deployment environment.
+    source = inspect.getsource(executor_module)
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ExceptHandler):
+            for stmt in ast.walk(node):
+                if (isinstance(stmt, ast.Assign)
+                        and any(
+                            isinstance(t, ast.Name) and t.id == "DEFAULT_STRENGTH"
+                            for t in stmt.targets
+                        )):
+                    # Extract the hardcoded fallback value
+                    value_node = stmt.value
+                    if isinstance(value_node, ast.Constant):
+                        assert value_node.value == pdd.DEFAULT_STRENGTH, (
+                            f"Hardcoded fallback DEFAULT_STRENGTH={value_node.value} "
+                            f"in executor.py ImportError handler does not match "
+                            f"pdd.DEFAULT_STRENGTH={pdd.DEFAULT_STRENGTH}"
+                        )

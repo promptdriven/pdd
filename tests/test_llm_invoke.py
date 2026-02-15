@@ -4684,3 +4684,22 @@ class TestTimeNoneHandling:
         # time=None should be treated as 0, so no reasoning params
         assert "thinking" not in captured_kwargs
         assert "reasoning_effort" not in captured_kwargs
+
+
+def test_llm_invoke_default_strength_matches_canonical():
+    """Issue #505: llm_invoke() default strength must match pdd.DEFAULT_STRENGTH.
+
+    The function signature at pdd/llm_invoke.py:1657 hardcodes
+    strength: float = 0.5, but the canonical constant in pdd/__init__.py
+    is DEFAULT_STRENGTH = 1.0.  This test uses inspect.signature() to
+    verify the parameter default matches the source of truth.
+    """
+    import inspect
+    import pdd
+
+    sig = inspect.signature(llm_invoke)
+    strength_param = sig.parameters["strength"]
+    assert strength_param.default == pdd.DEFAULT_STRENGTH, (
+        f"llm_invoke() strength default is {strength_param.default}, "
+        f"expected pdd.DEFAULT_STRENGTH={pdd.DEFAULT_STRENGTH}"
+    )
