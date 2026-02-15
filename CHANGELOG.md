@@ -1,3 +1,32 @@
+## v0.0.149 (2026-02-14)
+
+### Feat
+
+- Handle `PddError` objects in the `dump` utility and add a test case for dump failures.
+- Add Phase 7 — improved test prompt framing experiment
+- Complete Phase 6 Pro grounded run 4 and update analysis
+- Add Phase 6 grounding experiment — Pro vs Flash model comparison
+- Add Phase 5 grounding experiment results for sync_orchestration
+- Add LLM invocation stability test results in JSON and JUnit XML formats, and a summary report.
+- Generate and commit new test results and experiment outputs for LLM invocation stability and grounding, alongside updates to evaluation scripts and the Makefile.
+- increase pytest chunks from 24 to 32 and fix flaky CI tests
+- add profiling report and preserve raw results in cloud batch pipeline
+- Add interactive steering to sync orchestration, improve pytest project root discovery, clarify agentic test handling, and update cloud batch test infrastructure.
+- junitxml-based chunk balancing for cloud batch
+- Add Phase 4 ungrounded-pdd arm to grounding experiment
+- add cloud batch test results and update CHANGELOG with detailed feature, fix, build, and refactor entries.
+
+### Fix
+
+- Ensure core dumps serialize all types, prevent test module pollution in `test_generate.py`, and adjust regression test cost row validation.
+- ensure CLI commands registered before fixture snapshot in test_cli
+- add validate_cached_state to agentic_common prompt
+- initialize last_completed_step in state dict and fix step9 test assertion
+- update prompts and add tests for issue #467 across all orchestrators
+- apply issue #467 false cached steps fix to all orchestrators
+- make flaky CI tests more resilient to intermittent failures
+- Correct 6 errors in Phase 4 experiment log and run script
+
 ## v0.0.148 (2026-02-13)
 
 ### Feat
