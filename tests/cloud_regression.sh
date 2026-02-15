@@ -405,7 +405,11 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "2" ]; then
         cp "$ORIGINAL_MATH_SCRIPT" "$MATH_SCRIPT"
     elif [ ! -f "$MATH_SCRIPT" ]; then
         log "Generating math script first..."
-        run_pdd_command generate --output "$MATH_SCRIPT" "$FIXTURES_PATH/$MATH_PROMPT"
+        if ! run_pdd_command_noexit generate --output "$MATH_SCRIPT" "$FIXTURES_PATH/$MATH_PROMPT"; then
+            log "Prerequisite generate failed, retrying after 5s..."
+            sleep 5
+            run_pdd_command generate --output "$MATH_SCRIPT" "$FIXTURES_PATH/$MATH_PROMPT"
+        fi
     fi
     run_pdd_command example --output "$MATH_VERIFICATION_PROGRAM" "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT"
     check_exists "$MATH_VERIFICATION_PROGRAM" "'example' output"
@@ -421,7 +425,11 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "3" ]; then
         cp "$ORIGINAL_MATH_SCRIPT" "$MATH_SCRIPT"
     elif [ ! -f "$MATH_SCRIPT" ]; then
         log "Generating math script first..."
-        run_pdd_command generate --output "$MATH_SCRIPT" "$FIXTURES_PATH/$MATH_PROMPT"
+        if ! run_pdd_command_noexit generate --output "$MATH_SCRIPT" "$FIXTURES_PATH/$MATH_PROMPT"; then
+            log "Prerequisite generate failed, retrying after 5s..."
+            sleep 5
+            run_pdd_command generate --output "$MATH_SCRIPT" "$FIXTURES_PATH/$MATH_PROMPT"
+        fi
     fi
     run_pdd_command test --output "$MATH_TEST_SCRIPT" --language Python "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT"
     check_exists "$MATH_TEST_SCRIPT" "'test' output"
@@ -489,7 +497,11 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "5" ]; then
         cp "$ORIGINAL_MATH_SCRIPT" "$MATH_SCRIPT"
     elif [ ! -f "$MATH_SCRIPT" ]; then
         log "Generating math script first..."
-        run_pdd_command generate --output "$MATH_SCRIPT" "$FIXTURES_PATH/$MATH_PROMPT"
+        if ! run_pdd_command_noexit generate --output "$MATH_SCRIPT" "$FIXTURES_PATH/$MATH_PROMPT"; then
+            log "Prerequisite generate failed, retrying after 5s..."
+            sleep 5
+            run_pdd_command generate --output "$MATH_SCRIPT" "$FIXTURES_PATH/$MATH_PROMPT"
+        fi
     fi
 
     # Create a program that will crash (TypeError)

@@ -2,7 +2,7 @@ language,comment,extension,run_command,run_test_command
 Python,#,.py,python {file},python -m pytest {file} -v
 Java,//,.java,java {file},
 C++,//,.cpp,,
-JavaScript,//,.js,node {file},
+JavaScript,//,.js,node {file},node {file}
 HTML,"<!-- -->",.html,,
 CSS,"/**/",.css,,
 Ruby,#,.rb,ruby {file},
@@ -11,8 +11,8 @@ Swift,//,.swift,swift {file},swift test
 Go,//,.go,go run {file},go test -v {file}
 Rust,//,.rs,,cargo test
 Kotlin,//,.kt,kotlin {file},
-TypeScript,//,.ts,npx tsx {file},
-TypeScriptReact,//,.tsx,npx tsx {file},
+TypeScript,//,.ts,npx tsx {file},npx tsx {file}
+TypeScriptReact,//,.tsx,npx tsx {file},npx tsx {file}
 C#,//,.cs,dotnet run {file},dotnet test
 SQL,--,.sql,,
 Shell,#,.sh,sh {file},
@@ -69,3 +69,26 @@ Systemverilog,//,.sv,,
 Prisma,///,.prisma,,
 Lean,--,.lean,lean {file},
 Agda,--,.agda,,
+JavaScriptReact,//,.jsx,node {file},node {file}
+Svelte,//,.svelte,,
+Vue,//,.vue,,
+SCSS,//,.scss,,
+Sass,//,.sass,,
+Less,//,.less,,
+Jinja,#,.jinja2,,
+Handlebars,{{!}},.hbs,,
+Pug,//,.pug,,
+EJS,//,.ejs,,
+Twig,{#},.twig,,
+Terraform,#,.tf,,
+HCL,#,.hcl,,
+Solidity,//,.sol,,
+Zig,//,.zig,zig run {file},zig test {file}
+Mojo,#,.mojo,mojo run {file},
+GraphQL,#,.graphql,,
+Protobuf,//,.proto,,
+Nix,#,.nix,,
+GLSL,//,.glsl,,
+WGSL,//,.wgsl,,
+Starlark,#,.bzl,,
+Dockerfile,#,.dockerfile,,
