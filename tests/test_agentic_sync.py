@@ -322,3 +322,55 @@ class TestRunAgenticSync:
         assert cost == pytest.approx(0.15)
         assert model == "anthropic"
         mock_runner.run.assert_called_once()
+
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync.build_dep_graph_from_architecture")
+    @patch("pdd.agentic_sync.load_prompt_template", return_value="template {issue_content} {architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_strips_language_suffix_from_llm_basenames(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        mock_load_prompt,
+        mock_build_graph,
+        mock_runner_cls,
+    ):
+        """LLM returns basenames with language suffix; they should be stripped."""
+        issue_data = {"title": "Test", "body": "Fix models", "comments_url": ""}
+        mock_gh_cmd.return_value = (True, json.dumps(issue_data))
+        mock_load_arch.return_value = (
+            [
+                {"filename": "crm_models_Python.prompt", "dependencies": []},
+                {"filename": "api_orders_Python.prompt", "dependencies": ["crm_models_Python.prompt"]},
+            ],
+            Path("/tmp/architecture.json"),
+        )
+        # LLM returns basenames WITH language suffixes (as found in architecture.json filenames)
+        mock_agentic_task.return_value = (
+            True,
+            'MODULES_TO_SYNC: ["crm_models_Python", "api_orders_Python"]\nDEPS_VALID: true',
+            0.05,
+            "anthropic",
+        )
+        mock_build_graph.return_value = {"crm_models": ["api_orders"], "api_orders": []}
+
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = (True, "All 2 modules synced successfully", 0.20)
+        mock_runner_cls.return_value = mock_runner
+
+        success, msg, cost, model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1", quiet=True
+        )
+
+        assert success
+        # Verify stripped basenames were passed to build_dep_graph_from_architecture
+        call_args = mock_build_graph.call_args
+        assert sorted(call_args[0][1]) == ["api_orders", "crm_models"]
+        # Verify stripped basenames were passed to AsyncSyncRunner
+        runner_kwargs = mock_runner_cls.call_args[1]
+        assert sorted(runner_kwargs["basenames"]) == ["api_orders", "crm_models"]

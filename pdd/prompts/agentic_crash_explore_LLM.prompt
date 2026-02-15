@@ -47,3 +47,12 @@ DO NOT repeat these approaches - try something different.
 - IMPORTANT: Read actual source files before assuming what functions/classes exist
   - Do NOT guess at imports or API names
   - Explore the codebase to understand actual exports
+
+## Common Crash Patterns
+
+### Missing Environment Variables
+If the error shows KeyError for an API key/token, or "Set the XXX environment variable":
+- This is NOT a code bug. The example needs graceful degradation.
+- Fix the PROGRAM FILE to check for the env var with os.environ.get() + sys.exit(0)
+- Do NOT hardcode API keys or dummy values.
+- Use sys.exit(0) (not sys.exit(1)) so PDD treats it as non-crash.
