@@ -85,6 +85,6 @@ def _should_show_onboarding_reminder(ctx: click.Context) -> bool:
 
 def _run_setup_utility() -> None:
     """Execute the interactive setup utility script."""
-    result = subprocess.run([sys.executable, "-m", "pdd.setup_tool"])
+    result = subprocess.run([sys.executable, "-m", "pdd.setup.setup_tool"])
     if result.returncode not in (0, None):
         raise RuntimeError(f"Setup utility exited with status {result.returncode}")

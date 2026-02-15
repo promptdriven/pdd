@@ -71,3 +71,4 @@ The user-level CSV is at ~/.pdd/llm_model.csv.
 
 % Deliverables
 - Module at `pdd/setup/setup_tool.py` exporting `run_setup`.
+- IMPORTANT: Must include `if __name__ == "__main__":` entry point that calls `run_setup()` to enable execution via `python -m pdd.setup.setup_tool`.
