@@ -774,3 +774,159 @@ All 42 tests passed."""
         assert result == [], (
             "LLM output without FILES_MODIFIED markers should return empty list"
         )
+
+
+# ============================================================================
+# Issue #467: Blind Resume — validate cached state on load
+# ============================================================================
+
+
+class TestIssue467BlindResume:
+    """Tests for Issue #467 blind resume fix in the e2e fix orchestrator."""
+
+    @pytest.fixture
+    def mock_deps(self, tmp_path):
+        """Mock dependencies for e2e fix orchestrator runtime tests."""
+        with patch("pdd.agentic_e2e_fix_orchestrator.run_agentic_task") as mock_run, \
+             patch("pdd.agentic_e2e_fix_orchestrator.load_workflow_state") as mock_load, \
+             patch("pdd.agentic_e2e_fix_orchestrator.save_workflow_state") as mock_save, \
+             patch("pdd.agentic_e2e_fix_orchestrator.clear_workflow_state") as mock_clear, \
+             patch("pdd.agentic_e2e_fix_orchestrator.load_prompt_template") as mock_template, \
+             patch("pdd.agentic_e2e_fix_orchestrator.console") as mock_console, \
+             patch("pdd.agentic_e2e_fix_orchestrator._get_file_hashes") as mock_hashes, \
+             patch("pdd.agentic_e2e_fix_orchestrator._commit_and_push") as mock_commit:
+            mock_run.return_value = (True, "Step Output", 0.1, "gpt-4")
+            mock_load.return_value = (None, None)
+            mock_save.return_value = None
+            mock_template.return_value = "Prompt for {issue_number}"
+            mock_hashes.return_value = {}
+            mock_commit.return_value = (True, "No changes")
+
+            yield {
+                "run": mock_run,
+                "load": mock_load,
+                "save": mock_save,
+                "clear": mock_clear,
+                "template": mock_template,
+                "console": mock_console,
+            }
+
+    def test_resume_from_all_failed_state_reruns_from_step_1(self, mock_deps, tmp_path):
+        """
+        Issue #467: When resuming from a state where all steps failed,
+        the workflow should re-run from step 1, not skip past them.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+
+        corrupted_state = {
+            "workflow": "e2e_fix",
+            "issue_number": 1,
+            "current_cycle": 1,
+            "last_completed_step": 5,
+            "step_outputs": {
+                "1": "FAILED: All agent providers failed",
+                "2": "FAILED: All agent providers failed",
+                "3": "FAILED: All agent providers failed",
+                "4": "FAILED: All agent providers failed",
+                "5": "FAILED: All agent providers failed",
+            },
+            "total_cost": 0.0,
+            "model_used": "unknown",
+            "changed_files": [],
+            "dev_unit_states": {},
+        }
+        mock_deps["load"].return_value = (corrupted_state, None)
+
+        executed_labels = []
+
+        def track_run(*args, **kwargs):
+            label = kwargs.get("label", "")
+            executed_labels.append(label)
+            if "step2" in label:
+                return (True, "ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, "Step Output", 0.1, "gpt-4")
+
+        mock_deps["run"].side_effect = track_run
+
+        run_agentic_e2e_fix_orchestrator(
+            issue_url="http://github.com/o/r/issues/1",
+            issue_content="E2E test failure",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1,
+            issue_author="user",
+            issue_title="E2E Fix",
+            cwd=tmp_path,
+            quiet=True,
+            max_cycles=1,
+            resume=True,
+            use_github_state=False,
+        )
+
+        assert any("step1" in l for l in executed_labels), (
+            f"Step 1 should be re-executed when its cached output is FAILED, "
+            f"but executed steps were: {executed_labels}. "
+            f"This is the 'blind resume' bug from issue #467."
+        )
+
+    def test_resume_from_partial_failure_reruns_failed_steps(self, mock_deps, tmp_path):
+        """
+        Issue #467: When steps 1-3 cached OK but 4-5 FAILED,
+        resume should re-run from step 4.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+
+        corrupted_state = {
+            "workflow": "e2e_fix",
+            "issue_number": 1,
+            "current_cycle": 1,
+            "last_completed_step": 5,
+            "step_outputs": {
+                "1": "Tests ran successfully",
+                "2": "Some tests failing",
+                "3": "Root cause identified",
+                "4": "FAILED: All agent providers failed",
+                "5": "FAILED: All agent providers failed",
+            },
+            "total_cost": 0.3,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {},
+        }
+        mock_deps["load"].return_value = (corrupted_state, None)
+
+        executed_labels = []
+
+        def track_run(*args, **kwargs):
+            label = kwargs.get("label", "")
+            executed_labels.append(label)
+            if "step9" in label:
+                return (True, "ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, "Step Output", 0.1, "gpt-4")
+
+        mock_deps["run"].side_effect = track_run
+
+        run_agentic_e2e_fix_orchestrator(
+            issue_url="http://github.com/o/r/issues/1",
+            issue_content="E2E test failure",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1,
+            issue_author="user",
+            issue_title="E2E Fix",
+            cwd=tmp_path,
+            quiet=True,
+            max_cycles=1,
+            resume=True,
+            use_github_state=False,
+        )
+
+        # Steps 1-3 should be skipped
+        assert not any("step1" in l for l in executed_labels), "Step 1 succeeded and should not be re-run"
+        assert not any("step2" in l for l in executed_labels), "Step 2 succeeded and should not be re-run"
+        assert not any("step3" in l for l in executed_labels), "Step 3 succeeded and should not be re-run"
+        # Step 4 should be re-run
+        assert any("step4" in l for l in executed_labels), (
+            f"Step 4 should be re-executed because its cached output is FAILED, "
+            f"but executed steps were: {executed_labels}."
+        )

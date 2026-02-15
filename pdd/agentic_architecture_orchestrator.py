@@ -27,6 +27,7 @@ from pdd.agentic_common import (
     load_workflow_state,
     save_workflow_state,
     clear_workflow_state,
+    validate_cached_state,
     DEFAULT_MAX_RETRIES,
 )
 from pdd.load_prompt_template import load_prompt_template
@@ -216,8 +217,14 @@ def run_agentic_architecture_orchestrator(
         total_cost = state.get("total_cost", 0.0)
         model_used = state.get("model_used", "unknown")
         github_comment_id = loaded_gh_id
+
+        # Issue #467: Validate cached state — correct last_completed_step
+        # if any cached step outputs have "FAILED:" prefix.
+        last_completed_step = validate_cached_state(
+            last_completed_step, step_outputs, quiet=quiet
+        )
     else:
-        state = {"step_outputs": {}}
+        state = {"step_outputs": {}, "last_completed_step": 0}
         last_completed_step = 0
         step_outputs = state["step_outputs"]
         total_cost = 0.0
@@ -394,8 +401,14 @@ def run_agentic_architecture_orchestrator(
                     console.print(f"[yellow]Warning: .pddrc was not created[/yellow]")
 
         context[f"step{step_num}_output"] = step_output
-        state["step_outputs"][str(step_num)] = step_output
-        state["last_completed_step"] = step_num
+
+        # Issue #467: Only advance last_completed_step on success.
+        # On failure, prefix output with "FAILED:" and keep cursor unchanged.
+        if step_success:
+            state["step_outputs"][str(step_num)] = step_output
+            state["last_completed_step"] = step_num
+        else:
+            state["step_outputs"][str(step_num)] = f"FAILED: {step_output}"
 
         save_result = save_workflow_state(cwd, issue_number, "architecture", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
         if save_result:

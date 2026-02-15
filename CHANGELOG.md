@@ -1,37 +1,71 @@
+## v0.0.149 (2026-02-14)
+
+### Feat
+
+- Handle `PddError` objects in the `dump` utility and add a test case for dump failures.
+- Add Phase 7 — improved test prompt framing experiment
+- Complete Phase 6 Pro grounded run 4 and update analysis
+- Add Phase 6 grounding experiment — Pro vs Flash model comparison
+- Add Phase 5 grounding experiment results for sync_orchestration
+- Add LLM invocation stability test results in JSON and JUnit XML formats, and a summary report.
+- Generate and commit new test results and experiment outputs for LLM invocation stability and grounding, alongside updates to evaluation scripts and the Makefile.
+- increase pytest chunks from 24 to 32 and fix flaky CI tests
+- add profiling report and preserve raw results in cloud batch pipeline
+- Add interactive steering to sync orchestration, improve pytest project root discovery, clarify agentic test handling, and update cloud batch test infrastructure.
+- junitxml-based chunk balancing for cloud batch
+- Add Phase 4 ungrounded-pdd arm to grounding experiment
+- add cloud batch test results and update CHANGELOG with detailed feature, fix, build, and refactor entries.
+
+### Fix
+
+- Ensure core dumps serialize all types, prevent test module pollution in `test_generate.py`, and adjust regression test cost row validation.
+- ensure CLI commands registered before fixture snapshot in test_cli
+- add validate_cached_state to agentic_common prompt
+- initialize last_completed_step in state dict and fix step9 test assertion
+- update prompts and add tests for issue #467 across all orchestrators
+- apply issue #467 false cached steps fix to all orchestrators
+- make flaky CI tests more resilient to intermittent failures
+- Correct 6 errors in Phase 4 experiment log and run script
+
 ## v0.0.148 (2026-02-13)
 
 ### Feat
 
-- Add prod llm_invoke grounding experiment results
-- Implement comprehensive unit and integration tests for `llm_invoke` utilities and establish cloud batch test reporting.
-- Send raw prompt as `searchInput` to the cloud `generateCode` endpoint and include cloud batch test results.
-- Add llm_invoke regeneration stability experiment scripts and results
-- update LLM invocation prompt with enhanced model selection, structured output, error handling, and add cloud batch test results.
-- Add resolve pipeline (fix→render→stitch) with SSE job tracking
-- document cloud testing process and add example batch results file.
+- **Resolve pipeline (fix → render → stitch)**: Review-app annotations can now be resolved end-to-end — Claude fixes the Remotion source, Remotion renders the affected section, and ffmpeg stitches the full video. Jobs are queued per-section with SSE progress streaming (`POST /api/annotations/:id/resolve`, `GET /api/jobs/:id/stream`).
+- **`searchInput` sent to cloud endpoint**: `pdd fix` and `pdd generate` now send the raw prompt path as `searchInput` to the cloud `generateCode` endpoint, enabling server-side few-shot retrieval.
+- **Duplicate detection checks resolution status**: The duplicate-check prompts for bug, change, and test workflows now verify whether the original issue was actually resolved before closing the new issue as a duplicate. Unresolved originals are treated as new issues.
+- **NOT_A_BUG early exit in e2e fix orchestrator**: Step 3 (root cause analysis) can now emit `NOT_A_BUG`, which stops the entire e2e fix workflow early instead of cycling to max iterations.
+- **Abort on 3 consecutive provider failures**: Bug orchestrator now detects when three consecutive steps fail with "All agent providers failed" and aborts early, saving cost and returning `changed_files` collected so far.
+- **`llm_invoke` prompt overhauled**: Rewritten prompt covers gpt-5 Responses API support, hierarchical logging configuration, `litellm.drop_params` control, soft fallback when base model is missing from CSV, and structured output via both Pydantic and raw JSON schema.
+- **Comprehensive `llm_invoke` test suite**: ~1,800 lines of new unit and integration tests covering pure JSON-schema utilities, Pydantic validation, model selection, reasoning parameters, cost tracking, and cloud mode detection.
+- **`llm_invoke` grounding experiments**: New experiment scripts and results measuring regeneration stability and retrieval quality for `llm_invoke` (grounded vs ungrounded, 5 runs each).
+- **Cloud testing documented in onboarding guide**: `make cloud-test` / `make cloud-test-quick` commands added to ONBOARDING_INTERNAL.md with setup and usage instructions.
 
 ### Fix
 
-- address Copilot review — remove unused imports/fixtures, add use_github_state, drop e2e markers
-- add failing tests and prompt fixes for duplicate detection closing unresolved issues (#469)
-- update test-durations.json from balanced cloud batch run
-- add missing searchInput field to test_full_gen_cloud_success assertion
-- address Copilot review — return changed_files on abort, break on missing steps
-- prevent false cached steps on resume when all providers fail (#467)
-- address PR review feedback (#468)
-- load prompt templates from local repo in tests (#468)
-- add NOT_A_BUG early exit check in e2e fix orchestrator (#468)
-- use --simple flag in test_update_silently_skips_logging to avoid 600s agentic timeout
-- update test-durations.json from balanced cloud batch run
-- increase timeout to 300s for three flaky E2E tests
-- update test-durations.json with actual profiled data, fix record cmd
-- cloud-batch bug fixes and duration-based chunk balancing
-- await safeWriteAnnotations in resolve endpoint to persist job before response
+- **False cached steps on resume when all providers fail** — Bug orchestrator state saving used `step_num - 1` on failure, creating a "ratchet effect" where consecutive failures silently advanced `last_completed_step` through failed steps. Now `last_completed_step_to_save` stays at the last truly successful step. On resume, cached step outputs are validated by scanning for `FAILED:` prefixes.
+- **`changed_files` empty on e2e fix early exit** — When the e2e fix orchestrator exited early at Step 2 (`ALL_TESTS_PASS`), it returned an empty `changed_files` list because no LLM output was parsed. Now uses hash-based file change detection against a pre-workflow snapshot. Thanks James Levine!
+- **Duplicate detection closing unresolved issues** — Duplicate-check step was closing new issues as duplicates even when the original issue's workflow had failed. Prompts now require checking the original's workflow state and GitHub issue status before closing.
+- **`await safeWriteAnnotations` in resolve endpoint** — Resolve job reference was not persisted to the annotation before the HTTP response, causing a race where the client saw no `resolveJob` field.
+- Load prompt templates from local repo in tests so tests don't depend on installed package paths.
+- Use `--simple` flag in `test_update_silently_skips_logging` to avoid 600s agentic timeout.
+- Increase timeout to 300s for three flaky E2E tests.
+
+### Build
+
+- **Duration-based cloud batch chunk balancing**: New `balance-chunks.py` uses greedy bin-packing with per-file duration data (`test-durations.json`) to assign test files to cloud batch chunks, replacing alphabetical splitting. Includes `record` and `estimate` subcommands for maintaining duration data. Entrypoint falls back to alphabetical split if no durations file exists.
+- Updated `test-durations.json` with profiled data from balanced runs.
 
 ### Refactor
 
-- overhaul LLM invocation logic, logging, error handling, and experiment setup, adding a prompting guide and new experiment scripts.
-- streamline LLM invocation setup by removing interactive API key management, refactoring logging, and updating JSON schema utilities.
+- **Prompts, data, and docs moved into `pdd/` package**: `prompts/`, `data/`, and `docs/prompting_guide.md` relocated to `pdd/prompts/`, `pdd/data/`, and `pdd/docs/prompting_guide.md` so they ship with the installed package. Top-level `data/` and `prompts/` are now symlinks for backward compatibility. Old `docs/prompting_guide.md` deleted.
+- **LLM invocation logic overhauled**: Removed interactive API key management, refactored logging to use hierarchical `pdd.llm_invoke` logger, added `litellm.drop_params` support, and restructured JSON schema utilities (`_ensure_all_properties_required`, `_add_additional_properties_false`).
+- **Bug orchestrator state validation on resume**: Added `cached_outputs` scan loop that detects FAILED prefixes and corrects `last_completed_step` before resuming, preventing skipping of failed steps.
+- Extracted `_detect_changed_files()` helper in e2e fix orchestrator for hash-based file change detection.
+
+### Docs
+
+- Added experiment log (`experiments/grounding/EXPERIMENT_LOG.md`) with results for retrieval quality and regeneration stability experiments.
 
 ## v0.0.147 (2026-02-12)
 

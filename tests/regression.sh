@@ -1987,7 +1987,11 @@ log "Cost file: $(pwd)/$COST_FILE"
 # Display total cost and perform final validation
 if [ -f "$COST_FILE" ]; then
     # Validate row count
-    MIN_EXPECTED_COST_ROWS=10
+    if [ "$TARGET_TEST" = "all" ]; then
+        MIN_EXPECTED_COST_ROWS=10
+    else
+        MIN_EXPECTED_COST_ROWS=1
+    fi
     ACTUAL_DATA_ROWS=$(awk 'NR > 1 {count++} END {print count+0}' "$COST_FILE") # +0 ensures numeric output even if empty
     log "Found $ACTUAL_DATA_ROWS data rows in cost file."
     if [ "$ACTUAL_DATA_ROWS" -ge "$MIN_EXPECTED_COST_ROWS" ]; then
