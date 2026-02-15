@@ -56,7 +56,7 @@ contexts:
       example_output_path: "examples/"          # Where example files go
       default_language: "python"                # Primary language
       target_coverage: 90.0                     # Test coverage target (%)
-      strength: 0.75                            # LLM generation strength (0-1)
+      strength: 1.0                             # LLM generation strength (0-1)
       temperature: 0.0                          # LLM temperature (0-1)
       budget: 10.0                              # Cost budget per operation ($)
       max_attempts: 3                           # Max retry attempts
@@ -105,7 +105,7 @@ INSTRUCTIONS:
      * Utils/Shared: 85-90% (reusable code)
      * CLI: 85% (user-facing interfaces)
    - **auto_deps_csv_path**: "project_dependencies.csv" (ALWAYS include this)
-   - **strength**: 0.75 (standard - can be omitted, PDD will use default)
+   - **strength**: 1.0 (standard - can be omitted, PDD will use default)
    - **temperature**: 0.0 (deterministic - can be omitted, PDD will use default)
    - **budget**: 10.0 (standard - can be omitted, PDD will use default)
    - **max_attempts**: 3 (standard - can be omitted, PDD will use default)
@@ -153,7 +153,7 @@ contexts:
       example_output_path: "examples/"
       default_language: "python"
       target_coverage: 90.0
-      strength: 0.75                            # Optional: LLM generation strength
+      strength: 1.0                             # Optional: LLM generation strength
       temperature: 0.0                          # Optional: LLM temperature
       budget: 10.0                              # Optional: Cost budget per operation
       max_attempts: 3                           # Optional: Max retry attempts
