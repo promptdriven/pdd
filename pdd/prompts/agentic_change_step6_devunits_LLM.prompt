@@ -288,14 +288,33 @@ For each new dev unit proposed, explain:
 *Proceeding to Step 7: Architecture Review*
 ```
 
-**If no dev units can be identified (STOP workflow):**
+**If no dev units but documentation-only changes:**
+```markdown
+## Step 6: Dev Units Identified
+
+**Status:** Documentation Only
+
+### Analysis
+This change request only affects documentation files (e.g., README.md, docs/*.md) and does not require modifications to any dev units (prompt + code + example + test).
+
+### Documentation Files Affected
+- [List documentation files that need updates]
+
+### Why No Dev Units
+[Explanation of why this is a documentation-only change]
+
+---
+*Proceeding to Step 9: Implementation (skipping Steps 7-8 for documentation-only changes)*
+```
+
+**If no dev units and not documentation-only (STOP workflow):**
 ```markdown
 ## Step 6: Dev Units Identified
 
 **Status:** No Dev Units Found
 
 ### Analysis
-[Explanation of why no dev units could be identified]
+[Explanation of why no dev units could be identified and why this is not a documentation-only change]
 
 ### Recommendation
 [Suggestions for clarifying the request or alternative approaches]
