@@ -30,8 +30,8 @@ help:
 	@echo "  make pr-test pr-url=URL      - Test any GitHub PR on GitHub Actions (e.g., https://github.com/owner/repo/pull/123)"
 	@echo "  make cloud-test              - Build image + push + run all tests on Cloud Batch"
 	@echo "  make cloud-test-quick        - Run tests on Cloud Batch (skip image rebuild)"
-	@echo "  make cloud-test-build        - Build Cloud Batch Docker image locally"
-	@echo "  make cloud-test-push         - Push image to Artifact Registry"
+	@echo "  make cloud-test-build        - Build and push image via Cloud Build"
+	@echo "  make cloud-test-push         - (no-op, included in cloud-test-build)"
 	@echo "  make cloud-test-setup        - One-time GCP infrastructure setup"
 	@echo "  make analysis                - Run regression analysis"
 	@echo "  make verify MODULE=name      - Verify code functionality against prompt intent"
@@ -535,8 +535,8 @@ cloud-test:
 	@CURRENT_HASH=$$(cat $(CLOUD_IMAGE_DEPS) | shasum -a 256 | cut -d' ' -f1); \
 	STORED_HASH=$$(cat $(CLOUD_IMAGE_HASH_FILE) 2>/dev/null || echo "none"); \
 	if [ "$$CURRENT_HASH" != "$$STORED_HASH" ]; then \
-		echo "Image deps changed — rebuilding Docker image"; \
-		$(MAKE) cloud-test-build && $(MAKE) cloud-test-push; \
+		echo "Image deps changed — rebuilding via Cloud Build"; \
+		$(MAKE) cloud-test-build; \
 	else \
 		echo "Image deps unchanged — skipping rebuild"; \
 	fi
@@ -548,17 +548,19 @@ cloud-test-quick:
 	@GCP_PROJECT_ID=$(GCP_PROJECT_ID) GCP_REGION=$(GCP_REGION) GCS_BUCKET=$(GCS_BUCKET) \
 		bash $(CLOUD_BATCH_DIR)/submit.sh
 
-# Build Docker image locally
+# Build and push image via Cloud Build (no local Docker needed)
 cloud-test-build:
-	@echo "Building Cloud Batch test image"
-	@docker build --platform linux/amd64 -t pdd-test -f $(CLOUD_BATCH_DIR)/Dockerfile .
-
-# Push Docker image to Artifact Registry
-cloud-test-push:
-	@echo "Pushing image to Artifact Registry"
-	@docker tag pdd-test $(AR_IMAGE)
-	@docker push $(AR_IMAGE)
+	@echo "Submitting build to Cloud Build"
+	@gcloud builds submit \
+		--config=$(CLOUD_BATCH_DIR)/cloudbuild.yaml \
+		--substitutions=_AR_IMAGE=$(AR_IMAGE) \
+		--project=$(GCP_PROJECT_ID) \
+		.
 	@cat $(CLOUD_IMAGE_DEPS) | shasum -a 256 | cut -d' ' -f1 > $(CLOUD_IMAGE_HASH_FILE)
+
+# No-op — push is handled by Cloud Build
+cloud-test-push:
+	@echo "Push is now handled by cloud-test-build (Cloud Build). Nothing to do."
 
 # One-time GCP infrastructure setup
 cloud-test-setup:
