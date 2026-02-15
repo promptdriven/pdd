@@ -97,13 +97,19 @@ def main() -> int:
         default="llm_invoke",
         help="Module name to summarize (default: llm_invoke)",
     )
+    parser.add_argument(
+        "--suffix",
+        default="",
+        help="Suffix for output CSV/dir names (e.g. '_pro' → llm_invoke_pro_stability.csv)",
+    )
     args = parser.parse_args()
 
     global MODULE_NAME, STABILITY_CSV, EVALUATION_CSV, GENERATIONS_DIR
     MODULE_NAME = args.module
-    STABILITY_CSV = RESULTS_DIR / f"{MODULE_NAME}_stability.csv"
-    EVALUATION_CSV = RESULTS_DIR / f"{MODULE_NAME}_evaluation.csv"
-    GENERATIONS_DIR = RESULTS_DIR / f"{MODULE_NAME}_generations"
+    output_name = args.module + args.suffix
+    STABILITY_CSV = RESULTS_DIR / f"{output_name}_stability.csv"
+    EVALUATION_CSV = RESULTS_DIR / f"{output_name}_evaluation.csv"
+    GENERATIONS_DIR = RESULTS_DIR / f"{output_name}_generations"
 
     stab_rows = _load_csv(STABILITY_CSV)
     eval_rows = _load_csv(EVALUATION_CSV)

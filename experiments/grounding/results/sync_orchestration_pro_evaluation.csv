@@ -1,0 +1,10 @@
+arm,run_number,syntax_valid,line_count,function_count,class_count,reference_similarity,reference_recall,tests_total,tests_passed,tests_failed,tests_error,test_runtime_seconds
+grounded,1,True,1982,29,3,0.9919,0.9911,99,96,3,0,63.0
+grounded,2,True,1971,29,3,0.9995,0.9976,99,96,3,0,61.8
+grounded,3,True,1960,29,3,0.9815,0.9959,99,96,3,0,62.0
+grounded,5,True,1666,28,2,0.8822,0.9604,99,96,3,0,61.9
+ungrounded,1,False,1145,0,0,0.0232,0.1863,0,0,0,0,0.0
+ungrounded,2,False,1092,0,0,0.0838,0.1827,0,0,0,0,0.0
+ungrounded,3,False,1228,0,0,0.0873,0.1703,0,0,0,0,0.0
+ungrounded,4,False,1104,0,0,0.0773,0.1827,0,0,0,0,0.0
+ungrounded,5,False,1055,0,0,0.0835,0.2106,0,0,0,0,0.0

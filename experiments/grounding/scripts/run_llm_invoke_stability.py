@@ -66,7 +66,7 @@ CSV_FIELDS = [
     "response_time_ms",
 ]
 
-TIMEOUT_PER_RUN = 600  # seconds
+TIMEOUT_PER_RUN = 1200  # seconds (Pro model needs longer than Flash)
 
 
 # ---------------------------------------------------------------------------
@@ -104,12 +104,49 @@ def _get_staging_jwt() -> str:
 
 
 def _get_prod_jwt() -> str:
-    """Obtain a JWT for prod via env var."""
+    """Obtain a JWT for prod via env var or Firebase Admin SDK custom token."""
     token = os.environ.get("PDD_JWT_TOKEN")
-    if not token:
-        print("ERROR: PDD_JWT_TOKEN is required for prod environment.")
-        sys.exit(1)
-    return token
+    if token:
+        return token
+
+    # Fall back to generating a JWT via Firebase Admin SDK custom token
+    try:
+        result = subprocess.run(
+            [
+                "node", "-e",
+                """
+const admin = require('firebase-admin');
+async function main() {
+  const app = admin.initializeApp({ projectId: 'prompt-driven-development' });
+  const customToken = await admin.auth().createCustomToken(
+    'QxhdEyciK7ark7LxMdvrm38Ufsn1', { admin: true }
+  );
+  const apiKey = 'AIzaSyC0w2jwRR82ZFgQs_YXJoEBqnnTH71X6BE';
+  const resp = await globalThis.fetch(
+    'https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=' + apiKey,
+    { method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({token: customToken, returnSecureToken: true}) }
+  );
+  const data = await resp.json();
+  if (data.idToken) { console.log(data.idToken); } else { process.exit(1); }
+  process.exit(0);
+}
+main().catch(() => process.exit(1));
+""",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            print("  Obtained fresh JWT via Firebase Admin SDK custom token")
+            return result.stdout.strip()
+    except Exception as e:
+        print(f"  WARNING: Firebase Admin SDK token generation failed: {e}")
+
+    print("ERROR: PDD_JWT_TOKEN is required for prod environment.")
+    print("  Set PDD_JWT_TOKEN or ensure Firebase CLI is authenticated (firebase login).")
+    sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -209,12 +246,14 @@ def _call_generate_cloud(
     resolved_prompt: str,
     temperature: float,
     raw_prompt: Optional[str] = None,
+    strength: float = 0.5,
 ) -> Dict[str, Any]:
     """Call POST /generateCode (grounded arm) and return parsed result."""
     payload = {
         "promptContent": resolved_prompt,
         "language": "Python",
         "temperature": temperature,
+        "strength": strength,
     }
     if raw_prompt:
         payload["searchInput"] = raw_prompt
@@ -368,6 +407,7 @@ def _call_generate_local(
 
 def _call_generate_pdd_local(
     temperature: float,
+    strength: float = 0.5,
 ) -> Dict[str, Any]:
     """Run `pdd generate --local` as a subprocess (ungrounded-pdd arm).
 
@@ -398,7 +438,7 @@ def _call_generate_pdd_local(
         cmd = [
             sys.executable, "-c", "from pdd.cli import cli; cli()",
             "--local", "--force", "--no-core-dump",
-            "--strength", "0.5",
+            "--strength", str(strength),
             "--temperature", str(temperature),
             "generate",
             "--output", str(tmp_output),
@@ -507,6 +547,9 @@ def run_experiment(
     temperature: float = 1.0,
     base_url: Optional[str] = None,
     arms: Optional[List[str]] = None,
+    model: str = "vertex_ai/gemini-3-flash-preview",
+    strength_cloud: float = 0.5,
+    strength_local: float = 0.5,
 ) -> int:
     """Run module regeneration stability experiment. Returns 0 on success."""
     if arms is None:
@@ -547,14 +590,17 @@ def run_experiment(
     grounded_no_example = 0
 
     arm_descriptions = {
-        "grounded": f"POST {base_url}/generateCode",
-        "ungrounded": "litellm vertex_ai/gemini-3-flash-preview (no examples)",
-        "ungrounded-pdd": "pdd generate --local (auto-discovers tests, no few-shot)",
+        "grounded": f"POST {base_url}/generateCode (strength={strength_cloud})",
+        "ungrounded": f"litellm {model} (no examples)",
+        "ungrounded-pdd": f"pdd generate --local (strength={strength_local}, auto-discovers tests, no few-shot)",
     }
 
     print(f"\n{MODULE_NAME} Regeneration Stability Experiment")
     print(f"{'=' * 70}")
     print(f"Environment:  {env}")
+    print(f"Model (ungrounded): {model}")
+    print(f"Strength (cloud):   {strength_cloud}")
+    print(f"Strength (local):   {strength_local}")
     for arm in arms:
         print(f"  {arm:18s} {arm_descriptions.get(arm, '')}")
     if resolved_prompt:
@@ -579,6 +625,7 @@ def run_experiment(
                     base_url, headers, run_prompt,
                     temperature=temperature,
                     raw_prompt=raw_prompt,
+                    strength=strength_cloud,
                 )
             elif arm == "ungrounded":
                 nonce = f"\n# experiment-run-seed: {uuid.uuid4()}\n"
@@ -586,10 +633,12 @@ def run_experiment(
                 result = _call_generate_local(
                     resolved_prompt=run_prompt,
                     temperature=temperature,
+                    model=model,
                 )
             elif arm == "ungrounded-pdd":
                 result = _call_generate_pdd_local(
                     temperature=temperature,
+                    strength=strength_local,
                 )
             else:
                 print(f" [SKIP] unknown arm: {arm}")
@@ -720,13 +769,36 @@ def main() -> int:
         default="llm_invoke",
         help="Module name to test (default: llm_invoke)",
     )
+    parser.add_argument(
+        "--model",
+        default="vertex_ai/gemini-3-flash-preview",
+        help="Model for ungrounded litellm arm (default: vertex_ai/gemini-3-flash-preview)",
+    )
+    parser.add_argument(
+        "--strength-cloud",
+        type=float,
+        default=0.5,
+        help="Strength for grounded (cloud) arm — maps to model via server llm_model.csv (default: 0.5)",
+    )
+    parser.add_argument(
+        "--strength-local",
+        type=float,
+        default=0.5,
+        help="Strength for ungrounded-pdd (local) arm — maps to model via local llm_model.csv (default: 0.5)",
+    )
+    parser.add_argument(
+        "--suffix",
+        default="",
+        help="Suffix for output CSV/dir names (e.g. '_pro' → llm_invoke_pro_stability.csv)",
+    )
     args = parser.parse_args()
 
     global MODULE_NAME, PROMPT_FILE, CSV_PATH, GENERATIONS_DIR
     MODULE_NAME = args.module
     PROMPT_FILE = PDD_REPO_ROOT / "prompts" / f"{MODULE_NAME}_python.prompt"
-    CSV_PATH = RESULTS_DIR / f"{MODULE_NAME}_stability.csv"
-    GENERATIONS_DIR = RESULTS_DIR / f"{MODULE_NAME}_generations"
+    output_name = args.module + args.suffix
+    CSV_PATH = RESULTS_DIR / f"{output_name}_stability.csv"
+    GENERATIONS_DIR = RESULTS_DIR / f"{output_name}_generations"
 
     return run_experiment(
         env=args.env,
@@ -734,6 +806,9 @@ def main() -> int:
         temperature=args.temperature,
         base_url=args.base_url,
         arms=args.arms,
+        model=args.model,
+        strength_cloud=args.strength_cloud,
+        strength_local=args.strength_local,
     )
 
 

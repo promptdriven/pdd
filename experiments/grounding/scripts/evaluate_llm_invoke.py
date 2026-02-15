@@ -215,14 +215,20 @@ def main() -> int:
         default="llm_invoke",
         help="Module name to evaluate (default: llm_invoke)",
     )
+    parser.add_argument(
+        "--suffix",
+        default="",
+        help="Suffix for output CSV/dir names (e.g. '_pro' → llm_invoke_pro_evaluation.csv)",
+    )
     args = parser.parse_args()
 
     global MODULE_NAME, GENERATIONS_DIR, EVAL_CSV_PATH, STABILITY_CSV_PATH
     global CANONICAL_FILE, TEST_FILES
     MODULE_NAME = args.module
-    GENERATIONS_DIR = RESULTS_DIR / f"{MODULE_NAME}_generations"
-    EVAL_CSV_PATH = RESULTS_DIR / f"{MODULE_NAME}_evaluation.csv"
-    STABILITY_CSV_PATH = RESULTS_DIR / f"{MODULE_NAME}_stability.csv"
+    output_name = args.module + args.suffix
+    GENERATIONS_DIR = RESULTS_DIR / f"{output_name}_generations"
+    EVAL_CSV_PATH = RESULTS_DIR / f"{output_name}_evaluation.csv"
+    STABILITY_CSV_PATH = RESULTS_DIR / f"{output_name}_stability.csv"
     CANONICAL_FILE = PDD_REPO_ROOT / "pdd" / f"{MODULE_NAME}.py"
     TEST_FILES = sorted(PDD_REPO_ROOT.glob(f"tests/test_{MODULE_NAME}*.py"))
 
