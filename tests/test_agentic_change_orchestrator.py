@@ -2420,3 +2420,247 @@ def test_state_preserved_when_steps_failed(mock_dependencies, temp_cwd):
     assert success is True
     # State should NOT be cleared because some steps have FAILED: prefix
     mock_clear_state.assert_not_called()
+
+
+# -----------------------------------------------------------------------------
+# Tests for Issue #530: Documentation-only changes should not trigger hard stop
+# -----------------------------------------------------------------------------
+
+def test_documentation_only_should_not_trigger_hard_stop(mock_dependencies, temp_cwd):
+    """
+    FAILING TEST for Issue #530: Step 6 with "Documentation Only" should
+    continue the workflow, not trigger a hard stop.
+
+    THE BUG:
+    The original prompt (before Step 5.5 fix) output "No Dev Units Found" for
+    documentation-only changes, which triggered a hard stop at line 286 of
+    agentic_change_orchestrator.py, wasting tokens from Steps 1-5.
+
+    THE FIX:
+    1. Step 5.5 updated the prompt to output "Documentation Only" status
+       instead of "No Dev Units Found" for doc-only changes
+    2. The orchestrator needs to be updated to NOT treat "Documentation Only"
+       as a hard stop condition
+    3. Documentation-only changes should skip Steps 7-8 and proceed to Step 9
+
+    THIS TEST WILL FAIL on the current code if:
+    - The orchestrator treats "Documentation Only" as a hard stop
+    - OR if steps 7-8 are not properly skipped for documentation-only changes
+
+    After the fix, this test should pass.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+
+    # Track which steps were executed
+    executed_steps = []
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        executed_steps.append(label)
+
+        # Step 6 outputs "Documentation Only" status (NEW format from Step 5.5 fix)
+        # This should NOT trigger a hard stop
+        if label == "step6":
+            return (True, """## Step 6: Dev Units Identified
+
+**Status:** Documentation Only
+
+### Analysis
+This change request only affects documentation files and does not require
+modifications to any dev units.
+
+### Documentation Files Affected
+- README.md
+- docs/user-guide.md
+
+---
+*Proceeding to Step 9: Implementation (skipping Steps 7-8)*
+""", 0.1, "gpt-4")
+
+        # Step 9 should be executed (implementation step)
+        if label == "step9":
+            return (True, "FILES_CREATED: README.md\nDocumentation updated.", 0.1, "gpt-4")
+
+        # Step 10 should be executed
+        if label == "step10":
+            return (True, "Architecture metadata updated", 0.1, "gpt-4")
+
+        # Step 11 (review) should find no issues
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+
+        # Step 13 should create PR
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/1", 0.1, "gpt-4")
+
+        # Default output for other steps
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, cost, model, files = run_agentic_change_orchestrator(
+        issue_url="https://github.com/owner/repo/issues/530",
+        issue_content="Update documentation",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=530,
+        issue_author="user",
+        issue_title="Documentation-only change",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    # PRIMARY ASSERTION: Workflow should succeed (not trigger hard stop)
+    assert success is True, \
+        f"Workflow should succeed for 'Documentation Only', but got: {msg}"
+
+    # SECONDARY ASSERTION: Step 9 was executed (workflow did not stop at Step 6)
+    assert "step9" in executed_steps, \
+        "Step 9 should be executed for documentation-only changes"
+
+    # TERTIARY ASSERTION: Steps 7-8 should be skipped for documentation-only
+    assert "step7" not in executed_steps, \
+        "Step 7 (architecture) should be skipped for documentation-only changes"
+    assert "step8" not in executed_steps, \
+        "Step 8 (analyze) should be skipped for documentation-only changes"
+
+
+def test_no_dev_units_found_should_still_trigger_hard_stop(mock_dependencies, temp_cwd):
+    """
+    Test that Step 6 output with "No Dev Units Found" status DOES trigger
+    a hard stop (existing behavior for true failures).
+
+    This is a regression test to ensure that the fix for issue #530 does not
+    break the existing hard-stop behavior for cases where no dev units can be
+    identified and it's NOT a documentation-only change.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+
+    # Track which steps were executed
+    executed_steps = []
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        executed_steps.append(label)
+
+        # Step 6 outputs "No Dev Units Found" status (existing failure format)
+        if label == "step6":
+            return (True, """## Step 6: Dev Units Identified
+
+**Status:** No Dev Units Found
+
+### Analysis
+Unable to identify any dev units affected by this change request.
+This does not appear to be a documentation-only change.
+
+### Recommendation
+Please clarify which components should be modified.
+
+---
+*Investigation paused - unable to identify affected modules.*
+""", 0.1, "gpt-4")
+
+        # Default output for other steps
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, cost, model, files = run_agentic_change_orchestrator(
+        issue_url="https://github.com/owner/repo/issues/999",
+        issue_content="Unclear change request",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=999,
+        issue_author="user",
+        issue_title="Unclear request",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    # Verify the workflow failed (hard stop triggered)
+    assert success is False, "Workflow should fail when 'No Dev Units Found' is output"
+
+    # Verify the failure message indicates no dev units
+    assert "no dev units" in msg.lower(), f"Expected 'no dev units' in message, got: {msg}"
+
+    # Verify Step 9 was NOT executed (workflow stopped at Step 6)
+    assert "step9" not in executed_steps, "Step 9 should NOT be executed when hard stop is triggered"
+
+
+def test_normal_dev_units_path_continues_to_step7(mock_dependencies, temp_cwd):
+    """
+    Test that Step 6 with normal dev units output continues to Steps 7-8
+    as expected (existing behavior).
+
+    This is a regression test to ensure that the fix for issue #530 does not
+    break the normal workflow path where dev units are identified and should
+    proceed through architecture review (Step 7) and analysis (Step 8).
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+
+    # Track which steps were executed
+    executed_steps = []
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        executed_steps.append(label)
+
+        # Step 6 outputs normal dev units identified
+        if label == "step6":
+            return (True, """## Step 6: Dev Units Identified
+
+**Status:** Dev Units Found
+
+### Dev Units
+- auth_handler (prompt + code + test)
+- user_service (prompt + code + test)
+
+---
+*Proceeding to Step 7: Architecture Review*
+""", 0.1, "gpt-4")
+
+        # Step 9 implements the changes
+        if label == "step9":
+            return (True, "FILES_CREATED: auth_handler.py, user_service.py", 0.1, "gpt-4")
+
+        # Step 10 updates architecture
+        if label == "step10":
+            return (True, "Architecture updated", 0.1, "gpt-4")
+
+        # Step 11 review
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+
+        # Step 13 creates PR
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/1", 0.1, "gpt-4")
+
+        # Default output for other steps
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, cost, model, files = run_agentic_change_orchestrator(
+        issue_url="https://github.com/owner/repo/issues/100",
+        issue_content="Add authentication feature",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=100,
+        issue_author="user",
+        issue_title="Add auth feature",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    # Verify the workflow succeeded
+    assert success is True, f"Workflow should succeed for normal dev units path, but got: {msg}"
+
+    # Verify Steps 7 and 8 WERE executed (normal path includes architecture review)
+    assert "step7" in executed_steps, "Step 7 should be executed for normal dev units"
+    assert "step8" in executed_steps, "Step 8 should be executed for normal dev units"
+
+    # Verify Step 9 was executed
+    assert "step9" in executed_steps, "Step 9 should be executed for normal dev units"
