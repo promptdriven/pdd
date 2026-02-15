@@ -12,6 +12,7 @@ from pdd import __version__, DEFAULT_STRENGTH, DEFAULT_TEMPERATURE, DEFAULT_TIME
 # Import necessary components from pdd.core.cli for testing
 from pdd.core.cli import _strip_ansi_codes, OutputCapture, PDDCLI, cli as cli_command, process_commands
 import pdd.core.cli as core_cli_module
+import pdd.cli  # noqa: F401 — ensure register_commands() populates cli before fixture snapshots
 
 RUN_ALL_TESTS_ENABLED = os.getenv("PDD_RUN_ALL_TESTS") == "1"
 
@@ -23,6 +24,12 @@ def setup_cli_environment():
     2. Registers dummy commands (generate, fix, etc.) so CLI parsing works.
     3. Cleans up commands after test.
     """
+    # Defense-in-depth: ensure all real commands are registered before snapshotting.
+    # Without this, the snapshot may miss commands like 'auth' that other test files
+    # in the same pytest-xdist worker depend on (see cloud batch chunk 23 failure).
+    from pdd.commands import register_commands
+    register_commands(cli_command)
+
     with patch('pdd.core.cli.get_local_pdd_path'):
         # Save original commands
         original_commands = cli_command.commands.copy()

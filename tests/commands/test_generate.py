@@ -112,6 +112,18 @@ finally:
     else:
         sys.modules.pop("pdd.commands.generate", None)
 
+    # Evict any pdd.core.* modules that were imported as side effects during the
+    # mocking window (e.g. pdd.core.dump imported via pdd.commands.report).
+    # These bound MagicMock attributes from the mocked pdd.core.errors and must
+    # be re-imported fresh with the real module.
+    _core_side_effects = [
+        n for n in sys.modules
+        if n.startswith("pdd.core.") and n not in _import_mocks
+        and n not in _saved_modules
+    ]
+    for _name in _core_side_effects:
+        sys.modules.pop(_name, None)
+
 del _import_mocks, _saved_modules, _saved_generate_module, _saved_commands_modules, _saved_commands_pkg, _saved_commands_attrs, _mod_name
 
 # --------------------------------------------------------------------------------
