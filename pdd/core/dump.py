@@ -201,7 +201,7 @@ def _write_core_dump(
             "terminal_output": terminal_output,
         }
 
-        dump_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        dump_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
 
         # Garbage collect old core dumps after writing (Issue #231)
         # This ensures we keep at most N dumps, not N+1
