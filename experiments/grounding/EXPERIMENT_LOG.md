@@ -706,18 +706,18 @@ The `pdd generate --local` pipeline makes 6+ sequential LLM calls (initial gener
 
 | Metric | Flash | Pro | Change |
 |---|---|---|---|
-| Syntax valid | 4/5 (80%) | 4/4 (100%)*** | +20pp |
-| Avg lines | 426.6 ± 38.5 | **1894.8 ± 152.8** | **+344%** |
-| Avg functions | 19.8 ± 11.1 | **28.8 ± 0.5** | +45% |
-| Avg classes | 1.4 ± 0.9 | **2.8 ± 0.5** | +100% |
-| Pairwise similarity | 0.391 | **0.915** | **+134%** |
-| Ref similarity | 0.145 ± 0.069 | **0.964 ± 0.055** | **+565%** |
-| Ref recall | 0.360 ± 0.080 | **0.986 ± 0.017** | **+174%** |
-| Test pass rate (99 tests) | 77.6% | **97.0%** | +19.4pp |
-| Avg cost | $0.121 | $0.126 | +4% |
-| Avg response time | 86.7s | 372.9s | +330% |
+| Syntax valid | 4/5 (80%) | **5/5 (100%)** | +20pp |
+| Avg lines | 426.6 ± 38.5 | **1775.2 ± 296.0** | **+316%** |
+| Avg functions | 19.8 ± 11.1 | **28.6 ± 0.5** | +44% |
+| Avg classes | 1.4 ± 0.9 | **2.6 ± 0.5** | +86% |
+| Pairwise similarity | 0.391 | **0.785** | **+101%** |
+| Ref similarity | 0.145 ± 0.069 | **0.893 ± 0.159** | **+516%** |
+| Ref recall | 0.360 ± 0.080 | **0.981 ± 0.019** | **+172%** |
+| Test pass rate (99 tests) | 77.6% | **97.0% (96/99 all 5 runs)** | +19.4pp |
+| Avg cost | $0.121 | $0.377 | +212% |
+| Avg response time | 86.7s | 337.0s | +289% |
 
-***Pro had 5 runs but run 4 timed out at 1200s. 4 successful runs: all syntax valid, all pass 96/99 tests. Cost comparison is on successful runs only.
+Note: Run 4 was a rerun after a Vertex AI platform outage. It completed successfully but produced a shorter output (1,297 lines vs avg 1,895 for runs 1-3,5), likely due to the model hitting a generation-length boundary. See "Run 4 Outlier Analysis" below.
 
 #### Ungrounded Arm
 
@@ -736,9 +736,11 @@ The `pdd generate --local` pipeline makes 6+ sequential LLM calls (initial gener
 
 #### 1. Pro + Grounding produces near-canonical output for sync_orchestration
 
-The most striking result: Pro grounded sync_orchestration achieves **0.964 reference similarity** and **0.986 reference recall** — near-perfect reproduction of the 1,973-line canonical module. Flash grounded achieved only 0.145 ref_sim. The Pro grounded output averages 1,895 lines (vs canonical's 1,973), meaning Pro nearly reproduces the full module rather than the 4.6x compressed skeleton Flash produces.
+Pro grounded sync_orchestration achieves **0.893 reference similarity** and **0.981 reference recall** across all 5 runs. The top 3 runs (1-3) achieve 0.982–1.000 ref_sim — near-perfect reproduction of the 1,973-line canonical. Flash grounded achieved only 0.145 ref_sim.
 
-Pairwise similarity of 0.915 confirms the 4 valid runs are nearly identical to each other. This is unprecedented consistency at temperature 1.0 on a 247KB prompt.
+The 5-run average is pulled down by run 4 (0.611 ref_sim, 1,297 lines — see outlier analysis below). Excluding run 4, the remaining 4 runs average 0.964 ref_sim and 1,895 lines, meaning Pro nearly reproduces the full module rather than the 4.6x compressed skeleton Flash produces.
+
+Pairwise similarity of 0.785 across all 5 runs (0.915 excluding run 4) confirms strong consistency at temperature 1.0 on a 247KB prompt.
 
 #### 2. Grounding dominates model quality
 
@@ -764,7 +766,7 @@ The grounding lift (grounded minus ungrounded ref_sim) grows dramatically with P
 | Module | Flash Lift | Pro Lift | Ratio |
 |---|---|---|---|
 | llm_invoke | +0.011 | **+0.105** | **9.5x** |
-| sync_orchestration | +0.108 | **+0.893** | **8.3x** |
+| sync_orchestration | +0.108 | **+0.822** | **7.6x** |
 
 The combination of a stronger model and grounding is multiplicative, not additive. Pro has more capacity to exploit the few-shot example's structural information. The example constrains Pro's output to the correct architecture, and Pro's superior code generation ability fills in the implementation details that Flash compresses away.
 
@@ -773,15 +775,86 @@ The combination of a stronger model and grounding is multiplicative, not additiv
 | Comparison | Cost Delta | Latency Delta | Quality Delta |
 |---|---|---|---|
 | Pro vs Flash grounded (llm_invoke) | +247% ($0.455 vs $0.131) | +189% | +333% ref_sim |
-| Pro vs Flash grounded (sync_orchestration) | +4% ($0.126 vs $0.121) | +330% | +565% ref_sim |
+| Pro vs Flash grounded (sync_orchestration) | +212% ($0.377 vs $0.121) | +289% | +516% ref_sim |
 | Pro vs Flash ungrounded (llm_invoke) | +784% ($0.168 vs $0.019) | +230% | Worse (20% vs 100% syntax) |
 | Pro vs Flash ungrounded (sync_orchestration) | +431% ($0.260 vs $0.049) | +197% | Worse (0% vs 80% syntax) |
 
-For grounded generation: Pro is worth the tradeoff. The quality improvement is massive (especially sync_orchestration: near-canonical output at only +4% cost). For ungrounded generation: Pro is strictly worse (more expensive, slower, less reliable).
+For grounded generation: Pro is worth the tradeoff. The quality improvement is massive (sync_orchestration: +516% ref_sim). The cost increase (+212%) is driven by run 4's rerun ($1.38 — see outlier analysis); excluding it, the remaining 4 runs averaged $0.126 (+4%). For ungrounded generation: Pro is strictly worse (more expensive, slower, less reliable).
 
 #### 6. Grounding as model capability amplifier
 
 The data reveals grounding's role: it is not just an anti-hallucination guardrail but a **model capability amplifier**. Without grounding, upgrading Flash → Pro makes code worse (more verbose, more syntax errors, no quality gain). With grounding, upgrading Flash → Pro unlocks dramatic quality improvement (near-canonical reproduction). The few-shot example channels the stronger model's capacity toward faithful reproduction rather than creative hallucination.
+
+### Run 4 Outlier Analysis
+
+#### Timeline
+
+Run 4 of the Pro grounded sync_orchestration experiment was the only incomplete datapoint from Phase 6. The original run (2026-02-15 ~00:24–00:44 UTC) timed out at 1200s during the experiment. Two subsequent rerun attempts failed due to a Vertex AI platform outage. A third rerun succeeded after deploying an explicit `location=global` fix.
+
+#### Platform Outage (2026-02-15)
+
+Cloud Functions logs showed multiple Vertex AI models failing simultaneously during the rerun attempts:
+
+```
+[ERROR] vertex_ai/gemini-3-pro-preview: litellm.Timeout: Connection timed out after None seconds
+[ERROR] vertex_ai/deepseek-ai/deepseek-v3.2-maas: litellm.InternalServerError: Vertex_aiException
+[ERROR] vertex_ai/claude-opus-4-6: litellm.Timeout: Connection timed out after 120.0 seconds
+```
+
+The model fallback chain (Pro → deepseek → claude-opus → kimi) resulted in `fireworks_ai/kimi-k2p5` being selected, which is why the failed reruns used the wrong model despite correct strength=0.554 mapping.
+
+#### Fix: Explicit Location Configuration
+
+The root cause was a missing explicit `location` field in `llm_model.csv` for Pro and deepseek models. While `VERTEX_LOCATION=global` in `.env.prod` provides a fallback, the platform outage revealed that the `None` timeout in litellm's error suggests the location wasn't being properly forwarded. Adding `global` to the CSV:
+
+```
+# Before:
+Google,vertex_ai/gemini-3-pro-preview,...,effort,
+Google,vertex_ai/deepseek-ai/deepseek-v3.2-maas,...,effort,
+
+# After:
+Google,vertex_ai/gemini-3-pro-preview,...,effort,global
+Google,vertex_ai/deepseek-ai/deepseek-v3.2-maas,...,effort,global
+```
+
+After this fix + backend deploy, run 4 completed successfully in 193s.
+
+#### Run 4 Quality vs Other Runs
+
+| Run | Lines | Ref Sim | Ref Recall | Functions | Cost | Time |
+|---|---:|---:|---:|---:|---:|---:|
+| 1 | 1,982 | 0.992 | 0.991 | 29 | $0.087 | 402s |
+| 2 | 1,971 | 1.000 | 0.998 | 29 | $0.173 | 353s |
+| 3 | 1,960 | 0.982 | 0.996 | 29 | $0.172 | 479s |
+| **4** | **1,297** | **0.611** | **0.960** | **28** | **$1.381** | **193s** |
+| 5 | 1,666 | 0.882 | 0.960 | 28 | $0.072 | 258s |
+
+Run 4 is a clear outlier: 1,297 lines (34% shorter than runs 1-3's avg 1,971) with 0.611 ref_sim (vs 0.991 avg for runs 1-3). However:
+
+- **Syntax is valid** (True)
+- **Tests pass**: 96/99 (same as all other runs)
+- **Ref recall is high**: 0.960 (meaning 96% of its lines match canonical — it's not wrong, just incomplete)
+- **Cost was anomalously high** ($1.38 vs ~$0.13 typical) — likely due to the platform instability causing retries or slow token generation
+
+#### Qualitative Assessment of Run 4
+
+Run 4 preserves all critical architectural patterns:
+- AtomicStateUpdate with PendingStateUpdate dataclass, commit/rollback, tempfile+os.replace
+- isinstance dict/tuple result dispatch (correct)
+- 4-element cycle detection pattern matching
+- Thread-safe single-element list refs
+- All 8 operation types dispatched correctly
+- SyncApp constructor with 14 named kwargs (most complete of all 5 runs)
+
+What's missing (explaining the 676-line gap):
+- Complex `fix` operation handler (~120 lines): run 4 has a minimal version
+- `test_extend` operation (~40 lines): completely absent
+- Post-crash verification logic (~100 lines): simplified
+- Skip operation handlers (~60 lines): absent
+- Enhanced agentic result parsing (~40 lines): simplified to basic dict/tuple
+- Budget warnings, audit logging, worker exception capture (~80 lines)
+
+**Interpretation**: Run 4 appears to have hit a generation-length boundary (possibly output token limit). The model generated the most important code first (architecture, state management, operation dispatch) and ran out of budget before completing helper functions and edge case handlers. This is consistent with its faster completion time (193s vs 258–479s for other runs) — it simply generated fewer tokens.
 
 ### Model vs Grounding Decomposition
 
@@ -791,10 +864,10 @@ Answering the three motivating questions:
 No. Grounding is the dominant factor. Pro + ungrounded is worse than Flash + grounded across all metrics. Grounding provides information the model cannot infer regardless of its capability level.
 
 **Q2: Does Pro + grounding compound?**
-Yes, multiplicatively. The grounding lift is 8–10x larger for Pro than Flash. Pro has more capacity to exploit the few-shot example, producing near-canonical output (0.964 ref_sim for sync_orchestration) instead of compressed skeletons (0.145 for Flash).
+Yes, multiplicatively. The grounding lift is 7.6–9.5x larger for Pro than Flash. Pro has more capacity to exploit the few-shot example, producing near-canonical output (0.893 ref_sim for sync_orchestration, 0.964 excluding the run 4 outlier) instead of compressed skeletons (0.145 for Flash).
 
 **Q3: Is Pro worth the cost/latency tradeoff?**
-Only with grounding. Pro + grounded: dramatically better quality at modest cost increase (sync_orchestration: +4% cost, +565% ref_sim). Pro + ungrounded: strictly worse across all dimensions. **Recommendation: use Pro exclusively through the grounded endpoint.**
+Only with grounding. Pro + grounded: dramatically better quality (sync_orchestration: +516% ref_sim). Cost increase is variable ($0.126 typical, $1.38 on rerun due to platform issues). Pro + ungrounded: strictly worse across all dimensions. **Recommendation: use Pro exclusively through the grounded endpoint.**
 
 ## Experiment-Wide Conclusions (Phases 1–6)
 
@@ -829,15 +902,15 @@ The ungrounded-pdd arm has full test suite access (4 test files / ~5,750 lines f
 | llm_invoke | Flash | 0.030 | 0.019 | +58% |
 | llm_invoke | Pro | 0.130 | 0.025 | **+420%** |
 | sync_orchestration | Flash | 0.145 | 0.037 | +292% |
-| sync_orchestration | Pro | 0.964 | 0.071 | **+1258%** |
+| sync_orchestration | Pro | 0.893 | 0.071 | **+1158%** |
 
-The grounding effect scales along two dimensions: module complexity (llm_invoke → sync_orchestration) and model capability (Flash → Pro). The combination is multiplicative — Pro + grounding on sync_orchestration achieves near-canonical output (0.964 ref_sim).
+The grounding effect scales along two dimensions: module complexity (llm_invoke → sync_orchestration) and model capability (Flash → Pro). The combination is multiplicative — Pro + grounding on sync_orchestration achieves near-canonical output (0.893 ref_sim average, 0.964 excluding the run 4 outlier).
 
 **5. Regeneration is lossy with Flash but near-lossless with Pro + grounding.**
 
 Flash grounded regeneration of sync_orchestration produces a 4.6x compression (1,973 → ~426 lines). The preserved code is architecturally correct but production-incomplete (SyncApp constructor broken 3/5, helpers stubbed, no audit logging).
 
-However, **Pro + grounding eliminates this compression**: average output is 1,895 lines (vs canonical's 1,973), with 0.964 reference similarity and 0.986 recall. This is no longer a skeleton — it is a near-faithful reproduction.
+Pro + grounding dramatically reduces this compression: average output is 1,775 lines (vs canonical's 1,973), with 0.893 reference similarity and 0.981 recall. Runs 1-3 achieve 0.982–1.000 ref_sim (near-perfect), while runs 4-5 show moderate compression (1,297–1,666 lines). Even the shortest run (4) passes 96/99 tests, indicating functional completeness despite reduced line count.
 
 **6. Grounding is a model capability amplifier, not just a guardrail.**
 
@@ -856,17 +929,17 @@ Pairwise similarity across all experiments:
 | llm_invoke | Flash | 0.189 | 0.162 | +17% |
 | llm_invoke | Pro | 0.266 | 0.109 | +144% |
 | sync_orchestration | Flash | 0.391 | 0.284 | +38% |
-| sync_orchestration | Pro | 0.915 | 0.144 | +535% |
+| sync_orchestration | Pro | 0.785 | 0.144 | +445% |
 
-Phase 6 dramatically strengthens this finding. Pro + grounding on sync_orchestration achieves 0.915 pairwise similarity — the 4 runs are nearly identical. However, formal statistical significance still requires N≥20.
+Phase 6 dramatically strengthens this finding. Pro + grounding on sync_orchestration achieves 0.785 pairwise similarity across all 5 runs (0.915 for the 4 non-outlier runs). However, formal statistical significance still requires N≥20.
 
 **2. Grounding produces more concise code with Flash, but Pro reverses this.**
 
-Flash grounded produces shorter code (467.6 / 426.6 lines) than Flash ungrounded (428.8 / 513.0). But Pro grounded produces *much longer* code (894.4 / 1,894.8) that more faithfully reproduces the canonical. The conciseness effect is Flash-specific, not a general property of grounding.
+Flash grounded produces shorter code (467.6 / 426.6 lines) than Flash ungrounded (428.8 / 513.0). But Pro grounded produces *much longer* code (894.4 / 1,775.2) that more faithfully reproduces the canonical. The conciseness effect is Flash-specific, not a general property of grounding.
 
 **3. Cost overhead depends on model and arm.**
 
-Flash grounded costs ~2.5x more than Flash ungrounded ($0.121–0.131 vs $0.015–0.049). Pro grounded has highly variable overhead: +247% for llm_invoke but only +4% for sync_orchestration. Pro ungrounded is consistently 4–8x more expensive than Flash ungrounded. The cost dynamics are more complex than a simple multiplier.
+Flash grounded costs ~2.5x more than Flash ungrounded ($0.121–0.131 vs $0.015–0.049). Pro grounded has highly variable overhead: +247% for llm_invoke, +212% for sync_orchestration (inflated by run 4's $1.38 rerun; typical runs ~$0.13). Pro ungrounded is consistently 4–8x more expensive than Flash ungrounded. The cost dynamics are more complex than a simple multiplier.
 
 ### Cannot Conclude
 
@@ -903,6 +976,8 @@ All non-trivial phases used temperature 1.0 (maximum nondeterminism). Phase 2 at
 4. **Test suite enhancement**: Investigate whether adding implementation-detail tests (e.g., asserting `CloudConfig.get_jwt_token()` is called, checking rate map is `Tuple` type) would close the gap between ungrounded-pdd and grounded arms.
 5. **Prompt-level grounding**: Test injecting the few-shot example directly into the pdd prompt (via `<include>` tag) to see if this recovers the anti-hallucination benefit without the cloud endpoint overhead.
 6. **Multi-module generalization**: Test grounding on additional complex modules (e.g., `code_generator`, `fix_main`) to confirm the scaling trend observed between llm_invoke and sync_orchestration.
-7. **Pro default for grounded endpoint**: Phase 6 shows Pro + grounding produces near-canonical output for sync_orchestration at only +4% cost. Consider making Pro the default model for the grounded `generateCode` endpoint, at least for complex modules.
+7. **Pro default for grounded endpoint**: Phase 6 shows Pro + grounding produces near-canonical output for sync_orchestration. Consider making Pro the default model for the grounded `generateCode` endpoint, at least for complex modules. Cost is comparable to Flash for typical runs (~$0.13).
 8. **PDD pipeline timeout optimization**: Pro is incompatible with `pdd generate --local` due to the multi-call pipeline (6+ calls × 80–100s each). Explore parallelizing pipeline stages or reducing continuation loops to make Pro viable locally.
-9. **Statistical validation at scale**: Phase 6's Pro results are dramatic but still N=4–5 per arm. Run N=20 for the key comparison (Pro + grounded vs Flash + grounded on sync_orchestration) to achieve statistical significance.
+9. **Statistical validation at scale**: Phase 6's Pro results are dramatic but still N=5 per arm. Run N=20 for the key comparison (Pro + grounded vs Flash + grounded on sync_orchestration) to achieve statistical significance.
+10. **Investigate output length variability**: Run 4 produced 1,297 lines vs 1,960–1,982 for runs 1-3 despite same model/strength/temperature. Investigate whether output token limits or generation-length boundaries cause intermittent truncation, and whether increasing `max_output_tokens` eliminates the issue.
+11. **Explicit Vertex AI location for all models**: The platform outage revealed that models without explicit `location=global` in `llm_model.csv` may fail silently. Audit all Vertex AI models in the CSV to ensure explicit location configuration.

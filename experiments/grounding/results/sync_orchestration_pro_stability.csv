@@ -8,3 +8,4 @@ timestamp_utc,env,arm,run_number,http_status,generated_code_hash,generated_code_
 2026-02-15T01:08:44.744122+00:00,prod,ungrounded,3,0,a47ff5537ec6c6cf,1228,0,0,False,,0.26960399999999995,vertex_ai/gemini-3-pro-preview,94973
 2026-02-15T01:10:25.478539+00:00,prod,ungrounded,4,0,11c04613fa6609f0,1104,0,0,False,,0.254136,vertex_ai/gemini-3-pro-preview,100726
 2026-02-15T01:11:47.869956+00:00,prod,ungrounded,5,0,6b50a40792f5bd57,1055,0,0,False,,0.247206,vertex_ai/gemini-3-pro-preview,82379
+2026-02-15T03:05:14.535176+00:00,prod,grounded,4,200,cc6219070878ead3,1297,28,2,True,ICqQQrD8O5CeWLa2y6fX,1.3808969999999998,vertex_ai/gemini-3-pro-preview,193430
