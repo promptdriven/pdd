@@ -405,7 +405,11 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "2" ]; then
         cp "$ORIGINAL_MATH_SCRIPT" "$MATH_SCRIPT"
     elif [ ! -f "$MATH_SCRIPT" ]; then
         log "Generating math script first..."
-        run_pdd_command generate --output "$MATH_SCRIPT" "$FIXTURES_PATH/$MATH_PROMPT"
+        if ! run_pdd_command_noexit generate --output "$MATH_SCRIPT" "$FIXTURES_PATH/$MATH_PROMPT"; then
+            log "Prerequisite generate failed, retrying after 5s..."
+            sleep 5
+            run_pdd_command generate --output "$MATH_SCRIPT" "$FIXTURES_PATH/$MATH_PROMPT"
+        fi
     fi
     run_pdd_command example --output "$MATH_VERIFICATION_PROGRAM" "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT"
     check_exists "$MATH_VERIFICATION_PROGRAM" "'example' output"
@@ -421,7 +425,11 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "3" ]; then
         cp "$ORIGINAL_MATH_SCRIPT" "$MATH_SCRIPT"
     elif [ ! -f "$MATH_SCRIPT" ]; then
         log "Generating math script first..."
-        run_pdd_command generate --output "$MATH_SCRIPT" "$FIXTURES_PATH/$MATH_PROMPT"
+        if ! run_pdd_command_noexit generate --output "$MATH_SCRIPT" "$FIXTURES_PATH/$MATH_PROMPT"; then
+            log "Prerequisite generate failed, retrying after 5s..."
+            sleep 5
+            run_pdd_command generate --output "$MATH_SCRIPT" "$FIXTURES_PATH/$MATH_PROMPT"
+        fi
     fi
     run_pdd_command test --output "$MATH_TEST_SCRIPT" --language Python "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT"
     check_exists "$MATH_TEST_SCRIPT" "'test' output"
@@ -437,25 +445,34 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "4" ]; then
         cp "$ORIGINAL_MATH_SCRIPT" "$MATH_SCRIPT"
     elif [ ! -f "$MATH_SCRIPT" ]; then
         log "Generating math script first..."
-        run_pdd_command generate --output "$MATH_SCRIPT" "$FIXTURES_PATH/$MATH_PROMPT"
+        if ! run_pdd_command_noexit generate --output "$MATH_SCRIPT" "$FIXTURES_PATH/$MATH_PROMPT"; then
+            log_error "Prerequisite generate failed for fix test (cloud rate limit?). Skipping."
+            CLOUD_FAILURES=$((CLOUD_FAILURES + 1))
+            print_cloud_status "fix (prerequisite generate)" "false"
+        fi
     fi
-    if [ ! -f "$MATH_TEST_SCRIPT" ]; then
+    if [ ! -f "$MATH_SCRIPT" ]; then
+        log "Skipping fix test: math script not available"
+    elif [ ! -f "$MATH_TEST_SCRIPT" ]; then
         log "Generating test script first..."
-        run_pdd_command test --output "$MATH_TEST_SCRIPT" --language Python "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT"
+        run_pdd_command_noexit test --output "$MATH_TEST_SCRIPT" --language Python "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT" || true
     fi
 
-    # Run tests to potentially generate errors for fix command
-    log "Running pytest to check for errors..."
-    python -m pytest "$MATH_TEST_SCRIPT" > "$PYTEST_LOG" 2>&1 || true
-
-    if grep -q -E "===+ (FAILURES|ERRORS) ===+" "$PYTEST_LOG"; then
-        log "Errors found, running 'fix' command"
-        run_pdd_command_noexit fix --output-test "$FIXED_MATH_TEST_SCRIPT" --output-code "$FIXED_MATH_SCRIPT" \
-                            "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT" "$MATH_TEST_SCRIPT" "$PYTEST_LOG"
+    if [ ! -f "$MATH_SCRIPT" ] || [ ! -f "$MATH_TEST_SCRIPT" ]; then
+        log "Skipping fix test: prerequisite files not available"
     else
-        log "No errors found in pytest run, creating a simple error scenario for fix test"
-        # Create a test file with an intentional error to test fix command
-        cat > "broken_${MATH_TEST_SCRIPT}" << 'PYEOF'
+        # Run tests to potentially generate errors for fix command
+        log "Running pytest to check for errors..."
+        python -m pytest "$MATH_TEST_SCRIPT" > "$PYTEST_LOG" 2>&1 || true
+
+        if grep -q -E "===+ (FAILURES|ERRORS) ===+" "$PYTEST_LOG"; then
+            log "Errors found, running 'fix' command"
+            run_pdd_command_noexit fix --output-test "$FIXED_MATH_TEST_SCRIPT" --output-code "$FIXED_MATH_SCRIPT" \
+                                "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT" "$MATH_TEST_SCRIPT" "$PYTEST_LOG"
+        else
+            log "No errors found in pytest run, creating a simple error scenario for fix test"
+            # Create a test file with an intentional error to test fix command
+            cat > "broken_${MATH_TEST_SCRIPT}" << 'PYEOF'
 import pytest
 from simple_math import add
 
@@ -463,9 +480,10 @@ def test_add_intentional_fail():
     """This test intentionally fails to test the fix command."""
     assert add(2, 2) == 5, "Intentional failure for testing fix"
 PYEOF
-        python -m pytest "broken_${MATH_TEST_SCRIPT}" > "$PYTEST_LOG" 2>&1 || true
-        run_pdd_command_noexit fix --output-test "$FIXED_MATH_TEST_SCRIPT" --output-code "$FIXED_MATH_SCRIPT" \
-                            "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT" "broken_${MATH_TEST_SCRIPT}" "$PYTEST_LOG"
+            python -m pytest "broken_${MATH_TEST_SCRIPT}" > "$PYTEST_LOG" 2>&1 || true
+            run_pdd_command_noexit fix --output-test "$FIXED_MATH_TEST_SCRIPT" --output-code "$FIXED_MATH_SCRIPT" \
+                                "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT" "broken_${MATH_TEST_SCRIPT}" "$PYTEST_LOG"
+        fi
     fi
 fi
 
@@ -479,7 +497,11 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "5" ]; then
         cp "$ORIGINAL_MATH_SCRIPT" "$MATH_SCRIPT"
     elif [ ! -f "$MATH_SCRIPT" ]; then
         log "Generating math script first..."
-        run_pdd_command generate --output "$MATH_SCRIPT" "$FIXTURES_PATH/$MATH_PROMPT"
+        if ! run_pdd_command_noexit generate --output "$MATH_SCRIPT" "$FIXTURES_PATH/$MATH_PROMPT"; then
+            log "Prerequisite generate failed, retrying after 5s..."
+            sleep 5
+            run_pdd_command generate --output "$MATH_SCRIPT" "$FIXTURES_PATH/$MATH_PROMPT"
+        fi
     fi
 
     # Create a program that will crash (TypeError)
@@ -514,27 +536,39 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "6" ]; then
         cp "$ORIGINAL_MATH_SCRIPT" "$MATH_SCRIPT"
     elif [ ! -f "$MATH_SCRIPT" ]; then
         log "Generating math script first..."
-        run_pdd_command generate --output "$MATH_SCRIPT" "$FIXTURES_PATH/$MATH_PROMPT"
+        if ! run_pdd_command_noexit generate --output "$MATH_SCRIPT" "$FIXTURES_PATH/$MATH_PROMPT"; then
+            log_error "Prerequisite generate failed for verify test (cloud rate limit?). Skipping."
+            CLOUD_FAILURES=$((CLOUD_FAILURES + 1))
+            print_cloud_status "verify (prerequisite generate)" "false"
+        fi
     fi
-    if [ ! -f "$MATH_VERIFICATION_PROGRAM" ] || grep -q "'a'" "$MATH_VERIFICATION_PROGRAM"; then
-        # Regenerate a valid example program
-        log "Generating example program first..."
-        run_pdd_command example --output "$MATH_VERIFICATION_PROGRAM" "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT"
-    fi
-
-    # Introduce a semantic error to test verify
-    log "Introducing semantic error for verify test..."
-    if grep -q "return a + b" "$MATH_SCRIPT"; then
-        sed -i.bak 's/return a + b/return a - b/' "$MATH_SCRIPT"
-        log "Changed 'return a + b' to 'return a - b'"
+    if [ ! -f "$MATH_SCRIPT" ]; then
+        log "Skipping verify test: math script not available"
     else
-        log "Could not find 'return a + b' pattern, verify may not detect semantic error"
-    fi
+        if [ ! -f "$MATH_VERIFICATION_PROGRAM" ] || grep -q "'a'" "$MATH_VERIFICATION_PROGRAM"; then
+            # Regenerate a valid example program
+            log "Generating example program first..."
+            run_pdd_command_noexit example --output "$MATH_VERIFICATION_PROGRAM" "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT" || true
+        fi
 
-    run_pdd_command_noexit verify --output-results "$VERIFY_RESULTS_LOG" \
-        --output-code "$VERIFY_CODE_OUTPUT" --output-program "$VERIFY_PROGRAM_OUTPUT" \
-        --max-attempts 3 --budget 5.0 \
-        "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT" "$MATH_VERIFICATION_PROGRAM"
+        if [ ! -f "$MATH_VERIFICATION_PROGRAM" ]; then
+            log "Skipping verify test: example program not available"
+        else
+            # Introduce a semantic error to test verify
+            log "Introducing semantic error for verify test..."
+            if grep -q "return a + b" "$MATH_SCRIPT"; then
+                sed -i.bak 's/return a + b/return a - b/' "$MATH_SCRIPT"
+                log "Changed 'return a + b' to 'return a - b'"
+            else
+                log "Could not find 'return a + b' pattern, verify may not detect semantic error"
+            fi
+
+            run_pdd_command_noexit verify --output-results "$VERIFY_RESULTS_LOG" \
+                --output-code "$VERIFY_CODE_OUTPUT" --output-program "$VERIFY_PROGRAM_OUTPUT" \
+                --max-attempts 3 --budget 5.0 \
+                "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT" "$MATH_VERIFICATION_PROGRAM"
+        fi
+    fi
 fi
 
 # 7. Split

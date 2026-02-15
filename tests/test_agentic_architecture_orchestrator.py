@@ -1062,3 +1062,184 @@ INCLUDE PATH ERROR in prompts/routes_Python.prompt: 'src/context/routes_example.
         assert len(step11_fix_labels) >= 1, (
             f"Orchestrator should trigger step11_fix after INVALID, got labels: {labels}"
         )
+
+
+# ============================================================================
+# Issue #467: False Cache / Ratchet Effect on last_completed_step
+# ============================================================================
+
+
+def test_consecutive_failures_no_ratchet(mock_dependencies, base_args, tmp_path):
+    """
+    Issue #467: When consecutive steps fail, last_completed_step should remain 0.
+
+    Bug (now fixed): Each failed step unconditionally set
+    state["last_completed_step"] = step_num, advancing the cursor
+    despite the step having failed.
+    """
+    mocks = mock_dependencies
+    base_args["cwd"] = tmp_path
+    base_args["skip_prompts"] = True
+
+    arch_json = tmp_path / "architecture.json"
+    arch_json.write_text('[{"name": "mod"}]')
+
+    saved_states = []
+
+    def capture_save(cwd, issue_number, wf_type, state, state_dir, repo_owner, repo_name, use_github_state=True, github_comment_id=None):
+        saved_states.append(dict(state))
+        return None
+
+    mocks["save_state"].side_effect = capture_save
+    mocks["run"].return_value = (False, "All agent providers failed", 0.0, "")
+
+    run_agentic_architecture_orchestrator(**base_args)
+
+    final_state = saved_states[-1]
+    assert final_state["last_completed_step"] == 0, (
+        f"When all steps fail, last_completed_step should be 0, "
+        f"but got {final_state['last_completed_step']}. "
+        f"This is the 'ratchet effect' bug from issue #467."
+    )
+
+    # All step outputs should be prefixed with "FAILED:"
+    for step_key, output in final_state["step_outputs"].items():
+        assert output.startswith("FAILED:"), (
+            f"Step {step_key} output should start with 'FAILED:' but got: {output[:50]}"
+        )
+
+
+def test_resume_from_all_failed_state_reruns_from_step_1(mock_dependencies, base_args, tmp_path):
+    """
+    Issue #467: When resuming from a state where all steps failed,
+    the workflow should re-run from step 1, not skip past them.
+    """
+    mocks = mock_dependencies
+    base_args["cwd"] = tmp_path
+    base_args["skip_prompts"] = True
+
+    arch_json = tmp_path / "architecture.json"
+    arch_json.write_text('[{"name": "mod"}]')
+
+    corrupted_state = {
+        "last_completed_step": 5,
+        "step_outputs": {
+            "1": "FAILED: All agent providers failed",
+            "2": "FAILED: All agent providers failed",
+            "3": "FAILED: All agent providers failed",
+            "4": "FAILED: All agent providers failed",
+            "5": "FAILED: All agent providers failed",
+        },
+        "total_cost": 0.0,
+        "model_used": "unknown",
+        "scaffolding_files": [],
+        "prompt_files": [],
+    }
+    mocks["load_state"].return_value = (corrupted_state, None)
+
+    executed_labels = []
+
+    def track_run(*args, **kwargs):
+        label = kwargs.get("label", "")
+        executed_labels.append(label)
+        return (True, "Step Output", 0.1, "gpt-4")
+
+    mocks["run"].side_effect = track_run
+
+    run_agentic_architecture_orchestrator(**base_args)
+
+    assert "step1" in executed_labels, (
+        f"Step 1 should be re-executed when its cached output is FAILED, "
+        f"but executed steps were: {executed_labels}. "
+        f"This is the 'blind resume' bug from issue #467."
+    )
+
+
+def test_partial_failure_preserves_last_successful_step(mock_dependencies, base_args, tmp_path):
+    """
+    Issue #467: When steps 1-3 succeed and steps 4+ fail,
+    last_completed_step should be 3 (last successful step).
+    """
+    mocks = mock_dependencies
+    base_args["cwd"] = tmp_path
+    base_args["skip_prompts"] = True
+
+    arch_json = tmp_path / "architecture.json"
+    arch_json.write_text('[{"name": "mod"}]')
+
+    saved_states = []
+
+    def capture_save(cwd, issue_number, wf_type, state, state_dir, repo_owner, repo_name, use_github_state=True, github_comment_id=None):
+        saved_states.append(dict(state))
+        return None
+
+    mocks["save_state"].side_effect = capture_save
+
+    call_count = {"n": 0}
+
+    def run_side_effect(*args, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] <= 3:
+            return (True, "Success", 0.1, "gpt-4")
+        return (False, "Provider error", 0.0, "")
+
+    mocks["run"].side_effect = run_side_effect
+
+    run_agentic_architecture_orchestrator(**base_args)
+
+    final_state = saved_states[-1]
+    assert final_state["last_completed_step"] == 3, (
+        f"When steps 1-3 succeed and 4+ fail, last_completed_step should be 3, "
+        f"but got {final_state['last_completed_step']}. "
+        f"The ratchet effect advanced it beyond the last successful step."
+    )
+
+
+def test_resume_from_partial_failure_reruns_failed_steps(mock_dependencies, base_args, tmp_path):
+    """
+    Issue #467: When resuming from state where steps 1-3 succeeded but 4-5 failed,
+    resume should re-run from step 4, not step 6.
+    """
+    mocks = mock_dependencies
+    base_args["cwd"] = tmp_path
+    base_args["skip_prompts"] = True
+
+    arch_json = tmp_path / "architecture.json"
+    arch_json.write_text('[{"name": "mod"}]')
+
+    corrupted_state = {
+        "last_completed_step": 5,
+        "step_outputs": {
+            "1": "PRD analyzed",
+            "2": "Deep analysis done",
+            "3": "Research done",
+            "4": "FAILED: All agent providers failed",
+            "5": "FAILED: All agent providers failed",
+        },
+        "total_cost": 0.3,
+        "model_used": "gpt-4",
+        "scaffolding_files": [],
+        "prompt_files": [],
+    }
+    mocks["load_state"].return_value = (corrupted_state, None)
+
+    executed_labels = []
+
+    def track_run(*args, **kwargs):
+        label = kwargs.get("label", "")
+        executed_labels.append(label)
+        return (True, "Step Output", 0.1, "gpt-4")
+
+    mocks["run"].side_effect = track_run
+
+    run_agentic_architecture_orchestrator(**base_args)
+
+    # Step 4 should be re-executed
+    assert "step4" in executed_labels, (
+        f"Step 4 should be re-executed because its cached output is FAILED, "
+        f"but executed steps were: {executed_labels}."
+    )
+    # Steps 1-3 should NOT be re-executed
+    assert "step1" not in executed_labels, "Step 1 succeeded and should not be re-run"
+    assert "step2" not in executed_labels, "Step 2 succeeded and should not be re-run"
+    assert "step3" not in executed_labels, "Step 3 succeeded and should not be re-run"

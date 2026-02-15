@@ -20,6 +20,7 @@ from pdd.agentic_common import (
     load_workflow_state,
     save_workflow_state,
     clear_workflow_state,
+    validate_cached_state,
     DEFAULT_MAX_RETRIES,
 )
 from pdd.load_prompt_template import load_prompt_template
@@ -261,8 +262,14 @@ def run_agentic_test_orchestrator(
         github_comment_id = loaded_gh_id
         worktree_path_str = state.get("worktree_path")
         worktree_path = Path(worktree_path_str) if worktree_path_str else None
+
+        # Issue #467: Validate cached state — correct last_completed_step
+        # if any cached step outputs have "FAILED:" prefix.
+        last_completed_step = validate_cached_state(
+            last_completed_step, step_outputs, quiet=quiet
+        )
     else:
-        state = {"step_outputs": {}}
+        state = {"step_outputs": {}, "last_completed_step": 0}
         last_completed_step = 0
         step_outputs = state["step_outputs"]
         total_cost = 0.0
@@ -279,7 +286,7 @@ def run_agentic_test_orchestrator(
         "issue_author": issue_author,
         "issue_title": issue_title,
     }
-    
+
     # Populate context with previous step outputs
     for s_num, s_out in step_outputs.items():
         context[f"step{s_num}_output"] = s_out
