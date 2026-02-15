@@ -14,7 +14,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-from pdd.sync_determine_operation import sync_determine_operation
+from pdd.sync_determine_operation import sync_determine_operation, calculate_prompt_hash
 
 
 def _sha256(path: Path) -> str:
@@ -52,7 +52,7 @@ def _setup_sync_env(tmp_path, prompt_content, included_files):
     test_file = tests_dir / "test_helper.py"
     test_file.write_text("def test_helper(): assert True\n")
 
-    prompt_hash = _sha256(prompt_file)
+    prompt_hash = calculate_prompt_hash(prompt_file)
     code_hash = _sha256(code_file)
     example_hash = _sha256(example_file)
     test_hash = _sha256(test_file)

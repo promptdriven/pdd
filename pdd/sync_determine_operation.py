@@ -825,7 +825,7 @@ def calculate_sha256(file_path: Path) -> Optional[str]:
     """Calculates the SHA256 hash of a file if it exists."""
     if not file_path.exists():
         return None
-    
+
     try:
         hasher = hashlib.sha256()
         with open(file_path, 'rb') as f:
@@ -834,6 +834,72 @@ def calculate_sha256(file_path: Path) -> Optional[str]:
         return hasher.hexdigest()
     except (IOError, OSError):
         return None
+
+
+import re as _re
+
+_INCLUDE_PATTERN = _re.compile(r'<include>(.*?)</include>')
+_BACKTICK_INCLUDE_PATTERN = _re.compile(r'```<([^>]*?)>```')
+
+
+def _resolve_include_path(include_ref: str, prompt_dir: Path) -> Optional[Path]:
+    """Resolve an <include> reference to an absolute Path."""
+    p = Path(include_ref)
+    if p.is_absolute() and p.exists():
+        return p
+    candidate = prompt_dir / include_ref
+    if candidate.exists():
+        return candidate
+    # Try from cwd
+    candidate = Path.cwd() / include_ref
+    if candidate.exists():
+        return candidate
+    return None
+
+
+def calculate_prompt_hash(prompt_path: Path) -> Optional[str]:
+    """Hash a prompt file including the content of all its <include> dependencies.
+
+    This ensures that changes to included files are detected by the fingerprint
+    system (GitHub issue #522).
+    """
+    if not prompt_path.exists():
+        return None
+
+    try:
+        prompt_content = prompt_path.read_text(encoding='utf-8', errors='ignore')
+    except (IOError, OSError):
+        return None
+
+    # Collect include dependency paths
+    include_refs = _INCLUDE_PATTERN.findall(prompt_content)
+    include_refs += _BACKTICK_INCLUDE_PATTERN.findall(prompt_content)
+
+    if not include_refs:
+        # No includes — fall back to simple file hash for backward compat
+        return calculate_sha256(prompt_path)
+
+    # Build composite hash: prompt bytes + sorted dependency contents
+    hasher = hashlib.sha256()
+    try:
+        with open(prompt_path, 'rb') as f:
+            for chunk in iter(lambda: f.read(4096), b""):
+                hasher.update(chunk)
+    except (IOError, OSError):
+        return None
+
+    prompt_dir = prompt_path.parent
+    for ref in sorted(set(r.strip() for r in include_refs)):
+        dep_path = _resolve_include_path(ref, prompt_dir)
+        if dep_path and dep_path.exists():
+            try:
+                with open(dep_path, 'rb') as f:
+                    for chunk in iter(lambda: f.read(4096), b""):
+                        hasher.update(chunk)
+            except (IOError, OSError):
+                pass
+
+    return hasher.hexdigest()
 
 
 def read_fingerprint(basename: str, language: str) -> Optional[Fingerprint]:
@@ -901,6 +967,9 @@ def calculate_current_hashes(paths: Dict[str, Any]) -> Dict[str, Any]:
                 for f in file_path
                 if isinstance(f, Path) and f.exists()
             }
+        elif file_type == 'prompt' and isinstance(file_path, Path):
+            # Issue #522: Hash prompt with <include> dependencies
+            hashes['prompt_hash'] = calculate_prompt_hash(file_path)
         elif isinstance(file_path, Path):
             hashes[f"{file_type}_hash"] = calculate_sha256(file_path)
     return hashes
@@ -1361,7 +1430,7 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
         # If the user modified the prompt, we need to regenerate regardless of runtime state
         if fingerprint:
             paths = get_pdd_file_paths(basename, language, prompts_dir, context_override=context_override)
-            current_prompt_hash = calculate_sha256(paths['prompt'])
+            current_prompt_hash = calculate_prompt_hash(paths['prompt'])
             if current_prompt_hash and current_prompt_hash != fingerprint.prompt_hash:
                 prompt_content = paths['prompt'].read_text(encoding='utf-8', errors='ignore') if paths['prompt'].exists() else ""
                 has_deps = check_for_dependencies(prompt_content)
