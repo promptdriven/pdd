@@ -1,6 +1,16 @@
 steps:
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', '${_AR_IMAGE}', '-f', 'ci/cloud-batch/Dockerfile', '.']
+    args: ['pull', '${_AR_IMAGE}']
+    allowFailure: true
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '--cache-from=${_AR_IMAGE}'
+      - '-t'
+      - '${_AR_IMAGE}'
+      - '-f'
+      - 'ci/cloud-batch/Dockerfile'
+      - '.'
 images:
   - '${_AR_IMAGE}'
 options:
