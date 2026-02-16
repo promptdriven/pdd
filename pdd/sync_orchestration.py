@@ -1271,6 +1271,14 @@ def sync_orchestration(
                             operation = 'generate'
                             decision.operation = 'generate' # Update decision too
 
+                    # Skip auto-deps in agentic mode — prompts already have explicit dependencies
+                    if operation == 'auto-deps' and agentic_mode:
+                        log_event(basename, language, "auto_deps_skipped", {
+                            "reason": "auto-deps skipped in agentic mode — prompts have explicit dependencies"
+                        }, invocation_mode="sync")
+                        operation = 'generate'
+                        decision.operation = 'generate'
+
                     # Bug #4 fix: Detect crash-verify cycle pattern
                     # The pattern [crash, verify, crash, verify] or [verify, crash, verify, crash]
                     # represents 2 iterations of the alternating cycle, so break immediately

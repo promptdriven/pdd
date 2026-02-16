@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import os
+import signal
 import sys
 import json
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 import uuid
 import re
@@ -552,7 +554,8 @@ def _run_with_provider(
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     verbose: bool = False,
     quiet: bool = False,
-    cli_path: Optional[str] = None
+    cli_path: Optional[str] = None,
+    label: str = "",
 ) -> Tuple[bool, str, float]:
     """
     Internal helper to run a specific provider's CLI.
@@ -566,6 +569,7 @@ def _run_with_provider(
         verbose: Verbose output
         quiet: Suppress output
         cli_path: Optional explicit CLI path (if None, uses _find_cli_binary)
+        label: Task label for heartbeat messages
     """
 
     # Prepare Environment

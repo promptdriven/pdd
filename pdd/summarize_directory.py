@@ -47,12 +47,13 @@ def _get_files_from_git(directory_path: str) -> Optional[List[str]]:
             capture_output=True,
             text=True,
             check=True,
-            cwd=cwd
+            cwd=cwd,
+            timeout=30
         )
         files = [f for f in result.stdout.strip().split('\n') if f]
         # Convert to absolute paths
         return [os.path.join(cwd, f) for f in files]
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
         return None  # Not a git repo or git not available
 
 
