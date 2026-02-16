@@ -88,6 +88,8 @@ while [ "${ELAPSED}" -lt "${POLL_TIMEOUT}" ]; do
     # Check for new failures
     for json_file in "${STREAMING_DIR}"/task_*.json; do
         [ -f "${json_file}" ] || continue
+        # Skip files that are too small (likely partially flushed by GCS FUSE)
+        [ "$(wc -c < "${json_file}")" -lt 10 ] && continue
         basename_file=$(basename "${json_file}")
         # Skip if already seen
         [ -f "${STREAMING_DIR}/seen_${basename_file}" ] && continue

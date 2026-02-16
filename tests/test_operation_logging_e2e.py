@@ -441,7 +441,7 @@ class TestSyncLogsWithSyncMode:
             cwd=project_dir,
             capture_output=True,
             text=True,
-            timeout=180,
+            timeout=300,  # 5 minutes for LLM API call (matches other E2E tests)
             env={**os.environ, "PDD_FORCE": "1"}
         )
 
