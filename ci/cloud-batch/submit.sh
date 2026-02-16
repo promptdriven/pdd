@@ -12,6 +12,20 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 POLL_INTERVAL=10
 POLL_TIMEOUT=1800  # 30 minutes
 
+# Portable timeout (macOS lacks GNU timeout)
+_with_timeout() {
+    local secs=$1; shift
+    "$@" &
+    local cmd_pid=$!
+    ( sleep "$secs" && kill "$cmd_pid" 2>/dev/null ) >/dev/null 2>&1 &
+    local sleep_pid=$!
+    local rc=0
+    wait "$cmd_pid" || rc=$?
+    kill "$sleep_pid" 2>/dev/null || true
+    wait "$sleep_pid" 2>/dev/null || true
+    return "$rc"
+}
+
 # ── Check for uncommitted changes ─────────────────────────────────────────
 cd "${REPO_ROOT}"
 if ! git diff --quiet HEAD 2>/dev/null || ! git diff --cached --quiet HEAD 2>/dev/null; then
@@ -75,13 +89,13 @@ TOTAL=${TOTAL:-72}
 STREAM_FAILURES=0
 
 while [ "${ELAPSED}" -lt "${POLL_TIMEOUT}" ]; do
-    STATUS=$(gcloud batch jobs describe "${JOB_NAME}" \
+    STATUS=$(_with_timeout 15 gcloud batch jobs describe "${JOB_NAME}" \
         --project="${PROJECT_ID}" \
         --location="${REGION}" \
         --format="value(status.state)" 2>/dev/null || echo "UNKNOWN")
 
     # ── Stream completed task results ─────────────────────────────────
-    gsutil -q -m cp "gs://${BUCKET}/${JOB_RUN_ID}/results/task_*.json" "${STREAMING_DIR}/" 2>/dev/null || true
+    _with_timeout 15 gsutil -q -m cp "gs://${BUCKET}/${JOB_RUN_ID}/results/task_*.json" "${STREAMING_DIR}/" 2>/dev/null || true
     COMPLETED=$(find "${STREAMING_DIR}" -maxdepth 1 -name "task_*.json" | wc -l | tr -d ' ')
     COMPLETED=${COMPLETED:-0}
 

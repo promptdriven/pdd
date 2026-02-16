@@ -66,7 +66,7 @@ CSV_FIELDS = [
     "response_time_ms",
 ]
 
-TIMEOUT_PER_RUN = 1200  # seconds (Pro model needs longer than Flash)
+TIMEOUT_PER_RUN = 3600  # 1 hour — Opus needs more time per call
 
 
 # ---------------------------------------------------------------------------

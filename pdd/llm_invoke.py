@@ -514,7 +514,7 @@ def _get_environment_info() -> Dict[str, str]:
 # <<< SET LITELLM DEBUG LOGGING >>>
 # os.environ['LITELLM_LOG'] = 'DEBUG' # Keep commented out unless debugging LiteLLM itself
 
-LLM_CALL_TIMEOUT = 120  # seconds per LLM API call
+LLM_CALL_TIMEOUT = 600  # 10 min — Opus generating ~1000+ lines needs more than 120s per call
 
 # --- Constants and Configuration ---
 
