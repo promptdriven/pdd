@@ -1,6 +1,6 @@
 # Experiment Log: Grounding Validation
 
-Updated: 2026-02-15
+Updated: 2026-02-16
 Experiment directory: `experiments/grounding/`
 Retrieval CSV: `experiments/grounding/results/retrieval_results.csv`
 Generation CSV: `experiments/grounding/results/generation_stability.csv`
@@ -14,6 +14,10 @@ llm_invoke PDD v2 CSV: `experiments/grounding/results/llm_invoke_pdd_v2_stabilit
 llm_invoke PDD v2 Evaluation: `experiments/grounding/results/llm_invoke_pdd_v2_evaluation.csv`
 sync_orchestration PDD v2 CSV: `experiments/grounding/results/sync_orchestration_pdd_v2_stability.csv`
 sync_orchestration PDD v2 Evaluation: `experiments/grounding/results/sync_orchestration_pdd_v2_evaluation.csv`
+llm_invoke Opus CSV: `experiments/grounding/results/llm_invoke_opus_stability.csv`
+llm_invoke Opus Evaluation: `experiments/grounding/results/llm_invoke_opus_evaluation.csv`
+sync_orchestration Opus CSV: `experiments/grounding/results/sync_orchestration_opus_stability.csv`
+sync_orchestration Opus Evaluation: `experiments/grounding/results/sync_orchestration_opus_evaluation.csv`
 
 ## Scope
 
@@ -25,6 +29,7 @@ This log captures recorded runs for the grounding validation experiment, which m
 5. **Phase 5 — sync_orchestration**: Does grounding's effect scale to PDD's largest module (1,973 lines)?
 6. **Phase 6 — Pro vs Flash**: Does a stronger model interact differently with grounding?
 7. **Phase 7 — Improved test prompting**: Can better prompt framing extract more implementation signal from tests?
+8. **Phase 8 — Opus 4.6 (strongest model)**: Does the strongest available model (ELO 1576) interact differently with grounding?
 
 ## Phase 1: Retrieval Quality
 
@@ -991,7 +996,7 @@ Categories where test signal is absent (hallucinated imports, caching architectu
 
 Across all categories and both modules, the grounded arm (with one few-shot example but no tests) outperforms even the improved ungrounded-pdd arm (with full test suite + better prompting). The conclusion from Phase 4 stands: **one relevant code example outperforms an entire test suite for anchoring implementation fidelity**, and improved prompting does not meaningfully close this gap.
 
-## Experiment-Wide Conclusions (Phases 1-7)
+## Experiment-Wide Conclusions (Phases 1-8)
 
 ### Decisive Findings
 
@@ -1023,8 +1028,12 @@ The ungrounded-pdd arm has full test suite access (4 test files / ~5,750 lines f
 |---|---|---|---|---|
 | llm_invoke | Flash | 0.030 | 0.019 | +58% |
 | llm_invoke | Pro | 0.130 | 0.025 | **+420%** |
+| llm_invoke | gpt-5.2-codex* | 0.044 | — | — |
 | sync_orchestration | Flash | 0.145 | 0.037 | +292% |
 | sync_orchestration | Pro | 0.893 | 0.071 | **+1158%** |
+| sync_orchestration | gpt-5.2-codex* | 0.675 | — | — |
+
+*Phase 8: gpt-5.2-codex was used grounded (server fallback from Opus timeout). Opus ungrounded-pdd ref_sim: llm_invoke 0.014, sync_orchestration 0.043. Cross-model grounding lift: gpt-5.2-codex grounded (ELO 1472) vs Opus ungrounded-pdd (ELO 1576): **+1470%** (sync_orchestration).
 
 The grounding effect scales along two dimensions: module complexity (llm_invoke → sync_orchestration) and model capability (Flash → Pro). The combination is multiplicative — Pro + grounding on sync_orchestration achieves near-canonical output (0.893 ref_sim average, 0.964 excluding the run 4 outlier).
 
@@ -1090,6 +1099,187 @@ All grounded runs used a single example (the top vector search result). We don't
 
 All non-trivial phases used temperature 1.0 (maximum nondeterminism). Phase 2 at temperature 0.0 showed trivially perfect stability for both arms. The grounding benefit at intermediate temperatures (0.3–0.7) is unknown.
 
+## Phase 8: Opus 4.6 — Strongest Model Experiment
+
+### Motivation
+
+Phases 1–7 tested Flash and Pro. Phase 8 adds the strongest available model: Claude Opus 4.6 (ELO 1576, Anthropic's flagship). Key questions:
+1. Does the strongest model + grounding compound beyond Pro's 0.893 ref_sim (sync_orchestration)?
+2. Can the strongest model extract implementation patterns from tests without grounding (ungrounded-pdd)?
+3. How does model capability interact with grounding across the full model range?
+
+### Experimental Setup
+
+- **Target model**: `vertex_ai/claude-opus-4-6` (ELO 1576) via strength=1.0
+- **Arms**: Grounded + Ungrounded-PDD
+- **Runs per arm**: 5 per module
+- **Modules**: llm_invoke, sync_orchestration
+- **Temperature**: 1.0
+- **Cache busting**: UUID nonce per run
+- **Timeout changes**: `TIMEOUT_PER_RUN` bumped to 3600s, `LLM_CALL_TIMEOUT` bumped to 600s
+
+### Critical Finding: Model Mismatch
+
+**The grounded arm did NOT use Opus.** The server-side `LLM_CALL_TIMEOUT` was not bumped (only the local copy was changed). Opus exceeds the server's 120s per-call timeout, triggering the fallback chain. All grounded runs used `gpt-5.2-codex` (OpenAI, ELO 1472) instead.
+
+The ungrounded-pdd arm correctly used `anthropic/claude-opus-4-6` (ELO 1576) via the local pipeline with the bumped 600s timeout.
+
+This creates an unintended but informative comparison: **gpt-5.2-codex grounded (ELO 1472) vs Opus ungrounded-pdd (ELO 1576)**. A weaker model with grounding vs the strongest model without grounding.
+
+### llm_invoke Results
+
+#### Quantitative
+
+| Metric | gpt-5.2-codex Grounded | Opus Ungrounded-PDD |
+|---|---|---|
+| N (runs) | 5 | 5 |
+| Syntax valid | 5/5 (100%) | 4/5 (80%) |
+| Avg lines | 1388.0 ± 524.5 | 1730.2 ± 195.2 |
+| Avg functions | 31.0 ± 0.7 | 45.8 ± 3.8 |
+| Avg classes | 4.2 ± 0.4 | 4.0 ± 0.0 |
+| Pairwise similarity | **0.307** | 0.109 |
+| Ref similarity | **0.044 ± 0.072** | 0.014 ± 0.011 |
+| Ref recall | **0.434 ± 0.164** | 0.107 ± 0.010 |
+| Test pass rate (243 tests) | **100%** (243/243, all 5) | 80% (4/5 syntax valid pass 243/243) |
+| Avg cost | $0.480 | $2.040 |
+| Avg response time | 623s | 572s |
+| Model | gpt-5.2-codex | anthropic/claude-opus-4-6 |
+| Examples used | `Hp7oK65bRdCyrJYnABWE` (4/5) | (none) |
+
+Note: Grounded run 1 had NO_EXAMPLE (no few-shot example retrieved). Its ref_sim (0.023) is close to ungrounded runs.
+
+#### llm_invoke Hallucination Analysis
+
+| Category | gpt-5.2-codex Grounded (5 runs) | Opus Ungrounded-PDD (5 runs) | Flash Grounded (Phase 3) | Flash Ungrounded-PDD (Phase 4) |
+|---|---|---|---|---|
+| Hallucinated imports (`DEFAULT_STRENGTH`) | **5/5 FAIL** | 2/5 FAIL | 0/5 | 5/5 FAIL |
+| Auth pattern (correct `core.cloud.CloudConfig`) | 4/5 PASS | 0/5 exact (5/5 use `CloudConfig` from wrong path `.cloud_config`) | 5/5 PASS | 5/5 FAIL (invented env vars) |
+| Rate map type (`Tuple` correct) | **5/5 PASS** | 1/5 PASS (run 4 only) | 5/5 PASS | 0/5 |
+| CSV column names (`input`/`output`) | 5/5 PASS | 5/5 PASS | 5/5 PASS | 5/5 PASS |
+| Caching (GCS S3 + SQLite) | **5/5 PASS** | **5/5 PASS** | 5/5 PASS | 0/5 |
+
+**Key observations:**
+
+1. **Opus ungrounded-pdd recovers caching architecture (5/5)** — Flash ungrounded-pdd had 0/5 caching. Opus can infer the caching pattern from the test suite or prompt context. This is the single biggest Opus-specific improvement.
+
+2. **Opus ungrounded-pdd uses CloudConfig (correct class, wrong import path)** — Flash ungrounded-pdd invented entirely fake env vars (`PDD_CLOUD_TOKEN`). Opus correctly identifies the auth mechanism but imports from `.cloud_config` instead of `.core.cloud`. A meaningful partial improvement.
+
+3. **Opus ungrounded-pdd gets rate map type right 1/5** — Flash was 0/5. Small improvement. One Opus run (run 4) correctly uses `Dict[str, Tuple[float, float]]`.
+
+4. **gpt-5.2-codex grounded hallucinates imports 5/5** — Unlike Flash grounded (0/5 hallucinated imports), gpt-5.2-codex produces `from . import DEFAULT_STRENGTH, DEFAULT_TIME` in all runs. These exist in `pdd/__init__.py` but are not used by the canonical `llm_invoke.py`. The few-shot example doesn't prevent this model-specific hallucination.
+
+### sync_orchestration Results
+
+#### Quantitative
+
+| Metric | gpt-5.2-codex Grounded | Opus Ungrounded-PDD |
+|---|---|---|
+| N (runs) | 4 (run 5: HTTP 402) | 5 |
+| Syntax valid | 4/4 (100%) | 4/5 (80%) |
+| Avg lines | 1484.0 ± 774.1 | 1757.6 ± 56.3 |
+| Avg functions | 24.5 ± 8.7 | 26.0 ± 4.2 |
+| Avg classes | 2.75 ± 0.5 | 0.8 ± 0.4 |
+| Pairwise similarity | **0.407** | 0.174 |
+| Ref similarity | **0.675 ± 0.404** | 0.043 ± 0.007 |
+| Ref recall | **0.904 ± 0.168** | 0.155 ± 0.014 |
+| Test pass rate (99 tests) | **96/99** (all 4 valid runs) | 96/99 (4/5, 1 syntax fail) |
+| Avg cost | $0.729 | $1.919 |
+| Avg response time | 524s | 481s |
+| Model | gpt-5.2-codex | anthropic/claude-opus-4-6 |
+| Examples used | `ICqQQrD8O5CeWLa2y6fX` (4/4) | (none) |
+
+Note: Grounded run 5 failed with HTTP 402 (insufficient credits). Grounded run 2 is an outlier (235 lines, 11 functions — likely hit generation-length boundary or received truncated response).
+
+#### sync_orchestration High-Fidelity Runs
+
+Grounded runs 3 and 4 are remarkable:
+
+| Run | Lines | Ref Sim | Ref Recall | Functions | Classes |
+|---|---:|---:|---:|---:|---:|
+| Run 3 | 1,973 | **0.997** | **0.998** | 29 | 3 |
+| Run 4 | 1,981 | **0.991** | **0.985** | 29 | 3 |
+
+Both reproduce the 1,978-line canonical near-perfectly (ref_sim > 0.99). This matches or exceeds Pro's best runs (0.982–1.000 ref_sim in Phase 6). gpt-5.2-codex + grounding achieves the same near-canonical fidelity as Pro + grounding for sync_orchestration.
+
+#### sync_orchestration Hallucination Analysis
+
+| Category | gpt-5.2-codex Grounded (4 runs) | Opus Ungrounded-PDD (5 runs) |
+|---|---|---|
+| Return type dispatch (isinstance dict/tuple) | **4/4 PASS** (run 2 has dict only due to brevity) | 3/5 PASS (runs 1,2,4 have dict dispatch; 3,5 use different approach) |
+| AtomicStateUpdate present (with dataclass) | **4/4 PASS** | 4/5 PASS (run 1 uncertain) |
+| Cycle detection (4-element pattern matching) | **3/4 PASS** (run 2 too short) | **5/5 PASS** (all use crash/verify/crash/verify pattern) |
+| Function signatures consistent | **4/4 PASS** | 4/5 PASS |
+| SyncApp constructor | 3/4 present | **5/5 present** |
+
+**Key observation:** Opus ungrounded-pdd shows dramatically better hallucination prevention for sync_orchestration vs Flash (Phase 5: cycle detection 2/5, return type 2/5). Opus achieves 5/5 cycle detection and 3/5 return type dispatch without any grounding. However, the grounded arm (even with gpt-5.2-codex, not Opus) still dominates on ref_sim (0.675 vs 0.043) and recall (0.904 vs 0.155).
+
+### Cross-Phase Model Comparison
+
+#### sync_orchestration (most complex module — key comparison)
+
+| Model | Arm | Ref Sim | Ref Recall | Pairwise | Syntax Valid | Cost |
+|---|---|---:|---:|---:|---:|---:|
+| Flash | Grounded | 0.145 | 0.360 | 0.391 | 80% | $0.121 |
+| Flash | Ungrounded-PDD | 0.040 | 0.268 | 0.281 | 100% | $0.051 |
+| Pro | Grounded | **0.893** | **0.981** | **0.785** | 100% | $0.377 |
+| Pro | Ungrounded | 0.071 | 0.187 | 0.144 | 0% | $0.260 |
+| **gpt-5.2-codex** | **Grounded** | **0.675** | **0.904** | **0.407** | **100%** | **$0.729** |
+| **Opus** | **Ungrounded-PDD** | **0.043** | **0.155** | **0.174** | **80%** | **$1.919** |
+
+#### llm_invoke
+
+| Model | Arm | Ref Sim | Ref Recall | Pairwise | Syntax Valid | Cost |
+|---|---|---:|---:|---:|---:|---:|
+| Flash | Grounded | 0.030 | 0.206 | 0.189 | 100% | $0.131 |
+| Flash | Ungrounded-PDD | 0.021 | 0.151 | 0.106 | 100% | $0.057 |
+| Pro | Grounded | 0.130 | 0.356 | 0.266 | 80% | $0.455 |
+| Pro | Ungrounded | 0.025 | 0.111 | 0.109 | 20% | $0.168 |
+| **gpt-5.2-codex** | **Grounded** | **0.044** | **0.434** | **0.307** | **100%** | **$0.480** |
+| **Opus** | **Ungrounded-PDD** | **0.014** | **0.107** | **0.109** | **80%** | **$2.040** |
+
+### Key Findings (Phase 8)
+
+#### 1. Grounding dominates model capability — even across a 104-ELO gap
+
+gpt-5.2-codex (ELO 1472) + grounding dramatically outperforms Opus (ELO 1576) without grounding:
+- sync_orchestration: ref_sim **0.675 vs 0.043** (15.7x), ref_recall **0.904 vs 0.155** (5.8x)
+- llm_invoke: ref_sim **0.044 vs 0.014** (3.1x), ref_recall **0.434 vs 0.107** (4.1x)
+
+This reinforces Phase 6's finding: a weaker model with grounding beats a stronger model without grounding. The few-shot example provides information no model can infer from the prompt alone.
+
+#### 2. Opus ungrounded-pdd partially closes hallucination gaps
+
+Compared to Flash ungrounded-pdd, Opus shows genuine improvements:
+- **Caching architecture**: 5/5 present (Flash: 0/5) — Opus infers the GCS S3 + SQLite cache pattern
+- **Auth mechanism**: Uses correct `CloudConfig` class (Flash: invented env vars)
+- **Cycle detection**: 5/5 match canonical pattern for sync_orchestration (Flash: 2/5)
+- **Rate map type**: 1/5 correct (Flash: 0/5)
+
+Opus's stronger reasoning ability allows it to extract more implementation signal from the prompt and tests. However, these improvements don't translate to higher ref_sim — the per-line similarity remains low (0.043 for sync_orchestration) despite getting the patterns right.
+
+#### 3. gpt-5.2-codex grounded matches Pro grounded quality
+
+For sync_orchestration, gpt-5.2-codex grounded runs 3-4 achieve ref_sim 0.991-0.997 — matching Pro's best runs (0.982-1.000). This suggests the grounding effect saturates: once the few-shot example provides the structural anchor, multiple strong models can reproduce the canonical near-perfectly. The quality ceiling is set by the example quality, not the model.
+
+#### 4. Grounding introduces a new hallucination type for gpt-5.2-codex
+
+All 5 gpt-5.2-codex grounded runs hallucinate `from . import DEFAULT_STRENGTH, DEFAULT_TIME` — a hallucination Flash grounded never exhibited (0/5). This is a model-specific behavior: gpt-5.2-codex imports more aggressively from the package namespace. The grounding example doesn't prevent this because the symbols are real (they exist in `pdd/__init__.py`), just unused by the canonical.
+
+#### 5. Cost dynamics at the high end
+
+| Comparison | Cost | Quality (sync ref_sim) |
+|---|---|---|
+| Flash grounded | $0.121 | 0.145 |
+| Pro grounded | $0.377 | 0.893 |
+| gpt-5.2-codex grounded | $0.729 | 0.675 |
+| Opus ungrounded-pdd | **$1.919** | **0.043** |
+
+Opus ungrounded-pdd costs 2.6x more than gpt-5.2-codex grounded but produces 15.7x lower fidelity. The cost-quality frontier heavily favors grounded generation. Pro grounded remains the best value: $0.377 for 0.893 ref_sim.
+
+#### 6. Server-side timeout blocks Opus grounded experiment
+
+The intended Opus grounded experiment was blocked by the server's `LLM_CALL_TIMEOUT=120s`. To test Opus grounded, the server code must be redeployed with the bumped timeout. This is a prerequisite for completing the full model comparison matrix.
+
 ## Next Steps
 
 1. **Investigate coverage gaps**: Why did factorial and flask-api not find examples in Phase 2? Check the 1025 prod `few_shot` documents for math/algorithm and web/API coverage.
@@ -1103,3 +1293,5 @@ All non-trivial phases used temperature 1.0 (maximum nondeterminism). Phase 2 at
 9. **Statistical validation at scale**: Phase 6's Pro results are dramatic but still N=5 per arm. Run N=20 for the key comparison (Pro + grounded vs Flash + grounded on sync_orchestration) to achieve statistical significance.
 10. **Investigate output length variability**: Run 4 produced 1,297 lines vs 1,960–1,982 for runs 1-3 despite same model/strength/temperature. Investigate whether output token limits or generation-length boundaries cause intermittent truncation, and whether increasing `max_output_tokens` eliminates the issue.
 11. **Explicit Vertex AI location for all models**: The platform outage revealed that models without explicit `location=global` in `llm_model.csv` may fail silently. Audit all Vertex AI models in the CSV to ensure explicit location configuration.
+12. **Deploy server-side timeout for Opus**: Phase 8's intended Opus grounded experiment was blocked by the server's `LLM_CALL_TIMEOUT=120s`. Deploy with `LLM_CALL_TIMEOUT=600` to enable true Opus grounded runs. This would complete the model comparison matrix (Flash/Pro/gpt-5.2-codex/Opus × grounded/ungrounded-pdd).
+13. **Investigate gpt-5.2-codex hallucinated imports**: gpt-5.2-codex grounded hallucinates `from . import DEFAULT_STRENGTH, DEFAULT_TIME` in 5/5 runs — a behavior not seen with Flash or Pro grounded. Investigate whether this is a model-family-specific tendency and whether the few-shot example could be adjusted to prevent it.
