@@ -686,6 +686,53 @@ def test_process_commands_fatal_exception(mock_write_dump, mock_print):
         process_commands(results=[({}, 0.1, "gpt-4")])
     ctx.exit.assert_called_with(1)
 
+def test_cli_help_shows_correct_default_strength(runner):
+    """Issue #505: CLI help text for --strength must display the actual DEFAULT_STRENGTH.
+
+    The help string in pdd/core/cli.py:220 hardcodes "Default: 0.75" but the
+    canonical constant in pdd/__init__.py is DEFAULT_STRENGTH = 1.0.  This test
+    ensures the help text always reflects the real default so users are not
+    misled about which model tier they are using.
+    """
+    result = runner.invoke(cli_command, ["--help"])
+    assert result.exit_code == 0
+    # The help text must contain the canonical DEFAULT_STRENGTH value
+    expected_fragment = f"Default: {DEFAULT_STRENGTH}"
+    assert expected_fragment in result.output, (
+        f"CLI --help should say '{expected_fragment}' but got:\n{result.output}"
+    )
+    # The stale value 0.75 must NOT appear in the strength help text
+    assert "Default: 0.75" not in result.output, (
+        "CLI --help still contains the stale 'Default: 0.75' for --strength"
+    )
+
+
+def test_default_strength_consistent_across_modules(runner):
+    """Issue #505: DEFAULT_STRENGTH must be consistent across all modules.
+
+    Imports DEFAULT_STRENGTH from pdd (canonical) and pdd.server.executor,
+    and checks that the CLI help string references the same value.  This
+    prevents future drift when the constant is updated in one place but
+    not in others.
+    """
+    import pdd
+    import pdd.server.executor as executor_mod
+
+    # 1. executor module's DEFAULT_STRENGTH must match the canonical constant
+    assert executor_mod.DEFAULT_STRENGTH == pdd.DEFAULT_STRENGTH, (
+        f"executor.DEFAULT_STRENGTH={executor_mod.DEFAULT_STRENGTH} != "
+        f"pdd.DEFAULT_STRENGTH={pdd.DEFAULT_STRENGTH}"
+    )
+
+    # 2. CLI help text must reference the canonical value
+    result = runner.invoke(cli_command, ["--help"])
+    assert result.exit_code == 0
+    expected_fragment = f"Default: {pdd.DEFAULT_STRENGTH}"
+    assert expected_fragment in result.output, (
+        f"CLI help should contain '{expected_fragment}' but got:\n{result.output}"
+    )
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__]))
