@@ -34,8 +34,8 @@ _BOX_CHARS_RE = re.compile(r'^[\s╭╮╰╯─│┌┐└┘├┤┬┴┼�
 
 # Maximum concurrent syncs
 MAX_WORKERS = 4
-# Per-module timeout in seconds
-MODULE_TIMEOUT = 900
+# Per-module timeout in seconds (30 min — complex modules need generate+crash+verify+test)
+MODULE_TIMEOUT = 1800
 # State file for resumability (relative to project root)
 STATE_FILE_PATH = ".pdd/agentic_sync_state.json"
 
