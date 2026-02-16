@@ -1184,6 +1184,14 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
         newly_acquired_keys[key_name] = False # Mark as existing
         return True
     else:
+        # For Vertex AI, allow ADC when project is available
+        if key_name == 'VERTEX_CREDENTIALS':
+            vertex_project = os.getenv("VERTEX_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT")
+            if vertex_project:
+                logger.info(f"VERTEX_CREDENTIALS not set; using ADC (project={vertex_project}).")
+                newly_acquired_keys[key_name] = False
+                return True
+
         logger.warning(f"API key environment variable '{key_name}' for model '{model_info.get('model')}' is not set.")
 
         # Skip prompting if --force flag is set (non-interactive mode)
@@ -1910,9 +1918,8 @@ def llm_invoke(
                               model_name_litellm.startswith('vertex_ai/')
 
             if is_vertex_model and api_key_name_from_csv == 'VERTEX_CREDENTIALS':
-                credentials_file_path = os.getenv("VERTEX_CREDENTIALS") # Path from env var
                 vertex_project_env = os.getenv("VERTEX_PROJECT")
-                # Check for per-model location override, fall back to env var
+                # Resolve location: CSV override → env var fallback
                 model_location = model_info.get('location')
                 if pd.notna(model_location) and str(model_location).strip():
                     vertex_location_env = str(model_location).strip()
@@ -1921,39 +1928,29 @@ def llm_invoke(
                 else:
                     vertex_location_env = os.getenv("VERTEX_LOCATION")
 
-                if credentials_file_path and vertex_project_env and vertex_location_env:
-                    try:
-                        with open(credentials_file_path, 'r') as f:
-                            loaded_credentials = json.load(f)
-                        vertex_credentials_json_string = json.dumps(loaded_credentials)
-                        
-                        litellm_kwargs["vertex_credentials"] = vertex_credentials_json_string
-                        litellm_kwargs["vertex_project"] = vertex_project_env
-                        litellm_kwargs["vertex_location"] = vertex_location_env
-                        if verbose:
-                            logger.info(f"[INFO] For Vertex AI: using vertex_credentials from '{credentials_file_path}', project '{vertex_project_env}', location '{vertex_location_env}'.")
-                    except FileNotFoundError:
-                        # Still pass project and location so ADC can work
-                        litellm_kwargs["vertex_project"] = vertex_project_env
-                        litellm_kwargs["vertex_location"] = vertex_location_env
-                        if verbose:
-                            logger.warning(f"[WARN] Vertex credentials file not found at '{credentials_file_path}'. Using ADC with project '{vertex_project_env}', location '{vertex_location_env}'.")
-                    except json.JSONDecodeError:
-                        # Still pass project and location so ADC can work
-                        litellm_kwargs["vertex_project"] = vertex_project_env
-                        litellm_kwargs["vertex_location"] = vertex_location_env
-                        if verbose:
-                            logger.error(f"[ERROR] Failed to decode JSON from Vertex credentials file: '{credentials_file_path}'. Using ADC with project '{vertex_project_env}', location '{vertex_location_env}'.")
-                    except Exception as e:
-                        # Still pass project and location so ADC can work
-                        litellm_kwargs["vertex_project"] = vertex_project_env
-                        litellm_kwargs["vertex_location"] = vertex_location_env
-                        if verbose:
-                            logger.error(f"[ERROR] Failed to load Vertex credentials from '{credentials_file_path}': {e}. Using ADC with project '{vertex_project_env}', location '{vertex_location_env}'.")
+                if vertex_project_env and vertex_location_env:
+                    litellm_kwargs["vertex_project"] = vertex_project_env
+                    litellm_kwargs["vertex_location"] = vertex_location_env
+                    # Optionally load explicit credentials file
+                    credentials_file_path = os.getenv("VERTEX_CREDENTIALS")
+                    if credentials_file_path:
+                        try:
+                            with open(credentials_file_path, 'r') as f:
+                                loaded_credentials = json.load(f)
+                            litellm_kwargs["vertex_credentials"] = json.dumps(loaded_credentials)
+                            if verbose:
+                                logger.info(f"[INFO] For Vertex AI: using vertex_credentials from '{credentials_file_path}', project '{vertex_project_env}', location '{vertex_location_env}'.")
+                        except (FileNotFoundError, json.JSONDecodeError) as e:
+                            if verbose:
+                                logger.info(f"[INFO] No credentials file ({e}); using ADC.")
+                        except Exception as e:
+                            if verbose:
+                                logger.error(f"[ERROR] Failed to load Vertex credentials from '{credentials_file_path}': {e}. Using ADC.")
+                    elif verbose:
+                        logger.info(f"[INFO] Using ADC for Vertex AI (project={vertex_project_env}, location={vertex_location_env})")
                 else:
                     if verbose:
-                        logger.warning(f"[WARN] For Vertex AI (using '{api_key_name_from_csv}'): One or more required environment variables (VERTEX_CREDENTIALS, VERTEX_PROJECT, VERTEX_LOCATION) are missing.")
-                        if not credentials_file_path: logger.warning(f"  Reason: VERTEX_CREDENTIALS (path to JSON file) env var not set or empty.")
+                        logger.warning(f"[WARN] Missing VERTEX_PROJECT or VERTEX_LOCATION for {model_name_litellm}.")
                         if not vertex_project_env: logger.warning(f"  Reason: VERTEX_PROJECT env var not set or empty.")
                         if not vertex_location_env: logger.warning(f"  Reason: VERTEX_LOCATION env var not set or empty.")
                         logger.warning(f"  LiteLLM may attempt to use Application Default Credentials or the call may fail.")
