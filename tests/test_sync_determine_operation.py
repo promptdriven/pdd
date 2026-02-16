@@ -34,7 +34,8 @@ from sync_determine_operation import (
     validate_expected_files,
     _handle_missing_expected_files,
     _is_workflow_complete,
-    get_pdd_file_paths
+    get_pdd_file_paths,
+    calculate_prompt_hash
 )
 
 # --- Test Plan ---
@@ -3455,4 +3456,214 @@ class TestInfiniteLoopBugIssue349:
         assert decision.operation == 'fix', (
             f"exit_code=1 with tests_failed=2 should trigger 'fix', got '{decision.operation}'\n"
             f"Real test failures must still be handled."
+        )
+
+
+# --- GitHub Issue #522: Fingerprint ignores <include> dependencies ---
+
+class TestFingerprintIncludeDependencies:
+    """
+    Regression tests for GitHub issue #522: sync fingerprint ignores <include>
+    dependencies. When an included file changes but the top-level .prompt file
+    doesn't, sync should detect the change and regenerate.
+    """
+
+    def test_included_file_change_triggers_regeneration(self, pdd_test_environment):
+        """
+        Primary bug reproduction: an included file changes but the prompt
+        file itself stays the same. Sync should detect the change via the
+        preprocessed content hash, not skip with 'nothing to do'.
+        """
+        prompts_dir = pdd_test_environment / "prompts"
+        prompts_dir.mkdir(exist_ok=True)
+
+        # Create the included dependency file
+        dep_file = pdd_test_environment / "shared_types.py"
+        create_file(dep_file, "class User:\n    name: str\n")
+
+        # Create prompt that includes the dependency
+        prompt_path = prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt"
+        prompt_content = "Create a helper.\n<include>shared_types.py</include>\n"
+        prompt_hash = create_file(prompt_path, prompt_content)
+
+        # Create fingerprint with the CURRENT raw prompt hash
+        # This simulates a previous successful sync
+        fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
+        create_fingerprint_file(fp_path, {
+            "pdd_version": "1.0.0",
+            "timestamp": "2025-01-01T00:00:00Z",
+            "command": "generate",
+            "prompt_hash": prompt_hash,  # Same as current raw prompt!
+            "code_hash": "c_hash",
+            "example_hash": "e_hash",
+            "test_hash": "t_hash"
+        })
+
+        # Create run report (successful previous run)
+        rr_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json"
+        create_run_report_file(rr_path, {
+            "timestamp": "2025-01-01T00:00:00Z",
+            "exit_code": 0,
+            "tests_passed": 1,
+            "tests_failed": 0,
+            "coverage": 90.0
+        })
+
+        # Create code/example/test files
+        paths = get_pdd_file_paths(BASENAME, LANGUAGE, prompts_dir="prompts")
+        create_file(paths['code'], "def helper(): pass")
+        create_file(paths['example'], "helper()")
+        create_file(paths['test'], "def test_helper(): pass")
+
+        # NOW change the included file (the bug: this should trigger regeneration)
+        create_file(dep_file, "class User:\n    name: str\n    email: str\n")
+
+        # The prompt file itself is UNCHANGED — raw hash is identical
+        assert calculate_sha256(prompt_path) == prompt_hash, \
+            "Sanity check: raw prompt file should not have changed"
+
+        decision = sync_determine_operation(
+            BASENAME, LANGUAGE, TARGET_COVERAGE,
+            prompts_dir=str(prompts_dir)
+        )
+
+        # BUG: Current code returns 'nothing' because it only hashes the raw
+        # prompt file, missing the changed <include> dependency.
+        # After fix, it should detect the change and regenerate.
+        assert decision.operation in ('generate', 'auto-deps'), (
+            f"Expected 'generate' or 'auto-deps' because included file changed, "
+            f"got '{decision.operation}'. "
+            f"The fingerprint system must hash preprocessed (include-expanded) content, "
+            f"not just the raw prompt file."
+        )
+
+    def test_no_include_change_no_false_positive(self, pdd_test_environment):
+        """
+        Baseline: when nothing changes (no included file changes, no prompt
+        changes), sync should NOT falsely trigger regeneration.
+        """
+        prompts_dir = pdd_test_environment / "prompts"
+        prompts_dir.mkdir(exist_ok=True)
+
+        # Create the included dependency file
+        dep_file = pdd_test_environment / "shared_types.py"
+        create_file(dep_file, "class User:\n    name: str\n")
+
+        # Create prompt that includes the dependency
+        prompt_path = prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt"
+        prompt_content = "Create a helper.\n<include>shared_types.py</include>\n"
+        create_file(prompt_path, prompt_content)
+        # Use composite hash (prompt + includes) to simulate a fingerprint saved by fixed code
+        prompt_hash = calculate_prompt_hash(prompt_path)
+
+        # Fingerprint matches current state exactly
+        fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
+        create_fingerprint_file(fp_path, {
+            "pdd_version": "1.0.0",
+            "timestamp": "2025-01-01T00:00:00Z",
+            "command": "generate",
+            "prompt_hash": prompt_hash,
+            "code_hash": None,
+            "example_hash": None,
+            "test_hash": None
+        })
+
+        # Create code/example/test files with matching hashes
+        paths = get_pdd_file_paths(BASENAME, LANGUAGE, prompts_dir="prompts")
+        code_hash = create_file(paths['code'], "def helper(): pass")
+        example_hash = create_file(paths['example'], "helper()")
+        test_hash = create_file(paths['test'], "def test_helper(): pass")
+
+        # Update fingerprint with actual file hashes
+        create_fingerprint_file(fp_path, {
+            "pdd_version": "1.0.0",
+            "timestamp": "2025-01-01T00:00:00Z",
+            "command": "test",
+            "prompt_hash": prompt_hash,
+            "code_hash": code_hash,
+            "example_hash": example_hash,
+            "test_hash": test_hash
+        })
+
+        # Create passing run report
+        rr_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json"
+        create_run_report_file(rr_path, {
+            "timestamp": "2025-01-01T00:00:00Z",
+            "exit_code": 0,
+            "tests_passed": 5,
+            "tests_failed": 0,
+            "coverage": 95.0
+        })
+
+        # Nothing changed — should not regenerate
+        decision = sync_determine_operation(
+            BASENAME, LANGUAGE, TARGET_COVERAGE,
+            prompts_dir=str(prompts_dir)
+        )
+
+        # Should NOT trigger generate/auto-deps since nothing changed
+        assert decision.operation not in ('generate', 'auto-deps'), (
+            f"Expected no regeneration when nothing changed, got '{decision.operation}'. "
+            f"The fix must not introduce false positives."
+        )
+
+    def test_one_of_multiple_includes_changes(self, pdd_test_environment):
+        """
+        When a prompt includes multiple files and only one changes,
+        sync should detect the change and regenerate.
+        """
+        prompts_dir = pdd_test_environment / "prompts"
+        prompts_dir.mkdir(exist_ok=True)
+
+        # Create two dependency files
+        dep1 = pdd_test_environment / "types.py"
+        dep2 = pdd_test_environment / "utils.py"
+        create_file(dep1, "class Foo: pass")
+        create_file(dep2, "def bar(): pass")
+
+        # Create prompt including both
+        prompt_path = prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt"
+        prompt_content = "Build module.\n<include>types.py</include>\n<include>utils.py</include>\n"
+        prompt_hash = create_file(prompt_path, prompt_content)
+
+        # Fingerprint from previous sync
+        fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
+        create_fingerprint_file(fp_path, {
+            "pdd_version": "1.0.0",
+            "timestamp": "2025-01-01T00:00:00Z",
+            "command": "generate",
+            "prompt_hash": prompt_hash,
+            "code_hash": "c_hash",
+            "example_hash": "e_hash",
+            "test_hash": "t_hash"
+        })
+
+        rr_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json"
+        create_run_report_file(rr_path, {
+            "timestamp": "2025-01-01T00:00:00Z",
+            "exit_code": 0,
+            "tests_passed": 1,
+            "tests_failed": 0,
+            "coverage": 90.0
+        })
+
+        paths = get_pdd_file_paths(BASENAME, LANGUAGE, prompts_dir="prompts")
+        create_file(paths['code'], "def module(): pass")
+        create_file(paths['example'], "module()")
+        create_file(paths['test'], "def test_module(): pass")
+
+        # Change only dep2
+        create_file(dep2, "def bar(): return 42")
+
+        # Raw prompt unchanged
+        assert calculate_sha256(prompt_path) == prompt_hash
+
+        decision = sync_determine_operation(
+            BASENAME, LANGUAGE, TARGET_COVERAGE,
+            prompts_dir=str(prompts_dir)
+        )
+
+        assert decision.operation in ('generate', 'auto-deps'), (
+            f"Expected regeneration when one of multiple included files changed, "
+            f"got '{decision.operation}'."
         )
