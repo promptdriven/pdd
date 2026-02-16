@@ -1,4 +1,4 @@
-<pdd-reason>Discovers API keys from CSV providers, checking existence across shell, .env, and PDD config with source transparency.</pdd-reason>
+<pdd-reason>Discovers API keys needed by the user's configured models, checking existence across shell, .env, and PDD config with source transparency.</pdd-reason>
 
 <pdd-interface>
 {
@@ -15,26 +15,27 @@
 % You are an expert Python engineer. Your goal is to write the pdd/setup/api_key_scanner.py module.
 
 % Role & Scope
-Dynamically discovers API keys from all sources and reports their existence. Reads pdd/data/llm_model.csv to find all unique API key environment variable names, then checks .env files, shell environment, and ~/.pdd/api-env.* files. Only checks **existence** — never makes API calls or stores key values.
+Discovers API keys needed by the user's configured models and reports their existence. Reads the user's `~/.pdd/llm_model.csv` to find all unique API key environment variable names, then checks .env files, shell environment, and ~/.pdd/api-env.* files. Only checks **existence** — never makes API calls or stores key values.
 
 % Requirements
-1. Function: `scan_environment() -> Dict[str, KeyInfo]` — returns mapping of key name to KeyInfo(source, is_set). Does not store key values.
-2. Function: `get_provider_key_names() -> List[str]` — returns deduplicated sorted list of all non-empty api_key values from the master CSV
-3. Dynamic discovery: extract all unique api_key column values from pdd/data/llm_model.csv — no hardcoded provider list
+1. Function: `scan_environment() -> Dict[str, KeyInfo]` — returns mapping of key name to KeyInfo(source, is_set). Does not store key values. Returns empty dict if no models are configured yet.
+2. Function: `get_provider_key_names() -> List[str]` — returns deduplicated sorted list of all non-empty api_key values from the user's CSV (`~/.pdd/llm_model.csv`)
+3. Dynamic discovery: extract all unique api_key column values from the user CSV — no hardcoded provider list
 4. Check sources in priority order:
    - .env file (via python-dotenv `dotenv_values`, read-only — always reads fresh on each scan)
-   - Shell environment (`os.environ` — note: may include stale .env values if edited during session; restart pdd setup to refresh)
+   - Shell environment (`os.environ`)
    - ~/.pdd/api-env.{shell} (parse uncommented `export KEY=` lines)
 5. KeyInfo: dataclass with fields `source` (str) and `is_set` (bool). Report source as "shell environment", ".env file", or "~/.pdd/api-env.zsh" (etc.)
 6. Detect shell from SHELL env var for correct api-env file
 7. Never raise exceptions — return best-effort results with logging for errors
-8. Handle missing/malformed CSV gracefully (return empty dict)
+8. Handle missing/malformed/empty CSV gracefully (return empty dict/list)
 
 % Dependencies
 <llm_model_csv_schema>
-The CSV at pdd/data/llm_model.csv has columns:
+The user CSV at ~/.pdd/llm_model.csv has columns:
 provider,model,input,output,coding_arena_elo,base_url,api_key,max_reasoning_tokens,structured_output,reasoning_type,location
 Rows with empty api_key are local LLMs (no key needed).
+This file is created/managed by provider_manager when the user adds providers via `pdd setup`.
 </llm_model_csv_schema>
 
 % Deliverables

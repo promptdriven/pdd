@@ -8,13 +8,21 @@ import tempfile
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from rich.console import Console
 from rich.table import Table
 from rich.prompt import Prompt, Confirm
 
-from pdd.setup.api_key_scanner import KeyInfo
+from pdd.setup.litellm_registry import (
+    is_litellm_available,
+    get_top_providers,
+    search_providers,
+    get_models_for_provider,
+    get_api_key_env_var,
+    ProviderInfo,
+    ModelInfo,
+)
 
 console = Console()
 
@@ -57,9 +65,6 @@ def _get_user_csv_path() -> Path:
     return _get_pdd_dir() / "llm_model.csv"
 
 
-def _get_master_csv_path() -> Path:
-    """Return path to pdd/data/llm_model.csv (shipped with the package)."""
-    return Path(__file__).resolve().parent.parent / "data" / "llm_model.csv"
 
 
 # ---------------------------------------------------------------------------
@@ -184,107 +189,256 @@ def _comment_out_key_in_api_env(key_name: str) -> None:
     _write_api_env_atomic(env_path, new_lines)
 
 
-def _get_master_rows_for_key(api_key_name: str) -> List[Dict[str, str]]:
-    """Return all rows from master CSV whose api_key column matches."""
-    master_rows = _read_csv(_get_master_csv_path())
-    return [r for r in master_rows if r.get("api_key", "").strip() == api_key_name]
+# ---------------------------------------------------------------------------
+# Key-existence check (used by add_provider_from_registry)
+# ---------------------------------------------------------------------------
+
+def _is_key_set(key_name: str) -> Optional[str]:
+    """Return the source label if *key_name* is set, else ``None``.
+
+    Checks .env (via python-dotenv), shell environment, and api-env file.
+    """
+    try:
+        from dotenv import dotenv_values  # type: ignore
+        dotenv_vals = dotenv_values()
+        if key_name in dotenv_vals and dotenv_vals[key_name] is not None:
+            return ".env file"
+    except Exception:
+        pass
+
+    if os.environ.get(key_name):
+        return "shell environment"
+
+    env_path = _get_api_env_path()
+    if env_path.exists():
+        from pdd.setup.api_key_scanner import _parse_api_env_file
+        api_env_vals = _parse_api_env_file(env_path)
+        if key_name in api_env_vals:
+            return f"~/.pdd/{env_path.name}"
+
+    return None
 
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
-def add_api_key(scan_results: Dict[str, KeyInfo]) -> bool:
+def add_provider_from_registry() -> bool:
     """
-    Show missing keys from scan_results, prompt user for one, save to
-    api-env file, then copy ALL matching rows from master CSV into user CSV.
+    Search/browse LiteLLM's model registry, let the user pick a provider
+    and specific models, handle the API key, and save to user CSV.
 
-    Returns True if a key was added/updated, False if cancelled.
+    Returns True if any models were added, False if cancelled.
     """
-    # Separate missing and found keys
-    missing_keys = {k: v for k, v in scan_results.items() if not v.is_set}
-    found_keys = {k: v for k, v in scan_results.items() if v.is_set}
-
-    if not missing_keys:
-        console.print("[green]All known API keys are already configured.[/green]")
+    if not is_litellm_available():
+        console.print(
+            "[red]litellm is required but not installed or has no model data.[/red]\n"
+            "[yellow]Run: pip install litellm[/yellow]\n"
+            "[yellow]Or use 'Add a custom provider' instead.[/yellow]"
+        )
         return False
 
-    # Display missing keys
-    console.print("\n[bold]Missing API keys:[/bold]")
-    sorted_missing = sorted(missing_keys.keys())
-    for idx, key_name in enumerate(sorted_missing, 1):
-        console.print(f"  {idx}. {key_name}")
+    # ── Step 1: Browse / Search providers ──────────────────────────────
 
-    # Prompt user to select one
+    top = get_top_providers()
+
+    console.print("\n[bold]Search providers[/bold]\n")
+    console.print("  Top providers:")
+    for idx, p in enumerate(top, 1):
+        console.print(
+            f"    {idx:>2}. {p.display_name:20s}  ({p.model_count} chat models)"
+        )
+    console.print()
+
     selection = Prompt.ask(
-        "\nEnter the number of the key to add (or press Enter to cancel)"
+        "Enter number, or type to search (empty to cancel)"
     )
     if not selection.strip():
         console.print("[dim]Cancelled.[/dim]")
         return False
 
+    selected_provider: Optional[ProviderInfo] = None
+
+    # Try as a number first (direct selection from top list)
     try:
         choice = int(selection.strip())
-        if choice < 1 or choice > len(sorted_missing):
-            console.print("[red]Invalid selection.[/red]")
-            return False
+        if 1 <= choice <= len(top):
+            selected_provider = top[choice - 1]
     except ValueError:
-        console.print("[red]Invalid input.[/red]")
-        return False
+        pass
 
-    selected_key = sorted_missing[choice - 1]
+    # If not a valid number, treat as search query
+    if selected_provider is None:
+        results = search_providers(selection.strip())
+        if not results:
+            console.print(
+                f"[yellow]No providers matching '{selection.strip()}'.[/yellow]\n"
+                "[yellow]Try a different search, or use 'Add a custom provider'.[/yellow]"
+            )
+            return False
 
-    # Check if key is already in environment (shouldn't be since it's in missing, but guard)
-    if os.environ.get(selected_key):
+        if len(results) == 1:
+            selected_provider = results[0]
+        else:
+            console.print(f"\n  Found {len(results)} provider(s):")
+            for idx, p in enumerate(results, 1):
+                console.print(
+                    f"    {idx:>2}. {p.display_name:20s}  ({p.model_count} chat models)"
+                )
+            console.print()
+
+            pick = Prompt.ask("Select provider number (empty to cancel)")
+            if not pick.strip():
+                console.print("[dim]Cancelled.[/dim]")
+                return False
+            try:
+                pick_idx = int(pick.strip())
+                if 1 <= pick_idx <= len(results):
+                    selected_provider = results[pick_idx - 1]
+                else:
+                    console.print("[red]Invalid selection.[/red]")
+                    return False
+            except ValueError:
+                console.print("[red]Invalid input.[/red]")
+                return False
+
+    assert selected_provider is not None
+
+    # ── Step 2: Model selection ────────────────────────────────────────
+
+    models = get_models_for_provider(selected_provider.name)
+    if not models:
         console.print(
-            f"[yellow]{selected_key} is already set in the current environment. Skipping.[/yellow]"
+            f"[yellow]No chat models found for {selected_provider.display_name} "
+            f"in litellm's registry.[/yellow]\n"
+            "[yellow]Use 'Add a custom provider' instead.[/yellow]"
         )
         return False
 
-    # Check if master CSV has rows for this key
-    master_rows = _get_master_rows_for_key(selected_key)
-    if not master_rows:
-        console.print(
-            f"[yellow]No models found in master CSV for '{selected_key}'.[/yellow]\n"
-            f"[yellow]Please use 'Add a custom provider' instead.[/yellow]"
-        )
-        return False
+    table = Table(title=f"Chat models for {selected_provider.display_name}")
+    table.add_column("#", style="bold", width=4)
+    table.add_column("Model")
+    table.add_column("Input $/M", justify="right")
+    table.add_column("Output $/M", justify="right")
+    table.add_column("Max Input", justify="right")
 
-    # Prompt for the actual key value
-    key_value = Prompt.ask(f"Enter the value for {selected_key}")
-    if not key_value.strip():
+    for idx, m in enumerate(models, 1):
+        input_cost = f"${m.input_cost_per_million:.2f}" if m.input_cost_per_million else "$0.00"
+        output_cost = f"${m.output_cost_per_million:.2f}" if m.output_cost_per_million else "$0.00"
+        max_input = f"{m.max_input_tokens:,}" if m.max_input_tokens else "—"
+        table.add_row(str(idx), m.litellm_id, input_cost, output_cost, max_input)
+
+    console.print(table)
+    console.print()
+
+    model_selection = Prompt.ask(
+        "Select models (comma-separated numbers, 'all', or empty to cancel)"
+    )
+    if not model_selection.strip():
         console.print("[dim]Cancelled.[/dim]")
         return False
-    key_value = key_value.strip()
 
-    # Save key to api-env file
-    _save_key_to_api_env(selected_key, key_value)
-    console.print(f"[green]Saved {selected_key} to {_get_api_env_path()}[/green]")
+    selected_models: List[ModelInfo] = []
 
-    # Copy matching rows from master CSV into user CSV
+    if model_selection.strip().lower() == "all":
+        selected_models = list(models)
+    else:
+        for part in model_selection.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                num = int(part)
+                if 1 <= num <= len(models):
+                    selected_models.append(models[num - 1])
+                else:
+                    console.print(f"[yellow]Skipping invalid number: {num}[/yellow]")
+            except ValueError:
+                console.print(f"[yellow]Skipping invalid input: '{part}'[/yellow]")
+
+    if not selected_models:
+        console.print("[dim]No valid selections. Cancelled.[/dim]")
+        return False
+
+    # ── Step 3: API key ────────────────────────────────────────────────
+
+    api_key_var = selected_provider.api_key_env_var
+
+    if api_key_var is None:
+        # Provider not in our known mapping — ask the user
+        api_key_var = Prompt.ask(
+            f"API key env var for {selected_provider.display_name} "
+            "(e.g. PROVIDER_API_KEY, or empty to skip)"
+        ).strip() or None
+
+    if api_key_var:
+        existing_source = _is_key_set(api_key_var)
+        if existing_source:
+            console.print(
+                f"  [green]{api_key_var} is already set ({existing_source}).[/green]"
+            )
+            if Confirm.ask("Update the key?", default=False):
+                key_value = Prompt.ask(f"Enter new value for {api_key_var}")
+                if key_value.strip():
+                    _save_key_to_api_env(api_key_var, key_value.strip())
+                    console.print(
+                        f"[green]Updated {api_key_var} in {_get_api_env_path()}[/green]"
+                    )
+        else:
+            key_value = Prompt.ask(f"Enter the value for {api_key_var}")
+            if key_value.strip():
+                _save_key_to_api_env(api_key_var, key_value.strip())
+                console.print(
+                    f"[green]Saved {api_key_var} to {_get_api_env_path()}[/green]"
+                )
+
+    # ── Step 4: Write to user CSV ──────────────────────────────────────
+
     user_csv_path = _get_user_csv_path()
-    existing_user_rows = _read_csv(user_csv_path)
+    existing_rows = _read_csv(user_csv_path)
 
     # Build set of existing model identifiers to avoid duplicates
-    existing_models = {
+    existing_model_ids = {
         (r.get("provider", ""), r.get("model", ""))
-        for r in existing_user_rows
+        for r in existing_rows
     }
 
     added_count = 0
-    for row in master_rows:
-        model_id = (row.get("provider", ""), row.get("model", ""))
-        if model_id not in existing_models:
-            existing_user_rows.append(row)
-            existing_models.add(model_id)
+    for m in selected_models:
+        # Build the litellm model ID with provider prefix convention
+        csv_model = m.litellm_id
+
+        new_row: Dict[str, str] = {
+            "provider": selected_provider.display_name,
+            "model": csv_model,
+            "input": str(m.input_cost_per_million),
+            "output": str(m.output_cost_per_million),
+            "coding_arena_elo": "1000",
+            "base_url": "",
+            "api_key": api_key_var or "",
+            "max_reasoning_tokens": "0",
+            "structured_output": str(m.supports_function_calling),
+            "reasoning_type": "",
+            "location": "",
+        }
+
+        model_id = (new_row["provider"], new_row["model"])
+        if model_id not in existing_model_ids:
+            existing_rows.append(new_row)
+            existing_model_ids.add(model_id)
             added_count += 1
+        else:
+            console.print(f"  [dim]Skipping duplicate: {csv_model}[/dim]")
 
-    _write_csv_atomic(user_csv_path, existing_user_rows)
-    console.print(
-        f"[green]Added {added_count} model(s) for {selected_key} to {user_csv_path}[/green]"
-    )
+    if added_count > 0:
+        _write_csv_atomic(user_csv_path, existing_rows)
+        console.print(
+            f"[green]Added {added_count} model(s) to {user_csv_path}[/green]"
+        )
+    else:
+        console.print("[yellow]No new models were added (all already configured).[/yellow]")
 
-    return True
+    return added_count > 0
 
 
 def add_custom_provider() -> bool:

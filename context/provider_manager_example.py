@@ -8,29 +8,41 @@ project_root = Path(__file__).resolve().parent.parent
 sys.path.append(str(project_root))
 
 from pdd.setup.provider_manager import (
-    add_api_key,
+    add_provider_from_registry,
     add_custom_provider,
     remove_models_by_provider,
     remove_individual_models,
 )
-from pdd.setup.api_key_scanner import scan_environment
 
 
 def main() -> None:
     """
     Demonstrates how to use the provider_manager module to:
-    1. Add an API key and auto-load all models for that provider
+    1. Search/browse litellm's registry to add a provider and specific models
     2. Add a custom LiteLLM-compatible provider
     3. Remove all models for a provider (comments out the key)
     4. Remove individual models from the user CSV
     """
 
-    # First, scan the environment to see what's configured
-    scan_results = scan_environment()
+    # Example 1: Search/browse providers from litellm's registry
+    # Shows top ~10 providers, lets you search, pick models, enter API key
+    # add_provider_from_registry()  # Uncomment to run interactively
 
-    # Example 1: Add an API key (auto-loads all models for that provider)
-    # Shows missing keys, prompts for one, saves to api-env, copies CSV rows
-    # add_api_key(scan_results)  # Uncomment to run interactively
+    # Interactive flow:
+    #   Top providers:
+    #     1. OpenAI         (102 chat models)
+    #     2. Anthropic       (29 chat models)
+    #     ...
+    #   Enter number, or type to search: anthropic
+    #
+    #   Chat models for Anthropic:
+    #     1. claude-opus-4-5-20251101    $5.00  $25.00  200,000
+    #     2. claude-sonnet-4-5-20250929  $3.00  $15.00  200,000
+    #     ...
+    #   Select models: 1,2
+    #
+    #   ANTHROPIC_API_KEY: sk-ant-...
+    #   ✓ Added 2 model(s) to ~/.pdd/llm_model.csv
 
     # Example 2: Add a custom provider (Together AI, Deepinfra, etc.)
     # Prompts for prefix, model name, API key var, base URL, costs

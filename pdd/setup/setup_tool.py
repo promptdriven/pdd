@@ -11,7 +11,7 @@ from typing import Dict
 
 from .api_key_scanner import scan_environment, KeyInfo
 from .provider_manager import (
-    add_api_key,
+    add_provider_from_registry,
     add_custom_provider,
     remove_models_by_provider,
     remove_individual_models,
@@ -30,6 +30,12 @@ def _display_scan(scan_results: Dict[str, KeyInfo]) -> None:
     """Print a table of discovered API keys and a summary line."""
     print("\n  API-key scan")
     print("  " + "─" * 50)
+
+    if not scan_results:
+        print("    No models configured yet.")
+        print("    Use 'Add a provider' to get started.")
+        print()
+        return
 
     api_found = 0
     local_count = 0
@@ -67,11 +73,11 @@ def _display_menu() -> None:
     print()
 
 
-def _add_provider_submenu(scan_results: Dict[str, KeyInfo]) -> None:
+def _add_provider_submenu() -> None:
     """Sub-menu for option 1 — Add a provider."""
     print()
     print("  Add a provider:")
-    print("    a. Enter an API key")
+    print("    a. Search providers")
     print("    b. Add a local LLM")
     print("    c. Add a custom provider")
     print()
@@ -79,7 +85,7 @@ def _add_provider_submenu(scan_results: Dict[str, KeyInfo]) -> None:
     sub_choice = input("  Choice [a/b/c]: ").strip().lower()
 
     if sub_choice == "a":
-        add_api_key(scan_results)
+        add_provider_from_registry()
     elif sub_choice == "b":
         configure_local_llm()
     elif sub_choice == "c":
@@ -131,7 +137,7 @@ def run_setup() -> None:
             choice = input("  Choice [1-6]: ").strip()
 
             if choice == "1":
-                _add_provider_submenu(scan_results)
+                _add_provider_submenu()
             elif choice == "2":
                 _remove_models_submenu()
             elif choice == "3":

@@ -1,0 +1,57 @@
+<pdd-reason>Wraps litellm's bundled model registry to provide provider search, model browsing, and API key env var lookup without network calls.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "is_litellm_available", "signature": "() -> bool", "returns": "bool"},
+      {"name": "get_api_key_env_var", "signature": "(provider: str) -> Optional[str]", "returns": "Optional[str]"},
+      {"name": "get_top_providers", "signature": "() -> List[ProviderInfo]", "returns": "List[ProviderInfo]"},
+      {"name": "get_all_providers", "signature": "() -> List[ProviderInfo]", "returns": "List[ProviderInfo]"},
+      {"name": "search_providers", "signature": "(query: str) -> List[ProviderInfo]", "returns": "List[ProviderInfo]"},
+      {"name": "get_models_for_provider", "signature": "(provider: str) -> List[ModelInfo]", "returns": "List[ModelInfo]"}
+    ],
+    "dataclasses": [
+      {"name": "ProviderInfo", "fields": ["name", "display_name", "api_key_env_var", "model_count", "sample_models"]},
+      {"name": "ModelInfo", "fields": ["name", "litellm_id", "input_cost_per_million", "output_cost_per_million", "max_input_tokens", "max_output_tokens", "supports_vision", "supports_function_calling"]}
+    ]
+  }
+}
+</pdd-interface>
+
+% You are an expert Python engineer. Your goal is to write the pdd/setup/litellm_registry.py module.
+
+% Role & Scope
+Thin wrapper around litellm's bundled data (`litellm.model_cost`, `litellm.models_by_provider`) for provider discovery and model browsing. Uses only locally bundled data — never makes network calls. Provides the data layer for the "Search providers" flow in `pdd setup`.
+
+% Requirements
+1. Dataclass `ProviderInfo(name, display_name, api_key_env_var, model_count, sample_models)` — summary of a provider with up to 3 sample model names.
+2. Dataclass `ModelInfo(name, litellm_id, input_cost_per_million, output_cost_per_million, max_input_tokens, max_output_tokens, supports_vision, supports_function_calling)` — metadata for a single model.
+3. `is_litellm_available() -> bool` — guards against import failure, returns True only if litellm is importable and has model_cost data.
+4. `get_api_key_env_var(provider) -> Optional[str]` — returns the API key env var name from a hardcoded mapping of ~25 common providers (e.g. "anthropic" → "ANTHROPIC_API_KEY"). Returns None for unknown providers.
+5. `get_top_providers() -> List[ProviderInfo]` — returns a curated list of ~10 major cloud providers in a fixed display order. Falls back to all providers sorted by model count if curated list yields too few.
+6. `get_all_providers() -> List[ProviderInfo]` — returns all providers with at least one chat model, sorted by model count descending.
+7. `search_providers(query) -> List[ProviderInfo]` — case-insensitive substring match on provider name and display name. Empty query returns all providers.
+8. `get_models_for_provider(provider) -> List[ModelInfo]` — returns chat-mode models sorted by name. Converts per-token costs to per-million costs.
+9. Filter to `mode == "chat"` models only when browsing.
+10. Handle vertex_ai sub-providers: aggregate all `litellm_provider` values starting with "vertex_ai" when querying vertex_ai.
+11. Fallback: when `models_by_provider` entries aren't in `model_cost`, scan `model_cost` by `litellm_provider` field to catch mismatches (e.g. together_ai).
+12. All litellm imports must be local (inside functions), guarded by `is_litellm_available()`.
+13. Hardcoded `PROVIDER_DISPLAY_NAMES` dict for human-friendly names (e.g. "fireworks_ai" → "Fireworks AI"). Fallback: replace underscores and title-case.
+
+% Dependencies
+<litellm_data>
+litellm.model_cost: Dict[str, dict] — ~2566 entries keyed by model ID.
+  Each entry has: litellm_provider, mode, input_cost_per_token, output_cost_per_token,
+  max_input_tokens, max_output_tokens, supports_vision, supports_function_calling,
+  supports_response_schema, and more.
+
+litellm.models_by_provider: Dict[str, Set[str]] — 86 providers mapped to sets of model names.
+
+Note: model_cost has NO api_key_env_var field. Provider-to-key mapping must be hardcoded.
+</litellm_data>
+
+% Deliverables
+- Module at `pdd/setup/litellm_registry.py` exporting `ProviderInfo`, `ModelInfo`, `is_litellm_available`, `get_api_key_env_var`, `get_top_providers`, `get_all_providers`, `search_providers`, `get_models_for_provider`.
+- Also exports constants `PROVIDER_API_KEY_MAP` and `PROVIDER_DISPLAY_NAMES` for use by other modules.

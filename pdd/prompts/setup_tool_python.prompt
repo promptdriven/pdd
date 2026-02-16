@@ -13,6 +13,7 @@
 
 <pdd-dependency>api_key_scanner_python.prompt</pdd-dependency>
 <pdd-dependency>provider_manager_python.prompt</pdd-dependency>
+<pdd-dependency>litellm_registry_python.prompt</pdd-dependency>
 <pdd-dependency>local_llm_configurator_python.prompt</pdd-dependency>
 <pdd-dependency>model_tester_python.prompt</pdd-dependency>
 <pdd-dependency>cli_detector_python.prompt</pdd-dependency>
@@ -21,19 +22,19 @@
 % You are an expert Python engineer. Your goal is to write the pdd/setup/setup_tool.py module.
 
 % Role & Scope
-Main orchestrator for `pdd setup`. Auto-scans the environment for API keys (existence only — no API calls), then presents an interactive menu. After any action, the menu re-displays with an updated scan.
+Main orchestrator for `pdd setup`. Auto-scans the environment for API keys based on the user's configured models (existence only — no API calls), then presents an interactive menu. After any action, the menu re-displays with an updated scan. When no models are configured yet, displays a helpful "get started" message.
 
 % Requirements
 1. Function: `run_setup()` — main entry point
-2. On entry, call `api_key_scanner.scan_environment()` and display each key with `✓ Found (source)` or `— Not found`, plus a summary line: `Models configured: N (from M API keys + K local)`
+2. On entry, call `api_key_scanner.scan_environment()` and display each key with `✓ Found (source)` or `— Not found`, plus a summary line: `Models configured: N (from M API keys + K local)`. If scan_results is empty, display: "No models configured yet. Use 'Add a provider' to get started."
 3. Present a 6-option menu after the scan:
-   1. Add a provider (sub-menu: a. Enter an API key, b. Add a local LLM, c. Add a custom provider)
+   1. Add a provider (sub-menu: a. Search providers, b. Add a local LLM, c. Add a custom provider)
    2. Remove models (sub-menu: a. By provider, b. Individual models)
    3. Test a model
    4. Detect CLI tools
    5. Initialize .pddrc
    6. Done
-4. Delegate to: `provider_manager.add_api_key`, `local_llm_configurator.configure_local_llm`, `provider_manager.add_custom_provider`, `provider_manager.remove_models_by_provider`, `provider_manager.remove_individual_models`, `model_tester.test_model_interactive`, `cli_detector.detect_cli_tools`, `pddrc_initializer.offer_pddrc_init`
+4. Delegate to: `provider_manager.add_provider_from_registry`, `local_llm_configurator.configure_local_llm`, `provider_manager.add_custom_provider`, `provider_manager.remove_models_by_provider`, `provider_manager.remove_individual_models`, `model_tester.test_model_interactive`, `cli_detector.detect_cli_tools`, `pddrc_initializer.offer_pddrc_init`
 5. After options 1–5, re-scan and re-display the menu
 6. Option 6 exits the loop
 7. Handle KeyboardInterrupt for clean exit at any point
@@ -46,6 +47,10 @@ Main orchestrator for `pdd setup`. Auto-scans the environment for API keys (exis
 <provider_manager_example>
   <include>context/provider_manager_example.py</include>
 </provider_manager_example>
+
+<litellm_registry_example>
+  <include>context/litellm_registry_example.py</include>
+</litellm_registry_example>
 
 <local_llm_configurator_example>
   <include>context/local_llm_configurator_example.py</include>
@@ -64,9 +69,9 @@ Main orchestrator for `pdd setup`. Auto-scans the environment for API keys (exis
 </pddrc_initializer_example>
 
 <llm_model_csv_schema>
-The CSV at pdd/data/llm_model.csv has columns:
+The user-level CSV at ~/.pdd/llm_model.csv has columns:
 provider,model,input,output,coding_arena_elo,base_url,api_key,max_reasoning_tokens,structured_output,reasoning_type,location
-The user-level CSV is at ~/.pdd/llm_model.csv.
+This file is created when the user first adds a provider via setup.
 </llm_model_csv_schema>
 
 % Deliverables

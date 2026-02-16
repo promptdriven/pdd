@@ -1,8 +1,8 @@
 """
 pdd/setup/api_key_scanner.py
 
-Discovers API keys from CSV providers, checking existence across
-shell, .env, and PDD config with source transparency.
+Discovers API keys needed by the user's configured models, checking
+existence across shell, .env, and PDD config with source transparency.
 """
 
 import csv
@@ -23,26 +23,28 @@ class KeyInfo:
 
 
 def _get_csv_path() -> Path:
-    """Return the path to the master llm_model.csv file."""
-    # Navigate from this file's location to pdd/data/llm_model.csv
-    module_dir = Path(__file__).resolve().parent  # pdd/setup/
-    pdd_dir = module_dir.parent  # pdd/
-    return pdd_dir / "data" / "llm_model.csv"
+    """Return the path to the user's configured llm_model.csv.
+
+    Reads from ``~/.pdd/llm_model.csv`` so the scan reflects which
+    API keys the user's configured models actually need, rather than
+    an arbitrary hardcoded list.
+    """
+    return Path.home() / ".pdd" / "llm_model.csv"
 
 
 def get_provider_key_names() -> List[str]:
     """
     Returns a deduplicated, sorted list of all non-empty api_key values
-    from the master CSV (pdd/data/llm_model.csv).
+    from the user's configured CSV (~/.pdd/llm_model.csv).
 
-    Returns an empty list if the CSV is missing or malformed.
+    Returns an empty list if the CSV is missing, empty, or malformed.
     """
     csv_path = _get_csv_path()
     key_names: set = set()
 
     try:
         if not csv_path.exists():
-            logger.warning("llm_model.csv not found at %s", csv_path)
+            logger.debug("User CSV not found at %s (no models configured yet).", csv_path)
             return []
 
         with open(csv_path, "r", newline="", encoding="utf-8") as f:
@@ -142,17 +144,17 @@ def _parse_api_env_file(file_path: Path) -> Dict[str, str]:
 
 def scan_environment() -> Dict[str, KeyInfo]:
     """
-    Scan for API key existence across all known sources.
+    Scan for API key existence based on the user's configured models.
 
-    Checks sources in priority order:
+    Reads API key names from ``~/.pdd/llm_model.csv`` and checks their
+    existence in priority order:
       1. .env file (via python-dotenv dotenv_values, read-only)
-      2. Shell environment (os.environ - note: may include stale .env values if edited during session)
+      2. Shell environment (os.environ)
       3. ~/.pdd/api-env.{shell} file
 
     Returns a mapping of key name -> KeyInfo(source, is_set).
+    Returns an empty dict if no models are configured yet.
     Never raises exceptions; returns best-effort results.
-
-    Note: If you edit .env during a pdd setup session, restart pdd setup to see updated shell environment.
     """
     result: Dict[str, KeyInfo] = {}
 
