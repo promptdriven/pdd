@@ -13,6 +13,9 @@ shared:
   - pdd/server/*.py
   - pdd/server/routes/*.py
 
+  # Package data
+  - pdd/data/
+
   # Tests (unit tests — recursive to include subdirectories)
   - tests/**/*.py
   - tests/*regression*.sh

@@ -1,11 +1,23 @@
 # Experiment Log: Grounding Validation
 
-Updated: 2026-02-14
+Updated: 2026-02-16
 Experiment directory: `experiments/grounding/`
 Retrieval CSV: `experiments/grounding/results/retrieval_results.csv`
 Generation CSV: `experiments/grounding/results/generation_stability.csv`
 sync_orchestration CSV: `experiments/grounding/results/sync_orchestration_stability.csv`
 sync_orchestration Evaluation: `experiments/grounding/results/sync_orchestration_evaluation.csv`
+llm_invoke Pro CSV: `experiments/grounding/results/llm_invoke_pro_stability.csv`
+llm_invoke Pro Evaluation: `experiments/grounding/results/llm_invoke_pro_evaluation.csv`
+sync_orchestration Pro CSV: `experiments/grounding/results/sync_orchestration_pro_stability.csv`
+sync_orchestration Pro Evaluation: `experiments/grounding/results/sync_orchestration_pro_evaluation.csv`
+llm_invoke PDD v2 CSV: `experiments/grounding/results/llm_invoke_pdd_v2_stability.csv`
+llm_invoke PDD v2 Evaluation: `experiments/grounding/results/llm_invoke_pdd_v2_evaluation.csv`
+sync_orchestration PDD v2 CSV: `experiments/grounding/results/sync_orchestration_pdd_v2_stability.csv`
+sync_orchestration PDD v2 Evaluation: `experiments/grounding/results/sync_orchestration_pdd_v2_evaluation.csv`
+llm_invoke Opus CSV: `experiments/grounding/results/llm_invoke_opus_stability.csv`
+llm_invoke Opus Evaluation: `experiments/grounding/results/llm_invoke_opus_evaluation.csv`
+sync_orchestration Opus CSV: `experiments/grounding/results/sync_orchestration_opus_stability.csv`
+sync_orchestration Opus Evaluation: `experiments/grounding/results/sync_orchestration_opus_evaluation.csv`
 
 ## Scope
 
@@ -15,6 +27,9 @@ This log captures recorded runs for the grounding validation experiment, which m
 3. **Phase 3 — llm_invoke regeneration**: Cache-busted 3-arm comparison at temperature 1.0
 4. **Phase 4 — pdd generate --local**: Does test visibility substitute for grounding?
 5. **Phase 5 — sync_orchestration**: Does grounding's effect scale to PDD's largest module (1,973 lines)?
+6. **Phase 6 — Pro vs Flash**: Does a stronger model interact differently with grounding?
+7. **Phase 7 — Improved test prompting**: Can better prompt framing extract more implementation signal from tests?
+8. **Phase 8 — Opus 4.6 (strongest model)**: Does the strongest available model (ELO 1576) interact differently with grounding?
 
 ## Phase 1: Retrieval Quality
 
@@ -639,7 +654,349 @@ All arms import from the correct submodules (`.sync_tui`, `.operation_log`, `.sy
 
 Import accuracy is high across all arms because the resolved prompt includes the full module structure. This is not a grounding-specific benefit.
 
-## Experiment-Wide Conclusions (Phases 1–5)
+## Phase 6: Model Strength Impact (Pro vs Flash)
+
+### Motivation
+
+Phases 1–5 used Gemini 3 Flash exclusively. This phase tests whether a stronger model (Gemini 3 Pro) interacts with grounding differently. Key questions:
+1. Does model quality (Pro vs Flash) matter more than grounding for code fidelity?
+2. Does Pro + grounding compound to produce superior output?
+3. Is Pro worth the cost/latency tradeoff?
+
+### Experimental Setup
+
+- **Model**: `vertex_ai/gemini-3-pro-preview` (both arms)
+- **Strength parameter**: Cloud 0.554 (maps to Pro via `llm_model.csv` ELO interpolation with Flash as base), Local 0.818 (maps to Pro with gpt-5-nano as base)
+- **Arms**: Grounded + Ungrounded only (pdd-local skipped — Pro's 6+ sequential LLM calls in the `pdd generate` pipeline exceed the 1200s timeout)
+- **Runs per arm**: 5 per module
+- **Temperature**: 1.0
+- **Modules**: llm_invoke, sync_orchestration
+- **Cache busting**: UUID nonce per run
+
+#### Why No PDD-Local Arm
+
+The `pdd generate --local` pipeline makes 6+ sequential LLM calls (initial generation → completion check → trim → continue → loop check → trim final). With Pro taking ~80–100s per call, the minimum pipeline time is 480–600s. With preprocessing overhead and potential continuation loops, the total easily exceeds both the 600s and 1200s timeouts tested. This is a fundamental architectural constraint: Pro is incompatible with the multi-call pdd pipeline at current timeout limits.
+
+### llm_invoke Results (Flash vs Pro)
+
+#### Grounded Arm
+
+| Metric | Flash | Pro | Change |
+|---|---|---|---|
+| Syntax valid | 5/5 (100%) | 4/5 (80%) | -20pp |
+| Avg lines | 467.6 ± 149.7 | 894.4 ± 97.7 | +91% (nearly 2x) |
+| Avg functions | 17.4 ± 2.1 | 19.2 ± 11.1 | +10% |
+| Pairwise similarity | 0.189 | **0.266** | **+41%** |
+| Ref similarity | 0.030 ± 0.004 | **0.130 ± 0.050** | **+333%** |
+| Ref recall | 0.206 ± 0.015 | **0.356 ± 0.089** | **+73%** |
+| Test pass rate | 100% (217 tests) | 80% (240 tests)* | -20pp |
+| Avg cost | $0.131 | $0.455 | +247% |
+| Avg response time | 65.6s | 189.6s | +189% |
+
+*Note: Test suite grew from 217 → 240 tests between Flash and Pro experiment runs. Test pass rates are not directly comparable. Pro's 80% rate reflects 1 syntax failure (0/0 tests), not test failures — all 4 syntax-valid Pro runs pass 240/240.
+
+#### Ungrounded Arm
+
+| Metric | Flash | Pro | Change |
+|---|---|---|---|
+| Syntax valid | 4/5 (80%)** | 1/5 (20%) | -60pp |
+| Avg lines | 428.8 ± 65.8 | 881.2 ± 72.5 | +105% |
+| Pairwise similarity | 0.162 | 0.109 | -33% |
+| Ref similarity | 0.019 ± 0.002 | 0.025 ± 0.016 | +32% |
+| Ref recall | 0.162 ± 0.009 | 0.111 ± 0.004 | -31% |
+| Test pass rate | 100% (when valid) | 20% (1/5 valid, passes 240/240) | -80pp |
+| Avg cost | $0.019 | $0.168 | +784% |
+| Avg response time | 25.2s | 83.1s | +230% |
+
+**Flash run 4 was rate-limited (EMPTY), not a syntax failure.
+
+### sync_orchestration Results (Flash vs Pro)
+
+#### Grounded Arm
+
+| Metric | Flash | Pro | Change |
+|---|---|---|---|
+| Syntax valid | 4/5 (80%) | **5/5 (100%)** | +20pp |
+| Avg lines | 426.6 ± 38.5 | **1775.2 ± 296.0** | **+316%** |
+| Avg functions | 19.8 ± 11.1 | **28.6 ± 0.5** | +44% |
+| Avg classes | 1.4 ± 0.9 | **2.6 ± 0.5** | +86% |
+| Pairwise similarity | 0.391 | **0.785** | **+101%** |
+| Ref similarity | 0.145 ± 0.069 | **0.893 ± 0.159** | **+516%** |
+| Ref recall | 0.360 ± 0.080 | **0.981 ± 0.019** | **+172%** |
+| Test pass rate (99 tests) | 77.6% | **97.0% (96/99 all 5 runs)** | +19.4pp |
+| Avg cost | $0.121 | $0.377 | +212% |
+| Avg response time | 86.7s | 337.0s | +289% |
+
+Note: Run 4 was a rerun after a Vertex AI platform outage. It completed successfully but produced a shorter output (1,297 lines vs avg 1,895 for runs 1-3,5), likely due to the model hitting a generation-length boundary. See "Run 4 Outlier Analysis" below.
+
+#### Ungrounded Arm
+
+| Metric | Flash | Pro | Change |
+|---|---|---|---|
+| Syntax valid | 4/5 (80%) | **0/5 (0%)** | **-80pp** |
+| Avg lines | 513.0 ± 39.1 | 1124.8 ± 66.0 | +119% |
+| Pairwise similarity | 0.284 | 0.144 | -49% |
+| Ref similarity | 0.037 ± 0.016 | 0.071 ± 0.027 | +92% |
+| Ref recall | 0.261 ± 0.018 | 0.187 ± 0.015 | -28% |
+| Test pass rate | 77.6% (when valid) | **0%** (0/5 valid) | **-77.6pp** |
+| Avg cost | $0.049 | $0.260 | +431% |
+| Avg response time | 31.9s | 94.7s | +197% |
+
+### Key Findings (Phase 6)
+
+#### 1. Pro + Grounding produces near-canonical output for sync_orchestration
+
+Pro grounded sync_orchestration achieves **0.893 reference similarity** and **0.981 reference recall** across all 5 runs. The top 3 runs (1-3) achieve 0.982–1.000 ref_sim — near-perfect reproduction of the 1,973-line canonical. Flash grounded achieved only 0.145 ref_sim.
+
+The 5-run average is pulled down by run 4 (0.611 ref_sim, 1,297 lines — see outlier analysis below). Excluding run 4, the remaining 4 runs average 0.964 ref_sim and 1,895 lines, meaning Pro nearly reproduces the full module rather than the 4.6x compressed skeleton Flash produces.
+
+Pairwise similarity of 0.785 across all 5 runs (0.915 excluding run 4) confirms strong consistency at temperature 1.0 on a 247KB prompt.
+
+#### 2. Grounding dominates model quality
+
+Pro without grounding performs **worse** than Flash with grounding on every functional metric:
+
+| Comparison | Ref Similarity | Syntax Valid | Test Pass Rate |
+|---|---|---|---|
+| Flash + Grounding (llm_invoke) | 0.030 | 100% | 100% |
+| **Pro + No Grounding (llm_invoke)** | 0.025 | **20%** | **20%** |
+| Flash + Grounding (sync_orchestration) | 0.145 | 80% | 77.6% |
+| **Pro + No Grounding (sync_orchestration)** | 0.071 | **0%** | **0%** |
+
+A stronger model without grounding cannot match a weaker model with grounding. The few-shot example provides information the model fundamentally cannot infer, regardless of capability.
+
+#### 3. Pro without grounding has catastrophic syntax failure rates
+
+Pro ungrounded syntax validity: 1/5 (llm_invoke), 0/5 (sync_orchestration). Flash ungrounded: 4/5, 4/5. Pro generates 2x more code (881–1125 lines vs 429–513) and the longer output is far more likely to contain unclosed brackets, unterminated strings, or malformed class definitions. **Verbosity and syntax validity are inversely correlated for ungrounded generation.**
+
+#### 4. Pro + Grounding compounds multiplicatively
+
+The grounding lift (grounded minus ungrounded ref_sim) grows dramatically with Pro:
+
+| Module | Flash Lift | Pro Lift | Ratio |
+|---|---|---|---|
+| llm_invoke | +0.011 | **+0.105** | **9.5x** |
+| sync_orchestration | +0.108 | **+0.822** | **7.6x** |
+
+The combination of a stronger model and grounding is multiplicative, not additive. Pro has more capacity to exploit the few-shot example's structural information. The example constrains Pro's output to the correct architecture, and Pro's superior code generation ability fills in the implementation details that Flash compresses away.
+
+#### 5. Cost/latency tradeoff depends on the arm
+
+| Comparison | Cost Delta | Latency Delta | Quality Delta |
+|---|---|---|---|
+| Pro vs Flash grounded (llm_invoke) | +247% ($0.455 vs $0.131) | +189% | +333% ref_sim |
+| Pro vs Flash grounded (sync_orchestration) | +212% ($0.377 vs $0.121) | +289% | +516% ref_sim |
+| Pro vs Flash ungrounded (llm_invoke) | +784% ($0.168 vs $0.019) | +230% | Worse (20% vs 100% syntax) |
+| Pro vs Flash ungrounded (sync_orchestration) | +431% ($0.260 vs $0.049) | +197% | Worse (0% vs 80% syntax) |
+
+For grounded generation: Pro is worth the tradeoff. The quality improvement is massive (sync_orchestration: +516% ref_sim). The cost increase (+212%) is driven by run 4's rerun ($1.38 — see outlier analysis); excluding it, the remaining 4 runs averaged $0.126 (+4%). For ungrounded generation: Pro is strictly worse (more expensive, slower, less reliable).
+
+#### 6. Grounding as model capability amplifier
+
+The data reveals grounding's role: it is not just an anti-hallucination guardrail but a **model capability amplifier**. Without grounding, upgrading Flash → Pro makes code worse (more verbose, more syntax errors, no quality gain). With grounding, upgrading Flash → Pro unlocks dramatic quality improvement (near-canonical reproduction). The few-shot example channels the stronger model's capacity toward faithful reproduction rather than creative hallucination.
+
+### Run 4 Outlier Analysis
+
+#### Timeline
+
+Run 4 of the Pro grounded sync_orchestration experiment was the only incomplete datapoint from Phase 6. The original run (2026-02-15 ~00:24–00:44 UTC) timed out at 1200s during the experiment. Two subsequent rerun attempts failed due to a Vertex AI platform outage. A third rerun succeeded after deploying an explicit `location=global` fix.
+
+#### Platform Outage (2026-02-15)
+
+Cloud Functions logs showed multiple Vertex AI models failing simultaneously during the rerun attempts:
+
+```
+[ERROR] vertex_ai/gemini-3-pro-preview: litellm.Timeout: Connection timed out after None seconds
+[ERROR] vertex_ai/deepseek-ai/deepseek-v3.2-maas: litellm.InternalServerError: Vertex_aiException
+[ERROR] vertex_ai/claude-opus-4-6: litellm.Timeout: Connection timed out after 120.0 seconds
+```
+
+The model fallback chain (Pro → deepseek → claude-opus → kimi) resulted in `fireworks_ai/kimi-k2p5` being selected, which is why the failed reruns used the wrong model despite correct strength=0.554 mapping.
+
+#### Fix: Explicit Location Configuration
+
+The root cause was a missing explicit `location` field in `llm_model.csv` for Pro and deepseek models. While `VERTEX_LOCATION=global` in `.env.prod` provides a fallback, the platform outage revealed that the `None` timeout in litellm's error suggests the location wasn't being properly forwarded. Adding `global` to the CSV:
+
+```
+# Before:
+Google,vertex_ai/gemini-3-pro-preview,...,effort,
+Google,vertex_ai/deepseek-ai/deepseek-v3.2-maas,...,effort,
+
+# After:
+Google,vertex_ai/gemini-3-pro-preview,...,effort,global
+Google,vertex_ai/deepseek-ai/deepseek-v3.2-maas,...,effort,global
+```
+
+After this fix + backend deploy, run 4 completed successfully in 193s.
+
+#### Run 4 Quality vs Other Runs
+
+| Run | Lines | Ref Sim | Ref Recall | Functions | Cost | Time |
+|---|---:|---:|---:|---:|---:|---:|
+| 1 | 1,982 | 0.992 | 0.991 | 29 | $0.087 | 402s |
+| 2 | 1,971 | 1.000 | 0.998 | 29 | $0.173 | 353s |
+| 3 | 1,960 | 0.982 | 0.996 | 29 | $0.172 | 479s |
+| **4** | **1,297** | **0.611** | **0.960** | **28** | **$1.381** | **193s** |
+| 5 | 1,666 | 0.882 | 0.960 | 28 | $0.072 | 258s |
+
+Run 4 is a clear outlier: 1,297 lines (34% shorter than runs 1-3's avg 1,971) with 0.611 ref_sim (vs 0.991 avg for runs 1-3). However:
+
+- **Syntax is valid** (True)
+- **Tests pass**: 96/99 (same as all other runs)
+- **Ref recall is high**: 0.960 (meaning 96% of its lines match canonical — it's not wrong, just incomplete)
+- **Cost was anomalously high** ($1.38 vs ~$0.13 typical) — likely due to the platform instability causing retries or slow token generation
+
+#### Qualitative Assessment of Run 4
+
+Run 4 preserves all critical architectural patterns:
+- AtomicStateUpdate with PendingStateUpdate dataclass, commit/rollback, tempfile+os.replace
+- isinstance dict/tuple result dispatch (correct)
+- 4-element cycle detection pattern matching
+- Thread-safe single-element list refs
+- All 8 operation types dispatched correctly
+- SyncApp constructor with 14 named kwargs (most complete of all 5 runs)
+
+What's missing (explaining the 676-line gap):
+- Complex `fix` operation handler (~120 lines): run 4 has a minimal version
+- `test_extend` operation (~40 lines): completely absent
+- Post-crash verification logic (~100 lines): simplified
+- Skip operation handlers (~60 lines): absent
+- Enhanced agentic result parsing (~40 lines): simplified to basic dict/tuple
+- Budget warnings, audit logging, worker exception capture (~80 lines)
+
+**Interpretation**: Run 4 appears to have hit a generation-length boundary (possibly output token limit). The model generated the most important code first (architecture, state management, operation dispatch) and ran out of budget before completing helper functions and edge case handlers. This is consistent with its faster completion time (193s vs 258–479s for other runs) — it simply generated fewer tokens.
+
+### Model vs Grounding Decomposition
+
+Answering the three motivating questions:
+
+**Q1: Does model quality matter more than grounding?**
+No. Grounding is the dominant factor. Pro + ungrounded is worse than Flash + grounded across all metrics. Grounding provides information the model cannot infer regardless of its capability level.
+
+**Q2: Does Pro + grounding compound?**
+Yes, multiplicatively. The grounding lift is 7.6–9.5x larger for Pro than Flash. Pro has more capacity to exploit the few-shot example, producing near-canonical output (0.893 ref_sim for sync_orchestration, 0.964 excluding the run 4 outlier) instead of compressed skeletons (0.145 for Flash).
+
+**Q3: Is Pro worth the cost/latency tradeoff?**
+Only with grounding. Pro + grounded: dramatically better quality (sync_orchestration: +516% ref_sim). Cost increase is variable ($0.126 typical, $1.38 on rerun due to platform issues). Pro + ungrounded: strictly worse across all dimensions. **Recommendation: use Pro exclusively through the grounded endpoint.**
+
+## Phase 7: Improved Test Prompt Framing
+
+### Motivation
+
+Phase 4-5 showed the ungrounded-pdd arm (with full test suite visibility) produced the same hallucination categories as bare ungrounded. However, the test injection prompt was minimal: "The following is the unit test content that the generated code must pass." This purely behavioral framing tells the model *what* to do but not *what to learn from* the tests. Phase 7 tests whether more descriptive prompting can help the model extract implementation signals from test assertions, mock patterns, and fixture setup.
+
+### Prompt Change
+
+The `<unit_test_content>` framing in `code_generator_main.py` was updated from:
+
+```
+The following is the unit test content that the generated code must pass:
+```
+
+To:
+
+```
+Study these test files carefully before generating code. Pay special attention to:
+- What specific types and data structures the assertions reveal
+  (e.g., if a test asserts `x == (1.0, 2.0)`, the value is a tuple, not a dict)
+- What mock patterns show about the real interfaces being called
+  (e.g., `mock_config.get_jwt_token.return_value` reveals the auth API)
+- What import paths are used for internal modules
+- What fixture setup reveals about expected data formats
+  (e.g., DataFrame column names, namedtuple fields)
+
+The generated code must pass these tests, but also match the
+implementation patterns they imply.
+```
+
+### Experimental Setup
+
+- **Arm**: Ungrounded-PDD only (suffix `_pdd_v2`)
+- **Model**: `vertex_ai/gemini-3-flash-preview`
+- **Temperature**: 1.0
+- **Runs per module**: 5
+- **Modules**: llm_invoke, sync_orchestration
+- **Cache busting**: UUID nonce per run
+
+### llm_invoke Results
+
+#### Quantitative (v1 vs v2 vs Grounded)
+
+| Metric | v1 (Phase 4) | v2 (Phase 7) | Grounded (Phase 3) |
+|---|---|---|---|
+| Syntax valid | 5/5 | 5/5 | 5/5 |
+| Avg lines | 485.6 ± 45.8 | 456.8 ± 65.0 | 467.6 ± 149.7 |
+| Avg functions | 15.8 ± 0.8 | 12.8 ± 2.3 | 17.4 ± 2.1 |
+| Pairwise similarity | 0.106 | 0.096 | **0.189** |
+| Ref similarity | 0.021 ± 0.010 | 0.020 ± 0.005 | **0.030 ± 0.004** |
+| Ref recall | 0.151 ± 0.002 | 0.125 ± 0.053 | **0.206 ± 0.015** |
+| Test pass rate | 100% (217) | 100% (240) | 100% (217) |
+| Avg cost | $0.057 | $0.041 | $0.131 |
+
+Note: Test suite grew from 217 to 240 tests between experiments.
+
+#### Hallucination Categories
+
+| Category | v1 (Phase 4) | v2 (Phase 7) | Grounded | Signal in Tests? |
+|---|---|---|---|---|
+| Hallucinated imports (`DEFAULT_STRENGTH`) | 5/5 FAIL | 5/5 FAIL | 0/5 | Absent |
+| Auth pattern (invented `PDD_CLOUD_TOKEN`) | 5/5 FAIL | 5/5 FAIL | 0/5 | Weak (in mocks) |
+| Rate map type (`Tuple` vs `Dict`) | 5/5 FAIL | 5/5 FAIL | 0/5 | Strong (explicit assertion) |
+| CSV column names | 5/5 PASS | 5/5 PASS | 5/5 | Strong |
+| Caching (GCS S3 + SQLite) | 2/5 partial | 0/5 | 5/5 | Absent |
+
+### sync_orchestration Results
+
+#### Quantitative (v1 vs v2 vs Grounded)
+
+| Metric | v1 (Phase 5) | v2 (Phase 7) | Grounded (Phase 5) |
+|---|---|---|---|
+| Syntax valid | 5/5 | 4/5 | 4/5 |
+| Avg lines | 488.6 ± 57.9 | 501.0 ± 51.3 | 426.6 ± 38.5 |
+| Avg functions | 14.2 ± 1.9 | 11.4 ± 5.5 | 19.8 ± 11.1 |
+| Pairwise similarity | 0.281 | 0.307 | **0.391** |
+| Ref similarity | 0.040 ± 0.018 | 0.030 ± 0.004 | **0.145 ± 0.069** |
+| Ref recall | 0.268 ± 0.026 | 0.259 ± 0.024 | **0.360 ± 0.080** |
+| Test pass rate | 97.0% | 77.6% (1 syntax fail) | 77.6% |
+| Avg cost | $0.051 | $0.068 | $0.121 |
+
+#### Hallucination Categories
+
+| Category | v1 (Phase 5) | v2 (Phase 7) | Grounded | Signal in Tests? |
+|---|---|---|---|---|
+| Return type dispatch (isinstance) | 2/5 | 2/5 | **5/5** | Weak |
+| AtomicStateUpdate present | 3/5 | **4/5** | **5/5** | Moderate (mocked) |
+| Cycle detection (4-element) | 2/5 | 2/5 | **4/5** | Absent |
+| Function signatures consistent | 1/5 | **3/5** | **5/5** | Strong (imports) |
+| SyncApp constructor (14 kwargs) | 1/5 | 0/5 | 2/5 | Absent (fully mocked) |
+
+### Key Findings (Phase 7)
+
+#### 1. Improved prompting had marginal impact on quantitative metrics
+
+Reference similarity, recall, and pairwise similarity are statistically indistinguishable between v1 and v2 for both modules. The prompt change did not produce a measurable improvement in overall code fidelity.
+
+#### 2. Improved prompting helped where strong test signal exists — but only for sync_orchestration
+
+For sync_orchestration, two categories improved:
+- **AtomicStateUpdate** (3/5 → 4/5): Tests mock this class, revealing its interface
+- **Function signatures** (1/5 → 3/5): Tests import specific functions by name
+
+For llm_invoke, **zero categories improved** — even rate map type stayed wrong 5/5 despite the test literally asserting `== (30.0, 60.0)` which unambiguously reveals a tuple.
+
+#### 3. The rate map type result is the most surprising
+
+`test_populates_rate_map()` asserts `assert llm_mod._MODEL_RATE_MAP["gpt-4"] == (30.0, 60.0)` — an explicit tuple. The improved prompt specifically says "if a test asserts `x == (1.0, 2.0)`, the value is a tuple, not a dict." Yet all 5 v2 runs still used `Dict[str, Dict[str, float]]`. This suggests the model is not performing the multi-step reasoning needed: (1) find the assertion, (2) infer the type, (3) apply it to the type annotation. The assertion is buried among ~5,750 lines of test code, and the model's attention may not reach it.
+
+#### 4. Prompting cannot manufacture absent signal
+
+Categories where test signal is absent (hallucinated imports, caching architecture, SyncApp constructor, cycle detection) remained unchanged at 0% or near-0% improvement. This confirms the fundamental limitation: better prompting extracts more from available signal but cannot create signal that doesn't exist.
+
+#### 5. The grounded arm remains dominant
+
+Across all categories and both modules, the grounded arm (with one few-shot example but no tests) outperforms even the improved ungrounded-pdd arm (with full test suite + better prompting). The conclusion from Phase 4 stands: **one relevant code example outperforms an entire test suite for anchoring implementation fidelity**, and improved prompting does not meaningfully close this gap.
+
+## Experiment-Wide Conclusions (Phases 1-8)
 
 ### Decisive Findings
 
@@ -661,44 +1018,59 @@ All 3 arms pass the same tests (217/217 for llm_invoke, 96/99 for sync_orchestra
 - Hallucinated code that produces correct outputs is invisible to tests
 - Grounding addresses a quality dimension orthogonal to test coverage
 
-**3. Test visibility does not substitute for grounding.**
+**3. Test visibility does not substitute for grounding, even with improved prompting.**
 
-The ungrounded-pdd arm has full test suite access (4 test files / ~5,750 lines for llm_invoke; 99 tests for sync_orchestration) yet produces the **same categories of hallucination** as bare ungrounded. In some cases worse: ungrounded-pdd has the lowest pairwise similarity (0.106 for llm_invoke) due to web-scraped content variability. One relevant code example outperforms an entire test suite for implementation anchoring.
+The ungrounded-pdd arm has full test suite access (4 test files / ~5,750 lines for llm_invoke; 99 tests for sync_orchestration) yet produces the **same categories of hallucination** as bare ungrounded. Phase 7 tested whether improved prompt framing (instructing the model to study assertion types, mock patterns, and fixture setup) could extract more signal from tests. Result: marginal improvement on 2 of 10 hallucination categories (AtomicStateUpdate 3/5→4/5, function signatures 1/5→3/5 for sync_orchestration), zero improvement for llm_invoke. The rate map type remained wrong 5/5 despite a test literally asserting on tuples. One relevant code example still outperforms an entire test suite + optimized prompting for implementation anchoring.
 
-**4. Grounding's effect scales with module complexity.**
+**4. Grounding's effect scales with module complexity and model capability.**
 
-| Module | Canonical Lines | Grounded Ref Similarity | Ungrounded Ref Similarity | Grounding Lift |
+| Module | Model | Grounded Ref Sim | Ungrounded Ref Sim | Grounding Lift |
 |---|---|---|---|---|
-| llm_invoke | ~700 | 0.030 | 0.019 | +58% |
-| sync_orchestration | 1,973 | 0.145 | 0.037 | **+292%** |
+| llm_invoke | Flash | 0.030 | 0.019 | +58% |
+| llm_invoke | Pro | 0.130 | 0.025 | **+420%** |
+| llm_invoke | gpt-5.2-codex* | 0.044 | — | — |
+| sync_orchestration | Flash | 0.145 | 0.037 | +292% |
+| sync_orchestration | Pro | 0.893 | 0.071 | **+1158%** |
+| sync_orchestration | gpt-5.2-codex* | 0.675 | — | — |
 
-The more complex the module, the more grounding helps. This is intuitive: larger modules have more internal conventions (return types, class patterns, cycle detection strategies) that can drift without anchoring.
+*Phase 8: gpt-5.2-codex was used grounded (server fallback from Opus timeout). Opus ungrounded-pdd ref_sim: llm_invoke 0.014, sync_orchestration 0.043. Cross-model grounding lift: gpt-5.2-codex grounded (ELO 1472) vs Opus ungrounded-pdd (ELO 1576): **+1470%** (sync_orchestration).
 
-**5. Regeneration is lossy even with grounding.**
+The grounding effect scales along two dimensions: module complexity (llm_invoke → sync_orchestration) and model capability (Flash → Pro). The combination is multiplicative — Pro + grounding on sync_orchestration achieves near-canonical output (0.893 ref_sim average, 0.964 excluding the run 4 outlier).
 
-Grounded regeneration of sync_orchestration produces a 4.6x compression (1,973 → ~426 lines). The preserved code is architecturally correct but production-incomplete:
-- SyncApp constructor broken in 3/5 runs
-- All helper functions stubbed
-- No audit logging, budget warnings, skip handling, or crash recovery
-- No docstrings or issue references
+**5. Regeneration is lossy with Flash but near-lossless with Pro + grounding.**
 
-Grounding ensures the skeleton is correct but cannot recover the accumulated engineering decisions in 1,973 lines of battle-tested code. Regenerated code should be treated as a starting point, not a replacement.
+Flash grounded regeneration of sync_orchestration produces a 4.6x compression (1,973 → ~426 lines). The preserved code is architecturally correct but production-incomplete (SyncApp constructor broken 3/5, helpers stubbed, no audit logging).
+
+Pro + grounding dramatically reduces this compression: average output is 1,775 lines (vs canonical's 1,973), with 0.893 reference similarity and 0.981 recall. Runs 1-3 achieve 0.982–1.000 ref_sim (near-perfect), while runs 4-5 show moderate compression (1,297–1,666 lines). Even the shortest run (4) passes 96/99 tests, indicating functional completeness despite reduced line count.
+
+**6. Grounding is a model capability amplifier, not just a guardrail.**
+
+Without grounding, upgrading Flash → Pro makes output *worse* (more verbose, more syntax errors, no quality gain). With grounding, the same upgrade produces dramatic improvement. The few-shot example channels the stronger model's capacity toward faithful reproduction rather than creative hallucination. Pro + ungrounded: 0–20% syntax validity. Pro + grounded: 80–100% syntax validity with near-canonical fidelity.
 
 ### Suggestive but Not Statistically Proven
 
 These observations are directionally consistent but cannot be confirmed with N=5 runs per arm.
 
-**1. Quantitative consistency metrics favor grounding.**
+**1. Quantitative consistency metrics favor grounding.** (Strengthened by Phase 6)
 
-Pairwise similarity: 0.189/0.391 (grounded) vs 0.162/0.284 (ungrounded) across llm_invoke/sync_orchestration. The grounded arm is 17-38% more self-consistent. However, with N=5 and high variance, these differences are not statistically significant (would need N≥20 for a reliable t-test at p<0.05).
+Pairwise similarity across all experiments:
 
-**2. Grounding produces more concise code.**
+| Module | Model | Grounded | Ungrounded | Lift |
+|---|---|---|---|---|
+| llm_invoke | Flash | 0.189 | 0.162 | +17% |
+| llm_invoke | Pro | 0.266 | 0.109 | +144% |
+| sync_orchestration | Flash | 0.391 | 0.284 | +38% |
+| sync_orchestration | Pro | 0.785 | 0.144 | +445% |
 
-Grounded avg lines: 467.6 (llm_invoke), 426.6 (sync_orchestration) vs ungrounded: 428.8, 513.0. The grounded arm trends shorter, consistent with Phase 2 findings. But the variance is high (std dev 38–150 lines).
+Phase 6 dramatically strengthens this finding. Pro + grounding on sync_orchestration achieves 0.785 pairwise similarity across all 5 runs (0.915 for the 4 non-outlier runs). However, formal statistical significance still requires N≥20.
 
-**3. Cost overhead is ~2.5x with linear scaling.**
+**2. Grounding produces more concise code with Flash, but Pro reverses this.**
 
-Grounded costs $0.121–0.131/call vs $0.015–0.049 ungrounded. The overhead ratio is consistent across prompt sizes, suggesting it scales linearly. But we have only 2 data points (2 modules).
+Flash grounded produces shorter code (467.6 / 426.6 lines) than Flash ungrounded (428.8 / 513.0). But Pro grounded produces *much longer* code (894.4 / 1,775.2) that more faithfully reproduces the canonical. The conciseness effect is Flash-specific, not a general property of grounding.
+
+**3. Cost overhead depends on model and arm.**
+
+Flash grounded costs ~2.5x more than Flash ungrounded ($0.121–0.131 vs $0.015–0.049). Pro grounded has highly variable overhead: +247% for llm_invoke, +212% for sync_orchestration (inflated by run 4's $1.38 rerun; typical runs ~$0.13). Pro ungrounded is consistently 4–8x more expensive than Flash ungrounded. The cost dynamics are more complex than a simple multiplier.
 
 ### Cannot Conclude
 
@@ -727,6 +1099,187 @@ All grounded runs used a single example (the top vector search result). We don't
 
 All non-trivial phases used temperature 1.0 (maximum nondeterminism). Phase 2 at temperature 0.0 showed trivially perfect stability for both arms. The grounding benefit at intermediate temperatures (0.3–0.7) is unknown.
 
+## Phase 8: Opus 4.6 — Strongest Model Experiment
+
+### Motivation
+
+Phases 1–7 tested Flash and Pro. Phase 8 adds the strongest available model: Claude Opus 4.6 (ELO 1576, Anthropic's flagship). Key questions:
+1. Does the strongest model + grounding compound beyond Pro's 0.893 ref_sim (sync_orchestration)?
+2. Can the strongest model extract implementation patterns from tests without grounding (ungrounded-pdd)?
+3. How does model capability interact with grounding across the full model range?
+
+### Experimental Setup
+
+- **Target model**: `vertex_ai/claude-opus-4-6` (ELO 1576) via strength=1.0
+- **Arms**: Grounded + Ungrounded-PDD
+- **Runs per arm**: 5 per module
+- **Modules**: llm_invoke, sync_orchestration
+- **Temperature**: 1.0
+- **Cache busting**: UUID nonce per run
+- **Timeout changes**: `TIMEOUT_PER_RUN` bumped to 3600s, `LLM_CALL_TIMEOUT` bumped to 600s
+
+### Critical Finding: Model Mismatch
+
+**The grounded arm did NOT use Opus.** The server-side `LLM_CALL_TIMEOUT` was not bumped (only the local copy was changed). Opus exceeds the server's 120s per-call timeout, triggering the fallback chain. All grounded runs used `gpt-5.2-codex` (OpenAI, ELO 1472) instead.
+
+The ungrounded-pdd arm correctly used `anthropic/claude-opus-4-6` (ELO 1576) via the local pipeline with the bumped 600s timeout.
+
+This creates an unintended but informative comparison: **gpt-5.2-codex grounded (ELO 1472) vs Opus ungrounded-pdd (ELO 1576)**. A weaker model with grounding vs the strongest model without grounding.
+
+### llm_invoke Results
+
+#### Quantitative
+
+| Metric | gpt-5.2-codex Grounded | Opus Ungrounded-PDD |
+|---|---|---|
+| N (runs) | 5 | 5 |
+| Syntax valid | 5/5 (100%) | 4/5 (80%) |
+| Avg lines | 1388.0 ± 524.5 | 1730.2 ± 195.2 |
+| Avg functions | 31.0 ± 0.7 | 45.8 ± 3.8 |
+| Avg classes | 4.2 ± 0.4 | 4.0 ± 0.0 |
+| Pairwise similarity | **0.307** | 0.109 |
+| Ref similarity | **0.044 ± 0.072** | 0.014 ± 0.011 |
+| Ref recall | **0.434 ± 0.164** | 0.107 ± 0.010 |
+| Test pass rate (243 tests) | **100%** (243/243, all 5) | 80% (4/5 syntax valid pass 243/243) |
+| Avg cost | $0.480 | $2.040 |
+| Avg response time | 623s | 572s |
+| Model | gpt-5.2-codex | anthropic/claude-opus-4-6 |
+| Examples used | `Hp7oK65bRdCyrJYnABWE` (4/5) | (none) |
+
+Note: Grounded run 1 had NO_EXAMPLE (no few-shot example retrieved). Its ref_sim (0.023) is close to ungrounded runs.
+
+#### llm_invoke Hallucination Analysis
+
+| Category | gpt-5.2-codex Grounded (5 runs) | Opus Ungrounded-PDD (5 runs) | Flash Grounded (Phase 3) | Flash Ungrounded-PDD (Phase 4) |
+|---|---|---|---|---|
+| Hallucinated imports (`DEFAULT_STRENGTH`) | **5/5 FAIL** | 2/5 FAIL | 0/5 | 5/5 FAIL |
+| Auth pattern (correct `core.cloud.CloudConfig`) | 4/5 PASS | 0/5 exact (5/5 use `CloudConfig` from wrong path `.cloud_config`) | 5/5 PASS | 5/5 FAIL (invented env vars) |
+| Rate map type (`Tuple` correct) | **5/5 PASS** | 1/5 PASS (run 4 only) | 5/5 PASS | 0/5 |
+| CSV column names (`input`/`output`) | 5/5 PASS | 5/5 PASS | 5/5 PASS | 5/5 PASS |
+| Caching (GCS S3 + SQLite) | **5/5 PASS** | **5/5 PASS** | 5/5 PASS | 0/5 |
+
+**Key observations:**
+
+1. **Opus ungrounded-pdd recovers caching architecture (5/5)** — Flash ungrounded-pdd had 0/5 caching. Opus can infer the caching pattern from the test suite or prompt context. This is the single biggest Opus-specific improvement.
+
+2. **Opus ungrounded-pdd uses CloudConfig (correct class, wrong import path)** — Flash ungrounded-pdd invented entirely fake env vars (`PDD_CLOUD_TOKEN`). Opus correctly identifies the auth mechanism but imports from `.cloud_config` instead of `.core.cloud`. A meaningful partial improvement.
+
+3. **Opus ungrounded-pdd gets rate map type right 1/5** — Flash was 0/5. Small improvement. One Opus run (run 4) correctly uses `Dict[str, Tuple[float, float]]`.
+
+4. **gpt-5.2-codex grounded hallucinates imports 5/5** — Unlike Flash grounded (0/5 hallucinated imports), gpt-5.2-codex produces `from . import DEFAULT_STRENGTH, DEFAULT_TIME` in all runs. These exist in `pdd/__init__.py` but are not used by the canonical `llm_invoke.py`. The few-shot example doesn't prevent this model-specific hallucination.
+
+### sync_orchestration Results
+
+#### Quantitative
+
+| Metric | gpt-5.2-codex Grounded | Opus Ungrounded-PDD |
+|---|---|---|
+| N (runs) | 4 (run 5: HTTP 402) | 5 |
+| Syntax valid | 4/4 (100%) | 4/5 (80%) |
+| Avg lines | 1484.0 ± 774.1 | 1757.6 ± 56.3 |
+| Avg functions | 24.5 ± 8.7 | 26.0 ± 4.2 |
+| Avg classes | 2.75 ± 0.5 | 0.8 ± 0.4 |
+| Pairwise similarity | **0.407** | 0.174 |
+| Ref similarity | **0.675 ± 0.404** | 0.043 ± 0.007 |
+| Ref recall | **0.904 ± 0.168** | 0.155 ± 0.014 |
+| Test pass rate (99 tests) | **96/99** (all 4 valid runs) | 96/99 (4/5, 1 syntax fail) |
+| Avg cost | $0.729 | $1.919 |
+| Avg response time | 524s | 481s |
+| Model | gpt-5.2-codex | anthropic/claude-opus-4-6 |
+| Examples used | `ICqQQrD8O5CeWLa2y6fX` (4/4) | (none) |
+
+Note: Grounded run 5 failed with HTTP 402 (insufficient credits). Grounded run 2 is an outlier (235 lines, 11 functions — likely hit generation-length boundary or received truncated response).
+
+#### sync_orchestration High-Fidelity Runs
+
+Grounded runs 3 and 4 are remarkable:
+
+| Run | Lines | Ref Sim | Ref Recall | Functions | Classes |
+|---|---:|---:|---:|---:|---:|
+| Run 3 | 1,973 | **0.997** | **0.998** | 29 | 3 |
+| Run 4 | 1,981 | **0.991** | **0.985** | 29 | 3 |
+
+Both reproduce the 1,978-line canonical near-perfectly (ref_sim > 0.99). This matches or exceeds Pro's best runs (0.982–1.000 ref_sim in Phase 6). gpt-5.2-codex + grounding achieves the same near-canonical fidelity as Pro + grounding for sync_orchestration.
+
+#### sync_orchestration Hallucination Analysis
+
+| Category | gpt-5.2-codex Grounded (4 runs) | Opus Ungrounded-PDD (5 runs) |
+|---|---|---|
+| Return type dispatch (isinstance dict/tuple) | **4/4 PASS** (run 2 has dict only due to brevity) | 3/5 PASS (runs 1,2,4 have dict dispatch; 3,5 use different approach) |
+| AtomicStateUpdate present (with dataclass) | **4/4 PASS** | 4/5 PASS (run 1 uncertain) |
+| Cycle detection (4-element pattern matching) | **3/4 PASS** (run 2 too short) | **5/5 PASS** (all use crash/verify/crash/verify pattern) |
+| Function signatures consistent | **4/4 PASS** | 4/5 PASS |
+| SyncApp constructor | 3/4 present | **5/5 present** |
+
+**Key observation:** Opus ungrounded-pdd shows dramatically better hallucination prevention for sync_orchestration vs Flash (Phase 5: cycle detection 2/5, return type 2/5). Opus achieves 5/5 cycle detection and 3/5 return type dispatch without any grounding. However, the grounded arm (even with gpt-5.2-codex, not Opus) still dominates on ref_sim (0.675 vs 0.043) and recall (0.904 vs 0.155).
+
+### Cross-Phase Model Comparison
+
+#### sync_orchestration (most complex module — key comparison)
+
+| Model | Arm | Ref Sim | Ref Recall | Pairwise | Syntax Valid | Cost |
+|---|---|---:|---:|---:|---:|---:|
+| Flash | Grounded | 0.145 | 0.360 | 0.391 | 80% | $0.121 |
+| Flash | Ungrounded-PDD | 0.040 | 0.268 | 0.281 | 100% | $0.051 |
+| Pro | Grounded | **0.893** | **0.981** | **0.785** | 100% | $0.377 |
+| Pro | Ungrounded | 0.071 | 0.187 | 0.144 | 0% | $0.260 |
+| **gpt-5.2-codex** | **Grounded** | **0.675** | **0.904** | **0.407** | **100%** | **$0.729** |
+| **Opus** | **Ungrounded-PDD** | **0.043** | **0.155** | **0.174** | **80%** | **$1.919** |
+
+#### llm_invoke
+
+| Model | Arm | Ref Sim | Ref Recall | Pairwise | Syntax Valid | Cost |
+|---|---|---:|---:|---:|---:|---:|
+| Flash | Grounded | 0.030 | 0.206 | 0.189 | 100% | $0.131 |
+| Flash | Ungrounded-PDD | 0.021 | 0.151 | 0.106 | 100% | $0.057 |
+| Pro | Grounded | 0.130 | 0.356 | 0.266 | 80% | $0.455 |
+| Pro | Ungrounded | 0.025 | 0.111 | 0.109 | 20% | $0.168 |
+| **gpt-5.2-codex** | **Grounded** | **0.044** | **0.434** | **0.307** | **100%** | **$0.480** |
+| **Opus** | **Ungrounded-PDD** | **0.014** | **0.107** | **0.109** | **80%** | **$2.040** |
+
+### Key Findings (Phase 8)
+
+#### 1. Grounding dominates model capability — even across a 104-ELO gap
+
+gpt-5.2-codex (ELO 1472) + grounding dramatically outperforms Opus (ELO 1576) without grounding:
+- sync_orchestration: ref_sim **0.675 vs 0.043** (15.7x), ref_recall **0.904 vs 0.155** (5.8x)
+- llm_invoke: ref_sim **0.044 vs 0.014** (3.1x), ref_recall **0.434 vs 0.107** (4.1x)
+
+This reinforces Phase 6's finding: a weaker model with grounding beats a stronger model without grounding. The few-shot example provides information no model can infer from the prompt alone.
+
+#### 2. Opus ungrounded-pdd partially closes hallucination gaps
+
+Compared to Flash ungrounded-pdd, Opus shows genuine improvements:
+- **Caching architecture**: 5/5 present (Flash: 0/5) — Opus infers the GCS S3 + SQLite cache pattern
+- **Auth mechanism**: Uses correct `CloudConfig` class (Flash: invented env vars)
+- **Cycle detection**: 5/5 match canonical pattern for sync_orchestration (Flash: 2/5)
+- **Rate map type**: 1/5 correct (Flash: 0/5)
+
+Opus's stronger reasoning ability allows it to extract more implementation signal from the prompt and tests. However, these improvements don't translate to higher ref_sim — the per-line similarity remains low (0.043 for sync_orchestration) despite getting the patterns right.
+
+#### 3. gpt-5.2-codex grounded matches Pro grounded quality
+
+For sync_orchestration, gpt-5.2-codex grounded runs 3-4 achieve ref_sim 0.991-0.997 — matching Pro's best runs (0.982-1.000). This suggests the grounding effect saturates: once the few-shot example provides the structural anchor, multiple strong models can reproduce the canonical near-perfectly. The quality ceiling is set by the example quality, not the model.
+
+#### 4. Grounding introduces a new hallucination type for gpt-5.2-codex
+
+All 5 gpt-5.2-codex grounded runs hallucinate `from . import DEFAULT_STRENGTH, DEFAULT_TIME` — a hallucination Flash grounded never exhibited (0/5). This is a model-specific behavior: gpt-5.2-codex imports more aggressively from the package namespace. The grounding example doesn't prevent this because the symbols are real (they exist in `pdd/__init__.py`), just unused by the canonical.
+
+#### 5. Cost dynamics at the high end
+
+| Comparison | Cost | Quality (sync ref_sim) |
+|---|---|---|
+| Flash grounded | $0.121 | 0.145 |
+| Pro grounded | $0.377 | 0.893 |
+| gpt-5.2-codex grounded | $0.729 | 0.675 |
+| Opus ungrounded-pdd | **$1.919** | **0.043** |
+
+Opus ungrounded-pdd costs 2.6x more than gpt-5.2-codex grounded but produces 15.7x lower fidelity. The cost-quality frontier heavily favors grounded generation. Pro grounded remains the best value: $0.377 for 0.893 ref_sim.
+
+#### 6. Server-side timeout blocks Opus grounded experiment
+
+The intended Opus grounded experiment was blocked by the server's `LLM_CALL_TIMEOUT=120s`. To test Opus grounded, the server code must be redeployed with the bumped timeout. This is a prerequisite for completing the full model comparison matrix.
+
 ## Next Steps
 
 1. **Investigate coverage gaps**: Why did factorial and flask-api not find examples in Phase 2? Check the 1025 prod `few_shot` documents for math/algorithm and web/API coverage.
@@ -735,3 +1288,10 @@ All non-trivial phases used temperature 1.0 (maximum nondeterminism). Phase 2 at
 4. **Test suite enhancement**: Investigate whether adding implementation-detail tests (e.g., asserting `CloudConfig.get_jwt_token()` is called, checking rate map is `Tuple` type) would close the gap between ungrounded-pdd and grounded arms.
 5. **Prompt-level grounding**: Test injecting the few-shot example directly into the pdd prompt (via `<include>` tag) to see if this recovers the anti-hallucination benefit without the cloud endpoint overhead.
 6. **Multi-module generalization**: Test grounding on additional complex modules (e.g., `code_generator`, `fix_main`) to confirm the scaling trend observed between llm_invoke and sync_orchestration.
+7. **Pro default for grounded endpoint**: Phase 6 shows Pro + grounding produces near-canonical output for sync_orchestration. Consider making Pro the default model for the grounded `generateCode` endpoint, at least for complex modules. Cost is comparable to Flash for typical runs (~$0.13).
+8. **PDD pipeline timeout optimization**: Pro is incompatible with `pdd generate --local` due to the multi-call pipeline (6+ calls × 80–100s each). Explore parallelizing pipeline stages or reducing continuation loops to make Pro viable locally.
+9. **Statistical validation at scale**: Phase 6's Pro results are dramatic but still N=5 per arm. Run N=20 for the key comparison (Pro + grounded vs Flash + grounded on sync_orchestration) to achieve statistical significance.
+10. **Investigate output length variability**: Run 4 produced 1,297 lines vs 1,960–1,982 for runs 1-3 despite same model/strength/temperature. Investigate whether output token limits or generation-length boundaries cause intermittent truncation, and whether increasing `max_output_tokens` eliminates the issue.
+11. **Explicit Vertex AI location for all models**: The platform outage revealed that models without explicit `location=global` in `llm_model.csv` may fail silently. Audit all Vertex AI models in the CSV to ensure explicit location configuration.
+12. **Deploy server-side timeout for Opus**: Phase 8's intended Opus grounded experiment was blocked by the server's `LLM_CALL_TIMEOUT=120s`. Deploy with `LLM_CALL_TIMEOUT=600` to enable true Opus grounded runs. This would complete the model comparison matrix (Flash/Pro/gpt-5.2-codex/Opus × grounded/ungrounded-pdd).
+13. **Investigate gpt-5.2-codex hallucinated imports**: gpt-5.2-codex grounded hallucinates `from . import DEFAULT_STRENGTH, DEFAULT_TIME` in 5/5 runs — a behavior not seen with Flash or Pro grounded. Investigate whether this is a model-family-specific tendency and whether the few-shot example could be adjusted to prevent it.

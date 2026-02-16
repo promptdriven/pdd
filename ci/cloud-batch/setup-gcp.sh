@@ -19,6 +19,7 @@ echo "=== Enabling required APIs ==="
 gcloud services enable \
     batch.googleapis.com \
     artifactregistry.googleapis.com \
+    cloudbuild.googleapis.com \
     secretmanager.googleapis.com \
     logging.googleapis.com \
     storage.googleapis.com \
@@ -109,8 +110,8 @@ echo "     echo -n '...' | gcloud secrets versions add pdd-jwt-token --data-file
 echo "     echo -n '...' | gcloud secrets versions add firebase-api-key --data-file=- --project=${PROJECT_ID}"
 echo "     echo -n '...' | gcloud secrets versions add github-client-id --data-file=- --project=${PROJECT_ID}"
 echo ""
-echo "  2. Build and push Docker image:"
-echo "     make cloud-test-build && make cloud-test-push"
+echo "  2. Build and push Docker image (via Cloud Build):"
+echo "     make cloud-test-build"
 echo ""
 echo "  3. Run tests:"
 echo "     make cloud-test-quick"

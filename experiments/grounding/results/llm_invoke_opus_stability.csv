@@ -1,0 +1,11 @@
+timestamp_utc,env,arm,run_number,http_status,generated_code_hash,generated_code_lines,function_count,class_count,syntax_valid,examples_used,total_cost,model_name,response_time_ms
+2026-02-16T00:38:51.997975+00:00,prod,grounded,1,200,68d03731df36d26f,702,30,5,True,,0.19919675,gpt-5.2-codex,640344
+2026-02-16T00:48:47.042721+00:00,prod,grounded,2,200,8e9ff4a14315e2de,1342,31,4,True,Hp7oK65bRdCyrJYnABWE,0.50788775,gpt-5.2-codex,595013
+2026-02-16T00:58:37.320863+00:00,prod,grounded,3,200,4ff5d74be684b82e,1201,31,4,True,Hp7oK65bRdCyrJYnABWE,0.4421875,gpt-5.2-codex,590261
+2026-02-16T01:08:49.502308+00:00,prod,grounded,4,200,08143cd8ad94a3c9,1508,31,4,True,Hp7oK65bRdCyrJYnABWE,0.5794860000000001,gpt-5.2-codex,612150
+2026-02-16T01:20:06.304242+00:00,prod,grounded,5,200,96c209f085d2394a,2187,32,4,True,Hp7oK65bRdCyrJYnABWE,0.6713665,gpt-5.2-codex,676757
+2026-02-16T01:31:51.682512+00:00,prod,ungrounded-pdd,1,0,ac129c4299b5b3f6,1805,42,4,False,,2.553544,anthropic/claude-opus-4-6,705357
+2026-02-16T01:39:51.863539+00:00,prod,ungrounded-pdd,2,0,138c79895c2a5e52,1952,48,4,True,,1.692598,anthropic/claude-opus-4-6,480161
+2026-02-16T01:49:09.386804+00:00,prod,ungrounded-pdd,3,0,ecf17483bc85ae3e,1399,41,4,True,,2.152912,anthropic/claude-opus-4-6,557505
+2026-02-16T01:58:42.276559+00:00,prod,ungrounded-pdd,4,0,04bdc7989a348be6,1769,47,4,True,,1.694004,anthropic/claude-opus-4-6,572870
+2026-02-16T02:07:47.245126+00:00,prod,ungrounded-pdd,5,0,dbe3c05bfb949df1,1726,51,4,True,,2.105747,anthropic/claude-opus-4-6,544949

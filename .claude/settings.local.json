@@ -76,7 +76,8 @@
       "Bash(python3:*)",
       "Bash(git merge:*)",
       "Bash(gh pr view:*)",
-      "Bash(gh pr diff:*)"
+      "Bash(gh pr diff:*)",
+      "Bash(pytest:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

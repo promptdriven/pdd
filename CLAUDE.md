@@ -11,6 +11,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Fix module: `make fix MODULE=module_name`
 - Crash fix: `make crash MODULE=module_name`
 - Regression tests: `make regression`
+- Cloud batch tests: `make cloud-test` (streams failures live, ~10 min)
+- Cloud batch (keep raw): `make cloud-test KEEP_RAW=1` (also preserve raw JSON/XML in test-results/cloud-batch-raw/)
 - Lint check: `pylint **/*.py`
 
 ## Code Style

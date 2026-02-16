@@ -1,0 +1,11 @@
+timestamp_utc,env,arm,run_number,http_status,generated_code_hash,generated_code_lines,function_count,class_count,syntax_valid,examples_used,total_cost,model_name,response_time_ms
+2026-02-15T00:09:49.966216+00:00,prod,grounded,1,200,59cc712bc766ee63,1982,29,3,True,ICqQQrD8O5CeWLa2y6fX,0.0873335,vertex_ai/gemini-3-pro-preview,401558
+2026-02-15T00:15:42.697521+00:00,prod,grounded,2,200,d36fbbb001d02ae8,1971,29,3,True,ICqQQrD8O5CeWLa2y6fX,0.1731395,vertex_ai/gemini-3-pro-preview,352699
+2026-02-15T00:23:41.860752+00:00,prod,grounded,3,200,6f2ff8622eeb2312,1960,29,3,True,ICqQQrD8O5CeWLa2y6fX,0.17205199999999998,vertex_ai/gemini-3-pro-preview,479120
+2026-02-15T01:03:52.028415+00:00,prod,grounded,5,200,dc45490e0163c2b8,1666,28,2,True,ICqQQrD8O5CeWLa2y6fX,0.07172100000000001,vertex_ai/gemini-3-pro-preview,258242
+2026-02-15T01:05:40.840904+00:00,prod,ungrounded,1,0,d0d2fb2177e4b1f1,1145,0,0,False,,0.272796,vertex_ai/gemini-3-pro-preview,106396
+2026-02-15T01:07:09.759351+00:00,prod,ungrounded,2,0,a1849aac00361ae1,1092,0,0,False,,0.25568599999999997,vertex_ai/gemini-3-pro-preview,88911
+2026-02-15T01:08:44.744122+00:00,prod,ungrounded,3,0,a47ff5537ec6c6cf,1228,0,0,False,,0.26960399999999995,vertex_ai/gemini-3-pro-preview,94973
+2026-02-15T01:10:25.478539+00:00,prod,ungrounded,4,0,11c04613fa6609f0,1104,0,0,False,,0.254136,vertex_ai/gemini-3-pro-preview,100726
+2026-02-15T01:11:47.869956+00:00,prod,ungrounded,5,0,6b50a40792f5bd57,1055,0,0,False,,0.247206,vertex_ai/gemini-3-pro-preview,82379
+2026-02-15T03:05:14.535176+00:00,prod,grounded,4,200,cc6219070878ead3,1297,28,2,True,ICqQQrD8O5CeWLa2y6fX,1.3808969999999998,vertex_ai/gemini-3-pro-preview,193430
