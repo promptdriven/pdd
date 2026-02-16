@@ -4,8 +4,9 @@ import csv
 import io
 import os
 import re
-import tempfile
+import shlex
 import shutil
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -65,6 +66,75 @@ def _get_user_csv_path() -> Path:
     return _get_pdd_dir() / "llm_model.csv"
 
 
+def _get_shell_rc_path() -> Optional[Path]:
+    """Return the shell RC file path (~/.zshrc, ~/.bashrc, etc.)."""
+    shell = _get_shell_name()
+    home = Path.home()
+    shell_files = {
+        "zsh": home / ".zshrc",
+        "bash": home / ".bashrc",
+        "fish": home / ".config" / "fish" / "config.fish",
+        "csh": home / ".cshrc",
+        "tcsh": home / ".tcshrc",
+        "ksh": home / ".kshrc",
+        "sh": home / ".profile",
+    }
+    return shell_files.get(shell)
+
+
+def _get_source_line_for_shell(api_env_path: Path) -> str:
+    """Return the appropriate source line syntax for the current shell."""
+    shell = _get_shell_name()
+    path_str = str(api_env_path)
+
+    if shell == "fish":
+        return f'test -f "{path_str}"; and source "{path_str}"'
+    elif shell in ("csh", "tcsh"):
+        return f'if ( -f "{path_str}" ) source "{path_str}"'
+    elif shell == "sh":
+        # sh uses . instead of source
+        return f'[ -f "{path_str}" ] && . "{path_str}"'
+    else:
+        # bash, zsh, ksh and others
+        return f'[ -f "{path_str}" ] && source "{path_str}"'
+
+
+def _ensure_api_env_sourced_in_rc() -> bool:
+    """
+    Ensure the api-env file is sourced in the user's shell RC file.
+
+    Adds a shell-appropriate source line to ~/.zshrc (or equivalent) if not
+    already present. This ensures new terminal sessions automatically have
+    the API keys available.
+
+    Returns True if the line was added, False if already present or unsupported.
+    """
+    rc_path = _get_shell_rc_path()
+    if rc_path is None:
+        return False
+
+    api_env_path = _get_api_env_path()
+
+    # Ensure parent directory exists (important for fish: ~/.config/fish/)
+    rc_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Check if api-env path is already referenced in the RC file
+    if rc_path.exists():
+        content = rc_path.read_text(encoding="utf-8")
+        # Check if the api-env file path is already mentioned (covers any syntax)
+        if str(api_env_path) in content:
+            return False
+    else:
+        content = ""
+
+    # Build shell-appropriate source line
+    source_line = _get_source_line_for_shell(api_env_path)
+
+    # Append the source line
+    with open(rc_path, "a", encoding="utf-8") as f:
+        f.write(f"\n# PDD API keys\n{source_line}\n")
+
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -130,20 +200,51 @@ def _write_api_env_atomic(path: Path, lines: List[str]) -> None:
         raise
 
 
+def _build_env_export_line(key_name: str, key_value: str) -> str:
+    """Build a shell-appropriate export line for the given key/value."""
+    shell = _get_shell_name()
+    # Use shlex.quote() for proper shell escaping of special characters
+    # This handles $, ", ', `, \, spaces, and other problematic chars
+    quoted_value = shlex.quote(key_value)
+
+    if shell == "fish":
+        return f"set -gx {key_name} {quoted_value}\n"
+    elif shell in ("csh", "tcsh"):
+        return f"setenv {key_name} {quoted_value}\n"
+    else:
+        # bash, zsh, ksh, sh and others
+        return f"export {key_name}={quoted_value}\n"
+
+
+def _build_env_key_pattern(key_name: str) -> re.Pattern:
+    """Build a regex pattern to match any shell syntax for the given key."""
+    # Match: export KEY=, setenv KEY , set -gx KEY  (with optional comment prefix)
+    escaped_key = re.escape(key_name)
+    return re.compile(
+        rf"^(?:#\s*)?(?:export\s+{escaped_key}\s*=|setenv\s+{escaped_key}\s|set\s+-gx\s+{escaped_key}\s)",
+        re.MULTILINE,
+    )
+
+
 def _save_key_to_api_env(key_name: str, key_value: str) -> None:
     """
     Add or update an export line in the api-env file.
     If the key already exists (even commented out), replace it.
+
+    Uses shell-appropriate syntax (export for bash/zsh, set -gx for fish,
+    setenv for csh/tcsh).
+
+    Also sets the key in os.environ so it's immediately available
+    in the current session without requiring the user to source their shell.
     """
+    # Set in current process environment for immediate availability
+    os.environ[key_name] = key_value
+
     env_path = _get_api_env_path()
     lines = _read_api_env_lines(env_path)
 
-    export_line = f'export {key_name}="{key_value}"\n'
-
-    # Pattern to match existing line (commented or not)
-    pattern = re.compile(
-        r"^(?:#\s*)?export\s+" + re.escape(key_name) + r"\s*=", re.MULTILINE
-    )
+    export_line = _build_env_export_line(key_name, key_value)
+    pattern = _build_env_key_pattern(key_name)
 
     found = False
     new_lines: List[str] = []
@@ -166,13 +267,16 @@ def _save_key_to_api_env(key_name: str, key_value: str) -> None:
 def _comment_out_key_in_api_env(key_name: str) -> None:
     """
     Comment out (never delete) a key in the api-env file.
-    Adds a comment with the date.
+    Adds a comment with the date. Handles all shell syntaxes.
     """
     env_path = _get_api_env_path()
     lines = _read_api_env_lines(env_path)
 
+    # Match uncommented lines only (export, setenv, set -gx)
+    escaped_key = re.escape(key_name)
     pattern = re.compile(
-        r"^export\s+" + re.escape(key_name) + r"\s*=", re.MULTILINE
+        rf"^(?:export\s+{escaped_key}\s*=|setenv\s+{escaped_key}\s|set\s+-gx\s+{escaped_key}\s)",
+        re.MULTILINE,
     )
 
     today = datetime.now().strftime("%Y-%m-%d")
@@ -384,12 +488,28 @@ def add_provider_from_registry() -> bool:
                     console.print(
                         f"[green]Updated {api_key_var} in {_get_api_env_path()}[/green]"
                     )
+                    rc_updated = _ensure_api_env_sourced_in_rc()
+                    if rc_updated:
+                        console.print(
+                            f"[green]Added source line to {_get_shell_rc_path()}[/green]"
+                        )
+                    console.print(
+                        "[dim]Key is available now for this session.[/dim]"
+                    )
         else:
             key_value = Prompt.ask(f"Enter the value for {api_key_var}")
             if key_value.strip():
                 _save_key_to_api_env(api_key_var, key_value.strip())
                 console.print(
                     f"[green]Saved {api_key_var} to {_get_api_env_path()}[/green]"
+                )
+                rc_updated = _ensure_api_env_sourced_in_rc()
+                if rc_updated:
+                    console.print(
+                        f"[green]Added source line to {_get_shell_rc_path()}[/green]"
+                    )
+                console.print(
+                    "[dim]Key is available now for this session.[/dim]"
                 )
 
     # ── Step 4: Write to user CSV ──────────────────────────────────────
@@ -501,6 +621,14 @@ def add_custom_provider() -> bool:
             _save_key_to_api_env(api_key_var, key_value.strip())
             console.print(
                 f"[green]Saved {api_key_var} to {_get_api_env_path()}[/green]"
+            )
+            rc_updated = _ensure_api_env_sourced_in_rc()
+            if rc_updated:
+                console.print(
+                    f"[green]Added source line to {_get_shell_rc_path()}[/green]"
+                )
+            console.print(
+                "[dim]Key is available now for this session.[/dim]"
             )
 
     # Build the row with sensible defaults

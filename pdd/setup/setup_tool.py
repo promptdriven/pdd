@@ -7,6 +7,7 @@ with an updated scan.
 """
 from __future__ import annotations
 
+import os
 from typing import Dict
 
 from .api_key_scanner import scan_environment, KeyInfo
@@ -52,6 +53,11 @@ def _display_scan(scan_results: Dict[str, KeyInfo]) -> None:
             print(f"    {key_name:30s} ✓ Found  ({info.source})")
         else:
             print(f"    {key_name:30s} — Not found")
+
+    # Add helpful note about editing API keys
+    shell_path = os.environ.get("SHELL", "")
+    shell_name = os.path.basename(shell_path) if shell_path else "bash"
+    print(f"\n    💡 To edit API keys: update ~/.pdd/api-env.{shell_name} or .env file")
 
     total_configured = api_found + local_count
     print(

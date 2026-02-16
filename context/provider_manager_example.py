@@ -42,7 +42,14 @@ def main() -> None:
     #   Select models: 1,2
     #
     #   ANTHROPIC_API_KEY: sk-ant-...
+    #   ✓ Saved ANTHROPIC_API_KEY to ~/.pdd/api-env.zsh
+    #   ✓ Added source line to ~/.zshrc
+    #   Key is available now for this session.
     #   ✓ Added 2 model(s) to ~/.pdd/llm_model.csv
+    #
+    # NOTE: The API key is immediately available in the current session via os.environ,
+    # so you can test the model right away. New terminal sessions will also have the
+    # key automatically because `source ~/.pdd/api-env.zsh` was added to ~/.zshrc.
 
     # Example 2: Add a custom provider (Together AI, Deepinfra, etc.)
     # Prompts for prefix, model name, API key var, base URL, costs

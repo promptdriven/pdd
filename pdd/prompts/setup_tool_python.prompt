@@ -26,7 +26,7 @@ Main orchestrator for `pdd setup`. Auto-scans the environment for API keys based
 
 % Requirements
 1. Function: `run_setup()` — main entry point
-2. On entry, call `api_key_scanner.scan_environment()` and display each key with `✓ Found (source)` or `— Not found`, plus a summary line: `Models configured: N (from M API keys + K local)`. If scan_results is empty, display: "No models configured yet. Use 'Add a provider' to get started."
+2. On entry, call `api_key_scanner.scan_environment()` and display each key with `✓ Found (source)` or `— Not found`. After the key list, display a helpful note: `💡 To edit API keys: update ~/.pdd/api-env.{shell} or .env file` (where {shell} is auto-detected from the SHELL environment variable, defaulting to "bash"). Then display the summary line: `Models configured: N (from M API keys + K local)`. If scan_results is empty, display: "No models configured yet. Use 'Add a provider' to get started."
 3. Present a 6-option menu after the scan:
    1. Add a provider (sub-menu: a. Search providers, b. Add a local LLM, c. Add a custom provider)
    2. Remove models (sub-menu: a. By provider, b. Individual models)

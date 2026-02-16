@@ -61,9 +61,9 @@ def _resolve_api_key(row: Dict[str, Any]) -> Tuple[Optional[str], str]:
     """
     key_name: str = str(row.get("api_key", "")).strip()
 
-    # Local model — no key required
+    # No env var configured — litellm will use its own defaults
     if not key_name:
-        return None, "(local — no key required)"
+        return None, "(no key configured)"
 
     # Check environment
     key_value = os.getenv(key_name, "")
@@ -159,12 +159,9 @@ def _run_test(row: Dict[str, Any]) -> Dict[str, Any]:
         "timeout": 30,
     }
 
-    # Only pass api_key if we have one (local models don't need it)
+    # Only pass api_key if we have one; otherwise litellm uses its defaults
     if api_key:
         kwargs["api_key"] = api_key
-    elif not str(row.get("api_key", "")).strip():
-        # Local model — use placeholder key if provider expects one
-        pass
 
     if base_url:
         kwargs["base_url"] = base_url
@@ -348,8 +345,8 @@ def test_model_interactive() -> None:
         api_key, key_status = _resolve_api_key(row)
         if "✓" in key_status:
             console.print(f"  API Key:   [green]{key_status}[/green]")
-        elif "local" in key_status:
-            console.print(f"  API Key:   [dim]{key_status}[/dim]")
+        elif "no key configured" in key_status:
+            console.print(f"  API Key:   [yellow]{key_status}[/yellow]")
         else:
             console.print(f"  API Key:   [red]{key_status}[/red]")
 

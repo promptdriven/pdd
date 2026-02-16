@@ -19,12 +19,12 @@ Tests a single configured model by making one `litellm.completion()` call with a
 % Requirements
 1. Function: `test_model_interactive()` — show models from `~/.pdd/llm_model.csv`, let user pick one, test it, loop until user exits (empty input or "q")
 2. Test call: `litellm.completion(model=..., messages=[{"role": "user", "content": "Say OK"}], api_key=..., api_base=..., timeout=30)`
-3. Before calling, show diagnostics: API key status (`✓ Found (source)` / `✗ Not found` / `(local — no key required)`) and base URL if applicable
+3. Before calling, show diagnostics: API key status (`✓ Found (source)` / `✗ Not found` / `(no key configured)`) and base URL if applicable
 4. After calling, show: `LLM call  ✓ OK (0.3s, $0.0001)` or `LLM call  ✗ error description`
 5. Calculate cost from token usage × CSV row's input/output prices per 1M tokens
 6. Persist test results in the model list display across picks within a session
 7. Distinguish errors: authentication, connection refused (local), model not found, timeout
-8. For local models (empty api_key): pass api_base, omit api_key
+8. For models with empty api_key field (no env var configured): pass api_base if present, omit api_key — litellm will use its own defaults
 9. If no user CSV exists or is empty, inform user and return
 
 % Dependencies

@@ -36,6 +36,8 @@ def main() -> None:
     #     ANTHROPIC_API_KEY               ✓ Found  (shell environment)
     #     OPENAI_API_KEY                  — Not found
     #
+    #     💡 To edit API keys: update ~/.pdd/api-env.zsh or .env file
+    #
     #   Models configured: 1 (from 1 API keys + 0 local)
     #
     #   What would you like to do?

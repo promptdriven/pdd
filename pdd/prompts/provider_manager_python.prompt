@@ -26,20 +26,24 @@ Handles adding and removing LLM providers and models in PDD setup. The primary f
 1. `add_provider_from_registry()` — interactive search/browse flow using litellm_registry:
    a. Show top ~10 providers (from `get_top_providers()`). Accept a number for direct selection, or text to search via `search_providers()`.
    b. Display selected provider's chat models in a Rich table with columns: #, Model, Input $/M, Output $/M, Max Input. Accept comma-separated numbers or "all".
-   c. Look up API key env var via `get_api_key_env_var()`. If already set, offer to use existing. If not set, prompt for value. If provider not in map, ask user for env var name. Save to `~/.pdd/api-env.{shell}`.
+   c. Look up API key env var via `get_api_key_env_var()`. If already set, offer to use existing. If not set, prompt for value. If provider not in map, ask user for env var name. Save to `~/.pdd/api-env.{shell}`. Also set `os.environ[key_name] = key_value` so the key is immediately available in the current session. Ensure `source ~/.pdd/api-env.{shell}` is added to the user's shell RC file (~/.zshrc, ~/.bashrc, etc.) so new terminal sessions automatically have the keys.
    d. Append selected models to `~/.pdd/llm_model.csv`, skip duplicates (by provider+model pair). Map litellm data to CSV schema.
    e. Return True if any models were added.
 
-2. `add_custom_provider()` — prompt for provider prefix, model name, API key env var, base URL (optional), costs (optional). Append row to user CSV with sensible defaults. Save API key to api-env if provided. Unchanged from previous version.
+2. `add_custom_provider()` — prompt for provider prefix, model name, API key env var, base URL (optional), costs (optional). Append row to user CSV with sensible defaults. Save API key to api-env if provided, set in os.environ for immediate availability, and ensure the source line is in the shell RC file.
 
 3. `remove_models_by_provider()` — group user CSV models by api_key, show numbered list with counts, remove all rows for selected provider. Comment out (never delete) the key in api-env: `# Commented out by pdd setup on YYYY-MM-DD`.
 
 4. `remove_individual_models()` — list all models from user CSV, let user select by comma-separated numbers, remove selected rows.
 
 5. All CSV writes must be atomic (temp file + rename).
-6. Detect shell from SHELL env var for api-env file path.
+6. Detect shell from SHELL env var for api-env file path and use shell-appropriate syntax:
+   - bash/zsh/ksh/sh: `export KEY=value`
+   - fish: `set -gx KEY value`
+   - csh/tcsh: `setenv KEY value`
 7. Handle empty input as cancel/back.
 8. Check if litellm is available before registry flow; suggest custom provider as fallback.
+9. When adding source line to RC file, use shell-appropriate syntax with existence check (e.g., `[ -f "..." ] && source "..."` for bash/zsh, `test -f ...; and source ...` for fish).
 
 % Dependencies
 <litellm_registry_example>
