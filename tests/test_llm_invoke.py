@@ -1282,6 +1282,62 @@ def test_vertex_location_fallback_when_empty(mock_set_llm_cache):
                 assert call_kwargs.get('vertex_location') == 'global'
 
 
+def test_vertex_adc_without_credentials_file(mock_set_llm_cache):
+    """Test that Vertex AI works via ADC when VERTEX_CREDENTIALS is not set."""
+    with patch('pdd.llm_invoke._load_model_data') as mock_load_data:
+        mock_data = [{
+            'provider': 'Google',
+            'model': 'vertex_ai/gemini-3-flash-preview',
+            'input': 0.15, 'output': 0.6,
+            'coding_arena_elo': 1290,
+            'structured_output': True,
+            'base_url': '',
+            'api_key': 'VERTEX_CREDENTIALS',
+            'reasoning_type': 'effort',
+            'max_reasoning_tokens': 0,
+            'location': 'global'
+        }]
+        mock_df = pd.DataFrame(mock_data)
+        mock_df['avg_cost'] = (mock_df['input'] + mock_df['output']) / 2
+        mock_load_data.return_value = mock_df
+
+        # Set project and location but NOT VERTEX_CREDENTIALS
+        env_vars = {
+            'VERTEX_PROJECT': 'test-project',
+            'VERTEX_LOCATION': 'global',
+        }
+
+        with patch.dict(os.environ, env_vars, clear=False):
+            # Ensure VERTEX_CREDENTIALS is not set
+            os.environ.pop('VERTEX_CREDENTIALS', None)
+            with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+                mock_completion.return_value = create_mock_litellm_response("test")
+                llm_invoke("test {x}", {"x": "y"}, 0.5, 0.7, True)
+
+                call_kwargs = mock_completion.call_args[1]
+                assert call_kwargs.get('vertex_project') == 'test-project'
+                assert call_kwargs.get('vertex_location') == 'global'
+                assert 'vertex_credentials' not in call_kwargs
+
+
+def test_ensure_api_key_allows_adc_for_vertex(mock_set_llm_cache):
+    """Test that _ensure_api_key returns True for VERTEX_CREDENTIALS when VERTEX_PROJECT is set."""
+    from pdd.llm_invoke import _ensure_api_key
+
+    model_info = {
+        'model': 'vertex_ai/gemini-3-flash-preview',
+        'api_key': 'VERTEX_CREDENTIALS'
+    }
+    newly_acquired_keys = {}
+
+    with patch.dict(os.environ, {'VERTEX_PROJECT': 'test-project'}, clear=False):
+        os.environ.pop('VERTEX_CREDENTIALS', None)
+        result = _ensure_api_key(model_info, newly_acquired_keys, verbose=True)
+
+        assert result is True
+        assert newly_acquired_keys.get('VERTEX_CREDENTIALS') is False
+
+
 # ==============================================================================
 # Test for API key input() hang bug fix
 #
