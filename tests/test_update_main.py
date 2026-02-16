@@ -709,3 +709,96 @@ def test_agentic_update_failure_does_not_corrupt_source(tmp_path):
     # Source must remain unchanged even after agentic failure
     assert source_prompt.read_text() == original_content, \
         "Source prompt was corrupted by failed agentic update"
+
+
+# --- Tests for issue #493: NameError when using --output with subdirectory code file ---
+
+from pdd.update_main import resolve_prompt_code_pair
+
+
+def test_resolve_prompt_code_pair_output_dir_with_subdirectory_code_file(tmp_path, monkeypatch):
+    """
+    Regression test for GitHub issue #493.
+    resolve_prompt_code_pair() crashes with UnboundLocalError when --output is provided
+    and the code file is in a subdirectory (rel_dir != "."), because context_config
+    is only defined in the else branch but used unconditionally when computing code_root.
+    """
+    # Setup: git repo with code file in a subdirectory
+    repo_path = tmp_path / "test_repo"
+    repo_path.mkdir()
+    sub_dir = repo_path / "backend" / "src"
+    sub_dir.mkdir(parents=True)
+    code_file = sub_dir / "module.py"
+    code_file.write_text("def hello(): return 'world'")
+
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    monkeypatch.chdir(repo_path)
+    git.Repo.init(repo_path)
+
+    with patch("pdd.update_main.get_language") as mock_lang:
+        mock_lang.return_value = "python"
+
+        # This should NOT raise NameError for context_config
+        prompt_path, code_path = resolve_prompt_code_pair(
+            str(code_file), quiet=True, output_dir=str(output_dir)
+        )
+
+    # The prompt file should be created under the output directory
+    assert os.path.exists(prompt_path)
+    assert Path(prompt_path).is_relative_to(output_dir)
+    assert prompt_path.endswith("module_python.prompt")
+
+
+def test_resolve_prompt_code_pair_output_dir_with_root_level_code_file(tmp_path, monkeypatch):
+    """
+    Edge case for issue #493: code file at repo root with --output should work
+    (this path doesn't hit the bug since rel_dir == "." skips the code_root logic).
+    """
+    repo_path = tmp_path / "test_repo"
+    repo_path.mkdir()
+    code_file = repo_path / "module.py"
+    code_file.write_text("def hello(): return 'world'")
+
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    monkeypatch.chdir(repo_path)
+    git.Repo.init(repo_path)
+
+    with patch("pdd.update_main.get_language") as mock_lang:
+        mock_lang.return_value = "python"
+
+        prompt_path, code_path = resolve_prompt_code_pair(
+            str(code_file), quiet=True, output_dir=str(output_dir)
+        )
+
+    assert os.path.exists(prompt_path)
+    assert prompt_path.endswith("module_python.prompt")
+
+
+def test_resolve_prompt_code_pair_no_output_dir_subdirectory_still_works(tmp_path, monkeypatch):
+    """
+    No-regression test for issue #493: without --output, subdirectory code files
+    should still work as before (context_config is defined in else branch).
+    """
+    repo_path = tmp_path / "test_repo"
+    repo_path.mkdir()
+    sub_dir = repo_path / "backend"
+    sub_dir.mkdir()
+    code_file = sub_dir / "module.py"
+    code_file.write_text("def hello(): return 'world'")
+
+    monkeypatch.chdir(repo_path)
+    git.Repo.init(repo_path)
+
+    with patch("pdd.update_main.get_language") as mock_lang:
+        mock_lang.return_value = "python"
+
+        prompt_path, code_path = resolve_prompt_code_pair(
+            str(code_file), quiet=True
+        )
+
+    assert os.path.exists(prompt_path)
+    assert prompt_path.endswith("module_python.prompt")
