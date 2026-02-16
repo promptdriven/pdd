@@ -1,3 +1,22 @@
+## v0.0.150 (2026-02-15)
+
+### Feat
+
+- Implement cloud-based LLM invocation with enhanced logging, Pydantic schema validation, and introduce new grounding stability experiments.
+- enhance orchestrators with state validation and interactive steering, improve cloud batch testing with JUnit XML-based chunk balancing and GCS integration, and update test durations.
+
+### Fix
+
+- Implement LLM invocation retry cost logic and add new E2E and unit tests for issue 509.
+- Circular <include> tags silently produce corrupted output (no cycle detection)
+- Sync fingerprint ignores <include> dependencies — stale code after included file changes
+- budget tracker drops test costs due to tuple index bug
+- Cloud Batch streaming false positive and e2e test timeout
+- pdd update --output crashes with NameError when code file is in subdirectory
+- Use ADC for Vertex AI auth in cloud batch, reduce cache misses
+- Sync pdd/data/ to public repo and skip prompt test when file missing
+- Wire up GCS LiteLLM cache for cloud batch, fix task count, and harden flaky tests
+
 ## v0.0.149 (2026-02-14)
 
 ### Feat
