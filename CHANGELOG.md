@@ -2,20 +2,29 @@
 
 ### Feat
 
-- Implement cloud-based LLM invocation with enhanced logging, Pydantic schema validation, and introduce new grounding stability experiments.
-- enhance orchestrators with state validation and interactive steering, improve cloud batch testing with JUnit XML-based chunk balancing and GCS integration, and update test durations.
+- **Circular `<include>` cycle detection**: Recursive include preprocessing now tracks visited files and raises `ValueError` on cycles instead of silently producing corrupted output or hitting Python's recursion limit. Both `<include>` XML tags and backtick includes (```` ```<file>``` ````) are covered. Thanks @Serhan-Asad (PR #528)!
+- **Vertex AI Application Default Credentials (ADC) support**: `llm_invoke` no longer requires `VERTEX_CREDENTIALS` file path when `VERTEX_PROJECT` is set — falls back to ADC automatically. Simplifies cloud batch and local development setups.
+- **Global location override for Vertex AI models**: `llm_model.csv` now specifies `location=global` for Gemini 3 Pro, Gemini 3 Flash, and Claude Sonnet 4.5 on Vertex AI, reducing region-specific routing failures.
 
 ### Fix
 
-- Implement LLM invocation retry cost logic and add new E2E and unit tests for issue 509.
-- Circular <include> tags silently produce corrupted output (no cycle detection)
-- Sync fingerprint ignores <include> dependencies — stale code after included file changes
-- budget tracker drops test costs due to tuple index bug
-- Cloud Batch streaming false positive and e2e test timeout
-- pdd update --output crashes with NameError when code file is in subdirectory
-- Use ADC for Vertex AI auth in cloud batch, reduce cache misses
-- Sync pdd/data/ to public repo and skip prompt test when file missing
-- Wire up GCS LiteLLM cache for cloud batch, fix task count, and harden flaky tests
+- **LLM retry cost accumulation** — When `llm_invoke` retried on malformed JSON, the retry callback data overwrote the original call's cost/token counts. Now accumulates cost, input tokens, and output tokens across original + retry calls. Cache restoration also moved into a `finally` block to prevent leaks on retry failure. Thanks @Serhan-Asad (PR #519)!
+- **Budget tracker drops test operation costs** — `sync_orchestration` extracted cost from result tuples using `result[-2]`, but `test`/`test_extend` operations return cost at index 1, not index -2. Fixed cost and model extraction to use operation-aware indexing. Thanks @Serhan-Asad (PR #518)!
+- **`pdd update --output` crashes with `NameError` in subdirectories** — When the code file was in a subdirectory and `--output` was used, `context_config` was referenced before assignment. Added initialization. Thanks @Serhan-Asad (PR #496)!
+- **Circular `<include>` tags produce corrupted output** — Without cycle detection, circular includes silently expanded until Python's recursion limit, producing truncated/corrupted prompts. Now raises a clear error.
+- **Sync fingerprint ignores `<include>` dependencies** — When an included file changed but the parent prompt didn't, the sync fingerprint remained the same, causing stale code to persist after included file edits.
+- **Cloud Batch streaming false positives** — Result polling skipped partially-flushed GCS files (< 10 bytes) and added a portable timeout wrapper for `gcloud`/`gsutil` commands on macOS.
+- **Malformed JSON detection for raw newlines** — `_is_malformed_json_response` now detects excessive actual trailing newlines (not just escaped `\n` sequences), catching additional truncation cases.
+
+### Build
+
+- **Cloud Build for Docker images**: Replaced local `docker build` + `docker push` with `gcloud builds submit` using a new `cloudbuild.yaml`. Adds Docker layer caching (`--cache-from`) and eliminates the need for a local Docker daemon. `make cloud-test-push` is now a no-op.
+- **GCP project ID unconditionally set**: `GCP_PROJECT_ID` changed from `?=` (overridable) to `:=` (fixed) in the Makefile, preventing accidental use of wrong projects.
+- Updated `test-durations.json` with latest profiled data.
+
+### Docs
+
+- **Grounding experiment Phase 8 (Opus 4.6)**: Added experiment comparing grounded vs strongest-model (ungrounded) generation for `llm_invoke` and `sync_orchestration` modules using Claude Opus 4.6, with stability and evaluation CSVs.
 
 ## v0.0.149 (2026-02-14)
 
