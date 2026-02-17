@@ -100,6 +100,14 @@ def _prompt_to_code_path(prompt_path: Path, prompts_dir: Path) -> Optional[Path]
     return (code_dir / rel_dir / code_name).resolve()
 
 
+def _change_main_succeeded(result_message: object) -> bool:
+    """
+    change_main (non-CSV mode) reports success with:
+    "Modified prompt saved to <path>".
+    """
+    return isinstance(result_message, str) and result_message.startswith("Modified prompt saved to ")
+
+
 def run_user_story_tests(
     *,
     prompts_dir: Optional[str] = None,
@@ -244,9 +252,10 @@ def run_user_story_fix(
             )
             total_cost += cost
             model_name = model or model_name
-            changed_files.append(str(prompt_path))
-            if result_message.startswith("[bold red]Error"):
-                errors.append(result_message)
+            if _change_main_succeeded(result_message):
+                changed_files.append(str(prompt_path))
+            else:
+                errors.append(str(result_message))
 
     finally:
         if original_skip is None:
