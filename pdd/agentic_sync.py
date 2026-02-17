@@ -257,9 +257,24 @@ def run_agentic_sync(
         return False, "Failed to load agentic_sync_identify_modules_LLM prompt template", 0.0, ""
 
     arch_json_str = json.dumps(architecture, indent=2) if architecture else "No architecture.json available."
+
+    # Build module catalog from prompts/ directory for LLM context
+    prompts_dir = project_root / "prompts"
+    module_catalog_str = "No prompts/ directory found."
+    if prompts_dir.is_dir():
+        prompt_files = sorted(
+            f.name for f in prompts_dir.rglob("*_*.prompt")
+            if not f.stem.lower().endswith("_llm")
+        )
+        if prompt_files:
+            module_catalog_str = "\n".join(f"- {name}" for name in prompt_files)
+        else:
+            module_catalog_str = "No module prompt files found in prompts/ directory."
+
     prompt = prompt_template.format(
         issue_content=issue_content,
         architecture_json=arch_json_str,
+        module_catalog=module_catalog_str,
     )
 
     if not quiet:

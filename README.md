@@ -29,6 +29,7 @@ For CLI users, PDD also offers powerful **agentic commands** that implement GitH
 - `pdd bug <issue-url>` - Create failing tests for bugs
 - `pdd fix <issue-url>` - Fix the failing tests
 - `pdd generate <issue-url>` - Generate architecture.json from a PRD issue (11-step workflow)
+- `pdd sync <issue-url>` - Identify and sync affected modules from a GitHub issue
 - `pdd test <issue-url>` - Generate UI tests from issue descriptions (9-step workflow)
 
 For prompt-based workflows, the **`sync`** command automates the complete development cycle with intelligent decision-making, real-time visual feedback, and sophisticated state management.
@@ -571,6 +572,7 @@ flowchart TB
 
 ### Agentic Commands (Issue-Driven)
 - **[`change`](#8-change)**: Implement feature requests from GitHub issues (12-step workflow)
+- **[`sync`](#1-sync)**: Identify and sync affected modules from GitHub issues
 - **[`bug`](#14-bug)**: Analyze bugs and create failing tests from GitHub issues
 - **[`fix`](#6-fix)**: Fix failing tests (supports issue-driven and manual modes)
 - **[`test`](#4-test)**: Generate UI tests from GitHub issues (9-step workflow in agentic mode)
@@ -920,6 +922,29 @@ pdd sync --dry-run calculator
 cd backend && pdd --force sync calculator     # Uses backend context settings with animation
 cd frontend && pdd --force sync dashboard     # Uses frontend context with real-time feedback
 pdd --context backend --force sync calculator # Explicit context override with visual progress
+```
+
+**Agentic Mode (Issue-Driven Sync):**
+
+When the positional argument is a GitHub issue URL instead of a basename, `sync` enters agentic mode. It uses an LLM to analyze the issue content, identify which modules need syncing, validate dependencies, and then run `pdd sync` on each affected module in parallel (respecting dependency order).
+
+```bash
+pdd sync https://github.com/owner/repo/issues/123
+```
+
+**How module identification works:**
+- **With `architecture.json`**: The LLM analyzes the issue against the architecture to identify directly affected modules and their transitive dependencies. It also validates and corrects the dependency graph if needed.
+- **Without `architecture.json`**: The system scans the `prompts/` directory for `*_<Language>.prompt` files to build a module catalog. The LLM then selects relevant modules from this catalog based on the issue content. Dependencies are inferred from `<include>` tags in prompt files.
+
+**Prerequisites:**
+- `gh` CLI must be installed and authenticated
+- The project must have a `prompts/` directory with prompt files (with or without `architecture.json`)
+
+**Example:**
+```bash
+# Sync modules affected by a GitHub issue
+# Works with or without architecture.json — modules discovered from prompts/ directory
+pdd sync https://github.com/myorg/myrepo/issues/42
 ```
 
 ### 2. generate

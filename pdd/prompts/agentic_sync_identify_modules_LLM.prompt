@@ -1,3 +1,16 @@
+<pdd-reason>LLM prompt that identifies modules needing sync from a GitHub issue, with or without architecture.json.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "identify_modules", "signature": "(issue_content, architecture_json, module_catalog)", "returns": "MODULES_TO_SYNC[], DEPS_VALID, DEPS_CORRECTIONS[]"}
+    ]
+  }
+}
+</pdd-interface>
+
 You are analyzing a GitHub issue to determine which PDD modules need to be synced,
 and validating the architecture.json dependency graph.
 
@@ -7,6 +20,13 @@ and validating the architecture.json dependency graph.
 ## Architecture (architecture.json)
 {architecture_json}
 
+## Available Module Catalog
+This lists all prompt files found in the prompts/ directory. Use this as a reference for valid module names.
+When architecture.json is available, cross-reference this catalog with the architecture metadata.
+When architecture.json is NOT available, this catalog is the primary source of available modules.
+
+{module_catalog}
+
 ## Task 1: Identify Modules
 Based on the issue description, identify which modules (by basename) need `pdd sync`.
 A basename is the module name without the language suffix (e.g., "llm_invoke" for "llm_invoke_python.prompt").
@@ -14,14 +34,28 @@ A basename is the module name without the language suffix (e.g., "llm_invoke" fo
 Consider:
 - Modules directly mentioned or affected by the issue
 - Transitive dependencies: if module A depends on B, and B needs sync, A may also need sync
-- Only include modules that exist in the architecture.json
+
+If architecture.json is available (i.e., the Architecture section above contains JSON data):
+- Prefer modules that exist in the architecture.json
+- Use the architecture metadata (reason, dependencies) to determine relevance
+- Cross-reference with the module catalog to ensure selected modules have prompt files
+
+If architecture.json is NOT available (indicated by "No architecture.json available." above):
+- Select modules from the Available Module Catalog above
+- Only include modules that exist in the catalog
+- Use module basenames and filenames to infer relevance to the issue
+- When uncertain, prefer including a module over excluding it (false positives are less costly than false negatives)
 
 ## Task 2: Validate Dependencies
-Review the `dependencies` field for each identified module in architecture.json.
+If architecture.json is available:
+- Review the `dependencies` field for each identified module in architecture.json
 - Are the listed dependencies correct and complete?
 - Are there missing dependencies or incorrect ones?
 - If everything is correct, say DEPS_VALID: true
 - If corrections are needed, output the changes
+
+If architecture.json is NOT available:
+- Output DEPS_VALID: true (no architecture to validate)
 
 ## Output Format
 You MUST output the following markers exactly as shown:

@@ -511,3 +511,41 @@ If the workflow stops (e.g., PRD needs clarification):
 - Include tech stack preferences explicitly (e.g., "FastAPI + PostgreSQL" vs. leaving it ambiguous)
 - Review the generated `architecture.json` before generating individual module prompts
 - The `context_urls` field in each module entry provides documentation links for code generation
+
+## Method 5: Syncing Modules from a GitHub Issue
+
+If you have a GitHub issue describing a feature or bug, you can use `pdd sync` to automatically identify and sync all affected modules:
+
+```bash
+pdd sync https://github.com/myorg/myrepo/issues/42
+```
+
+### How it works
+
+1. Fetches the issue content (title, description, and comments)
+2. Identifies which modules need syncing using an LLM
+3. Validates the dependency graph
+4. Runs `pdd sync` on each module in dependency order (parallelizing where possible)
+
+### With or without `architecture.json`
+
+- If your project has an `architecture.json`, the LLM uses it to identify affected modules and their dependencies
+- If your project only has prompt files in `prompts/`, the system scans for `*_<Language>.prompt` files to build a module catalog and uses `<include>` tags to infer dependencies
+
+### Prerequisites
+
+1. `gh` CLI installed and authenticated (`gh auth login`)
+2. Prompt files in your `prompts/` directory
+
+### Example workflow
+
+```bash
+# Someone files an issue about improving the calculator module
+# Run agentic sync to update affected modules
+pdd sync https://github.com/myorg/myrepo/issues/99
+
+# The command will:
+# - Analyze the issue
+# - Identify that calculator_python.prompt and its dependents need sync
+# - Run pdd sync on each in the correct order
+```
