@@ -1,3 +1,19 @@
+## v0.0.151 (2026-02-16)
+
+### Feat
+
+- Add Product Requirements Document (PRD) for the AI-First Video Editor demo.
+- Add agentic sync - LLM-driven parallel module sync from GitHub issues
+
+### Fix
+
+- Address Copilot review feedback on agentic sync
+- Increase LLM API call timeout from 120 seconds to 600 seconds.
+- Fix cost propagation bug and increase module timeout
+- Add token-based cost estimation fallback for Claude subscription auth
+- Add timeouts to prevent sync hangs (Firecrawl, git ls-files, auto-deps)
+- Auto-fix env var errors, fix cost tracking, fix 7x duplicate language syncs
+
 ## v0.0.150 (2026-02-15)
 
 ### Feat
