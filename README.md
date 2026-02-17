@@ -102,7 +102,7 @@ With the CLI on your `PATH`, continue with:
 ```bash
 pdd setup
 ```
-The command installs tab completion, walks you through API key entry, and seeds local configuration files.
+The command detects agentic CLI tools, scans for API keys, configures models, and seeds local configuration files.
 If you postpone this step, the CLI detects the missing setup artifacts the first time you run another command and shows a reminder banner so you can complete it later (the banner is suppressed once `~/.pdd/api-env` exists or when your project already provides credentials via `.env` or `.pdd/`).
 
 ### Alternative: pip Installation
@@ -227,13 +227,13 @@ Run the comprehensive setup wizard:
 pdd setup
 ```
 
-The setup wizard will:
-- **Scan your environment** for API keys from all sources (shell, .env, ~/.pdd files)
-- **Present an interactive menu** with options to add/fix keys, configure local LLMs (Ollama, LM Studio), add custom providers, or remove providers
-- **Validate API keys** using actual LLM requests to ensure they work
-- **Guide model selection** with cost transparency (show pricing for each tier)
-- **Detect agentic CLI tools** (claude, gemini, codex) and offer installation
-- **Create .pddrc** configuration file with sensible defaults for your project
+The setup wizard runs in two phases:
+- **Phase 1** — Detects agentic CLI tools (claude, gemini, codex) and offers installation if needed
+- **Phase 2** — Auto-configures PDD in 4 deterministic steps:
+  1. Scans for API keys across shell, .env, and ~/.pdd files (prompts to add one if none found)
+  2. Configures models from a reference CSV based on your available keys
+  3. Checks for local LLMs (Ollama, LM Studio) and creates a `.pddrc` config file
+  4. Tests a model and prints a summary
 
 The wizard can be re-run at any time to update keys, add providers, or reconfigure settings.
 
@@ -2703,12 +2703,12 @@ The `.pddrc` approach is recommended for team projects as it ensures consistent 
 
 ### Model Configuration (`llm_model.csv`)
 
-PDD uses a CSV file (`llm_model.csv`) to store information about available AI models, their costs, capabilities, and required API key names. The `pdd setup` wizard automatically manages this file by:
+PDD uses a CSV file (`llm_model.csv`) to store information about available AI models, their costs, capabilities, and required API key names. The `pdd setup` command automatically manages this file by:
 
-- **Dynamic provider discovery:** Reading all provider API keys from the CSV to scan your environment
-- **Interactive model selection:** Letting you choose which model tiers to enable (Fast/Cheap, Balanced, Most Capable) with cost transparency
-- **Custom provider support:** Adding custom LiteLLM-compatible providers and local LLMs (Ollama, LM Studio)
-- **Provider removal:** Safely removing providers by deleting their model rows from the CSV
+- **API key scanning:** Checking shell environment, `.env` files, and `~/.pdd/api-env.*` for provider keys
+- **Automatic model configuration:** Matching found keys to a bundled reference CSV and writing matching models to your user CSV
+- **Local LLM detection:** Discovering running Ollama and LM Studio servers and adding their models
+- **Fallback menu:** Manual options to add providers, test models, or initialize `.pddrc` if auto-configuration fails
 
 When running commands locally, PDD determines which configuration file to use based on the following priority:
 
@@ -2718,7 +2718,7 @@ When running commands locally, PDD determines which configuration file to use ba
 
 This tiered approach allows for both shared project configurations and individual user overrides, while ensuring PDD works out-of-the-box without requiring manual configuration.
 
-**Note:** The setup wizard uses this CSV as the source of truth for provider discovery and model selection. You can manually edit it, but running `pdd setup` again is the recommended way to manage providers and models.
+**Note:** You can manually edit this CSV, but running `pdd setup` again is the recommended way to add providers and update models.
 
 *Note: This file-based configuration primarily affects local operations and utilities. Cloud execution modes likely rely on centrally managed configurations.*
 
