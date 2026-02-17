@@ -868,7 +868,14 @@ def test_change_main_csv_output_dir_slash_saves_individual_files(
 
 @patch('pdd.change_main.process_csv_change')
 @patch('pdd.change_main.construct_paths')
-def test_change_csv_skips_empty_modified_content(mock_construct_paths, mock_process_csv, tmp_path, caplog):
+@patch('pdd.change_main.run_user_story_tests')
+def test_change_csv_skips_empty_modified_content(
+    mock_story_tests,
+    mock_construct_paths,
+    mock_process_csv,
+    tmp_path,
+    caplog,
+):
     """
     When process_csv_change returns a result with an empty string for
     modified_prompt, no file should be written for that entry.
@@ -913,6 +920,7 @@ def test_change_csv_skips_empty_modified_content(mock_construct_paths, mock_proc
             "extension": ".py",
             "quiet": False,
             "force": True,
+            "skip_user_stories": True,
             "time": 0.25,
         }
     )
@@ -931,6 +939,7 @@ def test_change_csv_skips_empty_modified_content(mock_construct_paths, mock_proc
     empty_file = output_dir / "empty.prompt"
     assert not empty_file.exists(), \
         f"File {empty_file} should not be written when modified_prompt is empty string"
+    mock_story_tests.assert_not_called()
 
 
 def test_change_main_user_story_validation_failure(tmp_path):
