@@ -64,6 +64,9 @@ cap_only:
   # All prompts (full directory)
   - pdd/prompts/
 
+  # Architecture metadata
+  - architecture.json
+
   # Context prompt files
   - context/ctx_obj_params.prompt
   - context/test.prompt

@@ -58,72 +58,157 @@ A complete 20-minute educational video ("Why You're Still Darning Socks") about 
 
 ## 3. System Architecture
 
-### End-to-End Pipeline
+### End-to-End Pipeline: main_script.md to Rendered Video
+
+Everything starts from one file. The main script forks into four parallel tracks — audio,
+specs, video clips, and animation code — then converges at render time.
 
 ```
-                    PRODUCTION PIPELINE
-                    ==================
-
-  narrative/*.md ──────────────────────────────────────┐
-       │                                               │
-       ▼                                               ▼
-  ┌──────────┐    segment_NNN.wav    ┌──────────────────────┐
-  │ Qwen3-TTS │──────────────────────▶│  faster-whisper      │
-  │ (render   │    24kHz mono WAV    │  word_timestamps.json │
-  │  _tts.py) │                      └──────────┬───────────┘
-  └──────────┘                                  │
-                                                ▼
-  specs/*.md ──────────────────────▶ generate_section_compositions.py
-       │                                        │
-       │                           ┌────────────┴────────────┐
-       │                           ▼                         ▼
-       │                    constants.ts              Component.tsx
-       │                    (BEATS, FPS,              (visual sequence
-       │                     VISUAL_SEQUENCE)          renderer)
-       │                           │                         │
-       ▼                           └────────────┬────────────┘
-  ┌──────────┐                                  │
-  │ Veo 3.1  │   MP4 clips                     ▼
-  │ (generate│──────────────────▶ remotion/src/remotion/
-  │ _segments│   8s, 9:16/16:9       54 composition folders
-  │  .py)    │                       + 7 section wrappers
-  └──────────┘                              │
-                                            ▼
-                               ┌─────────────────────┐
-                               │  Remotion Render     │
-                               │  (local CLI or       │
-                               │   AWS Lambda)        │
-                               └──────────┬──────────┘
-                                          │
-                                          ▼
-                               outputs/sections/*.mp4
-                                          │
-                                    ffmpeg concat
-                                          │
-                                          ▼
-                               outputs/full_video.mp4
-
-
-                    REVIEW / EDIT LOOP
-                    ==================
-
-           ┌─────────────────────────────────────┐
-           │         review-app (Express.js)      │
-           │              port 3847               │
-           └─────────────────────────────────────┘
+                            ┌──────────────────────┐
+                            │  narrative/           │
+                            │  main_script.md       │
+                            │  (39KB, human-written)│
+                            │                       │
+                            │  NARRATOR: text +     │
+                            │  [VISUAL: ...] blocks │
+                            └──────────┬────────────┘
+                                       │
+              ┌────────────────────────┼─────────────────────────┐
+              │ Claude Code            │ Claude Code              │ Claude Code
+              │ extracts narrator      │ expands [VISUAL:]        │ expands [VISUAL:]
+              │ text, adds TTS         │ blocks into detailed     │ blocks into Veo
+              │ annotations            │ animation specs          │ prompts
+              ▼                        ▼                          ▼
+    ┌──────────────────┐    ┌──────────────────────┐    ┌──────────────────┐
+    │ narrative/        │    │ specs/**/*.md         │    │ specs/**/prompts/ │
+    │ tts_script.md     │    │ (84+ spec files)      │    │ (Veo prompt MDs)  │
+    │ (20KB)            │    │                       │    │                   │
+    │ [TONE:] [PACE:]   │    │ Animation params,     │    │ Character desc,   │
+    │ [PAUSE:] emphasis │    │ color palettes,        │    │ scene setup,      │
+    │                   │    │ frame-by-frame timing, │    │ camera, lighting  │
+    │                   │    │ Remotion code scaffold │    │                   │
+    └────────┬─────────┘    └──────────┬────────────┘    └────────┬─────────┘
+             │                         │                          │
+             │                         │                          │
+    ═══ AUDIO TRACK ═══      ═══ ANIMATION TRACK ═══    ═══ VIDEO TRACK ═══
+             │                         │                          │
+             ▼                         ▼                          ▼
+    render_tts.py              Claude Code writes         generate_*.py
+    Qwen3-TTS 1.7B             individual Remotion        calls Veo 3.1 API
+    24kHz mono                 compositions from          (extracts prompts
+                               spec files                 from spec MDs)
+             │                         │                          │
+             ▼                         ▼                          ▼
+    112 segment_NNN.wav        50+ composition dirs       MP4 clips (8s each)
+             │                 (01-ColdOpen/ ...          9:16 or 16:9
+             │                  51-SockMetaphorFinal/)          │
+             ▼                         │                        │
+    sync_audio_pipeline.py             │               composite_segments.py
+    groups by section,                 │               (split-screen ffmpeg)
+    inserts [PAUSE:] silence           │                        │
+             │                         │                        ▼
+             ▼                         │               remotion/public/*.mp4
+    7 section narration WAVs ──────────│──────────▶    remotion/public/*.wav
+             │                         │
+             ▼                         │
+    faster-whisper                     │
+    word_timestamps=True               │
+             │                         │
+             ▼                         │
+    word_timestamps.json (×7)          │
+             │                         │
+             ▼                         │
+    ┌────────────────────────────┐     │
+    │ generate_section_          │     │
+    │   compositions.py          │     │
+    │                            │     │
+    │ Maps Whisper segments      │     │
+    │ to composition IDs         │     │
+    │ (hardcoded visual_sequence │     │
+    │  tuples in script)         │     │
+    └────────────┬───────────────┘     │
+                 │                     │
+                 ▼                     │
+    S00-S06 section wrappers          │
+    (constants.ts + Component.tsx)     │
+    — initially generated,            │
+      then hand-refined by            │
+      Claude Code (crossfades,        │
+      overlays, extra components)     │
+                 │                     │
+                 └─────────┬───────────┘
+                           │
+              ═══ CONVERGENCE ═══
+                           │
+                           ▼
+              ┌─────────────────────────┐
+              │  Remotion Render         │
+              │  (local CLI or Lambda)   │
+              │                          │
+              │  All tracks merge:       │
+              │  - <Audio> from WAVs     │
+              │  - <OffthreadVideo>      │
+              │    from Veo clips        │
+              │  - Animated components   │
+              │    from compositions     │
+              │  - BEATS timing from     │
+              │    Whisper timestamps    │
+              └────────────┬────────────┘
+                           │
+                           ▼
+              outputs/sections/*.mp4 (×7)
+                           │
+                     ffmpeg concat
+                     (codec copy)
+                           │
+                           ▼
+              outputs/full_video.mp4 (232MB)
+                           │
+              ═══ REVIEW LOOP ═══
+                           │
+                           ▼
+              ┌─────────────────────────┐
+              │  review-app (Express.js) │
+              │  port 3847               │
+              └─────────────────────────┘
                            │
               ┌────────────┼────────────┐
               ▼            ▼            ▼
          [Annotate]   [Analyze]    [Resolve]
               │            │            │
-              │            │     ┌──────┴──────┐
-              ▼            ▼     ▼      ▼      ▼
-          Draw +      Claude   Fix   Render  Stitch
-          Speech      reads    code  section  full
-          on frame    specs    via   via      via
-                      + src    CLI   Remotion ffmpeg
-                      + img
+              ▼            ▼     ┌──────┴──────┐
+          Draw +      Claude     │      │      │
+          Speech      reads     Fix   Render  Stitch
+          on frame    specs    code  section  full
+                      + src    via   via      via
+                      + img    CLI   Remotion ffmpeg
+                                       │
+                                       ▼
+                              Updated full_video.mp4
 ```
+
+### Automation Summary
+
+Each step in the pipeline is one of three types:
+
+| Step | Method | Automation |
+|------|--------|------------|
+| Write main script | Human | Manual |
+| Generate TTS script from main script | Claude Code | LLM-directed |
+| Generate specs from [VISUAL:] blocks | Claude Code | LLM-directed (iterative, gaps filled in passes) |
+| Generate Veo prompts | Claude Code | LLM-directed (created as part of spec files) |
+| Render TTS audio segments | `render_tts.py` (Qwen3-TTS) | Fully automated |
+| Concatenate sections with pauses | `sync_audio_pipeline.py` | Fully automated |
+| Transcribe with word timestamps | faster-whisper | Fully automated |
+| Generate Veo video clips | `generate_*.py` (Veo 3.1 API) | Fully automated |
+| Write individual Remotion compositions | Claude Code (from specs) | LLM-directed |
+| Generate section wrapper scaffolding | `generate_section_compositions.py` | Fully automated |
+| Refine section wrappers (crossfades, overlays) | Claude Code | LLM-directed |
+| Register compositions in Root.tsx | Claude Code | LLM-directed (manual curation) |
+| Render sections | Remotion CLI / Lambda | Fully automated |
+| Stitch full video | ffmpeg concat | Fully automated |
+| Audit renders against specs | Claude Code | LLM-directed (AUDIT_*.md files) |
+| Review and auto-fix | review-app + Claude | Automated loop |
 
 ### Data Flow: Annotation to Fixed Video
 
@@ -332,33 +417,55 @@ Visual type mapping in specs:
 ### 5.2 Audio Pipeline
 
 ```
-narrative/tts_script.md
+narrative/main_script.md (39KB)
     │
-    │  Annotations: [TONE:], [PACE:], [PAUSE:], [EMOTION:], **emphasis**
-    │
-    ▼
-tools/tts/render_tts.py
-    │
-    │  Qwen3-TTS 1.7B (local model, 24kHz mono WAV)
-    │  50+ tone mappings (e.g., "knowing, conspiratorial" →
-    │     "as if sharing an insider insight")
+    │  Full script with NARRATOR: text + [VISUAL: ...] blocks
     │
     ▼
-segment_000.wav ... segment_NNN.wav
+Claude Code (one-time generation)
     │
-    │  ffmpeg concat with silence gaps matching [PAUSE: Xs] annotations
-    │  (silence files generated at matching 24kHz sample rate)
-    │
-    ▼
-section_narration.wav (concatenated)
-    │
-    ▼
-faster-whisper (base model, int8)
-    │
-    │  word_timestamps=True
+    │  Extracts only narrator text (strips [VISUAL:] blocks)
+    │  Adds TTS annotations: [TONE:], [PACE:], [PAUSE:], [EMOTION:]
+    │  Adds emphasis markers: **strong**, *light*
+    │  Condenses phrasing for natural speech delivery
     │
     ▼
-word_timestamps.json
+narrative/tts_script.md (20KB)
+    │
+    │  Pure narration with voice direction annotations
+    │  Sections separated by --- dividers
+    │
+    ▼
+tools/tts/render_tts.py — parse + generate
+    │
+    │  1. Parse: extracts ~103 segments with tone/pace/emotion metadata
+    │  2. Generate: Qwen3-TTS 1.7B (local, 24kHz mono, speaker "Aiden")
+    │     50+ tone mappings (e.g., "knowing, conspiratorial" →
+    │        "as if sharing an insider insight")
+    │  3. Output: individual segment WAVs + full concatenated audio
+    │
+    ▼
+outputs/tts/segment_000.wav ... segment_111.wav (112 files)
+    │
+    ▼
+tools/tts/sync_audio_pipeline.py — group + concatenate + transcribe
+    │
+    │  1. Groups segments by section (hardcoded ranges):
+    │     cold_open: 105-110, part1: 0-29, part2: 31-45,
+    │     part3: 47-71, part4: 73-80, part5: 82-90, closing: 92-100
+    │
+    │  2. Concatenates with silence gaps matching [PAUSE: Xs] durations
+    │     (np.zeros at 24kHz sample rate — not ffmpeg)
+    │
+    │  3. Copies section WAVs to remotion/public/ for <Audio> playback
+    │
+    ▼
+outputs/tts/{section}/{section}_narration.wav (7 files)
+    │
+    │  faster-whisper (base model, int8, word_timestamps=True)
+    │
+    ▼
+outputs/tts/{section}/word_timestamps.json (7 files)
     │  { words: [{ word, start, end, probability }],
     │    segments: [{ start, end, text }] }
     │
@@ -378,7 +485,7 @@ remotion/src/remotion/S0X-Section/constants.ts
     }
 ```
 
-**Critical principle:** Audio is the source of truth, not script estimates. TTS often condenses narration, changing which visuals align with which words. Always generate audio first, then map visuals.
+**Critical principle:** Audio is the source of truth, not script estimates. TTS condenses narration and reshuffles which visuals align with which words. Always generate audio first, run Whisper, then map visuals to actual word timestamps.
 
 ### 5.3 Veo Video Generation
 
