@@ -30,40 +30,12 @@ def get_context_obj(ctx: click.Context) -> Dict[str, Any]:
     default=None,
     help="Specify where to save the analysis results (CSV file).",
 )
-@click.pass_context
-@track_cost
-def detect_change(
-    ctx: click.Context,
-    files: Tuple[str, ...] = (),
-    output: Optional[str] = None,
-) -> Optional[Tuple[List, float, str]]:
-    """Detect if prompts need to be changed based on a description.
-    
-    Usage: pdd detect [PROMPT_FILES...] CHANGE_FILE
-    """
-    try:
-        if len(files) < 2:
-             raise click.UsageError("Requires at least one PROMPT_FILE and one CHANGE_FILE.")
-        
-        # According to usage conventions (and README), the last file is the change file
-        change_file = files[-1]
-        prompt_files = list(files[:-1])
-
-        result, total_cost, model_name = detect_change_main(
-            ctx=ctx,
-            prompt_files=prompt_files,
-            change_file=change_file,
-            output=output,
-        )
-        return result, total_cost, model_name
-    except (click.Abort, click.ClickException):
-        raise
-    except Exception as exception:
-        handle_error(exception, "detect", get_context_obj(ctx).get("quiet", False))
-        return None
-
-
-@click.command("story-test")
+@click.option(
+    "--stories",
+    is_flag=True,
+    default=False,
+    help="Run user story validation mode (no PROMPT_FILES/CHANGE_FILE arguments).",
+)
 @click.option(
     "--stories-dir",
     type=click.Path(file_okay=False, dir_okay=True),
@@ -80,45 +52,67 @@ def detect_change(
     "--include-llm",
     is_flag=True,
     default=False,
-    help="Include *_llm.prompt files in validation.",
+    help="Include *_llm.prompt files in user story validation.",
 )
 @click.option(
     "--fail-fast/--no-fail-fast",
     default=True,
-    help="Stop on the first failing story.",
+    help="Stop on the first failing story in user story validation mode.",
 )
 @click.pass_context
 @track_cost
-def story_test(
+def detect_change(
     ctx: click.Context,
-    stories_dir: Optional[str],
-    prompts_dir: Optional[str],
-    include_llm: bool,
-    fail_fast: bool,
-) -> Optional[Tuple[Dict[str, Any], float, str]]:
-    """Validate prompt changes against user stories."""
+    files: Tuple[str, ...] = (),
+    output: Optional[str] = None,
+    stories: bool = False,
+    stories_dir: Optional[str] = None,
+    prompts_dir: Optional[str] = None,
+    include_llm: bool = False,
+    fail_fast: bool = True,
+) -> Optional[Tuple[Any, float, str]]:
+    """Detect prompt changes or run user story validation via --stories."""
     try:
-        obj = get_context_obj(ctx)
-        passed, results, total_cost, model_name = run_user_story_tests(
-            prompts_dir=prompts_dir,
-            stories_dir=stories_dir,
-            strength=obj.get("strength", 0.2),
-            temperature=obj.get("temperature", 0.0),
-            time=obj.get("time", 0.25),
-            verbose=obj.get("verbose", False),
-            quiet=obj.get("quiet", False),
-            fail_fast=fail_fast,
-            include_llm_prompts=include_llm,
+        if stories:
+            if files:
+                raise click.UsageError(
+                    "--stories mode does not accept PROMPT_FILES/CHANGE_FILE arguments."
+                )
+            if output is not None:
+                raise click.UsageError("--output is not supported with --stories.")
+
+            obj = get_context_obj(ctx)
+            passed, results, total_cost, model_name = run_user_story_tests(
+                prompts_dir=prompts_dir,
+                stories_dir=stories_dir,
+                strength=obj.get("strength", 0.2),
+                temperature=obj.get("temperature", 0.0),
+                time=obj.get("time", 0.25),
+                verbose=obj.get("verbose", False),
+                quiet=obj.get("quiet", False),
+                fail_fast=fail_fast,
+                include_llm_prompts=include_llm,
+            )
+            return {"passed": passed, "results": results}, total_cost, model_name
+
+        if len(files) < 2:
+            raise click.UsageError("Requires at least one PROMPT_FILE and one CHANGE_FILE.")
+        
+        # According to usage conventions (and README), the last file is the change file
+        change_file = files[-1]
+        prompt_files = list(files[:-1])
+
+        result, total_cost, model_name = detect_change_main(
+            ctx=ctx,
+            prompt_files=prompt_files,
+            change_file=change_file,
+            output=output,
         )
-        result = {
-            "passed": passed,
-            "results": results,
-        }
         return result, total_cost, model_name
     except (click.Abort, click.ClickException):
         raise
     except Exception as exception:
-        handle_error(exception, "story-test", get_context_obj(ctx).get("quiet", False))
+        handle_error(exception, "detect", get_context_obj(ctx).get("quiet", False))
         return None
 
 

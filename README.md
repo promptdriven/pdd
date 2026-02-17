@@ -591,7 +591,7 @@ flowchart TB
 - **[`detect`](#10-detect)**: Analyzes prompts to determine which ones need changes based on a description
 - **[`conflicts`](#11-conflicts)**: Finds and suggests resolutions for conflicts between two prompt files
 - **[`trace`](#13-trace)**: Finds the corresponding line number in a prompt file for a given code line
-- **[`story-test`](#21-story-test)**: Validates prompt changes against user stories
+- **[`detect --stories`](#10-detect)**: Validates prompt changes against user stories
 
 ### Utility Commands
 - **[`auth`](#18-auth)**: Manages authentication with PDD Cloud
@@ -609,7 +609,7 @@ Overrides:
 - `PDD_PROMPTS_DIR` sets the prompts directory.
 
 Commands:
-- `pdd story-test` runs the validation suite.
+- `pdd detect --stories` runs the validation suite.
 - `pdd change` runs story validation after prompt modifications and fails if any story fails.
 - `pdd fix user_stories/story__*.md` applies a single story to prompts and re-validates it.
 
@@ -2102,7 +2102,7 @@ pdd update --simple --git my_module_python.prompt src/my_module.py
 
 ### 10. detect
 
-Analyze a list of prompt files and a change description to determine which prompts need to be changed.
+Analyze prompts to determine required changes, or run user story validation mode.
 
 ```
 pdd [GLOBAL OPTIONS] detect [OPTIONS] PROMPT_FILES... CHANGE_FILE
@@ -2114,10 +2114,16 @@ Arguments:
 
 Options:
 - `--output LOCATION`: Specify where to save the CSV file containing the analysis results. The default file name is `<change_file_basename>_detect.csv`.  If an environment variable `PDD_DETECT_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--stories`: Run user story validation mode. When set, positional `PROMPT_FILES... CHANGE_FILE` arguments are not allowed.
+- `--stories-dir DIR`: Directory containing `story__*.md` files (stories mode only).
+- `--prompts-dir DIR`: Directory containing `.prompt` files (stories mode only).
+- `--include-llm`: Include `*_llm.prompt` files in stories mode.
+- `--fail-fast/--no-fail-fast`: Stop on the first failing story in stories mode (default: `--fail-fast`).
 
 Example:
 ```
 pdd [GLOBAL OPTIONS] detect --output detect_results.csv factorial_calculator_python.prompt data_processing_python.prompt web_scraper_python.prompt changes_description.prompt
+pdd [GLOBAL OPTIONS] detect --stories --prompts-dir prompts --stories-dir user_stories
 ```
 
 ### 11. conflicts
@@ -2527,27 +2533,6 @@ pdd firecrawl-cache check <url>        # Check if a URL is cached
 ```
 
 **When to use**: Caching is automatic. Use `stats` to check cache status, `info` to view configuration, `check` to verify if a URL is cached, or `clear` to force re-scraping all URLs.
-
-### 21. story-test
-
-Validate prompt changes against user stories stored as Markdown files in `user_stories/`. A story **passes** when `detect` finds no required prompt changes.
-
-**Usage:**
-```bash
-pdd [GLOBAL OPTIONS] story-test [OPTIONS]
-```
-
-**Options:**
-- `--stories-dir DIR`: Directory containing `story__*.md` files (default: `user_stories/`).
-- `--prompts-dir DIR`: Directory containing `.prompt` files (default: `prompts/`).
-- `--include-llm`: Include `*_llm.prompt` files in validation.
-- `--fail-fast/--no-fail-fast`: Stop on the first failing story (default: `--fail-fast`).
-
-**Examples:**
-```bash
-pdd story-test
-PDD_USER_STORIES_DIR=stories pdd story-test --prompts-dir prompts
-```
 
 ## Example Review Process
 
