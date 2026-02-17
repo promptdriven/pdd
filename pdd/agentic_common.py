@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 import os
-import signal
 import sys
 import json
 import shutil
 import subprocess
 import tempfile
-import threading
 import time
 import uuid
 import re

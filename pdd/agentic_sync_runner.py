@@ -254,6 +254,7 @@ class AsyncSyncRunner:
         }
 
         # Atomic write via temp file + os.replace
+        tmp_path = None
         try:
             fd, tmp_path = tempfile.mkstemp(
                 dir=str(state_path.parent), suffix=".tmp"
@@ -263,10 +264,11 @@ class AsyncSyncRunner:
             os.replace(tmp_path, str(state_path))
         except OSError:
             # Best-effort; don't break sync for state persistence failures
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+            if tmp_path is not None:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
 
     def _delete_state(self) -> None:
         """Remove the state file (called on full success)."""
@@ -574,7 +576,12 @@ class AsyncSyncRunner:
             # Track the process group so we can kill it on Ctrl+C
             self._child_pgids.add(process.pid)
         except Exception as e:
-            return False, _parse_cost_from_csv(cost_file.name), str(e)
+            cost = _parse_cost_from_csv(cost_file.name)
+            try:
+                os.remove(cost_file.name)
+            except OSError:
+                pass
+            return False, cost, str(e)
 
         t_out = threading.Thread(
             target=_read_stream, args=(process.stdout, stdout_lines, ""), daemon=True
