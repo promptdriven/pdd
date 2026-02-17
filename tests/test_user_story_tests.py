@@ -165,7 +165,7 @@ def test_user_story_fix_happy_path(tmp_path):
          patch("pdd.user_story_tests.run_user_story_tests") as mock_story_tests:
         mock_discover.return_value = [prompt_path]
         mock_detect.return_value = ([{"prompt_name": "calc_python.prompt"}], 0.1, "detect-model")
-        mock_change.return_value = ("ok", 0.2, "change-model")
+        mock_change.return_value = (f"Modified prompt saved to {prompt_path}", 0.2, "change-model")
         mock_story_tests.return_value = (True, [], 0.3, "verify-model")
 
         success, message, cost, model, changed_files = run_user_story_fix(
@@ -182,4 +182,46 @@ def test_user_story_fix_happy_path(tmp_path):
     assert changed_files == [str(prompt_path)]
     assert ctx.obj.get("skip_user_stories") is None
     mock_change.assert_called_once()
+    assert mock_change.call_args[1]["input_code"] == str(code_path)
+
+
+def test_user_story_fix_treats_plain_error_message_as_failure(tmp_path):
+    prompts_dir = tmp_path / "prompts" / "sub"
+    src_dir = tmp_path / "src" / "sub"
+    stories_dir = tmp_path / "user_stories"
+    prompts_dir.mkdir(parents=True)
+    src_dir.mkdir(parents=True)
+    stories_dir.mkdir()
+
+    prompt_path = prompts_dir / "calc_python.prompt"
+    prompt_path.write_text("prompt", encoding="utf-8")
+    code_path = src_dir / "calc.py"
+    code_path.write_text("code", encoding="utf-8")
+    story_path = stories_dir / "story__calc.md"
+    story_path.write_text("story", encoding="utf-8")
+
+    ctx = SimpleNamespace(obj={})
+
+    with patch("pdd.user_story_tests.discover_prompt_files") as mock_discover, \
+         patch("pdd.user_story_tests.detect_change") as mock_detect, \
+         patch("pdd.change_main.change_main") as mock_change, \
+         patch("pdd.user_story_tests.run_user_story_tests") as mock_story_tests:
+        mock_discover.return_value = [prompt_path]
+        mock_detect.return_value = ([{"prompt_name": "calc_python.prompt"}], 0.1, "detect-model")
+        mock_change.return_value = ("Error during prompt modification: failure", 0.2, "change-model")
+
+        success, message, cost, model, changed_files = run_user_story_fix(
+            ctx=ctx,
+            story_file=str(story_path),
+            prompts_dir=str(tmp_path / "prompts"),
+            quiet=True,
+        )
+
+    assert success is False
+    assert "Error during prompt modification: failure" in message
+    assert cost == pytest.approx(0.3)
+    assert model == "change-model"
+    assert changed_files == []
+    assert ctx.obj.get("skip_user_stories") is None
+    mock_story_tests.assert_not_called()
     assert mock_change.call_args[1]["input_code"] == str(code_path)
