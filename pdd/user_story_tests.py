@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -12,21 +13,26 @@ from .get_extension import get_extension
 
 DEFAULT_STORIES_DIR = "user_stories"
 DEFAULT_PROMPTS_DIR = "prompts"
+DEFAULT_SRC_DIR = "src"
 STORY_PREFIX = "story__"
 STORY_SUFFIX = ".md"
+logger = logging.getLogger(__name__)
 
 
 def _resolve_stories_dir(stories_dir: Optional[str] = None) -> Path:
+    """Resolve the directory containing story markdown files."""
     resolved = stories_dir or os.environ.get("PDD_USER_STORIES_DIR") or DEFAULT_STORIES_DIR
     return Path(resolved)
 
 
 def _resolve_prompts_dir(prompts_dir: Optional[str] = None) -> Path:
+    """Resolve the directory containing prompt files."""
     resolved = prompts_dir or os.environ.get("PDD_PROMPTS_DIR") or DEFAULT_PROMPTS_DIR
     return Path(resolved)
 
 
 def discover_story_files(stories_dir: Optional[str] = None) -> List[Path]:
+    """Discover user story files matching story__*.md in the stories directory."""
     base_dir = _resolve_stories_dir(stories_dir)
     if not base_dir.exists() or not base_dir.is_dir():
         return []
@@ -38,6 +44,7 @@ def discover_prompt_files(
     *,
     include_llm: bool = False,
 ) -> List[Path]:
+    """Discover .prompt files from prompts_dir, optionally including *_llm.prompt."""
     base_dir = _resolve_prompts_dir(prompts_dir)
     if not base_dir.exists() or not base_dir.is_dir():
         return []
@@ -48,10 +55,12 @@ def discover_prompt_files(
 
 
 def _read_story(path: Path) -> str:
+    """Read and return a story file as UTF-8 text."""
     return path.read_text(encoding="utf-8")
 
 
 def _build_prompt_name_map(prompt_files: Iterable[Path]) -> Dict[str, Path]:
+    """Build case-sensitive and case-insensitive lookup keys for prompt paths."""
     name_map: Dict[str, Path] = {}
     for pf in prompt_files:
         name_map[pf.name] = pf
@@ -62,6 +71,7 @@ def _build_prompt_name_map(prompt_files: Iterable[Path]) -> Dict[str, Path]:
 
 
 def _resolve_prompt_path(prompt_name: str, prompt_files: Iterable[Path]) -> Optional[Path]:
+    """Resolve a detect-reported prompt name to an existing prompt path."""
     name_map = _build_prompt_name_map(prompt_files)
     if prompt_name in name_map:
         return name_map[prompt_name]
@@ -75,7 +85,16 @@ def _resolve_prompt_path(prompt_name: str, prompt_files: Iterable[Path]) -> Opti
     return None
 
 
+def _resolve_src_dir(prompts_dir: Path) -> Path:
+    """Resolve source directory from PDD_SRC_DIR or default to ../src from prompts_dir."""
+    resolved = os.environ.get("PDD_SRC_DIR")
+    if resolved:
+        return Path(resolved)
+    return prompts_dir.parent / DEFAULT_SRC_DIR
+
+
 def _prompt_to_code_path(prompt_path: Path, prompts_dir: Path) -> Optional[Path]:
+    """Map a prompt file path to its corresponding source file path."""
     try:
         rel_path = prompt_path.relative_to(prompts_dir)
     except ValueError:
@@ -92,7 +111,7 @@ def _prompt_to_code_path(prompt_path: Path, prompts_dir: Path) -> Optional[Path]
         return None
     extension = extension.lstrip(".")
 
-    code_dir = prompts_dir.parent / "src"
+    code_dir = _resolve_src_dir(prompts_dir)
     rel_dir = rel_path.parent
     if not extension:
         return None
@@ -223,10 +242,12 @@ def run_user_story_fix(
     changed_files: List[str] = []
     errors: List[str] = []
 
-    ctx_obj = getattr(ctx, "obj", None) or {}
+    ctx_obj = getattr(ctx, "obj", None)
+    if ctx_obj is None:
+        ctx_obj = {}
+        ctx.obj = ctx_obj
     original_skip = ctx_obj.get("skip_user_stories")
     ctx_obj["skip_user_stories"] = True
-    setattr(ctx, "obj", ctx_obj)
 
     try:
         for change in changes_list:
@@ -255,6 +276,7 @@ def run_user_story_fix(
             if _change_main_succeeded(result_message):
                 changed_files.append(str(prompt_path))
             else:
+                logger.debug("Story fix failed for %s: %s", prompt_path, result_message)
                 errors.append(str(result_message))
 
     finally:
@@ -262,7 +284,6 @@ def run_user_story_fix(
             ctx_obj.pop("skip_user_stories", None)
         else:
             ctx_obj["skip_user_stories"] = original_skip
-        setattr(ctx, "obj", ctx_obj)
 
     if errors:
         return False, "\n".join(errors), total_cost, model_name, changed_files
