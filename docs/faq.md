@@ -476,3 +476,7 @@ The AI development landscape has a tool for every project size. PDD's strength i
 -   **Small Projects / Demos**: Tools like **Lovable** or **Bolt** are fantastic for getting quick results with minimal setup.
 -   **Medium-Sized Features / Prototyping**: Interactive, chat-based tools like **Cursor** or the **Claude Code** are excellent for iterative refinement and exploration.
 -   **Production-Scale, Long-Lived Systems**: **PDD** is the best choice when you need deterministic, maintainable, and version-controlled code generation that can scale with your team and project complexity."*
+
+## Q: Can I use `pdd sync` with a GitHub issue URL if my project doesn't have an `architecture.json`?
+
+Yes. When no `architecture.json` is present, the system scans your `prompts/` directory for `*_<Language>.prompt` files to build a module catalog. The LLM then selects relevant modules based on the issue content, and dependencies are inferred from `<include>` tags in the prompt files. You still get parallel sync with dependency ordering — `architecture.json` is optional, not required.
