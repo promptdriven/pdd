@@ -1,31 +1,86 @@
+## v0.0.151 (2026-02-16)
+
+### Feat
+
+- Add Product Requirements Document (PRD) for the AI-First Video Editor demo.
+- Add agentic sync - LLM-driven parallel module sync from GitHub issues
+
+### Fix
+
+- Address Copilot review feedback on agentic sync
+- Increase LLM API call timeout from 120 seconds to 600 seconds.
+- Fix cost propagation bug and increase module timeout
+- Add token-based cost estimation fallback for Claude subscription auth
+- Add timeouts to prevent sync hangs (Firecrawl, git ls-files, auto-deps)
+- Auto-fix env var errors, fix cost tracking, fix 7x duplicate language syncs
+
+## v0.0.150 (2026-02-15)
+
+### Feat
+
+- **Circular `<include>` cycle detection**: Recursive include preprocessing now tracks visited files and raises `ValueError` on cycles instead of silently producing corrupted output or hitting Python's recursion limit. Both `<include>` XML tags and backtick includes (```` ```<file>``` ````) are covered. Thanks @Serhan-Asad (PR #528)!
+- **Vertex AI Application Default Credentials (ADC) support**: `llm_invoke` no longer requires `VERTEX_CREDENTIALS` file path when `VERTEX_PROJECT` is set — falls back to ADC automatically. Simplifies cloud batch and local development setups.
+- **Global location override for Vertex AI models**: `llm_model.csv` now specifies `location=global` for Gemini 3 Pro, Gemini 3 Flash, and Claude Sonnet 4.5 on Vertex AI, reducing region-specific routing failures.
+
+### Fix
+
+- **LLM retry cost accumulation** — When `llm_invoke` retried on malformed JSON, the retry callback data overwrote the original call's cost/token counts. Now accumulates cost, input tokens, and output tokens across original + retry calls. Cache restoration also moved into a `finally` block to prevent leaks on retry failure. Thanks @Serhan-Asad (PR #519)!
+- **Budget tracker drops test operation costs** — `sync_orchestration` extracted cost from result tuples using `result[-2]`, but `test`/`test_extend` operations return cost at index 1, not index -2. Fixed cost and model extraction to use operation-aware indexing. Thanks @Serhan-Asad (PR #518)!
+- **`pdd update --output` crashes with `NameError` in subdirectories** — When the code file was in a subdirectory and `--output` was used, `context_config` was referenced before assignment. Added initialization. Thanks @Serhan-Asad (PR #496)!
+- **Circular `<include>` tags produce corrupted output** — Without cycle detection, circular includes silently expanded until Python's recursion limit, producing truncated/corrupted prompts. Now raises a clear error.
+- **Sync fingerprint ignores `<include>` dependencies** — When an included file changed but the parent prompt didn't, the sync fingerprint remained the same, causing stale code to persist after included file edits.
+- **Cloud Batch streaming false positives** — Result polling skipped partially-flushed GCS files (< 10 bytes) and added a portable timeout wrapper for `gcloud`/`gsutil` commands on macOS.
+- **Malformed JSON detection for raw newlines** — `_is_malformed_json_response` now detects excessive actual trailing newlines (not just escaped `\n` sequences), catching additional truncation cases.
+
+### Build
+
+- **Cloud Build for Docker images**: Replaced local `docker build` + `docker push` with `gcloud builds submit` using a new `cloudbuild.yaml`. Adds Docker layer caching (`--cache-from`) and eliminates the need for a local Docker daemon. `make cloud-test-push` is now a no-op.
+- **GCP project ID unconditionally set**: `GCP_PROJECT_ID` changed from `?=` (overridable) to `:=` (fixed) in the Makefile, preventing accidental use of wrong projects.
+- Updated `test-durations.json` with latest profiled data.
+
+### Docs
+
+- **Grounding experiment Phase 8 (Opus 4.6)**: Added experiment comparing grounded vs strongest-model (ungrounded) generation for `llm_invoke` and `sync_orchestration` modules using Claude Opus 4.6, with stability and evaluation CSVs.
+
 ## v0.0.149 (2026-02-14)
 
 ### Feat
 
-- Handle `PddError` objects in the `dump` utility and add a test case for dump failures.
-- Add Phase 7 — improved test prompt framing experiment
-- Complete Phase 6 Pro grounded run 4 and update analysis
-- Add Phase 6 grounding experiment — Pro vs Flash model comparison
-- Add Phase 5 grounding experiment results for sync_orchestration
-- Add LLM invocation stability test results in JSON and JUnit XML formats, and a summary report.
-- Generate and commit new test results and experiment outputs for LLM invocation stability and grounding, alongside updates to evaluation scripts and the Makefile.
-- increase pytest chunks from 24 to 32 and fix flaky CI tests
-- add profiling report and preserve raw results in cloud batch pipeline
-- Add interactive steering to sync orchestration, improve pytest project root discovery, clarify agentic test handling, and update cloud batch test infrastructure.
-- junitxml-based chunk balancing for cloud batch
-- Add Phase 4 ungrounded-pdd arm to grounding experiment
-- add cloud batch test results and update CHANGELOG with detailed feature, fix, build, and refactor entries.
+- **Issue #467 cached-state validation across all orchestrators**: New `validate_cached_state()` helper in `agentic_common` scans step outputs for `FAILED:` prefixes and corrects `last_completed_step` on resume. Applied to architecture, change, test, and e2e-fix orchestrators — prevents the "blind resume" bug where the orchestrator trusted a corrupted `last_completed_step` and skipped failed steps.
+- **Interactive steering in sync orchestration**: After each `sync_determine_operation` call, users can now override the recommended operation via `maybe_steer_operation()`. Controlled by `no_steer` flag and `steer_timeout` parameter. Steering aborts are logged as `steering_override` events.
+- **Improved test prompt framing**: `code_generator_main` now instructs the LLM to study test files for type/data-structure hints, mock patterns, import paths, and fixture formats before generating code — instead of a generic "must pass these tests" instruction.
+- **`PddError` handling in core dump utility**: `_write_core_dump()` now correctly serializes `PddError` objects via `default=str`, with a dedicated test case for dump failures.
+- **Pytest project root discovery for sync**: Both `_execute_tests_and_create_run_report()` and the fix operation's pre-test run now use `_find_project_root(test_file)` to set `PYTHONPATH` and pass `--rootdir` / `-c /dev/null` to pytest, preventing parent config interference.
+- **Agentic test generation success handling refined**: `test_extend` operations for Python and TypeScript now always verify results by running tests locally, rather than trusting synthetic agent success reports. Only non-Python/TypeScript languages use synthetic `RunReport` for test_extend.
 
 ### Fix
 
-- Ensure core dumps serialize all types, prevent test module pollution in `test_generate.py`, and adjust regression test cost row validation.
-- ensure CLI commands registered before fixture snapshot in test_cli
-- add validate_cached_state to agentic_common prompt
-- initialize last_completed_step in state dict and fix step9 test assertion
-- update prompts and add tests for issue #467 across all orchestrators
-- apply issue #467 false cached steps fix to all orchestrators
-- make flaky CI tests more resilient to intermittent failures
-- Correct 6 errors in Phase 4 experiment log and run script
+- **Consecutive orchestrator failures no longer advance `last_completed_step`** — Previously, `step_num - 1` on failure created a "ratchet effect" where consecutive failures silently advanced the cursor through failed steps. Now `last_completed_step` stays unchanged on failure and failed outputs are stored with a `FAILED:` prefix.
+- **Change orchestrator step 9 no-files failure** — When step 9 produced no file changes, the state was saved with `last_completed_step = step_num - 1`, which could mark an earlier failed step as successful. Now stores `FAILED:` prefix and leaves `last_completed_step` unchanged.
+- **CLI commands registered before fixture snapshot in `test_cli`** — Added `register_commands()` call in the `setup_cli_environment` fixture to ensure all real commands (including `auth`) are present before snapshotting, fixing intermittent pytest-xdist failures.
+- **Test module pollution in `test_generate.py` and `test_fix.py`** — Evict `pdd.core.*` modules imported as side effects during mock windows, preventing `MagicMock` attributes from leaking into subsequent tests.
+- **Flaky CI tests made more resilient** — E2E tests (`test_e2e_issue_340`, `test_e2e_issue_342`) now gracefully skip on empty LLM responses, auth/network failures, and intermittent xdist command registration issues. Firecrawl help tests converted to `@pytest.mark.parametrize`.
+- **Regression test cost row validation relaxed** — `regression.sh` adjusted to handle variable cost output formats.
+
+### Build
+
+- **JUnit XML-based chunk balancing for cloud batch**: `balance-chunks.py` now parses `task_*_junit.xml` files for accurate per-test durations instead of distributing chunk wall-clock time proportionally. Falls back to log-based proportional method when no XML files exist.
+- **Profiling report in cloud batch results**: `collect-results.sh` now generates per-suite summary tables, pytest chunk distribution histograms, top-20 slowest individual tests, and chunk balance metrics (slowest/fastest ratio).
+- **Auto-update test durations on collect**: `collect-results.sh` automatically runs `balance-chunks.py record` after downloading results, keeping `test-durations.json` current.
+- **Raw result preservation**: New `KEEP_RAW=1` option in `make cloud-test` preserves raw JSON/XML files in `test-results/cloud-batch-raw/`.
+- **Setup time tracking**: Cloud batch result table now shows per-task setup time separately (`setup: Ns`) when available.
+- **Pytest chunks increased from 24 to 32** for better parallelism.
+- **Cloud regression tests hardened** — Fix and verify test sections now handle prerequisite generation failures gracefully (e.g., cloud rate limits) instead of cascading failures.
+
+### Refactor
+
+- **Orchestrator prompts updated for state validation**: All four orchestrator prompts (`architecture`, `change`, `test`, `e2e_fix`) updated to document `validate_cached_state()` usage, the `FAILED:` prefix convention, and the corrected failure-handling rule (keep `last_completed_step` unchanged, not `step_num - 1`).
+- **`agentic_common` prompt documents `validate_cached_state`**: New section in the shared prompt describes the function signature, behavior, and purpose.
+- **Sync orchestration prompt updated**: Documents interactive steering integration, `maybe_steer_operation()` API, progress callback for TUI, and `_find_project_root` usage.
+
+### Docs
+
+- **Grounding experiment Phases 4–7**: Added ungrounded-pdd arm (Phase 4), sync_orchestration module experiments (Phase 5), Pro vs Flash model comparison (Phase 6), and improved test prompt framing experiment (Phase 7) to `experiments/grounding/EXPERIMENT_LOG.md`.
 
 ## v0.0.148 (2026-02-13)
 
