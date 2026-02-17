@@ -261,23 +261,40 @@ def _detect_languages_with_context(basename: str, prompts_dir: Path, context_nam
                     languages_to_try = ['python', 'typescript', 'javascript', 'typescriptreact', 'go', 'rust', 'java']
                     found_lang_to_path: Dict[str, Path] = {}
 
-                    for lang in languages_to_try:
-                        ext = _get_extension_safe(lang)
-                        template_context = {
-                            'name': name_part,
-                            'category': category,
-                            'dir_prefix': dir_prefix,
-                            'ext': ext,
-                            'language': lang,
-                        }
-                        expanded_path = expand_template(prompt_template, template_context)
-                        # Resolve relative to .pddrc location, not CWD
-                        full_path = pddrc_parent / expanded_path
+                    # If the template has no {language} placeholder, it's a
+                    # static path — all 7 languages would resolve to the same
+                    # file.  Infer the single language from the filename suffix
+                    # instead of iterating (avoids 7x duplicate syncs).
+                    if '{language}' not in prompt_template and '{ext}' not in prompt_template:
+                        full_path = pddrc_parent / prompt_template
                         if full_path.exists():
-                            found_lang_to_path[lang] = full_path
+                            stem = full_path.stem  # e.g. "action_engine_Python"
+                            lang_suffix = stem.rsplit('_', 1)[-1].lower()
+                            if lang_suffix in languages_to_try:
+                                found_lang_to_path[lang_suffix] = full_path
+                            else:
+                                # Unrecognised suffix — default to python
+                                found_lang_to_path['python'] = full_path
+                        if found_lang_to_path:
+                            return _python_first_sorted(found_lang_to_path)
+                    else:
+                        for lang in languages_to_try:
+                            ext = _get_extension_safe(lang)
+                            template_context = {
+                                'name': name_part,
+                                'category': category,
+                                'dir_prefix': dir_prefix,
+                                'ext': ext,
+                                'language': lang,
+                            }
+                            expanded_path = expand_template(prompt_template, template_context)
+                            # Resolve relative to .pddrc location, not CWD
+                            full_path = pddrc_parent / expanded_path
+                            if full_path.exists():
+                                found_lang_to_path[lang] = full_path
 
-                    if found_lang_to_path:
-                        return _python_first_sorted(found_lang_to_path)
+                        if found_lang_to_path:
+                            return _python_first_sorted(found_lang_to_path)
 
                     # Template expansion didn't find files - fallback to recursive glob
                     # This handles cases where basename alone doesn't provide category info

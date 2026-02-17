@@ -9,7 +9,7 @@ from unittest.mock import patch, MagicMock, Mock, call, ANY
 import os
 import click
 
-from pdd.sync_orchestration import sync_orchestration, _execute_tests_and_create_run_report
+from pdd.sync_orchestration import sync_orchestration, _execute_tests_and_create_run_report, _try_auto_fix_env_var_error
 from pdd.sync_determine_operation import SyncDecision, get_pdd_file_paths
 
 # Test Plan:
@@ -4819,3 +4819,189 @@ def test_fix_main_call_uses_local_flag_for_auto_submit():
     # The correct pattern
     assert 'auto_submit=(not local)' in source, \
         "sync_orchestration must pass auto_submit=(not local) to fix_main"
+
+
+# --- Auto-fix Environment Variable Error Tests ---
+
+class TestAutoFixEnvVarError:
+    """Tests for _try_auto_fix_env_var_error() function."""
+
+    def test_detects_key_error_pattern(self, tmp_path):
+        """KeyError: 'BREVO_API_KEY' is detected and the example is patched."""
+        example_file = tmp_path / "example.py"
+        example_file.write_text("import os\nprint(os.environ['BREVO_API_KEY'])\n")
+
+        error_output = "Traceback (most recent call last):\n  File \"example.py\", line 2\nKeyError: 'BREVO_API_KEY'"
+
+        fixed, msg = _try_auto_fix_env_var_error(error_output, example_file)
+
+        assert fixed is True
+        assert "BREVO_API_KEY" in msg
+        content = example_file.read_text()
+        assert 'os.environ.get("BREVO_API_KEY")' in content
+        assert 'sys.exit(0)' in content
+
+    def test_detects_set_the_var_pattern(self, tmp_path):
+        """'Set the X environment variable' pattern is detected."""
+        example_file = tmp_path / "example.py"
+        example_file.write_text("import os\napi_key = os.environ['STRIPE_SECRET_KEY']\n")
+
+        error_output = "ERROR: Set the STRIPE_SECRET_KEY environment variable first."
+
+        fixed, msg = _try_auto_fix_env_var_error(error_output, example_file)
+
+        assert fixed is True
+        assert "STRIPE_SECRET_KEY" in msg
+        content = example_file.read_text()
+        assert 'os.environ.get("STRIPE_SECRET_KEY")' in content
+        assert 'sys.exit(0)' in content
+
+    def test_no_env_var_error_returns_false(self, tmp_path):
+        """Non-env-var errors are ignored."""
+        example_file = tmp_path / "example.py"
+        example_file.write_text("print('hello')\n")
+
+        error_output = "TypeError: unsupported operand type(s) for +: 'int' and 'str'"
+
+        fixed, msg = _try_auto_fix_env_var_error(error_output, example_file)
+
+        assert fixed is False
+        assert "No environment variable error detected" in msg
+
+    def test_pdd_path_is_skipped(self, tmp_path):
+        """PDD_PATH errors are not auto-fixed (it's a runtime variable)."""
+        example_file = tmp_path / "example.py"
+        example_file.write_text("import os\npath = os.environ['PDD_PATH']\n")
+
+        error_output = "KeyError: 'PDD_PATH'"
+
+        fixed, msg = _try_auto_fix_env_var_error(error_output, example_file)
+
+        assert fixed is False
+        assert "PDD_PATH" in msg
+
+    def test_fixed_example_exits_with_zero(self, tmp_path):
+        """Guard uses sys.exit(0), not sys.exit(1)."""
+        example_file = tmp_path / "example.py"
+        example_file.write_text("import os\nkey = os.environ['MY_API_KEY']\nprint(key)\n")
+
+        error_output = "KeyError: 'MY_API_KEY'"
+
+        _try_auto_fix_env_var_error(error_output, example_file)
+
+        content = example_file.read_text()
+        assert 'sys.exit(0)' in content
+        assert 'sys.exit(1)' not in content
+
+    def test_replaces_bracket_access(self, tmp_path):
+        """os.environ["VAR"] is replaced with os.environ.get("VAR")."""
+        example_file = tmp_path / "example.py"
+        example_file.write_text('import os\napi_key = os.environ["OPENAI_API_KEY"]\nprint(api_key)\n')
+
+        error_output = "KeyError: 'OPENAI_API_KEY'"
+
+        _try_auto_fix_env_var_error(error_output, example_file)
+
+        content = example_file.read_text()
+        assert 'os.environ["OPENAI_API_KEY"]' not in content
+        assert 'os.environ.get("OPENAI_API_KEY")' in content
+
+    def test_detects_value_error_with_key_suffix(self, tmp_path):
+        """ValueError mentioning a VAR_KEY pattern is detected."""
+        example_file = tmp_path / "example.py"
+        example_file.write_text("import os\nprint('hello')\n")
+
+        error_output = "ValueError: GITHUB_API_KEY is required but not set"
+
+        fixed, msg = _try_auto_fix_env_var_error(error_output, example_file)
+
+        assert fixed is True
+        assert "GITHUB_API_KEY" in msg
+
+    def test_guard_inserted_after_imports(self, tmp_path):
+        """Guard is inserted after imports but before code."""
+        example_file = tmp_path / "example.py"
+        example_file.write_text(
+            "import os\n"
+            "from pathlib import Path\n"
+            "\n"
+            "api_key = os.environ['MY_TOKEN']\n"
+            "print(api_key)\n"
+        )
+
+        error_output = "KeyError: 'MY_TOKEN'"
+
+        _try_auto_fix_env_var_error(error_output, example_file)
+
+        content = example_file.read_text()
+        lines = content.split('\n')
+        # Find where the guard is
+        guard_line = next(i for i, l in enumerate(lines) if 'os.environ.get("MY_TOKEN")' in l)
+        # Find where "from pathlib" is
+        pathlib_line = next(i for i, l in enumerate(lines) if 'from pathlib' in l)
+        assert guard_line > pathlib_line, "Guard should be after imports"
+
+
+def test_auto_fix_env_var_integration_skips_crash_main(orchestration_fixture):
+    """
+    Integration test: when env var auto-fix succeeds in crash phase,
+    crash_main() is NOT called (saving expensive LLM costs).
+
+    Uses the orchestration_fixture pattern from test_auto_fix_success_saves_complete_metadata.
+    """
+    from pathlib import Path
+
+    code_file = Path('src') / 'calculator.py'
+    code_file.write_text("# Mock code file\ndef calculator():\n    pass\n")
+
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_save_fp = orchestration_fixture['_save_fingerprint_atomic']
+
+    mock_determine.side_effect = [
+        SyncDecision(operation='generate', reason='New unit'),
+        SyncDecision(operation='example', reason='Code exists, example missing'),
+        SyncDecision(operation='crash', reason='Example crashes'),
+        SyncDecision(operation='all_synced', reason='All operations complete'),
+    ]
+
+    with patch('pdd.sync_orchestration._run_example_with_error_detection') as mock_run_example, \
+         patch('pdd.sync_orchestration._try_auto_fix_import_error') as mock_import_fix, \
+         patch('pdd.sync_orchestration._try_auto_fix_env_var_error') as mock_env_fix, \
+         patch('pdd.sync_orchestration._save_run_report_atomic') as mock_save_report:
+
+        # First call: example crashes with env var error
+        # Second call: retry after env var auto-fix succeeds
+        mock_run_example.side_effect = [
+            (1, "", "KeyError: 'BREVO_API_KEY'"),  # Initial crash
+            (0, "Skipping example - BREVO_API_KEY not set", ""),  # After auto-fix
+        ]
+
+        # Import fix returns False (not an import error)
+        mock_import_fix.return_value = (False, "No import error detected")
+
+        # Env var fix returns True
+        mock_env_fix.return_value = (True, "Added env var guard for BREVO_API_KEY with sys.exit(0)")
+
+        result = sync_orchestration(basename="calculator", language="python")
+
+    # crash_main should NOT have been called
+    crash_main_mock = orchestration_fixture['crash_main']
+    assert not crash_main_mock.called, \
+        "crash_main should NOT be called when env var auto-fix succeeds"
+
+    # Verify operations_completed includes 'crash'
+    assert 'crash' in result['operations_completed'], \
+        "Auto-fix success should track 'crash' in operations_completed"
+
+    # Verify fingerprint was saved
+    fingerprint_calls = [
+        c for c in mock_save_fp.call_args_list
+        if len(c[0]) >= 3 and c[0][2] == 'crash'
+    ]
+    assert len(fingerprint_calls) > 0, \
+        "Fingerprint should be saved for crash operation after env var auto-fix"
+
+    # Verify it was saved with auto-fix metadata
+    call_args = fingerprint_calls[0][0]
+    assert call_args[4] == 0.0, "Auto-fix should have cost=0.0"
+    assert call_args[5] == 'auto-fix', "Auto-fix should use model='auto-fix'"

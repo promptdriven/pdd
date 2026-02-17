@@ -345,7 +345,7 @@ def test_web_second_pass_executes_after_deferral(reset_firecrawl_cache) -> None:
     """Second pass without recursion should execute the deferred web scrape."""
     prompt = "Start <web>https://example.com</web> End"
     mock_firecrawl = MagicMock()
-    mock_firecrawl.Firecrawl.return_value.scrape.return_value = {'markdown': "# Content"}
+    mock_firecrawl.Firecrawl.return_value.scrape_url.return_value = {'markdown': "# Content"}
 
     with patch.dict('sys.modules', {'firecrawl': mock_firecrawl}):
         with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'key', 'FIRECRAWL_CACHE_ENABLE': 'false'}):
@@ -566,7 +566,7 @@ def test_process_xml_web_tag(reset_firecrawl_cache) -> None:
     # Since Firecrawl is imported inside the function, we need to patch the module
     mock_firecrawl = MagicMock()
     mock_app = MagicMock()
-    mock_app.scrape.return_value = {'markdown': mock_markdown_content}
+    mock_app.scrape_url.return_value = {'markdown': mock_markdown_content}
     mock_firecrawl.Firecrawl.return_value = mock_app
 
     # Patch the import at the module level
@@ -619,7 +619,7 @@ def test_process_xml_web_tag_empty_content(reset_firecrawl_cache) -> None:
     # Create a mock Firecrawl class that returns empty response
     mock_firecrawl_class = MagicMock()
     mock_instance = mock_firecrawl_class.return_value
-    mock_instance.scrape.return_value = {}  # No markdown key
+    mock_instance.scrape_url.return_value = {}  # No markdown key
 
     # Patch the import
     with patch.dict('sys.modules', {'firecrawl': MagicMock()}):
@@ -639,7 +639,7 @@ def test_process_xml_web_tag_scraping_error(reset_firecrawl_cache) -> None:
     # Create a mock Firecrawl class that raises an exception
     mock_firecrawl_class = MagicMock()
     mock_instance = mock_firecrawl_class.return_value
-    mock_instance.scrape.side_effect = Exception(error_message)
+    mock_instance.scrape_url.side_effect = Exception(error_message)
 
     # Patch the import
     with patch.dict('sys.modules', {'firecrawl': MagicMock()}):
@@ -660,7 +660,7 @@ def test_process_web_tag_invalid_ttl_env_no_crash(reset_firecrawl_cache) -> None
 
     mock_firecrawl = MagicMock()
     mock_app = MagicMock()
-    mock_app.scrape.return_value = {'markdown': mock_markdown_content}
+    mock_app.scrape_url.return_value = {'markdown': mock_markdown_content}
     mock_firecrawl.Firecrawl.return_value = mock_app
 
     with patch.dict('sys.modules', {'firecrawl': mock_firecrawl}):
