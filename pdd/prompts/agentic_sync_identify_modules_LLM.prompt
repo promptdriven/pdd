@@ -1,0 +1,38 @@
+You are analyzing a GitHub issue to determine which PDD modules need to be synced,
+and validating the architecture.json dependency graph.
+
+## Issue
+{issue_content}
+
+## Architecture (architecture.json)
+{architecture_json}
+
+## Task 1: Identify Modules
+Based on the issue description, identify which modules (by basename) need `pdd sync`.
+A basename is the module name without the language suffix (e.g., "llm_invoke" for "llm_invoke_python.prompt").
+
+Consider:
+- Modules directly mentioned or affected by the issue
+- Transitive dependencies: if module A depends on B, and B needs sync, A may also need sync
+- Only include modules that exist in the architecture.json
+
+## Task 2: Validate Dependencies
+Review the `dependencies` field for each identified module in architecture.json.
+- Are the listed dependencies correct and complete?
+- Are there missing dependencies or incorrect ones?
+- If everything is correct, say DEPS_VALID: true
+- If corrections are needed, output the changes
+
+## Output Format
+You MUST output the following markers exactly as shown:
+
+MODULES_TO_SYNC: ["basename1", "basename2", ...]
+
+DEPS_VALID: true|false
+
+If DEPS_VALID is false, also output:
+DEPS_CORRECTIONS:
+[
+  {{"filename": "api_orders_Python.prompt", "dependencies": ["models_Python.prompt", "db_schema_Postgres.prompt"]}},
+  ...
+]

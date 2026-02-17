@@ -102,6 +102,14 @@ GEMINI_PRICING_BY_FAMILY = {
 # Codex: Based on test expectations ($1.50/$6.00, Cached 25%)
 CODEX_PRICING = Pricing(1.50, 6.00, 0.25)
 
+# Anthropic Claude: Token-based fallback pricing when total_cost_usd is unavailable
+# Cache read is 90% discount, cache write is 25% premium over input
+ANTHROPIC_PRICING_BY_FAMILY = {
+    "opus": Pricing(15.0, 75.0, 0.1),       # Claude Opus 4
+    "sonnet": Pricing(3.0, 15.0, 0.1),      # Claude Sonnet 4
+    "haiku": Pricing(0.80, 4.0, 0.1),       # Claude Haiku 3.5
+}
+
 console = Console()
 
 
@@ -391,6 +399,57 @@ def _calculate_codex_cost(usage: Dict[str, Any]) -> float:
     
     return input_cost + cached_cost + output_cost
 
+
+def _calculate_anthropic_cost(data: Dict[str, Any]) -> float:
+    """Calculate cost from Claude Code JSON when total_cost_usd is missing.
+
+    Tries modelUsage per-model costUSD first, then falls back to token-based
+    estimation from the usage field.
+    """
+    # Try 1: Sum costUSD from modelUsage (most accurate)
+    model_usage = data.get("modelUsage", {})
+    if model_usage:
+        total = sum(
+            float(info.get("costUSD", 0.0))
+            for info in model_usage.values()
+            if isinstance(info, dict)
+        )
+        if total > 0:
+            return total
+
+    # Try 2: Token-based estimation from usage field
+    usage = data.get("usage", {})
+    if not usage:
+        return 0.0
+
+    input_tokens = usage.get("input_tokens", 0)
+    output_tokens = usage.get("output_tokens", 0)
+    cache_read = usage.get("cache_read_input_tokens", 0)
+    cache_creation = usage.get("cache_creation_input_tokens", 0)
+
+    # Determine pricing family from modelUsage keys or default to sonnet
+    family = "sonnet"  # default
+    for model_name in model_usage.keys():
+        name_lower = model_name.lower()
+        if "opus" in name_lower:
+            family = "opus"
+            break
+        elif "haiku" in name_lower:
+            family = "haiku"
+            break
+
+    pricing = ANTHROPIC_PRICING_BY_FAMILY.get(family, ANTHROPIC_PRICING_BY_FAMILY["sonnet"])
+
+    # new_input = total input minus cached reads (cache creation is billed at 1.25x input)
+    new_input = max(0, input_tokens - cache_read)
+    input_cost = (new_input / 1_000_000) * pricing.input_per_million
+    cache_read_cost = (cache_read / 1_000_000) * pricing.input_per_million * pricing.cached_input_multiplier
+    cache_write_cost = (cache_creation / 1_000_000) * pricing.input_per_million * 1.25
+    output_cost = (output_tokens / 1_000_000) * pricing.output_per_million
+
+    return input_cost + cache_read_cost + cache_write_cost + output_cost
+
+
 def run_agentic_task(
     instruction: str,
     cwd: Path,
@@ -552,7 +611,8 @@ def _run_with_provider(
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     verbose: bool = False,
     quiet: bool = False,
-    cli_path: Optional[str] = None
+    cli_path: Optional[str] = None,
+    label: str = "",
 ) -> Tuple[bool, str, float]:
     """
     Internal helper to run a specific provider's CLI.
@@ -566,6 +626,7 @@ def _run_with_provider(
         verbose: Verbose output
         quiet: Suppress output
         cli_path: Optional explicit CLI path (if None, uses _find_cli_binary)
+        label: Task label for heartbeat messages
     """
 
     # Prepare Environment
@@ -701,8 +762,10 @@ def _parse_provider_json(provider: str, data: Dict[str, Any]) -> Tuple[bool, str
 
     try:
         if provider == "anthropic":
-            # Anthropic usually provides direct cost
+            # Use total_cost_usd if available, otherwise estimate from token usage
             cost = float(data.get("total_cost_usd", 0.0))
+            if cost == 0.0:
+                cost = _calculate_anthropic_cost(data)
             # Result might be in 'result' or 'response'
             output_text = data.get("result") or data.get("response") or ""
             

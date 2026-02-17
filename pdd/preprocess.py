@@ -359,6 +359,7 @@ def process_web_tags(text: str, recursive: bool) -> str:
 
         console.print(f"Scraping web content from: [cyan]{url}[/cyan]")
         _dbg(f"Web tag URL: {url}")
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
         try:
             try:
                 from firecrawl import Firecrawl
@@ -374,7 +375,12 @@ def process_web_tags(text: str, recursive: bool) -> str:
 
             app = Firecrawl(api_key=api_key)
 
-            response = app.scrape(url, formats=['markdown'])
+            # Firecrawl SDK has a bug: it passes timeout (ms) to requests.post()
+            # which expects seconds, so timeout=30000 becomes 30000s (~8hrs).
+            # Wrap in a thread with a hard 30s client-side deadline.
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(app.scrape_url, url, formats=['markdown'], timeout=30000)
+                response = future.result(timeout=30)
 
             # Handle both dict response (new API) and object response (legacy)
             content = None
@@ -393,6 +399,10 @@ def process_web_tags(text: str, recursive: bool) -> str:
                 console.print(f"[bold yellow]Warning:[/bold yellow] No markdown content returned for {url}")
                 _dbg("Web scrape returned no markdown content")
                 return f"[No content available for {url}]"
+        except FuturesTimeoutError:
+            console.print(f"[bold yellow]Warning:[/bold yellow] Web scrape timed out after 30s for {url}")
+            _dbg(f"Web scrape timeout for {url}")
+            return f"[Web scraping timed out for {url}]"
         except Exception as e:
             console.print(f"[bold red]Error scraping web content:[/bold red] {str(e)}")
             _dbg(f"Web scraping exception: {e}")

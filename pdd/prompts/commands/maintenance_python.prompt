@@ -14,6 +14,10 @@
   1. **sync**:
      - Interface: Match the `sync` command specification in `README.md`.
      - Logic: Call `sync_main` with `@track_cost` decorator.
+     - URL detection: If BASENAME matches `github\.com/.+/issues/\d+`, dispatch to `run_agentic_sync()` from `agentic_sync.py` instead of `sync_main()`.
+     - Additional options for agentic sync mode: `--timeout-adder` (float, default 0.0) and `--no-github-state` (flag).
+     - Helper: `_run_agentic_sync_dispatch(ctx, issue_url, ...)` handles the dispatch, displays results, raises `click.exceptions.Exit(1)` on failure.
+     - Import `_is_github_issue_url` and `run_agentic_sync` from `..agentic_sync`.
   2. **auto-deps**:
      - Interface: Match the `auto-deps` command specification in `README.md`.
      - Logic: Call `auto_deps_main` with `@track_cost` decorator.
@@ -32,10 +36,14 @@
   <track_cost_example>
   <include>context/track_cost_example.py</include>
   </track_cost_example>
+  <agentic_sync_example>
+  <include>context/agentic_sync_example.py</include>
+  </agentic_sync_example>
 
 % Instructions
-  - Use `handle_error` for exceptions (re-raise `click.Abort`).
+  - Use `handle_error` for exceptions (re-raise `click.Abort` and `click.exceptions.Exit`).
   - Support deprecated flags with warnings.
+  - Backward compatible: `pdd sync my_module` still calls `sync_main` as before.
 
 % Deliverables
   - Code: `pdd/commands/maintenance.py`
