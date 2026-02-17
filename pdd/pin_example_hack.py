@@ -1571,7 +1571,8 @@ def sync_orchestration(
                             elif isinstance(result, tuple) and len(result) >= 3:
                                 if operation == 'test': success = pdd_files['test'].exists()
                                 else: success = bool(result[0])
-                                cost = result[-2] if len(result) >= 2 and isinstance(result[-2], (int, float)) else 0.0
+                                # Cost is always at index 1 in both 3-tuple and 4-tuple returns
+                                cost = result[1] if len(result) >= 2 and isinstance(result[1], (int, float)) else 0.0
                                 current_cost_ref[0] += cost
                             else:
                                 success = result is not None
@@ -1589,8 +1590,8 @@ def sync_orchestration(
                                  actual_cost = result.get('cost', 0.0)
                                  model_name = result.get('model', 'unknown')
                             elif isinstance(result, tuple) and len(result) >= 3:
-                                 actual_cost = result[-2] if len(result) >= 2 else 0.0
-                                 model_name = result[-1] if len(result) >= 1 else 'unknown'
+                                 actual_cost = result[1] if isinstance(result[1], (int, float)) else 0.0
+                                 model_name = result[2] if len(result) >= 3 and isinstance(result[2], str) else 'unknown'
                             last_model_name = str(model_name)
                             operations_completed.append(operation)
                             _save_operation_fingerprint(basename, language, operation, pdd_files, actual_cost, str(model_name), atomic_state=atomic_state)
