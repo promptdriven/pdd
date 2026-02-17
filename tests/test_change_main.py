@@ -1092,7 +1092,7 @@ def test_change_main_user_story_validation_uses_output_dir(tmp_path):
         )
 
     _, kwargs = mock_story_tests.call_args
-    assert kwargs["prompt_files"] == [out_prompt, base_other]
+    assert kwargs["prompt_files"] == [out_prompt, base_prompt, base_other]
 
 
 def test_change_main_skips_user_story_validation_for_csv_output(tmp_path):

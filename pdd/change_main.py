@@ -525,7 +525,7 @@ def change_main(
                     merged: List[Path] = []
                     seen = set()
                     for pf in override_prompts + base_prompts:
-                        key = pf.name.lower()
+                        key = str(pf.resolve()).lower()
                         if key in seen:
                             continue
                         merged.append(pf)
