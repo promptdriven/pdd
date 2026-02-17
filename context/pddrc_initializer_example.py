@@ -7,7 +7,7 @@ from pathlib import Path
 project_root = Path(__file__).resolve().parent.parent
 sys.path.append(str(project_root))
 
-from pdd.setup.pddrc_initializer import offer_pddrc_init
+from pdd.pddrc_initializer import offer_pddrc_init
 
 
 def main() -> None:

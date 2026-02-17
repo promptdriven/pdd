@@ -1,574 +1,378 @@
-"""Tests for setup_tool.py"""
+"""Tests for setup_tool.py — deterministic auto-configuration."""
 
-import subprocess
-import tempfile
-from pathlib import Path
 import pytest
-from pdd.setup_tool import create_api_env_script
+from unittest.mock import MagicMock, patch
+from pathlib import Path
+
+from pdd import setup_tool
 
 
-def test_create_api_env_script_with_special_characters_bash():
-    """
-    Test that API keys with special shell characters are properly escaped
-    when generating bash/zsh shell scripts.
-    
-    This test will fail with the current implementation (no escaping) and
-    pass after fixing with shlex.quote().
-    """
-    # Simulate a Gemini API key that might contain special characters
-    # These are realistic characters that could appear in API keys or be accidentally
-    # included when copy-pasting
-    test_keys = {
-        'GEMINI_API_KEY': 'AIzaSyAbCdEf123456$var"quote\'backtick\\slash'
-    }
-    
-    # Generate the script
-    script_content = create_api_env_script(test_keys, 'bash')
-    
-    # Write to a temporary file
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False) as f:
-        f.write(script_content)
-        script_path = Path(f.name)
-    
-    try:
-        # Try to parse/validate the script by running it with bash -n (syntax check)
-        # This will fail if the script has parsing errors
-        result = subprocess.run(
-            ['bash', '-n', str(script_path)],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        
-        # The script should parse without errors
-        assert result.returncode == 0, (
-            f"Generated script has syntax errors: {result.stderr}\n"
-            f"Script content:\n{script_content}"
-        )
-        
-        # Additionally, try to source it in a subprocess to ensure it can be executed
-        # We'll check the exit code but not the actual env vars (since they're set in subprocess)
-        result = subprocess.run(
-            ['bash', '-c', f'source {script_path} && exit 0'],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        
-        assert result.returncode == 0, (
-            f"Generated script cannot be sourced: {result.stderr}\n"
-            f"Script content:\n{script_content}"
-        )
-        
-    finally:
-        # Clean up
-        script_path.unlink()
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def mock_cli_result():
+    result = MagicMock()
+    result.cli_name = "test_cli"
+    result.provider = "test_provider"
+    result.api_key_configured = True
+    return result
 
 
-def test_create_api_env_script_with_special_characters_zsh():
-    """Test that API keys with special characters work in zsh scripts."""
-    test_keys = {
-        'GEMINI_API_KEY': 'AIzaSyAbCdEf123456$var"quote\'backtick\\slash'
-    }
-    
-    script_content = create_api_env_script(test_keys, 'zsh')
-    
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False) as f:
-        f.write(script_content)
-        script_path = Path(f.name)
-    
-    try:
-        # Test zsh syntax
-        result = subprocess.run(
-            ['zsh', '-n', str(script_path)],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        
-        assert result.returncode == 0, (
-            f"Generated zsh script has syntax errors: {result.stderr}\n"
-            f"Script content:\n{script_content}"
-        )
-    finally:
-        script_path.unlink()
+@pytest.fixture
+def mock_detect_cli():
+    with patch("pdd.cli_detector.detect_and_bootstrap_cli") as m:
+        yield m
 
 
-def test_create_api_env_script_with_common_problematic_characters():
-    """
-    Test with various common problematic characters that might appear in API keys.
-    
-    Characters tested:
-    - Double quotes: "
-    - Single quotes: '
-    - Dollar signs: $ (variable expansion)
-    - Backticks: ` (command substitution)
-    - Backslashes: \\ (escaping)
-    - Spaces: (should be handled)
-    - Parentheses: () (might be interpreted)
-    """
-    problematic_key = 'key"with\'many$special`characters\\and spaces(too)'
-    test_keys = {
-        'GEMINI_API_KEY': problematic_key
-    }
-    
-    # Test all common shells
-    for shell in ['bash', 'zsh', 'sh']:
-        script_content = create_api_env_script(test_keys, shell)
-        
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False) as f:
-            f.write(script_content)
-            script_path = Path(f.name)
-        
-        try:
-            # Use bash/sh for sh, bash for bash, zsh for zsh
-            shell_cmd = 'sh' if shell == 'sh' else shell
-            result = subprocess.run(
-                [shell_cmd, '-n', str(script_path)],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            
-            assert result.returncode == 0, (
-                f"Generated {shell} script has syntax errors: {result.stderr}\n"
-                f"Script content:\n{script_content}"
-            )
-        finally:
-            script_path.unlink()
+@pytest.fixture
+def mock_auto_phase():
+    with patch("pdd.setup_tool._run_auto_phase") as m:
+        yield m
 
 
-def test_create_api_env_script_preserves_key_value():
-    """
-    Test that after proper escaping, the key value can still be correctly
-    extracted when the script is sourced.
-    """
-    original_key = 'AIzaSyAbCdEf123456$var"quote\'backtick\\slash'
-    test_keys = {
-        'GEMINI_API_KEY': original_key
-    }
-    
-    script_content = create_api_env_script(test_keys, 'bash')
-    
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False) as f:
-        f.write(script_content)
-        script_path = Path(f.name)
-    
-    try:
-        # Source the script and extract the value
-        # We'll use a Python subprocess to avoid shell escaping issues in our test
-        result = subprocess.run(
-            ['bash', '-c', f'source {script_path} && python3 -c "import os; print(os.environ.get(\'GEMINI_API_KEY\', \'\'))"'],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        
-        assert result.returncode == 0, (
-            f"Failed to source script and read env var: {result.stderr}\n"
-            f"Script content:\n{script_content}"
-        )
-        
-        extracted_key = result.stdout.strip()
-        assert extracted_key == original_key, (
-            f"Key value was corrupted during escaping.\n"
-            f"Original: {repr(original_key)}\n"
-            f"Extracted: {repr(extracted_key)}\n"
-            f"Script content:\n{script_content}"
-        )
-    finally:
-        script_path.unlink()
+@pytest.fixture
+def mock_fallback_menu():
+    with patch("pdd.setup_tool._run_fallback_menu") as m:
+        yield m
 
 
-def test_create_api_env_script_with_normal_key():
-    """
-    Test that normal keys (without special characters) still work correctly.
-    This ensures our fix doesn't break existing functionality.
-    """
-    normal_key = 'AIzaSyAbCdEf1234567890_normal_key_value'
-    test_keys = {
-        'OPENAI_API_KEY': normal_key,
-        'GEMINI_API_KEY': normal_key
-    }
-    
-    script_content = create_api_env_script(test_keys, 'bash')
-    
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False) as f:
-        f.write(script_content)
-        script_path = Path(f.name)
-    
-    try:
-        result = subprocess.run(
-            ['bash', '-n', str(script_path)],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        
-        assert result.returncode == 0, (
-            f"Normal key failed syntax check: {result.stderr}\n"
-            f"Script content:\n{script_content}"
-        )
-        
-        # Verify values can be extracted
-        result = subprocess.run(
-            ['bash', '-c', f'source {script_path} && python3 -c "import os; print(os.environ.get(\'OPENAI_API_KEY\', \'\')); print(os.environ.get(\'GEMINI_API_KEY\', \'\'))"'],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        
-        assert result.returncode == 0
-        extracted_keys = result.stdout.strip().split('\n')
-        assert extracted_keys[0] == normal_key
-        assert extracted_keys[1] == normal_key
-    finally:
-        script_path.unlink()
+@pytest.fixture
+def mock_input():
+    with patch("builtins.input") as m:
+        yield m
 
 
-def _shell_available(shell: str) -> bool:
-    """Check if a shell is available on the system"""
-    try:
-        result = subprocess.run(
-            ['which', shell],
-            capture_output=True,
-            timeout=2
-        )
-        return result.returncode == 0
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return False
+@pytest.fixture
+def mock_print():
+    with patch("builtins.print") as m:
+        yield m
 
 
-def test_create_api_env_script_with_special_characters_fish():
-    """
-    Test that API keys with special characters work in fish shell scripts.
-    
-    This test verifies that shlex.quote() works correctly with fish shell.
-    Fish is not POSIX-compliant, so there may be edge cases where POSIX-style
-    quoting doesn't work as expected.
-    """
-    if not _shell_available('fish'):
-        pytest.skip("fish shell not available")
-    
-    test_keys = {
-        'GEMINI_API_KEY': 'AIzaSyAbCdEf123456$var"quote\'backtick\\slash'
-    }
-    
-    script_content = create_api_env_script(test_keys, 'fish')
-    
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.fish', delete=False) as f:
-        f.write(script_content)
-        script_path = Path(f.name)
-    
-    try:
-        # Fish doesn't have a -n syntax check flag like bash/zsh
-        # So we'll try to source it and see if it works
-        result = subprocess.run(
-            ['fish', '-c', f'source {script_path}; exit 0'],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        
-        assert result.returncode == 0, (
-            f"Generated fish script has syntax/execution errors: {result.stderr}\n"
-            f"Script content:\n{script_content}"
-        )
-    finally:
-        script_path.unlink()
+# ---------------------------------------------------------------------------
+# Tests for run_setup
+# ---------------------------------------------------------------------------
+
+def test_run_setup_no_cli_detected(mock_detect_cli, mock_auto_phase, mock_print):
+    """Test that setup exits early if no CLI is detected."""
+    result = MagicMock()
+    result.cli_name = ""
+    mock_detect_cli.return_value = result
+
+    setup_tool.run_setup()
+
+    mock_detect_cli.assert_called_once()
+    mock_auto_phase.assert_not_called()
+    assert any("Agentic features require at least one CLI tool" in str(c) for c in mock_print.call_args_list)
 
 
-def test_create_api_env_script_preserves_key_value_fish():
-    """
-    Test that fish shell correctly preserves key values with special characters.
-    
-    This is critical because fish has different quoting rules than POSIX shells,
-    and shlex.quote() may not handle all cases correctly.
-    """
-    if not _shell_available('fish'):
-        pytest.skip("fish shell not available")
-    
-    original_key = 'AIzaSyAbCdEf123456$var"quote\'backtick\\slash'
-    test_keys = {
-        'GEMINI_API_KEY': original_key
-    }
-    
-    script_content = create_api_env_script(test_keys, 'fish')
-    
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.fish', delete=False) as f:
-        f.write(script_content)
-        script_path = Path(f.name)
-    
-    try:
-        # Source the script and extract the value using fish
-        result = subprocess.run(
-            ['fish', '-c', f'source {script_path}; python3 -c "import os; print(os.environ.get(\'GEMINI_API_KEY\', \'\'))"'],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        
-        assert result.returncode == 0, (
-            f"Failed to source fish script and read env var: {result.stderr}\n"
-            f"Script content:\n{script_content}"
-        )
-        
-        extracted_key = result.stdout.strip()
-        assert extracted_key == original_key, (
-            f"Key value was corrupted during escaping in fish shell.\n"
-            f"Original: {repr(original_key)}\n"
-            f"Extracted: {repr(extracted_key)}\n"
-            f"Script content:\n{script_content}\n"
-            f"This indicates shlex.quote() may not work correctly with fish shell."
-        )
-    finally:
-        script_path.unlink()
+def test_run_setup_success_path(mock_detect_cli, mock_auto_phase, mock_input, mock_print, mock_cli_result):
+    """Test the happy path where auto phase succeeds."""
+    mock_detect_cli.return_value = mock_cli_result
+    mock_auto_phase.return_value = True
+
+    with patch("pdd.setup_tool._console") as mock_console:
+        setup_tool.run_setup()
+
+    mock_detect_cli.assert_called_once()
+    mock_auto_phase.assert_called_once()
+    assert any("Setup complete" in str(c) for c in mock_console.print.call_args_list)
 
 
-def test_create_api_env_script_with_special_characters_csh():
-    """
-    Test that API keys with special characters work in csh/tcsh shell scripts.
-    
-    WARNING: csh/tcsh have fundamentally different quoting rules than POSIX shells.
-    shlex.quote() uses POSIX single-quote syntax which may not work correctly
-    in csh/tcsh, especially with:
-    - Variables containing $ (variable expansion still occurs in single quotes)
-    - Complex backslash sequences
-    - Certain special characters
-    
-    This test will help identify if shlex.quote() works correctly with csh/tcsh.
-    """
-    # Try csh first, then tcsh
-    shell_cmd = None
-    shell_name = None
-    for shell in ['csh', 'tcsh']:
-        if _shell_available(shell):
-            shell_cmd = shell
-            shell_name = shell
-            break
-    
-    if not shell_cmd:
-        pytest.skip("csh/tcsh not available")
-    
-    test_keys = {
-        'GEMINI_API_KEY': 'AIzaSyAbCdEf123456$var"quote\'backtick\\slash'
-    }
-    
-    script_content = create_api_env_script(test_keys, shell_name)
-    
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.csh', delete=False) as f:
-        f.write(script_content)
-        script_path = Path(f.name)
-    
-    try:
-        # csh/tcsh don't have a -n flag, so we'll try to source it
-        # Use -f to prevent reading .cshrc/.tcshrc which might interfere
-        result = subprocess.run(
-            [shell_cmd, '-f', '-c', f'source {script_path}; exit 0'],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        
-        assert result.returncode == 0, (
-            f"Generated {shell_name} script has syntax/execution errors: {result.stderr}\n"
-            f"Script content:\n{script_content}\n"
-            f"This may indicate that shlex.quote() doesn't work correctly with {shell_name}."
-        )
-    finally:
-        script_path.unlink()
+def test_run_setup_fallback_path(mock_detect_cli, mock_auto_phase, mock_fallback_menu, mock_input, mock_cli_result):
+    """Test that fallback menu is triggered if auto phase fails."""
+    mock_detect_cli.return_value = mock_cli_result
+    mock_auto_phase.return_value = False
+
+    setup_tool.run_setup()
+
+    mock_auto_phase.assert_called_once()
+    mock_fallback_menu.assert_called_once()
 
 
-def test_create_api_env_script_preserves_key_value_csh():
-    """
-    Test that csh/tcsh correctly preserves key values with special characters.
-    
-    This is critical because csh/tcsh have fundamentally different quoting rules:
-    - Single quotes in csh do NOT prevent variable expansion ($var still expands)
-    - Backslash escaping works differently
-    - The quoting mechanism is incompatible with POSIX
-    
-    This test will likely reveal issues with using shlex.quote() for csh/tcsh.
-    """
-    # Try csh first, then tcsh
-    shell_cmd = None
-    shell_name = None
-    for shell in ['csh', 'tcsh']:
-        if _shell_available(shell):
-            shell_cmd = shell
-            shell_name = shell
-            break
-    
-    if not shell_cmd:
-        pytest.skip("csh/tcsh not available")
-    
-    original_key = 'AIzaSyAbCdEf123456$var"quote\'backtick\\slash'
-    test_keys = {
-        'GEMINI_API_KEY': original_key
-    }
-    
-    script_content = create_api_env_script(test_keys, shell_name)
-    
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.csh', delete=False) as f:
-        f.write(script_content)
-        script_path = Path(f.name)
-    
-    try:
-        # Source the script and extract the value using csh/tcsh
-        # Use -f to prevent reading .cshrc/.tcshrc
-        result = subprocess.run(
-            [shell_cmd, '-f', '-c', f'source {script_path}; python3 -c "import os; print(os.environ.get(\'GEMINI_API_KEY\', \'\'))"'],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        
-        assert result.returncode == 0, (
-            f"Failed to source {shell_name} script and read env var: {result.stderr}\n"
-            f"Script content:\n{script_content}"
-        )
-        
-        extracted_key = result.stdout.strip()
-        assert extracted_key == original_key, (
-            f"Key value was corrupted during escaping in {shell_name} shell.\n"
-            f"Original: {repr(original_key)}\n"
-            f"Extracted: {repr(extracted_key)}\n"
-            f"Script content:\n{script_content}\n"
-            f"This indicates shlex.quote() does NOT work correctly with {shell_name}.\n"
-            f"csh/tcsh have different quoting rules than POSIX shells."
-        )
-    finally:
-        script_path.unlink()
+def test_run_setup_keyboard_interrupt(mock_detect_cli, mock_print):
+    """Test handling of KeyboardInterrupt during setup."""
+    mock_detect_cli.side_effect = KeyboardInterrupt
+
+    setup_tool.run_setup()
+
+    assert any("Setup interrupted" in str(c) for c in mock_print.call_args_list)
 
 
-def test_create_api_env_script_csh_variable_expansion_issue():
-    """
-    Test a specific csh/tcsh issue: variable expansion in single quotes.
-    
-    In csh/tcsh, single quotes do NOT prevent variable expansion.
-    This means a key containing $HOME will expand to the actual home directory
-    path, which is incorrect behavior.
-    
-    This test demonstrates the fundamental incompatibility between
-    POSIX-style quoting (shlex.quote) and csh/tcsh.
-    """
-    # Try csh first, then tcsh
-    shell_cmd = None
-    shell_name = None
-    for shell in ['csh', 'tcsh']:
-        if _shell_available(shell):
-            shell_cmd = shell
-            shell_name = shell
-            break
-    
-    if not shell_cmd:
-        pytest.skip("csh/tcsh not available")
-    
-    # Create a key that contains $HOME to test variable expansion
-    # In POSIX shells, this should be preserved as-is
-    # In csh/tcsh, this might expand to the actual home directory
-    test_key = 'api_key_with_$HOME_in_it'
-    test_keys = {
-        'GEMINI_API_KEY': test_key
-    }
-    
-    script_content = create_api_env_script(test_keys, shell_name)
-    
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.csh', delete=False) as f:
-        f.write(script_content)
-        script_path = Path(f.name)
-    
-    try:
-        # Source the script and extract the value
-        result = subprocess.run(
-            [shell_cmd, '-f', '-c', f'source {script_path}; python3 -c "import os; print(os.environ.get(\'GEMINI_API_KEY\', \'\'))"'],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        
-        assert result.returncode == 0, (
-            f"Failed to source {shell_name} script: {result.stderr}\n"
-            f"Script content:\n{script_content}"
-        )
-        
-        extracted_key = result.stdout.strip()
-        # This test will likely FAIL, demonstrating the issue
-        assert extracted_key == test_key, (
-            f"Variable expansion occurred in {shell_name} despite single quotes!\n"
-            f"Expected: {repr(test_key)}\n"
-            f"Got: {repr(extracted_key)}\n"
-            f"Script content:\n{script_content}\n"
-            f"This proves that shlex.quote() (POSIX single quotes) does NOT work\n"
-            f"correctly with csh/tcsh, which expand variables even in single quotes."
-        )
-    finally:
-        script_path.unlink()
+def test_run_setup_no_api_key_warning(mock_detect_cli, mock_auto_phase, mock_input, mock_print):
+    """Test that a warning is printed if API key is not configured, but proceeds."""
+    result = MagicMock()
+    result.cli_name = "test_cli"
+    result.api_key_configured = False
+    mock_detect_cli.return_value = result
+    mock_auto_phase.return_value = True
+
+    setup_tool.run_setup()
+
+    assert any("No API key configured" in str(c) for c in mock_print.call_args_list)
+    mock_auto_phase.assert_called_once()
 
 
-def test_create_api_env_script_fish_edge_cases():
-    """
-    Test fish shell with various edge cases that might reveal quoting issues.
-    
-    Fish shell, while often compatible with POSIX-style quoting, may have
-    edge cases with certain character combinations.
-    """
-    if not _shell_available('fish'):
-        pytest.skip("fish shell not available")
-    
-    edge_cases = [
-        'key with spaces',
-        "key'with'single'quotes",
-        'key"with"double"quotes',
-        'key$with$dollars',
-        'key\\with\\backslashes',
-        'key`with`backticks',
-        'key(with)parentheses',
-        'key[with]brackets',
-        'key{with}braces',
-        'key;with;semicolons',
-        'key|with|pipes',
-        'key&with&ampersands',
-        'key<with>redirects',
-        'key\nwith\nnewlines',
-        'key\twith\ttabs',
+# ---------------------------------------------------------------------------
+# Tests for _run_auto_phase
+# ---------------------------------------------------------------------------
+
+@patch("pdd.setup_tool._step4_test_and_summary")
+@patch("pdd.setup_tool._step3_local_llms_and_pddrc")
+@patch("pdd.setup_tool._step2_configure_models")
+@patch("pdd.setup_tool._step1_scan_keys")
+@patch("builtins.input")
+def test_run_auto_phase_success(mock_input, mock_step1, mock_step2, mock_step3, mock_step4):
+    """Test that all 4 steps run sequentially on success."""
+    mock_step1.return_value = [("ANTHROPIC_API_KEY", "shell environment")]
+    mock_step2.return_value = {"Anthropic": 3}
+    mock_step3.return_value = {"Ollama": ["llama3.2:3b"]}
+
+    result = setup_tool._run_auto_phase()
+
+    assert result is True
+    mock_step1.assert_called_once()
+    mock_step2.assert_called_once_with([("ANTHROPIC_API_KEY", "shell environment")])
+    mock_step3.assert_called_once()
+    mock_step4.assert_called_once()
+    # 3 "Press Enter" prompts between steps
+    assert mock_input.call_count == 3
+
+
+@patch("pdd.setup_tool._step1_scan_keys")
+@patch("builtins.input")
+def test_run_auto_phase_exception_returns_false(mock_input, mock_step1):
+    """Test that exceptions in steps cause fallback."""
+    mock_step1.side_effect = RuntimeError("test error")
+
+    result = setup_tool._run_auto_phase()
+
+    assert result is False
+
+
+# ---------------------------------------------------------------------------
+# Tests for _step1_scan_keys
+# ---------------------------------------------------------------------------
+
+@patch("pdd.setup_tool._prompt_for_api_key")
+@patch("pdd.api_key_scanner._parse_api_env_file")
+@patch("pdd.api_key_scanner._detect_shell")
+@patch("pdd.litellm_registry.PROVIDER_API_KEY_MAP", {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"})
+def test_step1_finds_keys_in_env(mock_detect_shell, mock_parse, mock_prompt, tmp_path, monkeypatch):
+    """Test that step 1 finds keys from os.environ."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    mock_detect_shell.return_value = "bash"
+    mock_parse.return_value = {}
+
+    found = setup_tool._step1_scan_keys()
+
+    assert len(found) == 1
+    assert found[0] == ("ANTHROPIC_API_KEY", "shell environment")
+    mock_prompt.assert_not_called()
+
+
+@patch("pdd.setup_tool._prompt_for_api_key")
+@patch("pdd.api_key_scanner._parse_api_env_file")
+@patch("pdd.api_key_scanner._detect_shell")
+@patch("pdd.litellm_registry.PROVIDER_API_KEY_MAP", {"anthropic": "ANTHROPIC_API_KEY"})
+def test_step1_no_keys_triggers_prompt(mock_detect_shell, mock_parse, mock_prompt, tmp_path, monkeypatch):
+    """Test that step 1 prompts for a key when none found."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    mock_detect_shell.return_value = "bash"
+    mock_parse.return_value = {}
+    mock_prompt.return_value = [("ANTHROPIC_API_KEY", "~/.pdd/api-env.bash")]
+
+    found = setup_tool._step1_scan_keys()
+
+    assert len(found) == 1
+    mock_prompt.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Tests for _step2_configure_models
+# ---------------------------------------------------------------------------
+
+@patch("pdd.provider_manager._get_user_csv_path")
+@patch("pdd.provider_manager._write_csv_atomic")
+@patch("pdd.provider_manager._read_csv")
+def test_step2_adds_matching_models(mock_read, mock_write, mock_csv_path, tmp_path):
+    """Test that step 2 filters reference CSV by found keys and writes user CSV."""
+    mock_csv_path.return_value = tmp_path / "llm_model.csv"
+
+    # First call: reference CSV, second call: existing user CSV (empty)
+    mock_read.side_effect = [
+        [
+            {"provider": "Anthropic", "model": "claude-sonnet", "api_key": "ANTHROPIC_API_KEY", "base_url": ""},
+            {"provider": "OpenAI", "model": "gpt-4", "api_key": "OPENAI_API_KEY", "base_url": ""},
+        ],
+        [],  # empty user CSV
     ]
-    
-    for i, test_key in enumerate(edge_cases):
-        test_keys = {
-            'TEST_API_KEY': test_key
-        }
-        
-        script_content = create_api_env_script(test_keys, 'fish')
-        
-        with tempfile.NamedTemporaryFile(mode='w', suffix=f'.fish', delete=False) as f:
-            f.write(script_content)
-            script_path = Path(f.name)
-        
-        try:
-            # Try to source it
-            result = subprocess.run(
-                ['fish', '-c', f'source {script_path}; python3 -c "import os; print(os.environ.get(\'TEST_API_KEY\', \'\'))"'],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            
-            if result.returncode != 0:
-                pytest.fail(
-                    f"Fish shell failed with edge case {i+1}: {repr(test_key)}\n"
-                    f"Error: {result.stderr}\n"
-                    f"Script content:\n{script_content}"
-                )
-            
-            extracted_key = result.stdout.strip()
-            if extracted_key != test_key:
-                pytest.fail(
-                    f"Fish shell corrupted value for edge case {i+1}: {repr(test_key)}\n"
-                    f"Expected: {repr(test_key)}\n"
-                    f"Got: {repr(extracted_key)}\n"
-                    f"Script content:\n{script_content}"
-                )
-        finally:
-            script_path.unlink()
 
+    found_keys = [("ANTHROPIC_API_KEY", "shell environment")]
+    result = setup_tool._step2_configure_models(found_keys)
+
+    assert result == {"Anthropic": 1}
+    mock_write.assert_called_once()
+    written_rows = mock_write.call_args[0][1]
+    assert len(written_rows) == 1
+    assert written_rows[0]["model"] == "claude-sonnet"
+
+
+@patch("pdd.provider_manager._get_user_csv_path")
+@patch("pdd.provider_manager._write_csv_atomic")
+@patch("pdd.provider_manager._read_csv")
+def test_step2_deduplicates_existing(mock_read, mock_write, mock_csv_path, tmp_path):
+    """Test that step 2 skips models already in user CSV."""
+    mock_csv_path.return_value = tmp_path / "llm_model.csv"
+
+    mock_read.side_effect = [
+        [{"provider": "Anthropic", "model": "claude-sonnet", "api_key": "ANTHROPIC_API_KEY", "base_url": ""}],
+        [{"provider": "Anthropic", "model": "claude-sonnet", "api_key": "ANTHROPIC_API_KEY"}],
+    ]
+
+    found_keys = [("ANTHROPIC_API_KEY", "shell environment")]
+    result = setup_tool._step2_configure_models(found_keys)
+
+    assert result == {"Anthropic": 1}
+    mock_write.assert_not_called()
+
+
+@patch("pdd.provider_manager._get_user_csv_path")
+@patch("pdd.provider_manager._write_csv_atomic")
+@patch("pdd.provider_manager._read_csv")
+def test_step2_skips_local_models(mock_read, mock_write, mock_csv_path, tmp_path):
+    """Test that step 2 skips local models (ollama, lm_studio, localhost)."""
+    mock_csv_path.return_value = tmp_path / "llm_model.csv"
+
+    mock_read.side_effect = [
+        [
+            {"provider": "Ollama", "model": "ollama/llama", "api_key": "", "base_url": "http://localhost:11434"},
+            {"provider": "lm_studio", "model": "lm/model", "api_key": "", "base_url": "http://localhost:1234"},
+            {"provider": "OpenAI", "model": "gpt-local", "api_key": "OPENAI_API_KEY", "base_url": "http://localhost:8080"},
+            {"provider": "Anthropic", "model": "claude", "api_key": "ANTHROPIC_API_KEY", "base_url": ""},
+        ],
+        [],
+    ]
+
+    found_keys = [("ANTHROPIC_API_KEY", "env"), ("OPENAI_API_KEY", "env")]
+    result = setup_tool._step2_configure_models(found_keys)
+
+    assert result == {"Anthropic": 1}
+
+
+# ---------------------------------------------------------------------------
+# Tests for local LLM helpers
+# ---------------------------------------------------------------------------
+
+def test_extract_ollama_models():
+    """Test Ollama model name extraction from API response."""
+    data = {"models": [{"name": "llama3.2:3b"}, {"name": "openhermes:latest"}, {"name": ""}]}
+    result = setup_tool._extract_ollama_models(data)
+    assert result == ["llama3.2:3b", "openhermes:latest"]
+
+
+def test_extract_ollama_models_empty():
+    """Test Ollama extraction with empty models list."""
+    assert setup_tool._extract_ollama_models({"models": []}) == []
+    assert setup_tool._extract_ollama_models({}) == []
+
+
+def test_extract_lm_studio_models():
+    """Test LM Studio model name extraction from API response."""
+    data = {"data": [{"id": "model-a"}, {"id": "model-b"}, {"id": ""}]}
+    result = setup_tool._extract_lm_studio_models(data)
+    assert result == ["model-a", "model-b"]
+
+
+def test_extract_lm_studio_models_empty():
+    """Test LM Studio extraction with empty data list."""
+    assert setup_tool._extract_lm_studio_models({"data": []}) == []
+    assert setup_tool._extract_lm_studio_models({}) == []
+
+
+# ---------------------------------------------------------------------------
+# Tests for _run_fallback_menu
+# ---------------------------------------------------------------------------
+
+@patch("pdd.pddrc_initializer.offer_pddrc_init")
+@patch("pdd.model_tester.test_model_interactive")
+@patch("pdd.provider_manager.add_provider_from_registry")
+@patch("builtins.input")
+def test_run_fallback_menu_options(mock_input, mock_add_provider, mock_test_model, mock_init_pddrc):
+    """Test the fallback menu loop and options."""
+    mock_input.side_effect = ["1", "2", "3", "5", "4"]
+
+    setup_tool._run_fallback_menu()
+
+    mock_add_provider.assert_called_once()
+    mock_test_model.assert_called_once()
+    mock_init_pddrc.assert_called_once()
+    assert mock_input.call_count == 5
+
+
+@patch("builtins.input")
+def test_run_fallback_menu_interrupt(mock_input, mock_print):
+    """Test exiting fallback menu via KeyboardInterrupt."""
+    mock_input.side_effect = KeyboardInterrupt
+
+    setup_tool._run_fallback_menu()
+
+    assert any("Setup interrupted" in str(c) for c in mock_print.call_args_list)
+
+
+# ---------------------------------------------------------------------------
+# Tests for _prompt_for_api_key
+# ---------------------------------------------------------------------------
+
+@patch("pdd.provider_manager._save_key_to_api_env")
+@patch("pdd.setup_tool.getpass")
+@patch("builtins.input")
+def test_prompt_for_api_key_adds_key(mock_input, mock_getpass, mock_save):
+    """Test that prompt flow saves a key and returns it."""
+    mock_input.side_effect = [
+        "1",   # Select Anthropic
+        "n",   # Don't add another
+    ]
+    mock_getpass.getpass.return_value = "sk-test-key-123"
+
+    result = setup_tool._prompt_for_api_key()
+
+    assert len(result) == 1
+    assert result[0][0] == "ANTHROPIC_API_KEY"
+    mock_save.assert_called_once_with("ANTHROPIC_API_KEY", "sk-test-key-123")
+
+
+@patch("pdd.provider_manager._save_key_to_api_env")
+@patch("pdd.setup_tool.getpass")
+@patch("builtins.input")
+def test_prompt_for_api_key_skip(mock_input, mock_getpass, mock_save):
+    """Test that skip option returns empty list."""
+    skip_idx = len(setup_tool._PROMPT_PROVIDERS) + 2
+    mock_input.side_effect = [str(skip_idx)]
+
+    result = setup_tool._prompt_for_api_key()
+
+    assert result == []
+    mock_save.assert_not_called()
+
+
+@patch("pdd.provider_manager._save_key_to_api_env")
+@patch("pdd.setup_tool.getpass")
+@patch("builtins.input")
+def test_prompt_for_api_key_empty_value_skips(mock_input, mock_getpass, mock_save):
+    """Test that empty key value is rejected gracefully."""
+    skip_idx = len(setup_tool._PROMPT_PROVIDERS) + 2
+    mock_input.side_effect = [
+        "1",           # Select Anthropic
+        str(skip_idx), # Skip after empty key
+    ]
+    mock_getpass.getpass.return_value = ""
+
+    result = setup_tool._prompt_for_api_key()
+
+    assert result == []
+    mock_save.assert_not_called()

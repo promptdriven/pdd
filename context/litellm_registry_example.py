@@ -7,7 +7,7 @@ from pathlib import Path
 project_root = Path(__file__).resolve().parent.parent
 sys.path.append(str(project_root))
 
-from pdd.setup.litellm_registry import (
+from pdd.litellm_registry import (
     is_litellm_available,
     get_api_key_env_var,
     get_top_providers,

@@ -12,7 +12,7 @@
 }
 </pdd-interface>
 
-% You are an expert Python engineer. Your goal is to write the pdd/setup/api_key_scanner.py module.
+% You are an expert Python engineer. Your goal is to write the pdd/api_key_scanner.py module.
 
 % Role & Scope
 Discovers API keys needed by the user's configured models and reports their existence. Reads the user's `~/.pdd/llm_model.csv` to find all unique API key environment variable names, then checks .env files, shell environment, and ~/.pdd/api-env.* files. Only checks **existence** — never makes API calls or stores key values.
@@ -39,4 +39,4 @@ This file is created/managed by provider_manager when the user adds providers vi
 </llm_model_csv_schema>
 
 % Deliverables
-- Module at `pdd/setup/api_key_scanner.py` exporting `scan_environment`, `get_provider_key_names`, and `KeyInfo`.
+- Module at `pdd/api_key_scanner.py` exporting `scan_environment`, `get_provider_key_names`, and `KeyInfo`.

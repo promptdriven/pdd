@@ -1,4 +1,4 @@
-"""Tests for pdd/setup/api_key_scanner.py"""
+"""Tests for pdd/api_key_scanner.py"""
 
 import csv
 import os
@@ -8,7 +8,7 @@ from unittest import mock
 
 import pytest
 
-from pdd.setup.api_key_scanner import (
+from pdd.api_key_scanner import (
     KeyInfo,
     get_provider_key_names,
     scan_environment,
@@ -355,7 +355,7 @@ class TestScanEnvironment:
 
         # Mock dotenv to return a value
         with mock.patch(
-            "pdd.setup.api_key_scanner._load_dotenv_values",
+            "pdd.api_key_scanner._load_dotenv_values",
             return_value={"OPENAI_API_KEY": "sk-from-dotenv"},
         ):
             result = scan_environment()
@@ -372,7 +372,7 @@ class TestScanEnvironment:
 
         # Mock dotenv to return empty (no .env file)
         with mock.patch(
-            "pdd.setup.api_key_scanner._load_dotenv_values",
+            "pdd.api_key_scanner._load_dotenv_values",
             return_value={},
         ):
             result = scan_environment()
@@ -398,7 +398,7 @@ class TestScanEnvironment:
 
         # Mock get_provider_key_names to raise
         with mock.patch(
-            "pdd.setup.api_key_scanner.get_provider_key_names",
+            "pdd.api_key_scanner.get_provider_key_names",
             side_effect=Exception("Test error"),
         ):
             result = scan_environment()
@@ -422,7 +422,7 @@ class TestScanEnvironment:
 
         # Test with bash shell
         monkeypatch.setenv("SHELL", "/bin/bash")
-        with mock.patch("pdd.setup.api_key_scanner._load_dotenv_values", return_value={}):
+        with mock.patch("pdd.api_key_scanner._load_dotenv_values", return_value={}):
             result = scan_environment()
 
         assert result["OPENAI_API_KEY"].is_set is True
@@ -527,7 +527,7 @@ class TestEdgeCases:
         monkeypatch.setenv("MY_SPECIAL_KEY", "value_with_$pecial_chars")
         monkeypatch.setenv("SHELL", "/bin/bash")
 
-        with mock.patch("pdd.setup.api_key_scanner._load_dotenv_values", return_value={}):
+        with mock.patch("pdd.api_key_scanner._load_dotenv_values", return_value={}):
             result = scan_environment()
 
         assert result["MY_SPECIAL_KEY"].is_set is True

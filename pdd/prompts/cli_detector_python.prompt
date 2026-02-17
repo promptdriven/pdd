@@ -1,11 +1,15 @@
-<pdd-reason>Detects installed agentic CLI tools and offers installation guidance for missing ones.</pdd-reason>
+<pdd-reason>Detects and bootstraps agentic CLI tools for pdd setup, with minimal-friction interactive installation and API key configuration.</pdd-reason>
 
 <pdd-interface>
 {
   "type": "module",
   "module": {
     "functions": [
-      {"name": "detect_cli_tools", "signature": "() -> None", "returns": "None"}
+      {"name": "detect_cli_tools", "signature": "() -> None", "returns": "None"},
+      {"name": "detect_and_bootstrap_cli", "signature": "() -> CliBootstrapResult", "returns": "CliBootstrapResult"}
+    ],
+    "dataclasses": [
+      {"name": "CliBootstrapResult", "fields": ["cli_name", "provider", "cli_path", "api_key_configured"]}
     ]
   }
 }
@@ -13,20 +17,73 @@
 
 <pdd-dependency>agentic_common_python.prompt</pdd-dependency>
 
-% You are an expert Python engineer. Your goal is to write the pdd/setup/cli_detector.py module.
+% You are an expert Python engineer. Your goal is to write the pdd/cli_detector.py module.
 
 % Role & Scope
-Detects installed agentic CLI harnesses (Claude CLI, Codex CLI, Gemini CLI) required for `pdd fix`, `pdd change`, and `pdd bug`. Leverages `get_available_agents()` from `pdd.agentic_common` and cross-references with API keys to suggest installations.
+Detects and bootstraps agentic CLI harnesses (Claude CLI, Codex CLI, Gemini CLI) required for `pdd fix`, `pdd change`, `pdd bug`, and now `pdd setup` Phase 2 (agentic auto-configuration). The primary function `detect_and_bootstrap_cli()` is designed for minimal user friction — auto-detect what's available, default to the best option, and the user just presses Enter to confirm. The legacy `detect_cli_tools()` function is preserved for backward compatibility.
 
 % Requirements
-1. Function: `detect_cli_tools()` — check for CLI tools, display results, offer installation
-2. For each CLI (claude, codex, gemini): show `✓ Found at /path` or `✗ Not found`
-3. Cross-reference with API keys: if user has OPENAI_API_KEY but not codex CLI, highlight and suggest `npm install -g @openai/codex`
-4. Offer `Install now? [y/N]` for missing CLIs that have a matching API key; run via subprocess if accepted
-5. Show context: `(Required for: pdd fix, pdd change, pdd bug)`
-6. Handle npm not being installed (suggest manual installation)
+
+1. Dataclass: `CliBootstrapResult` with fields:
+   - `cli_name: str` — e.g. "claude", "gemini", "codex" (empty string if none)
+   - `provider: str` — e.g. "anthropic", "google", "openai" (empty string if none)
+   - `cli_path: str` — absolute path to the CLI binary (empty string if none)
+   - `api_key_configured: bool` — True if the API key for this provider is set
+
+2. Function: `detect_and_bootstrap_cli() -> CliBootstrapResult` — Phase 1 entry point for `pdd setup`. Shows all three CLI options with their status and lets the user choose which one to use. Flow:
+   a. Print "Checking CLI tools..."
+   b. Check all three CLIs (claude, gemini, codex) using `shutil.which()` and common path fallbacks (nvm paths, ~/.local/bin, /usr/local/bin). Use `_find_cli_binary()` from `pdd.agentic_common` if available.
+   c. Provider-to-CLI mapping: anthropic→claude, google→gemini, openai→codex. Provider-to-key mapping: anthropic→ANTHROPIC_API_KEY, google→GOOGLE_API_KEY or GEMINI_API_KEY, openai→OPENAI_API_KEY.
+   d. Print a numbered selection table (one CLI per line), using consistent column alignment:
+      - Index: 1, 2, 3
+      - Name: "Claude CLI", "Codex CLI", "Gemini CLI"
+      - Install status: `✓ Found at {path}` or `✗ Not found`
+      - Key status: `✓ {KEY_NAME} is set` or `✗ {KEY_NAME} not set`
+      Example output:
+      ```
+      Checking CLI tools...
+
+      1. Claude CLI   ✓ Found at /usr/local/bin/claude   ✓ ANTHROPIC_API_KEY is set
+      2. Codex CLI    ✗ Not found                         ✗ OPENAI_API_KEY not set
+      3. Gemini CLI   ✗ Not found                         ✓ GEMINI_API_KEY is set
+
+      Which CLI would you like to use for pdd setup? [1/2/3]:
+      ```
+   e. Read user input:
+      - Accept "1", "2", or "3" to select a CLI.
+      - If user presses Enter without typing, default to the highest-priority option that is both installed and has an API key; if none qualify, prefer installed-only; if still none, default to "1" (Claude). Print the default selection so the user sees it.
+      - If user types "q" or "n", return `CliBootstrapResult(cli_name="", provider="", cli_path="", api_key_configured=False)` with message "Skipped CLI setup. You can run `pdd setup` again later."
+   f. **Install step (if selected CLI is not installed):** Print the install command for that CLI and prompt `Install now? [y/N]: ` (default No on Enter). If accepted and npm is available, run installation via subprocess and wait for it to complete. If npm is not available, print manual installation instructions and return empty result. After successful installation, re-check the path.
+      - Claude CLI install: `npm install -g @anthropic-ai/claude-code`
+      - Codex CLI install: `npm install -g @openai/codex`
+      - Gemini CLI install: `npm install -g @google/gemini-cli`
+   g. **API key step (if selected CLI's key is not set):** Prompt `Enter your {Provider} API key (or press Enter to skip): `. If user provides a key: save it to `~/.pdd/api-env.{shell}` using shell-appropriate syntax (bash/zsh: `export KEY=value`, fish: `set -gx KEY value`), set it in `os.environ` for immediate availability, and add the source line to the shell RC file if not already present. If user presses Enter without a key, note that some CLIs (e.g. Claude CLI with a subscription) may still work, and return with `api_key_configured=False`.
+   h. **Ready:** Once both install and key steps pass (or are already satisfied), return the populated `CliBootstrapResult` immediately — do not print any "Press Enter" message here. The caller (setup_tool) owns that transition prompt.
+   i. Handle KeyboardInterrupt at every input prompt for a clean exit.
+
+3. Function: `detect_cli_tools()` — legacy function, kept for backward compatibility.
+   - For each CLI (claude, codex, gemini): show `✓ Found at /path` or `✗ Not found`
+   - Cross-reference with API keys: if user has OPENAI_API_KEY but not codex CLI, highlight and suggest `npm install -g @openai/codex`
+   - Offer `Install now? [y/N]` for missing CLIs that have a matching API key; run via subprocess if accepted
+   - Show context: `(Required for: pdd fix, pdd change, pdd bug)`
+   - Handle npm not being installed (suggest manual installation)
+
+4. Shell detection: Detect shell from `SHELL` env var (default to "bash"). Use `os.path.basename()` to extract shell name. Map to RC file path: zsh→~/.zshrc, bash→~/.bashrc, fish→~/.config/fish/config.fish.
+
+5. API key file management:
+   - Create `~/.pdd/` directory if it doesn't exist
+   - Write key to `~/.pdd/api-env.{shell}` (append, don't overwrite existing entries)
+   - Use shell-appropriate export syntax
+   - Add `source ~/.pdd/api-env.{shell}` (or fish equivalent: `test -f ... ; and source ...`) to shell RC file if not already present
 
 % Dependencies
+
+% Here are examples of how to use internal modules:
+<internal_example_modules>
+    % Here is an example of the cli_detector module showing expected usage:
+    % Here is an example of the agentic_common module showing CLI detection and agent availability:
+    </internal_example_modules>
+
 <agentic_common_example>
   <include>context/agentic_common_example.py</include>
 </agentic_common_example>
@@ -38,4 +95,4 @@ from pdd.agentic_common import get_available_agents, CLI_COMMANDS
 </agentic_common_api>
 
 % Deliverables
-- Module at `pdd/setup/cli_detector.py` exporting `detect_cli_tools`.
+- Module at `pdd/cli_detector.py` exporting `detect_cli_tools`, `detect_and_bootstrap_cli`, and `CliBootstrapResult`.

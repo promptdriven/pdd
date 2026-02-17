@@ -1,5 +1,5 @@
 """
-pdd/setup/api_key_scanner.py
+pdd/api_key_scanner.py
 
 Discovers API keys needed by the user's configured models, checking
 existence across shell, .env, and PDD config with source transparency.

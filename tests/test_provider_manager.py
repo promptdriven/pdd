@@ -1,4 +1,4 @@
-"""Tests for pdd/setup/provider_manager.py"""
+"""Tests for pdd/provider_manager.py"""
 
 import csv
 import os
@@ -8,7 +8,7 @@ from unittest import mock
 
 import pytest
 
-from pdd.setup.provider_manager import (
+from pdd.provider_manager import (
     CSV_FIELDNAMES,
     _get_shell_name,
     _get_pdd_dir,
@@ -386,9 +386,9 @@ class TestAddProviderFromRegistry:
     def test_returns_false_when_litellm_unavailable(self, temp_home):
         """Should return False when litellm is not available."""
         with mock.patch(
-            "pdd.setup.provider_manager.is_litellm_available", return_value=False
+            "pdd.provider_manager.is_litellm_available", return_value=False
         ):
-            with mock.patch("pdd.setup.provider_manager.console"):
+            with mock.patch("pdd.provider_manager.console"):
                 result = add_provider_from_registry()
 
         assert result is False
@@ -396,22 +396,22 @@ class TestAddProviderFromRegistry:
     def test_returns_false_on_empty_selection(self, temp_home):
         """Should return False when user enters empty selection."""
         with mock.patch(
-            "pdd.setup.provider_manager.is_litellm_available", return_value=True
+            "pdd.provider_manager.is_litellm_available", return_value=True
         ):
             with mock.patch(
-                "pdd.setup.provider_manager.get_top_providers",
+                "pdd.provider_manager.get_top_providers",
                 return_value=[],
             ):
-                with mock.patch("pdd.setup.provider_manager.Prompt") as mock_prompt:
+                with mock.patch("pdd.provider_manager.Prompt") as mock_prompt:
                     mock_prompt.ask.return_value = ""
-                    with mock.patch("pdd.setup.provider_manager.console"):
+                    with mock.patch("pdd.provider_manager.console"):
                         result = add_provider_from_registry()
 
         assert result is False
 
     def test_adds_models_to_csv(self, temp_home):
         """Should add selected models to user CSV."""
-        from pdd.setup.litellm_registry import ProviderInfo, ModelInfo
+        from pdd.litellm_registry import ProviderInfo, ModelInfo
 
         mock_provider = ProviderInfo(
             name="test_provider",
@@ -432,26 +432,26 @@ class TestAddProviderFromRegistry:
         ]
 
         with mock.patch(
-            "pdd.setup.provider_manager.is_litellm_available", return_value=True
+            "pdd.provider_manager.is_litellm_available", return_value=True
         ):
             with mock.patch(
-                "pdd.setup.provider_manager.get_top_providers",
+                "pdd.provider_manager.get_top_providers",
                 return_value=[mock_provider],
             ):
                 with mock.patch(
-                    "pdd.setup.provider_manager.get_models_for_provider",
+                    "pdd.provider_manager.get_models_for_provider",
                     return_value=mock_models,
                 ):
-                    with mock.patch("pdd.setup.provider_manager.Prompt") as mock_prompt:
+                    with mock.patch("pdd.provider_manager.Prompt") as mock_prompt:
                         # Select provider 1, then model 1
                         mock_prompt.ask.side_effect = ["1", "1", "test-api-key"]
 
-                        with mock.patch("pdd.setup.provider_manager.Confirm") as mock_confirm:
+                        with mock.patch("pdd.provider_manager.Confirm") as mock_confirm:
                             mock_confirm.ask.return_value = False
 
-                            with mock.patch("pdd.setup.provider_manager.console"):
+                            with mock.patch("pdd.provider_manager.console"):
                                 with mock.patch(
-                                    "pdd.setup.provider_manager._is_key_set",
+                                    "pdd.provider_manager._is_key_set",
                                     return_value=None,
                                 ):
                                     result = add_provider_from_registry()
@@ -473,16 +473,16 @@ class TestAddCustomProvider:
 
     def test_returns_false_on_empty_provider(self, temp_home):
         """Should return False when provider name is empty."""
-        with mock.patch("pdd.setup.provider_manager.Prompt") as mock_prompt:
+        with mock.patch("pdd.provider_manager.Prompt") as mock_prompt:
             mock_prompt.ask.return_value = ""
-            with mock.patch("pdd.setup.provider_manager.console"):
+            with mock.patch("pdd.provider_manager.console"):
                 result = add_custom_provider()
 
         assert result is False
 
     def test_adds_custom_provider_to_csv(self, temp_home):
         """Should add custom provider to user CSV."""
-        with mock.patch("pdd.setup.provider_manager.Prompt") as mock_prompt:
+        with mock.patch("pdd.provider_manager.Prompt") as mock_prompt:
             mock_prompt.ask.side_effect = [
                 "custom_llm",      # provider prefix
                 "my-model",        # model name
@@ -491,9 +491,9 @@ class TestAddCustomProvider:
                 "1.0",             # input cost
                 "2.0",             # output cost
             ]
-            with mock.patch("pdd.setup.provider_manager.Confirm") as mock_confirm:
+            with mock.patch("pdd.provider_manager.Confirm") as mock_confirm:
                 mock_confirm.ask.return_value = False  # Don't enter key value now
-                with mock.patch("pdd.setup.provider_manager.console"):
+                with mock.patch("pdd.provider_manager.console"):
                     result = add_custom_provider()
 
         assert result is True
@@ -510,7 +510,7 @@ class TestAddCustomProvider:
         """Should save API key to api-env when user provides it."""
         monkeypatch.setenv("SHELL", "/bin/bash")
 
-        with mock.patch("pdd.setup.provider_manager.Prompt") as mock_prompt:
+        with mock.patch("pdd.provider_manager.Prompt") as mock_prompt:
             mock_prompt.ask.side_effect = [
                 "custom_llm",
                 "my-model",
@@ -520,9 +520,9 @@ class TestAddCustomProvider:
                 "0.0",
                 "sk-my-secret-key",  # API key value
             ]
-            with mock.patch("pdd.setup.provider_manager.Confirm") as mock_confirm:
+            with mock.patch("pdd.provider_manager.Confirm") as mock_confirm:
                 mock_confirm.ask.return_value = True  # Yes, enter key value
-                with mock.patch("pdd.setup.provider_manager.console"):
+                with mock.patch("pdd.provider_manager.console"):
                     result = add_custom_provider()
 
         assert result is True
@@ -543,16 +543,16 @@ class TestRemoveModelsByProvider:
 
     def test_returns_false_when_no_models(self, temp_home):
         """Should return False when no models configured."""
-        with mock.patch("pdd.setup.provider_manager.console"):
+        with mock.patch("pdd.provider_manager.console"):
             result = remove_models_by_provider()
 
         assert result is False
 
     def test_returns_false_on_cancel(self, sample_csv, temp_home):
         """Should return False when user cancels."""
-        with mock.patch("pdd.setup.provider_manager.Prompt") as mock_prompt:
+        with mock.patch("pdd.provider_manager.Prompt") as mock_prompt:
             mock_prompt.ask.return_value = ""  # Empty = cancel
-            with mock.patch("pdd.setup.provider_manager.console"):
+            with mock.patch("pdd.provider_manager.console"):
                 result = remove_models_by_provider()
 
         assert result is False
@@ -561,11 +561,11 @@ class TestRemoveModelsByProvider:
         """Should remove all models with matching api_key."""
         monkeypatch.setenv("SHELL", "/bin/bash")
 
-        with mock.patch("pdd.setup.provider_manager.Prompt") as mock_prompt:
+        with mock.patch("pdd.provider_manager.Prompt") as mock_prompt:
             mock_prompt.ask.return_value = "1"  # Select first provider
-            with mock.patch("pdd.setup.provider_manager.Confirm") as mock_confirm:
+            with mock.patch("pdd.provider_manager.Confirm") as mock_confirm:
                 mock_confirm.ask.return_value = True  # Confirm removal
-                with mock.patch("pdd.setup.provider_manager.console"):
+                with mock.patch("pdd.provider_manager.console"):
                     result = remove_models_by_provider()
 
         assert result is True
@@ -586,27 +586,27 @@ class TestRemoveIndividualModels:
 
     def test_returns_false_when_no_models(self, temp_home):
         """Should return False when no models configured."""
-        with mock.patch("pdd.setup.provider_manager.console"):
+        with mock.patch("pdd.provider_manager.console"):
             result = remove_individual_models()
 
         assert result is False
 
     def test_returns_false_on_cancel(self, sample_csv, temp_home):
         """Should return False when user cancels."""
-        with mock.patch("pdd.setup.provider_manager.Prompt") as mock_prompt:
+        with mock.patch("pdd.provider_manager.Prompt") as mock_prompt:
             mock_prompt.ask.return_value = ""  # Empty = cancel
-            with mock.patch("pdd.setup.provider_manager.console"):
+            with mock.patch("pdd.provider_manager.console"):
                 result = remove_individual_models()
 
         assert result is False
 
     def test_removes_selected_models(self, sample_csv, temp_home):
         """Should remove only selected models."""
-        with mock.patch("pdd.setup.provider_manager.Prompt") as mock_prompt:
+        with mock.patch("pdd.provider_manager.Prompt") as mock_prompt:
             mock_prompt.ask.return_value = "1"  # Remove first model
-            with mock.patch("pdd.setup.provider_manager.Confirm") as mock_confirm:
+            with mock.patch("pdd.provider_manager.Confirm") as mock_confirm:
                 mock_confirm.ask.return_value = True  # Confirm
-                with mock.patch("pdd.setup.provider_manager.console"):
+                with mock.patch("pdd.provider_manager.console"):
                     result = remove_individual_models()
 
         assert result is True
@@ -617,11 +617,11 @@ class TestRemoveIndividualModels:
 
     def test_removes_multiple_models(self, sample_csv, temp_home):
         """Should handle comma-separated model selection."""
-        with mock.patch("pdd.setup.provider_manager.Prompt") as mock_prompt:
+        with mock.patch("pdd.provider_manager.Prompt") as mock_prompt:
             mock_prompt.ask.return_value = "1, 2"  # Remove first two models
-            with mock.patch("pdd.setup.provider_manager.Confirm") as mock_confirm:
+            with mock.patch("pdd.provider_manager.Confirm") as mock_confirm:
                 mock_confirm.ask.return_value = True  # Confirm
-                with mock.patch("pdd.setup.provider_manager.console"):
+                with mock.patch("pdd.provider_manager.console"):
                     result = remove_individual_models()
 
         assert result is True

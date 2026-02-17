@@ -7,53 +7,77 @@ from pathlib import Path
 project_root = Path(__file__).resolve().parent.parent
 sys.path.append(str(project_root))
 
-from pdd.setup.setup_tool import run_setup
+from pdd.setup_tool import run_setup
 
 
 def main() -> None:
     """
     Demonstrates how to use the setup_tool module to:
-    1. Launch the interactive pdd setup wizard
-    2. Scan for configured API keys
-    3. Navigate the 6-option menu
+    1. Launch the two-phase pdd setup flow
+    2. Phase 1: Bootstrap an agentic CLI (Claude/Gemini/Codex)
+    3. Phase 2: Auto-configure API keys, models, local LLMs, and .pddrc
 
-    The setup wizard is fully interactive. Running it will:
-    - Scan ~/.pdd/llm_model.csv for configured models and their API key status
-    - Display a menu with options to add/remove providers, test models, etc.
-    - Loop until the user selects Done or presses Ctrl-C
+    The setup flow is mostly automatic. Phase 1 asks 0-2 questions
+    (which CLI to use), then Phase 2 runs 4 deterministic steps
+    with "Press Enter" pauses between them.
     """
 
-    # Run the interactive setup wizard
+    # Run the setup flow
     # run_setup()  # Uncomment to run interactively
 
     # Example flow:
-    #   ╭──────────────────────────────╮
-    #   │        pdd setup             │
-    #   ╰──────────────────────────────╯
+    #   +------------------------------+
+    #   |        pdd setup             |
+    #   +------------------------------+
     #
-    #   API-key scan
-    #   ──────────────────────────────────────────────────
-    #     ANTHROPIC_API_KEY               ✓ Found  (shell environment)
-    #     OPENAI_API_KEY                  — Not found
+    #   Phase 1 -- CLI Bootstrap
+    #   Detected: claude (Anthropic)
+    #   API key: configured
     #
-    #     💡 To edit API keys: update ~/.pdd/api-env.zsh or .env file
+    #   Ready to auto-configure PDD. Press Enter to continue...
     #
-    #   Models configured: 1 (from 1 API keys + 0 local)
+    #   [Step 1/4] Scanning for API keys...
+    #     ANTHROPIC_API_KEY   shell environment
+    #     GEMINI_API_KEY      shell environment
     #
-    #   What would you like to do?
-    #     1. Add a provider
-    #     2. Remove models
-    #     3. Test a model
-    #     4. Detect CLI tools
-    #     5. Initialize .pddrc
-    #     6. Done
+    #     2 API key(s) found.
     #
-    #   Choice [1-6]: 1
+    #   Press Enter to continue to the next step...
     #
-    #   Add a provider:
-    #     a. Search providers
-    #     b. Add a local LLM
-    #     c. Add a custom provider
+    #   [Step 2/4] Configuring models...
+    #     3 new model(s) added to ~/.pdd/llm_model.csv
+    #     4 cloud model(s) configured
+    #       Anthropic: 3 models
+    #       Google: 1 model
+    #
+    #   Press Enter to continue to the next step...
+    #
+    #   [Step 3/4] Checking local LLMs and .pddrc...
+    #     Ollama running -- found llama3.2:3b, openhermes:latest
+    #     LM Studio not running (skip)
+    #     .pddrc already exists at /path/to/project/.pddrc
+    #
+    #   Press Enter to continue to the next step...
+    #
+    #   [Step 4/4] Testing and summarizing...
+    #     Testing anthropic/claude-sonnet-4-5-20250929...
+    #     claude-sonnet-4-5-20250929 responded OK (1.2s)
+    #
+    #     ===============================================
+    #       PDD Setup Complete
+    #     ===============================================
+    #
+    #       API Keys:  2 found
+    #       Models:    4 configured (Anthropic: 3, Google: 1)
+    #       Local:     Ollama -- llama3.2:3b, openhermes:latest
+    #       .pddrc:    exists
+    #       Test:      OK
+    #
+    #     ===============================================
+    #       Run 'pdd generate' or 'pdd sync' to start.
+    #     ===============================================
+    #
+    #   Setup complete. Happy prompting!
     pass
 
 

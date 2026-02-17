@@ -16,7 +16,7 @@
 
 <pdd-dependency>litellm_registry_python.prompt</pdd-dependency>
 
-% You are an expert Python engineer. Your goal is to write the pdd/setup/provider_manager.py module.
+% You are an expert Python engineer. Your goal is to write the pdd/provider_manager.py module.
 
 % Role & Scope
 Handles adding and removing LLM providers and models in PDD setup. The primary flow uses litellm's bundled model registry to let users search/browse providers, pick specific models, and enter API keys. Also supports adding custom LiteLLM-compatible providers and two modes of model removal.
@@ -65,4 +65,4 @@ CSV mapping from litellm registry:
 </llm_model_csv_schema>
 
 % Deliverables
-- Module at `pdd/setup/provider_manager.py` exporting `add_provider_from_registry`, `add_custom_provider`, `remove_models_by_provider`, `remove_individual_models`.
+- Module at `pdd/provider_manager.py` exporting `add_provider_from_registry`, `add_custom_provider`, `remove_models_by_provider`, `remove_individual_models`.

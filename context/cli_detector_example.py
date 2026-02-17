@@ -7,31 +7,40 @@ from pathlib import Path
 project_root = Path(__file__).resolve().parent.parent
 sys.path.append(str(project_root))
 
-from pdd.setup.cli_detector import detect_cli_tools
+from pdd.cli_detector import detect_and_bootstrap_cli, detect_cli_tools
 
 
 def main() -> None:
     """
     Demonstrates how to use the cli_detector module to:
-    1. Detect installed agentic CLI harnesses (claude, codex, gemini)
-    2. Cross-reference with available API keys
-    3. Offer installation for missing CLIs
+    1. Bootstrap an agentic CLI for pdd setup (detect_and_bootstrap_cli)
+    2. Detect installed CLI harnesses (claude, codex, gemini)
+    3. Cross-reference with available API keys
+    4. Offer installation for missing CLIs
     """
 
-    # Run the interactive detector
+    # Primary entry point used by pdd setup Phase 1:
+    # result = detect_and_bootstrap_cli()
+    # result.cli_name   -> "claude" | "codex" | "gemini" | ""
+    # result.provider   -> "Anthropic" | "OpenAI" | "Google" | ""
+    # result.api_key_configured -> True | False
+
+    # Legacy function for detection only:
     # detect_cli_tools()  # Uncomment to run interactively
 
-    # Example flow:
+    # Example flow (detect_and_bootstrap_cli):
     #   Checking CLI tools...
     #   (Required for: pdd fix, pdd change, pdd bug)
     #
-    #   Claude CLI   ✓ Found at /usr/local/bin/claude
-    #   Codex CLI    ✗ Not found
-    #   Gemini CLI   ✗ Not found
+    #   Claude CLI   Found at /usr/local/bin/claude
+    #   Codex CLI    Not found
+    #   Gemini CLI   Not found
     #
-    #   You have OPENAI_API_KEY but Codex CLI is not installed.
-    #   Install with: npm install -g @openai/codex
-    #   Install now? [y/N]
+    #   Using Claude CLI (Anthropic).
+    #   API key: configured
+    #
+    # Returns CliBootstrapResult(cli_name="claude", provider="Anthropic",
+    #                            api_key_configured=True)
     pass
 
 

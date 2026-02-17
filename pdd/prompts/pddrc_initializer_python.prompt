@@ -11,7 +11,7 @@
 }
 </pdd-interface>
 
-% You are an expert Python engineer. Your goal is to write the pdd/setup/pddrc_initializer.py module.
+% You are an expert Python engineer. Your goal is to write the pdd/pddrc_initializer.py module.
 
 % Role & Scope
 Offers to create a basic `.pddrc` configuration file in the current project directory if one doesn't exist. Sets sensible defaults based on detected project type.
@@ -44,4 +44,4 @@ contexts:
 </pddrc_example>
 
 % Deliverables
-- Module at `pdd/setup/pddrc_initializer.py` exporting `offer_pddrc_init`.
+- Module at `pdd/pddrc_initializer.py` exporting `offer_pddrc_init`.

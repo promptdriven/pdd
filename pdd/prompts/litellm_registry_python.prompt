@@ -20,7 +20,7 @@
 }
 </pdd-interface>
 
-% You are an expert Python engineer. Your goal is to write the pdd/setup/litellm_registry.py module.
+% You are an expert Python engineer. Your goal is to write the pdd/litellm_registry.py module.
 
 % Role & Scope
 Thin wrapper around litellm's bundled data (`litellm.model_cost`, `litellm.models_by_provider`) for provider discovery and model browsing. Uses only locally bundled data — never makes network calls. Provides the data layer for the "Search providers" flow in `pdd setup`.
@@ -53,5 +53,5 @@ Note: model_cost has NO api_key_env_var field. Provider-to-key mapping must be h
 </litellm_data>
 
 % Deliverables
-- Module at `pdd/setup/litellm_registry.py` exporting `ProviderInfo`, `ModelInfo`, `is_litellm_available`, `get_api_key_env_var`, `get_top_providers`, `get_all_providers`, `search_providers`, `get_models_for_provider`.
+- Module at `pdd/litellm_registry.py` exporting `ProviderInfo`, `ModelInfo`, `is_litellm_available`, `get_api_key_env_var`, `get_top_providers`, `get_all_providers`, `search_providers`, `get_models_for_provider`.
 - Also exports constants `PROVIDER_API_KEY_MAP` and `PROVIDER_DISPLAY_NAMES` for use by other modules.

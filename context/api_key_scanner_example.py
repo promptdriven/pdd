@@ -7,7 +7,7 @@ from pathlib import Path
 project_root = Path(__file__).resolve().parent.parent
 sys.path.append(str(project_root))
 
-from pdd.setup.api_key_scanner import scan_environment, get_provider_key_names, KeyInfo
+from pdd.api_key_scanner import scan_environment, get_provider_key_names, KeyInfo
 
 
 def main() -> None:

@@ -15,7 +15,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.prompt import Prompt, Confirm
 
-from pdd.setup.litellm_registry import (
+from pdd.litellm_registry import (
     is_litellm_available,
     get_top_providers,
     search_providers,
@@ -315,7 +315,7 @@ def _is_key_set(key_name: str) -> Optional[str]:
 
     env_path = _get_api_env_path()
     if env_path.exists():
-        from pdd.setup.api_key_scanner import _parse_api_env_file
+        from pdd.api_key_scanner import _parse_api_env_file
         api_env_vals = _parse_api_env_file(env_path)
         if key_name in api_env_vals:
             return f"~/.pdd/{env_path.name}"

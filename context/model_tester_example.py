@@ -7,7 +7,7 @@ from pathlib import Path
 project_root = Path(__file__).resolve().parent.parent
 sys.path.append(str(project_root))
 
-from pdd.setup.model_tester import test_model_interactive
+from pdd.model_tester import test_model_interactive
 
 
 def main() -> None:

@@ -1,5 +1,5 @@
 """
-pdd/setup/litellm_registry.py
+pdd/litellm_registry.py
 
 Wraps litellm's bundled model registry to provide provider search, model
 browsing, and API key env var lookup.  Uses only local data — no network calls.

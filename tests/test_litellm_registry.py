@@ -1,10 +1,10 @@
-"""Tests for pdd/setup/litellm_registry.py"""
+"""Tests for pdd/litellm_registry.py"""
 
 from unittest import mock
 
 import pytest
 
-from pdd.setup.litellm_registry import (
+from pdd.litellm_registry import (
     ProviderInfo,
     ModelInfo,
     PROVIDER_API_KEY_MAP,
@@ -158,7 +158,7 @@ class TestIsLitellmAvailable:
                 raise ImportError("No module named 'litellm'")
 
             with mock.patch(
-                "pdd.setup.litellm_registry.is_litellm_available",
+                "pdd.litellm_registry.is_litellm_available",
                 side_effect=raise_import_error,
             ):
                 # The actual function should handle this gracefully
@@ -169,7 +169,7 @@ class TestIsLitellmAvailable:
         mock_litellm = mock.MagicMock()
         mock_litellm.model_cost = {}
 
-        with mock.patch("pdd.setup.litellm_registry.is_litellm_available") as mock_fn:
+        with mock.patch("pdd.litellm_registry.is_litellm_available") as mock_fn:
             mock_fn.return_value = False
             assert mock_fn() is False
 
@@ -311,7 +311,7 @@ class TestGetTopProviders:
     def test_returns_empty_list_when_litellm_unavailable(self):
         """Should return empty list when litellm is not available."""
         with mock.patch(
-            "pdd.setup.litellm_registry.is_litellm_available", return_value=False
+            "pdd.litellm_registry.is_litellm_available", return_value=False
         ):
             result = get_top_providers()
             assert result == []
@@ -353,7 +353,7 @@ class TestGetAllProviders:
     def test_returns_empty_list_when_litellm_unavailable(self):
         """Should return empty list when litellm is not available."""
         with mock.patch(
-            "pdd.setup.litellm_registry.is_litellm_available", return_value=False
+            "pdd.litellm_registry.is_litellm_available", return_value=False
         ):
             result = get_all_providers()
             assert result == []
@@ -449,7 +449,7 @@ class TestGetModelsForProvider:
     def test_returns_empty_list_when_litellm_unavailable(self):
         """Should return empty list when litellm is not available."""
         with mock.patch(
-            "pdd.setup.litellm_registry.is_litellm_available", return_value=False
+            "pdd.litellm_registry.is_litellm_available", return_value=False
         ):
             result = get_models_for_provider("openai")
             assert result == []

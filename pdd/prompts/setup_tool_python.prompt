@@ -1,4 +1,4 @@
-<pdd-reason>Orchestrates pdd setup: environment scanning, provider management, model testing, CLI detection, and configuration.</pdd-reason>
+<pdd-reason>Orchestrates pdd setup in two phases: (1) interactive CLI bootstrapping with minimal friction, (2) deterministic auto-configuration using existing Python modules (no LLM calls).</pdd-reason>
 
 <pdd-interface>
 {
@@ -11,69 +11,161 @@
 }
 </pdd-interface>
 
-<pdd-dependency>api_key_scanner_python.prompt</pdd-dependency>
-<pdd-dependency>provider_manager_python.prompt</pdd-dependency>
-<pdd-dependency>litellm_registry_python.prompt</pdd-dependency>
-<pdd-dependency>local_llm_configurator_python.prompt</pdd-dependency>
-<pdd-dependency>model_tester_python.prompt</pdd-dependency>
 <pdd-dependency>cli_detector_python.prompt</pdd-dependency>
-<pdd-dependency>pddrc_initializer_python.prompt</pdd-dependency>
 
-% You are an expert Python engineer. Your goal is to write the pdd/setup/setup_tool.py module.
+% You are an expert Python engineer. Your goal is to write the pdd/setup_tool.py module.
 
 % Role & Scope
-Main orchestrator for `pdd setup`. Auto-scans the environment for API keys based on the user's configured models (existence only — no API calls), then presents an interactive menu. After any action, the menu re-displays with an updated scan. When no models are configured yet, displays a helpful "get started" message.
+Main orchestrator for `pdd setup`. Implements a two-phase flow designed for minimal user friction — users should be able to complete setup by pressing Enter just a few times. Phase 1 bootstraps an agentic CLI (Claude/Gemini/Codex) interactively. Phase 2 runs deterministic Python code that auto-discovers API keys, configures models from a reference CSV, checks for local LLMs, initializes .pddrc, tests a model, and prints a summary — all with clean, deterministic output and no LLM calls.
 
 % Requirements
-1. Function: `run_setup()` — main entry point
-2. On entry, call `api_key_scanner.scan_environment()` and display each key with `✓ Found (source)` or `— Not found`. After the key list, display a helpful note: `💡 To edit API keys: update ~/.pdd/api-env.{shell} or .env file` (where {shell} is auto-detected from the SHELL environment variable, defaulting to "bash"). Then display the summary line: `Models configured: N (from M API keys + K local)`. If scan_results is empty, display: "No models configured yet. Use 'Add a provider' to get started."
-3. Present a 6-option menu after the scan:
-   1. Add a provider (sub-menu: a. Search providers, b. Add a local LLM, c. Add a custom provider)
-   2. Remove models (sub-menu: a. By provider, b. Individual models)
-   3. Test a model
-   4. Detect CLI tools
-   5. Initialize .pddrc
-   6. Done
-4. Delegate to: `provider_manager.add_provider_from_registry`, `local_llm_configurator.configure_local_llm`, `provider_manager.add_custom_provider`, `provider_manager.remove_models_by_provider`, `provider_manager.remove_individual_models`, `model_tester.test_model_interactive`, `cli_detector.detect_cli_tools`, `pddrc_initializer.offer_pddrc_init`
-5. After options 1–5, re-scan and re-display the menu
-6. Option 6 exits the loop
-7. Handle KeyboardInterrupt for clean exit at any point
+
+1. Function: `run_setup()` — main entry point. Two-phase flow:
+
+   **Banner:**
+   Print a simple banner:
+   ```
+     ╭──────────────────────────────╮
+     │        pdd setup             │
+     ╰──────────────────────────────╯
+   ```
+
+   **Phase 1 — CLI Bootstrap (interactive, 0–2 user inputs):**
+   a. Call `cli_detector.detect_and_bootstrap_cli()` which returns a `CliBootstrapResult`.
+   b. If result has `cli_name == ""` (user declined everything):
+      - Print: "Agentic features require at least one CLI tool. Run `pdd setup` again when ready."
+      - Return (exit gracefully).
+   c. If result has a CLI but `api_key_configured == False`:
+      - Print: "Note: No API key configured. The agent may have limited capability."
+      - Still proceed to Phase 2 (some CLIs like Claude support subscription auth).
+
+   **Phase 2 — Deterministic Auto-Configuration (4 steps):**
+   a. Print: "Ready to auto-configure PDD. Press Enter to continue..." and wait for Enter.
+   b. Run 4 sequential steps via `_run_auto_phase()`, each printing its output immediately:
+      1. `_step1_scan_keys()` — scan for API keys
+      2. `_step2_configure_models()` — match keys to reference models, write CSV
+      3. `_step3_local_llms_and_pddrc()` — check Ollama/LM Studio, ensure .pddrc
+      4. `_step4_test_and_summary()` — test one model, print final summary
+   c. Between each step (except after the last), prompt "Press Enter to continue to the next step..."
+   d. If any step raises an exception, catch it, print error, and fall back to manual menu.
+   e. After all steps, print: "Setup complete. Happy prompting!"
+
+2. Step 1 — Scan for API Keys (`_step1_scan_keys`):
+   - Ensure ~/.pdd directory exists (mkdir -p equivalent).
+   - Get all known env var names from `litellm_registry.PROVIDER_API_KEY_MAP.values()`.
+   - Check each against: os.environ, ~/.pdd/api-env.{shell} (via `api_key_scanner._parse_api_env_file`), and .env files (via python-dotenv).
+   - Print each found key with aligned formatting: `  ✓ KEY_NAME   source_label`
+   - If none found: call `_prompt_for_api_key()` to interactively add at least one key.
+   - Return: `List[Tuple[str, str]]` of (key_name, source_label).
+
+   **`_prompt_for_api_key()` — Interactive key addition (called when no keys found):**
+   - Show a numbered list of popular providers (Anthropic, Google Gemini, OpenAI, DeepSeek) plus "Other provider" and "Skip".
+   - User selects a provider, then pastes their key (masked via `getpass.getpass()`).
+   - Key is saved to `~/.pdd/api-env.{shell}` via `provider_manager._save_key_to_api_env()` which also sets `os.environ` for the current session.
+   - Loop with "Add another key? [y/N]" until user declines or selects Skip.
+   - "Other provider" shows the full `PROVIDER_API_KEY_MAP` sorted alphabetically.
+   - Returns: `List[Tuple[str, str]]` of newly added keys.
+
+3. Step 2 — Configure Models (`_step2_configure_models`):
+   - Read reference CSV from `pdd/data/llm_model.csv` using `provider_manager._read_csv()`.
+   - Filter to rows whose `api_key` column matches a found key name. Skip local models (provider=lm_studio/ollama, localhost base_url).
+   - Read existing user CSV at `~/.pdd/llm_model.csv`, deduplicate by `model` column.
+   - Write merged result atomically via `provider_manager._write_csv_atomic()`.
+   - Print counts: `  ✓ N new model(s) added` or `  ✓ All matching models already present`
+   - Print per-provider breakdown: `    Provider: N models`
+   - Return: `Dict[str, int]` of {provider: count}.
+
+4. Step 3 — Local LLMs + .pddrc (`_step3_local_llms_and_pddrc`):
+   - Check Ollama at `http://localhost:11434/api/tags` via `urllib.request` (3s timeout).
+     If reachable: print `  ✓ Ollama running — found model1, model2` and append to user CSV.
+     If not: print `  ✗ Ollama not running (skip)`.
+   - Check LM Studio at `http://localhost:1234/v1/models` similarly.
+   - Check if `.pddrc` exists in cwd. If yes: print exists. If no: auto-detect language via `pddrc_initializer._detect_language()`, create via `_build_pddrc_content()`.
+   - Return: `Dict[str, List[str]]` of {provider: [model_names]}.
+
+5. Step 4 — Test + Summary (`_step4_test_and_summary`):
+   - Pick first cloud model (has non-empty api_key) from user CSV.
+   - If litellm importable: test via `model_tester._run_test(row)`. Print result.
+   - If not: print "Skipped (litellm not installed)".
+   - Print deterministic summary box with all data from steps 1-3.
+
+6. Handle `KeyboardInterrupt` for clean exit at any point: print "Setup interrupted — exiting." and return.
+
+7. **Fallback (if auto phase fails):**
+   Run a simplified manual menu loop with options:
+   1. Add a provider (delegates to `provider_manager.add_provider_from_registry()`)
+   2. Test a model (delegates to `model_tester.test_model_interactive()`)
+   3. Initialize .pddrc (delegates to `pddrc_initializer.offer_pddrc_init()`)
+   4. Done
+
+8. Import strategy (all deferred/lazy):
+   - From `pdd.cli_detector`: `detect_and_bootstrap_cli`, `CliBootstrapResult`
+   - From `pdd.litellm_registry`: `PROVIDER_API_KEY_MAP`, `PROVIDER_DISPLAY_NAMES`
+   - From `pdd.api_key_scanner`: `_parse_api_env_file`, `_detect_shell`
+   - From `pdd.provider_manager`: `_read_csv`, `_write_csv_atomic`, `_get_user_csv_path`, `_save_key_to_api_env`, `_get_api_env_path`
+   - From `pdd.pddrc_initializer`: `_detect_language`, `_build_pddrc_content`
+   - From `pdd.model_tester`: `_run_test`
+   - Fallback only: `provider_manager.add_provider_from_registry`, `model_tester.test_model_interactive`, `pddrc_initializer.offer_pddrc_init`
+   - Standard library: `getpass`, `json`, `os`, `urllib.request`, `urllib.error`, `pathlib.Path`
 
 % Dependencies
-<api_key_scanner_example>
-  <include>context/api_key_scanner_example.py</include>
-</api_key_scanner_example>
 
-<provider_manager_example>
-  <include>context/provider_manager_example.py</include>
-</provider_manager_example>
+<internal_example_modules>
+    % Example of the CLI detector used in Phase 1 to bootstrap an agentic CLI:
+    <pdd.cli_detector><include>context/cli_detector_example.py</include></pdd.cli_detector>
 
-<litellm_registry_example>
-  <include>context/litellm_registry_example.py</include>
-</litellm_registry_example>
+    % Example of provider_manager used for CSV I/O and the fallback manual menu:
+    <pdd.provider_manager><include>context/provider_manager_example.py</include></pdd.provider_manager>
 
-<local_llm_configurator_example>
-  <include>context/local_llm_configurator_example.py</include>
-</local_llm_configurator_example>
+    % Example of model_tester used for testing models:
+    <pdd.model_tester><include>context/model_tester_example.py</include></pdd.model_tester>
 
-<model_tester_example>
-  <include>context/model_tester_example.py</include>
-</model_tester_example>
+    % Example of pddrc_initializer used for .pddrc creation:
+    <pdd.pddrc_initializer><include>context/pddrc_initializer_example.py</include></pdd.pddrc_initializer>
+</internal_example_modules>
 
 <cli_detector_example>
   <include>context/cli_detector_example.py</include>
 </cli_detector_example>
 
-<pddrc_initializer_example>
-  <include>context/pddrc_initializer_example.py</include>
-</pddrc_initializer_example>
-
 <llm_model_csv_schema>
 The user-level CSV at ~/.pdd/llm_model.csv has columns:
 provider,model,input,output,coding_arena_elo,base_url,api_key,max_reasoning_tokens,structured_output,reasoning_type,location
-This file is created when the user first adds a provider via setup.
+This file is created/managed by the auto-configuration step or manually by the user.
+The reference CSV at pdd/data/llm_model.csv contains known models for all major providers.
 </llm_model_csv_schema>
 
+<provider_manager_csv_api>
+from pdd.provider_manager import _read_csv, _write_csv_atomic, _get_user_csv_path
+# _read_csv(path: Path) -> List[Dict[str, str]]  — reads CSV to list of row dicts
+# _write_csv_atomic(path: Path, rows: List[Dict[str, str]])  — atomic write via temp file + rename
+# _get_user_csv_path() -> Path  — returns ~/.pdd/llm_model.csv
+</provider_manager_csv_api>
+
+<litellm_registry_api>
+from pdd.litellm_registry import PROVIDER_API_KEY_MAP
+# PROVIDER_API_KEY_MAP: Dict[str, str] — maps provider ID to env var name
+# e.g. {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY", ...}
+</litellm_registry_api>
+
+<api_key_scanner_api>
+from pdd.api_key_scanner import _parse_api_env_file, _detect_shell
+# _parse_api_env_file(file_path: Path) -> Dict[str, str]  — parse export lines from api-env file
+# _detect_shell() -> Optional[str]  — detect shell name from SHELL env var
+</api_key_scanner_api>
+
+<pddrc_initializer_api>
+from pdd.pddrc_initializer import _detect_language, _build_pddrc_content
+# _detect_language(cwd: Path) -> Optional[str]  — detect project language from marker files
+# _build_pddrc_content(language: str) -> str  — build YAML content for .pddrc
+</pddrc_initializer_api>
+
+<model_tester_api>
+from pdd.model_tester import _run_test
+# _run_test(row: Dict[str, Any]) -> Dict[str, Any]
+# Returns: {"success": bool, "duration_s": float, "cost": float, "error": str|None, "tokens": dict|None}
+</model_tester_api>
+
 % Deliverables
-- Module at `pdd/setup/setup_tool.py` exporting `run_setup`.
-- IMPORTANT: Must include `if __name__ == "__main__":` entry point that calls `run_setup()` to enable execution via `python -m pdd.setup.setup_tool`.
+- Module at `pdd/setup_tool.py` exporting `run_setup`.
+- IMPORTANT: Must include `if __name__ == "__main__":` entry point that calls `run_setup()` to enable execution via `python -m pdd.setup_tool`.

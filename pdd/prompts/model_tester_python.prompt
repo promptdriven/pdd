@@ -11,7 +11,7 @@
 }
 </pdd-interface>
 
-% You are an expert Python engineer. Your goal is to write the pdd/setup/model_tester.py module.
+% You are an expert Python engineer. Your goal is to write the pdd/model_tester.py module.
 
 % Role & Scope
 Tests a single configured model by making one `litellm.completion()` call with a minimal prompt. Only runs when the user explicitly chooses it — no surprise API costs. Uses `litellm.completion()` directly (not `llm_invoke`) because `llm_invoke` doesn't allow choosing a specific model or key.
@@ -34,4 +34,4 @@ provider,model,input,output,coding_arena_elo,base_url,api_key,max_reasoning_toke
 </llm_model_csv_schema>
 
 % Deliverables
-- Module at `pdd/setup/model_tester.py` exporting `test_model_interactive`.
+- Module at `pdd/model_tester.py` exporting `test_model_interactive`.
