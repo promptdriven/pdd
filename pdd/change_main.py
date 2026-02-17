@@ -539,7 +539,7 @@ def change_main(
                     strength=strength,
                     temperature=temperature,
                     time=time_budget,
-                    verbose=not quiet,
+                    verbose=ctx.obj.get("verbose", False),
                     quiet=quiet,
                     fail_fast=True,
                 )
