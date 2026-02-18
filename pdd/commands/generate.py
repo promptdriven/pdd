@@ -13,6 +13,7 @@ from ..context_generator_main import context_generator_main
 from ..track_cost import track_cost
 from ..operation_log import log_operation
 from ..core.errors import handle_error
+from ..user_story_tests import cache_story_prompt_links, generate_user_story
 
 # Initialize console
 console = Console(file=sys.stdout)
@@ -247,11 +248,13 @@ def test(
     merge: bool,
 ) -> Optional[Tuple[Any, float, str]]:
     """
-    Generate or enhance unit tests.
+    Generate or enhance unit tests, or link story prompt metadata.
 
-    Supports two modes:
+    Supports four modes:
     1. Agentic UI Test Generation: pdd test <GITHUB_ISSUE_URL>
     2. Manual Unit Test Generation: pdd test --manual PROMPT_FILE CODE_OR_EXAMPLE_FILE
+    3. Story Generation: pdd test prompts/upload_python.prompt prompts/notify_python.prompt
+    4. Story Metadata Linking: pdd test user_stories/story__my_story.md
     """
     from ..cmd_test_main import cmd_test_main
     from ..agentic_test import run_agentic_test
@@ -259,6 +262,83 @@ def test(
     try:
         if not args:
             raise click.UsageError("Missing arguments. See 'pdd test --help'.")
+
+        if len(args) == 1 and not manual:
+            story_path = Path(args[0])
+            if story_path.suffix.lower() == ".md" and story_path.name.startswith("story__"):
+                obj = ctx.obj or {}
+                success, message, cost, model, linked_prompts = cache_story_prompt_links(
+                    story_file=str(story_path),
+                    prompts_dir=os.environ.get("PDD_PROMPTS_DIR"),
+                    strength=obj.get("strength", 0.2),
+                    temperature=obj.get("temperature", 0.0),
+                    time=obj.get("time", 0.25),
+                    verbose=obj.get("verbose", False),
+                )
+
+                if not obj.get("quiet", False):
+                    if success:
+                        console.print(f"[bold green]Story metadata updated:[/bold green] {message}")
+                    else:
+                        console.print(f"[bold red]Story metadata update failed:[/bold red] {message}")
+                    if linked_prompts:
+                        console.print(f"Linked prompts: {', '.join(linked_prompts)}")
+
+                result_dict = {
+                    "success": success,
+                    "message": message,
+                    "story_file": str(story_path),
+                    "linked_prompts": linked_prompts,
+                }
+                return result_dict, cost, model
+
+            if story_path.suffix.lower() == ".prompt":
+                obj = ctx.obj or {}
+                story_prompt_args = [str(Path(arg)) for arg in args]
+                success, message, cost, model, generated_story_file, linked_prompts = generate_user_story(
+                    prompt_files=story_prompt_args,
+                    output=output,
+                    stories_dir=os.environ.get("PDD_USER_STORIES_DIR"),
+                    prompts_dir=os.environ.get("PDD_PROMPTS_DIR"),
+                )
+                if not obj.get("quiet", False):
+                    if success:
+                        console.print(f"[bold green]Story generated:[/bold green] {message}")
+                    else:
+                        console.print(f"[bold red]Story generation failed:[/bold red] {message}")
+                    if linked_prompts:
+                        console.print(f"Linked prompts: {', '.join(linked_prompts)}")
+                result_dict = {
+                    "success": success,
+                    "message": message,
+                    "story_file": generated_story_file,
+                    "linked_prompts": linked_prompts,
+                }
+                return result_dict, cost, model
+
+        if not manual and args and all(Path(arg).suffix.lower() == ".prompt" for arg in args):
+            obj = ctx.obj or {}
+            story_prompt_args = [str(Path(arg)) for arg in args]
+            success, message, cost, model, generated_story_file, linked_prompts = generate_user_story(
+                prompt_files=story_prompt_args,
+                output=output,
+                stories_dir=os.environ.get("PDD_USER_STORIES_DIR"),
+                prompts_dir=os.environ.get("PDD_PROMPTS_DIR"),
+            )
+            if not obj.get("quiet", False):
+                if success:
+                    console.print(f"[bold green]Story generated:[/bold green] {message}")
+                else:
+                    console.print(f"[bold red]Story generation failed:[/bold red] {message}")
+                if linked_prompts:
+                    console.print(f"Linked prompts: {', '.join(linked_prompts)}")
+            result_dict = {
+                "success": success,
+                "message": message,
+                "story_file": generated_story_file,
+                "linked_prompts": linked_prompts,
+            }
+            return result_dict, cost, model
 
         # Determine mode
         is_url = args[0].startswith("http") or "github.com" in args[0]

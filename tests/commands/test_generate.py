@@ -356,6 +356,70 @@ def test_test_manual_mode_arg_error(runner):
     assert result.exit_code != 0
     assert "Manual mode requires exactly two arguments" in result.output
 
+
+def test_test_story_mode_links_metadata(runner):
+    """Test 'test' command auto-detects story mode for story__*.md files."""
+    with runner.isolated_filesystem():
+        with open("story__upload_flow.md", "w") as f:
+            f.write("As a user...")
+
+        with patch.object(generate_module, "cache_story_prompt_links") as mock_link:
+            mock_link.return_value = (True, "Story prompt metadata linked.", 0.2, "gpt-4", ["upload_python.prompt"])
+            result = runner.invoke(generate_module.test, ["story__upload_flow.md"])
+
+    assert result.exit_code == 0
+    mock_link.assert_called_once()
+    kwargs = mock_link.call_args[1]
+    assert kwargs["story_file"] == "story__upload_flow.md"
+    assert kwargs["prompts_dir"] is None
+    assert kwargs["strength"] == 0.2
+    assert kwargs["temperature"] == 0.0
+    assert kwargs["time"] == 0.25
+    assert kwargs["verbose"] is False
+
+
+def test_test_story_generation_mode_from_prompt_inputs(runner):
+    """Test 'test' command auto-detects story generation for prompt-file inputs."""
+    with runner.isolated_filesystem():
+        with open("upload_python.prompt", "w") as f:
+            f.write("Upload prompt")
+        with open("notify_python.prompt", "w") as f:
+            f.write("Notify prompt")
+
+        with patch.object(generate_module, "generate_user_story") as mock_generate_story:
+            mock_generate_story.return_value = (
+                True,
+                "Generated story file: user_stories/story__upload_flow.md. Story prompt metadata linked.",
+                0.2,
+                "gpt-4",
+                "user_stories/story__upload_flow.md",
+                ["upload_python.prompt"],
+            )
+            result = runner.invoke(generate_module.test, ["upload_python.prompt", "notify_python.prompt"])
+
+    assert result.exit_code == 0
+    mock_generate_story.assert_called_once()
+    kwargs = mock_generate_story.call_args[1]
+    assert kwargs["prompt_files"] == ["upload_python.prompt", "notify_python.prompt"]
+    assert kwargs["output"] is None
+    assert kwargs["stories_dir"] is None
+    assert kwargs["prompts_dir"] is None
+
+
+def test_test_markdown_input_not_story_mode(runner):
+    """Test non-story markdown input no longer triggers story generation mode."""
+    with runner.isolated_filesystem():
+        with open("upload_flow.md", "w") as f:
+            f.write("As a user...")
+
+        with patch.object(generate_module, "generate_user_story") as mock_generate_story:
+            result = runner.invoke(generate_module.test, ["upload_flow.md"])
+
+    assert result.exit_code != 0
+    assert "Manual mode requires exactly two arguments" in result.output
+    mock_generate_story.assert_not_called()
+
+
 def test_test_missing_args(runner):
     """Test 'test' command with no arguments."""
     result = runner.invoke(generate_module.test, [])
