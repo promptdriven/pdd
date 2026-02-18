@@ -303,6 +303,10 @@ def test(
                     output=output,
                     stories_dir=os.environ.get("PDD_USER_STORIES_DIR"),
                     prompts_dir=os.environ.get("PDD_PROMPTS_DIR"),
+                    strength=obj.get("strength", 0.2),
+                    temperature=obj.get("temperature", 0.0),
+                    time=obj.get("time", 0.25),
+                    verbose=obj.get("verbose", False),
                 )
                 if not obj.get("quiet", False):
                     if success:
@@ -327,6 +331,10 @@ def test(
                 output=output,
                 stories_dir=os.environ.get("PDD_USER_STORIES_DIR"),
                 prompts_dir=os.environ.get("PDD_PROMPTS_DIR"),
+                strength=obj.get("strength", 0.2),
+                temperature=obj.get("temperature", 0.0),
+                time=obj.get("time", 0.25),
+                verbose=obj.get("verbose", False),
             )
             if not obj.get("quiet", False):
                 if success:

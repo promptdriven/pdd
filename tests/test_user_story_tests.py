@@ -319,25 +319,56 @@ def test_generate_user_story_creates_story_file_and_links(tmp_path):
     prompt_one.write_text("Handle file uploads.", encoding="utf-8")
     prompt_two.write_text("Send notifications.", encoding="utf-8")
 
-    success, message, cost, model, story_file, linked_prompts = generate_user_story(
-        prompt_files=[str(prompt_one), str(prompt_two)],
-        stories_dir=str(tmp_path / "user_stories"),
-        prompts_dir=str(prompts_dir),
-    )
+    changes = [{"prompt_name": "notify_python.prompt", "change_instructions": "Refine scope"}]
+    with patch("pdd.user_story_tests.detect_change") as mock_detect:
+        mock_detect.return_value = (changes, 0.2, "gpt-test")
+        success, message, cost, model, story_file, linked_prompts = generate_user_story(
+            prompt_files=[str(prompt_one), str(prompt_two)],
+            stories_dir=str(tmp_path / "user_stories"),
+            prompts_dir=str(prompts_dir),
+        )
 
     assert success is True
     assert "Generated story file:" in message
-    assert cost == 0.0
-    assert model == ""
-    assert linked_prompts == ["upload_python.prompt", "notify_python.prompt"]
+    assert "auto-detected" in message
+    assert cost == 0.2
+    assert model == "gpt-test"
+    assert linked_prompts == ["notify_python.prompt"]
     output_path = Path(story_file)
     assert output_path.exists()
     story_text = output_path.read_text(encoding="utf-8")
     assert story_text.startswith("# User Story:")
-    assert "<!-- pdd-story-prompts: upload_python.prompt, notify_python.prompt -->" in story_text
+    assert "<!-- pdd-story-prompts: notify_python.prompt -->" in story_text
     assert "## Story" in story_text
     assert "## Prompt Scope" in story_text
     assert "## Acceptance Criteria" in story_text
+
+
+def test_generate_user_story_falls_back_to_input_links_when_detection_empty(tmp_path):
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_one = prompts_dir / "upload_python.prompt"
+    prompt_two = prompts_dir / "notify_python.prompt"
+    prompt_one.write_text("Handle file uploads.", encoding="utf-8")
+    prompt_two.write_text("Send notifications.", encoding="utf-8")
+
+    with patch("pdd.user_story_tests.detect_change") as mock_detect:
+        mock_detect.return_value = ([], 0.15, "gpt-test")
+        success, message, cost, model, story_file, linked_prompts = generate_user_story(
+            prompt_files=[str(prompt_one), str(prompt_two)],
+            stories_dir=str(tmp_path / "user_stories"),
+            prompts_dir=str(prompts_dir),
+        )
+
+    assert success is True
+    assert "linked from prompt inputs" in message
+    assert cost == 0.15
+    assert model == "gpt-test"
+    assert linked_prompts == ["upload_python.prompt", "notify_python.prompt"]
+    story_text = Path(story_file).read_text(encoding="utf-8")
+    assert "<!-- pdd-story-prompts:" in story_text
+    assert "upload_python.prompt" in story_text
+    assert "notify_python.prompt" in story_text
 
 
 def test_generate_user_story_missing_prompt_fails(tmp_path):

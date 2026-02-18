@@ -228,6 +228,7 @@ def cache_story_prompt_links(
     time: float = 0.25,
     verbose: bool = False,
     include_llm_prompts: bool = False,
+    force_relink: bool = False,
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
     Detect touched prompts for a story and cache pdd-story-prompts metadata.
@@ -246,9 +247,9 @@ def cache_story_prompt_links(
     prompts_root = _resolve_prompts_dir(prompts_dir) if prompts_dir else None
     story_content = _read_story(story_path)
 
-    # Keep existing valid metadata unchanged.
+    # Keep existing valid metadata unchanged unless force_relink is requested.
     existing_refs = _parse_story_prompt_metadata(story_content)
-    if existing_refs:
+    if existing_refs and not force_relink:
         unresolved_refs: List[str] = []
         resolved_refs: List[str] = []
         for ref in existing_refs:
@@ -396,6 +397,11 @@ def generate_user_story(
     output: Optional[str] = None,
     stories_dir: Optional[str] = None,
     prompts_dir: Optional[str] = None,
+    strength: float = 0.2,
+    temperature: float = 0.0,
+    time: float = 0.25,
+    verbose: bool = False,
+    include_llm_prompts: bool = False,
 ) -> Tuple[bool, str, float, str, str, List[str]]:
     """
     Generate a story__*.md file from one or more prompt files.
@@ -440,15 +446,67 @@ def generate_user_story(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(story_markdown, encoding="utf-8")
-    linked_refs = [
+
+    linked_refs_from_input = [
         _prompt_reference_for_metadata(path.resolve(), prompts_root)
         for path in resolved_paths
     ]
+    linked_refs = linked_refs_from_input
+    total_cost = 0.0
+    model_name = ""
+
+    # Generation-time auto-detection: run detect_change on the story and
+    # cache detected prompt links into metadata for deterministic reruns.
+    detected_pool = discover_prompt_files(prompts_dir, include_llm=include_llm_prompts)
+    merged_pool: List[Path] = []
+    seen_pool = set()
+    for pf in resolved_paths + detected_pool:
+        key = str(pf.resolve()).lower()
+        if key in seen_pool:
+            continue
+        merged_pool.append(pf)
+        seen_pool.add(key)
+
+    detect_success, _, detect_cost, detect_model, detected_links = cache_story_prompt_links(
+        story_file=str(output_path),
+        prompts_dir=prompts_dir,
+        prompt_files=merged_pool,
+        strength=strength,
+        temperature=temperature,
+        time=time,
+        verbose=verbose,
+        include_llm_prompts=include_llm_prompts,
+        force_relink=True,
+    )
+    total_cost += detect_cost
+    model_name = detect_model or model_name
+
+    if detect_success and detected_links:
+        linked_refs = detected_links
+        status_message = (
+            f"Generated story file: {output_path}. "
+            "Story prompt metadata auto-detected from story content."
+        )
+    else:
+        # Preserve deterministic links from prompt inputs when detection
+        # produces no touched prompts or cannot update metadata.
+        latest_story = _read_story(output_path)
+        _upsert_story_prompt_metadata(
+            output_path,
+            latest_story,
+            [path.resolve() for path in resolved_paths],
+            prompts_root,
+        )
+        status_message = (
+            f"Generated story file: {output_path}. "
+            "Story prompt metadata linked from prompt inputs."
+        )
+
     return (
         True,
-        f"Generated story file: {output_path}. Story prompt metadata linked from prompt inputs.",
-        0.0,
-        "",
+        status_message,
+        total_cost,
+        model_name,
         str(output_path),
         linked_refs,
     )
