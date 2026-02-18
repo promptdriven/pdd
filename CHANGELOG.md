@@ -1,3 +1,9 @@
+## v0.0.152 (2026-02-17)
+
+### Feat
+
+- Implement atomic state updates for `sync_orchestration` to fix state desynchronization (Issue #159), update LLM invocation logic and prompts, and add new grounding experiment results.
+
 ## v0.0.151 (2026-02-16)
 
 ### Feat
