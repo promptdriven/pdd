@@ -404,6 +404,10 @@ def test_test_story_generation_mode_from_prompt_inputs(runner):
     assert kwargs["output"] is None
     assert kwargs["stories_dir"] is None
     assert kwargs["prompts_dir"] is None
+    assert kwargs["strength"] == 0.2
+    assert kwargs["temperature"] == 0.0
+    assert kwargs["time"] == 0.25
+    assert kwargs["verbose"] is False
 
 
 def test_test_markdown_input_not_story_mode(runner):
