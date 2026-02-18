@@ -1661,7 +1661,8 @@ pdd [GLOBAL OPTIONS] test user_stories/story__my_flow.md
 
 Behavior:
 - If input is one or more `.prompt` files, PDD generates `user_stories/story__<name>.md`.
-- The generated story metadata links exactly the provided prompt files.
+- During story generation, PDD runs prompt detection and auto-links touched prompts in `pdd-story-prompts` metadata.
+- If generation-time detection finds no touched prompts, metadata falls back to the provided prompt-file inputs.
 - If `pdd-story-prompts` metadata already exists and resolves cleanly, PDD keeps it unchanged.
 - If metadata is missing (or stale), PDD runs prompt detection and writes:
   `<!-- pdd-story-prompts: prompt_a_python.prompt, prompt_b_python.prompt -->`
