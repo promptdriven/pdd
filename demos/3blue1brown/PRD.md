@@ -16,19 +16,18 @@ AI video generation (Veo, Sora, Runway) is making *creation* cheap. But the edit
 
 ### The Vision
 
-**Human as director, AI as editor.** The director watches the video, annotates problems (circling an area, speaking a note, typing a description), and the system:
+**Human as director, AI as entire crew.** A single webapp is the control plane for the full video production pipeline — from source script to finished video. The director:
 
-1. Analyzes the annotation against the source spec and code
-2. Proposes a fix with confidence rating
-3. Applies the fix to source files
-4. Re-renders the affected section
-5. Stitches the result back into the full video
+1. **Writes or imports** a source script
+2. **Triggers generation** of TTS audio, visual specs, Veo clips, and Remotion compositions — each step orchestrated by the webapp calling Claude Code
+3. **Reviews** the rendered video, annotating problems (circling an area, speaking a note, typing a description)
+4. **Approves fixes** proposed by Claude, which are applied, re-rendered, and stitched back automatically
 
-The director never touches a timeline, keyframe, or code editor. They just say what's wrong, and the system fixes it.
+The director never touches a timeline, keyframe, terminal, or code editor. The webapp calls Claude Code to handle every step that was previously manual — generating TTS scripts, writing specs, authoring Remotion components, staging assets between pipeline stages, and fixing issues found during review.
 
 ### Why This Matters
 
-This is the same paradigm shift described in the video itself: moving from *crafting* (manually editing each frame) to *molding* (specifying intent, letting the machine produce). The review-app prototype proves this loop works end-to-end. The question is whether it can be productized.
+This is the same paradigm shift described in the video itself: moving from *crafting* (manually editing each frame) to *molding* (specifying intent, letting the machine produce). The prototype proves two things: (1) the review/fix loop works end-to-end, and (2) Claude Code can execute every "glue" step in the production pipeline. The product unifies both into a single webapp where the human directs and the AI produces.
 
 ---
 
@@ -58,85 +57,58 @@ A complete 20-minute educational video ("Why You're Still Darning Socks") about 
 
 ## 3. System Architecture
 
-### End-to-End Pipeline: main_script.md to Rendered Video
+### General Pipeline
 
-Everything starts from one file. The main script forks into four parallel tracks — audio,
-specs, video clips, and animation code — then converges at render time.
+Any video produced by this system follows the same fork-and-converge pattern. A single source script splits into parallel tracks — audio, animation specs, and video clips — then all tracks merge at render time.
 
 ```
                             ┌──────────────────────┐
-                            │  narrative/           │
-                            │  main_script.md       │
-                            │  (39KB, human-written)│
+                            │  Source Script        │
+                            │  (human-written)      │
                             │                       │
-                            │  NARRATOR: text +     │
-                            │  [VISUAL: ...] blocks │
+                            │  Narration text +     │
+                            │  visual descriptions  │
                             └──────────┬────────────┘
                                        │
               ┌────────────────────────┼─────────────────────────┐
               │ Claude Code            │ Claude Code              │ Claude Code
-              │ extracts narrator      │ expands [VISUAL:]        │ expands [VISUAL:]
-              │ text, adds TTS         │ blocks into detailed     │ blocks into Veo
-              │ annotations            │ animation specs          │ prompts
+              │ extracts narration,    │ expands visual           │ generates video
+              │ adds TTS annotations   │ descriptions into        │ generation prompts
+              │                        │ detailed specs           │
               ▼                        ▼                          ▼
     ┌──────────────────┐    ┌──────────────────────┐    ┌──────────────────┐
-    │ narrative/        │    │ specs/**/*.md         │    │ specs/**/prompts/ │
-    │ tts_script.md     │    │ (84+ spec files)      │    │ (Veo prompt MDs)  │
-    │ (20KB)            │    │                       │    │                   │
+    │ TTS Script        │    │ Visual Specs          │    │ Video Prompts     │
+    │                   │    │ (per-shot markdown)   │    │ (per-clip)        │
     │ [TONE:] [PACE:]   │    │ Animation params,     │    │ Character desc,   │
-    │ [PAUSE:] emphasis │    │ color palettes,        │    │ scene setup,      │
-    │                   │    │ frame-by-frame timing, │    │ camera, lighting  │
-    │                   │    │ Remotion code scaffold │    │                   │
+    │ [PAUSE:] emphasis │    │ color palettes,        │    │ scene, camera,    │
+    │                   │    │ timing, code scaffold │    │ lighting          │
     └────────┬─────────┘    └──────────┬────────────┘    └────────┬─────────┘
-             │                         │                          │
              │                         │                          │
     ═══ AUDIO TRACK ═══      ═══ ANIMATION TRACK ═══    ═══ VIDEO TRACK ═══
              │                         │                          │
              ▼                         ▼                          ▼
-    render_tts.py              Claude Code writes         generate_*.py
-    Qwen3-TTS 1.7B             individual Remotion        calls Veo 3.1 API
-    24kHz mono                 compositions from          (extracts prompts
-                               spec files                 from spec MDs)
-             │                         │                          │
-             ▼                         ▼                          ▼
-    112 segment_NNN.wav        50+ composition dirs       MP4 clips (8s each)
-             │                 (01-ColdOpen/ ...          9:16 or 16:9
-             │                  51-SockMetaphorFinal/)          │
-             ▼                         │                        │
-    sync_audio_pipeline.py             │               composite_segments.py
-    groups by section,                 │               (split-screen ffmpeg)
-    inserts [PAUSE:] silence           │                        │
-             │                         │                        ▼
-             ▼                         │               remotion/public/*.mp4
-    7 section narration WAVs ──────────│──────────▶    remotion/public/*.wav
-             │                         │
+    TTS engine                Claude Code writes         Imagen: reference
+    (segment WAVs)             Remotion compositions     portraits for
+             │                 from specs                character consistency
+             ▼                         │                          │
+    Concat with pauses                 │                          ▼
+    (per section)                      │                 Veo: clip generation
+             │                         │                 with frame chaining
+             ▼                         │                 (last frame of clip N
+    Whisper transcription              │                  → reference for N+1)
+    (word-level timestamps)            │                          │
+             │                         │                          ▼
+             ▼                         │                 Compositing (ffmpeg)
+    Section composition                │                 + asset staging
+    generator (BEATS +                 │                          │
+    VISUAL_SEQUENCE from               │                          ▼
+    timestamps)                        │                 remotion/public/*.mp4
+             │                         │                 remotion/public/*.wav
              ▼                         │
-    faster-whisper                     │
-    word_timestamps=True               │
-             │                         │
-             ▼                         │
-    word_timestamps.json (×7)          │
-             │                         │
-             ▼                         │
-    ┌────────────────────────────┐     │
-    │ generate_section_          │     │
-    │   compositions.py          │     │
-    │                            │     │
-    │ Maps Whisper segments      │     │
-    │ to composition IDs         │     │
-    │ (hardcoded visual_sequence │     │
-    │  tuples in script)         │     │
-    └────────────┬───────────────┘     │
-                 │                     │
-                 ▼                     │
-    S00-S06 section wrappers          │
-    (constants.ts + Component.tsx)     │
-    — initially generated,            │
-      then hand-refined by            │
-      Claude Code (crossfades,        │
-      overlays, extra components)     │
-                 │                     │
-                 └─────────┬───────────┘
+    Section wrappers ──────────────────┘
+    (initially generated,
+     then refined by
+     Claude Code)
                            │
               ═══ CONVERGENCE ═══
                            │
@@ -148,67 +120,52 @@ specs, video clips, and animation code — then converges at render time.
               │  All tracks merge:       │
               │  - <Audio> from WAVs     │
               │  - <OffthreadVideo>      │
-              │    from Veo clips        │
+              │    from video clips      │
               │  - Animated components   │
-              │    from compositions     │
               │  - BEATS timing from     │
               │    Whisper timestamps    │
               └────────────┬────────────┘
                            │
                            ▼
-              outputs/sections/*.mp4 (×7)
-                           │
-                     ffmpeg concat
-                     (codec copy)
-                           │
-                           ▼
-              outputs/full_video.mp4 (232MB)
+              Section MP4s → ffmpeg concat → Full Video
                            │
               ═══ REVIEW LOOP ═══
                            │
                            ▼
               ┌─────────────────────────┐
-              │  review-app (Express.js) │
-              │  port 3847               │
+              │  Webapp (review-app)    │
+              │  Annotate → Analyze →   │
+              │  Fix → Render → Stitch  │
               └─────────────────────────┘
-                           │
-              ┌────────────┼────────────┐
-              ▼            ▼            ▼
-         [Annotate]   [Analyze]    [Resolve]
-              │            │            │
-              ▼            ▼     ┌──────┴──────┐
-          Draw +      Claude     │      │      │
-          Speech      reads     Fix   Render  Stitch
-          on frame    specs    code  section  full
-                      + src    via   via      via
-                      + img    CLI   Remotion ffmpeg
-                                       │
-                                       ▼
-                              Updated full_video.mp4
 ```
 
-### Automation Summary
+**In the product, the webapp controls the entire pipeline above** — not just the review loop at the bottom. Each "Claude Code" step in the diagram becomes a server-initiated Claude Code invocation triggered by the UI. Each "Fully automated" step (TTS, Whisper, Veo, Remotion render) becomes a job the server spawns and streams progress for. The user drives every stage from the same interface.
 
-Each step in the pipeline is one of three types:
+### Automation Model
+
+Every step in the pipeline is one of three types. This pattern held across the demo and would hold for any video:
 
 | Step | Method | Automation |
 |------|--------|------------|
-| Write main script | Human | Manual |
-| Generate TTS script from main script | Claude Code | LLM-directed |
-| Generate specs from [VISUAL:] blocks | Claude Code | LLM-directed (iterative, gaps filled in passes) |
-| Generate Veo prompts | Claude Code | LLM-directed (created as part of spec files) |
-| Render TTS audio segments | `render_tts.py` (Qwen3-TTS) | Fully automated |
-| Concatenate sections with pauses | `sync_audio_pipeline.py` | Fully automated |
-| Transcribe with word timestamps | faster-whisper | Fully automated |
-| Generate Veo video clips | `generate_*.py` (Veo 3.1 API) | Fully automated |
-| Write individual Remotion compositions | Claude Code (from specs) | LLM-directed |
-| Generate section wrapper scaffolding | `generate_section_compositions.py` | Fully automated |
-| Refine section wrappers (crossfades, overlays) | Claude Code | LLM-directed |
-| Register compositions in Root.tsx | Claude Code | LLM-directed (manual curation) |
+| Write source script | Human | Manual |
+| Generate TTS script | Claude Code | LLM-directed |
+| Generate visual specs | Claude Code | LLM-directed (iterative) |
+| Generate video prompts | Claude Code | LLM-directed |
+| Render TTS audio | TTS engine | Fully automated |
+| Concatenate sections with pauses | Concat pipeline | Fully automated |
+| Transcribe with word timestamps | Whisper | Fully automated |
+| Generate character reference images | Imagen | Fully automated |
+| Generate video clips (with frame chaining) | Veo | Fully automated |
+| Stage video clips to Remotion | Claude Code | LLM-directed |
+| Write Remotion compositions | Claude Code (from specs) | LLM-directed |
+| Generate section wrapper scaffolding | Composition generator | Fully automated |
+| Refine section wrappers | Claude Code | LLM-directed |
 | Render sections | Remotion CLI / Lambda | Fully automated |
 | Stitch full video | ffmpeg concat | Fully automated |
-| Audit renders against specs | Claude Code | LLM-directed (AUDIT_*.md files) |
+| Audit renders against specs | Parallel Claude Code agents | LLM-directed |
 | Review and auto-fix | review-app + Claude | Automated loop |
+
+The key insight: **Claude Code is the orchestrator.** The automated scripts handle individual pipeline stages, but Claude Code acts as the glue — generating intermediate artifacts, staging files between pipelines, and refining scaffolded output. In the prototype, a human drove Claude Code from the terminal. In the product, **the webapp drives Claude Code programmatically** — every "LLM-directed" step becomes a server-side Claude Code invocation triggered by a button in the UI.
 
 ### Data Flow: Annotation to Fixed Video
 
@@ -278,9 +235,9 @@ POST /api/annotations/:id/resolve
 
 ---
 
-## 4. Core Product: The AI Review/Edit Loop
+## 4. Core Product: The Webapp
 
-This is the key innovation. Everything else (TTS, Veo, Remotion) is infrastructure. The review loop is the product.
+The webapp is the single control plane for the entire pipeline. In the prototype, the review/fix loop is the most polished piece — but the product extends that same pattern (user triggers action → server calls Claude Code / spawns job → streams progress → returns result) to every pipeline stage.
 
 ### 4.1 Annotation Model
 
@@ -378,17 +335,32 @@ Input prompt includes: everything from analysis + the analysis results. Claude e
 
 ### 4.5 Section Mapping
 
-Seven video sections, each mapping to a spec directory, Remotion directory, and composition ID:
+The server maintains a section registry that maps each video section to its spec directory, Remotion directory, and composition ID. This registry drives the entire review loop — analysis scopes Claude to the correct spec/source files, and rendering targets the correct composition.
 
-| Section ID | Video File | Remotion Composition | Spec Dir |
-|------------|-----------|---------------------|----------|
-| `cold_open` | `cold_open.mp4` | `ColdOpenSection` | `00-cold-open` |
-| `part1_economics` | `part1_economics.mp4` | `Part1Economics` | `01-economics` |
-| `part2_paradigm_shift` | `part2_paradigm_shift.mp4` | `Part2ParadigmShift` | `02-paradigm-shift` |
-| `part3_mold` | `part3_mold.mp4` | `Part3MoldThreeParts` | `03-mold-has-three-parts` |
-| `part4_precision` | `part4_precision.mp4` | `Part4PrecisionTradeoff` | `04-precision-brings-cost` |
-| `part5_compound` | `part5_compound.mp4` | `Part5CompoundReturns` | `05-compound` |
-| `closing` | `closing.mp4` | `ClosingSection` | `06-closing` |
+```
+section = {
+  id: string,              // e.g. "intro"
+  label: string,           // Display name
+  videoFile: string,       // e.g. "intro.mp4"
+  specDir: string,         // e.g. "00-intro"
+  remotionDir: string,     // e.g. "S00-Intro"
+  compositionId: string    // e.g. "IntroSection"
+}
+```
+
+In the prototype, this is a hardcoded array in `server.js`. In V1, this should be a config file (`sections.json` or similar) loaded at startup, so new videos don't require code changes.
+
+> **In the demo (7 sections):**
+>
+> | Section ID | Video File | Remotion Composition | Spec Dir |
+> |------------|-----------|---------------------|----------|
+> | `cold_open` | `cold_open.mp4` | `ColdOpenSection` | `00-cold-open` |
+> | `part1_economics` | `part1_economics.mp4` | `Part1Economics` | `01-economics` |
+> | `part2_paradigm_shift` | `part2_paradigm_shift.mp4` | `Part2ParadigmShift` | `02-paradigm-shift` |
+> | `part3_mold` | `part3_mold.mp4` | `Part3MoldThreeParts` | `03-mold-has-three-parts` |
+> | `part4_precision` | `part4_precision.mp4` | `Part4PrecisionTradeoff` | `04-precision-brings-cost` |
+> | `part5_compound` | `part5_compound.mp4` | `Part5CompoundReturns` | `05-compound` |
+> | `closing` | `closing.mp4` | `ClosingSection` | `06-closing` |
 
 ---
 
@@ -416,67 +388,63 @@ Visual type mapping in specs:
 
 ### 5.2 Audio Pipeline
 
+The audio pipeline follows a fixed five-stage pattern for any video: script extraction → TTS rendering → section grouping → transcription → timing constant generation.
+
 ```
-narrative/main_script.md (39KB)
+Source Script
     │
-    │  Full script with NARRATOR: text + [VISUAL: ...] blocks
+    │  Full script with narration text + visual description blocks
     │
     ▼
 Claude Code (one-time generation)
     │
-    │  Extracts only narrator text (strips [VISUAL:] blocks)
+    │  Extracts narration text (strips visual descriptions)
     │  Adds TTS annotations: [TONE:], [PACE:], [PAUSE:], [EMOTION:]
-    │  Adds emphasis markers: **strong**, *light*
-    │  Condenses phrasing for natural speech delivery
+    │  Adds emphasis markers for delivery
+    │  Condenses phrasing for natural speech
     │
     ▼
-narrative/tts_script.md (20KB)
+TTS Script
     │
     │  Pure narration with voice direction annotations
     │  Sections separated by --- dividers
     │
     ▼
-tools/tts/render_tts.py — parse + generate
+TTS Renderer (render_tts.py) — parse + generate
     │
-    │  1. Parse: extracts ~103 segments with tone/pace/emotion metadata
-    │  2. Generate: Qwen3-TTS 1.7B (local, 24kHz mono, speaker "Aiden")
-    │     50+ tone mappings (e.g., "knowing, conspiratorial" →
-    │        "as if sharing an insider insight")
-    │  3. Output: individual segment WAVs + full concatenated audio
+    │  1. Parse: extract segments with tone/pace/emotion metadata
+    │  2. Generate: TTS engine produces individual WAV segments
+    │  3. Output: per-segment WAVs + full concatenated audio
     │
     ▼
-outputs/tts/segment_000.wav ... segment_111.wav (112 files)
+Per-segment WAV files
     │
     ▼
-tools/tts/sync_audio_pipeline.py — group + concatenate + transcribe
+Sync Pipeline (sync_audio_pipeline.py) — group + concatenate + transcribe
     │
-    │  1. Groups segments by section (hardcoded ranges):
-    │     cold_open: 105-110, part1: 0-29, part2: 31-45,
-    │     part3: 47-71, part4: 73-80, part5: 82-90, closing: 92-100
-    │
+    │  1. Groups segments by section (segment-to-section mapping)
     │  2. Concatenates with silence gaps matching [PAUSE: Xs] durations
-    │     (np.zeros at 24kHz sample rate — not ffmpeg)
-    │
+    │     (np.zeros at sample rate — not ffmpeg)
     │  3. Copies section WAVs to remotion/public/ for <Audio> playback
     │
     ▼
-outputs/tts/{section}/{section}_narration.wav (7 files)
+Per-section narration WAVs
     │
-    │  faster-whisper (base model, int8, word_timestamps=True)
+    │  Whisper transcription (word_timestamps=True)
     │
     ▼
-outputs/tts/{section}/word_timestamps.json (7 files)
+Per-section word_timestamps.json
     │  { words: [{ word, start, end, probability }],
     │    segments: [{ start, end, text }] }
     │
     ▼
-tools/generate_section_compositions.py
+Section Composition Generator (generate_section_compositions.py)
     │
     │  Maps Whisper segments to visual compositions
     │  Generates BEATS constants + VISUAL_SEQUENCE arrays
     │
     ▼
-remotion/src/remotion/S0X-Section/constants.ts
+remotion/src/remotion/{SectionDir}/constants.ts
     BEATS = {
       VISUAL_00_START: 0,    // frame numbers
       VISUAL_00_END: 148,
@@ -487,26 +455,112 @@ remotion/src/remotion/S0X-Section/constants.ts
 
 **Critical principle:** Audio is the source of truth, not script estimates. TTS condenses narration and reshuffles which visuals align with which words. Always generate audio first, run Whisper, then map visuals to actual word timestamps.
 
-### 5.3 Veo Video Generation
+> **In the demo:**
+> - Source script: `narrative/main_script.md` (39KB) with `NARRATOR:` text + `[VISUAL:]` blocks
+> - TTS script: `narrative/tts_script.md` (20KB), ~103 segments
+> - TTS engine: Qwen3-TTS 1.7B (local, 24kHz mono, speaker "Aiden"), 50+ tone mappings
+> - Segment output: `outputs/tts/segment_000.wav` through `segment_111.wav` (112 files)
+> - Section grouping (hardcoded ranges in `sync_audio_pipeline.py`): cold_open: 105-110, part1: 0-29, part2: 31-45, part3: 47-71, part4: 73-80, part5: 82-90, closing: 92-100
+> - Section WAVs: `outputs/tts/{section}/{section}_narration.wav` (7 files)
+> - Timestamps: `outputs/tts/{section}/word_timestamps.json` (7 files, faster-whisper base/int8)
+
+### 5.3 Video Generation (Imagen + Veo)
+
+Video generation follows a three-phase pattern: reference image creation, clip generation with frame chaining, and asset staging to the Remotion project.
+
+#### Phase 1: Reference Images (Imagen)
+
+Before generating video clips, create character reference portraits using an image generation model. These seed Veo with consistent character appearances.
+
+```python
+# tools/veo/generate_references.py
+result = client.models.generate_images(
+    model="imagen-3.0-generate-002",
+    prompt=character_prompt,
+    config=types.GenerateImagesConfig(
+        number_of_images=1,
+        person_generation="allow_adult"
+    )
+)
+```
+
+Reference images are stored in `references/{section}/` and include detailed character descriptions (age, clothing, accessories) in the prompt. Close-up portraits work better as reference images than wide shots.
+
+#### Phase 2: Clip Generation with Frame Chaining
+
+Each clip is generated from a prompt (extracted from the spec's `## Veo Prompt` block) plus a reference image. The reference can be either an Imagen portrait or the last frame of the previous clip.
 
 ```python
 # tools/veo/generate_segments.py
 operation = client.models.generate_videos(
     model="veo-3.1-generate-preview",
-    prompt=enhanced_prompt,           # with character descriptions
+    prompt=enhanced_prompt,
     config=types.GenerateVideosConfig(
-        aspect_ratio="9:16",          # vertical for split-screen
+        aspect_ratio="9:16",          # vertical for split-screen, or 16:9 for full-frame
         number_of_videos=1
     ),
-    image=reference_image             # for character consistency
+    image=reference_image             # Imagen portrait OR last frame of previous clip
 )
 ```
 
-- **Authentication:** Vertex AI (service account) or Gemini API key
-- **Project:** `prompt-driven-development`, region `us-central1`
-- **Character consistency:** Reference images are mandatory — Veo generates different-looking people every run without them
-- **Split-screen:** Left/right panels generated separately in 9:16 vertical, composited via ffmpeg
+**Frame chaining** is the key mechanism for character consistency across clips. Rather than using the same static reference for every clip, each script extracts the last frame of clip N and feeds it as the reference for clip N+1:
+
+```
+Imagen portrait → Veo clip A → extract last frame → Veo clip B →
+  extract last frame → Veo clip C → ...
+```
+
+This chaining can also work **across sections**, creating visual continuity across the full video. Frame extraction uses ffprobe + ffmpeg:
+
+```bash
+ffprobe -v error -show_entries format=duration -of csv=p=0 clip.mp4
+ffmpeg -ss {duration - 0.1} -i clip.mp4 -vframes 1 -q:v 2 last_frame.png
+```
+
+Common clip patterns:
+- **Split-screen:** Left/right panels generated separately in 9:16 vertical, composited via ffmpeg into 16:9
 - **Full-frame:** Generated directly in 16:9
+- **Parallel generation:** `ThreadPoolExecutor` for generating independent clips concurrently
+- **Post-processing:** Color grading (sepia, vignette) via ffmpeg `colorchannelmixer`
+
+#### Phase 3: Asset Staging
+
+Veo scripts write to `outputs/veo/{section}/{raw,composited,frames}/`. A separate step stages clips to `remotion/public/` where Remotion's `staticFile()` can find them. In the prototype, this was performed by Claude Code executing `cp` commands — not by any script.
+
+The destination filenames must match the `staticFile()` references in the composition code. The `generate_section_compositions.py` script defines expected names via `veo:` prefixed entries in its visual sequence data (e.g., `"veo:intro_clip_01"`), which translates to `staticFile("intro_clip_01.mp4")`. Claude Code closed the loop by copying files to match these references.
+
+In V1, asset staging should be automated — either by having Veo scripts write directly to `remotion/public/` with standardized names, or by maintaining a manifest that maps output paths to `staticFile()` references.
+
+> **In the demo:**
+>
+> *Reference images:*
+> - `references/cold-open/developer_reference.png` — 32-year-old male, dark navy hoodie, black-framed glasses
+> - `references/cold-open/grandmother_reference.png` — 75-year-old woman, cream cardigan, wire-rimmed spectacles
+> - `references/part-1/` — alternate reference set for economics section
+>
+> *Frame chaining across sections:* Cold open segment 01e's last frames (`01e_left_last.png`, `01e_right_last.png`) reused as references for economics segment 07. Segments 07→08→09 form their own dependency chain.
+>
+> *Generation scripts (9 total):*
+>
+> | Script | Section | Notable Features |
+> |--------|---------|-----------------|
+> | `generate_segments.py` | 00-cold-open | Main script; `--use-references`, `--separate-sides`, `--sequential` flags |
+> | `generate_references.py` | — | Imagen 3.0 portrait generation (not Veo) |
+> | `composite_segments.py` | 00-cold-open | ffmpeg split-screen compositing (left 9:16 + right 9:16 → 16:9) |
+> | `generate_paradigm_shift.py` | 02-paradigm-shift | Generates segments 01, 02, 04, 05, 07 from section specs |
+> | `generate_section_04.py` | 04-precision | Parallel generation via `ThreadPoolExecutor(max_workers=4)` |
+> | `generate_segment_07.py` | 01-economics | Cross-section reference reuse; sepia color grading |
+> | `generate_segment_08.py` | 01-economics | Chained from segment 07's last frame |
+> | `generate_segment_09.py` | 01-economics | Chained from segment 08's last frame |
+> | `generate_segment_2_01.py` | 02-paradigm-shift | Standalone factory floor shot |
+>
+> *Asset staging examples:*
+>
+> | Source (`outputs/veo/`) | Destination (`remotion/public/`) |
+> |---|---|
+> | `00-cold-open/composited/01a_establish_split_screen.mp4` | `cold_open_01a_establish.mp4` |
+> | `02-paradigm-shift/raw/04_defect_discovered.mp4` | `veo_defect_discovered.mp4` |
+> | `04-precision-tradeoff/composited/01_split_3d_vs_mold.mp4` | `split_3d_vs_mold.mp4` |
 
 ### 5.4 Remotion Composition Architecture
 
@@ -545,6 +599,27 @@ npx remotion render src/remotion/index.ts {compositionId} \
 - Deployed via `remotion/deploy.mjs`
 - API endpoints: `src/app/api/lambda/render/route.ts`, `.../progress/route.ts`
 
+### 5.6 Multi-Agent Audit Pipeline
+
+After rendering, parallel Claude Code agents audit every visual segment against its spec. Each agent:
+
+1. Renders a still frame at the segment midpoint using `npx remotion still`
+2. Compares the frame against the spec's visual description, color palette, animation state, and narration sync point
+3. Writes an `AUDIT_*.md` file with pass/fail verdict and technical notes
+
+Agents run in parallel (one per section). Each agent receives a batch of specs to audit and works independently. Results are aggregated into section-level and master sweep reports.
+
+**Output structure:**
+- `audits/AUDIT_SWEEP_{date}.md` — master sweep report with pass/fail counts
+- `audits/AUDIT_BRIEFS.md` — pre-prepared audit briefs with batch breakdowns
+- `audits/AUDIT_{section}.md` — section-level summaries
+- `specs/{section}/AUDIT_*.md` — spec-level audit files with frame-by-frame analysis
+- `specs/{section}/AUDIT_SUMMARY.md` — per-section rollup
+
+Audit files include version iterations (e.g., `AUDIT_S01_V0.md` through `AUDIT_S01_V23.md`) when issues are found and re-audited after fixes.
+
+> **In the demo:** 7 agents audited 82 scenes across 7 sections, producing 136 audit files. Master sweep report: 81 PASS, 1 NEEDS_FIX.
+
 ---
 
 ## 6. Tech Stack & Dependencies
@@ -558,8 +633,9 @@ npx remotion render src/remotion/index.ts {compositionId} \
 | Web framework | Next.js | 16.0.10 | Remotion web UI + Lambda API |
 | Styling | Tailwind CSS | 4.0.3 | Component styling |
 | Schema validation | Zod | 3.22.3 | Composition prop validation |
+| Reference images | Google Imagen 3.0 | `imagen-3.0-generate-002` | Character portrait generation for Veo consistency |
 | Video generation | Google Veo 3.1 | Preview | AI-generated live-action footage |
-| TTS | Qwen3-TTS | 1.7B | Narration audio generation |
+| TTS | Qwen3-TTS | 1.7B (local, ~4.5GB) | Narration audio generation |
 | Transcription | faster-whisper | base/int8 | Word-level timestamps |
 | AI editor | Claude Opus 4.6 | CLI | Analysis + code fixes |
 | Video processing | ffmpeg | System | Concat, composite, frame extract |
@@ -570,10 +646,23 @@ npx remotion render src/remotion/index.ts {compositionId} \
 
 | Package | Purpose |
 |---------|---------|
-| `google-genai` | Vertex AI / Veo API client |
+| `google-genai` | Vertex AI / Veo + Imagen API client |
 | `faster-whisper` | Whisper transcription |
-| `transformers` | Qwen3-TTS model loading |
+| `qwen_tts` | Qwen3-TTS model loading and inference |
+| `transformers` | HuggingFace model infrastructure |
 | `soundfile` | WAV file I/O |
+
+### Model Setup
+
+Qwen3-TTS runs locally and requires downloading ~4.5GB of model weights:
+
+```
+models/
+├── Qwen3-TTS-12Hz-1.7B-CustomVoice/   # 3.8GB (model.safetensors + config)
+└── Qwen3-TTS-Tokenizer-12Hz/          # 682MB (speech tokenizer)
+```
+
+`render_tts.py` loads from the local `models/` directory. `render_full.py` loads from HuggingFace Hub (cached). There is no setup script — models were downloaded manually via HuggingFace Hub. The `qwen_tts` Python package is required but not listed in any requirements file within the demo directory.
 
 ### Review App
 
@@ -658,7 +747,12 @@ interpolate(frame, [0, 10, 11, 25], [1, 1, 1, 0])
 
 ### 8.3 Character Consistency in Veo
 
-Veo generates different-looking people every run. Without reference images, the "developer" character looks different in every clip. Reference images must match the scene type — close-ups work better than wide shots as references.
+Veo generates different-looking people every run. The solution is two-layered:
+
+1. **Imagen-generated reference portraits** seed each section with a consistent character appearance
+2. **Frame chaining** propagates consistency across clips — the last frame of clip N becomes the reference for clip N+1, creating a visual chain that drifts less than using a static portrait for every clip
+
+Close-up portraits work better as reference images than wide shots. Cross-section chaining (cold open frames reused in economics) maintains continuity across the full video.
 
 ### 8.4 Audio Is Source of Truth
 
@@ -692,56 +786,60 @@ For a 19-second rendered video:
 
 ## 9. Product Requirements for V1
 
-### 9.1 Core Loop (Must Have)
+### 9.1 Production Pipeline (Must Have)
 
-**P0 — The review/fix/render cycle, productized:**
+**P0 — The webapp controls the full pipeline, not just the review loop:**
 
-- [ ] **Project import:** Load a Remotion project with specs, define sections and composition mappings via config file (not hardcoded)
+- [ ] **Project setup:** Create a new video project from a source script. Define sections, configure TTS voice/model, set output resolution.
+- [ ] **Script → TTS script generation:** Trigger Claude Code to extract narration and add TTS annotations. Review/edit the generated TTS script in-app.
+- [ ] **TTS rendering:** Trigger TTS generation from the UI. Preview audio per-segment. Re-generate individual segments.
+- [ ] **Audio sync pipeline:** Trigger section grouping, silence insertion, Whisper transcription. Display word-level timestamps.
+- [ ] **Spec generation:** Trigger Claude Code to generate visual specs from the source script. Edit specs in-app with live preview.
+- [ ] **Veo generation:** Trigger reference image creation (Imagen) and clip generation (Veo) from the UI. Manage frame chaining dependencies. Preview clips inline.
+- [ ] **Composition generation:** Trigger Claude Code to write Remotion compositions from specs. Trigger section wrapper scaffolding. Preview individual compositions.
+- [ ] **Asset staging:** Automated staging of Veo clips and TTS audio to `remotion/public/` with manifest tracking (replacing the manual Claude Code `cp` pattern).
+- [ ] **Section render + stitch:** Render sections (local CLI or Lambda), assemble full video.
+- [ ] **Progress streaming:** Real-time SSE/WebSocket updates for every pipeline stage — not just the fix loop.
+
+### 9.2 Review/Fix Loop (Must Have)
+
+**P0 — The review/fix/render cycle, productized (extends the prototype's most polished piece):**
+
 - [ ] **Video player with annotation:** Spacebar workflow (pause → draw → speak → save → resume), drawing tools (freehand, rectangle, circle, arrow, text), speech-to-text input
 - [ ] **AI analysis:** Send annotation context (frame, drawing, text, spec, source code) to Claude; return structured assessment with severity/category/fixes
 - [ ] **Diff preview:** Show proposed code changes before applying. User can accept, reject, or edit.
 - [ ] **AI fix:** Apply accepted changes to source files with git commit per fix (automatic rollback support)
-- [ ] **Section render:** Re-render only the affected section
-- [ ] **Full stitch:** Reassemble full video from sections
-- [ ] **Progress streaming:** Real-time SSE updates through the fix → render → stitch pipeline
+- [ ] **Section re-render + re-stitch:** Re-render only the affected section, reassemble full video
+- [ ] **Batch fixes:** Queue multiple annotations on the same section, apply all fixes, render once
 
-### 9.2 Reliability (Must Have)
+### 9.3 Reliability (Must Have)
 
 **P0 — Things that are currently broken or fragile:**
 
+- [ ] **Project config:** Section registry, composition mappings, and pipeline settings in a config file (not hardcoded in `server.js`)
 - [ ] **Database-backed persistence:** Replace `annotations.json` with SQLite or Postgres. Support concurrent access, annotation history, and backup.
 - [ ] **Structured Claude output:** Use Claude's tool_use mode or structured output instead of free-form JSON parsing with three fallback strategies
 - [ ] **Git integration:** Auto-commit before and after every Claude fix. Enable `git diff` preview and `git revert` for bad fixes.
-- [ ] **Job retry:** Allow retrying failed resolve jobs without re-analyzing
-- [ ] **Batch fixes:** Queue multiple annotations on the same section, apply all fixes, render once
+- [ ] **Job retry:** Allow retrying failed jobs (any pipeline stage, not just resolve) without re-running upstream steps
+- [ ] **Asset manifest:** Central registry of all clips, audio segments, reference images, and generated compositions — replacing the current scatter across `outputs/`, `remotion/public/`, and `references/`
 
-### 9.3 Efficiency (Should Have)
+### 9.4 Efficiency (Should Have)
 
 **P1 — Performance and cost improvements:**
 
 - [ ] **Incremental rendering:** Render only the frames around the fix (Remotion supports `--frames` flag), composite into existing section video
-- [ ] **Claude session reuse:** Keep a warm Claude session per section instead of cold-starting the CLI for every analysis/fix
-- [ ] **Parallel section renders:** If fixes touch different sections, render them concurrently
-- [ ] **Cost dashboard:** Track and display Claude API, Veo, and Lambda costs per annotation and per session
+- [ ] **Claude session reuse:** Keep a warm Claude session per section instead of cold-starting the CLI for every invocation
+- [ ] **Parallel pipeline stages:** Run independent pipeline stages concurrently (e.g., TTS and Veo generation in parallel; multi-section renders in parallel)
+- [ ] **Cost dashboard:** Track and display Claude API, Veo, Imagen, and Lambda costs per stage and per session
 
-### 9.4 Collaboration (Should Have)
+### 9.5 Collaboration (Should Have)
 
 **P1 — Multi-user support:**
 
 - [ ] **User accounts:** Basic auth with roles (director, editor, viewer)
-- [ ] **Shared annotation state:** WebSocket-based real-time sync of annotations across clients
+- [ ] **Shared state:** WebSocket-based real-time sync of annotations and pipeline status across clients
 - [ ] **Comment threads:** Discussion on annotations before resolving
 - [ ] **Assignment:** Assign annotations to team members or to AI
-
-### 9.5 Production Pipeline Integration (Nice to Have)
-
-**P2 — The full spec-driven pipeline as a managed workflow:**
-
-- [ ] **Spec editor:** Edit markdown specs in-app with live preview
-- [ ] **TTS generation:** Trigger Qwen3-TTS rendering from the UI
-- [ ] **Veo generation:** Generate and manage video clips with reference image tracking
-- [ ] **Asset manager:** Central registry of all clips, audio segments, reference images, and generated compositions
-- [ ] **Timeline view:** Visual representation of section composition with drag-to-reorder
 
 ---
 
@@ -820,73 +918,64 @@ For a 19-second rendered video:
 
 ---
 
-## Appendix B: File Map
+## Appendix B: Project Directory Structure
+
+Any video project built with this system should follow this general layout:
 
 ```
-demos/3blue1brown/
+{project}/
 ├── narrative/
-│   ├── main_script.md            # Full script with visual descriptions (39KB)
-│   ├── tts_script.md             # TTS-optimized script with annotations (20KB)
-│   └── tts_cold_open.md          # Cold open excerpt
+│   ├── main_script.md            # Source script (human-written)
+│   └── tts_script.md             # TTS-optimized script (Claude Code-generated)
 │
 ├── specs/
-│   ├── 00-cold-open/             # 8 specs + prompts/
-│   ├── 01-economics/             # 13 specs + README + prompts/
-│   ├── 02-paradigm-shift/        # 11 specs + README + prompts/
-│   ├── 03-mold-has-three-parts/  # Mold mechanics specs
-│   ├── 04-precision-brings-cost/ # Precision requirement specs
-│   └── 05-compound/              # Compound cost specs
+│   └── {NN-section-name}/        # One directory per section
+│       ├── segment_NN_*.md       # Per-shot visual specs
+│       ├── AUDIT_*.md            # Per-spec audit results
+│       └── prompts/              # Veo prompt files (optional)
 │
 ├── remotion/
 │   ├── src/remotion/
-│   │   ├── Root.tsx              # 60 composition registrations
-│   │   ├── 01-ColdOpen/         # through 51-SockMetaphorFinal/
-│   │   ├── S00-ColdOpen/        # Section wrappers (S00-S06)
-│   │   └── examples/
-│   ├── deploy.mjs                # AWS Lambda deployment
-│   ├── config.mjs                # Lambda config (region, RAM, timeout)
-│   └── package.json              # Remotion 4.0.410, React 19, Next.js 16
+│   │   ├── Root.tsx              # Composition registrations
+│   │   ├── {NN-ComponentName}/   # Individual animation compositions
+│   │   └── {S0N-SectionName}/    # Section wrapper compositions
+│   ├── public/                   # Static assets (WAVs, MP4s) for Remotion
+│   ├── deploy.mjs                # AWS Lambda deployment (optional)
+│   └── package.json
 │
 ├── tools/
 │   ├── tts/
-│   │   ├── render_tts.py         # Qwen3-TTS rendering
-│   │   ├── sync_audio_pipeline.py # Concat + Whisper
-│   │   └── render_full.py        # Full pipeline
+│   │   ├── render_tts.py         # TTS rendering
+│   │   └── sync_audio_pipeline.py # Section grouping + Whisper
 │   ├── veo/
-│   │   ├── generate_segments.py  # Veo 3.1 video generation
-│   │   ├── generate_references.py # Reference image creation
+│   │   ├── generate_segments.py  # Video clip generation
+│   │   ├── generate_references.py # Reference image generation
 │   │   └── composite_segments.py # Split-screen compositing
 │   └── generate_section_compositions.py  # Whisper → BEATS → Remotion
 │
 ├── review-app/
-│   ├── server.js                 # Express API (862 lines)
-│   ├── server.test.js            # Jest test suite
-│   ├── package.json              # express, jest, supertest
-│   ├── public/
-│   │   ├── index.html            # Editor UI
-│   │   ├── app.js                # Keyboard shortcuts, spacebar workflow
-│   │   ├── video-player.js       # Video playback + frame capture
-│   │   ├── canvas-overlay.js     # Drawing tools (5 tools, 314 lines)
-│   │   ├── annotation-panel.js   # CRUD + resolve pipeline UI (589 lines)
-│   │   ├── speech-input.js       # Web Speech API wrapper
-│   │   ├── api-client.js         # Fetch wrapper + SSE
-│   │   └── styles.css            # Dark theme, severity badges
-│   └── data/
-│       ├── annotations.json      # Flat file persistence
-│       └── thumbnails/           # Frame captures
-│
-├── docs/
-│   ├── RENDERING_METHODOLOGY.md  # Production lessons (354 lines)
-│   └── audio-synced-animation-process.md  # Audio sync methodology
+│   ├── server.js                 # Express API
+│   ├── public/                   # Editor UI (spacebar workflow)
+│   └── data/                     # Annotations + thumbnails
 │
 ├── outputs/
-│   ├── full_video.mp4            # Final video (232MB)
-│   ├── sections/                 # 7 section videos + concat_list.txt
+│   ├── full_video.mp4            # Final stitched video
+│   ├── sections/                 # Per-section rendered videos
 │   ├── tts/                      # Audio segments + timestamps
 │   └── veo/                      # Generated video clips
 │
 ├── references/                   # Character reference images for Veo
-├── audits/                       # Frame-by-frame QA reports
-├── models/                       # Local Qwen3-TTS weights
-└── archive/                      # Historical assets
+├── audits/                       # QA audit reports
+├── models/                       # Local model weights (TTS, etc.)
+├── docs/                         # Process documentation
+└── archive/                      # Stale files preserved for reference
 ```
+
+> **In the demo (`demos/3blue1brown/`):**
+> - `narrative/` — 3 files including `tts_cold_open.md` (cold open excerpt)
+> - `specs/` — 6 section dirs (`00-cold-open` through `05-compound`), ~150+ spec files
+> - `remotion/src/remotion/` — 60 registered compositions (`01-ColdOpen/` through `51-SockMetaphorFinal/`), 7 section wrappers (`S00-ColdOpen/` through `S06-Closing/`)
+> - `tools/veo/` — 9 generation scripts (section-specific, see Section 5.3)
+> - `review-app/` — `server.js` (862 lines), 7 public JS modules, `server.test.js` (Jest)
+> - `outputs/` — `full_video.mp4` (232MB), 7 section videos, 112 TTS segments
+> - `docs/` — `RENDERING_METHODOLOGY.md` (354 lines), `audio-synced-animation-process.md`

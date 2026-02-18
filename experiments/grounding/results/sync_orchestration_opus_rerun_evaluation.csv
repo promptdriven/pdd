@@ -1,0 +1,6 @@
+arm,run_number,syntax_valid,line_count,function_count,class_count,reference_similarity,reference_recall,tests_total,tests_passed,tests_failed,tests_error,test_runtime_seconds
+grounded,1,True,1973,29,3,0.9733,0.9951,108,105,3,0,65.7
+grounded,2,True,1973,29,3,0.9733,0.9951,108,105,3,0,66.0
+grounded,3,True,1973,29,3,0.9732,0.9943,108,105,3,0,63.1
+grounded,4,True,1973,29,3,0.9732,0.9943,108,105,3,0,64.8
+grounded,5,True,1973,29,3,0.9732,0.9943,108,105,3,0,64.8

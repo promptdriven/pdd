@@ -88,7 +88,7 @@
 % LLM Invocation:
     - For OpenAI gpt-5* models: Call litellm.responses() API to support 'reasoning' parameter. Build text.format block for structured output (type=json_schema when output_pydantic/output_schema, else type=text). Skip temperature for Responses API.
     - For other models: Call litellm.completion() or litellm.batch_completion().
-    - Pass: model, messages, temperature, num_retries=2, timeout=LLM_CALL_TIMEOUT (120s).
+    - Pass: model, messages, temperature, num_retries=2, timeout=LLM_CALL_TIMEOUT (600s).
     - Do NOT set max_tokens/max_completion_tokens; rely on provider defaults.
     - Anthropic with thinking enabled: Force temperature=1.
     - LM Studio: Set base_url from LM_STUDIO_API_BASE env (default http://localhost:1234/v1) and api_key placeholder "lm-studio".
