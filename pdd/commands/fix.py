@@ -73,6 +73,13 @@ def fix(
 
         # Determine mode based on first argument
         is_url = args[0].startswith("http") or "github.com" in args[0]
+
+        def is_user_story_file(path: str) -> bool:
+            return (
+                path.endswith(".md")
+                and os.path.basename(path).startswith("story__")
+                and os.path.exists(path)
+            )
         
         if is_url and not manual:
             if len(args) > 1:
@@ -107,6 +114,32 @@ def fix(
             return result_dict, cost, model
 
         else:
+            if not manual and len(args) == 1 and is_user_story_file(args[0]):
+                from ..user_story_tests import run_user_story_fix
+
+                ctx_obj = ctx.obj or {}
+                success, message, cost, model, changed_files = run_user_story_fix(
+                    ctx=ctx,
+                    story_file=args[0],
+                    prompts_dir=ctx_obj.get("prompts_dir"),
+                    strength=ctx_obj.get("strength", 0.2),
+                    temperature=ctx_obj.get("temperature", 0.0),
+                    time=ctx_obj.get("time", 0.25),
+                    budget=budget,
+                    verbose=ctx_obj.get("verbose", False),
+                    quiet=ctx_obj.get("quiet", False),
+                )
+                if success:
+                    console.print(f"[bold green]User story fix completed:[/bold green] {message}")
+                else:
+                    console.print(f"[bold red]User story fix failed:[/bold red] {message}")
+                result_dict = {
+                    "success": success,
+                    "message": message,
+                    "changed_files": changed_files,
+                }
+                return result_dict, cost, model
+
             min_args = 3 if loop else 4
             if len(args) < min_args:
                  mode_str = "Loop" if loop else "Non-loop"
