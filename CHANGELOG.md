@@ -2,7 +2,14 @@
 
 ### Feat
 
-- Implement atomic state updates for `sync_orchestration` to fix state desynchronization (Issue #159), update LLM invocation logic and prompts, and add new grounding experiment results.
+- **Atomic state updates in `sync_orchestration`** — Fixes state desynchronization (Issue #159) where concurrent updates could leave module state inconsistent. State transitions are now applied atomically, preventing races between parallel sync workers.
+- **`LLM_CALL_TIMEOUT` configurable via environment variable** — Previously hardcoded to 600 seconds; now reads `LLM_CALL_TIMEOUT` env var so callers can override without patching code.
+- **Model list updated to Claude Sonnet 4.6** — `claude-sonnet-4-5` (Anthropic and Vertex AI) replaced by `claude-sonnet-4-6` in `llm_model.csv`. Legacy `claude-sonnet-4-5-20250929` entry removed.
+
+### Build
+
+- **`pytest` configuration moved into `pyproject.toml`** — `asyncio_mode`, `testpaths`, custom markers, and `filterwarnings` are now declared in `[tool.pytest.ini_options]`, removing the need for a separate `pytest.ini` or `setup.cfg` entry.
+- **Updated `test-durations.json`** with latest profiled CI data.
 
 ## v0.0.151 (2026-02-16)
 
