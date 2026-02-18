@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pdd-cli"
-version = "0.0.151"
+version = "0.0.152"
 description = "PDD (Prompt-Driven Development) Command Line Interface"
 readme = {file = "pypi_description.rst", content-type = "text/x-rst"}
 authors = [
@@ -105,9 +105,29 @@ dev = [
     "httpx==0.28.1"
 ]
 
+[tool.pytest.ini_options]
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+markers = [
+    "real: mark a test as requiring real resources (e.g. API calls)",
+    "integration: mark a test as an integration test (makes real API calls, costs money)",
+    "slow: mark a test as slow-running",
+    "e2e: mark a test as E2E test (uses real LLM calls, costs money, runs slowly)",
+]
+filterwarnings = [
+    "ignore:.*Pydantic V1 style.*deprecated.*",
+    "ignore:.*Accessing the 'model_fields' attribute on the instance is deprecated.*",
+    "ignore:datetime\\.datetime\\.utcnow\\(\\) is deprecated:DeprecationWarning:botocore\\.auth.*",
+    "ignore::UserWarning:pydantic.main",
+    "ignore:Use 'content=<\\.\\.\\.>' to upload raw bytes/text content:DeprecationWarning:httpx._models",
+    "ignore:Unknown config option.*:pytest.PytestConfigWarning",
+    "ignore:Support for class-based.*config.*is deprecated:DeprecationWarning",
+]
+
 [tool.commitizen]
 name = "cz_conventional_commits"
-version = "0.0.151"
+version = "0.0.152"
 tag_format = "v$version"
 version_files = [
     "pyproject.toml:version",

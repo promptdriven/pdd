@@ -1,18 +1,44 @@
+## v0.0.152 (2026-02-17)
+
+### Feat
+
+- Implement atomic state updates for `sync_orchestration` to fix state desynchronization (Issue #159), update LLM invocation logic and prompts, and add new grounding experiment results.
+
 ## v0.0.151 (2026-02-16)
 
 ### Feat
 
-- Add Product Requirements Document (PRD) for the AI-First Video Editor demo.
-- Add agentic sync - LLM-driven parallel module sync from GitHub issues
+- **Agentic sync — LLM-driven parallel module sync from GitHub issues**: `pdd sync <github_issue_url>` fetches the issue, uses an LLM to identify which modules need syncing and validate `architecture.json` dependencies, then dispatches parallel `pdd sync` subprocesses via a new `AsyncSyncRunner` with dependency-aware scheduling (up to 4 concurrent workers). Live progress is posted to a GitHub issue comment with per-module status, duration, and cost. Pause-on-failure ensures running modules finish but no new ones start. Resumable state is saved to `.pdd/agentic_sync_state.json`. New modules: `pdd/agentic_sync.py`, `pdd/agentic_sync_runner.py`.
+- **New CLI options for agentic sync**: `--timeout-adder` (extra timeout per step) and `--no-github-state` (disable GitHub comment updates) added to `pdd sync`.
+- **Auto-fix missing environment variable crashes**: When an example crashes due to a missing API key/token (`KeyError`, `ValueError`, etc.), `sync_orchestration` now automatically inserts an env var guard with `sys.exit(0)` before invoking the expensive agentic crash-fix loop.
 
 ### Fix
 
-- Address Copilot review feedback on agentic sync
-- Increase LLM API call timeout from 120 seconds to 600 seconds.
-- Fix cost propagation bug and increase module timeout
-- Add token-based cost estimation fallback for Claude subscription auth
-- Add timeouts to prevent sync hangs (Firecrawl, git ls-files, auto-deps)
-- Auto-fix env var errors, fix cost tracking, fix 7x duplicate language syncs
+- **Cost extraction from result tuples used wrong index** — Both `sync_orchestration` and `pin_example_hack` extracted cost via `result[-2]`, which returned the wrong value for 4-tuple returns. Fixed to always use `result[1]` (the cost index for both 3-tuple and 4-tuple formats).
+- **Token-based cost estimation fallback for Claude subscription auth** — When Anthropic's `total_cost_usd` field is missing (subscription-mode responses), cost is now estimated from token counts using per-family pricing (Opus/Sonnet/Haiku). Falls back to `modelUsage.costUSD` summation first, then token math.
+- **LLM API call timeout increased from 120s to 600s** — Complex agentic tasks (generate + crash + verify + test) were hitting the 2-minute timeout on slower models.
+- **Module timeout increased to 30 minutes** for agentic sync subprocesses (`MODULE_TIMEOUT = 1800`), accommodating multi-step module syncs.
+- **Firecrawl web scraping timeout** — The Firecrawl SDK passes `timeout` in milliseconds to `requests.post()` which expects seconds, causing ~8-hour hangs. Wrapped in a `ThreadPoolExecutor` with a hard 30-second client-side deadline.
+- **`git ls-files` timeout** — Added 30-second timeout to `_get_files_from_git()` in `summarize_directory` to prevent hangs on large repositories.
+- **7x duplicate language syncs** — When a prompt template had no `{language}` or `{ext}` placeholder, all 7 languages resolved to the same static file, triggering 7 identical syncs. Now infers the single language from the filename suffix.
+- **Cost CSV header written to empty files** — `track_cost` now checks `os.path.getsize() > 0` instead of just `os.path.isfile()`, fixing cases where a truncated/empty CSV file caused headerless rows.
+- **Auto-deps skipped in agentic mode** — Prompts in agentic sync already have explicit dependencies; the `auto-deps` operation is now skipped to avoid redundant LLM calls.
+
+### Build
+
+- New `architecture.json` entries for `agentic_sync` and `agentic_sync_runner` modules with dependency and interface metadata.
+- Updated `test-durations.json` with latest profiled data.
+
+### Refactor
+
+- **Phase markers emitted during sync orchestration** — `PDD_PHASE: <operation>` lines are printed to stdout so the parent `AsyncSyncRunner` process can track per-module progress in real time.
+- **Agentic crash-fix prompt updated** — `agentic_crash_explore_LLM.prompt` now documents the missing-env-var pattern and the correct fix (graceful `sys.exit(0)`, not hardcoded keys).
+
+### Docs
+
+- New PDD prompts: `agentic_sync_identify_modules_LLM.prompt`, `agentic_sync_python.prompt`, `agentic_sync_runner_python.prompt`.
+- Updated `maintenance_python.prompt` with agentic sync dispatch, URL detection, and new CLI options.
+- New context examples: `context/agentic_sync_example.py`, `context/agentic_sync_runner_example.py`.
 
 ## v0.0.150 (2026-02-15)
 
