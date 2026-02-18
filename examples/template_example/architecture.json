@@ -61,7 +61,7 @@
               {
                 "name": "model",
                 "type": "str",
-                "default": "claude-sonnet-4-5@20250929",
+                "default": "claude-sonnet-4-6",
                 "description": "Claude model to use for editing"
               },
               {
@@ -113,7 +113,7 @@
         "asyncFunctions": [
           {
             "name": "edit_file",
-            "signature": "edit_file(file_path: str, edit_instructions: str, model: str = 'claude-sonnet-4-5@20250929', verbose: bool = False, use_cache: Union[str, bool] = 'auto', max_iterations: int = 10) -> Tuple[bool, str, float]",
+            "signature": "edit_file(file_path: str, edit_instructions: str, model: str = 'claude-sonnet-4-6', verbose: bool = False, use_cache: Union[str, bool] = 'auto', max_iterations: int = 10) -> Tuple[bool, str, float]",
             "returns": "Tuple of (success, error_message, cost_in_usd)",
             "errorHandling": "Retries up to max_iterations, returns error message on failure",
             "retryPolicy": "Maximum 10 conversation iterations",

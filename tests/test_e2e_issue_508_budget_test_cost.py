@@ -38,7 +38,7 @@ class TestBudgetCostExtraction:
 
     def test_4_tuple_test_extend_cost_extraction(self):
         """Same fix applies for test_extend operation which also calls cmd_test_main."""
-        result = ("test content", 0.0012345, "claude-sonnet-4-5", False)
+        result = ("test content", 0.0012345, "claude-sonnet-4-6", False)
 
         cost = self._extract_cost(result, operation='test_extend')
 
@@ -101,7 +101,7 @@ class TestLoggingSectionTestExtendGap:
         test_extend also returns a 4-tuple from cmd_test_main, so the same
         explicit indexing should apply.
         """
-        result = ("tests", 0.0012345, "claude-sonnet-4-5", True)
+        result = ("tests", 0.0012345, "claude-sonnet-4-6", True)
 
         actual_cost = self._extract_logging_cost(result, operation='test_extend')
 
