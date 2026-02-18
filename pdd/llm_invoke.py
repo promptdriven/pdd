@@ -514,6 +514,8 @@ def _get_environment_info() -> Dict[str, str]:
 # <<< SET LITELLM DEBUG LOGGING >>>
 # os.environ['LITELLM_LOG'] = 'DEBUG' # Keep commented out unless debugging LiteLLM itself
 
+LLM_CALL_TIMEOUT = 600  # seconds per LLM API call
+
 # --- Constants and Configuration ---
 
 # Determine project root: use PathResolver to ignore package-root PDD_PATH values.
@@ -863,6 +865,12 @@ def _is_malformed_json_response(content: str, threshold: int = 100) -> bool:
     if trailing_newline_count >= threshold:
         return True
 
+    # Also check for excessive actual trailing newlines (not just escaped \\n)
+    # This catches cases where raw newlines cause truncation
+    actual_newline_count = len(content) - len(content.rstrip('\n'))
+    if actual_newline_count >= threshold:
+        return True
+
     # Also check for response that looks truncated mid-string
     # (ends with characters that suggest we're inside a JSON string value)
     if not stripped.endswith('}') and not stripped.endswith(']') and not stripped.endswith('"'):
@@ -1176,6 +1184,14 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
         newly_acquired_keys[key_name] = False # Mark as existing
         return True
     else:
+        # For Vertex AI, allow ADC when project is available
+        if key_name == 'VERTEX_CREDENTIALS':
+            vertex_project = os.getenv("VERTEX_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT")
+            if vertex_project:
+                logger.info(f"VERTEX_CREDENTIALS not set; using ADC (project={vertex_project}).")
+                newly_acquired_keys[key_name] = False
+                return True
+
         logger.warning(f"API key environment variable '{key_name}' for model '{model_info.get('model')}' is not set.")
 
         # Skip prompting if --force flag is set (non-interactive mode)
@@ -1902,9 +1918,8 @@ def llm_invoke(
                               model_name_litellm.startswith('vertex_ai/')
 
             if is_vertex_model and api_key_name_from_csv == 'VERTEX_CREDENTIALS':
-                credentials_file_path = os.getenv("VERTEX_CREDENTIALS") # Path from env var
                 vertex_project_env = os.getenv("VERTEX_PROJECT")
-                # Check for per-model location override, fall back to env var
+                # Resolve location: CSV override → env var fallback
                 model_location = model_info.get('location')
                 if pd.notna(model_location) and str(model_location).strip():
                     vertex_location_env = str(model_location).strip()
@@ -1913,39 +1928,29 @@ def llm_invoke(
                 else:
                     vertex_location_env = os.getenv("VERTEX_LOCATION")
 
-                if credentials_file_path and vertex_project_env and vertex_location_env:
-                    try:
-                        with open(credentials_file_path, 'r') as f:
-                            loaded_credentials = json.load(f)
-                        vertex_credentials_json_string = json.dumps(loaded_credentials)
-                        
-                        litellm_kwargs["vertex_credentials"] = vertex_credentials_json_string
-                        litellm_kwargs["vertex_project"] = vertex_project_env
-                        litellm_kwargs["vertex_location"] = vertex_location_env
-                        if verbose:
-                            logger.info(f"[INFO] For Vertex AI: using vertex_credentials from '{credentials_file_path}', project '{vertex_project_env}', location '{vertex_location_env}'.")
-                    except FileNotFoundError:
-                        # Still pass project and location so ADC can work
-                        litellm_kwargs["vertex_project"] = vertex_project_env
-                        litellm_kwargs["vertex_location"] = vertex_location_env
-                        if verbose:
-                            logger.warning(f"[WARN] Vertex credentials file not found at '{credentials_file_path}'. Using ADC with project '{vertex_project_env}', location '{vertex_location_env}'.")
-                    except json.JSONDecodeError:
-                        # Still pass project and location so ADC can work
-                        litellm_kwargs["vertex_project"] = vertex_project_env
-                        litellm_kwargs["vertex_location"] = vertex_location_env
-                        if verbose:
-                            logger.error(f"[ERROR] Failed to decode JSON from Vertex credentials file: '{credentials_file_path}'. Using ADC with project '{vertex_project_env}', location '{vertex_location_env}'.")
-                    except Exception as e:
-                        # Still pass project and location so ADC can work
-                        litellm_kwargs["vertex_project"] = vertex_project_env
-                        litellm_kwargs["vertex_location"] = vertex_location_env
-                        if verbose:
-                            logger.error(f"[ERROR] Failed to load Vertex credentials from '{credentials_file_path}': {e}. Using ADC with project '{vertex_project_env}', location '{vertex_location_env}'.")
+                if vertex_project_env and vertex_location_env:
+                    litellm_kwargs["vertex_project"] = vertex_project_env
+                    litellm_kwargs["vertex_location"] = vertex_location_env
+                    # Optionally load explicit credentials file
+                    credentials_file_path = os.getenv("VERTEX_CREDENTIALS")
+                    if credentials_file_path:
+                        try:
+                            with open(credentials_file_path, 'r') as f:
+                                loaded_credentials = json.load(f)
+                            litellm_kwargs["vertex_credentials"] = json.dumps(loaded_credentials)
+                            if verbose:
+                                logger.info(f"[INFO] For Vertex AI: using vertex_credentials from '{credentials_file_path}', project '{vertex_project_env}', location '{vertex_location_env}'.")
+                        except (FileNotFoundError, json.JSONDecodeError) as e:
+                            if verbose:
+                                logger.info(f"[INFO] No credentials file ({e}); using ADC.")
+                        except Exception as e:
+                            if verbose:
+                                logger.error(f"[ERROR] Failed to load Vertex credentials from '{credentials_file_path}': {e}. Using ADC.")
+                    elif verbose:
+                        logger.info(f"[INFO] Using ADC for Vertex AI (project={vertex_project_env}, location={vertex_location_env})")
                 else:
                     if verbose:
-                        logger.warning(f"[WARN] For Vertex AI (using '{api_key_name_from_csv}'): One or more required environment variables (VERTEX_CREDENTIALS, VERTEX_PROJECT, VERTEX_LOCATION) are missing.")
-                        if not credentials_file_path: logger.warning(f"  Reason: VERTEX_CREDENTIALS (path to JSON file) env var not set or empty.")
+                        logger.warning(f"[WARN] Missing VERTEX_PROJECT or VERTEX_LOCATION for {model_name_litellm}.")
                         if not vertex_project_env: logger.warning(f"  Reason: VERTEX_PROJECT env var not set or empty.")
                         if not vertex_location_env: logger.warning(f"  Reason: VERTEX_LOCATION env var not set or empty.")
                         logger.warning(f"  LiteLLM may attempt to use Application Default Credentials or the call may fail.")
@@ -2391,7 +2396,7 @@ def llm_invoke(
                         pass
                     if verbose:
                         logger.info(f"[INFO] Calling litellm.completion for {model_name_litellm}...")
-                    response = litellm.completion(**litellm_kwargs)
+                    response = litellm.completion(**litellm_kwargs, timeout=LLM_CALL_TIMEOUT)
 
                 end_time = time_module.time()
 
@@ -2449,16 +2454,27 @@ def llm_invoke(
                                     retry_messages = _format_messages(modified_prompt, input_json, use_batch_mode)
                                     # Disable cache for retry
                                     litellm.cache = None
-                                    retry_response = litellm.completion(
-                                        model=model_name_litellm,
-                                        messages=retry_messages,
-                                        temperature=current_temperature,
-                                        response_format=response_format,
-                                        **time_kwargs,
-                                        **retry_provider_kwargs  # Issue #185: Pass Vertex AI credentials
-                                    )
-                                    # Re-enable cache - restore original configured cache (restore to original state, even if None)
-                                    litellm.cache = configured_cache
+                                    # Issue #509: Save accumulated cost/tokens before retry overwrites callback data
+                                    _accumulated_cost = _LAST_CALLBACK_DATA.get("cost", 0.0)
+                                    _accumulated_input_tokens = _LAST_CALLBACK_DATA.get("input_tokens", 0)
+                                    _accumulated_output_tokens = _LAST_CALLBACK_DATA.get("output_tokens", 0)
+                                    try:
+                                        retry_response = litellm.completion(
+                                            model=model_name_litellm,
+                                            messages=retry_messages,
+                                            temperature=current_temperature,
+                                            response_format=response_format,
+                                            timeout=LLM_CALL_TIMEOUT,
+                                            **time_kwargs,
+                                            **retry_provider_kwargs  # Issue #185: Pass Vertex AI credentials
+                                        )
+                                    finally:
+                                        # Always restore cache, even if retry raises
+                                        litellm.cache = configured_cache
+                                    # Issue #509: Accumulate cost/tokens from original call + retry
+                                    _LAST_CALLBACK_DATA["cost"] = _LAST_CALLBACK_DATA.get("cost", 0.0) + _accumulated_cost
+                                    _LAST_CALLBACK_DATA["input_tokens"] = _LAST_CALLBACK_DATA.get("input_tokens", 0) + _accumulated_input_tokens
+                                    _LAST_CALLBACK_DATA["output_tokens"] = _LAST_CALLBACK_DATA.get("output_tokens", 0) + _accumulated_output_tokens
                                     # Extract result from retry
                                     retry_raw_result = retry_response.choices[0].message.content
                                     if retry_raw_result is not None:
@@ -2489,16 +2505,27 @@ def llm_invoke(
                                     # Disable cache for retry
                                     original_cache = litellm.cache
                                     litellm.cache = None
-                                    retry_response = litellm.completion(
-                                        model=model_name_litellm,
-                                        messages=retry_messages,
-                                        temperature=current_temperature,
-                                        response_format=response_format,
-                                        **time_kwargs,
-                                        **retry_provider_kwargs  # Issue #185: Pass Vertex AI credentials
-                                    )
-                                    # Re-enable cache
-                                    litellm.cache = original_cache
+                                    # Issue #509: Save accumulated cost/tokens before retry overwrites callback data
+                                    _accumulated_cost = _LAST_CALLBACK_DATA.get("cost", 0.0)
+                                    _accumulated_input_tokens = _LAST_CALLBACK_DATA.get("input_tokens", 0)
+                                    _accumulated_output_tokens = _LAST_CALLBACK_DATA.get("output_tokens", 0)
+                                    try:
+                                        retry_response = litellm.completion(
+                                            model=model_name_litellm,
+                                            messages=retry_messages,
+                                            temperature=current_temperature,
+                                            response_format=response_format,
+                                            timeout=LLM_CALL_TIMEOUT,
+                                            **time_kwargs,
+                                            **retry_provider_kwargs  # Issue #185: Pass Vertex AI credentials
+                                        )
+                                    finally:
+                                        # Always restore cache, even if retry raises
+                                        litellm.cache = original_cache
+                                    # Issue #509: Accumulate cost/tokens from original call + retry
+                                    _LAST_CALLBACK_DATA["cost"] = _LAST_CALLBACK_DATA.get("cost", 0.0) + _accumulated_cost
+                                    _LAST_CALLBACK_DATA["input_tokens"] = _LAST_CALLBACK_DATA.get("input_tokens", 0) + _accumulated_input_tokens
+                                    _LAST_CALLBACK_DATA["output_tokens"] = _LAST_CALLBACK_DATA.get("output_tokens", 0) + _accumulated_output_tokens
                                     # Extract result from retry
                                     retry_raw_result = retry_response.choices[0].message.content
                                     if retry_raw_result is not None and not _is_malformed_json_response(retry_raw_result):
@@ -2727,16 +2754,27 @@ def llm_invoke(
                                         # Disable cache for retry
                                         original_cache = litellm.cache
                                         litellm.cache = None
-                                        retry_response = litellm.completion(
-                                            model=model_name_litellm,
-                                            messages=retry_messages,
-                                            temperature=current_temperature,
-                                            response_format=response_format,
-                                            **time_kwargs,
-                                            **retry_provider_kwargs  # Issue #185: Pass Vertex AI credentials
-                                        )
-                                        # Re-enable cache
-                                        litellm.cache = original_cache
+                                        # Issue #509: Save accumulated cost/tokens before retry overwrites callback data
+                                        _accumulated_cost = _LAST_CALLBACK_DATA.get("cost", 0.0)
+                                        _accumulated_input_tokens = _LAST_CALLBACK_DATA.get("input_tokens", 0)
+                                        _accumulated_output_tokens = _LAST_CALLBACK_DATA.get("output_tokens", 0)
+                                        try:
+                                            retry_response = litellm.completion(
+                                                model=model_name_litellm,
+                                                messages=retry_messages,
+                                                temperature=current_temperature,
+                                                response_format=response_format,
+                                                timeout=LLM_CALL_TIMEOUT,
+                                                **time_kwargs,
+                                                **retry_provider_kwargs  # Issue #185: Pass Vertex AI credentials
+                                            )
+                                        finally:
+                                            # Always restore cache, even if retry raises
+                                            litellm.cache = original_cache
+                                        # Issue #509: Accumulate cost/tokens from original call + retry
+                                        _LAST_CALLBACK_DATA["cost"] = _LAST_CALLBACK_DATA.get("cost", 0.0) + _accumulated_cost
+                                        _LAST_CALLBACK_DATA["input_tokens"] = _LAST_CALLBACK_DATA.get("input_tokens", 0) + _accumulated_input_tokens
+                                        _LAST_CALLBACK_DATA["output_tokens"] = _LAST_CALLBACK_DATA.get("output_tokens", 0) + _accumulated_output_tokens
                                         # Extract and re-parse the retry result
                                         retry_raw_result = retry_response.choices[0].message.content
                                         if retry_raw_result is not None:

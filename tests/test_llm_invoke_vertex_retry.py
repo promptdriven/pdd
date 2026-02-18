@@ -55,7 +55,7 @@ def create_vertex_model_dataframe():
     """Create a mock DataFrame with a Vertex AI model configuration."""
     mock_data = [{
         'provider': 'Google',
-        'model': 'vertex_ai/claude-opus-4-5',
+        'model': 'vertex_ai/claude-opus-4-6',
         'input': 5.0,
         'output': 25.0,
         'coding_arena_elo': 1465,
@@ -242,6 +242,47 @@ class TestVertexRetryPassesCredentials:
                             f"Retry call missing vertex_project - bug #185. Got: {retry_kwargs.get('vertex_project')}"
                         assert 'vertex_credentials' in retry_kwargs, \
                             f"Retry call missing vertex_credentials - bug #185. Keys: {list(retry_kwargs.keys())}"
+
+
+    def test_vertex_kwargs_passed_on_retry_with_adc(self, mock_set_llm_cache):
+        """
+        Test that retry calls include vertex_project and vertex_location
+        when using ADC (no VERTEX_CREDENTIALS file).
+        """
+        mock_df = create_vertex_model_dataframe()
+
+        env_vars = {
+            'VERTEX_PROJECT': 'test-project',
+            'VERTEX_LOCATION': 'us-east4',
+            'PDD_FORCE_LOCAL': '1',
+        }
+
+        with patch('pdd.llm_invoke._load_model_data', return_value=mock_df):
+            with patch.dict(os.environ, env_vars, clear=False):
+                # Ensure VERTEX_CREDENTIALS is not set
+                os.environ.pop('VERTEX_CREDENTIALS', None)
+                with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+                    # First call returns None content (triggers retry)
+                    # Second call returns valid content
+                    first_response = create_mock_litellm_response(None)
+                    second_response = create_mock_litellm_response("Valid response")
+                    mock_completion.side_effect = [first_response, second_response]
+
+                    llm_invoke("test {x}", {"x": "y"}, 0.5, 0.7, True)
+
+                    # Assert both calls were made
+                    assert mock_completion.call_count == 2
+
+                    # Get the retry call kwargs (second call)
+                    retry_kwargs = mock_completion.call_args_list[1][1]
+
+                    # ADC path: project and location must be set, credentials must NOT
+                    assert retry_kwargs.get('vertex_location') == 'us-east4', \
+                        "Retry call missing vertex_location with ADC"
+                    assert retry_kwargs.get('vertex_project') == 'test-project', \
+                        "Retry call missing vertex_project with ADC"
+                    assert 'vertex_credentials' not in retry_kwargs, \
+                        "ADC retry should NOT have vertex_credentials"
 
 
 class TestVertexRetryIntegration:

@@ -22,6 +22,23 @@ def set_pdd_path(path: str) -> None:
     """Set the PDD_PATH environment variable to the specified path."""
     os.environ['PDD_PATH'] = path
 
+# Fixture to reset Firecrawl cache singleton for test isolation
+@pytest.fixture
+def reset_firecrawl_cache():
+    """
+    Reset the Firecrawl cache singleton before each test.
+
+    This ensures that when tests set FIRECRAWL_CACHE_ENABLE=false,
+    a fresh cache instance is created that respects the env var.
+    Without this, the singleton created by an earlier test would persist.
+    """
+    import pdd.firecrawl_cache
+    original_instance = pdd.firecrawl_cache._cache_instance
+    pdd.firecrawl_cache._cache_instance = None
+    yield
+    # Restore after test
+    pdd.firecrawl_cache._cache_instance = original_instance
+
 # Test for processing includes in triple backticks
 def test_process_backtick_includes() -> None:
     """Test processing of includes within triple backticks."""
@@ -324,14 +341,14 @@ def test_recursive_web_defers_scrape() -> None:
     assert result == prompt
 
 
-def test_web_second_pass_executes_after_deferral() -> None:
+def test_web_second_pass_executes_after_deferral(reset_firecrawl_cache) -> None:
     """Second pass without recursion should execute the deferred web scrape."""
     prompt = "Start <web>https://example.com</web> End"
     mock_firecrawl = MagicMock()
-    mock_firecrawl.Firecrawl.return_value.scrape.return_value = {'markdown': "# Content"}
+    mock_firecrawl.Firecrawl.return_value.scrape_url.return_value = {'markdown': "# Content"}
 
     with patch.dict('sys.modules', {'firecrawl': mock_firecrawl}):
-        with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'key'}):
+        with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'key', 'FIRECRAWL_CACHE_ENABLE': 'false'}):
             result = preprocess(prompt, recursive=False, double_curly_brackets=False)
 
     assert result == "Start # Content End"
@@ -540,7 +557,7 @@ def test_preprocess_double_curly_brackets():
     assert processed == desired_output, "The preprocess function did not double the curly brackets as expected."
 
 # Test for processing XML-like web tags
-def test_process_xml_web_tag() -> None:
+def test_process_xml_web_tag(reset_firecrawl_cache) -> None:
     """Test processing of XML-like web tags."""
     mock_markdown_content = "# Webpage Content\n\nThis is the scraped content."
     prompt = "This is a test <web>https://example.com</web>"
@@ -549,18 +566,18 @@ def test_process_xml_web_tag() -> None:
     # Since Firecrawl is imported inside the function, we need to patch the module
     mock_firecrawl = MagicMock()
     mock_app = MagicMock()
-    mock_app.scrape.return_value = {'markdown': mock_markdown_content}
+    mock_app.scrape_url.return_value = {'markdown': mock_markdown_content}
     mock_firecrawl.Firecrawl.return_value = mock_app
 
     # Patch the import at the module level
     with patch.dict('sys.modules', {'firecrawl': mock_firecrawl}):
-        # Mock the environment variable for API key
-        with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'fake_api_key'}):
+        # Mock the environment variable for API key and disable cache
+        with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'fake_api_key', 'FIRECRAWL_CACHE_ENABLE': 'false'}):
             result = preprocess(prompt, recursive=False, double_curly_brackets=False)
             assert result == expected_output
 
 # Test for handling missing Firecrawl API key
-def test_process_xml_web_tag_missing_api_key() -> None:
+def test_process_xml_web_tag_missing_api_key(reset_firecrawl_cache) -> None:
     """Test handling of missing Firecrawl API key."""
     prompt = "This is a test <web>https://example.com</web>"
     expected_output = "This is a test [Error: FIRECRAWL_API_KEY not set. Cannot scrape https://example.com]"
@@ -572,28 +589,29 @@ def test_process_xml_web_tag_missing_api_key() -> None:
     with patch.dict('sys.modules', {'firecrawl': MagicMock()}):
         with patch('builtins.__import__', side_effect=lambda name, *args:
               MagicMock(Firecrawl=mock_firecrawl_class) if name == 'firecrawl' else importlib.__import__(name, *args)):
-            # Ensure the API key environment variable is not set
-            with patch.dict('os.environ', {}, clear=True):
+            # Ensure the API key environment variable is not set and disable cache
+            with patch.dict('os.environ', {'FIRECRAWL_CACHE_ENABLE': 'false'}, clear=True):
                 result = preprocess(prompt, recursive=False, double_curly_brackets=False)
                 assert result == expected_output
 
 # Test for handling Firecrawl import error
-def test_process_xml_web_tag_import_error() -> None:
+def test_process_xml_web_tag_import_error(reset_firecrawl_cache) -> None:
     """Test handling of Firecrawl import error."""
     prompt = "This is a test <web>https://example.com</web>"
     expected_output = "This is a test [Error: firecrawl-py package not installed. Cannot scrape https://example.com]"
 
-    # Patch the import to raise ImportError
-    with patch('builtins.__import__', side_effect=lambda name, *args: 
-          raise_import_error(name) if name == 'firecrawl' else importlib.__import__(name, *args)):
-        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
-        assert result == expected_output
+    # Patch the import to raise ImportError and disable cache
+    with patch.dict('os.environ', {'FIRECRAWL_CACHE_ENABLE': 'false'}):
+        with patch('builtins.__import__', side_effect=lambda name, *args:
+              raise_import_error(name) if name == 'firecrawl' else importlib.__import__(name, *args)):
+            result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+            assert result == expected_output
 
 def raise_import_error(name):
     raise ImportError(f"No module named '{name}'")
 
 # Test for handling empty markdown content
-def test_process_xml_web_tag_empty_content() -> None:
+def test_process_xml_web_tag_empty_content(reset_firecrawl_cache) -> None:
     """Test handling of empty markdown content from Firecrawl."""
     prompt = "This is a test <web>https://example.com</web>"
     expected_output = "This is a test [No content available for https://example.com]"
@@ -601,18 +619,18 @@ def test_process_xml_web_tag_empty_content() -> None:
     # Create a mock Firecrawl class that returns empty response
     mock_firecrawl_class = MagicMock()
     mock_instance = mock_firecrawl_class.return_value
-    mock_instance.scrape.return_value = {}  # No markdown key
+    mock_instance.scrape_url.return_value = {}  # No markdown key
 
     # Patch the import
     with patch.dict('sys.modules', {'firecrawl': MagicMock()}):
         with patch('builtins.__import__', side_effect=lambda name, *args:
               MagicMock(Firecrawl=mock_firecrawl_class) if name == 'firecrawl' else importlib.__import__(name, *args)):
-            with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'fake_api_key'}):
+            with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'fake_api_key', 'FIRECRAWL_CACHE_ENABLE': 'false'}):
                 result = preprocess(prompt, recursive=False, double_curly_brackets=False)
                 assert result == expected_output
 
 # Test for handling Firecrawl API error
-def test_process_xml_web_tag_scraping_error() -> None:
+def test_process_xml_web_tag_scraping_error(reset_firecrawl_cache) -> None:
     """Test handling of Firecrawl API error."""
     prompt = "This is a test <web>https://example.com</web>"
     error_message = "API request failed"
@@ -621,15 +639,40 @@ def test_process_xml_web_tag_scraping_error() -> None:
     # Create a mock Firecrawl class that raises an exception
     mock_firecrawl_class = MagicMock()
     mock_instance = mock_firecrawl_class.return_value
-    mock_instance.scrape.side_effect = Exception(error_message)
+    mock_instance.scrape_url.side_effect = Exception(error_message)
 
     # Patch the import
     with patch.dict('sys.modules', {'firecrawl': MagicMock()}):
         with patch('builtins.__import__', side_effect=lambda name, *args:
               MagicMock(Firecrawl=mock_firecrawl_class) if name == 'firecrawl' else importlib.__import__(name, *args)):
-            with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'fake_api_key'}):
+            with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'fake_api_key', 'FIRECRAWL_CACHE_ENABLE': 'false'}):
                 result = preprocess(prompt, recursive=False, double_curly_brackets=False)
                 assert result == expected_output
+
+def test_process_web_tag_invalid_ttl_env_no_crash(reset_firecrawl_cache) -> None:
+    """Regression: invalid FIRECRAWL_CACHE_TTL_HOURS should not crash process_web_tags.
+
+    The cache module handles TTL parsing internally with proper error handling.
+    preprocess.py should not duplicate this parsing with a bare int() call.
+    """
+    mock_markdown_content = "# Test Content"
+    prompt = "Test <web>https://example.com</web>"
+
+    mock_firecrawl = MagicMock()
+    mock_app = MagicMock()
+    mock_app.scrape_url.return_value = {'markdown': mock_markdown_content}
+    mock_firecrawl.Firecrawl.return_value = mock_app
+
+    with patch.dict('sys.modules', {'firecrawl': mock_firecrawl}):
+        with patch.dict('os.environ', {
+            'FIRECRAWL_API_KEY': 'fake_api_key',
+            'FIRECRAWL_CACHE_TTL_HOURS': 'not_a_number',
+            'FIRECRAWL_CACHE_ENABLE': 'false',
+        }):
+            # Should NOT raise ValueError
+            result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+            assert mock_markdown_content in result
+
 
 # NEW TESTS FROM test_preprocess2.py
 

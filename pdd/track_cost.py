@@ -66,7 +66,7 @@ def track_cost(func):
                     else:
                         output_cost_path = os.getenv('PDD_OUTPUT_COST_PATH')
 
-                    if output_cost_path:
+                    if output_cost_path and os.environ.get('PYTEST_CURRENT_TEST') is None:
                         command_name = ctx.command.name
                         cost, model_name = extract_cost_and_model(result)
 
@@ -81,12 +81,12 @@ def track_cost(func):
                             'output_files': ';'.join(output_files),
                         }
 
-                        file_exists = os.path.isfile(output_cost_path)
+                        file_has_content = os.path.isfile(output_cost_path) and os.path.getsize(output_cost_path) > 0
                         fieldnames = ['timestamp', 'model', 'command', 'cost', 'input_files', 'output_files']
 
                         with open(output_cost_path, 'a', newline='', encoding='utf-8') as csvfile:
                             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-                            if not file_exists:
+                            if not file_has_content:
                                 writer.writeheader()
                             writer.writerow(row)
 

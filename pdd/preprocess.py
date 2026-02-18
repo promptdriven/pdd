@@ -9,6 +9,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.markup import escape
 from rich.traceback import install
+from .firecrawl_cache import get_firecrawl_cache
 from pdd.path_resolution import get_default_resolver
 
 install()
@@ -109,18 +110,20 @@ def _scan_risky_placeholders(text: str) -> Tuple[List[Tuple[int, str]], List[Tup
         pass
     return single_brace, template_brace
 
-def preprocess(prompt: str, recursive: bool = False, double_curly_brackets: bool = True, exclude_keys: Optional[List[str]] = None) -> str:
+def preprocess(prompt: str, recursive: bool = False, double_curly_brackets: bool = True, exclude_keys: Optional[List[str]] = None, _seen: Optional[set] = None) -> str:
     try:
         if not prompt:
             console.print("[bold red]Error:[/bold red] Empty prompt provided")
             return ""
+        if _seen is None:
+            _seen = set()
         _DEBUG_EVENTS.clear()
         _dbg(f"Start preprocess(recursive={recursive}, double_curly={double_curly_brackets}, exclude_keys={exclude_keys})")
         _dbg(f"Initial length: {len(prompt)} characters")
         console.print(Panel("Starting prompt preprocessing", style="bold blue"))
-        prompt = process_backtick_includes(prompt, recursive)
+        prompt = process_backtick_includes(prompt, recursive, _seen=_seen)
         _dbg("After backtick includes processed")
-        prompt = process_xml_tags(prompt, recursive)
+        prompt = process_xml_tags(prompt, recursive, _seen=_seen)
         _dbg("After XML-like tags processed")
         if double_curly_brackets:
             prompt = double_curly(prompt, exclude_keys)
@@ -140,6 +143,10 @@ def preprocess(prompt: str, recursive: bool = False, double_curly_brackets: bool
         _dbg(f"Final length: {len(prompt)} characters")
         _write_debug_report()
         return prompt
+    except (RecursionError, ValueError) as e:
+        if "Circular include" in str(e) or isinstance(e, RecursionError):
+            raise
+        raise
     except Exception as e:
         console.print(f"[bold red]Error during preprocessing:[/bold red] {str(e)}")
         console.print(Panel(traceback.format_exc(), title="Error Details", style="red"))
@@ -154,18 +161,24 @@ def get_file_path(file_name: str) -> str:
         return os.path.join("./", file_name)
     return str(resolved)
 
-def process_backtick_includes(text: str, recursive: bool) -> str:
+def process_backtick_includes(text: str, recursive: bool, _seen: Optional[set] = None) -> str:
+    if _seen is None:
+        _seen = set()
     # More specific pattern that doesn't match nested > characters
     pattern = r"```<([^>]*?)>```"
     def replace_include(match):
         file_path = match.group(1).strip()
         try:
             full_path = get_file_path(file_path)
+            resolved = os.path.realpath(full_path)
+            if resolved in _seen:
+                raise ValueError(f"Circular include detected: {file_path} is already in the include chain")
             console.print(f"Processing backtick include: [cyan]{full_path}[/cyan]")
             with open(full_path, 'r', encoding='utf-8') as file:
                 content = file.read()
                 if recursive:
-                    content = preprocess(content, recursive=True, double_curly_brackets=False)
+                    child_seen = _seen | {resolved}
+                    content = preprocess(content, recursive=True, double_curly_brackets=False, _seen=child_seen)
                 _dbg(f"Included via backticks: {file_path} (len={len(content)})")
                 return f"```{content}```"
         except FileNotFoundError:
@@ -174,6 +187,12 @@ def process_backtick_includes(text: str, recursive: bool) -> str:
             # First pass (recursive=True): leave the tag so a later env expansion can resolve it
             # Second pass (recursive=False): replace with a visible placeholder
             return match.group(0) if recursive else f"```[File not found: {file_path}]```"
+        except ValueError as e:
+            if "Circular include" in str(e):
+                raise
+            console.print(f"[bold red]Error processing include:[/bold red] {str(e)}")
+            _dbg(f"Error processing backtick include {file_path}: {e}")
+            return f"```[Error processing include: {file_path}]```"
         except Exception as e:
             console.print(f"[bold red]Error processing include:[/bold red] {str(e)}")
             _dbg(f"Error processing backtick include {file_path}: {e}")
@@ -185,20 +204,27 @@ def process_backtick_includes(text: str, recursive: bool) -> str:
         current_text = re.sub(pattern, replace_include, current_text, flags=re.DOTALL)
     return current_text
 
-def process_xml_tags(text: str, recursive: bool) -> str:
+def process_xml_tags(text: str, recursive: bool, _seen: Optional[set] = None) -> str:
+    if _seen is None:
+        _seen = set()
     text = process_pdd_tags(text)
-    text = process_include_tags(text, recursive)
+    text = process_include_tags(text, recursive, _seen=_seen)
     text = process_include_many_tags(text, recursive)
     text = process_shell_tags(text, recursive)
     text = process_web_tags(text, recursive)
     return text
 
-def process_include_tags(text: str, recursive: bool) -> str:
+def process_include_tags(text: str, recursive: bool, _seen: Optional[set] = None) -> str:
+    if _seen is None:
+        _seen = set()
     pattern = r'<include>(.*?)</include>'
     def replace_include(match):
         file_path = match.group(1).strip()
         try:
             full_path = get_file_path(file_path)
+            resolved = os.path.realpath(full_path)
+            if resolved in _seen:
+                raise ValueError(f"Circular include detected: {file_path} is already in the include chain")
             ext = os.path.splitext(file_path)[1].lower()
             image_extensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.heic']
             
@@ -244,7 +270,8 @@ def process_include_tags(text: str, recursive: bool) -> str:
                 with open(full_path, 'r', encoding='utf-8') as file:
                     content = file.read()
                     if recursive:
-                        content = preprocess(content, recursive=True, double_curly_brackets=False)
+                        child_seen = _seen | {resolved}
+                        content = preprocess(content, recursive=True, double_curly_brackets=False, _seen=child_seen)
                     _dbg(f"Included via XML tag: {file_path} (len={len(content)})")
                     return content
         except FileNotFoundError:
@@ -253,6 +280,12 @@ def process_include_tags(text: str, recursive: bool) -> str:
             # First pass (recursive=True): leave the tag so a later env expansion can resolve it
             # Second pass (recursive=False): replace with a visible placeholder
             return match.group(0) if recursive else f"[File not found: {file_path}]"
+        except ValueError as e:
+            if "Circular include" in str(e):
+                raise
+            console.print(f"[bold red]Error processing include:[/bold red] {str(e)}")
+            _dbg(f"Error processing XML include {file_path}: {e}")
+            return f"[Error processing include: {file_path}]"
         except Exception as e:
             console.print(f"[bold red]Error processing include:[/bold red] {str(e)}")
             _dbg(f"Error processing XML include {file_path}: {e}")
@@ -313,32 +346,63 @@ def process_web_tags(text: str, recursive: bool) -> str:
         if recursive:
             # Defer network operations until after env var expansion
             return match.group(0)
+
+        # Get cache instance
+        cache = get_firecrawl_cache()
+
+        # Check cache first
+        cached_content = cache.get(url)
+        if cached_content is not None:
+            console.print(f"Using cached content for: [cyan]{url}[/cyan]")
+            return cached_content
+
+
         console.print(f"Scraping web content from: [cyan]{url}[/cyan]")
         _dbg(f"Web tag URL: {url}")
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
         try:
             try:
                 from firecrawl import Firecrawl
             except ImportError:
                 _dbg("firecrawl import failed; package not installed")
                 return f"[Error: firecrawl-py package not installed. Cannot scrape {url}]"
+
             api_key = os.environ.get('FIRECRAWL_API_KEY')
             if not api_key:
                 console.print("[bold yellow]Warning:[/bold yellow] FIRECRAWL_API_KEY not found in environment")
                 _dbg("FIRECRAWL_API_KEY not set")
                 return f"[Error: FIRECRAWL_API_KEY not set. Cannot scrape {url}]"
+
             app = Firecrawl(api_key=api_key)
-            response = app.scrape(url, formats=['markdown'])
+
+            # Firecrawl SDK has a bug: it passes timeout (ms) to requests.post()
+            # which expects seconds, so timeout=30000 becomes 30000s (~8hrs).
+            # Wrap in a thread with a hard 30s client-side deadline.
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(app.scrape_url, url, formats=['markdown'], timeout=30000)
+                response = future.result(timeout=30)
+
             # Handle both dict response (new API) and object response (legacy)
+            content = None
             if isinstance(response, dict) and 'markdown' in response:
                 _dbg(f"Web scrape returned markdown (len={len(response['markdown'])})")
-                return response['markdown']
+                content = response['markdown']
             elif hasattr(response, 'markdown'):
                 _dbg(f"Web scrape returned markdown (len={len(response.markdown)})")
-                return response.markdown
+                content = response.markdown
+
+            if content:
+                # Cache the result for future use
+                cache.set(url, content)
+                return content
             else:
                 console.print(f"[bold yellow]Warning:[/bold yellow] No markdown content returned for {url}")
                 _dbg("Web scrape returned no markdown content")
                 return f"[No content available for {url}]"
+        except FuturesTimeoutError:
+            console.print(f"[bold yellow]Warning:[/bold yellow] Web scrape timed out after 30s for {url}")
+            _dbg(f"Web scrape timeout for {url}")
+            return f"[Web scraping timed out for {url}]"
         except Exception as e:
             console.print(f"[bold red]Error scraping web content:[/bold red] {str(e)}")
             _dbg(f"Web scraping exception: {e}")
@@ -360,7 +424,7 @@ def process_include_many_tags(text: str, recursive: bool) -> str:
             # Wait for env expansion to materialize the list
             return match.group(0)
         # Split by newlines or commas
-        raw_items = [s.strip() for part in inner.split('\n') for s in part.split(',')]
+        raw_items = [s.strip() for part in inner.splitlines() for s in part.split(',')]
         paths = [p for p in raw_items if p]
         contents: list[str] = []
         for p in paths:

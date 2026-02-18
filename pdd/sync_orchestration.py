@@ -17,6 +17,8 @@ from dataclasses import asdict, dataclass, field
 import tempfile
 import sys
 
+from .sync_tui import maybe_steer_operation, DEFAULT_STEER_TIMEOUT_S
+
 import click
 import logging
 
@@ -534,6 +536,90 @@ def _try_auto_fix_import_error(
     return False, "Import error detected but no auto-fix available"
 
 
+def _try_auto_fix_env_var_error(
+    error_output: str,
+    example_file: Path,
+) -> tuple[bool, str]:
+    """
+    Try to automatically fix missing environment variable errors before calling expensive agentic fix.
+
+    Detects patterns like:
+    - KeyError: 'BREVO_API_KEY' (from os.environ["VAR"])
+    - "Set the BREVO_API_KEY environment variable" (explicit error messages)
+    - ValueError/RuntimeError mentioning env var names (ALL_CAPS_WITH_UNDERSCORES)
+
+    Inserts a guard at the top of the example that checks for the env var and exits
+    gracefully with sys.exit(0) so PDD treats it as non-crash.
+
+    Returns:
+        (fixed, message): Whether a fix was attempted and what was done.
+    """
+    import re
+
+    env_var_name = None
+
+    # Pattern 1: KeyError: 'VAR_NAME' or KeyError: "VAR_NAME"
+    key_error_match = re.search(r"KeyError:\s*['\"]([A-Z][A-Z0-9_]+)['\"]", error_output)
+    if key_error_match:
+        env_var_name = key_error_match.group(1)
+
+    # Pattern 2: "Set the VAR_NAME environment variable"
+    if not env_var_name:
+        set_the_match = re.search(r"[Ss]et the ([A-Z][A-Z0-9_]+) environment variable", error_output)
+        if set_the_match:
+            env_var_name = set_the_match.group(1)
+
+    # Pattern 3: ValueError/RuntimeError mentioning env var names
+    if not env_var_name:
+        val_err_match = re.search(
+            r"(?:ValueError|RuntimeError).*?([A-Z][A-Z0-9_]{2,}(?:_KEY|_TOKEN|_SECRET|_API|_URL|_PASSWORD|_CREDENTIALS))",
+            error_output,
+        )
+        if val_err_match:
+            env_var_name = val_err_match.group(1)
+
+    if not env_var_name:
+        return False, "No environment variable error detected"
+
+    # Skip PDD_PATH — it's always set by the runtime
+    if env_var_name == "PDD_PATH":
+        return False, "PDD_PATH is a runtime variable, not an API key"
+
+    try:
+        example_content = example_file.read_text(encoding='utf-8')
+
+        # Insert guard near the top, after any existing imports
+        lines = example_content.split('\n')
+        insert_pos = 0
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped and not stripped.startswith('#') and not stripped.startswith('import ') and not stripped.startswith('from '):
+                insert_pos = i
+                break
+        else:
+            insert_pos = len(lines)
+
+        guard = (
+            f"\n# Auto-added by pdd: graceful skip for missing env var\n"
+            f"import os, sys\n"
+            f"if not os.environ.get(\"{env_var_name}\"):\n"
+            f"    print(\"{env_var_name} not set. Skipping example.\")\n"
+            f"    sys.exit(0)\n"
+        )
+        lines.insert(insert_pos, guard)
+
+        # Also replace direct os.environ["VAR"] access with os.environ.get("VAR")
+        fixed_content = '\n'.join(lines)
+        bracket_pattern = f'os\\.environ\\[[\"\']({re.escape(env_var_name)})[\"\']]'
+        fixed_content = re.sub(bracket_pattern, f'os.environ.get("{env_var_name}")', fixed_content)
+
+        example_file.write_text(fixed_content, encoding='utf-8')
+        return True, f"Added env var guard for {env_var_name} with sys.exit(0)"
+
+    except Exception as e:
+        return False, f"Failed to fix env var error: {e}"
+
+
 def _run_example_with_error_detection(
     cmd_parts: list[str],
     env: dict,
@@ -946,6 +1032,8 @@ def sync_orchestration(
     context_config: Optional[Dict[str, str]] = None,
     context_override: Optional[str] = None,
     confirm_callback: Optional[Callable[[str, str], bool]] = None,
+    no_steer: bool = False,
+    steer_timeout: float = DEFAULT_STEER_TIMEOUT_S,
     agentic_mode: bool = False,
 ) -> Dict[str, Any]:
     """
@@ -1081,6 +1169,17 @@ def sync_orchestration(
         last_model_name: str = ""
         operation_history: List[str] = []
         MAX_CYCLE_REPEATS = 2
+        try:
+            log_event(
+                basename,
+                language,
+                "sync_start",
+                {"pid": os.getpid()},
+                invocation_mode="sync",
+            )
+        except Exception:
+            # Best-effort logging; sync should proceed even if log setup fails.
+            pass
         
         # Helper function to print inside worker (goes to RichLog via redirection)
         # print() will work if sys.stdout is redirected.
@@ -1105,8 +1204,49 @@ def sync_orchestration(
                             "percentage": (budget_remaining / budget) * 100
                         }, invocation_mode="sync")
 
-                    decision = sync_determine_operation(basename, language, target_coverage, budget_remaining, False, prompts_dir, skip_tests, skip_verify, context_override)
+                    decision = sync_determine_operation(
+                        basename,
+                        language,
+                        target_coverage,
+                        budget_remaining,
+                        False,
+                        prompts_dir,
+                        skip_tests,
+                        skip_verify,
+                        context_override,
+                    )
                     operation = decision.operation
+
+                    # Interactive steering: allow user to override the recommended operation.
+                    if no_steer:
+                        steered_op = operation
+                        should_abort = False
+                    else:
+                        steered_op, should_abort = maybe_steer_operation(
+                                operation,
+                                decision.reason,
+                                app_ref[0],
+                                quiet,
+                                skip_tests,
+                                skip_verify,
+                                timeout_s=steer_timeout,
+                        )
+                    if should_abort:
+                        errors.append("User aborted sync via steering.")
+                        log_event(basename, language, "steering_abort", {"recommended": operation}, invocation_mode="sync")
+                        break
+
+                    if steered_op != operation:
+                        log_event(
+                            basename,
+                            language,
+                            "steering_override",
+                            {"recommended": operation, "chosen": steered_op, "reason": decision.reason},
+                            invocation_mode="sync",
+                        )
+                        operation = steered_op
+                        # Keep decision.operation aligned with the chosen path for downstream logging.
+                        decision.operation = steered_op
                     
                     log_entry = create_log_entry(
                         operation=decision.operation,
@@ -1130,6 +1270,14 @@ def sync_orchestration(
                             log_event(basename, language, "cycle_detected", {"cycle_type": "auto-deps-infinite"}, invocation_mode="sync")
                             operation = 'generate'
                             decision.operation = 'generate' # Update decision too
+
+                    # Skip auto-deps in agentic mode — prompts already have explicit dependencies
+                    if operation == 'auto-deps' and agentic_mode:
+                        log_event(basename, language, "auto_deps_skipped", {
+                            "reason": "auto-deps skipped in agentic mode — prompts have explicit dependencies"
+                        }, invocation_mode="sync")
+                        operation = 'generate'
+                        decision.operation = 'generate'
 
                     # Bug #4 fix: Detect crash-verify cycle pattern
                     # The pattern [crash, verify, crash, verify] or [verify, crash, verify, crash]
@@ -1213,6 +1361,8 @@ def sync_orchestration(
 
                     if operation in ['all_synced', 'nothing', 'fail_and_request_manual_merge', 'error']:
                         current_function_name_ref[0] = "synced" if operation in ['all_synced', 'nothing'] else "conflict"
+                        # Emit phase marker for parent process to parse (agentic sync progress tracking)
+                        print(f"PDD_PHASE: {current_function_name_ref[0]}", flush=True)
                         success = operation in ['all_synced', 'nothing']
                         error_msg = None
                         if operation == 'fail_and_request_manual_merge':
@@ -1230,6 +1380,7 @@ def sync_orchestration(
                     # Bug #11 fix: Use 'skip:' prefix so _is_workflow_complete() knows the op was skipped
                     if operation == 'verify' and (skip_verify or skip_tests):
                         skipped_operations.append('verify')
+                        print(f"PDD_PHASE: skip:{operation}", flush=True)
                         update_log_entry(log_entry, success=True, cost=0.0, model='skipped', duration=0.0, error=None)
                         append_log_entry(basename, language, log_entry)
                         # Save fingerprint with 'skip:' prefix to indicate operation was skipped, not executed
@@ -1237,6 +1388,7 @@ def sync_orchestration(
                         continue
                     if operation == 'test' and skip_tests:
                         skipped_operations.append('test')
+                        print(f"PDD_PHASE: skip:{operation}", flush=True)
                         update_log_entry(log_entry, success=True, cost=0.0, model='skipped', duration=0.0, error=None)
                         append_log_entry(basename, language, log_entry)
                         # Save fingerprint with 'skip:' prefix to indicate operation was skipped, not executed
@@ -1244,6 +1396,7 @@ def sync_orchestration(
                         continue
                     if operation == 'crash' and (skip_tests or skip_verify):
                         skipped_operations.append('crash')
+                        print(f"PDD_PHASE: skip:{operation}", flush=True)
                         update_log_entry(log_entry, success=True, cost=0.0, model='skipped', duration=0.0, error=None)
                         append_log_entry(basename, language, log_entry)
                         # Save fingerprint with 'skip:' prefix to indicate operation was skipped, not executed
@@ -1263,6 +1416,8 @@ def sync_orchestration(
                         continue
 
                     current_function_name_ref[0] = operation
+                    # Emit phase marker for parent process to parse (agentic sync progress tracking)
+                    print(f"PDD_PHASE: {operation}", flush=True)
                     ctx = _create_mock_context(
                         force=force, strength=strength, temperature=temperature, time=time_param,
                         verbose=verbose, quiet=quiet, output_cost=output_cost,
@@ -1392,6 +1547,12 @@ def sync_orchestration(
                                         pdd_files['code'],
                                         pdd_files['example']
                                     )
+                                    if not auto_fixed:
+                                        # Try auto-fix for missing environment variable errors
+                                        auto_fixed, auto_fix_msg = _try_auto_fix_env_var_error(
+                                            crash_log_content,
+                                            pdd_files['example']
+                                        )
                                     if auto_fixed:
                                         log_event(basename, language, "auto_fix_attempted", {"message": auto_fix_msg}, invocation_mode="sync")
                                         # Retry running the example after auto-fix
@@ -1667,7 +1828,7 @@ def sync_orchestration(
                                 # fix_error_loop runs them together. This detects test isolation
                                 # failures that only manifest when multiple test files interact.
                                 test_files_for_fix = [str(f) for f in pdd_files.get('test_files', [pdd_files['test']])]
-                                result = fix_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), unit_test_file=unit_test_file_for_fix, error_file=str(error_file_path), output_test=output_test_for_fix, output_code=str(pdd_files['code']), output_results=f"{basename.replace('/', '_')}_fix_results.log", loop=True, verification_program=str(pdd_files['example']), max_attempts=effective_max_attempts, budget=budget - current_cost_ref[0], auto_submit=True, strength=strength, temperature=temperature, test_files=test_files_for_fix)
+                                result = fix_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), unit_test_file=unit_test_file_for_fix, error_file=str(error_file_path), output_test=output_test_for_fix, output_code=str(pdd_files['code']), output_results=f"{basename.replace('/', '_')}_fix_results.log", loop=True, verification_program=str(pdd_files['example']), max_attempts=effective_max_attempts, budget=budget - current_cost_ref[0], auto_submit=(not local), strength=strength, temperature=temperature, test_files=test_files_for_fix)
                             elif operation == 'update':
                                 result = update_main(ctx, input_prompt_file=str(pdd_files['prompt']), modified_code_file=str(pdd_files['code']), input_code_file=None, output=str(pdd_files['prompt']), use_git=True, strength=strength, temperature=temperature)
                             else:
@@ -1693,7 +1854,8 @@ def sync_orchestration(
                                         success = pdd_files['test'].exists()
                                 else:
                                     success = bool(result[0])
-                                cost = result[-2] if len(result) >= 2 and isinstance(result[-2], (int, float)) else 0.0
+                                # Cost is always at index 1 in both 3-tuple and 4-tuple returns
+                                cost = result[1] if len(result) >= 2 and isinstance(result[1], (int, float)) else 0.0
                                 current_cost_ref[0] += cost
                             else:
                                 success = result is not None
@@ -1716,14 +1878,16 @@ def sync_orchestration(
                                  model_name = result.get('model', 'unknown')
                             elif isinstance(result, tuple) and len(result) >= 3:
                                  # cmd_test_main returns 4-tuple: (content, cost, model, agentic_success)
-                                 # Other commands return 3-tuple: (content, cost, model)
-                                 # Use explicit indexing for test operation to handle 4-tuple correctly
-                                 if operation == 'test' and len(result) >= 4:
+                                 # Other commands may return either:
+                                 #   - 3-tuple: (content, cost, model), e.g. some context operations
+                                 #   - 4-tuple: (content, was_incremental, cost, model_name), e.g. code_generator_main
+                                 # For tests, cost is at index 1; for most other 4+ tuples, cost is at index -2 and model at -1.
+                                 if operation in ('test', 'test_extend') and len(result) >= 4:
                                      actual_cost = result[1] if isinstance(result[1], (int, float)) else 0.0
                                      model_name = result[2] if isinstance(result[2], str) else 'unknown'
                                  else:
-                                     actual_cost = result[-2] if isinstance(result[-2], (int, float)) else 0.0
-                                     model_name = result[-1] if len(result) >= 1 else 'unknown'
+                                     actual_cost = result[1] if isinstance(result[1], (int, float)) else 0.0
+                                     model_name = result[2] if len(result) >= 3 and isinstance(result[2], str) else 'unknown'
                             last_model_name = str(model_name)
                             operations_completed.append(operation)
                             _save_fingerprint_atomic(basename, language, operation, pdd_files, actual_cost, str(model_name), atomic_state=atomic_state)
@@ -1879,7 +2043,7 @@ def sync_orchestration(
         worker_exception = app.worker_exception
 
     # Check for worker exception that might have caused a crash (TUI mode only)
-    if not headless and worker_exception:
+    if not headless and worker_exception is not None:
         print(f"\n[Error] Worker thread crashed with exception: {worker_exception}", file=sys.stderr)
 
         if hasattr(app, 'captured_logs') and app.captured_logs:

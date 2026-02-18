@@ -1,19 +1,333 @@
+## v0.0.151 (2026-02-16)
+
+### Feat
+
+- Add Product Requirements Document (PRD) for the AI-First Video Editor demo.
+- Add agentic sync - LLM-driven parallel module sync from GitHub issues
+
+### Fix
+
+- Address Copilot review feedback on agentic sync
+- Increase LLM API call timeout from 120 seconds to 600 seconds.
+- Fix cost propagation bug and increase module timeout
+- Add token-based cost estimation fallback for Claude subscription auth
+- Add timeouts to prevent sync hangs (Firecrawl, git ls-files, auto-deps)
+- Auto-fix env var errors, fix cost tracking, fix 7x duplicate language syncs
+
+## v0.0.150 (2026-02-15)
+
+### Feat
+
+- **Circular `<include>` cycle detection**: Recursive include preprocessing now tracks visited files and raises `ValueError` on cycles instead of silently producing corrupted output or hitting Python's recursion limit. Both `<include>` XML tags and backtick includes (```` ```<file>``` ````) are covered. Thanks @Serhan-Asad (PR #528)!
+- **Vertex AI Application Default Credentials (ADC) support**: `llm_invoke` no longer requires `VERTEX_CREDENTIALS` file path when `VERTEX_PROJECT` is set — falls back to ADC automatically. Simplifies cloud batch and local development setups.
+- **Global location override for Vertex AI models**: `llm_model.csv` now specifies `location=global` for Gemini 3 Pro, Gemini 3 Flash, and Claude Sonnet 4.5 on Vertex AI, reducing region-specific routing failures.
+
+### Fix
+
+- **LLM retry cost accumulation** — When `llm_invoke` retried on malformed JSON, the retry callback data overwrote the original call's cost/token counts. Now accumulates cost, input tokens, and output tokens across original + retry calls. Cache restoration also moved into a `finally` block to prevent leaks on retry failure. Thanks @Serhan-Asad (PR #519)!
+- **Budget tracker drops test operation costs** — `sync_orchestration` extracted cost from result tuples using `result[-2]`, but `test`/`test_extend` operations return cost at index 1, not index -2. Fixed cost and model extraction to use operation-aware indexing. Thanks @Serhan-Asad (PR #518)!
+- **`pdd update --output` crashes with `NameError` in subdirectories** — When the code file was in a subdirectory and `--output` was used, `context_config` was referenced before assignment. Added initialization. Thanks @Serhan-Asad (PR #496)!
+- **Circular `<include>` tags produce corrupted output** — Without cycle detection, circular includes silently expanded until Python's recursion limit, producing truncated/corrupted prompts. Now raises a clear error.
+- **Sync fingerprint ignores `<include>` dependencies** — When an included file changed but the parent prompt didn't, the sync fingerprint remained the same, causing stale code to persist after included file edits.
+- **Cloud Batch streaming false positives** — Result polling skipped partially-flushed GCS files (< 10 bytes) and added a portable timeout wrapper for `gcloud`/`gsutil` commands on macOS.
+- **Malformed JSON detection for raw newlines** — `_is_malformed_json_response` now detects excessive actual trailing newlines (not just escaped `\n` sequences), catching additional truncation cases.
+
+### Build
+
+- **Cloud Build for Docker images**: Replaced local `docker build` + `docker push` with `gcloud builds submit` using a new `cloudbuild.yaml`. Adds Docker layer caching (`--cache-from`) and eliminates the need for a local Docker daemon. `make cloud-test-push` is now a no-op.
+- **GCP project ID unconditionally set**: `GCP_PROJECT_ID` changed from `?=` (overridable) to `:=` (fixed) in the Makefile, preventing accidental use of wrong projects.
+- Updated `test-durations.json` with latest profiled data.
+
+### Docs
+
+- **Grounding experiment Phase 8 (Opus 4.6)**: Added experiment comparing grounded vs strongest-model (ungrounded) generation for `llm_invoke` and `sync_orchestration` modules using Claude Opus 4.6, with stability and evaluation CSVs.
+
+## v0.0.149 (2026-02-14)
+
+### Feat
+
+- **Issue #467 cached-state validation across all orchestrators**: New `validate_cached_state()` helper in `agentic_common` scans step outputs for `FAILED:` prefixes and corrects `last_completed_step` on resume. Applied to architecture, change, test, and e2e-fix orchestrators — prevents the "blind resume" bug where the orchestrator trusted a corrupted `last_completed_step` and skipped failed steps.
+- **Interactive steering in sync orchestration**: After each `sync_determine_operation` call, users can now override the recommended operation via `maybe_steer_operation()`. Controlled by `no_steer` flag and `steer_timeout` parameter. Steering aborts are logged as `steering_override` events.
+- **Improved test prompt framing**: `code_generator_main` now instructs the LLM to study test files for type/data-structure hints, mock patterns, import paths, and fixture formats before generating code — instead of a generic "must pass these tests" instruction.
+- **`PddError` handling in core dump utility**: `_write_core_dump()` now correctly serializes `PddError` objects via `default=str`, with a dedicated test case for dump failures.
+- **Pytest project root discovery for sync**: Both `_execute_tests_and_create_run_report()` and the fix operation's pre-test run now use `_find_project_root(test_file)` to set `PYTHONPATH` and pass `--rootdir` / `-c /dev/null` to pytest, preventing parent config interference.
+- **Agentic test generation success handling refined**: `test_extend` operations for Python and TypeScript now always verify results by running tests locally, rather than trusting synthetic agent success reports. Only non-Python/TypeScript languages use synthetic `RunReport` for test_extend.
+
+### Fix
+
+- **Consecutive orchestrator failures no longer advance `last_completed_step`** — Previously, `step_num - 1` on failure created a "ratchet effect" where consecutive failures silently advanced the cursor through failed steps. Now `last_completed_step` stays unchanged on failure and failed outputs are stored with a `FAILED:` prefix.
+- **Change orchestrator step 9 no-files failure** — When step 9 produced no file changes, the state was saved with `last_completed_step = step_num - 1`, which could mark an earlier failed step as successful. Now stores `FAILED:` prefix and leaves `last_completed_step` unchanged.
+- **CLI commands registered before fixture snapshot in `test_cli`** — Added `register_commands()` call in the `setup_cli_environment` fixture to ensure all real commands (including `auth`) are present before snapshotting, fixing intermittent pytest-xdist failures.
+- **Test module pollution in `test_generate.py` and `test_fix.py`** — Evict `pdd.core.*` modules imported as side effects during mock windows, preventing `MagicMock` attributes from leaking into subsequent tests.
+- **Flaky CI tests made more resilient** — E2E tests (`test_e2e_issue_340`, `test_e2e_issue_342`) now gracefully skip on empty LLM responses, auth/network failures, and intermittent xdist command registration issues. Firecrawl help tests converted to `@pytest.mark.parametrize`.
+- **Regression test cost row validation relaxed** — `regression.sh` adjusted to handle variable cost output formats.
+
+### Build
+
+- **JUnit XML-based chunk balancing for cloud batch**: `balance-chunks.py` now parses `task_*_junit.xml` files for accurate per-test durations instead of distributing chunk wall-clock time proportionally. Falls back to log-based proportional method when no XML files exist.
+- **Profiling report in cloud batch results**: `collect-results.sh` now generates per-suite summary tables, pytest chunk distribution histograms, top-20 slowest individual tests, and chunk balance metrics (slowest/fastest ratio).
+- **Auto-update test durations on collect**: `collect-results.sh` automatically runs `balance-chunks.py record` after downloading results, keeping `test-durations.json` current.
+- **Raw result preservation**: New `KEEP_RAW=1` option in `make cloud-test` preserves raw JSON/XML files in `test-results/cloud-batch-raw/`.
+- **Setup time tracking**: Cloud batch result table now shows per-task setup time separately (`setup: Ns`) when available.
+- **Pytest chunks increased from 24 to 32** for better parallelism.
+- **Cloud regression tests hardened** — Fix and verify test sections now handle prerequisite generation failures gracefully (e.g., cloud rate limits) instead of cascading failures.
+
+### Refactor
+
+- **Orchestrator prompts updated for state validation**: All four orchestrator prompts (`architecture`, `change`, `test`, `e2e_fix`) updated to document `validate_cached_state()` usage, the `FAILED:` prefix convention, and the corrected failure-handling rule (keep `last_completed_step` unchanged, not `step_num - 1`).
+- **`agentic_common` prompt documents `validate_cached_state`**: New section in the shared prompt describes the function signature, behavior, and purpose.
+- **Sync orchestration prompt updated**: Documents interactive steering integration, `maybe_steer_operation()` API, progress callback for TUI, and `_find_project_root` usage.
+
+### Docs
+
+- **Grounding experiment Phases 4–7**: Added ungrounded-pdd arm (Phase 4), sync_orchestration module experiments (Phase 5), Pro vs Flash model comparison (Phase 6), and improved test prompt framing experiment (Phase 7) to `experiments/grounding/EXPERIMENT_LOG.md`.
+
+## v0.0.148 (2026-02-13)
+
+### Feat
+
+- **Resolve pipeline (fix → render → stitch)**: Review-app annotations can now be resolved end-to-end — Claude fixes the Remotion source, Remotion renders the affected section, and ffmpeg stitches the full video. Jobs are queued per-section with SSE progress streaming (`POST /api/annotations/:id/resolve`, `GET /api/jobs/:id/stream`).
+- **`searchInput` sent to cloud endpoint**: `pdd fix` and `pdd generate` now send the raw prompt path as `searchInput` to the cloud `generateCode` endpoint, enabling server-side few-shot retrieval.
+- **Duplicate detection checks resolution status**: The duplicate-check prompts for bug, change, and test workflows now verify whether the original issue was actually resolved before closing the new issue as a duplicate. Unresolved originals are treated as new issues.
+- **NOT_A_BUG early exit in e2e fix orchestrator**: Step 3 (root cause analysis) can now emit `NOT_A_BUG`, which stops the entire e2e fix workflow early instead of cycling to max iterations.
+- **Abort on 3 consecutive provider failures**: Bug orchestrator now detects when three consecutive steps fail with "All agent providers failed" and aborts early, saving cost and returning `changed_files` collected so far.
+- **`llm_invoke` prompt overhauled**: Rewritten prompt covers gpt-5 Responses API support, hierarchical logging configuration, `litellm.drop_params` control, soft fallback when base model is missing from CSV, and structured output via both Pydantic and raw JSON schema.
+- **Comprehensive `llm_invoke` test suite**: ~1,800 lines of new unit and integration tests covering pure JSON-schema utilities, Pydantic validation, model selection, reasoning parameters, cost tracking, and cloud mode detection.
+- **`llm_invoke` grounding experiments**: New experiment scripts and results measuring regeneration stability and retrieval quality for `llm_invoke` (grounded vs ungrounded, 5 runs each).
+- **Cloud testing documented in onboarding guide**: `make cloud-test` / `make cloud-test-quick` commands added to ONBOARDING_INTERNAL.md with setup and usage instructions.
+
+### Fix
+
+- **False cached steps on resume when all providers fail** — Bug orchestrator state saving used `step_num - 1` on failure, creating a "ratchet effect" where consecutive failures silently advanced `last_completed_step` through failed steps. Now `last_completed_step_to_save` stays at the last truly successful step. On resume, cached step outputs are validated by scanning for `FAILED:` prefixes.
+- **`changed_files` empty on e2e fix early exit** — When the e2e fix orchestrator exited early at Step 2 (`ALL_TESTS_PASS`), it returned an empty `changed_files` list because no LLM output was parsed. Now uses hash-based file change detection against a pre-workflow snapshot. Thanks James Levine!
+- **Duplicate detection closing unresolved issues** — Duplicate-check step was closing new issues as duplicates even when the original issue's workflow had failed. Prompts now require checking the original's workflow state and GitHub issue status before closing.
+- **`await safeWriteAnnotations` in resolve endpoint** — Resolve job reference was not persisted to the annotation before the HTTP response, causing a race where the client saw no `resolveJob` field.
+- Load prompt templates from local repo in tests so tests don't depend on installed package paths.
+- Use `--simple` flag in `test_update_silently_skips_logging` to avoid 600s agentic timeout.
+- Increase timeout to 300s for three flaky E2E tests.
+
+### Build
+
+- **Duration-based cloud batch chunk balancing**: New `balance-chunks.py` uses greedy bin-packing with per-file duration data (`test-durations.json`) to assign test files to cloud batch chunks, replacing alphabetical splitting. Includes `record` and `estimate` subcommands for maintaining duration data. Entrypoint falls back to alphabetical split if no durations file exists.
+- Updated `test-durations.json` with profiled data from balanced runs.
+
+### Refactor
+
+- **Prompts, data, and docs moved into `pdd/` package**: `prompts/`, `data/`, and `docs/prompting_guide.md` relocated to `pdd/prompts/`, `pdd/data/`, and `pdd/docs/prompting_guide.md` so they ship with the installed package. Top-level `data/` and `prompts/` are now symlinks for backward compatibility. Old `docs/prompting_guide.md` deleted.
+- **LLM invocation logic overhauled**: Removed interactive API key management, refactored logging to use hierarchical `pdd.llm_invoke` logger, added `litellm.drop_params` support, and restructured JSON schema utilities (`_ensure_all_properties_required`, `_add_additional_properties_false`).
+- **Bug orchestrator state validation on resume**: Added `cached_outputs` scan loop that detects FAILED prefixes and corrects `last_completed_step` before resuming, preventing skipping of failed steps.
+- Extracted `_detect_changed_files()` helper in e2e fix orchestrator for hash-based file change detection.
+
+### Docs
+
+- Added experiment log (`experiments/grounding/EXPERIMENT_LOG.md`) with results for retrieval quality and regeneration stability experiments.
+
+## v0.0.147 (2026-02-12)
+
+### Feat
+
+- **CSV-driven test command discovery**: `default_verify_cmd_for()` now reads `run_test_command` from `language_format.csv` instead of hardcoding per-language commands. JavaScript, TypeScript, TypeScript React, JavaScriptReact, Go, Rust, Swift, and C# now resolve test commands from CSV, reducing agentic fallback for common languages.
+- **Configurable agent provider preference**: New `PDD_AGENTIC_PROVIDER` environment variable overrides the default `anthropic,google,openai` provider order (e.g., `PDD_AGENTIC_PROVIDER=google` to use only Google). Replaces the former `AGENT_PROVIDER_PREFERENCE` constant with `get_agent_provider_preference()`.
+- **Gemini and Codex model override**: `GEMINI_MODEL` and `CODEX_MODEL` environment variables now pass `--model` to the Gemini CLI and Codex CLI respectively, mirroring the existing `CLAUDE_MODEL` support for Anthropic.
+- **LLM call timeout**: All `litellm.completion()` calls now enforce a 120-second timeout (`LLM_CALL_TIMEOUT`), preventing indefinite hangs on unresponsive providers.
+- **Grounding experiment infrastructure**: New `experiments/grounding/` directory with retrieval quality (Phase 1) and generation stability (Phase 2) experiments, including seed data, query sets, Makefile-driven automation, and CSV result tracking.
+
+### Fix
+
+- **JS/TS test expectations updated**: Tests now assert explicit `run_test_command` values (`node {file}`, `npx tsx {file}`) instead of expecting empty strings, matching the new CSV-driven discovery.
+- **Lock file assertion removed**: `test_auto_deps_lock.py` no longer asserts lock file existence after release, which was filelock-version-dependent. Serialization is still verified via execution order assertions.
+- **LLM timeout for cloud tests**: Added 120s timeout to all LLM retry paths in `llm_invoke.py`, fixing cloud test hangs on unresponsive providers.
+- **Test fixture parameters**: Added missing `mock_env` and `mock_load_model_data` fixtures to `TestAgenticDebugLogging` test that was failing in isolation.
+
+### Build
+
+- **PDD secrets dispatch workflow**: New `.github/workflows/pdd-secrets-dispatch.yml` for encrypted secret exchange between GitHub Actions runners via RSA+AES envelope encryption.
+- **Regression test cost control**: `regression.sh` and `sync_regression.sh` now set `PDD_MODEL_DEFAULT=vertex_ai/gemini-3-flash-preview` and `PDD_AGENTIC_PROVIDER=google,anthropic,openai` to force cheaper models during regression runs.
+- **Cloud Batch provider config**: `ci/cloud-batch/entrypoint.sh` now sets `PDD_AGENTIC_PROVIDER=google,anthropic,openai` to prefer Google's Gemini on Vertex AI in CI.
+- **GLM-5 model update**: Replaced Fireworks `glm-4p7` (Elo 1441, $0.60/$2.20) with `glm-5` (Elo 1451, $1.00/$3.20). Enabled `structured_output` for DeepSeek v3.2. Added `global` location for Gemini 3 Flash Preview and Claude Opus 4.6 on Vertex AI.
+
+### Refactor
+
+- **`AGENT_PROVIDER_PREFERENCE` → `get_agent_provider_preference()`**: Constant replaced with a function that reads from `PDD_AGENTIC_PROVIDER` env var, enabling runtime configuration without code changes.
+- **`default_verify_cmd_for()` resolution chain**: Refactored from a Python-only hardcoded function to a three-step resolution: CSV lookup → Python fallback → None (agentic mode).
+
+## v0.0.146 (2026-02-11)
+
+### Feat
+
+- **Agentic orchestrator fallback comments**: When an agent step fails (e.g., all providers unavailable), a fallback comment is now posted to the GitHub issue so users can see which steps failed and why. Previously, failed steps were silent when the agent never executed.
+- **Agentic orchestrator early abort**: The change orchestrator now aborts after 3 consecutive provider failures instead of blindly retrying all 13 steps, saving time and API cost when providers are down.
+- **Provider error details in failure messages**: `run_agentic_task` now includes per-provider error snippets in the failure message (e.g., `"All agent providers failed: anthropic: rate limited; google: timeout"`) instead of a generic message.
+- **Claude Code OAuth token support**: The Anthropic provider now preserves `ANTHROPIC_API_KEY` when `CLAUDE_CODE_OAUTH_TOKEN` is present, enabling Claude Code CLI authentication in CI environments.
+- **Vertex AI ADC authentication**: `get_available_agents()` now recognizes Application Default Credentials on GCP VMs (`GOOGLE_CLOUD_PROJECT` without `GOOGLE_APPLICATION_CREDENTIALS`), enabling the Google provider on Cloud Batch.
+
+### Fix
+
+- **Warning count false negatives (#485)**: `pytest_output.py` now parses warning counts only from the pytest summary line (e.g., `"2 warnings"` in `=== 1 passed, 2 warnings ===`) instead of naively counting all occurrences of "warning" in stdout. Library warnings from LiteLLM, Pydantic, and PDD log messages no longer inflate the count. Thanks Serhan Asad (#490)!
+- **Warnings no longer block success gate (#485)**: `fix_error_loop` success condition changed from `fails == 0 and errors == 0 and warnings == 0` to `fails == 0 and errors == 0`. Warnings are informational and no longer cause false test failures or trigger unnecessary agentic fallback.
+- **Workflow state preserved on partial failure**: When the change orchestrator completes with some failed steps, workflow state is no longer cleared, preserving debugging info for investigation.
+- **macOS regression test compatibility**: `regression.sh` now detects macOS and falls back to `gtimeout` or a no-op wrapper when GNU `timeout` is unavailable.
+
+### Build
+
+- **Cloud Batch scale-up (56 → 64 tasks)**: Increased pytest chunks from 16 to 24 and total task count from 56 to 64 for better parallelism. Max run duration increased from 1200s to 1500s.
+- **Cloud Batch CI environment hardening**: Install Gemini CLI, Codex CLI, and Claude Code CLI in the Docker image. Add `zsh`, `fish`, `tcsh`, `nodejs`, `npm` for shell detection tests. Include parent `.pddrc`, `context/`, `docs/` in source tarball. Set Vertex AI ADC env vars. Exchange Firebase refresh token for JWT at runtime. Inject `CLAUDE_CODE_OAUTH_TOKEN` via Secret Manager.
+- **Dynamic task count in collect-results.sh**: Task count is now derived from the Cloud Batch job descriptor instead of being hardcoded, preventing mismatches when the job template changes.
+- **Regression test isolation**: Individual regression test cases can now run independently in CI parallel mode. Prerequisite files (e.g., `simple_math.py`, `sub_simple_math.prompt`) are seeded from fixtures when not running sequentially. Added 15-minute timeout per command and tail-30 log output on failure for CI debugging.
+- **Smart Docker image rebuild**: `make cloud-test` now auto-detects whether image-affecting files changed (via SHA-256 hash) and skips rebuild when unnecessary.
+- **Subdirectory test discovery**: Cloud Batch entrypoint now uses `find tests/ -name 'test_*.py'` (recursive) instead of `find tests/ -maxdepth 1`, picking up tests in `tests/server/` and other subdirectories.
+- **GCS bucket rename**: Default CI results bucket changed from `pdd-ci-results` to `pdd-stg-ci-results`.
+
+### Docs
+
+- **New test fixtures**: Added `tests/fixtures/simple_math.py`, `simple_math_example.py`, `sub_simple_math.prompt`, and `updated_simple_math_python.prompt` to support isolated regression test execution.
+
+## v0.0.145 (2026-02-10)
+
+### Feat
+
+- **Cloud Batch CI**: Add parallel test infrastructure running 56 Spot VM tasks on GCP Cloud Batch. Includes Dockerfile, entrypoint dispatching pytest chunks / regression / sync / cloud suites by task index, JSON job template with Secret Manager integration, GCS-based result collection with markdown report generation, and one-time GCP setup script. New Makefile targets: `cloud-test`, `cloud-test-quick`, `cloud-test-build`, `cloud-test-push`, `cloud-test-setup`.
+
+### Fix
+
+- **fix_verification_errors**: Return error signal (`-1`) instead of false success (`0`) on all LLM failure paths, preventing the verify loop from misinterpreting errors as "0 issues found" (#305). All five early-return error paths (`verification_issues_count: 0`) changed to `-1`. Thanks James Levin!
+- **fix_main / sync_orchestration**: Skip `auto_submit` when running in local mode (`PDD_FORCE_LOCAL` env flag or `--local` sync flag), preventing CI auth hangs that blocked headless test runs.
+- **get_jwt_token**: Rewrite OAuth device flow polling to handle rate limiting correctly (#309). Parse JSON body before `raise_for_status()` so `slow_down` errors in HTTP 429 responses are handled per GitHub spec (increment interval by 5s). Add exponential backoff with cap for HTTP 429 responses without JSON body. Respect `Retry-After` header. Clean up redundant `JSONDecodeError` catch and unused imports. Thanks James Levin!
+- **commands/modify**: `pdd change` now raises `Exit(1)` on failure instead of silently returning, so callers and CI detect unsuccessful modifications.
+
+### Docs
+
+- **CONTRIBUTING.md**: Add Continuous Integration section documenting the GitHub Actions unit test workflow, how to reproduce the CI test subset locally (`pytest -m "not integration and not e2e and not real" --timeout=60`), and a new checklist item requiring CI to pass before merge.
+
+### Tests
+
+- **test_e2e_issue_305_false_success**: New 365-line E2E test suite exercising the full `fix_verification_errors` → verify loop path with simulated LLM failures, confirming `-1` error signal propagation and correct failure reporting.
+- **test_e2e_issue_309_oauth_rate_limit**: New 406-line E2E test suite covering OAuth device flow rate limiting: `slow_down` interval increment, HTTP 429 exponential backoff, `Retry-After` header, mixed 429-then-success sequences, and backoff cap behavior.
+- **test_fix_verification_errors**: Add 169 lines of tests for all error-signal return paths.
+- **test_fix_main**: Add 178 lines of tests covering `auto_submit` suppression under `PDD_FORCE_LOCAL`.
+- **test_get_jwt_token**: Expand with 273 lines of new rate-limiting and backoff tests.
+- **test_sync_orchestration**: Add 99 lines testing `auto_submit=(not local)` propagation in sync fix calls.
+- **test_commands_modify**: Add 28 lines testing `Exit(1)` on change failure.
+
+## v0.0.144 (2026-02-09)
+
+### Feat
+
+- **agentic_architecture**: Expand architecture workflow from 8 to 12 steps. New steps: step 7 generates `.pddrc` from `architecture.json`, step 8 generates prompt files, step 9 validates completeness against PRD, step 10 validates `pdd sync` can run for every module, step 11 validates dependency ordering, step 12 fixes validation errors. Old step 7 (validate) and step 8 (fix) replaced.
+- **agentic_bug**: Expand bug workflow to 10 steps. New step 5.5 classifies whether root cause is in code or prompt. New step 9 generates E2E tests. Step 10 (formerly step 9) creates draft PR with `pdd fix` command.
+- **agentic_change**: Add full 13-step `pdd change` workflow with architecture entries for all steps (duplicate check, docs review, research, clarification, docs changes, dev units, architecture decisions, analysis, implementation, architecture update, issue identification, issue fixing, PR creation).
+- **agentic_e2e_fix**: Add architecture entries for E2E fix workflow (4 steps: unit tests, E2E tests, root cause, fix E2E tests).
+
+### Fix
+
+- **agentic_common**: Add `--paginate` to `gh api` commands to correctly fetch all issue comments, resolving workflow state loss on issues with 30+ comments. Without `--paginate`, GitHub API returns only the first 30 comments, making state comments beyond that boundary invisible and causing full workflow restarts (~$4 in wasted LLM costs). Fix applied to `_find_state_comment()` in `agentic_common.py` and comment-fetching calls in `agentic_bug.py`, `agentic_change.py`, `agentic_test.py`, and `agentic_architecture.py`. Thanks Serhan Asad! (upstream #482)
+
+### Refactor
+
+- **architecture.json**: Remove obsolete module entries (`encode_message`, `simple_math`, `test_other`, `agentic_fix_harvest_only`). Update descriptions from generic boilerplate to semantic descriptions of each module's purpose.
+- **agentic_change tests**: Update subprocess mock assertions to use `any()` over command arg lists instead of checking `cmd[-1]`, accommodating the new `--paginate` flag appended after the URL.
+
+### Docs
+
+- **README.md**: Document `--no-steer` and `--steer-timeout` sync options. Add `CLAUDE_MODEL` and `PDD_USER_FEEDBACK` environment variable documentation. Update macOS Python note (no longer ships pre-installed).
+- **ONBOARDING.md**: Update all repository URLs from `gltanaka/pdd` to `promptdriven/pdd`.
+
+### Tests
+
+- **test_agentic_common**: Add 10 tests for `_find_state_comment()` pagination behavior: `--paginate` flag assertion, state beyond 30 comments, multiple state comments, empty issues, `gh` CLI not installed, API failures, and full `load_workflow_state()` call chain.
+- **test_e2e_issue_481_pagination**: Add E2E test suite exercising the complete `load_workflow_state()` → `github_load_state()` → `_find_state_comment()` call chain with simulated paginated vs non-paginated GitHub API responses.
+- **test_agentic_common**: Add secondary call-site tests verifying `--paginate` in `agentic_bug._fetch_comments()` and `agentic_test._fetch_issue_data()`.
+
+## v0.0.143 (2026-02-08)
+
+### Feat
+
+- Introduce `replay_stability_ab` experiment with multi-step agentic development for `user_id_parser`, adding email input parsing and configurable reserved IDs.
+- Implement and test a `user_id_parser` within the `replay_stability_ab` experiment, including new source, examples, and acceptance tests.
+- Implement new Remotion visual components and refine existing scene timings, addressing audit feedback across several video sections.
+- Add audit specification markdown files for the 3blue1brown demo across multiple chapters.
+- add numerous new Remotion compositions and integrate them into existing sequences, including a cost label overlay in `ClosingSection`.
+- add and refine specifications for the 3blue1brown demo, covering cold open, economics, paradigm shift, mold, compound returns, and closing sections.
+- Add video looping to prevent freezing, introduce `startAtFullView` and `showOverlayText` props for charts, and adjust sequence timings.
+
+### Fix
+
+- Handle worktree add when branch is checked out (#445)
+
+### Refactor
+
+- Convert E2E skip-tests to proper regression assertions (#445)
+
+## v0.0.142 (2026-02-07)
+
+### Feat
+
+- **firecrawl caching**: Automatic SQLite-based caching for Firecrawl web scraping results, reducing API credit usage. `<web>` tags in prompts now check cache before scraping. Configurable via environment variables (`FIRECRAWL_CACHE_TTL_HOURS`, `FIRECRAWL_CACHE_MAX_SIZE_MB`, `FIRECRAWL_CACHE_MAX_ENTRIES`). Includes URL normalization (strips tracking params), LRU eviction, and access tracking. New `pdd firecrawl-cache` CLI group with `stats`, `clear`, `info`, and `check` subcommands (#46). Thanks Niti Goyal! (upstream #474)
+
+### Fix
+
+- **generate_test**: Make `sys.path` preamble injection deterministic by stripping any existing LLM-generated `sys.path` manipulation before injecting the canonical preamble. Previously skipped injection if `sys.path.insert` was already present, leading to inconsistent isolation.
+- **firecrawl_cache**: Fix 5 review findings — remove duplicate TTL parsing crash, add `try/except` for `MAX_SIZE_MB`/`MAX_ENTRIES` env vars, preserve `ref` and `source` URL params during normalization, replace `SELECT+UPDATE` with atomic `INSERT ... ON CONFLICT DO UPDATE` (upstream #479).
+- **sessions/connect/cloud**: Replace all stale `pdd login` references with `pdd auth login` across CLI output and error messages (#470). Thanks Serhan Asad! (upstream #472)
+- **agentic_arch_step11**: Add `<include>` path validation — verifies that include paths in prompt files match `.pddrc` `example_output_path` prefixes, skipping URLs, template variables, and `pdd/` internal paths (#426).
+- **llm_invoke**: Update stale model name reference in tests.
+
+### Refactor
+
+- **preprocess**: Remove Firecrawl cache prompt file; enhance prompt path resolution logic with explicit precedence rules (`PDD_PROMPT_PATH` > `PDD_PROMPTS_DIR`, `.pddrc` `prompt_path` alias support).
+
+### Build
+
+- **llm_model.csv**: Update model roster and Elo ratings. Add `claude-opus-4-6` (Elo 1576, replaces `claude-opus-4-5`), `gpt-5.2-codex` (replaces `gpt-5.1-codex` and `gpt-5.1-codex-max`), `kimi-k2p5` via Fireworks (replaces Groq `kimi-k2-instruct`), `qwen3-coder-next` via LM Studio. Updated Elo ratings across the board (e.g., `gemini-3-pro-preview` 1487→1452, `gpt-5.2` 1486→1472, `claude-sonnet-4-5` 1370→1386).
+
+### Docs
+
+- **construct_paths_python.prompt**: Document prompt path resolution precedence rules and `prompt_path` alias.
+- **agentic_arch_step12_fix_LLM.prompt**: Add fix instructions for wrong `<include>` paths.
+- **README.md**: Add firecrawl cache documentation section with configuration and CLI usage.
+
+## v0.0.141 (2026-02-06)
+
+### Feat
+
+- **sync steering**: Add interactive operation steering to `pdd sync`. Users can now override the recommended sync operation (generate, test, fix, etc.) via a modal choice picker in the TUI, with configurable timeout (`--steer-timeout`) and opt-out (`--no-steer`). Headless/CI environments auto-accept the default. Thanks Benjamin Knobloch! (upstream #267)
+- **agentic_common**: Support `CLAUDE_MODEL` environment variable to override the Claude model used in agentic workflows.
+- **agentic_common**: Inject user feedback from GitHub issue comments (`PDD_USER_FEEDBACK` env var) into agentic task prompts for iterative fix attempts.
+
+### Fix
+
+- **sessions cleanup**: Fix misleading "Successfully cleaned up" message when all cleanups actually failed. `deregister()` now returns `bool` so callers can track real failures (#469). Thanks Serhan Asad! (upstream #475)
+- **unfinished_prompt**: Strip trailing markdown code fences (` ``` `) before completeness checks. Try multiple parse strategies (raw, dedented, wrapped in function body) so indented Python tails like `return a + b` are correctly recognized as complete.
+- **sync_determine_operation**: Fix resource leak in `SyncLock.acquire()` — file descriptor and lock file are now properly cleaned up on failure. Re-raises the original exception instead of wrapping in `TimeoutError`.
+- **sync_orchestration**: Use `worker_exception is not None` instead of `isinstance(worker_exception, BaseException)` for crash detection.
+- **track_cost**: Prevent `@track_cost` decorator from writing mock data to `pdd_cost.csv` during pytest runs.
+- **agentic_common**: Remove `PDD_OUTPUT_COST_PATH` from subprocess environment to prevent cost tracking side effects in child processes.
+- **codebase-wide**: Replace `.split('\n')` with `.splitlines()` across codebase to fix Windows CRLF line ending bug (#471). Thanks Serhan Asad! (upstream #473)
+
+### Refactor
+
+- **agentic_bug_step5_root_cause**: Restructure root cause analysis prompt to emphasize tracing to the true root cause (not just symptoms), searching for existing patterns in the codebase, and specifying the fix location with rationale.
+
 ## v0.0.140 (2026-02-05)
 
 ### Feat
 
-- Add comprehensive agentic workflow logging
+- **agentic_common**: Add debug logging for agentic workflows. When `--verbose` is enabled, full prompt/response pairs are written to `.pdd/agentic-logs/` as JSONL session files. Logs include cost, duration, provider, and success status per step. Silent when verbose is off; never crashes the workflow on write errors.
+- **agentic_common_python.prompt**: Add prompt specification for the new agentic debug logging feature, documenting the JSONL entry format and `run_agentic_task()` integration.
 
 ### Fix
 
-- Correct docstring to reference Step 10 instead of Step 5.5
-- Step 10 prompt now stages all files from files_to_stage, not just test files (#429)
-- Address Copilot review feedback on agentic logging tests
-- Auth logout shows success message when not authenticated (inconsistent with clear-cache)
+- **agentic_bug_step10_pr_LLM.prompt**: Step 10 now stages all files from `files_to_stage` instead of only test files from Steps 7 and 9. Previously, prompt files fixed in Step 5.5 were excluded from generated PRs even though the orchestrator correctly passed them (#429).
+- **auth**: Logout command now checks authentication state first and displays "Not authenticated." instead of the misleading "Logged out of PDD Cloud." when the user is already logged out (#449). Thanks Serhan Asad!
+- **agentic_bug_step10_pr_LLM.prompt**: PR template now includes a "Prompt Files" section acknowledging prompt file changes from Step 5.5.
+
+### Build
+
+- **package-test.yml**: Add `paths-ignore` to CI workflow so documentation-only changes (markdown, scripts, config files) skip the package install test.
 
 ### Refactor
 
-- Address Copilot PR review comments
+- **pdd/prompts/commands/auth_python.prompt**: Delete unused auth prompt file.
 
 ## v0.0.139 (2026-02-04)
 

@@ -1,6 +1,6 @@
 # PDD (Prompt-Driven Development) Command Line Interface
 
-![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.140-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
+![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.151-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
 
 ## Introduction
 
@@ -71,7 +71,7 @@ On macOS, you'll need to install some prerequisites before installing PDD:
    brew install python
    ```
    
-   **Note**: macOS comes with Python 2.7 by default (deprecated), but PDD requires Python 3.8 or higher. The `brew install python` command installs the latest Python 3 version.
+   **Note**: Recent versions of macOS no longer ship with Python pre-installed. PDD requires Python 3.8 or higher. The `brew install python` command installs the latest Python 3 version.
 
 ### Recommended Method: uv
 
@@ -367,7 +367,7 @@ export PDD_TEST_OUTPUT_PATH=/path/to/tests/
 
 ## Version
 
-Current version: 0.0.140
+Current version: 0.0.151
 
 To check your installed version, run:
 ```
@@ -796,6 +796,8 @@ Options:
 - `--skip-tests`: Skip unit test generation and fixing
 - `--target-coverage FLOAT`: Desired code coverage percentage (default is 90.0)
 - `--dry-run`: Display real-time sync analysis for this basename instead of running sync operations. This performs the same state analysis as a normal sync run but without acquiring exclusive locks or executing any operations, allowing inspection even when another sync process is active.
+- `--no-steer`: Disable interactive steering of sync operations.
+- `--steer-timeout FLOAT`: Timeout in seconds for steering prompts (default: 8.0).
 
 **Real-time Progress Animation**:
 The sync command provides live visual feedback showing:
@@ -2467,6 +2469,36 @@ pdd sessions cleanup --all --force
 
 **When to use**: Use `sessions list` to discover available remote sessions, `sessions info` to check session details, and `sessions cleanup` to remove stale or orphaned sessions.
 
+### 20. Firecrawl Web Scraping Cache
+
+**Automatic caching** for web content scraped via `<web>` tags in prompts. Reduces API credit usage by caching results for 24 hours by default.
+
+**How it works:**
+- Transparent and automatic - no manual management needed
+- Cached content stored in `PROJECT_ROOT/.pdd/cache/firecrawl.db`
+- Expired entries automatically skipped when accessed
+- URL normalization (removes tracking parameters, case-insensitive matching)
+- Access tracking for LRU eviction when cache is full
+
+**Configuration (optional):**
+```bash
+export FIRECRAWL_CACHE_ENABLE=false          # Disable caching (default: true)
+export FIRECRAWL_CACHE_TTL_HOURS=48          # Cache for 48 hours (default: 24)
+export FIRECRAWL_CACHE_MAX_SIZE_MB=200       # Max cache size in MB (default: 100)
+export FIRECRAWL_CACHE_MAX_ENTRIES=2000      # Max number of entries (default: 1000)
+export FIRECRAWL_CACHE_AUTO_CLEANUP=false    # Disable auto cleanup (default: true)
+```
+
+**Cache management commands:**
+```bash
+pdd firecrawl-cache stats              # View cache statistics
+pdd firecrawl-cache clear              # Clear all cached entries
+pdd firecrawl-cache info               # View cache configuration
+pdd firecrawl-cache check <url>        # Check if a URL is cached
+```
+
+**When to use**: Caching is automatic. Use `stats` to check cache status, `info` to view configuration, `check` to verify if a URL is cached, or `clear` to force re-scraping all URLs.
+
 ## Example Review Process
 
 When the global `--review-examples` option is used with any command, PDD will present potential few-shot examples that might be used for the current operation. The review process follows these steps:
@@ -2615,6 +2647,11 @@ PDD uses several environment variables to customize its behavior:
 - **`PDD_CONFIG_PATH`**: Override the default `.pddrc` file location (default: searches upward from current directory).
 - **`PDD_DEFAULT_CONTEXT`**: Default context to use when no context is detected (default: "default").
 - **`PDD_DEFAULT_LANGUAGE`**: Global default programming language when not specified in context (default: "python").
+
+#### Agentic Workflow Variables
+
+- **`CLAUDE_MODEL`**: Override the model used by Claude CLI in agentic workflows (e.g., `claude-sonnet-4-5-20250929`). When set, passes `--model` to the Claude CLI command. No default; only used if explicitly set.
+- **`PDD_USER_FEEDBACK`**: Inject user feedback from GitHub issue comments into agentic task instructions. Set by the GitHub App executor to pass feedback from previous execution attempts. No default.
 
 #### Output Path Variables
 

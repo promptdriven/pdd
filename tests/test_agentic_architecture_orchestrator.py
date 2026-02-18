@@ -797,3 +797,449 @@ class TestProgrammaticJSONValidation:
 
         # Fix step should have been called at least once
         assert step9_fix_count["value"] >= 1, "Fix step should be called to convert JSON object to array"
+
+
+class TestIncludePathValidation:
+    """Tests for include path validation in Step 11 (issue #426)."""
+
+    def test_step11_detects_wrong_include_paths(self, mock_dependencies, base_args):
+        """
+        Test that Step 11 validation detects when generated prompts use wrong include paths.
+
+        Bug reproduction for issue #426:
+        - .pddrc specifies examples should be in context/
+        - Generated prompts incorrectly use src/models_example.py
+        - Step 11 should catch this and return VALIDATION_RESULT: INVALID
+        """
+        mocks = mock_dependencies
+        cwd = base_args["cwd"]
+
+        # Create architecture.json
+        architecture = [
+            {
+                "priority": 1,
+                "filename": "models_Python.prompt",
+                "dependencies": []
+            }
+        ]
+
+        # Create .pddrc with example_output_path specifying context/
+        pddrc_content = """
+prompts_dir: prompts
+contexts:
+  python:
+    defaults:
+      example_output_path: context/
+"""
+
+        # Create prompt file with WRONG include path
+        prompt_content = """<pdd-reason>Generate Python models</pdd-reason>
+<include>src/models_example.py</include>
+
+% Task: Generate models
+"""
+
+        step11_validation_count = {"value": 0}
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+
+            if "step6" in label:
+                # Step 6 writes architecture.json
+                (cwd / "architecture.json").write_text(json.dumps(architecture))
+                return (True, 'FILES_CREATED: architecture.json', 0.1, "gpt-4")
+
+            if "step7" in label:
+                # Step 7 creates .pddrc
+                (cwd / ".pddrc").write_text(pddrc_content)
+                return (True, 'FILES_CREATED: .pddrc', 0.1, "gpt-4")
+
+            if "step8" in label:
+                # Step 8 creates prompt files
+                prompts_dir = cwd / "prompts"
+                prompts_dir.mkdir(exist_ok=True)
+                (prompts_dir / "models_Python.prompt").write_text(prompt_content)
+                return (True, 'FILES_CREATED: prompts/models_Python.prompt', 0.1, "gpt-4")
+
+            # Steps 9-10 pass
+            if "step9" in label or "step10" in label:
+                return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+
+            # Step 11 should detect the wrong include path
+            if "step11_attempt1" in label:
+                step11_validation_count["value"] += 1
+                # The LLM would detect the wrong path and return INVALID
+                return (True, "VALIDATION_RESULT: INVALID\n\nINCLUDE PATH ERROR in prompts/models_Python.prompt: 'src/models_example.py' does not match any example_output_path in .pddrc. Expected paths: ['context/']", 0.1, "gpt-4")
+
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mocks["run"].side_effect = side_effect
+
+        success, msg, cost, model, files = run_agentic_architecture_orchestrator(**base_args)
+
+        # Step 11 validation should have detected the wrong include path
+        assert step11_validation_count["value"] >= 1, "Step 11 validation should have been called"
+
+        # Verify orchestrator triggered fix+retry flow after INVALID
+        labels = [kwargs.get("label", "") for _, kwargs in mocks["run"].call_args_list]
+        step11_fix_labels = [l for l in labels if "step11_fix" in l]
+        assert len(step11_fix_labels) >= 1, (
+            f"Orchestrator should trigger step11_fix after INVALID, got labels: {labels}"
+        )
+
+    def test_step11_passes_with_correct_include_paths(self, mock_dependencies, base_args):
+        """
+        Test that Step 11 validation passes when include paths correctly match .pddrc.
+
+        Happy path for issue #426:
+        - .pddrc specifies examples should be in context/
+        - Generated prompts correctly use context/models_example.py
+        - Step 11 should return VALIDATION_RESULT: VALID
+        """
+        mocks = mock_dependencies
+        cwd = base_args["cwd"]
+
+        # Create architecture.json
+        architecture = [
+            {
+                "priority": 1,
+                "filename": "models_Python.prompt",
+                "dependencies": []
+            }
+        ]
+
+        # Create .pddrc with example_output_path specifying context/
+        pddrc_content = """
+prompts_dir: prompts
+contexts:
+  python:
+    defaults:
+      example_output_path: context/
+"""
+
+        # Create prompt file with CORRECT include path
+        prompt_content = """<pdd-reason>Generate Python models</pdd-reason>
+<include>context/models_example.py</include>
+
+% Task: Generate models
+"""
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+
+            if "step6" in label:
+                # Step 6 writes architecture.json
+                (cwd / "architecture.json").write_text(json.dumps(architecture))
+                return (True, 'FILES_CREATED: architecture.json', 0.1, "gpt-4")
+
+            if "step7" in label:
+                # Step 7 creates .pddrc
+                (cwd / ".pddrc").write_text(pddrc_content)
+                return (True, 'FILES_CREATED: .pddrc', 0.1, "gpt-4")
+
+            if "step8" in label:
+                # Step 8 creates prompt files
+                prompts_dir = cwd / "prompts"
+                prompts_dir.mkdir(exist_ok=True)
+                (prompts_dir / "models_Python.prompt").write_text(prompt_content)
+                return (True, 'FILES_CREATED: prompts/models_Python.prompt', 0.1, "gpt-4")
+
+            # All validation steps pass
+            if "step9" in label or "step10" in label or "step11" in label:
+                return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mocks["run"].side_effect = side_effect
+
+        success, msg, cost, model, files = run_agentic_architecture_orchestrator(**base_args)
+
+        # Should succeed
+        assert success is True
+
+        # All main steps should have run without any fix/retry steps
+        labels = [kwargs.get("label", "") for _, kwargs in mocks["run"].call_args_list]
+        assert any("step11" in l for l in labels), "Step 11 should have run"
+        assert not any("_fix" in l for l in labels), "No fix steps should have been triggered"
+
+    def test_step11_handles_multiple_wrong_include_paths(self, mock_dependencies, base_args):
+        """
+        Test that Step 11 detects multiple wrong include paths across different prompt files.
+
+        Edge case for issue #426:
+        - Multiple contexts with different example_output_path values
+        - Multiple prompts with wrong paths
+        - Step 11 should catch all of them
+        """
+        mocks = mock_dependencies
+        cwd = base_args["cwd"]
+
+        # Create architecture.json with multiple modules
+        architecture = [
+            {
+                "priority": 1,
+                "filename": "models_Python.prompt",
+                "dependencies": []
+            },
+            {
+                "priority": 2,
+                "filename": "routes_Python.prompt",
+                "dependencies": ["models_Python.prompt"]
+            }
+        ]
+
+        # Create .pddrc with example_output_path specifying context/
+        pddrc_content = """
+prompts_dir: prompts
+contexts:
+  python:
+    defaults:
+      example_output_path: context/
+"""
+
+        # Create prompt files with WRONG include paths
+        models_prompt = """<pdd-reason>Generate Python models</pdd-reason>
+<include>src/models_example.py</include>
+
+% Task: Generate models
+"""
+
+        routes_prompt = """<pdd-reason>Generate Python routes</pdd-reason>
+<include>src/context/routes_example.py</include>
+<include>context/models_example.py</include>
+
+% Task: Generate routes
+"""
+
+        step11_validation_count = {"value": 0}
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+
+            if "step6" in label:
+                # Step 6 writes architecture.json
+                (cwd / "architecture.json").write_text(json.dumps(architecture))
+                return (True, 'FILES_CREATED: architecture.json', 0.1, "gpt-4")
+
+            if "step7" in label:
+                # Step 7 creates .pddrc
+                (cwd / ".pddrc").write_text(pddrc_content)
+                return (True, 'FILES_CREATED: .pddrc', 0.1, "gpt-4")
+
+            if "step8" in label:
+                # Step 8 creates prompt files
+                prompts_dir = cwd / "prompts"
+                prompts_dir.mkdir(exist_ok=True)
+                (prompts_dir / "models_Python.prompt").write_text(models_prompt)
+                (prompts_dir / "routes_Python.prompt").write_text(routes_prompt)
+                return (True, 'FILES_CREATED: prompts/models_Python.prompt, prompts/routes_Python.prompt', 0.1, "gpt-4")
+
+            # Steps 9-10 pass
+            if "step9" in label or "step10" in label:
+                return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+
+            # Step 11 should detect multiple wrong include paths
+            if "step11_attempt1" in label:
+                step11_validation_count["value"] += 1
+                # The LLM would detect both wrong paths
+                return (True, """VALIDATION_RESULT: INVALID
+
+INCLUDE PATH ERROR in prompts/models_Python.prompt: 'src/models_example.py' does not match any example_output_path in .pddrc. Expected paths: ['context/']
+INCLUDE PATH ERROR in prompts/routes_Python.prompt: 'src/context/routes_example.py' does not match any example_output_path in .pddrc. Expected paths: ['context/']""", 0.1, "gpt-4")
+
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mocks["run"].side_effect = side_effect
+
+        success, msg, cost, model, files = run_agentic_architecture_orchestrator(**base_args)
+
+        # Step 11 validation should have detected the wrong include paths
+        assert step11_validation_count["value"] >= 1, "Step 11 validation should have been called and detected errors"
+
+        # Verify orchestrator triggered fix+retry flow after INVALID
+        labels = [kwargs.get("label", "") for _, kwargs in mocks["run"].call_args_list]
+        step11_fix_labels = [l for l in labels if "step11_fix" in l]
+        assert len(step11_fix_labels) >= 1, (
+            f"Orchestrator should trigger step11_fix after INVALID, got labels: {labels}"
+        )
+
+
+# ============================================================================
+# Issue #467: False Cache / Ratchet Effect on last_completed_step
+# ============================================================================
+
+
+def test_consecutive_failures_no_ratchet(mock_dependencies, base_args, tmp_path):
+    """
+    Issue #467: When consecutive steps fail, last_completed_step should remain 0.
+
+    Bug (now fixed): Each failed step unconditionally set
+    state["last_completed_step"] = step_num, advancing the cursor
+    despite the step having failed.
+    """
+    mocks = mock_dependencies
+    base_args["cwd"] = tmp_path
+    base_args["skip_prompts"] = True
+
+    arch_json = tmp_path / "architecture.json"
+    arch_json.write_text('[{"name": "mod"}]')
+
+    saved_states = []
+
+    def capture_save(cwd, issue_number, wf_type, state, state_dir, repo_owner, repo_name, use_github_state=True, github_comment_id=None):
+        saved_states.append(dict(state))
+        return None
+
+    mocks["save_state"].side_effect = capture_save
+    mocks["run"].return_value = (False, "All agent providers failed", 0.0, "")
+
+    run_agentic_architecture_orchestrator(**base_args)
+
+    final_state = saved_states[-1]
+    assert final_state["last_completed_step"] == 0, (
+        f"When all steps fail, last_completed_step should be 0, "
+        f"but got {final_state['last_completed_step']}. "
+        f"This is the 'ratchet effect' bug from issue #467."
+    )
+
+    # All step outputs should be prefixed with "FAILED:"
+    for step_key, output in final_state["step_outputs"].items():
+        assert output.startswith("FAILED:"), (
+            f"Step {step_key} output should start with 'FAILED:' but got: {output[:50]}"
+        )
+
+
+def test_resume_from_all_failed_state_reruns_from_step_1(mock_dependencies, base_args, tmp_path):
+    """
+    Issue #467: When resuming from a state where all steps failed,
+    the workflow should re-run from step 1, not skip past them.
+    """
+    mocks = mock_dependencies
+    base_args["cwd"] = tmp_path
+    base_args["skip_prompts"] = True
+
+    arch_json = tmp_path / "architecture.json"
+    arch_json.write_text('[{"name": "mod"}]')
+
+    corrupted_state = {
+        "last_completed_step": 5,
+        "step_outputs": {
+            "1": "FAILED: All agent providers failed",
+            "2": "FAILED: All agent providers failed",
+            "3": "FAILED: All agent providers failed",
+            "4": "FAILED: All agent providers failed",
+            "5": "FAILED: All agent providers failed",
+        },
+        "total_cost": 0.0,
+        "model_used": "unknown",
+        "scaffolding_files": [],
+        "prompt_files": [],
+    }
+    mocks["load_state"].return_value = (corrupted_state, None)
+
+    executed_labels = []
+
+    def track_run(*args, **kwargs):
+        label = kwargs.get("label", "")
+        executed_labels.append(label)
+        return (True, "Step Output", 0.1, "gpt-4")
+
+    mocks["run"].side_effect = track_run
+
+    run_agentic_architecture_orchestrator(**base_args)
+
+    assert "step1" in executed_labels, (
+        f"Step 1 should be re-executed when its cached output is FAILED, "
+        f"but executed steps were: {executed_labels}. "
+        f"This is the 'blind resume' bug from issue #467."
+    )
+
+
+def test_partial_failure_preserves_last_successful_step(mock_dependencies, base_args, tmp_path):
+    """
+    Issue #467: When steps 1-3 succeed and steps 4+ fail,
+    last_completed_step should be 3 (last successful step).
+    """
+    mocks = mock_dependencies
+    base_args["cwd"] = tmp_path
+    base_args["skip_prompts"] = True
+
+    arch_json = tmp_path / "architecture.json"
+    arch_json.write_text('[{"name": "mod"}]')
+
+    saved_states = []
+
+    def capture_save(cwd, issue_number, wf_type, state, state_dir, repo_owner, repo_name, use_github_state=True, github_comment_id=None):
+        saved_states.append(dict(state))
+        return None
+
+    mocks["save_state"].side_effect = capture_save
+
+    call_count = {"n": 0}
+
+    def run_side_effect(*args, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] <= 3:
+            return (True, "Success", 0.1, "gpt-4")
+        return (False, "Provider error", 0.0, "")
+
+    mocks["run"].side_effect = run_side_effect
+
+    run_agentic_architecture_orchestrator(**base_args)
+
+    final_state = saved_states[-1]
+    assert final_state["last_completed_step"] == 3, (
+        f"When steps 1-3 succeed and 4+ fail, last_completed_step should be 3, "
+        f"but got {final_state['last_completed_step']}. "
+        f"The ratchet effect advanced it beyond the last successful step."
+    )
+
+
+def test_resume_from_partial_failure_reruns_failed_steps(mock_dependencies, base_args, tmp_path):
+    """
+    Issue #467: When resuming from state where steps 1-3 succeeded but 4-5 failed,
+    resume should re-run from step 4, not step 6.
+    """
+    mocks = mock_dependencies
+    base_args["cwd"] = tmp_path
+    base_args["skip_prompts"] = True
+
+    arch_json = tmp_path / "architecture.json"
+    arch_json.write_text('[{"name": "mod"}]')
+
+    corrupted_state = {
+        "last_completed_step": 5,
+        "step_outputs": {
+            "1": "PRD analyzed",
+            "2": "Deep analysis done",
+            "3": "Research done",
+            "4": "FAILED: All agent providers failed",
+            "5": "FAILED: All agent providers failed",
+        },
+        "total_cost": 0.3,
+        "model_used": "gpt-4",
+        "scaffolding_files": [],
+        "prompt_files": [],
+    }
+    mocks["load_state"].return_value = (corrupted_state, None)
+
+    executed_labels = []
+
+    def track_run(*args, **kwargs):
+        label = kwargs.get("label", "")
+        executed_labels.append(label)
+        return (True, "Step Output", 0.1, "gpt-4")
+
+    mocks["run"].side_effect = track_run
+
+    run_agentic_architecture_orchestrator(**base_args)
+
+    # Step 4 should be re-executed
+    assert "step4" in executed_labels, (
+        f"Step 4 should be re-executed because its cached output is FAILED, "
+        f"but executed steps were: {executed_labels}."
+    )
+    # Steps 1-3 should NOT be re-executed
+    assert "step1" not in executed_labels, "Step 1 succeeded and should not be re-run"
+    assert "step2" not in executed_labels, "Step 2 succeeded and should not be re-run"
+    assert "step3" not in executed_labels, "Step 3 succeeded and should not be re-run"

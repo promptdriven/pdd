@@ -5,6 +5,7 @@ __pycache__/
 *.vsix
 .tmp/
 .agentic_prompt*
+.cloud-image-hash
 sync_order.sh
 
 staging_data_dump.json
@@ -17,6 +18,9 @@ litellm_cache.sqlite/
 
 # Auto-deps lock files (created by filelock for concurrent access prevention)
 *.csv.lock
+
+# Cost tracking CSV (generated at runtime, should not be committed)
+pdd_cost.csv
 
 # Claude folder
 .claude/
@@ -78,6 +82,7 @@ coverage.xml
 *.py,cover
 .hypothesis/
 .pytest_cache/
+test-results/
 cover/
 staging/
 *.staging.log
@@ -221,3 +226,7 @@ Makefile.test-staging
 
 # Large model weights (HuggingFace clones)
 demos/3blue1brown/models/
+
+# Generated video outputs
+demos/3blue1brown/outputs/
+*.mp4

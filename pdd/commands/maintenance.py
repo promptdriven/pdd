@@ -7,6 +7,7 @@ from pathlib import Path
 
 from ..sync_main import sync_main
 from ..auto_deps_main import auto_deps_main
+from ..agentic_sync import _is_github_issue_url, run_agentic_sync
 from ..track_cost import track_cost
 from ..core.errors import handle_error
 from ..core.utils import _run_setup_utility
@@ -57,10 +58,35 @@ from ..core.utils import _run_setup_utility
     help="Deprecated: Use --dry-run instead.",
 )
 @click.option(
+    "--no-steer",
+    "no_steer",
+    is_flag=True,
+    default=False,
+    help="Disable interactive steering of sync operations.",
+)
+@click.option(
+    "--steer-timeout",
+    type=float,
+    default=None,
+    help="Timeout in seconds for steering prompts (default: 8.0).",
+)
+@click.option(
     "--agentic",
     is_flag=True,
     default=False,
     help="Use agentic mode for Python (skip iterative loops, trust agent results).",
+)
+@click.option(
+    "--timeout-adder",
+    type=float,
+    default=0.0,
+    help="Additional timeout per step (agentic sync mode).",
+)
+@click.option(
+    "--no-github-state",
+    is_flag=True,
+    default=False,
+    help="Disable GitHub comment updates (agentic sync mode).",
 )
 @click.pass_context
 @track_cost
@@ -74,12 +100,17 @@ def sync(
     target_coverage: Optional[float],
     dry_run: bool,
     log: bool,
+    no_steer: bool,
+    steer_timeout: Optional[float],
     agentic: bool,
+    timeout_adder: float,
+    no_github_state: bool,
 ) -> Optional[Tuple[str, float, str]]:
     """
     Synchronize prompts with code and tests.
 
-    BASENAME is the base name of the prompt file (e.g., 'my_module' for 'prompts/my_module_python.prompt').
+    BASENAME is the base name of the prompt file (e.g., 'my_module' for 'prompts/my_module_python.prompt'),
+    or a GitHub issue URL for agentic multi-module sync.
     """
     # Handle deprecated --log flag
     if log:
@@ -92,6 +123,21 @@ def sync(
         )
         dry_run = True
 
+    # Detect GitHub issue URL -> dispatch to agentic sync
+    if _is_github_issue_url(basename):
+        return _run_agentic_sync_dispatch(
+            ctx=ctx,
+            issue_url=basename,
+            budget=budget,
+            skip_verify=skip_verify,
+            skip_tests=skip_tests,
+            agentic=agentic,
+            no_steer=no_steer,
+            max_attempts=max_attempts,
+            timeout_adder=timeout_adder,
+            no_github_state=no_github_state,
+        )
+
     try:
         result, total_cost, model_name = sync_main(
             ctx=ctx,
@@ -102,10 +148,63 @@ def sync(
             skip_tests=skip_tests,
             target_coverage=target_coverage,
             dry_run=dry_run,
+            no_steer=no_steer,
+            steer_timeout=steer_timeout,
             agentic_mode=agentic,
         )
         return str(result), total_cost, model_name
     except click.Abort:
+        raise
+    except Exception as exception:
+        handle_error(exception, "sync", ctx.obj.get("quiet", False))
+        return None
+
+
+def _run_agentic_sync_dispatch(
+    ctx: click.Context,
+    issue_url: str,
+    budget: Optional[float],
+    skip_verify: bool,
+    skip_tests: bool,
+    agentic: bool,
+    no_steer: bool,
+    max_attempts: Optional[int],
+    timeout_adder: float,
+    no_github_state: bool,
+) -> Optional[Tuple[str, float, str]]:
+    """Dispatch to agentic sync runner for GitHub issue URLs."""
+    ctx.ensure_object(dict)
+    quiet = ctx.obj.get("quiet", False)
+    verbose = ctx.obj.get("verbose", False)
+
+    try:
+        success, message, cost, model = run_agentic_sync(
+            issue_url=issue_url,
+            verbose=verbose,
+            quiet=quiet,
+            budget=budget,
+            skip_verify=skip_verify,
+            skip_tests=skip_tests,
+            agentic_mode=agentic,
+            no_steer=no_steer,
+            max_attempts=max_attempts,
+            timeout_adder=timeout_adder,
+            use_github_state=not no_github_state,
+        )
+
+        if not quiet:
+            status = "Success" if success else "Failed"
+            click.echo(f"Status: {status}")
+            click.echo(f"Message: {message}")
+            click.echo(f"Cost: ${cost:.4f}")
+            click.echo(f"Model: {model}")
+
+        if not success:
+            raise click.exceptions.Exit(1)
+
+        return message, cost, model
+
+    except (click.Abort, click.exceptions.Exit):
         raise
     except Exception as exception:
         handle_error(exception, "sync", ctx.obj.get("quiet", False))

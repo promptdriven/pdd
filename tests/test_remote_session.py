@@ -1,3 +1,4 @@
+import os
 import pytest
 import asyncio
 import datetime
@@ -299,7 +300,7 @@ async def test_heartbeat_error_handling(manager, mock_cloud_config, mock_httpx_c
 
 @pytest.mark.asyncio
 async def test_deregister_success(manager, mock_cloud_config, mock_httpx_client):
-    """Test successful deregistration."""
+    """Test successful deregistration returns True."""
     manager.session_id = "sess-1"
     manager.start_heartbeat() # Start it so we can verify it stops
 
@@ -307,8 +308,9 @@ async def test_deregister_success(manager, mock_cloud_config, mock_httpx_client)
     mock_response.status_code = 200
     mock_httpx_client.post.return_value = mock_response
 
-    await manager.deregister()
+    result = await manager.deregister()
 
+    assert result is True
     assert manager.session_id is None
     assert manager._heartbeat_task is None # Should be stopped
 
@@ -318,24 +320,46 @@ async def test_deregister_success(manager, mock_cloud_config, mock_httpx_client)
     assert kwargs["json"]["sessionId"] == "sess-1"
 
 @pytest.mark.asyncio
-async def test_deregister_idempotent(manager, mock_cloud_config, mock_httpx_client):
-    """Test deregister handles errors gracefully (idempotency)."""
+async def test_deregister_http_error_returns_false(manager, mock_cloud_config, mock_httpx_client):
+    """Test deregister returns False on HTTP error status (e.g. 500).
+
+    See: https://github.com/promptdriven/pdd/issues/469
+    """
     manager.session_id = "sess-1"
 
-    # Simulate API error
     mock_response = MagicMock()
     mock_response.status_code = 500
     mock_httpx_client.post.return_value = mock_response
 
-    # Should not raise exception
-    await manager.deregister()
+    result = await manager.deregister()
 
-    assert manager.session_id is None # Should still clear local ID
+    assert result is False
+    assert manager.session_id is None  # Still clears local ID
 
-    # Test when session_id is already None
+@pytest.mark.asyncio
+async def test_deregister_network_exception_returns_false(manager, mock_cloud_config, mock_httpx_client):
+    """Test deregister returns False on network exception without raising.
+
+    See: https://github.com/promptdriven/pdd/issues/469
+    """
+    manager.session_id = "sess-1"
+
+    mock_httpx_client.post.side_effect = Exception("Connection refused")
+
+    result = await manager.deregister()
+
+    assert result is False
+    assert manager.session_id is None  # Still clears local ID
+
+@pytest.mark.asyncio
+async def test_deregister_no_session_returns_true(manager, mock_cloud_config, mock_httpx_client):
+    """Test deregister returns True when no session_id is set (no-op)."""
     manager.session_id = None
     mock_httpx_client.post.reset_mock()
-    await manager.deregister()
+
+    result = await manager.deregister()
+
+    assert result is True
     mock_httpx_client.post.assert_not_called()
 
 # --- RemoteSessionManager List Sessions Tests ---
@@ -1222,3 +1246,111 @@ class TestUpdateCommand401Handling:
             await manager.update_command("cmd-123", status="completed")
 
         assert refresh_count[0] == 1
+
+
+# --- Bug #470: Incorrect auth command reference in error messages ---
+
+class TestIssue470AuthCommandReferences:
+    """
+    Tests for Issue #470: Verify all auth error messages in remote_session.py
+    reference 'pdd auth login', not the non-existent 'pdd login'.
+    """
+
+    @pytest.mark.asyncio
+    async def test_refresh_token_no_refresh_token_shows_correct_command(
+        self, manager
+    ):
+        """
+        Test that _refresh_token references 'pdd auth login' when no refresh token
+        is stored. This covers remote_session.py line 199.
+        """
+        with patch("pdd.remote_session._get_cached_jwt", return_value=None), \
+             patch.dict(os.environ, {"NEXT_PUBLIC_FIREBASE_API_KEY": "test-key"}), \
+             patch("pdd.remote_session.KEYRING_AVAILABLE", True), \
+             patch("pdd.remote_session.FirebaseAuthenticator") as mock_auth, \
+             patch("pdd.remote_session.console") as mock_console:
+            mock_instance = MagicMock()
+            mock_instance._get_stored_refresh_token.return_value = None
+            mock_auth.return_value = mock_instance
+
+            result = await manager._refresh_token()
+
+            assert result is False
+            # Check that at least one console.print call contains 'pdd auth login'
+            printed = " ".join(str(call[0][0]) for call in mock_console.print.call_args_list if call[0])
+            assert "pdd auth login" in printed, (
+                "refresh_token error should reference 'pdd auth login', "
+                f"not 'pdd login'. Got: {printed}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_token_refresh_failure_shows_correct_command(
+        self, manager, mock_cloud_config, mock_httpx_client
+    ):
+        """
+        Test that heartbeat loop references 'pdd auth login' when token refresh
+        fails. This covers remote_session.py line 317.
+        """
+        manager.session_id = "sess-1"
+
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+        mock_response.text = "Unauthorized"
+        mock_httpx_client.post = AsyncMock(return_value=mock_response)
+
+        async def mock_refresh_fail():
+            return False
+
+        manager._refresh_token = mock_refresh_fail
+
+        # Set up stop event so heartbeat exits deterministically
+        manager._stop_event = asyncio.Event()
+
+        with patch("pdd.remote_session.console") as mock_console:
+            # Run heartbeat with deterministic stop after first failure
+            async def run_heartbeat_briefly():
+                task = asyncio.create_task(manager._heartbeat_loop())
+                await asyncio.sleep(0.1)  # Let it run one iteration
+                manager._stop_event.set()
+                try:
+                    await asyncio.wait_for(task, timeout=1.0)
+                except asyncio.TimeoutError:
+                    task.cancel()
+
+            await run_heartbeat_briefly()
+
+            printed = " ".join(str(call[0][0]) for call in mock_console.print.call_args_list if call[0])
+            assert "pdd auth login" in printed, (
+                "Heartbeat token refresh failure should reference 'pdd auth login', "
+                f"not 'pdd login'. Got: {printed}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_update_command_token_refresh_failure_shows_correct_command(
+        self, manager, mock_cloud_config, mock_httpx_client
+    ):
+        """
+        Test that update_command references 'pdd auth login' when token refresh
+        fails. This covers remote_session.py line 509.
+        """
+        manager.session_id = "sess-1"
+
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+        mock_response.text = "Unauthorized"
+        mock_httpx_client.post = AsyncMock(return_value=mock_response)
+
+        async def mock_refresh_fail():
+            return False
+
+        manager._refresh_token = mock_refresh_fail
+
+        with patch("pdd.remote_session.console") as mock_console:
+            with pytest.raises(RuntimeError):
+                await manager.update_command("cmd-123", status="completed")
+
+            printed = " ".join(str(call[0][0]) for call in mock_console.print.call_args_list if call[0])
+            assert "pdd auth login" in printed, (
+                "update_command token refresh failure should reference 'pdd auth login', "
+                f"not 'pdd login'. Got: {printed}"
+            )

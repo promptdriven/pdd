@@ -23,7 +23,21 @@ except ImportError:
         return None
 
 # Constants
-AGENT_PROVIDER_PREFERENCE: List[str] = ["anthropic", "google", "openai"]
+_DEFAULT_PROVIDER_PREFERENCE: List[str] = ["anthropic", "google", "openai"]
+
+
+def get_agent_provider_preference() -> List[str]:
+    """Return provider preference order, overridable via PDD_AGENTIC_PROVIDER env var.
+
+    Examples:
+        PDD_AGENTIC_PROVIDER=google,anthropic,openai  ->  ["google", "anthropic", "openai"]
+        PDD_AGENTIC_PROVIDER=google                    ->  ["google"]
+        (unset)                                        ->  ["anthropic", "google", "openai"]
+    """
+    env_val = os.environ.get("PDD_AGENTIC_PROVIDER", "")
+    if env_val:
+        return [p.strip() for p in env_val.split(",") if p.strip()]
+    return _DEFAULT_PROVIDER_PREFERENCE
 
 # CLI command mapping for each provider
 CLI_COMMANDS: Dict[str, str] = {
@@ -87,6 +101,14 @@ GEMINI_PRICING_BY_FAMILY = {
 
 # Codex: Based on test expectations ($1.50/$6.00, Cached 25%)
 CODEX_PRICING = Pricing(1.50, 6.00, 0.25)
+
+# Anthropic Claude: Token-based fallback pricing when total_cost_usd is unavailable
+# Cache read is 90% discount, cache write is 25% premium over input
+ANTHROPIC_PRICING_BY_FAMILY = {
+    "opus": Pricing(15.0, 75.0, 0.1),       # Claude Opus 4
+    "sonnet": Pricing(3.0, 15.0, 0.1),      # Claude Sonnet 4
+    "haiku": Pricing(0.80, 4.0, 0.1),       # Claude Haiku 3.5
+}
 
 console = Console()
 
@@ -316,8 +338,11 @@ def get_available_agents() -> List[str]:
     has_gemini_cli = _find_cli_binary("gemini") is not None
     has_google_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
     has_vertex_auth = (
-        os.environ.get("GOOGLE_APPLICATION_CREDENTIALS") and
         os.environ.get("GOOGLE_GENAI_USE_VERTEXAI") == "true"
+        and (
+            os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+            or os.environ.get("GOOGLE_CLOUD_PROJECT")  # ADC on GCP VMs
+        )
     )
 
     if has_gemini_cli and (has_google_key or has_vertex_auth):
@@ -374,6 +399,57 @@ def _calculate_codex_cost(usage: Dict[str, Any]) -> float:
     
     return input_cost + cached_cost + output_cost
 
+
+def _calculate_anthropic_cost(data: Dict[str, Any]) -> float:
+    """Calculate cost from Claude Code JSON when total_cost_usd is missing.
+
+    Tries modelUsage per-model costUSD first, then falls back to token-based
+    estimation from the usage field.
+    """
+    # Try 1: Sum costUSD from modelUsage (most accurate)
+    model_usage = data.get("modelUsage", {})
+    if model_usage:
+        total = sum(
+            float(info.get("costUSD", 0.0))
+            for info in model_usage.values()
+            if isinstance(info, dict)
+        )
+        if total > 0:
+            return total
+
+    # Try 2: Token-based estimation from usage field
+    usage = data.get("usage", {})
+    if not usage:
+        return 0.0
+
+    input_tokens = usage.get("input_tokens", 0)
+    output_tokens = usage.get("output_tokens", 0)
+    cache_read = usage.get("cache_read_input_tokens", 0)
+    cache_creation = usage.get("cache_creation_input_tokens", 0)
+
+    # Determine pricing family from modelUsage keys or default to sonnet
+    family = "sonnet"  # default
+    for model_name in model_usage.keys():
+        name_lower = model_name.lower()
+        if "opus" in name_lower:
+            family = "opus"
+            break
+        elif "haiku" in name_lower:
+            family = "haiku"
+            break
+
+    pricing = ANTHROPIC_PRICING_BY_FAMILY.get(family, ANTHROPIC_PRICING_BY_FAMILY["sonnet"])
+
+    # new_input = total input minus cached reads (cache creation is billed at 1.25x input)
+    new_input = max(0, input_tokens - cache_read)
+    input_cost = (new_input / 1_000_000) * pricing.input_per_million
+    cache_read_cost = (cache_read / 1_000_000) * pricing.input_per_million * pricing.cached_input_multiplier
+    cache_write_cost = (cache_creation / 1_000_000) * pricing.input_per_million * 1.25
+    output_cost = (output_tokens / 1_000_000) * pricing.output_per_million
+
+    return input_cost + cache_read_cost + cache_write_cost + output_cost
+
+
 def run_agentic_task(
     instruction: str,
     cwd: Path,
@@ -404,7 +480,7 @@ def run_agentic_task(
     agents = get_available_agents()
 
     # Filter agents based on preference order
-    candidates = [p for p in AGENT_PROVIDER_PREFERENCE if p in agents]
+    candidates = [p for p in get_agent_provider_preference() if p in agents]
 
     if not candidates:
         msg = "No agent providers are available (check CLI installation and API keys)"
@@ -419,8 +495,19 @@ def run_agentic_task(
     prompt_filename = f".agentic_prompt_{uuid.uuid4().hex[:8]}.txt"
     prompt_path = cwd / prompt_filename
 
+    # Inject user feedback from GitHub issue comments (set by GitHub App executor)
+    user_feedback = os.environ.get("PDD_USER_FEEDBACK")
+    feedback_section = ""
+    if user_feedback:
+        feedback_section = (
+            "\n\n## User Feedback\n"
+            "The user provided the following feedback from a previous execution attempt. "
+            "Factor this into your response:\n"
+            f"{user_feedback}\n"
+        )
+
     full_instruction = (
-        f"{instruction}\n\n"
+        f"{instruction}{feedback_section}\n\n"
         f"Read the file {prompt_filename} for instructions. "
         "You have full file access to explore and modify files as needed."
     )
@@ -429,6 +516,8 @@ def run_agentic_task(
         # Write prompt to file
         with open(prompt_path, "w", encoding="utf-8") as f:
             f.write(full_instruction)
+
+        provider_errors: List[str] = []
 
         for provider in candidates:
             if verbose:
@@ -491,6 +580,7 @@ def run_agentic_task(
                     time.sleep(backoff)
 
             # All retries exhausted for this provider
+            provider_errors.append(f"{provider}: {last_output[:200]}")
             if verbose:
                 console.print(f"[yellow]Provider {provider} failed after {max_retries} attempts: {last_output}[/yellow]")
                 _log_agentic_interaction(
@@ -504,7 +594,7 @@ def run_agentic_task(
                     cwd=cwd
                 )
 
-        return False, "All agent providers failed", 0.0, ""
+        return False, f"All agent providers failed: {'; '.join(provider_errors)}", 0.0, ""
 
     finally:
         # Cleanup prompt file
@@ -521,7 +611,8 @@ def _run_with_provider(
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     verbose: bool = False,
     quiet: bool = False,
-    cli_path: Optional[str] = None
+    cli_path: Optional[str] = None,
+    label: str = "",
 ) -> Tuple[bool, str, float]:
     """
     Internal helper to run a specific provider's CLI.
@@ -535,6 +626,7 @@ def _run_with_provider(
         verbose: Verbose output
         quiet: Suppress output
         cli_path: Optional explicit CLI path (if None, uses _find_cli_binary)
+        label: Task label for heartbeat messages
     """
 
     # Prepare Environment
@@ -542,6 +634,7 @@ def _run_with_provider(
     env["TERM"] = "dumb"
     env["NO_COLOR"] = "1"
     env["CI"] = "1"
+    env.pop("PDD_OUTPUT_COST_PATH", None)
 
     # Get CLI binary name for this provider
     cli_name = CLI_COMMANDS.get(provider)
@@ -561,8 +654,10 @@ def _run_with_provider(
 
     # Construct Command using discovered cli_path (Issue #234 fix)
     if provider == "anthropic":
-        # Remove API key to force subscription auth if configured that way
-        env.pop("ANTHROPIC_API_KEY", None)
+        # In CI with OAuth token, keep it for authentication;
+        # otherwise remove API key to force subscription auth
+        if not env.get("CLAUDE_CODE_OAUTH_TOKEN"):
+            env.pop("ANTHROPIC_API_KEY", None)
         # Use -p - to pipe prompt as direct user message via stdin.
         # This prevents Claude from interpreting file-discovered instructions
         # as "automated bot workflow" and refusing to execute.
@@ -572,6 +667,10 @@ def _run_with_provider(
             "--dangerously-skip-permissions",
             "--output-format", "json",
         ]
+        # Allow model override via CLAUDE_MODEL env var (Issue #318)
+        claude_model = env.get("CLAUDE_MODEL")
+        if claude_model:
+            cmd.extend(["--model", claude_model])
     elif provider == "google":
         # Do NOT use -p flag for Gemini. The -p flag passes text literally,
         # so passing a file path gives Gemini the path string instead of content.
@@ -583,6 +682,10 @@ def _run_with_provider(
             "--yolo",
             "--output-format", "json"
         ]
+        # Allow model override via GEMINI_MODEL env var (mirrors CLAUDE_MODEL for anthropic)
+        gemini_model = env.get("GEMINI_MODEL")
+        if gemini_model:
+            cmd.extend(["--model", gemini_model])
     elif provider == "openai":
         cmd = [
             cli_path,
@@ -591,6 +694,10 @@ def _run_with_provider(
             "--json",
             str(prompt_path)
         ]
+        # Allow model override via CODEX_MODEL env var (mirrors CLAUDE_MODEL for anthropic)
+        codex_model = env.get("CODEX_MODEL")
+        if codex_model:
+            cmd.extend(["--model", codex_model])
     else:
         return False, f"Unknown provider {provider}", 0.0
 
@@ -655,8 +762,10 @@ def _parse_provider_json(provider: str, data: Dict[str, Any]) -> Tuple[bool, str
 
     try:
         if provider == "anthropic":
-            # Anthropic usually provides direct cost
+            # Use total_cost_usd if available, otherwise estimate from token usage
             cost = float(data.get("total_cost_usd", 0.0))
+            if cost == 0.0:
+                cost = _calculate_anthropic_cost(data)
             # Result might be in 'result' or 'response'
             output_text = data.get("result") or data.get("response") or ""
             
@@ -720,9 +829,10 @@ def _find_state_comment(
     try:
         # List comments
         cmd = [
-            "gh", "api", 
+            "gh", "api",
             f"repos/{repo_owner}/{repo_name}/issues/{issue_number}/comments",
-            "--method", "GET"
+            "--method", "GET",
+            "--paginate"
         ]
         result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
         if result.returncode != 0:
@@ -836,6 +946,67 @@ def _should_use_github_state(use_github_state: bool) -> bool:
         return False
     return True
 
+# --- Cached State Validation (Issue #467) ---
+
+def validate_cached_state(
+    last_completed_step: Union[int, float],
+    step_outputs: Dict[str, str],
+    step_order: Optional[List[Union[int, float]]] = None,
+    quiet: bool = False,
+) -> Union[int, float]:
+    """Validate cached state and return actual last successful step.
+
+    Scans step_outputs for entries with "FAILED:" prefix and corrects
+    last_completed_step to the actual last successfully completed step.
+    This prevents the "blind resume" bug (Issue #467) where the orchestrator
+    trusts a corrupted last_completed_step and skips failed steps.
+
+    Args:
+        last_completed_step: The stored last_completed_step value.
+        step_outputs: Dict mapping step number strings to output strings.
+        step_order: Ordered list of step numbers. If None, derived from
+            step_outputs keys sorted numerically.
+        quiet: If False, prints a warning when correction is applied.
+
+    Returns:
+        The corrected last_completed_step value.
+    """
+    if not step_outputs:
+        return last_completed_step
+
+    if step_order is None:
+        # Derive order from keys, sorted numerically
+        step_order = sorted(step_outputs.keys(), key=lambda k: float(k))
+    else:
+        # Convert to string keys for lookup
+        step_order = [str(s) if not isinstance(s, str) else s for s in step_order]
+
+    actual_last_success: Union[int, float] = 0
+    for sn in step_order:
+        key = str(sn)
+        output_val = step_outputs.get(key, "")
+        if not output_val:
+            break
+        if str(output_val).startswith("FAILED:"):
+            break
+        # Parse back to numeric for comparison
+        try:
+            actual_last_success = float(key) if "." in key else int(key)
+        except ValueError:
+            actual_last_success = 0
+
+    if actual_last_success < last_completed_step:
+        if not quiet:
+            console.print(
+                f"[yellow]State validation: correcting last_completed_step "
+                f"from {last_completed_step} to {actual_last_success} "
+                f"(found FAILED steps in cache)[/yellow]"
+            )
+        return actual_last_success
+
+    return last_completed_step
+
+
 # --- High Level State Wrappers ---
 
 def load_workflow_state(
@@ -937,3 +1108,68 @@ def clear_workflow_state(
     # Clear GitHub
     if _should_use_github_state(use_github_state):
         github_clear_state(repo_owner, repo_name, issue_number, workflow_type, cwd)
+
+
+def post_step_comment(
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    step_num: int,
+    total_steps: int,
+    description: str,
+    output: str,
+    cwd: Path,
+) -> bool:
+    """
+    Post a fallback comment on a GitHub issue when a step fails.
+
+    When the LLM agent fails (e.g., all providers unavailable), the agent never
+    runs and therefore never posts its own step comment. This function posts a
+    fallback comment so users can see which steps failed and why.
+
+    Args:
+        repo_owner: GitHub repository owner
+        repo_name: GitHub repository name
+        issue_number: Issue number to comment on
+        step_num: Current step number
+        total_steps: Total number of steps in the workflow
+        description: Human-readable step description
+        output: Error output / failure details
+        cwd: Working directory for subprocess
+
+    Returns:
+        True if comment was posted successfully, False otherwise
+    """
+    if not shutil.which("gh"):
+        return False
+
+    # Truncate output to avoid exceeding GitHub comment size limits
+    error_detail = output[:1000] if len(output) > 1000 else output
+
+    body = (
+        f"## Step {step_num}/{total_steps}: {description}\n\n"
+        f"**Status:** FAILED\n\n"
+        f"### Error Details\n"
+        f"```\n{error_detail}\n```\n\n"
+        f"---\n"
+        f"*Automated fallback comment — agent did not execute for this step.*"
+    )
+
+    try:
+        result = subprocess.run(
+            [
+                "gh", "issue", "comment", str(issue_number),
+                "--repo", f"{repo_owner}/{repo_name}",
+                "--body", body,
+            ],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            console.print(f"[yellow]Warning: Failed to post fallback comment for step {step_num}: {result.stderr}[/yellow]")
+            return False
+        return True
+    except Exception as e:
+        console.print(f"[yellow]Warning: Failed to post fallback comment for step {step_num}: {e}[/yellow]")
+        return False

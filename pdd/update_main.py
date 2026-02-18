@@ -67,6 +67,7 @@ def resolve_prompt_code_pair(code_file_path: str, quiet: bool = False, output_di
         pass
 
     # Determine the base prompts directory
+    context_config = {}
     if output_dir:
         # Use the custom output directory (absolute path)
         base_prompts_dir = os.path.abspath(output_dir)

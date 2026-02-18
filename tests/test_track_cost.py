@@ -6,6 +6,7 @@ import re
 from datetime import datetime
 from typing import Tuple
 from pdd.track_cost import track_cost
+from pdd.agentic_sync_runner import _parse_cost_from_csv
 
 # Sample command function to be decorated
 @track_cost
@@ -75,7 +76,26 @@ def mock_rprint():
         yield mocked_rprint
 
 
-def test_csv_row_appended_if_file_exists(mock_click_context, mock_open_file, mock_rprint):
+@pytest.fixture(autouse=True)
+def clear_pytest_env_for_cost_tests():
+    """
+    Patch os.environ.get so that PYTEST_CURRENT_TEST returns None inside
+    the track_cost decorator, allowing CSV-writing tests to exercise that
+    code path while running under pytest.
+    """
+    original_get = os.environ.get
+
+    def _patched_get(key, *args, **kwargs):
+        if key == 'PYTEST_CURRENT_TEST':
+            return None
+        return original_get(key, *args, **kwargs)
+
+    with mock.patch.object(os.environ, 'get', side_effect=_patched_get):
+        yield
+
+
+def test_csv_row_appended_if_file_exists_with_content(mock_click_context, mock_open_file, mock_rprint):
+    """When CSV file exists AND has content, header should NOT be written (append mode)."""
     mock_ctx = create_mock_context(
         'generate',
         {
@@ -87,7 +107,8 @@ def test_csv_row_appended_if_file_exists(mock_click_context, mock_open_file, moc
     )
     mock_click_context.return_value = mock_ctx
 
-    with mock.patch('os.path.isfile', return_value=True):
+    with mock.patch('os.path.isfile', return_value=True), \
+         mock.patch('os.path.getsize', return_value=100):
         result = sample_command(mock_ctx, '/path/to/prompt.txt', output='/path/to/output')
 
     mock_open_file.assert_called_once_with('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
@@ -95,6 +116,41 @@ def test_csv_row_appended_if_file_exists(mock_click_context, mock_open_file, moc
     handle = mock_open_file()
     assert not any('timestamp,model,command,cost,input_files,output_files' in call.args[0] for call in handle.write.call_args_list)
     row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,gpt-3,generate,25.5,/path/to/prompt.txt,/path/to/output\r\n')
+    assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
+
+    mock_rprint.assert_not_called()
+    assert result == ('/path/to/output', 25.5, 'gpt-3')
+
+
+def test_csv_header_written_if_file_exists_but_empty(mock_click_context, mock_open_file, mock_rprint):
+    """
+    Regression test: when the CSV file exists but is empty (e.g. created by
+    NamedTemporaryFile in agentic_sync_runner), the header MUST be written.
+    Without the header, DictReader uses the first data row as column names,
+    causing _parse_cost_from_csv to return 0.0 for all modules.
+    """
+    mock_ctx = create_mock_context(
+        'sync',
+        {
+            'prompt_file': '/path/to/prompt.txt',
+            'output': '/path/to/output'
+        },
+        obj={'output_cost': None}  # Not set via CLI — uses PDD_OUTPUT_COST_PATH env
+    )
+    mock_click_context.return_value = mock_ctx
+
+    with mock.patch('os.path.isfile', return_value=True), \
+         mock.patch('os.path.getsize', return_value=0), \
+         mock.patch.dict(os.environ, {'PDD_OUTPUT_COST_PATH': '/tmp/cost_abc.csv'}):
+        result = sample_command(mock_ctx, '/path/to/prompt.txt', output='/path/to/output')
+
+    mock_open_file.assert_called_once_with('/tmp/cost_abc.csv', 'a', newline='', encoding='utf-8')
+
+    handle = mock_open_file()
+    # Header MUST be written when file is empty
+    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files\r\n')
+    # Data row should follow (command name is 'sync' from mock context)
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,gpt-3,sync,25.5,/path/to/prompt.txt,/path/to/output\r\n')
     assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     mock_rprint.assert_not_called()
@@ -418,7 +474,8 @@ def test_exception_in_logging(mock_click_context, mock_open_file, mock_rprint):
     # Configure the open mock to raise an exception when called
     mock_open_file.side_effect = IOError("Failed to open file")
 
-    with mock.patch('os.path.isfile', return_value=True):
+    with mock.patch('os.path.isfile', return_value=True), \
+         mock.patch('os.path.getsize', return_value=100):
         result = sample_command(mock_ctx, '/path/to/prompt.txt')
 
     # Ensure that open was attempted
@@ -691,3 +748,77 @@ def test_files_tracked_on_command_failure(mock_click_context, mock_rprint, tmp_p
     # No tracking errors should be printed (the exception handling should be clean)
     # Note: rprint might be called for the actual exception, but not for tracking errors
     # We just want to make sure the test doesn't crash and files are tracked
+
+
+def test_csv_write_skipped_when_pytest_current_test_set(mock_click_context, mock_rprint):
+    """CSV writing should be skipped when PYTEST_CURRENT_TEST is set."""
+    mock_ctx = create_mock_context(
+        'generate',
+        {
+            'prompt_file': '/path/to/prompt',
+            'output': '/path/to/output',
+        },
+        obj={'output_cost': '/path/to/cost.csv'},
+    )
+
+    # Override the autouse fixture by restoring real os.environ.get,
+    # then set PYTEST_CURRENT_TEST so the guard skips CSV writing.
+    real_get = os.environ.__class__.get
+
+    with mock.patch.object(os.environ, 'get', side_effect=lambda k, *a, **kw: real_get(os.environ, k, *a, **kw)):
+        with mock.patch.dict(os.environ, {'PYTEST_CURRENT_TEST': 'tests/test_foo.py::test_bar (call)'}):
+            with mock.patch('builtins.open', mock_open()) as mocked_file:
+                sample_command(mock_ctx, prompt_file='/path/to/prompt', output='/path/to/output')
+                mocked_file.assert_not_called()
+
+
+def test_empty_tempfile_roundtrip_with_parse_cost(tmp_path):
+    """
+    End-to-end regression test: simulates the agentic_sync_runner flow where
+    NamedTemporaryFile creates an empty CSV, track_cost writes to it, and
+    _parse_cost_from_csv reads it back.
+
+    Before the fix, the empty pre-created file caused track_cost to skip the
+    CSV header. DictReader then misinterpreted the first data row as the header,
+    causing _parse_cost_from_csv to return 0.0.
+    """
+    import tempfile
+    import csv
+
+    # Simulate what agentic_sync_runner does: create an empty temp file
+    cost_file = tempfile.NamedTemporaryFile(
+        suffix=".csv", delete=False, dir=str(tmp_path)
+    )
+    cost_file.close()
+
+    # Verify file exists but is empty (precondition)
+    assert os.path.isfile(cost_file.name)
+    assert os.path.getsize(cost_file.name) == 0
+
+    # Simulate what track_cost does when writing cost
+    fieldnames = ['timestamp', 'model', 'command', 'cost', 'input_files', 'output_files']
+    file_has_content = os.path.isfile(cost_file.name) and os.path.getsize(cost_file.name) > 0
+
+    with open(cost_file.name, 'a', newline='', encoding='utf-8') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        if not file_has_content:
+            writer.writeheader()
+        writer.writerow({
+            'timestamp': '2026-02-15T15:29:05.893',
+            'model': 'claude-3',
+            'command': 'sync',
+            'cost': 0.38,
+            'input_files': 'test.prompt',
+            'output_files': 'test.py',
+        })
+
+    # Parse cost like _parse_cost_from_csv does
+    cost = _parse_cost_from_csv(cost_file.name)
+
+    assert cost == pytest.approx(0.38), (
+        f"Expected cost 0.38 but got {cost}. "
+        "If 0.0, the CSV header was likely missing (empty file bug)."
+    )
+
+    # Clean up
+    os.unlink(cost_file.name)

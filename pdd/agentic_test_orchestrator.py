@@ -20,6 +20,7 @@ from pdd.agentic_common import (
     load_workflow_state,
     save_workflow_state,
     clear_workflow_state,
+    validate_cached_state,
     DEFAULT_MAX_RETRIES,
 )
 from pdd.load_prompt_template import load_prompt_template
@@ -153,18 +154,28 @@ def _setup_worktree(cwd: Path, issue_number: int, quiet: bool) -> Tuple[Optional
             shutil.rmtree(worktree_path)
 
     # Clean up branch if it exists
-    if _branch_exists(cwd, branch_name):
-        _delete_branch(cwd, branch_name)
+    branch_exists = _branch_exists(cwd, branch_name)
+    if branch_exists:
+        success, _err = _delete_branch(cwd, branch_name)
+        if success:
+            branch_exists = False
 
     # Create worktree
     try:
         worktree_path.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(
-            ["git", "worktree", "add", "-b", branch_name, str(worktree_path), "HEAD"],
-            cwd=git_root,
-            capture_output=True,
-            check=True
-        )
+        if branch_exists:
+            # Branch couldn't be deleted (e.g. currently checked out) — use existing
+            # --force required: git refuses to checkout a branch already in use
+            subprocess.run(
+                ["git", "worktree", "add", "--force", str(worktree_path), branch_name],
+                cwd=git_root, capture_output=True, check=True
+            )
+        else:
+            # Branch was deleted or didn't exist — create new
+            subprocess.run(
+                ["git", "worktree", "add", "-b", branch_name, str(worktree_path), "HEAD"],
+                cwd=git_root, capture_output=True, check=True
+            )
         if not quiet:
             console.print(f"[blue]Working in worktree: {worktree_path}[/blue]")
         return worktree_path, None
@@ -251,8 +262,14 @@ def run_agentic_test_orchestrator(
         github_comment_id = loaded_gh_id
         worktree_path_str = state.get("worktree_path")
         worktree_path = Path(worktree_path_str) if worktree_path_str else None
+
+        # Issue #467: Validate cached state — correct last_completed_step
+        # if any cached step outputs have "FAILED:" prefix.
+        last_completed_step = validate_cached_state(
+            last_completed_step, step_outputs, quiet=quiet
+        )
     else:
-        state = {"step_outputs": {}}
+        state = {"step_outputs": {}, "last_completed_step": 0}
         last_completed_step = 0
         step_outputs = state["step_outputs"]
         total_cost = 0.0
@@ -269,7 +286,7 @@ def run_agentic_test_orchestrator(
         "issue_author": issue_author,
         "issue_title": issue_title,
     }
-    
+
     # Populate context with previous step outputs
     for s_num, s_out in step_outputs.items():
         context[f"step{s_num}_output"] = s_out

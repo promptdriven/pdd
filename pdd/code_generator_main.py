@@ -367,13 +367,23 @@ def code_generator_main(
         
         if test_files_to_include:
             prompt_content += "\n\n<unit_test_content>\n"
-            prompt_content += "The following is the unit test content that the generated code must pass:\n"
+            prompt_content += (
+                "Study these test files carefully before generating code. "
+                "Pay special attention to:\n"
+                "- What specific types and data structures the assertions reveal "
+                "(e.g., if a test asserts `x == (1.0, 2.0)`, the value is a tuple, not a dict)\n"
+                "- What mock patterns show about the real interfaces being called "
+                "(e.g., `mock_config.get_jwt_token.return_value` reveals the auth API)\n"
+                "- What import paths are used for internal modules\n"
+                "- What fixture setup reveals about expected data formats "
+                "(e.g., DataFrame column names, namedtuple fields)\n\n"
+                "The generated code must pass these tests, but also match the "
+                "implementation patterns they imply.\n"
+            )
             for tf in test_files_to_include:
                 try:
                     with open(tf, 'r', encoding='utf-8') as f:
                         content = f.read()
-                    # If multiple files, label them? Or just concat?
-                    # Using code block with file path comment is safer for context.
                     prompt_content += f"\nFile: {pathlib.Path(tf).name}\n```python\n{content}\n```\n"
                 except Exception as e:
                     console.print(f"[yellow]Warning: Could not read unit test file {tf}: {e}[/yellow]")
@@ -792,7 +802,7 @@ def code_generator_main(
                     current_execution_is_local = True
 
                 if jwt_token and not current_execution_is_local:
-                    payload = {"promptContent": processed_prompt_for_cloud, "language": language, "strength": strength, "temperature": temperature, "verbose": verbose}
+                    payload = {"promptContent": processed_prompt_for_cloud, "searchInput": prompt_content, "language": language, "strength": strength, "temperature": temperature, "verbose": verbose}
                     headers = {"Authorization": f"Bearer {jwt_token}", "Content-Type": "application/json"}
                     cloud_url = CloudConfig.get_endpoint_url("generateCode")
                     try:

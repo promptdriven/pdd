@@ -9,7 +9,7 @@ from unittest.mock import patch, MagicMock, Mock, call, ANY
 import os
 import click
 
-from pdd.sync_orchestration import sync_orchestration, _execute_tests_and_create_run_report
+from pdd.sync_orchestration import sync_orchestration, _execute_tests_and_create_run_report, _try_auto_fix_env_var_error
 from pdd.sync_determine_operation import SyncDecision, get_pdd_file_paths
 
 # Test Plan:
@@ -1311,9 +1311,9 @@ async def test_tui_request_confirmation_completes_without_hanging():
     import threading
     import asyncio
     from unittest.mock import MagicMock, patch, AsyncMock
-
+    
+    from textual.widgets import RichLog, Static # Added import
     from pdd.sync_tui import SyncApp
-
     # Create a minimal SyncApp instance for testing
     app = SyncApp(
         basename="test",
@@ -1331,6 +1331,10 @@ async def test_tui_request_confirmation_completes_without_hanging():
         tests_color_ref=["blue"],
         stop_event=threading.Event(),
     )
+
+    # Mock Textual UI components to avoid full rendering and focus on resize logic
+    app.log_widget = MagicMock(spec=RichLog)
+    app.animation_view = MagicMock(spec=Static)
 
     # Use Textual's async test runner to properly run the app
     async with app.run_test() as pilot:
@@ -2358,6 +2362,27 @@ def test_sync_uses_merge_when_test_file_exists(orchestration_fixture):
 # =============================================================================
 # Tests for strength/temperature propagation to sub-commands
 # =============================================================================
+
+def test_all_synced_decision_completes(orchestration_fixture):
+    """Verify that an all_synced decision completes the workflow."""
+    mocks = orchestration_fixture
+    mock_determine = mocks['sync_determine_operation']
+
+    # Return a final all_synced decision instead of exhausting an iterator.
+    mock_determine.side_effect = [
+        SyncDecision(
+            operation="all_synced",
+            reason="Test: sequence complete",
+            confidence=1.0,
+            estimated_cost=0.0,
+            details={"decision_type": "mock"},
+        )
+    ]
+
+    result = sync_orchestration(basename="calculator", language="python")
+
+    assert result['success'] is True
+
 
 class TestStrengthTemperaturePropagation:
     """Bug fix tests: sync_orchestration should pass strength/temperature to sub-commands."""
@@ -4695,3 +4720,288 @@ def test_auto_fix_success_saves_complete_metadata(orchestration_fixture):
     assert result['operations_completed'] == ['generate', 'example', 'crash'], (
         "Expected all three operations to complete"
     )
+
+
+# --- CI auth hang regression tests (GitHub Actions #462) ---
+
+def test_fix_operation_passes_auto_submit_false_when_local(orchestration_fixture, tmp_path):
+    """
+    Regression test for CI auth hang: when local=True, sync_orchestration must
+    pass auto_submit=False to fix_main. Otherwise fix_main triggers the GitHub
+    device code flow which hangs in CI for ~15 minutes.
+    """
+    import subprocess
+
+    # Setup: test file exists so fix operation can proceed
+    test_file = tmp_path / 'tests' / 'test_calculator.py'
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    test_file.write_text('def test_fail(): assert False')
+
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_determine.side_effect = [
+        SyncDecision(operation='fix', reason='Tests failing'),
+        SyncDecision(operation='all_synced', reason='Done'),
+    ]
+
+    # Mock subprocess for the test execution phase
+    mock_result = MagicMock()
+    mock_result.stdout = "FAILED test_calculator.py::test_fail\n1 failed"
+    mock_result.stderr = ""
+    mock_result.returncode = 1
+
+    with patch('pdd.sync_orchestration.subprocess.run', return_value=mock_result), \
+         patch('pdd.sync_orchestration.detect_host_python_executable', return_value='python'), \
+         patch('pdd.get_test_command.get_test_command_for_file', return_value='pytest'):
+        result = sync_orchestration(basename="calculator", language="python", local=True)
+
+    fix_main_mock = orchestration_fixture['fix_main']
+    assert fix_main_mock.called, "fix_main should have been called"
+
+    call_kwargs = fix_main_mock.call_args[1] if fix_main_mock.call_args[1] else {}
+    assert 'auto_submit' in call_kwargs, \
+        "fix_main call must include auto_submit keyword argument"
+    assert call_kwargs['auto_submit'] is False, \
+        "auto_submit must be False when local=True (prevents CI auth hang)"
+
+
+def test_fix_operation_passes_auto_submit_true_when_not_local(orchestration_fixture, tmp_path):
+    """
+    Complementary test: when local=False (default), auto_submit should be True
+    so that successful fixes are uploaded to PDD cloud.
+    """
+    import subprocess
+
+    test_file = tmp_path / 'tests' / 'test_calculator.py'
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    test_file.write_text('def test_fail(): assert False')
+
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_determine.side_effect = [
+        SyncDecision(operation='fix', reason='Tests failing'),
+        SyncDecision(operation='all_synced', reason='Done'),
+    ]
+
+    mock_result = MagicMock()
+    mock_result.stdout = "FAILED test_calculator.py::test_fail\n1 failed"
+    mock_result.stderr = ""
+    mock_result.returncode = 1
+
+    with patch('pdd.sync_orchestration.subprocess.run', return_value=mock_result), \
+         patch('pdd.sync_orchestration.detect_host_python_executable', return_value='python'), \
+         patch('pdd.get_test_command.get_test_command_for_file', return_value='pytest'):
+        result = sync_orchestration(basename="calculator", language="python", local=False)
+
+    fix_main_mock = orchestration_fixture['fix_main']
+    assert fix_main_mock.called, "fix_main should have been called"
+
+    call_kwargs = fix_main_mock.call_args[1] if fix_main_mock.call_args[1] else {}
+    assert 'auto_submit' in call_kwargs, \
+        "fix_main call must include auto_submit keyword argument"
+    assert call_kwargs['auto_submit'] is True, \
+        "auto_submit must be True when local=False (uploads fix to PDD cloud)"
+
+
+def test_fix_main_call_uses_local_flag_for_auto_submit():
+    """
+    Source-level regression test: the fix_main() call in sync_orchestration.py
+    must use 'auto_submit=(not local)' instead of 'auto_submit=True'.
+    """
+    import inspect
+    from pdd import sync_orchestration as sync_mod
+
+    source = inspect.getsource(sync_mod.sync_orchestration)
+
+    # The old buggy pattern that caused the CI hang
+    assert 'auto_submit=True' not in source, \
+        "sync_orchestration must NOT hardcode auto_submit=True in fix_main call " \
+        "(causes CI auth hang when local=True)"
+
+    # The correct pattern
+    assert 'auto_submit=(not local)' in source, \
+        "sync_orchestration must pass auto_submit=(not local) to fix_main"
+
+
+# --- Auto-fix Environment Variable Error Tests ---
+
+class TestAutoFixEnvVarError:
+    """Tests for _try_auto_fix_env_var_error() function."""
+
+    def test_detects_key_error_pattern(self, tmp_path):
+        """KeyError: 'BREVO_API_KEY' is detected and the example is patched."""
+        example_file = tmp_path / "example.py"
+        example_file.write_text("import os\nprint(os.environ['BREVO_API_KEY'])\n")
+
+        error_output = "Traceback (most recent call last):\n  File \"example.py\", line 2\nKeyError: 'BREVO_API_KEY'"
+
+        fixed, msg = _try_auto_fix_env_var_error(error_output, example_file)
+
+        assert fixed is True
+        assert "BREVO_API_KEY" in msg
+        content = example_file.read_text()
+        assert 'os.environ.get("BREVO_API_KEY")' in content
+        assert 'sys.exit(0)' in content
+
+    def test_detects_set_the_var_pattern(self, tmp_path):
+        """'Set the X environment variable' pattern is detected."""
+        example_file = tmp_path / "example.py"
+        example_file.write_text("import os\napi_key = os.environ['STRIPE_SECRET_KEY']\n")
+
+        error_output = "ERROR: Set the STRIPE_SECRET_KEY environment variable first."
+
+        fixed, msg = _try_auto_fix_env_var_error(error_output, example_file)
+
+        assert fixed is True
+        assert "STRIPE_SECRET_KEY" in msg
+        content = example_file.read_text()
+        assert 'os.environ.get("STRIPE_SECRET_KEY")' in content
+        assert 'sys.exit(0)' in content
+
+    def test_no_env_var_error_returns_false(self, tmp_path):
+        """Non-env-var errors are ignored."""
+        example_file = tmp_path / "example.py"
+        example_file.write_text("print('hello')\n")
+
+        error_output = "TypeError: unsupported operand type(s) for +: 'int' and 'str'"
+
+        fixed, msg = _try_auto_fix_env_var_error(error_output, example_file)
+
+        assert fixed is False
+        assert "No environment variable error detected" in msg
+
+    def test_pdd_path_is_skipped(self, tmp_path):
+        """PDD_PATH errors are not auto-fixed (it's a runtime variable)."""
+        example_file = tmp_path / "example.py"
+        example_file.write_text("import os\npath = os.environ['PDD_PATH']\n")
+
+        error_output = "KeyError: 'PDD_PATH'"
+
+        fixed, msg = _try_auto_fix_env_var_error(error_output, example_file)
+
+        assert fixed is False
+        assert "PDD_PATH" in msg
+
+    def test_fixed_example_exits_with_zero(self, tmp_path):
+        """Guard uses sys.exit(0), not sys.exit(1)."""
+        example_file = tmp_path / "example.py"
+        example_file.write_text("import os\nkey = os.environ['MY_API_KEY']\nprint(key)\n")
+
+        error_output = "KeyError: 'MY_API_KEY'"
+
+        _try_auto_fix_env_var_error(error_output, example_file)
+
+        content = example_file.read_text()
+        assert 'sys.exit(0)' in content
+        assert 'sys.exit(1)' not in content
+
+    def test_replaces_bracket_access(self, tmp_path):
+        """os.environ["VAR"] is replaced with os.environ.get("VAR")."""
+        example_file = tmp_path / "example.py"
+        example_file.write_text('import os\napi_key = os.environ["OPENAI_API_KEY"]\nprint(api_key)\n')
+
+        error_output = "KeyError: 'OPENAI_API_KEY'"
+
+        _try_auto_fix_env_var_error(error_output, example_file)
+
+        content = example_file.read_text()
+        assert 'os.environ["OPENAI_API_KEY"]' not in content
+        assert 'os.environ.get("OPENAI_API_KEY")' in content
+
+    def test_detects_value_error_with_key_suffix(self, tmp_path):
+        """ValueError mentioning a VAR_KEY pattern is detected."""
+        example_file = tmp_path / "example.py"
+        example_file.write_text("import os\nprint('hello')\n")
+
+        error_output = "ValueError: GITHUB_API_KEY is required but not set"
+
+        fixed, msg = _try_auto_fix_env_var_error(error_output, example_file)
+
+        assert fixed is True
+        assert "GITHUB_API_KEY" in msg
+
+    def test_guard_inserted_after_imports(self, tmp_path):
+        """Guard is inserted after imports but before code."""
+        example_file = tmp_path / "example.py"
+        example_file.write_text(
+            "import os\n"
+            "from pathlib import Path\n"
+            "\n"
+            "api_key = os.environ['MY_TOKEN']\n"
+            "print(api_key)\n"
+        )
+
+        error_output = "KeyError: 'MY_TOKEN'"
+
+        _try_auto_fix_env_var_error(error_output, example_file)
+
+        content = example_file.read_text()
+        lines = content.split('\n')
+        # Find where the guard is
+        guard_line = next(i for i, l in enumerate(lines) if 'os.environ.get("MY_TOKEN")' in l)
+        # Find where "from pathlib" is
+        pathlib_line = next(i for i, l in enumerate(lines) if 'from pathlib' in l)
+        assert guard_line > pathlib_line, "Guard should be after imports"
+
+
+def test_auto_fix_env_var_integration_skips_crash_main(orchestration_fixture):
+    """
+    Integration test: when env var auto-fix succeeds in crash phase,
+    crash_main() is NOT called (saving expensive LLM costs).
+
+    Uses the orchestration_fixture pattern from test_auto_fix_success_saves_complete_metadata.
+    """
+    from pathlib import Path
+
+    code_file = Path('src') / 'calculator.py'
+    code_file.write_text("# Mock code file\ndef calculator():\n    pass\n")
+
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_save_fp = orchestration_fixture['_save_fingerprint_atomic']
+
+    mock_determine.side_effect = [
+        SyncDecision(operation='generate', reason='New unit'),
+        SyncDecision(operation='example', reason='Code exists, example missing'),
+        SyncDecision(operation='crash', reason='Example crashes'),
+        SyncDecision(operation='all_synced', reason='All operations complete'),
+    ]
+
+    with patch('pdd.sync_orchestration._run_example_with_error_detection') as mock_run_example, \
+         patch('pdd.sync_orchestration._try_auto_fix_import_error') as mock_import_fix, \
+         patch('pdd.sync_orchestration._try_auto_fix_env_var_error') as mock_env_fix, \
+         patch('pdd.sync_orchestration._save_run_report_atomic') as mock_save_report:
+
+        # First call: example crashes with env var error
+        # Second call: retry after env var auto-fix succeeds
+        mock_run_example.side_effect = [
+            (1, "", "KeyError: 'BREVO_API_KEY'"),  # Initial crash
+            (0, "Skipping example - BREVO_API_KEY not set", ""),  # After auto-fix
+        ]
+
+        # Import fix returns False (not an import error)
+        mock_import_fix.return_value = (False, "No import error detected")
+
+        # Env var fix returns True
+        mock_env_fix.return_value = (True, "Added env var guard for BREVO_API_KEY with sys.exit(0)")
+
+        result = sync_orchestration(basename="calculator", language="python")
+
+    # crash_main should NOT have been called
+    crash_main_mock = orchestration_fixture['crash_main']
+    assert not crash_main_mock.called, \
+        "crash_main should NOT be called when env var auto-fix succeeds"
+
+    # Verify operations_completed includes 'crash'
+    assert 'crash' in result['operations_completed'], \
+        "Auto-fix success should track 'crash' in operations_completed"
+
+    # Verify fingerprint was saved
+    fingerprint_calls = [
+        c for c in mock_save_fp.call_args_list
+        if len(c[0]) >= 3 and c[0][2] == 'crash'
+    ]
+    assert len(fingerprint_calls) > 0, \
+        "Fingerprint should be saved for crash operation after env var auto-fix"
+
+    # Verify it was saved with auto-fix metadata
+    call_args = fingerprint_calls[0][0]
+    assert call_args[4] == 0.0, "Auto-fix should have cost=0.0"
+    assert call_args[5] == 'auto-fix', "Auto-fix should use model='auto-fix'"

@@ -54,23 +54,27 @@ def mock_dependencies(temp_cwd):
          patch("pdd.agentic_change_orchestrator.save_workflow_state") as mock_save_state, \
          patch("pdd.agentic_change_orchestrator.clear_workflow_state") as mock_clear_state, \
          patch("pdd.agentic_change_orchestrator.subprocess.run") as mock_subprocess, \
+         patch("pdd.agentic_change_orchestrator.post_step_comment") as mock_post_comment, \
          patch("pdd.agentic_change_orchestrator.console") as mock_console:
-        
+
         # Default mock behaviors
         mock_run.return_value = (True, "Default Agent Output", 0.1, "gpt-4")
-        
+
         mock_template = MagicMock()
         mock_template.format.return_value = "Formatted Prompt"
         mock_template_loader.return_value = mock_template
-        
+
         # Default state: No existing state
         mock_load_state.return_value = (None, None)
-        
+
         # Mock git rev-parse to return the temp_cwd as root
         # This ensures mkdir operations on the root succeed
         mock_subprocess.return_value.stdout = str(temp_cwd)
         mock_subprocess.return_value.returncode = 0
-        
+
+        # Default: post_step_comment succeeds
+        mock_post_comment.return_value = True
+
         yield {
             "run": mock_run,
             "template_loader": mock_template_loader,
@@ -78,6 +82,7 @@ def mock_dependencies(temp_cwd):
             "save_state": mock_save_state,
             "clear_state": mock_clear_state,
             "subprocess": mock_subprocess,
+            "post_comment": mock_post_comment,
             "console": mock_console
         }
 
@@ -1796,7 +1801,9 @@ def test_step9_output_saved_on_failure(mock_dependencies, temp_cwd):
         if len(args) >= 4:
             state_arg = args[3]
             if isinstance(state_arg, dict) and "step_outputs" in state_arg:
-                if state_arg["step_outputs"].get("9") == step9_output_text:
+                step9_val = state_arg["step_outputs"].get("9", "")
+                # Issue #467: failed step outputs now have "FAILED:" prefix
+                if step9_val == step9_output_text or step9_val == f"FAILED: {step9_output_text}":
                     found_step9_output = True
                     break
     assert found_step9_output, "Step 9 output should be saved to state on failure"
@@ -2155,3 +2162,442 @@ Issue URL: {issue_url}
 
     # Should not fail due to format key errors
     assert "Context missing key for step 4" not in msg, f"Curly brace escaping failed: {msg}"
+
+
+# -----------------------------------------------------------------------------
+# Issue #445: Worktree restoration fails when branch is checked out
+# -----------------------------------------------------------------------------
+
+def test_setup_worktree_branch_checked_out_fails_without_fallback(tmp_path):
+    """
+    Test that reproduces issue #445: _setup_worktree() fails when trying to
+    create a worktree for a branch that already exists and is currently checked out.
+
+    This test demonstrates the bug where:
+    1. _delete_branch() returns (False, error) because the branch is checked out
+    2. The return value is ignored (line 168 in agentic_change_orchestrator.py)
+    3. git worktree add -b fails with exit code 255 because the branch still exists
+
+    This test uses real git operations to reproduce the exact failure scenario.
+
+    Expected behavior BEFORE fix: Test FAILS (demonstrates the bug)
+    Expected behavior AFTER fix: Test PASSES (worktree created using existing branch)
+    """
+    # Import the function under test
+    from pdd.agentic_change_orchestrator import _setup_worktree
+
+    # Create a real git repository
+    git_repo = tmp_path / "test_repo"
+    git_repo.mkdir()
+
+    # Initialize git repo
+    subprocess.run(["git", "init"], cwd=git_repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=git_repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=git_repo, check=True, capture_output=True)
+
+    # Create initial commit (required for git worktree operations)
+    (git_repo / "README.md").write_text("Initial commit")
+    subprocess.run(["git", "add", "README.md"], cwd=git_repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=git_repo, check=True, capture_output=True)
+
+    # Create the branch that will cause the bug
+    issue_number = 445
+    branch_name = f"change/issue-{issue_number}"
+    subprocess.run(["git", "checkout", "-b", branch_name], cwd=git_repo, check=True, capture_output=True)
+
+    # Verify we're on the branch (this is the critical condition for the bug)
+    result = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=git_repo,
+        capture_output=True,
+        text=True,
+        check=True
+    )
+    current_branch = result.stdout.strip()
+    assert current_branch == branch_name, f"Expected to be on {branch_name}, but on {current_branch}"
+
+    # Call _setup_worktree() - this should fail with the current buggy code
+    # because:
+    # 1. Branch exists and is checked out
+    # 2. _delete_branch() will fail (can't delete checked-out branch)
+    # 3. Return value from _delete_branch() is ignored (bug on line 168)
+    # 4. git worktree add -b will fail with exit code 255 (branch exists)
+    worktree_path, error = _setup_worktree(git_repo, issue_number, quiet=True)
+
+    # BEFORE FIX: This assertion will FAIL because worktree_path is None and error is set
+    # The error message will be: "Git worktree creation failed: Command ... returned non-zero exit status 255"
+    #
+    # AFTER FIX: This assertion will PASS because:
+    # - _setup_worktree() will detect that _delete_branch() returned (False, ...)
+    # - It will fall back to: git worktree add <path> change/issue-445 (without -b)
+    # - The worktree will be created successfully using the existing branch
+    assert worktree_path is not None, f"Expected worktree to be created, but got error: {error}"
+    assert error is None, f"Expected no error, but got: {error}"
+
+    # Verify the worktree was actually created
+    assert worktree_path.exists(), f"Worktree path {worktree_path} should exist"
+    assert (worktree_path / ".git").exists(), f"Worktree should have .git file at {worktree_path}"
+
+    # Verify the worktree is on the correct branch
+    result = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=worktree_path,
+        capture_output=True,
+        text=True,
+        check=True
+    )
+    worktree_branch = result.stdout.strip()
+    assert worktree_branch == branch_name, f"Worktree should be on {branch_name}, but is on {worktree_branch}"
+
+
+# -----------------------------------------------------------------------------
+# Issue #289: Fallback comments + consecutive failure abort + conditional state clearing
+# -----------------------------------------------------------------------------
+
+def test_fallback_comment_on_step_failure(mock_dependencies, temp_cwd):
+    """
+    When a step fails, post_step_comment is called for the failed step.
+    When a step succeeds, post_step_comment is NOT called.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_post_comment = mocks["post_comment"]
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step1":
+            return (False, "All agent providers failed: anthropic: Exit code 1", 0.0, "")
+        if label == "step9":
+            return (True, "FILES_CREATED: new.py", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "Arch updated", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/1", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, cost, model, files = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="content",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=289,
+        issue_author="me",
+        issue_title="Fallback comment test",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    # post_step_comment should be called exactly once (for step 1 failure)
+    assert mock_post_comment.call_count == 1
+    call_kwargs = mock_post_comment.call_args
+    # Verify step_num=1 was passed
+    assert call_kwargs[1].get("step_num", call_kwargs[0][3] if len(call_kwargs[0]) > 3 else None) == 1 or \
+           1 in call_kwargs[0]
+
+
+def test_abort_after_consecutive_provider_failures(mock_dependencies, temp_cwd):
+    """
+    When 3 consecutive steps fail with 'All agent providers failed',
+    the workflow should abort early.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_post_comment = mocks["post_comment"]
+
+    # All steps fail with provider failure
+    mock_run.return_value = (False, "All agent providers failed: anthropic: rate limited", 0.0, "")
+
+    success, msg, cost, model, files = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="content",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=289,
+        issue_author="me",
+        issue_title="Abort test",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    assert success is False
+    assert "Aborting" in msg
+    assert "consecutive" in msg.lower() or "3" in msg
+    # Should have been called 3 times (once per failed step before abort)
+    assert mock_post_comment.call_count == 3
+    # Only 3 steps should have been attempted
+    assert mock_run.call_count == 3
+
+
+def test_consecutive_failure_counter_resets(mock_dependencies, temp_cwd):
+    """
+    The consecutive provider failure counter resets when a step succeeds.
+    Steps 1-2 fail, step 3 succeeds, steps 4-5 fail — should NOT abort.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_post_comment = mocks["post_comment"]
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label in ("step1", "step2"):
+            return (False, "All agent providers failed: anthropic: rate limited", 0.0, "")
+        if label in ("step4", "step5"):
+            return (False, "All agent providers failed: anthropic: timeout", 0.0, "")
+        if label == "step9":
+            return (True, "FILES_CREATED: new.py", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "Arch updated", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/1", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, cost, model, files = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="content",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=289,
+        issue_author="me",
+        issue_title="Counter reset test",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    # Should NOT have aborted (counter reset at step 3 success)
+    assert "Aborting" not in msg
+    # post_step_comment called for steps 1, 2, 4, 5 = 4 times
+    assert mock_post_comment.call_count == 4
+
+
+def test_state_preserved_when_steps_failed(mock_dependencies, temp_cwd):
+    """
+    When some steps failed but the workflow still completes,
+    clear_workflow_state should NOT be called (to preserve debugging info).
+
+    Steps 1 and 2 fail (provider failures), step 3 succeeds (resets counter),
+    remaining steps succeed. The workflow completes but state is preserved
+    because step_outputs contain FAILED: entries.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_clear_state = mocks["clear_state"]
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        # Steps 1-2 fail (below the 3-consecutive abort threshold)
+        if label in ("step1", "step2"):
+            return (False, "All agent providers failed: anthropic: error", 0.0, "")
+        if label == "step9":
+            return (True, "FILES_CREATED: new.py", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "Arch updated", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/1", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, cost, model, files = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="content",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=289,
+        issue_author="me",
+        issue_title="State preserve test",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    assert success is True
+    # State should NOT be cleared because some steps have FAILED: prefix
+    mock_clear_state.assert_not_called()
+
+
+# ============================================================================
+# Issue #467: Blind Resume + step_num - 1 fix
+# ============================================================================
+
+
+def test_resume_from_all_failed_state_reruns_from_step_1(mock_dependencies, temp_cwd):
+    """
+    Issue #467: When resuming from a state where all steps failed,
+    the workflow should re-run from step 1, not skip past them.
+    """
+    mocks = mock_dependencies
+
+    corrupted_state = {
+        "last_completed_step": 6,
+        "step_outputs": {
+            "1": "FAILED: All agent providers failed",
+            "2": "FAILED: All agent providers failed",
+            "3": "FAILED: All agent providers failed",
+            "4": "FAILED: All agent providers failed",
+            "5": "FAILED: All agent providers failed",
+            "6": "FAILED: All agent providers failed",
+        },
+        "total_cost": 0.0,
+        "model_used": "unknown",
+    }
+    mocks["load_state"].return_value = (corrupted_state, None)
+
+    executed_labels = []
+
+    def track_run(**kwargs):
+        label = kwargs.get("label", "")
+        executed_labels.append(label)
+        if label == "step9":
+            return (True, "FILES_MODIFIED: file.py", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/1", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mocks["run"].side_effect = track_run
+
+    success, msg, cost, model, files = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="content",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=467,
+        issue_author="user",
+        issue_title="Blind resume test",
+        cwd=temp_cwd,
+        quiet=True,
+        use_github_state=False,
+    )
+
+    assert "step1" in executed_labels, (
+        f"Step 1 should be re-executed when its cached output is FAILED, "
+        f"but executed steps were: {executed_labels}. "
+        f"This is the 'blind resume' bug from issue #467."
+    )
+
+
+def test_resume_from_partial_failure_reruns_failed_steps(mock_dependencies, temp_cwd):
+    """
+    Issue #467: When resuming from state where steps 1-4 succeeded but 5-6 failed,
+    resume should re-run from step 5, not step 7.
+    """
+    mocks = mock_dependencies
+
+    corrupted_state = {
+        "last_completed_step": 6,
+        "step_outputs": {
+            "1": "No duplicates",
+            "2": "Not implemented yet",
+            "3": "Research done",
+            "4": "Requirements clear",
+            "5": "FAILED: All agent providers failed",
+            "6": "FAILED: All agent providers failed",
+        },
+        "total_cost": 0.4,
+        "model_used": "gpt-4",
+    }
+    mocks["load_state"].return_value = (corrupted_state, None)
+
+    executed_labels = []
+
+    def track_run(**kwargs):
+        label = kwargs.get("label", "")
+        executed_labels.append(label)
+        if label == "step9":
+            return (True, "FILES_MODIFIED: file.py", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/1", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mocks["run"].side_effect = track_run
+
+    success, msg, cost, model, files = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="content",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=467,
+        issue_author="user",
+        issue_title="Partial failure test",
+        cwd=temp_cwd,
+        quiet=True,
+        use_github_state=False,
+    )
+
+    # Steps 1-4 should be skipped
+    assert "step1" not in executed_labels, "Step 1 succeeded and should not be re-run"
+    assert "step2" not in executed_labels, "Step 2 succeeded and should not be re-run"
+    assert "step3" not in executed_labels, "Step 3 succeeded and should not be re-run"
+    assert "step4" not in executed_labels, "Step 4 succeeded and should not be re-run"
+    # Step 5 should be re-run
+    assert "step5" in executed_labels, (
+        f"Step 5 should be re-executed because its cached output is FAILED, "
+        f"but executed steps were: {executed_labels}."
+    )
+
+
+def test_step9_no_files_marks_failed_not_step_num_minus_1(mock_dependencies, temp_cwd):
+    """
+    Issue #467: Step 9 with no changed files should mark the step as FAILED
+    and NOT use the step_num - 1 formula for last_completed_step.
+    """
+    mocks = mock_dependencies
+    mock_save = mocks["save_state"]
+
+    saved_states = []
+
+    def capture_save(cwd, issue_number, wf_type, state, state_dir, repo_owner, repo_name, use_github_state=True, github_comment_id=None):
+        saved_states.append(dict(state))
+        return None
+
+    mock_save.side_effect = capture_save
+
+    def run_side_effect(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            # Step 9 succeeds but reports no FILES_CREATED/MODIFIED
+            return (True, "No files changed", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mocks["run"].side_effect = run_side_effect
+
+    success, msg, cost, model, files = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="content",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=467,
+        issue_author="user",
+        issue_title="No files test",
+        cwd=temp_cwd,
+        quiet=True,
+        use_github_state=False,
+    )
+
+    assert not success
+    assert "no file changes" in msg.lower()
+
+    # Find the state saved when step 9 early-returns
+    step9_states = [s for s in saved_states if "9" in s.get("step_outputs", {})]
+    if step9_states:
+        last = step9_states[-1]
+        assert last["step_outputs"]["9"].startswith("FAILED:"), (
+            "Step 9 with no files should be marked as FAILED, not stored as raw output"
+        )
+        # last_completed_step should be 8 (last successful step), NOT step_num - 1 = 8
+        # which happens to be the same value but for the right reason (step 8 succeeded)
+        assert last["last_completed_step"] == 8, (
+            f"last_completed_step should be 8 (last success), got {last['last_completed_step']}"
+        )

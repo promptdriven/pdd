@@ -196,7 +196,7 @@ class RemoteSessionManager:
                 refresh_token = firebase_auth._get_stored_refresh_token()
 
                 if not refresh_token:
-                    console.print("[yellow]Cannot refresh token: no refresh token stored. Please run 'pdd login' again.[/yellow]")
+                    console.print("[yellow]Cannot refresh token: no refresh token stored. Please run 'pdd auth login' again.[/yellow]")
                     return False
 
                 # Refresh the token
@@ -314,7 +314,7 @@ class RemoteSessionManager:
                                         token_refreshed = True
                                         continue  # Retry with new token
                                     else:
-                                        console.print("[red]Token refresh failed. Please run 'pdd login' to re-authenticate.[/red]")
+                                        console.print("[red]Token refresh failed. Please run 'pdd auth login' to re-authenticate.[/red]")
                                         break
                                 else:
                                     console.print("[red]Heartbeat still failing after token refresh (Status: 401)[/red]")
@@ -369,13 +369,16 @@ class RemoteSessionManager:
                 pass
             self._heartbeat_task = None
 
-    async def deregister(self) -> None:
+    async def deregister(self) -> bool:
         """
         Deregister the session from the cloud.
         Should be called on application shutdown.
+
+        Returns:
+            True if deregistration succeeded, False otherwise.
         """
         if not self.session_id:
-            return
+            return True
 
         endpoint = CloudConfig.get_endpoint_url("deregisterSession")
 
@@ -383,6 +386,7 @@ class RemoteSessionManager:
         await self.stop_heartbeat()
         await self.stop_command_polling()
 
+        success = False
         async with httpx.AsyncClient(timeout=5.0) as client:
             try:
                 # Server expects POST method for deregisterSession
@@ -391,17 +395,20 @@ class RemoteSessionManager:
                     json={"sessionId": self.session_id},
                     headers=self._get_headers()
                 )
-                
+
                 if response.status_code < 400:
                     console.print("[dim]Session deregistered from cloud.[/dim]")
+                    success = True
                 else:
                     console.print(f"[yellow]Warning: Failed to deregister session (Status: {response.status_code})[/yellow]")
-            
+
             except Exception as e:
                 # Idempotent: don't raise on failure during shutdown
                 console.print(f"[yellow]Warning: Error deregistering session: {str(e)}[/yellow]")
             finally:
                 self.session_id = None
+
+        return success
 
     async def get_pending_commands(self) -> List[CommandInfo]:
         """
@@ -506,7 +513,7 @@ class RemoteSessionManager:
                                 token_refreshed = True
                                 continue  # Retry with new token
                             else:
-                                console.print("[red]Token refresh failed. Please run 'pdd login' to re-authenticate.[/red]")
+                                console.print("[red]Token refresh failed. Please run 'pdd auth login' to re-authenticate.[/red]")
                                 raise RuntimeError("Authentication failed: token expired and refresh failed")
                         else:
                             console.print("[red]Command update still failing after token refresh (Status: 401)[/red]")

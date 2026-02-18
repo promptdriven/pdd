@@ -28,6 +28,11 @@ help:
 	@echo "  make test-all-ci [PR_NUMBER=n] [PR_URL=url] - Run all tests with result capture"
 	@echo "  make test-all-with-infisical [PR_NUMBER=n] [PR_URL=url] - Run all tests with Infisical"
 	@echo "  make pr-test pr-url=URL      - Test any GitHub PR on GitHub Actions (e.g., https://github.com/owner/repo/pull/123)"
+	@echo "  make cloud-test              - Build image + push + run all tests on Cloud Batch"
+	@echo "  make cloud-test-quick        - Run tests on Cloud Batch (skip image rebuild)"
+	@echo "  make cloud-test-build        - Build and push image via Cloud Build"
+	@echo "  make cloud-test-push         - (no-op, included in cloud-test-build)"
+	@echo "  make cloud-test-setup        - One-time GCP infrastructure setup"
 	@echo "  make analysis                - Run regression analysis"
 	@echo "  make verify MODULE=name      - Verify code functionality against prompt intent"
 	@echo "  make lint                    - Run pylint for static code analysis"
@@ -101,7 +106,7 @@ TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
 # All Example files in context directory (recursive)
 EXAMPLE_FILES := $(shell find $(CONTEXT_DIR) -name "*_example.py" 2>/dev/null)
 
-.PHONY: all clean test requirements production coverage staging regression sync-regression all-regression cloud-regression install build analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public publish-public-cap public-ensure public-update public-import public-diff sync-public ensure-dev-deps
+.PHONY: all clean test requirements production coverage staging regression sync-regression all-regression cloud-regression install build analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public publish-public-cap public-ensure public-update public-import public-diff sync-public ensure-dev-deps cloud-test cloud-test-quick cloud-test-build cloud-test-push cloud-test-setup
 
 all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 
@@ -193,19 +198,20 @@ run-examples: $(EXAMPLE_FILES)
 # Ensure dev dependencies are installed before running tests
 ensure-dev-deps:
 	@echo "Updating pdd conda environment with dev dependencies"
+	@conda run -n pdd --no-capture-output python -c "import site, glob, shutil; [shutil.rmtree(p) for p in glob.glob(site.getsitepackages()[0] + '/pdd_cli-*.dist-info')]" 2>/dev/null || true
 	@conda run -n pdd --no-capture-output pip install -e '.[dev]'
 
 # Run tests
 test: ensure-dev-deps
 	@echo "Running staging tests"
 	@cd $(STAGING_DIR)
-	@conda run -n pdd --no-capture-output PDD_RUN_REAL_LLM_TESTS=1 PDD_RUN_LLM_TESTS=1 PDD_PATH=$(abspath $(PDD_DIR)) PYTHONPATH=$(PDD_DIR):$$PYTHONPATH python -m pytest -vv -n auto $(TESTS_DIR)
+	@conda run -n pdd --no-capture-output PDD_MODEL_DEFAULT=vertex_ai/gemini-3-flash-preview PDD_RUN_REAL_LLM_TESTS=1 PDD_RUN_LLM_TESTS=1 PDD_PATH=$(abspath $(PDD_DIR)) PYTHONPATH=$(PDD_DIR):$$PYTHONPATH python -m pytest -vv -n auto $(TESTS_DIR)
 
 # Run tests with coverage
 coverage: ensure-dev-deps
 	@echo "Running tests with coverage"
 	@cd $(STAGING_DIR)
-	@conda run -n pdd --no-capture-output PDD_PATH=$(STAGING_DIR) PYTHONPATH=$(PDD_DIR):$$PYTHONPATH python -m pytest --cov=$(PDD_DIR) --cov-report=term-missing --cov-report=html $(TESTS_DIR)
+	@conda run -n pdd --no-capture-output PDD_MODEL_DEFAULT=vertex_ai/gemini-3-flash-preview PDD_PATH=$(STAGING_DIR) PYTHONPATH=$(PDD_DIR):$$PYTHONPATH python -m pytest --cov=$(PDD_DIR) --cov-report=term-missing --cov-report=html $(TESTS_DIR)
 
 # Run pylint
 lint: ensure-dev-deps
@@ -512,6 +518,55 @@ ifdef TEST_NUM
 else
 	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH bash tests/cloud_regression.sh
 endif
+
+# Cloud Batch configuration
+CLOUD_BATCH_DIR := ci/cloud-batch
+GCP_PROJECT_ID := prompt-driven-development-stg
+GCP_REGION ?= us-central1
+GCS_BUCKET ?= pdd-stg-ci-results
+AR_IMAGE := $(GCP_REGION)-docker.pkg.dev/$(GCP_PROJECT_ID)/pdd-ci/pdd-test:latest
+
+# Files baked into the Docker image — changes to these require a rebuild
+CLOUD_IMAGE_DEPS := requirements.txt pyproject.toml $(CLOUD_BATCH_DIR)/entrypoint.sh $(CLOUD_BATCH_DIR)/Dockerfile
+CLOUD_IMAGE_HASH_FILE := .cloud-image-hash
+
+# Smart run: auto-detects whether image rebuild is needed
+cloud-test:
+	@CURRENT_HASH=$$(cat $(CLOUD_IMAGE_DEPS) | shasum -a 256 | cut -d' ' -f1); \
+	STORED_HASH=$$(cat $(CLOUD_IMAGE_HASH_FILE) 2>/dev/null || echo "none"); \
+	if [ "$$CURRENT_HASH" != "$$STORED_HASH" ]; then \
+		echo "Image deps changed — rebuilding via Cloud Build"; \
+		$(MAKE) cloud-test-build; \
+	else \
+		echo "Image deps unchanged — skipping rebuild"; \
+	fi
+	@$(MAKE) cloud-test-quick
+
+# Upload source and run tests (skip image rebuild — typical workflow)
+cloud-test-quick:
+	@echo "Running tests on Cloud Batch (quick mode — no image rebuild)"
+	@GCP_PROJECT_ID=$(GCP_PROJECT_ID) GCP_REGION=$(GCP_REGION) GCS_BUCKET=$(GCS_BUCKET) \
+		bash $(CLOUD_BATCH_DIR)/submit.sh
+
+# Build and push image via Cloud Build (no local Docker needed)
+cloud-test-build:
+	@echo "Submitting build to Cloud Build"
+	@gcloud builds submit \
+		--config=$(CLOUD_BATCH_DIR)/cloudbuild.yaml \
+		--substitutions=_AR_IMAGE=$(AR_IMAGE) \
+		--project=$(GCP_PROJECT_ID) \
+		.
+	@cat $(CLOUD_IMAGE_DEPS) | shasum -a 256 | cut -d' ' -f1 > $(CLOUD_IMAGE_HASH_FILE)
+
+# No-op — push is handled by Cloud Build
+cloud-test-push:
+	@echo "Push is now handled by cloud-test-build (Cloud Build). Nothing to do."
+
+# One-time GCP infrastructure setup
+cloud-test-setup:
+	@echo "Setting up Cloud Batch infrastructure"
+	@GCP_PROJECT_ID=$(GCP_PROJECT_ID) GCP_REGION=$(GCP_REGION) GCS_BUCKET=$(GCS_BUCKET) \
+		bash $(CLOUD_BATCH_DIR)/setup-gcp.sh
 
 # Automated test runner with Infisical for CI/CD
 .PHONY: test-all-ci

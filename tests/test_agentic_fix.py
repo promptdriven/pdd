@@ -114,7 +114,8 @@ AGENTS = [
 
 
 def _has_cli(cmd: str) -> bool:
-    return shutil.which(cmd) is not None
+    from pdd.agentic_common import _find_cli_binary
+    return _find_cli_binary(cmd) is not None
 
 
 def _mk_files(tmp_path: Path):
@@ -131,10 +132,19 @@ def _mk_files(tmp_path: Path):
 
 @pytest.mark.parametrize("provider,env_key,cli", AGENTS)
 def test_run_agentic_fix_real_call_when_available(provider, env_key, cli, tmp_path, monkeypatch):
-    # Only run if API key (or Gemini alias for Google) + CLI are present
+    # Only run if API key (or Gemini alias for Google, or OAuth for Anthropic) + CLI are present
     detected_key = os.getenv(env_key)
     if provider == "google" and not detected_key:
         pytest.skip("Google API key not available.")
+        detected_key = os.getenv("GEMINI_API_KEY")
+    if provider == "anthropic" and not detected_key:
+        detected_key = os.getenv("CLAUDE_CODE_OAUTH_TOKEN")
+
+    # Also accept Vertex AI auth for Google provider (GCP VMs with ADC)
+    if provider == "google" and not detected_key:
+        if (os.environ.get("GOOGLE_GENAI_USE_VERTEXAI") == "true"
+                and os.environ.get("GOOGLE_CLOUD_PROJECT")):
+            detected_key = "vertex-ai-auth"
 
     if not detected_key or not _has_cli(cli):
         pytest.skip(f"{provider} not available (missing API key and/or '{cli}' CLI).")
@@ -146,6 +156,12 @@ def test_run_agentic_fix_real_call_when_available(provider, env_key, cli, tmp_pa
     for k in ("ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY"):
         if k != env_key:
             monkeypatch.delenv(k, raising=False)
+
+    # For non-google providers, also hide Vertex AI auth so google doesn't interfere
+    if provider != "google":
+        monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
+        monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+        monkeypatch.delenv("GOOGLE_CLOUD_LOCATION", raising=False)
 
     # For non-anthropic providers, hide Claude CLI so subscription auth isn't used
     # Must mock _find_cli_binary since it checks common paths beyond shutil.which
