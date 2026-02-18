@@ -282,14 +282,14 @@ class AsyncSyncRunner:
         for pgid in list(self._child_pgids):
             try:
                 os.killpg(pgid, signal.SIGTERM)
-            except OSError:
+            except (OSError, TypeError, ValueError):
                 pass
         # Give children a moment to exit, then force-kill survivors
         time.sleep(1)
         for pgid in list(self._child_pgids):
             try:
                 os.killpg(pgid, signal.SIGKILL)
-            except OSError:
+            except (OSError, TypeError, ValueError):
                 pass
         self._child_pgids.clear()
 
@@ -573,8 +573,10 @@ class AsyncSyncRunner:
                 bufsize=1,  # Line buffered
                 start_new_session=True,  # Create process group for clean kill
             )
-            # Track the process group so we can kill it on Ctrl+C
-            self._child_pgids.add(process.pid)
+            pid = getattr(process, "pid", None)
+            # Track only valid pids so cleanup paths don't target invalid groups.
+            if isinstance(pid, int) and pid > 0:
+                self._child_pgids.add(pid)
         except Exception as e:
             cost = _parse_cost_from_csv(cost_file.name)
             try:
@@ -624,22 +626,38 @@ class AsyncSyncRunner:
                         last_heartbeat = now
         except subprocess.TimeoutExpired:
             # Kill entire process group (includes grandchild agentic subprocesses)
+            pid = getattr(process, "pid", None)
             try:
-                os.killpg(process.pid, signal.SIGTERM)
-            except OSError:
-                process.terminate()
+                if isinstance(pid, int) and pid > 0:
+                    os.killpg(pid, signal.SIGTERM)
+                else:
+                    process.terminate()
+            except (OSError, TypeError, ValueError):
+                try:
+                    process.terminate()
+                except Exception:
+                    pass
             try:
                 process.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except OSError:
-                    process.kill()
+                    if isinstance(pid, int) and pid > 0:
+                        os.killpg(pid, signal.SIGKILL)
+                    else:
+                        process.kill()
+                except (OSError, TypeError, ValueError):
+                    try:
+                        process.kill()
+                    except Exception:
+                        pass
                 process.wait()
-            self._child_pgids.discard(process.pid)
+            if isinstance(pid, int) and pid > 0:
+                self._child_pgids.discard(pid)
             return False, _parse_cost_from_csv(cost_file.name), f"Timeout after {MODULE_TIMEOUT}s"
         finally:
-            self._child_pgids.discard(process.pid)
+            pid = getattr(process, "pid", None)
+            if isinstance(pid, int) and pid > 0:
+                self._child_pgids.discard(pid)
             t_out.join(timeout=5)
             t_err.join(timeout=5)
 

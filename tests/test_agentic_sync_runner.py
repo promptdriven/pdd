@@ -807,6 +807,46 @@ class TestSyncOneModule:
         assert not success
         assert "Timeout" in error
 
+    @patch("pdd.agentic_sync_runner.os.killpg")
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_timeout_with_non_int_pid_falls_back_to_terminate(
+        self, mock_find, mock_popen, mock_cost, mock_unlink, mock_killpg
+    ):
+        """Timeout cleanup should not call killpg when pid is not an int."""
+        timeout_exc = __import__("subprocess").TimeoutExpired(cmd="pdd", timeout=900)
+        mock_proc = _make_mock_popen()
+        mock_proc.wait.side_effect = [timeout_exc, 0]
+        mock_proc.pid = MagicMock(name="pid")
+        mock_popen.return_value = mock_proc
+
+        runner = AsyncSyncRunner(
+            basenames=["slow"],
+            dep_graph={"slow": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+
+        call_count = [0]
+        base_time = 1000.0
+
+        def fake_time():
+            call_count[0] += 1
+            if call_count[0] <= 2:
+                return base_time
+            return base_time + 2000
+
+        with patch("pdd.agentic_sync_runner.time.time", side_effect=fake_time):
+            success, cost, error = runner._sync_one_module("slow")
+
+        assert not success
+        assert "Timeout" in error
+        mock_killpg.assert_not_called()
+        mock_proc.terminate.assert_called()
+
     @patch("pdd.agentic_sync_runner.os.unlink")
     @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.05)
     @patch("pdd.agentic_sync_runner.subprocess.Popen")
