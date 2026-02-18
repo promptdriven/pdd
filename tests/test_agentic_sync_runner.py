@@ -28,6 +28,7 @@ def _make_mock_popen(stdout_text: str = "", stderr_text: str = "", exit_code: in
     mock_proc.stdout = io.StringIO(stdout_text)
     mock_proc.stderr = io.StringIO(stderr_text)
     mock_proc.wait.return_value = exit_code
+    mock_proc.pid = 99999  # Prevent os.killpg(MagicMock) from resolving to pgid 1
     return mock_proc
 
 
