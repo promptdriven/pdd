@@ -2,13 +2,17 @@
 
 ### Feat
 
-- update Claude Sonnet token counts and introduce atomic state updates for `sync_orchestration` to fix state desynchronization.
-- add user story validation framework (PR #484)
-- implement atomic state updates, configurable LLM timeout, update Claude model, and migrate pytest configuration to pyproject.toml.
+- **User story validation framework** — New `pdd/user_story_tests.py` module discovers `story__*.md` files and validates them against the current prompt set using `detect_change`. `pdd change` now automatically runs user story validation after successful code generation; failures abort the run. `pdd detect --stories` runs validation standalone with `--prompts-dir`, `--stories-dir`, `--include-llm`, and `--fail-fast` options. `pdd fix <story__*.md>` auto-detects story files and invokes `run_user_story_fix` to repair the failing prompt. New `user_stories/story__template.md` template included. Thanks @beknobloch (PR #484)!
+- **1M context window for Claude models** — `llm_invoke` now sends the `anthropic-beta: context-1m-2025-08-07` header for all Claude API calls, enabling prompts up to 1M tokens. No extra cost applies below the 200K-token threshold.
+- **Model updated: `claude-sonnet-4-5` → `claude-sonnet-4-6`** — Both the Anthropic and Vertex AI entries in `llm_model.csv` now point to `claude-sonnet-4-6`, with an updated coding arena ELO of 1480.
 
 ### Fix
 
-- prevent os.killpg(1) from crashing pytest-xdist workers in CI
+- **`os.killpg(1)` crash in pytest-xdist workers** — `os.killpg(1)` (sending SIGTERM to the init process) raised `PermissionError` inside xdist workers, failing the entire CI test run. Now skips `killpg` when the process group ID is 1. (PR #543)
+
+### Build
+
+- **Grounding experiment results** — Added generated code runs and stability metrics for `sync_orchestration` Sonnet re-runs (`experiments/grounding/results/`); used to measure prompt grounding effectiveness across model generations.
 
 ## v0.0.152 (2026-02-17)
 
