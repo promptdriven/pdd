@@ -15,5 +15,5 @@ Fireworks,fireworks_ai/accounts/fireworks/models/glm-5,1.00,3.20,1451,,FIREWORKS
 Fireworks,fireworks_ai/accounts/fireworks/models/kimi-k2p5,0.60,3.00,1449,,FIREWORKS_API_KEY,0,False,none,
 Anthropic,anthropic/claude-opus-4-6,5.0,25.0,1576,,ANTHROPIC_API_KEY,128000,True,budget,
 Anthropic,anthropic/claude-haiku-4-5-20251001,1.0,5.0,1270,,ANTHROPIC_API_KEY,128000,True,budget,
-Anthropic,anthropic/claude-sonnet-4-6,3.0,15.0,1386,,ANTHROPIC_API_KEY,128000,True,budget,
-Google,vertex_ai/claude-sonnet-4-6,3.0,15.0,1386,,VERTEX_CREDENTIALS,128000,True,budget,
+Anthropic,anthropic/claude-sonnet-4-6,3.0,15.0,1480,,ANTHROPIC_API_KEY,128000,True,budget,
+Google,vertex_ai/claude-sonnet-4-6,3.0,15.0,1480,,VERTEX_CREDENTIALS,128000,True,budget,

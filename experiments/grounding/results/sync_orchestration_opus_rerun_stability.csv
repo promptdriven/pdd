@@ -4,3 +4,5 @@ timestamp_utc,env,arm,run_number,http_status,generated_code_hash,generated_code_
 2026-02-17T21:18:25.840393+00:00,prod,grounded,3,200,e7b2f4f5c6b0f19f,1973,29,3,True,ICqQQrD8O5CeWLa2y6fX,0.69197625,gpt-5.2-codex,377834
 2026-02-17T21:22:12.626571+00:00,prod,grounded,4,200,e7b2f4f5c6b0f19f,1973,29,3,True,ICqQQrD8O5CeWLa2y6fX,0.6918485,gpt-5.2-codex,226759
 2026-02-17T21:26:00.329318+00:00,prod,grounded,5,200,e7b2f4f5c6b0f19f,1973,29,3,True,ICqQQrD8O5CeWLa2y6fX,0.69212325,gpt-5.2-codex,227665
+2026-02-18T23:31:38.378651+00:00,prod,grounded,1,200,fd94c1d2c286f437,1774,29,3,True,ICqQQrD8O5CeWLa2y6fX,0.6480315,gpt-5.2-codex,352101
+2026-02-19T04:22:22.245854+00:00,prod,grounded,1,200,e7b2f4f5c6b0f19f,1973,29,3,True,ICqQQrD8O5CeWLa2y6fX,0.6921215,gpt-5.2-codex,281165

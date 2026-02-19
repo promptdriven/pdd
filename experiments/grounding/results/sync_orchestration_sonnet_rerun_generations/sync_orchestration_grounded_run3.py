@@ -11,13 +11,11 @@ import datetime
 import subprocess
 import re
 import os
+import tempfile
+import sys
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Callable
 from dataclasses import asdict, dataclass, field
-import tempfile
-import sys
-
-from .sync_tui import maybe_steer_operation, DEFAULT_STEER_TIMEOUT_S
 
 import click
 import logging
@@ -28,6 +26,7 @@ MAX_TEST_EXTEND_ATTEMPTS = 2  # Allow up to 2 attempts to extend tests for cover
 MAX_CONSECUTIVE_CRASHES = 3  # Allow up to 3 consecutive crash attempts (Bug #157 fix)
 
 # --- Real PDD Component Imports ---
+from .sync_tui import maybe_steer_operation, DEFAULT_STEER_TIMEOUT_S
 from .sync_tui import SyncApp
 from .operation_log import (
     load_operation_log,
@@ -1747,10 +1746,16 @@ def sync_orchestration(
                                     else:
                                         # Non-agentic mode (Python) - check if file exists
                                         success = pdd_files['test'].exists()
+                                    # Cost handling for 4-tuple test results (explicit indexing)
+                                    if len(result) >= 4 and isinstance(result[1], (int, float)):
+                                        current_cost_ref[0] += result[1]
+                                    else:
+                                        cost = result[-2] if isinstance(result[-2], (int, float)) else 0.0
+                                        current_cost_ref[0] += cost
                                 else:
                                     success = bool(result[0])
-                                cost = result[-2] if len(result) >= 2 and isinstance(result[-2], (int, float)) else 0.0
-                                current_cost_ref[0] += cost
+                                    cost = result[-2] if len(result) >= 2 and isinstance(result[-2], (int, float)) else 0.0
+                                    current_cost_ref[0] += cost
                             else:
                                 success = result is not None
 
