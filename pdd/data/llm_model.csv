@@ -2,7 +2,7 @@ provider,model,input,output,coding_arena_elo,base_url,api_key,max_reasoning_toke
 OpenAI,gpt-5-nano,0.05,0.4,1249,,OPENAI_API_KEY,0,True,none,
 Google,vertex_ai/gemini-3-flash-preview,0.5,3.0,1442,,VERTEX_CREDENTIALS,0,True,effort,global
 Google,vertex_ai/gemini-3-pro-preview,1.25,10.0,1452,,VERTEX_CREDENTIALS,0,True,effort,global
-Google,vertex_ai/claude-sonnet-4-5,3.0,15.0,1386,,VERTEX_CREDENTIALS,128000,True,budget,global
+Google,vertex_ai/claude-sonnet-4-6,3.0,15.0,1480,,VERTEX_CREDENTIALS,128000,True,budget,global
 Google,gemini/gemini-3-pro-preview,1.25,10.0,1452,,GEMINI_API_KEY,0,True,effort,
 OpenAI,gpt-5.1-codex-mini,0.25,2.0,1325,,OPENAI_API_KEY,0,True,effort,
 OpenAI,gpt-5.2,1.75,14.0,1472,,OPENAI_API_KEY,0,True,effort,
@@ -14,6 +14,6 @@ lm_studio,lm_studio/qwen3-coder-next,0,0,1040,http://localhost:1234/v1,,0,True,n
 lm_studio,lm_studio/openai-gpt-oss-120b-mlx-6,0.0001,0,1082,http://localhost:1234/v1,,0,True,effort,
 Fireworks,fireworks_ai/accounts/fireworks/models/glm-5,1.00,3.20,1451,,FIREWORKS_API_KEY,0,False,none,
 Fireworks,fireworks_ai/accounts/fireworks/models/kimi-k2p5,0.60,3.00,1449,,FIREWORKS_API_KEY,0,False,none,
-Anthropic,anthropic/claude-sonnet-4-5-20250929,3.0,15.0,1386,,ANTHROPIC_API_KEY,128000,True,budget,
+Anthropic,anthropic/claude-sonnet-4-6,3.0,15.0,1480,,ANTHROPIC_API_KEY,128000,True,budget,
 Anthropic,anthropic/claude-opus-4-6,5.0,25.0,1576,,ANTHROPIC_API_KEY,128000,True,budget,
 Anthropic,anthropic/claude-haiku-4-5-20251001,1.0,5.0,1270,,ANTHROPIC_API_KEY,128000,True,budget,
