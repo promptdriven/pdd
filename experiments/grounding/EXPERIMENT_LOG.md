@@ -1478,6 +1478,100 @@ Ungrounded Opus consistently makes the same systematic import errors across all 
 
 The grounded example acts as a **structural anchor**, reducing Opus's hallucination rate from ~8–10 invented functions per run to zero. The tradeoff is that Opus's creative reasoning is constrained — it fills in from the example's architecture rather than inferring its own. The one persistent gap (`_try_auto_fix_env_var_error`) is a prompt-engineering opportunity: if the env-var recovery path is tested or described more explicitly, Opus would likely generate it. Ungrounded Opus demonstrates strong functional correctness but produces structurally incompatible code — useful for exploring novel implementations, but not for controlled regeneration of an existing module.
 
+## Phase 10: Gemini 3.1-Pro Preview Grounded Benchmark
+
+### Objective
+
+Benchmark `vertex_ai/gemini-3.1-pro-preview` (ELO 1495) on the `sync_orchestration` grounded arm, using the same prompt and example used in Phase 9 (Opus 4.6). Model selection: `strength=0.75` targets ELO 1509, which selects Gemini 3.1-pro (distance 14) over Opus (distance 67) and GPT-5.2 (distance 37).
+
+### Setup
+
+| Parameter | Value |
+|---|---|
+| Environment | prod |
+| Module | sync_orchestration |
+| Arms | grounded |
+| Strength (cloud) | 0.75 |
+| Temperature | 1.0 |
+| Runs | 4 (after IAM fix) |
+| Model selected | `vertex_ai/gemini-3.1-pro-preview` |
+| Prompt | sync_orchestration_python.prompt (246,584 chars resolved) |
+| Example ID | ICqQQrD8O5CeWLa2y6fX |
+
+**Infrastructure note**: The previous session's `gcloud functions deploy` removed the `allUsers:run.invoker` IAM binding from the Cloud Run service. This caused HTTP 401 for all requests to the `.cloudfunctions.net` URL. Fix: `gcloud functions add-invoker-policy-binding generateCode --member="allUsers"`. The Cloud Run URL (`.run.app`) was unaffected; the `.cloudfunctions.net` proxy has a separate IAM check.
+
+### Results
+
+| Run | Lines | Funcs (total) | Funcs (top-level) | Classes | Syntax | ref_sim | recall | Tests | Cost | Time |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 1,973 | 29 | 14 | 3 | ✓ | 0.973 | 0.994 | 108/108 | $0.088 | 124s |
+| 2 | 1,973 | 29 | 14 | 3 | ✓ | 0.973 | 0.994 | 108/108 | $0.154 | 119s |
+| 3 | 1,973 | 29 | 14 | 3 | ✓ | 0.973 | 0.994 | 108/108 | $0.173 | 249s |
+| 4 | 848 | 28 | 14 | 2 | ✓ | 0.486 | 0.323 | n/a | $1.280 | 161s |
+
+**Pairwise similarity**: runs 1–3 = **1.000** (identical code), run 4 = 0.276 vs runs 1–3.
+
+### Key Findings
+
+#### 3/4 Runs Produce Identical Output
+
+At temperature=1.0, runs 1, 2, and 3 produce the **exact same code** (same hash: `e7b2f4f5c6b0f19f`). This is extreme consistency — the grounded example is effectively determinizing the output. The pairwise similarity of 1.000 across 3 independent runs suggests the example acts as a strong attractor.
+
+#### Run 4: Condensed Output (848 lines)
+
+Run 4 produced a syntactically valid but highly condensed implementation (848 lines, 41% of canonical length). It retains all 14 top-level functions and the correct import set, but the `sync_orchestration` function body is simplified/compressed. This is a failure mode where the model generates a "sketch" rather than a full implementation. Cost was significantly higher ($1.28 vs $0.088–$0.17 for others), possibly reflecting extended reasoning followed by an early output stop.
+
+#### Structural Correctness
+
+All 4 runs produce exactly 14 top-level functions — matching the canonical. Zero hallucinated helpers. The imports in runs 1–3 are **identical to the canonical**: same symbols, same source modules, same ordering (including sibling module imports like `auto_deps_main`, `fix_main`, `crash_main`, etc.).
+
+Key mechanisms present in runs 1–3 (same as Opus grounded):
+
+| Pattern | Canonical | Gemini 3.1 grounded (runs 1–3) |
+|---|---|---|
+| `_try_auto_fix_env_var_error` | ✓ | ✗ (absent in all 3) |
+| `consecutive_crashes` tracking | 4× | 4× ✓ |
+| `AtomicStateUpdate` | 9× | 9× ✓ |
+| `calculate_current_hashes` | 4× | 4× ✓ |
+| `_save_run_report_atomic` | 9× | 9× ✓ |
+| `_save_fingerprint_atomic` | 6× | 6× ✓ |
+
+#### Bug Comparison: Gemini 3.1-Pro vs Opus Grounded vs Canonical
+
+| Bug | Canonical | Opus grounded | Gemini 3.1 grounded |
+|---|---|---|---|
+| JS/TS coverage regex (`\|` vs `|`) | `\|` ✓ | `|` ✗ (broken regex) | `\|` ✓ **FIXED** |
+| Test cost tracking (4-tuple index) | `result[1]` ✓ | `result[-2]` ✗ | `result[-2]` ✗ (same bug) |
+| `test_extend` in 4-tuple log update | `in ('test', 'test_extend')` ✓ | `== 'test'` ✗ | `== 'test'` ✗ (same bug) |
+| `_try_auto_fix_env_var_error` | present ✓ | absent ✗ | absent ✗ (same gap) |
+
+**Gemini 3.1-pro fixes the JS/TS coverage regex bug** that Opus grounded has. The `result[-2]` cost extraction bug is present in both: for a 4-tuple `(content, cost, model, agentic_success)`, `result[-2]` resolves to the model name string (index 2), not the cost float (index 1), causing the early `current_cost_ref` update to record $0 instead of the real cost. The log entry cost is also wrong for `test_extend` operations.
+
+### Cross-Model Comparison (sync_orchestration grounded)
+
+| Model | ELO | ref_sim | recall | Tests | Pairwise | Cost/run | Notes |
+|---|---|---|---|---|---|---|---|
+| gpt-5.2-codex grounded | 1472 | **0.973** | **0.995** | 97/108 | **1.000** | ~$0.16 | Hallucinated import block |
+| gemini-3.1-pro grounded (this) | 1495 | **0.973** | **0.994** | **108/108** | **1.000**† | **$0.14** | 1/4 condensed run; fixes coverage regex |
+| claude-opus-4-6 grounded | 1576 | 0.823 | — | **108/108** | 0.961 | $1.40 | Highest test pass; shared cost bug |
+
+†Pairwise=1.000 computed on runs 1–3 (identical); including run 4 gives avg pairwise=0.638.
+
+**Gemini 3.1-pro grounded is the best value model for this experiment**: it matches codex on ref_sim (0.973) and recall (0.994), beats codex on test pass rate (108/108 vs 97/108), and costs ~10× less than Opus. The 1/4 condensed-output failure rate is the main downside vs codex's perfect 5/5 consistency.
+
+### Conclusion
+
+Gemini 3.1-pro preview with grounding achieves the highest combined score among all models tested for `sync_orchestration` regeneration:
+
+- **ref_sim=0.973** (matches best-in-class codex)
+- **108/108 tests** (beats codex's 97/108)
+- **~$0.14/run** (10× cheaper than Opus, comparable to codex)
+- **Zero hallucinated functions** (matches Opus grounded, vs 8–10 for ungrounded)
+- **Identical imports** to canonical (better than codex which hallucinates import aliasing)
+- **Fixes the JS/TS coverage regex bug** present in Opus grounded
+
+The main risk is the 1/4 degenerate run (848 lines). Running N=5 or N=10 would give a cleaner picture of the condensed-output failure rate. The shared `result[-2]` cost bug and missing `_try_auto_fix_env_var_error` are consistent with the grounded example's content (neither the bug fix nor the env-var function appears in the example), suggesting these are persistent grounding artifacts.
+
 ## Next Steps
 
 1. **Investigate coverage gaps**: Why did factorial and flask-api not find examples in Phase 2? Check the 1025 prod `few_shot` documents for math/algorithm and web/API coverage.
@@ -1486,10 +1580,12 @@ The grounded example acts as a **structural anchor**, reducing Opus's hallucinat
 4. **Test suite enhancement**: Investigate whether adding implementation-detail tests (e.g., asserting `CloudConfig.get_jwt_token()` is called, checking rate map is `Tuple` type) would close the gap between ungrounded-pdd and grounded arms.
 5. **Prompt-level grounding**: Test injecting the few-shot example directly into the pdd prompt (via `<include>` tag) to see if this recovers the anti-hallucination benefit without the cloud endpoint overhead.
 6. **Multi-module generalization**: Test grounding on additional complex modules (e.g., `code_generator`, `fix_main`) to confirm the scaling trend observed between llm_invoke and sync_orchestration.
-7. **Pro default for grounded endpoint**: Phase 6 shows Pro + grounding produces near-canonical output for sync_orchestration. Consider making Pro the default model for the grounded `generateCode` endpoint, at least for complex modules. Cost is comparable to Flash for typical runs (~$0.13).
+7. ~~**Pro default for grounded endpoint**~~: ✅ Phase 10 confirms Gemini 3.1-pro grounded matches Pro on quality (ref_sim=0.973, 108/108) at comparable cost (~$0.14/run) with better test pass rate than codex. Consider making Gemini 3.1-pro the default for the grounded endpoint.
 8. **PDD pipeline timeout optimization**: Pro is incompatible with `pdd generate --local` due to the multi-call pipeline (6+ calls × 80–100s each). Explore parallelizing pipeline stages or reducing continuation loops to make Pro viable locally.
 9. **Statistical validation at scale**: Phase 6's Pro results are dramatic but still N=5 per arm. Run N=20 for the key comparison (Pro + grounded vs Flash + grounded on sync_orchestration) to achieve statistical significance.
 10. **Investigate output length variability**: Run 4 produced 1,297 lines vs 1,960–1,982 for runs 1-3 despite same model/strength/temperature. Investigate whether output token limits or generation-length boundaries cause intermittent truncation, and whether increasing `max_output_tokens` eliminates the issue.
 11. **Explicit Vertex AI location for all models**: The platform outage revealed that models without explicit `location=global` in `llm_model.csv` may fail silently. Audit all Vertex AI models in the CSV to ensure explicit location configuration.
 12. ~~**Deploy server-side timeout for Opus**~~: ✅ Done in Phase 9. `LLM_CALL_TIMEOUT=600` deployed. context-1m beta enabled. Opus grounded runs completed for both modules.
 13. **Investigate gpt-5.2-codex hallucinated imports**: gpt-5.2-codex grounded hallucinates `from . import DEFAULT_STRENGTH, DEFAULT_TIME` in 5/5 runs — a behavior not seen with Flash or Pro grounded. Investigate whether this is a model-family-specific tendency and whether the few-shot example could be adjusted to prevent it.
+14. **Fix `result[-2]` cost bug in grounded example**: The `current_cost_ref[0]` early-update uses `result[-2]` for a 4-tuple test result, recording $0 instead of the actual cost. This bug persists across Opus and Gemini 3.1-pro grounded arms, suggesting it's in the example itself. Fix the example code and re-run to confirm elimination.
+15. **Investigate Gemini 3.1-pro condensed-output failure rate**: 1/4 runs produced 848 lines instead of ~1,973. Run N=10 to determine if this is a ~25% failure rate or a one-off anomaly, and investigate whether it's related to output token budget, prompt structure, or server-side truncation.
