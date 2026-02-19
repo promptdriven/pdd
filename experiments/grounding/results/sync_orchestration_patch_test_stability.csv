@@ -1,0 +1,2 @@
+timestamp_utc,env,arm,run_number,http_status,generated_code_hash,generated_code_lines,function_count,class_count,syntax_valid,examples_used,total_cost,model_name,response_time_ms
+2026-02-19T06:24:17.398112+00:00,prod,grounded,1,200,e7b2f4f5c6b0f19f,1973,29,3,True,ICqQQrD8O5CeWLa2y6fX,0.69111225,gpt-5.2-codex,260720
