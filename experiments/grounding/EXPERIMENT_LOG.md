@@ -1383,6 +1383,32 @@ Pro grounded ($0.377): 97% tests, ref_sim=0.893, 337s. Opus grounded (~$1.44 tru
 
 The `context-1m-2025-08-07` beta works on Vertex AI Claude (confirmed by successful Opus runs on a 235K-token prompt). Infrastructure is now in place for any module whose grounded prompt exceeds 200K tokens.
 
+### sync_orchestration Hallucination Analysis (Opus Grounded)
+
+| Category | Opus Grounded (5 runs) | codex Grounded (Phase 8 rerun) | Pro Grounded (Phase 6) |
+|---|---|---|---|
+| `from . import DEFAULT_STRENGTH` | **5/5 PASS** (canonical pattern) | **5/5 FAIL** (hallucinated `DEFAULT_TIME` alongside) | 5/5 PASS |
+| `DEFAULT_TIME` import | **5/5 PASS** (absent, correct) | **5/5 FAIL** (hallucinated) | 5/5 PASS |
+| `AtomicStateUpdate` + `PendingStateUpdate` dataclasses | **5/5 PASS** | 5/5 PASS | 5/5 PASS |
+| Cycle detection (3 types: auto-deps, crash-verify, test-fix) | **5/5 PASS** | 5/5 PASS | 4/5 PASS |
+| `isinstance` dict/tuple dispatch for operation results | **5/5 PASS** | 5/5 PASS | 5/5 PASS |
+| `consecutive_crashes` tracking | **5/5 PASS** | 5/5 PASS | 3/5 PASS |
+| `SyncApp` import and usage | **5/5 PASS** | 5/5 PASS | 5/5 PASS |
+| `_try_auto_fix_env_var_error` helper | **0/5 FAIL** (omitted entirely) | 5/5 PASS | 3/5 PASS |
+| Subscripted return types (`tuple[int, int, float]`) | 4/5 PASS (run 1 uses generic `tuple`) | 5/5 PASS | 3/5 PASS |
+
+**Key observations:**
+
+1. **No hallucinated imports.** Opus is the first model to correctly import only `DEFAULT_STRENGTH` (which the canonical does) without hallucinating `DEFAULT_TIME`. codex grounded hallucinated `DEFAULT_TIME` in 5/5 runs — a persistent false positive from over-anchoring to the few-shot example's import block. Opus reads the prompt more carefully and does not invent what it doesn't see.
+
+2. **Missing `_try_auto_fix_env_var_error`.** All 5 Opus runs omit this helper, which handles automatic env-var error recovery in the example runner path. The canonical defines it at line 539 and calls it at line 1552. This is the primary reason Opus outputs are ~400 lines shorter than canonical (preamble: Opus 638–768 lines vs canonical 1010 lines). Critically, **no test exercises this code path directly**, which is why 108/108 tests still pass despite the omission. It represents a functional gap that the test suite does not catch.
+
+3. **Structural consistency across all 5 runs.** Every run includes the same top-level function set (14 functions), the same 3-type cycle detection (`auto-deps-infinite`, `crash-verify`, `test-fix`), and the same `AtomicStateUpdate` + `PendingStateUpdate` dataclass architecture. Runs 3–5 are slightly more complete (more lines, subscripted type hints) than runs 1–2, consistent with the ~180-line variance observed in output length (1491–1674 lines).
+
+4. **Opus reasons rather than copies.** codex grounded produced pairwise=1.000 with near-identical ~1973-line outputs — essentially the same code every run. Opus varied from 1491 to 1674 lines (pairwise=0.961), indicating genuine per-run reasoning rather than pattern-repeating the example. The few-shot example anchors the architecture but Opus adapts implementation details independently, leading to lower ref_sim but higher correctness.
+
+5. **Preamble compression.** Opus consistently writes more concise helper function bodies — correct but fewer internal guard checks and inline comments compared to the canonical's verbose style. This is stylistic, not functional (all tests pass), except for the missing env-var auto-fix path. The ~372-line gap between Opus preambles (avg 703 lines) and the canonical (1010 lines) is entirely explained by this compression plus the absent `_try_auto_fix_env_var_error`.
+
 ## Next Steps
 
 1. **Investigate coverage gaps**: Why did factorial and flask-api not find examples in Phase 2? Check the 1025 prod `few_shot` documents for math/algorithm and web/API coverage.
