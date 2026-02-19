@@ -1409,6 +1409,75 @@ The `context-1m-2025-08-07` beta works on Vertex AI Claude (confirmed by success
 
 5. **Preamble compression.** Opus consistently writes more concise helper function bodies — correct but fewer internal guard checks and inline comments compared to the canonical's verbose style. This is stylistic, not functional (all tests pass), except for the missing env-var auto-fix path. The ~372-line gap between Opus preambles (avg 703 lines) and the canonical (1010 lines) is entirely explained by this compression plus the absent `_try_auto_fix_env_var_error`.
 
+### Grounded vs Ungrounded Opus — Code Comparison
+
+This section compares the generated code from two Opus 4.6 arms using the same `sync_orchestration` module as the target:
+- **Grounded** (Phase 9 / `opus_rerun2`): 5 runs with ~235K-token few-shot example in the prompt
+- **Ungrounded** (Phase 8 / `opus_generations/ungrounded-pdd_*`): 5 runs using only the PDD prompt, no example
+
+#### Summary Table
+
+| Metric | Grounded Opus | Ungrounded Opus | Canonical |
+|---|---|---|---|
+| Avg lines | 1,615 | 1,757 | 2,081 |
+| Top-level functions | **14/14** (all 5 runs) | 21–27 per run | 14 |
+| Hallucinated functions | **0** (all 5 runs) | **8–10 per run** | 0 |
+| Missing `_save_run_report_atomic` | **0/5** (present) | **5/5** (missing) | present |
+| Missing `_save_fingerprint_atomic` | **0/5** (present) | **5/5** (missing) | present |
+| Missing `consecutive_crashes` | **0/5** (present) | **5/5** (missing) | present |
+| Missing `_try_auto_fix_env_var_error` | 5/5 (absent) | 5/5 (absent) | present |
+| Correct imports (import block) | **~identical to canonical** | Wrong: omits key symbols, invents others | baseline |
+| AtomicStateUpdate | 5/5 | 3/5 | present |
+| budget exceeded check | 5/5 | 3/5 | present |
+| calculate_current_hashes call | 5/5 | 0/5 | present |
+| Tests passed | **108/108 all runs** | **108/108 all runs** | N/A |
+| ref_sim | **0.823** | **0.043** | 1.000 |
+| Pairwise | 0.961 | 0.174 | N/A |
+
+#### Function Structure Analysis
+
+**Grounded Opus (opus_rerun2)** produces code with exactly 14 top-level functions — matching the canonical exactly — across every run. Zero functions are hallucinated. The only gap is `_try_auto_fix_env_var_error`, which is consistently omitted.
+
+**Ungrounded Opus** invents a different helper API every run, producing 21–27 top-level functions (8–10 hallucinated). These invented helpers have plausible names (`_detect_cycles`, `_execute_operation`, `_post_operation`, `_extract_result_fields`, `_check_agentic_test_success`, `_error_result`, `_handle_skip`, `_is_headless`, `_build_final_state`, etc.) but do not exist in the canonical. The canonical's `_save_run_report_atomic` and `_save_fingerprint_atomic` are systematically absent — replaced by different invented alternatives each run.
+
+#### Import Correctness
+
+Grounded Opus imports are virtually identical to the canonical. The only deviation is a minor aliasing (`import threading as _threading` in some runs). All required module-level imports from sibling modules (`auto_deps_main`, `fix_main`, `crash_main`, etc.) are present and correct.
+
+Ungrounded Opus consistently makes the same systematic import errors across all 5 runs:
+- **Omits** `__version__`, `calculate_current_hashes`, `Fingerprint`, `get_extension` (from `sync_determine_operation`), `datetime`/`timezone`, `traceback`
+- **Invents** `from .get_extension import get_extension` (the symbol is actually in `sync_determine_operation`), uses aliased imports not present in canonical
+- Import block varies significantly across runs, indicating the model is guessing the dependency graph rather than recalling it
+
+#### Strengths and Weaknesses
+
+**Grounded Opus — Strengths:**
+1. **Zero structural hallucination.** Every run produces exactly the canonical set of functions — no invented helpers, no missing top-level functions (except the one untested path).
+2. **Import fidelity.** Imports exactly match canonical: correct symbols, correct source modules, correct aliases. This prevents runtime `ImportError` and maintains API compatibility with callers.
+3. **Key safety mechanisms present.** `consecutive_crashes` tracking, `_save_run_report_atomic`, `_save_fingerprint_atomic`, and `calculate_current_hashes` are consistently implemented — these are crash-recovery paths that protect against data loss in production.
+4. **100% test pass rate.** The only model arm to achieve perfect test scores across all runs.
+5. **Consistent structure across runs.** pairwise=0.961 means each run produces functionally equivalent code; callers can rely on the same API shape regardless of which generation is deployed.
+
+**Grounded Opus — Weaknesses:**
+1. **Missing `_try_auto_fix_env_var_error`.** All 5 runs omit this ~50-line helper that auto-corrects env-var errors in the example runner path. The test suite does not cover this code path, so the omission is invisible to test metrics. A production deployment would silently degrade for users whose examples hit missing-env-var errors.
+2. **Concise helpers may lack edge cases.** Opus writes more compact function bodies than the canonical's verbose style. While all tested behaviors are correct, edge-case handling within individual helper functions may be thinner than the canonical.
+
+**Ungrounded Opus — Strengths:**
+1. **Longer output reflects broader reasoning.** At 1,705–1,866 lines (vs 1,491–1,674 for grounded), ungrounded Opus generates more code overall. The extra ~150 lines contain invented helpers that attempt to cover functionality the model infers from the prompt alone.
+2. **Same test pass rate.** 108/108 tests pass in both arms — confirming that the test suite covers Opus's creative implementations as well as the grounded one.
+3. **Confident import of sibling modules.** Even without the example, Opus correctly imports the major orchestration modules (`auto_deps_main`, `fix_main`, `crash_main`, etc.) in 5/5 runs.
+
+**Ungrounded Opus — Weaknesses:**
+1. **Severe structural hallucination.** 8–10 invented helper functions per run, with a completely different API design each time (different names, signatures, and call sites). This is the defining failure mode: the code runs and tests pass, but the implementation is incompatible with the canonical architecture.
+2. **Import drift.** Missing critical symbols (`calculate_current_hashes`, `Fingerprint`, `__version__`, `traceback`) and misidentifying the source module for `get_extension`. Ungrounded imports would likely cause `ImportError` or subtle semantic bugs when integrated into the broader codebase.
+3. **Missing crash-safety mechanisms.** None of the 5 runs implements `consecutive_crashes` tracking, `save_run_report_atomic`, or `save_fingerprint_atomic`. The production safety layer that prevents infinite crash loops and protects persisted run state is entirely absent.
+4. **Low consistency (pairwise=0.174).** Each run invents a different API. A team deploying from ungrounded runs would get a different function signature and helper layout each time — making reproducible CI/CD impossible.
+5. **ref_sim=0.043.** Near-zero overlap with the canonical at the textual level. The 108/108 test pass rate masks that the code is architecturally unrelated to the intended implementation.
+
+#### Conclusion
+
+The grounded example acts as a **structural anchor**, reducing Opus's hallucination rate from ~8–10 invented functions per run to zero. The tradeoff is that Opus's creative reasoning is constrained — it fills in from the example's architecture rather than inferring its own. The one persistent gap (`_try_auto_fix_env_var_error`) is a prompt-engineering opportunity: if the env-var recovery path is tested or described more explicitly, Opus would likely generate it. Ungrounded Opus demonstrates strong functional correctness but produces structurally incompatible code — useful for exploring novel implementations, but not for controlled regeneration of an existing module.
+
 ## Next Steps
 
 1. **Investigate coverage gaps**: Why did factorial and flask-api not find examples in Phase 2? Check the 1025 prod `few_shot` documents for math/algorithm and web/API coverage.
