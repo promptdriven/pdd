@@ -362,6 +362,386 @@ In the prototype, this is a hardcoded array in `server.js`. In V1, this should b
 > | `part5_compound` | `part5_compound.mp4` | `Part5CompoundReturns` | `05-compound` |
 > | `closing` | `closing.mp4` | `ClosingSection` | `06-closing` |
 
+### 4.6 Production Pipeline UI
+
+The production pipeline UI provides a staged workflow covering all steps from project setup through final render. It lives in a dedicated **"Pipeline"** tab alongside the existing review tab.
+
+#### 4.6.1 Overall App Layout
+
+A **stage sidebar** on the left drives a **main panel** on the right. Each stage shows a status badge and is independently selectable.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  [Review Tab]  [Pipeline Tab ●]                               project.json ▾ │
+├──────────────────┬──────────────────────────────────────────────────────────┤
+│  PIPELINE STAGES │                                                            │
+│                  │                  Main Panel                                │
+│  1 Project Setup │  (content changes based on selected stage)                │
+│    ● done        │                                                            │
+│  2 Script Editor │                                                            │
+│    ● done        │                                                            │
+│  3 TTS Script    │                                                            │
+│    ◌ running     │                                                            │
+│  4 TTS Render    │                                                            │
+│    ○ not started │                                                            │
+│  5 Audio Sync    │                                                            │
+│    ○ not started │                                                            │
+│  6 Spec Gen      │                                                            │
+│    ○ not started │                                                            │
+│  7 Veo Gen       │                                                            │
+│    ○ not started │                                                            │
+│  8 Compositions  │                                                            │
+│    ○ not started │                                                            │
+│  9 Render+Stitch │                                                            │
+│    ○ not started │                                                            │
+│                  │                                                            │
+└──────────────────┴────────────────────────────────────────────────────────── ┘
+```
+
+**Status badge model:**
+
+| Badge | Value | Meaning |
+|-------|-------|---------|
+| ○ | `not_started` | No output exists for this stage |
+| ◌ | `running` | A job is currently executing |
+| ● | `done` | Output exists and is up to date |
+| ✕ | `error` | Last run failed; error message shown in tooltip |
+
+Key behaviors:
+- Navigation is **non-gating**: clicking any stage immediately shows that stage's panel. If an upstream stage has not completed, a yellow ⚠ banner is shown: _"Stage N has not run. Output may be missing."_
+- `GET /api/pipeline/status` is polled every 5 s to refresh all badges without a full page reload.
+
+**SSE streaming pattern** (reused by every pipeline stage that triggers a job):
+
+1. User clicks a trigger button (e.g., "Generate TTS Script →").
+2. Client POSTs to the relevant endpoint and receives `{ jobId }`.
+3. Client opens `EventSource` on `GET /api/jobs/:id/stream`.
+4. Progress events are appended to a scrollable log panel in real time.
+5. On `event: done`, the log shows a green ✓ banner; the sidebar badge updates to `done`.
+6. On `event: error`, the log shows a red ✕ banner with the error message.
+7. Fallback: if `EventSource` fails, poll `GET /api/jobs/:id` every 2 s.
+
+---
+
+#### 4.6.2 Stage 1: Project Setup
+
+A settings form that initialises or edits `project.json`. This replaces the hardcoded `sections` array in `server.js`.
+
+```
+┌────────────────────────────────────────────────────────────────────────────┐
+│  Stage 1 — Project Setup                                        [Save ✓]   │
+├────────────────────────────────────────────────────────────────────────────┤
+│  Project name:  [3blue1brown-antibiotics          ]                        │
+│  Output res:    [1920x1080 ▾]                                              │
+│  TTS voice:     [en-US-Neural2-D ▾]   Speaking rate: [0.95]               │
+│                                                                             │
+│  Section Registry                               [+ Add Section]             │
+│  ┌──────────────────┬──────────────────┬─────────────────┬──────────────┐ │
+│  │ Section ID       │ Video File        │ Remotion Comp    │ Spec Dir     │ │
+│  ├──────────────────┼──────────────────┼─────────────────┼──────────────┤ │
+│  │ cold_open    [✎] │ cold_open.mp4    │ ColdOpenSection │ 00-cold-open │ │
+│  │ part1_econ   [✎] │ part1_econ.mp4   │ Part1Economics  │ 01-economics │ │
+│  │ …                │ …                │ …               │ …            │ │
+│  └──────────────────┴──────────────────┴─────────────────┴──────────────┘ │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+Key behaviors:
+- Each row in the Section Registry is **inline-editable**: clicking [✎] turns the row into text inputs.
+- [+ Add Section] appends a blank row. Row drag handles allow reordering; order is preserved in `project.json`.
+- [Save ✓] PUTs to `PUT /api/project`. A success toast appears; badge moves to `done`.
+- Unsaved changes show a yellow dot on [Save ✓] and trigger a browser `beforeunload` warning.
+- The server reloads the section registry on save **without restart**; `project.json` is the single source of truth.
+
+---
+
+#### 4.6.3 Stage 2: Script Editor
+
+A split-pane editor for viewing and editing `narrative/main_script.md` before TTS script generation.
+
+```
+┌────────────────────────────────────────────────────────────────────────────┐
+│  Stage 2 — Script Editor                     [Generate TTS Script →]       │
+├───────────────────────────┬────────────────────────────────────────────────┤
+│  Source  (main_script.md) │  Structured Preview                             │
+│  ─────────────────────────│────────────────────────────────────────────────│
+│  ## Part 1: Economics     │  [SECTION: part1_economics]                    │
+│                           │                                                 │
+│  NARRATOR: The story of   │  ■ NARRATOR  (line 12)                        │
+│  antibiotics begins...    │  The story of antibiotics begins...            │
+│                           │                                                 │
+│  [VISUAL: Wide shot of    │  ▣ VISUAL  (line 15)                          │
+│  a Petri dish with a      │  Wide shot of a Petri dish...                  │
+│  clear halo around a      │                                                 │
+│  mold colony]             │                                                 │
+│                           │                                                 │
+│  (syntax-highlighted)     │  (color-coded by block type)                   │
+└───────────────────────────┴────────────────────────────────────────────────┘
+```
+
+Key behaviors:
+- Left pane is a **CodeMirror editor** with Markdown syntax highlighting. Changes auto-save to disk on 1 s debounce (`PUT /api/project/script`).
+- Right pane **re-renders on every keystroke** (debounced 200 ms). `NARRATOR:` lines get a blue ■ badge; `[VISUAL:]` blocks get a teal ▣ badge; `## ...` headers get a gray section label.
+- The split is **resizable** by dragging the divider.
+- [Generate TTS Script →] is enabled only after at least one `NARRATOR:` block is detected. Clicking advances to Stage 3 and triggers the TTS script generation job.
+
+---
+
+#### 4.6.4 Stage 3: TTS Script Generation
+
+A split diff view showing the Claude Code–generated TTS script alongside the source, with an inline editor for post-generation edits.
+
+```
+┌────────────────────────────────────────────────────────────────────────────┐
+│  Stage 3 — TTS Script Generation                          [Render Audio →] │
+├────────────────────────────────────────────────────────────────────────────┤
+│  [Generate TTS Script ↺]   Last run: 2 min ago                             │
+│                                                                             │
+│  ┌─ Progress Log ──────────────────────────────────────────────────────┐   │
+│  │  [13:42:01] Invoking Claude Code (claude-opus-4-6)...              │   │
+│  │  [13:42:04] Reading main_script.md...                              │   │
+│  │  [13:42:09] Writing tts_script.md...                               │   │
+│  │  [13:42:11] ✓ Done (12 segments generated)                         │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  ┌─ Source (main_script.md) ──┬─ Generated (tts_script.md) ──────────┐    │
+│  │ NARRATOR: The story of     │ NARRATOR: The story of antibi-        │    │
+│  │ antibiotics begins...      │ otics [PACE:slow] begins, in          │    │
+│  │                            │ [PAUSE:0.5s] the nineteen thirties.   │    │
+│  │ [VISUAL: Wide shot...]     │ [VISUAL: Wide shot...]  (unchanged)   │    │
+│  └────────────────────────────┴───────────────────────────────────────┘    │
+│                                                                             │
+│  ┌─ Inline Editor (tts_script.md) ───────────────────────────────────┐    │
+│  │  (editable; auto-saves on blur, 1 s debounce)                     │    │
+│  └─────────────────────────────────────────────────────────────────── ┘    │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+Key behaviors:
+- [Generate TTS Script ↺] POSTs to `POST /api/pipeline/tts-script/run`. SSE streaming pattern applies (see §4.6.1).
+- The diff view uses **unified diff coloring**: removed lines red, added lines green, unchanged lines gray.
+- The inline editor below the diff is always live; saving does **not** re-run the diff — the user must click [Generate TTS Script ↺] to regenerate.
+- [Render Audio →] is enabled once `tts_script.md` exists on disk. Clicking advances to Stage 4.
+
+---
+
+#### 4.6.5 Stage 4: TTS Rendering
+
+A segment list with per-row playback, re-render, and waveform preview, plus batch render controls.
+
+```
+┌────────────────────────────────────────────────────────────────────────────┐
+│  Stage 4 — TTS Rendering          [Render All]  [Render Missing]           │
+├──────┬──────────────────────────────────────────┬────────┬─────────────────┤
+│  #   │ Segment ID                               │ Status │ Actions         │
+├──────┼──────────────────────────────────────────┼────────┼─────────────────┤
+│  01  │ cold_open_001                            │ ● done │ [▶] [↺]        │
+│  02  │ cold_open_002                            │ ● done │ [▶] [↺]        │
+│  03  │ part1_economics_001                      │ ◌ …    │ [▶] [↺]        │
+│  04  │ part1_economics_002                      │ ○      │ [▶] [↺]        │
+│  …   │ …                                        │ …      │ …               │
+├──────┴──────────────────────────────────────────┴────────┴─────────────────┤
+│  Batch progress:  ██████████░░░░░░░░░░  48%  (6/12 segments)  current: 03  │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+Key behaviors:
+- [▶] plays the segment's `.wav` file via an `<audio>` element without leaving the page.
+- [↺] triggers `POST /api/pipeline/tts-render/run` with `{ segments: ["cold_open_001"] }` and opens a small inline log for that row.
+- [Render All] sends all segment IDs; [Render Missing] sends only segments with `not_started` status.
+- **Row expand**: clicking a row expands it to show an inline **waveform preview** (rendered via `wavesurfer.js`) and the raw TTS text for that segment.
+- Batch progress bar is updated via SSE; current segment ID is shown at the right end of the bar.
+- `done` status means the `.wav` file exists and is non-zero bytes.
+
+---
+
+#### 4.6.6 Stage 5: Audio Sync Pipeline
+
+Section grouping configuration, run controls for `sync_audio_pipeline.py`, and a word-timestamp viewer.
+
+```
+┌────────────────────────────────────────────────────────────────────────────┐
+│  Stage 5 — Audio Sync Pipeline                           [Run Audio Sync]  │
+├────────────────────────────────────────────────────────────────────────────┤
+│  Section Grouping (segment ID ranges → section ID)    [Save Config]        │
+│  ┌──────────────────┬─────────────────────────────────────────────────┐   │
+│  │ Section ID        │ Segment Range                                   │   │
+│  ├──────────────────┼─────────────────────────────────────────────────┤   │
+│  │ cold_open        │ cold_open_001 – cold_open_004           [✎]    │   │
+│  │ part1_economics  │ part1_economics_001 – part1_economics_007 [✎]  │   │
+│  │ …                │ …                                               │   │
+│  └──────────────────┴─────────────────────────────────────────────────┘   │
+│                                                                             │
+│  ┌─ Progress Log (SSE) ───────────────────────────────────────────────┐   │
+│  │  [13:55:02] Running sync_audio_pipeline.py...                     │   │
+│  │  [13:55:08] cold_open: 4 segments, 23.4 s                        │   │
+│  │  [13:55:14] ✓ All sections complete                               │   │
+│  └─────────────────────────────────────────────────────────────────── ┘   │
+│                                                                             │
+│  Word Timestamp Viewer        Filter: [all sections ▾]  [Search word…]    │
+│  ┌────────┬──────────┬──────────┬──────────────────────────────────────┐  │
+│  │ Word   │ Start    │ End      │ Segment ID                           │  │
+│  ├────────┼──────────┼──────────┼──────────────────────────────────────┤  │
+│  │ The    │  0.000 s │  0.080 s │ cold_open_001                       │  │
+│  │ story  │  0.082 s │  0.240 s │ cold_open_001                       │  │
+│  │ of     │  0.242 s │  0.290 s │ cold_open_001                       │  │
+│  │ …      │ …        │ …        │ …                                   │  │
+│  └────────┴──────────┴──────────┴──────────────────────────────────────┘  │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+Key behaviors:
+- Section grouping config is **inline-editable**; [Save Config] persists ranges to `project.json` under `audioSync.sectionGroups`.
+- [Run Audio Sync] POSTs to `POST /api/pipeline/audio-sync/run`. SSE streaming pattern applies.
+- The Word Timestamp Viewer is **read-only** — data is loaded from pipeline output JSON; re-run the pipeline to update.
+- The section filter dropdown lists all section IDs; selecting one scrolls and filters the table to that section's words.
+- Timestamps display in seconds with three decimal places. Rows are 40 px tall; virtual scrolling is used for large scripts.
+
+---
+
+#### 4.6.7 Stage 6: Spec Generation
+
+Section-grouped collapsible file list with visual type badges, inline editing, and per-section regeneration.
+
+```
+┌────────────────────────────────────────────────────────────────────────────┐
+│  Stage 6 — Spec Generation      [Generate All Specs]  [Regenerate Section] │
+├────────────────────────────────────────────────────────────────────────────┤
+│  ▼ cold_open  (4 specs)                                                    │
+│    ├─ [Remotion]  segment_01_title-card.md               ● [✎] [↺]        │
+│    ├─ [Remotion]  segment_02_logo-reveal.md              ● [✎] [↺]        │
+│    ├─ [veo:]      segment_03_petri-dish-wide.md          ● [✎] [↺]        │
+│    └─ [title:]    segment_04_section-header.md           ● [✎] [↺]        │
+│  ▶ part1_economics  (7 specs)                 ○ not started               │
+│  ▶ part2_paradigm_shift  (6 specs)            ○ not started               │
+│  …                                                                         │
+│                                                                             │
+│  ┌─ Inline Spec Editor ───────────────────────────────────────────────┐   │
+│  │  # Segment 01: Title Card                                          │   │
+│  │  **Type:** Remotion                                                 │   │
+│  │  **Duration:** 3.2 s                                               │   │
+│  │  …                                                                  │   │
+│  │  (auto-saves to specs/{section}/segment_NN_*.md on blur)           │   │
+│  └─────────────────────────────────────────────────────────────────── ┘   │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+Key behaviors:
+- Section groups are **collapsible** (▼ open, ▶ closed). Last open/closed state is persisted in `localStorage`.
+- Each spec file shows a **visual type badge**: `[Remotion]` (blue), `[veo:]` (purple), `[title:]` (gray), `[split:]` (orange).
+- [✎] opens the spec in the inline CodeMirror Markdown editor below the list.
+- [↺] triggers regeneration of that single spec file via `POST /api/pipeline/specs/run` with `{ sections: ["cold_open"], files: ["segment_01_title-card.md"] }`.
+- [Generate All Specs] sends all section IDs; [Regenerate Section] sends the currently selected section's ID only.
+- SSE streaming applies; the progress log is shown in an expandable drawer at the bottom of the panel.
+
+---
+
+#### 4.6.8 Stage 7: Veo Generation
+
+Character reference panel, frame chaining graph, clip list, stale-upstream warnings, and batch generation controls.
+
+```
+┌────────────────────────────────────────────────────────────────────────────┐
+│  Stage 7 — Veo Generation    [Generate All]  [Generate Missing]  [▾ Sect] │
+├───────────────────────────┬────────────────────────────────────────────────┤
+│  Character References     │  Clip List               Filter: [all ▾]       │
+│  ─────────────────────────│────────────────────────────────────────────────│
+│  [portrait_alex.png]      │  ┌────┬──────────────────┬─────┬───┬────────┐ │
+│  Alex (protagonist)       │  │ #  │ Clip ID           │ Sec │ AR│ Status │ │
+│  [↺ Regenerate]           │  ├────┼──────────────────┼─────┼───┼────────┤ │
+│                           │  │ 01 │ cold_open_veo_01  │ c/o │16:9│ ● done│ │
+│  [portrait_narrator.png]  │  │ 02 │ cold_open_veo_02  │ c/o │16:9│ ● done│ │
+│  Narrator (voiceover)     │  │ 03 │ part1_veo_01      │ p1  │16:9│ ◌ …   │ │
+│  [↺ Regenerate]           │  │ 04 │ part1_veo_02      │ p1  │9:16│ ○     │ │
+│                           │  │ 05 │ part1_split_L     │ p1  │9:16│ ○  ⚠  │ │
+│                           │  │ 06 │ part1_split_R     │ p1  │9:16│ ○     │ │
+│                           │  └────┴──────────────────┴─────┴───┴────────┘ │
+│  Frame Chaining           │                                                 │
+│  cold_open_veo_01 →       │  ⚠ Clip 05: reference portrait changed.        │
+│  cold_open_veo_02 →       │     Re-generate to update.                     │
+│  part1_veo_01 →           │                                                 │
+│  part1_veo_02             │  ☑ Auto-composite: part1_split (L+R → 16:9)    │
+└───────────────────────────┴────────────────────────────────────────────────┘
+```
+
+Key behaviors:
+- The **Character References** panel shows a thumbnail for each portrait. [↺ Regenerate] triggers a new Veo generation for that portrait and updates the file in place.
+- The **Frame Chaining** panel shows the clip dependency chain as a textual graph. If a clip's reference frame changes (upstream clip re-generated), all dependent clips show a ⚠ **stale-upstream warning** badge.
+- Clip list columns: `#`, `Clip ID`, `Section` (abbreviated), `AR` (aspect ratio), `Status`.
+- [Generate All] / [Generate Missing] / [▾ Sect] (dropdown to pick a single section) POST to `POST /api/pipeline/veo/run` with the appropriate clip ID list.
+- **Auto-compositing**: when a `split:` spec defines a left + right clip pair, a checkbox appears once both clips are `done`. Checking it composites them automatically via `ffmpeg hstack`.
+- SSE streaming shows per-clip progress: _"Clip 03/12: generating (est. 45 s remaining)"_.
+
+---
+
+#### 4.6.9 Stage 8: Composition Generation
+
+Component and section wrapper list with asset staging manifest.
+
+```
+┌────────────────────────────────────────────────────────────────────────────┐
+│  Stage 8 — Composition Generation             [Generate All Compositions]  │
+├───────────────────────────────────────────────┬────────────────────────────┤
+│  Components                   [Regenerate ↺]  │  Asset Staging Manifest    │
+│  ──────────────────────────────────────────── │  [Stage All Missing]       │
+│  ▼ cold_open                                  │  ──────────────────────────│
+│    ├─ TitleCard           ● [Preview] [↺]     │  ✓ cold_open.wav           │
+│    ├─ LogoReveal          ● [Preview] [↺]     │  ✓ cold_open_veo_01.mp4   │
+│    └─ PetriDishWide       ✕ [Preview] [↺]     │  ✗ cold_open_veo_02.mp4   │
+│  ▶ part1_economics (7)    ○                   │    [Stage Now]             │
+│                                               │  ✓ part1_veo_01.mp4       │
+│  Section Wrappers                             │  ✗ part1_veo_02.mp4       │
+│  ──────────────────────────────────────────── │    [Stage Now]             │
+│  ColdOpenSection          ● [Preview] [↺]     │  …                        │
+│  Part1Economics           ○                   │  (lists remotion/public/   │
+│  …                                            │   expected vs present)     │
+└───────────────────────────────────────────────┴────────────────────────────┘
+```
+
+Key behaviors:
+- **Component list**: each Remotion component derived from a spec. [Preview] runs `npx remotion still <compositionId> --frame=0` and opens the PNG in a modal. [↺] triggers `POST /api/pipeline/compositions/run` scoped to that component's ID.
+- **Section Wrappers** are listed separately below components, with the same Preview and Regenerate controls.
+- [Generate All Compositions] sends all component and wrapper IDs in a single batch job.
+- **Asset Staging Manifest**: lists every file that `remotion/public/` must contain (derived from specs). ✓ = file present, ✗ = missing. [Stage Now] runs `POST /api/pipeline/asset-staging/run` for a single file; [Stage All Missing] stages all ✗ files at once.
+- A ✕ (error) status on a component shows the last Claude Code error in a tooltip; clicking the row expands a log drawer.
+
+---
+
+#### 4.6.10 Stage 9: Render + Stitch
+
+Section render list, parallel progress bars, and full-video stitch panel.
+
+```
+┌────────────────────────────────────────────────────────────────────────────┐
+│  Stage 9 — Render + Stitch         [Render ▾]    [Stitch Full Video]      │
+├────────────────────────────────────────────────────────────────────────────┤
+│  ┌────────────────────┬──────────┬────────┬──────────────────┬───────────┐ │
+│  │ Section            │ Duration │ Status │ Progress          │ Actions   │ │
+│  ├────────────────────┼──────────┼────────┼──────────────────┼───────────┤ │
+│  │ cold_open          │  23.4 s  │ ● done │ ████████████ 100%│ [▶] [↺]  │ │
+│  │ part1_economics    │  41.2 s  │ ◌ …    │ ██████░░░░░░  52%│ [▶] [↺]  │ │
+│  │ part2_paradigm…    │    —     │ ○      │ ░░░░░░░░░░░░   0%│ [▶] [↺]  │ │
+│  │ …                  │ …        │ …      │ …                │ …         │ │
+│  └────────────────────┴──────────┴────────┴──────────────────┴───────────┘ │
+│                                                                             │
+│  Active renders (2 parallel):                                               │
+│  part1_economics  [██████░░░░]  52%   part3_mold  [███░░░░░░░]  28%        │
+│                                                                             │
+│  Full Video                                                                 │
+│  ─────────────────────────────────────────────────────────────────────────│
+│  Size: 1.2 GB   Duration: 4m 37s   Status: ○ not rendered                 │
+│  [Stitch Full Video]   [Open in Review →]                                  │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+Key behaviors:
+- [▶] for a completed section opens the rendered `.mp4` in a `<video>` modal.
+- [↺] triggers `POST /api/pipeline/render/run` with `{ sections: ["cold_open"] }` for that row.
+- **[Render ▾] dropdown** offers: "Render All", "Render Missing", "Render Selected Section" (scoped to the last-clicked row).
+- **Parallel renders**: up to 3 sections can render concurrently. Each active render shows its own progress bar in the "Active renders" panel, updated via SSE.
+- [Stitch Full Video] POSTs to `POST /api/pipeline/stitch/run`, which runs `ffmpeg -f concat -safe 0 -i concat.txt -c copy output.mp4`. Progress is streamed via SSE.
+- **Full Video panel**: shows output file size, duration (read from `ffprobe`), and [Open in Review →] which switches to the Review tab with the full video loaded.
+
 ---
 
 ## 5. Video Production Pipeline
@@ -915,6 +1295,24 @@ For a 19-second rendered video:
 | GET | `/api/sections` | List section metadata |
 | POST | `/api/thumbnails` | Upload base64 frame capture |
 | GET | `/api/export` | Download annotations.json |
+
+### Pipeline
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/project` | Get project config (`project.json`) |
+| PUT | `/api/project` | Update project config (sections, voice, resolution, etc.) |
+| PUT | `/api/project/script` | Save edits to `narrative/main_script.md` |
+| POST | `/api/pipeline/tts-script/run` | Trigger Claude Code TTS script generation |
+| POST | `/api/pipeline/tts-render/run` | Trigger TTS rendering (body: `{ segments?: string[] }`) |
+| POST | `/api/pipeline/audio-sync/run` | Trigger `sync_audio_pipeline.py` |
+| POST | `/api/pipeline/specs/run` | Trigger Claude Code spec generation (body: `{ sections?: string[], files?: string[] }`) |
+| POST | `/api/pipeline/veo/run` | Trigger Veo clip generation (body: `{ clips?: string[] }`) |
+| POST | `/api/pipeline/compositions/run` | Trigger Claude Code composition generation (body: `{ ids?: string[] }`) |
+| POST | `/api/pipeline/asset-staging/run` | Stage assets to `remotion/public/` (body: `{ files?: string[] }`) |
+| POST | `/api/pipeline/render/run` | Trigger section render(s) (body: `{ sections?: string[] }`) |
+| POST | `/api/pipeline/stitch/run` | Trigger `ffmpeg` concat stitch |
+| GET | `/api/pipeline/status` | Get status of all pipeline stages |
 
 ---
 
