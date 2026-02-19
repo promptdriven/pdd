@@ -1,3 +1,15 @@
+## v0.0.153 (2026-02-18)
+
+### Feat
+
+- update Claude Sonnet token counts and introduce atomic state updates for `sync_orchestration` to fix state desynchronization.
+- add user story validation framework (PR #484)
+- implement atomic state updates, configurable LLM timeout, update Claude model, and migrate pytest configuration to pyproject.toml.
+
+### Fix
+
+- prevent os.killpg(1) from crashing pytest-xdist workers in CI
+
 ## v0.0.152 (2026-02-17)
 
 ### Feat
