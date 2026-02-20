@@ -1,3 +1,15 @@
+## v0.0.154 (2026-02-19)
+
+### Feat
+
+- Add initial video editor demo including API routes, processing pipeline scripts, and frontend application files.
+- Agentic checkup with iterative fix-verify loop, sub-steps, and architecture improvements (#482)
+- add Phase 10 Gemini 3.1-pro grounded benchmark results for sync_orchestration
+- add experimental run of sync orchestration with atomic state updates and update PRD.
+- Update Gemini 3 Pro preview to 3.1 Pro preview and add xAI Grok models to LLM configurations.
+- add grounding experiment results for Opus 4.6 grounded sync_orchestration runs
+- Add grounding experiment results for sync orchestration runs, including generated code and stability metrics.
+
 ## v0.0.153 (2026-02-18)
 
 ### Feat
