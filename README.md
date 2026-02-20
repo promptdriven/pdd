@@ -167,7 +167,7 @@ For CLI enthusiasts, implement GitHub issues directly:
 
 2. **One Agentic CLI** - Required to run the workflows (install at least one):
    - **Claude Code**: `npm install -g @anthropic-ai/claude-code` (requires `ANTHROPIC_API_KEY`)
-   - **Gemini CLI**: `npm install -g @google/gemini-cli` (requires `GOOGLE_API_KEY`)
+   - **Gemini CLI**: `npm install -g @google/gemini-cli` (requires `GOOGLE_API_KEY` or `GEMINI_API_KEY`)
    - **Codex CLI**: `npm install -g @openai/codex` (requires `OPENAI_API_KEY`)
 
 **Usage:**
@@ -227,24 +227,23 @@ Run the comprehensive setup wizard:
 pdd setup
 ```
 
-The setup wizard runs in two phases:
-- **Phase 1** — Detects agentic CLI tools (claude, gemini, codex) and offers installation if needed
-- **Phase 2** — Auto-configures PDD in 4 deterministic steps:
-  1. Scans for API keys across shell, .env, and ~/.pdd files (prompts to add one if none found)
-  2. Configures models from a reference CSV based on your available keys
-  3. Checks for local LLMs (Ollama, LM Studio) and creates a `.pddrc` config file
-  4. Tests a model and prints a summary
+The setup wizard runs these steps:
+  1.  Detects agentic CLI tools (Claude, Gemini, Codex) and offers installation and API key configuration if needed
+  2. Scans for API keys across `.env`, and `~/.pdd/api-env.*`, and the shell environment; prompts to add one if none are found
+  3. Configures models from a reference CSV `data/llm_model.csv` of top models (ELO ≥ 1400) across all LiteLLM-supported providers  based on your available keys
+  4. Optionally creates a `.pddrc` project config
+  5. Tests the first available model with a real LLM call 
+  6. Prints a structured summary (CLIs, keys, models, test result)
 
 The wizard can be re-run at any time to update keys, add providers, or reconfigure settings.
 
+> **Important:** After setup completes, source the API environment file so your keys take effect in the current terminal session:
+> ```bash
+> source ~/.pdd/api-env.zsh   # or api-env.bash, depending on your shell
+> ```
+> New terminal windows will load keys automatically.
+
 If you skip this step, the first regular pdd command you run will detect the missing setup files and print a reminder banner so you can finish onboarding later.
-
-Reload your shell so the new completion and environment hooks are available:
-```bash
-source ~/.zshrc  # or source ~/.bashrc / fish equivalent
-```
-
-👉 For detailed setup documentation, see [docs/SETUP_GUIDE.md](docs/SETUP_GUIDE.md). For manual configuration, see [SETUP_WITH_GEMINI.md](SETUP_WITH_GEMINI.md).
 
 5. **Run Hello**:
    ```bash
@@ -1839,7 +1838,7 @@ For the agentic fallback to function, you need to have at least one of the suppo
     *   Requires the `ANTHROPIC_API_KEY` environment variable to be set.
 2.  **Google Gemini:**
     *   Requires the `gemini` CLI to be installed and in your `PATH`.
-    *   Requires the `GOOGLE_API_KEY` environment variable to be set.
+    *   Requires the `GOOGLE_API_KEY` or `GEMINI_API_KEY` environment variable to be set.
 3.  **OpenAI Codex/GPT:**
     *   Requires the `codex` CLI to be installed and in your `PATH`.
     *   Requires the `OPENAI_API_KEY` environment variable to be set.
@@ -2785,12 +2784,7 @@ The `.pddrc` approach is recommended for team projects as it ensures consistent 
 
 ### Model Configuration (`llm_model.csv`)
 
-PDD uses a CSV file (`llm_model.csv`) to store information about available AI models, their costs, capabilities, and required API key names. The `pdd setup` command automatically manages this file by:
-
-- **API key scanning:** Checking shell environment, `.env` files, and `~/.pdd/api-env.*` for provider keys
-- **Automatic model configuration:** Matching found keys to a bundled reference CSV and writing matching models to your user CSV
-- **Local LLM detection:** Discovering running Ollama and LM Studio servers and adding their models
-- **Fallback menu:** Manual options to add providers, test models, or initialize `.pddrc` if auto-configuration fails
+PDD uses a CSV file (`llm_model.csv`) to store information about available AI models, their costs, capabilities, and required API key names.
 
 When running commands locally, PDD determines which configuration file to use based on the following priority:
 

@@ -60,25 +60,27 @@ Right after installation, let PDD bootstrap its configuration:
 pdd setup
 ```
 
-The interactive setup wizard will:
-1. **Scan your environment** for existing API keys from all sources
-2. **Show an interactive menu** with options to:
-   - Add or fix API keys (including Gemini)
-   - Add local LLMs (Ollama, LM Studio)
-   - Add custom providers
-   - Remove providers
-3. **Validate your Gemini API key** with a real test request
-4. **Guide model selection** with cost transparency
-5. **Detect agentic CLI tools** and offer installation
-6. **Create .pddrc** for your project
+The setup wizard runs these steps:
+  1.  Detects agentic CLI tools (Claude, Gemini, Codex) and offers installation and API key configuration if needed
+  2. Scans for API keys across `.env`, and `~/.pdd/api-env.*`, and the shell environment; prompts to add one if none are found
+  3. Configures models from a reference CSV `data/llm_model.csv` of top models (ELO ≥ 1400) across all LiteLLM-supported providers  based on your available keys
+  4. Optionally creates a `.pddrc` project config
+  5. Tests the first available model with a real LLM call 
+  6. Prints a structured summary (CLIs, keys, models, test result)
 
 When adding your Gemini API key:
-- Select option `1. Add or fix API keys` from the menu
+- Select Gemini CLI as one of the agentic CLI tools
 - The wizard will detect that `GEMINI_API_KEY` is missing
 - Paste your API key when prompted (you can create it in the next step if you haven't already)
 - The wizard tests it immediately and confirms it works
 
-The wizard writes your credentials to `~/.pdd/api-env.zsh` (or `.bash`), updates `llm_model.csv` with your selected models, and reminds you to reload your shell (`source ~/.zshrc`, etc.) so completion and env hooks load.
+The wizard writes your credentials to `~/.pdd/api-env.zsh` (or `.bash`) and updates `llm_model.csv` with your selected models.
+
+> **Important:** After setup completes, source the API environment file so your keys take effect in the current terminal session:
+> ```bash
+> source ~/.pdd/api-env.zsh   # or api-env.bash, depending on your shell
+> ```
+> New terminal windows will load keys automatically.
 
 If you prefer to configure everything manually—or you're on an offline machine—skip the wizard and follow the manual instructions below.
 

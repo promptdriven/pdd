@@ -20,7 +20,7 @@ _CLI_COMMANDS: dict[str, str] = {
 # Maps provider name -> environment variable for API key
 _API_KEY_ENV_VARS: dict[str, str] = {
     "anthropic": "ANTHROPIC_API_KEY",
-    "google": "GOOGLE_API_KEY",
+    "google": "GEMINI_API_KEY",
     "openai": "OPENAI_API_KEY",
 }
 
@@ -88,7 +88,7 @@ _COMMON_CLI_PATHS: Dict[str, List[Path]] = {
     ],
 }
 
-console = Console()
+console = Console(highlight=False)
 
 @dataclass
 class CliBootstrapResult:
@@ -97,6 +97,7 @@ class CliBootstrapResult:
     provider: str = ""
     cli_path: str = ""
     api_key_configured: bool = False
+    skipped: bool = False  # True when user explicitly skipped CLI setup
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -114,15 +115,15 @@ def _has_api_key(provider: str) -> bool:
     if not env_var:
         # Also check fallback keys
         if provider == "google":
-            val = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+            val = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
             return bool(val and val.strip())
         return False
     val = os.environ.get(env_var)
     if val and val.strip():
         return True
-    # Fallback for google: also check GEMINI_API_KEY
+    # Fallback for google: also check GOOGLE_API_KEY (Vertex AI convention)
     if provider == "google":
-        val = os.environ.get("GEMINI_API_KEY")
+        val = os.environ.get("GOOGLE_API_KEY")
         return bool(val and val.strip())
     return False
 
@@ -261,37 +262,162 @@ def _save_api_key(key_name: str, key_value: str, shell: str) -> bool:
         return False
 
 def _prompt_api_key(provider: str, shell: str) -> bool:
-    """Prompt user for API key and save it."""
+    """Prompt user for API key and save it. Prints save location on success."""
     key_name = PROVIDER_PRIMARY_KEY.get(provider, "")
     if not key_name:
         return False
-        
+
     display = PROVIDER_DISPLAY.get(provider, provider)
     try:
         key_value = _prompt_input(f"  Enter your {display} API key (or press Enter to skip): ").strip()
     except (EOFError, KeyboardInterrupt):
         return False
-        
+
     if not key_value:
         if provider == "anthropic":
             console.print("  [dim]Note: Claude CLI may still work with subscription auth.[/dim]")
         return False
-        
-    return _save_api_key(key_name, key_value, shell)
+
+    api_env_path = _get_api_env_file_path(shell)
+    if _save_api_key(key_name, key_value, shell):
+        console.print(f"  [green]\u2713[/green] {key_name} saved to {api_env_path}")
+        #console.print(f"  [green]\u2713[/green] {key_name} loaded into current session")
+        return True
+    return False
+
+
+def _test_cli(cli_name: str, cli_path: str) -> bool:
+    """Run a quick sanity-check invocation of the CLI. Returns True on success."""
+    console.print(f"\n  Testing {cli_name}...")
+    try:
+        result = subprocess.run(
+            [cli_path, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if result.returncode == 0:
+            version_line = (result.stdout or result.stderr or "").strip().splitlines()[0] if (result.stdout or result.stderr) else ""
+            console.print(f"  [green]\u2713[/green] {cli_name} version {version_line or 'OK'}")
+            return True
+        else:
+            # Some CLIs exit non-zero for --version but still work; try --help
+            result2 = subprocess.run(
+                [cli_path, "--help"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            if result2.returncode == 0:
+                console.print(f"  [green]\u2713[/green] {cli_name} is responsive")
+                return True
+            console.print(f"  [red]\u2717[/red] {cli_name} test failed (exit {result.returncode})")
+            return False
+    except FileNotFoundError:
+        console.print(f"  [red]\u2717[/red] {cli_name} binary not found at {cli_path}")
+        return False
+    except subprocess.TimeoutExpired:
+        console.print(f"  [red]\u2717[/red] {cli_name} test timed out")
+        return False
+    except Exception as exc:
+        console.print(f"  [red]\u2717[/red] {cli_name} test error: {exc}")
+        return False
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
-def detect_and_bootstrap_cli() -> CliBootstrapResult:
+def _bootstrap_single_cli(
+    cli_entry: Dict[str, object],
+    shell: str,
+) -> CliBootstrapResult:
+    """Process install/key/test for a single CLI selection.
+
+    Returns a populated CliBootstrapResult (skipped=True on failure).
+    """
+    display_name = str(cli_entry["display_name"])
+    sel_provider: str = str(cli_entry["provider"])
+    sel_cli_name: str = str(cli_entry["cli_name"])
+    sel_path: Optional[str] = str(cli_entry["path"]) if cli_entry["path"] else None
+    sel_has_key: bool = bool(cli_entry["has_key"])
+
+    console.print(f"\n  [bold]Setting up {display_name}...[/bold]")
+
+    def _cli_skip(reason: str = "") -> CliBootstrapResult:
+        if reason:
+            console.print(f"  [red]\u2717 {reason}[/red]")
+        console.print(f"  [red]\u2717 {display_name} not configured.[/red]")
+        return CliBootstrapResult(skipped=True)
+
+    # Install step (if not installed)
+    if not sel_path:
+        install_cmd = _INSTALL_COMMANDS[sel_provider]
+        console.print(f"  Install command: [bold]{install_cmd}[/bold]")
+        try:
+            install_answer = _prompt_input("  Install now? [y/N]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            console.print()
+            return _cli_skip()
+
+        if install_answer in ("y", "yes"):
+            if not _npm_available():
+                console.print("  [red]\u2717[/red] npm is not installed. Please install Node.js/npm first.")
+                console.print(f"  Then run: {install_cmd}")
+                return _cli_skip("npm not available — cannot install CLI")
+
+            console.print(f"  Installing {display_name}...")
+            if _run_install(install_cmd):
+                sel_path = _find_cli_binary(sel_cli_name)
+                if sel_path:
+                    console.print(f"  [green]\u2713[/green] Installed {sel_cli_name} at {sel_path}")
+                else:
+                    console.print("  [yellow]Installation completed but CLI not found on PATH.[/yellow]")
+                    return _cli_skip("CLI installed but not found on PATH")
+            else:
+                console.print("  [red]Installation failed. Try installing manually.[/red]")
+                return _cli_skip("installation failed")
+        else:
+            return _cli_skip()
+
+    # API key step (if not set)
+    if not sel_has_key:
+        sel_has_key = _prompt_api_key(sel_provider, shell)
+        if not sel_has_key and sel_provider != "anthropic":
+            console.print(f"  [dim]No API key set. {display_name} may have limited functionality.[/dim]")
+
+    # Force CLI test (no option to skip)
+    _test_cli(sel_cli_name, sel_path or sel_cli_name)
+
+    return CliBootstrapResult(
+        cli_name=sel_cli_name,
+        provider=sel_provider,
+        cli_path=sel_path or "",
+        api_key_configured=sel_has_key,
+    )
+
+
+def detect_and_bootstrap_cli() -> List[CliBootstrapResult]:
     """Phase 1 entry point for pdd setup.
 
     Shows a numbered selection table of all three CLI options with their
-    install and API-key status, lets the user choose, and walks through
-    installation and key configuration as needed.
+    install and API-key status, lets the user choose one or more via
+    comma-separated input, and walks through installation and key
+    configuration for each.
+
+    Returns a list of CliBootstrapResult objects (one per selected CLI).
+    On full skip: returns [CliBootstrapResult(skipped=True)].
     """
-    console.print("\nChecking CLI tools...\n")
+    # Import banner helper from setup_tool
+    from pdd.setup_tool import _print_step_banner
+    _print_step_banner("Checking CLI tools...")
     shell = _detect_shell()
+
+    def _skip_all(reason: str = "") -> List[CliBootstrapResult]:
+        """Print red CLI-not-configured warning and return a skipped result."""
+        if reason:
+            console.print(f"  [red]\u2717 {reason}[/red]")
+        console.print("  [red]\u2717 CLI not configured. Run `pdd setup` again to configure it.[/red]")
+        return [CliBootstrapResult(skipped=True)]
 
     # ------------------------------------------------------------------
     # 1. Gather status for each CLI in table order
@@ -361,81 +487,55 @@ def detect_and_bootstrap_cli() -> CliBootstrapResult:
                 break
 
     # ------------------------------------------------------------------
-    # 4. Prompt for selection
+    # 4. Prompt for selection (comma-separated)
     # ------------------------------------------------------------------
     try:
-        console.print("  Which CLI would you like to use for pdd setup? \[[blue]1[/blue]/[blue]2[/blue]/[blue]3[/blue]]: ", end="")
+        console.print(r"  Select CLIs to use for pdd agentic tools (enter numbers separated by commas, e.g., [blue]1[/blue],[blue]3[/blue]): ", end="")
         raw = _prompt_input("").strip()
     except (EOFError, KeyboardInterrupt):
-        console.print("\n  [dim]Skipped CLI setup. You can run `pdd setup` again later.[/dim]")
-        return CliBootstrapResult()
+        console.print()
+        return _skip_all()
 
     if raw.lower() in ("q", "n"):
-        console.print("  [dim]Skipped CLI setup. You can run `pdd setup` again later.[/dim]")
-        return CliBootstrapResult()
+        return _skip_all()
 
-    if raw in ("1", "2", "3"):
-        selected_idx = int(raw) - 1
-    elif raw == "":
-        selected_idx = default_idx
-        console.print(f"  [dim]Defaulting to {cli_info[selected_idx]['display_name']}[/dim]")
+    # Parse comma-separated selections, deduplicate while preserving order
+    selected_indices: List[int] = []
+    if raw == "":
+        selected_indices = [default_idx]
+        console.print(f"  [dim]Defaulting to {cli_info[default_idx]['display_name']}[/dim]")
     else:
-        # Invalid input — treat as default
-        selected_idx = default_idx
-        console.print(f"  [dim]Invalid input. Defaulting to {cli_info[selected_idx]['display_name']}[/dim]")
-
-    selected = cli_info[selected_idx]
-    sel_provider: str = str(selected["provider"])
-    sel_cli_name: str = str(selected["cli_name"])
-    sel_path: Optional[str] = selected["path"] if selected["path"] else None  # type: ignore[assignment]
-    sel_has_key: bool = bool(selected["has_key"])
+        seen: set[int] = set()
+        parts = [p.strip() for p in raw.split(",")]
+        for part in parts:
+            if part in ("1", "2", "3"):
+                idx = int(part) - 1
+                if idx not in seen:
+                    seen.add(idx)
+                    selected_indices.append(idx)
+        if not selected_indices:
+            # No valid numbers found — treat as default
+            selected_indices = [default_idx]
+            console.print(f"  [dim]Invalid input. Defaulting to {cli_info[default_idx]['display_name']}[/dim]")
 
     # ------------------------------------------------------------------
-    # 5. Install step (if not installed)
+    # 5. Process each selected CLI
     # ------------------------------------------------------------------
-    if not sel_path:
-        install_cmd = _INSTALL_COMMANDS[sel_provider]
-        console.print(f"\n  Install command: [bold]{install_cmd}[/bold]")
+    results: List[CliBootstrapResult] = []
+    for sel_idx in selected_indices:
         try:
-            install_answer = _prompt_input("  Install now? [y/N]: ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            console.print("\n  [dim]Skipped CLI setup. You can run `pdd setup` again later.[/dim]")
-            return CliBootstrapResult()
+            result = _bootstrap_single_cli(cli_info[sel_idx], shell)
+            results.append(result)
+        except KeyboardInterrupt:
+            console.print()
+            console.print(f"  [red]\u2717 {cli_info[sel_idx]['display_name']} not configured.[/red]")
+            results.append(CliBootstrapResult(skipped=True))
+            break  # Stop processing remaining CLIs
 
-        if install_answer in ("y", "yes"):
-            if not _npm_available():
-                console.print("  [red]\u2717[/red] npm is not installed. Please install Node.js/npm first,")
-                console.print(f"  then run: {install_cmd}")
-                return CliBootstrapResult()
+    if not results:
+        return _skip_all()
 
-            console.print(f"  Installing {selected['display_name']}...")
-            if _run_install(install_cmd):
-                sel_path = _find_cli_binary(sel_cli_name)
-                if sel_path:
-                    console.print(f"  [green]\u2713[/green] Installed {sel_cli_name} at {sel_path}")
-                else:
-                    console.print("  [yellow]Installation completed but CLI not found on PATH.[/yellow]")
-                    return CliBootstrapResult()
-            else:
-                console.print("  [red]Installation failed. Try installing manually.[/red]")
-                return CliBootstrapResult()
-        else:
-            console.print(f"  [dim]Skipped installation. Run `{install_cmd}` manually when ready.[/dim]")
-            return CliBootstrapResult()
-
-    # ------------------------------------------------------------------
-    # 6. API key step (if not set)
-    # ------------------------------------------------------------------
-    if not sel_has_key:
-        sel_has_key = _prompt_api_key(sel_provider, shell)
-
-    # ------------------------------------------------------------------
-    return CliBootstrapResult(
-        cli_name=sel_cli_name,
-        provider=sel_provider,
-        cli_path=sel_path or "",
-        api_key_configured=sel_has_key,
-    )
+    return results
 
 
 def detect_cli_tools() -> None:

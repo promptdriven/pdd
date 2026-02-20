@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import sys
+import threading
 import time as time_module
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -103,6 +105,36 @@ def _resolve_base_url(row: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _resolve_provider_auth(row: Dict[str, Any]) -> List[Tuple[str, str, bool]]:
+    """Resolve all auth-related env vars for a model row.
+
+    Returns a list of (label, status_string, is_ok) tuples.
+    Driven by the CSV api_key field (pipe-delimited for multi-credential providers).
+    """
+    from pdd.provider_manager import parse_api_key_vars
+
+    api_key_field = str(row.get("api_key", "")).strip()
+    env_vars = parse_api_key_vars(api_key_field)
+
+    if not env_vars:
+        # Empty api_key — device flow (e.g. GitHub Copilot) or local model
+        return [("Auth", "Device flow / no key needed", True)]
+
+    results: List[Tuple[str, str, bool]] = []
+    for var in env_vars:
+        value = os.getenv(var, "")
+        if value:
+            # Extra validation for credential file paths
+            if var == "GOOGLE_APPLICATION_CREDENTIALS" and not Path(value).is_file():
+                results.append((var, f"⚠ Path set but file not found ({var})", False))
+            else:
+                results.append((var, f"✓ Found ({var})", True))
+        else:
+            results.append((var, f"✗ Not found ({var})", False))
+
+    return results
+
+
 def _calculate_cost(
     prompt_tokens: int,
     completion_tokens: int,
@@ -148,55 +180,33 @@ def _run_test(row: Dict[str, Any]) -> Dict[str, Any]:
     Returns a dict with keys: success, duration_s, cost, error, tokens.
     """
     import litellm
+    from pdd.provider_manager import parse_api_key_vars
 
     model_name: str = str(row.get("model", ""))
-    api_key, _key_status = _resolve_api_key(row)
     base_url = _resolve_base_url(row)
 
     kwargs: Dict[str, Any] = {
         "model": model_name,
         "messages": [{"role": "user", "content": "Say OK"}],
-        "timeout": 30,
+        "timeout": 8,
     }
 
-    # Only pass api_key if we have one; otherwise litellm uses its defaults
-    if api_key:
-        kwargs["api_key"] = api_key
+    # Resolve API key using the pipe-delimited convention:
+    #   Single var  → pass as api_key=
+    #   Multi var   → litellm reads from os.environ (don't pass api_key=)
+    #   Empty       → device flow / local (don't pass api_key=)
+    api_key_field = str(row.get("api_key", "")).strip()
+    env_vars = parse_api_key_vars(api_key_field)
+
+    if len(env_vars) == 1:
+        key_value = os.getenv(env_vars[0], "")
+        if key_value:
+            kwargs["api_key"] = key_value.strip()
+    # Multi-var and empty: litellm reads env vars automatically
 
     if base_url:
         kwargs["base_url"] = base_url
         kwargs["api_base"] = base_url
-
-    # Vertex AI handling
-    is_vertex = model_name.startswith("vertex_ai/") or str(row.get("provider", "")).lower() in (
-        "google",
-        "vertex_ai",
-        "googlevertexai",
-    )
-    key_name = str(row.get("api_key", "")).strip()
-    if is_vertex and key_name == "VERTEX_CREDENTIALS":
-        creds_path = os.getenv("VERTEX_CREDENTIALS", "")
-        project = os.getenv("VERTEX_PROJECT", "")
-        location_csv = str(row.get("location", "")).strip()
-        location = location_csv if location_csv else os.getenv("VERTEX_LOCATION", "")
-
-        if creds_path:
-            try:
-                import json as _json
-
-                with open(creds_path, "r") as f:
-                    creds = _json.load(f)
-                kwargs["vertex_credentials"] = _json.dumps(creds)
-            except Exception:
-                pass  # Will likely fail at call time with a clear error
-
-        if project:
-            kwargs["vertex_project"] = project
-        if location:
-            kwargs["vertex_location"] = location
-
-        # Remove api_key for vertex — it uses credentials instead
-        kwargs.pop("api_key", None)
 
     start = time_module.time()
     try:
@@ -312,7 +322,7 @@ def test_model_interactive() -> None:
 
         try:
             choice = console.input(
-                "[bold cyan]Enter model number to test (or q/empty to quit): [/bold cyan]"
+                "[bold cyan]Enter model number to test (or empty to quit): [/bold cyan]"
             ).strip()
         except (EOFError, KeyboardInterrupt):
             console.print("\n[dim]Exiting model tester.[/dim]")
@@ -341,36 +351,58 @@ def test_model_interactive() -> None:
         console.print(f"[bold]Testing: [bright_white]{model_name}[/bright_white] ({provider})[/bold]")
         console.print("─" * 50)
 
-        # Diagnostics: API key
-        api_key, key_status = _resolve_api_key(row)
-        if "✓" in key_status:
-            console.print(f"  API Key:   [green]{key_status}[/green]")
-        elif "no key configured" in key_status:
-            console.print(f"  API Key:   [yellow]{key_status}[/yellow]")
-        else:
-            console.print(f"  API Key:   [red]{key_status}[/red]")
+        # Diagnostics: provider authentication
+        auth_checks = _resolve_provider_auth(row)
+        for label, status_str, is_ok in auth_checks:
+            color = "green" if is_ok else "red"
+            console.print(f"  {label + ':':<13s}[{color}]{status_str}[/{color}]")
 
         # Diagnostics: base URL
         base_url = _resolve_base_url(row)
         if base_url:
             console.print(f"  Base URL:  [dim]{base_url}[/dim]")
 
-        # Diagnostics: Vertex AI specifics
-        key_name = str(row.get("api_key", "")).strip()
-        if key_name == "VERTEX_CREDENTIALS":
-            project = os.getenv("VERTEX_PROJECT", "")
-            location_csv = str(row.get("location", "")).strip()
-            location = location_csv if location_csv else os.getenv("VERTEX_LOCATION", "")
-            if project:
-                console.print(f"  Project:   [dim]{project}[/dim]")
-            if location:
-                console.print(f"  Location:  [dim]{location}[/dim]")
-
         console.print()
-        console.print("  [dim]Sending test prompt...[/dim]")
+        sys.stdout.write("  Sending test prompt...")
+        sys.stdout.flush()
 
-        # Run the test
-        result = _run_test(row)
+        # Run the test in a thread, printing dots while waiting
+        test_result_holder: List[Optional[Dict[str, Any]]] = [None]
+
+        def _do_test() -> None:
+            test_result_holder[0] = _run_test(row)
+
+        t = threading.Thread(target=_do_test, daemon=True)
+        t.start()
+
+        elapsed = 0.0
+        while t.is_alive() and elapsed < 8.0:
+            t.join(timeout=1.0)
+            if t.is_alive():
+                sys.stdout.write(".")
+                sys.stdout.flush()
+                elapsed += 1.0
+
+        if t.is_alive():
+            # Timeout — thread is still running; don't wait further
+            sys.stdout.write("\n")
+            result = {
+                "success": False,
+                "duration_s": elapsed,
+                "cost": 0.0,
+                "error": "Request timed out (8s)",
+                "tokens": None,
+            }
+        else:
+            sys.stdout.write("\n")
+            result = test_result_holder[0] or {
+                "success": False,
+                "duration_s": 0.0,
+                "cost": 0.0,
+                "error": "Unknown error",
+                "tokens": None,
+            }
+
         results[idx] = result
 
         if result["success"]:

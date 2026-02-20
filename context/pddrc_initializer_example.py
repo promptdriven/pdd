@@ -7,30 +7,34 @@ from pathlib import Path
 project_root = Path(__file__).resolve().parent.parent
 sys.path.append(str(project_root))
 
-from pdd.pddrc_initializer import offer_pddrc_init
+from pdd.pddrc_initializer import _build_pddrc_content, _detect_language
 
 
 def main() -> None:
     """
-    Demonstrates how to use the pddrc_initializer module to:
-    1. Check if .pddrc exists in current project
-    2. Detect project language (Python/TypeScript/Go)
-    3. Offer to create .pddrc with sensible defaults
+    Demonstrates how to use the pddrc_initializer module.
+
+    The primary entry points are:
+    - _detect_language(cwd): returns "python", "typescript", "go", or None
+    - _build_pddrc_content(language): returns YAML string for .pddrc
+    - offer_pddrc_init(): interactive flow with YAML preview + confirmation
+
+    In practice, `pdd setup` imports _detect_language and _build_pddrc_content
+    directly for a streamlined flow (no YAML preview).
     """
 
-    # Run the interactive initialization
-    # was_created = offer_pddrc_init()  # Uncomment to run interactively
+    # Detect language from marker files in cwd
+    from pathlib import Path
+    language = _detect_language(Path.cwd())
+    print(f"Detected language: {language}")  # e.g. "python" or None
 
-    # Example flow:
-    #   No .pddrc found in current project.
-    #
-    #   Would you like to create one with default settings?
-    #     Default language: python
-    #     Output path: pdd/
-    #     Test output path: tests/
-    #
-    #   Create .pddrc? [Y/n]
-    #   ✓ Created .pddrc with default settings
+    # Build .pddrc content for a given language
+    content = _build_pddrc_content(language or "python")
+    print(content)
+
+    # Or use the full interactive flow (shows YAML preview, asks for confirmation):
+    # from pdd.pddrc_initializer import offer_pddrc_init
+    # was_created = offer_pddrc_init()
     pass
 
 

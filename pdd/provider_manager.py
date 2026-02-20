@@ -9,21 +9,12 @@ import shutil
 import tempfile
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from rich.console import Console
 from rich.table import Table
 from rich.prompt import Prompt, Confirm
 
-from pdd.litellm_registry import (
-    is_litellm_available,
-    get_top_providers,
-    search_providers,
-    get_models_for_provider,
-    get_api_key_env_var,
-    ProviderInfo,
-    ModelInfo,
-)
 
 console = Console()
 
@@ -33,6 +24,134 @@ CSV_FIELDNAMES = [
     "base_url", "api_key", "max_reasoning_tokens", "structured_output",
     "reasoning_type", "location",
 ]
+
+# ---------------------------------------------------------------------------
+# Pipe-delimited api_key helpers
+# ---------------------------------------------------------------------------
+# The CSV api_key column can contain multiple env var names separated by "|".
+# Single var → pass as api_key= to litellm.  Multi-var → litellm reads from
+# os.environ automatically (Bedrock, Azure, Vertex AI).  Empty → device flow
+# or local model (GitHub Copilot, Ollama).
+
+
+def parse_api_key_vars(api_key_field: str) -> List[str]:
+    """Split the pipe-delimited api_key CSV field into individual env var names.
+
+    Returns an empty list if the field is empty/blank.
+    """
+    if not api_key_field or not api_key_field.strip():
+        return []
+    return [v.strip() for v in api_key_field.split("|") if v.strip()]
+
+
+def is_multi_credential(api_key_field: str) -> bool:
+    """Return True if the api_key field contains multiple env vars (pipe-delimited)."""
+    return "|" in (api_key_field or "")
+
+
+# ---------------------------------------------------------------------------
+# Complex provider authentication registry
+# ---------------------------------------------------------------------------
+# Providers that require multi-variable auth (not just a single API key).
+# Maps provider display name (as in CSV) -> list of env var configs.
+# Used by _setup_complex_provider() for interactive credential prompting.
+
+COMPLEX_AUTH_PROVIDERS: Dict[str, List[Dict[str, Any]]] = {
+    "Google Vertex AI": [
+        {
+            "env_var": "GOOGLE_APPLICATION_CREDENTIALS",
+            "label": "Credentials",
+            "required": True,
+            "default": None,
+            "hint": "Path to GCP service account JSON (or 'adc' for Application Default Credentials)",
+        },
+        {
+            "env_var": "VERTEXAI_PROJECT",
+            "label": "GCP Project",
+            "required": True,
+            "default": None,
+            "hint": "Google Cloud project ID",
+        },
+        {
+            "env_var": "VERTEXAI_LOCATION",
+            "label": "Location",
+            "required": True,
+            "default": "us-central1",
+            "hint": "GCP region (e.g. us-central1)",
+        },
+    ],
+    "AWS Bedrock": [
+        {
+            "env_var": "AWS_ACCESS_KEY_ID",
+            "label": "Access Key ID",
+            "required": True,
+            "default": None,
+            "hint": "AWS IAM access key ID",
+        },
+        {
+            "env_var": "AWS_SECRET_ACCESS_KEY",
+            "label": "Secret Key",
+            "required": True,
+            "default": None,
+            "hint": "AWS IAM secret access key",
+        },
+        {
+            "env_var": "AWS_REGION_NAME",
+            "label": "Region",
+            "required": True,
+            "default": "us-east-1",
+            "hint": "AWS region (e.g. us-east-1)",
+        },
+    ],
+    "Azure OpenAI": [
+        {
+            "env_var": "AZURE_API_KEY",
+            "label": "API Key",
+            "required": True,
+            "default": None,
+            "hint": "Azure OpenAI resource key",
+        },
+        {
+            "env_var": "AZURE_API_BASE",
+            "label": "Endpoint",
+            "required": True,
+            "default": None,
+            "hint": "Azure OpenAI endpoint URL (e.g. https://myresource.openai.azure.com/)",
+        },
+        {
+            "env_var": "AZURE_API_VERSION",
+            "label": "API Version",
+            "required": True,
+            "default": "2024-10-21",
+            "hint": "Azure API version string",
+        },
+    ],
+    "Azure AI": [
+        {
+            "env_var": "AZURE_AI_API_KEY",
+            "label": "API Key",
+            "required": True,
+            "default": None,
+            "hint": "Azure AI Foundry API key",
+        },
+        {
+            "env_var": "AZURE_AI_API_BASE",
+            "label": "Endpoint",
+            "required": False,
+            "default": None,
+            "hint": "Optional: Azure AI endpoint URL",
+        },
+    ],
+    "Github Copilot": [
+        {
+            "env_var": "GITHUB_COPILOT_API_KEY",
+            "label": "API Key",
+            "required": False,
+            "default": None,
+            "hint": "Optional: GitHub Copilot uses device flow auth at runtime",
+        },
+    ],
+}
 
 # ---------------------------------------------------------------------------
 # Path helpers
@@ -327,155 +446,144 @@ def _is_key_set(key_name: str) -> Optional[str]:
 # Public API
 # ---------------------------------------------------------------------------
 
+def _get_ref_csv_path() -> Path:
+    """Return path to the bundled reference CSV."""
+    return Path(__file__).parent / "data" / "llm_model.csv"
+
+
+def _setup_complex_provider(provider_name: str) -> bool:
+    """Run interactive auth setup for a complex (multi-variable) provider.
+
+    Prompts for each required env var and saves to api-env.
+    Returns True if at least one credential was configured, False if all skipped.
+    """
+    var_configs = COMPLEX_AUTH_PROVIDERS.get(provider_name)
+    if not var_configs:
+        return False
+
+    required_names = [c["label"] for c in var_configs if c["required"]]
+    optional_names = [c["label"] for c in var_configs if not c["required"]]
+    print()
+    console.print(f"  [bold]{provider_name} Setup[/bold]")
+    if required_names:
+        console.print(f"  Required: {', '.join(required_names)}")
+    if optional_names:
+        console.print(f"  Optional: {', '.join(optional_names)}")
+
+    # GitHub Copilot: explain device flow before prompting
+    if provider_name == "Github Copilot":
+        console.print(
+            "\n  [dim]GitHub Copilot authenticates via device flow at runtime.\n"
+            "  You can paste an API key now, or skip and authenticate later.[/dim]"
+        )
+    print()
+
+    any_saved = False
+    for cfg in var_configs:
+        env_var = cfg["env_var"]
+        label = cfg["label"]
+        required = cfg["required"]
+        default = cfg["default"]
+        hint = cfg["hint"]
+
+        existing_source = _is_key_set(env_var)
+        if existing_source:
+            console.print(f"  [green]✓[/green] {label} already set ({existing_source})")
+            if not Confirm.ask("    Update?", default=False):
+                continue
+
+        opt_tag = " [dim](optional)[/dim]" if not required else ""
+        if default:
+            value = Prompt.ask(f"  {label}{opt_tag} [dim]{hint}[/dim]", default=default)
+        else:
+            value = Prompt.ask(f"  {label}{opt_tag} [dim]{hint}[/dim]", default="")
+
+        value = value.strip()
+        if not value:
+            if not required:
+                continue
+            console.print(f"    [yellow]Skipped[/yellow]")
+            continue
+
+        # Vertex AI: special handling for credentials path
+        if env_var == "GOOGLE_APPLICATION_CREDENTIALS":
+            if value.lower() == "adc":
+                console.print(
+                    "    [dim]Using Application Default Credentials.\n"
+                    "    Make sure you've run: gcloud auth application-default login[/dim]"
+                )
+                continue
+            if not Path(value).exists():
+                console.print(f"    [yellow]Warning: file not found at {value}[/yellow]")
+
+        _save_key_to_api_env(env_var, value)
+        console.print(f"    [green]✓ Saved[/green]")
+        any_saved = True
+
+    if any_saved:
+        _ensure_api_env_sourced_in_rc()
+        console.print("\n  [dim]Credentials available for this session.[/dim]")
+
+    return any_saved
+
+
 def add_provider_from_registry() -> bool:
     """
-    Search/browse LiteLLM's model registry, let the user pick a provider
-    and specific models, handle the API key, and save to user CSV.
+    Browse providers from the reference CSV, let the user pick one,
+    handle the API key, and add its models to the user CSV.
 
     Returns True if any models were added, False if cancelled.
     """
-    if not is_litellm_available():
-        console.print(
-            "[red]litellm is required but not installed or has no model data.[/red]\n"
-            "[yellow]Run: pip install litellm[/yellow]\n"
-            "[yellow]Or use 'Add a custom provider' instead.[/yellow]"
-        )
+    # ── Step 1: List providers from reference CSV ─────────────────────
+
+    ref_rows = _read_csv(_get_ref_csv_path())
+    if not ref_rows:
+        console.print("[yellow]No models found in reference CSV.[/yellow]")
         return False
 
-    # ── Step 1: Browse / Search providers ──────────────────────────────
+    # Build unique provider list with model counts and api_key
+    provider_info: Dict[str, Dict[str, object]] = {}
+    for row in ref_rows:
+        provider = row.get("provider", "").strip()
+        api_key = row.get("api_key", "").strip()
+        if not provider:
+            continue
+        if provider not in provider_info:
+            provider_info[provider] = {"api_key": api_key, "count": 0}
+        provider_info[provider]["count"] = int(provider_info[provider]["count"]) + 1
 
-    top = get_top_providers()
+    sorted_providers = sorted(provider_info.keys())
 
-    console.print("\n[bold]Search providers[/bold]\n")
-    console.print("  Top providers:")
-    for idx, p in enumerate(top, 1):
-        console.print(
-            f"    {idx:>2}. {p.display_name:20s}  ({p.model_count} chat models)"
-        )
+    console.print("\n[bold]Add a provider[/bold]\n")
+    for idx, prov in enumerate(sorted_providers, 1):
+        info = provider_info[prov]
+        count = info["count"]
+        s = "s" if count != 1 else ""
+        console.print(f"  {idx:>2}. {prov:25s}  ({count} model{s})")
     console.print()
 
-    selection = Prompt.ask(
-        "Enter number, or type to search (empty to cancel)"
-    )
+    selection = Prompt.ask("Enter number (empty to cancel)")
     if not selection.strip():
         console.print("[dim]Cancelled.[/dim]")
         return False
 
-    selected_provider: Optional[ProviderInfo] = None
-
-    # Try as a number first (direct selection from top list)
     try:
         choice = int(selection.strip())
-        if 1 <= choice <= len(top):
-            selected_provider = top[choice - 1]
-    except ValueError:
-        pass
-
-    # If not a valid number, treat as search query
-    if selected_provider is None:
-        results = search_providers(selection.strip())
-        if not results:
-            console.print(
-                f"[yellow]No providers matching '{selection.strip()}'.[/yellow]\n"
-                "[yellow]Try a different search, or use 'Add a custom provider'.[/yellow]"
-            )
+        if choice < 1 or choice > len(sorted_providers):
+            console.print("[red]Invalid selection.[/red]")
             return False
-
-        if len(results) == 1:
-            selected_provider = results[0]
-        else:
-            console.print(f"\n  Found {len(results)} provider(s):")
-            for idx, p in enumerate(results, 1):
-                console.print(
-                    f"    {idx:>2}. {p.display_name:20s}  ({p.model_count} chat models)"
-                )
-            console.print()
-
-            pick = Prompt.ask("Select provider number (empty to cancel)")
-            if not pick.strip():
-                console.print("[dim]Cancelled.[/dim]")
-                return False
-            try:
-                pick_idx = int(pick.strip())
-                if 1 <= pick_idx <= len(results):
-                    selected_provider = results[pick_idx - 1]
-                else:
-                    console.print("[red]Invalid selection.[/red]")
-                    return False
-            except ValueError:
-                console.print("[red]Invalid input.[/red]")
-                return False
-
-    assert selected_provider is not None
-
-    # ── Step 2: Model selection ────────────────────────────────────────
-
-    models = get_models_for_provider(selected_provider.name)
-    if not models:
-        console.print(
-            f"[yellow]No chat models found for {selected_provider.display_name} "
-            f"in litellm's registry.[/yellow]\n"
-            "[yellow]Use 'Add a custom provider' instead.[/yellow]"
-        )
+    except ValueError:
+        console.print("[red]Invalid input.[/red]")
         return False
 
-    table = Table(title=f"Chat models for {selected_provider.display_name}")
-    table.add_column("#", style="bold", width=4)
-    table.add_column("Model")
-    table.add_column("Input $/M", justify="right")
-    table.add_column("Output $/M", justify="right")
-    table.add_column("Max Input", justify="right")
+    selected_provider = sorted_providers[choice - 1]
+    api_key_var = str(provider_info[selected_provider]["api_key"]) or None
 
-    for idx, m in enumerate(models, 1):
-        input_cost = f"${m.input_cost_per_million:.2f}" if m.input_cost_per_million else "$0.00"
-        output_cost = f"${m.output_cost_per_million:.2f}" if m.output_cost_per_million else "$0.00"
-        max_input = f"{m.max_input_tokens:,}" if m.max_input_tokens else "—"
-        table.add_row(str(idx), m.litellm_id, input_cost, output_cost, max_input)
+    # ── Step 2: Provider authentication ──────────────────────────────
 
-    console.print(table)
-    console.print()
-
-    model_selection = Prompt.ask(
-        "Select models (comma-separated numbers, 'all', or empty to cancel)"
-    )
-    if not model_selection.strip():
-        console.print("[dim]Cancelled.[/dim]")
-        return False
-
-    selected_models: List[ModelInfo] = []
-
-    if model_selection.strip().lower() == "all":
-        selected_models = list(models)
-    else:
-        for part in model_selection.split(","):
-            part = part.strip()
-            if not part:
-                continue
-            try:
-                num = int(part)
-                if 1 <= num <= len(models):
-                    selected_models.append(models[num - 1])
-                else:
-                    console.print(f"[yellow]Skipping invalid number: {num}[/yellow]")
-            except ValueError:
-                console.print(f"[yellow]Skipping invalid input: '{part}'[/yellow]")
-
-    if not selected_models:
-        console.print("[dim]No valid selections. Cancelled.[/dim]")
-        return False
-
-    # ── Step 3: API key ────────────────────────────────────────────────
-
-    api_key_var = selected_provider.api_key_env_var
-
-    if api_key_var is None:
-        # Provider not in our known mapping — ask the user
-        api_key_var = Prompt.ask(
-            f"API key env var for {selected_provider.display_name} "
-            "(e.g. PROVIDER_API_KEY, or empty to skip)"
-        ).strip() or None
-
-    if api_key_var:
+    if selected_provider in COMPLEX_AUTH_PROVIDERS:
+        _setup_complex_provider(selected_provider)
+    elif api_key_var:
         existing_source = _is_key_set(api_key_var)
         if existing_source:
             console.print(
@@ -497,7 +605,10 @@ def add_provider_from_registry() -> bool:
                         "[dim]Key is available now for this session.[/dim]"
                     )
         else:
-            key_value = Prompt.ask(f"Enter the value for {api_key_var}")
+            key_value = Prompt.ask(
+                f"Enter your {selected_provider} API key (or press Enter to skip)",
+                default="",
+            )
             if key_value.strip():
                 _save_key_to_api_env(api_key_var, key_value.strip())
                 console.print(
@@ -511,52 +622,38 @@ def add_provider_from_registry() -> bool:
                 console.print(
                     "[dim]Key is available now for this session.[/dim]"
                 )
+            else:
+                console.print(
+                    f"[yellow]Note: No API key configured for {selected_provider}. "
+                    f"The LLM may have limited capability.[/yellow]"
+                )
 
-    # ── Step 4: Write to user CSV ──────────────────────────────────────
+    # ── Step 3: Add all models for this provider to user CSV ──────────
+
+    provider_rows = [
+        row for row in ref_rows
+        if row.get("provider", "").strip() == selected_provider
+    ]
 
     user_csv_path = _get_user_csv_path()
     existing_rows = _read_csv(user_csv_path)
-
-    # Build set of existing model identifiers to avoid duplicates
-    existing_model_ids = {
-        (r.get("provider", ""), r.get("model", ""))
-        for r in existing_rows
-    }
+    existing_models = {r.get("model", "").strip() for r in existing_rows}
 
     added_count = 0
-    for m in selected_models:
-        # Build the litellm model ID with provider prefix convention
-        csv_model = m.litellm_id
-
-        new_row: Dict[str, str] = {
-            "provider": selected_provider.display_name,
-            "model": csv_model,
-            "input": str(m.input_cost_per_million),
-            "output": str(m.output_cost_per_million),
-            "coding_arena_elo": "1000",
-            "base_url": "",
-            "api_key": api_key_var or "",
-            "max_reasoning_tokens": "0",
-            "structured_output": str(m.supports_function_calling),
-            "reasoning_type": "",
-            "location": "",
-        }
-
-        model_id = (new_row["provider"], new_row["model"])
-        if model_id not in existing_model_ids:
-            existing_rows.append(new_row)
-            existing_model_ids.add(model_id)
+    for row in provider_rows:
+        model = row.get("model", "").strip()
+        if model and model not in existing_models:
+            existing_rows.append(row)
+            existing_models.add(model)
             added_count += 1
-        else:
-            console.print(f"  [dim]Skipping duplicate: {csv_model}[/dim]")
 
     if added_count > 0:
         _write_csv_atomic(user_csv_path, existing_rows)
         console.print(
-            f"[green]Added {added_count} model(s) to {user_csv_path}[/green]"
+            f"[green]Added {added_count} model(s) for {selected_provider} to {user_csv_path}[/green]"
         )
     else:
-        console.print("[yellow]No new models were added (all already configured).[/yellow]")
+        console.print("[yellow]All models for this provider are already configured.[/yellow]")
 
     return added_count > 0
 

@@ -1,8 +1,14 @@
-"""Tests for pdd/provider_manager.py"""
+"""Tests for pdd/provider_manager.py
+
+Organized by public API function. Tests verify user-observable behavior
+through the public interface; private helpers are exercised indirectly.
+Shell execution integration tests verify generated scripts actually work.
+"""
 
 import csv
 import os
-import tempfile
+import subprocess
+import shutil
 from pathlib import Path
 from unittest import mock
 
@@ -10,19 +16,13 @@ import pytest
 
 from pdd.provider_manager import (
     CSV_FIELDNAMES,
-    _get_shell_name,
-    _get_pdd_dir,
-    _get_api_env_path,
-    _get_user_csv_path,
-    _read_csv,
-    _write_csv_atomic,
-    _read_api_env_lines,
-    _write_api_env_atomic,
+    COMPLEX_AUTH_PROVIDERS,
     _save_key_to_api_env,
-    _comment_out_key_in_api_env,
-    _is_key_set,
-    add_provider_from_registry,
+    _setup_complex_provider,
     add_custom_provider,
+    add_provider_from_registry,
+    is_multi_credential,
+    parse_api_key_vars,
     remove_models_by_provider,
     remove_individual_models,
 )
@@ -108,185 +108,633 @@ def sample_api_env(temp_home):
     return api_env_path
 
 
+def _read_user_csv(temp_home):
+    """Read the user CSV and return list of row dicts."""
+    csv_path = temp_home / ".pdd" / "llm_model.csv"
+    if not csv_path.exists():
+        return []
+    with open(csv_path, "r", encoding="utf-8", newline="") as f:
+        return list(csv.DictReader(f))
+
+
 # ---------------------------------------------------------------------------
-# Tests for path helpers
+# I. parse_api_key_vars / is_multi_credential
 # ---------------------------------------------------------------------------
 
 
-class TestPathHelpers:
-    """Tests for path helper functions."""
+class TestApiKeyParsing:
+    """Tests for the public utility functions parse_api_key_vars and is_multi_credential."""
 
-    def test_get_shell_name_bash(self, monkeypatch):
-        """Should detect bash shell."""
+    def test_parse_single_var(self):
+        assert parse_api_key_vars("OPENAI_API_KEY") == ["OPENAI_API_KEY"]
+
+    def test_parse_multiple_vars(self):
+        result = parse_api_key_vars("AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_REGION_NAME")
+        assert result == ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION_NAME"]
+
+    def test_parse_empty_and_none(self):
+        assert parse_api_key_vars("") == []
+        assert parse_api_key_vars(None) == []
+        assert parse_api_key_vars("   ") == []
+
+    def test_parse_strips_whitespace_and_filters_empty(self):
+        assert parse_api_key_vars(" KEY_A | KEY_B ") == ["KEY_A", "KEY_B"]
+        assert parse_api_key_vars("KEY_A||KEY_B") == ["KEY_A", "KEY_B"]
+
+    def test_is_multi_credential(self):
+        assert is_multi_credential("A|B") is True
+        assert is_multi_credential("OPENAI_API_KEY") is False
+        assert is_multi_credential("") is False
+        assert is_multi_credential(None) is False
+
+
+# ---------------------------------------------------------------------------
+# II. add_provider_from_registry
+# ---------------------------------------------------------------------------
+
+
+class TestAddProviderFromRegistry:
+    """Tests for add_provider_from_registry — the main provider browsing flow."""
+
+    def test_returns_false_on_empty_ref_csv(self, temp_home):
+        """Should return False when reference CSV has no models."""
+        with mock.patch("pdd.provider_manager._read_csv", return_value=[]):
+            with mock.patch("pdd.provider_manager.console"):
+                assert add_provider_from_registry() is False
+
+    def test_returns_false_on_cancel(self, temp_home):
+        """Empty input should cancel the flow."""
+        ref_rows = [
+            {"provider": "Anthropic", "model": "claude", "api_key": "ANTHROPIC_API_KEY"},
+        ]
+        with mock.patch("pdd.provider_manager._read_csv", return_value=ref_rows):
+            with mock.patch("pdd.provider_manager.Prompt") as mock_prompt:
+                mock_prompt.ask.return_value = ""
+                with mock.patch("pdd.provider_manager.console"):
+                    assert add_provider_from_registry() is False
+
+    @pytest.mark.parametrize("bad_input", ["99", "0", "abc", "-1"])
+    def test_returns_false_on_invalid_selection(self, temp_home, bad_input):
+        """Out-of-range or non-numeric input should return False."""
+        ref_rows = [
+            {"provider": "Anthropic", "model": "claude", "api_key": "ANTHROPIC_API_KEY"},
+        ]
+        with mock.patch("pdd.provider_manager._read_csv", return_value=ref_rows):
+            with mock.patch("pdd.provider_manager.Prompt") as mock_prompt:
+                mock_prompt.ask.return_value = bad_input
+                with mock.patch("pdd.provider_manager.console"):
+                    assert add_provider_from_registry() is False
+
+    def test_adds_models_to_csv(self, temp_home, monkeypatch):
+        """Should add all models for the selected provider to user CSV."""
         monkeypatch.setenv("SHELL", "/bin/bash")
-        assert _get_shell_name() == "bash"
 
-    def test_get_shell_name_zsh(self, monkeypatch):
-        """Should detect zsh shell."""
-        monkeypatch.setenv("SHELL", "/usr/local/bin/zsh")
-        assert _get_shell_name() == "zsh"
-
-    def test_get_shell_name_fish(self, monkeypatch):
-        """Should detect fish shell."""
-        monkeypatch.setenv("SHELL", "/opt/homebrew/bin/fish")
-        assert _get_shell_name() == "fish"
-
-    def test_get_shell_name_defaults_to_bash(self, monkeypatch):
-        """Should default to bash for unknown shells."""
-        monkeypatch.setenv("SHELL", "/bin/unknown_shell")
-        assert _get_shell_name() == "bash"
-
-    def test_get_shell_name_no_shell_var(self, monkeypatch):
-        """Should default to bash when SHELL not set."""
-        monkeypatch.delenv("SHELL", raising=False)
-        # Implementation defaults to /bin/bash when SHELL is not set
-        result = _get_shell_name()
-        assert result == "bash"
-
-    def test_get_pdd_dir_creates_directory(self, tmp_path, monkeypatch):
-        """Should create ~/.pdd if it doesn't exist."""
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        pdd_dir = tmp_path / ".pdd"
-
-        # Directory shouldn't exist yet
-        assert not pdd_dir.exists()
-
-        result = _get_pdd_dir()
-
-        assert result == pdd_dir
-        assert pdd_dir.exists()
-
-    def test_get_api_env_path(self, temp_home, monkeypatch):
-        """Should return correct api-env path for shell."""
-        monkeypatch.setenv("SHELL", "/bin/zsh")
-        result = _get_api_env_path()
-        assert result == temp_home / ".pdd" / "api-env.zsh"
-
-    def test_get_user_csv_path(self, temp_home):
-        """Should return correct user CSV path."""
-        result = _get_user_csv_path()
-        assert result == temp_home / ".pdd" / "llm_model.csv"
-
-
-# ---------------------------------------------------------------------------
-# Tests for CSV I/O helpers
-# ---------------------------------------------------------------------------
-
-
-class TestCsvHelpers:
-    """Tests for CSV read/write functions."""
-
-    def test_read_csv_returns_list_of_dicts(self, sample_csv):
-        """Should read CSV and return list of row dictionaries."""
-        result = _read_csv(sample_csv)
-
-        assert isinstance(result, list)
-        assert len(result) == 3
-        assert result[0]["provider"] == "OpenAI"
-        assert result[0]["model"] == "gpt-4"
-
-    def test_read_csv_missing_file(self, temp_home):
-        """Should return empty list for missing file."""
-        result = _read_csv(temp_home / ".pdd" / "nonexistent.csv")
-        assert result == []
-
-    def test_write_csv_atomic_creates_file(self, temp_home):
-        """Should create CSV file with correct content."""
-        csv_path = temp_home / ".pdd" / "test.csv"
-        rows = [
-            {"provider": "Test", "model": "test-model", "input": "1.0", "output": "2.0"},
+        ref_rows = [
+            {"provider": "Anthropic", "model": "claude-sonnet", "api_key": "ANTHROPIC_API_KEY",
+             "input": "3.0", "output": "15.0", "coding_arena_elo": "1400", "base_url": "",
+             "max_reasoning_tokens": "0", "structured_output": "True", "reasoning_type": "", "location": ""},
+            {"provider": "Anthropic", "model": "claude-opus", "api_key": "ANTHROPIC_API_KEY",
+             "input": "5.0", "output": "25.0", "coding_arena_elo": "1500", "base_url": "",
+             "max_reasoning_tokens": "0", "structured_output": "True", "reasoning_type": "", "location": ""},
+            {"provider": "OpenAI", "model": "gpt-4", "api_key": "OPENAI_API_KEY",
+             "input": "30.0", "output": "60.0", "coding_arena_elo": "1300", "base_url": "",
+             "max_reasoning_tokens": "0", "structured_output": "True", "reasoning_type": "", "location": ""},
         ]
 
-        _write_csv_atomic(csv_path, rows)
+        with mock.patch("pdd.provider_manager._read_csv", side_effect=[ref_rows, []]):
+            with mock.patch("pdd.provider_manager._write_csv_atomic") as mock_write:
+                with mock.patch("pdd.provider_manager.Prompt") as mock_prompt:
+                    mock_prompt.ask.side_effect = ["1", "test-api-key"]
+                    with mock.patch("pdd.provider_manager.Confirm") as mock_confirm:
+                        mock_confirm.ask.return_value = False
+                        with mock.patch("pdd.provider_manager.console"):
+                            with mock.patch("pdd.provider_manager._is_key_set", return_value=None):
+                                result = add_provider_from_registry()
 
-        assert csv_path.exists()
-        result = _read_csv(csv_path)
-        assert len(result) == 1
-        assert result[0]["provider"] == "Test"
+        assert result is True
+        mock_write.assert_called_once()
+        written_rows = mock_write.call_args[0][1]
+        assert len(written_rows) == 2
+        assert all(r["provider"] == "Anthropic" for r in written_rows)
 
-    def test_write_csv_atomic_is_atomic(self, temp_home):
-        """Write should be atomic - no partial writes on failure."""
-        csv_path = temp_home / ".pdd" / "test.csv"
+    def test_skips_duplicate_models(self, temp_home, monkeypatch):
+        """Should not add models that already exist in user CSV."""
+        monkeypatch.setenv("SHELL", "/bin/bash")
 
-        # Write initial content
-        _write_csv_atomic(csv_path, [{"provider": "Original"}])
+        ref_rows = [
+            {"provider": "Anthropic", "model": "claude-sonnet", "api_key": "ANTHROPIC_API_KEY",
+             "input": "3.0", "output": "15.0", "coding_arena_elo": "1400", "base_url": "",
+             "max_reasoning_tokens": "0", "structured_output": "True", "reasoning_type": "", "location": ""},
+        ]
+        existing_rows = [
+            {"provider": "Anthropic", "model": "claude-sonnet", "api_key": "ANTHROPIC_API_KEY"},
+        ]
 
-        # Verify temp files are cleaned up
-        pdd_dir = temp_home / ".pdd"
-        temp_files = list(pdd_dir.glob(".llm_model_*.tmp"))
-        assert len(temp_files) == 0
+        with mock.patch("pdd.provider_manager._read_csv", side_effect=[ref_rows, existing_rows]):
+            with mock.patch("pdd.provider_manager._write_csv_atomic") as mock_write:
+                with mock.patch("pdd.provider_manager.Prompt") as mock_prompt:
+                    mock_prompt.ask.return_value = "1"
+                    with mock.patch("pdd.provider_manager.console"):
+                        with mock.patch("pdd.provider_manager._is_key_set", return_value="shell environment"):
+                            with mock.patch("pdd.provider_manager.Confirm") as mock_confirm:
+                                mock_confirm.ask.return_value = False
+                                result = add_provider_from_registry()
 
-    def test_write_csv_atomic_fills_missing_fields(self, temp_home):
-        """Should fill missing fields with empty strings."""
-        csv_path = temp_home / ".pdd" / "test.csv"
-        rows = [{"provider": "Test", "model": "test-model"}]  # Missing many fields
+        assert result is False
+        mock_write.assert_not_called()
 
-        _write_csv_atomic(csv_path, rows)
+    def test_dispatches_to_complex_auth_for_vertex(self, temp_home):
+        """Selecting a complex provider should delegate to _setup_complex_provider."""
+        with mock.patch("pdd.provider_manager._setup_complex_provider", return_value=True) as mock_setup:
+            with mock.patch("pdd.provider_manager._write_csv_atomic"):
+                with mock.patch("pdd.provider_manager._read_csv") as mock_read:
+                    mock_read.side_effect = [
+                        [{"provider": "Google Vertex AI", "model": "vertex_ai/gemini-2.5-pro",
+                          "api_key": "GOOGLE_APPLICATION_CREDENTIALS", "base_url": ""}],
+                        [],
+                    ]
+                    with mock.patch("pdd.provider_manager.Prompt") as mock_prompt:
+                        mock_prompt.ask.return_value = "1"
+                        with mock.patch("pdd.provider_manager.console"):
+                            add_provider_from_registry()
 
-        result = _read_csv(csv_path)
-        # All CSV_FIELDNAMES should be present
-        for field in CSV_FIELDNAMES:
-            assert field in result[0]
+        mock_setup.assert_called_once_with("Google Vertex AI")
 
 
 # ---------------------------------------------------------------------------
-# Tests for api-env file helpers
+# III. add_custom_provider
 # ---------------------------------------------------------------------------
 
 
-class TestApiEnvHelpers:
-    """Tests for api-env file read/write functions."""
+class TestAddCustomProvider:
+    """Tests for add_custom_provider — the manual provider entry flow."""
 
-    def test_read_api_env_lines(self, sample_api_env):
-        """Should read api-env file lines."""
-        result = _read_api_env_lines(sample_api_env)
+    @mock.patch("pdd.provider_manager._ensure_api_env_sourced_in_rc")
+    @mock.patch("pdd.provider_manager._save_key_to_api_env")
+    @mock.patch("pdd.provider_manager._write_csv_atomic")
+    @mock.patch("pdd.provider_manager._read_csv", return_value=[])
+    @mock.patch("pdd.provider_manager.Confirm")
+    @mock.patch("pdd.provider_manager.Prompt")
+    @mock.patch("pdd.provider_manager.console")
+    def test_adds_custom_model_with_correct_format(
+        self, mock_console, mock_prompt, mock_confirm, mock_read, mock_write, mock_save, mock_rc
+    ):
+        """Should create provider/model formatted model name and sensible defaults."""
+        mock_prompt.ask.side_effect = [
+            "ollama", "llama3", "OLLAMA_API_KEY", "", "0.0", "0.0",
+        ]
+        mock_confirm.ask.return_value = False
 
-        assert len(result) == 2
-        assert "OPENAI_API_KEY" in result[0]
+        assert add_custom_provider() is True
 
-    def test_read_api_env_lines_missing_file(self, temp_home):
-        """Should return empty list for missing file."""
-        result = _read_api_env_lines(temp_home / ".pdd" / "nonexistent")
-        assert result == []
+        written_rows = mock_write.call_args[0][1]
+        assert len(written_rows) == 1
+        assert written_rows[0]["model"] == "ollama/llama3"
+        assert written_rows[0]["provider"] == "ollama"
+        assert written_rows[0]["api_key"] == "OLLAMA_API_KEY"
+        assert written_rows[0]["coding_arena_elo"] == "1000"
+        assert written_rows[0]["structured_output"] == "True"
 
-    def test_write_api_env_atomic(self, temp_home):
-        """Should write api-env file atomically."""
-        env_path = temp_home / ".pdd" / "api-env.bash"
-        lines = ["export TEST_KEY=value\n"]
+    @pytest.mark.parametrize("abort_at_step,inputs", [
+        ("provider", [""]),
+        ("model", ["ollama", ""]),
+        ("api_key_var", ["ollama", "llama3", ""]),
+    ])
+    @mock.patch("pdd.provider_manager.Prompt")
+    @mock.patch("pdd.provider_manager.console")
+    def test_returns_false_on_empty_input_at_each_step(
+        self, mock_console, mock_prompt, abort_at_step, inputs
+    ):
+        """Empty input at any required step should cancel."""
+        mock_prompt.ask.side_effect = inputs
+        assert add_custom_provider() is False
 
-        _write_api_env_atomic(env_path, lines)
+    @mock.patch("pdd.provider_manager._ensure_api_env_sourced_in_rc")
+    @mock.patch("pdd.provider_manager._save_key_to_api_env")
+    @mock.patch("pdd.provider_manager._write_csv_atomic")
+    @mock.patch("pdd.provider_manager._read_csv", return_value=[])
+    @mock.patch("pdd.provider_manager.Confirm")
+    @mock.patch("pdd.provider_manager.Prompt")
+    @mock.patch("pdd.provider_manager.console")
+    def test_saves_api_key_when_user_provides_value(
+        self, mock_console, mock_prompt, mock_confirm, mock_read, mock_write, mock_save, mock_rc
+    ):
+        """When user opts to provide key value, it should be saved to api-env."""
+        mock_prompt.ask.side_effect = [
+            "openai", "gpt-5", "MY_KEY", "", "0.0", "0.0", "sk-secret123",
+        ]
+        mock_confirm.ask.return_value = True
 
-        assert env_path.exists()
-        content = env_path.read_text()
-        assert "TEST_KEY" in content
+        assert add_custom_provider() is True
+        mock_save.assert_called_once_with("MY_KEY", "sk-secret123")
 
-    def test_save_key_to_api_env_new_key(self, temp_home, monkeypatch):
-        """Should add new key to api-env file."""
+    @mock.patch("pdd.provider_manager._ensure_api_env_sourced_in_rc")
+    @mock.patch("pdd.provider_manager._save_key_to_api_env")
+    @mock.patch("pdd.provider_manager._write_csv_atomic")
+    @mock.patch("pdd.provider_manager._read_csv", return_value=[])
+    @mock.patch("pdd.provider_manager.Confirm")
+    @mock.patch("pdd.provider_manager.Prompt")
+    @mock.patch("pdd.provider_manager.console")
+    def test_invalid_costs_default_to_zero(
+        self, mock_console, mock_prompt, mock_confirm, mock_read, mock_write, mock_save, mock_rc
+    ):
+        """Non-numeric cost values should default to 0.0."""
+        mock_prompt.ask.side_effect = [
+            "test", "model", "TEST_KEY", "", "not-a-number", "also-bad",
+        ]
+        mock_confirm.ask.return_value = False
+
+        assert add_custom_provider() is True
+        written_rows = mock_write.call_args[0][1]
+        assert written_rows[0]["input"] == "0.0"
+        assert written_rows[0]["output"] == "0.0"
+
+
+# ---------------------------------------------------------------------------
+# IV. remove_models_by_provider
+# ---------------------------------------------------------------------------
+
+
+class TestRemoveModelsByProvider:
+    """Tests for remove_models_by_provider — bulk removal by api_key group."""
+
+    def test_returns_false_when_no_models(self, temp_home):
+        with mock.patch("pdd.provider_manager.console"):
+            assert remove_models_by_provider() is False
+
+    def test_returns_false_on_cancel(self, sample_csv, temp_home):
+        with mock.patch("pdd.provider_manager.Prompt") as mock_prompt:
+            mock_prompt.ask.return_value = ""
+            with mock.patch("pdd.provider_manager.console"):
+                assert remove_models_by_provider() is False
+
+    @pytest.mark.parametrize("bad_input", ["99", "abc"])
+    def test_returns_false_on_invalid_selection(self, sample_csv, temp_home, bad_input):
+        with mock.patch("pdd.provider_manager.Prompt") as mock_prompt:
+            mock_prompt.ask.return_value = bad_input
+            with mock.patch("pdd.provider_manager.console"):
+                assert remove_models_by_provider() is False
+
+    def test_returns_false_when_user_declines_confirm(self, sample_csv, temp_home):
+        with mock.patch("pdd.provider_manager.Prompt") as mock_prompt:
+            mock_prompt.ask.return_value = "1"
+            with mock.patch("pdd.provider_manager.Confirm") as mock_confirm:
+                mock_confirm.ask.return_value = False
+                with mock.patch("pdd.provider_manager.console"):
+                    assert remove_models_by_provider() is False
+
+    def test_removes_all_models_for_selected_provider(self, sample_csv, temp_home, monkeypatch):
+        """Should remove all models sharing the selected api_key and comment it out."""
         monkeypatch.setenv("SHELL", "/bin/bash")
+
+        with mock.patch("pdd.provider_manager.Prompt") as mock_prompt:
+            mock_prompt.ask.return_value = "1"
+            with mock.patch("pdd.provider_manager.Confirm") as mock_confirm:
+                mock_confirm.ask.return_value = True
+                with mock.patch("pdd.provider_manager.console"):
+                    result = remove_models_by_provider()
+
+        assert result is True
+        remaining = _read_user_csv(temp_home)
+        assert len(remaining) < 3
+
+
+# ---------------------------------------------------------------------------
+# V. remove_individual_models
+# ---------------------------------------------------------------------------
+
+
+class TestRemoveIndividualModels:
+    """Tests for remove_individual_models — selective model removal."""
+
+    def test_returns_false_when_no_models(self, temp_home):
+        with mock.patch("pdd.provider_manager.console"):
+            assert remove_individual_models() is False
+
+    def test_returns_false_on_cancel(self, sample_csv, temp_home):
+        with mock.patch("pdd.provider_manager.Prompt") as mock_prompt:
+            mock_prompt.ask.return_value = ""
+            with mock.patch("pdd.provider_manager.console"):
+                assert remove_individual_models() is False
+
+    def test_returns_false_on_all_invalid_numbers(self, sample_csv, temp_home):
+        """All-invalid comma-separated input should result in no selections."""
+        with mock.patch("pdd.provider_manager.Prompt") as mock_prompt:
+            mock_prompt.ask.return_value = "99, abc, -1"
+            with mock.patch("pdd.provider_manager.console"):
+                assert remove_individual_models() is False
+
+    def test_returns_false_when_user_declines_confirm(self, sample_csv, temp_home):
+        with mock.patch("pdd.provider_manager.Prompt") as mock_prompt:
+            mock_prompt.ask.return_value = "1"
+            with mock.patch("pdd.provider_manager.Confirm") as mock_confirm:
+                mock_confirm.ask.return_value = False
+                with mock.patch("pdd.provider_manager.console"):
+                    assert remove_individual_models() is False
+
+    def test_removes_single_model(self, sample_csv, temp_home):
+        with mock.patch("pdd.provider_manager.Prompt") as mock_prompt:
+            mock_prompt.ask.return_value = "1"
+            with mock.patch("pdd.provider_manager.Confirm") as mock_confirm:
+                mock_confirm.ask.return_value = True
+                with mock.patch("pdd.provider_manager.console"):
+                    assert remove_individual_models() is True
+
+        assert len(_read_user_csv(temp_home)) == 2
+
+    def test_removes_multiple_comma_separated(self, sample_csv, temp_home):
+        with mock.patch("pdd.provider_manager.Prompt") as mock_prompt:
+            mock_prompt.ask.return_value = "1, 2"
+            with mock.patch("pdd.provider_manager.Confirm") as mock_confirm:
+                mock_confirm.ask.return_value = True
+                with mock.patch("pdd.provider_manager.console"):
+                    assert remove_individual_models() is True
+
+        assert len(_read_user_csv(temp_home)) == 1
+
+
+# ---------------------------------------------------------------------------
+# VI. Complex provider auth (_setup_complex_provider)
+# ---------------------------------------------------------------------------
+
+
+class TestComplexProviderAuth:
+    """Tests for complex (multi-variable) provider authentication flows.
+
+    _setup_complex_provider is tested directly because it's the entry point
+    for a significant user-facing flow that add_provider_from_registry delegates to.
+    """
+
+    def test_registry_contains_expected_providers(self):
+        """Registry should contain the 5 known complex providers."""
+        expected = {"Google Vertex AI", "AWS Bedrock", "Azure OpenAI", "Azure AI", "Github Copilot"}
+        assert expected == set(COMPLEX_AUTH_PROVIDERS.keys())
+
+    def test_simple_providers_not_in_registry(self):
+        for name in ["Anthropic", "OpenAI", "DeepSeek"]:
+            assert name not in COMPLEX_AUTH_PROVIDERS
+
+    def test_registry_entries_have_required_fields(self):
+        required_keys = {"env_var", "label", "required", "default", "hint"}
+        for provider, configs in COMPLEX_AUTH_PROVIDERS.items():
+            assert len(configs) > 0, f"{provider} has no configs"
+            for cfg in configs:
+                assert required_keys <= set(cfg.keys()), f"{provider} config missing keys"
+
+    def test_unknown_provider_returns_false(self):
+        assert _setup_complex_provider("Unknown Provider") is False
+
+    @mock.patch("pdd.provider_manager._ensure_api_env_sourced_in_rc")
+    @mock.patch("pdd.provider_manager._save_key_to_api_env")
+    @mock.patch("pdd.provider_manager._is_key_set", return_value=None)
+    @mock.patch("pdd.provider_manager.Confirm")
+    @mock.patch("pdd.provider_manager.Prompt")
+    @mock.patch("pdd.provider_manager.console")
+    def test_bedrock_saves_all_three_vars(
+        self, mock_console, mock_prompt, mock_confirm, mock_is_key, mock_save, mock_rc
+    ):
+        mock_prompt.ask.side_effect = ["AKIAEXAMPLE", "wJalrXSecret", "us-east-1"]
+
+        assert _setup_complex_provider("AWS Bedrock") is True
+        assert mock_save.call_count == 3
+        mock_save.assert_any_call("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE")
+        mock_save.assert_any_call("AWS_SECRET_ACCESS_KEY", "wJalrXSecret")
+        mock_save.assert_any_call("AWS_REGION_NAME", "us-east-1")
+        mock_rc.assert_called_once()
+
+    @mock.patch("pdd.provider_manager._ensure_api_env_sourced_in_rc")
+    @mock.patch("pdd.provider_manager._save_key_to_api_env")
+    @mock.patch("pdd.provider_manager._is_key_set", return_value=None)
+    @mock.patch("pdd.provider_manager.Confirm")
+    @mock.patch("pdd.provider_manager.Prompt")
+    @mock.patch("pdd.provider_manager.console")
+    def test_vertex_adc_skips_credentials_save(
+        self, mock_console, mock_prompt, mock_confirm, mock_is_key, mock_save, mock_rc
+    ):
+        """When user enters 'adc' for Vertex credentials, that var should not be saved."""
+        mock_prompt.ask.side_effect = ["adc", "my-project-123", "us-central1"]
+
+        assert _setup_complex_provider("Google Vertex AI") is True
+        assert mock_save.call_count == 2
+        mock_save.assert_any_call("VERTEXAI_PROJECT", "my-project-123")
+        mock_save.assert_any_call("VERTEXAI_LOCATION", "us-central1")
+
+    @mock.patch("pdd.provider_manager._ensure_api_env_sourced_in_rc")
+    @mock.patch("pdd.provider_manager._save_key_to_api_env")
+    @mock.patch("pdd.provider_manager._is_key_set", return_value=None)
+    @mock.patch("pdd.provider_manager.Confirm")
+    @mock.patch("pdd.provider_manager.Prompt")
+    @mock.patch("pdd.provider_manager.console")
+    def test_azure_openai_saves_three_vars(
+        self, mock_console, mock_prompt, mock_confirm, mock_is_key, mock_save, mock_rc
+    ):
+        mock_prompt.ask.side_effect = [
+            "abc123key", "https://myresource.openai.azure.com/", "2024-10-21",
+        ]
+
+        assert _setup_complex_provider("Azure OpenAI") is True
+        assert mock_save.call_count == 3
+        mock_save.assert_any_call("AZURE_API_KEY", "abc123key")
+        mock_save.assert_any_call("AZURE_API_BASE", "https://myresource.openai.azure.com/")
+        mock_save.assert_any_call("AZURE_API_VERSION", "2024-10-21")
+
+    @mock.patch("pdd.provider_manager._ensure_api_env_sourced_in_rc")
+    @mock.patch("pdd.provider_manager._save_key_to_api_env")
+    @mock.patch("pdd.provider_manager._is_key_set", return_value=None)
+    @mock.patch("pdd.provider_manager.Confirm")
+    @mock.patch("pdd.provider_manager.Prompt")
+    @mock.patch("pdd.provider_manager.console")
+    def test_skip_all_required_vars_returns_false(
+        self, mock_console, mock_prompt, mock_confirm, mock_is_key, mock_save, mock_rc
+    ):
+        """Skipping all vars should return False and save nothing."""
+        mock_prompt.ask.side_effect = ["", "", ""]
+
+        assert _setup_complex_provider("AWS Bedrock") is False
+        mock_save.assert_not_called()
+        mock_rc.assert_not_called()
+
+    @mock.patch("pdd.provider_manager._ensure_api_env_sourced_in_rc")
+    @mock.patch("pdd.provider_manager._save_key_to_api_env")
+    @mock.patch("pdd.provider_manager._is_key_set", return_value="shell environment")
+    @mock.patch("pdd.provider_manager.Confirm")
+    @mock.patch("pdd.provider_manager.Prompt")
+    @mock.patch("pdd.provider_manager.console")
+    def test_existing_key_skipped_when_update_declined(
+        self, mock_console, mock_prompt, mock_confirm, mock_is_key, mock_save, mock_rc
+    ):
+        mock_confirm.ask.return_value = False
+
+        assert _setup_complex_provider("Github Copilot") is False
+        mock_save.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# VII. Shell execution integration tests
+#
+# These are the most valuable tests in this file. They verify that
+# _save_key_to_api_env produces scripts that real shells can source,
+# and that API key values survive the shell escaping roundtrip.
+# ---------------------------------------------------------------------------
+
+
+def _shell_available(shell: str) -> bool:
+    return shutil.which(shell) is not None
+
+
+class TestShellExecution:
+    """
+    Integration tests that actually execute generated api-env scripts
+    in real shells and verify key values are preserved exactly.
+    """
+
+    def test_bash_syntax_valid_with_special_chars(self, temp_home, monkeypatch):
+        """Generated api-env script should have valid bash syntax."""
+        monkeypatch.setenv("SHELL", "/bin/bash")
+        _save_key_to_api_env("TEST_KEY", 'AIzaSyAbCdEf123456$var"quote\'backtick\\slash')
         env_path = temp_home / ".pdd" / "api-env.bash"
 
-        _save_key_to_api_env("NEW_KEY", "new-value")
+        result = subprocess.run(
+            ["bash", "-n", str(env_path)],
+            capture_output=True, text=True, timeout=5,
+        )
+        assert result.returncode == 0, (
+            f"Bash syntax error: {result.stderr}\nScript:\n{env_path.read_text()}"
+        )
 
-        content = env_path.read_text()
-        # shlex.quote() doesn't quote simple values without special chars
-        assert 'export NEW_KEY=' in content
-        assert 'new-value' in content
+    def test_zsh_syntax_valid_with_special_chars(self, temp_home, monkeypatch):
+        if not _shell_available("zsh"):
+            pytest.skip("zsh not available")
+        monkeypatch.setenv("SHELL", "/bin/zsh")
+        _save_key_to_api_env("TEST_KEY", 'AIzaSyAbCdEf123456$var"quote\'backtick\\slash')
+        env_path = temp_home / ".pdd" / "api-env.zsh"
 
-    def test_save_key_to_api_env_updates_existing(self, sample_api_env, monkeypatch):
-        """Should update existing key in api-env file."""
+        result = subprocess.run(
+            ["zsh", "-n", str(env_path)],
+            capture_output=True, text=True, timeout=5,
+        )
+        assert result.returncode == 0, (
+            f"Zsh syntax error: {result.stderr}\nScript:\n{env_path.read_text()}"
+        )
+
+    def test_key_value_preserved_bash(self, temp_home, monkeypatch):
+        """API key should survive bash source→read roundtrip exactly."""
         monkeypatch.setenv("SHELL", "/bin/bash")
+        original = 'AIzaSyAbCdEf123456$var"quote\'backtick\\slash'
+        _save_key_to_api_env("TEST_KEY", original)
+        env_path = temp_home / ".pdd" / "api-env.bash"
 
-        _save_key_to_api_env("OPENAI_API_KEY", "sk-updated")
+        result = subprocess.run(
+            ["bash", "-c",
+             f"source {env_path} && python3 -c \"import os; print(os.environ.get('TEST_KEY', ''))\""],
+            capture_output=True, text=True, timeout=5,
+        )
+        assert result.returncode == 0, f"Source failed: {result.stderr}"
+        assert result.stdout.strip() == original
 
-        content = sample_api_env.read_text()
-        # shlex.quote() doesn't quote simple values without special chars
-        assert 'export OPENAI_API_KEY=' in content
-        assert 'sk-updated' in content
-        # Should not have duplicate entries
-        assert content.count("OPENAI_API_KEY") == 1
+    def test_key_value_preserved_zsh(self, temp_home, monkeypatch):
+        if not _shell_available("zsh"):
+            pytest.skip("zsh not available")
+        monkeypatch.setenv("SHELL", "/bin/zsh")
+        original = 'AIzaSyAbCdEf123456$var"quote\'backtick\\slash'
+        _save_key_to_api_env("TEST_KEY", original)
+        env_path = temp_home / ".pdd" / "api-env.zsh"
 
-    def test_save_key_to_api_env_uncomments_commented_key(self, temp_home, monkeypatch):
-        """Should replace commented key with new value."""
+        result = subprocess.run(
+            ["zsh", "-c",
+             f"source {env_path} && python3 -c \"import os; print(os.environ.get('TEST_KEY', ''))\""],
+            capture_output=True, text=True, timeout=5,
+        )
+        assert result.returncode == 0, f"Source failed: {result.stderr}"
+        assert result.stdout.strip() == original
+
+    @pytest.mark.parametrize("name,value", [
+        ("dollar", "key$value"),
+        ("double_quote", 'key"value'),
+        ("single_quote", "key'value"),
+        ("backtick", "key`value"),
+        ("backslash", "key\\value"),
+        ("space", "key value"),
+        ("semicolon", "key;value"),
+        ("ampersand", "key&value"),
+        ("pipe", "key|value"),
+        ("newline", "key\nvalue"),
+        ("tab", "key\tvalue"),
+    ])
+    def test_problematic_char_preserved_bash(self, temp_home, monkeypatch, name, value):
+        """Each problematic shell character should be preserved through bash roundtrip."""
+        monkeypatch.setenv("SHELL", "/bin/bash")
+        key_name = f"TEST_{name.upper()}"
+        _save_key_to_api_env(key_name, value)
+        env_path = temp_home / ".pdd" / "api-env.bash"
+
+        syntax = subprocess.run(
+            ["bash", "-n", str(env_path)],
+            capture_output=True, text=True, timeout=5,
+        )
+        assert syntax.returncode == 0, f"Syntax error for '{name}': {syntax.stderr}"
+
+        extract = subprocess.run(
+            ["bash", "-c",
+             f"source {env_path} && python3 -c \"import os; print(repr(os.environ.get('{key_name}', '')))\""],
+            capture_output=True, text=True, timeout=5,
+        )
+        if extract.returncode == 0:
+            extracted = eval(extract.stdout.strip())
+            assert extracted == value, (
+                f"Value corrupted for '{name}': expected {repr(value)}, got {repr(extracted)}"
+            )
+
+    def test_multiple_keys_all_preserved(self, temp_home, monkeypatch):
+        """Multiple keys saved sequentially should all be preserved."""
+        monkeypatch.setenv("SHELL", "/bin/bash")
+        keys = {
+            "OPENAI_API_KEY": "sk-test123",
+            "ANTHROPIC_API_KEY": "ant-key$special",
+            "GEMINI_API_KEY": 'gem"quoted\'key',
+        }
+        for k, v in keys.items():
+            _save_key_to_api_env(k, v)
+
+        env_path = temp_home / ".pdd" / "api-env.bash"
+        for key_name, expected in keys.items():
+            result = subprocess.run(
+                ["bash", "-c",
+                 f"source {env_path} && python3 -c \"import os; print(os.environ.get('{key_name}', ''))\""],
+                capture_output=True, text=True, timeout=5,
+            )
+            assert result.returncode == 0
+            assert result.stdout.strip() == expected
+
+    def test_key_update_replaces_in_place(self, temp_home, monkeypatch):
+        """Updating an existing key should replace it, not duplicate it."""
+        monkeypatch.setenv("SHELL", "/bin/bash")
+        _save_key_to_api_env("MY_KEY", "old-value")
+        _save_key_to_api_env("MY_KEY", "new-value")
+
+        env_path = temp_home / ".pdd" / "api-env.bash"
+        content = env_path.read_text()
+        assert content.count("MY_KEY") == 1
+
+        result = subprocess.run(
+            ["bash", "-c",
+             f"source {env_path} && python3 -c \"import os; print(os.environ.get('MY_KEY', ''))\""],
+            capture_output=True, text=True, timeout=5,
+        )
+        assert result.returncode == 0
+        assert result.stdout.strip() == "new-value"
+
+    def test_save_key_sets_os_environ_immediately(self, temp_home, monkeypatch):
+        """_save_key_to_api_env should set os.environ for immediate availability."""
+        monkeypatch.setenv("SHELL", "/bin/bash")
+        monkeypatch.delenv("MY_IMMEDIATE_KEY", raising=False)
+
+        _save_key_to_api_env("MY_IMMEDIATE_KEY", "test-value-abc")
+
+        assert os.environ.get("MY_IMMEDIATE_KEY") == "test-value-abc"
+
+    def test_commented_key_replaced_on_save(self, temp_home, monkeypatch):
+        """Saving a key that was previously commented out should uncomment/replace it."""
         monkeypatch.setenv("SHELL", "/bin/bash")
         env_path = temp_home / ".pdd" / "api-env.bash"
         env_path.write_text("# export OLD_KEY=old-value\n")
@@ -294,721 +742,13 @@ class TestApiEnvHelpers:
         _save_key_to_api_env("OLD_KEY", "new-value")
 
         content = env_path.read_text()
-        # shlex.quote() doesn't quote simple values without special chars
-        assert 'export OLD_KEY=' in content
-        assert 'new-value' in content
         assert "# export OLD_KEY" not in content
+        assert "new-value" in content
 
-    def test_save_key_with_special_characters(self, temp_home, monkeypatch):
-        """Should handle API keys with special characters."""
-        monkeypatch.setenv("SHELL", "/bin/bash")
-
-        # Key with special shell characters
-        special_value = 'key$with"special\'chars'
-        _save_key_to_api_env("SPECIAL_KEY", special_value)
-
-        env_path = temp_home / ".pdd" / "api-env.bash"
-        content = env_path.read_text()
-        assert "SPECIAL_KEY" in content
-
-    def test_comment_out_key_in_api_env(self, sample_api_env, monkeypatch):
-        """Should comment out key with date annotation."""
-        monkeypatch.setenv("SHELL", "/bin/bash")
-
-        _comment_out_key_in_api_env("OPENAI_API_KEY")
-
-        content = sample_api_env.read_text()
-        assert "# Commented out by pdd setup on" in content
-        assert "# export OPENAI_API_KEY" in content
-
-    def test_comment_out_preserves_other_keys(self, sample_api_env, monkeypatch):
-        """Should preserve other keys when commenting out one."""
-        monkeypatch.setenv("SHELL", "/bin/bash")
-
-        _comment_out_key_in_api_env("OPENAI_API_KEY")
-
-        content = sample_api_env.read_text()
-        # ANTHROPIC_API_KEY should still be active
-        assert "export ANTHROPIC_API_KEY=ant-test456" in content
-
-
-# ---------------------------------------------------------------------------
-# Tests for _is_key_set
-# ---------------------------------------------------------------------------
-
-
-class TestIsKeySet:
-    """Tests for _is_key_set function."""
-
-    def test_detects_key_in_shell_env(self, temp_home, monkeypatch):
-        """Should detect key set in shell environment."""
-        monkeypatch.setenv("TEST_KEY", "test-value")
-
-        result = _is_key_set("TEST_KEY")
-
-        assert result == "shell environment"
-
-    def test_detects_key_in_api_env_file(self, sample_api_env, monkeypatch):
-        """Should detect key in api-env file."""
-        monkeypatch.setenv("SHELL", "/bin/bash")
-        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-
-        result = _is_key_set("OPENAI_API_KEY")
-
-        assert "api-env.bash" in result
-
-    def test_returns_none_when_key_not_set(self, temp_home, monkeypatch):
-        """Should return None when key is not set anywhere."""
-        monkeypatch.delenv("NONEXISTENT_KEY", raising=False)
-
-        result = _is_key_set("NONEXISTENT_KEY")
-
-        assert result is None
-
-    def test_dotenv_priority_over_shell(self, temp_home, monkeypatch):
-        """Should check .env file first."""
-        monkeypatch.setenv("TEST_KEY", "shell-value")
-
-        with mock.patch("dotenv.dotenv_values", return_value={"TEST_KEY": "dotenv-value"}):
-            result = _is_key_set("TEST_KEY")
-
-        assert result == ".env file"
-
-
-# ---------------------------------------------------------------------------
-# Tests for add_provider_from_registry (mocked)
-# ---------------------------------------------------------------------------
-
-
-class TestAddProviderFromRegistry:
-    """Tests for add_provider_from_registry function."""
-
-    def test_returns_false_when_litellm_unavailable(self, temp_home):
-        """Should return False when litellm is not available."""
-        with mock.patch(
-            "pdd.provider_manager.is_litellm_available", return_value=False
-        ):
-            with mock.patch("pdd.provider_manager.console"):
-                result = add_provider_from_registry()
-
-        assert result is False
-
-    def test_returns_false_on_empty_selection(self, temp_home):
-        """Should return False when user enters empty selection."""
-        with mock.patch(
-            "pdd.provider_manager.is_litellm_available", return_value=True
-        ):
-            with mock.patch(
-                "pdd.provider_manager.get_top_providers",
-                return_value=[],
-            ):
-                with mock.patch("pdd.provider_manager.Prompt") as mock_prompt:
-                    mock_prompt.ask.return_value = ""
-                    with mock.patch("pdd.provider_manager.console"):
-                        result = add_provider_from_registry()
-
-        assert result is False
-
-    def test_adds_models_to_csv(self, temp_home):
-        """Should add selected models to user CSV."""
-        from pdd.litellm_registry import ProviderInfo, ModelInfo
-
-        mock_provider = ProviderInfo(
-            name="test_provider",
-            display_name="Test Provider",
-            api_key_env_var="TEST_API_KEY",
-            model_count=2,
-            sample_models=["model1", "model2"],
-        )
-
-        mock_models = [
-            ModelInfo(
-                name="model1",
-                litellm_id="test_provider/model1",
-                input_cost_per_million=1.0,
-                output_cost_per_million=2.0,
-                supports_function_calling=True,
-            ),
-        ]
-
-        with mock.patch(
-            "pdd.provider_manager.is_litellm_available", return_value=True
-        ):
-            with mock.patch(
-                "pdd.provider_manager.get_top_providers",
-                return_value=[mock_provider],
-            ):
-                with mock.patch(
-                    "pdd.provider_manager.get_models_for_provider",
-                    return_value=mock_models,
-                ):
-                    with mock.patch("pdd.provider_manager.Prompt") as mock_prompt:
-                        # Select provider 1, then model 1
-                        mock_prompt.ask.side_effect = ["1", "1", "test-api-key"]
-
-                        with mock.patch("pdd.provider_manager.Confirm") as mock_confirm:
-                            mock_confirm.ask.return_value = False
-
-                            with mock.patch("pdd.provider_manager.console"):
-                                with mock.patch(
-                                    "pdd.provider_manager._is_key_set",
-                                    return_value=None,
-                                ):
-                                    result = add_provider_from_registry()
-
-        # Check that model was added to CSV
-        csv_path = temp_home / ".pdd" / "llm_model.csv"
-        if csv_path.exists():
-            rows = _read_csv(csv_path)
-            assert any(r["model"] == "test_provider/model1" for r in rows)
-
-
-# ---------------------------------------------------------------------------
-# Tests for add_custom_provider (mocked)
-# ---------------------------------------------------------------------------
-
-
-class TestAddCustomProvider:
-    """Tests for add_custom_provider function."""
-
-    def test_returns_false_on_empty_provider(self, temp_home):
-        """Should return False when provider name is empty."""
-        with mock.patch("pdd.provider_manager.Prompt") as mock_prompt:
-            mock_prompt.ask.return_value = ""
-            with mock.patch("pdd.provider_manager.console"):
-                result = add_custom_provider()
-
-        assert result is False
-
-    def test_adds_custom_provider_to_csv(self, temp_home):
-        """Should add custom provider to user CSV."""
-        with mock.patch("pdd.provider_manager.Prompt") as mock_prompt:
-            mock_prompt.ask.side_effect = [
-                "custom_llm",      # provider prefix
-                "my-model",        # model name
-                "CUSTOM_API_KEY",  # api key env var
-                "",                # base url (optional)
-                "1.0",             # input cost
-                "2.0",             # output cost
-            ]
-            with mock.patch("pdd.provider_manager.Confirm") as mock_confirm:
-                mock_confirm.ask.return_value = False  # Don't enter key value now
-                with mock.patch("pdd.provider_manager.console"):
-                    result = add_custom_provider()
-
-        assert result is True
-
-        # Verify CSV was updated
-        csv_path = temp_home / ".pdd" / "llm_model.csv"
-        rows = _read_csv(csv_path)
-        assert len(rows) == 1
-        assert rows[0]["provider"] == "custom_llm"
-        assert rows[0]["model"] == "custom_llm/my-model"
-        assert rows[0]["api_key"] == "CUSTOM_API_KEY"
-
-    def test_saves_api_key_when_provided(self, temp_home, monkeypatch):
-        """Should save API key to api-env when user provides it."""
-        monkeypatch.setenv("SHELL", "/bin/bash")
-
-        with mock.patch("pdd.provider_manager.Prompt") as mock_prompt:
-            mock_prompt.ask.side_effect = [
-                "custom_llm",
-                "my-model",
-                "CUSTOM_API_KEY",
-                "",
-                "0.0",
-                "0.0",
-                "sk-my-secret-key",  # API key value
-            ]
-            with mock.patch("pdd.provider_manager.Confirm") as mock_confirm:
-                mock_confirm.ask.return_value = True  # Yes, enter key value
-                with mock.patch("pdd.provider_manager.console"):
-                    result = add_custom_provider()
-
-        assert result is True
-
-        # Verify api-env was updated
-        env_path = temp_home / ".pdd" / "api-env.bash"
-        content = env_path.read_text()
-        assert "CUSTOM_API_KEY" in content
-
-
-# ---------------------------------------------------------------------------
-# Tests for remove_models_by_provider (mocked)
-# ---------------------------------------------------------------------------
-
-
-class TestRemoveModelsByProvider:
-    """Tests for remove_models_by_provider function."""
-
-    def test_returns_false_when_no_models(self, temp_home):
-        """Should return False when no models configured."""
-        with mock.patch("pdd.provider_manager.console"):
-            result = remove_models_by_provider()
-
-        assert result is False
-
-    def test_returns_false_on_cancel(self, sample_csv, temp_home):
-        """Should return False when user cancels."""
-        with mock.patch("pdd.provider_manager.Prompt") as mock_prompt:
-            mock_prompt.ask.return_value = ""  # Empty = cancel
-            with mock.patch("pdd.provider_manager.console"):
-                result = remove_models_by_provider()
-
-        assert result is False
-
-    def test_removes_all_models_for_provider(self, sample_csv, temp_home, monkeypatch):
-        """Should remove all models with matching api_key."""
-        monkeypatch.setenv("SHELL", "/bin/bash")
-
-        with mock.patch("pdd.provider_manager.Prompt") as mock_prompt:
-            mock_prompt.ask.return_value = "1"  # Select first provider
-            with mock.patch("pdd.provider_manager.Confirm") as mock_confirm:
-                mock_confirm.ask.return_value = True  # Confirm removal
-                with mock.patch("pdd.provider_manager.console"):
-                    result = remove_models_by_provider()
-
-        assert result is True
-
-        # Check that models were removed
-        rows = _read_csv(sample_csv)
-        # One provider should have been removed
-        assert len(rows) < 3
-
-
-# ---------------------------------------------------------------------------
-# Tests for remove_individual_models (mocked)
-# ---------------------------------------------------------------------------
-
-
-class TestRemoveIndividualModels:
-    """Tests for remove_individual_models function."""
-
-    def test_returns_false_when_no_models(self, temp_home):
-        """Should return False when no models configured."""
-        with mock.patch("pdd.provider_manager.console"):
-            result = remove_individual_models()
-
-        assert result is False
-
-    def test_returns_false_on_cancel(self, sample_csv, temp_home):
-        """Should return False when user cancels."""
-        with mock.patch("pdd.provider_manager.Prompt") as mock_prompt:
-            mock_prompt.ask.return_value = ""  # Empty = cancel
-            with mock.patch("pdd.provider_manager.console"):
-                result = remove_individual_models()
-
-        assert result is False
-
-    def test_removes_selected_models(self, sample_csv, temp_home):
-        """Should remove only selected models."""
-        with mock.patch("pdd.provider_manager.Prompt") as mock_prompt:
-            mock_prompt.ask.return_value = "1"  # Remove first model
-            with mock.patch("pdd.provider_manager.Confirm") as mock_confirm:
-                mock_confirm.ask.return_value = True  # Confirm
-                with mock.patch("pdd.provider_manager.console"):
-                    result = remove_individual_models()
-
-        assert result is True
-
-        # Check that one model was removed
-        rows = _read_csv(sample_csv)
-        assert len(rows) == 2
-
-    def test_removes_multiple_models(self, sample_csv, temp_home):
-        """Should handle comma-separated model selection."""
-        with mock.patch("pdd.provider_manager.Prompt") as mock_prompt:
-            mock_prompt.ask.return_value = "1, 2"  # Remove first two models
-            with mock.patch("pdd.provider_manager.Confirm") as mock_confirm:
-                mock_confirm.ask.return_value = True  # Confirm
-                with mock.patch("pdd.provider_manager.console"):
-                    result = remove_individual_models()
-
-        assert result is True
-
-        # Check that two models were removed
-        rows = _read_csv(sample_csv)
-        assert len(rows) == 1
-
-
-# ---------------------------------------------------------------------------
-# Edge case tests
-# ---------------------------------------------------------------------------
-
-
-class TestEdgeCases:
-    """Test edge cases and error handling."""
-
-    def test_csv_write_atomic_cleans_up_on_error(self, temp_home):
-        """Should clean up temp file on write error."""
-        csv_path = temp_home / ".pdd" / "test.csv"
-
-        # Create a scenario where write might fail
-        with mock.patch("os.fdopen", side_effect=IOError("Simulated error")):
-            with pytest.raises(IOError):
-                _write_csv_atomic(csv_path, [{"provider": "Test"}])
-
-        # No temp files should remain
-        temp_files = list((temp_home / ".pdd").glob(".llm_model_*.tmp"))
-        assert len(temp_files) == 0
-
-    def test_handles_special_characters_in_api_keys(self, temp_home, monkeypatch):
-        """Should handle API key values with special shell characters."""
-        monkeypatch.setenv("SHELL", "/bin/bash")
-
-        # Characters that might cause issues in shell scripts
-        special_values = [
-            'key$with$dollars',
-            'key"with"quotes',
-            "key'with'single",
-            'key`with`backticks',
-            'key\\with\\backslashes',
-            'key with spaces',
-            'key;with;semicolons',
-        ]
-
-        for i, value in enumerate(special_values):
-            key_name = f"SPECIAL_KEY_{i}"
-            _save_key_to_api_env(key_name, value)
-
-        env_path = temp_home / ".pdd" / "api-env.bash"
-        content = env_path.read_text()
-
-        # All keys should be present
-        for i in range(len(special_values)):
-            assert f"SPECIAL_KEY_{i}" in content
-
-    def test_handles_unicode_in_model_names(self, temp_home):
-        """Should handle unicode characters in model names."""
-        csv_path = temp_home / ".pdd" / "llm_model.csv"
-        rows = [
-            {
-                "provider": "Tëst",
-                "model": "模型-émoji-🤖",
-                "input": "1.0",
-                "output": "2.0",
-            }
-        ]
-
-        _write_csv_atomic(csv_path, rows)
-
-        result = _read_csv(csv_path)
-        assert result[0]["provider"] == "Tëst"
-        assert "模型" in result[0]["model"]
-
-    def test_handles_empty_csv_fields(self, temp_home):
-        """Should handle rows with empty optional fields."""
-        csv_path = temp_home / ".pdd" / "llm_model.csv"
-        rows = [
-            {
-                "provider": "Test",
-                "model": "test-model",
-                # All other fields will be filled with empty strings
-            }
-        ]
-
-        _write_csv_atomic(csv_path, rows)
-
-        result = _read_csv(csv_path)
-        assert result[0]["provider"] == "Test"
-        assert result[0]["api_key"] == ""
-
-    def test_concurrent_writes_safe(self, temp_home):
-        """Atomic writes should be safe for concurrent access."""
-        csv_path = temp_home / ".pdd" / "llm_model.csv"
-
-        # Write initial data
-        _write_csv_atomic(csv_path, [{"provider": "Initial"}])
-
-        # Simulate concurrent write
-        _write_csv_atomic(csv_path, [{"provider": "Updated"}])
-
-        result = _read_csv(csv_path)
-        assert len(result) == 1
-        assert result[0]["provider"] == "Updated"
-
-
-# ---------------------------------------------------------------------------
-# Shell script execution tests (following test_setup_tool.py pattern)
-# ---------------------------------------------------------------------------
-
-
-class TestApiEnvShellExecution:
-    """
-    Tests that verify generated api-env scripts can be sourced and
-    correctly preserve API key values, especially with special characters.
-
-    These tests follow the rigorous pattern from test_setup_tool.py,
-    actually executing shell scripts to verify correctness.
-    """
-
-    def _shell_available(self, shell: str) -> bool:
-        """Check if a shell is available on the system."""
-        import shutil
-        return shutil.which(shell) is not None
-
-    def test_api_env_script_valid_bash_syntax(self, temp_home, monkeypatch):
-        """
-        Generated api-env script should have valid bash syntax.
-        This test catches quoting errors that would break shell parsing.
-        """
-        monkeypatch.setenv("SHELL", "/bin/bash")
-
-        # Save a key with special characters
-        special_key = 'AIzaSyAbCdEf123456$var"quote\'backtick\\slash'
-        _save_key_to_api_env("TEST_KEY", special_key)
-
-        env_path = temp_home / ".pdd" / "api-env.bash"
-
-        # Run bash syntax check
-        import subprocess
         result = subprocess.run(
-            ["bash", "-n", str(env_path)],
-            capture_output=True,
-            text=True,
-            timeout=5,
+            ["bash", "-c",
+             f"source {env_path} && python3 -c \"import os; print(os.environ.get('OLD_KEY', ''))\""],
+            capture_output=True, text=True, timeout=5,
         )
-
-        assert result.returncode == 0, (
-            f"Generated script has bash syntax errors: {result.stderr}\n"
-            f"Script content:\n{env_path.read_text()}"
-        )
-
-    def test_api_env_script_valid_zsh_syntax(self, temp_home, monkeypatch):
-        """Generated api-env script should have valid zsh syntax."""
-        if not self._shell_available("zsh"):
-            pytest.skip("zsh not available")
-
-        monkeypatch.setenv("SHELL", "/bin/zsh")
-
-        special_key = 'AIzaSyAbCdEf123456$var"quote\'backtick\\slash'
-        _save_key_to_api_env("TEST_KEY", special_key)
-
-        env_path = temp_home / ".pdd" / "api-env.zsh"
-
-        import subprocess
-        result = subprocess.run(
-            ["zsh", "-n", str(env_path)],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-
-        assert result.returncode == 0, (
-            f"Generated script has zsh syntax errors: {result.stderr}\n"
-            f"Script content:\n{env_path.read_text()}"
-        )
-
-    def test_api_env_script_can_be_sourced_bash(self, temp_home, monkeypatch):
-        """Script should be sourceable in bash without errors."""
-        monkeypatch.setenv("SHELL", "/bin/bash")
-
-        special_key = 'key"with\'many$special`characters'
-        _save_key_to_api_env("TEST_KEY", special_key)
-
-        env_path = temp_home / ".pdd" / "api-env.bash"
-
-        import subprocess
-        result = subprocess.run(
-            ["bash", "-c", f"source {env_path} && exit 0"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-
-        assert result.returncode == 0, (
-            f"Cannot source script in bash: {result.stderr}\n"
-            f"Script content:\n{env_path.read_text()}"
-        )
-
-    def test_api_env_preserves_key_value_bash(self, temp_home, monkeypatch):
-        """
-        API key value should be preserved exactly when script is sourced.
-        This is the critical test - verifies the key survives shell escaping.
-        """
-        monkeypatch.setenv("SHELL", "/bin/bash")
-
-        original_key = 'AIzaSyAbCdEf123456$var"quote\'backtick\\slash'
-        _save_key_to_api_env("TEST_KEY", original_key)
-
-        env_path = temp_home / ".pdd" / "api-env.bash"
-
-        import subprocess
-        result = subprocess.run(
-            [
-                "bash", "-c",
-                f"source {env_path} && python3 -c \"import os; print(os.environ.get('TEST_KEY', ''))\""
-            ],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-
-        assert result.returncode == 0, (
-            f"Failed to source script and read env var: {result.stderr}\n"
-            f"Script content:\n{env_path.read_text()}"
-        )
-
-        extracted_key = result.stdout.strip()
-        assert extracted_key == original_key, (
-            f"Key value was corrupted during shell escaping.\n"
-            f"Original:  {repr(original_key)}\n"
-            f"Extracted: {repr(extracted_key)}\n"
-            f"Script content:\n{env_path.read_text()}"
-        )
-
-    def test_api_env_preserves_key_value_zsh(self, temp_home, monkeypatch):
-        """API key value should be preserved exactly in zsh."""
-        if not self._shell_available("zsh"):
-            pytest.skip("zsh not available")
-
-        monkeypatch.setenv("SHELL", "/bin/zsh")
-
-        original_key = 'AIzaSyAbCdEf123456$var"quote\'backtick\\slash'
-        _save_key_to_api_env("TEST_KEY", original_key)
-
-        env_path = temp_home / ".pdd" / "api-env.zsh"
-
-        import subprocess
-        result = subprocess.run(
-            [
-                "zsh", "-c",
-                f"source {env_path} && python3 -c \"import os; print(os.environ.get('TEST_KEY', ''))\""
-            ],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-
-        assert result.returncode == 0, (
-            f"Failed to source script: {result.stderr}\n"
-            f"Script content:\n{env_path.read_text()}"
-        )
-
-        extracted_key = result.stdout.strip()
-        assert extracted_key == original_key, (
-            f"Key value was corrupted in zsh.\n"
-            f"Original:  {repr(original_key)}\n"
-            f"Extracted: {repr(extracted_key)}\n"
-            f"Script content:\n{env_path.read_text()}"
-        )
-
-    def test_api_env_with_various_problematic_characters(self, temp_home, monkeypatch):
-        """
-        Test with various characters that commonly cause shell escaping issues.
-        Each character tested individually to identify specific failures.
-        """
-        monkeypatch.setenv("SHELL", "/bin/bash")
-
-        problematic_chars = [
-            ('dollar', 'key$value'),
-            ('double_quote', 'key"value'),
-            ('single_quote', "key'value"),
-            ('backtick', 'key`value'),
-            ('backslash', 'key\\value'),
-            ('space', 'key value'),
-            ('semicolon', 'key;value'),
-            ('ampersand', 'key&value'),
-            ('pipe', 'key|value'),
-            ('newline', 'key\nvalue'),
-            ('tab', 'key\tvalue'),
-        ]
-
-        import subprocess
-
-        for name, test_value in problematic_chars:
-            key_name = f"TEST_{name.upper()}"
-            _save_key_to_api_env(key_name, test_value)
-
-            env_path = temp_home / ".pdd" / "api-env.bash"
-
-            # Verify syntax is valid
-            syntax_result = subprocess.run(
-                ["bash", "-n", str(env_path)],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-
-            assert syntax_result.returncode == 0, (
-                f"Syntax error with '{name}' character: {syntax_result.stderr}\n"
-                f"Script:\n{env_path.read_text()}"
-            )
-
-            # Verify value is preserved
-            extract_result = subprocess.run(
-                [
-                    "bash", "-c",
-                    f"source {env_path} && python3 -c \"import os; print(repr(os.environ.get('{key_name}', '')))\""
-                ],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-
-            if extract_result.returncode == 0:
-                extracted = eval(extract_result.stdout.strip())
-                assert extracted == test_value, (
-                    f"Value corrupted for '{name}' character.\n"
-                    f"Expected: {repr(test_value)}\n"
-                    f"Got: {repr(extracted)}"
-                )
-
-    def test_multiple_keys_preserved(self, temp_home, monkeypatch):
-        """Multiple keys should all be preserved correctly."""
-        monkeypatch.setenv("SHELL", "/bin/bash")
-
-        keys = {
-            "OPENAI_API_KEY": "sk-test123",
-            "ANTHROPIC_API_KEY": "ant-key$special",
-            "GEMINI_API_KEY": 'gem"quoted\'key',
-        }
-
-        for key_name, key_value in keys.items():
-            _save_key_to_api_env(key_name, key_value)
-
-        env_path = temp_home / ".pdd" / "api-env.bash"
-
-        import subprocess
-
-        for key_name, expected_value in keys.items():
-            result = subprocess.run(
-                [
-                    "bash", "-c",
-                    f"source {env_path} && python3 -c \"import os; print(os.environ.get('{key_name}', ''))\""
-                ],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-
-            assert result.returncode == 0
-            extracted = result.stdout.strip()
-            assert extracted == expected_value, (
-                f"{key_name} was corrupted.\n"
-                f"Expected: {repr(expected_value)}\n"
-                f"Got: {repr(extracted)}"
-            )
-
-    def test_normal_key_still_works(self, temp_home, monkeypatch):
-        """Normal keys without special characters should still work."""
-        monkeypatch.setenv("SHELL", "/bin/bash")
-
-        normal_key = "sk-proj-abcdef1234567890ABCDEF"
-        _save_key_to_api_env("OPENAI_API_KEY", normal_key)
-
-        env_path = temp_home / ".pdd" / "api-env.bash"
-
-        import subprocess
-        result = subprocess.run(
-            [
-                "bash", "-c",
-                f"source {env_path} && echo $OPENAI_API_KEY"
-            ],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-
         assert result.returncode == 0
-        assert result.stdout.strip() == normal_key
+        assert result.stdout.strip() == "new-value"

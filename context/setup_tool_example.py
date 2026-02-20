@@ -14,11 +14,11 @@ def main() -> None:
     """
     Demonstrates how to use the setup_tool module to:
     1. Launch the two-phase pdd setup flow
-    2. Phase 1: Bootstrap an agentic CLI (Claude/Gemini/Codex)
-    3. Phase 2: Auto-configure API keys, models, local LLMs, and .pddrc
+    2. Phase 1: Bootstrap agentic CLIs (Claude/Gemini/Codex)
+    3. Phase 2: Auto-configure API keys, models, and .pddrc
 
     The setup flow is mostly automatic. Phase 1 asks 0-2 questions
-    (which CLI to use), then Phase 2 runs 4 deterministic steps
+    (which CLIs to use), then Phase 2 runs 3 deterministic steps
     with "Press Enter" pauses between them.
     """
 
@@ -26,58 +26,72 @@ def main() -> None:
     # run_setup()  # Uncomment to run interactively
 
     # Example flow:
-    #   +------------------------------+
-    #   |        pdd setup             |
-    #   +------------------------------+
+    #   (PDD ASCII logo in cyan)
+    #   Let's get set up quickly with a solid basic configuration!
     #
     #   Phase 1 -- CLI Bootstrap
     #   Detected: claude (Anthropic)
     #   API key: configured
     #
-    #   Ready to auto-configure PDD. Press Enter to continue...
-    #
-    #   [Step 1/4] Scanning for API keys...
-    #     ANTHROPIC_API_KEY   shell environment
-    #     GEMINI_API_KEY      shell environment
+    #   ────────────────────────────────────────
+    #   Scanning for API keys...
+    #   ────────────────────────────────────────
+    #     ✓ ANTHROPIC_API_KEY   shell environment
+    #     ✓ GEMINI_API_KEY      shell environment
     #
     #     2 API key(s) found.
+    #     You can edit your global API keys in ~/.pdd/api-env.zsh
     #
     #   Press Enter to continue to the next step...
     #
-    #   [Step 2/4] Configuring models...
-    #     3 new model(s) added to ~/.pdd/llm_model.csv
-    #     4 cloud model(s) configured
+    #   ────────────────────────────────────────
+    #   Configuring models...
+    #   ────────────────────────────────────────
+    #     ✓ 3 new model(s) added to ~/.pdd/llm_model.csv
+    #     ✓ 4 model(s) configured
     #       Anthropic: 3 models
     #       Google: 1 model
+    #     ✓ .pddrc detected at /path/to/project/.pddrc
     #
     #   Press Enter to continue to the next step...
     #
-    #   [Step 3/4] Checking local LLMs and .pddrc...
-    #     Ollama running -- found llama3.2:3b, openhermes:latest
-    #     LM Studio not running (skip)
-    #     .pddrc already exists at /path/to/project/.pddrc
+    #   ────────────────────────────────────────
+    #   Testing and summarizing...
+    #   ────────────────────────────────────────
+    #     Testing anthropic/claude-sonnet-4-5-20250929......
+    #     ✓ claude-sonnet-4-5-20250929 responded OK (1.2s)
     #
-    #   Press Enter to continue to the next step...
+    #     PDD Setup Complete!
     #
-    #   [Step 4/4] Testing and summarizing...
-    #     Testing anthropic/claude-sonnet-4-5-20250929...
-    #     claude-sonnet-4-5-20250929 responded OK (1.2s)
+    #       CLI:       ✓ claude configured
+    #       API Keys:  ✓ 2 found
+    #       Models:    4 configured (Anthropic: 3, Google: 1) in ~/.pdd/llm_model.csv
+    #       .pddrc:    ✓ exists
+    #       Test:      ✓ claude-sonnet-4-5-20250929 responded OK (1.2s)
     #
-    #     ===============================================
-    #       PDD Setup Complete
-    #     ===============================================
+    #   Press Enter to finish, or 'm' for more options:
     #
-    #       API Keys:  2 found
-    #       Models:    4 configured (Anthropic: 3, Google: 1)
-    #       Local:     Ollama -- llama3.2:3b, openhermes:latest
-    #       .pddrc:    exists
-    #       Test:      OK
+    #   (user presses Enter)
     #
-    #     ===============================================
-    #       Run 'pdd generate' or 'pdd sync' to start.
-    #     ===============================================
+    #   ────────────────────────────────────────────────────────────────────────────────
+    #   QUICK START:
+    #   1. Generate code from the sample prompt:
+    #      pdd generate success_python.prompt
+    #   ────────────────────────────────────────────────────────────────────────────────
+    #   LEARN MORE:
+    #   • PDD documentation: pdd --help
+    #   • PDD website: https://promptdriven.ai/
+    #   • Discord community: https://discord.gg/Yp4RTh8bG7
     #
-    #   Setup complete. Happy prompting!
+    #   Full summary saved to PDD-SETUP-SUMMARY.txt
+    #
+    #   --- OR if user enters 'm': ---
+    #
+    #   Options:
+    #     1. Add a provider
+    #     2. Test a model
+    #
+    #   Select an option (Enter to finish):
     pass
 
 

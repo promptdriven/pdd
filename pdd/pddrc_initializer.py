@@ -35,7 +35,7 @@ LANGUAGE_DEFAULTS: dict[str, dict[str, str]] = {
 
 # Standard defaults
 STANDARD_DEFAULTS: dict[str, float | int] = {
-    "strength": 1.0,
+    "strength": 0.818,
     "temperature": 0.0,
     "target_coverage": 80.0,
     "budget": 10.0,

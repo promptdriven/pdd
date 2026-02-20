@@ -57,9 +57,13 @@ def get_provider_key_names() -> List[str]:
                 return []
 
             for row in reader:
-                api_key_name = row.get("api_key", "").strip()
-                if api_key_name:
-                    key_names.add(api_key_name)
+                api_key_field = row.get("api_key", "").strip()
+                if api_key_field:
+                    # Support pipe-delimited multi-var fields (e.g. "VAR1|VAR2|VAR3")
+                    for var in api_key_field.split("|"):
+                        var = var.strip()
+                        if var:
+                            key_names.add(var)
 
     except Exception as e:
         logger.error("Error reading llm_model.csv: %s", e)
