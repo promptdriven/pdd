@@ -41,9 +41,12 @@ You are working on step 8 of the agentic architecture workflow. Step 6 generated
 % Key Rules
 
 1. **Prompt file location:**
-   - All prompts go FLAT in `prompts/` directory
+   - Read `.pddrc` to find `prompts_dir` for the matching context
+   - **Per-module contexts (Strategy A):** Prompts go FLAT in `prompts/` (the default `prompts_dir`)
+     - Example: `prompts/home_page_TypeScriptReact.prompt`
+   - **Group contexts (Strategy B):** Prompts go in the group context's `prompts_dir` subdirectory
+     - Example: `prompts/backend/crm_models_Python.prompt` (when `prompts_dir: "prompts/backend"`)
    - Filename comes DIRECTLY from architecture.json `filename` field
-   - Example: `prompts/home_page_TypeScriptReact.prompt`
 
 2. **Prompt content structure:**
    ```
@@ -75,9 +78,14 @@ You are working on step 8 of the agentic architecture workflow. Step 6 generated
 
 % Output Requirements
 
-1. **Create prompts/ directory:** `mkdir -p prompts`
+1. **Create prompt directories:**
+   - Read `.pddrc` to determine where prompts go
+   - For per-module contexts (Strategy A): `mkdir -p prompts`
+   - For group contexts (Strategy B): `mkdir -p prompts/SUBDIRECTORY` (e.g., `mkdir -p prompts/backend`)
 
-2. **Write each prompt file** to `prompts/{filename}`
+2. **Write each prompt file** to the correct directory:
+   - Strategy A: `prompts/{filename}`
+   - Strategy B: `prompts/{subdirectory}/{filename}` (matching the group context's `prompts_dir`)
 
 3. **Post summary to GitHub**
 
@@ -97,13 +105,18 @@ This example shows the correct prompt file structure and naming.
 
 Generate prompt files for ALL modules in architecture.json.
 
+First, read `.pddrc` to determine the prompt placement strategy:
+- If .pddrc uses per-module contexts with `outputs.code.path` → place prompts FLAT in `prompts/`
+- If .pddrc uses group contexts with `prompts_dir` subdirectory → place prompts in that subdirectory
+
 For each module:
-1. Create file at `prompts/{filename}` (filename from architecture.json)
-2. Include rich context from reason, description, interface fields
-3. Add <include> tags for dependencies
+1. Determine the correct directory from `.pddrc` (flat `prompts/` or subdirectory like `prompts/backend/`)
+2. Create file at the correct path (e.g., `prompts/{filename}` or `prompts/backend/{filename}`)
+3. Include rich context from reason, description, interface fields
+4. Add <include> tags for dependencies
 
 Remember:
-- Prompts are FLAT in prompts/ directory (no subdirectories)
+- Check `.pddrc` for the correct prompt directory before creating files
 - Filename comes directly from architecture.json
 - Filenames MUST use valid language suffixes: `TypeScript`, `TypeScriptReact`, `Python`, etc.
   - ❌ WRONG: `_NextJS.prompt`, `_React.prompt`, `_Node.prompt`
