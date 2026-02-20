@@ -319,12 +319,38 @@ def _write_api_env_atomic(path: Path, lines: List[str]) -> None:
         raise
 
 
+def _quote_for_shell(value: str, shell: str) -> str:
+    """Quote a value for the given shell, handling shell-specific edge cases.
+
+    - POSIX shells (bash/zsh/sh/ksh): shlex.quote() is fully correct.
+    - fish: single quotes treat \\\\ and \\' as escape sequences (unlike POSIX),
+      so we must escape backslashes and single quotes within single quotes.
+    - csh/tcsh: single quotes DO prevent $ expansion, but ! (history expansion)
+      is never suppressed by any quoting. We backslash-escape ! outside quotes.
+    """
+    if shell == "fish":
+        # fish single quotes recognise \\' and \\\\ as escapes
+        escaped = value.replace("\\", "\\\\").replace("'", "\\'")
+        return f"'{escaped}'"
+    elif shell in ("csh", "tcsh"):
+        # csh single quotes are mostly POSIX-like, but ! is never suppressed.
+        # Strategy: use shlex.quote() for the base quoting, then break out
+        # any ! characters so they can be backslash-escaped outside quotes.
+        if "!" not in value:
+            return shlex.quote(value)
+        # Split on !, quote each segment, rejoin with escaped !
+        parts = value.split("!")
+        quoted_parts = [shlex.quote(p) for p in parts]
+        return "\\!".join(quoted_parts)
+    else:
+        # bash, zsh, ksh, sh — shlex.quote() is fully correct
+        return shlex.quote(value)
+
+
 def _build_env_export_line(key_name: str, key_value: str) -> str:
     """Build a shell-appropriate export line for the given key/value."""
     shell = _get_shell_name()
-    # Use shlex.quote() for proper shell escaping of special characters
-    # This handles $, ", ', `, \, spaces, and other problematic chars
-    quoted_value = shlex.quote(key_value)
+    quoted_value = _quote_for_shell(key_value, shell)
 
     if shell == "fish":
         return f"set -gx {key_name} {quoted_value}\n"

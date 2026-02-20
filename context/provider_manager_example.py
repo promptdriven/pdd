@@ -7,7 +7,7 @@ from pathlib import Path
 project_root = Path(__file__).resolve().parent.parent
 sys.path.append(str(project_root))
 
-from pdd.setup.provider_manager import (
+from pdd.provider_manager import (
     add_provider_from_registry,
     add_custom_provider,
     remove_models_by_provider,
