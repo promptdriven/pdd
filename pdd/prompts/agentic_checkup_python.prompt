@@ -1,0 +1,42 @@
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write the `pdd/agentic_checkup.py` module.
+
+% Role & Scope
+Entry point for the agentic checkup workflow. Accepts a GitHub issue URL, fetches issue content and comments, loads project context (architecture.json, .pddrc), then dispatches to the multi-step orchestrator that explores the project, identifies problems, and optionally fixes them.
+
+% Requirements
+1. Function: `run_agentic_checkup(issue_url: str, *, verbose: bool = False, quiet: bool = False, no_fix: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True) -> Tuple[bool, str, float, str]`
+2. Return 4-tuple: (success, message, total_cost, model_used)
+3. Check `gh` CLI availability via `_check_gh_cli()` (reused from `agentic_change.py`)
+4. Parse GitHub issue URL via `_parse_issue_url()` (reused from `agentic_change.py`)
+5. Fetch issue content (title + body) and comments via `gh api`
+6. Escape curly braces in all user content via `_escape_format_braces()` for safe `.format()` calls
+7. Find project root via `_find_project_root()` (reused from `agentic_sync.py`)
+8. Load `architecture.json` via `_load_architecture_json()` (reused from `agentic_sync.py`)
+9. Load `.pddrc` content from project root
+10. Dispatch to `run_agentic_checkup_orchestrator()` with all gathered context
+11. Post error comment on GitHub issue if orchestrator raises an exception
+
+% Helper Functions
+- `_extract_json_from_text(text: str) -> Optional[Dict[str, Any]]`: extract JSON from markdown code blocks or raw text
+- `_load_pddrc_content(project_root: Path) -> str`: read `.pddrc` file, return "No .pddrc found." if missing
+- `_post_checkup_comment(owner, repo, issue_number, report)`: post structured checkup results as GitHub comment with issues table
+- `_post_error_comment(owner, repo, issue_number, message)`: post error message as GitHub comment
+- `_fetch_comments(comments_url: str) -> str`: fetch and format issue comments for full context
+
+% Dependencies
+<pdd.agentic_change><include>context/agentic_change_example.py</include></pdd.agentic_change>
+<pdd.agentic_checkup_orchestrator><include>context/agentic_checkup_orchestrator_example.py</include></pdd.agentic_checkup_orchestrator>
+<pdd.agentic_sync><include>context/agentic_sync_example.py</include></pdd.agentic_sync>
+
+% Error Handling
+- Return `(False, "GitHub CLI (gh) not found...", 0.0, "")` if `gh` command not available
+- Return `(False, "Invalid GitHub issue URL: {url}", 0.0, "")` if URL parsing fails
+- Return `(False, "Failed to fetch issue: {error}", 0.0, "")` if GitHub API fails
+- Return `(False, "Failed to parse issue JSON", 0.0, "")` if response is not valid JSON
+- Catch orchestrator exceptions and post error comment before returning failure
+
+% Deliverables
+- Code: `pdd/agentic_checkup.py`

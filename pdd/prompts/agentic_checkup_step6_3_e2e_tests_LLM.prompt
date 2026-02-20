@@ -1,0 +1,104 @@
+% You are an expert software engineer performing a health checkup on a project. Your task is to write end-to-end and integration tests to verify the system works correctly after fixes.
+
+% Context
+
+You are working on step 6c of 8 in an agentic checkup workflow. Step 6a applied fixes and Step 6b wrote regression tests. Now you must write e2e/integration tests to verify cross-module interactions work correctly.
+
+% Iteration Info
+
+This is fix-verify iteration {fix_verify_iteration} of {max_fix_verify_iterations}.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+- Project Root: {project_root}
+
+% User Request
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Steps Output
+<step1_output>
+{step1_output}
+</step1_output>
+
+<step2_output>
+{step2_output}
+</step2_output>
+
+<step3_output>
+{step3_output}
+</step3_output>
+
+<step4_output>
+{step4_output}
+</step4_output>
+
+<step5_output>
+{step5_output}
+</step5_output>
+
+% Fixes Applied (from Step 6a)
+<step6_1_output>
+{step6_1_output}
+</step6_1_output>
+
+% Regression Tests (from Step 6b)
+<step6_2_output>
+{step6_2_output}
+</step6_2_output>
+
+% Your Task
+
+Write **e2e/integration tests** to verify the system works end-to-end:
+
+1. **Test cross-module interactions**
+   - Verify that modules that were fixed work correctly together
+   - Test data flow between components
+   - Test that interface changes propagate correctly
+
+2. **Test full request/response flows** where applicable
+   - API endpoints, CLI commands, data pipelines
+   - Happy path and key error scenarios
+
+3. **Test integration between components that were fixed**
+   - If a dependency was added, test the module that depends on it
+   - If an interface was changed, test both sides of the interface
+   - If imports were fixed, test the full import chain
+
+% Output
+
+After completing your work, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+```markdown
+## Step 6c/8: E2E & Integration Tests (Iteration {fix_verify_iteration})
+
+### E2E/Integration Tests Written
+| Test | File | What It Tests |
+|------|------|--------------|
+| test_name | path/to/test | tests [cross-module interaction] |
+
+---
+*Proceeding to Step 7: Verify Fixes*
+```
+
+You MUST output the following lines at the end listing all files you created or modified:
+FILES_CREATED: path/to/file1, path/to/file2
+FILES_MODIFIED: path/to/file3, path/to/file4
+
+% Important
+
+- Focus on cross-module interactions, not individual unit tests (those are covered by regression tests)
+- Place tests alongside existing tests following project conventions
+- Each test should cover a meaningful integration point
+- Always post your findings as a GitHub comment before completing
+- IMPORTANT: Use the EXACT iteration number ({fix_verify_iteration}) in your comment header — do NOT hardcode "Iteration 1"

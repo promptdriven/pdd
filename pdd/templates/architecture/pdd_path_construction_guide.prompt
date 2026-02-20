@@ -65,9 +65,13 @@ Given basename "foo", PDD searches for prompts:
 2. Scans directory for files matching pattern `{{basename}}_*.prompt`
 3. Extracts language from filename suffix
 
-**IMPORTANT**: Prompt files must be in a FLAT directory structure.
-- ✅ `prompts/home_page_TypeScriptReact.prompt`
-- ❌ `prompts/pages/home_page_TypeScriptReact.prompt` (nested - won't be found unless prompts_dir configured)
+**IMPORTANT**: Prompt files must be in the directory matching `prompts_dir` from the matching context.
+- **Style 1 (per-module):** FLAT in `prompts/` (the default `prompts_dir`)
+  - ✅ `prompts/home_page_TypeScriptReact.prompt`
+  - ❌ `prompts/pages/home_page_TypeScriptReact.prompt`
+- **Style 2 (group contexts):** In the group context's `prompts_dir` subdirectory
+  - ✅ `prompts/backend/crm_models_Python.prompt` (when `prompts_dir: "prompts/backend"`)
+  - ❌ `prompts/crm_models_Python.prompt` (wrong — not in the group's subdirectory)
 
 **Prompt filename format:**
 ```
@@ -82,12 +86,12 @@ Given basename "foo", PDD searches for prompts:
 % HOW PDD DETERMINES OUTPUT CODE PATH
 % ============================================================================
 
-There are TWO configuration styles. Choose ONE based on your project type:
+There are TWO configuration styles. Choose the right one based on your project type:
 
-**Style 1: outputs.code.path (REQUIRED for frameworks with strict filenames)**
+**Style 1: outputs.code.path (Per-module exact paths)**
 
-Use this for Next.js, Nuxt, SvelteKit where files MUST have exact names like
-`page.tsx`, `route.ts`, `layout.tsx`.
+Use this for Next.js, Nuxt, SvelteKit where output filenames do NOT derive from the basename.
+Example: basename `home_page` → filepath `app/page.tsx` (no derivation).
 
 ```yaml
 contexts:
@@ -96,7 +100,12 @@ contexts:
     defaults:
       outputs:
         code:
-          path: "app/page.tsx"  # EXACT output path - no templates!
+          path: "app/page.tsx"  # EXACT output path
+
+  default:
+    defaults:
+      prompts_dir: "prompts/"
+      generate_output_path: "src/"
 ```
 
 When `pdd sync home_page` runs:
@@ -104,26 +113,41 @@ When `pdd sync home_page` runs:
 2. Finds `outputs.code.path: "app/page.tsx"`
 3. Outputs code to `app/page.tsx`
 
-**Style 2: generate_output_path (for simple projects)**
+**Style 2: generate_output_path (Template-based group contexts)**
 
-Use this for Python, Go, or simple Node.js projects where output filename = basename.
+Use this for Python, Go, Rust, or standard backend projects where output filename = basename.
+Example: basename `crm_models` → filepath `backend/crm_models.py` (basename in filepath).
 
 ```yaml
 contexts:
-  default:
+  backend:
+    paths: ["*"]
     defaults:
-      prompts_dir: "prompts/"
-      generate_output_path: "src/"  # Directory-based: outputs {{basename}}.{{ext}}
+      prompts_dir: "prompts/backend"
+      generate_output_path: "backend/"  # Directory-based: outputs {basename}.{ext}
 ```
 
-When `pdd sync hello_world` runs:
-1. No specific context matches, uses `default`
-2. Uses `generate_output_path: "src/"`
-3. Outputs code to `src/hello_world.py`
+When `pdd sync crm_models` runs:
+1. Matches context `backend` (pattern `*` matches all basenames)
+2. Uses `generate_output_path: "backend/"`
+3. Outputs code to `backend/crm_models.py` (directory + basename + extension)
 
-**CRITICAL**: These styles are MUTUALLY EXCLUSIVE.
-- Framework projects (Next.js): Use `outputs.code.path` with exact paths
-- Simple projects (Python): Use `generate_output_path` with directory
+**Complete Python backend .pddrc example:**
+```yaml
+version: "1.0"
+
+contexts:
+  backend:
+    paths: ["*"]
+    defaults:
+      prompts_dir: "prompts/backend"
+      generate_output_path: "backend/"
+```
+
+**CHOOSING BETWEEN STYLES**: Check if filepaths derive from basenames.
+- If basename appears in filepath as the filename → Style 2 (template-based)
+- If basename does NOT appear in filepath → Style 1 (per-module exact)
+- Mixed projects can use BOTH styles (Style 1 contexts for framework files, Style 2 group context for backend files)
 
 % ============================================================================
 % VALID LANGUAGE SUFFIXES (CASE-SENSITIVE)
@@ -176,15 +200,16 @@ contexts:
 | `*api*` | `api_tasks_route`, `user_api` | `tasks_route` |
 | `prisma_*` | `prisma_schema`, `prisma_client` | `my_prisma` |
 
-**CRITICAL**: Do NOT put `prompts_dir` in every context!
+**CRITICAL**: Where `prompts_dir` goes depends on your strategy!
 
+**Style 1 (per-module exact paths):** `prompts_dir` goes ONLY in `default` context.
 ```yaml
-# ❌ WRONG - breaks context matching
+# ❌ WRONG for Style 1 - don't duplicate prompts_dir
 contexts:
   home_page:
     paths: ["*home_page*"]
     defaults:
-      prompts_dir: "prompts/"  # DON'T duplicate this!
+      prompts_dir: "prompts/"  # DON'T duplicate this in per-module contexts!
       outputs:
         code:
           path: "app/page.tsx"
@@ -192,7 +217,7 @@ contexts:
     defaults:
       prompts_dir: "prompts/"
 
-# ✅ CORRECT - prompts_dir only in default
+# ✅ CORRECT for Style 1 - prompts_dir only in default
 contexts:
   home_page:
     paths: ["*home_page*"]
@@ -204,6 +229,17 @@ contexts:
     defaults:
       prompts_dir: "prompts/"
       generate_output_path: "src/"
+```
+
+**Style 2 (template-based group contexts):** `prompts_dir` goes on the group context, pointing to a subdirectory.
+```yaml
+# ✅ CORRECT for Style 2 - prompts_dir on group context with subdirectory
+contexts:
+  backend:
+    paths: ["*"]
+    defaults:
+      prompts_dir: "prompts/backend"    # Subdirectory for this group's prompts
+      generate_output_path: "backend/"  # Output directory
 ```
 
 % ============================================================================
@@ -235,30 +271,53 @@ contexts:
 - `home-page_TypeScriptReact.prompt` ❌ (use underscores, not hyphens)
 
 % ============================================================================
-% COMPLETE WORKING EXAMPLE (VERIFIED)
+% COMPLETE WORKING EXAMPLES (VERIFIED)
 % ============================================================================
 
+% --- Example A: Next.js (Style 1 - Per-module exact paths) ---
+
 For a complete, verified working example of a Next.js Task Notes application with
-13 modules, see:
+13 modules using per-module exact path contexts:
 
-<complete_working_example>
+<complete_working_example_a>
 <include>pdd/templates/architecture/example_nextjs_task_notes.prompt</include>
-</complete_working_example>
+</complete_working_example_a>
 
-**Quick Reference - Key patterns from the example:**
+**Quick Reference - Style 1 patterns (Next.js):**
 
 | filename | basename | filepath | context paths |
 |----------|----------|----------|---------------|
 | `prisma_schema_Prisma.prompt` | `prisma_schema` | `prisma/schema.prisma` | `["*prisma_schema*"]` |
 | `home_page_TypeScriptReact.prompt` | `home_page` | `app/page.tsx` | `["*home_page*"]` |
 | `api_tasks_id_route_TypeScript.prompt` | `api_tasks_id_route` | `app/api/tasks/[id]/route.ts` | `["*api_tasks_id_route*"]` |
-| `task_card_component_TypeScriptReact.prompt` | `task_card_component` | `components/TaskCard.tsx` | `["*task_card_component*"]` |
 
-**Commands:**
 ```bash
 pdd sync prisma_schema      → prisma/schema.prisma
 pdd sync home_page          → app/page.tsx
 pdd sync api_tasks_id_route → app/api/tasks/[id]/route.ts
+```
+
+% --- Example B: Python Backend (Style 2 - Template-based group contexts) ---
+
+For a complete, verified working example of a Python FastAPI backend with
+7 modules using template-based group contexts:
+
+<complete_working_example_b>
+<include>pdd/templates/architecture/example_python_backend.prompt</include>
+</complete_working_example_b>
+
+**Quick Reference - Style 2 patterns (Python backend):**
+
+| filename | basename | filepath | group context |
+|----------|----------|----------|---------------|
+| `crm_models_Python.prompt` | `crm_models` | `backend/crm_models.py` | `backend` (paths: `["*"]`) |
+| `auth_service_Python.prompt` | `auth_service` | `backend/auth_service.py` | `backend` (paths: `["*"]`) |
+| `customers_router_Python.prompt` | `customers_router` | `backend/customers_router.py` | `backend` (paths: `["*"]`) |
+
+```bash
+pdd sync crm_models        → backend/crm_models.py
+pdd sync auth_service      → backend/auth_service.py
+pdd sync customers_router  → backend/customers_router.py
 ```
 
 % ============================================================================
@@ -321,9 +380,13 @@ pdd sync home_page --dry-run
    - ❌ No context matches `api_tasks_route`
    - ✅ Add context with `paths: ["*api_tasks_route*"]`
 
-6. **Using templates for framework-specific files**
-   - ❌ `path: "app/{{name}}.tsx"` (would output `app/home_page.tsx`)
-   - ✅ `path: "app/page.tsx"` (exact path)
+6. **Using the wrong path style for your project type**
+   - For frameworks (Next.js/Nuxt/SvelteKit) — use exact paths, NOT templates:
+     - ❌ `path: "app/{name}.tsx"` (would output `app/home_page.tsx` — wrong!)
+     - ✅ `path: "app/page.tsx"` (exact path)
+   - For backends (Python/Go/Rust) — use template-based group contexts, NOT per-module:
+     - ❌ 7 separate contexts each with `outputs.code.path: "backend/crm_models.py"` (redundant!)
+     - ✅ 1 group context with `generate_output_path: "backend/"` (template expansion)
 
 % ============================================================================
 % REFERENCE: KEY CODE FILES
@@ -352,11 +415,22 @@ For deeper understanding, these are the key code files:
 
 Before finishing architecture.json and .pddrc generation:
 
+**Common checks (both styles):**
 □ Every filename uses underscores, NO slashes
 □ Every filename ends with valid PascalCase language suffix
-□ Every filepath matches framework conventions
-□ Every module has a corresponding context in .pddrc
-□ Each context's `paths:` pattern matches its basename
-□ Each context's `outputs.code.path` matches its filepath
-□ `prompts_dir` appears ONLY in `default` context
+□ Every filepath matches framework/project conventions
 □ Verified paths using Python script or dry-run
+
+**Style 1 checks (per-module exact paths — Next.js/Nuxt/SvelteKit):**
+□ Every module has a dedicated context in .pddrc
+□ Each context's `paths:` pattern matches its basename
+□ Each context's `outputs.code.path` matches its filepath exactly
+□ `prompts_dir` appears ONLY in `default` context
+□ All prompt files are FLAT in `prompts/` directory
+
+**Style 2 checks (template-based group contexts — Python/Go/Rust):**
+□ Modules are grouped by output directory into group contexts
+□ Each group context has `generate_output_path` set to the directory
+□ Each group context has `prompts_dir` pointing to its subdirectory (e.g., `"prompts/backend"`)
+□ All prompt files are in the group's `prompts_dir` subdirectory
+□ No `outputs.code.path` on group contexts (template expansion handles it)

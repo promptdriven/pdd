@@ -1,0 +1,88 @@
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write the `pdd/agentic_checkup_orchestrator.py` module.
+
+% Role & Scope
+Orchestrator for the 8-step agentic checkup workflow. Runs each step as a separate agentic task with focused prompts and per-step timeouts. Steps 3-7 run in an iterative fix-verify loop (max 3 iterations) so that if verification finds remaining failures the workflow loops back to re-check/fix until clean. Step 6 is split into sub-steps 6.1 (fix), 6.2 (regression tests), 6.3 (e2e tests). Steps 6-8 operate in an isolated git worktree.
+
+% Requirements
+1. Function: `run_agentic_checkup_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_title: str, architecture_json: str, pddrc_content: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, no_fix: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True) -> Tuple[bool, str, float, str]`
+2. Return 4-tuple: (success, final_message, total_cost, model_used)
+3. Run 10 steps in order: `STEP_ORDER = [1, 2, 3, 4, 5, 6.1, 6.2, 6.3, 7, 8]` with `TOTAL_STEPS = 8` for display
+4. Steps 1-2 run linearly once; steps 3-7 run in iterative while loop; step 8 runs after loop
+5. Iterative loop: `MAX_FIX_VERIFY_ITERATIONS = 3`; exit when step 7 output contains "All Issues Fixed"
+6. Step 6 sub-steps: 6.1 (fix issues), 6.2 (regression tests), 6.3 (e2e/integration tests)
+7. Fractional steps use underscore-based keys: `6.1 -> "6_1"` for templates, context, and state
+8. Display fractional steps as 6a/6b/6c via `_display_step` mapping
+9. Parse `FILES_CREATED:` / `FILES_MODIFIED:` lines from step 6.1/6.2/6.3 output to track changed files
+10. Accumulate `previous_fixes` context across iterations for step 6.1
+
+% Per-Step Timeouts
+```python
+CHECKUP_STEP_TIMEOUTS: Dict[Union[int, float], float] = {
+    1: 340.0,    # Discover
+    2: 600.0,    # Deps
+    3: 600.0,    # Build
+    4: 600.0,    # Interfaces
+    5: 600.0,    # Test
+    6.1: 600.0,  # Fix issues
+    6.2: 600.0,  # Regression tests
+    6.3: 600.0,  # E2E / integration tests
+    7: 1200.0,   # Verify (re-runs full test suite, needs extra time)
+    8: 340.0,    # Create PR
+}
+```
+
+% Step Sequence
+| Step | Template Name | Purpose |
+|------|---------------|---------|
+| 1 | agentic_checkup_step1_discover_LLM | Discover project structure and tech stack |
+| 2 | agentic_checkup_step2_deps_LLM | Audit dependencies |
+| 3 | agentic_checkup_step3_build_LLM | Run build/compile checks |
+| 4 | agentic_checkup_step4_interfaces_LLM | Check cross-module interfaces, nav reachability, API consistency |
+| 5 | agentic_checkup_step5_test_LLM | Run tests |
+| 6.1 | agentic_checkup_step6_1_fix_LLM | Fix discovered issues |
+| 6.2 | agentic_checkup_step6_2_regression_tests_LLM | Write regression tests for fixes |
+| 6.3 | agentic_checkup_step6_3_e2e_tests_LLM | Write e2e/integration tests |
+| 7 | agentic_checkup_step7_verify_LLM | Verify fixes and generate report |
+| 8 | agentic_checkup_step8_create_pr_LLM | Create pull request |
+
+% Step Execution
+For each step:
+1. Load prompt template via `load_prompt_template(f"agentic_checkup_step{step_str}_{name}_LLM")`
+2. Preprocess with `double_curly_brackets=True` and `exclude_keys` for context variables
+3. Format template with accumulated context dict
+4. Call `run_agentic_task(formatted_prompt, step_cwd, ..., timeout=CHECKUP_STEP_TIMEOUTS[step_num] + timeout_adder, max_retries=DEFAULT_MAX_RETRIES)`
+5. Store output for subsequent steps, accumulate cost
+
+% Resume Support
+- `_next_step(current)`: return next step in `STEP_ORDER` (handles fractional + legacy values)
+- State validation: scan cached `step_outputs` for `FAILED:` prefixes to find actual last success
+- Bug A fix: save state immediately after worktree creation (before step 3)
+- Bug B fix: if resuming with `start_step > 7` and `fix_verify_iteration > 0`, increment iteration and restart at step 3
+
+% Git Worktree Isolation
+- `_setup_worktree(cwd, issue_number, quiet, resume_existing)`: create worktree at `.pdd/worktrees/checkup-issue-{N}/`
+- `_copy_uncommitted_changes(git_root, worktree_path, quiet)`: apply uncommitted diffs and copy untracked files
+- Branch name: `checkup/issue-{N}`
+- Worktree created before first loop iteration; all loop steps (3-7) + step 8 run in worktree
+
+% No-Fix Mode
+- `--no-fix`: steps 3-5 linear, skip 6.1/6.2/6.3 and 8, run step 7 once, no loop
+- Skipped steps get output "Skipped: --no-fix mode"
+
+% State Persistence
+Use shared functions from `agentic_common`: `load_workflow_state`, `save_workflow_state`, `clear_workflow_state`
+- State directory: `.pdd/checkup-state/`
+- Workflow type: `"checkup"`
+- State includes: `fix_verify_iteration`, `previous_fixes`, `worktree_path`, `changed_files`
+
+% Dependencies
+Import from `agentic_common`: `run_agentic_task`, `DEFAULT_MAX_RETRIES`, `load_workflow_state`, `save_workflow_state`, `clear_workflow_state`
+Note: `CHECKUP_STEP_TIMEOUTS` is defined locally in this module
+<pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
+<pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
+
+% Deliverables
+- Code: `pdd/agentic_checkup_orchestrator.py`
