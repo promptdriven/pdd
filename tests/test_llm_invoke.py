@@ -1200,142 +1200,100 @@ def test_llm_invoke_responses_api_valid_json_parses_correctly(mock_load_models, 
                     assert response['result'].field2 == 42
 
 
-# --- Tests for Per-Model Vertex AI Location Override ---
+# --- Tests for Multi-Credential Provider (Vertex AI) ---
 
-def test_vertex_location_override_from_csv(mock_set_llm_cache):
-    """Test that per-model location in CSV overrides VERTEX_LOCATION env var."""
+def test_vertex_multi_credential_no_api_key_passed(mock_set_llm_cache):
+    """Test that Vertex AI (pipe-delimited api_key) does NOT pass api_key= to litellm."""
     with patch('pdd.llm_invoke._load_model_data') as mock_load_data:
-        # Create mock model with location='us-central1'
         mock_data = [{
-            'provider': 'Google',
-            'model': 'vertex_ai/deepseek-ai/deepseek-r1-0528-maas',
-            'input': 0.55, 'output': 2.19,
-            'coding_arena_elo': 1391,
-            'structured_output': False,
-            'base_url': '',
-            'api_key': 'VERTEX_CREDENTIALS',
-            'reasoning_type': 'none',
-            'max_reasoning_tokens': 0,
-            'location': 'us-central1'  # Per-model location override
-        }]
-        mock_df = pd.DataFrame(mock_data)
-        mock_df['avg_cost'] = (mock_df['input'] + mock_df['output']) / 2
-        mock_load_data.return_value = mock_df
-
-        # Set env vars - VERTEX_LOCATION is 'global' but should be overridden
-        env_vars = {
-            'VERTEX_CREDENTIALS': '/fake/path.json',
-            'VERTEX_PROJECT': 'test-project',
-            'VERTEX_LOCATION': 'global'  # This should be overridden by CSV
-        }
-
-        with patch.dict(os.environ, env_vars):
-            with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
-                mock_completion.return_value = create_mock_litellm_response("test")
-                # Use mock_open for proper file context manager behavior
-                m = mock_open(read_data='{}')
-                with patch('builtins.open', m):
-                    with patch('pdd.llm_invoke.json.load', return_value={}):
-                        llm_invoke("test {x}", {"x": "y"}, 0.5, 0.7, True)
-
-                # Assert vertex_location was set to 'us-central1', not 'global'
-                call_kwargs = mock_completion.call_args[1]
-                assert call_kwargs.get('vertex_location') == 'us-central1'
-
-
-def test_vertex_location_fallback_when_empty(mock_set_llm_cache):
-    """Test that empty location in CSV falls back to VERTEX_LOCATION env var."""
-    with patch('pdd.llm_invoke._load_model_data') as mock_load_data:
-        # Create mock model with NO location (empty string)
-        mock_data = [{
-            'provider': 'Google',
+            'provider': 'Google Vertex AI',
             'model': 'vertex_ai/gemini-3-flash-preview',
             'input': 0.15, 'output': 0.6,
             'coding_arena_elo': 1290,
             'structured_output': True,
             'base_url': '',
-            'api_key': 'VERTEX_CREDENTIALS',
+            'api_key': 'GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION',
             'reasoning_type': 'effort',
             'max_reasoning_tokens': 0,
-            'location': ''  # Empty - should fall back to env var
+            'location': ''
         }]
         mock_df = pd.DataFrame(mock_data)
         mock_df['avg_cost'] = (mock_df['input'] + mock_df['output']) / 2
         mock_load_data.return_value = mock_df
 
         env_vars = {
-            'VERTEX_CREDENTIALS': '/fake/path.json',
-            'VERTEX_PROJECT': 'test-project',
-            'VERTEX_LOCATION': 'global'  # Should use this when CSV location is empty
+            'GOOGLE_APPLICATION_CREDENTIALS': '/fake/path.json',
+            'VERTEXAI_PROJECT': 'test-project',
+            'VERTEXAI_LOCATION': 'us-east4',
         }
 
         with patch.dict(os.environ, env_vars):
-            with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
-                mock_completion.return_value = create_mock_litellm_response("test")
-                m = mock_open(read_data='{}')
-                with patch('builtins.open', m):
-                    with patch('pdd.llm_invoke.json.load', return_value={}):
-                        llm_invoke("test {x}", {"x": "y"}, 0.5, 0.7, True)
-
-                # Assert vertex_location falls back to env var 'global'
-                call_kwargs = mock_completion.call_args[1]
-                assert call_kwargs.get('vertex_location') == 'global'
-
-
-def test_vertex_adc_without_credentials_file(mock_set_llm_cache):
-    """Test that Vertex AI works via ADC when VERTEX_CREDENTIALS is not set."""
-    with patch('pdd.llm_invoke._load_model_data') as mock_load_data:
-        mock_data = [{
-            'provider': 'Google',
-            'model': 'vertex_ai/gemini-3-flash-preview',
-            'input': 0.15, 'output': 0.6,
-            'coding_arena_elo': 1290,
-            'structured_output': True,
-            'base_url': '',
-            'api_key': 'VERTEX_CREDENTIALS',
-            'reasoning_type': 'effort',
-            'max_reasoning_tokens': 0,
-            'location': 'global'
-        }]
-        mock_df = pd.DataFrame(mock_data)
-        mock_df['avg_cost'] = (mock_df['input'] + mock_df['output']) / 2
-        mock_load_data.return_value = mock_df
-
-        # Set project and location but NOT VERTEX_CREDENTIALS
-        env_vars = {
-            'VERTEX_PROJECT': 'test-project',
-            'VERTEX_LOCATION': 'global',
-        }
-
-        with patch.dict(os.environ, env_vars, clear=False):
-            # Ensure VERTEX_CREDENTIALS is not set
-            os.environ.pop('VERTEX_CREDENTIALS', None)
             with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
                 mock_completion.return_value = create_mock_litellm_response("test")
                 llm_invoke("test {x}", {"x": "y"}, 0.5, 0.7, True)
 
+                # Multi-credential: litellm reads from env, no api_key= passed
                 call_kwargs = mock_completion.call_args[1]
-                assert call_kwargs.get('vertex_project') == 'test-project'
-                assert call_kwargs.get('vertex_location') == 'global'
+                assert 'api_key' not in call_kwargs
                 assert 'vertex_credentials' not in call_kwargs
+                assert 'vertex_project' not in call_kwargs
+                assert 'vertex_location' not in call_kwargs
+
+
+def test_vertex_adc_without_credentials_file(mock_set_llm_cache):
+    """Test that _ensure_api_key allows ADC when GOOGLE_APPLICATION_CREDENTIALS is missing but VERTEXAI_PROJECT is set."""
+    with patch('pdd.llm_invoke._load_model_data') as mock_load_data:
+        mock_data = [{
+            'provider': 'Google Vertex AI',
+            'model': 'vertex_ai/gemini-3-flash-preview',
+            'input': 0.15, 'output': 0.6,
+            'coding_arena_elo': 1290,
+            'structured_output': True,
+            'base_url': '',
+            'api_key': 'GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION',
+            'reasoning_type': 'effort',
+            'max_reasoning_tokens': 0,
+            'location': ''
+        }]
+        mock_df = pd.DataFrame(mock_data)
+        mock_df['avg_cost'] = (mock_df['input'] + mock_df['output']) / 2
+        mock_load_data.return_value = mock_df
+
+        # Set project and location but NOT GOOGLE_APPLICATION_CREDENTIALS (ADC)
+        env_vars = {
+            'VERTEXAI_PROJECT': 'test-project',
+            'VERTEXAI_LOCATION': 'global',
+        }
+
+        with patch.dict(os.environ, env_vars, clear=False):
+            os.environ.pop('GOOGLE_APPLICATION_CREDENTIALS', None)
+            with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+                mock_completion.return_value = create_mock_litellm_response("test")
+                llm_invoke("test {x}", {"x": "y"}, 0.5, 0.7, True)
+
+                # Multi-credential: no api_key or vertex-specific kwargs
+                call_kwargs = mock_completion.call_args[1]
+                assert 'api_key' not in call_kwargs
 
 
 def test_ensure_api_key_allows_adc_for_vertex(mock_set_llm_cache):
-    """Test that _ensure_api_key returns True for VERTEX_CREDENTIALS when VERTEX_PROJECT is set."""
+    """Test that _ensure_api_key returns True for Vertex AI ADC when VERTEXAI_PROJECT is set."""
     from pdd.llm_invoke import _ensure_api_key
 
     model_info = {
         'model': 'vertex_ai/gemini-3-flash-preview',
-        'api_key': 'VERTEX_CREDENTIALS'
+        'api_key': 'GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION'
     }
     newly_acquired_keys = {}
 
-    with patch.dict(os.environ, {'VERTEX_PROJECT': 'test-project'}, clear=False):
-        os.environ.pop('VERTEX_CREDENTIALS', None)
+    with patch.dict(os.environ, {
+        'VERTEXAI_PROJECT': 'test-project',
+        'VERTEXAI_LOCATION': 'global',
+    }, clear=False):
+        os.environ.pop('GOOGLE_APPLICATION_CREDENTIALS', None)
         result = _ensure_api_key(model_info, newly_acquired_keys, verbose=True)
 
         assert result is True
-        assert newly_acquired_keys.get('VERTEX_CREDENTIALS') is False
 
 
 # ==============================================================================
@@ -1694,7 +1652,13 @@ def test_deepseek_maas_passes_response_format_for_structured_output(mock_set_llm
     assert len(deepseek_data) == 1, "DeepSeek MaaS model not found in CSV"
 
     with patch('pdd.llm_invoke._load_model_data', return_value=deepseek_data):
-        with patch.dict(os.environ, {'VERTEX_CREDENTIALS': 'fake_creds'}):
+        # Set the actual env vars that the CSV api_key column requires for Vertex AI models
+        vertex_env = {
+            'GOOGLE_APPLICATION_CREDENTIALS': '/fake/path/creds.json',
+            'VERTEXAI_PROJECT': 'fake-project',
+            'VERTEXAI_LOCATION': 'us-central1',
+        }
+        with patch.dict(os.environ, vertex_env):
             with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
                 # Return valid JSON that matches SampleOutputModel
                 json_response = '{"field1": "test_value", "field2": 42}'
@@ -1761,7 +1725,13 @@ def test_vertex_ai_claude_opus_passes_response_format_for_structured_output(mock
         "vertex_ai/claude-opus-4-6 should have structured_output=True in CSV"
 
     with patch('pdd.llm_invoke._load_model_data', return_value=opus_data):
-        with patch.dict(os.environ, {'VERTEX_CREDENTIALS': 'fake_creds'}):
+        # Set the actual env vars that the CSV api_key column requires for Vertex AI models
+        vertex_env = {
+            'GOOGLE_APPLICATION_CREDENTIALS': '/fake/path/creds.json',
+            'VERTEXAI_PROJECT': 'fake-project',
+            'VERTEXAI_LOCATION': 'us-central1',
+        }
+        with patch.dict(os.environ, vertex_env):
             with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
                 # Return valid JSON that matches SampleOutputModel
                 json_response = '{"field1": "test_value", "field2": 42}'
@@ -1819,7 +1789,13 @@ def test_structured_output_uses_strict_json_schema_mode(mock_set_llm_cache):
     assert len(opus_data) == 1, "Vertex AI Claude Opus model not found in CSV"
 
     with patch('pdd.llm_invoke._load_model_data', return_value=opus_data):
-        with patch.dict(os.environ, {'VERTEX_CREDENTIALS': 'fake_creds'}):
+        # Set the actual env vars that the CSV api_key column requires for Vertex AI models
+        vertex_env = {
+            'GOOGLE_APPLICATION_CREDENTIALS': '/fake/path/creds.json',
+            'VERTEXAI_PROJECT': 'fake-project',
+            'VERTEXAI_LOCATION': 'us-central1',
+        }
+        with patch.dict(os.environ, vertex_env):
             with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
                 # Return valid JSON matching SampleOutputModel
                 json_response = '{"field1": "test_value", "field2": 42}'
