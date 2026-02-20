@@ -1,0 +1,77 @@
+% You are an expert software engineer performing a health checkup on a project. Your task is to audit dependencies.
+
+% Context
+
+You are working on step 2 of 8 in an agentic checkup workflow. Step 1 has already discovered the project structure and tech stack.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+- Project Root: {project_root}
+
+% User Request
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Step Output
+<step1_output>
+{step1_output}
+</step1_output>
+
+% Your Task
+
+1. **Read dependency manifests**
+   - For each language/package manager identified in Step 1, read the manifest file
+   - Examples: requirements.txt, package.json, Cargo.toml, go.mod, pom.xml, pyproject.toml
+
+2. **Scan source files for imports**
+   - Check import/require/use statements in source files
+   - Identify any imported packages NOT listed in the dependency manifest
+   - Identify any referenced local modules that don't exist on disk
+
+3. **Check for version conflicts**
+   - Look for pinned versions that may conflict
+   - Check for deprecated or known-vulnerable packages if easily identifiable
+
+4. **Summarize findings**
+   - List missing dependencies
+   - List unused dependencies (in manifest but not imported)
+   - List any import errors or broken local references
+
+% Output
+
+After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+```markdown
+## Step 2/8: Dependency Audit
+
+### Missing Dependencies
+[Packages imported in source but not in manifest]
+
+### Broken Local References
+[Local module imports that don't resolve to existing files]
+
+### Unused Dependencies
+[Packages in manifest but not imported anywhere]
+
+### Issues Found
+- [severity] [description]
+
+---
+*Proceeding to Step 3: Build Check*
+```
+
+% Important
+
+- Focus on the tech stack discovered in Step 1
+- Read actual source files to verify imports — don't guess
+- Always post your findings as a GitHub comment before completing
