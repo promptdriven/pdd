@@ -1,7 +1,7 @@
 # PRD: AI-First Video Editor
 
 **Status:** Internal Engineering Document — derived from working prototype
-**Date:** 2026-02-16
+**Date:** 2026-02-19
 **Prototype:** `demos/3blue1brown/`
 
 ---
@@ -12,7 +12,7 @@
 
 Video production is one of the last creative workflows where iteration is punishingly slow. A director spots a timing issue at 14:32 — the fix requires a human editor to locate the source clip, adjust keyframes, re-render, re-export, and re-review. Each cycle takes minutes to hours. Most feedback dies in the gap between "I see the problem" and "I can fix it."
 
-AI video generation (Veo, Sora, Runway) is making *creation* cheap. But the edit loop — the thing that turns a rough cut into a finished product — is still manual. This is the darning socks problem applied to video: generation costs are collapsing, but we're still patching frame by frame.
+AI video generation (Veo, Sora, Runway) is making *creation* cheap. But the edit loop — the thing that turns a rough cut into a finished product — is still manual. Generation costs are collapsing, but we're still patching frame by frame.
 
 ### The Vision
 
@@ -45,7 +45,7 @@ A complete 20-minute educational video ("Why You're Still Darning Socks") about 
 | Live-action footage | Google Veo 3.1 | 50+ MP4 clips (8s each, 9:16 & 16:9) |
 | Animated visualizations | Remotion 4.0 + React 19 | 60 compositions, 73 named components |
 | Section rendering | Remotion CLI + AWS Lambda | 7 section videos + 1 full 232MB video |
-| Review & auto-fix | Express.js + Claude Opus 4.6 | `review-app/` — the key innovation |
+| Review & auto-fix | Express.js (prototype) + Claude Opus 4.6 | `review-app/` — the key innovation (V1 migrates to Next.js API routes) |
 
 ### What It Demonstrates
 
@@ -211,7 +211,8 @@ POST /api/sections/:sectionId/resolve-batch
   │ Reassembles all sections into final video                 │
   └───────────────────────┬──────────────────────────────────┘
                           ▼
-  All batch annotations marked resolved: true
+  Successful annotations marked resolved: true
+  Failed annotations marked resolved: false, error: "..."
   Video player reloads with updated full_video.mp4
 ```
 
@@ -252,7 +253,8 @@ annotation = {
 
   // Claude's analysis
   analysis: {
-    status: "pending" | "analyzing" | "completed",
+    status: "pending" | "analyzing" | "completed" | "error",
+    error: string | null,            // populated when status = "error"
     severity: "critical" | "high" | "medium" | "low" | "informational",
     category: "animation-timing" | "visual-design" | "readability" |
               "audio-sync" | "color-contrast" | "layout" | "typography" |
@@ -322,6 +324,8 @@ For `remotion` fixes, Claude receives: everything from analysis + the analysis r
 - **SSE streaming:** Real-time per-annotation and overall progress via `GET /api/jobs/:id/stream`
 - **Polling fallback:** `GET /api/jobs/:id` if EventSource fails
 - **Crash recovery:** On server restart, all pending/running jobs marked as `error: "Server restarted during pipeline"`
+- **Per-annotation error handling within a batch:** If a single annotation's fix fails (any `fixType`), the batch does **not** abort. The failed annotation is marked `error` with the failure message, and the batch continues to the next annotation. After all annotations are attempted, the section renders and stitches with whatever fixes succeeded. The user can then retry individual failed annotations via [Retry Failed] or re-queue them in a new batch. This applies to all fix types: a failed Veo regeneration does not block a subsequent Remotion fix in the same batch.
+- **Job retry:** Any failed job (pipeline stage or batch resolve) can be retried via `POST /api/jobs/:id/retry` without re-running upstream stages. The retry reuses the original job parameters.
 
 ### 4.5 Section Mapping
 
@@ -334,11 +338,15 @@ section = {
   videoFile: string,       // e.g. "intro.mp4"
   specDir: string,         // e.g. "00-intro"
   remotionDir: string,     // e.g. "S00-Intro"
-  compositionId: string    // e.g. "IntroSection"
+  compositionId: string,   // e.g. "IntroSection"
+  durationSeconds: number, // e.g. 23.4 — populated after render (read from ffprobe)
+  offsetSeconds: number    // e.g. 0.0 — cumulative offset in full video (computed from section order + durations)
 }
 ```
 
-In the prototype, this is a hardcoded array in `server.js`. In V1, this should be a config file (`sections.json` or similar) loaded at startup, so new videos don't require code changes.
+`durationSeconds` and `offsetSeconds` are populated after rendering (Stage 9) by running `ffprobe` on each section video. They are used to map a timestamp in the full video to the correct section during review — e.g., a pause at 64.6s in the full video maps to section `part2_paradigm_shift` (offset 41.2s) at local time 23.4s.
+
+In the prototype, this is a hardcoded array in `server.js`. In V1, this should be part of `project.json` (see §4.5.1), loaded at startup, so new videos don't require code changes.
 
 > **In the demo (7 sections):**
 >
@@ -352,27 +360,105 @@ In the prototype, this is a hardcoded array in `server.js`. In V1, this should b
 > | `part5_compound` | `part5_compound.mp4` | `Part5CompoundReturns` | `05-compound` |
 > | `closing` | `closing.mp4` | `ClosingSection` | `06-closing` |
 
+### 4.5.1 Project Config Schema (`project.json`)
+
+`project.json` is the single source of truth for all project configuration. It is created by Stage 1 (Project Setup), read by every pipeline stage and the review loop, and updated automatically as pipeline stages produce output (e.g., `durationSeconds` after rendering).
+
+```json
+{
+  "name": "3blue1brown-antibiotics",
+  "outputResolution": { "width": 1920, "height": 1080 },
+
+  "tts": {
+    "engine": "qwen3-tts",
+    "modelPath": "models/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+    "tokenizerPath": "models/Qwen3-TTS-Tokenizer-12Hz",
+    "speaker": "Aiden",
+    "speakingRate": 0.95,
+    "sampleRate": 24000
+  },
+
+  "sections": [
+    {
+      "id": "cold_open",
+      "label": "Cold Open",
+      "videoFile": "cold_open.mp4",
+      "specDir": "00-cold-open",
+      "remotionDir": "S00-ColdOpen",
+      "compositionId": "ColdOpenSection",
+      "durationSeconds": null,
+      "offsetSeconds": null
+    }
+  ],
+
+  "audioSync": {
+    "sectionGroups": {
+      "cold_open": { "startSegment": "cold_open_001", "endSegment": "cold_open_004" },
+      "part1_economics": { "startSegment": "part1_economics_001", "endSegment": "part1_economics_007" }
+    },
+    "silenceGapDefault": 0.3
+  },
+
+  "veo": {
+    "model": "veo-3.1-generate-preview",
+    "defaultAspectRatio": "16:9",
+    "maxConcurrentGenerations": 4,
+    "references": [
+      {
+        "id": "alex",
+        "label": "Alex (protagonist)",
+        "imagePath": "references/cold-open/developer_reference.png",
+        "sections": ["cold_open", "part1_economics"]
+      }
+    ],
+    "frameChains": [
+      { "clips": ["cold_open_veo_01", "cold_open_veo_02"], "referenceId": "alex" }
+    ]
+  },
+
+  "render": {
+    "maxParallelRenders": 3,
+    "useLambda": false,
+    "lambdaRegion": "us-east-1"
+  }
+}
+```
+
+Fields with `null` values are populated automatically by pipeline stages (e.g., `durationSeconds` after Stage 9 rendering). All other fields are user-configured in Stage 1.
+
 ### 4.6 Production Pipeline UI
 
 The production pipeline UI provides a staged workflow covering all steps from project setup through final render. It lives in a dedicated **"Pipeline"** tab alongside the existing review tab.
 
 #### 4.6.1 Overall App Layout
 
-The app has two columns: a narrow **stage sidebar** on the left and a **main panel** on the right that renders the active stage's UI. The 9 stages run in logical order but navigation is **non-gating** — any stage can be selected at any time.
+The app has two columns: a narrow **stage sidebar** on the left and a **main panel** on the right that renders the active stage's UI. The 10 stages run in logical order. Triggering any stage **auto-runs all prerequisite stages** that haven't completed yet (see "Prerequisite auto-run" below).
 
 ```mermaid
 flowchart TD
     S1["1 · Project Setup"]:::done
     S2["2 · Script Editor"]:::done
-    S3["3 · TTS Script Generation"]:::running
-    S4["4 · TTS Rendering"]:::pending
-    S5["5 · Audio Sync Pipeline"]:::pending
-    S6["6 · Spec Generation"]:::pending
-    S7["7 · Veo Generation"]:::pending
-    S8["8 · Composition Generation"]:::pending
-    S9["9 · Render + Stitch"]:::pending
 
-    S1 --> S2 --> S3 --> S4 --> S5 --> S6 --> S7 --> S8 --> S9
+    subgraph audio["Audio Track"]
+        S3["3 · TTS Script Generation"]:::running
+        S4["4 · TTS Rendering"]:::pending
+        S5["5 · Audio Sync Pipeline"]:::pending
+        S3 --> S4 --> S5
+    end
+
+    subgraph visual["Visual Track"]
+        S6["6 · Spec Generation"]:::pending
+        S7["7 · Veo Generation"]:::pending
+        S6 --> S7
+    end
+
+    S2 --> S3
+    S2 --> S6
+
+    S5 --> S8["8 · Composition Generation"]:::pending
+    S7 --> S8
+    S8 --> S9["9 · Render + Stitch"]:::pending
+    S9 --> S10["10 · Audit"]:::pending
 
     classDef done    fill:#22c55e,color:#fff,stroke:#16a34a
     classDef running fill:#f59e0b,color:#fff,stroke:#d97706
@@ -389,7 +475,8 @@ flowchart TD
 | ✕ | `error` | Last run failed; error message shown in tooltip |
 
 Key behaviors:
-- Navigation is **non-gating**: clicking any stage immediately shows that stage's panel. If an upstream stage has not completed, a yellow ⚠ banner is shown: _"Stage N has not run. Output may be missing."_
+- **Navigation is free**: clicking any stage immediately shows that stage's panel, regardless of upstream status.
+- **Prerequisite auto-run**: when the user triggers a stage's run action, the server checks all upstream stages in the dependency graph (not a flat list — the graph has parallel tracks). Any stage that hasn't completed is run automatically before the requested stage executes. Independent branches run concurrently. For example, clicking [Render All] in Stage 9 with Stages 3-8 incomplete will run the audio track (TTS script → TTS rendering → audio sync) **in parallel with** the visual track (spec generation → Veo generation), then run composition generation once both tracks complete, then render. Progress for each prerequisite stage is streamed via SSE, and the sidebar badges update in real time as each completes. If any prerequisite fails, the chain stops and the error is reported.
 - `GET /api/pipeline/status` is polled every 5 s to refresh all badges without a full page reload.
 
 **SSE streaming pattern** (reused by every pipeline stage that triggers a job):
@@ -414,7 +501,7 @@ A settings form that initialises or edits `project.json`. This replaces the hard
 ├────────────────────────────────────────────────────────────────────────────┤
 │  Project name:  [3blue1brown-antibiotics          ]                        │
 │  Output res:    [1920x1080 ▾]                                              │
-│  TTS voice:     [en-US-Neural2-D ▾]   Speaking rate: [0.95]               │
+│  TTS voice:     [Aiden ▾]             Speaking rate: [0.95]               │
 │                                                                             │
 │  Section Registry                               [+ Add Section]             │
 │  ┌──────────────────┬──────────────────┬─────────────────┬──────────────┐ │
@@ -748,6 +835,42 @@ Key behaviors:
 
 ---
 
+#### 4.6.11 Stage 10: Audit
+
+Multi-agent spec-vs-render audit with per-section results and drill-down to individual spec verdicts.
+
+```
+┌────────────────────────────────────────────────────────────────────────────┐
+│  Stage 10 — Audit              [Audit All Sections]  [Audit Section ▾]    │
+├────────────────────────────────────────────────────────────────────────────┤
+│  ┌────────────────────┬──────┬──────┬────────┬─────────────────────────┐  │
+│  │ Section            │ Pass │ Fail │ Status │ Actions                 │  │
+│  ├────────────────────┼──────┼──────┼────────┼─────────────────────────┤  │
+│  │ cold_open          │  4   │  0   │ ● done │ [View Report] [↺]      │  │
+│  │ part1_economics    │  6   │  1   │ ● done │ [View Report] [↺]      │  │
+│  │ part2_paradigm…    │  —   │  —   │ ○      │ [View Report] [↺]      │  │
+│  │ …                  │ …    │ …    │ …      │ …                       │  │
+│  └────────────────────┴──────┴──────┴────────┴─────────────────────────┘  │
+│                                                                            │
+│  ┌─ Audit Detail (part1_economics) ──────────────────────────────────┐    │
+│  │  segment_01_title-card.md          PASS  "Colors match spec"      │    │
+│  │  segment_02_chart-animation.md     PASS  "Timing within 0.1s"     │    │
+│  │  segment_03_veo-factory.md         FAIL  "Character not visible"  │    │
+│  │    └─ [View Frame] [View Spec] [Create Annotation →]             │    │
+│  └───────────────────────────────────────────────────────────────────┘    │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+Key behaviors:
+- [Audit All Sections] POSTs to `POST /api/pipeline/audit/run`. Launches parallel Claude Code agents (one per section) that render still frames at segment midpoints via `npx remotion still` and compare against specs.
+- [Audit Section ▾] dropdown scopes to a single section.
+- [View Report] expands the section row to show per-spec pass/fail verdicts with one-line summaries.
+- FAIL rows show a [Create Annotation →] button that pre-fills a new annotation in the Review tab with the audit finding, frame screenshot, and relevant spec — bridging the audit and review/fix loops.
+- Audit output files are written to `audits/` and `specs/{section}/AUDIT_*.md` (see §5.6).
+- SSE streaming shows per-agent progress: _"Agent 3/7: auditing part3_mold (spec 4/8)"_.
+
+---
+
 ## 5. Video Production Pipeline
 
 ### 5.1 Spec-Driven Approach
@@ -1045,7 +1168,7 @@ models/
 └── Qwen3-TTS-Tokenizer-12Hz/          # 682MB (speech tokenizer)
 ```
 
-`render_tts.py` loads from the local `models/` directory. `render_full.py` loads from HuggingFace Hub (cached). There is no setup script — models were downloaded manually via HuggingFace Hub. The `qwen_tts` Python package is required but not listed in any requirements file within the demo directory.
+V1 loads all models from the local `models/` directory. (`render_full.py` in the prototype loaded from HuggingFace Hub, but V1 standardizes on local-only to avoid runtime downloads.) A setup script downloads model weights on first run (see §9.3).
 
 ### Review App
 
@@ -1079,7 +1202,7 @@ models/
 | Area | Issue | Impact |
 |------|-------|--------|
 | **Persistence** | Annotations stored in a flat JSON file (`data/annotations.json`) | No concurrent access, no backup, no history |
-| **Auth** | None | Single-user only |
+| **Auth** | None | Single-user local app — no auth needed (see §9.5) |
 | **Claude spawning** | New CLI process per analysis/fix — cold start every time | ~10s overhead per invocation |
 | **JSON extraction** | Three fallback strategies for parsing Claude's output (direct parse, code fence, brace matching) | Fragile; depends on Claude's output format |
 | **Section mapping** | Hardcoded array of 7 sections with manual spec/remotion/composition mapping | Adding sections requires server code change |
@@ -1094,7 +1217,7 @@ models/
 | Feature | Why It Matters |
 |---------|---------------|
 | **Version control for fixes** | No way to revert a bad Claude fix. Once it edits the .tsx file, the old version is gone (unless git tracked). |
-| **Multi-annotation batching** | Each annotation triggers a separate fix → render → stitch cycle. Five annotations on the same section = five full renders. |
+| **Multi-annotation batching** | In the prototype, each annotation triggers a separate fix → render → stitch cycle. Five annotations on the same section = five full renders. V1 implements per-section batch queuing (see §4.4, §9.2). |
 | **Diff preview** | No way to see what Claude will change before it changes it. The fix is applied blindly. |
 | **Selective re-render** | Rendering is per-section. Can't re-render just the 3 seconds around the fix. |
 | **Asset management** | Veo clips, TTS segments, and reference images are scattered across `outputs/`, `remotion/public/`, and `references/`. No manifest or DAM. |
@@ -1182,7 +1305,7 @@ For a 19-second rendered video:
 - [ ] **Composition generation:** Trigger Claude Code to write Remotion compositions from specs. Trigger section wrapper scaffolding. Preview individual compositions.
 - [ ] **Asset staging:** Automated staging of Veo clips and TTS audio to `remotion/public/` with manifest tracking (replacing the manual Claude Code `cp` pattern).
 - [ ] **Section render + stitch:** Render sections via local Remotion CLI, assemble full video. (Lambda remains available as an opt-in for long renders.)
-- [ ] **Progress streaming:** Real-time SSE/WebSocket updates for every pipeline stage — not just the fix loop.
+- [ ] **Progress streaming:** Real-time SSE updates for every pipeline stage — not just the fix loop. (SSE is preferred over WebSockets: communication is one-directional server→client, SSE has built-in browser reconnection, and the client never sends messages during a job.)
 
 ### 9.2 Review/Fix Loop (Must Have)
 
@@ -1205,6 +1328,8 @@ For a 19-second rendered video:
 - [ ] **Git integration:** Auto-commit before and after every Claude fix. Enable `git diff` preview and `git revert` for bad fixes.
 - [ ] **Job retry:** Allow retrying failed jobs (any pipeline stage, not just resolve) without re-running upstream steps
 - [ ] **Asset manifest:** Central registry of all clips, audio segments, reference images, and generated compositions — replacing the current scatter across `outputs/`, `remotion/public/`, and `references/`
+- [ ] **Dependency management:** `requirements.txt` for all Python dependencies (including `qwen_tts`, `google-genai`, `faster-whisper`, `soundfile`, `transformers`) and `package.json` for all Node dependencies. No implicit/undocumented dependencies.
+- [ ] **Setup script:** A single `setup.sh` (or `make setup`) that installs Python + Node dependencies, downloads Qwen3-TTS model weights (~4.5GB) to `models/`, verifies `ffmpeg` is installed, and creates the expected directory structure (`outputs/`, `references/`, `audits/`, `data/`).
 
 ### 9.4 Efficiency (Should Have)
 
@@ -1215,14 +1340,13 @@ For a 19-second rendered video:
 - [ ] **Parallel pipeline stages:** Run independent pipeline stages concurrently (e.g., TTS and Veo generation in parallel; multi-section renders in parallel)
 - [ ] **Cost dashboard:** Track and display Claude API, Veo, and Imagen costs per stage and per session (local rendering has no marginal cost; Lambda costs tracked only if Lambda opt-in is used)
 
-### 9.5 Collaboration (Out of Scope for V1)
+### 9.5 Out of Scope for V1
 
-**Not in V1** — target user is a single internal team member on a local laptop. Multi-user support deferred:
+**Not in V1** — target user is a single internal team member on a local laptop:
 
-- User accounts with roles (director, editor, viewer)
-- Shared annotation state across clients
-- Comment threads on annotations
-- Assignment of annotations to team members or to AI
+- **Authentication:** No auth needed. Single-user local app — no login, no sessions, no user management.
+- **Collaboration:** No multi-user support. No shared annotation state, comment threads, or role-based access.
+- **Accessibility:** No WCAG compliance, screen reader support, or keyboard-only navigation beyond existing shortcuts. Desktop-only; no mobile/responsive layout.
 
 ---
 
@@ -1291,6 +1415,7 @@ For a 19-second rendered video:
 |--------|------|-------------|
 | GET | `/api/jobs/:id` | Poll job status |
 | GET | `/api/jobs/:id/stream` | SSE stream of job progress |
+| POST | `/api/jobs/:id/retry` | Retry a failed job with original parameters |
 
 ### Metadata
 
@@ -1316,7 +1441,73 @@ For a 19-second rendered video:
 | POST | `/api/pipeline/asset-staging/run` | Stage assets to `remotion/public/` (body: `{ files?: string[] }`) |
 | POST | `/api/pipeline/render/run` | Trigger section render(s) (body: `{ sections?: string[] }`) |
 | POST | `/api/pipeline/stitch/run` | Trigger `ffmpeg` concat stitch |
+| POST | `/api/pipeline/audit/run` | Trigger multi-agent audit (body: `{ sections?: string[] }`) |
 | GET | `/api/pipeline/status` | Get status of all pipeline stages |
+
+### Common Response Schemas
+
+**Job trigger response** (all `POST /api/pipeline/*/run` and `POST /api/sections/:sectionId/resolve-batch`):
+```json
+{ "jobId": "job_1708300000_abc123" }
+```
+HTTP 202 Accepted. Use `GET /api/jobs/:id` or `GET /api/jobs/:id/stream` to track progress.
+
+**Job status response** (`GET /api/jobs/:id`):
+```json
+{
+  "jobId": "job_1708300000_abc123",
+  "status": "pending" | "running" | "done" | "error",
+  "stage": "tts-script" | "tts-render" | "audio-sync" | "specs" | "veo" |
+           "compositions" | "asset-staging" | "render" | "stitch" | "audit" |
+           "resolve-batch" | "prerequisite-chain",
+  "progress": 0-100,
+  "step": "fixing" | "rendering" | "stitching" | ...,
+  "error": null | "Error message string",
+  "createdAt": "2026-02-16T13:42:01Z",
+  "updatedAt": "2026-02-16T13:42:11Z"
+}
+```
+
+**SSE event format** (`GET /api/jobs/:id/stream`):
+```
+event: progress
+data: {"progress": 52, "step": "rendering", "message": "Rendering part1_economics (52%)"}
+
+event: done
+data: {"jobId": "job_...", "result": { ... }}
+
+event: error
+data: {"jobId": "job_...", "error": "Error message string"}
+```
+
+**Error response** (all endpoints, on failure):
+```json
+{
+  "error": "Human-readable error message",
+  "code": "INVALID_SECTION" | "JOB_NOT_FOUND" | "JOB_ALREADY_RUNNING" | "UPSTREAM_INCOMPLETE" | "INTERNAL_ERROR"
+}
+```
+
+**Pipeline status response** (`GET /api/pipeline/status`):
+```json
+{
+  "stages": {
+    "project-setup": "done",
+    "script-editor": "done",
+    "tts-script": "running",
+    "tts-render": "not_started",
+    "audio-sync": "not_started",
+    "specs": "not_started",
+    "veo": "not_started",
+    "compositions": "not_started",
+    "asset-staging": "not_started",
+    "render": "not_started",
+    "stitch": "not_started",
+    "audit": "not_started"
+  },
+  "activeJobIds": ["job_..."] | []
+}
+```
 
 ---
 
@@ -1375,7 +1566,7 @@ Any video project built with this system should follow this general layout:
 
 > **In the demo (`demos/3blue1brown/`):**
 > - `narrative/` — 3 files including `tts_cold_open.md` (cold open excerpt)
-> - `specs/` — 6 section dirs (`00-cold-open` through `05-compound`), ~150+ spec files
+> - `specs/` — 7 section dirs (`00-cold-open` through `06-closing`), ~150+ spec files
 > - `remotion/src/remotion/` — 60 registered compositions (`01-ColdOpen/` through `51-SockMetaphorFinal/`), 7 section wrappers (`S00-ColdOpen/` through `S06-Closing/`)
 > - `tools/veo/` — 9 generation scripts (section-specific, see Section 5.3)
 > - `review-app/` — `server.js` (862 lines), 7 public JS modules, `server.test.js` (Jest)
