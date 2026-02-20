@@ -1995,6 +1995,14 @@ def llm_invoke(
                 litellm_kwargs["base_url"] = str(api_base)
                 litellm_kwargs["api_base"] = str(api_base)
 
+            # Enable 1M context window for Claude models via Anthropic beta header.
+            # Safe to send for all prompt lengths — the API only charges premium rates
+            # when the request actually exceeds 200K tokens.
+            if "claude" in model_name_litellm.lower():
+                litellm_kwargs["extra_headers"] = {"anthropic-beta": "context-1m-2025-08-07"}
+                if verbose:
+                    logger.info("[INFO] Added anthropic-beta: context-1m-2025-08-07 header for Claude model.")
+
             # Provider-specific defaults (e.g., LM Studio)
             model_name_lower = str(model_name_litellm).lower()
             provider_lower_for_model = provider.lower()

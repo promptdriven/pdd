@@ -56,6 +56,62 @@ def test_detect_change_insufficient_args(runner, mock_context_obj):
         assert "Requires at least one PROMPT_FILE and one CHANGE_FILE" in result.output
 
 # -----------------------------------------------------------------------------
+# Tests for 'detect --stories' mode
+# -----------------------------------------------------------------------------
+
+def test_detect_stories_success(runner, mock_context_obj):
+    """Test 'detect --stories' invokes user story runner with defaults."""
+    with patch("pdd.commands.analysis.run_user_story_tests") as mock_runner:
+        mock_runner.return_value = (True, [{"story": "s", "passed": True}], 0.1, "gpt-4")
+        result = runner.invoke(detect_change, ["--stories"], obj=mock_context_obj)
+
+        assert result.exit_code == 0
+        args, kwargs = mock_runner.call_args
+        assert kwargs["prompts_dir"] is None
+        assert kwargs["stories_dir"] is None
+        assert kwargs["include_llm_prompts"] is False
+        assert kwargs["fail_fast"] is True
+
+
+def test_detect_stories_options(runner, mock_context_obj):
+    """Test 'detect --stories' forwards options."""
+    with patch("pdd.commands.analysis.run_user_story_tests") as mock_runner:
+        mock_runner.return_value = (True, [], 0.0, "gpt-4")
+        result = runner.invoke(
+            detect_change,
+            ["--stories", "--stories-dir", "stories", "--prompts-dir", "prompts", "--include-llm", "--no-fail-fast"],
+            obj=mock_context_obj,
+        )
+
+        assert result.exit_code == 0
+        args, kwargs = mock_runner.call_args
+        assert kwargs["prompts_dir"] == "prompts"
+        assert kwargs["stories_dir"] == "stories"
+        assert kwargs["include_llm_prompts"] is True
+        assert kwargs["fail_fast"] is False
+
+
+def test_detect_stories_rejects_files(runner, mock_context_obj):
+    """Test '--stories' mode rejects prompt/change positional arguments."""
+    with runner.isolated_filesystem():
+        with open("p1.prompt", "w") as f:
+            f.write("content")
+        with open("change.txt", "w") as f:
+            f.write("change")
+        result = runner.invoke(detect_change, ["--stories", "p1.prompt", "change.txt"], obj=mock_context_obj)
+
+    assert result.exit_code != 0
+    assert "does not accept PROMPT_FILES/CHANGE_FILE arguments" in result.output
+
+
+def test_detect_stories_rejects_output_option(runner, mock_context_obj):
+    """Test '--stories' mode rejects detect CSV output flag."""
+    result = runner.invoke(detect_change, ["--stories", "--output", "out.csv"], obj=mock_context_obj)
+
+    assert result.exit_code != 0
+    assert "--output is not supported with --stories" in result.output
+
+# -----------------------------------------------------------------------------
 # Tests for 'conflicts' command
 # -----------------------------------------------------------------------------
 

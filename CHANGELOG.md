@@ -1,8 +1,43 @@
+## v0.0.154 (2026-02-19)
+
+### Feat
+
+- Add initial video editor demo including API routes, processing pipeline scripts, and frontend application files.
+- Agentic checkup with iterative fix-verify loop, sub-steps, and architecture improvements (#482)
+- add Phase 10 Gemini 3.1-pro grounded benchmark results for sync_orchestration
+- add experimental run of sync orchestration with atomic state updates and update PRD.
+- Update Gemini 3 Pro preview to 3.1 Pro preview and add xAI Grok models to LLM configurations.
+- add grounding experiment results for Opus 4.6 grounded sync_orchestration runs
+- Add grounding experiment results for sync orchestration runs, including generated code and stability metrics.
+
+## v0.0.153 (2026-02-18)
+
+### Feat
+
+- **User story validation framework** — New `pdd/user_story_tests.py` module discovers `story__*.md` files and validates them against the current prompt set using `detect_change`. `pdd change` now automatically runs user story validation after successful code generation; failures abort the run. `pdd detect --stories` runs validation standalone with `--prompts-dir`, `--stories-dir`, `--include-llm`, and `--fail-fast` options. `pdd fix <story__*.md>` auto-detects story files and invokes `run_user_story_fix` to repair the failing prompt. New `user_stories/story__template.md` template included. Thanks @beknobloch (PR #484)!
+- **1M context window for Claude models** — `llm_invoke` now sends the `anthropic-beta: context-1m-2025-08-07` header for all Claude API calls, enabling prompts up to 1M tokens. No extra cost applies below the 200K-token threshold.
+- **Model updated: `claude-sonnet-4-5` → `claude-sonnet-4-6`** — Both the Anthropic and Vertex AI entries in `llm_model.csv` now point to `claude-sonnet-4-6`, with an updated coding arena ELO of 1480.
+
+### Fix
+
+- **`os.killpg(1)` crash in pytest-xdist workers** — `os.killpg(1)` (sending SIGTERM to the init process) raised `PermissionError` inside xdist workers, failing the entire CI test run. Now skips `killpg` when the process group ID is 1. (PR #543)
+
+### Build
+
+- **Grounding experiment results** — Added generated code runs and stability metrics for `sync_orchestration` Sonnet re-runs (`experiments/grounding/results/`); used to measure prompt grounding effectiveness across model generations.
+
 ## v0.0.152 (2026-02-17)
 
 ### Feat
 
-- Implement atomic state updates for `sync_orchestration` to fix state desynchronization (Issue #159), update LLM invocation logic and prompts, and add new grounding experiment results.
+- **Atomic state updates in `sync_orchestration`** — Fixes state desynchronization (Issue #159) where concurrent updates could leave module state inconsistent. State transitions are now applied atomically, preventing races between parallel sync workers.
+- **`LLM_CALL_TIMEOUT` configurable via environment variable** — Previously hardcoded to 600 seconds; now reads `LLM_CALL_TIMEOUT` env var so callers can override without patching code.
+- **Model list updated to Claude Sonnet 4.6** — `claude-sonnet-4-5` (Anthropic and Vertex AI) replaced by `claude-sonnet-4-6` in `llm_model.csv`. Legacy `claude-sonnet-4-5-20250929` entry removed.
+
+### Build
+
+- **`pytest` configuration moved into `pyproject.toml`** — `asyncio_mode`, `testpaths`, custom markers, and `filterwarnings` are now declared in `[tool.pytest.ini_options]`, removing the need for a separate `pytest.ini` or `setup.cfg` entry.
+- **Updated `test-durations.json`** with latest profiled CI data.
 
 ## v0.0.151 (2026-02-16)
 

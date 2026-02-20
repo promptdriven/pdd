@@ -1,6 +1,6 @@
 # PDD (Prompt-Driven Development) Command Line Interface
 
-![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.152-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
+![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.154-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
 
 ## Introduction
 
@@ -353,7 +353,7 @@ For proper model identifiers to use in your custom configuration, refer to the [
 
 ## Version
 
-Current version: 0.0.152
+Current version: 0.0.154
 
 To check your installed version, run:
 ```
@@ -529,6 +529,8 @@ flowchart TB
         bug["pdd bug &lt;url&gt;"]
         fix_url["pdd fix &lt;url&gt;"]
         test_url["pdd test &lt;url&gt;"]
+        checkup["pdd checkup &lt;url&gt;"]
+        sync_url["pdd sync &lt;url&gt;"]
     end
 
     sync["pdd sync"]
@@ -548,17 +550,19 @@ flowchart TB
 
 **Key concepts:**
 - **Entry points**: Use `pdd connect` (web UI) or run commands directly via CLI
-- **Issue-driven**: `change`, `bug`, `fix <url>` automate GitHub issue workflows
-- **`pdd sync`**: Orchestrates generate → test → fix → update for prompt-based development
+- **Issue-driven**: `change`, `bug`, `fix <url>`, `checkup`, `sync <url>` automate GitHub issue workflows
+- **`pdd sync`**: Orchestrates generate → test → fix → update for prompt-based development (also accepts issue URLs for multi-module sync)
 
 ### Getting Started
-- **[`connect`](#17-connect)**: **[RECOMMENDED]** Launch web interface for visual PDD interaction
+- **[`connect`](#18-connect)**: **[RECOMMENDED]** Launch web interface for visual PDD interaction
 - **[`setup`](#post-installation-setup-required-first-step-after-installation)**: Configure API keys and shell completion
 
 ### Agentic Commands (Issue-Driven)
 - **[`change`](#8-change)**: Implement feature requests from GitHub issues (12-step workflow)
 - **[`bug`](#14-bug)**: Analyze bugs and create failing tests from GitHub issues
+- **[`checkup`](#17-checkup)**: Run automated project health check from a GitHub issue (8-step workflow)
 - **[`fix`](#6-fix)**: Fix failing tests (supports issue-driven and manual modes)
+- **[`sync`](#1-sync)**: Multi-module parallel sync from a GitHub issue (when passed a URL instead of basename)
 - **[`test`](#4-test)**: Generate UI tests from GitHub issues (9-step workflow in agentic mode)
 
 ### Core Commands (Prompt-Based)
@@ -763,7 +767,11 @@ Here are the main commands provided by PDD:
 **[PRIMARY COMMAND]** Automatically execute the complete PDD workflow loop for a given basename. This command implements the entire synchronized cycle from the whitepaper, intelligently determining what steps are needed and executing them in the correct order with real-time visual feedback and sophisticated state management.
 
 ```bash
+# Single-module sync
 pdd [GLOBAL OPTIONS] sync [OPTIONS] BASENAME
+
+# Agentic multi-module sync from a GitHub issue
+pdd [GLOBAL OPTIONS] sync [OPTIONS] GITHUB_ISSUE_URL
 ```
 
 Important: Sync frequently overwrites generated files to keep outputs up to date. In most real runs, include the global `--force` flag to allow overwrites without interactive confirmation:
@@ -907,6 +915,28 @@ cd backend && pdd --force sync calculator     # Uses backend context settings wi
 cd frontend && pdd --force sync dashboard     # Uses frontend context with real-time feedback
 pdd --context backend --force sync calculator # Explicit context override with visual progress
 ```
+
+**Agentic Multi-Module Sync (GitHub Issue Mode)**:
+
+When a GitHub issue URL is passed instead of a basename, sync enters agentic mode:
+1. **Module Identification**: Fetches the issue content and uses an LLM to identify which modules need syncing
+2. **Dependency Validation**: Validates architecture.json dependencies and applies corrections if needed
+3. **Parallel Execution**: Dispatches parallel sync via `AsyncSyncRunner` with dependency-aware scheduling (max 4 concurrent workers)
+4. **Live Progress**: Posts and updates a GitHub comment with real-time module sync status
+
+```bash
+# Sync modules identified from a GitHub issue (parallel, dependency-aware)
+pdd sync https://github.com/myorg/myrepo/issues/100
+
+# With additional timeout for large modules
+pdd sync --timeout-adder 60 https://github.com/myorg/myrepo/issues/100
+```
+
+Options (agentic mode):
+- `--timeout-adder FLOAT`: Add additional seconds to each module's timeout (default: 0.0)
+- `--no-github-state`: Disable GitHub state persistence, use local-only
+
+**Cross-Machine Resume**: Workflow state is stored in a hidden GitHub comment, enabling resume from any machine. Use `--no-github-state` to disable.
 
 ### 2. generate
 
@@ -2300,7 +2330,59 @@ pdd verify --max-attempts 5 --budget 2.5 --output-code src/calc_verified.py --ou
 
 **When to use**: Use `verify` after `generate` and `example` for an initial round of functional validation and automated fixing based on *LLM judgment of program output against the prompt*. This helps ensure the code produces results aligned with the prompt's intent for a key scenario before proceeding to more granular unit testing (`test`) or fixing specific runtime errors (`crash`) or unit test failures (`fix`).
 
-### 17. connect
+### 17. checkup
+
+Run an automated health check on a project from a GitHub issue. The checkup workflow explores the project, identifies problems (missing deps, build errors, interface mismatches, failing tests, orphan pages, inconsistent API patterns), optionally fixes them, writes regression and e2e tests, and creates a PR.
+
+```
+pdd [GLOBAL OPTIONS] checkup [OPTIONS] GITHUB_ISSUE_URL
+```
+
+Arguments:
+- `GITHUB_ISSUE_URL`: GitHub issue URL describing what to check (e.g., "Check the entire CRM app")
+
+Options:
+- `--no-fix`: Report-only mode — discover and report issues without applying fixes
+- `--timeout-adder FLOAT`: Add additional seconds to each step's timeout (default: 0.0)
+- `--no-github-state`: Disable GitHub state persistence, use local-only
+
+**How it works (8-step workflow with iterative fix-verify loop):**
+
+1. **Discover** — Scan project structure, tech stack, and module inventory
+2. **Dependency Audit** — Check all imports resolve, no missing packages, no circular deps
+3. **Build Check** — Run build/compile commands, check for syntax/type errors
+4. **Interface Check** — Verify cross-module interfaces, frontend nav reachability, API call consistency
+5. **Test Execution** — Run full test suite, identify failures
+6. **Fix Issues** (3 sub-steps):
+   - 6a. Fix discovered issues (missing deps, imports, interfaces, build errors, orphan pages, API patterns)
+   - 6b. Write regression tests for every fix
+   - 6c. Write e2e/integration tests for cross-module interactions
+7. **Verify** — Re-run build + tests to confirm all fixes work
+8. **Create PR** — Create a pull request with all fixes and tests
+
+**Iterative Fix-Verify Loop**: Steps 3-7 run in a loop (max 3 iterations). If step 7 finds remaining issues, the workflow loops back to step 3 for another pass. The loop exits when step 7 reports "All Issues Fixed" or max iterations are reached.
+
+**Git Worktree Isolation**: All fix steps run in an isolated git worktree (`checkup/issue-{N}` branch), keeping the user's working directory clean.
+
+**Cross-Machine Resume**: Workflow state is stored in a hidden GitHub comment, enabling resume from any machine. Use `--no-github-state` to disable.
+
+**Report-Only Mode**: Use `--no-fix` to run steps 1-5 and 7 without applying fixes — useful for auditing a project's health without making changes.
+
+Each step posts its findings as a comment on the GitHub issue, providing a detailed audit trail.
+
+Example:
+```bash
+# Full checkup with fixes
+pdd checkup https://github.com/myorg/myrepo/issues/42
+
+# Report-only mode (no fixes applied)
+pdd checkup --no-fix https://github.com/myorg/myrepo/issues/42
+
+# With extra timeout for large projects
+pdd checkup --timeout-adder 120 https://github.com/myorg/myrepo/issues/42
+```
+
+### 18. connect
 
 **[RECOMMENDED ENTRY POINT]** Launches a web-based interface for PDD at `localhost:9876`.
 
