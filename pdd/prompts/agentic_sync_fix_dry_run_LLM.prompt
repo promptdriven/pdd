@@ -1,0 +1,23 @@
+You are debugging a failed `pdd sync` dry-run for module "{basename}".
+
+## Error Output
+{dry_run_error}
+
+## Project Structure
+{project_tree}
+
+## .pddrc Locations
+{pddrc_locations}
+
+## Task
+The dry-run failed when running `pdd sync {basename} --dry-run` from `{attempted_cwd}`.
+This usually means the prompt file was not found, or the working directory is wrong.
+
+Determine the correct working directory to run `pdd sync {basename}` from.
+Look at where .pddrc files are located and which subdirectory contains the relevant prompt files.
+
+## Output Format
+SYNC_CWD: <relative-path-from-project-root>
+
+Example: SYNC_CWD: examples/hello
+If the command should run from the project root: SYNC_CWD: .

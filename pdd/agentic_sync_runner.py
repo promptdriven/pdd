@@ -165,6 +165,7 @@ class AsyncSyncRunner:
         quiet: bool = False,
         verbose: bool = False,
         issue_url: Optional[str] = None,
+        module_cwds: Optional[Dict[str, Path]] = None,
     ):
         self.basenames = basenames
         self.dep_graph = dep_graph
@@ -174,6 +175,7 @@ class AsyncSyncRunner:
         self.verbose = verbose
         self.issue_url = issue_url
         self.project_root = Path.cwd()
+        self.module_cwds = module_cwds or {}
 
         self.module_states: Dict[str, ModuleState] = {
             b: ModuleState() for b in basenames
@@ -567,7 +569,7 @@ class AsyncSyncRunner:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 stdin=subprocess.DEVNULL,
-                cwd=str(self.project_root),
+                cwd=str(self.module_cwds.get(basename, self.project_root)),
                 env=env,
                 text=True,
                 bufsize=1,  # Line buffered

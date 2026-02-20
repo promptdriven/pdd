@@ -8,7 +8,10 @@ then dispatches to the async sync runner for parallel execution.
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -16,7 +19,8 @@ from rich.console import Console
 
 from .agentic_change import _check_gh_cli, _escape_format_braces, _parse_issue_url, _run_gh_command
 from .agentic_common import run_agentic_task
-from .agentic_sync_runner import AsyncSyncRunner, build_dep_graph_from_architecture
+from .agentic_sync_runner import AsyncSyncRunner, _find_pdd_executable, build_dep_graph_from_architecture
+from .construct_paths import _detect_context_from_basename, _load_pddrc_config
 from .load_prompt_template import load_prompt_template
 from .sync_order import build_dependency_graph, extract_module_from_include, topological_sort
 
@@ -59,6 +63,250 @@ def _load_architecture_json(project_root: Path) -> Tuple[Optional[List[Dict[str,
         return None, arch_path
     except (json.JSONDecodeError, OSError):
         return None, arch_path
+
+
+def _resolve_module_cwd(basename: str, project_root: Path) -> Path:
+    """Determine the correct working directory for a module based on .pddrc discovery.
+
+    Logic:
+    1. Try project root first — load its .pddrc, check if a non-default context matches.
+    2. If matched, return project_root.
+    3. If not, scan subdirectories (recursive, max depth 2) for .pddrc files.
+       For each, load and check if a context matches. Deepest match wins.
+    4. Fall back to project_root.
+    """
+    # 1. Check project root .pddrc
+    root_pddrc = project_root / ".pddrc"
+    if root_pddrc.exists():
+        try:
+            config = _load_pddrc_config(root_pddrc)
+            detected = _detect_context_from_basename(basename, config)
+            if detected and detected != "default":
+                return project_root
+        except (ValueError, OSError):
+            pass
+
+    # 2. Scan subdirectories for .pddrc files (max depth 2)
+    best_match: Optional[Path] = None
+    best_depth = -1
+
+    for depth in range(1, 3):
+        pattern = "/".join(["*"] * depth) + "/.pddrc"
+        for pddrc_path in project_root.glob(pattern):
+            try:
+                config = _load_pddrc_config(pddrc_path)
+                detected = _detect_context_from_basename(basename, config)
+                if detected and detected != "default":
+                    candidate_dir = pddrc_path.parent
+                    candidate_depth = len(candidate_dir.relative_to(project_root).parts)
+                    if candidate_depth > best_depth:
+                        best_match = candidate_dir
+                        best_depth = candidate_depth
+            except (ValueError, OSError):
+                continue
+
+    if best_match is not None:
+        return best_match
+
+    # 3. Fall back to project root
+    return project_root
+
+
+def _run_single_dry_run(
+    basename: str, cwd: Path, quiet: bool = False
+) -> Tuple[bool, str]:
+    """Run pdd sync <basename> --dry-run from the given cwd.
+
+    Returns:
+        Tuple of (success, stderr_output).
+    """
+    pdd_exe = _find_pdd_executable()
+    if pdd_exe:
+        cmd = [pdd_exe]
+    else:
+        cmd = [sys.executable, "-m", "pdd"]
+
+    cmd.extend(["--force", "sync", basename, "--dry-run", "--agentic", "--no-steer"])
+
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env={**os.environ, "PDD_FORCE": "1", "CI": "1"},
+        )
+        if result.returncode == 0:
+            return True, ""
+        return False, result.stderr or result.stdout or f"Exit code {result.returncode}"
+    except subprocess.TimeoutExpired:
+        return False, "Dry-run timed out after 60s"
+    except Exception as e:
+        return False, str(e)
+
+
+def _llm_fix_dry_run_failure(
+    basename: str,
+    project_root: Path,
+    dry_run_error: str,
+    quiet: bool = False,
+    verbose: bool = False,
+) -> Tuple[bool, Optional[Path], float, str]:
+    """Ask the LLM to suggest the correct cwd/command when dry-run fails.
+
+    Returns:
+        Tuple of (success, suggested_cwd_or_None, llm_cost, error_msg).
+    """
+    prompt_template = load_prompt_template("agentic_sync_fix_dry_run_LLM")
+    if not prompt_template:
+        return False, None, 0.0, "Failed to load dry-run fix prompt template"
+
+    # Build project tree (top 2 levels)
+    try:
+        tree_lines = []
+        for item in sorted(project_root.iterdir()):
+            if item.name.startswith(".") and item.name not in (".pddrc",):
+                continue
+            tree_lines.append(item.name + ("/" if item.is_dir() else ""))
+            if item.is_dir():
+                try:
+                    for sub in sorted(item.iterdir()):
+                        if sub.name.startswith(".") and sub.name not in (".pddrc",):
+                            continue
+                        tree_lines.append(f"  {sub.name}" + ("/" if sub.is_dir() else ""))
+                except PermissionError:
+                    pass
+        project_tree = "\n".join(tree_lines)
+    except Exception:
+        project_tree = "(unable to list project structure)"
+
+    # Find all .pddrc locations
+    pddrc_locations_list = []
+    for pddrc_path in project_root.rglob(".pddrc"):
+        try:
+            rel = pddrc_path.parent.relative_to(project_root)
+            pddrc_locations_list.append(str(rel) if str(rel) != "." else "(project root)")
+        except ValueError:
+            pddrc_locations_list.append(str(pddrc_path.parent))
+    pddrc_locations = "\n".join(f"- {loc}" for loc in pddrc_locations_list) or "- (none found)"
+
+    # Escape curly braces in dynamic content to prevent .format() KeyErrors
+    safe_tree = project_tree.replace("{", "{{").replace("}", "}}")
+    safe_locations = pddrc_locations.replace("{", "{{").replace("}", "}}")
+    safe_error = dry_run_error[:2000].replace("{", "{{").replace("}", "}}")
+
+    prompt = prompt_template.format(
+        basename=basename,
+        dry_run_error=safe_error,
+        project_tree=safe_tree,
+        pddrc_locations=safe_locations,
+        attempted_cwd=str(project_root),
+    )
+
+    llm_success, llm_output, llm_cost, _ = run_agentic_task(
+        instruction=prompt,
+        cwd=project_root,
+        verbose=verbose,
+        quiet=quiet,
+        label="agentic_sync_fix_dry_run",
+    )
+
+    if not llm_success:
+        return False, None, llm_cost, f"LLM failed to suggest fix: {llm_output}"
+
+    # Parse SYNC_CWD from response
+    match = re.search(r"SYNC_CWD:\s*(.+)", llm_output)
+    if not match:
+        return False, None, llm_cost, "LLM response did not contain SYNC_CWD marker"
+
+    suggested_rel = match.group(1).strip()
+    project_root_resolved = project_root.resolve()
+    suggested_cwd = (project_root_resolved / suggested_rel).resolve()
+
+    # Guard against symlink-based directory traversal outside project root
+    try:
+        suggested_cwd.relative_to(project_root_resolved)
+    except ValueError:
+        return (
+            False,
+            None,
+            llm_cost,
+            f"LLM suggested directory outside project root: {suggested_rel}",
+        )
+
+    if not suggested_cwd.is_dir():
+        return False, None, llm_cost, f"LLM suggested non-existent directory: {suggested_rel}"
+
+    # Re-validate with dry-run from suggested cwd
+    revalidate_ok, revalidate_err = _run_single_dry_run(basename, suggested_cwd, quiet=quiet)
+    if revalidate_ok:
+        return True, suggested_cwd, llm_cost, ""
+    else:
+        return (
+            False,
+            None,
+            llm_cost,
+            f"LLM suggested cwd '{suggested_rel}' but dry-run still failed: {revalidate_err[:500]}",
+        )
+
+
+def _run_dry_run_validation(
+    modules: List[str],
+    project_root: Path,
+    quiet: bool = False,
+    verbose: bool = False,
+) -> Tuple[bool, Dict[str, Path], List[str], float]:
+    """Run dry-run validation for each module with LLM fallback.
+
+    Returns:
+        Tuple of (all_valid, module_to_cwd_map, error_messages, total_llm_cost).
+    """
+    module_cwds: Dict[str, Path] = {}
+    errors: List[str] = []
+    total_llm_cost = 0.0
+
+    for basename in modules:
+        # 1. Resolve cwd programmatically
+        cwd = _resolve_module_cwd(basename, project_root)
+
+        # 2. Run dry-run
+        ok, err_output = _run_single_dry_run(basename, cwd, quiet=quiet)
+
+        if ok:
+            module_cwds[basename] = cwd
+            continue
+
+        # 3. Dry-run failed — try LLM fallback
+        if not quiet:
+            console.print(
+                f"[yellow]Dry-run failed for {basename} from {cwd}, trying LLM fallback...[/yellow]"
+            )
+
+        llm_ok, llm_cwd, llm_cost, llm_err = _llm_fix_dry_run_failure(
+            basename=basename,
+            project_root=project_root,
+            dry_run_error=err_output,
+            quiet=quiet,
+            verbose=verbose,
+        )
+        total_llm_cost += llm_cost
+
+        if llm_ok and llm_cwd is not None:
+            module_cwds[basename] = llm_cwd
+            if not quiet:
+                try:
+                    rel = Path(".") if llm_cwd == project_root else llm_cwd.relative_to(project_root)
+                except ValueError:
+                    rel = llm_cwd
+                console.print(
+                    f"[green]LLM resolved {basename} → cwd: {rel}[/green]"
+                )
+        else:
+            errors.append(f"{basename}: {llm_err or err_output}")
+
+    all_valid = len(errors) == 0
+    return all_valid, module_cwds, errors, total_llm_cost
 
 
 def _parse_llm_response(response: str) -> Tuple[List[str], bool, List[Dict[str, Any]]]:
@@ -316,6 +564,39 @@ def run_agentic_sync(
     if not quiet:
         console.print(f"[blue]Dependency graph: {dep_graph}[/blue]")
 
+    # 11.5 Dry-run validation (hybrid: programmatic + LLM fallback)
+    if not quiet:
+        console.print("[bold]Running dry-run validation for each module...[/bold]")
+
+    all_valid, module_cwds, dry_run_errors, dry_run_cost = _run_dry_run_validation(
+        modules=modules_to_sync,
+        project_root=project_root,
+        quiet=quiet,
+        verbose=verbose,
+    )
+    llm_cost += dry_run_cost
+
+    if not all_valid:
+        error_detail = "\n".join(dry_run_errors)
+        msg = f"Dry-run validation failed:\n{error_detail}"
+        if not quiet:
+            console.print(f"[red]{msg}[/red]")
+        if use_github_state:
+            _post_error_comment(owner, repo, issue_number, msg)
+        return False, msg, llm_cost, provider
+
+    if not quiet:
+        for bn, cwd in module_cwds.items():
+            if cwd == project_root:
+                rel = Path(".")
+            else:
+                try:
+                    rel = cwd.relative_to(project_root)
+                except ValueError:
+                    rel = cwd
+            console.print(f"  [green]\u2713[/green] {bn} \u2192 cwd: {rel}")
+        console.print("[green]All modules passed dry-run validation[/green]")
+
     # 12. Run parallel sync
     sync_options = {
         "budget": budget,
@@ -341,6 +622,7 @@ def run_agentic_sync(
         quiet=quiet,
         verbose=verbose,
         issue_url=issue_url,
+        module_cwds=module_cwds,
     )
 
     runner_success, runner_msg, runner_cost = runner.run()
