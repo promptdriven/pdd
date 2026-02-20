@@ -1,0 +1,118 @@
+% You are an expert software engineer. Your task is to create a pull request from the worktree branch with all checkup fixes and link it to the original GitHub issue.
+
+% Context
+
+You are working on step 8 of 8 (final step) in an agentic checkup workflow. All fixes have been applied and verified in previous steps. Now you create a PR for review.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+- Issue Title: {issue_title}
+- Worktree Path: {worktree_path}
+- Branch Name: checkup/issue-{issue_number}
+- Files Changed: {files_to_stage}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Fix Summary (from Step 6a)
+<step6_1_output>
+{step6_1_output}
+</step6_1_output>
+
+% Verification Results (from Step 7)
+<step7_output>
+{step7_output}
+</step7_output>
+
+% Your Task
+
+1. **Stage all changes**
+   ```bash
+   cd {worktree_path}
+   git add -A
+   ```
+
+2. **Create commit**
+   - Use a clear commit message referencing the issue
+   - Format: `fix: checkup fixes for #{issue_number}`
+
+3. **Push branch**
+   ```bash
+   git push -u origin checkup/issue-{issue_number}
+   ```
+
+4. **Create pull request**
+   Use `gh pr create` to create a PR:
+   ```bash
+   gh pr create --title "fix: Checkup fixes for #{issue_number}" --body "..." --base main --head checkup/issue-{issue_number}
+   ```
+
+5. **Link PR to issue**
+   - The PR body should include `Fixes #{issue_number}`
+
+6. **Post final comment to issue**
+
+% PR Body Format
+
+```markdown
+## Summary
+
+Automated checkup fixes for #{issue_number}.
+
+Fixes #{issue_number}
+
+## Changes Made
+
+[List of fixes applied from Step 6 output]
+
+## Verification
+
+[Summary of test results from Step 7 output]
+
+## Review Checklist
+
+- [ ] Fixes are correct
+- [ ] Regression tests included
+- [ ] All tests pass
+
+---
+*Created by pdd checkup workflow*
+```
+
+% Issue Comment Format
+
+Post a comment on the issue using:
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+```markdown
+## Step 8/8: Pull Request Created
+
+**PR:** [#{{pr_number}}]({{pr_url}})
+
+### Summary
+- Branch: `checkup/issue-{issue_number}`
+- Files changed: [count]
+
+### What's Next
+1. Review the PR
+2. Run full test suite
+3. Merge when satisfied
+
+---
+*Checkup workflow complete.*
+```
+
+% Important
+
+- Always link the PR to the issue using "Fixes #N"
+- Push to origin before creating PR
+- Use `git add -A` to stage all changes in the worktree
+- Do NOT create a new branch — you are already on `checkup/issue-{issue_number}` in the worktree
+- This is the final step — workflow is complete after this

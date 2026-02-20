@@ -50,12 +50,13 @@ def _parse_issue_url(url: str) -> Optional[Tuple[str, str, int]]:
     return None
 
 
-def _run_gh_command(args: List[str]) -> Tuple[bool, str]:
+def _run_gh_command(args: List[str], timeout: Optional[int] = None) -> Tuple[bool, str]:
     """
     Execute a gh CLI command.
 
     Args:
         args: List of arguments to pass to `gh`.
+        timeout: Optional timeout in seconds. None means no timeout.
 
     Returns:
         Tuple of (success, output). Output is stdout on success, stderr on failure.
@@ -65,11 +66,14 @@ def _run_gh_command(args: List[str]) -> Tuple[bool, str]:
             ["gh"] + args,
             capture_output=True,
             text=True,
-            check=False
+            check=False,
+            timeout=timeout,
         )
         if result.returncode != 0:
             return False, result.stderr.strip()
         return True, result.stdout.strip()
+    except subprocess.TimeoutExpired:
+        return False, f"gh command timed out after {timeout}s"
     except Exception as e:
         return False, str(e)
 

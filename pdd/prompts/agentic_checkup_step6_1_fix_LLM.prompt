@@ -1,0 +1,122 @@
+% You are an expert software engineer performing a health checkup on a project. Your task is to fix all discovered issues.
+
+% Context
+
+You are working on step 6a of 8 in an agentic checkup workflow. Previous steps have discovered the project, audited deps, checked build, verified interfaces, and run tests.
+
+Report-only mode (no fixes): {no_fix}
+
+% Iteration Info
+
+This is fix-verify iteration {fix_verify_iteration} of {max_fix_verify_iterations}.
+If this is iteration 2 or later, previous fix attempts did NOT fully resolve all issues.
+Focus on remaining/new problems that the previous iteration did not fix.
+
+% Previous Fix Attempts
+<previous_fixes>
+{previous_fixes}
+</previous_fixes>
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+- Project Root: {project_root}
+
+% User Request
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Steps Output
+<step1_output>
+{step1_output}
+</step1_output>
+
+<step2_output>
+{step2_output}
+</step2_output>
+
+<step3_output>
+{step3_output}
+</step3_output>
+
+<step4_output>
+{step4_output}
+</step4_output>
+
+<step5_output>
+{step5_output}
+</step5_output>
+
+% Your Task
+
+Fix all issues discovered in Steps 2-5, in order of severity (critical first):
+
+1. **Fix missing dependencies**
+   - Add missing packages to the appropriate dependency manifest
+   - Ensure version compatibility
+
+2. **Fix import/path errors**
+   - Correct wrong import paths
+   - Fix module references that don't resolve
+
+3. **Fix interface mismatches**
+   - Correct function signatures, wrong field names, missing exports
+   - Align interfaces between modules
+
+4. **Fix build errors**
+   - Fix syntax errors, type errors, compilation failures
+
+5. **Fix failing tests**
+   - Update broken mocks, fix assertions, add missing test setup
+   - Do NOT change test assertions that correctly detect real bugs — fix the code instead
+
+6. **Fix orphan pages / missing navigation**
+   - If Step 4 found pages with no navigation link, add them to the appropriate nav component (sidebar, navbar, menu)
+   - Use an appropriate icon and label consistent with existing nav items
+
+7. **Fix inconsistent API call patterns**
+   - If Step 4 found frontend pages using a different API URL pattern than the rest of the codebase, update them to match the established convention
+   - e.g. replace relative `/endpoint` with `${process.env.NEXT_PUBLIC_API_BASE_URL}/endpoint` to match other pages
+
+8. **Clean up PDD artifacts** if any:
+   - Remove .agentic_prompt_*.txt, tmp*.py, crash logs
+
+% Output
+
+After completing your work, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+```markdown
+## Step 6a/8: Fix Issues (Iteration {fix_verify_iteration})
+
+### Fixes Applied
+| Issue | File | Fix Description |
+|-------|------|----------------|
+| [from which step] | path/to/file | what was fixed |
+
+### Files Changed
+- `path/to/file1`
+- `path/to/file2`
+
+---
+*Proceeding to Step 6b: Regression Tests*
+```
+
+You MUST output the following lines at the end listing all files you created or modified:
+FILES_CREATED: path/to/file1, path/to/file2
+FILES_MODIFIED: path/to/file3, path/to/file4
+
+% Important
+
+- Fix issues in order of severity (critical first)
+- If a test assertion correctly detects a real bug, fix the CODE, not the test
+- Always post your findings as a GitHub comment before completing
+- IMPORTANT: Use the EXACT iteration number ({fix_verify_iteration}) in your comment header — do NOT hardcode "Iteration 1"
