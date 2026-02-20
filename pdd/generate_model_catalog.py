@@ -26,6 +26,7 @@ import argparse
 import csv
 import re
 import sys
+from collections import defaultdict
 from datetime import date
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -33,7 +34,8 @@ from typing import Dict, List, Optional, Tuple
 # ---------------------------------------------------------------------------
 # ELO cutoff — models below this score are excluded from the catalog.
 # ---------------------------------------------------------------------------
-ELO_CUTOFF = 1400
+ELO_CUTOFF = 1300
+MAX_COST_PER_MTOK = 100.0  # Sanity cap — drop rows with absurd pricing (LiteLLM bugs)
 
 # ---------------------------------------------------------------------------
 # ELO scores — canonical base model names mapped to coding arena ELO.
@@ -46,183 +48,159 @@ ELO_CUTOFF = 1400
 # ---------------------------------------------------------------------------
 ELO_SCORES: Dict[str, int] = {
     # -----------------------------------------------------------------------
-    # Anthropic Claude — dash-separated canonical form
+    # Source: LMArena CODE Arena leaderboard, scraped Feb 20, 2026.
+    #   - Scores marked [CODE] are directly from the Code Arena.
+    #   - Scores marked [EST]  are estimated from Text Arena scores,
+    #     discounted by ~40-60 pts based on observed Text→Code deltas
+    #     for similar-tier models.
+    #   - Only 40 models have Code Arena scores; many popular API models
+    #     (o3, gpt-5-mini, deepseek-r1, etc.) are not on the Code Arena.
     # -----------------------------------------------------------------------
-    "claude-opus-4-6": 1530,
-    "claude-opus-4-5": 1496,
-    "claude-opus-4": 1405,
-    "claude-opus-4-1": 1475,
-    "claude-sonnet-4-6": 1485,
-    "claude-sonnet-4-5": 1464,
-    "claude-sonnet-4": 1384,
-    "claude-3-7-sonnet": 1341,
-    "claude-3-5-sonnet-20241022": 1340,
-    "claude-3-5-sonnet-20240620": 1309,
-    "claude-3-5-sonnet": 1340,
-    "claude-haiku-4-5": 1436,
-    "claude-3-5-haiku": 1287,
-    "claude-3-opus": 1269,
-    "claude-3-haiku": 1208,
-    "claude-3-sonnet": 1232,
-    # Dot-separated variants (OpenRouter, GitHub Copilot, Vercel, GMI)
-    "claude-opus-4.6": 1530,
-    "claude-opus-4.5": 1496,
-    "claude-opus-4.1": 1475,
-    "claude-sonnet-4.6": 1485,
-    "claude-sonnet-4.5": 1464,
-    "claude-haiku-4.5": 1436,
-    "claude-3.5-sonnet": 1340,
-    "claude-3.5-haiku": 1287,
-    "claude-3.7-sonnet": 1341,
-    # Alternate naming: "claude-4-opus" / "claude-4-sonnet"
-    "claude-4-opus": 1405,
-    "claude-4-sonnet": 1384,
+
+    # -----------------------------------------------------------------------
+    # Anthropic Claude
+    # -----------------------------------------------------------------------
+    "claude-opus-4-6": 1569,            # [CODE] #2, 1824 votes
+    "claude-opus-4-5": 1471,            # [CODE] #5, non-thinking variant
+    "claude-opus-4-1": 1389,            # [CODE] #15
+    "claude-opus-4": 1370,              # [EST] from Text 1413, delta ~-43
+    "claude-sonnet-4-6": 1388,          # [EST] same tier as sonnet-4-5 (not yet on Code Arena)
+    "claude-sonnet-4-5": 1386,          # [CODE] #18
+    "claude-sonnet-4": 1350,            # [EST] from Text 1397, delta ~-47
+    "claude-3-7-sonnet": 1310,          # [EST] from Text 1341
+    "claude-3-5-sonnet-20241022": 1310, # [EST] from Text 1340
+    "claude-3-5-sonnet": 1310,          # [EST]
+    "claude-haiku-4-5": 1303,           # [CODE] #28
+    # Dot-separated aliases
+    "claude-opus-4.6": 1569,
+    "claude-opus-4.5": 1471,
+    "claude-opus-4.1": 1389,
+    "claude-sonnet-4.6": 1388,
+    "claude-sonnet-4.5": 1386,
+    "claude-haiku-4.5": 1303,
+    "claude-3.5-sonnet": 1310,
+    "claude-3.7-sonnet": 1310,
+    # Alternate naming
+    "claude-4-opus": 1370,
+    "claude-4-sonnet": 1350,
+
     # -----------------------------------------------------------------------
     # OpenAI — GPT-5 family
     # -----------------------------------------------------------------------
-    "gpt-5": 1460,
-    "gpt-5.1": 1450,
-    "gpt-5.2": 1465,
-    "gpt-5-mini": 1419,
-    "gpt-5-nano": 1363,
+    "gpt-5.2": 1397,                   # [CODE] #13 (default reasoning)
+    "gpt-5.1": 1348,                   # [CODE] #21 (default); gpt-5.1-medium = 1389
+    "gpt-5": 1394,                     # [CODE] #14 as gpt-5-medium
+    "gpt-5-mini": 1310,                # [EST] from Text ~1385, heavy code discount
     # OpenAI — GPT-4.x
-    "gpt-4.5": 1419,
-    "gpt-4.1": 1396,
-    "gpt-4.1-mini": 1370,
-    "gpt-4.1-nano": 1312,
-    "gpt-4o": 1307,
-    "gpt-4o-2024-08-06": 1307,
-    "gpt-4o-2024-11-20": 1307,
-    "gpt-4o-mini": 1300,
-    "gpt-4-turbo": 1280,
-    "gpt-4-0125-preview": 1261,
-    "gpt-4-1106-preview": 1269,
+    "gpt-4.5": 1380,                   # [EST] from Text 1444, delta ~-64
+    "gpt-4.1": 1355,                   # [EST] from Text 1413, delta ~-58
+    "gpt-4.1-mini": 1310,              # [EST] from Text 1370
+    "gpt-4o": 1300,                    # [EST]
     # OpenAI — o-series
-    "o3": 1441,
-    "o4-mini": 1385,
-    "o3-mini": 1361,
-    "o1": 1378,
-    "o1-mini": 1366,
-    "o1-preview": 1378,
-    # OpenAI — gpt-oss
-    "gpt-oss-120b": 1398,
-    "gpt-oss-20b": 1371,
+    "o3": 1370,                        # [EST] from Text 1432, delta ~-62
+    "o4-mini": 1330,                   # [EST] from Text 1385
+    "o3-mini": 1310,                   # [EST] from Text 1361
+    "o1": 1340,                        # [EST] from Text 1402, delta ~-62
+    "o1-mini": 1315,                   # [EST] from Text 1366
+
     # -----------------------------------------------------------------------
     # Google Gemini
     # -----------------------------------------------------------------------
-    "gemini-3-pro": 1501,
-    "gemini-3-pro-preview": 1501,
-    "gemini-3-flash": 1469,
-    "gemini-3-flash-preview": 1469,
-    "gemini-2.5-pro": 1465,
-    "gemini-2.5-flash": 1420,
-    "gemini-2.0-flash": 1371,
-    "gemini-2.0-flash-thinking": 1383,
-    "gemini-1.5-pro": 1311,
-    "gemini-1.5-flash": 1273,
+    "gemini-3-pro": 1449,              # [CODE] #6
+    "gemini-3-pro-preview": 1449,
+    "gemini-3-flash": 1443,            # [CODE] #8
+    "gemini-3-flash-preview": 1443,
+    "gemini-2.5-pro": 1206,            # [CODE] #35  ← huge Text→Code drop!
+    "gemini-2.5-flash": 1300,          # [EST] from Text 1411, delta ~-111 (like 2.5-pro)
+
     # -----------------------------------------------------------------------
     # DeepSeek
     # -----------------------------------------------------------------------
-    "deepseek-r1": 1382,
-    "deepseek-r1-0528": 1436,
-    "deepseek-reasoner": 1382,
-    "deepseek-chat": 1337,
-    "deepseek-v3": 1337,
-    "deepseek-v3-0324": 1391,
-    "deepseek-v3.1": 1430,
-    "deepseek-v3.2": 1431,
+    "deepseek-v3.2": 1310,             # [CODE] #27
+    "deepseek-v3.1": 1300,             # [EST] from Text 1418, similar to v3.2 code perf
+    "deepseek-r1-0528": 1370,          # [EST] from Text 1419; r1 models reason well
+    "deepseek-r1": 1340,               # [EST] from Text 1382
+    "deepseek-reasoner": 1340,         # alias for deepseek-r1
+    "deepseek-v3-0324": 1300,          # [EST] from Text 1391
+    "deepseek-v3": 1300,               # [EST]
+    "deepseek-chat": 1300,             # alias
+
     # -----------------------------------------------------------------------
     # xAI / Grok
     # -----------------------------------------------------------------------
-    "grok-4.1": 1483,
-    "grok-4": 1453,
-    "grok-4-fast": 1441,
-    "grok-3": 1439,
-    "grok-3-mini": 1380,
-    "grok-2": 1298,
+    "grok-4.1-thinking": 1204,         # [CODE] #36 — very low code score despite high text
+    "grok-4.1": 1200,                  # [EST] non-thinking likely similar or lower
+    "grok-4": 1200,                    # [EST] not on Code Arena; grok-4-fast-reasoning = 1153
+    "grok-4-fast": 1153,               # [CODE] #38
+    "grok-3": 1200,                    # [EST]
+
     # -----------------------------------------------------------------------
     # Mistral
     # -----------------------------------------------------------------------
-    "mistral-large": 1450,
-    "mistral-large-3": 1450,
-    "mistral-medium-3": 1387,
-    "mistral-medium-3.1": 1412,
-    "magistral-medium": 1307,
-    "magistral-small": 1330,
-    "codestral": 1300,
-    "mistral-small-3.1": 1295,
-    "mistral-small-3.2": 1361,
-    "mistral-small-3": 1251,
+    "mistral-large": 1223,             # [CODE] #34
+    "mistral-large-3": 1223,           # [CODE] #34
+
     # -----------------------------------------------------------------------
     # Moonshot / Kimi
     # -----------------------------------------------------------------------
-    "kimi-k2.5": 1480,
-    "kimi-k2-instruct": 1402,
-    "kimi-k2-thinking": 1450,
-    "kimi-k2-0905": 1403,
-    "kimi-k2-0711": 1402,
-    # -----------------------------------------------------------------------
-    # Meta Llama
-    # -----------------------------------------------------------------------
-    "llama-4-maverick-17b-128e": 1312,
-    "llama-4-scout-17b-16e": 1290,
-    "llama-3.3-70b": 1279,
-    "llama-3.1-405b": 1299,
-    "llama-3.1-70b": 1268,
-    "llama-3.1-8b": 1203,
-    "llama-3-70b": 1216,
+    "kimi-k2.5": 1446,                 # [CODE] #7, kimi-k2.5-thinking
+    "kimi-k2.5-instant": 1421,         # [CODE] #10
+    "kimi-k2-thinking": 1333,          # [CODE] #23, kimi-k2-thinking-turbo
+    "kimi-k2-instruct": 1310,          # [EST]
+    "kimi-k2-0905": 1310,              # [EST]
+    "kimi-k2-0711": 1310,              # [EST]
+
     # -----------------------------------------------------------------------
     # Qwen / Alibaba
     # -----------------------------------------------------------------------
-    "qwen3-max": 1468,
-    "qwen3-235b-a22b": 1394,
-    "qwen3-235b-a22b-instruct-2507": 1457,
-    "qwen3-235b-a22b-thinking-2507": 1442,
-    "qwen3-32b": 1376,
-    "qwen3-30b-a3b": 1346,
-    "qwen3-coder-480b-a35b": 1406,
-    "qwq-32b": 1351,
-    "qwen2.5-72b": 1302,
-    "qwen2.5-max": 1373,
+    "qwen3-coder-480b-a35b": 1280,     # [CODE] #30
+    "qwen3-235b-a22b-instruct-2507": 1280,  # [EST] similar to qwen3-coder code perf
+    "qwen3-235b-a22b-thinking-2507": 1300,  # [EST]
+    "qwen3-max": 1310,                 # [EST] from Text 1434
+    "qwen3-235b-a22b": 1280,           # [EST]
+    "qwen3-32b": 1260,                 # [EST]
+
     # -----------------------------------------------------------------------
     # GLM (Zhipu AI / ZAI)
     # -----------------------------------------------------------------------
-    "glm-5": 1461,
-    "glm-4.7": 1460,
-    "glm-4.6": 1458,
-    "glm-4.5": 1448,
-    "glm-4.5-air": 1410,
+    "glm-4.7": 1441,                   # [CODE] #9
+    "glm-4.6": 1357,                   # [CODE] #20
+    "glm-5": 1420,                     # [EST] added to Code Arena Feb 12, not in my scrape
+
     # -----------------------------------------------------------------------
     # Minimax
     # -----------------------------------------------------------------------
-    "minimax-m2.1": 1430,
-    "minimax-m1": 1369,
-    "minimax-m2": 1430,
-    # -----------------------------------------------------------------------
-    # Amazon Nova
-    # -----------------------------------------------------------------------
-    "nova-pro": 1282,
-    "nova-lite": 1253,
-    "nova-micro": 1228,
+    "minimax-m2.1": 1405,              # [CODE] #12
+    "minimax-m2": 1313,                # [CODE] #26
+
     # -----------------------------------------------------------------------
     # MiMo (Xiaomi)
     # -----------------------------------------------------------------------
-    "mimo-v2-flash": 1411,
-    # -----------------------------------------------------------------------
-    # Gemma (Google open)
-    # -----------------------------------------------------------------------
-    "gemma-3-27b": 1350,
-    "gemma-3-12b": 1310,
-    "gemma-3-4b": 1265,
-    # -----------------------------------------------------------------------
-    # NVIDIA Nemotron
-    # -----------------------------------------------------------------------
-    "llama-3.3-nemotron-super-49b": 1359,
-    "llama-3.1-nemotron-70b": 1289,
-    # -----------------------------------------------------------------------
-    # Phi (Microsoft)
-    # -----------------------------------------------------------------------
-    "phi-4": 1242,
+    "mimo-v2-flash": 1340,             # [CODE] #22
+}
+
+# ---------------------------------------------------------------------------
+# Price overrides — (input_per_mtok, output_per_mtok).
+# Use this to correct known LiteLLM pricing bugs or supply missing prices.
+# ---------------------------------------------------------------------------
+PRICE_OVERRIDES: Dict[str, Tuple[float, float]] = {
+    # Hyperbolic uses unified pricing; LiteLLM has V3 price for R1-0528
+    "hyperbolic/deepseek-ai/DeepSeek-R1-0528": (3.0, 3.0),
+    # W&B prices are off by ~100,000x in LiteLLM (github.com/BerriAI/litellm/issues/17417)
+    "wandb/Qwen/Qwen3-235B-A22B-Instruct-2507": (0.10, 0.10),
+    "wandb/Qwen/Qwen3-235B-A22B-Thinking-2507": (0.10, 0.10),
+    "wandb/deepseek-ai/DeepSeek-R1-0528": (1.35, 5.40),
+    "wandb/deepseek-ai/DeepSeek-V3.1": (0.55, 1.65),
+    "wandb/Qwen/Qwen3-Coder-480B-A35B-Instruct": (1.0, 1.5),
+    # Vercel has long-context rate ($2.50) instead of standard ($1.25) for Gemini 2.5 Pro
+    "vercel_ai_gateway/google/gemini-2.5-pro": (1.25, 10.0),
+    # Hyperbolic unified pricing — LiteLLM has wrong values for R1 and V3
+    "hyperbolic/deepseek-ai/DeepSeek-R1": (2.0, 2.0),
+    "hyperbolic/deepseek-ai/DeepSeek-V3": (0.25, 0.25),
+    # Heroku reports $0 in LiteLLM but actually charges per-token
+    "heroku/claude-4-sonnet": (3.0, 15.0),
+    "heroku/claude-3-5-sonnet-latest": (3.0, 15.0),
+    "heroku/claude-3-7-sonnet": (3.0, 15.0),
 }
 
 # ---------------------------------------------------------------------------
@@ -374,6 +352,18 @@ _FIREWORKS_ACCOUNT = re.compile(
 # Anthropic fast/us routing prefixes on bare IDs
 _FAST_PREFIX = re.compile(r"^(?:fast/us/|fast/|us/)", re.IGNORECASE)
 
+# Dated Anthropic model IDs: claude-opus-4-6-20260205, claude-sonnet-4-5-20250929, etc.
+_DATED_ANTHROPIC = re.compile(
+    r"^(?P<base>claude-[\w-]+)-\d{8}$",
+    re.IGNORECASE,
+)
+
+# Bedrock region-specific model IDs (bare geo-prefix form: us., eu., apac., au., jp., ap.)
+_BEDROCK_GEO_MODEL = re.compile(
+    r"^(?:us|eu|apac|ap|au|jp)\.",
+    re.IGNORECASE,
+)
+
 # Vertex AI @version suffix: @20241022, @default, @001, @latest
 _VERTEX_VERSION = re.compile(r"@[\w.-]+$")
 
@@ -495,6 +485,19 @@ def _get_provider_root(litellm_provider: str) -> str:
     return litellm_provider.split("-")[0].split("_models")[0]
 
 
+# Regex matching region-specific Bedrock model IDs, e.g.:
+#   bedrock/us-east-1/...   bedrock/eu-north-1/...
+#   us.anthropic....        eu.anthropic....
+_REGION_RE = re.compile(
+    r"^(bedrock/[a-z]{2}-[a-z]+-\d+/|[a-z]{2}\.)"
+)
+
+
+def _has_region(model_id: str) -> bool:
+    """Return True if model_id is pinned to a specific cloud region."""
+    return bool(_REGION_RE.match(model_id))
+
+
 def _infer_reasoning_type(model_id: str, litellm_provider: str, entry: dict) -> str:
     supports_reasoning = entry.get("supports_reasoning", False)
     if not supports_reasoning:
@@ -607,6 +610,12 @@ def build_rows() -> List[dict]:
         # Skip placeholder/tier entries
         if _is_placeholder(model_id):
             continue
+        # Fix B: Skip fast/ and us/ routing prefix variants entirely.
+        # These are LiteLLM routing hints, not separate models. fast/ has 6x
+        # inflated pricing; us/ has 10% regional surcharge. Both resolve to
+        # the same underlying model at the same endpoint.
+        if _FAST_PREFIX.match(model_id):
+            continue
         # Skip dated preview models superseded by a stable GA release
         if _is_superseded_preview(model_id, all_model_ids):
             skipped_previews += 1
@@ -629,6 +638,10 @@ def build_rows() -> List[dict]:
         out_cost_token = entry.get("output_cost_per_token") or 0.0
         input_cost = round(in_cost_token * 1_000_000, 6)
         output_cost = round(out_cost_token * 1_000_000, 6)
+
+        # Apply manual price overrides for known LiteLLM pricing bugs
+        if model_id in PRICE_OVERRIDES:
+            input_cost, output_cost = PRICE_OVERRIDES[model_id]
 
         # Provider display name and API key env var
         display_name, api_key = PROVIDERS.get(
@@ -669,8 +682,143 @@ def build_rows() -> List[dict]:
     if skipped_previews:
         print(f"  Skipped {skipped_previews} dated preview model(s) superseded by stable GA releases.")
 
-    # Sort: ELO descending, then model name ascending
-    rows.sort(key=lambda r: (-r["coding_arena_elo"], r["model"]))
+    initial_count = len(rows)
+
+    # ------------------------------------------------------------------
+    # Fix C: Skip dated variants when the undated version exists.
+    # e.g. drop "claude-opus-4-6-20260205" if "claude-opus-4-6" is present,
+    # and drop "vertex_ai/claude-opus-4-5@20250929" if the unversioned
+    # "vertex_ai/claude-opus-4-5" is present.
+    # ------------------------------------------------------------------
+    model_ids_present = {r["model"] for r in rows}
+    kept_after_c: List[dict] = []
+    skipped_dated = 0
+    for row in rows:
+        mid = row["model"]
+        # Check bare Anthropic dated IDs: claude-*-YYYYMMDD
+        m = _DATED_ANTHROPIC.match(mid)
+        if m and m.group("base") in model_ids_present:
+            skipped_dated += 1
+            continue
+        # Check Vertex AI @version suffixed IDs
+        if "@" in mid:
+            base_no_version = _VERTEX_VERSION.sub("", mid)
+            if base_no_version != mid and base_no_version in model_ids_present:
+                skipped_dated += 1
+                continue
+        # Check Bedrock versioned IDs (e.g. anthropic.claude-opus-4-5-20251101-v1:0)
+        stripped = _BEDROCK_VERSION.sub("", mid)
+        if stripped != mid and stripped in model_ids_present:
+            skipped_dated += 1
+            continue
+        kept_after_c.append(row)
+    rows = kept_after_c
+    if skipped_dated:
+        print(f"  Fix C: Removed {skipped_dated} dated/versioned variant(s).")
+
+    # ------------------------------------------------------------------
+    # Fix A: Deduplicate per (provider_display, canonical_base_model).
+    # For each provider × base model, keep only the cheapest non-regional
+    # variant. This collapses e.g. 14 Anthropic claude-opus-4-6 rows into 1.
+    # ------------------------------------------------------------------
+    # Also handles Bedrock region dedup: for Bedrock, multiple region-specific
+    # model IDs (bedrock/us-east-1/..., bedrock/eu-north-1/..., us.anthropic...,
+    # eu.anthropic...) resolve to the same model. We keep only the cheapest
+    # (typically the regionless/global variant).
+    dedup_buckets: Dict[Tuple[str, str], List[dict]] = defaultdict(list)
+    no_canonical = 0
+    for row in rows:
+        canonical = _extract_base_model(row["model"])
+        if canonical is None:
+            # Can't canonicalize — keep it as-is (use model ID as its own key)
+            canonical = row["model"]
+            no_canonical += 1
+        dedup_buckets[(row["provider"], canonical)].append(row)
+
+    rows_deduped: List[dict] = []
+    dedup_removed = 0
+    for (_provider, _base), bucket in dedup_buckets.items():
+        if len(bucket) == 1:
+            rows_deduped.append(bucket[0])
+        else:
+            # Keep the cheapest variant (by avg cost = (input + output) / 2).
+            # Tiebreaker: prefer regionless model IDs so Bedrock users aren't
+            # locked to a specific region (e.g. "bedrock/moonshotai.kimi-k2.5"
+            # over "bedrock/us-east-1/moonshotai.kimi-k2.5").
+            bucket.sort(key=lambda r: (
+                (r["input"] + r["output"]) / 2,
+                _has_region(r["model"]),
+            ))
+            rows_deduped.append(bucket[0])
+            dedup_removed += len(bucket) - 1
+    rows = rows_deduped
+    if dedup_removed:
+        print(f"  Fix A: Deduplicated {dedup_removed} provider×model variant(s).")
+
+    # ------------------------------------------------------------------
+    # Sanity filter — drop rows where input or output cost exceeds the cap.
+    # Catches LiteLLM pricing bugs (e.g. values off by 100,000×).
+    # ------------------------------------------------------------------
+    pre_sanity = len(rows)
+    rows = [
+        r for r in rows
+        if r["input"] <= MAX_COST_PER_MTOK and r["output"] <= MAX_COST_PER_MTOK
+    ]
+    sanity_removed = pre_sanity - len(rows)
+    if sanity_removed:
+        print(f"  Sanity filter: Removed {sanity_removed} row(s) with cost > ${MAX_COST_PER_MTOK}/Mtok.")
+
+    # ------------------------------------------------------------------
+    # Fix D: Pareto filter — remove models that are strictly dominated
+    # (higher cost AND lower ELO) by another model *from the same provider*.
+    #
+    # A model X is dominated if there exists model Y (same provider) where:
+    #   Y.elo >= X.elo  AND  Y.avg_cost <= X.avg_cost  AND  (strictly better on >= 1)
+    #
+    # Scoped per-provider so that free-tier providers (GitHub Copilot) don't
+    # wipe out paid providers that users with different API keys still need.
+    # This prunes e.g. Opus 4/4.1 ($15/$75, ELO 1405/1475) within Anthropic
+    # since Opus 4.5/4.6 ($5/$25, ELO 1496/1530) strictly dominate them.
+    # ------------------------------------------------------------------
+    provider_groups: Dict[str, List[dict]] = defaultdict(list)
+    for row in rows:
+        provider_groups[row["provider"]].append(row)
+
+    pareto_removed = 0
+    pareto_kept: List[dict] = []
+    for provider, group in provider_groups.items():
+        # Skip Pareto filtering for zero-cost providers (e.g. GitHub Copilot,
+        # Snowflake, Dashscope). All their models report $0, so cost isn't a
+        # meaningful differentiator and only the highest-ELO model would survive.
+        all_zero = all((r["input"] + r["output"]) == 0 for r in group)
+        if all_zero:
+            pareto_kept.extend(group)
+            continue
+        for candidate in group:
+            c_elo = candidate["coding_arena_elo"]
+            c_avg = (candidate["input"] + candidate["output"]) / 2
+            dominated = False
+            for other in group:
+                if other is candidate:
+                    continue
+                o_elo = other["coding_arena_elo"]
+                o_avg = (other["input"] + other["output"]) / 2
+                if o_elo >= c_elo and o_avg <= c_avg:
+                    if o_elo > c_elo or o_avg < c_avg:
+                        dominated = True
+                        break
+            if dominated:
+                pareto_removed += 1
+            else:
+                pareto_kept.append(candidate)
+    rows = pareto_kept
+    if pareto_removed:
+        print(f"  Fix D: Removed {pareto_removed} Pareto-dominated model(s).")
+
+    print(f"  Post-processing: {initial_count} -> {len(rows)} rows.")
+
+    # Sort: provider ascending, then ELO descending within each provider
+    rows.sort(key=lambda r: (r["provider"], -r["coding_arena_elo"], r["model"]))
     return rows
 
 
@@ -702,8 +850,8 @@ def main() -> None:
     # Print a quick summary by provider
     from collections import Counter
     providers = Counter(r["provider"] for r in rows)
-    print("\nTop providers by model count:")
-    for provider, count in providers.most_common(20):
+    print("\nProviders by model count:")
+    for provider, count in providers.most_common():
         print(f"  {provider}: {count}")
 
 
