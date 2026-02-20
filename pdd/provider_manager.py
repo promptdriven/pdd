@@ -496,12 +496,37 @@ def _setup_complex_provider(provider_name: str) -> bool:
     if optional_names:
         console.print(f"  Optional: {', '.join(optional_names)}")
 
-    # GitHub Copilot: explain device flow before prompting
+    # GitHub Copilot: trigger interactive OAuth device flow via litellm
     if provider_name == "Github Copilot":
         console.print(
-            "\n  [dim]GitHub Copilot authenticates via device flow at runtime.\n"
-            "  You can paste an API key now, or skip and authenticate later.[/dim]"
+            "\n  [dim]GitHub Copilot authenticates via OAuth device flow.\n"
+            "  This will open a browser to authenticate with GitHub.[/dim]\n"
         )
+        if Confirm.ask("  Authenticate now?", default=True):
+            try:
+                import litellm
+                console.print("  [dim]Starting device flow authentication...[/dim]")
+                # A simple completion call triggers litellm's GitHub Copilot
+                # OAuth device flow, which prompts the user to visit a URL
+                # and enter a code.  The resulting token is cached by litellm
+                # at ~/.config/litellm/github_copilot/api-key.json.
+                litellm.completion(
+                    model="github_copilot/gpt-4o",
+                    messages=[{"role": "user", "content": "Say OK"}],
+                    timeout=120,
+                )
+                console.print("  [green]✓ GitHub Copilot authenticated successfully![/green]")
+                return True
+            except KeyboardInterrupt:
+                console.print("\n  [yellow]Authentication cancelled.[/yellow]")
+                return False
+            except Exception as e:
+                console.print(f"  [red]Authentication failed: {e}[/red]")
+                console.print("  [dim]You can try again later with 'pdd setup'.[/dim]")
+                return False
+        else:
+            console.print("  [dim]Skipped. You can authenticate later with 'pdd setup'.[/dim]")
+            return False
     print()
 
     any_saved = False

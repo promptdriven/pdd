@@ -24,7 +24,8 @@ def main() -> None:
     2. Add a custom LiteLLM-compatible provider
     3. Remove all models for a provider (comments out the key)
     4. Remove individual models from the user CSV
-    5. Parse pipe-delimited api_key fields
+    5. Add GitHub Copilot provider (OAuth device flow)
+    6. Parse pipe-delimited api_key fields
     """
 
     # Example 1: Browse providers from the bundled reference CSV
@@ -62,7 +63,37 @@ def main() -> None:
     # Lists all models, user picks by number, removes selected rows
     # remove_individual_models()  # Uncomment to run interactively
 
-    # Example 5: Utility functions for api_key field parsing
+    # Example 5: Add GitHub Copilot provider (OAuth device flow)
+    # When selecting "Github Copilot" from the registry, pdd setup triggers
+    # litellm's interactive OAuth device flow instead of prompting for an API key.
+    # add_provider_from_registry()  # Uncomment to run interactively
+
+    # Interactive flow:
+    #   Add a provider
+    #
+    #     ...
+    #     5. Github Copilot          (9 models)
+    #     ...
+    #   Enter number (empty to cancel): 5
+    #
+    #   Github Copilot Setup
+    #
+    #   GitHub Copilot authenticates via OAuth device flow.
+    #   This will open a browser to authenticate with GitHub.
+    #
+    #   Authenticate now? [Y/n]: Y
+    #   Starting device flow authentication...
+    #   <litellm displays a device code and verification URL>
+    #   <user visits URL, enters code, authorizes>
+    #   ✓ GitHub Copilot authenticated successfully!
+    #   ✓ Added 9 model(s) for Github Copilot to ~/.pdd/llm_model.csv
+    #
+    # NOTE: The OAuth token is cached by litellm at
+    # ~/.config/litellm/github_copilot/api-key.json (customizable via
+    # GITHUB_COPILOT_TOKEN_DIR and GITHUB_COPILOT_API_KEY_FILE env vars).
+    # In --force/CI mode, GitHub Copilot models are skipped if no token exists.
+
+    # Example 6: Utility functions for api_key field parsing
     # Useful when working with CSV rows that have pipe-delimited api_key fields
     single = parse_api_key_vars("OPENAI_API_KEY")
     print(f"Single key vars: {single}")  # ['OPENAI_API_KEY']
