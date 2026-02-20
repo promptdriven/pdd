@@ -1,0 +1,69 @@
+steps:
+  # Build wheel once; both test steps share /workspace
+  - name: 'python:3.12-slim'
+    id: build-wheel
+    entrypoint: bash
+    args:
+      - '-c'
+      - 'pip install build --quiet && python -m build --quiet'
+
+  # Test 1: package install + pdd preprocess (parallel with test-sync)
+  - name: 'python:3.12-slim'
+    id: test-package-install
+    waitFor: ['build-wheel']
+    entrypoint: bash
+    args:
+      - '-c'
+      - |
+        apt-get update -qq && apt-get install -y -qq git
+        pip install dist/*.whl --quiet
+        cd /tmp
+        echo '<include>docs/prompting_guide.md</include>' > test_include_python.prompt
+        pdd --quiet preprocess test_include_python.prompt --output preprocessed.txt
+        if grep -q "PDD Mental Model" preprocessed.txt; then
+          echo "SUCCESS: Package includes resolved correctly"
+        else
+          echo "FAILURE: Package include not found or not resolved"
+          head -20 preprocessed.txt
+          exit 1
+        fi
+
+  # Test 2: pdd sync using Vertex AI (no API key needed — Cloud Build ADC)
+  - name: 'python:3.12-slim'
+    id: test-sync
+    waitFor: ['build-wheel']
+    env:
+      - 'VERTEX_PROJECT=prompt-driven-development-stg'
+      - 'VERTEX_LOCATION=global'
+      - 'GOOGLE_GENAI_USE_VERTEXAI=true'
+      - 'GOOGLE_CLOUD_PROJECT=prompt-driven-development-stg'
+      - 'PDD_MODEL_DEFAULT=vertex_ai/gemini-2.0-flash'
+    entrypoint: bash
+    args:
+      - '-c'
+      - |
+        set -o pipefail
+        apt-get update -qq && apt-get install -y -qq git
+        pip install dist/*.whl --quiet
+        cd /workspace/examples/hello
+        rm -rf src/ tests/ examples/
+        pdd --local --force sync hello 2>&1 | tee sync.log
+        if [ ! -f src/hello.py ]; then
+          echo "FAILURE: src/hello.py was not generated"
+          exit 1
+        fi
+        echo "SUCCESS: Generated file exists"
+        cat src/hello.py
+        OUTPUT=$$(cd src && python -c "from hello import hello; hello()")
+        if echo "$$OUTPUT" | grep -qi "hello"; then
+          echo "SUCCESS: Generated code runs correctly"
+          echo "Output: $$OUTPUT"
+        else
+          echo "FAILURE: Output did not contain 'hello'"
+          echo "Output: $$OUTPUT"
+          exit 1
+        fi
+
+options:
+  logging: 'CLOUD_LOGGING_ONLY'
+timeout: '1800s'
