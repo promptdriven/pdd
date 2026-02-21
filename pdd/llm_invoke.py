@@ -1166,13 +1166,70 @@ def _save_key_to_env_file(key_name: str, value: str, env_path: Path) -> None:
 
 
 def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, bool], verbose: bool) -> bool:
-    """Checks for API key in env, prompts user if missing, and updates .env."""
-    key_name = model_info.get('api_key')
+    """Checks for API key(s) in env, prompts user if missing, and updates .env.
 
-    if not key_name or key_name == "EXISTING_KEY":
+    Supports pipe-delimited api_key fields (e.g. ``VAR1|VAR2|VAR3``).
+    - Empty field → no auth needed (device flow / local model), always True.
+    - Single var  → existing interactive-prompt behaviour for simple providers.
+    - Multi var   → checks all vars; if any missing, directs user to ``pdd setup``.
+    """
+    from pdd.provider_manager import parse_api_key_vars
+
+    api_key_field = str(model_info.get('api_key', '') or '')
+
+    if not api_key_field.strip() or api_key_field == "EXISTING_KEY":
+        # GitHub Copilot models use an interactive OAuth device flow managed by
+        # litellm.  In non-interactive (--force) mode we must skip the model
+        # unless the user has already authenticated (token file exists).
+        model_name = str(model_info.get('model', ''))
+        if model_name.startswith("github_copilot/") and os.environ.get('PDD_FORCE'):
+            token_dir = Path(os.environ.get(
+                'GITHUB_COPILOT_TOKEN_DIR',
+                str(Path.home() / ".config" / "litellm" / "github_copilot"),
+            ))
+            api_key_file = os.environ.get('GITHUB_COPILOT_API_KEY_FILE', 'api-key.json')
+            token_path = token_dir / api_key_file
+            if not token_path.exists():
+                logger.warning(
+                    f"Skipping GitHub Copilot model '{model_name}' in --force mode: "
+                    f"no OAuth token found at {token_path}. Run 'pdd setup' to authenticate."
+                )
+                return False
         if verbose:
-            logger.info(f"Skipping API key check for model {model_info.get('model')} (key name: {key_name})")
-        return True # Assume key is handled elsewhere or not needed
+            logger.info(f"Skipping API key check for model {model_info.get('model')} (key field: {api_key_field!r})")
+        return True  # Device flow, local model, or handled elsewhere
+
+    env_vars = parse_api_key_vars(api_key_field)
+
+    # --- Multi-credential provider (pipe-delimited) ---
+    if len(env_vars) > 1:
+        missing = [v for v in env_vars if not os.getenv(v)]
+        if not missing:
+            if verbose:
+                logger.info(f"All {len(env_vars)} env vars set for model {model_info.get('model')}.")
+            newly_acquired_keys[api_key_field] = False
+            return True
+
+        # Vertex AI ADC fallback: GOOGLE_APPLICATION_CREDENTIALS may be unset
+        # if the user ran ``gcloud auth application-default login`` instead.
+        if "GOOGLE_APPLICATION_CREDENTIALS" in env_vars and "GOOGLE_APPLICATION_CREDENTIALS" in missing:
+            project = os.getenv("VERTEXAI_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT")
+            if project:
+                remaining = [v for v in missing if v != "GOOGLE_APPLICATION_CREDENTIALS"]
+                if not remaining:
+                    logger.info(f"Using ADC for Vertex AI (project={project}).")
+                    newly_acquired_keys[api_key_field] = False
+                    return True
+
+        logger.warning(
+            f"Multi-credential provider for model '{model_info.get('model')}' "
+            f"is missing env vars: {', '.join(missing)}. "
+            f"Run 'pdd setup' to configure."
+        )
+        return False
+
+    # --- Single-credential provider (original behaviour) ---
+    key_name = env_vars[0]
 
     key_value = os.getenv(key_name)
     if key_value:
@@ -1181,58 +1238,50 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
     if key_value:
         if verbose:
             logger.info(f"API key '{key_name}' found in environment.")
-        newly_acquired_keys[key_name] = False # Mark as existing
+        newly_acquired_keys[key_name] = False  # Mark as existing
         return True
-    else:
-        # For Vertex AI, allow ADC when project is available
-        if key_name == 'VERTEX_CREDENTIALS':
-            vertex_project = os.getenv("VERTEX_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT")
-            if vertex_project:
-                logger.info(f"VERTEX_CREDENTIALS not set; using ADC (project={vertex_project}).")
-                newly_acquired_keys[key_name] = False
-                return True
 
-        logger.warning(f"API key environment variable '{key_name}' for model '{model_info.get('model')}' is not set.")
+    logger.warning(f"API key environment variable '{key_name}' for model '{model_info.get('model')}' is not set.")
 
-        # Skip prompting if --force flag is set (non-interactive mode)
-        if os.environ.get('PDD_FORCE'):
-            logger.error(f"API key '{key_name}' not set. In --force mode, skipping interactive prompt.")
+    # Skip prompting if --force flag is set (non-interactive mode)
+    if os.environ.get('PDD_FORCE'):
+        logger.error(f"API key '{key_name}' not set. In --force mode, skipping interactive prompt.")
+        return False
+
+    try:
+        # Interactive prompt
+        user_provided_key = input(f"Please enter the API key for {key_name}: ").strip()
+        if not user_provided_key:
+            logger.error("No API key provided. Cannot proceed with this model.")
             return False
 
+        # Sanitize the user-provided key
+        user_provided_key = _sanitize_api_key(user_provided_key)
+
+        # Set environment variable for the current process
+        os.environ[key_name] = user_provided_key
+        logger.info(f"API key '{key_name}' set for the current session.")
+        newly_acquired_keys[key_name] = True  # Mark as newly acquired
+
+        # Update .env file
         try:
-            # Interactive prompt
-            user_provided_key = input(f"Please enter the API key for {key_name}: ").strip()
-            if not user_provided_key:
-                logger.error("No API key provided. Cannot proceed with this model.")
-                return False
+            _save_key_to_env_file(key_name, user_provided_key, ENV_PATH)
+            logger.info(f"API key '{key_name}' saved to {ENV_PATH}.")
+            logger.warning("SECURITY WARNING: The API key has been saved to your .env file. "
+                   "Ensure this file is kept secure and is included in your .gitignore.")
 
-            # Sanitize the user-provided key
-            user_provided_key = _sanitize_api_key(user_provided_key)
-            
-            # Set environment variable for the current process
-            os.environ[key_name] = user_provided_key
-            logger.info(f"API key '{key_name}' set for the current session.")
-            newly_acquired_keys[key_name] = True # Mark as newly acquired
+        except IOError as e:
+            logger.error(f"Failed to update .env file at {ENV_PATH}: {e}")
+            # Continue since the key is set in the environment for this session
 
-            # Update .env file
-            try:
-                _save_key_to_env_file(key_name, user_provided_key, ENV_PATH)
-                logger.info(f"API key '{key_name}' saved to {ENV_PATH}.")
-                logger.warning("SECURITY WARNING: The API key has been saved to your .env file. "
-                       "Ensure this file is kept secure and is included in your .gitignore.")
+        return True
 
-            except IOError as e:
-                logger.error(f"Failed to update .env file at {ENV_PATH}: {e}")
-                # Continue since the key is set in the environment for this session
-
-            return True
-
-        except EOFError: # Handle non-interactive environments
-             logger.error(f"Cannot prompt for API key '{key_name}' in a non-interactive environment.")
-             return False
-        except Exception as e:
-             logger.error(f"An unexpected error occurred during API key acquisition: {e}")
-             return False
+    except EOFError:  # Handle non-interactive environments
+         logger.error(f"Cannot prompt for API key '{key_name}' in a non-interactive environment.")
+         return False
+    except Exception as e:
+         logger.error(f"An unexpected error occurred during API key acquisition: {e}")
+         return False
 
 
 def _format_messages(prompt: str, input_data: Union[Dict[str, Any], List[Dict[str, Any]]], use_batch_mode: bool) -> Union[List[Dict[str, str]], List[List[Dict[str, str]]]]:
@@ -1910,83 +1959,35 @@ def llm_invoke(
                 "num_retries": 2,
             }
 
-            api_key_name_from_csv = model_info.get('api_key') # From CSV
-            # Determine if it's a Vertex AI model for special handling
-            is_vertex_model = (provider.lower() == 'google') or \
-                              (provider.lower() == 'googlevertexai') or \
-                              (provider.lower() == 'vertex_ai') or \
-                              model_name_litellm.startswith('vertex_ai/')
+            # --- Resolve API key / credentials ---
+            # The CSV api_key field may be:
+            #   - Single env var (e.g. "ANTHROPIC_API_KEY") → pass as api_key=
+            #   - Pipe-delimited (e.g. "VAR1|VAR2|VAR3")   → litellm reads from env
+            #   - Empty (device flow / local)               → no api_key needed
+            from pdd.provider_manager import parse_api_key_vars
 
-            if is_vertex_model and api_key_name_from_csv == 'VERTEX_CREDENTIALS':
-                vertex_project_env = os.getenv("VERTEX_PROJECT")
-                # Resolve location: CSV override → env var fallback
-                model_location = model_info.get('location')
-                if pd.notna(model_location) and str(model_location).strip():
-                    vertex_location_env = str(model_location).strip()
-                    if verbose:
-                        logger.info(f"[INFO] Using per-model location override: '{vertex_location_env}' for model '{model_name_litellm}'")
-                else:
-                    vertex_location_env = os.getenv("VERTEX_LOCATION")
+            api_key_field = str(model_info.get('api_key', '') or '')
+            env_vars = parse_api_key_vars(api_key_field)
 
-                if vertex_project_env and vertex_location_env:
-                    litellm_kwargs["vertex_project"] = vertex_project_env
-                    litellm_kwargs["vertex_location"] = vertex_location_env
-                    # Optionally load explicit credentials file
-                    credentials_file_path = os.getenv("VERTEX_CREDENTIALS")
-                    if credentials_file_path:
-                        try:
-                            with open(credentials_file_path, 'r') as f:
-                                loaded_credentials = json.load(f)
-                            litellm_kwargs["vertex_credentials"] = json.dumps(loaded_credentials)
-                            if verbose:
-                                logger.info(f"[INFO] For Vertex AI: using vertex_credentials from '{credentials_file_path}', project '{vertex_project_env}', location '{vertex_location_env}'.")
-                        except (FileNotFoundError, json.JSONDecodeError) as e:
-                            if verbose:
-                                logger.info(f"[INFO] No credentials file ({e}); using ADC.")
-                        except Exception as e:
-                            if verbose:
-                                logger.error(f"[ERROR] Failed to load Vertex credentials from '{credentials_file_path}': {e}. Using ADC.")
-                    elif verbose:
-                        logger.info(f"[INFO] Using ADC for Vertex AI (project={vertex_project_env}, location={vertex_location_env})")
-                else:
-                    if verbose:
-                        logger.warning(f"[WARN] Missing VERTEX_PROJECT or VERTEX_LOCATION for {model_name_litellm}.")
-                        if not vertex_project_env: logger.warning(f"  Reason: VERTEX_PROJECT env var not set or empty.")
-                        if not vertex_location_env: logger.warning(f"  Reason: VERTEX_LOCATION env var not set or empty.")
-                        logger.warning(f"  LiteLLM may attempt to use Application Default Credentials or the call may fail.")
-
-            elif api_key_name_from_csv: # For other api_key_names specified in CSV (e.g., OPENAI_API_KEY, or a direct VERTEX_AI_API_KEY string)
-                key_value = os.getenv(api_key_name_from_csv)
+            if len(env_vars) == 1:
+                # Simple provider: pass env var value as api_key=
+                key_value = os.getenv(env_vars[0])
                 if key_value:
                     key_value = _sanitize_api_key(key_value)
                     litellm_kwargs["api_key"] = key_value
                     if verbose:
-                        logger.info(f"[INFO] Explicitly passing API key from env var '{api_key_name_from_csv}' as 'api_key' parameter to LiteLLM.")
-                    
-                    # If this model is Vertex AI AND uses a direct API key string (not VERTEX_CREDENTIALS from CSV),
-                    # also pass project and location from env vars.
-                    if is_vertex_model:
-                        vertex_project_env = os.getenv("VERTEX_PROJECT")
-                        # Check for per-model location override, fall back to env var
-                        model_location = model_info.get('location')
-                        if pd.notna(model_location) and str(model_location).strip():
-                            vertex_location_env = str(model_location).strip()
-                            if verbose:
-                                logger.info(f"[INFO] Using per-model location override: '{vertex_location_env}' for model '{model_name_litellm}'")
-                        else:
-                            vertex_location_env = os.getenv("VERTEX_LOCATION")
-                        if vertex_project_env and vertex_location_env:
-                            litellm_kwargs["vertex_project"] = vertex_project_env
-                            litellm_kwargs["vertex_location"] = vertex_location_env
-                            if verbose:
-                                logger.info(f"[INFO] For Vertex AI model (using direct API key '{api_key_name_from_csv}'), also passing vertex_project='{vertex_project_env}' and vertex_location='{vertex_location_env}' from env vars.")
-                        elif verbose:
-                             logger.warning(f"[WARN] For Vertex AI model (using direct API key '{api_key_name_from_csv}'), VERTEX_PROJECT or VERTEX_LOCATION env vars not set. This might be required by LiteLLM.")
-                elif verbose: # api_key_name_from_csv was in CSV, but corresponding env var was not set/empty
-                    logger.warning(f"[WARN] API key name '{api_key_name_from_csv}' found in CSV, but the environment variable '{api_key_name_from_csv}' is not set or empty. LiteLLM will use default authentication if applicable (e.g., other standard env vars or ADC).")
-            
-            elif verbose: # No api_key_name_from_csv in CSV for this model
-                logger.info(f"[INFO] No API key name specified in CSV for model '{model_name_litellm}'. LiteLLM will use its default authentication mechanisms (e.g., standard provider env vars or ADC for Vertex AI).")
+                        logger.info(f"[INFO] Passing API key from '{env_vars[0]}' to LiteLLM.")
+                elif verbose:
+                    logger.warning(f"[WARN] Env var '{env_vars[0]}' not set. LiteLLM will use default auth.")
+            elif len(env_vars) > 1:
+                # Multi-credential provider (Bedrock, Azure, Vertex AI, etc.)
+                # litellm reads these env vars from os.environ automatically.
+                if verbose:
+                    logger.info(f"[INFO] Multi-credential provider; litellm reads env vars: {env_vars}")
+            else:
+                # Empty api_key — device flow (GitHub Copilot) or local model
+                if verbose:
+                    logger.info(f"[INFO] No API key for '{model_name_litellm}'; using device flow or default auth.")
 
             # Add base_url/api_base override if present in CSV
             api_base = model_info.get('base_url')
@@ -2412,10 +2413,9 @@ def llm_invoke(
                     logger.info(f"[SUCCESS] Invocation successful for {model_name_litellm} (took {end_time - start_time:.2f}s)")
 
                 # Build retry kwargs with provider credentials from litellm_kwargs
-                # Issue #185: Retry calls were missing vertex_location, vertex_project, etc.
                 retry_provider_kwargs = {k: v for k, v in litellm_kwargs.items()
-                                         if k in ('vertex_credentials', 'vertex_project', 'vertex_location',
-                                                  'api_key', 'base_url', 'api_base')}
+                                         if k in ('api_key', 'base_url', 'api_base',
+                                                  'api_version')}
 
                 # --- 7. Process Response ---
                 results = []

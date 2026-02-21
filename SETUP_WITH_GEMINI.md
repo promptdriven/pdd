@@ -60,14 +60,29 @@ Right after installation, let PDD bootstrap its configuration:
 pdd setup
 ```
 
-During the wizard:
-- Choose **Install tab completion** if you want shell helpers.
-- Pick **Google Gemini** when asked which providers to configure.
-- Paste your Gemini API key when prompted (you can create it in the next step if you haven’t already).
+The setup wizard runs these steps:
+  1.  Detects agentic CLI tools (Claude, Gemini, Codex) and offers installation and API key configuration if needed
+  2. Scans for API keys across `.env`, and `~/.pdd/api-env.*`, and the shell environment; prompts to add one if none are found
+  3. Configures models from a reference CSV `data/llm_model.csv` of top models (ELO ≥ 1400) across all LiteLLM-supported providers  based on your available keys
+  4. Optionally creates a `.pddrc` project config
+  5. Tests the first available model with a real LLM call 
+  6. Prints a structured summary (CLIs, keys, models, test result)
 
-The wizard writes your credentials to `~/.pdd/api-env`, seeds `~/.pdd/llm_model.csv` with Gemini entries, and reminds you to reload your shell (`source ~/.zshrc`, etc.) so completion and env hooks load.
+When adding your Gemini API key:
+- Select Gemini CLI as one of the agentic CLI tools
+- The wizard will detect that `GEMINI_API_KEY` is missing
+- Paste your API key when prompted (you can create it in the next step if you haven't already)
+- The wizard tests it immediately and confirms it works
 
-If you prefer to configure everything manually—or you’re on an offline machine—skip the wizard and follow the manual instructions below.
+The wizard writes your credentials to `~/.pdd/api-env.zsh` (or `.bash`) and updates `llm_model.csv` with your selected models.
+
+> **Important:** After setup completes, source the API environment file so your keys take effect in the current terminal session:
+> ```bash
+> source ~/.pdd/api-env.zsh   # or api-env.bash, depending on your shell
+> ```
+> New terminal windows will load keys automatically.
+
+If you prefer to configure everything manually—or you're on an offline machine—skip the wizard and follow the manual instructions below.
 
 ---
 
