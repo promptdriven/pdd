@@ -4,7 +4,7 @@ const config = {
   transform: {
     "^.+\\.(ts|tsx)$": ["ts-jest", { tsconfig: { module: "commonjs" } }],
   },
-  testMatch: ["**/__tests__/**/*.test.ts", "**/*.test.ts"],
+  testMatch: ["**/__tests__/**/*.test.ts", "**/*.test.ts", "**/tests/**/*.ts", "tests/*.ts"],
   moduleNameMapper: {
     "^@/(.*)$": "<rootDir>/$1",
   },
