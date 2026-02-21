@@ -1,14 +1,37 @@
+## v0.0.155 (2026-02-20)
+
+### Feat
+
+- Add initial video editor project scaffolding with prompts, Dockerfile, and configuration, and update CI test durations.
+- initialize video editor project with core files, prompts, documentation, and CI configuration.
+- Add support for generating a video editor application with its architecture, prompts, and initial structure.
+- replace placeholder script with a detailed 'Prompt-Driven Development' video script for the narrative demo.
+- Introduce `pdd checkup` command, update models, refactor `.pddrc` strategy detection, migrate package tests to Cloud Build, and update grounding experiment documentation.
+- Dry-run validation with per-module cwd for agentic sync (#489)
+
+### Fix
+
+- improve e2e test resilience by skipping on LLM generation failures or empty responses.
+
 ## v0.0.154 (2026-02-19)
 
 ### Feat
 
-- Add initial video editor demo including API routes, processing pipeline scripts, and frontend application files.
-- Agentic checkup with iterative fix-verify loop, sub-steps, and architecture improvements (#482)
-- add Phase 10 Gemini 3.1-pro grounded benchmark results for sync_orchestration
-- add experimental run of sync orchestration with atomic state updates and update PRD.
-- Update Gemini 3 Pro preview to 3.1 Pro preview and add xAI Grok models to LLM configurations.
-- add grounding experiment results for Opus 4.6 grounded sync_orchestration runs
-- Add grounding experiment results for sync orchestration runs, including generated code and stability metrics.
+- **`pdd checkup` — agentic project health check from a GitHub issue** — New command `pdd checkup <github_issue_url>` runs an 8-step LLM-driven health check. Steps: 1) discover project layout, 2) check deps, 3) build, 4) inspect interfaces, 5) run tests, 6) fix issues (sub-steps: 6.1 fix code, 6.2 write regression tests, 6.3 write e2e/integration tests), 7) verify (re-run full suite), 8) open a PR. Steps 3–7 run in an iterative fix-verify loop (up to 3 iterations) until clean. Fixes run in an isolated git worktree to keep changes on a separate branch. Supports `--no-fix` (report only), `--timeout-adder`, and `--no-github-state`. State is persisted to `.pdd/checkup-state/` for resume support. New modules: `pdd/agentic_checkup.py`, `pdd/agentic_checkup_orchestrator.py`, `pdd/commands/checkup.py`.
+- **Model updates** — `gemini-3-pro-preview` replaced by `vertex_ai/gemini-3.1-pro-preview` (pricing: $2.00/$12.00 per M tokens, ELO 1495). Two xAI Grok models added: `xai/grok-4-0709` (ELO 1467) and `xai/grok-4-1-fast-reasoning` (ELO 1402).
+- **`_run_gh_command` timeout parameter** — `agentic_change._run_gh_command()` now accepts an optional `timeout` (seconds); raises a clean error message on `TimeoutExpired` instead of hanging.
+
+### Refactor
+
+- **`.pddrc` Strategy A / Strategy B detection in `arch` workflow** — Step 7 (`.pddrc` generation) now detects which of two strategies fits the project: **Strategy A** (per-module exact paths — Next.js/Nuxt/SvelteKit, where output filenames don't derive from the basename) creates one context per module with `outputs.code.path`; **Strategy B** (template-based group contexts — Python/Go/Rust backends, where `filepath` contains the basename) creates one group context per output directory with `generate_output_path`. Steps 8 (prompt placement), 10 (sync validation), and 12 (fix) updated to handle both strategies. New `example_python_backend.prompt` template added as a verified working example for Strategy B.
+
+### Build
+
+- **Package tests migrated from GitHub Actions to GCP Cloud Build** — `.github/workflows/package-test.yml` removed; `cloudbuild-ci.yaml` added as the new CI pipeline.
+
+### Docs
+
+- **Grounding experiment Phases 9–10** — Added Opus 4.6 grounded `sync_orchestration` runs (Phase 9) and Gemini 3.1-pro grounded runs (Phase 10) with stability metrics, hallucination analysis, and generated-code comparisons in `experiments/grounding/`.
 
 ## v0.0.153 (2026-02-18)
 

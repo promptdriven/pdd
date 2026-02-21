@@ -162,6 +162,31 @@ def _ensure_repo_context(owner: str, repo: str, current_cwd: Path, quiet: bool) 
         return current_cwd, f"Failed to clone repository: {err_msg}"
 
 
+def _extract_target_dir(issue_body: str) -> Optional[str]:
+    """
+    Parse target directory from issue body.
+
+    Matches patterns like:
+      - in `video_editor_pdd/`   (backtick-quoted with trailing slash)
+      - in `video_editor_pdd`    (backtick-quoted)
+      - in "video_editor_pdd"    (double-quoted)
+      - in video_editor_pdd/     (unquoted with trailing slash — underscore required)
+
+    Uses tight patterns to avoid matching natural English like "in Python",
+    "in the", "in a new directory", etc.
+    """
+    # Pattern 1: backtick or double-quote wrapped — any alphanumeric+slash
+    quoted = re.compile(r'\bin\s+[`"]([a-zA-Z0-9_\-/]+/?)[`"]', re.IGNORECASE)
+    # Pattern 2: unquoted but MUST contain an underscore or slash (directory-like)
+    unquoted = re.compile(r'\bin\s+([a-zA-Z0-9_\-]*[_/][a-zA-Z0-9_\-/]*)', re.IGNORECASE)
+
+    for pattern in (quoted, unquoted):
+        match = pattern.search(issue_body)
+        if match:
+            return match.group(1).rstrip("/")
+    return None
+
+
 def run_agentic_architecture(
     issue_url: str,
     *,
@@ -169,7 +194,8 @@ def run_agentic_architecture(
     quiet: bool = False,
     timeout_adder: float = 0.0,
     use_github_state: bool = True,
-    skip_prompts: bool = False
+    skip_prompts: bool = False,
+    target_dir: Optional[str] = None
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
     Entry point for the agentic architecture workflow.
@@ -186,6 +212,7 @@ def run_agentic_architecture(
         timeout_adder: Additional seconds to add to step timeouts.
         use_github_state: Whether to persist state to GitHub comments.
         skip_prompts: If True, skip Step 9 (prompt generation). Default False (prompts ARE generated).
+        target_dir: Optional subdirectory for new project. If None, parsed from issue body.
 
     Returns:
         Tuple containing:
@@ -252,6 +279,12 @@ def run_agentic_architecture(
     if error:
         return False, error, 0.0, "", []
 
+    # Parse target_dir from issue body if not provided via CLI
+    if target_dir is None:
+        target_dir = _extract_target_dir(issue_body)
+        if target_dir and not quiet:
+            console.print(f"[blue]Detected subproject directory: {target_dir}[/blue]")
+
     # 6. Invoke Orchestrator
     return run_agentic_architecture_orchestrator(
         issue_url=issue_url,
@@ -266,5 +299,6 @@ def run_agentic_architecture(
         quiet=quiet,
         timeout_adder=timeout_adder,
         use_github_state=use_github_state,
-        skip_prompts=skip_prompts
+        skip_prompts=skip_prompts,
+        target_dir=target_dir,
     )

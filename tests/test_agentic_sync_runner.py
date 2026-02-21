@@ -1193,3 +1193,52 @@ class TestHeartbeatLineFiltering:
             "╰──────────────────────╯\n",
         ]
         assert self._last_informative_line(lines) == "Successfully loaded prompt: agentic_test_generate_LLM"
+
+
+# ---------------------------------------------------------------------------
+# AsyncSyncRunner per-module cwd (module_cwds)
+# ---------------------------------------------------------------------------
+
+class TestModuleCwds:
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_module_cwds_respected(self, mock_find, mock_popen, mock_cost, mock_unlink):
+        """Popen uses module-specific cwd when module_cwds is provided."""
+        mock_popen.return_value = _make_mock_popen(stdout_text="OK\n", exit_code=0)
+
+        custom_cwd = Path("/project/examples/hello")
+        runner = AsyncSyncRunner(
+            basenames=["greeting"],
+            dep_graph={"greeting": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            module_cwds={"greeting": custom_cwd},
+        )
+
+        runner._sync_one_module("greeting")
+        popen_kwargs = mock_popen.call_args[1]
+        assert popen_kwargs["cwd"] == str(custom_cwd)
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_missing_module_falls_back_to_project_root(self, mock_find, mock_popen, mock_cost, mock_unlink):
+        """Module not in module_cwds falls back to project_root."""
+        mock_popen.return_value = _make_mock_popen(stdout_text="OK\n", exit_code=0)
+
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            module_cwds={"other": Path("/project/other")},
+        )
+
+        runner._sync_one_module("foo")
+        popen_kwargs = mock_popen.call_args[1]
+        assert popen_kwargs["cwd"] == str(runner.project_root)
