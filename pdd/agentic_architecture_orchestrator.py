@@ -14,6 +14,7 @@ Once a step passes, we don't re-validate it (prevents fix loops).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -180,7 +181,8 @@ def run_agentic_architecture_orchestrator(
     quiet: bool = False,
     timeout_adder: float = 0.0,
     use_github_state: bool = True,
-    skip_prompts: bool = False
+    skip_prompts: bool = False,
+    target_dir: Optional[str] = None
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
     Orchestrates the 11-step agentic architecture workflow.
@@ -202,6 +204,11 @@ def run_agentic_architecture_orchestrator(
 
     if not quiet:
         console.print(f"Generating architecture for issue #{issue_number}: \"{issue_title}\"")
+
+    # Derive base_dir: subproject directory or repo root
+    base_dir = cwd / target_dir if target_dir else cwd
+    if target_dir:
+        base_dir.mkdir(parents=True, exist_ok=True)
 
     state_dir = _get_state_dir(cwd)
 
@@ -239,6 +246,12 @@ def run_agentic_architecture_orchestrator(
         "issue_number": issue_number,
         "issue_author": issue_author,
         "issue_title": issue_title,
+        "target_dir": target_dir or ".",
+        "target_dir_note": (
+            f"Create all files under `{target_dir}/` (NOT the repo root)."
+            if target_dir else
+            "Create files in the repository root."
+        ),
     }
 
     # Populate context with previous step outputs
@@ -315,6 +328,14 @@ def run_agentic_architecture_orchestrator(
 
         timeout = ARCH_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder
 
+        # Capture pre-hash for Step 6 to detect no-op (agent failed to create/modify arch)
+        arch_file_step6 = base_dir / "architecture.json"
+        pre_hash_step6 = (
+            hashlib.md5(arch_file_step6.read_bytes()).hexdigest()
+            if step_num == 6 and arch_file_step6.exists()
+            else None
+        )
+
         step_success, step_output, step_cost, step_model = run_agentic_task(
             instruction=formatted_prompt,
             cwd=cwd,
@@ -357,9 +378,26 @@ def run_agentic_architecture_orchestrator(
                     if scaffold_count > 0:
                         console.print(f"   → Scaffolding files created: {scaffold_count}")
 
-            # Validate architecture.json
-            arch_file = cwd / "architecture.json"
-            if arch_file.exists():
+            # Validate architecture.json (use base_dir so subproject arch is checked)
+            arch_file = base_dir / "architecture.json"
+
+            # Hash check: detect no-op (agent reformatted existing arch or failed to create)
+            post_hash_step6 = (
+                hashlib.md5(arch_file.read_bytes()).hexdigest()
+                if arch_file.exists()
+                else None
+            )
+            if pre_hash_step6 is not None and pre_hash_step6 == post_hash_step6:
+                step_success = False
+                step_output = "FAILED: Step 6 agent did not modify architecture.json (content unchanged)"
+                if not quiet:
+                    console.print(f"[red]Error: Step 6 produced no change to architecture.json — agent likely reformatted existing file[/red]")
+            elif pre_hash_step6 is None and not arch_file.exists():
+                step_success = False
+                step_output = "FAILED: Step 6 agent did not create architecture.json"
+                if not quiet:
+                    console.print(f"[red]Error: Step 6 did not create architecture.json[/red]")
+            elif arch_file.exists():
                 try:
                     with open(arch_file, "r", encoding="utf-8") as f:
                         arch_content = f.read()
@@ -593,8 +631,8 @@ def run_agentic_architecture_orchestrator(
                                     if not quiet:
                                         console.print(f"   → Fixed: {len(verified_modified)} files modified")
 
-                                # Re-read architecture.json after fix
-                                arch_file = cwd / "architecture.json"
+                                # Re-read architecture.json after fix (use base_dir for subproject)
+                                arch_file = base_dir / "architecture.json"
                                 if arch_file.exists():
                                     try:
                                         with open(arch_file, "r", encoding="utf-8") as f:
@@ -652,7 +690,7 @@ def run_agentic_architecture_orchestrator(
 
     # --- Post-Processing ---
     final_architecture = context.get("step6_output", "")
-    output_files = _save_architecture_files(cwd, final_architecture, issue_title)
+    output_files = _save_architecture_files(base_dir, final_architecture, issue_title)
 
     # Add scaffolding files to output list
     for sf in scaffolding_files:

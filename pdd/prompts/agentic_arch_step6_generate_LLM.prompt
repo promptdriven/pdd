@@ -54,6 +54,15 @@ You are working on step 6 of 12 in an agentic architecture workflow. All analysi
 {step5_output}
 </step5_output>
 
+% Target Directory
+
+{target_dir_note}
+
+- Write `architecture.json` to `{target_dir}/architecture.json` (NOT the repo root, unless target_dir is `.`)
+- Create all scaffolding files under `{target_dir}/`
+- In the FILES_CREATED marker, list all paths relative to the repo root (e.g. `{target_dir}/architecture.json`, `{target_dir}/src/main.py`)
+- If `{target_dir}/architecture.json` already exists, REPLACE it with the new project architecture
+
 % Your Task
 
 Generate a complete, valid architecture.json following these rules:
@@ -104,7 +113,7 @@ Generate a complete, valid architecture.json following these rules:
 % Output
 
 1. **Write architecture.json to disk**
-   Save the JSON array directly to `architecture.json` in the current working directory:
+   Save the JSON array directly to `{target_dir}/architecture.json`:
    - The file must contain ONLY the valid JSON array
    - No markdown fencing, no comments, no wrapper objects
    - Validate the JSON is syntactically correct before writing

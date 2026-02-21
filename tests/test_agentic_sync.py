@@ -14,8 +14,12 @@ from pdd.agentic_sync import (
     _apply_architecture_corrections,
     _find_project_root,
     _is_github_issue_url,
+    _llm_fix_dry_run_failure,
     _load_architecture_json,
     _parse_llm_response,
+    _resolve_module_cwd,
+    _run_dry_run_validation,
+    _run_single_dry_run,
     run_agentic_sync,
 )
 from pdd.agentic_sync_runner import build_dep_graph_from_architecture
@@ -280,6 +284,7 @@ class TestRunAgenticSync:
         assert "Invalid" in msg
 
     @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync._run_dry_run_validation")
     @patch("pdd.agentic_sync.build_dep_graph_from_architecture", return_value={"foo": []})
     @patch("pdd.agentic_sync.load_prompt_template", return_value="template {issue_content} {architecture_json}")
     @patch("pdd.agentic_sync.run_agentic_task")
@@ -294,6 +299,7 @@ class TestRunAgenticSync:
         mock_agentic_task,
         mock_load_prompt,
         mock_build_graph,
+        mock_dry_run,
         mock_runner_cls,
     ):
         # Setup mocks
@@ -309,6 +315,7 @@ class TestRunAgenticSync:
             0.05,
             "anthropic",
         )
+        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, [], 0.0)
 
         mock_runner = MagicMock()
         mock_runner.run.return_value = (True, "All 1 modules synced successfully", 0.10)
@@ -324,6 +331,7 @@ class TestRunAgenticSync:
         mock_runner.run.assert_called_once()
 
     @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync._run_dry_run_validation")
     @patch("pdd.agentic_sync.build_dep_graph_from_architecture")
     @patch("pdd.agentic_sync.load_prompt_template", return_value="template {issue_content} {architecture_json}")
     @patch("pdd.agentic_sync.run_agentic_task")
@@ -338,6 +346,7 @@ class TestRunAgenticSync:
         mock_agentic_task,
         mock_load_prompt,
         mock_build_graph,
+        mock_dry_run,
         mock_runner_cls,
     ):
         """LLM returns basenames with language suffix; they should be stripped."""
@@ -358,6 +367,7 @@ class TestRunAgenticSync:
             "anthropic",
         )
         mock_build_graph.return_value = {"crm_models": ["api_orders"], "api_orders": []}
+        mock_dry_run.return_value = (True, {"crm_models": Path("/tmp"), "api_orders": Path("/tmp")}, [], 0.0)
 
         mock_runner = MagicMock()
         mock_runner.run.return_value = (True, "All 2 modules synced successfully", 0.20)
@@ -374,3 +384,179 @@ class TestRunAgenticSync:
         # Verify stripped basenames were passed to AsyncSyncRunner
         runner_kwargs = mock_runner_cls.call_args[1]
         assert sorted(runner_kwargs["basenames"]) == ["api_orders", "crm_models"]
+
+
+# ---------------------------------------------------------------------------
+# _resolve_module_cwd
+# ---------------------------------------------------------------------------
+
+class TestResolveModuleCwd:
+    def _write_pddrc(self, path: Path, contexts: Dict[str, Any]) -> None:
+        """Helper to write a .pddrc file."""
+        import yaml
+        config = {"contexts": contexts}
+        path.write_text(yaml.dump(config))
+
+    def test_module_found_in_root_pddrc(self, tmp_path):
+        """Module matched by root .pddrc returns project root."""
+        self._write_pddrc(tmp_path / ".pddrc", {
+            "myctx": {
+                "defaults": {"prompts_dir": "prompts/mymod"},
+                "paths": ["src/mymod/**"],
+            },
+        })
+        result = _resolve_module_cwd("mymod/widget", tmp_path)
+        assert result == tmp_path
+
+    def test_module_found_in_subdirectory_pddrc(self, tmp_path):
+        """Module found in subdirectory .pddrc returns that subdirectory."""
+        # Root .pddrc has no matching context
+        self._write_pddrc(tmp_path / ".pddrc", {
+            "default": {"paths": ["**"]},
+        })
+        # Subdirectory has a matching context
+        sub = tmp_path / "examples" / "hello"
+        sub.mkdir(parents=True)
+        self._write_pddrc(sub / ".pddrc", {
+            "hello_ctx": {
+                "defaults": {"prompts_dir": "prompts/greeting"},
+                "paths": ["src/**"],
+            },
+        })
+        result = _resolve_module_cwd("greeting/hi", tmp_path)
+        assert result == sub
+
+    def test_module_not_found_falls_back_to_root(self, tmp_path):
+        """Module not in any .pddrc falls back to project root."""
+        self._write_pddrc(tmp_path / ".pddrc", {
+            "other": {
+                "defaults": {"prompts_dir": "prompts/other"},
+                "paths": ["src/other/**"],
+            },
+        })
+        result = _resolve_module_cwd("nonexistent_mod", tmp_path)
+        assert result == tmp_path
+
+    def test_no_pddrc_falls_back_to_root(self, tmp_path):
+        """No .pddrc files at all returns project root."""
+        result = _resolve_module_cwd("anything", tmp_path)
+        assert result == tmp_path
+
+    def test_deepest_match_wins(self, tmp_path):
+        """When multiple subdirs match, the deepest one wins."""
+        # Depth 1 match
+        sub1 = tmp_path / "level1"
+        sub1.mkdir()
+        self._write_pddrc(sub1 / ".pddrc", {
+            "ctx1": {
+                "defaults": {"prompts_dir": "prompts/shared"},
+                "paths": ["src/**"],
+            },
+        })
+        # Depth 2 match (deeper)
+        sub2 = sub1 / "level2"
+        sub2.mkdir()
+        self._write_pddrc(sub2 / ".pddrc", {
+            "ctx2": {
+                "defaults": {"prompts_dir": "prompts/shared"},
+                "paths": ["src/**"],
+            },
+        })
+        result = _resolve_module_cwd("shared/mod", tmp_path)
+        assert result == sub2
+
+
+# ---------------------------------------------------------------------------
+# _run_single_dry_run
+# ---------------------------------------------------------------------------
+
+class TestRunSingleDryRun:
+    @patch("pdd.agentic_sync.subprocess.run")
+    @patch("pdd.agentic_sync._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_successful_dry_run(self, mock_find, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
+        ok, err = _run_single_dry_run("my_module", Path("/project"))
+        assert ok is True
+        assert err == ""
+        # Verify command includes --dry-run
+        cmd = mock_run.call_args[0][0]
+        assert "--dry-run" in cmd
+        assert "my_module" in cmd
+
+    @patch("pdd.agentic_sync.subprocess.run")
+    @patch("pdd.agentic_sync._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_failed_dry_run(self, mock_find, mock_run):
+        mock_run.return_value = MagicMock(
+            returncode=1, stderr="Error: prompt not found", stdout=""
+        )
+        ok, err = _run_single_dry_run("bad_module", Path("/project"))
+        assert ok is False
+        assert "prompt not found" in err
+
+    @patch("pdd.agentic_sync.subprocess.run")
+    @patch("pdd.agentic_sync._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_timeout(self, mock_find, mock_run):
+        mock_run.side_effect = __import__("subprocess").TimeoutExpired(
+            cmd="pdd", timeout=60
+        )
+        ok, err = _run_single_dry_run("slow_module", Path("/project"))
+        assert ok is False
+        assert "timed out" in err.lower()
+
+
+# ---------------------------------------------------------------------------
+# _run_dry_run_validation
+# ---------------------------------------------------------------------------
+
+class TestRunDryRunValidation:
+    @patch("pdd.agentic_sync._run_single_dry_run")
+    @patch("pdd.agentic_sync._resolve_module_cwd")
+    def test_all_pass_programmatic(self, mock_resolve, mock_dry_run):
+        """All modules pass programmatic dry-run."""
+        project_root = Path("/project")
+        mock_resolve.return_value = project_root
+        mock_dry_run.return_value = (True, "")
+
+        all_valid, cwds, errors, cost = _run_dry_run_validation(
+            ["mod_a", "mod_b"], project_root, quiet=True
+        )
+        assert all_valid is True
+        assert cwds == {"mod_a": project_root, "mod_b": project_root}
+        assert errors == []
+        assert cost == 0.0
+
+    @patch("pdd.agentic_sync._llm_fix_dry_run_failure")
+    @patch("pdd.agentic_sync._run_single_dry_run")
+    @patch("pdd.agentic_sync._resolve_module_cwd")
+    def test_programmatic_fails_llm_succeeds(self, mock_resolve, mock_dry_run, mock_llm):
+        """Programmatic fails, LLM fallback succeeds."""
+        project_root = Path("/project")
+        llm_cwd = Path("/project/sub")
+        mock_resolve.return_value = project_root
+        mock_dry_run.return_value = (False, "prompt not found")
+        mock_llm.return_value = (True, llm_cwd, 0.02, "")
+
+        all_valid, cwds, errors, cost = _run_dry_run_validation(
+            ["mod_x"], project_root, quiet=True
+        )
+        assert all_valid is True
+        assert cwds == {"mod_x": llm_cwd}
+        assert errors == []
+        assert cost == pytest.approx(0.02)
+
+    @patch("pdd.agentic_sync._llm_fix_dry_run_failure")
+    @patch("pdd.agentic_sync._run_single_dry_run")
+    @patch("pdd.agentic_sync._resolve_module_cwd")
+    def test_both_fail(self, mock_resolve, mock_dry_run, mock_llm):
+        """Both programmatic and LLM fail."""
+        project_root = Path("/project")
+        mock_resolve.return_value = project_root
+        mock_dry_run.return_value = (False, "prompt not found")
+        mock_llm.return_value = (False, None, 0.01, "LLM could not resolve")
+
+        all_valid, cwds, errors, cost = _run_dry_run_validation(
+            ["mod_y"], project_root, quiet=True
+        )
+        assert all_valid is False
+        assert "mod_y" in errors[0]
+        assert cost == pytest.approx(0.01)
