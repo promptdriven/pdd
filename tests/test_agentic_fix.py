@@ -9,6 +9,7 @@ import pytest
 from pdd.agentic_fix import (
     run_agentic_fix,
     _verify_and_log,
+    find_llm_csv_path,
 )
 
 
@@ -134,6 +135,7 @@ def test_run_agentic_fix_real_call_when_available(provider, env_key, cli, tmp_pa
     # Only run if API key (or Gemini alias for Google, or OAuth for Anthropic) + CLI are present
     detected_key = os.getenv(env_key)
     if provider == "google" and not detected_key:
+        pytest.skip("Google API key not available.")
         detected_key = os.getenv("GEMINI_API_KEY")
     if provider == "anthropic" and not detected_key:
         detected_key = os.getenv("CLAUDE_CODE_OAUTH_TOKEN")
@@ -436,6 +438,91 @@ class TestCwdHandling:
                 f"Code path should reference {module_dir}, got: {content[:200]}"
             assert str(other_dir / "src" / "hello.py") not in content, \
                 "Code path should NOT reference the process cwd (other_dir)"
+
+
+def test_find_llm_csv_path_uses_base_dir(tmp_path, monkeypatch):
+    """Should resolve project llm_model.csv relative to provided base_dir."""
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    (project_root / ".pdd").mkdir()
+    project_csv = project_root / ".pdd" / "llm_model.csv"
+    project_csv.write_text("provider,model,api_key\n", encoding="utf-8")
+
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    monkeypatch.setenv("HOME", str(home_dir))
+
+    other_dir = tmp_path / "other"
+    other_dir.mkdir()
+    monkeypatch.chdir(other_dir)
+
+    found = find_llm_csv_path(project_root)
+    assert found == project_csv
+
+
+def test_run_agentic_fix_resolves_error_log_against_cwd(tmp_path, monkeypatch):
+    """Relative error_log_file should resolve against cwd, not process CWD."""
+    module_dir = tmp_path / "module"
+    module_dir.mkdir()
+
+    src_dir = module_dir / "src"
+    src_dir.mkdir()
+    (src_dir / "hello.py").write_text("def hello(): print('hello')\n", encoding="utf-8")
+
+    tests_dir = module_dir / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_hello.py").write_text("from hello import hello\n", encoding="utf-8")
+
+    prompt_file = module_dir / "hello.prompt"
+    prompt_file.write_text("print hello\n", encoding="utf-8")
+
+    module_error = module_dir / "error.log"
+    module_error.write_text("Traceback: module error\n", encoding="utf-8")
+
+    other_dir = tmp_path / "other"
+    other_dir.mkdir()
+    other_error = other_dir / "error.log"
+    other_error.write_text("Traceback: other error\n", encoding="utf-8")
+
+    monkeypatch.chdir(other_dir)
+
+    monkeypatch.setattr("pdd.agentic_fix._load_model_data", lambda _: _df())
+    monkeypatch.setattr(
+        "pdd.agentic_fix.load_prompt_template",
+        lambda name: "{code_abs}{test_abs}{prompt_content}{error_content}{verify_cmd}{protect_tests}",
+    )
+    monkeypatch.setattr("pdd.agentic_common._find_cli_binary", lambda cmd, config=None: "/usr/bin/shim")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("PDD_AGENTIC_LOGLEVEL", "quiet")
+
+    instruction_contents = []
+    original_write_text = Path.write_text
+
+    def track_instruction(self, content, *args, **kwargs):
+        if "agentic_fix_instructions" in str(self):
+            instruction_contents.append(content)
+        return original_write_text(self, content, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", track_instruction)
+
+    monkeypatch.setattr(
+        "pdd.agentic_fix.run_agentic_task",
+        lambda instruction, cwd, verbose, quiet, label, max_retries: (True, "", 0.05, "anthropic")
+    )
+    monkeypatch.setattr("pdd.agentic_fix._verify_and_log", lambda *a, **k: True)
+
+    run_agentic_fix(
+        prompt_file=str(prompt_file),
+        code_file="src/hello.py",
+        unit_test_file="tests/test_hello.py",
+        error_log_file="error.log",
+        cwd=module_dir,
+    )
+
+    assert instruction_contents, "Expected instruction file to be written."
+    instruction = instruction_contents[-1]
+    assert "Traceback: module error" in instruction
+    assert "Traceback: other error" not in instruction
 
 
 class TestMtimeChangeDetection:
