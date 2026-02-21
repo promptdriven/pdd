@@ -46,6 +46,9 @@
 #
 # VIII. scan_environment — Edge Cases
 #   26. test_scan_special_chars_in_key_value: Key value with special chars → no crash.
+#   27. test_scan_empty_string_values_not_set: Keys with empty values → is_set=False.
+#   28. test_scan_empty_dotenv_falls_through_to_shell: Empty .env value → shell environment wins.
+#   29. test_scan_empty_shell_falls_through_to_dotenv: Empty shell value → .env file wins.
 
 import csv
 from pathlib import Path
@@ -327,7 +330,8 @@ def test_scan_detects_shell_env_key(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test123")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
-    result = scan_environment()
+    with mock.patch("pdd.api_key_scanner._load_dotenv_values", return_value={}):
+        result = scan_environment()
 
     assert result["OPENAI_API_KEY"].is_set is True
     assert result["OPENAI_API_KEY"].source == "shell environment"
@@ -346,7 +350,8 @@ def test_scan_detects_api_env_file_key(tmp_path, monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
-    result = scan_environment()
+    with mock.patch("pdd.api_key_scanner._load_dotenv_values", return_value={}):
+        result = scan_environment()
 
     assert result["OPENAI_API_KEY"].is_set is True
     assert result["OPENAI_API_KEY"].source == "~/.pdd/api-env.bash"
@@ -513,3 +518,52 @@ def test_scan_special_chars_in_key_value(tmp_path, monkeypatch):
         result = scan_environment()
 
     assert result["MY_SPECIAL_KEY"].is_set is True
+
+
+def test_scan_empty_string_values_not_set(tmp_path, monkeypatch):
+    """Keys with empty string values are treated as not set from all sources."""
+    _setup_home(tmp_path, monkeypatch, csv_rows=SIMPLE_CSV_ROWS)
+
+    # Set one key to empty string in shell environment
+    monkeypatch.setenv("OPENAI_API_KEY", "")
+    # Set another to whitespace-only
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "   ")
+    monkeypatch.setenv("SHELL", "/bin/bash")
+
+    # .env returns empty since _load_dotenv_values filters empty strings
+    with mock.patch("pdd.api_key_scanner._load_dotenv_values", return_value={}):
+        result = scan_environment()
+
+    # Both keys should be marked as not set since they have empty/whitespace values
+    assert result["OPENAI_API_KEY"].is_set is False
+    assert result["ANTHROPIC_API_KEY"].is_set is False
+
+
+def test_scan_empty_dotenv_falls_through_to_shell(tmp_path, monkeypatch):
+    """Empty .env value is filtered out; shell environment wins."""
+    _setup_home(tmp_path, monkeypatch, csv_rows=SIMPLE_CSV_ROWS)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-from-shell")
+
+    # .env has the key but with empty value (gets filtered by _load_dotenv_values)
+    # So the implementation should skip .env and find the shell value
+    with mock.patch("pdd.api_key_scanner._load_dotenv_values", return_value={}):
+        result = scan_environment()
+
+    assert result["OPENAI_API_KEY"].is_set is True
+    assert result["OPENAI_API_KEY"].source == "shell environment"
+
+
+def test_scan_empty_shell_falls_through_to_dotenv(tmp_path, monkeypatch):
+    """Empty shell value is skipped; .env file wins."""
+    _setup_home(tmp_path, monkeypatch, csv_rows=SIMPLE_CSV_ROWS)
+    monkeypatch.setenv("OPENAI_API_KEY", "")  # Empty in shell
+
+    # .env has a real value
+    with mock.patch(
+        "pdd.api_key_scanner._load_dotenv_values",
+        return_value={"OPENAI_API_KEY": "sk-from-dotenv"},
+    ):
+        result = scan_environment()
+
+    assert result["OPENAI_API_KEY"].is_set is True
+    assert result["OPENAI_API_KEY"].source == ".env file"

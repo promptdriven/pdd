@@ -76,13 +76,15 @@ def _load_dotenv_values() -> Dict[str, str]:
     """
     Load values from a .env file using python-dotenv's dotenv_values (read-only).
     Returns an empty dict on any failure.
+    Only includes keys with non-empty values.
     """
     try:
         from dotenv import dotenv_values  # type: ignore
 
         values = dotenv_values()
         # dotenv_values returns an OrderedDict; values can be None for keys without values
-        return {k: v for k, v in values.items() if v is not None}
+        # Filter out None and empty string values
+        return {k: v for k, v in values.items() if v and v.strip()}
     except ImportError:
         logger.debug("python-dotenv not installed; skipping .env file check.")
         return {}
@@ -105,7 +107,7 @@ def _detect_shell() -> Optional[str]:
 def _parse_api_env_file(file_path: Path) -> Dict[str, str]:
     """
     Parse a ~/.pdd/api-env.{shell} file for uncommented `export KEY=value` lines.
-    Returns a dict of key names to values found.
+    Returns a dict of key names to non-empty values found.
     """
     result: Dict[str, str] = {}
 
@@ -137,7 +139,8 @@ def _parse_api_env_file(file_path: Path) -> Dict[str, str]:
                         ):
                             value = value[1:-1]
 
-                        if key and value:
+                        # Only include keys with non-empty values
+                        if key and value and value.strip():
                             result[key] = value
 
     except Exception as e:
@@ -183,17 +186,17 @@ def scan_environment() -> Dict[str, KeyInfo]:
             api_env_source_label = f"~/.pdd/api-env.{shell_name}"
 
         for key_name in key_names:
-            # Check in priority order
+            # Check in priority order, ensuring values are non-empty
             if key_name in dotenv_vals:
                 result[key_name] = KeyInfo(source=".env file", is_set=True)
-            elif key_name in os.environ:
+            elif key_name in os.environ and os.environ[key_name].strip():
                 result[key_name] = KeyInfo(source="shell environment", is_set=True)
             elif key_name in api_env_vals:
                 result[key_name] = KeyInfo(
                     source=api_env_source_label, is_set=True
                 )
             else:
-                # Key not found in any source
+                # Key not found in any source or has empty value
                 result[key_name] = KeyInfo(source="", is_set=False)
 
     except Exception as e:

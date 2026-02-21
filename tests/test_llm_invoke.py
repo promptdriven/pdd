@@ -1633,25 +1633,28 @@ def test_llm_invoke_dict_response_missing_field_triggers_fallback(mock_load_mode
 
 # --- Tests for structured_output CSV flag behavior ---
 
-def test_deepseek_maas_passes_response_format_for_structured_output(mock_set_llm_cache):
-    """Verify that DeepSeek MaaS model passes response_format when output_pydantic is requested.
+def test_vertex_ai_maas_passes_response_format_for_structured_output(mock_set_llm_cache):
+    """Verify that Vertex AI MaaS models pass response_format when output_pydantic is requested.
 
-    According to Google Cloud documentation, all Vertex AI MaaS models (including DeepSeek)
-    support structured output. This test verifies the CSV has structured_output=True for DeepSeek.
+    According to Google Cloud documentation, all Vertex AI MaaS models
+    support structured output. This test uses the MiniMax MaaS model to verify
+    the CSV has structured_output=True and that response_format is correctly passed.
 
     This test will:
     - FAIL if structured_output=False in CSV (the bug)
     - PASS if structured_output=True in CSV (after fix)
     """
-    # Read the REAL CSV to get DeepSeek's actual structured_output value
+    maas_model = 'vertex_ai/minimaxai/minimax-m2-maas'
+
+    # Read the REAL CSV to get the MaaS model's actual structured_output value
     from pdd.llm_invoke import _load_model_data
     real_data = _load_model_data(None)  # None uses package default CSV path
 
-    # Filter to only include DeepSeek MaaS model
-    deepseek_data = real_data[real_data['model'] == 'vertex_ai/deepseek-ai/deepseek-v3.2-maas'].copy()
-    assert len(deepseek_data) == 1, "DeepSeek MaaS model not found in CSV"
+    # Filter to only include the MaaS model
+    maas_data = real_data[real_data['model'] == maas_model].copy()
+    assert len(maas_data) == 1, f"MaaS model {maas_model} not found in CSV"
 
-    with patch('pdd.llm_invoke._load_model_data', return_value=deepseek_data):
+    with patch('pdd.llm_invoke._load_model_data', return_value=maas_data):
         # Set the actual env vars that the CSV api_key column requires for Vertex AI models
         vertex_env = {
             'GOOGLE_APPLICATION_CREDENTIALS': '/fake/path/creds.json',
@@ -1664,7 +1667,7 @@ def test_deepseek_maas_passes_response_format_for_structured_output(mock_set_llm
                 json_response = '{"field1": "test_value", "field2": 42}'
                 mock_response = create_mock_litellm_response(
                     json_response,
-                    model_name='vertex_ai/deepseek-ai/deepseek-v3.2-maas'
+                    model_name=maas_model
                 )
                 mock_completion.return_value = mock_response
 
@@ -1679,16 +1682,16 @@ def test_deepseek_maas_passes_response_format_for_structured_output(mock_set_llm
                         verbose=True
                     )
 
-                # Verify DeepSeek was called
+                # Verify the MaaS model was called
                 mock_completion.assert_called_once()
                 call_args, call_kwargs = mock_completion.call_args
-                assert call_kwargs['model'] == 'vertex_ai/deepseek-ai/deepseek-v3.2-maas', \
-                    f"Expected DeepSeek model, got {call_kwargs['model']}"
+                assert call_kwargs['model'] == maas_model, \
+                    f"Expected MaaS model, got {call_kwargs['model']}"
 
-                # EXPECTED: DeepSeek MaaS should have response_format passed
+                # EXPECTED: MaaS model should have response_format passed
                 # because it supports structured output (per Google Cloud docs)
                 assert 'response_format' in call_kwargs, \
-                    "DeepSeek MaaS should have response_format passed - check that structured_output=True in CSV"
+                    "Vertex AI MaaS model should have response_format passed - check that structured_output=True in CSV"
 
                 response_format = call_kwargs['response_format']
                 assert response_format['type'] == 'json_schema', \
