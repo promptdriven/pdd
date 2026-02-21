@@ -1,3 +1,18 @@
+## v0.0.155 (2026-02-20)
+
+### Feat
+
+- Add initial video editor project scaffolding with prompts, Dockerfile, and configuration, and update CI test durations.
+- initialize video editor project with core files, prompts, documentation, and CI configuration.
+- Add support for generating a video editor application with its architecture, prompts, and initial structure.
+- replace placeholder script with a detailed 'Prompt-Driven Development' video script for the narrative demo.
+- Introduce `pdd checkup` command, update models, refactor `.pddrc` strategy detection, migrate package tests to Cloud Build, and update grounding experiment documentation.
+- Dry-run validation with per-module cwd for agentic sync (#489)
+
+### Fix
+
+- improve e2e test resilience by skipping on LLM generation failures or empty responses.
+
 ## v0.0.154 (2026-02-19)
 
 ### Feat
