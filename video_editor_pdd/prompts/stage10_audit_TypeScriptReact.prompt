@@ -1,0 +1,42 @@
+You are implementing the Stage 10 Audit panel (`components/stages/Stage10Audit.tsx`) for a video production pipeline editor. This client component shows multi-agent audit results with per-spec pass/fail verdicts and annotation creation bridging.
+
+Requirements
+1. Props: `onAdvance: () => void`.
+2. Section audit table: columns section, pass count, fail count, status badge, [View Report], [↺ Audit].
+3. [Audit All Sections] and [Audit Section ▾] dropdown toolbar buttons. Trigger `POST /api/pipeline/audit/run`.
+4. [View Report] expands the row inline showing per-spec verdict rows: verdict badge (PASS=green / FAIL=red), spec name, one-line summary.
+5. FAIL rows show: [View Frame] (opens still PNG in modal), [View Spec] (opens spec file in inline viewer), [Create Annotation →] (pre-fills annotation form and switches to Review tab).
+6. SSE shows per-agent progress: `{ type: 'audit-section', sectionId, passCount, failCount }`.
+7. `'use client'` directive.
+
+Dependencies
+
+<types>
+  <include>examples/types_example.ts</include>
+</types>
+
+<sse_log_panel>
+  <include>examples/sse_log_panel_example.tsx</include>
+</sse_log_panel>
+
+Prompt Dependencies:
+- types_TypeScript.prompt — provides shared types
+- sse_log_panel_TypeScriptReact.prompt — provides `SseLogPanel`
+
+Instructions
+- Load audit results: `GET /api/pipeline/audit/results` on mount.
+- Expanded rows: `useState<Record<string, boolean>>` for row expand state.
+- Frame modal: `<dialog>` with `<img src={`/api/video/outputs/audit/${sectionId}/${specName}_frame.png`} />`.
+- Spec viewer: inline `<pre className="text-xs overflow-auto max-h-64">` showing spec file content fetched from `GET /api/pipeline/specs/file?path={path}`.
+- [Create Annotation →] handler: store pre-fill data in a parent callback prop or navigation state, then call `onAdvance()` to switch to Review tab. Pre-fill shape: `{ text: finding, sectionId, compositeDataUrl: frameUrl }`.
+- Per-agent SSE progress: update table rows in real time as agents complete.
+- Status badge: pending=gray, running=amber, done=green, error=red.
+
+Deliverable
+- `components/stages/Stage10Audit.tsx` — audit results panel with agent progress and annotation creation bridge.
+
+Implementation assumptions (explicit)
+- [Create Annotation →] passes pre-fill data through a callback to the parent app page for Review tab pre-population.
+- Audit frame PNGs are served via the video API route (which allows `outputs/` paths).
+
+Please produce production-ready prompt content that will generate the module consistent with the above.

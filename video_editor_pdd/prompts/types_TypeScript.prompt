@@ -1,0 +1,47 @@
+You are implementing the central shared TypeScript type definitions for a video production pipeline editor built with Next.js 15 App Router. This module (`lib/types.ts`) is the single source of truth for all domain types — pipeline stages, job states, annotations, sections, and project configuration — used across every frontend component, API route, and server library. No other module may define these types; all imports flow from here with no circular dependencies.
+
+Requirements
+1. Export the `PipelineStage` union type covering all 10 pipeline stages: `'setup' | 'script' | 'tts-script' | 'tts-render' | 'audio-sync' | 'specs' | 'veo' | 'compositions' | 'render' | 'audit'`.
+2. Export `StageStatus` union: `'not_started' | 'running' | 'done' | 'error'`.
+3. Export `JobStatus` union: `'pending' | 'running' | 'done' | 'error'`.
+4. Export `Job` interface: `{ id: string; stage: PipelineStage; status: JobStatus; progress: number; error: string | null; params: Record<string, unknown>; createdAt: string; updatedAt: string }`.
+5. Export `FixType` union: `'remotion' | 'veo' | 'tts' | 'none'`.
+6. Export `AnnotationAnalysis` interface: `{ severity: 'critical' | 'major' | 'minor' | 'pass'; fixType: FixType; technicalAssessment: string; suggestedFixes: string[]; confidence: number }`.
+7. Export `Annotation` interface: `{ id: string; sectionId: string; timestamp: number; text: string; videoFile: string | null; drawingDataUrl: string | null; compositeDataUrl: string | null; analysis: AnnotationAnalysis | null; resolved: boolean; resolveJobId: string | null; createdAt: string }`.
+8. Export `Section` interface: `{ id: string; label: string; videoFile: string; specDir: string; remotionDir: string; compositionId: string; durationSeconds: number; offsetSeconds: number }`.
+9. Export `TtsConfig` interface: `{ voice: string; rate: number; model: string }`.
+10. Export `VeoConfig` interface: `{ model: string; aspectRatio: '16:9' | '9:16'; referenceImages: Record<string, string> }`.
+11. Export `RenderConfig` interface: `{ maxParallelRenders: number; outputDir: string; fps: number; width: number; height: number }`.
+12. Export `AudioSyncConfig` interface: `{ sectionGroups: Record<string, string[]> }`.
+13. Export `ProjectConfig` interface: `{ name: string; outputResolution: '1920x1080' | '1280x720'; tts: TtsConfig; sections: Section[]; audioSync: AudioSyncConfig; veo: VeoConfig; render: RenderConfig }`.
+14. Export `RenderProgress` interface: `{ percent: number; message: string }`.
+15. Export `ClaudeFixResult` interface: `{ fixType: FixType; filesModified: string[]; changeDescription: string; confidence: number }`.
+16. Export `AnnotationCaptureData` interface used by VideoPlayer: `{ timestamp: number; text: string; drawingDataUrl: string | null; compositeDataUrl: string | null; videoFile: string }`.
+17. Export `SseSend` type alias: `(data: object) => void`.
+18. All types must be pure TypeScript — no runtime code, no imports from other local modules.
+19. Use `interface` for object shapes and `type` for unions/aliases. Export every definition named above.
+
+Dependencies
+
+No local dependencies.
+
+Instructions
+- Create `lib/types.ts` exporting all types listed above as named exports.
+- Group exports logically: (1) pipeline stage/status enums, (2) job types, (3) annotation types, (4) section and project config types, (5) utility/helper types.
+- Add a JSDoc comment on each exported type explaining its purpose in one line.
+- Do not import from any other local file — this module must have zero local dependencies to avoid circular imports.
+- The `AnnotationAnalysis` type is returned by Claude analysis invocations and must align with the JSON schema Claude is prompted to return.
+- `ProjectConfig.sections` is an array; ordering matters for ffmpeg concat and audio offset calculations.
+- `SseSend` is used as a parameter type in `lib/jobs.ts` — define it here so it's shared.
+- Ensure `RenderProgress` matches what `lib/render.ts` callbacks emit.
+
+Deliverable
+- `lib/types.ts` — production-ready TypeScript file with all types exported, no runtime code, no imports.
+
+Implementation assumptions (explicit)
+- `Job.params` stores stage-specific invocation parameters as an opaque record (serialized to/from SQLite as JSON text).
+- `Section.videoFile` is a relative path from the project root to the rendered MP4.
+- `AnnotationAnalysis.confidence` is a float 0–1.
+- `ProjectConfig` matches the on-disk `project.json` shape exactly; Zod validation in `lib/project.ts` will validate against this interface.
+
+Please produce production-ready prompt content that will generate the module consistent with the above.

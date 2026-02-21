@@ -1,0 +1,47 @@
+You are implementing the SQLite persistence layer (`lib/db.ts`) for a video production pipeline editor built with Next.js 15. This server-only module wraps better-sqlite3 with a singleton pattern, runs schema migrations on startup, and performs crash recovery for interrupted pipeline jobs.
+
+Requirements
+1. Export `getDb(): Database` — returns a module-level singleton better-sqlite3 `Database` instance. Lazy-initializes on first call. Calls `runMigrations()` and `recoverCrashedJobs()` on first open.
+2. Export `runMigrations(db: Database): void` — creates three tables if they do not exist:
+   - `jobs (id TEXT PRIMARY KEY, stage TEXT, status TEXT, progress REAL, error TEXT, params TEXT, createdAt TEXT, updatedAt TEXT)`
+   - `annotations (id TEXT PRIMARY KEY, sectionId TEXT, timestamp REAL, text TEXT, videoFile TEXT, drawingDataUrl TEXT, compositeDataUrl TEXT, analysis TEXT, resolved INTEGER DEFAULT 0, resolveJobId TEXT, createdAt TEXT)`
+   - `pipeline_status (stage TEXT PRIMARY KEY, status TEXT, lastJobId TEXT, error TEXT, updatedAt TEXT)`
+   Uses `CREATE TABLE IF NOT EXISTS` for idempotency.
+3. Export `recoverCrashedJobs(db: Database): void` — on startup, finds all jobs with `status = 'running'` and updates them to `status = 'error', error = 'Server restarted during pipeline'`.
+4. The database file path defaults to `process.env.DB_PATH ?? path.join(process.cwd(), 'pipeline.db')`.
+5. Add `'use server'` directive at the top (or server-only guard) to prevent accidental client-side import.
+6. The singleton must be safe to call from concurrent Route Handlers — better-sqlite3 is synchronous and Node.js is single-threaded, so no locking needed.
+7. Use `WAL` journal mode for better concurrent read performance: `db.pragma('journal_mode = WAL')`.
+
+Dependencies
+
+<types>
+  <include>examples/types_example.ts</include>
+</types>
+
+<better_sqlite3_api_reference_for_synchronous_sqlite_access>
+  <web>https://github.com/WiseLibs/better-sqlite3/blob/master/docs/api.md</web>
+</better_sqlite3_api_reference_for_synchronous_sqlite_access>
+
+Prompt Dependencies:
+- types_TypeScript.prompt — provides `Job`, `PipelineStage`, `StageStatus` types
+
+Instructions
+- Import `Database` type from `better-sqlite3` and the actual default export for runtime use.
+- Use a module-level `let db: Database | null = null` for singleton.
+- `runMigrations` must use `db.exec()` for DDL statements (no prepared statements needed).
+- `recoverCrashedJobs` uses a prepared statement: `db.prepare("UPDATE jobs SET status='error', error=?, updatedAt=? WHERE status='running'").run(...)`.
+- The `annotations.analysis` column stores JSON text (serialized `AnnotationAnalysis`); deserialization happens in the API layer.
+- `pipeline_status` is used by the pipeline status API route to return stage badges without scanning the jobs table.
+- All datetime values are stored as ISO 8601 strings (`new Date().toISOString()`).
+- Add `import 'server-only'` at the top of the file (requires the `server-only` npm package) to enforce server-only usage.
+
+Deliverable
+- `lib/db.ts` — server-only SQLite singleton with migrations and crash recovery.
+
+Implementation assumptions (explicit)
+- better-sqlite3 is listed in `package.json` dependencies and in `next.config.ts` `serverExternalPackages`.
+- `server-only` package is installed.
+- DB file is stored at project root; no migrations version table needed (idempotent CREATE IF NOT EXISTS is sufficient).
+
+Please produce production-ready prompt content that will generate the module consistent with the above.

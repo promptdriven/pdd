@@ -1,0 +1,44 @@
+You are implementing the Stage 7 Veo Generation panel (`components/stages/Stage7VeoGeneration.tsx`) for a video production pipeline editor. This client component manages character reference images, frame chaining dependencies, clip generation, stale warnings, and auto-composite for split clips.
+
+Requirements
+1. Props: `onAdvance: () => void`.
+2. Left column: Character References panel showing one thumbnail per portrait with [↺ Regenerate] per reference. Clicking regenerate POSTs to `/api/pipeline/veo/references/run`.
+3. Left column: Frame Chaining display showing text-based chain: `clip1 → clip2 → clip3` per section.
+4. Right column: Clip list table — columns: clip ID, section, aspect ratio, status badge, stale ⚠ warning if upstream was regenerated, [↺ per-clip regenerate].
+5. Toolbar: [Generate All] / [Generate Missing] / section dropdown for [Generate Section].
+6. Auto-composite checkbox: when checked, paired `9:16` and `16:9` clips for the same section are automatically composited as split-screen.
+7. SSE progress shows per-clip events.
+8. `'use client'` directive.
+
+Dependencies
+
+<types>
+  <include>examples/types_example.ts</include>
+</types>
+
+<sse_log_panel>
+  <include>examples/sse_log_panel_example.tsx</include>
+</sse_log_panel>
+
+Prompt Dependencies:
+- types_TypeScript.prompt — provides shared types
+- sse_log_panel_TypeScriptReact.prompt — provides `SseLogPanel`
+
+Instructions
+- Load clips: `GET /api/pipeline/veo/clips` on mount.
+- Stale indicator: `clip.stale === true` → show `⚠` in amber next to clip ID.
+- Frame chain display: compute chain from `clip.frameChainDeps` — render as `{deps.join(' → ')} → {clipId}`.
+- Thumbnail for reference images: `<img src={`/api/video/outputs/veo/references/${refId}.png`} className="w-16 h-16 object-cover rounded" />`.
+- Per-clip regenerate: `POST /api/pipeline/veo/run` with `{ clips: [clipId] }`.
+- Section filter dropdown: extract unique section IDs from clips list.
+- Generate section: `POST /api/pipeline/veo/run` with `{ clips: clipsForSection.map(c => c.id) }`.
+- Status badge: done=green ●, generating=amber ◌ (pulse), missing=gray ○, error=red ✕.
+
+Deliverable
+- `components/stages/Stage7VeoGeneration.tsx` — Veo clip generation panel with frame chaining and reference management.
+
+Implementation assumptions (explicit)
+- Reference portrait thumbnails are served via the video API route.
+- Stale detection is server-side; the client just renders the `stale` flag from the API.
+
+Please produce production-ready prompt content that will generate the module consistent with the above.

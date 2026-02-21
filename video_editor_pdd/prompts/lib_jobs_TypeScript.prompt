@@ -1,0 +1,53 @@
+You are implementing the job manager and pipeline orchestration module (`lib/jobs.ts`) for a video production pipeline editor. This is the critical server-only module that manages job lifecycle in SQLite, orchestrates pipeline stage execution with prerequisite auto-running, and implements the DAG-based dependency graph for the 10-stage pipeline.
+
+Requirements
+1. Export `createJob(stage: PipelineStage, params: Record<string, unknown>): string` — inserts a new job record into the `jobs` table with `status: 'pending'`, returns the generated `jobId` (UUID v4).
+2. Export `runJob(jobId: string, executor: (onLog: (msg: string) => void) => Promise<void>): Promise<void>` — marks job as `running` (updates DB), calls `executor(onLog)`, on success marks `done`, on error marks `error` with error message. Also updates `pipeline_status` table for the job's stage.
+3. Export `getJob(jobId: string): Job | undefined` — reads job from DB, returns undefined if not found. Deserializes `params` from JSON text.
+4. Export `retryJob(jobId: string): Promise<void>` — resets job status to `pending`, then runs the same executor again. The executor is re-created from the job's stored `params`.
+5. Export `runPipelineStage(stage: PipelineStage, params: Record<string, unknown>, send: SseSend): Promise<string>` — checks the prerequisite DAG, auto-runs incomplete upstream stages concurrently before running the requested stage, returns `jobId`.
+6. Define the pipeline DAG as a constant: audio track (`tts-script` → `tts-render` → `audio-sync`) and visual track (`specs` → `veo`) run in parallel after `script`, then `compositions`, then `render`, then `audit`.
+7. The `onLog` callback passed to executors should both write log lines to DB (append to a `logs` TEXT column as newline-delimited) and emit SSE events via the `send` function.
+8. Progress updates: `runJob` emits `send({ type: 'progress', percent, jobId })` on each progress callback from the executor.
+9. Add `import 'server-only'` guard.
+10. Use `crypto.randomUUID()` for job ID generation.
+
+Dependencies
+
+<types>
+  <include>examples/types_example.ts</include>
+</types>
+
+<lib_db>
+  <include>examples/lib_db_example.ts</include>
+</lib_db>
+
+<lib_sse>
+  <include>examples/lib_sse_example.ts</include>
+</lib_sse>
+
+Prompt Dependencies:
+- types_TypeScript.prompt — provides `PipelineStage`, `Job`, `JobStatus`, `SseSend`
+- lib_db_TypeScript.prompt — provides `getDb()`
+- lib_sse_TypeScript.prompt — provides `SseSend` type
+
+Instructions
+- The `jobs` table `logs` column is not in the initial schema — add it as `logs TEXT DEFAULT ''` in `runMigrations` (or handle missing column gracefully with a try/catch on insert).
+- DAG definition example: `const DAG: Record<PipelineStage, PipelineStage[]> = { 'tts-script': ['script'], 'tts-render': ['tts-script'], ... }`.
+- `runPipelineStage` should check `pipeline_status` for each prerequisite stage; if any is not `done`, create and run it concurrently using `Promise.all`.
+- The `retryJob` function must look up the stored `params` from DB and recreate the executor. This requires a registry of executor factories — define `type ExecutorFactory = (params: Record<string, unknown>, send: SseSend) => (onLog: (msg: string) => void) => Promise<void>` and export `registerExecutor(stage: PipelineStage, factory: ExecutorFactory): void`.
+- Each API route calls `registerExecutor` at module load time to register its stage executor.
+- `runJob` must emit `send({ type: 'log', message: msg, jobId })` for each log line via the `onLog` callback.
+- Update `pipeline_status` atomically with the job status change: `db.prepare('INSERT OR REPLACE INTO pipeline_status ...').run(...)`.
+- Use `Date.now()` for timestamps, convert to ISO string.
+
+Deliverable
+- `lib/jobs.ts` — server-only job lifecycle manager with DAG-based orchestration and retry support.
+
+Implementation assumptions (explicit)
+- `crypto.randomUUID()` is available in Node.js 18+.
+- The `send` parameter in `runPipelineStage` is the SSE send function from the calling API route.
+- Prerequisite stages use the same `send` function for streaming — callers see all upstream and downstream log output.
+- Concurrent prerequisite runs use `Promise.all` (not sequential) for audio+visual track parallelism.
+
+Please produce production-ready prompt content that will generate the module consistent with the above.

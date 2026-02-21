@@ -1,0 +1,45 @@
+You are implementing the annotation panel React component (`components/AnnotationPanel.tsx`) for a video production pipeline editor. This client component displays review annotation cards with analysis severity, fix type badges, batch resolve controls, and per-annotation retry.
+
+Requirements
+1. Props: `annotations: Annotation[]`, `sectionId: string`, `onBatchResolve: (jobId: string) => void`.
+2. Renders a scrollable list of annotation cards sorted by timestamp ascending.
+3. Each card shows: timestamp (formatted as `MM:SS.ms`), thumbnail of `compositeDataUrl` (80×45px), annotation text (truncated to 2 lines), severity badge, fix type badge, analysis summary (1 line).
+4. Cards expand on click to show full `technicalAssessment`, `suggestedFixes` list, and [Retry] / [Mark Resolved] actions.
+5. `[Apply N Fixes]` button at top — N = count of unresolved annotations with non-null analysis. POSTs to `/api/sections/${sectionId}/resolve-batch`. Shows `SseLogPanel` for the returned `jobId`.
+6. Resolving annotations (with `resolveJobId` set): show inline progress spinner with job status from SSE.
+7. Resolved annotations: show green `✓ Resolved` badge. Collapsed by default.
+8. Failed annotations: show [Retry] button that POSTs to `/api/jobs/${annotation.resolveJobId}/retry`.
+9. `'use client'` directive.
+10. Severity badge colors: critical=red, major=orange, minor=yellow, pass=green.
+
+Dependencies
+
+<types>
+  <include>examples/types_example.ts</include>
+</types>
+
+<sse_log_panel>
+  <include>examples/sse_log_panel_example.tsx</include>
+</sse_log_panel>
+
+Prompt Dependencies:
+- types_TypeScript.prompt — provides `Annotation`, `AnnotationAnalysis`, `FixType`
+- sse_log_panel_TypeScriptReact.prompt — provides `SseLogPanel`
+
+Instructions
+- Timestamp format helper: `const formatTs = (s: number) => { const m = Math.floor(s/60); const sec = (s%60).toFixed(1); return `${m}:${sec.padStart(4,'0')}`; }`.
+- Badge color map: `{ critical: 'bg-red-500', major: 'bg-orange-500', minor: 'bg-yellow-500', pass: 'bg-green-500' }`.
+- Fix type labels: `{ remotion: 'Remotion Fix', veo: 'Veo Regen', tts: 'TTS Re-render', none: 'No Fix' }`.
+- `[Apply N Fixes]` is disabled when N=0 or when a batch job is in progress.
+- After batch resolve POST, call `onBatchResolve(data.jobId)` and show `<SseLogPanel jobId={batchJobId} onDone={refetchAnnotations} />`.
+- Use `useState` for expanded card state: `Record<string, boolean>`.
+- Thumbnail: `<img src={annotation.compositeDataUrl} className="w-20 h-11 object-cover rounded flex-shrink-0" />`.
+
+Deliverable
+- `components/AnnotationPanel.tsx` — annotation list panel with batch resolve and SSE progress.
+
+Implementation assumptions (explicit)
+- Parent component refreshes `annotations` prop after batch resolve completes (via `onBatchResolve` callback).
+- `compositeDataUrl` is always a valid base64 data URL if set.
+
+Please produce production-ready prompt content that will generate the module consistent with the above.

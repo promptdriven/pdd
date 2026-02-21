@@ -1,0 +1,47 @@
+You are implementing the Claude Code CLI integration module (`lib/claude.ts`) for a video production pipeline editor. This server-only module spawns `claude` CLI subprocesses for both read-only analysis and read-write fix operations, parses JSON output with robust fallback strategies, and enforces a hard timeout.
+
+Requirements
+1. Export `runClaudeAnalysis(prompt: string, onLog?: (line: string) => void): Promise<AnnotationAnalysis>` — spawns `claude -p --model claude-opus-4-6 --output-format json --allowedTools Read,Glob --no-session-persistence` with the prompt piped to stdin. Returns parsed `AnnotationAnalysis` JSON.
+2. Export `runClaudeFix(prompt: string, scopeDir: string, onLog?: (line: string) => void): Promise<ClaudeFixResult>` — spawns `claude -p --model claude-opus-4-6 --output-format json --allowedTools Read,Write,Edit,Glob,Grep --no-session-persistence` with `cwd` set to `scopeDir`. Returns parsed `ClaudeFixResult`.
+3. Both functions stream stderr lines to the `onLog` callback (if provided) in real time.
+4. JSON parsing uses three fallback strategies in order: (a) direct `JSON.parse(stdout)`, (b) extract JSON from a code fence `` ```json ... ``` ``, (c) brace-matching to find the first `{...}` in stdout.
+5. Hard timeout: 300 seconds. If the process does not exit within 300s, kill it and reject with `Error('Claude CLI timeout after 300s')`.
+6. If the process exits with non-zero code and no parseable JSON, reject with `Error(`Claude CLI failed: ${stderr}`)`.
+7. Add `import 'server-only'` guard.
+8. Use `child_process.spawn` (not `exec`) to support streaming stderr and large outputs.
+9. The prompt is passed as the `-p` argument value (not stdin) — use the CLI's `-p <prompt>` positional argument.
+
+Dependencies
+
+<types>
+  <include>examples/types_example.ts</include>
+</types>
+
+<claude_code_cli_flags_model_output_format_json_allowedtools_no_session_persistence>
+  <web>https://docs.anthropic.com/en/docs/claude-code/cli-usage</web>
+</claude_code_cli_flags_model_output_format_json_allowedtools_no_session_persistence>
+
+Prompt Dependencies:
+- types_TypeScript.prompt — provides `AnnotationAnalysis`, `ClaudeFixResult`, `FixType`
+
+Instructions
+- Use `child_process.spawn('claude', ['-p', prompt, '--model', 'claude-opus-4-6', '--output-format', 'json', '--allowedTools', 'Read,Glob', '--no-session-persistence'])`.
+- For `runClaudeFix`, add `--allowedTools Read,Write,Edit,Glob,Grep` and set `options.cwd = scopeDir`.
+- Collect stdout chunks into a buffer; call `onLog` for each stderr line as it arrives.
+- The `setTimeout` for the 300s timeout should call `proc.kill('SIGTERM')` and then reject the promise.
+- Clear the timeout in the process `close` event handler to avoid leaks.
+- JSON code fence regex: `/```json\s*([\s\S]*?)```/` — extract group 1.
+- Brace matching: find the index of the first `{` and last `}` in stdout, then parse the substring.
+- `ClaudeFixResult` shape expected from Claude: `{ fixType, filesModified, changeDescription, confidence }`.
+- `AnnotationAnalysis` shape expected from Claude: `{ severity, fixType, technicalAssessment, suggestedFixes, confidence }`.
+- Log a warning (via `console.warn`) when fallback parsing strategies (b) or (c) are used.
+
+Deliverable
+- `lib/claude.ts` — server-only Claude CLI integration with subprocess management and robust JSON parsing.
+
+Implementation assumptions (explicit)
+- `claude` CLI is installed and on PATH in the deployment environment.
+- The `--no-session-persistence` flag prevents Claude from writing session files during batch invocations.
+- `onLog` is called for progress tracking in the SSE log panel but is optional.
+
+Please produce production-ready prompt content that will generate the module consistent with the above.

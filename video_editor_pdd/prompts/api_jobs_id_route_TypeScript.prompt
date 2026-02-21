@@ -1,0 +1,37 @@
+You are implementing `app/api/jobs/[id]/route.ts`, the GET job polling API route for the video production pipeline editor. This route provides a REST fallback for clients that cannot use SSE.
+
+Requirements
+1. `GET /api/jobs/[id]` — returns the current `Job` record from DB for polling fallback.
+   - Returns the full `Job` shape including `status`, `progress`, `error`, `createdAt`, `updatedAt`.
+   - Returns 404 with `{ error: 'Job not found' }` if the ID does not exist.
+2. No authentication required.
+3. Export `export const dynamic = 'force-dynamic'`.
+
+Dependencies
+
+<types>
+  <include>examples/types_example.ts</include>
+</types>
+
+<lib_jobs>
+  <include>examples/lib_jobs_example.ts</include>
+</lib_jobs>
+
+Prompt Dependencies:
+- types_TypeScript.prompt — provides `Job`
+- lib_jobs_TypeScript.prompt — provides `getJob`
+
+Instructions
+- Use Next.js App Router dynamic route: `export async function GET(request: Request, { params }: { params: { id: string } })`.
+- Call `getJob(params.id)`. If undefined, return 404.
+- Return `NextResponse.json(job)` on success.
+- This is the polling fallback used by `SseLogPanel` when `EventSource` fails.
+
+Deliverable
+- `app/api/jobs/[id]/route.ts` — GET handler for job state polling.
+
+Implementation assumptions (explicit)
+- This route file is in `app/api/jobs/[id]/route.ts` — a separate file from `app/api/jobs/[id]/stream/route.ts` which is in a subdirectory.
+- Both route files share the same dynamic segment `[id]` but serve different endpoints.
+
+Please produce production-ready TypeScript code consistent with the above.

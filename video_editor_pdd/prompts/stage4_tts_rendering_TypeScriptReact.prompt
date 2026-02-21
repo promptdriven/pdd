@@ -1,0 +1,47 @@
+You are implementing the Stage 4 TTS Rendering panel (`components/stages/Stage4TtsRendering.tsx`) for a video production pipeline editor. This client component displays TTS audio segments with per-row waveform playback, batch render controls, and per-segment re-render.
+
+Requirements
+1. Props: `onAdvance: () => void`.
+2. Toolbar: [Render All] and [Render Missing] buttons. Both trigger `POST /api/pipeline/tts-render/run` (with and without `segments` filter). Show batch progress bar.
+3. Segment table columns: #, segment ID, status badge (done/missing/error), [▶] play button, [↺] re-render.
+4. Row expansion on click: shows WaveSurfer.js waveform for the segment WAV file and raw TTS text. Waveform initialized on expand only.
+5. Batch progress bar: shows current segment ID being rendered and overall percent.
+6. Per-row [↺] re-render: triggers `POST /api/pipeline/tts-render/run` with `{ segments: [segmentId] }`. Shows inline `SseLogPanel`.
+7. Load segments: `GET /api/pipeline/tts-render/segments` on mount and after each render.
+8. `'use client'` directive.
+
+Dependencies
+
+<types>
+  <include>examples/types_example.ts</include>
+</types>
+
+<sse_log_panel>
+  <include>examples/sse_log_panel_example.tsx</include>
+</sse_log_panel>
+
+<wavesurfer_js_api_for_inline_waveform_rendering_and_audio_playback>
+  <web>https://wavesurfer.xyz/docs/</web>
+</wavesurfer_js_api_for_inline_waveform_rendering_and_audio_playback>
+
+Prompt Dependencies:
+- types_TypeScript.prompt — provides shared types
+- sse_log_panel_TypeScriptReact.prompt — provides `SseLogPanel`
+
+Instructions
+- WaveSurfer initialization on row expand: `const ws = WaveSurfer.create({ container: waveformRef.current, url: `/api/audio/${segmentId}.wav`, height: 64, waveColor: '#4ade80', progressColor: '#166534' })`.
+- Store WaveSurfer instances in a `useRef<Map<string, WaveSurfer>>` to avoid re-initialization.
+- [▶] play: `wavesurfer.playPause()`.
+- Audio URL: serve WAV files from `outputs/tts/{segmentId}.wav` — needs an audio serving route (similar to video route) or use a static file server.
+- SSE events from render: `{ type: 'segment', segmentId, status }` updates row status in real time.
+- Batch progress: track `currentSegment` and `completedCount` from SSE events.
+- [Advance →] button enabled when all segments have `status: 'done'`.
+
+Deliverable
+- `components/stages/Stage4TtsRendering.tsx` — TTS segment rendering panel with WaveSurfer waveforms.
+
+Implementation assumptions (explicit)
+- `wavesurfer.js` npm package is installed.
+- WAV files are served via a separate audio API route (analogous to the video route).
+
+Please produce production-ready prompt content that will generate the module consistent with the above.

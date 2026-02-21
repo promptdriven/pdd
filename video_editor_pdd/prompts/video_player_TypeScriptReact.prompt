@@ -1,0 +1,51 @@
+You are implementing the video player React component (`components/VideoPlayer.tsx`) for a video production pipeline editor. This client component implements the core review UX: spacebar annotation workflow with a drawing canvas overlay, Web Speech API transcription, and annotation marker display on the progress bar.
+
+Requirements
+1. Props: `src: string`, `annotations: Annotation[]`, `onAnnotationCapture: (data: AnnotationCaptureData) => void`.
+2. `<video>` element with `src` prop. Keyboard shortcut K = play/pause.
+3. Space bar: first press pauses video and enters recording mode. Second press: captures frame + drawing, emits `onAnnotationCapture`, exits recording mode.
+4. Drawing tools (active only in recording mode): D=freehand, R=rectangle, C=circle, A=arrow, T=text. Keyboard shortcuts select tool.
+5. Canvas overlay (1920×1080 logical, CSS-scaled to fit container): `<canvas>` positioned absolutely over the video.
+6. Web Speech API: start `SpeechRecognition` on first space press; accumulate `transcript` as interim+final results; stop on second space press.
+7. On capture: use `OffscreenCanvas` to composite the video frame + drawing canvas into a single data URL (`compositeDataUrl`). Also capture drawing-only `drawingDataUrl` from the canvas.
+8. Progress bar: render annotation timestamps as small dot markers. Clicking a marker seeks video to that timestamp.
+9. Ctrl+Z: undo last drawing stroke.
+10. Arrow keys: seek ±5 seconds.
+11. F: toggle fullscreen.
+12. `'use client'` directive.
+
+Dependencies
+
+<types>
+  <include>examples/types_example.ts</include>
+</types>
+
+<web_speech_api_speechrecognition_for_voice_annotation_capture>
+  <web>https://developer.mozilla.org/en-US/docs/Web/API/Web_Speech_API/Using_the_Web_Speech_API</web>
+</web_speech_api_speechrecognition_for_voice_annotation_capture>
+
+<offscreencanvas_for_frame_drawing_composite_image_creation>
+  <web>https://developer.mozilla.org/en-US/docs/Web/API/OffscreenCanvas</web>
+</offscreencanvas_for_frame_drawing_composite_image_creation>
+
+Prompt Dependencies:
+- types_TypeScript.prompt — provides `Annotation`, `AnnotationCaptureData`
+
+Instructions
+- Use `useRef<HTMLVideoElement>` and `useRef<HTMLCanvasElement>` for DOM refs.
+- Drawing stroke storage: `useState<Stroke[]>` where `Stroke = { tool: DrawTool; points: [number, number][] }`.
+- Canvas redraws on each stroke via `useEffect`.
+- Web Speech: `const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)()`. Set `recognition.continuous = true; recognition.interimResults = true`.
+- Frame capture: `const offscreen = new OffscreenCanvas(1920, 1080); const ctx = offscreen.getContext('2d'); ctx.drawImage(videoEl, 0, 0, 1920, 1080); ctx.drawImage(canvasEl, 0, 0)`. Then `offscreen.convertToBlob()` → `URL.createObjectURL` or `toDataURL`.
+- Progress bar: `<div className="relative h-2 bg-gray-700 cursor-pointer">` with annotation dots as `<div style={{ left: `${(a.timestamp / duration) * 100}%` }} className="absolute w-1.5 h-1.5 rounded-full bg-yellow-400 top-0">`.
+- Canvas scaling: CSS `width: 100%; height: 100%; object-fit: contain` on both video and canvas; use `getBoundingClientRect` to map mouse coordinates to canvas logical coordinates.
+
+Deliverable
+- `components/VideoPlayer.tsx` — full-featured review video player with drawing canvas and annotation workflow.
+
+Implementation assumptions (explicit)
+- `OffscreenCanvas` is supported in target browser (Chrome 69+, Firefox 105+).
+- Web Speech API requires HTTPS or localhost.
+- `window.SpeechRecognition` has a webkit prefix fallback for compatibility.
+
+Please produce production-ready prompt content that will generate the module consistent with the above.

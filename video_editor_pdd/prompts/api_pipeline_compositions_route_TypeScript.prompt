@@ -1,0 +1,55 @@
+You are implementing the composition generation API routes (`app/api/pipeline/compositions/run/route.ts` and supporting routes) for a video production pipeline editor. These endpoints trigger Claude Code to write Remotion components from specs and manage asset staging.
+
+Requirements
+1. `POST /api/pipeline/compositions/run` — accepts `{ components?: string[], wrappers?: string[] }`. Invokes Claude Code with Read+Write+Edit+Glob tools scoped to `remotion/src/remotion/` for each component. Returns SSE stream with `{ jobId }`.
+2. `POST /api/pipeline/asset-staging/run` — accepts `{ files?: string[] }`. Copies files from `outputs/veo/` to `remotion/public/` per staging manifest. Returns `{ jobId }`.
+3. `GET /api/pipeline/compositions/list` — returns `{ sections: CompositionSection[] }` where `CompositionSection = { sectionId: string; components: CompositionEntry[]; wrappers: CompositionEntry[] }` and `CompositionEntry = { name: string; status: 'exists' | 'missing' | 'error'; lastError?: string }`.
+4. No authentication required.
+
+Dependencies
+
+<types>
+  <include>examples/types_example.ts</include>
+</types>
+
+<lib_jobs>
+  <include>examples/lib_jobs_example.ts</include>
+</lib_jobs>
+
+<lib_claude>
+  <include>examples/lib_claude_example.ts</include>
+</lib_claude>
+
+<lib_project>
+  <include>examples/lib_project_example.ts</include>
+</lib_project>
+
+<remotion_composition_registration_and_props_schema_with_zod>
+  <web>https://www.remotion.dev/docs/composition</web>
+</remotion_composition_registration_and_props_schema_with_zod>
+
+Prompt Dependencies:
+- types_TypeScript.prompt — provides shared types
+- lib_jobs_TypeScript.prompt — provides `runPipelineStage`, `registerExecutor`
+- lib_claude_TypeScript.prompt — provides `runClaudeFix`
+- lib_project_TypeScript.prompt — provides `loadProject`
+
+Instructions
+- Claude scope: `remotion/src/remotion/` for component generation. Each component is a separate Claude invocation.
+- For wrappers: run `python3 generate_section_compositions.py` subprocess.
+- Asset staging: `fs.copyFileSync(src, dest)` for each file in the staging manifest that is expected but missing in `remotion/public/`.
+- Component status detection: check if `remotion/src/remotion/{componentName}.tsx` exists.
+- Register executor: `registerExecutor('compositions', ...)`.
+- Emit per-component events: `{ type: 'component', name, status: 'generating' | 'done' | 'error' }`.
+- `CompositionEntry.lastError` is read from the last error job for that component (from DB).
+
+Deliverable
+- `app/api/pipeline/compositions/run/route.ts` — POST endpoint for composition generation.
+- `app/api/pipeline/asset-staging/run/route.ts` — POST endpoint for asset staging.
+- `app/api/pipeline/compositions/list/route.ts` — GET endpoint for composition list.
+
+Implementation assumptions (explicit)
+- Each Remotion component corresponds to a spec file in `specs/`.
+- `generate_section_compositions.py` generates the section wrapper files.
+
+Please produce production-ready prompt content that will generate the module consistent with the above.

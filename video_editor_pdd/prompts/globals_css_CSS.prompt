@@ -1,0 +1,43 @@
+You are implementing the global CSS stylesheet (`app/globals.css`) for a video production pipeline editor built with Next.js 15 and Tailwind CSS v4. This file uses the Tailwind v4 CSS-first configuration approach with `@import 'tailwindcss'` and an `@theme {}` block — no `tailwind.config.js` needed.
+
+Requirements
+1. Use `@import 'tailwindcss'` at the top (Tailwind v4 CSS-first syntax).
+2. Define an `@theme {}` block with custom color tokens for the pipeline editor UI:
+   - Sidebar background: `--color-sidebar: #0f172a` (dark slate)
+   - Stage status badge colors: `--color-stage-done: #22c55e`, `--color-stage-running: #f59e0b`, `--color-stage-error: #ef4444`, `--color-stage-not-started: #64748b`
+   - Annotation severity: `--color-severity-critical: #ef4444`, `--color-severity-major: #f97316`, `--color-severity-minor: #eab308`, `--color-severity-pass: #22c55e`
+   - Panel background: `--color-panel: #1e293b`
+   - Border: `--color-border: #334155`
+3. Define `@layer base` with dark body defaults: `body { background-color: theme(--color-panel); color: #e2e8f0; font-family: ui-monospace, 'Cascadia Code', monospace; }`.
+4. Define `@layer base` styles for scrollbars (webkit): thin scrollbars with panel background track and border-color thumb.
+5. Define utility classes for the SSE log panel: monospace font, small text, no wrapping.
+6. No `tailwind.config.js` — all configuration is in this CSS file via `@theme {}`.
+
+Dependencies
+
+<tailwind_v4_css_first_config_import_theme_no_tailwind_config_js>
+  <web>https://tailwindcss.com/docs/v4-beta</web>
+</tailwind_v4_css_first_config_import_theme_no_tailwind_config_js>
+
+<tailwind_theme_token_definitions_for_custom_colors_and_spacing>
+  <web>https://tailwindcss.com/docs/theme</web>
+</tailwind_theme_token_definitions_for_custom_colors_and_spacing>
+
+Instructions
+- Tailwind v4 `@theme {}` replaces `tailwind.config.js` theme extensions. Custom CSS properties defined inside `@theme {}` become Tailwind utility classes automatically (e.g., `--color-sidebar` → `bg-sidebar`, `text-sidebar`).
+- The `@import 'tailwindcss'` directive must be the first non-comment line.
+- Use CSS custom property naming convention `--color-*` for colors, `--spacing-*` for spacing.
+- `@layer base` resets apply to the entire document; keep them minimal.
+- The editor uses a dark theme throughout — all background tokens should be dark slate shades.
+- Status badge pulse animation: define `@keyframes pulse-badge { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }` and a `.animate-stage-running` utility class.
+- Scrollbar styles use `::-webkit-scrollbar`, `::-webkit-scrollbar-track`, `::-webkit-scrollbar-thumb` pseudo-elements.
+
+Deliverable
+- `app/globals.css` — Tailwind v4 CSS-first global stylesheet with custom design tokens.
+
+Implementation assumptions (explicit)
+- Tailwind CSS v4 (beta or stable) is installed.
+- The `@tailwindcss/vite` or `@tailwindcss/postcss` plugin is configured in the build toolchain.
+- All components use Tailwind utility classes; no CSS modules are used in this project.
+
+Please produce production-ready prompt content that will generate the module consistent with the above.

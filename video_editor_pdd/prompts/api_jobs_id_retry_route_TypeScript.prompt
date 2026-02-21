@@ -1,0 +1,41 @@
+You are implementing `app/api/jobs/[id]/retry/route.ts`, the POST job retry API route for the video production pipeline editor.
+
+Requirements
+1. `POST /api/jobs/[id]/retry` — retries a failed job:
+   - Calls `retryJob(jobId)` from `lib/jobs.ts`.
+   - Returns `{ jobId: string }` on success.
+   - Returns 404 with `{ error: 'Job not found' }` if job does not exist.
+   - Returns 400 with `{ error: 'Job is not in error state' }` if job status is not `'error'`.
+2. No authentication required.
+3. Export `export const dynamic = 'force-dynamic'`.
+
+Dependencies
+
+<types>
+  <include>examples/types_example.ts</include>
+</types>
+
+<lib_jobs>
+  <include>examples/lib_jobs_example.ts</include>
+</lib_jobs>
+
+Prompt Dependencies:
+- types_TypeScript.prompt — provides `Job`, `JobStatus`
+- lib_jobs_TypeScript.prompt — provides `getJob`, `retryJob`
+
+Instructions
+- Use Next.js App Router dynamic route: `export async function POST(request: Request, { params }: { params: { id: string } })`.
+- First call `getJob(params.id)` to validate existence and status before retrying.
+- If job not found: return 404.
+- If job status is not `'error'`: return 400.
+- Call `retryJob(params.id)`. Return `{ jobId: params.id }`.
+- Return 500 with error message if `retryJob` throws.
+
+Deliverable
+- `app/api/jobs/[id]/retry/route.ts` — POST handler for retrying failed jobs.
+
+Implementation assumptions (explicit)
+- `retryJob` is an async function in `lib/jobs.ts` that resets status and re-executes the same pipeline stage.
+- The retry is non-blocking by default; the client subscribes to the SSE stream at `/api/jobs/{id}/stream` for progress.
+
+Please produce production-ready TypeScript code consistent with the above.

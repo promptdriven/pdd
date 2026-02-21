@@ -1,0 +1,52 @@
+You are implementing the spec generation API routes (`app/api/pipeline/specs/run/route.ts` and supporting routes) for a video production pipeline editor. These endpoints trigger Claude Code to generate visual spec markdown files per section.
+
+Requirements
+1. `POST /api/pipeline/specs/run` — accepts `{ sections?: string[], files?: string[] }`. If sections omitted, generates all sections. Calls `runClaudeFix` with a spec generation prompt scoped to `specs/`. Returns SSE stream with `{ jobId }`.
+2. `GET /api/pipeline/specs/list` — returns `{ sections: SpecSection[] }` where `SpecSection = { sectionId: string; files: SpecFile[] }` and `SpecFile = { path: string; visualType: 'remotion' | 'veo' | 'title' | 'split' | 'unknown'; status: 'exists' | 'missing' }`.
+3. `GET /api/pipeline/specs/file?path=<relpath>` — reads and returns spec file content: `{ content: string }`. Returns 404 if not found.
+4. `PUT /api/pipeline/specs/file` — accepts `{ path: string, content: string }`. Saves spec file with atomic write. Returns `{ ok: true }`.
+5. No authentication required.
+6. Visual type detection: parse the spec file first line for `[Remotion]`, `[veo:]`, `[title:]`, `[split:]` prefixes.
+
+Dependencies
+
+<types>
+  <include>examples/types_example.ts</include>
+</types>
+
+<lib_jobs>
+  <include>examples/lib_jobs_example.ts</include>
+</lib_jobs>
+
+<lib_claude>
+  <include>examples/lib_claude_example.ts</include>
+</lib_claude>
+
+<lib_project>
+  <include>examples/lib_project_example.ts</include>
+</lib_project>
+
+Prompt Dependencies:
+- types_TypeScript.prompt — provides `PipelineStage`
+- lib_jobs_TypeScript.prompt — provides `runPipelineStage`, `registerExecutor`
+- lib_claude_TypeScript.prompt — provides `runClaudeFix`
+- lib_project_TypeScript.prompt — provides `loadProject`
+
+Instructions
+- Scope Claude to `specs/` directory: `runClaudeFix(SPEC_PROMPT, path.join(process.cwd(), 'specs'), onLog)`.
+- `GET /api/pipeline/specs/list`: scan `specs/` directory recursively per section subdirectory. Group by section ID.
+- Visual type detection: read first 200 bytes of each spec file and check for type prefix patterns.
+- Path validation for `GET /api/pipeline/specs/file`: ensure path is within `specs/` (prevent path traversal).
+- These endpoints span multiple route files: `run/route.ts`, `list/route.ts`, `file/route.ts`.
+- Register executor: `registerExecutor('specs', ...)`.
+
+Deliverable
+- `app/api/pipeline/specs/run/route.ts` — POST endpoint for spec generation.
+- `app/api/pipeline/specs/list/route.ts` — GET endpoint listing spec files by section.
+- `app/api/pipeline/specs/file/route.ts` — GET/PUT endpoints for spec file content.
+
+Implementation assumptions (explicit)
+- Spec files live in `specs/{sectionId}/*.md`.
+- `loadProject()` provides the section list for determining which sections to generate.
+
+Please produce production-ready prompt content that will generate the module consistent with the above.

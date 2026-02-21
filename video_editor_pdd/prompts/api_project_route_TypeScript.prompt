@@ -1,0 +1,41 @@
+You are implementing the project configuration API route (`app/api/project/route.ts`) for a video production pipeline editor. This Next.js 15 App Router Route Handler provides GET and PUT endpoints for reading and updating `project.json`.
+
+Requirements
+1. `GET /api/project` — reads `project.json` via `loadProject()`, returns the full `ProjectConfig` as JSON with status 200.
+2. `PUT /api/project` — accepts a request body of `Partial<ProjectConfig>`. Merges with the existing config (load → merge → validate → save). Returns the updated `ProjectConfig` with status 200.
+3. Returns HTTP 400 with `{ error: 'Validation failed', issues: ZodIssue[] }` if Zod validation fails.
+4. Returns HTTP 500 with `{ error: string }` on file system errors.
+5. Returns HTTP 405 with `{ error: 'Method not allowed' }` for unsupported methods.
+6. No authentication required.
+7. Use `NextResponse.json()` for all responses.
+
+Dependencies
+
+<types>
+  <include>examples/types_example.ts</include>
+</types>
+
+<lib_project>
+  <include>examples/lib_project_example.ts</include>
+</lib_project>
+
+Prompt Dependencies:
+- types_TypeScript.prompt — provides `ProjectConfig`
+- lib_project_TypeScript.prompt — provides `loadProject`, `saveProject`, `validateProjectConfig`
+
+Instructions
+- Import `loadProject`, `saveProject`, `validateProjectConfig` from `@/lib/project`.
+- `PUT` handler: `const existing = loadProject(); const merged = { ...existing, ...body }; const validated = validateProjectConfig(merged); saveProject(validated); return NextResponse.json(validated)`.
+- Catch `ZodError` specifically: `import { ZodError } from 'zod'`; check `err instanceof ZodError` to return 400.
+- Use `request.json()` to parse the PUT body; wrap in try/catch for malformed JSON (return 400).
+- Both `GET` and `PUT` are exported as named exports: `export async function GET(request: Request)` and `export async function PUT(request: Request)`.
+- Add `export const dynamic = 'force-dynamic'` to prevent static optimization of this route.
+
+Deliverable
+- `app/api/project/route.ts` — Next.js App Router Route Handler for project config CRUD.
+
+Implementation assumptions (explicit)
+- `lib/project.ts` operations are synchronous (better-sqlite3 pattern, but file I/O here).
+- The route file uses `@/lib/project` path alias (configured in `tsconfig.json`).
+
+Please produce production-ready prompt content that will generate the module consistent with the above.

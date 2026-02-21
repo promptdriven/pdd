@@ -1,0 +1,43 @@
+You are implementing the Server-Sent Events (SSE) streaming utility (`lib/sse.ts`) for a video production pipeline editor built with Next.js 15 App Router. This server-only module provides a single factory function used by all pipeline API routes to create SSE streams with typed event helpers.
+
+Requirements
+1. Export `createSseStream(): { stream: ReadableStream; send(data: object): void; done(): void; error(msg: string): void }`.
+2. `stream` is a `ReadableStream` suitable for returning from a Next.js Route Handler as `new Response(stream, { headers: {...} })`.
+3. `send(data: object)` encodes and enqueues `data: ${JSON.stringify(data)}\n\n` — standard SSE data format.
+4. `done()` enqueues `event: done\ndata: {}\n\n` to signal successful completion to the client.
+5. `error(msg: string)` enqueues `event: error\ndata: ${JSON.stringify({ message: msg })}\n\n`.
+6. After `done()` or `error()` is called, the controller is closed.
+7. Use `TextEncoder` to encode strings to `Uint8Array`.
+8. The `ReadableStream` constructor accepts `{ start(controller) { ... } }` — capture the controller in the closure for use by `send`/`done`/`error`.
+9. Add `import 'server-only'` guard.
+10. Handle the case where the controller is already closed (catch `TypeError` on `enqueue` after close).
+
+Dependencies
+
+<sse_protocol_event_format_reconnection_event_types>
+  <web>https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events</web>
+</sse_protocol_event_format_reconnection_event_types>
+
+<nextjs_readablestream_pattern_for_sse_in_route_handlers>
+  <web>https://nextjs.org/docs/app/building-your-application/routing/route-handlers#streaming</web>
+</nextjs_readablestream_pattern_for_sse_in_route_handlers>
+
+Instructions
+- The `ReadableStream` `start` callback is synchronous — immediately store `controller` in a closure variable.
+- Do not `await` anything inside `start` — the controller capture must happen synchronously.
+- `send`, `done`, and `error` are synchronous functions (they call `controller.enqueue()` synchronously).
+- Callers are responsible for calling `done()` or `error()` exactly once; the utility just handles the encoding.
+- The SSE `data:` lines must use `\n\n` (two newlines) as the message terminator per the SSE spec.
+- For `event: done` and `event: error`, emit both the `event:` line and the `data:` line before the double newline.
+- The utility does not manage job state — that is handled by `lib/jobs.ts`.
+- Response headers that callers should use: `Content-Type: text/event-stream`, `Cache-Control: no-cache`, `Connection: keep-alive`.
+
+Deliverable
+- `lib/sse.ts` — server-only SSE stream factory, ~40 lines.
+
+Implementation assumptions (explicit)
+- `ReadableStream` is available globally in Node.js 18+ (no polyfill needed).
+- `TextEncoder` is available globally.
+- Callers always call `done()` or `error()` before the route handler returns.
+
+Please produce production-ready prompt content that will generate the module consistent with the above.

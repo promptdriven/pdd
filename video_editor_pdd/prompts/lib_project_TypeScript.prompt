@@ -1,0 +1,42 @@
+You are implementing the project configuration manager (`lib/project.ts`) for a video production pipeline editor. This server-only module manages `project.json` — the single source of truth for all pipeline state including section registry, TTS config, Veo config, and render settings. It must validate on read, write atomically, and support hot-reload watching.
+
+Requirements
+1. Export `loadProject(dir?: string): ProjectConfig` — reads and JSON-parses `project.json` from `dir ?? process.cwd()`. Validates with Zod schema matching `ProjectConfig`. Throws `ZodError` on invalid shape. Throws descriptive error if file not found.
+2. Export `saveProject(config: ProjectConfig, dir?: string): void` — validates config with Zod, then writes atomically: serialize to JSON string, write to `project.tmp.json`, then `fs.renameSync` to `project.json`. Prevents partial writes on crash.
+3. Export `getSection(id: string, config: ProjectConfig): Section | undefined` — utility to find section by id in `config.sections`.
+4. Export `validateProjectConfig(data: unknown): ProjectConfig` — runs Zod parse and returns typed result or throws `ZodError` with field-level details.
+5. Define a Zod schema (`projectConfigSchema`) matching the `ProjectConfig` interface exactly. Use `z.object()` with all required fields; use `.optional()` only for genuinely optional fields. Coerce numbers where appropriate.
+6. Add `import 'server-only'` guard.
+7. The Zod schema must validate nested objects: `tts`, `veo`, `render`, `audioSync`, and the `sections` array.
+8. `saveProject` must JSON-stringify with 2-space indentation for human-readable project files.
+
+Dependencies
+
+<types>
+  <include>examples/types_example.ts</include>
+</types>
+
+Prompt Dependencies:
+- types_TypeScript.prompt — provides `ProjectConfig`, `Section`, `TtsConfig`, `VeoConfig`, `RenderConfig`, `AudioSyncConfig`
+
+Instructions
+- Use `fs` from Node.js (not `fs/promises`) — synchronous reads are acceptable here as this is server-only.
+- Zod v3 syntax: `import { z } from 'zod'`.
+- The `projectConfigSchema` must be a named export so it can be imported in API routes for partial validation.
+- `loadProject` path: `path.join(dir ?? process.cwd(), 'project.json')`.
+- `saveProject` temp path: `path.join(dir ?? process.cwd(), 'project.tmp.json')`.
+- Zod error thrown by `loadProject` should include the file path in the message for debugging.
+- `validateProjectConfig` is a thin wrapper that just calls `projectConfigSchema.parse(data)`.
+- `sections` array items must validate `durationSeconds` and `offsetSeconds` as `z.number().default(0)`.
+- `veo.referenceImages` is `z.record(z.string(), z.string())` (map of character name → file path).
+
+Deliverable
+- `lib/project.ts` — server-only module with Zod validation, atomic writes, and utility functions.
+
+Implementation assumptions (explicit)
+- `zod` is a project dependency.
+- `project.json` lives at `process.cwd()` in the Next.js app root.
+- Atomic rename is safe on all target deployment OSes (Linux, macOS).
+- `watchProject` is not needed in the initial implementation (polling via API is used instead).
+
+Please produce production-ready prompt content that will generate the module consistent with the above.

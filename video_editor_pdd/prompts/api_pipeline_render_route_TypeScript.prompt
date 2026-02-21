@@ -1,0 +1,54 @@
+You are implementing the render and stitch API routes (`app/api/pipeline/render/run/route.ts` and supporting routes) for a video production pipeline editor. These endpoints trigger Remotion section rendering and ffmpeg full-video stitching with parallel render support.
+
+Requirements
+1. `POST /api/pipeline/render/run` — accepts `{ sections?: string[] }`. Renders up to `project.json render.maxParallelRenders` sections concurrently using `lib/render.ts` `renderSection()`. Returns SSE stream with `{ jobId }`.
+2. After each section renders, reads ffprobe duration via `getSectionDuration()` and updates `project.json` with `durationSeconds` and recalculated `offsetSeconds` for all sections.
+3. `POST /api/pipeline/stitch/run` — runs ffmpeg concat via `stitchFullVideo()`. Returns `{ jobId }`.
+4. `GET /api/pipeline/render/status` — returns `{ sections: SectionRenderStatus[], fullVideo: FullVideoInfo }`.
+5. `SectionRenderStatus = { sectionId: string; status: 'done' | 'missing' | 'error'; duration?: number; progress?: number }`.
+6. `FullVideoInfo = { exists: boolean; path?: string; size?: number; duration?: number }`.
+7. No authentication required.
+
+Dependencies
+
+<types>
+  <include>examples/types_example.ts</include>
+</types>
+
+<lib_jobs>
+  <include>examples/lib_jobs_example.ts</include>
+</lib_jobs>
+
+<lib_render>
+  <include>examples/lib_render_example.ts</include>
+</lib_render>
+
+<lib_project>
+  <include>examples/lib_project_example.ts</include>
+</lib_project>
+
+Prompt Dependencies:
+- types_TypeScript.prompt — provides `PipelineStage`, `RenderProgress`
+- lib_jobs_TypeScript.prompt — provides `runPipelineStage`, `registerExecutor`
+- lib_render_TypeScript.prompt — provides `renderSection`, `stitchFullVideo`, `getSectionDuration`
+- lib_project_TypeScript.prompt — provides `loadProject`, `saveProject`
+
+Instructions
+- Parallel renders: use `Promise.all(batch.map(sectionId => renderSection(...)))` where batch size is `config.render.maxParallelRenders`.
+- Section output path: `outputs/sections/{sectionId}.mp4`.
+- Full video output: `outputs/full_video.mp4`.
+- `offsetSeconds` recalculation: after all sections rendered, sort by section order, accumulate offsets as cumulative durations.
+- Emit per-section progress events: `{ type: 'section-progress', sectionId, percent }`.
+- Register executor: `registerExecutor('render', ...)`.
+- `GET /api/pipeline/render/status`: check file existence in `outputs/sections/` for status detection.
+
+Deliverable
+- `app/api/pipeline/render/run/route.ts` — POST endpoint for section rendering.
+- `app/api/pipeline/stitch/run/route.ts` — POST endpoint for full video stitching.
+- `app/api/pipeline/render/status/route.ts` — GET endpoint for render status.
+
+Implementation assumptions (explicit)
+- The Remotion bundle is pre-built; `renderSection` uses the existing bundle.
+- `outputs/sections/` and `outputs/` directories are created as needed.
+
+Please produce production-ready prompt content that will generate the module consistent with the above.

@@ -1,0 +1,46 @@
+You are implementing `scripts/sync_audio_pipeline.py`, a Python subprocess script invoked by the Next.js audio sync API route to concatenate TTS segments into per-section WAV files and generate word-level timestamps via Faster-Whisper.
+
+Requirements
+1. Reads `project.json` from `--project-dir` to get `sections` and their `sectionGroups` (mapping segment IDs to sections).
+2. For each section:
+   a. Reads segment WAV files from `--output-dir/{segmentId}.wav`.
+   b. Concatenates in order using ffmpeg (`ffmpeg -f concat -safe 0 -i filelist.txt -c copy output.wav`) or pydub.
+   c. Copies result to `--remotion-public/{sectionId}/narration.wav`.
+   d. Runs Faster-Whisper on the concatenated WAV to generate word-level timestamps.
+   e. Writes `word_timestamps.json` to `--output-dir/{sectionId}/word_timestamps.json`.
+3. Prints JSON progress lines to stdout per section:
+   ```json
+   {"sectionId": "intro", "status": "done", "wordCount": 142}
+   ```
+   or on error:
+   ```json
+   {"sectionId": "intro", "status": "error", "error": "..."}
+   ```
+4. CLI args:
+   - `--project-dir` (default: `.`)
+   - `--output-dir` (default: `outputs/tts/`)
+   - `--remotion-public` (default: `remotion/public/`)
+5. Exits with code 0 on complete success; non-zero if any section failed.
+
+Instructions
+- `word_timestamps.json` format per word:
+  ```json
+  [{"word": "Hello", "start": 0.12, "end": 0.45, "segmentId": "seg_001"}, ...]
+  ```
+- Map each word back to its originating segment by tracking cumulative audio duration.
+- If a section has no segment WAVs present, print an error for that section and continue.
+- Create output subdirectories as needed: `os.makedirs(f'{output_dir}/{section_id}', exist_ok=True)`.
+- Create remotion public subdirectories as needed: `os.makedirs(f'{remotion_public}/{section_id}', exist_ok=True)`.
+- Use `faster_whisper.WhisperModel` with `word_timestamps=True`.
+- Use `argparse` for CLI parsing.
+- Import guard: `if __name__ == '__main__': main()`.
+
+Deliverable
+- `scripts/sync_audio_pipeline.py` — standalone Python script for audio concatenation and timestamp generation.
+
+Implementation assumptions (explicit)
+- Faster-Whisper and ffmpeg/pydub are already installed in the environment.
+- `project.json` has a `sectionGroups` map: `{ "intro": ["seg_001", "seg_002"], "section2": ["seg_003"] }`.
+- Segment WAVs already exist from the TTS rendering step.
+
+Please produce production-ready Python code consistent with the above.

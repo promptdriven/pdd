@@ -1,0 +1,59 @@
+You are implementing the Veo generation API routes (`app/api/pipeline/veo/run/route.ts` and supporting routes) for a video production pipeline editor. These endpoints orchestrate character reference image creation, Veo clip generation with frame chaining, and staging manifest management.
+
+Requirements
+1. `POST /api/pipeline/veo/run` — accepts `{ clips?: string[] }`. Generates specified clips or all if omitted. Uses `lib/veo.ts` for Imagen and Veo API calls. Returns SSE stream with `{ jobId }`.
+2. Frame chaining: for clips in order, extract the last frame of clip N before generating clip N+1, pass it as `referenceImagePath` to `generateVeoClip`.
+3. `GET /api/pipeline/veo/clips` — returns `{ clips: VeoClip[] }` where `VeoClip = { id: string; sectionId: string; aspectRatio: '16:9' | '9:16'; status: 'done' | 'missing' | 'error'; stale: boolean; frameChainDeps: string[] }`.
+4. `POST /api/pipeline/veo/references/run` — accepts `{ referenceId: string }`. Regenerates a character reference portrait image. Returns `{ jobId }`.
+5. `GET /api/pipeline/veo/staging-manifest` — returns `{ files: AssetStagingEntry[] }` comparing expected vs present files in `remotion/public/`.
+6. No authentication required.
+
+Dependencies
+
+<types>
+  <include>examples/types_example.ts</include>
+</types>
+
+<lib_jobs>
+  <include>examples/lib_jobs_example.ts</include>
+</lib_jobs>
+
+<lib_veo>
+  <include>examples/lib_veo_example.ts</include>
+</lib_veo>
+
+<lib_project>
+  <include>examples/lib_project_example.ts</include>
+</lib_project>
+
+<veo_generatevideos_api_with_image_reference_and_frame_chaining>
+  <web>https://ai.google.dev/api/generate-content#v1beta.models.generateVideos</web>
+</veo_generatevideos_api_with_image_reference_and_frame_chaining>
+
+Prompt Dependencies:
+- types_TypeScript.prompt — provides shared types
+- lib_jobs_TypeScript.prompt — provides `runPipelineStage`, `registerExecutor`
+- lib_veo_TypeScript.prompt — provides `generateReferenceImage`, `generateVeoClip`, `extractLastFrame`
+- lib_project_TypeScript.prompt — provides `loadProject`
+
+Instructions
+- Clip output path: `outputs/veo/{clipId}.mp4`.
+- Frame chain path: `outputs/veo/{clipId}_last_frame.png`.
+- Stale detection: a clip is stale if any of its `frameChainDeps` have a newer mtime than the clip itself.
+- `AssetStagingEntry = { file: string; expected: boolean; present: boolean }`.
+- Expected files come from `loadProject().sections` mapped to Veo clip filenames.
+- Reference portrait output: `outputs/veo/references/{referenceId}.png`.
+- Register executor: `registerExecutor('veo', ...)`.
+- Emit per-clip SSE events: `{ type: 'clip', clipId, status: 'generating' | 'done' | 'error' }`.
+
+Deliverable
+- `app/api/pipeline/veo/run/route.ts` — POST endpoint for Veo clip generation.
+- `app/api/pipeline/veo/clips/route.ts` — GET endpoint for clip list.
+- `app/api/pipeline/veo/references/run/route.ts` — POST endpoint for reference image regeneration.
+- `app/api/pipeline/veo/staging-manifest/route.ts` — GET endpoint for staging manifest.
+
+Implementation assumptions (explicit)
+- `veo.referenceImages` in `project.json` maps character names to file paths.
+- Clips are processed sequentially for frame chaining correctness, not in parallel.
+
+Please produce production-ready prompt content that will generate the module consistent with the above.

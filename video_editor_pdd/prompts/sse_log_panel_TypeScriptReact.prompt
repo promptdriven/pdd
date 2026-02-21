@@ -1,0 +1,43 @@
+You are implementing the SSE log panel React component (`components/SseLogPanel.tsx`) for a video production pipeline editor. This client component streams real-time job output from EventSource, displays a scrollable auto-tailing log, and shows completion/error banners.
+
+Requirements
+1. Props: `jobId: string | null`, `onDone?: () => void`, `onError?: (msg: string) => void`, `className?: string`.
+2. When `jobId` is null, render nothing (return null).
+3. When `jobId` is set, open an `EventSource` at `/api/jobs/${jobId}/stream`.
+4. Append incoming `data` events as `[HH:MM:SS] message` lines to a log buffer (state array).
+5. On `event: done`, show a green success banner `✓ Completed` and call `onDone()`.
+6. On `event: error`, show a red error banner `✕ Error: {message}` and call `onError(message)`.
+7. Auto-scroll to bottom on each new log line (use `useEffect` with scroll ref).
+8. Fall back to polling `GET /api/jobs/${jobId}` every 2s if EventSource fails or is not supported.
+9. Virtualize the log list using CSS `contain: strict; overflow-y: auto` for large log volumes (no external lib required).
+10. Close EventSource on component unmount or when `jobId` changes.
+11. `'use client'` directive at the top.
+
+Dependencies
+
+<types>
+  <include>examples/types_example.ts</include>
+</types>
+
+Prompt Dependencies:
+- types_TypeScript.prompt — provides `Job` type for polling fallback
+
+Instructions
+- Use `useRef<EventSource | null>(null)` to hold the EventSource instance.
+- `useEffect` dependencies: `[jobId]`. On cleanup: `eventSource.current?.close()`.
+- Timestamp format: `new Date().toLocaleTimeString('en-US', { hour12: false })` → `HH:MM:SS`.
+- Log container: `<div ref={logRef} className="overflow-y-auto max-h-64 font-mono text-xs bg-black/20 p-2 rounded">`.
+- Auto-scroll: `logRef.current?.scrollTo({ top: logRef.current.scrollHeight, behavior: 'smooth' })`.
+- Success banner: `<div className="mt-2 text-green-400 font-mono text-sm">✓ Completed</div>`.
+- Error banner: `<div className="mt-2 text-red-400 font-mono text-sm">✕ Error: {errorMsg}</div>`.
+- Polling fallback: `const interval = setInterval(() => fetch(...), 2000)` started only when EventSource constructor throws.
+- Parse event data: `const data = JSON.parse(event.data)` for `message` field extraction.
+
+Deliverable
+- `components/SseLogPanel.tsx` — client component for real-time SSE log display with fallback polling.
+
+Implementation assumptions (explicit)
+- The component is a pure display component — it does not control job execution.
+- EventSource is available in all target browsers; the fallback is for SSR or restricted environments.
+
+Please produce production-ready prompt content that will generate the module consistent with the above.

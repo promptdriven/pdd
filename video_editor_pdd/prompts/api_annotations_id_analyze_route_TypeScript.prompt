@@ -1,0 +1,54 @@
+You are implementing `app/api/annotations/[id]/analyze/route.ts`, the POST annotation analysis API route for the video production pipeline editor. This route triggers a read-only Claude analysis of a specific annotation using spec files and composite screenshots.
+
+Requirements
+1. `POST /api/annotations/[id]/analyze` — triggers `runClaudeAnalysis()` for the specified annotation:
+   - Loads the annotation from DB by `id`. Returns 404 if not found.
+   - Builds a prompt: `"Analyze this annotation for section {sectionId}. Annotation text: {text}. Review the spec files in specs/{sectionId}/ and the composite frame image provided."`
+   - Passes the `compositeDataUrl` (base64 PNG) to Claude by writing it to a temp PNG file first.
+   - Calls `runClaudeAnalysis(prompt, onLog)` with the annotation context.
+   - Updates `annotation.analysis` in DB with the returned `AnnotationAnalysis` JSON.
+   - Returns `{ annotation: Annotation }` with the updated record.
+2. No authentication required.
+3. Export `export const dynamic = 'force-dynamic'`.
+
+Dependencies
+
+<types>
+  <include>examples/types_example.ts</include>
+</types>
+
+<lib_db>
+  <include>examples/lib_db_example.ts</include>
+</lib_db>
+
+<lib_claude>
+  <include>examples/lib_claude_example.ts</include>
+</lib_claude>
+
+<lib_project>
+  <include>examples/lib_project_example.ts</include>
+</lib_project>
+
+Prompt Dependencies:
+- types_TypeScript.prompt — provides `Annotation`, `AnnotationAnalysis`
+- lib_db_TypeScript.prompt — provides `getDb()`
+- lib_claude_TypeScript.prompt — provides `runClaudeAnalysis`
+- lib_project_TypeScript.prompt — provides `loadProject`, `getSection`
+
+Instructions
+- Use Next.js App Router dynamic route: `export async function POST(request: Request, { params }: { params: { id: string } })`.
+- Write `compositeDataUrl` base64 data to a temp file: `const tmpPath = path.join(os.tmpdir(), \`annotation_${id}_composite.png\`); fs.writeFileSync(tmpPath, Buffer.from(dataUrl.split(',')[1], 'base64'))`.
+- Clean up temp file after analysis completes (success or error) using try/finally.
+- Store the analysis result back to DB: `UPDATE annotations SET analysis_json = ? WHERE id = ?` with `JSON.stringify(analysis)`.
+- Re-read the full annotation from DB after update to return the complete record.
+- Return 500 with error message if Claude analysis throws.
+
+Deliverable
+- `app/api/annotations/[id]/analyze/route.ts` — POST handler that triggers Claude analysis and updates annotation.
+
+Implementation assumptions (explicit)
+- `compositeDataUrl` is stored as a base64 data URL string in the DB (`data:image/png;base64,...`).
+- Analysis is read-only (Claude only has Read/Glob tools, not Write/Edit).
+- Spec files are in `specs/{sectionId}/` relative to the project root.
+
+Please produce production-ready TypeScript code consistent with the above.

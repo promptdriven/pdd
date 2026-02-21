@@ -1,0 +1,45 @@
+You are implementing the Stage 8 Composition Generation panel (`components/stages/Stage8CompositionGen.tsx`) for a video production pipeline editor. This client component manages Remotion component generation, section wrappers, and asset staging manifest.
+
+Requirements
+1. Props: `onAdvance: () => void`.
+2. Left: component list by section (collapsible). Each component row: name, status badge, [Preview] button (opens PNG still in modal), [↺] per-component regenerate.
+3. Section wrappers listed separately below components.
+4. [Generate All Compositions] runs `POST /api/pipeline/compositions/run`.
+5. Right: asset staging manifest table — columns: filename, expected (✓/✗), present (✓/✗), [Stage Now] button for missing files.
+6. [Stage All Missing] button runs `POST /api/pipeline/asset-staging/run`.
+7. Error status shows last error message in a tooltip on hover.
+8. Log drawer (expandable) shows SSE log for the active job.
+9. `'use client'` directive.
+
+Dependencies
+
+<types>
+  <include>examples/types_example.ts</include>
+</types>
+
+<sse_log_panel>
+  <include>examples/sse_log_panel_example.tsx</include>
+</sse_log_panel>
+
+Prompt Dependencies:
+- types_TypeScript.prompt — provides shared types
+- sse_log_panel_TypeScriptReact.prompt — provides `SseLogPanel`
+
+Instructions
+- Load composition list: `GET /api/pipeline/compositions/list`.
+- Load staging manifest: `GET /api/pipeline/veo/staging-manifest`.
+- Preview modal: `<dialog>` element with `<img src={previewUrl}>`. `previewUrl` is `GET /api/pipeline/compositions/preview?component={name}` which returns a PNG still path.
+- Per-component regenerate: `POST /api/pipeline/compositions/run` with `{ components: [name] }`.
+- [Stage Now] for single file: `POST /api/pipeline/asset-staging/run` with `{ files: [filename] }`.
+- Collapsible sections: same `localStorage` persistence pattern as Stage 6.
+- Status badge: same pattern — done/missing/error with color coding.
+- Error tooltip: HTML `title` attribute on the error badge.
+
+Deliverable
+- `components/stages/Stage8CompositionGen.tsx` — composition generation panel with asset staging management.
+
+Implementation assumptions (explicit)
+- Component preview stills are generated on demand via a dedicated preview API endpoint.
+- Staging manifest compares `outputs/veo/` files against `remotion/public/` expected files.
+
+Please produce production-ready prompt content that will generate the module consistent with the above.

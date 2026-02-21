@@ -1,0 +1,43 @@
+You are implementing `scripts/generate_section_compositions.py`, a Python subprocess script invoked by the compositions API route to scaffold Remotion section wrapper TSX components from the project.json section registry.
+
+Requirements
+1. Reads `project.json` from `--project-dir` to get the `sections` list.
+2. For each section, generates `remotion/src/remotion/{sectionId}/index.tsx`:
+   - A React component named `{SectionId}Section` (PascalCase).
+   - Imports `Sequence` from `remotion`.
+   - Imports all sub-compositions listed in the section's `compositions` field (if present).
+   - Uses `durationSeconds` and `offsetSeconds` from the section config.
+   - Wraps sub-compositions in `<Sequence from={offsetSeconds * fps} durationInFrames={durationSeconds * fps}>`.
+3. Updates `remotion/src/remotion/Root.tsx` to register all section compositions as top-level `<Composition>` entries.
+4. Prints JSON progress lines to stdout per section:
+   ```json
+   {"sectionId": "intro", "status": "done", "path": "remotion/src/remotion/intro/index.tsx"}
+   ```
+   or if skipped:
+   ```json
+   {"sectionId": "intro", "status": "skipped", "reason": "already exists"}
+   ```
+5. CLI args:
+   - `--project-dir` (default: `.`)
+   - `--remotion-dir` (default: `remotion/`)
+   - `--force` (flag, overwrites existing files if set)
+6. Exits with code 0 on success.
+
+Instructions
+- Section ID → PascalCase: `intro` → `Intro`, `section_two` → `SectionTwo` (split on `_` and `-`).
+- Default FPS: 30 (read from project.json `render.fps` if present, else 30).
+- If section file already exists and `--force` is not set, skip and emit `status: skipped`.
+- Create directories as needed: `os.makedirs(remotion_dir + '/src/remotion/' + section_id, exist_ok=True)`.
+- Root.tsx update: find the existing `<Composition>` block(s) and replace or append all sections. Use regex or string templates — do not use a TypeScript/JS parser.
+- Use `argparse` for CLI parsing.
+- Import guard: `if __name__ == '__main__': main()`.
+
+Deliverable
+- `scripts/generate_section_compositions.py` — standalone Python script for Remotion scaffolding.
+
+Implementation assumptions (explicit)
+- `project.json` has a top-level `sections` array with `id`, `durationSeconds`, `offsetSeconds`, and optional `compositions` fields per section.
+- The Remotion directory already exists; this script only writes files within it.
+- The generated TSX files are boilerplate stubs; Claude Code will fill in the actual composition logic in the compositions stage.
+
+Please produce production-ready Python code consistent with the above.

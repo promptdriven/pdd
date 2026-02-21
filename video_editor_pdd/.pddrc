@@ -1,0 +1,394 @@
+version: "1.0"
+
+contexts:
+  # ============================================================
+  # TYPES & CONFIG
+  # ============================================================
+
+  types:
+    paths: ["*types_TypeScript*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/types.ts"
+
+  next_config:
+    paths: ["*next_config*"]
+    defaults:
+      outputs:
+        code:
+          path: "next.config.ts"
+
+  package_json:
+    paths: ["*package_json*"]
+    defaults:
+      outputs:
+        code:
+          path: "package.json"
+
+  tsconfig_json:
+    paths: ["*tsconfig_json*"]
+    defaults:
+      outputs:
+        code:
+          path: "tsconfig.json"
+
+  # ============================================================
+  # PYTHON SCRIPTS
+  # ============================================================
+
+  render_tts:
+    paths: ["*render_tts*"]
+    defaults:
+      outputs:
+        code:
+          path: "scripts/render_tts.py"
+
+  sync_audio_pipeline:
+    paths: ["*sync_audio_pipeline*"]
+    defaults:
+      outputs:
+        code:
+          path: "scripts/sync_audio_pipeline.py"
+
+  generate_section_compositions:
+    paths: ["*generate_section_compositions*"]
+    defaults:
+      outputs:
+        code:
+          path: "scripts/generate_section_compositions.py"
+
+  # ============================================================
+  # SERVER LIBRARIES
+  # ============================================================
+
+  lib_db:
+    paths: ["*lib_db*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/db.ts"
+
+  lib_project:
+    paths: ["*lib_project*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/project.ts"
+
+  lib_sse:
+    paths: ["*lib_sse*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/sse.ts"
+
+  lib_claude:
+    paths: ["*lib_claude*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/claude.ts"
+
+  lib_veo:
+    paths: ["*lib_veo*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/veo.ts"
+
+  lib_render:
+    paths: ["*lib_render*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/render.ts"
+
+  globals_css:
+    paths: ["*globals_css*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/globals.css"
+
+  # ============================================================
+  # CORE INFRA
+  # ============================================================
+
+  lib_jobs:
+    paths: ["*lib_jobs*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/jobs.ts"
+
+  # ============================================================
+  # API ROUTES
+  # ============================================================
+
+  api_project_route:
+    paths: ["*api_project_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/project/route.ts"
+
+  api_project_script_route:
+    paths: ["*api_project_script_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/project/script/route.ts"
+
+  api_pipeline_status_route:
+    paths: ["*api_pipeline_status_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/pipeline/status/route.ts"
+
+  api_pipeline_tts_script_route:
+    paths: ["*api_pipeline_tts_script_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/pipeline/tts-script/run/route.ts"
+
+  api_pipeline_tts_render_route:
+    paths: ["*api_pipeline_tts_render_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/pipeline/tts-render/run/route.ts"
+
+  api_pipeline_audio_sync_route:
+    paths: ["*api_pipeline_audio_sync_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/pipeline/audio-sync/run/route.ts"
+
+  api_pipeline_specs_route:
+    paths: ["*api_pipeline_specs_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/pipeline/specs/run/route.ts"
+
+  api_pipeline_veo_route:
+    paths: ["*api_pipeline_veo_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/pipeline/veo/run/route.ts"
+
+  api_pipeline_compositions_route:
+    paths: ["*api_pipeline_compositions_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/pipeline/compositions/run/route.ts"
+
+  api_pipeline_render_route:
+    paths: ["*api_pipeline_render_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/pipeline/render/run/route.ts"
+
+  api_pipeline_audit_route:
+    paths: ["*api_pipeline_audit_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/pipeline/audit/run/route.ts"
+
+  api_jobs_stream_route:
+    paths: ["*api_jobs_stream_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/jobs/[id]/stream/route.ts"
+
+  api_annotations_id_analyze_route:
+    paths: ["*api_annotations_id_analyze_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/annotations/[id]/analyze/route.ts"
+
+  api_annotations_id_route:
+    paths: ["*api_annotations_id_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/annotations/[id]/route.ts"
+
+  api_annotations_route:
+    paths: ["*api_annotations_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/annotations/route.ts"
+
+  api_jobs_id_retry_route:
+    paths: ["*api_jobs_id_retry_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/jobs/[id]/retry/route.ts"
+
+  api_jobs_id_route:
+    paths: ["*api_jobs_id_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/jobs/[id]/route.ts"
+
+  api_sections_id_resolve_batch_route:
+    paths: ["*api_sections_id_resolve_batch_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/sections/[id]/resolve-batch/route.ts"
+
+  api_video_route:
+    paths: ["*api_video_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/video/[...path]/route.ts"
+
+  # ============================================================
+  # SHARED COMPONENTS
+  # ============================================================
+
+  sse_log_panel:
+    paths: ["*sse_log_panel*"]
+    defaults:
+      outputs:
+        code:
+          path: "components/SseLogPanel.tsx"
+
+  stage_sidebar:
+    paths: ["*stage_sidebar*"]
+    defaults:
+      outputs:
+        code:
+          path: "components/StageSidebar.tsx"
+
+  video_player:
+    paths: ["*video_player*"]
+    defaults:
+      outputs:
+        code:
+          path: "components/VideoPlayer.tsx"
+
+  annotation_panel:
+    paths: ["*annotation_panel*"]
+    defaults:
+      outputs:
+        code:
+          path: "components/AnnotationPanel.tsx"
+
+  # ============================================================
+  # STAGE COMPONENTS
+  # ============================================================
+
+  stage1_project_setup:
+    paths: ["*stage1_project_setup*"]
+    defaults:
+      outputs:
+        code:
+          path: "components/stages/Stage1ProjectSetup.tsx"
+
+  stage2_script_editor:
+    paths: ["*stage2_script_editor*"]
+    defaults:
+      outputs:
+        code:
+          path: "components/stages/Stage2ScriptEditor.tsx"
+
+  stage3_tts_script_gen:
+    paths: ["*stage3_tts_script_gen*"]
+    defaults:
+      outputs:
+        code:
+          path: "components/stages/Stage3TtsScriptGen.tsx"
+
+  stage4_tts_rendering:
+    paths: ["*stage4_tts_rendering*"]
+    defaults:
+      outputs:
+        code:
+          path: "components/stages/Stage4TtsRendering.tsx"
+
+  stage5_audio_sync:
+    paths: ["*stage5_audio_sync*"]
+    defaults:
+      outputs:
+        code:
+          path: "components/stages/Stage5AudioSync.tsx"
+
+  stage6_spec_generation:
+    paths: ["*stage6_spec_generation*"]
+    defaults:
+      outputs:
+        code:
+          path: "components/stages/Stage6SpecGeneration.tsx"
+
+  stage7_veo_generation:
+    paths: ["*stage7_veo_generation*"]
+    defaults:
+      outputs:
+        code:
+          path: "components/stages/Stage7VeoGeneration.tsx"
+
+  stage8_composition_gen:
+    paths: ["*stage8_composition_gen*"]
+    defaults:
+      outputs:
+        code:
+          path: "components/stages/Stage8CompositionGen.tsx"
+
+  stage9_render_stitch:
+    paths: ["*stage9_render_stitch*"]
+    defaults:
+      outputs:
+        code:
+          path: "components/stages/Stage9RenderStitch.tsx"
+
+  stage10_audit:
+    paths: ["*stage10_audit*"]
+    defaults:
+      outputs:
+        code:
+          path: "components/stages/Stage10Audit.tsx"
+
+  # ============================================================
+  # APP ENTRY
+  # ============================================================
+
+  app_layout:
+    paths: ["*app_layout*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/layout.tsx"
+
+  app_page:
+    paths: ["*app_page*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/page.tsx"
+
+  # ============================================================
+  # DEFAULT FALLBACK
+  # ============================================================
+  # CRITICAL: prompts_dir goes ONLY here, not in other contexts!
+
+  default:
+    defaults:
+      prompts_dir: "prompts/"
+      generate_output_path: "src/"

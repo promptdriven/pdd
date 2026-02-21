@@ -1,0 +1,39 @@
+You are implementing the video streaming API route (`app/api/video/[...path]/route.ts`) for a video production pipeline editor. This Route Handler serves MP4 video files with HTTP range request support for the VideoPlayer component's `<video>` element.
+
+Requirements
+1. `GET /api/video/[...path]` — serves video files from `outputs/sections/` and `remotion/public/` with range request support (206 Partial Content).
+2. Reads `Range` header; returns appropriate byte slice. Returns 206 with `Content-Range: bytes {start}-{end}/{total}` and `Accept-Ranges: bytes` headers.
+3. Returns 200 for requests without a `Range` header (full file).
+4. Returns 404 if file not found.
+5. Returns 403 if path traversal is detected (path contains `..` or escapes the allowed directories).
+6. Sets `Content-Type: video/mp4` for all responses.
+7. Allowed root directories: `outputs/` and `remotion/public/`. Reject any path that resolves outside these.
+
+Dependencies
+
+<lib_project>
+  <include>examples/lib_project_example.ts</include>
+</lib_project>
+
+Prompt Dependencies:
+- lib_project_TypeScript.prompt — provides `loadProject` for base path resolution
+
+Instructions
+- Reconstruct file path: `const filePath = path.join(process.cwd(), ...params.path)`.
+- Security check: `const resolved = path.resolve(filePath); const allowed = [path.resolve('outputs'), path.resolve('remotion/public')]; if (!allowed.some(d => resolved.startsWith(d))) return 403`.
+- Parse Range header: `const range = request.headers.get('range')`. If present, parse `bytes={start}-{end}`.
+- Use `fs.statSync(filePath)` for file size; use `fs.createReadStream(filePath, { start, end })` for range reads.
+- Convert Node.js `ReadableStream` (from `fs.createReadStream`) to Web API `ReadableStream` using `Readable.toWeb()` or `ReadableStream.from()`.
+- `Content-Range: bytes {start}-{end}/{total}` header.
+- `Accept-Ranges: bytes` header always present.
+- Export `export async function GET(request: Request, { params }: { params: { path: string[] } })`.
+
+Deliverable
+- `app/api/video/[...path]/route.ts` — video file streaming handler with range support.
+
+Implementation assumptions (explicit)
+- Video files are always MP4; no content-type negotiation needed.
+- `fs.createReadStream` with `{ start, end }` provides correct byte ranges.
+- `Readable.toWeb()` is available in Node.js 18+.
+
+Please produce production-ready prompt content that will generate the module consistent with the above.

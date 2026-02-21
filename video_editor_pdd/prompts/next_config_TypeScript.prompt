@@ -1,0 +1,39 @@
+You are implementing the Next.js 15 App Router configuration file (`next.config.ts`) for a video production pipeline editor. This config is critical for native module support (better-sqlite3 requires serverExternalPackages), large file upload handling, and SSE streaming. It must use the TypeScript config format introduced in Next.js 15.
+
+Requirements
+1. Use TypeScript config format: `import type { NextConfig } from 'next'; const nextConfig: NextConfig = { ... }; export default nextConfig;`.
+2. Set `serverExternalPackages: ['better-sqlite3']` so the native SQLite addon is bundled correctly in server components and Route Handlers.
+3. Set `experimental.serverActions.bodySizeLimit: '10mb'` to support large file upload payloads in Server Actions.
+4. Add custom response headers for SSE routes (`/api/pipeline/*`, `/api/jobs/*`) that set `Cache-Control: no-cache, no-transform` and `X-Accel-Buffering: no` to prevent proxy buffering of event streams.
+5. Do not add any webpack overrides — better-sqlite3 is handled via `serverExternalPackages`, not webpack externals.
+6. Do not enable `experimental.appDir` — it is the default in Next.js 15.
+7. Keep the config minimal; do not add features not listed here.
+
+Dependencies
+
+<serverexternalpackages_config_for_native_modules>
+  <web>https://nextjs.org/docs/app/api-reference/config/next-config-js/serverExternalPackages</web>
+</serverexternalpackages_config_for_native_modules>
+
+<route_handler_config_for_sse_streaming>
+  <web>https://nextjs.org/docs/app/building-your-application/routing/route-handlers</web>
+</route_handler_config_for_sse_streaming>
+
+Instructions
+- File path: `next.config.ts` in the project root.
+- The `headers()` async function must return an array of header objects; each object has a `source` glob and a `headers` array of `{ key, value }` pairs.
+- Use `/api/pipeline/:path*` and `/api/jobs/:path*` as the SSE source globs.
+- The `X-Accel-Buffering: no` header prevents nginx from buffering SSE responses in production.
+- Do not add `reactStrictMode` or other settings not explicitly required.
+- TypeScript import: `import type { NextConfig } from 'next'` (type-only import for config type).
+
+Deliverable
+- `next.config.ts` — minimal, correct Next.js 15 configuration file.
+
+Implementation assumptions (explicit)
+- The project uses Next.js 15 with App Router.
+- better-sqlite3 is used in server-side modules only (Route Handlers, not client components).
+- SSE routes stream responses using `ReadableStream` per Next.js Route Handler streaming pattern.
+- Deployment target may include nginx reverse proxy, so buffering headers are needed.
+
+Please produce production-ready prompt content that will generate the module consistent with the above.

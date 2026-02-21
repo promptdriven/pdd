@@ -1,0 +1,48 @@
+You are implementing `app/api/annotations/route.ts`, the base annotations CRUD API route for a video production pipeline editor. This route handles creating new annotations and listing annotations for a section.
+
+Requirements
+1. `POST /api/annotations` — creates a new annotation:
+   - Accepts `CreateAnnotationInput`: `{ sectionId, timestamp, text, drawingDataUrl, compositeDataUrl, videoFile }`.
+   - Saves composite thumbnail and annotation fields to DB.
+   - Returns the created `Annotation` object with all fields.
+2. `GET /api/annotations?section=X` — returns annotations for a section:
+   - Reads optional `section` query param to filter by `sectionId`.
+   - Returns all annotations if no section filter is provided.
+   - Returns `{ annotations: Annotation[] }` ordered by timestamp ascending.
+3. No authentication required.
+
+Dependencies
+
+<types>
+  <include>examples/types_example.ts</include>
+</types>
+
+<lib_db>
+  <include>examples/lib_db_example.ts</include>
+</lib_db>
+
+Prompt Dependencies:
+- types_TypeScript.prompt — provides `Annotation`, `CreateAnnotationInput`
+- lib_db_TypeScript.prompt — provides `getDb()`
+
+Instructions
+- Generate a UUID for the annotation ID (`crypto.randomUUID()`).
+- Store `drawingDataUrl` and `compositeDataUrl` as TEXT columns in the DB (base64 data URLs).
+- `analysis_json` column starts as NULL (analysis is populated later via the `/[id]/analyze` endpoint).
+- `resolved` column defaults to 0 (false).
+- For POST: validate required fields (`sectionId`, `text`) and return 400 if missing.
+- For GET: deserialize `analysis_json` → `analysis` for each annotation when reading from DB.
+
+Deliverable
+- `app/api/annotations/route.ts` — POST (create) and GET (list) handlers for annotations.
+
+Note: The following endpoints are in SEPARATE route files (not in this file):
+- `GET /api/annotations/[id]` → `app/api/annotations/[id]/route.ts`
+- `POST /api/annotations/[id]/analyze` → `app/api/annotations/[id]/analyze/route.ts`
+- `POST /api/sections/[id]/resolve-batch` → `app/api/sections/[id]/resolve-batch/route.ts`
+
+Implementation assumptions (explicit)
+- The DB `annotations` table has columns: `id`, `section_id`, `timestamp`, `text`, `video_file`, `drawing_data_url`, `composite_data_url`, `analysis_json`, `resolved`, `resolve_job_id`, `created_at`.
+- No file system writes are needed in this route — data URLs are stored directly in the DB.
+
+Please produce production-ready TypeScript code consistent with the above.

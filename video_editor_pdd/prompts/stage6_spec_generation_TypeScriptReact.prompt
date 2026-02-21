@@ -1,0 +1,44 @@
+You are implementing the Stage 6 Spec Generation panel (`components/stages/Stage6SpecGeneration.tsx`) for a video production pipeline editor. This client component shows collapsible section groups with spec file lists, visual type badges, and an inline CodeMirror spec editor.
+
+Requirements
+1. Props: `onAdvance: () => void`.
+2. Toolbar: [Generate All Specs] and per-section [↺ Regenerate] buttons. Trigger `POST /api/pipeline/specs/run`.
+3. Section groups are collapsible (expanded state persisted in `localStorage`).
+4. Each spec row shows: visual type badge `[Remotion]`/`[veo:]`/`[title:]`/`[split:]`, status (exists/missing), [✎] open in editor, [↺] regenerate that file.
+5. Clicking [✎]: opens an inline CodeMirror Markdown editor below the table. Auto-saves to spec file path via `PUT /api/pipeline/specs/file` on blur + 1s debounce.
+6. SSE log in an expandable drawer at the bottom.
+7. `'use client'` directive.
+8. Visual type badge colors: Remotion=blue, veo=purple, title=teal, split=orange.
+
+Dependencies
+
+<types>
+  <include>examples/types_example.ts</include>
+</types>
+
+<sse_log_panel>
+  <include>examples/sse_log_panel_example.tsx</include>
+</sse_log_panel>
+
+Prompt Dependencies:
+- types_TypeScript.prompt — provides shared types
+- sse_log_panel_TypeScriptReact.prompt — provides `SseLogPanel`
+
+Instructions
+- Load spec list: `GET /api/pipeline/specs/list` on mount.
+- Load spec file for editor: `GET /api/pipeline/specs/file?path={encodeURIComponent(filePath)}`.
+- Save spec file: `PUT /api/pipeline/specs/file` with `{ path, content }`.
+- Collapsible state: `useState<Record<string, boolean>>` initialized from `localStorage.getItem('spec-sections-expanded')`.
+- Per-section regenerate: `POST /api/pipeline/specs/run` with `{ sections: [sectionId] }`.
+- Per-file regenerate: `POST /api/pipeline/specs/run` with `{ files: [filePath] }`.
+- SSE drawer: collapsible `<details>` element containing `<SseLogPanel jobId={latestJobId} />`.
+- Visual type badge regex: match `\[Remotion\]`, `\[veo:.*?\]`, `\[title:.*?\]`, `\[split:.*?\]` in spec file first line.
+
+Deliverable
+- `components/stages/Stage6SpecGeneration.tsx` — spec generation panel with collapsible sections and inline editor.
+
+Implementation assumptions (explicit)
+- Spec files are Markdown; CodeMirror Markdown extension is already a dependency.
+- Section groups correspond to sections in project.json.
+
+Please produce production-ready prompt content that will generate the module consistent with the above.

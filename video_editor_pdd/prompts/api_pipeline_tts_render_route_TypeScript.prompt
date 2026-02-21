@@ -1,0 +1,42 @@
+You are implementing the TTS audio rendering API route (`app/api/pipeline/tts-render/run/route.ts`) for a video production pipeline editor. This endpoint spawns `render_tts.py` as a child process to render TTS audio segments from `tts_script.md`.
+
+Requirements
+1. `POST /api/pipeline/tts-render/run` — accepts optional `{ segments?: string[] }` body. If `segments` omitted, renders all. Returns SSE stream with `{ jobId }` as first event.
+2. The job executor spawns `python3 render_tts.py [--segments seg1 seg2 ...]` from `process.cwd()`. Streams stdout/stderr lines as SSE log events.
+3. Per-segment outputs: `outputs/tts/{segmentId}.wav`.
+4. On completion, emits per-segment status events: `{ type: 'segment', segmentId, status: 'done' | 'error', duration }`.
+5. `GET /api/pipeline/tts-render/segments` — returns `{ segments: TtsSegment[] }` by reading `outputs/tts/` directory and `tts_script.md` for segment metadata.
+6. No authentication required.
+
+Dependencies
+
+<types>
+  <include>examples/types_example.ts</include>
+</types>
+
+<lib_jobs>
+  <include>examples/lib_jobs_example.ts</include>
+</lib_jobs>
+
+Prompt Dependencies:
+- types_TypeScript.prompt — provides `PipelineStage`
+- lib_jobs_TypeScript.prompt — provides `runPipelineStage`, `registerExecutor`
+
+Instructions
+- Define `TtsSegment` interface locally: `{ id: string; status: 'done' | 'missing' | 'error'; duration?: number; text?: string }`.
+- Spawn: `child_process.spawn('python3', ['render_tts.py', ...(segments ?? []).flatMap(s => ['--segment', s])], { cwd: process.cwd() })`.
+- Stream stdout/stderr: call `onLog(line)` for each line from both streams.
+- For `GET /api/pipeline/tts-render/segments`: scan `outputs/tts/*.wav` with `fs.readdirSync`, cross-reference with segment IDs parsed from `tts_script.md`.
+- Register executor: `registerExecutor('tts-render', ...)`.
+- Export both `GET` and `POST` handlers. The `GET` handler for segments is in the same route file at `app/api/pipeline/tts-render/segments/route.ts` — note this is a separate file from the run route.
+- Actually: the run endpoint is at `app/api/pipeline/tts-render/run/route.ts` and the segments list is at `app/api/pipeline/tts-render/segments/route.ts`. Include both in this file's deliverable section.
+
+Deliverable
+- `app/api/pipeline/tts-render/run/route.ts` — POST endpoint for TTS rendering with SSE streaming.
+- `app/api/pipeline/tts-render/segments/route.ts` — GET endpoint listing TTS segments with status.
+
+Implementation assumptions (explicit)
+- `render_tts.py` is at project root and handles `--segment` filtering.
+- Segment IDs are derived from `tts_script.md` heading markers.
+
+Please produce production-ready prompt content that will generate the module consistent with the above.

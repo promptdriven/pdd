@@ -1,0 +1,365 @@
+================================================================================
+COMPLETE TYPE SYSTEM - ALL REQUIRED EXPORTS FOR lib/types.ts
+================================================================================
+
+This document lists ALL 31 types that must be exported from lib/types.ts.
+Currently, the prompt only specifies 17. These 14 additional types are also required.
+
+================================================================================
+CATEGORY 1: PIPELINE STAGES & STATUS (4 types)
+================================================================================
+
+1. PipelineStage (UNION TYPE)
+   Values: 'setup' | 'script' | 'tts-script' | 'tts-render' | 'audio-sync' | 'specs' | 'veo' | 'compositions' | 'render' | 'audit'
+   Used in: All stage components, API routes, Job, StageStatusEntry
+
+2. StageStatus (UNION TYPE)
+   Values: 'not_started' | 'running' | 'done' | 'error'
+   Used in: StageStatusEntry, SectionRenderStatus, AnnotationAnalysis (implied)
+
+3. StageStatusEntry (INTERFACE) ⚠ MISSING FROM PROMPT
+   Fields:
+   - status: StageStatus
+   - lastJobId: string | null
+   - error: string | null
+   Used in: GET /api/pipeline/status response (Record<PipelineStage, StageStatusEntry>)
+
+4. JobStatus (UNION TYPE)
+   Values: 'pending' | 'running' | 'done' | 'error'
+   Used in: Job interface
+
+================================================================================
+CATEGORY 2: JOB & EXECUTION (1 type)
+================================================================================
+
+5. Job (INTERFACE)
+   Fields:
+   - id: string
+   - stage: PipelineStage
+   - status: JobStatus
+   - progress: number (0-100)
+   - error: string | null
+   - params: Record<string, unknown>
+   - createdAt: string (ISO 8601)
+   - updatedAt: string (ISO 8601)
+   Used in: GET /api/jobs/[id], all job queries
+
+================================================================================
+CATEGORY 3: ANNOTATIONS & REVIEW (7 types)
+================================================================================
+
+6. FixType (UNION TYPE)
+   Values: 'remotion' | 'veo' | 'tts' | 'none'
+   Used in: AnnotationAnalysis, ClaudeFixResult, annotation batch resolution
+
+7. AnnotationAnalysis (INTERFACE)
+   Fields:
+   - severity: 'critical' | 'major' | 'minor' | 'pass'
+   - fixType: FixType
+   - technicalAssessment: string
+   - suggestedFixes: string[]
+   - confidence: number (0-1)
+   Used in: Annotation.analysis, POST /api/annotations/[id]/analyze result
+
+8. Annotation (INTERFACE)
+   Fields:
+   - id: string
+   - sectionId: string
+   - timestamp: number
+   - text: string
+   - videoFile: string | null
+   - drawingDataUrl: string | null
+   - compositeDataUrl: string | null
+   - analysis: AnnotationAnalysis | null
+   - resolved: boolean
+   - resolveJobId: string | null
+   - createdAt: string
+   Used in: GET /api/annotations, POST /api/annotations result, AnnotationPanel
+
+9. AnnotationCaptureData (INTERFACE)
+   Fields:
+   - timestamp: number
+   - text: string
+   - drawingDataUrl: string | null
+   - compositeDataUrl: string | null
+   - videoFile: string
+   Used in: VideoPlayer.onAnnotationCapture callback, POST /api/annotations body
+
+10. CreateAnnotationInput (INTERFACE) ⚠ MISSING FROM PROMPT
+    Fields:
+    - sectionId: string
+    - timestamp: number
+    - text: string
+    - drawingDataUrl: string | null
+    - compositeDataUrl: string | null
+    - videoFile: string
+    Used in: POST /api/annotations request validation
+
+================================================================================
+CATEGORY 4: AUDIO & TTS (2 types)
+================================================================================
+
+11. TtsSegment (INTERFACE) ⚠ MISSING FROM PROMPT
+    Fields:
+    - segmentId: string
+    - status: 'done' | 'error' | 'pending'
+    - duration: number (seconds)
+    - text: string
+    Used in: GET /api/pipeline/tts-render/segments response, Stage4TtsRendering component
+
+12. WordTimestamp (INTERFACE) ⚠ MISSING FROM PROMPT
+    Fields:
+    - word: string
+    - start: number (seconds, 3 decimals)
+    - end: number (seconds, 3 decimals)
+    - segmentId: string
+    Used in: GET /api/pipeline/audio-sync/timestamps response, Stage5AudioSync word viewer
+
+================================================================================
+CATEGORY 5: CONFIGURATION (4 types)
+================================================================================
+
+13. TtsConfig (INTERFACE)
+    Fields:
+    - voice: string
+    - rate: number
+    - model: string
+    Used in: ProjectConfig.tts
+
+14. VeoConfig (INTERFACE)
+    Fields:
+    - model: string
+    - aspectRatio: '16:9' | '9:16'
+    - referenceImages: Record<string, string>
+    Used in: ProjectConfig.veo
+
+15. RenderConfig (INTERFACE)
+    Fields:
+    - maxParallelRenders: number
+    - outputDir: string
+    - fps: number
+    - width: number
+    - height: number
+    Used in: ProjectConfig.render
+
+16. AudioSyncConfig (INTERFACE)
+    Fields:
+    - sectionGroups: Record<string, string[]> (sectionId → segment IDs)
+    Used in: ProjectConfig.audioSync
+
+================================================================================
+CATEGORY 6: SECTIONS & PROJECT (2 types)
+================================================================================
+
+17. Section (INTERFACE)
+    Fields:
+    - id: string
+    - label: string
+    - videoFile: string
+    - specDir: string
+    - remotionDir: string
+    - compositionId: string
+    - durationSeconds: number
+    - offsetSeconds: number
+    Used in: ProjectConfig.sections[], getSection() queries
+
+18. ProjectConfig (INTERFACE)
+    Fields:
+    - name: string
+    - outputResolution: '1920x1080' | '1280x720'
+    - tts: TtsConfig
+    - sections: Section[]
+    - audioSync: AudioSyncConfig
+    - veo: VeoConfig
+    - render: RenderConfig
+    Used in: GET /api/project response, Stage1ProjectSetup
+
+================================================================================
+CATEGORY 7: VEO GENERATION (2 types)
+================================================================================
+
+19. VeoClip (INTERFACE) ⚠ MISSING FROM PROMPT
+    Fields:
+    - clipId: string
+    - section: string (sectionId)
+    - aspectRatio: '16:9' | '9:16'
+    - status: 'pending' | 'done' | 'error'
+    - frameChainDeps: string[] (clipIds of prior clips for frame chaining)
+    Used in: GET /api/pipeline/veo/clips response, Stage7VeoGeneration component
+
+20. AssetStagingEntry (INTERFACE) ⚠ MISSING FROM PROMPT
+    Fields:
+    - expectedPath: string (path in remotion/public/)
+    - presentPath: string | null (actual path, if file exists)
+    - status: 'present' | 'missing'
+    Used in: GET /api/pipeline/veo/staging-manifest response, Stage7VeoGeneration manifest view
+
+================================================================================
+CATEGORY 8: SPEC GENERATION (3 types)
+================================================================================
+
+21. SpecFile (INTERFACE) ⚠ REFERENCED BUT MISSING FROM PROMPT
+    Fields:
+    - path: string
+    - visualType: string ('Remotion', 'veo', 'title', 'split', etc.)
+    - status: 'done' | 'error' | 'pending'
+    Used in: SpecSection.files[], spec file listing
+
+22. SpecSection (INTERFACE) ⚠ MISSING FROM PROMPT
+    Fields:
+    - sectionId: string
+    - files: SpecFile[]
+    Used in: GET /api/pipeline/specs/list response, Stage6SpecGeneration component
+
+================================================================================
+CATEGORY 9: COMPOSITION GENERATION (3 types)
+================================================================================
+
+23. CompositionEntry (INTERFACE) ⚠ MISSING FROM PROMPT
+    Fields:
+    - id: string (compositionId or component name)
+    - type: string ('component' | 'wrapper', etc.)
+    - status: 'done' | 'error' | 'pending'
+    Used in: CompositionSection.components[], CompositionSection.wrappers[]
+
+24. CompositionSection (INTERFACE) ⚠ MISSING FROM PROMPT
+    Fields:
+    - sectionId: string
+    - components: CompositionEntry[]
+    - wrappers: CompositionEntry[]
+    Used in: GET /api/pipeline/compositions/list response, Stage8CompositionGen component
+
+================================================================================
+CATEGORY 10: RENDER & FINALIZATION (4 types)
+================================================================================
+
+25. RenderProgress (INTERFACE)
+    Fields:
+    - percent: number (0-100)
+    - message: string
+    Used in: Progress callbacks in lib/render.ts, Stage9RenderStitch progress bars
+
+26. SectionRenderStatus (INTERFACE) ⚠ MISSING FROM PROMPT
+    Fields:
+    - sectionId: string
+    - status: StageStatus
+    - duration: number (seconds)
+    - progress: number (0-100)
+    - jobId: string | null
+    Used in: GET /api/pipeline/render/status response, Stage9RenderStitch section table
+
+27. FullVideoInfo (INTERFACE) ⚠ MISSING FROM PROMPT
+    Fields:
+    - path: string
+    - duration: number (seconds)
+    - fileSize: number (bytes)
+    - exists: boolean
+    Used in: GET /api/pipeline/render/status response, Stage9RenderStitch full video panel
+
+================================================================================
+CATEGORY 11: AUDIT (3 types)
+================================================================================
+
+28. AuditVerdict (INTERFACE) ⚠ MISSING FROM PROMPT
+    Fields:
+    - specId: string
+    - passed: boolean
+    - message: string
+    Used in: AuditSectionResult.verdicts[]
+
+29. AuditSectionResult (INTERFACE) ⚠ MISSING FROM PROMPT
+    Fields:
+    - sectionId: string
+    - passCount: number
+    - failCount: number
+    - status: StageStatus
+    - verdicts: AuditVerdict[]
+    Used in: GET /api/pipeline/audit/results response, Stage10Audit component
+
+================================================================================
+CATEGORY 12: UTILITIES (3 types)
+================================================================================
+
+30. ClaudeFixResult (INTERFACE)
+    Fields:
+    - fixType: FixType
+    - filesModified: string[]
+    - changeDescription: string
+    - confidence: number (0-1)
+    Used in: lib/claude.ts runClaudeFix() return, annotation resolution
+
+31. SseSend (TYPE ALIAS)
+    Definition: (data: object) => void
+    Used in: lib/jobs.ts runPipelineStage(), all SSE event handlers
+
+================================================================================
+SUMMARY BY USAGE
+================================================================================
+
+Types specified in current prompt (17):
+✓ PipelineStage
+✓ StageStatus
+✓ JobStatus
+✓ Job
+✓ FixType
+✓ AnnotationAnalysis
+✓ Annotation
+✓ Section
+✓ TtsConfig
+✓ VeoConfig
+✓ RenderConfig
+✓ AudioSyncConfig
+✓ ProjectConfig
+✓ RenderProgress
+✓ ClaudeFixResult
+✓ AnnotationCaptureData
+✓ SseSend
+
+Types missing from prompt (14): ⚠ MUST ADD
+✗ StageStatusEntry
+✗ TtsSegment
+✗ WordTimestamp
+✗ VeoClip
+✗ AssetStagingEntry
+✗ SpecFile
+✗ SpecSection
+✗ CompositionEntry
+✗ CompositionSection
+✗ SectionRenderStatus
+✗ FullVideoInfo
+✗ AuditVerdict
+✗ AuditSectionResult
+✗ CreateAnnotationInput
+
+================================================================================
+IMPLEMENTATION CHECKLIST
+================================================================================
+
+For each type, add to types_TypeScript.prompt:
+[ ] StageStatusEntry interface
+[ ] TtsSegment interface
+[ ] WordTimestamp interface
+[ ] VeoClip interface
+[ ] AssetStagingEntry interface
+[ ] SpecFile interface
+[ ] SpecSection interface
+[ ] CompositionEntry interface
+[ ] CompositionSection interface
+[ ] SectionRenderStatus interface
+[ ] FullVideoInfo interface
+[ ] AuditVerdict interface
+[ ] AuditSectionResult interface
+[ ] CreateAnnotationInput interface
+
+For each new type:
+[ ] Add to Requirements section (numbered items)
+[ ] Add to Instructions section if any special notes
+[ ] Add JSDoc comment in generated types.ts
+[ ] Export as named export (interface or type)
+
+Validation:
+[ ] `npm run build` compiles without type errors
+[ ] All 31 types are imported correctly across modules
+[ ] No circular dependencies introduced
+
+================================================================================

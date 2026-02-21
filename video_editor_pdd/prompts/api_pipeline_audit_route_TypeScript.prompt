@@ -1,0 +1,55 @@
+You are implementing the audit API routes (`app/api/pipeline/audit/run/route.ts` and supporting routes) for a video production pipeline editor. These endpoints launch parallel Claude Code agents that render Remotion stills and compare frames against specs for each section.
+
+Requirements
+1. `POST /api/pipeline/audit/run` — accepts `{ sections?: string[] }` (defaults to all). Launches one agent per section concurrently. Returns SSE stream with `{ jobId }`.
+2. Each per-section agent: calls `renderStill()` for segment midpoints → calls `runClaudeAnalysis()` comparing the still PNG against the spec file → writes `specs/{sectionId}/AUDIT_{specName}.md` with pass/fail verdict and details.
+3. `GET /api/pipeline/audit/results` — returns `{ sections: AuditSectionResult[] }` where `AuditSectionResult = { sectionId: string; passCount: number; failCount: number; status: 'done' | 'pending' | 'error'; specs: SpecAuditResult[] }` and `SpecAuditResult = { specFile: string; verdict: 'pass' | 'fail'; summary: string; frameFile?: string }`.
+4. No authentication required.
+
+Dependencies
+
+<types>
+  <include>examples/types_example.ts</include>
+</types>
+
+<lib_jobs>
+  <include>examples/lib_jobs_example.ts</include>
+</lib_jobs>
+
+<lib_claude>
+  <include>examples/lib_claude_example.ts</include>
+</lib_claude>
+
+<lib_render>
+  <include>examples/lib_render_example.ts</include>
+</lib_render>
+
+<lib_project>
+  <include>examples/lib_project_example.ts</include>
+</lib_project>
+
+Prompt Dependencies:
+- types_TypeScript.prompt — provides `PipelineStage`, `AnnotationAnalysis`
+- lib_jobs_TypeScript.prompt — provides `runPipelineStage`, `registerExecutor`
+- lib_claude_TypeScript.prompt — provides `runClaudeAnalysis`
+- lib_render_TypeScript.prompt — provides `renderStill`
+- lib_project_TypeScript.prompt — provides `loadProject`
+
+Instructions
+- Still output path: `outputs/audit/{sectionId}/{specName}_frame.png`.
+- Audit report path: `specs/{sectionId}/AUDIT_{specName}.md`.
+- Claude analysis prompt: read the still PNG file and the spec file, return `AnnotationAnalysis` JSON with verdict.
+- Concurrent agents: `await Promise.all(sections.map(sectionId => auditSection(sectionId, send, onLog)))`.
+- Emit per-section events: `{ type: 'audit-section', sectionId, status: 'running' | 'done' | 'error', passCount, failCount }`.
+- `GET /api/pipeline/audit/results`: parse AUDIT_*.md files to extract verdicts (parse the `## Verdict` heading).
+- Register executor: `registerExecutor('audit', ...)`.
+
+Deliverable
+- `app/api/pipeline/audit/run/route.ts` — POST endpoint for parallel section auditing.
+- `app/api/pipeline/audit/results/route.ts` — GET endpoint for audit results.
+
+Implementation assumptions (explicit)
+- Audit MARKDOWN files have a structured format: `## Verdict\n{pass|fail}\n## Summary\n{text}`.
+- Multiple stills per section correspond to spec file count (one still per spec segment).
+
+Please produce production-ready prompt content that will generate the module consistent with the above.

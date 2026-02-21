@@ -1,0 +1,42 @@
+You are implementing the Stage 3 TTS Script Generation panel (`components/stages/Stage3TtsScriptGen.tsx`) for a video production pipeline editor. This client component shows the SSE log, unified diff view between source and generated scripts, and an inline editor for `tts_script.md`.
+
+Requirements
+1. Props: `onAdvance: () => void`.
+2. Header: [Generate TTS Script ↺] button + last run timestamp.
+3. SSE log panel (`SseLogPanel`) shown below the button, with `jobId` from the latest run.
+4. Diff view below log: split display of `main_script.md` (left) and `tts_script.md` (right) with line coloring: added=green, removed=red, unchanged=gray. Generated client-side from both file contents.
+5. Inline CodeMirror editor for `tts_script.md`. Auto-saves on blur + 1s debounce. Loads content from `GET /api/project/script?file=tts` (or separate endpoint).
+6. [Render Audio →] button enabled when `tts_script.md` exists. Calls `onAdvance()`.
+7. `'use client'` directive.
+
+Dependencies
+
+<types>
+  <include>examples/types_example.ts</include>
+</types>
+
+<sse_log_panel>
+  <include>examples/sse_log_panel_example.tsx</include>
+</sse_log_panel>
+
+Prompt Dependencies:
+- types_TypeScript.prompt — provides shared types
+- sse_log_panel_TypeScriptReact.prompt — provides `SseLogPanel`
+
+Instructions
+- Diff algorithm: use Myers diff or simple line-by-line comparison. A minimal implementation: split both files by `\n`, compute LCS, mark added/removed/unchanged.
+- Use a lightweight diff library if available (e.g., `diff` npm package): `import { diffLines } from 'diff'`.
+- Diff display: two-column `<pre>` blocks with `overflow-x-auto`. Line colors via CSS classes.
+- Fetch `tts_script.md` content: `GET /api/pipeline/tts-script/content` or adapt the script route to accept a query param.
+- Generate button POSTs to `/api/pipeline/tts-script/run`. Store returned `jobId` in state. Pass to `SseLogPanel`.
+- `lastRunTime` stored in `localStorage` under key `'tts-script-last-run'`.
+- CodeMirror editor same pattern as Stage 2 (import and mount).
+
+Deliverable
+- `components/stages/Stage3TtsScriptGen.tsx` — TTS script generation panel with diff view and inline editor.
+
+Implementation assumptions (explicit)
+- `diff` npm package is available for line diff computation.
+- `tts_script.md` endpoint is accessible via the project script API.
+
+Please produce production-ready prompt content that will generate the module consistent with the above.
