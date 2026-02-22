@@ -1,0 +1,71 @@
+import { NextResponse } from "next/server";
+import { getDb } from "@/lib/db";
+import type { PipelineStage, StageStatus } from "@/lib/types";
+
+export const dynamic = "force-dynamic";
+
+type StageStatusEntry = {
+  status: StageStatus;
+  lastJobId: string | null;
+  error: string | null;
+};
+
+// Canonical ordered list of all pipeline stages
+const PIPELINE_STAGES: PipelineStage[] = [
+  "setup",
+  "script",
+  "tts-script",
+  "tts-render",
+  "audio-sync",
+  "specs",
+  "veo",
+  "compositions",
+  "render",
+  "audit",
+];
+
+/**
+ * GET /api/pipeline/status
+ * Returns the current status of all pipeline stages.
+ */
+export async function GET(): Promise<NextResponse> {
+  try {
+    const db = getDb();
+    const rows = db.prepare("SELECT * FROM pipeline_status").all() as Array<{
+      stage: PipelineStage;
+      status: StageStatus;
+      lastJobId: string | null;
+      error: string | null;
+    }>;
+
+    const stagesMap = {} as Record<PipelineStage, StageStatusEntry>;
+
+    // Build map from existing rows
+    for (const row of rows) {
+      stagesMap[row.stage] = {
+        status: row.status,
+        lastJobId: row.lastJobId ?? null,
+        error: row.error ?? null,
+      };
+    }
+
+    // Fill missing stages with defaults
+    for (const stage of PIPELINE_STAGES) {
+      if (!stagesMap[stage]) {
+        stagesMap[stage] = {
+          status: "not_started",
+          lastJobId: null,
+          error: null,
+        };
+      }
+    }
+
+    return NextResponse.json({ stages: stagesMap });
+  } catch (error) {
+    console.error("Error fetching pipeline status:", error);
+    return NextResponse.json(
+      { error: "Internal Server Error" },
+      { status: 500 }
+    );
+  }
+}

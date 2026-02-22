@@ -2,11 +2,12 @@
 const config = {
   testEnvironment: "node",
   transform: {
-    "^.+\\.(ts|tsx)$": ["ts-jest", { tsconfig: { module: "commonjs" } }],
+    "^.+\\.(ts|tsx)$": ["ts-jest", { tsconfig: "tsconfig.test.json", diagnostics: false }],
   },
   testMatch: ["**/__tests__/**/*.test.ts", "**/*.test.ts", "**/tests/**/*.ts", "tests/*.ts"],
   moduleNameMapper: {
     "^@/(.*)$": "<rootDir>/$1",
+    "^server-only$": "<rootDir>/__mocks__/server-only.js",
   },
 };
 

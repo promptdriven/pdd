@@ -1,0 +1,68 @@
+{
+  "name": "Product Launch Video",
+  "outputResolution": "1920x1080",
+  "tts": {
+    "voice": "en-US-Neural2-F",
+    "rate": 1,
+    "model": "google-tts-v2"
+  },
+  "sections": [
+    {
+      "id": "intro",
+      "label": "Introduction",
+      "videoFile": "output/sections/intro.mp4",
+      "specDir": "specs/intro",
+      "remotionDir": "remotion/intro",
+      "compositionId": "IntroComposition",
+      "durationSeconds": 12.5,
+      "offsetSeconds": 0
+    },
+    {
+      "id": "main",
+      "label": "Main Content",
+      "videoFile": "output/sections/main.mp4",
+      "specDir": "specs/main",
+      "remotionDir": "remotion/main",
+      "compositionId": "MainComposition",
+      "durationSeconds": 45,
+      "offsetSeconds": 12.5
+    },
+    {
+      "id": "outro",
+      "label": "Outro",
+      "videoFile": "output/sections/outro.mp4",
+      "specDir": "specs/outro",
+      "remotionDir": "remotion/outro",
+      "compositionId": "OutroComposition",
+      "durationSeconds": 8,
+      "offsetSeconds": 57.5
+    }
+  ],
+  "audioSync": {
+    "sectionGroups": {
+      "narration": [
+        "intro",
+        "main",
+        "outro"
+      ],
+      "music": [
+        "intro",
+        "outro"
+      ]
+    }
+  },
+  "veo": {
+    "model": "veo-2.0-generate-001",
+    "aspectRatio": "16:9",
+    "referenceImages": {
+      "logo": "assets/logo.png"
+    }
+  },
+  "render": {
+    "maxParallelRenders": 3,
+    "outputDir": "output/final",
+    "fps": 30,
+    "width": 1920,
+    "height": 1080
+  }
+}
