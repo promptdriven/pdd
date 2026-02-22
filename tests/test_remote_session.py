@@ -377,7 +377,10 @@ async def test_list_sessions_success(mock_cloud_config, mock_httpx_client):
                 "projectName": "test-project",
                 "status": "active"
             }
-        ]
+        ],
+        "limit": 100,
+        "offset": 0,
+        "count": 1
     }
     mock_httpx_client.get.return_value = mock_response
 
@@ -400,6 +403,48 @@ async def test_list_sessions_error(mock_cloud_config, mock_httpx_client):
         await RemoteSessionManager.list_sessions("token")
     
     assert excinfo.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_list_sessions_paginates_multiple_pages(mock_cloud_config, mock_httpx_client):
+    """Should paginate until a partial page is returned."""
+    page_size = 100
+    # First response: full page (100 items)
+    full_page = [{"sessionId": f"s{i}", "cloudUrl": f"https://pdd.dev/connect/s{i}",
+                  "projectName": "p", "status": "active"} for i in range(page_size)]
+    # Second response: partial page (3 items)
+    partial_page = [{"sessionId": f"s{i}", "cloudUrl": f"https://pdd.dev/connect/s{i}",
+                     "projectName": "p", "status": "active"} for i in range(page_size, page_size + 3)]
+
+    resp1 = MagicMock()
+    resp1.status_code = 200
+    resp1.json.return_value = {"sessions": full_page, "limit": page_size, "offset": 0, "count": page_size}
+
+    resp2 = MagicMock()
+    resp2.status_code = 200
+    resp2.json.return_value = {"sessions": partial_page, "limit": page_size, "offset": page_size, "count": 3}
+
+    mock_httpx_client.get.side_effect = [resp1, resp2]
+
+    sessions = await RemoteSessionManager.list_sessions("token")
+
+    assert len(sessions) == 103
+    assert mock_httpx_client.get.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_list_sessions_sends_pagination_params(mock_cloud_config, mock_httpx_client):
+    """Should send limit and offset as query params."""
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"sessions": [], "limit": 100, "offset": 0, "count": 0}
+    mock_httpx_client.get.return_value = mock_response
+
+    await RemoteSessionManager.list_sessions("token")
+
+    call_kwargs = mock_httpx_client.get.call_args
+    assert call_kwargs.kwargs.get("params") == {"limit": 100, "offset": 0}
+
 
 # --- Additional Tests for New API ---
 

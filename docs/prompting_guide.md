@@ -195,10 +195,10 @@ Tip: Prefer small, named sections using XML‑style tags to make context scannab
 
 The PDD preprocessor supports additional XML‑style tags to keep prompts clean, reproducible, and self‑contained. Processing order (per spec) is: `pdd` → `include`/`include-many` → `shell` → `web`. When `recursive=True`, `<shell>` and `<web>` are deferred until a non‑recursive pass.
 
-- `<pdd>…</pdd>`
+- ``
   - Purpose: human‑only comment. Removed entirely during preprocessing.
   - Use: inline rationale or notes that should not reach the model.
-  - Example: `Before step X <pdd>explain why we do this here</pdd>`
+  - Example: `Before step X `
 
 - `<shell>…</shell>`
   - Purpose: run a shell command and inline stdout at that position.
@@ -259,7 +259,7 @@ Place architecture metadata tags at the **top of your prompt file** (after any `
   "type": "module",
   "module": {{
     "functions": [
-      {{"name": "function_name", "signature": "(...)", "returns": "Type"}}
+      {"name": "function_name", "signature": "(...)", "returns": "Type"}
     ]
   }}
 }}
@@ -288,7 +288,7 @@ Place architecture metadata tags at the **top of your prompt file** (after any `
     "type": "module",
     "module": {{
       "functions": [
-        {{"name": "llm_invoke", "signature": "(prompt, strength, ...)", "returns": "Dict"}}
+        {"name": "llm_invoke", "signature": "(prompt, strength, ...)", "returns": "Dict"}
       ]
     }}
   }}

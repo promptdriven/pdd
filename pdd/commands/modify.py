@@ -213,6 +213,19 @@ def update(
     Single-file mode (1 arg): Update prompt for specific code file.
     """
     ctx.ensure_object(dict)
+
+    # Validate argument counts before try/except so UsageError propagates naturally
+    if len(files) == 2 and not git:
+        raise click.UsageError(
+            "Two arguments require --git flag: pdd update --git <prompt> <modified_code>"
+        )
+    if len(files) == 3 and git:
+        raise click.UsageError(
+            "Cannot use --git with 3 arguments (--git and original_code are mutually exclusive)"
+        )
+    if len(files) > 3:
+        raise click.UsageError("Too many arguments. Max 3: <prompt> <modified_code> <original_code>")
+
     try:
         # Handle argument counts per modify_python.prompt spec (aligned with README)
         if len(files) == 0:
@@ -228,27 +241,17 @@ def update(
             modified_code_file = files[0]
             input_code_file = None
         elif len(files) == 2:
-            # Git-based update: prompt + modified_code (requires --git)
-            if not git:
-                raise click.UsageError(
-                    "Two arguments require --git flag: pdd update --git <prompt> <modified_code>"
-                )
+            # Git-based update: prompt + modified_code (--git guaranteed by pre-validation)
             is_repo_mode = False
             input_prompt_file = files[0]
             modified_code_file = files[1]
             input_code_file = None
         elif len(files) == 3:
-            # Manual update: prompt + modified_code + original_code
-            if git:
-                raise click.UsageError(
-                    "Cannot use --git with 3 arguments (--git and original_code are mutually exclusive)"
-                )
+            # Manual update: prompt + modified_code + original_code (no --git guaranteed)
             is_repo_mode = False
             input_prompt_file = files[0]
             modified_code_file = files[1]
             input_code_file = files[2]
-        else:
-            raise click.UsageError("Too many arguments. Max 3: <prompt> <modified_code> <original_code>")
 
         # Validate mode-specific options
         if is_repo_mode:
@@ -288,7 +291,7 @@ def update(
 
         return result, cost, model
 
-    except click.Abort:
+    except (click.Abort, click.UsageError):
         raise
     except Exception as e:
         handle_error(e, "update", ctx.obj.get("quiet", False))

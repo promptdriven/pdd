@@ -108,6 +108,8 @@ class PDDCLI(click.Group):
             # User cancelled (e.g., pressed 'no' on confirmation) - set flag
             # to exit silently without triggering error reporting
             user_abort = True
+        except click.UsageError:
+            raise  # Let Click handle it natively via BaseCommand.main() → echo()
         except KeyboardInterrupt as e:
             # Handle keyboard interrupt (Ctrl+C) gracefully
             exception_to_handle = e

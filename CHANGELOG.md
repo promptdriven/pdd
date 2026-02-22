@@ -1,17 +1,25 @@
+## v0.0.156 (2026-02-21)
+
+### Feat
+
+- Add new API routes for annotations, job details, and job retry, with corresponding examples and integration tests.
+- Implement core video editor pipeline APIs, scripts, tests, and examples for project, audio, TTS, and rendering functionalities.
+- Implement pagination for `RemoteSessionManager.list_sessions` a… (#492)
+
+### Fix
+
+- Correct log line processing in streaming routes by excluding trailing empty strings and include 'logs' in job schema tests.
+
 ## v0.0.155 (2026-02-20)
 
 ### Feat
 
-- Add initial video editor project scaffolding with prompts, Dockerfile, and configuration, and update CI test durations.
-- initialize video editor project with core files, prompts, documentation, and CI configuration.
-- Add support for generating a video editor application with its architecture, prompts, and initial structure.
-- replace placeholder script with a detailed 'Prompt-Driven Development' video script for the narrative demo.
-- Introduce `pdd checkup` command, update models, refactor `.pddrc` strategy detection, migrate package tests to Cloud Build, and update grounding experiment documentation.
-- Dry-run validation with per-module cwd for agentic sync (#489)
+- **Dry-run validation with per-module cwd in agentic sync** — Before dispatching parallel `pdd sync` workers, `run_agentic_sync` now runs a dry-run validation phase for every module. `_resolve_module_cwd()` discovers the correct working directory by scanning `.pddrc` files at the project root and up to two levels of subdirectories; the deepest matching context wins. `_run_single_dry_run()` executes `pdd sync <basename> --dry-run --agentic --no-steer` from the resolved cwd. If the dry-run fails, `_llm_fix_dry_run_failure()` builds a project-tree snapshot and `.pddrc` location list, invokes the LLM via a new `agentic_sync_fix_dry_run_LLM.prompt`, extracts the `SYNC_CWD:` marker from the response, validates the suggested path is inside the project root, and re-runs the dry-run to confirm. The resulting `module_cwds` dict is passed to `AsyncSyncRunner`, which now uses a per-module cwd instead of always running from the project root.
+- **Subproject directory support in agentic architecture** — `pdd generate --agentic` and the underlying orchestrator now accept a `--output-dir` / `target_dir` option to scope a new project to a subdirectory. `_extract_target_dir()` auto-parses the target directory from the GitHub issue body using tight patterns (backtick/double-quote wrapped, or unquoted paths containing `_` or `/` to avoid false matches on natural English). The orchestrator derives `base_dir = cwd / target_dir` and creates it if needed; all `architecture.json` reads/writes and scaffolding file creation are redirected to `base_dir`. Step 6 gains an MD5 hash check before and after execution — if the file content is unchanged the step is marked failed immediately, preventing silent no-ops where the agent reformats the existing file instead of creating a new architecture. The `agentic_arch_step6_generate_LLM.prompt` now includes explicit `target_dir` instructions.
 
 ### Fix
 
-- improve e2e test resilience by skipping on LLM generation failures or empty responses.
+- **E2E test resilience** — `test_e2e_issue_342_syspath_isolation` now skips (instead of failing) when the LLM returns an empty response or a generation failure, making CI stable in environments without an API key.
 
 ## v0.0.154 (2026-02-19)
 
