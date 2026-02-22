@@ -1,3 +1,15 @@
+## v0.0.156 (2026-02-21)
+
+### Feat
+
+- Add new API routes for annotations, job details, and job retry, with corresponding examples and integration tests.
+- Implement core video editor pipeline APIs, scripts, tests, and examples for project, audio, TTS, and rendering functionalities.
+- Implement pagination for `RemoteSessionManager.list_sessions` a… (#492)
+
+### Fix
+
+- Correct log line processing in streaming routes by excluding trailing empty strings and include 'logs' in job schema tests.
+
 ## v0.0.155 (2026-02-20)
 
 ### Feat
