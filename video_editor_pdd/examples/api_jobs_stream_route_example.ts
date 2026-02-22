@@ -1,165 +1,203 @@
 // example_usage.ts
 // Comprehensive usage example for app/api/jobs/[id]/stream/route.ts
 //
-// This file exercises the SSE streaming route's core behavior by using
-// the same getJob/createJob/runJob functions the real route handler uses.
-// It creates jobs in an in-memory SQLite database, runs them (which
-// appends log lines to job.logs), and demonstrates the polling + SSE
-// emission logic identical to what route.ts does.
+// This file verifies the SSE streaming route by:
+//   1. Importing and calling the actual GET handler from route.ts
+//   2. Consuming the ReadableStream response and parsing SSE events
+//   3. Testing all three terminal scenarios: done, error, not-found
+//   4. Verifying response headers match SSE requirements
+//   5. Verifying source file structure matches prompt requirements
+//
+// For standalone execution, an in-memory SQLite database is used
+// and the @/ module path alias is resolved at runtime.
 
-// Use in-memory database for standalone execution
+// ---------------------------------------------------------------------------
+// 0. Environment setup (must run before any module that calls getDb())
+// ---------------------------------------------------------------------------
 process.env.DB_PATH = ':memory:';
 
+// Register @/ path alias so route.ts's `import { getJob } from "@/lib/jobs"`
+// resolves correctly when running outside the Next.js bundler.
+const Module = require('module');
+const pathMod = require('path');
+const projectRoot = pathMod.resolve(__dirname, '..');
+const origResolve = Module._resolveFilename;
+Module._resolveFilename = function (request: string, ...args: unknown[]) {
+  if (request.startsWith('@/')) {
+    return origResolve.call(this, pathMod.join(projectRoot, request.slice(2)), ...args);
+  }
+  return origResolve.call(this, request, ...args);
+};
+
+// ---------------------------------------------------------------------------
+// 1. Imports (safe now that alias is registered)
+// ---------------------------------------------------------------------------
+import fs from 'fs';
+import path from 'path';
 import { createJob, getJob, runJob } from '../lib/jobs';
 
-// ============================================================================
-// Helper
-// ============================================================================
+// Dynamic require of route module (must be after alias registration above)
+const routeModule = require('../app/api/jobs/[id]/stream/route') as {
+  GET: (request: Request, context: { params: { id: string } }) => Promise<Response>;
+  dynamic: string;
+};
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+// ---------------------------------------------------------------------------
+// 2. Assertion helper
+// ---------------------------------------------------------------------------
+let passed = 0;
+let failed = 0;
+
+function assert(condition: boolean, label: string): void {
+  if (condition) {
+    passed++;
+    console.log(`  PASS: ${label}`);
+  } else {
+    failed++;
+    console.log(`  FAIL: ${label}`);
+  }
 }
 
-// ============================================================================
-// Example 1: SSE stream — polling getJob() for log lines and status
-// ============================================================================
+// ---------------------------------------------------------------------------
+// 3. SSE stream consumer helper
+// ---------------------------------------------------------------------------
 
-/**
- * Demonstrates the exact SSE polling logic from route.ts:
- *   1. Poll getJob(id) every 200ms
- *   2. Split job.logs on newline, send only NEW lines since lastLineIndex
- *   3. When job.status === 'done', send event: done and close
- *   4. When job.status === 'error', send event: error and close
- *
- * This mirrors the start(controller) callback in route.ts but collects
- * SSE frames into an array instead of enqueuing into a ReadableStream.
- */
-async function example1_ssePollingWithGetJob(): Promise<void> {
-  console.log('=== Example 1: SSE polling with getJob() ===\n');
+interface SseEvent {
+  eventType: string | null; // null for default "message" events
+  data: string;
+}
 
-  // Create a job in the database
-  const jobId = createJob('tts-render', { sectionId: 'intro' });
-  console.log(`Created job: ${jobId}`);
+async function consumeSseStream(response: Response): Promise<SseEvent[]> {
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  const events: SseEvent[] = [];
 
-  // Executor that logs progressively with sleeps between each line
-  const executor = async (onLog: (msg: string) => void): Promise<void> => {
-    onLog(`[tts-render] Starting with params: {"sectionId":"intro"}`);
-    await sleep(50);
-    onLog('[tts-render] Progress: 25%');
-    await sleep(50);
-    onLog('[tts-render] Synthesizing audio waveform...');
-    await sleep(50);
-    onLog('[tts-render] Progress: 50%');
-    await sleep(50);
-    onLog('[tts-render] Encoding to MP3...');
-    await sleep(50);
-    onLog('[tts-render] Progress: 75%');
-    await sleep(50);
-    onLog('[tts-render] Progress: 100%');
-    await sleep(50);
-    onLog('[tts-render] Completed successfully');
-  };
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+  }
+  buffer += decoder.decode(); // flush
 
-  // Collect SSE frames using the same polling logic as route.ts
-  const sseFrames: string[] = [];
-  let lastLineIndex = 0;
-  let streamDone = false;
-
-  // Start polling (mirrors route.ts setInterval(poll, 200))
-  const pollInterval = setInterval(() => {
-    if (streamDone) return;
-
-    const job = getJob(jobId);
-    if (!job) return;
-
-    // Split logs and send only new lines (mirrors route.ts logic)
-    const lines = job.logs ? job.logs.split('\n') : [];
-    // Exclude trailing empty string from final \n
-    const lineCount =
-      lines.length > 0 && lines[lines.length - 1] === ''
-        ? lines.length - 1
-        : lines.length;
-    if (lineCount > lastLineIndex) {
-      for (let i = lastLineIndex; i < lineCount; i++) {
-        if (lines[i]) {
-          sseFrames.push(`data: ${JSON.stringify({ type: 'log', message: lines[i] })}\n\n`);
-        }
+  // Parse SSE frames (separated by double newline)
+  const frames = buffer.split('\n\n').filter(Boolean);
+  for (const frame of frames) {
+    const lines = frame.split('\n');
+    let eventType: string | null = null;
+    let data = '';
+    for (const line of lines) {
+      if (line.startsWith('event: ')) {
+        eventType = line.slice(7);
+      } else if (line.startsWith('data: ')) {
+        data = line.slice(6);
       }
-      lastLineIndex = lineCount;
     }
-
-    // Check terminal status (mirrors route.ts)
-    if (job.status === 'done') {
-      sseFrames.push('event: done\ndata: {}\n\n');
-      streamDone = true;
-      clearInterval(pollInterval);
-    } else if (job.status === 'error') {
-      sseFrames.push(`event: error\ndata: ${JSON.stringify({ message: job.error ?? 'Unknown error' })}\n\n`);
-      streamDone = true;
-      clearInterval(pollInterval);
+    if (data || eventType) {
+      events.push({ eventType, data });
     }
-  }, 200);
+  }
+  return events;
+}
 
-  // Run the job concurrently — appends logs to DB via safeAppendLog
-  await runJob(jobId, executor);
+// ---------------------------------------------------------------------------
+// Example 1: Completed job — GET returns all log lines + done event
+// ---------------------------------------------------------------------------
 
-  // Wait for polling to pick up final status
-  await sleep(500);
-  clearInterval(pollInterval);
+async function example1_completedJob(): Promise<void> {
+  console.log('=== Example 1: Completed job — log lines + done event ===');
 
-  // Verify getJob returns logs from the database
-  const finalJob = getJob(jobId);
-  console.log(`Job final status: ${finalJob?.status}`);
-  console.log(`Job has logs: ${(finalJob?.logs?.length ?? 0) > 0}`);
+  const jobId = createJob('tts-render', { sectionId: 'intro' });
+
+  // Run the job to completion (populates logs and sets status=done)
+  await runJob(jobId, async (onLog) => {
+    onLog('[tts-render] Starting with params: {"sectionId":"intro"}');
+    onLog('[tts-render] Progress: 25%');
+    onLog('[tts-render] Synthesizing audio waveform...');
+    onLog('[tts-render] Progress: 50%');
+    onLog('[tts-render] Encoding to MP3...');
+    onLog('[tts-render] Progress: 75%');
+    onLog('[tts-render] Progress: 100%');
+    onLog('[tts-render] Completed successfully');
+  });
+
+  // Verify job is done in DB
+  const job = getJob(jobId);
+  assert(job?.status === 'done', 'Job status is done after runJob');
+
+  // Call the actual route handler
+  const request = new Request('http://localhost/api/jobs/' + jobId + '/stream');
+  const response = await routeModule.GET(request, { params: { id: jobId } });
+  const events = await consumeSseStream(response);
+
+  // Verify log events
+  const logEvents = events.filter((e) => e.eventType === null && JSON.parse(e.data).type === 'log');
+  assert(logEvents.length === 8, `8 log events emitted (got ${logEvents.length})`);
+
+  // Verify progress events
+  const progressEvents = events.filter((e) => e.eventType === null && JSON.parse(e.data).type === 'progress');
+  assert(progressEvents.length >= 1, `At least one progress event emitted (got ${progressEvents.length})`);
+
+  // Verify first log event format: data: {"type":"log","message":"..."}
+  const firstLog = JSON.parse(logEvents[0].data);
+  assert(firstLog.type === 'log', 'Log event has type="log"');
+  assert(
+    firstLog.message === '[tts-render] Starting with params: {"sectionId":"intro"}',
+    'First log message matches'
+  );
+
+  // Verify terminal done event
+  const doneEvents = events.filter((e) => e.eventType === 'done');
+  assert(doneEvents.length === 1, 'One done event emitted');
+  assert(doneEvents[0].data === '{}', 'Done event data is empty object');
+
+  // Total events: 8 log + at least 1 progress + 1 done = at least 10
+  assert(events.length >= 10, `Total SSE events: ${events.length} (expected at least 10)`);
 
   // Display SSE frames
-  console.log('\nSSE frames emitted by the server:\n');
-  for (const frame of sseFrames) {
-    console.log(frame.replace(/\n/g, '\\n').replace(/\\n\\n$/, ''));
-    console.log('---');
+  console.log('\n  SSE frames emitted by the server:');
+  for (const event of events) {
+    if (event.eventType) {
+      console.log(`    event: ${event.eventType}`);
+    }
+    console.log(`    data: ${event.data}`);
+    console.log('    ---');
   }
-
-  console.log(`\nTotal SSE frames: ${sseFrames.length}`);
-  const logFrames = sseFrames.filter((f) => f.startsWith('data:'));
-  const terminalFrames = sseFrames.filter((f) => f.startsWith('event:'));
-  console.log(`  Log frames: ${logFrames.length}`);
-  console.log(`  Terminal frame: ${terminalFrames.length} (done)`);
+  console.log('');
 }
 
-// ============================================================================
+// ---------------------------------------------------------------------------
 // Example 2: Job not found — error event on first poll
-// ============================================================================
+// ---------------------------------------------------------------------------
 
-/**
- * When getJob(id) returns undefined on the first poll, route.ts sends:
- *   event: error\ndata: {"message":"Job not found"}\n\n
- * and closes the stream immediately.
- */
-function example2_jobNotFound(): void {
-  console.log('\n=== Example 2: Job not found ===\n');
+async function example2_jobNotFound(): Promise<void> {
+  console.log('=== Example 2: Job not found — error event ===');
 
   const fakeId = 'non-existent-job-id';
-  const job = getJob(fakeId);
 
-  console.log(`getJob("${fakeId}") returns: ${job}`);
+  const request = new Request('http://localhost/api/jobs/' + fakeId + '/stream');
+  const response = await routeModule.GET(request, { params: { id: fakeId } });
+  const events = await consumeSseStream(response);
 
-  if (!job) {
-    const frame = `event: error\ndata: ${JSON.stringify({ message: 'Job not found' })}\n\n`;
-    console.log('SSE frame: ' + frame.replace(/\n/g, '\\n').replace(/\\n\\n$/, ''));
-    console.log('Stream closes immediately.');
-  }
+  // Should emit exactly one error event
+  assert(events.length === 1, `One event emitted (got ${events.length})`);
+  assert(events[0].eventType === 'error', 'Event type is error');
+
+  const errorData = JSON.parse(events[0].data);
+  assert(errorData.message === 'Job not found', 'Error message is "Job not found"');
+
+  console.log(`  SSE: event: error`);
+  console.log(`  SSE: data: ${events[0].data}`);
+  console.log('  Stream closes immediately.');
+  console.log('');
 }
 
-// ============================================================================
-// Example 3: Job error — error event after log lines
-// ============================================================================
+// ---------------------------------------------------------------------------
+// Example 3: Job execution failure — log lines + error event
+// ---------------------------------------------------------------------------
 
-/**
- * When a job fails during execution, route.ts streams log lines while
- * the job is running, then sends an error event when status becomes 'error'.
- */
 async function example3_jobError(): Promise<void> {
-  console.log('\n=== Example 3: Job execution failure ===\n');
+  console.log('=== Example 3: Job execution failure — error event ===');
 
   const jobId = createJob('veo', { sectionId: 'intro' });
 
@@ -170,120 +208,234 @@ async function example3_jobError(): Promise<void> {
     throw new Error('Veo API rate limit exceeded');
   });
 
-  const failedJob = getJob(jobId);
-  console.log(`Job status: ${failedJob?.status}`);
-  console.log(`Job error: ${failedJob?.error}`);
-  console.log(`Job has logs: ${(failedJob?.logs?.length ?? 0) > 0}`);
+  // Verify job is in error state
+  const job = getJob(jobId);
+  assert(job?.status === 'error', 'Job status is error after failed run');
+  assert(job?.error === 'Veo API rate limit exceeded', 'Error message stored in DB');
 
-  // Show what route.ts would emit for this job
-  if (failedJob?.logs) {
-    const lines = failedJob.logs.split('\n').filter(Boolean);
-    for (const line of lines) {
-      console.log(`SSE: data: ${JSON.stringify({ type: 'log', message: line })}\\n\\n`);
-    }
-  }
-  console.log(`SSE: event: error\\ndata: ${JSON.stringify({ message: failedJob?.error })}\\n\\n`);
-  console.log('Stream closes after error event.');
+  // Call the actual route handler
+  const request = new Request('http://localhost/api/jobs/' + jobId + '/stream');
+  const response = await routeModule.GET(request, { params: { id: jobId } });
+  const events = await consumeSseStream(response);
+
+  // Verify log events before error
+  const logEvents = events.filter((e) => e.eventType === null && JSON.parse(e.data).type === 'log');
+  assert(logEvents.length === 2, `2 log events emitted (got ${logEvents.length})`);
+
+  // Verify terminal error event
+  const errorEvents = events.filter((e) => e.eventType === 'error');
+  assert(errorEvents.length === 1, 'One error event emitted');
+
+  const errorData = JSON.parse(errorEvents[0].data);
+  assert(
+    errorData.message === 'Veo API rate limit exceeded',
+    'Error event contains correct message'
+  );
+
+  console.log(`  SSE log events: ${logEvents.length}`);
+  console.log(`  SSE error event: ${errorEvents[0].data}`);
+  console.log('  Stream closes after error event.');
+  console.log('');
 }
 
-// ============================================================================
-// Example 4: Response headers and stream construction
-// ============================================================================
+// ---------------------------------------------------------------------------
+// Example 4: Response headers verification
+// ---------------------------------------------------------------------------
 
-/**
- * The route handler returns a Response with SSE headers:
- *   Content-Type: text/event-stream
- *   Cache-Control: no-cache
- *   Connection: keep-alive
- *
- * And exports: export const dynamic = 'force-dynamic'
- */
-function example4_responseHeaders(): void {
-  console.log('\n=== Example 4: Response headers ===\n');
+async function example4_responseHeaders(): Promise<void> {
+  console.log('=== Example 4: Response headers ===');
 
-  // Demonstrate the Response construction (mirrors route.ts)
-  const encoder = new TextEncoder();
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(encoder.encode('data: {"type":"log","message":"test"}\n\n'));
-      controller.enqueue(encoder.encode('event: done\ndata: {}\n\n'));
-      controller.close();
-    },
+  const jobId = createJob('setup', {});
+  await runJob(jobId, async (onLog) => {
+    onLog('[setup] Done');
   });
 
-  const response = new Response(stream, {
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-    },
-  });
+  const request = new Request('http://localhost/api/jobs/' + jobId + '/stream');
+  const response = await routeModule.GET(request, { params: { id: jobId } });
 
-  console.log(`Content-Type: ${response.headers.get('Content-Type')}`);
-  console.log(`Cache-Control: ${response.headers.get('Cache-Control')}`);
-  console.log(`Connection: ${response.headers.get('Connection')}`);
-  console.log('dynamic: force-dynamic (exported constant)');
+  // Consume the stream so it doesn't leak
+  await consumeSseStream(response);
+
+  assert(
+    response.headers.get('Content-Type') === 'text/event-stream',
+    'Content-Type is text/event-stream'
+  );
+  assert(
+    response.headers.get('Cache-Control') === 'no-cache',
+    'Cache-Control is no-cache'
+  );
+  assert(
+    response.headers.get('Connection') === 'keep-alive',
+    'Connection is keep-alive'
+  );
+
+  console.log(`  Content-Type: ${response.headers.get('Content-Type')}`);
+  console.log(`  Cache-Control: ${response.headers.get('Cache-Control')}`);
+  console.log(`  Connection: ${response.headers.get('Connection')}`);
+  console.log('');
 }
 
-// ============================================================================
-// Example 5: Browser EventSource client pattern
-// ============================================================================
+// ---------------------------------------------------------------------------
+// Example 5: Exported constants verification
+// ---------------------------------------------------------------------------
 
-/**
- * Shows how clients consume the SSE stream using EventSource.
- * Log lines arrive as default "message" events, while "done" and "error"
- * are named events that require addEventListener.
- */
-function example5_clientPattern(): void {
-  console.log('\n=== Example 5: Client EventSource pattern ===\n');
+function example5_exports(): void {
+  console.log('=== Example 5: Exported constants ===');
 
-  console.log('Browser usage:');
-  console.log('  const es = new EventSource("/api/jobs/<id>/stream");');
-  console.log('  es.onmessage = (e) => {');
-  console.log('    const { type, message } = JSON.parse(e.data);');
-  console.log('    if (type === "log") appendLog(message);');
-  console.log('  };');
-  console.log('  es.addEventListener("done", () => { setStatus("done"); es.close(); });');
-  console.log('  es.addEventListener("error", (e) => { handleError(e); es.close(); });');
+  assert(routeModule.dynamic === 'force-dynamic', 'dynamic export is "force-dynamic"');
+  assert(typeof routeModule.GET === 'function', 'GET is an exported function');
+
+  console.log(`  dynamic: ${routeModule.dynamic}`);
+  console.log('');
 }
 
-// ============================================================================
-// Example 6: Internal server error handling
-// ============================================================================
+// ---------------------------------------------------------------------------
+// Example 6: Source file structure verification
+// ---------------------------------------------------------------------------
 
-/**
- * If getJob() or poll logic throws unexpectedly, route.ts catches the
- * error in a try/catch, sends an error event, and closes the stream.
- */
-function example6_internalError(): void {
-  console.log('\n=== Example 6: Internal server error ===\n');
+function example6_sourceStructure(): void {
+  console.log('=== Example 6: Source file structure verification ===');
 
-  console.log('If poll() throws unexpectedly:');
-  console.log(`  SSE: event: error\\ndata: {"message":"Internal Server Error"}\\n\\n`);
-  console.log('  Stream closes. Error logged server-side via console.error().');
+  const sourceCode = fs.readFileSync(
+    path.join(__dirname, '..', 'app', 'api', 'jobs', '[id]', 'stream', 'route.ts'),
+    'utf-8'
+  );
+
+  // Requirement: GET handler
+  assert(
+    /export\s+async\s+function\s+GET/.test(sourceCode),
+    'Exports async GET handler'
+  );
+
+  // Requirement: force-dynamic
+  assert(
+    sourceCode.includes('force-dynamic'),
+    'Exports dynamic = "force-dynamic"'
+  );
+
+  // Requirement: Imports getJob from @/lib/jobs
+  assert(
+    sourceCode.includes('getJob') && sourceCode.includes('@/lib/jobs'),
+    'Imports getJob from @/lib/jobs'
+  );
+
+  // Requirement: SSE mechanism (manual ReadableStream or createSseStream)
+  assert(
+    sourceCode.includes('ReadableStream') || sourceCode.includes('createSseStream'),
+    'Uses ReadableStream or createSseStream for SSE'
+  );
+
+  // Requirement: setInterval polling at 200ms
+  assert(
+    sourceCode.includes('setInterval') && sourceCode.includes('200'),
+    'Uses setInterval with 200ms polling'
+  );
+
+  // Requirement: lastLineIndex tracking
+  assert(sourceCode.includes('lastLineIndex'), 'Tracks lastLineIndex for incremental log delivery');
+
+  // Requirement: Split logs on newline
+  assert(
+    sourceCode.includes('.split'),
+    'Splits job.logs on newline'
+  );
+
+  // Requirement: SSE data format for logs
+  assert(
+    sourceCode.includes('"log"'),
+    'Sends log events with type:"log"'
+  );
+
+  // Requirement: done event
+  assert(
+    sourceCode.includes('done()') || sourceCode.includes('event: done'),
+    'Sends done event'
+  );
+
+  // Requirement: error event
+  assert(
+    sourceCode.includes('error(') || sourceCode.includes('event: error'),
+    'Sends error event'
+  );
+
+  // Requirement: SSE headers
+  assert(sourceCode.includes('text/event-stream'), 'Sets Content-Type: text/event-stream');
+  assert(sourceCode.includes('no-cache'), 'Sets Cache-Control: no-cache');
+  assert(sourceCode.includes('keep-alive'), 'Sets Connection: keep-alive');
+
+  // Requirement: Job not found handling
+  assert(
+    sourceCode.includes('Job not found'),
+    'Handles job-not-found case with error message'
+  );
+
+  // Requirement: clearInterval on close (prevents DB polling leaks)
+  assert(
+    sourceCode.includes('clearInterval'),
+    'Clears interval on stream close'
+  );
+
+  // Requirement: cancel() handler or onCancel callback for client disconnect cleanup
+  assert(
+    sourceCode.includes('cancel()') || sourceCode.includes('onCancel') || sourceCode.includes('createSseStream('),
+    'Has mechanism for client disconnect cleanup'
+  );
+
+
+  // Requirement: Params destructuring
+  assert(
+    sourceCode.includes('params') && sourceCode.includes('id'),
+    'Uses params.id from route context'
+  );
+
+  console.log('');
 }
 
-// ============================================================================
+// ---------------------------------------------------------------------------
+// Example 7: Client EventSource consumption pattern
+// ---------------------------------------------------------------------------
+
+function example7_clientPattern(): void {
+  console.log('=== Example 7: Client EventSource pattern ===');
+
+  console.log('  Browser usage:');
+  console.log('    const es = new EventSource("/api/jobs/<id>/stream");');
+  console.log('    es.onmessage = (e) => {');
+  console.log('      const { type, message } = JSON.parse(e.data);');
+  console.log('      if (type === "log") appendLog(message);');
+  console.log('    };');
+  console.log('    es.addEventListener("done", () => { setStatus("done"); es.close(); });');
+  console.log('    es.addEventListener("error", (e) => { handleError(e); es.close(); });');
+  console.log('');
+}
+
+// ---------------------------------------------------------------------------
 // Run all examples
-// ============================================================================
+// ---------------------------------------------------------------------------
 
 async function main(): Promise<void> {
   console.log('========================================');
-  console.log('SSE Job Stream Route - Usage Examples');
+  console.log('SSE Job Stream Route - Module Verification');
   console.log('========================================\n');
 
-  await example1_ssePollingWithGetJob();
-  example2_jobNotFound();
+  await example1_completedJob();
+  await example2_jobNotFound();
   await example3_jobError();
-  example4_responseHeaders();
-  example5_clientPattern();
-  example6_internalError();
+  await example4_responseHeaders();
+  example5_exports();
+  example6_sourceStructure();
+  example7_clientPattern();
 
-  console.log('\n========================================');
+  console.log('========================================');
+  console.log(`Results: ${passed} passed, ${failed} failed`);
+  if (failed > 0) {
+    process.exit(1);
+  }
   console.log('All examples completed successfully');
   console.log('========================================');
 }
 
-if (require.main === module) {
-  main().catch(console.error);
-}
+main().catch((err) => {
+  console.error('Example failed:', err);
+  process.exit(1);
+});

@@ -1,4 +1,5 @@
 import { getJob } from "@/lib/jobs";
+import { createSseStream } from "@/lib/sse";
 
 export const dynamic = "force-dynamic";
 
@@ -10,89 +11,66 @@ export async function GET(
   _request: Request,
   { params }: { params: { id: string } }
 ): Promise<Response> {
-  const encoder = new TextEncoder();
   let intervalId: ReturnType<typeof setInterval> | null = null;
+  let lastLineIndex = 0;
+  let lastProgress = -1;
+  let checkedOnce = false;
 
-  const stream = new ReadableStream<Uint8Array>({ 
-    start(controller) {
-      let lastLineIndex = 0;
-      let checkedOnce = false;
-      let closed = false;
-
-      const sendRaw = (payload: string) => {
-        controller.enqueue(encoder.encode(payload));
-      };
-
-      const closeStream = () => {
-        if (closed) return;
-        closed = true;
-        if (intervalId) clearInterval(intervalId);
-        controller.close();
-      };
-
-      const sendLog = (message: string) => {
-        sendRaw(`data: ${JSON.stringify({ type: "log", message })}\n\n`);
-      };
-
-      const sendDone = () => {
-        sendRaw(`event: done\ndata: {}\n\n`);
-      };
-
-      const sendError = (message: string) => {
-        sendRaw(`event: error\ndata: ${JSON.stringify({ message })}\n\n`);
-      };
-
-      const poll = () => {
-        try {
-          const job = getJob(params.id);
-
-          if (!job) {
-            if (!checkedOnce) {
-              sendError("Job not found");
-              closeStream();
-            }
-            return;
-          }
-
-          checkedOnce = true;
-
-          const lines = job.logs ? job.logs.split("\n") : [];
-          // Exclude trailing empty string caused by final \n so we
-          // don't advance past a position that will hold the next line.
-          const lineCount =
-            lines.length > 0 && lines[lines.length - 1] === ""
-              ? lines.length - 1
-              : lines.length;
-          if (lineCount > lastLineIndex) {
-            for (let i = lastLineIndex; i < lineCount; i++) {
-              if (lines[i]) sendLog(lines[i]);
-            }
-            lastLineIndex = lineCount;
-          }
-
-          if (job.status === "done") {
-            sendDone();
-            closeStream();
-          } else if (job.status === "error") {
-            sendError(job.error ?? "Unknown error");
-            closeStream();
-          }
-        } catch (err) {
-          console.error("SSE stream error:", err);
-          sendError("Internal Server Error");
-          closeStream();
-        }
-      };
-
-      // Poll immediately, then every 200ms
-      poll();
-      intervalId = setInterval(poll, 200);
-    },
-
-    cancel() {
-      if (intervalId) clearInterval(intervalId);
-    },
+  const { stream, send, done, error } = createSseStream(() => {
+    if (intervalId) clearInterval(intervalId);
   });
+
+  const poll = () => {
+    try {
+      const job = getJob(params.id);
+
+      if (!job) {
+        if (!checkedOnce) {
+          error("Job not found");
+          if (intervalId) clearInterval(intervalId);
+        }
+        return;
+      }
+
+      checkedOnce = true;
+
+      // 1. Send progress if it changed
+      if (job.progress !== lastProgress) {
+        send({ type: "progress", percent: job.progress });
+        lastProgress = job.progress;
+      }
+
+      // 2. Send new logs
+      const lines = job.logs ? job.logs.split("\n") : [];
+      const lineCount =
+        lines.length > 0 && lines[lines.length - 1] === ""
+          ? lines.length - 1
+          : lines.length;
+      if (lineCount > lastLineIndex) {
+        for (let i = lastLineIndex; i < lineCount; i++) {
+          send({ type: "log", message: lines[i] });
+        }
+        lastLineIndex = lineCount;
+      }
+
+      // 3. Handle terminal status
+      if (job.status === "done") {
+        done();
+        if (intervalId) clearInterval(intervalId);
+      } else if (job.status === "error") {
+        error(job.error ?? "Unknown error");
+        if (intervalId) clearInterval(intervalId);
+      }
+    } catch (err) {
+      console.error("SSE stream error:", err);
+      error("Internal Server Error");
+      if (intervalId) clearInterval(intervalId);
+    }
+  };
+
+  // Poll immediately, then every 200ms
+  intervalId = setInterval(poll, 200);
+  poll();
 
   return new Response(stream, {
     headers: {
