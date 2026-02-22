@@ -88,12 +88,12 @@ ELO_SCORES: Dict[str, int] = {
     # OpenAI — GPT-5 family
     # -----------------------------------------------------------------------
     "gpt-5.2": 1395,                   # [CODE] #17 (default reasoning)
-    "gpt-5.2-codex": 1471,             # [CODE] #5 (gpt-5.2-high)
+    "gpt-5.2-codex": 1336,             # [CODE] #22
     "gpt-5.1": 1348,                   # [CODE] (default)
     "gpt-5.1-codex": 1348,             # Codex variant
-    "gpt-5.1-codex-mini": 1325,        # [EST] smaller codex variant
+    "gpt-5.1-codex-mini": 1243,        # [CODE] #31
     "gpt-5.1-codex-max": 1389,         # [EST] same as gpt-5.1-medium
-    "gpt-5.3-codex": 1471,             # [EST] newest codex, at least gpt-5.2-high level
+    "gpt-5.3-codex": 1336,             # [EST] assume similar to gpt-5.2-codex
     "gpt-5": 1393,                     # [CODE] #18 as gpt-5-medium
     "gpt-5-mini": 1310,                # [EST]
     "gpt-5-nano": 1300,                # [EST] smallest GPT-5 variant
