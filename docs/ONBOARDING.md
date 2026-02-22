@@ -85,7 +85,24 @@ To enable syntax highlighting for `.prompt` files in your editor, you'll need to
 
 ### 7. Set Up API Keys
 
-Add your LLM API keys to a `.env` file in the project root:
+**Recommended: Use the setup wizard**
+
+Run the interactive setup wizard to configure your API keys:
+
+```bash
+pdd setup
+```
+
+The wizard will:
+- **Scan your environment** for existing API keys from all sources (shell, .env, ~/.pdd files)
+- **Present an interactive menu** to add/fix keys, configure local LLMs, or manage providers
+- **Validate keys** with real test requests to ensure they work
+- **Show cost transparency** for different model tiers
+- **Create .pddrc** configuration for your project
+
+**Alternative: Manual configuration**
+
+If you prefer manual setup, add your LLM API keys to a `.env` file in the project root:
 
 ```bash
 # Required: At least one LLM provider
@@ -93,7 +110,7 @@ OPENAI_API_KEY=sk-your-key-here
 # OR
 ANTHROPIC_API_KEY=sk-ant-your-key-here
 # OR
-GOOGLE_API_KEY=your-google-api-key
+GEMINI_API_KEY=your-google-api-key
 
 # Optional: For Vertex AI (Gemini via GCP)
 VERTEX_CREDENTIALS=/path/to/service-account.json
@@ -841,6 +858,17 @@ rm -f ~/.pdd/llm_model.csv
 
 **Fix for "API key not found":**
 
+**Recommended:** Run the setup wizard to detect and fix missing API keys:
+```bash
+pdd setup
+```
+
+The wizard will:
+- Scan all sources (shell, .env, ~/.pdd files) and show which keys are missing
+- Let you add missing keys with immediate validation
+- Show exactly where each key is loaded from for transparency
+
+**Manual fixes:**
 - If using **Infisical**: Follow **"Step 7: Set Up Infisical for Secrets Management"** above to configure your API keys
 - If using **.env file**: Ensure your `.env` file in the project root contains your API keys (e.g., `OPENAI_API_KEY=sk-...`)
 
@@ -850,6 +878,8 @@ rm -f ~/.pdd/llm_model.csv
 infisical run -- env | grep API_KEY  # If using Infisical
 # OR
 env | grep API_KEY  # If using .env
+# OR
+pdd setup  # Shows scan of all keys with source transparency
 ```
 
 **Note on API key requirements for testing:**
