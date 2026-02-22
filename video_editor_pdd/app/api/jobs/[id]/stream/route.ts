@@ -57,12 +57,17 @@ export async function GET(
           checkedOnce = true;
 
           const lines = job.logs ? job.logs.split("\n") : [];
-          if (lines.length > lastLineIndex) {
-            for (let i = lastLineIndex; i < lines.length; i++) {
-              const line = lines[i];
-              if (line) sendLog(line);
+          // Exclude trailing empty string caused by final \n so we
+          // don't advance past a position that will hold the next line.
+          const lineCount =
+            lines.length > 0 && lines[lines.length - 1] === ""
+              ? lines.length - 1
+              : lines.length;
+          if (lineCount > lastLineIndex) {
+            for (let i = lastLineIndex; i < lineCount; i++) {
+              if (lines[i]) sendLog(lines[i]);
             }
-            lastLineIndex = lines.length;
+            lastLineIndex = lineCount;
           }
 
           if (job.status === "done") {

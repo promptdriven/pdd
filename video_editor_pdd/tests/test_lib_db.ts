@@ -105,6 +105,7 @@ describe("runMigrations", () => {
       "progress",
       "error",
       "params",
+      "logs",
       "createdAt",
       "updatedAt",
     ]);

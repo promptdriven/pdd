@@ -74,14 +74,18 @@ async function example1_ssePollingWithGetJob(): Promise<void> {
 
     // Split logs and send only new lines (mirrors route.ts logic)
     const lines = job.logs ? job.logs.split('\n') : [];
-    if (lines.length > lastLineIndex) {
-      for (let i = lastLineIndex; i < lines.length; i++) {
-        const line = lines[i];
-        if (line) {
-          sseFrames.push(`data: ${JSON.stringify({ type: 'log', message: line })}\n\n`);
+    // Exclude trailing empty string from final \n
+    const lineCount =
+      lines.length > 0 && lines[lines.length - 1] === ''
+        ? lines.length - 1
+        : lines.length;
+    if (lineCount > lastLineIndex) {
+      for (let i = lastLineIndex; i < lineCount; i++) {
+        if (lines[i]) {
+          sseFrames.push(`data: ${JSON.stringify({ type: 'log', message: lines[i] })}\n\n`);
         }
       }
-      lastLineIndex = lines.length;
+      lastLineIndex = lineCount;
     }
 
     // Check terminal status (mirrors route.ts)
