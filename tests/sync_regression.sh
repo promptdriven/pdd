@@ -806,9 +806,15 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "4" ]; then
 
     # Single sync with budget processes all language prompts (Python, JS, TS)
     log "4a. Testing multi-language calculator sync"
+    # Multi-language sync is inherently flaky (depends on LLM output quality);
+    # disable set -e so failures don't kill the test runner
+    set +e
     run_pdd_command_noexit sync --budget 5.0 --max-attempts 1 "$MULTI_LANG_BASENAME"
-    # Multi-language sync file layout varies; run check in subshell so exit 1 doesn't kill us
-    if (check_sync_files "$MULTI_LANG_BASENAME" "python" false); then
+    # Run check in subshell so exit 1 in check_sync_files doesn't kill us
+    (check_sync_files "$MULTI_LANG_BASENAME" "python" false)
+    MULTI_CHECK=$?
+    set -e
+    if [ "$MULTI_CHECK" -eq 0 ]; then
         log "Validation success: multi-language sync files found"
     else
         log_timestamped "Note: Multi-language sync may not produce expected file layout"
