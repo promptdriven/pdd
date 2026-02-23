@@ -151,11 +151,14 @@ class TestIssue553CircularIncludesNonRecursiveE2E:
             f"stderr: {result.stderr[:500]}"
         )
 
-        if output_file.exists():
-            content = output_file.read_text()
-            assert "Top" in content
-            assert "Mid" in content
-            assert "Leaf" in content
+        assert output_file.exists(), (
+            f"Expected output file {output_file} to be created by --output flag.\n"
+            f"stdout: {result.stdout[:500]}"
+        )
+        content = output_file.read_text()
+        assert "Top" in content
+        assert "Mid" in content
+        assert "Leaf" in content
 
     def test_recursive_mode_still_detects_cycle(self, tmp_path):
         """Sanity check: --recursive mode still catches circular includes (regression guard)."""

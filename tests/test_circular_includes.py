@@ -11,32 +11,9 @@ error marker in output), NOT silently corrupted content.
 """
 
 import os
-import signal
 import pytest
-from contextlib import contextmanager
 from unittest.mock import patch, mock_open, MagicMock
 from pdd.preprocess import preprocess
-
-
-@contextmanager
-def _timeout(seconds):
-    """Raise TimeoutError if the block doesn't complete in time.
-
-    Used to detect infinite loops caused by circular includes (bug #553).
-    On buggy code the loop never terminates, so SIGALRM fires and the test fails.
-    On fixed code ValueError is raised before the alarm.
-    """
-    def handler(signum, frame):
-        raise TimeoutError(
-            f"Timed out after {seconds}s — infinite loop detected (bug #553)"
-        )
-    old_handler = signal.signal(signal.SIGALRM, handler)
-    signal.alarm(seconds)
-    try:
-        yield
-    finally:
-        signal.alarm(0)
-        signal.signal(signal.SIGALRM, old_handler)
 
 # Store original so we can restore
 _original_pdd_path = os.environ.get('PDD_PATH')
