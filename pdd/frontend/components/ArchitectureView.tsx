@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { api, ArchitectureModule, PromptInfo, PromptGenerationResult, ArchitectureValidationResult, ArchitectureSyncResult } from '../api';
+import { api, ArchitectureModule, PromptInfo, PromptGenerationResult, ArchitectureValidationResult, ArchitectureSyncResult, GenerationGlobalOptions } from '../api';
 import DependencyViewer from './DependencyViewer';
 import FileBrowser from './FileBrowser';
 import GenerationProgressModal from './GenerationProgressModal';
@@ -34,9 +34,22 @@ interface ArchitectureViewProps {
   onAddToQueue?: (commandType: CommandType, prompt: PromptInfo, rawOptions: Record<string, any>, displayCommand: string) => void;
   // Callback to run sync directly (not queued)
   onRunSync?: (prompt: PromptInfo, options?: Record<string, any>) => void;
+  // Counter that increments when a sync task/job completes, triggering a prompt refresh
+  syncCompletedCounter?: number;
 }
 
 type EditorMode = 'empty' | 'editor' | 'graph';
+
+/**
+ * Determine if a module still needs syncing based on its expected outputs.
+ * Config-type languages (JSON, YAML, CSS) only expect "code", while
+ * executable languages expect "code", "test", and "example".
+ */
+export function moduleNeedsSync(info: PromptInfo | undefined): boolean {
+  if (!info) return true;
+  const expected = info.expected_outputs ?? ['code', 'test', 'example'];
+  return expected.some(output => !info[output as keyof PromptInfo]);
+}
 
 const ArchitectureView: React.FC<ArchitectureViewProps> = ({
   serverConnected,
@@ -50,6 +63,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
   onRemoteJobSubmitted,
   onAddToQueue,
   onRunSync,
+  syncCompletedCounter,
 }) => {
   // Architecture state
   const [architecture, setArchitecture] = useState<ArchitectureModule[] | null>(null);
@@ -79,6 +93,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
   const [promptGenerationResults, setPromptGenerationResults] = useState<PromptGenerationResult[] | null>(null);
   const [showProgressModal, setShowProgressModal] = useState(false);
   const [showOrderModal, setShowOrderModal] = useState(false);
+  const [globalOptions, setGlobalOptions] = useState<GenerationGlobalOptions>({});
 
   // Cancel ref for batch generation
   const cancelRequestedRef = useRef(false);
@@ -96,6 +111,8 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
   const [showAddModal, setShowAddModal] = useState(false);
   const [selectedModule, setSelectedModule] = useState<ArchitectureModule | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [isRearranging, setIsRearranging] = useState(false);
+  const [rearrangeVersion, setRearrangeVersion] = useState(0);
   const [validationResult, setValidationResult] = useState<ArchitectureValidationResult | null>(null);
   const [highlightedModules, setHighlightedModules] = useState<Set<string>>(new Set());
 
@@ -211,6 +228,13 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
 
     loadArchitecture();
   }, [serverConnected, loadExistingPrompts]);
+
+  // Refresh prompts when a sync task/job completes (counter increments)
+  useEffect(() => {
+    if (syncCompletedCounter && syncCompletedCounter > 0) {
+      loadExistingPrompts();
+    }
+  }, [syncCompletedCounter, loadExistingPrompts]);
 
   // Handle file selection from browser (architecture files only)
   const handleFileSelect = useCallback(async (path: string) => {
@@ -359,8 +383,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
     });
     return architecture.filter(module => {
       const info = promptMap.get(module.filename);
-      if (!info) return true;
-      return !info.code || !info.test || !info.example;
+      return moduleNeedsSync(info);
     }).length;
   }, [architecture, promptsInfo]);
 
@@ -378,8 +401,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
     for (const batch of batches) {
       const remaining = batch.modules.filter(module => {
         const info = promptMap.get(module.filename);
-        if (!info) return true;
-        return !info.code || !info.test || !info.example;
+        return moduleNeedsSync(info);
       }).length;
       counts.set(batch.id, remaining);
     }
@@ -418,8 +440,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
     return modules
       .filter(module => {
         const info = promptMap.get(module.filename);
-        if (!info) return true;
-        return !info.code || !info.test || !info.example;
+        return moduleNeedsSync(info);
       })
       .sort((a, b) => a.priority - b.priority);
   }, [promptsInfo]);
@@ -905,9 +926,37 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
       if (!shouldDiscard) return;
     }
     discardChanges();
+    setRearrangeVersion(v => v + 1);  // force React Flow to resync with reverted positions
     setValidationResult(null);
     setHighlightedModules(new Set());
-  }, [hasUnsavedChanges, discardChanges]);
+  }, [hasUnsavedChanges, discardChanges, setRearrangeVersion]);
+
+  // Re-arrange graph layout via agentic workflow
+  const handleRearrange = useCallback(async () => {
+    setIsRearranging(true);
+    try {
+      const result = await api.rearrangeGraphLayout(architecturePathInput);
+      if (result.success && result.modules) {
+        const positions = new Map<string, { x: number; y: number }>();
+        for (const mod of result.modules) {
+          if (mod.position) {
+            positions.set(mod.filename, mod.position);
+          }
+        }
+        if (positions.size > 0) {
+          updatePositions(positions);
+          setRearrangeVersion(v => v + 1);
+        }
+      } else {
+        alert('Re-arrange failed: ' + (result.error || 'Unknown error'));
+      }
+    } catch (e: any) {
+      console.error('Re-arrange failed:', e);
+      alert('Re-arrange failed: ' + e.message);
+    } finally {
+      setIsRearranging(false);
+    }
+  }, [updatePositions, architecturePathInput]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -1264,9 +1313,6 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
                       // Reset all state and go back to empty mode
                       setArchitecture(null);
                       setPrdContent('');
-                      setPrdPath(null);
-                      setTechStackContent('');
-                      setTechStackPath(null);
                       setAppName('');
                       setMode('empty');
                       setEditMode(false);
@@ -1303,6 +1349,8 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
             canRedo={canRedo}
             isSaving={isSaving}
             onSyncFromPrompts={handleOpenSyncModal}
+            onRearrange={handleRearrange}
+            isRearranging={isRearranging}
           />
         )}
 
@@ -1410,6 +1458,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
                 onBatchSelect={setSelectedBatch}
                 onSyncBatch={handleSyncBatch}
                 remainingCountByBatch={remainingCountByBatch}
+                rearrangeVersion={rearrangeVersion}
               />
             )
           ) : (

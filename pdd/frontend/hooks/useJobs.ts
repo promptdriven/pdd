@@ -523,8 +523,8 @@ export function useJobs(options: UseJobsOptions = {}) {
    */
   useEffect(() => {
     // Check if there are any remote running jobs
-    const remoteJobs = Array.from(jobs.values()).filter(
-      (j: JobInfo) => j.metadata?.remote
+    const remoteJobs = (Array.from(jobs.values()) as JobInfo[]).filter(
+      (j) => j.metadata?.remote
     );
     const hasRemoteRunningJobs = remoteJobs.some(j => j.status === 'running');
 

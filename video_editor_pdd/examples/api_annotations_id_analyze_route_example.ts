@@ -32,8 +32,10 @@ Module._resolveFilename = function (request: string, ...args: unknown[]) {
 // ---------------------------------------------------------------------------
 // 1. Mock runClaudeAnalysis before loading the route module
 // ---------------------------------------------------------------------------
-const claudeModule = require('../lib/claude');
-
+// tsx creates ESM namespace objects with non-configurable getter properties,
+// so direct property assignment (e.g., `mod.runClaudeAnalysis = mock`) silently
+// fails. Instead, pre-populate require.cache with a mock Module so the route
+// module picks up the mock when it imports @/lib/claude.
 const mockAnalysis = {
   severity: 'major' as const,
   fixType: 'remotion' as const,
@@ -42,16 +44,29 @@ const mockAnalysis = {
   confidence: 0.87,
 };
 
-claudeModule.runClaudeAnalysis = async function mockRunClaudeAnalysis(
-  _prompt: string,
-  onLog?: (line: string) => void
-) {
-  if (onLog) {
-    onLog('[mock] Starting analysis...');
-    onLog('[mock] Analysis complete');
-  }
-  return mockAnalysis;
+const claudePath = require.resolve('../lib/claude');
+const mockClaudeModule = new Module(claudePath);
+mockClaudeModule.filename = claudePath;
+mockClaudeModule.loaded = true;
+mockClaudeModule.exports = {
+  runClaudeAnalysis: async function mockRunClaudeAnalysis(
+    _prompt: string,
+    onLog?: (line: string) => void
+  ) {
+    if (onLog) {
+      onLog('[mock] Starting analysis...');
+      onLog('[mock] Analysis complete');
+    }
+    return mockAnalysis;
+  },
+  runClaudeFix: async function mockRunClaudeFix() {
+    throw new Error('runClaudeFix not mocked');
+  },
+  parseJsonWithFallback: function mockParseJsonWithFallback(stdout: string) {
+    return JSON.parse(stdout);
+  },
 };
+require.cache[claudePath] = mockClaudeModule;
 
 // ---------------------------------------------------------------------------
 // 2. Imports (safe now that alias is registered and mock is in place)

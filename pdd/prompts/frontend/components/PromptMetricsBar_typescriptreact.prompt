@@ -1,0 +1,46 @@
+% You are an expert TypeScript React engineer. Build `pdd/frontend/components/PromptMetricsBar.tsx`, a compact metrics header for prompt analysis, panel toggles, and context budget visibility.
+
+% Dependencies
+<prompt_metrics_bar_dependencies>
+  <include-many>pdd/frontend/api.ts, pdd/frontend/lib/format.ts</include-many>
+</prompt_metrics_bar_dependencies>
+
+Requirements
+1. Export default `PromptMetricsBar` as `React.FC<PromptMetricsBarProps>`.
+2. `PromptMetricsBarProps` must include:
+   - required: `rawMetrics`, `processedMetrics`, `viewMode: 'raw' | 'processed'`, `onViewModeChange`, `isLoading`
+   - optional: `preprocessingError`, `timeValue`, `promptLineCount`, `codeLineCount`, `contextLimit`, `maxThinkingTokens`, `selectedModel`
+   - optional action props: `showCodePanel`, `onToggleCodePanel`, `hasCodeFile`, `showTestPanel`, `onToggleTestPanel`, `hasTestFile`, `showExamplePanel`, `onToggleExamplePanel`, `hasExampleFile`, `showPreview`, `onTogglePreview`, `onShowDiff`
+3. Default `timeValue` to `0.25`. Select `currentMetrics` from `viewMode` (`processed` uses `processedMetrics`, otherwise `rawMetrics`).
+4. Compute context budgeting with exact fallback priority:
+   - `contextLimit = selectedModel.context_limit || currentMetrics.context_limit || contextLimit prop || 200000`
+   - `maxThinkingTokens = selectedModel.max_thinking_tokens || maxThinkingTokens prop || (contextLimit >= 200000 ? 128000 : 32000)`
+   - `thinkingBudget = floor(timeValue * maxThinkingTokens)`
+   - `inputTokens = currentMetrics?.token_count || 0`
+   - `outputCapacity = max(0, contextLimit - inputTokens - thinkingBudget)`
+   - output warning threshold: `outputCapacity < 20000`
+5. Keep helpers:
+   - `formatTokens`: `1.0M` / `1.0K` / raw integer string.
+   - usage text color and mini-bar color thresholds by percent: `<50` green, `<75` yellow, `<90` orange, else red.
+6. Top row left:
+   - render Raw/Processed toggle; `Processed` is disabled when no `processedMetrics` and no `preprocessingError`
+   - processed toggle `title` shows preprocessing error when present
+   - show compact `Error` badge only when `preprocessingError` exists and `viewMode === 'processed'`
+   - render a separator then conditional action buttons:
+     - Code/Test/Example buttons only when corresponding toggle handlers exist; disabled when corresponding `has*File` is false; active state colors: blue/yellow/green.
+     - Preview button only when `onTogglePreview` exists; switch icon/label/title between `Preview` and `Source`.
+     - Diff button only when `onShowDiff` exists; disable when no code file; enabled state uses gradient accent styling.
+7. Top row right:
+   - loading state: spinner + `Analyzing...`
+   - metrics state: show token count, context mini progress with capped width at 100%, optional cost (`formatCost(currentMetrics.cost_estimate.input_cost)`), thinking mini bar with token count tooltip, and Code:Prompt ratio when both line counts exist and `promptLineCount > 0`.
+   - fallback: `No metrics`.
+8. Add a second-row context distribution bar only when `currentMetrics` exists:
+   - left label: formatted context limit (`<tokens> ctx`)
+   - stacked segments: Input (blue), Thinking (purple), Output (green or orange warning)
+   - widths from `inputPercent`, `thinkingPercent`, `outputPercent` derived from `contextLimit`
+   - segment tooltips include formatted token counts and one-decimal percentages
+   - legend row for Input/Thinking/Output; append `(low)` and warning text color when output is low.
+9. Use responsive Tailwind dark-surface styling consistent with `PromptSpace` and keep inline SVG icons (no external icon package).
+
+Deliverable
+- Output only `pdd/frontend/components/PromptMetricsBar.tsx`.

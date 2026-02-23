@@ -63,6 +63,11 @@
      modern/systems (zig, mojo, solidity),
      config/query/infra (graphql, protobuf, terraform, hcl, nix, dockerfile, etc.),
      and data formats (json, yaml, toml, ini).
+   - `get_language_outputs(name)` returns the set of expected output types for a language:
+     executable languages return {'code', 'test', 'example'}, config/data/markup languages
+     (json, yaml, css, html, sql, makefile, dockerfile, etc.) return {'code'} only.
+     Uses the `outputs` column from language_format.csv when available, with a built-in
+     `_CODE_ONLY_LANGUAGES` set as fallback. Unknown languages default to all three outputs.
 
 6. Output Path Generation: Call generate_output_paths with resolved parameters.
    - For test/bug commands without --force, create numbered files instead of overwriting.

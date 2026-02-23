@@ -1,0 +1,21 @@
+% Write `pdd/commands/checkup.py` implementing the `pdd checkup` CLI wrapper for `run_agentic_checkup`.
+
+<include>context/python_preamble.prompt</include>
+
+% Requirements
+- Click command: `@click.command("checkup")`, `@click.pass_context`, `@track_cost`.
+- Params: `target` arg; `--no-fix`; `--timeout-adder` (float, default `0.0`); `--no-github-state`.
+- Signature returns `Optional[Tuple[str, float, str]]`.
+- Validate `target` with `_is_github_issue_url`; invalid -> `click.BadParameter(..., param_hint="'TARGET'")` and message must mention `GitHub issue URL`.
+- `ctx.ensure_object(dict)`; read `quiet = ctx.obj.get("quiet", False)` and `verbose = ctx.obj.get("verbose", False)`.
+- Call `run_agentic_checkup(issue_url=target, verbose=verbose, quiet=quiet, no_fix=no_fix, timeout_adder=timeout_adder, use_github_state=not no_github_state)`.
+- If not quiet, `click.echo` exactly these lines:
+  - `Status: Success|Failed`
+  - `Message: {message}`
+  - `Cost: ${cost:.4f}`
+  - `Model: {model}`
+- If `not success`: raise `click.exceptions.Exit(1)`; else return `(message, cost, model)`.
+- Exception policy: re-raise `click.Abort` and `click.exceptions.Exit`; all other exceptions call `handle_error(exception, "checkup", ctx.obj.get("quiet", False))` and return `None`.
+
+% Dependencies
+<include-many>context/agentic_checkup_example.py, context/agentic_sync_example.py, context/track_cost_example.py, context/core/errors_example.py</include-many>

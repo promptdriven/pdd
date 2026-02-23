@@ -1,0 +1,46 @@
+<pdd-reason>Tests individual models via litellm.completion() with direct API key passing and diagnostics.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "test_model_interactive", "signature": "() -> None", "returns": "None"}
+    ]
+  }
+}
+</pdd-interface>
+
+% You are an expert Python engineer. Your goal is to write the pdd/model_tester.py module.
+
+% Role & Scope
+Tests a single configured model by making one `litellm.completion()` call with a minimal prompt. Only runs when the user explicitly chooses it — no surprise API costs. Uses `litellm.completion()` directly (not `llm_invoke`) because `llm_invoke` doesn't allow choosing a specific model or key.
+
+% Requirements
+1. Function: `test_model_interactive()` — show models from `~/.pdd/llm_model.csv`, let user pick one, test it, loop until user exits (empty input or "q")
+2. Test call: `litellm.completion(model=..., messages=[...], timeout=8)`. Only pass `api_key=` for single-var providers.
+3. The CSV `api_key` column may be pipe-delimited (e.g. "VAR1|VAR2|VAR3"). Use `parse_api_key_vars()` from provider_manager.
+   - Single var: resolve from env, pass as api_key= to litellm.
+   - Multi var: do NOT pass api_key= — litellm reads from os.environ (Bedrock, Azure, Vertex).
+   - Empty: device flow or local model — no key needed.
+4. Before calling, show diagnostics: check each env var from the api_key field. Show `✓ Found (VAR)` / `✗ Not found (VAR)` per var, plus base URL if applicable.
+   - For `GOOGLE_APPLICATION_CREDENTIALS`, also verify the path points to an existing file.
+5. After calling, show: `LLM call  ✓ OK (0.3s, $0.0001)` or `LLM call  ✗ error description`
+6. Calculate cost from token usage × CSV row's input/output prices per 1M tokens
+7. Persist test results in the model list display across picks within a session
+8. Distinguish errors: authentication, connection refused (local), model not found, timeout, rate limit
+9. If no user CSV exists or is empty, inform user and return
+10. CSV loading: validate required columns (provider, model, api_key). Normalize nullable string columns to empty strings and coerce numeric cost columns to floats (default 0.0).
+11. LM Studio convention: if model starts with `lm_studio/` or provider is `lm_studio`, default base_url to `LM_STUDIO_API_BASE` env var or `http://localhost:1234/v1`.
+
+<pdd-dependency>provider_manager_python.prompt</pdd-dependency>
+
+% Dependencies
+<llm_model_csv_schema>
+The user's CSV at ~/.pdd/llm_model.csv has columns:
+provider,model,input,output,coding_arena_elo,base_url,api_key,max_reasoning_tokens,structured_output,reasoning_type,location
+</llm_model_csv_schema>
+
+<provider_manager>
+  <include>context/provider_manager_example.py</include>
+</provider_manager>

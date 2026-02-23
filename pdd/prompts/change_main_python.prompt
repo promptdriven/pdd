@@ -12,6 +12,7 @@
     - `output` (`Optional[str]`): Output path (file or directory). Specifies the destination for the modified prompt(s) or a CSV results file (in CSV mode). Defaults generated if not specified.
     - `use_csv` (`bool`): Flag indicating whether to use CSV mode for batch changes.
     - `budget` (`float`): Maximum cost allowed for the change process (passed in as a function parameter, not read from `ctx.obj`).
+    - `ctx.obj["skip_user_stories"]` (`bool`, optional): When truthy, skip post-change user story validation.
 
     Outputs:
     - Returns a tuple containing (`str`, `float`, `str`):
@@ -94,7 +95,16 @@
       - In CSV mode, when writing a CSV file, print the CSV path. When saving individual files, print the count and destination directory.
       - In non-CSV mode and if not quiet, print the saved file path and display the modified content in a Rich `Panel`.
 
-   7. **Error Handling and Logging**:
+   7. **User Story Validation Hook (post-change)**:
+      - After successful prompt modification (`success` in non-CSV mode, or CSV mode that writes prompt files), run user story validation unless `ctx.obj.get("skip_user_stories", False)` is true.
+      - Resolve stories directory from `PDD_USER_STORIES_DIR` (default: `user_stories`) and prompts directory from resolved config / env.
+      - Skip user story validation when CSV output target is a `.csv` file (no prompt files were written).
+      - When validating against an override output directory, merge prompt files from override and base prompts directories and de-duplicate by resolved full path (case-insensitive key).
+      - Call `run_user_story_tests(..., fail_fast=True, quiet=quiet, verbose=ctx.obj.get("verbose", False))`.
+      - Add story validation cost/model into the total return values.
+      - If validation fails, return an error message that user story validation failed.
+
+   8. **Error Handling and Logging**:
       - Implement comprehensive try-except blocks to catch potential exceptions (`FileNotFoundError`, `IOError`, `csv.Error`, `NotADirectoryError`, etc.) at various stages (file reading, path construction, CSV processing, file writing).
       - Log detailed information about the execution flow, decisions made (e.g., language/extension derivation), key paths, and any errors encountered using the module logger.
       - Return appropriate error messages, costs (potentially partial), and model names in case of failures.

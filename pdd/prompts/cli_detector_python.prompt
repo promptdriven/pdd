@@ -1,0 +1,58 @@
+<pdd-reason>Detects and bootstraps agentic CLI tools for pdd setup, with minimal-friction interactive installation and API key configuration.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "detect_and_bootstrap_cli", "signature": "() -> List[CliBootstrapResult]", "returns": "List[CliBootstrapResult]"},
+      {"name": "detect_cli_tools", "signature": "() -> None", "returns": "None"}
+    ],
+    "dataclasses": [
+      {"name": "CliBootstrapResult", "fields": ["cli_name: str", "provider: str", "cli_path: str", "api_key_configured: bool", "skipped: bool"]}
+    ]
+  }
+}
+</pdd-interface>
+
+% You are an expert Python engineer. Your goal is to write the pdd/cli_detector.py module.
+
+% Role & Scope
+Detects and bootstraps agentic CLI harnesses (Claude CLI, Codex CLI, Gemini CLI) required for `pdd fix`, `pdd change`, `pdd bug`, and `pdd setup`. The primary entry point `detect_and_bootstrap_cli()` presents a numbered table of CLIs with install/key status, lets the user select one or more, and walks through installation and API key configuration for each. The legacy `detect_cli_tools()` function is preserved for backward compatibility.
+
+% Requirements
+
+1. Dataclass: `CliBootstrapResult` with fields `cli_name: str`, `provider: str`, `cli_path: str`, `api_key_configured: bool`, `skipped: bool` (default False). All strings default to empty.
+
+2. Function: `detect_and_bootstrap_cli() -> List[CliBootstrapResult]` — Phase 1 entry point for `pdd setup`.
+   a. Print a step banner via `_print_step_banner()` imported from `pdd.setup_tool`.
+   b. Detect all three CLIs via `shutil.which()` with fallback to common paths (~/.local/bin, /usr/local/bin, /opt/homebrew/bin) and nvm node version directories.
+   c. Provider mappings: anthropic->claude, google->gemini, openai->codex. Table order: Claude CLI, Codex CLI, Gemini CLI.
+   d. Print a numbered selection table showing install status and API key status per CLI, with aligned columns.
+   e. Accept comma-separated numeric input (e.g. "1,3"). Default to best available (installed+key > installed > Claude). "q"/"n" returns a skipped result.
+   f. For each selected CLI, process install/key/test in sequence. On skip or failure of one CLI, continue to the next.
+   g. Install step: prompt user, run `npm install -g ...` via subprocess if accepted. Check npm availability first.
+   h. API key step: prompt for key, save to `~/.pdd/api-env.{shell}` with shell-appropriate syntax, add source line to RC file, set in `os.environ`.
+   i. CLI test step (always runs, cannot be skipped): run `cli --version`, fall back to `--help` if that fails.
+   j. Handle KeyboardInterrupt/EOFError at every input prompt gracefully.
+   k. Return list of results; if empty, return `[CliBootstrapResult(skipped=True)]`.
+
+3. Function: `detect_cli_tools() -> None` — legacy detection. For each CLI: show found/not-found status, cross-reference API keys, offer installation for missing CLIs that have matching keys.
+
+4. Shell detection: detect from `SHELL` env var (default "bash"). Map to RC file: zsh->.zshrc, bash->.bashrc, fish->~/.config/fish/config.fish.
+
+5. API key file management: create `~/.pdd/` if needed. Write keys to `~/.pdd/api-env.{shell}` (append, dedup by key name using regex). Add source line to RC file if not present. Shell syntax: bash/zsh use `export K=V`, fish uses `set -gx K V`. Source syntax: bash/zsh use `source path`, fish uses `test -f path ; and source path`.
+
+6. Google provider: primary env var is GEMINI_API_KEY (used by Gemini CLI for AI Studio auth). Fallback is GOOGLE_API_KEY (Vertex AI convention). Check GEMINI_API_KEY first, then GOOGLE_API_KEY. Primary key for saving is GEMINI_API_KEY. Display whichever is actually set.
+
+7. Module-level constants: `PROVIDER_PRIMARY_KEY`, `PROVIDER_DISPLAY`, `CLI_PREFERENCE`, `SHELL_RC_MAP` exposed for use by other modules.
+
+% Dependencies
+
+<setup_tool_api>
+from pdd.setup_tool import _print_step_banner
+# _print_step_banner(text: str) -> None — prints a cyan step banner
+</setup_tool_api>
+
+% Deliverables
+- Module at `pdd/cli_detector.py` exporting `detect_and_bootstrap_cli`, `detect_cli_tools`, and `CliBootstrapResult`.

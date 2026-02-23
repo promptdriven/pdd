@@ -39,7 +39,7 @@ Instructions
 - Use Next.js App Router dynamic route: `export async function POST(request: Request, { params }: { params: { id: string } })`.
 - Write `compositeDataUrl` base64 data to a temp file: `const tmpPath = path.join(os.tmpdir(), \`annotation_${id}_composite.png\`); fs.writeFileSync(tmpPath, Buffer.from(dataUrl.split(',')[1], 'base64'))`.
 - Clean up temp file after analysis completes (success or error) using try/finally.
-- Store the analysis result back to DB: `UPDATE annotations SET analysis_json = ? WHERE id = ?` with `JSON.stringify(analysis)`.
+- Store the analysis result back to DB: `UPDATE annotations SET analysis = ? WHERE id = ?` with `JSON.stringify(analysis)`.
 - Re-read the full annotation from DB after update to return the complete record.
 - Return 500 with error message if Claude analysis throws.
 

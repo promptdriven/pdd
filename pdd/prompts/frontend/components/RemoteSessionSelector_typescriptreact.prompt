@@ -1,0 +1,33 @@
+1) Role and Responsibility:
+The `RemoteSessionSelector` is a React functional component responsible for providing a user interface to select and monitor remote development sessions. It serves as a critical control in the system's dashboard, allowing users to switch between active and stale sessions, view connection status, and troubleshoot connectivity issues through a built-in debug panel.
+
+2) Requirements:
+- Functionality: Provide a dropdown to select from a list of `RemoteSessionInfo` objects.
+- Status Visualization: Display a status badge (Active/Offline) and a relative "last seen" timestamp for the selected session.
+- Error Handling: Display a clear error message if session loading fails and provide a "Refresh" action if a callback is provided.
+- Stale Session Warning: Show a prominent warning banner when a selected session is marked as 'stale', explaining that commands may not execute.
+- Debugging: Include a toggleable debug panel that shows session counts, raw error strings, fetch timestamps, and context-aware troubleshooting tips (e.g., authentication or network issues).
+- Responsive Design: Use Tailwind CSS for a responsive layout that adjusts from a vertical stack on mobile to a horizontal row on desktop, hiding non-essential metadata on smaller screens.
+- Accessibility: Include tooltips for truncated paths and clear labels for all interactive elements.
+
+3) Dependencies:
+<remote_session_api>
+  <include>../api</include>
+</remote_session_api>
+<react_hooks>
+  <include>useState from 'react'</include>
+</react_hooks>
+<tailwind_css>
+  <include>Utility classes for styling</include>
+</tailwind_css>
+
+4) Instructions:
+- Implement the component using the `RemoteSessionSelectorProps` interface, including `sessions`, `selectedSessionId`, `onSelectSession`, `disabled`, `error`, and `onRefresh`.
+- Create a helper function `formatRelativeTime` to convert ISO timestamps into human-readable strings (e.g., "5m ago", "2d ago").
+- The dropdown should display the project name and hostname, appending "(offline)" for stale sessions.
+- The debug panel must include a troubleshooting list that maps specific error strings (like "401" or "Not authenticated") to actionable CLI commands (e.g., `pdd auth login`).
+- Use a pulse animation for the status indicator when a session is not active to draw attention to the connectivity state.
+- Ensure the component is "clean" by defaulting `disabled` to false and `error` to null.
+
+5) Deliverable:
+- A single TypeScript React file (`RemoteSessionSelector.tsx`) containing the component and its associated interfaces.

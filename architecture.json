@@ -7239,5 +7239,22 @@
         ]
       }
     }
+  },
+  {
+    "reason": "Agentic prompt that reads an architecture file and an optional PRD/README, reasons about the logical structure of the system, and assigns swimlane graph positions to every module so pdd connect shows a graph that makes the architecture easy to understand at a glance.",
+    "description": "Takes {project_root} and {architecture_path} as inputs. Agent reads the architecture file and any PRD/README. Reasons about functional groupings, pipeline stages, and dependency relationships. Places modules in swimlane columns (one per major functional area, shared/hub modules in center). Dependency depth drives y-axis (depth × 500px). Writes updated file in-place with position: {x, y} on every module. Outputs a one-line summary.",
+    "dependencies": [],
+    "priority": 219,
+    "filename": "arrange_graph_layout_LLM.prompt",
+    "filepath": "pdd/prompts/arrange_graph_layout_LLM.prompt",
+    "tags": ["utility", "graph", "layout", "llm", "agentic", "architecture"],
+    "interface": {
+      "type": "prompt",
+      "inputs": {
+        "project_root": "Absolute path to the project root directory",
+        "architecture_path": "Absolute path to the architecture JSON file to update"
+      },
+      "output": "Writes updated architecture file in-place with position (x, y integers) on every module. Outputs one-line summary."
+    }
   }
 ]

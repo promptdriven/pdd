@@ -1,0 +1,21 @@
+% You are an expert TypeScript engineer. Generate `pdd/frontend/types.ts` as a pure type-contract module (`enum` + `interface` exports only).
+
+% Required exports (names, literal unions, and optionality must be exact)
+1) `CommandType` enum values: `SYNC='sync'`, `UPDATE='update'`, `GENERATE='generate'`, `TEST='test'`, `EXAMPLE='example'`, `FIX='fix'`, `BUG='bug'`, `CRASH='crash'`, `VERIFY='verify'`, `SUBMIT_EXAMPLE='submit-example'`, `SPLIT='split'`, `CHANGE='change'`, `DETECT='detect'`, `AUTO_DEPS='auto-deps'`, `CONFLICTS='conflicts'`, `PREPROCESS='preprocess'`.
+2) `CommandOption`: `{name:string; type:'text'|'textarea'|'file'|'number'|'checkbox'|'range'; placeholder:string; description:string; required?:boolean; defaultValue?:string|number|boolean; min?:number; max?:number; step?:number}`.
+3) `GlobalOption extends CommandOption`: `{cliFlag:string}`.
+4) `GlobalDefaults`: `{strength:number; temperature:number; time:number; verbose:boolean; quiet:boolean; force:boolean; local:boolean; reviewExamples:boolean}`.
+5) `CommandConfig`: `{name:CommandType; backendName:string; description:string; shortDescription:string; icon:string; options:CommandOption[]; requiresPrompt:boolean; requiresCode?:boolean; requiresTest?:boolean; group?:string; isAdvanced?:boolean}`.
+6) `PromptInfo`: `{prompt:string; basename:string; code?:string; test?:string; example?:string}`.
+7) `DevUnit`: `{prompt:string; code:string; example:string; test:string}`. `MockPrompt`: `{id:string; includes:string[]; devUnit:DevUnit}`.
+8) `ArchitectureInterface`: `{type:'page'|'component'|'module'|'api'|'graphql'|'cli'|'job'|'message'|'config'; page?:{route:string; params?:{name:string;type:string;description?:string}[]; dataSources?:{kind:string;source:string;method?:string;description?:string}[]}; component?:{props:{name:string;type:string;required?:boolean;description?:string}[]; emits?:string[]; context?:string[]}; module?:{functions:{name:string;signature:string;returns?:string;errors?:string[];sideEffects?:string[]}[]}; api?:{endpoints:{method:string;path:string;auth?:string;requestSchema?:any;responseSchema?:any}[]}; graphql?:{sdl?:string;queries?:string[];mutations?:string[];subscriptions?:string[]}; cli?:{commands:{name:string;args?:string[];flags?:string[];exitCodes?:number[]}[];io?:{stdin?:string;stdout?:string}}; job?:{trigger:{schedule?:string;event?:string};inputs?:string[];outputs?:string[];retryPolicy?:string}; message?:{topics:{name:string;direction:'publish'|'subscribe';schema?:any;qos?:string}[]}; config?:{keys:{name:string;type:string;default?:any;required?:boolean;source:'env'|'file'|'secret'}[]}}`.
+9) `ArchitectureModule`: `{reason:string; description:string; dependencies:string[]; priority:number; filename:string; filepath:string; tags?:string[]; interface?:ArchitectureInterface; position?:{x:number;y:number}}`.
+10) `ProjectArchitecture`: `{appName?:string; prdPath?:string; techStackPath?:string; modules:ArchitectureModule[]}`.
+11) `.pddrc` types:
+    - `PddrcContextDefaults`: `{generate_output_path?:string; test_output_path?:string; example_output_path?:string; prompts_dir?:string; default_language?:string; strength?:number; temperature?:number; budget?:number; max_attempts?:number}`.
+    - `PddrcContext`: `{paths:string[]; defaults:PddrcContextDefaults}`.
+    - `PddrcConfig`: `{version?:string; contexts:Record<string, PddrcContext>}`.
+
+% Constraints
+- No imports, functions, classes, constants, or runtime logic.
+- Use `any` only in `api.requestSchema`, `api.responseSchema`, `message.topics.schema`, and `config.keys.default`.

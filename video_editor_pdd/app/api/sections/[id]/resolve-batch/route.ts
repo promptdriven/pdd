@@ -1,0 +1,143 @@
+// app/api/sections/[id]/resolve-batch/route.ts
+import { NextResponse } from "next/server";
+import { getDb } from "@/lib/db";
+import { runClaudeFix } from "@/lib/claude";
+import { createJob, runJob } from "@/lib/jobs";
+import { renderSection } from "@/lib/render";
+import { loadProject, getSection } from "@/lib/project";
+import type { Annotation } from "@/lib/types";
+
+export const dynamic = "force-dynamic";
+
+type RouteParams = { params: { id: string } };
+
+function buildRemotionPrompt(annotation: Annotation): string {
+  return `
+You are applying a Remotion fix for this annotation.
+Annotation ID: ${annotation.id}
+Section ID: ${annotation.sectionId}
+Timestamp: ${annotation.timestamp}s
+User note: ${annotation.text}
+
+Provide a fix that resolves the issue. Return JSON:
+{ "fixType", "filesModified", "changeDescription", "confidence" }
+`.trim();
+}
+
+export async function POST(_request: Request, { params }: RouteParams) {
+  const sectionId = params.id;
+  const db = getDb();
+
+  try {
+    // 1. Load unresolved annotations for the section
+    const rows = db
+      .prepare(
+        `SELECT * FROM annotations WHERE sectionId = ? AND resolved = 0 ORDER BY timestamp ASC`
+      )
+      .all(sectionId) as Array<Record<string, unknown>>;
+
+    if (!rows || rows.length === 0) {
+      return NextResponse.json(
+        { jobId: null, message: "No unresolved annotations" },
+        { status: 200 }
+      );
+    }
+
+    // 2. Deserialize analysis_json → analysis
+    const annotations: Annotation[] = rows.map((row) => {
+      const analysisRaw = (row.analysis as string | null);
+      const analysis = analysisRaw ? JSON.parse(analysisRaw) : null;
+
+      return {
+        id: String(row.id),
+        sectionId: String(row.sectionId),
+        timestamp: Number(row.timestamp),
+        text: String(row.text ?? ""),
+        videoFile: (row.videoFile as string | null) ?? null,
+        drawingDataUrl: (row.drawingDataUrl as string | null) ?? null,
+        compositeDataUrl: (row.compositeDataUrl as string | null) ?? null,
+        analysis,
+        resolved: Boolean(row.resolved),
+        resolveJobId: (row.resolveJobId as string | null) ?? null,
+        createdAt: String(row.createdAt ?? ""),
+      };
+    });
+
+    // 3. Create top-level job
+    const jobId = createJob("audit", { sectionId });
+
+    // 4. Update resolve_job_id for all annotations
+    const updateStmt = db.prepare(
+      `UPDATE annotations SET resolveJobId = ? WHERE id = ?`
+    );
+    for (const ann of annotations) {
+      updateStmt.run(jobId, ann.id);
+    }
+
+    // 5. Fire-and-forget execution
+    void runJob(jobId, async (onLog) => {
+      const byFixType: Record<string, Annotation[]> = {
+        remotion: [],
+        veo: [],
+        tts: [],
+        manual: [],
+        none: [],
+      };
+
+      for (const ann of annotations) {
+        const fixType = ann.analysis?.fixType ?? "manual";
+        if (byFixType[fixType]) byFixType[fixType].push(ann);
+      }
+
+      // Remotion fixes via Claude
+      for (const ann of byFixType.remotion) {
+        onLog(`Running Claude fix for annotation ${ann.id}`);
+        await runClaudeFix(
+          buildRemotionPrompt(ann),
+          "remotion/src/remotion/",
+          onLog
+        );
+      }
+
+      // Veo fixes (placeholder)
+      for (const ann of byFixType.veo) {
+        onLog(`Queued Veo regeneration for annotation ${ann.id} (pending)`);
+      }
+
+      // TTS fixes (placeholder)
+      for (const ann of byFixType.tts) {
+        onLog(`Queued TTS re-render for annotation ${ann.id} (pending)`);
+      }
+
+      // manual fixes are skipped
+      for (const ann of byFixType.manual) {
+        onLog(`Skipped manual annotation ${ann.id}`);
+      }
+
+      // Render the affected section
+      const project = loadProject();
+      const section = getSection(sectionId, project);
+      if (!section) {
+        throw new Error(`Section "${sectionId}" not found`);
+      }
+
+      const outputPath = section.videoFile;
+      onLog(`Rendering section ${sectionId} → ${outputPath}`);
+      await renderSection(section.compositionId, outputPath, (progress) => {
+        onLog.progress?.(progress.percent);
+        onLog(progress.message);
+      });
+    }).catch((err) => {
+      console.error(`[resolve-batch] runJob ${jobId} failed unexpectedly:`, err);
+    });
+
+    // 6. Return immediately (non-blocking)
+    return NextResponse.json({ jobId }, { status: 200 });
+  } catch (error) {
+    console.error("Resolve batch failed:", error);
+    return NextResponse.json(
+      { error: "Internal Server Error" },
+      { status: 500 }
+    );
+  }
+}

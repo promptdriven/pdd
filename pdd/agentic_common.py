@@ -82,6 +82,28 @@ DEFAULT_MAX_RETRIES: int = 3
 DEFAULT_RETRY_DELAY: float = 5.0
 MAX_PATH_DISPLAY_LENGTH: int = 200  # Truncation length for PATH in diagnostic messages
 
+# Job deadline constants — prevent agentic retry loops from consuming the full job timeout
+JOB_TIMEOUT_MARGIN_SECONDS: float = 120.0   # Reserve for cleanup/reporting after last attempt
+MIN_ATTEMPT_TIMEOUT_SECONDS: float = 60.0   # Don't start an attempt if less than this remains
+
+def get_job_deadline() -> Optional[float]:
+    """Return the absolute Unix timestamp deadline from PDD_JOB_DEADLINE env var.
+
+    Set by the server (jobs.py) when launching subprocess jobs so that
+    the agentic retry loop can budget its attempts within the job timeout.
+
+    Returns:
+        Float deadline timestamp, or None if unset / invalid.
+    """
+    val = os.environ.get("PDD_JOB_DEADLINE")
+    if val:
+        try:
+            return float(val)
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
 # GitHub State Markers
 GITHUB_STATE_MARKER_START = "<!-- PDD_WORKFLOW_STATE:"
 GITHUB_STATE_MARKER_END = "-->"
@@ -459,7 +481,8 @@ def run_agentic_task(
     label: str = "",
     timeout: Optional[float] = None,
     max_retries: int = 1,
-    retry_delay: float = DEFAULT_RETRY_DELAY
+    retry_delay: float = DEFAULT_RETRY_DELAY,
+    deadline: Optional[float] = None,
 ) -> Tuple[bool, str, float, str]:
     """
     Runs an agentic task using available providers in preference order.
@@ -489,6 +512,7 @@ def run_agentic_task(
         return False, msg, 0.0, ""
 
     effective_timeout = timeout if timeout is not None else DEFAULT_TIMEOUT_SECONDS
+    effective_deadline = deadline if deadline is not None else get_job_deadline()
     task_start_time = time.time()
 
     # Create a unique temp file for the prompt
@@ -524,12 +548,29 @@ def run_agentic_task(
                 console.print(f"[dim]Attempting provider: {provider} for task '{label}'[/dim]")
 
             last_output = ""
+            deadline_exhausted = False
             for attempt in range(1, max_retries + 1):
+                # Deadline-aware budget check before each attempt
+                if effective_deadline is not None:
+                    remaining = effective_deadline - time.time() - JOB_TIMEOUT_MARGIN_SECONDS
+                    if remaining < MIN_ATTEMPT_TIMEOUT_SECONDS:
+                        if verbose:
+                            console.print(
+                                f"[yellow]Deadline budget exhausted "
+                                f"({remaining:.0f}s remaining < {MIN_ATTEMPT_TIMEOUT_SECONDS}s min). "
+                                f"Skipping attempt {attempt}.[/yellow]"
+                            )
+                        deadline_exhausted = True
+                        break
+                    attempt_timeout = min(effective_timeout, remaining)
+                else:
+                    attempt_timeout = effective_timeout
+
                 if verbose and attempt > 1:
                     console.print(f"[dim]Retry {attempt}/{max_retries} for {provider} (task: {label})[/dim]")
 
                 success, output, cost = _run_with_provider(
-                    provider, prompt_path, cwd, effective_timeout, verbose, quiet
+                    provider, prompt_path, cwd, attempt_timeout, verbose, quiet
                 )
                 last_output = output
 
@@ -579,7 +620,7 @@ def run_agentic_task(
                         console.print(f"[dim]Waiting {backoff}s before retry...[/dim]")
                     time.sleep(backoff)
 
-            # All retries exhausted for this provider
+            # All retries exhausted (or deadline budget exhausted) for this provider
             provider_errors.append(f"{provider}: {last_output[:200]}")
             if verbose:
                 console.print(f"[yellow]Provider {provider} failed after {max_retries} attempts: {last_output}[/yellow]")
@@ -593,6 +634,9 @@ def run_agentic_task(
                     duration=time.time() - task_start_time,
                     cwd=cwd
                 )
+            # If deadline was exhausted, don't try other providers either
+            if deadline_exhausted:
+                break
 
         return False, f"All agent providers failed: {'; '.join(provider_errors)}", 0.0, ""
 

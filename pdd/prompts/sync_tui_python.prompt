@@ -11,11 +11,12 @@ providing animated feedback, log output, and modal dialogs for user interaction.
 1. **SyncApp** - Main Textual App class:
    - Constructor accepts: basename, budget, worker_func, shared state refs for
      function_name, cost, paths (prompt/code/example/tests), colors, stop_event,
-     and optional progress_callback_ref
+     optional progress_callback_ref, and `no_steer`
    - Logo animation phase: particles form logo, hold, then expand to box perimeter
    - Main animation phase: renders sync status using sync_animation module
    - Progress bar for file processing (hidden when not in use)
    - RichLog widget for captured stdout/stderr output
+   - Expose `request_choice()` and `request_steering()` for sync steering
 
 2. **Worker Thread Execution**:
    - Run worker_func in @work(thread=True) decorated method
@@ -36,6 +37,7 @@ providing animated feedback, log output, and modal dialogs for user interaction.
 4. **Modal Dialogs**:
    - ConfirmScreen: Yes/No with keyboard bindings (y/n/enter/escape)
    - InputScreen: Text input with optional password masking, focus on mount
+   - ChoiceScreen: operation chooser with numeric shortcuts and timeout-based default
    - request_confirmation() and request_input() methods: thread-safe, block worker
      until user responds via threading.Event, 5-minute timeout
 
@@ -47,6 +49,22 @@ providing animated feedback, log output, and modal dialogs for user interaction.
 
 6. **show_exit_animation()** - Standalone function:
    - Display centered logo in Rich Panel, sleep 1 second, clear console
+
+7. **Steerability and Headless Safety**:
+   - Define `DEFAULT_STEER_TIMEOUT_S = 8.0`
+   - Implement `_is_headless_environment()` with CI/non-TTY checks and `PDD_TEST_HEADLESS` override
+   - `request_choice()` must auto-default after timeout and immediately default in headless mode
+   - `request_steering()` returns `(chosen_operation, should_abort)` and supports `no_steer`
+   - Provide `maybe_steer_operation(...)` adapter used by sync_orchestration:
+     - no prompt in quiet/headless mode
+     - respect `skip_tests` / `skip_verify` by rejecting disallowed choices
+
+8. **Sizing and Rendering Restrictions**:
+   - Enforce minimum/frozen UI width (`_min_ui_width = 80`, `_fixed_ui_width`)
+   - Compute `_log_width` from frozen width and set `COLUMNS` accordingly
+   - Keep animation rendering tied to frozen width to avoid resize jitter
+   - On resize, refresh layout/log widget without changing frozen width
+   - Keep RichLog replay/reflow bounded (max lines) to prevent oversized redraw work
 
 % Dependencies
 - textual (App, ModalScreen, widgets, bindings, work decorator)

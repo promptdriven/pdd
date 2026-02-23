@@ -14,6 +14,8 @@ interface GraphToolbarProps {
   canRedo: boolean;
   isSaving?: boolean;
   onSyncFromPrompts?: () => void;  // New prop for sync button
+  onRearrange?: () => void;
+  isRearranging?: boolean;
 }
 
 const GraphToolbar: React.FC<GraphToolbarProps> = ({
@@ -29,28 +31,12 @@ const GraphToolbar: React.FC<GraphToolbarProps> = ({
   canRedo,
   isSaving = false,
   onSyncFromPrompts,
+  onRearrange,
+  isRearranging = false,
 }) => {
   return (
     <div className="flex items-center gap-2 px-3 py-2 bg-surface-800/80 border-b border-surface-700/50">
-      {/* Sync from Prompts Button (only in view mode) */}
-      {!editMode && onSyncFromPrompts && (
-        <>
-          <Tooltip content="Sync architecture.json from prompt metadata tags">
-            <button
-              onClick={onSyncFromPrompts}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-purple-600 text-white hover:bg-purple-500 transition-colors"
-            >
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-              <span>Sync from Prompts</span>
-            </button>
-          </Tooltip>
-          <div className="w-px h-6 bg-surface-700" />
-        </>
-      )}
-
-      {/* Edit Mode Toggle */}
+      {/* Edit Mode Toggle — always first so it never shifts position */}
       <Tooltip content={editMode ? 'Exit edit mode' : 'Enter edit mode'}>
         <button
           onClick={onToggleEditMode}
@@ -69,6 +55,24 @@ const GraphToolbar: React.FC<GraphToolbarProps> = ({
         </button>
       </Tooltip>
 
+      {/* Sync from Prompts Button (only in view mode) */}
+      {!editMode && onSyncFromPrompts && (
+        <>
+          <div className="w-px h-6 bg-surface-700" />
+          <Tooltip content="Sync architecture.json from prompt metadata tags">
+            <button
+              onClick={onSyncFromPrompts}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-purple-600 text-white hover:bg-purple-500 transition-colors"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              <span>Sync from Prompts</span>
+            </button>
+          </Tooltip>
+        </>
+      )}
+
       {/* Edit mode actions */}
       {editMode && (
         <>
@@ -86,6 +90,32 @@ const GraphToolbar: React.FC<GraphToolbarProps> = ({
               <span>Add Module</span>
             </button>
           </Tooltip>
+
+          {/* Re-arrange Layout */}
+          {onRearrange && (
+            <>
+              <div className="w-px h-6 bg-surface-700" />
+              <Tooltip content="Re-arrange graph layout using AI (reads PRD + architecture file)">
+                <button
+                  onClick={onRearrange}
+                  disabled={isRearranging}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-purple-600 text-white hover:bg-purple-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  {isRearranging ? (
+                    <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                    </svg>
+                  ) : (
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-5h-4m4 0v4m0-4l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                    </svg>
+                  )}
+                  <span>{isRearranging ? 'Arranging…' : 'Re-arrange'}</span>
+                </button>
+              </Tooltip>
+            </>
+          )}
 
           <div className="w-px h-6 bg-surface-700" />
 

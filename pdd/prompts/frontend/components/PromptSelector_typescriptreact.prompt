@@ -1,0 +1,43 @@
+Create a React component named `PromptSelector` that serves as the primary navigation and management interface for a Prompt-Driven Development (PDD) dashboard. This component is responsible for listing, filtering, searching, and initiating synchronization actions for prompt files.
+
+### Requirements
+1.  **Prompt Listing & Display**:
+    *   Fetch and display a list of prompts using `api.listPrompts()`.
+    *   Render each prompt as a `PromptCard` showing the basename, language badge, a snippet of the prompt path, and status indicators for related files (Prompt, Code, Test, Example).
+    *   Implement modern, responsive styling using Tailwind CSS with a "glassmorphism" aesthetic and gradient accents.
+2.  **Filtering & Search**:
+    *   Provide a real-time search bar to filter prompts by name, path, or language.
+    *   Implement a "Changed Only" toggle that filters the list to show only prompts modified on the current branch (using `api.getChangedPrompts()`).
+3.  **Prompt Management**:
+    *   Include a "New Prompt" button that opens a `CreatePromptModal`.
+    *   Handle prompt creation by writing the file via `api.writeFile` and refreshing the list.
+    *   Allow selecting a prompt to open it in the main workspace via `onEditPrompt`.
+4.  **Synchronization Workflow**:
+    *   Each card must feature a "Sync" button (yellow/gold gradient) that opens a `SyncOptionsModal`.
+    *   Support both immediate execution (`onRunSync`) and queueing (`onAddToQueue`) with configurable options.
+5.  **State & Error Handling**:
+    *   Manage loading states with an animated spinner.
+    *   Implement robust error boundaries with a "Try Again" retry mechanism.
+    *   Handle empty states with a call-to-action for creating the first prompt.
+
+### Dependencies
+<api_service>
+  <include>../api.ts</include>
+</api_service>
+<create_prompt_modal>
+  <include>./CreatePromptModal.tsx</include>
+</create_prompt_modal>
+<sync_options_modal>
+  <include>./SyncOptionsModal.tsx</include>
+</sync_options_modal>
+
+### Instructions
+*   **Component Structure**: Break the UI into sub-components: `PromptSelector` (main container), `PromptCard` (individual items), and `FileTag` (status indicators).
+*   **Language Badges**: Use a mapping (`LANGUAGE_COLORS`) to assign specific gradient/border styles to common programming languages (Python, TS, JS, Java, Go, Rust).
+*   **File Status**: The `FileTag` component should visually distinguish between existing and missing files using checkmarks/crosses and color coding (Purple for Prompt, Green for Code, Yellow for Test, Blue for Example).
+*   **Performance**: Use `useMemo` for filtering logic to ensure smooth search interactions even with large lists of prompts.
+*   **Responsiveness**: Ensure the grid and card layouts adapt gracefully from mobile (single column, smaller text) to desktop.
+
+### Deliverables
+*   A single TypeScript file `PromptSelector.tsx` exporting the `PromptSelector` component as the default export.
+*   The file should include the internal `PromptCard`, `FileTag`, and necessary interface definitions for props.

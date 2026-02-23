@@ -1,0 +1,93 @@
+<pdd-reason>Manages LLM providers: browse reference CSV to add models, custom providers, and model removal with shell-aware credential storage.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "add_provider_from_registry", "signature": "() -> bool", "returns": "bool"},
+      {"name": "add_custom_provider", "signature": "() -> bool", "returns": "bool"},
+      {"name": "remove_models_by_provider", "signature": "() -> bool", "returns": "bool"},
+      {"name": "remove_individual_models", "signature": "() -> bool", "returns": "bool"},
+      {"name": "parse_api_key_vars", "signature": "(api_key_field: str) -> List[str]", "returns": "List[str]"},
+      {"name": "is_multi_credential", "signature": "(api_key_field: str) -> bool", "returns": "bool"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>api_key_scanner_python.prompt</pdd-dependency>
+
+% You are an expert Python engineer. Your goal is to write the pdd/provider_manager.py module.
+
+% Role & Scope
+Handles adding and removing LLM providers and models in PDD setup. Uses a bundled
+reference CSV (`pdd/data/llm_model.csv`) to let users browse providers, enter API keys,
+and add models to the user CSV (`~/.pdd/llm_model.csv`). Also supports custom
+LiteLLM-compatible providers and two modes of model removal. Manages credential
+persistence via shell-specific `api-env` files.
+
+% Requirements
+
+1. `parse_api_key_vars(api_key_field)` — split pipe-delimited api_key field into
+   individual env var names. Return empty list for blank/empty input.
+
+2. `is_multi_credential(api_key_field)` — return True when api_key field contains
+   multiple pipe-delimited env vars.
+
+3. Support complex-auth providers (Google Vertex AI, AWS Bedrock, Azure OpenAI,
+   Azure AI, Github Copilot) that require multiple credentials or special auth flows.
+   Github Copilot uses litellm's OAuth device flow instead of a traditional API key.
+
+4. `add_provider_from_registry()` — interactive flow: show numbered provider list
+   from reference CSV with model counts, handle authentication (complex or simple),
+   add provider's models to user CSV skipping duplicates. Return True if models added.
+
+5. `add_custom_provider()` — prompt for provider prefix, model name, API key env var,
+   optional base URL, optional costs (default 0.0). Build LiteLLM model string as
+   `provider/model_name`. Append to user CSV. Optionally save API key. Return True
+   if added, False if cancelled.
+
+6. `remove_models_by_provider()` — group user CSV models by api_key, display with
+   counts and sample models, remove all rows for selected group. Comment out (never
+   delete) credentials in api-env with date annotation. Return True if removed.
+
+7. `remove_individual_models()` — list all user CSV models, accept comma-separated
+   selection, confirm and remove. Return True if removed.
+
+8. All CSV writes must be atomic (temp file + rename). Clean up temp files on failure.
+
+9. Shell-aware credential storage: detect shell from SHELL env var, store credentials
+   in `~/.pdd/api-env.{shell}` using appropriate export syntax per shell family.
+   Values must be safely quoted for each shell. Set os.environ immediately on save.
+   Replace existing keys in-place rather than duplicating. Ensure source line is added
+   to the user's shell RC file if not already present.
+
+10. Key existence checks should search .env (python-dotenv), shell environment, and
+    api-env file, returning source label if found. Treat empty-string values as unset
+    (a key that exists but is empty should not count as configured).
+
+11. Empty input cancels/goes back throughout all interactive flows.
+
+% Dependencies
+
+<api_key_scanner>
+  Uses `_parse_api_env_file` from `pdd.api_key_scanner` to check if keys exist
+  in the api-env file.
+</api_key_scanner>
+
+<llm_model_csv_schema>
+The reference CSV at pdd/data/llm_model.csv and user CSV at ~/.pdd/llm_model.csv
+share columns:
+provider,model,input,output,coding_arena_elo,base_url,api_key,max_reasoning_tokens,
+structured_output,reasoning_type,location
+
+api_key column: single env var name for simple providers, pipe-delimited for
+multi-credential (e.g. "AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_REGION_NAME"),
+empty for device-flow or local models.
+</llm_model_csv_schema>
+
+% Deliverables
+- Module at `pdd/provider_manager.py` exporting `add_provider_from_registry`,
+  `add_custom_provider`, `remove_models_by_provider`, `remove_individual_models`,
+  `parse_api_key_vars`, `is_multi_credential`.

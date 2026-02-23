@@ -1,0 +1,110 @@
+% You are an expert TypeScript React engineer. Build `pdd/frontend/components/DependencyViewer.tsx`, an interactive architecture dependency graph using ReactFlow + dagre.
+
+% Dependencies
+<dependency_viewer_dependencies>
+  <include-many>pdd/frontend/api.ts, pdd/frontend/components/Icon.tsx, pdd/frontend/components/Tooltip.tsx, pdd/frontend/components/ModuleNode.tsx, pdd/frontend/components/BatchFilterDropdown.tsx, pdd/frontend/lib/batchUtils.ts</include-many>
+</dependency_viewer_dependencies>
+
+Requirements
+1. Export default `DependencyViewer` as `React.FC<DependencyViewerProps>` with props:
+   - required: `architecture`, `prdContent`, `onModuleClick`
+   - optional: `appName`, `onRunSync`, `onGeneratePrompts`, `isGeneratingPrompts`, `existingPrompts`, `promptsInfo`
+   - edit-mode: `editMode`, `onModuleEdit`, `onModuleDelete`, `onDependencyAdd`, `onDependencyRemove`, `onPositionsChange`, `highlightedModules`, `onInitialPositionsCalculated`
+   - batch-mode: `batches`, `selectedBatch`, `onBatchSelect`, `onSyncBatch`, `remainingCountByBatch`
+2. Keep defaults: `isGeneratingPrompts=false`, `existingPrompts=new Set()`, `promptsInfo=[]`, `editMode=false`, `highlightedModules=new Set()`, `batches=[]`, `selectedBatch=null`, `remainingCountByBatch=new Map()`.
+3. Keep `NODE_WIDTH=200`, `NODE_HEIGHT=85`.
+4. Implement `getCategory(module)` returning `'frontend' | 'backend' | 'shared'` from case-insensitive tags:
+   - frontend tags: `frontend, react, nextjs, ui, page, component, css, html`
+   - backend tags: `backend, api, database, sqlalchemy, fastapi, python, server`
+5. Implement `getCategoryColors(category)` returning exact dark-theme Tailwind class groups for `bg`, `border`, `hover`, `text`:
+   - frontend orange, backend blue, shared green.
+6. Implement `getLayoutedElements(nodes, edges, direction='TB')` with dagre:
+   - graph config `rankdir`, `nodesep:50`, `ranksep:100`, `edgesep:20`
+   - set node dimensions from constants
+   - set edges as `source -> target`
+   - return nodes with centered positions (`dagrePos - width/2,height/2`) and unchanged edges.
+7. Register `nodeTypes` with `moduleNode: ModuleNode`.
+8. Build `promptInfoMap` via `useMemo`: key by prompt file basename (`p.prompt.split('/').pop()`), value `PromptInfo`.
+9. Cache `allHavePositions` with `useMemo(() => architecture.every(m => m.position), [architecture])`.
+10. Compute `initialNodes` and `initialEdges` in one `useMemo`:
+   - nodes map each module to `Node<ModuleNodeData>` with id `filename`, type `moduleNode`, position from `m.position || {x:0,y:0}`, and data:
+     - label stripped from filename by removing `_[A-Za-z]+.prompt` then `.prompt`
+     - module, matching promptInfo, `hasPrompt`, category colors, click/sync/edit callbacks, highlight flag
+     - batch metadata from `getBatchForModule(filename, batches)` (`batchId`, `batchColor`, `batchName`)
+   - edges from each module dependency that exists in architecture (`dep -> module`), with:
+     - id `${dep}->${module}`
+     - `type: 'smoothstep'`
+     - blue stroke + closed arrow marker
+     - `animated:false`, `interactionWidth:20`
+     - edit-only toggles for `selectable`, `focusable`, `deletable`.
+11. Preserve three-way position behavior:
+   - none saved: full dagre layout
+   - all saved: use saved positions as-is
+   - partial saved: dagre all nodes, then override only nodes with saved positions.
+12. Use `useNodesState(initialNodes)` / `useEdgesState(initialEdges)` for controlled ReactFlow state.
+13. Track `prevEditModeRef`; when transitioning from non-edit to edit mode, persist all current node positions via `onPositionsChange` (if provided and nodes exist).
+14. Track `initialPositionsCalledRef`; call `onInitialPositionsCalculated` exactly once per mount when nodes exist and dagre was needed (`!allHavePositions`), sending all node positions.
+15. Implement `handleRelayout`:
+   - rerun dagre on current nodes/edges
+   - update nodes/edges state
+   - if edit mode, send all new positions to `onPositionsChange`.
+16. Implement `handleConnect(connection)` for edit mode only:
+   - ignore missing source/target
+   - call `onDependencyAdd(target, source)`
+   - visually append edge with same blue smoothstep style and arrow marker.
+17. Implement `handleEdgesDelete(deletedEdges)` for edit mode only: for each edge call `onDependencyRemove(target, source)`.
+18. Implement `handleEdgeClick` for edit mode:
+   - clear context menu
+   - mark clicked edge selected
+   - selected edge becomes red (`#ef4444`, stroke width `3`, red arrow), others revert blue (`#60a5fa`, width `2`).
+19. Implement `handleEdgeContextMenu` for edit mode:
+   - `preventDefault`
+   - open context menu at `clientX/clientY` storing the clicked edge.
+20. Implement `handleDeleteEdgeFromMenu`:
+   - remove selected dependency from data (`onDependencyRemove(target, source)`)
+   - remove edge from visual state
+   - close menu.
+21. Clicking pane closes context menu.
+22. Implement `handleNodesDelete` for edit mode only: call `onModuleDelete(node.id)` for each deleted node.
+23. Implement `handleNodeDragStop` for edit mode only: persist all node positions (not just dragged node) through `onPositionsChange`.
+24. Track `prevArchitectureRef` and a `getStructuralFingerprint(modules)` helper based on sorted `filename + sorted dependencies` only (ignore positions). In `useEffect`, reset nodes/edges to `initialNodes/initialEdges` only when structure changed or when not in edit mode.
+25. Render outer glass container with:
+   - collapsible PRD header showing `appName || 'Product Requirements Document'`
+   - module count
+   - expand/collapse button with tooltip and chevron icons
+   - when expanded, `<pre>` showing `prdContent` fallback `'No PRD content available'`.
+26. Render ReactFlow area with edges visually behind nodes using wrapper class selectors.
+27. Configure ReactFlow with current node/edge state and handlers:
+   - edit-only handlers for connect, edge click/context menu, node drag stop, edge delete, node delete
+   - always handle pane click
+   - `fitView` with padding `0.2`, `minZoom=0.1`, `maxZoom=2`
+   - default edge style/marker matching blue smoothstep edges and `interactionWidth:20`
+   - `connectionMode`: edit => `Loose`, otherwise `Strict`
+   - `deleteKeyCode`: edit => `['Backspace','Delete']`, otherwise `null`
+   - `edgesUpdatable`, `edgesFocusable`, `elementsSelectable` tied to `editMode`
+   - `selectNodesOnDrag=false`
+   - `proOptions={{ hideAttribution: true }}`.
+28. Inside ReactFlow, render:
+   - dotted `Background`, styled `Controls`, styled `MiniMap`
+   - MiniMap node color rules: prompt exists => emerald, else infer by category color class (orange/blue/green).
+29. Render top-left batch filter `Panel` when `batches.length > 1`:
+   - contains `BatchFilterDropdown`
+   - pass batches, selection, sync callback, remaining counts
+   - `onSelectBatch` fallback to noop when not provided
+   - disable dropdown while `editMode`.
+30. Render bottom-right legend `Panel` with:
+   - category chips (Frontend/Backend/Shared)
+   - prompt exists indicator
+   - code/test/example indicator row
+   - dependency arrow direction row
+   - `Re-layout` button wired to `handleRelayout`
+   - optional batch group color preview when multiple batches
+   - edit-mode help text explaining right-click delete or select + Delete/Backspace.
+31. Render edge context menu as fixed overlay when open:
+   - delete button invokes `handleDeleteEdgeFromMenu`
+   - show selected edge label `source -> target`
+   - stop propagation on menu container click.
+32. Preserve existing dark/glass Tailwind styling conventions and default export.
+
+Deliverable
+- Output only `pdd/frontend/components/DependencyViewer.tsx`.

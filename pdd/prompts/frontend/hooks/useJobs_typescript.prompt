@@ -1,0 +1,67 @@
+% You are an expert TypeScript React engineer. Generate `pdd/frontend/hooks/useJobs.ts` as the frontend job lifecycle hook for local async jobs, spawned terminal jobs, and remote cloud jobs.
+
+<dependencies>
+  <include>pdd/frontend/api.ts</include>
+</dependencies>
+
+Requirements
+1. Export:
+   - `JobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'`
+   - `JobProgress { current, total, message }`
+   - `JobInfo` with `id`, `command`, `displayCommand`, `status`, `progress`, `output`, `cost`, `startedAt`, `completedAt`, `error`, and optional `metadata`.
+   - `metadata` must support `remote?: boolean`, `sessionId?: string`, and extra keys.
+2. `useJobs(options = {})`:
+   - options: `onJobComplete?: (job: JobInfo, success: boolean) => void`, `maxOutputLines?: number`
+   - default `maxOutputLines = 1000`
+   - safety limits: `MAX_CONCURRENT_JOBS = 3`, `MAX_QUEUED_JOBS = 5`.
+3. Keep state/refs:
+   - `jobs: Map<string, JobInfo>`, `selectedJobId`
+   - `wsConnections: Map<string, WebSocket>` in a ref
+   - `jobsRef` and `onJobCompleteRef` to avoid stale closures in async polling/websocket callbacks
+   - on unmount, close open websockets and clear the map.
+4. Internal helpers:
+   - `addJobOutput(jobId, line)`: append one line and trim oldest lines above `maxOutputLines`.
+   - `updateJobProgress(jobId, current, total, message)`: update progress and force status to `running`.
+   - `completeJob(jobId, success, cost, result?)`: merge buffered `result.stdout`/`result.stderr` (stderr prefixed with `[stderr] `) with best-effort dedupe, set terminal fields (`status`, `completedAt`, `cost`, `error`), call completion callback, and close/remove the job websocket.
+5. `submitJob(request, displayCommand): Promise<string | null>`:
+   - compute active queued/running count from `jobsRef`; throw at queued limit and warn at concurrent limit
+   - call `api.executeCommand`, create/select job, connect `api.connectToJobStream`
+   - websocket callbacks:
+     - stdout/stderr append output (stderr with `[stderr] ` prefix)
+     - progress updates via `updateJobProgress`
+     - complete uses `completeJob`
+     - error logs and fails job
+     - close: if job is still running, fallback to `api.getJobStatus`; if fallback fails, fail job with `'Connection lost'`
+   - store websocket in `wsConnections`; return `jobId`; on exception log and return `null`.
+6. `cancelJob(jobId)` supports both modes:
+   - remote (`metadata.remote && metadata.sessionId`): call `api.cancelRemoteCommand({ sessionId, commandId: jobId })`, then mark job `cancelled` with `completedAt`.
+   - local: send websocket cancel via `api.sendCancelRequest` when open, call `api.cancelJob(jobId)`, then mark job `cancelled` with `completedAt`.
+   - log and rethrow errors.
+7. Job list helpers:
+   - `updateSpawnedJobStatus(jobId, updates: Partial<JobInfo>)`
+   - `removeJob(jobId)` (delete from map, close/remove websocket, clear selection if needed)
+   - `clearCompletedJobs()` removes `completed`/`failed`/`cancelled`.
+8. Spawned-job helpers:
+   - `addSpawnedJob(displayCommand, command, serverJobId?, metadata?)` returns job id, uses provided id or `spawned-${Date.now()}-${random}`, sets status `running`, writes placeholder output lines (remote vs local first line), stores metadata, and selects the job.
+   - `markSpawnedJobDone(jobId, success = true)` sets terminal status/time, appends user-marked message, triggers callback.
+   - `markJobStatus(jobId, status)` where status is terminal (`completed`/`failed`/`cancelled`): set status/time, append blank line plus human-readable status message, trigger callback (`success` only for `completed`).
+9. Local spawned-job polling effect:
+   - run only while at least one job is `running`, non-remote, and has no websocket
+   - poll every 2 seconds via `api.getSpawnedJobStatus(job.id)`
+   - on `completed`/`failed`: set terminal status/completion time, append exit-code line, and trigger callback outside `setJobs` via `onJobCompleteRef`
+   - ignore polling errors.
+10. Remote-job polling effect:
+    - run only while at least one remote job is running
+    - poll every 2 seconds via `api.getRemoteCommandStatus(sessionId, job.id)` using `jobsRef`
+    - for streaming `processing` responses: parse non-empty stdout/stderr lines, prefix stderr, and set output to the streamed lines
+    - for terminal cloud statuses (`completed`/`failed`/`cancelled`): build final output from stdout/stderr plus terminal message, set status/cost/error/completion time, and trigger callback outside `setJobs` using `onJobCompleteRef`
+    - ignore transient errors but keep warning logs.
+11. Return contract:
+    - derived state: `jobs`, `activeJobs`, `completedJobs`, `selectedJob`, `selectedJobId`, `isAnyJobRunning`
+    - actions: `submitJob`, `cancelJob`, `removeJob`, `clearCompletedJobs`, `setSelectedJobId`, `addSpawnedJob`, `markSpawnedJobDone`, `markJobStatus`, `updateSpawnedJobStatus`
+    - default-export `useJobs`.
+
+Constraints
+- Keep immutable updates (`new Map(prev)`), no external state library.
+- Preserve callback signatures and return shape expected by `App.tsx`, `JobDashboard.tsx`, and related job UI components.
+- Keep comments concise and only for non-obvious race-condition/polling behavior.

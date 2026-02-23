@@ -20,6 +20,8 @@
         - `skip_tests` (bool): Skip unit test generation
         - `target_coverage` (Optional[float]): Code coverage percentage. None = use .pddrc or default (90.0)
         - `dry_run` (bool): Analyze sync state without executing operations
+        - `no_steer` (bool): Disable interactive steering and always use recommended operations
+        - `steer_timeout` (Optional[float]): Steering choice timeout in seconds. None = default timeout.
         - `agentic_mode` (bool): When True, Python behaves like non-Python languages (uses agentic path for operations)
 
     Outputs:
@@ -30,6 +32,7 @@
 1. **Parameter Resolution**:
     - Use `ctx.obj.get(key, default)` pattern for ctx.obj parameters
     - Import DEFAULT_STRENGTH, DEFAULT_TIME from package root
+    - Import `DEFAULT_STEER_TIMEOUT_S` from `sync_tui`
     - Name context variable `context_override`, time variable `time_param` to avoid shadowing builtins
     - Configuration hierarchy: CLI value (if not None) > .pddrc value > hardcoded default
 
@@ -41,8 +44,9 @@
 3. **Dry-Run Mode**:
     - Display sync analysis for basename, then exit
     - Iterate through each detected language, print header, call sync_orchestration with `dry_run=True`
-    - Pass directory parameters, verbose, quiet, context_override to sync_orchestration
+    - Pass directory parameters, verbose, quiet, context_override, `no_steer`, and `steer_timeout`
     - Use `force=True` in construct_paths to avoid interactive prompts
+    - Use `DEFAULT_STEER_TIMEOUT_S` when `steer_timeout` is None
     - Return `({}, 0.0, "")` after processing all languages
 
 4. **Path and Configuration**:
@@ -75,6 +79,7 @@
     - Track remaining_budget across languages (reduce after each language's cost)
     - Skip subsequent languages if budget exhausted
     - Aggregate results and costs from all language syncs
+    - Forward steerability controls (`no_steer`, resolved `steer_timeout`) to each sync_orchestration call
 
 9. **User Feedback** (unless quiet=True):
     - Show sync progress summary before starting (detected context, languages, settings)

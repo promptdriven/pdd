@@ -7,13 +7,16 @@
     "functions": [
       {"name": "validate_architecture", "signature": "(request: ValidateArchitectureRequest)", "returns": "ValidationResult"},
       {"name": "sync_from_prompts", "signature": "(request: SyncRequest)", "returns": "SyncResult"},
-      {"name": "generate_tags_for_prompt", "signature": "(request: GenerateTagsRequest)", "returns": "GenerateTagsResult"}
+      {"name": "generate_tags_for_prompt", "signature": "(request: GenerateTagsRequest)", "returns": "GenerateTagsResult"},
+      {"name": "rearrange_graph_layout", "signature": "(request: RearrangeRequest)", "returns": "RearrangeResult"}
     ]
   }
 }
 </pdd-interface>
 
 <pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_common_python.prompt</pdd-dependency>
+<pdd-dependency>load_prompt_template_python.prompt</pdd-dependency>
 
 % You are an expert Python engineer. Your goal is to write `pdd/server/routes/architecture.py`.
 
@@ -46,19 +49,26 @@
      - Generates XML tags string ready to inject into prompt
      - Returns: GenerateTagsResult with tags string, has_existing_tags flag, architecture_entry
 
-  4. **Validation Checks**:
+  4. **POST /architecture/rearrange**:
+     - Body: RearrangeRequest with architecture_path (default: "architecture.json", relative to project root)
+     - Loads arrange_graph_layout_LLM.prompt via load_prompt_template, formats with project_root and architecture_path
+     - Runs the agentic instruction via run_agentic_task in a ThreadPoolExecutor (non-blocking asyncio)
+     - After agent completes, reads the updated file from disk and returns the full modules array
+     - Returns: RearrangeResult with success flag, modules array, message string, error string
+
+  5. **Validation Checks**:
      - Circular dependency detection using DFS algorithm
      - Missing dependency detection (references to non-existent modules)
      - Duplicate dependency warnings
      - Orphan module warnings (no dependencies and not depended upon)
      - Required field validation (filename, filepath, description)
 
-  5. **Error Types**:
+  6. **Error Types**:
      - `circular_dependency`: Modules form a dependency cycle
      - `missing_dependency`: Module depends on non-existent module
      - `invalid_field`: Required field missing or invalid
 
-  6. **Warning Types**:
+  7. **Warning Types**:
      - `duplicate_dependency`: Module lists same dependency twice
      - `orphan_module`: Module has no connections (may be intentional)
 
@@ -113,6 +123,18 @@
       has_existing_tags: bool = False
       architecture_entry: Optional[Dict[str, Any]] = None
       error: Optional[str] = None
+
+  class RearrangeRequest(BaseModel):
+      architecture_path: str = Field(
+          "architecture.json",
+          description="Path to architecture file, relative to project root"
+      )
+
+  class RearrangeResult(BaseModel):
+      success: bool
+      modules: Optional[List[Dict[str, Any]]] = None
+      message: Optional[str] = None
+      error: Optional[str] = None
   ```
 
 % Dependencies
@@ -131,6 +153,9 @@
   - sync-from-prompts: delegate to architecture_sync module, run validation on result
   - generate-tags-for-prompt: check if prompt already has PDD tags before generating
   - Handle exceptions gracefully and return appropriate error responses
+  - rearrange endpoint: use asyncio.get_event_loop().run_in_executor with a module-level
+    ThreadPoolExecutor(max_workers=2) so run_agentic_task (blocking subprocess) doesn't
+    stall the FastAPI event loop; read updated file from disk after agent writes it
 
 % Deliverables
   - Code: `pdd/server/routes/architecture.py`

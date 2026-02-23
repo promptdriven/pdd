@@ -23,6 +23,9 @@ SYNC_REGRESSION_END=63
 CLOUD_REGRESSION_START=64
 CLOUD_REGRESSION_END=71
 
+VITEST_START=72
+VITEST_END=72
+
 # ── Helper: write result JSON ──────────────────────────────────────────────
 write_result() {
     local status="$1" duration="$2" suite="$3" detail="$4"
@@ -101,6 +104,16 @@ fi
 
 # ── Dispatch by task index ────────────────────────────────────────────────
 START_TIME=$(date +%s)
+
+# ── Trap handler: ensure result file on forced termination ────────────────
+trap_handler() {
+    local end_time=$(date +%s)
+    local duration=$((end_time - START_TIME))
+    if [ ! -f "${RESULT_JSON}" ]; then
+        write_result "timeout" "${duration}" "unknown" "killed_by_signal"
+    fi
+}
+trap trap_handler TERM INT
 
 run_test() {
     local suite="$1" detail="$2"
@@ -192,6 +205,15 @@ elif [ "${TASK_INDEX}" -ge "${CLOUD_REGRESSION_START}" ] && [ "${TASK_INDEX}" -l
     CASE_NUM=$((TASK_INDEX - CLOUD_REGRESSION_START + 1))
     run_test "cloud_regression" "case_${CASE_NUM}" \
         bash tests/cloud_regression.sh "${CASE_NUM}"
+
+elif [ "${TASK_INDEX}" -ge "${VITEST_START}" ] && [ "${TASK_INDEX}" -le "${VITEST_END}" ]; then
+    # ── Frontend Vitest tests ─────────────────────────────────────────
+    echo "=== Installing frontend dependencies ==="
+    cd pdd/frontend
+    npm install --prefer-offline --no-audit --no-fund 2>&1 | tail -5
+
+    run_test "vitest" "frontend" \
+        npx vitest run
 
 else
     echo "ERROR: Unknown task index ${TASK_INDEX}"

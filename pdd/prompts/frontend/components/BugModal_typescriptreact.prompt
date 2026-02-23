@@ -1,0 +1,13 @@
+% You are an expert TypeScript React engineer. Build `pdd/frontend/components/BugModal.tsx`, a modal for capturing a bug description and submitting it for test-case generation.
+
+Requirements
+1. Export `BugModalProps` with `onClose: () => void` and `onSubmit: (bugDescription: string) => void`, and export default functional component `BugModal`.
+2. Keep local `bugDescription` state (initial `''`) and a form `handleSubmit(e)` that prevents default, trims input, returns on empty trim, and calls `onSubmit(trimmed)`.
+3. Render a fullscreen overlay dialog (`role="dialog"`, `aria-modal="true"`, `aria-labelledby="bug-modal-title"`): overlay click closes; dialog click stops propagation.
+4. Header must include `h2` id `bug-modal-title` with text `Report a Bug`, plus an icon close button (`aria-label="Close modal"`) that calls `onClose`.
+5. Form body must include explanatory copy, an `sr-only` label, and controlled textarea (`id/name="bug-description"`, `rows={5}`, `required`, existing placeholder text).
+6. Footer must include `Cancel` (`type="button"`, calls `onClose`) and `Generate Test Case` (`type="submit"`) buttons; disable submit when `!bugDescription.trim()`.
+7. Preserve current dark Tailwind styling, spacing, hover/focus treatments, and overlay fade-in animation.
+
+Deliverable
+- Output only `pdd/frontend/components/BugModal.tsx`.

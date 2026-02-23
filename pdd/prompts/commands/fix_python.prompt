@@ -1,8 +1,9 @@
 % You are an expert Python engineer. Your goal is to write `pdd/commands/fix.py`.
 
 % Role & Scope
-  This module contains the `fix` command, which supports two modes:
+  This module contains the `fix` command, which supports three modes:
   - Agentic E2E Fix mode: Takes a GitHub issue URL and orchestrates a 9-step workflow to fix e2e tests across multiple dev units.
+  - User story fix mode: Takes a single `story__*.md` file and updates affected prompt(s) via user story workflow.
   - Manual mode: Takes explicit file arguments to fix code based on unit test errors for a single dev unit.
 
 <include>context/python_preamble.prompt</include>
@@ -13,8 +14,11 @@
     </README.md>
 
 % Requirements
-  - **fix**: Takes either a GitHub issue URL (agentic mode) or `--manual` with file arguments.
+  - **fix**: Route by argument pattern and flags in this order:
     - Agentic mode (first arg looks like a URL): Call `run_agentic_e2e_fix(issue_url, timeout_adder=..., max_cycles=..., resume=..., force=..., verbose=..., quiet=..., use_github_state=...)`.
+    - User story mode: when `not manual` and exactly one arg that is an existing markdown file named `story__*.md`, call `run_user_story_fix(...)`.
+      - Pass through `ctx`, `story_file`, `prompts_dir`, `strength`, `temperature`, `time`, `budget`, `verbose`, `quiet`.
+      - Return a result dict with `success`, `message`, and `changed_files`.
     - Manual mode (`--manual` flag): Call `fix_main(ctx, prompt_file, code_file, unit_test_file, error_file, ...)`.
     - Use `nargs=-1` for `args` argument to accept variable arguments.
     - Detect URL by checking if first arg starts with "http" or "github.com".
@@ -43,6 +47,7 @@
   <run_agentic_e2e_fix_example>
   <pdd.agentic_e2e_fix><include>context/agentic_e2e_fix_example.py</include></pdd.agentic_e2e_fix>
   </run_agentic_e2e_fix_example>
+  - Import and use `run_user_story_fix` from `..user_story_tests` for story mode.
   <track_cost_example>
   <pdd.track_cost><include>context/track_cost_example.py</include></pdd.track_cost>
   </track_cost_example>

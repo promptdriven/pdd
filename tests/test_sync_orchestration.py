@@ -5005,3 +5005,54 @@ def test_auto_fix_env_var_integration_skips_crash_main(orchestration_fixture):
     call_args = fingerprint_calls[0][0]
     assert call_args[4] == 0.0, "Auto-fix should have cost=0.0"
     assert call_args[5] == 'auto-fix', "Auto-fix should use model='auto-fix'"
+
+
+def test_agentic_verify_saves_run_report(orchestration_fixture):
+    """
+    Test that a successful verify operation in agentic mode (non-Python language)
+    saves a RunReport after completion.
+
+    This prevents false crash-verify cycle detection: without saving a RunReport
+    after verify, sync_determine_operation sees 'no run_report' on the next loop
+    and returns 'crash' again, creating a false [crash, verify, crash, verify] cycle.
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_get_paths = orchestration_fixture['get_pdd_file_paths']
+    tmp_path = Path(mock_get_paths.return_value['prompt']).parent.parent
+
+    # Set up typescriptreact files (non-Python → agentic path)
+    (tmp_path / "prompts" / "calculator_typescriptreact.prompt").write_text("Create a calculator.")
+    (tmp_path / "src" / "calculator.tsx").write_text("// TSX code")
+    (tmp_path / "examples" / "calculator_example.tsx").write_text("// Example")
+    (tmp_path / "tests" / "test_calculator.tsx").write_text("// Test")
+
+    mock_get_paths.return_value = {
+        'prompt': tmp_path / 'prompts' / 'calculator_typescriptreact.prompt',
+        'code': tmp_path / 'src' / 'calculator.tsx',
+        'example': tmp_path / 'examples' / 'calculator_example.tsx',
+        'test': tmp_path / 'tests' / 'test_calculator.tsx',
+    }
+
+    # Simulate: crash → verify → all_synced
+    mock_determine.side_effect = [
+        SyncDecision(operation='crash', reason='Example failed'),
+        SyncDecision(operation='verify', reason='Verify needed'),
+        SyncDecision(operation='all_synced', reason='Done'),
+    ]
+
+    # crash_main returns success (agentic tuple format)
+    orchestration_fixture['crash_main'].return_value = (True, "", "", 1, 0.05, "agentic-cli")
+    # fix_verification_main returns success (agentic tuple format)
+    orchestration_fixture['fix_verification_main'].return_value = (True, "", "", 1, 0.10, "agentic-cli")
+
+    with patch('pdd.sync_orchestration._save_run_report_atomic') as mock_save_report_atomic:
+        result = sync_orchestration(basename="calculator", language="typescriptreact")
+
+        # _save_run_report_atomic should be called at least twice:
+        # once after crash (existing behavior) and once after verify (new behavior)
+        save_calls = mock_save_report_atomic.call_args_list
+        assert len(save_calls) >= 2, (
+            f"Expected _save_run_report_atomic to be called at least 2 times "
+            f"(after crash AND after verify), but was called {len(save_calls)} time(s). "
+            f"Missing post-verify RunReport causes false crash-verify cycle detection."
+        )

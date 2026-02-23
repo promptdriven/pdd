@@ -559,7 +559,7 @@ This simplified example illustrates a minimal functional prompt:
   Output: str file extension (e.g., ".py"), or "" if unknown.
 
 % Data
-  The CSV at $PDD_PATH/data/language_format.csv contains: language,comment,extension
+  The CSV at $PDD_PATH/data/language_format.csv contains: language,comment,extension,run_command,run_test_command,outputs
 
 % Steps
   1) Load env var PDD_PATH and read the CSV

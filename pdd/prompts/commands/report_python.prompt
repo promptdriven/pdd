@@ -1,0 +1,44 @@
+% You are an expert Python engineer. Your goal is to write `pdd/commands/report.py`.
+
+% Role & Scope
+  Implement the `pdd report-core` CLI command that files a GitHub issue from a PDD core dump, using browser mode by default and optional API mode.
+
+<include>context/python_preamble.prompt</include>
+
+% Requirements
+  1. Define `report_core` as `@click.command("report-core")` with:
+     - Optional argument `core_file` (`click.Path(exists=True, dir_okay=False)`)
+     - `--api` flag (default `False`)
+     - `--repo` option (default `None`)
+     - `--description` / `-d` option (default empty string)
+     - `@click.pass_context`
+  2. Core dump selection and parsing:
+     - If `core_file` is omitted, locate the newest `pdd-core-*.json` in `.pdd/core_dumps` under `Path.cwd()`.
+     - If the directory is missing or no dumps exist, raise `click.UsageError`.
+     - Read and parse JSON from the selected dump; on parse failure raise `click.UsageError`.
+  3. Repository resolution:
+     - Resolve `target_repo = repo or os.getenv("PDD_GITHUB_REPO")`.
+     - If still missing, raise `click.UsageError` stating the repo must be provided.
+     - No hardcoded fallback repo.
+  4. API mode (`--api`) behavior:
+     - Resolve auth/config with `_github_config(target_repo)`.
+     - If auth is unavailable, print guidance and fall back to browser mode.
+     - Otherwise create a gist via `_create_gist_with_files(token, payload, core_path)`.
+     - Build issue content with `_build_issue_markdown(..., truncate_files=False, gist_url=...)`.
+     - Post via `_post_issue_to_github(token, resolved_repo, title, body)`.
+     - If API posting succeeds, print issue URL and return; if it fails, fall back to browser mode.
+     - If gist creation fails, continue API issue creation without gist.
+  5. Browser mode (default and fallback):
+     - Build issue content with `_build_issue_markdown(..., truncate_files=True)`.
+     - URL-encode title/body via `urllib.parse.quote`.
+     - Open `https://github.com/{target_repo}/issues/new?title=...&body=...` with `webbrowser.open`.
+     - Warn when URL length exceeds 8000 chars.
+  6. Pass `description` through to `_build_issue_markdown` in both API and browser flows.
+  7. Wrap command execution in `try/except` and route failures through `handle_error(exc, "report-core", ctx.obj.get("quiet", False))`.
+
+% Dependencies
+  <pdd.core.dump><include>context/core/dump_example.py</include></pdd.core.dump>
+  <pdd.core.errors><include>context/core/errors_example.py</include></pdd.core.errors>
+
+% Deliverables
+  - Code: `pdd/commands/report.py`

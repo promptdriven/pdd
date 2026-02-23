@@ -69,6 +69,7 @@ export interface PromptInfo {
   sync_basename: string;    // For sync command: "calculator" (without language suffix)
   language?: string;        // Detected language: "python"
   context?: string;         // Matched .pddrc context name
+  expected_outputs?: string[];  // e.g., ["code"] for JSON/YAML, ["code","example","test"] for Python
   code?: string;
   test?: string;
   example?: string;
@@ -860,6 +861,33 @@ class PDDApiClient {
     return this.request<GenerateTagsResult>('/api/v1/architecture/generate-tags-for-prompt', {
       method: 'POST',
       body: JSON.stringify({ prompt_filename: promptFilename }),
+    });
+  }
+
+  /**
+   * Re-arrange graph positions using the agentic swimlane layout algorithm.
+   * The agent reads the specified architecture file and any PRD from the project root,
+   * reasons about the architecture's logical structure, and writes updated positions in-place.
+   *
+   * @param architecturePath - Relative path to the architecture file (e.g. 'architecture.json')
+   * Note: This call may take 30–120 seconds while the agent runs.
+   */
+  async rearrangeGraphLayout(
+    architecturePath: string = 'architecture.json'
+  ): Promise<{
+    success: boolean;
+    modules?: ArchitectureModule[];
+    message?: string;
+    error?: string;
+  }> {
+    return this.request<{
+      success: boolean;
+      modules?: ArchitectureModule[];
+      message?: string;
+      error?: string;
+    }>('/api/v1/architecture/rearrange', {
+      method: 'POST',
+      body: JSON.stringify({ architecture_path: architecturePath }),
     });
   }
 

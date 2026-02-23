@@ -1,0 +1,188 @@
+% You are an expert TypeScript engineer. Generate `pdd/frontend/api.ts` as the PDD frontend API contract + client module for local server APIs, architecture workflows, remote cloud sessions, and job-stream WebSockets.
+
+% Imports and module constants
+1) Import `YAML` from `yaml` and `PddrcConfig` (type-only) from `./types`.
+2) Define:
+   - `const API_BASE_URL = import.meta.env.VITE_API_URL || ''`
+   - `const WS_BASE_URL = API_BASE_URL ? API_BASE_URL.replace('http', 'ws') : \`ws://${window.location.host}\``
+   Keep both constants (including `WS_BASE_URL`) for compatibility.
+
+% Exported contract types (exact names, field names, and unions)
+1) Core server/command/file types:
+   - `ServerStatus { version, project_root, uptime_seconds, active_jobs, connected_clients }`
+   - `CommandInfo { name, description }`
+   - `JobHandle { job_id, status:'queued'|'running'|'completed'|'failed'|'cancelled', created_at }`
+   - `JobResult { job_id, status, result:any, error:string|null, cost:number, duration_seconds:number, completed_at:string|null }`
+   - `FileTreeNode { name, path, type:'file'|'directory', children?:FileTreeNode[], size?:number, mtime?:string }`
+   - `FileContent { path, content, encoding:'utf-8'|'base64', size, is_binary, checksum? }`
+   - `PromptInfo { prompt, sync_basename, language?, context?, expected_outputs?:string[], code?, test?, example? }`
+   - `CommandRequest { command, args?:Record<string, any>, options?:Record<string, any> }`
+   - `RunResult { success, message, exit_code, stdout?:string|null, stderr?:string|null, error_details?:string|null }`
+   - `CancelResult { cancelled, message }`
+   - `CommandStatus { running, command:string|null }`
+   - `SpawnTerminalResponse { success, message, command, platform, job_id? }`
+   - `SpawnedJobStatus { job_id, command, status:'running'|'completed'|'failed'|'unknown', started_at, completed_at?, exit_code? }`
+
+2) Prompt metrics/sync/model types:
+   - `CostEstimate { input_cost, model, tokens, cost_per_million, currency }`
+   - `TokenMetrics { token_count, context_limit, context_usage_percent, cost_estimate:CostEstimate|null }`
+   - `PromptAnalyzeRequest { path, model?, preprocess?, content? }`
+   - `PromptAnalyzeResponse { raw_content, processed_content:string|null, raw_metrics, processed_metrics:TokenMetrics|null, preprocessing_succeeded, preprocessing_error:string|null }`
+   - `type SyncStatusType = 'in_sync' | 'prompt_changed' | 'code_changed' | 'conflict' | 'never_synced'`
+   - `SyncStatus { status:SyncStatusType, last_sync_timestamp:string|null, last_sync_command:string|null, prompt_modified, code_modified, fingerprint_exists, prompt_exists, code_exists }`
+   - `ModelInfo { model, provider, input_cost, output_cost, elo, context_limit, max_thinking_tokens, reasoning_type, structured_output }`
+   - `ModelsResponse { models:ModelInfo[], default_model }`
+
+3) Prompt-code diff analysis types:
+   - `PromptRange { startLine, endLine, text }`
+   - `CodeRange { startLine, endLine, text }`
+   - `DiffSection { id, promptRange, codeRanges:CodeRange[], status:'matched'|'partial'|'missing'|'extra', matchConfidence, semanticLabel, notes }`
+   - `LineMapping { promptLine, codeLines:number[], matchType:'exact'|'semantic'|'partial'|'none' }`
+   - `HiddenKnowledge { type:'magic_value'|'algorithm_choice'|'edge_case'|'error_handling'|'api_contract'|'optimization'|'business_logic'|'assumption', location:{startLine:number;endLine:number}, description, regenerationImpact:'would_differ'|'would_fail'|'might_work', suggestedPromptAddition }`
+   - `DiffStats { totalRequirements, matchedRequirements, missingRequirements, totalCodeFeatures, documentedFeatures, undocumentedFeatures, promptToCodeCoverage, codeToPromptCoverage, hiddenKnowledgeCount, criticalGaps }`
+   - `DiffAnalysisResult { overallScore, canRegenerate, regenerationRisk:'low'|'medium'|'high'|'critical', promptToCodeScore, codeToPromptScore, summary, sections:DiffSection[], codeSections:DiffSection[], hiddenKnowledge:HiddenKnowledge[], lineMappings:LineMapping[], stats:DiffStats, missing:string[], extra:string[], suggestions:string[] }`
+   - `DiffAnalysisRequest { prompt_content, code_content, strength?, mode?:'quick'|'detailed', include_tests?, prompt_path?, code_path? }`
+   - `DiffAnalysisResponse { result:DiffAnalysisResult, cost, model, analysisMode, cached, tests_included, test_files:string[] }`
+
+4) Prompt history/diff types:
+   - `PromptVersionInfo { commit_hash, commit_date, commit_message, author, prompt_content }`
+   - `PromptHistoryRequest { prompt_path, limit? }`
+   - `PromptHistoryResponse { versions:PromptVersionInfo[], current_content, has_uncommitted_changes }`
+   - `LinguisticChange { change_type:'added'|'removed'|'modified', category:'requirement'|'constraint'|'behavior'|'format', description, old_text?, new_text?, impact:'breaking'|'enhancement'|'clarification' }`
+   - `PromptDiffRequest { prompt_path, version_a, version_b, code_path?, strength? }`
+   - `PromptDiffResponse { prompt_a_content, prompt_b_content, text_diff, linguistic_changes:LinguisticChange[], code_diff?, summary, cost, model, version_a_label, version_b_label, versions_swapped }`
+
+5) Architecture/auth/remote-generation types:
+   - `ArchitectureModule { reason, description, dependencies:string[], priority, filename, filepath, tags?:string[], interface?:{ type:string; [key:string]:any }, position?:{x:number;y:number} }`
+   - `ArchitectureCheckResult { exists:boolean, path?:string }`
+   - `ArchitectureValidationError { type:'circular_dependency'|'missing_dependency'|'invalid_field', message, modules:string[] }`
+   - `ArchitectureValidationWarning { type:'duplicate_dependency'|'orphan_module', message, modules:string[] }`
+   - `ArchitectureValidationResult { valid, errors:ArchitectureValidationError[], warnings:ArchitectureValidationWarning[] }`
+   - `ArchitectureSyncRequest { filenames?:string[]|null, dry_run?:boolean }`
+   - `ArchitectureSyncModuleResult { filename, success, updated, changes:{ reason?:{old:string;new:string}; interface?:{old:any;new:any}; dependencies?:{old:string[];new:string[]} }, error? }`
+   - `ArchitectureSyncResult { success, updated_count, skipped_count, results:ArchitectureSyncModuleResult[], validation:ArchitectureValidationResult, errors:string[] }`
+   - `GenerateTagsResult { success, tags:string|null, has_existing_tags, architecture_entry:Record<string, any>|null, error:string|null }`
+   - `AuthStatus { authenticated, cached, expires_at:number|null }`
+   - `LogoutResult { success, message }`
+   - `LoginResponse { success, user_code?, verification_uri?, expires_in?, poll_id?, error? }`
+   - `LoginPollResponse { status:'pending'|'completed'|'expired'|'error', message? }`
+   - `RemoteSessionInfo { sessionId, cloudUrl, projectName, projectPath, createdAt, lastHeartbeat, status:'active'|'stale', metadata:{ hostname, platform, pythonVersion } }`
+   - `RemoteCommandRequest { sessionId, type, payload:{ args?:Record<string, any>; options?:Record<string, any> } }`
+   - `RemoteCommandStatus { commandId, type, status:'pending'|'processing'|'completed'|'failed'|'cancelled', createdAt, updatedAt?, response?:{ success?, message?, exit_code?, stdout?, stderr?, files_created?:string[], cost?, streaming?:boolean, error? } }`
+   - `GenerationGlobalOptions { strength?, temperature?, time?, verbose?, quiet?, force?, local? }`
+   - `GenerateArchitectureRequest { prdPath?, prdContent?, techStackPath?, techStackContent?, appName?, outputPath?, globalOptions? }`
+   - `GeneratePromptFromArchRequest { module, langOrFramework, architectureFile?, prdFile?, techStackFile?, outputPath?, globalOptions? }`
+   - `BatchGeneratePromptsRequest { modules:Array<{module:string;langOrFramework:string}>, architectureFile?, prdFile?, techStackFile?, globalOptions? }`
+   - `PromptGenerationResult { module, success, error? }`
+
+% PDDApiClient runtime behavior
+1) Implement class `PDDApiClient` with private fields `baseUrl`, `wsBaseUrl`, `cachedCloudUrl:string|null = null`.
+2) Constructor defaults `baseUrl` to `API_BASE_URL`; sets `wsBaseUrl = baseUrl.replace('http', 'ws')`.
+3) Private `request<T>(endpoint, options?)` must:
+   - `fetch(\`${this.baseUrl}${endpoint}\`, ...)`
+   - always set `'Content-Type':'application/json'` merged with `options?.headers`
+   - on non-OK: parse JSON fallback `{ detail: response.statusText }`, throw `new Error(error.detail || \`API Error: ${response.status}\`)`
+   - return `response.json()`
+
+4) Local server endpoint wrappers (name/signature/endpoint/body):
+   - `getStatus()` -> GET `/api/v1/status`
+   - `getAuthStatus()` -> GET `/api/v1/auth/status`
+   - `logout()` -> POST `/api/v1/auth/logout`
+   - `startLogin(options?)` -> POST `/api/v1/auth/login` with `JSON.stringify(options || {})`
+   - `pollLoginStatus(pollId)` -> GET `/api/v1/auth/login/poll/${encodeURIComponent(pollId)}`
+   - `getAvailableCommands()` -> GET `/api/v1/commands/available`
+   - `executeCommand(request)` -> POST `/api/v1/commands/execute`
+   - `runCommand(request)` -> POST `/api/v1/commands/run`
+   - `cancelCommand()` -> POST `/api/v1/commands/cancel`
+   - `getCommandStatus()` -> GET `/api/v1/commands/status`
+   - `getJobStatus(jobId)` -> GET `/api/v1/commands/jobs/${jobId}`
+   - `cancelJob(jobId)` -> POST `/api/v1/commands/jobs/${jobId}/cancel`
+   - `getJobHistory(limit=50, offset=0)` -> GET `/api/v1/commands/history?limit=...&offset=...`
+   - `spawnTerminal(request)` -> POST `/api/v1/commands/spawn-terminal`
+   - `getSpawnedJobStatus(jobId)` -> GET `/api/v1/commands/spawned-jobs/${jobId}/status`
+   - `getFileTree(path='', depth=3)` uses `URLSearchParams`, conditionally adds `path`, always adds `depth`, GET `/api/v1/files/tree?...`
+   - `getFileContent(path)` -> GET `/api/v1/files/content?path=${encodeURIComponent(path)}`
+   - `writeFile(path, content, encoding='utf-8')` -> POST `/api/v1/files/write` with `{ path, content, encoding }`
+   - `listPrompts()` -> GET `/api/v1/files/prompts`
+   - `getChangedPrompts(baseBranch='main')` -> GET `/api/v1/files/prompts/changed?base_branch=${encodeURIComponent(baseBranch)}`
+   - `analyzePrompt(request)` -> POST `/api/v1/prompts/analyze`
+   - `getSyncStatus(basename, language)` -> GET `/api/v1/prompts/sync-status?...`
+   - `getModels()` -> GET `/api/v1/prompts/models`
+   - `analyzeDiff(request)` -> POST `/api/v1/prompts/diff-analysis`
+   - `getPromptHistory(request)` -> POST `/api/v1/prompts/git-history`
+   - `getPromptDiff(request)` -> POST `/api/v1/prompts/prompt-diff`
+   - `validateArchitecture(modules)` -> POST `/api/v1/architecture/validate` with `{ modules }`
+   - `syncArchitectureFromPrompts(request={})` -> POST `/api/v1/architecture/sync-from-prompts`
+   - `generateTagsForPrompt(promptFilename)` -> POST `/api/v1/architecture/generate-tags-for-prompt` with `{ prompt_filename: promptFilename }`
+   - `rearrangeGraphLayout(architecturePath='architecture.json')` -> POST `/api/v1/architecture/rearrange` with `{ architecture_path: architecturePath }`
+   - `generateArchitectureFromIssue(issueUrl, options={})` -> POST `/api/v1/architecture/generate-from-issue` with `{ issue_url, verbose: options.verbose ?? false, quiet: options.quiet ?? false }`
+   - `getJWTToken()` -> GET `/api/v1/auth/jwt-token`, returns `jwt`, catches and returns `null`
+   - `fetchCloudUrl()` -> GET `/api/v1/config/cloud-url`, on failure `console.warn(...)` and fallback `import.meta.env.VITE_CLOUD_URL || 'https://us-central1-prompt-driven-development.cloudfunctions.net'`
+
+5) Config/analysis helpers:
+   - `getPddrc()` reads `.pddrc` via `getFileContent`, `YAML.parse(content.content) as PddrcConfig`, returns `null` on any error.
+   - `savePddrc(config)` uses `YAML.stringify(config)` then `writeFile('.pddrc', yamlContent)`.
+   - `analyzeFile(path, model?)` calls `analyzePrompt({ path, model: model || 'claude-sonnet-4-20250514', preprocess:false })` and returns `raw_metrics`.
+
+6) Architecture-file helpers:
+   - `checkArchitectureExists()` tries `getFileContent('architecture.json')`, returns `{exists:true,path:'architecture.json'}` else `{exists:false}`.
+   - `getArchitecture()` parses JSON from `architecture.json` into `ArchitectureModule[]`.
+   - `saveArchitecture(modules)` pretty-prints JSON with 2-space indent and writes `architecture.json`.
+   - `listMarkdownFiles()` calls `getFileTree('', 4)` and recursively collects `.md` file paths; on error logs `console.error('Failed to list markdown files:', e)` and returns collected array.
+
+7) Generation workflow helpers:
+   - `generateArchitecture(request)`:
+     - builds `env: Record<string,string>` from `prdPath`/`prdContent`, `techStackPath`/`techStackContent`, `appName`
+     - when content provided, write temp files `.pdd/temp_prd.md` and `.pdd/temp_tech_stack.md`
+     - converts env map into `envArgs: string[]` entries `KEY=VALUE`
+     - builds `options` with `output: request.outputPath || 'architecture.json'`, `template:'architecture/architecture_json'`, `env: envArgs`
+     - applies global options (`strength`, `temperature`, `time`, `verbose`, `quiet`, `force`) only when provided
+     - executes `runCommand({ command:'generate', args:{}, options })`
+   - `generatePddrcFromArchitecture({ architectureFile?, outputPath?, globalOptions? })`:
+     - `envArgs = [\`ARCHITECTURE_FILE=${architectureFile || 'architecture.json'}\`]`
+     - template `'generic/generate_pddrc'`, output default `'.pddrc'`, passes global options same way
+   - `generatePromptFromArchitecture(request)`:
+     - env includes `MODULE`, `LANG_OR_FRAMEWORK`, `ARCHITECTURE_FILE` (+ optional `PRD_FILE`, `TECH_STACK_FILE`)
+     - template `'generic/generate_prompt'`, output default ``prompts/${module}_${langOrFramework}.prompt``
+   - `batchGeneratePrompts(request, onProgress?, shouldCancel?)`:
+     - sequential loop over modules
+     - breaks before module when `shouldCancel?.()` true
+     - calls `onProgress?.(i + 1, modules.length, module)`
+     - uses `generatePromptFromArchitecture`
+     - pushes `{ module:\`${module}_${langOrFramework}\`, success, error? }`
+     - on throw sets `error` to `e.message` (Error) or `String(e)`
+
+8) Remote cloud session behavior:
+   - `getCloudUrl()` caches `fetchCloudUrl()` in `cachedCloudUrl`.
+   - `listRemoteSessions`, `submitRemoteCommand`, `getRemoteCommandStatus`, `cancelRemoteCommand` all:
+     - require token from `getJWTToken()`, else throw `new Error('Not authenticated. Please run: pdd auth login')`
+     - call cloud endpoints `/listSessions`, `/submitCommand`, `/getCommandStatus?...`, `/cancelCommand`
+     - use Bearer token + JSON headers
+     - on non-OK parse `{ error: response.statusText }` fallback and throw endpoint-specific message
+   - `listRemoteSessions()` returns `data.sessions || []`
+   - `submitRemoteCommand()` returns parsed JSON `{ commandId, status }`
+   - `getRemoteCommandStatus(sessionId, commandId)`:
+     - returns `null` on HTTP 404
+     - otherwise maps `data.command` into `RemoteCommandStatus`
+     - returns `null` when `data.command` missing
+
+9) Job stream WebSocket helpers:
+   - `connectToJobStream(jobId, callbacks)` opens `new WebSocket(\`${this.wsBaseUrl}/ws/jobs/${jobId}/stream\`)`
+   - `onmessage`: parse JSON, invoke `onMessage?.(message.type, message.data)`, route:
+     - `'stdout'` -> `onStdout?.(message.data)`
+     - `'stderr'` -> `onStderr?.(message.data)`
+     - `'progress'` -> `onProgress?.(message.current, message.total, message.message)`
+     - `'complete'` -> `onComplete?.(message.data?.success, message.data?.result, message.data?.cost || 0)`
+     - parse failures log `console.error('Failed to parse WebSocket message:', e)`
+   - `onerror` -> `onError?.(new Error('WebSocket error'))`
+   - `onclose` -> `onClose?.()`
+   - `sendCancelRequest(ws)` sends `{"type":"cancel"}` only when `ws.readyState === WebSocket.OPEN`
+
+10) Exports at bottom:
+    - `export const api = new PDDApiClient();`
+    - `export { PDDApiClient };`
+
+% Constraints
+- Preserve API compatibility exactly: exported type names, method names, snake_case keys, optional fields, and literal unions.
+- Keep return types explicit; keep `any` only where currently required by the contracts above.
+- No external runtime dependencies beyond `yaml`; do not import frontend UI modules here.

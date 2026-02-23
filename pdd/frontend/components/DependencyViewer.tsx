@@ -14,6 +14,9 @@ import ReactFlow, {
   ConnectionMode,
   addEdge,
   MarkerType,
+  EdgeProps,
+  BaseEdge,
+  getBezierPath,
 } from 'reactflow';
 import dagre from 'dagre';
 import 'reactflow/dist/style.css';
@@ -55,6 +58,7 @@ interface DependencyViewerProps {
   onBatchSelect?: (batch: Batch | null) => void;
   onSyncBatch?: (batch: Batch) => void;
   remainingCountByBatch?: Map<number, number>;
+  rearrangeVersion?: number;
 }
 
 // Determine category based on tags
@@ -96,13 +100,13 @@ const getCategoryColors = (category: 'frontend' | 'backend' | 'shared') => {
 };
 
 // Dagre layout algorithm
-const getLayoutedElements = (
+export const getLayoutedElements = (
   nodes: Node<ModuleNodeData>[],
   edges: Edge[],
   direction: 'TB' | 'LR' = 'TB'
 ) => {
   const g = new dagre.graphlib.Graph();
-  g.setGraph({ rankdir: direction, nodesep: 50, ranksep: 100, edgesep: 20 });
+  g.setGraph({ rankdir: direction, nodesep: 80, ranksep: 150, edgesep: 20 });
   g.setDefaultEdgeLabel(() => ({}));
 
   nodes.forEach((node) => {
@@ -126,13 +130,60 @@ const getLayoutedElements = (
     };
   });
 
-  return { nodes: layoutedNodes, edges };
+  const layoutedEdges = edges.map((edge) => {
+    const dagreEdge = g.edge({ v: edge.source, w: edge.target });
+    return {
+      ...edge,
+      type: 'waypointEdge',
+      data: { ...edge.data, waypoints: dagreEdge?.points ?? [] },
+    };
+  });
+
+  return { nodes: layoutedNodes, edges: layoutedEdges };
+};
+
+// Pure path builder for smooth quadratic-bezier spline through Dagre waypoints.
+// Each waypoint is a quadratic control point; the endpoint of each segment is
+// the midpoint to the next waypoint (C1 continuity — no sharp corners).
+// The final segment terminates at the actual target position.
+export function buildEdgePath(
+  sourceX: number,
+  sourceY: number,
+  waypoints: { x: number; y: number }[],
+  targetX: number,
+  targetY: number,
+): string {
+  const all = [{ x: sourceX, y: sourceY }, ...waypoints, { x: targetX, y: targetY }];
+  const parts: string[] = [`M ${all[0].x} ${all[0].y}`];
+  for (let i = 1; i < all.length - 1; i++) {
+    const ctrl = all[i];
+    const isLast = i === all.length - 2;
+    const end = isLast
+      ? all[all.length - 1]
+      : { x: (all[i].x + all[i + 1].x) / 2, y: (all[i].y + all[i + 1].y) / 2 };
+    parts.push(`Q ${ctrl.x} ${ctrl.y} ${end.x} ${end.y}`);
+  }
+  return parts.join(' ');
+}
+
+// Custom edge type that follows Dagre waypoints with smooth curves
+const WaypointEdge: React.FC<EdgeProps> = ({
+  id, sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition, data, markerEnd, style,
+}) => {
+  const pts: { x: number; y: number }[] = data?.waypoints ?? [];
+  const pathD = pts.length === 0
+    // No waypoints — use ReactFlow's bezier for a natural swooping curve
+    ? getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition })[0]
+    : buildEdgePath(sourceX, sourceY, pts, targetX, targetY);
+  return <BaseEdge id={id} path={pathD} markerEnd={markerEnd} style={style} />;
 };
 
 // Custom node types
 const nodeTypes: NodeTypes = {
   moduleNode: ModuleNode,
 };
+
+const edgeTypes = { waypointEdge: WaypointEdge };
 
 const DependencyViewer: React.FC<DependencyViewerProps> = ({
   architecture,
@@ -157,6 +208,7 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
   onBatchSelect,
   onSyncBatch,
   remainingCountByBatch = new Map(),
+  rearrangeVersion,
 }) => {
   const [isPrdVisible, setIsPrdVisible] = useState(false);
   const [contextMenu, setContextMenu] = useState<{
@@ -226,7 +278,7 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
           id: `${dep}->${m.filename}`,
           source: dep,
           target: m.filename,
-          type: 'smoothstep',
+          type: 'waypointEdge',
           style: { stroke: '#60a5fa', strokeWidth: 2 },
           markerEnd: {
             type: MarkerType.ArrowClosed,
@@ -348,7 +400,7 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
           {
             ...connection,
             id: `${connection.source}->${connection.target}`,
-            type: 'smoothstep',
+            type: 'waypointEdge',
             style: { stroke: '#60a5fa', strokeWidth: 2 },
             markerEnd: {
               type: MarkerType.ArrowClosed,
@@ -461,6 +513,9 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
   // Track previous architecture to detect structural changes (not just position changes)
   const prevArchitectureRef = React.useRef<ArchitectureModule[]>(architecture);
 
+  // Track previous rearrangeVersion to detect when a re-arrange has completed
+  const prevRearrangeVersionRef = useRef(rearrangeVersion ?? 0);
+
   // Helper to check if architecture structure changed (ignoring positions)
   const getStructuralFingerprint = useCallback((modules: ArchitectureModule[]) => {
     return modules.map(m => ({
@@ -472,6 +527,11 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
 
   // Update nodes/edges when architecture STRUCTURE changes (not just positions)
   React.useEffect(() => {
+    const rearrangeVersionChanged =
+      rearrangeVersion !== undefined &&
+      rearrangeVersion !== prevRearrangeVersionRef.current;
+    prevRearrangeVersionRef.current = rearrangeVersion ?? 0;
+
     const prevFingerprint = getStructuralFingerprint(prevArchitectureRef.current);
     const currentFingerprint = getStructuralFingerprint(architecture);
     const structureChanged = prevFingerprint !== currentFingerprint;
@@ -481,11 +541,12 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
     // Only sync if:
     // 1) Structure changed (modules added/removed, dependencies changed)
     // 2) Not in edit mode (initial load or exiting edit mode)
-    if (structureChanged || !editMode) {
+    // 3) Re-arrange completed (positions updated by agent)
+    if (structureChanged || !editMode || rearrangeVersionChanged) {
       setNodes(initialNodes);
       setEdges(initialEdges);
     }
-  }, [initialNodes, initialEdges, setNodes, setEdges, editMode, architecture, getStructuralFingerprint]);
+  }, [initialNodes, initialEdges, setNodes, setEdges, editMode, architecture, getStructuralFingerprint, rearrangeVersion]);
 
   return (
     <div className="glass rounded-xl border border-surface-700/50 overflow-hidden h-full flex flex-col">
@@ -541,13 +602,14 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
           onEdgesDelete={editMode ? handleEdgesDelete : undefined}
           onNodesDelete={editMode ? handleNodesDelete : undefined}
           nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
           fitView
           fitViewOptions={{ padding: 0.2 }}
           minZoom={0.1}
           maxZoom={2}
           defaultEdgeOptions={{
             style: { stroke: '#60a5fa', strokeWidth: 2 },
-            type: 'smoothstep',
+            type: 'waypointEdge',
             markerEnd: {
               type: MarkerType.ArrowClosed,
               color: '#60a5fa',

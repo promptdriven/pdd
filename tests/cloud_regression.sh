@@ -446,9 +446,9 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "4" ]; then
     elif [ ! -f "$MATH_SCRIPT" ]; then
         log "Generating math script first..."
         if ! run_pdd_command_noexit generate --output "$MATH_SCRIPT" "$FIXTURES_PATH/$MATH_PROMPT"; then
-            log_error "Prerequisite generate failed for fix test (cloud rate limit?). Skipping."
-            CLOUD_FAILURES=$((CLOUD_FAILURES + 1))
-            print_cloud_status "fix (prerequisite generate)" "false"
+            log "Prerequisite generate failed, retrying after 5s..."
+            sleep 5
+            run_pdd_command generate --output "$MATH_SCRIPT" "$FIXTURES_PATH/$MATH_PROMPT"
         fi
     fi
     if [ ! -f "$MATH_SCRIPT" ]; then

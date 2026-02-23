@@ -1,0 +1,736 @@
+/**
+ * Tests for components/stages/Stage5AudioSync.tsx
+ *
+ * PDD Principle: The prompt file is the source of truth.
+ * These tests verify that the code conforms to the specification in
+ * prompts/stage5_audio_sync_typescriptreact.prompt.
+ *
+ * Spec requirements verified:
+ *   1. Props: onAdvance: () => void.
+ *   2. Top section: section grouping table with inline-editable segment ranges. [Save Config] PUTs audioSync.sectionGroups to /api/project.
+ *   3. [Run Audio Sync] button: POSTs to /api/pipeline/audio-sync/run. Shows SseLogPanel with returned jobId.
+ *   4. Bottom section: Word Timestamp Viewer — columns: word, start (3dp), end (3dp), segmentId. Section filter dropdown. Search input.
+ *   5. Virtual scrolling for large timestamp lists: CSS contain: strict with fixed row heights.
+ *   6. Load timestamps: GET /api/pipeline/audio-sync/timestamps?section={sectionId}.
+ *   7. 'use client' directive.
+ */
+
+import fs from "fs";
+import path from "path";
+
+// ---------------------------------------------------------------------------
+// Source code (loaded once for structural tests)
+// ---------------------------------------------------------------------------
+
+const SOURCE_PATH = path.join(__dirname, "..", "components", "stages", "Stage5AudioSync.tsx");
+const sourceCode = fs.readFileSync(SOURCE_PATH, "utf-8");
+
+// ---------------------------------------------------------------------------
+// 1. 'use client' directive (Req 7)
+// ---------------------------------------------------------------------------
+
+describe("'use client' directive", () => {
+  it("has 'use client' as the very first line", () => {
+    const firstLine = sourceCode.split("\n")[0].trim();
+    expect(firstLine).toBe("'use client';");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 2. Module structure
+// ---------------------------------------------------------------------------
+
+describe("module structure", () => {
+  it("file exists at expected path", () => {
+    expect(fs.existsSync(SOURCE_PATH)).toBe(true);
+  });
+
+  it("is a TypeScript React file", () => {
+    expect(SOURCE_PATH).toMatch(/\.tsx$/);
+  });
+
+  it("exports Stage5AudioSync as default export", () => {
+    expect(sourceCode).toMatch(/export\s+default\s+function\s+Stage5AudioSync/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3. Props interface (Req 1)
+// ---------------------------------------------------------------------------
+
+describe("Stage5AudioSync props", () => {
+  it("declares onAdvance: () => void prop", () => {
+    expect(sourceCode).toMatch(/onAdvance\s*:\s*\(\)\s*=>\s*void/);
+  });
+
+  it("defines Stage5AudioSyncProps interface", () => {
+    expect(sourceCode).toMatch(/interface\s+Stage5AudioSyncProps/);
+  });
+
+  it("destructures onAdvance from props", () => {
+    expect(sourceCode).toMatch(/\{\s*onAdvance\s*\}\s*:\s*Stage5AudioSyncProps/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 4. Import structure
+// ---------------------------------------------------------------------------
+
+describe("import structure", () => {
+  it("imports React from react", () => {
+    expect(sourceCode).toMatch(/import\s+React/);
+    expect(sourceCode).toMatch(/from\s+['"]react['"]/);
+  });
+
+  it("imports useState from react", () => {
+    expect(sourceCode).toMatch(/useState/);
+  });
+
+  it("imports useEffect from react", () => {
+    expect(sourceCode).toMatch(/useEffect/);
+  });
+
+  it("imports useMemo from react", () => {
+    expect(sourceCode).toMatch(/useMemo/);
+  });
+
+  it("imports useRef from react", () => {
+    expect(sourceCode).toMatch(/useRef/);
+  });
+
+  it("imports ProjectConfig and Section types", () => {
+    expect(sourceCode).toMatch(/import\s+type\s*\{[^}]*ProjectConfig[^}]*\}/);
+    expect(sourceCode).toMatch(/import\s+type\s*\{[^}]*Section[^}]*\}/);
+  });
+
+  it("imports SseLogPanel", () => {
+    expect(sourceCode).toMatch(/import\s+SseLogPanel\s+from/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 5. Type definitions
+// ---------------------------------------------------------------------------
+
+describe("type definitions", () => {
+  it("defines WordTimestamp interface", () => {
+    expect(sourceCode).toMatch(/interface\s+WordTimestamp/);
+  });
+
+  it("WordTimestamp has word: string property", () => {
+    // Match inside the interface block
+    expect(sourceCode).toMatch(/interface\s+WordTimestamp[\s\S]*?word\s*:\s*string/);
+  });
+
+  it("WordTimestamp has start: number property", () => {
+    expect(sourceCode).toMatch(/interface\s+WordTimestamp[\s\S]*?start\s*:\s*number/);
+  });
+
+  it("WordTimestamp has end: number property", () => {
+    expect(sourceCode).toMatch(/interface\s+WordTimestamp[\s\S]*?end\s*:\s*number/);
+  });
+
+  it("WordTimestamp has segmentId property", () => {
+    expect(sourceCode).toMatch(/interface\s+WordTimestamp[\s\S]*?segmentId/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 6. Virtual scrolling constants (Req 5)
+// ---------------------------------------------------------------------------
+
+describe("virtual scrolling constants", () => {
+  it("defines ROW_HEIGHT constant", () => {
+    expect(sourceCode).toMatch(/const\s+ROW_HEIGHT\s*=\s*\d+/);
+  });
+
+  it("defines VIEWPORT_HEIGHT constant", () => {
+    expect(sourceCode).toMatch(/const\s+VIEWPORT_HEIGHT\s*=\s*\d+/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 7. State management
+// ---------------------------------------------------------------------------
+
+describe("state management", () => {
+  it("tracks project state as ProjectConfig | null", () => {
+    expect(sourceCode).toMatch(/\[\s*project\s*,\s*setProject\s*\]/);
+    expect(sourceCode).toMatch(/useState\s*<\s*ProjectConfig\s*\|\s*null\s*>/);
+  });
+
+  it("tracks loadingProject state", () => {
+    expect(sourceCode).toMatch(/\[\s*loadingProject\s*,\s*setLoadingProject\s*\]/);
+  });
+
+  it("tracks projectError state", () => {
+    expect(sourceCode).toMatch(/\[\s*projectError\s*,\s*setProjectError\s*\]/);
+  });
+
+  it("tracks sectionGroups state as Record<string, string[]>", () => {
+    expect(sourceCode).toMatch(/\[\s*sectionGroups\s*,\s*setSectionGroups\s*\]/);
+    expect(sourceCode).toMatch(/useState\s*<\s*Record\s*<\s*string\s*,\s*string\[\]\s*>\s*>/);
+  });
+
+  it("tracks savingConfig state", () => {
+    expect(sourceCode).toMatch(/\[\s*savingConfig\s*,\s*setSavingConfig\s*\]/);
+  });
+
+  it("tracks jobId state as string | null", () => {
+    expect(sourceCode).toMatch(/\[\s*jobId\s*,\s*setJobId\s*\]/);
+    expect(sourceCode).toMatch(/useState\s*<\s*string\s*\|\s*null\s*>/);
+  });
+
+  it("tracks selectedSectionId state", () => {
+    expect(sourceCode).toMatch(/\[\s*selectedSectionId\s*,\s*setSelectedSectionId\s*\]/);
+  });
+
+  it("tracks timestamps state as WordTimestamp[]", () => {
+    expect(sourceCode).toMatch(/\[\s*timestamps\s*,\s*setTimestamps\s*\]/);
+    expect(sourceCode).toMatch(/useState\s*<\s*WordTimestamp\[\]\s*>/);
+  });
+
+  it("tracks loadingTimestamps state", () => {
+    expect(sourceCode).toMatch(/\[\s*loadingTimestamps\s*,\s*setLoadingTimestamps\s*\]/);
+  });
+
+  it("tracks search state", () => {
+    expect(sourceCode).toMatch(/\[\s*search\s*,\s*setSearch\s*\]/);
+  });
+
+  it("tracks scrollTop state for virtual scrolling", () => {
+    expect(sourceCode).toMatch(/\[\s*scrollTop\s*,\s*setScrollTop\s*\]/);
+  });
+
+  it("has scrollRef for scroll container", () => {
+    expect(sourceCode).toMatch(/scrollRef\s*=\s*useRef/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 8. Project config loading on mount (Req 2, 4)
+// ---------------------------------------------------------------------------
+
+describe("project config loading on mount", () => {
+  it("fetches project from GET /api/project", () => {
+    expect(sourceCode).toMatch(/fetch\s*\(\s*['"]\/api\/project['"]\s*\)/);
+  });
+
+  it("sets project state from response", () => {
+    expect(sourceCode).toMatch(/setProject\s*\(\s*data\s*\)/);
+  });
+
+  it("initializes sectionGroups from project audioSync config", () => {
+    expect(sourceCode).toMatch(/setSectionGroups\s*\(\s*data\.audioSync\?\.sectionGroups\s*\?\?\s*\{\}\s*\)/);
+  });
+
+  it("sets default selectedSectionId to first section", () => {
+    expect(sourceCode).toMatch(/setSelectedSectionId\s*\(\s*data\.sections\[0\]\.id\s*\)/);
+  });
+
+  it("handles loading state correctly", () => {
+    expect(sourceCode).toMatch(/setLoadingProject\s*\(\s*true\s*\)/);
+    expect(sourceCode).toMatch(/setLoadingProject\s*\(\s*false\s*\)/);
+  });
+
+  it("handles fetch errors", () => {
+    expect(sourceCode).toMatch(/setProjectError/);
+  });
+
+  it("uses cleanup flag to prevent state updates on unmount", () => {
+    expect(sourceCode).toMatch(/let\s+active\s*=\s*true/);
+    expect(sourceCode).toMatch(/active\s*=\s*false/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 9. Timestamp loading when section changes (Req 6)
+// ---------------------------------------------------------------------------
+
+describe("timestamp loading", () => {
+  it("fetches timestamps from GET /api/pipeline/audio-sync/timestamps with section param", () => {
+    expect(sourceCode).toMatch(/fetch\s*\(\s*[\s\S]*?\/api\/pipeline\/audio-sync\/timestamps\?section=/);
+  });
+
+  it("encodes section ID in URL", () => {
+    expect(sourceCode).toMatch(/encodeURIComponent\s*\(\s*[\s\S]*?selectedSectionId/);
+  });
+
+  it("sets timestamps from response", () => {
+    expect(sourceCode).toMatch(/setTimestamps\s*\(\s*data\s*\)/);
+  });
+
+  it("tracks loading state for timestamps", () => {
+    expect(sourceCode).toMatch(/setLoadingTimestamps\s*\(\s*true\s*\)/);
+    expect(sourceCode).toMatch(/setLoadingTimestamps\s*\(\s*false\s*\)/);
+  });
+
+  it("clears timestamps on fetch error", () => {
+    expect(sourceCode).toMatch(/catch[\s\S]*?setTimestamps\s*\(\s*\[\]\s*\)/);
+  });
+
+  it("depends on selectedSectionId", () => {
+    expect(sourceCode).toMatch(/\[\s*selectedSectionId\s*\]/);
+  });
+
+  it("returns early if no selectedSectionId", () => {
+    expect(sourceCode).toMatch(/if\s*\(\s*!selectedSectionId\s*\)\s*return/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 10. Word filtering via search (Req 4 — search input)
+// ---------------------------------------------------------------------------
+
+describe("word filtering", () => {
+  it("uses useMemo for filteredWords", () => {
+    expect(sourceCode).toMatch(/filteredWords\s*=\s*useMemo/);
+  });
+
+  it("filters by word text case-insensitively", () => {
+    expect(sourceCode).toMatch(/w\.word\.toLowerCase\s*\(\s*\)\.includes\s*\(\s*term\s*\)/);
+  });
+
+  it("converts search term to lowercase", () => {
+    expect(sourceCode).toMatch(/search\.toLowerCase\s*\(\s*\)/);
+  });
+
+  it("depends on timestamps and search state", () => {
+    expect(sourceCode).toMatch(/\[\s*timestamps\s*,\s*search\s*\]/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 11. Virtual scrolling computation (Req 5)
+// ---------------------------------------------------------------------------
+
+describe("virtual scrolling computation", () => {
+  it("computes totalWords from timestamps length", () => {
+    expect(sourceCode).toMatch(/totalWords\s*=\s*timestamps\.length/);
+  });
+
+  it("computes visible count from viewport and row height", () => {
+    expect(sourceCode).toMatch(/visibleCount\s*=\s*Math\.ceil\s*\(\s*VIEWPORT_HEIGHT\s*\/\s*ROW_HEIGHT\s*\)/);
+  });
+
+  it("computes startIndex from scrollTop and row height", () => {
+    expect(sourceCode).toMatch(/startIndex\s*=\s*Math\.max\s*\(\s*0\s*,\s*Math\.floor\s*\(\s*scrollTop\s*\/\s*ROW_HEIGHT\s*\)/);
+  });
+
+  it("computes endIndex capped by filteredWords length", () => {
+    expect(sourceCode).toMatch(/endIndex\s*=\s*Math\.min\s*\(\s*filteredWords\.length/);
+  });
+
+  it("slices visible words from filteredWords", () => {
+    expect(sourceCode).toMatch(/visibleWords\s*=\s*filteredWords\.slice\s*\(\s*startIndex\s*,\s*endIndex\s*\)/);
+  });
+
+  it("computes offsetY for translateY", () => {
+    expect(sourceCode).toMatch(/offsetY\s*=\s*startIndex\s*\*\s*ROW_HEIGHT/);
+  });
+
+  it("computes totalHeight for container", () => {
+    expect(sourceCode).toMatch(/totalHeight\s*=\s*filteredWords\.length\s*\*\s*ROW_HEIGHT/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 12. Section grouping edit handler (Req 2)
+// ---------------------------------------------------------------------------
+
+describe("section grouping edit handler", () => {
+  it("defines handleGroupChange function", () => {
+    expect(sourceCode).toMatch(/const\s+handleGroupChange\s*=/);
+  });
+
+  it("splits comma-separated input into segments", () => {
+    expect(sourceCode).toMatch(/value[\s\S]*?\.split\s*\(\s*['"],['"]?\s*\)/);
+  });
+
+  it("trims whitespace from segment IDs", () => {
+    expect(sourceCode).toMatch(/\.map\s*\(\s*\(s\)\s*=>\s*s\.trim\s*\(\s*\)\s*\)/);
+  });
+
+  it("filters out empty strings", () => {
+    expect(sourceCode).toMatch(/\.filter\s*\(\s*Boolean\s*\)/);
+  });
+
+  it("updates sectionGroups state", () => {
+    expect(sourceCode).toMatch(/setSectionGroups\s*\(\s*\(prev\)\s*=>\s*\(\s*\{\s*\.\.\.prev\s*,\s*\[sectionId\]\s*:\s*segments\s*\}\s*\)\s*\)/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 13. Save Config handler (Req 2)
+// ---------------------------------------------------------------------------
+
+describe("save config handler", () => {
+  it("defines handleSaveConfig as async function", () => {
+    expect(sourceCode).toMatch(/const\s+handleSaveConfig\s*=\s*async/);
+  });
+
+  it("PUTs to /api/project", () => {
+    expect(sourceCode).toMatch(/fetch\s*\(\s*['"]\/api\/project['"]\s*,/);
+    expect(sourceCode).toMatch(/method\s*:\s*['"]PUT['"]/);
+  });
+
+  it("sends Content-Type: application/json header", () => {
+    expect(sourceCode).toMatch(/['"]Content-Type['"]\s*:\s*['"]application\/json['"]/);
+  });
+
+  it("sends audioSync.sectionGroups in body", () => {
+    expect(sourceCode).toMatch(/audioSync\s*:\s*\{\s*sectionGroups\s*\}/);
+  });
+
+  it("tracks saving state", () => {
+    expect(sourceCode).toMatch(/setSavingConfig\s*\(\s*true\s*\)/);
+    expect(sourceCode).toMatch(/setSavingConfig\s*\(\s*false\s*\)/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 14. Run Audio Sync handler (Req 3)
+// ---------------------------------------------------------------------------
+
+describe("run audio sync handler", () => {
+  it("defines handleRunAudioSync as async function", () => {
+    expect(sourceCode).toMatch(/const\s+handleRunAudioSync\s*=\s*async/);
+  });
+
+  it("POSTs to /api/pipeline/audio-sync/run", () => {
+    expect(sourceCode).toMatch(/fetch\s*\(\s*['"]\/api\/pipeline\/audio-sync\/run['"]\s*,/);
+    expect(sourceCode).toMatch(/method\s*:\s*['"]POST['"]/);
+  });
+
+  it("extracts jobId from response and sets state", () => {
+    expect(sourceCode).toMatch(/data\.jobId/);
+    expect(sourceCode).toMatch(/setJobId\s*\(\s*data\.jobId\s*\)/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 15. SSE done handler — auto-load timestamps (Req — after audio sync)
+// ---------------------------------------------------------------------------
+
+describe("SSE done handler", () => {
+  it("defines handleSseDone function", () => {
+    expect(sourceCode).toMatch(/const\s+handleSseDone\s*=/);
+  });
+
+  it("checks project sections exist", () => {
+    expect(sourceCode).toMatch(/project\?\.sections\?\.length/);
+  });
+
+  it("sets selectedSectionId to first section when not already set", () => {
+    expect(sourceCode).toMatch(/setSelectedSectionId\s*\(\s*project\.sections\[0\]\.id\s*\)/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 16. SseLogPanel integration (Req 3)
+// ---------------------------------------------------------------------------
+
+describe("SseLogPanel integration", () => {
+  it("renders SseLogPanel component", () => {
+    expect(sourceCode).toMatch(/<SseLogPanel/);
+  });
+
+  it("passes jobId prop to SseLogPanel", () => {
+    expect(sourceCode).toMatch(/jobId=\{jobId\}/);
+  });
+
+  it("passes onDone callback to SseLogPanel", () => {
+    expect(sourceCode).toMatch(/onDone=\{handleSseDone\}/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 17. Section grouping table rendering (Req 2)
+// ---------------------------------------------------------------------------
+
+describe("section grouping table", () => {
+  it("renders section grouping header", () => {
+    expect(sourceCode).toMatch(/Audio Sync Section Groups/);
+  });
+
+  it("renders Section column header", () => {
+    expect(sourceCode).toMatch(/<th[\s\S]*?>Section<\/th>/);
+  });
+
+  it("renders Segment IDs column header", () => {
+    expect(sourceCode).toMatch(/Segment IDs/);
+  });
+
+  it("maps sections to table rows", () => {
+    expect(sourceCode).toMatch(/sections\.map\s*\(\s*\(section\)\s*=>/);
+  });
+
+  it("displays section label", () => {
+    expect(sourceCode).toMatch(/section\.label/);
+  });
+
+  it("renders input for comma-separated segment IDs", () => {
+    expect(sourceCode).toMatch(/<input[\s\S]*?value=\{[\s\S]*?sectionGroups\[section\.id\]/);
+  });
+
+  it("joins segment IDs with comma-space for display", () => {
+    expect(sourceCode).toMatch(/\.join\s*\(\s*['"],\s*['"]\s*\)/);
+  });
+
+  it("handles input onChange for segment groups", () => {
+    expect(sourceCode).toMatch(/onChange=\{[\s\S]*?handleGroupChange\s*\(\s*section\.id/);
+  });
+
+  it("includes placeholder for segment input", () => {
+    expect(sourceCode).toMatch(/placeholder="segment1, segment2, segment3"/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 18. Save Config button (Req 2)
+// ---------------------------------------------------------------------------
+
+describe("Save Config button", () => {
+  it("renders Save Config button text", () => {
+    expect(sourceCode).toMatch(/Save Config/);
+  });
+
+  it("button calls handleSaveConfig on click", () => {
+    expect(sourceCode).toMatch(/onClick=\{handleSaveConfig\}/);
+  });
+
+  it("button is disabled while saving", () => {
+    expect(sourceCode).toMatch(/disabled=\{savingConfig\}/);
+  });
+
+  it("shows Saving… text while saving", () => {
+    expect(sourceCode).toMatch(/savingConfig\s*\?\s*['"]Saving…['"]\s*:\s*['"]Save Config['"]/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 19. Run Audio Sync button (Req 3)
+// ---------------------------------------------------------------------------
+
+describe("Run Audio Sync button", () => {
+  it("renders Run Audio Sync button text", () => {
+    expect(sourceCode).toMatch(/Run Audio Sync/);
+  });
+
+  it("button calls handleRunAudioSync on click", () => {
+    expect(sourceCode).toMatch(/onClick=\{handleRunAudioSync\}/);
+  });
+
+  it("uses emerald styling", () => {
+    expect(sourceCode).toMatch(/bg-emerald-600/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 20. Word Timestamp Viewer (Req 4)
+// ---------------------------------------------------------------------------
+
+describe("Word Timestamp Viewer", () => {
+  it("renders Word Timestamp Viewer header", () => {
+    expect(sourceCode).toMatch(/Word Timestamp Viewer/);
+  });
+
+  it("renders Word column header", () => {
+    expect(sourceCode).toMatch(/<th[\s\S]*?>Word<\/th>/);
+  });
+
+  it("renders Start column header", () => {
+    expect(sourceCode).toMatch(/<th[\s\S]*?>Start<\/th>/);
+  });
+
+  it("renders End column header", () => {
+    expect(sourceCode).toMatch(/<th[\s\S]*?>End<\/th>/);
+  });
+
+  it("renders Segment ID column header", () => {
+    expect(sourceCode).toMatch(/<th[\s\S]*?>Segment ID<\/th>/);
+  });
+
+  it("displays word text in table cells", () => {
+    expect(sourceCode).toMatch(/w\.word/);
+  });
+
+  it("formats start time to 3 decimal places", () => {
+    expect(sourceCode).toMatch(/w\.start\.toFixed\s*\(\s*3\s*\)/);
+  });
+
+  it("formats end time to 3 decimal places", () => {
+    expect(sourceCode).toMatch(/w\.end\.toFixed\s*\(\s*3\s*\)/);
+  });
+
+  it("displays segmentId with fallback to dash", () => {
+    expect(sourceCode).toMatch(/w\.segmentId\s*\?\?\s*['"][-]['"]/);
+  });
+
+  it("maps visibleWords for table rows", () => {
+    expect(sourceCode).toMatch(/visibleWords\.map/);
+  });
+
+  it("sets row height via style", () => {
+    expect(sourceCode).toMatch(/height:\s*ROW_HEIGHT/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 21. Section filter dropdown (Req 4)
+// ---------------------------------------------------------------------------
+
+describe("section filter dropdown", () => {
+  it("renders Section label", () => {
+    expect(sourceCode).toMatch(/Section:/);
+  });
+
+  it("renders select element for section filter", () => {
+    expect(sourceCode).toMatch(/<select/);
+  });
+
+  it("select value is bound to selectedSectionId", () => {
+    expect(sourceCode).toMatch(/value=\{selectedSectionId\}/);
+  });
+
+  it("select onChange updates selectedSectionId", () => {
+    expect(sourceCode).toMatch(/onChange=\{[\s\S]*?setSelectedSectionId\s*\(\s*e\.target\.value\s*\)/);
+  });
+
+  it("maps sections to option elements", () => {
+    expect(sourceCode).toMatch(/sections\.map\s*\(\s*\(s\)\s*=>/);
+    expect(sourceCode).toMatch(/<option[\s\S]*?value=\{s\.id\}/);
+  });
+
+  it("displays section label in option", () => {
+    expect(sourceCode).toMatch(/s\.label/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 22. Search input (Req 4)
+// ---------------------------------------------------------------------------
+
+describe("search input", () => {
+  it("renders search input with placeholder", () => {
+    expect(sourceCode).toMatch(/placeholder=["']Search word/);
+  });
+
+  it("search input value is bound to search state", () => {
+    expect(sourceCode).toMatch(/value=\{search\}/);
+  });
+
+  it("search input onChange updates search state", () => {
+    expect(sourceCode).toMatch(/onChange=\{[\s\S]*?setSearch\s*\(\s*e\.target\.value\s*\)/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 23. Word count display (Req — word count)
+// ---------------------------------------------------------------------------
+
+describe("word count display", () => {
+  it("displays filteredWords.length", () => {
+    expect(sourceCode).toMatch(/filteredWords\.length/);
+  });
+
+  it("displays totalWords count", () => {
+    expect(sourceCode).toMatch(/totalWords/);
+  });
+
+  it("shows 'of' between filtered and total count", () => {
+    expect(sourceCode).toMatch(/\{filteredWords\.length\}\s*of\s*\{totalWords\}\s*words/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 24. Virtual scrolling DOM structure (Req 5)
+// ---------------------------------------------------------------------------
+
+describe("virtual scrolling DOM structure", () => {
+  it("uses CSS contain: strict on scroll container", () => {
+    expect(sourceCode).toMatch(/contain:\s*['"]strict['"]/);
+  });
+
+  it("sets scroll container height to VIEWPORT_HEIGHT", () => {
+    expect(sourceCode).toMatch(/height:\s*VIEWPORT_HEIGHT/);
+  });
+
+  it("sets inner container height to totalHeight", () => {
+    expect(sourceCode).toMatch(/height:\s*totalHeight/);
+  });
+
+  it("uses translateY for offset positioning", () => {
+    expect(sourceCode).toMatch(/translateY\s*\(\s*\$\{offsetY\}px\s*\)/);
+  });
+
+  it("listens to onScroll events to update scrollTop", () => {
+    expect(sourceCode).toMatch(/onScroll=\{[\s\S]*?setScrollTop\s*\(\s*e\.currentTarget\.scrollTop\s*\)/);
+  });
+
+  it("has overflow-y-auto on scroll container", () => {
+    expect(sourceCode).toMatch(/overflow-y-auto/);
+  });
+
+  it("uses position relative on inner container", () => {
+    expect(sourceCode).toMatch(/position:\s*['"]relative['"]/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 25. Loading and error states
+// ---------------------------------------------------------------------------
+
+describe("loading and error states", () => {
+  it("shows loading message while loading project", () => {
+    expect(sourceCode).toMatch(/Loading project/);
+  });
+
+  it("shows error message when project fails to load", () => {
+    expect(sourceCode).toMatch(/Error loading project/);
+  });
+
+  it("shows loading timestamps message", () => {
+    expect(sourceCode).toMatch(/Loading timestamps/);
+  });
+
+  it("conditionally renders loading timestamps text", () => {
+    expect(sourceCode).toMatch(/loadingTimestamps\s*\?/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 26. Continue / Advance button (Req 1 — onAdvance)
+// ---------------------------------------------------------------------------
+
+describe("Continue button", () => {
+  it("renders Continue button text", () => {
+    expect(sourceCode).toMatch(/Continue/);
+  });
+
+  it("button calls onAdvance on click", () => {
+    expect(sourceCode).toMatch(/onClick=\{onAdvance\}/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 27. Layout and structure
+// ---------------------------------------------------------------------------
+
+describe("layout and structure", () => {
+  it("uses space-y-6 for main layout spacing", () => {
+    expect(sourceCode).toMatch(/space-y-6/);
+  });
+
+  it("uses rounded-lg border for section cards", () => {
+    expect(sourceCode).toMatch(/rounded-lg\s+border/);
+  });
+
+  it("uses flex items-center justify-between for toolbar", () => {
+    expect(sourceCode).toMatch(/flex\s+items-center\s+justify-between/);
+  });
+
+  it("uses flex justify-end for bottom button area", () => {
+    expect(sourceCode).toMatch(/flex\s+justify-end/);
+  });
+});

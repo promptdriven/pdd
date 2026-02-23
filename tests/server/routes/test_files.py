@@ -1359,3 +1359,92 @@ contexts:
         # It should end with /page or be just the category/page
         assert sync_basename.endswith("page") or sync_basename == "page", \
             f"Unexpected sync_basename for root page: '{sync_basename}'"
+
+
+# ============================================================================
+# Tests for expected_outputs field in list_prompt_files
+# ============================================================================
+
+class TestExpectedOutputs:
+    """Tests that list_prompt_files includes expected_outputs for each dev unit."""
+
+    @pytest.mark.asyncio
+    async def test_list_prompts_includes_expected_outputs(self, tmp_path):
+        """Verify that list_prompt_files returns expected_outputs field for JSON prompts."""
+        root = tmp_path / "eo_json_project"
+        root.mkdir()
+
+        # Create a JSON prompt file
+        prompts_dir = root / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "config_json.prompt").write_text("test prompt")
+        # Create matching code file
+        (root / "config.json").write_text("{}")
+
+        from pdd.server.routes.files import list_prompt_files, set_path_validator
+        from pdd.server.security import PathValidator
+
+        validator = PathValidator(root)
+        set_path_validator(validator)
+
+        results = await list_prompt_files(validator)
+        json_prompt = next(
+            (r for r in results if r.get('language') == 'json'),
+            None
+        )
+
+        assert json_prompt is not None, "JSON prompt not found in results"
+        assert 'expected_outputs' in json_prompt, "expected_outputs field missing"
+        assert json_prompt['expected_outputs'] == ['code']
+
+    @pytest.mark.asyncio
+    async def test_list_prompts_python_expected_outputs(self, tmp_path):
+        """Python dev units expect code, test, and example."""
+        root = tmp_path / "eo_py_project"
+        root.mkdir()
+
+        prompts_dir = root / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "calculator_python.prompt").write_text("test prompt")
+
+        from pdd.server.routes.files import list_prompt_files, set_path_validator
+        from pdd.server.security import PathValidator
+
+        validator = PathValidator(root)
+        set_path_validator(validator)
+
+        results = await list_prompt_files(validator)
+        py_prompt = next(
+            (r for r in results if r.get('language') == 'python'),
+            None
+        )
+
+        assert py_prompt is not None, "Python prompt not found in results"
+        assert 'expected_outputs' in py_prompt
+        assert sorted(py_prompt['expected_outputs']) == ['code', 'example', 'test']
+
+    @pytest.mark.asyncio
+    async def test_list_prompts_no_language_defaults_to_full_outputs(self, tmp_path):
+        """Prompts without a detected language should default to full outputs."""
+        root = tmp_path / "eo_nolang_project"
+        root.mkdir()
+
+        prompts_dir = root / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "something.prompt").write_text("test prompt")
+
+        from pdd.server.routes.files import list_prompt_files, set_path_validator
+        from pdd.server.security import PathValidator
+
+        validator = PathValidator(root)
+        set_path_validator(validator)
+
+        results = await list_prompt_files(validator)
+        prompt = next(
+            (r for r in results if 'something' in r.get('prompt', '')),
+            None
+        )
+
+        assert prompt is not None, "Prompt not found in results"
+        assert 'expected_outputs' in prompt
+        assert sorted(prompt['expected_outputs']) == ['code', 'example', 'test']

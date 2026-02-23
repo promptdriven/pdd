@@ -1240,6 +1240,40 @@ def test_vertex_multi_credential_no_api_key_passed(mock_set_llm_cache):
                 assert 'vertex_location' not in call_kwargs
 
 
+def test_vertex_location_passed_from_csv(mock_set_llm_cache):
+    """Test that location from CSV is passed as vertex_location to litellm."""
+    with patch('pdd.llm_invoke._load_model_data') as mock_load_data:
+        mock_data = [{
+            'provider': 'Google Vertex AI',
+            'model': 'vertex_ai/gemini-3-flash-preview',
+            'input': 0.15, 'output': 0.6,
+            'coding_arena_elo': 1290,
+            'structured_output': True,
+            'base_url': '',
+            'api_key': 'GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION',
+            'reasoning_type': 'effort',
+            'max_reasoning_tokens': 0,
+            'location': 'global'
+        }]
+        mock_df = pd.DataFrame(mock_data)
+        mock_df['avg_cost'] = (mock_df['input'] + mock_df['output']) / 2
+        mock_load_data.return_value = mock_df
+
+        env_vars = {
+            'GOOGLE_APPLICATION_CREDENTIALS': '/fake/path.json',
+            'VERTEXAI_PROJECT': 'test-project',
+            'VERTEXAI_LOCATION': 'us-east4',
+        }
+
+        with patch.dict(os.environ, env_vars):
+            with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+                mock_completion.return_value = create_mock_litellm_response("test")
+                llm_invoke("test {x}", {"x": "y"}, 0.5, 0.7, True)
+
+                call_kwargs = mock_completion.call_args[1]
+                assert call_kwargs.get('vertex_location') == 'global'
+
+
 def test_vertex_adc_without_credentials_file(mock_set_llm_cache):
     """Test that _ensure_api_key allows ADC when GOOGLE_APPLICATION_CREDENTIALS is missing but VERTEXAI_PROJECT is set."""
     with patch('pdd.llm_invoke._load_model_data') as mock_load_data:
@@ -3897,6 +3931,43 @@ class TestEnsureApiKey:
         monkeypatch.setenv("PDD_FORCE", "1")
         monkeypatch.delenv("MISSING_KEY", raising=False)
         model_info = {"model": "test-model", "api_key": "MISSING_KEY"}
+        newly_acquired = {}
+        result = llm_mod._ensure_api_key(model_info, newly_acquired, False)
+        assert result is False
+
+    def test_vertex_credentials_adc_fallback_with_project(self, llm_mod, monkeypatch):
+        monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project")
+        monkeypatch.delenv("VERTEX_CREDENTIALS", raising=False)
+        model_info = {"model": "vertex-model", "api_key": "VERTEX_CREDENTIALS"}
+        newly_acquired = {}
+        result = llm_mod._ensure_api_key(model_info, newly_acquired, False)
+        assert result is True
+
+    def test_vertex_credentials_adc_fallback_with_vertex_project(self, llm_mod, monkeypatch):
+        monkeypatch.setenv("VERTEX_PROJECT", "test-project")
+        monkeypatch.delenv("VERTEX_CREDENTIALS", raising=False)
+        monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+        model_info = {"model": "vertex-model", "api_key": "VERTEX_CREDENTIALS"}
+        newly_acquired = {}
+        result = llm_mod._ensure_api_key(model_info, newly_acquired, False)
+        assert result is True
+
+    def test_vertex_credentials_no_adc_no_project(self, llm_mod, monkeypatch):
+        monkeypatch.setenv("PDD_FORCE", "1")
+        monkeypatch.delenv("VERTEX_CREDENTIALS", raising=False)
+        monkeypatch.delenv("VERTEXAI_PROJECT", raising=False)
+        monkeypatch.delenv("VERTEX_PROJECT", raising=False)
+        monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+        model_info = {"model": "vertex-model", "api_key": "VERTEX_CREDENTIALS"}
+        newly_acquired = {}
+        result = llm_mod._ensure_api_key(model_info, newly_acquired, False)
+        assert result is False
+
+    def test_non_vertex_key_no_adc_fallback(self, llm_mod, monkeypatch):
+        monkeypatch.setenv("PDD_FORCE", "1")
+        monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project")
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        model_info = {"model": "openai-model", "api_key": "OPENAI_API_KEY"}
         newly_acquired = {}
         result = llm_mod._ensure_api_key(model_info, newly_acquired, False)
         assert result is False

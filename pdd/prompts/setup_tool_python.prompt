@@ -1,61 +1,152 @@
-You are an expert Python developer. Your task is to create a standalone, interactive command-line setup script for a tool called "PDD" (Prompt Driven Development). This script, named `pdd_setup.py`, will be the first thing a new user runs after installing the PDD package. Its primary goal is to guide the user through configuring their LLM API keys, and to bootstrap their local environment with the necessary configuration files so they can start using PDD immediately. The script must be user-friendly, robust, and provide clear instructions for what to do next.
+<pdd-reason>Orchestrates pdd setup in two phases: (1) interactive CLI bootstrapping with minimal friction, (2) deterministic auto-configuration using existing Python modules (no LLM calls).</pdd-reason>
 
-### Requirements
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "run_setup", "signature": "()", "returns": "None"}
+    ]
+  }
+}
+</pdd-interface>
 
-1.  **Interactive Command-Line Interface (CLI):**
-    *   The script must be executable directly from the shell.
-    *   It must present a clear, visually appealing interface using colors and box-drawing characters for structure (e.g., dividers, logos, menus).
-    *   It must feature a main menu that allows the user to:
-        1.  Enter/update API keys.
-        2.  Re-test the currently configured keys.
-        3.  Save the configuration and exit.
-        4.  Exit without saving.
-    *   It must handle `KeyboardInterrupt` (Ctrl+C) gracefully at any point, exiting with a "Setup cancelled" message.
+<pdd-dependency>cli_detector_python.prompt</pdd-dependency>
 
-2.  **API Key Management:**
-    *   **Discovery:** On startup, automatically discover API keys from the user's environment for OpenAI, Google, and Anthropic. The script should check for `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, and `GOOGLE_API_KEY`.
-    *   **Dynamic Variable Names:** The script must inspect a packaged data file (`pdd/data/llm_model.csv`) to determine the canonical environment variable names for each provider (e.g., `OPENAI_API_KEY` for OpenAI). This ensures the setup tool stays in sync with the main application's configuration.
-    *   **Validation:** Implement functions to test the validity of each API key by making a lightweight, authenticated request to the provider's public API endpoint.
-        *   OpenAI: `GET https://api.openai.com/v1/models` (expects 200 OK).
-        *   Google Gemini: `GET https://generativelanguage.googleapis.com/v1beta/models` (expects 200 OK).
-        *   Anthropic: `GET https://api.anthropic.com/v1/messages` (expects a status code other than 401 or 403, as a valid key with a malformed request returns 400).
-    *   **User Input:** Interactively prompt the user to enter keys, especially if none are found or if existing ones are invalid. Clearly indicate the status (e.g., "found", "not found", "valid", "invalid"). Provide URLs to obtain keys for each provider.
+% You are an expert Python engineer. Your goal is to write the pdd/setup_tool.py module.
 
-3.  **Configuration File Generation:**
-    *   The script must create a `~/.pdd/` directory if it does not exist.
-    *   **Shell Integration:** It must detect the user's shell (e.g., `bash`, `zsh`, `fish`, `csh`, `tcsh`) and generate a corresponding environment script (`~/.pdd/api-env.< shell >`) that exports the validated API keys. The script must use the correct syntax for the detected shell (`export`, `set -gx`, `setenv`).
-    *   **Shell Startup File:** It must append a line to the user's shell initialization file (e.g., `~/.bashrc`, `~/.zshrc`, `~/.config/fish/config.fish`) to source the generated environment script. The script must check for the existence of this line to avoid duplicates.
-    *   **Model Configuration:** It must generate a `~/.pdd/llm_model.csv` file. This file's content should be derived from a packaged `llm_model.csv` but filtered to only include models from providers for which the user has provided a valid API key.
+% Role & Scope
+Main orchestrator for `pdd setup`. Implements a two-phase flow designed for minimal user friction — users should be able to complete setup by pressing Enter just a few times. Phase 1 bootstraps agentic CLIs (Claude/Gemini/Codex) interactively. Phase 2 runs deterministic Python code that auto-discovers API keys, configures models from a reference CSV, initializes .pddrc, tests a model, and prints a summary — all with clean output and no LLM calls. Uses `rich.console.Console(highlight=False)` for formatted output.
 
-4.  **User Onboarding:**
-    *   Create a sample `success_python.prompt` file in the user's current directory to give them a ready-to-use example for their first `pdd generate` command.
-    *   Upon successful configuration, display a comprehensive, color-coded summary in the terminal.
-    *   Save this same summary to a file named `PDD-SETUP-SUMMARY.txt` in the current directory.
+% Requirements
 
-5.  **Exit Summary Content:**
-    *   The summary must be detailed and actionable.
-    *   It must list the API keys that were configured (mask the key values for security, showing only the first few and last few characters).
-    *   It must list all files that were created or modified (e.g., `~/.pdd/`, `~/.pdd/api-env.zsh`, `~/.zshrc`).
-    *   It must include a "QUICK START" section with the *exact* commands the user needs to run next:
-        1.  The command to reload their shell environment (e.g., `source ~/.pdd/api-env.zsh`).
-        2.  The command to generate code from the sample prompt (`pdd generate success_python.prompt`).
-    *   Include "LEARN MORE" and "TIPS" sections with links to documentation, the project website, and the Discord community.
+1. Function: `run_setup()` — main entry point. Two-phase flow:
 
-### Dependencies & Context
+   **Banner:**
+   Print the PDD ASCII art logo in cyan via `_print_pdd_logo()`, followed by bold white tagline: "Let's get set up quickly with a solid basic configuration!" Use ANSI escape codes (CYAN="\033[36m", WHITE="\033[37m", BOLD="\033[1m", RESET="\033[0m").
 
-*   **External Libraries:** The script will depend on the `requests` library for making HTTP API calls. All other dependencies (`os`, `sys`, `pathlib`, `csv`, `importlib.resources`, etc.) are part of the Python standard library.
-*   **Packaged Data:** The script needs to read a data file that is packaged with the application. Assume this file is located at `pdd/data/llm_model.csv` and can be accessed using `importlib.resources.files('pdd').joinpath(...)`. This CSV contains columns such as `model`, `provider`, and `api_key`.
+   **Phase 1 — CLI Bootstrap (interactive, 0–2 user inputs):**
+   a. Call `cli_detector.detect_and_bootstrap_cli()` which returns `List[CliBootstrapResult]`.
+   b. Iterate results: if `result.skipped`, skip silently (cli_detector already printed skip message). If result has a CLI but `api_key_configured == False`, print a yellow warning note about limited capability.
+   c. Proceed to Phase 2 regardless (some CLIs like Claude support subscription auth).
 
-### Instructions
+   **Phase 2 — Deterministic Auto-Configuration (3 steps):**
+   a. Run 3 sequential steps via `_run_auto_phase(cli_results)`. Before each step, print a cyan banner via `_print_step_banner(title)` using LIGHT_HORIZONTAL ("\u2500") lines.
+   b. Between steps 1→2 and 2→3, prompt "Press Enter to continue to the next step..."
+   c. If any step raises an exception, catch it, print error, and fall back to the options menu with "Setup incomplete. Use the menu to configure manually."
+   d. After successful auto-phase, offer post-setup prompt: "Press Enter to finish, or 'm' for more options:" — any non-empty input opens the options menu.
+   e. After menu (or if skipped), call `_print_exit_summary(found_keys, cli_results)` for the final output.
 
-1.  **Structure:** Organize the code into logical functions (e.g., `print_pdd_logo`, `discover_api_keys`, `test_openai_key`, `save_configuration`, `create_exit_summary`, `main`).
-2.  **Constants:** Define global constants for UI elements (box-drawing characters like `HEAVY_HORIZONTAL`, `BULLET`) and ANSI color codes (`CYAN`, `YELLOW`, `BOLD`, `RESET`) for a consistent and maintainable UI.
-3.  **Main Loop:** The `main()` function should orchestrate the workflow: display the logo, perform initial discovery and testing, and then enter a `while` loop for the main menu.
-4.  **File Handling:** Use `pathlib.Path` for all file and directory manipulations. Ensure correct file permissions are set where necessary (e.g., `0o755` for the `~/.pdd` directory and the `api-env` script).
-5.  **CSV Filtering:** When creating `~/.pdd/llm_model.csv`, read the packaged CSV, filter its rows based on whether the `api_key` value for a given row is present in the set of validated keys, and then write the filtered rows out to the new file, preserving the original header.
-6.  **Security:** When displaying the final summary, do not print the full API keys. Mask them to prevent accidental exposure.
-7.  **Clarity:** The final summary is the most critical part of the user experience. Ensure the "QUICK START" instructions are unambiguous and correct for the user's detected shell.
+2. Step 1 — Scan for API Keys (`_step1_scan_keys`):
+   - Ensure ~/.pdd directory exists.
+   - Get unique API key env var names from the `api_key` column of the reference CSV at `pdd/data/llm_model.csv`. Use `parse_api_key_vars()` from provider_manager to handle pipe-delimited fields.
+   - Check each var against: os.environ, ~/.pdd/api-env.{shell} (via `api_key_scanner._parse_api_env_file`), and .env files (via python-dotenv `dotenv_values`).
+   - Multi-var providers (pipe-delimited api_key): display grouped per provider, e.g. `✓ provider: 3/3 vars set` or `! provider: 1/3 vars set (missing: VAR1, VAR2)`. Skip providers with 0 found.
+   - Single-var providers: display as aligned individual lines with source labels.
+   - If none found: call `_prompt_for_api_key()` to interactively add at least one key.
+   - Print key count summary, then dim hint: "You can edit your global API keys in ~/.pdd/api-env.{shell}"
+   - Return: `List[Tuple[str, str]]` of (key_name, source_label).
 
-### Deliverable
+   **`_prompt_for_api_key()`:**
+   - Build provider list from reference CSV: unique `(provider, api_key)` pairs sorted by provider.
+   - Show numbered list plus "Skip" option.
+   - User selects provider, pastes key (masked via `getpass.getpass()`).
+   - Save via `provider_manager._save_key_to_api_env()`.
+   - Loop with "Add another key? [y/N]" until user declines or skips.
+   - Return: `List[Tuple[str, str]]` of newly added keys.
 
-A single, executable Python script named `pdd_setup.py`. The script must begin with `#!/usr/bin/env python3` and have a standard `if __name__ == '__main__':` entry point that calls the `main()` function. The script should contain all the logic, constants, and functions described above, with no external code dependencies other than the `requests` library.
+3. Step 2 — Configure Models + .pddrc (`_step2_configure_models_and_pddrc`):
+   - Read reference CSV via `provider_manager._read_csv()`.
+   - Filter to rows whose `api_key` env vars are ALL in found_key_names. Empty api_key = device flow (always include). Skip local models (provider=lm_studio/ollama, localhost/127.0.0.1 base_url).
+   - Read existing user CSV (create if missing). Deduplicate by `model` column. Add new matching rows. Write via `_write_csv_atomic()`.
+   - Print model count summary and per-provider breakdown.
+   - Check `.pddrc` in cwd: if exists, print confirmed. If not, explain what .pddrc does, ask user "Create .pddrc in this project? [y/Enter to skip]". If yes, detect language via `_detect_language()`, create via `_build_pddrc_content()`.
+   - Return: `Dict[str, int]` of {provider: count}.
+
+4. Step 3 — Test + Summary (`_step3_test_and_summary`):
+   - Pick first cloud model with all api_key env vars set. Empty api_key = device flow (eligible).
+   - Run test in a background thread with dot animation (print dots every second). Timeout after 8 seconds.
+   - If litellm importable: test via `model_tester._run_test(row)`. If not: skip with message.
+   - Print summary with green ✓ / red ✗ / yellow indicators:
+     - CLI: configured names (with API key warnings), or "not configured"
+     - API Keys: count found
+     - Models: count with per-provider breakdown and CSV path
+     - .pddrc: exists or not created
+     - Test: result
+
+5. Handle `KeyboardInterrupt` at any point: print "Setup interrupted — exiting." and return.
+
+6. **Exit summary (`_print_exit_summary`):**
+   - Create a sample `success_python.prompt` file if it doesn't exist (simple "print Hello" template).
+   - Write `PDD-SETUP-SUMMARY.txt` with full details: CLIs configured, API keys (masked), files created, quick start instructions, and learn more links (pdd --help, promptdriven.ai, Discord).
+   - Print condensed terminal output: QUICK START section (pdd generate success_python.prompt), LEARN MORE links, and dim note about saved summary file.
+   - If the api-env file exists, print a bold yellow "Important:" reminder telling the user to source the api-env file for keys to take effect in the current terminal session, with the exact command (e.g. `source ~/.pdd/api-env.zsh`). Add a dim note that new terminal windows will load keys automatically. Include this in both the terminal output and the PDD-SETUP-SUMMARY.txt file.
+
+7. **Options menu (`_run_options_menu`):**
+   Two menu items in a loop:
+     1. Add a provider — delegates to `provider_manager.add_provider_from_registry()`
+     2. Test a model — delegates to `model_tester.test_model_interactive()`
+   - Pressing Enter exits the menu.
+   - Catch exceptions from each action and print error.
+
+8. Import strategy (all deferred/lazy inside functions):
+   - From `pdd.cli_detector`: `detect_and_bootstrap_cli`, `CliBootstrapResult`
+   - From `pdd.api_key_scanner`: `_parse_api_env_file`, `_detect_shell`
+   - From `pdd.provider_manager`: `_read_csv`, `_write_csv_atomic`, `_get_user_csv_path`, `_save_key_to_api_env`, `_get_shell_rc_path`, `parse_api_key_vars`, `add_provider_from_registry`
+   - From `pdd.pddrc_initializer`: `_detect_language`, `_build_pddrc_content`
+   - From `pdd.model_tester`: `_run_test`, `test_model_interactive`
+   - Top-level: `getpass`, `os`, `sys`, `pathlib.Path`, `threading`
+   - Optional: `litellm` (import-guarded), `dotenv` (import-guarded)
+
+% Dependencies
+
+<internal_example_modules>
+    % Example of the CLI detector used in Phase 1 to bootstrap an agentic CLI:
+    <pdd.cli_detector><include>context/cli_detector_example.py</include></pdd.cli_detector>
+
+    % Example of provider_manager used for CSV I/O and the fallback manual menu:
+    <pdd.provider_manager><include>context/provider_manager_example.py</include></pdd.provider_manager>
+
+    % Example of model_tester used for testing models:
+    <pdd.model_tester><include>context/model_tester_example.py</include></pdd.model_tester>
+
+    % Example of pddrc_initializer used for .pddrc creation:
+    <pdd.pddrc_initializer><include>context/pddrc_initializer_example.py</include></pdd.pddrc_initializer>
+</internal_example_modules>
+
+<llm_model_csv_schema>
+The user-level CSV at ~/.pdd/llm_model.csv has columns:
+provider,model,input,output,coding_arena_elo,base_url,api_key,max_reasoning_tokens,structured_output,reasoning_type,location
+This file is created/managed by the auto-configuration step or manually by the user.
+The reference CSV at pdd/data/llm_model.csv contains known models for all major providers.
+</llm_model_csv_schema>
+
+<provider_manager_csv_api>
+from pdd.provider_manager import _read_csv, _write_csv_atomic, _get_user_csv_path, parse_api_key_vars
+# _read_csv(path: Path) -> List[Dict[str, str]]  — reads CSV to list of row dicts
+# _write_csv_atomic(path: Path, rows: List[Dict[str, str]])  — atomic write via temp file + rename
+# _get_user_csv_path() -> Path  — returns ~/.pdd/llm_model.csv
+# parse_api_key_vars(api_key_field: str) -> List[str]  — split pipe-delimited api_key into individual var names
+</provider_manager_csv_api>
+
+<api_key_scanner_api>
+from pdd.api_key_scanner import _parse_api_env_file, _detect_shell
+# _parse_api_env_file(file_path: Path) -> Dict[str, str]  — parse export lines from api-env file
+# _detect_shell() -> Optional[str]  — detect shell name from SHELL env var
+</api_key_scanner_api>
+
+<pddrc_initializer_api>
+from pdd.pddrc_initializer import _detect_language, _build_pddrc_content
+# _detect_language(cwd: Path) -> Optional[str]  — detect project language from marker files
+# _build_pddrc_content(language: str) -> str  — build YAML content for .pddrc
+</pddrc_initializer_api>
+
+<model_tester_api>
+from pdd.model_tester import _run_test
+# _run_test(row: Dict[str, Any]) -> Dict[str, Any]
+# Returns: {"success": bool, "duration_s": float, "cost": float, "error": str|None, "tokens": dict|None}
+</model_tester_api>
+
+% Deliverables
+- Module at `pdd/setup_tool.py` exporting `run_setup`.
+- Must include `if __name__ == "__main__":` entry point that calls `run_setup()`.

@@ -7,6 +7,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -40,6 +41,9 @@ except ImportError:
 
 from .models import JobStatus
 
+
+# Maximum time (seconds) a subprocess job may run before being killed
+JOB_TIMEOUT = 1800
 
 # Global options that must be placed BEFORE the subcommand (defined on cli group)
 GLOBAL_OPTIONS = {
@@ -417,6 +421,7 @@ class JobManager:
                     "stdout": job.live_stdout,
                     "stderr": job.live_stderr,
                     "exit_code": None,
+                    "error_type": type(e).__name__,
                 }
             job.status = JobStatus.FAILED
             console.print(f"[red]Job failed:[/red] {job.id} - {e}")
@@ -452,6 +457,7 @@ class JobManager:
         env['PDD_FORCE'] = '1'
         env['TERM'] = 'dumb'
         env['PDD_SKIP_UPDATE_CHECK'] = '1'  # Skip update prompts
+        env['PDD_JOB_DEADLINE'] = str(time.time() + JOB_TIMEOUT)  # Budget for agentic retries
 
         stdout_lines = []
         stderr_lines = []
@@ -509,8 +515,31 @@ class JobManager:
                 stdout_thread.start()
                 stderr_thread.start()
 
-                # Wait for process to complete
-                exit_code = process.wait()
+                # Wait for process to complete with timeout
+                start_wall = time.time()
+                while True:
+                    elapsed = time.time() - start_wall
+                    remaining = max(JOB_TIMEOUT - elapsed, 0)
+                    try:
+                        exit_code = process.wait(timeout=min(60, remaining))
+                        break
+                    except subprocess.TimeoutExpired:
+                        if time.time() - start_wall >= JOB_TIMEOUT:
+                            process.terminate()
+                            try:
+                                process.wait(timeout=10)
+                            except subprocess.TimeoutExpired:
+                                process.kill()
+                                try:
+                                    process.wait(timeout=10)
+                                except subprocess.TimeoutExpired:
+                                    logger.warning(
+                                        "Process %d did not exit after SIGKILL; possible zombie process",
+                                        process.pid,
+                                    )
+                            raise RuntimeError(
+                                f"Job timed out after {JOB_TIMEOUT}s and was killed"
+                            )
 
                 # Wait for output threads to finish
                 stdout_thread.join(timeout=5)
@@ -543,6 +572,12 @@ class JobManager:
             for line in stdout_text.splitlines():
                 if "Overall status:" in line and "Failed" in line:
                     raise RuntimeError("Sync operation failed (see output for details)")
+
+        if exit_code is not None and exit_code < 0:
+            sig_num = -exit_code
+            raise RuntimeError(
+                f"Process killed by signal {sig_num} (possible OOM or external termination)"
+            )
 
         if exit_code != 0:
             # Combine stdout and stderr for complete error context

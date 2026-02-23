@@ -1,0 +1,175 @@
+Create a Python module that orchestrates the full PDD sync workflow for one basename/language pair, including operation selection, execution, state persistence, and TUI/headless runtime behavior.
+
+## Dependencies
+
+<sync_determine_operation_example><include>context/sync_determine_operation_example.py</include></sync_determine_operation_example>
+<auto_deps_main_example><include>context/auto_deps_main_example.py</include></auto_deps_main_example>
+<code_generator_main_example><include>context/code_generator_main_example.py</include></code_generator_main_example>
+<context_generator_main_example><include>context/context_generator_main_example.py</include></context_generator_main_example>
+<crash_main_example><include>context/crash_main_example.py</include></crash_main_example>
+<fix_verification_main_example><include>context/fix_verification_main_example.py</include></fix_verification_main_example>
+<cmd_test_main_example><include>context/cmd_test_main_example.py</include></cmd_test_main_example>
+<fix_main_example><include>context/fix_main_example.py</include></fix_main_example>
+<update_main_example><include>context/update_main_example.py</include></update_main_example>
+<get_test_command_example><include>context/get_test_command_example.py</include></get_test_command_example>
+
+## Public API
+
+Define:
+
+```python
+MAX_CONSECUTIVE_TESTS = 3
+MAX_TEST_EXTEND_ATTEMPTS = 2
+MAX_CONSECUTIVE_CRASHES = 3
+```
+
+Implement `PendingStateUpdate` plus `AtomicStateUpdate` context manager:
+- Buffer run report + fingerprint writes.
+- Commit via temp file + `os.replace` atomic rename.
+- Roll back by deleting tracked temp files on exception.
+
+Implement `sync_orchestration()` with exactly:
+
+```python
+def sync_orchestration(
+    basename: str,
+    target_coverage: float = 90.0,
+    language: str = "python",
+    prompts_dir: str = "prompts",
+    code_dir: str = "src",
+    examples_dir: str = "examples",
+    tests_dir: str = "tests",
+    max_attempts: int = 3,
+    budget: float = 10.0,
+    skip_verify: bool = False,
+    skip_tests: bool = False,
+    dry_run: bool = False,
+    force: bool = False,
+    strength: float = DEFAULT_STRENGTH,
+    temperature: float = 0.0,
+    time_param: float = 0.25,
+    verbose: bool = False,
+    quiet: bool = False,
+    output_cost: Optional[str] = None,
+    review_examples: bool = False,
+    local: bool = False,
+    context_config: Optional[Dict[str, str]] = None,
+    context_override: Optional[str] = None,
+    confirm_callback: Optional[Callable[[str, str], bool]] = None,
+) -> Dict[str, Any]:
+```
+
+At function start, coerce `None` for `target_coverage`, `budget`, `max_attempts` to defaults.
+
+## Required Helpers
+
+Implement:
+- `load_sync_log`, `create_sync_log_entry`, `update_sync_log_entry`, `append_sync_log`, `log_sync_event`
+- `save_run_report(report, basename, language, atomic_state=None)` writing `META_DIR / "{safe_basename}_{language.lower()}_run.json"`
+- `_save_operation_fingerprint(..., atomic_state=None)` using `calculate_current_hashes` + `Fingerprint`, writing `META_DIR / "{safe_basename}_{language.lower()}.json"`
+- `_python_cov_target_for_code_file`, `_python_cov_target_for_test_and_code`
+- `_parse_test_output` for Python, JS/TS, Go, Rust, plus fallback
+- `_detect_example_errors` (traceback + ERROR-log patterns only)
+- `_try_auto_fix_import_error`:
+  - local import failures: patch example `sys.path`
+  - external package misses: run `pip install <top_level_package>`
+- `_run_example_with_error_detection` using `subprocess.Popen`, streamed stdout/stderr, timeout terminate/kill, and signal-kill-aware output error detection
+- `_execute_tests_and_create_run_report(test_file, basename, language, target_coverage, *, code_file=None, atomic_state=None, test_files=None)`:
+  - Python: run pytest + coverage, project-root detection via `_find_project_root`, support multiple test files
+  - Non-Python: use `get_test_command_for_file`
+  - Always persist `RunReport` (including `test_files` hash map)
+- `_create_mock_context`
+- `_display_sync_log` in verbose and concise modes
+
+## Workflow
+
+### Setup
+
+- If `dry_run=True`, return `_display_sync_log(...)`.
+- Resolve files through `get_pdd_file_paths(...)`.
+- If `FileNotFoundError` indicates missing test file (`test_config.py` or `tests/test_`), continue with fallback prompt/code/example/test paths and case-insensitive prompt filename lookup.
+- Other path-construction failures return a failure dict containing `error`, `errors`, and empty `operations_completed`.
+- Maintain shared TUI refs (`function_name_ref`, `cost_ref`, path/color refs, `stop_event`, `progress_callback_ref`) plus `app_ref`.
+- `get_confirm_callback()` behavior:
+  - auto-accept after first confirmation (`user_confirmed_overwrite`)
+  - use `app.request_confirmation` when app exists
+  - in headless mode without supplied callback, wrap `click.confirm` and set the same flag
+
+### Worker Loop
+
+Inside `sync_worker_logic()`:
+- Use `SyncLock(basename, language)` and log lock acquire/release events.
+- Track `operations_completed`, `skipped_operations`, `errors`, `operation_history`, `last_model_name`.
+- Enforce hard budget stop plus <20% budget warning event.
+- Per iteration, call:
+  `sync_determine_operation(basename, language, target_coverage, budget_remaining, False, prompts_dir, skip_tests, skip_verify, context_override)`
+- Create/update per-operation sync log entries.
+
+Cycle and stop guards:
+- If >=2 of last 3 operations are `auto-deps`, force `generate`.
+- Break on 4-op alternating cycles: crash/verify or test/fix (2 repeats).
+- Break on >=5 consecutive `fix`, >=`MAX_CONSECUTIVE_TESTS` consecutive `test`, >=`MAX_CONSECUTIVE_CRASHES` consecutive `crash`.
+- `test_extend`: non-Python -> accept current state; Python -> accept current state after `MAX_TEST_EXTEND_ATTEMPTS`.
+- Terminal operations `all_synced`, `nothing`, `fail_and_request_manual_merge`, `error`, `analyze_conflict`: log and break.
+
+Skip handling:
+- Skip `verify` when `skip_verify` or `skip_tests`.
+- Skip `test` when `skip_tests`.
+- Skip `crash` when `skip_tests` or `skip_verify`.
+- For each skip, persist fingerprint as `skip:<op>`.
+- For skipped crash, also persist synthetic successful `RunReport` (`exit_code=0`) so sync can advance.
+
+### Operation Execution
+
+Wrap operation execution plus post-op state writes in `with AtomicStateUpdate(...) as atomic_state:`.
+
+- `auto-deps`: run `auto_deps_main`; stage to `_with_deps.prompt`; replace only if changed, else delete temp and return no-op tuple.
+- `generate`: ensure code dir exists; call `code_generator_main` with absolute prompt/output paths; delete stale run report file.
+- `example`: ensure example dir exists; call `context_generator_main` with absolute paths.
+- `crash`:
+  - skip when code/example files are missing
+  - detect crash from existing run report exit code, else execute example with `_run_example_with_error_detection`
+  - run example with `sys.executable`, clean env (`FORCE_COLOR`, `COLUMNS` removed), no custom cwd
+  - if no crash, save success run report and treat crash step as skipped
+  - if crash, attempt `_try_auto_fix_import_error`; retry once and short-circuit on success
+  - otherwise write `crash.log` and call `crash_main(loop=True, max_attempts=(0 for non-Python else max_attempts), budget remaining, strength, temperature)`
+- `verify`: call `fix_verification_main` with same non-Python max-attempts override.
+- `test`: call `cmd_test_main`; if test exists use `existing_tests` + `merge=True`, else regular generation; when test exists run `_execute_tests_and_create_run_report(...)`.
+- `test_extend`: if test exists, `cmd_test_main(... existing_tests=[test], merge=True ...)` then rerun tests; else fallback to regular test generation and run tests if created.
+- `fix`:
+  - write `fix_errors.log` from test execution output
+  - Python: run pytest on all available test files (`pdd_files.get("test_files", [primary])`)
+  - Non-Python: run command from `get_test_command_for_file`
+  - parse failing files via `extract_failing_files_from_output`, choose `unit_test_file_for_fix`
+  - call `fix_main(... auto_submit=True, loop=True, max_attempts=(0 for non-Python else max_attempts), budget remaining, strength, temperature)`
+- `update`: call `update_main(... use_git=True, strength, temperature)`.
+
+Result handling:
+- Dict result: use `success`, `cost`, `model`.
+- Tuple result: success is tuple[0] except `test` where success is test file existence; cost from index 1; model from index 2.
+- On success: append operation and save fingerprint via `atomic_state`.
+- Always update and append sync log entry.
+- Post-success checks:
+  - after `crash`: rerun example and save fresh run report
+  - after `fix`: rerun tests to refresh run report
+- On operation failure: append failure message and break.
+
+### Runtime Mode and Return
+
+- Headless mode when `quiet` or `not sys.stdout.isatty()` or `CI` is set:
+  - set `PDD_FORCE=1`
+  - run worker directly
+- Otherwise run through `SyncApp`, then call `show_exit_animation()`.
+- If TUI worker throws, print worker error + captured log tail + traceback to stderr.
+- If final `result is None`, return interruption failure dict.
+
+Return dict must include:
+- `success`
+- `operations_completed`
+- `skipped_operations`
+- `total_cost`
+- `total_time`
+- `final_state` (exclude `test_files`)
+- `errors`
+- `error` (`"; ".join(errors)` or `None`)
+- `model_name`

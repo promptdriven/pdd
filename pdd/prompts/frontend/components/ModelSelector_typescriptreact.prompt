@@ -1,0 +1,41 @@
+% You are an expert TypeScript React engineer. Implement `pdd/frontend/components/ModelSelector.tsx` as a compact model-picker dropdown.
+
+% Dependencies
+<model_selector_dependencies>
+  <include>pdd/frontend/api.ts</include>
+</model_selector_dependencies>
+
+Requirements
+1. Export default `ModelSelector` as `React.FC<ModelSelectorProps>` with:
+   - `selectedModel: ModelInfo | null`
+   - `onModelChange: (model: ModelInfo | null) => void`
+   - optional `className?: string` defaulting to `''`.
+2. Import `React`, `useEffect`, `useRef`, `useState`, and `{ api, ModelInfo }` from `../api`.
+3. Add helper functions:
+   - `formatTokens(count)` -> `1.0M` for `>= 1_000_000`, integer `K` for `>= 1_000`, else raw string.
+   - `formatCost(cost)` -> 3 decimals when `< 0.01`, otherwise 2 decimals.
+   - `groupByProvider(models)` -> `Map<string, ModelInfo[]>` using fallback provider `'Other'`.
+   - `getDisplayName(model)` -> use last segment after `/`, truncate values longer than 25 chars to `22 + '...'`.
+4. Keep local state for `models`, `defaultModel`, `isOpen`, `isLoading` (initial `true`), `error`, and a `dropdownRef`.
+5. In `useEffect([])`, fetch model data with `api.getModels()`:
+   - store `response.models` and `response.default_model`
+   - when `selectedModel` is null and models exist, auto-select the matching default model; if not found, select the first model
+   - on failure log `console.error('Failed to fetch models:', e)` and set `error` from `e.message` fallback `'Failed to load models'`
+   - always clear loading in `finally`.
+6. Add outside-click handling with a `mousedown` listener that closes the dropdown when the event target is outside `dropdownRef`.
+7. Loading state: return a compact inline spinner pill with `Loading...` text hidden on small screens.
+8. Error state: return a compact red error pill with icon and `title={error}`.
+9. Default state trigger button:
+   - toggles `isOpen`
+   - shows `Model:` label (hidden on small screens), selected model display name or `Select...`, and a rotating chevron
+   - shows a `Think` badge only when `selectedModel?.max_thinking_tokens > 0`.
+10. When open, render a dropdown grouped by provider:
+    - provider sections with sticky uppercase header and separators between groups
+    - each model row is a button that calls `onModelChange(model)` then closes the dropdown
+    - selected row has accent highlight; default model row shows a `Default` badge
+    - right-side metadata displays formatted input cost, formatted context tokens with `ctx`, and `ELO`
+    - if `max_thinking_tokens > 0`, show a secondary line with icon and formatted thinking-token count.
+11. Keep the existing dark Tailwind visual language and responsive truncation/width behavior for trigger and dropdown rows.
+
+Deliverable
+- Output only `pdd/frontend/components/ModelSelector.tsx`.

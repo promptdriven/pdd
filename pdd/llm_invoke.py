@@ -1243,6 +1243,17 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
 
     logger.warning(f"API key environment variable '{key_name}' for model '{model_info.get('model')}' is not set.")
 
+    # Vertex AI ADC fallback: when VERTEX_CREDENTIALS is missing but a
+    # GCP project is configured, Application Default Credentials (e.g.
+    # Cloud Build, GCE metadata, `gcloud auth application-default login`)
+    # can authenticate without an explicit key.
+    if key_name == "VERTEX_CREDENTIALS":
+        project = os.getenv("VERTEXAI_PROJECT") or os.getenv("VERTEX_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT")
+        if project:
+            logger.info(f"Using ADC for Vertex AI (project={project}).")
+            newly_acquired_keys[key_name] = False
+            return True
+
     # Skip prompting if --force flag is set (non-interactive mode)
     if os.environ.get('PDD_FORCE'):
         logger.error(f"API key '{key_name}' not set. In --force mode, skipping interactive prompt.")
@@ -1988,6 +1999,11 @@ def llm_invoke(
                 # Empty api_key — device flow (GitHub Copilot) or local model
                 if verbose:
                     logger.info(f"[INFO] No API key for '{model_name_litellm}'; using device flow or default auth.")
+
+            # Pass vertex_location from CSV (e.g., "global" for gemini-3-flash-preview)
+            location = model_info.get('location')
+            if pd.notna(location) and location:
+                litellm_kwargs["vertex_location"] = str(location)
 
             # Add base_url/api_base override if present in CSV
             api_base = model_info.get('base_url')

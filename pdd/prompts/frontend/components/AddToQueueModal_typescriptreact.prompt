@@ -1,0 +1,66 @@
+% You are an expert TypeScript React engineer. Build `pdd/frontend/components/AddToQueueModal.tsx`, a modal for enqueueing PDD commands to run later.
+
+% Dependencies
+<queue_modal_dependencies>
+  <include-many>pdd/frontend/api.ts, pdd/frontend/types.ts, pdd/frontend/constants.ts, pdd/frontend/lib/commandBuilder.ts, pdd/frontend/components/FilePickerInput.tsx</include-many>
+</queue_modal_dependencies>
+
+Requirements
+1. Export a default `AddToQueueModal` React functional component and define `AddToQueueModalProps` with:
+   - `isOpen: boolean`
+   - `prompt: PromptInfo | null`
+   - optional `preselectedCommand?: CommandType`
+   - `onAddToQueue(commandType, prompt, rawOptions, displayCommand)`
+   - `onClose()`
+2. Add helper `formatOptionName(name)` that title-cases hyphenated option names (`review-examples` -> `Review Examples`).
+3. Implement local `OptionInput` component supporting `CommandOption | GlobalOption` plus `compact?: boolean`:
+   - `checkbox`: boolean input with label + description.
+   - `range`: slider with min/max/step defaults (`0/1/0.1`), numeric badge display (2 decimals), description, and min/max labels.
+   - fallback input: number/text based on `option.type`, render required marker, parse number values to `Number(...)` or empty string.
+   - Use stable `id` format `queue-option-${option.name}` for label/input association.
+4. Memoize `availableCommands` as `Object.values(COMMANDS).filter(cmd => cmd.requiresPrompt)`.
+5. Keep local state:
+   - `selectedCommand` initialized from `preselectedCommand ?? null`
+   - `showAdvanced` default `false`
+   - `optionValues` as `Record<string, any>`
+6. Derive `commandConfig` from `selectedCommand` (`COMMANDS[selectedCommand]` or `null`).
+7. On `commandConfig` / `prompt` change, rebuild `optionValues` defaults:
+   - start empty; clear state immediately when no command is selected.
+   - copy `commandConfig.options` `defaultValue`s.
+   - normalize checkbox defaults so `'true'` and `true` become `true`.
+   - if command requires code/test and prompt contains detected files, prefill `_code` / `_test`.
+   - special case: for `CommandType.SUBMIT_EXAMPLE`, prefill `verification-program` from `prompt.example` when present.
+   - include all global defaults as `_global_${opt.name}` from `GLOBAL_OPTIONS`.
+8. On modal close (`isOpen` false), reset `selectedCommand` back to `preselectedCommand ?? null` and collapse advanced options.
+9. Implement `handleValueChange(optionName, value)` as a shallow merge update into `optionValues`.
+10. Implement `handleAddToQueue()`:
+    - no-op if `commandConfig`, `prompt`, or `selectedCommand` is missing.
+    - generate preview command with `buildDisplayCommand(commandConfig.name, prompt, optionValues)`.
+    - call `onAddToQueue(commandConfig.name, prompt, optionValues, display)`.
+    - close modal via `onClose()`.
+11. Compute `hasCustomGlobalOptions` by comparing each `_global_*` value against corresponding `GLOBAL_OPTIONS` default.
+12. Return `null` when `isOpen` is false.
+13. Keep a defensive guard that logs and returns `null` if `availableCommands` is not an array.
+14. Render a full-screen modal overlay (clicking overlay closes modal; clicking dialog body stops propagation).
+15. Header: queue icon + title `Add to Task Queue` + subtitle `Queue this task for later execution`.
+16. Body:
+    - show target prompt card when `prompt` exists, displaying `prompt.sync_basename` fallback to basename from `prompt.prompt` and then `'Unknown'`.
+    - command selector grid from `availableCommands`; each button sets selected command and shows active/inactive visual state; use `cmd.icon || '▶'` and `cmd.shortDescription || cmd.name`.
+17. When `commandConfig` exists, render option sections:
+    - required file pickers via `FilePickerInput` when `requiresCode` / `requiresTest` are true.
+    - keep current extension filters for code/test file pickers.
+    - map command-specific `commandConfig.options` through `OptionInput`.
+18. Add collapsible `Advanced Options` section:
+    - toggle by button, with chevron rotation.
+    - show pulsing indicator when any global option differs from default.
+    - when expanded, render two groups using compact `OptionInput`:
+      - Model settings: `strength`, `temperature`, `time`
+      - Execution options: `local`, `verbose`, `quiet`, `force`, `review-examples`
+19. Footer has `Cancel` and `Add to Queue` actions:
+    - cancel calls `onClose`
+    - add calls `handleAddToQueue`
+    - disable add button when no selected command or no prompt.
+20. Preserve current dark/glass Tailwind styling, responsive modal sizing (mobile fullscreen to desktop dialog), and existing animation classes for open/collapse transitions.
+
+Deliverable
+- Output only `pdd/frontend/components/AddToQueueModal.tsx`.

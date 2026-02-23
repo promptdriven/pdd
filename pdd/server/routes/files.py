@@ -27,6 +27,7 @@ except ImportError:
 
 from ..models import FileContent, FileMetadata, FileTreeNode, WriteFileRequest, WriteResult
 from ..security import PathValidator, SecurityError
+from ...construct_paths import get_language_outputs
 
 # Binary file extensions
 BINARY_EXTENSIONS = {
@@ -529,11 +530,15 @@ async def list_prompt_files(
         # Include prompt_subdir in sync_basename so pdd sync can find the correct prompt
         # when there are multiple prompts with the same name in different subdirectories
         full_sync_basename = f"{prompt_subdir}/{sync_basename}" if prompt_subdir else sync_basename
+        # Determine expected outputs for this language
+        outputs = get_language_outputs(language) if language else {'code', 'test', 'example'}
+
         related = {
             "prompt": relative_path,
             "sync_basename": full_sync_basename,  # For sync command: "frontend/app/admin/page"
             "language": language,            # Detected language: "python"
             "context": context_name,         # Matched .pddrc context name
+            "expected_outputs": sorted(outputs),  # e.g., ["code"] or ["code", "example", "test"]
         }
 
         # Helper to substitute placeholders in path templates

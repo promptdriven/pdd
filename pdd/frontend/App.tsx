@@ -56,6 +56,9 @@ const App: React.FC = () => {
   const [lastRunResult, setLastRunResult] = useState<RunResult | null>(null);
   const [serverConnected, setServerConnected] = useState(false);
 
+  // Counter to trigger ArchitectureView prompt refresh after sync completions
+  const [syncCompletedCounter, setSyncCompletedCounter] = useState(0);
+
   // Bug command state
   const [bugIssueUrl, setBugIssueUrl] = useState('');
 
@@ -118,6 +121,9 @@ const App: React.FC = () => {
         5000
       );
       playNotification(success);
+      if (success && task.commandType === CommandType.SYNC) {
+        setSyncCompletedCounter(prev => prev + 1);
+      }
     },
     onQueueComplete: () => {
       addToast('Task queue completed', 'success', 3000);
@@ -136,6 +142,10 @@ const App: React.FC = () => {
     playNotification(success);
     // Notify task queue if this job was part of the queue
     taskQueue.handleJobComplete(job.id, success);
+    // Refresh architecture view prompt info after sync completes
+    if (success && job.command === 'sync') {
+      setSyncCompletedCounter(prev => prev + 1);
+    }
   }, [addToast, playNotification, taskQueue]);
 
   const {
@@ -1282,6 +1292,7 @@ const App: React.FC = () => {
                 }}
                 onAddToQueue={handleAddToQueue}
                 onRunSync={(prompt, options) => handleRunCommand(CommandType.SYNC, prompt, options)}
+                syncCompletedCounter={syncCompletedCounter}
               />
             ) : (
               <div>

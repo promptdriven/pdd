@@ -1,0 +1,64 @@
+% You are an expert TypeScript engineer. Generate `pdd/frontend/constants.ts` as the frontend command/constants module.
+
+% Dependencies
+<types_contract><include>pdd/frontend/types.ts</include></types_contract>
+
+% Requirements
+1) Import exactly `CommandConfig`, `CommandType`, `GlobalOption`, `GlobalDefaults` from `'./types'`.
+
+2) Export `GLOBAL_DEFAULTS: GlobalDefaults` with exact values:
+   `strength: 1`, `temperature: 0.0`, `time: 0.25`, `verbose: false`, `quiet: false`, `force: false`, `local: false`, `reviewExamples: false`.
+
+3) Export `GLOBAL_OPTIONS: GlobalOption[]` in exact order.
+   Format: `name | cliFlag | type | placeholder | description | default | min/max/step`
+   - `strength | --strength | range | '1' | Model strength: <0.5 = cheaper models, 0.5 = base, >0.5 = stronger models | GLOBAL_DEFAULTS.strength | 0/1/0.05`
+   - `temperature | --temperature | range | '0.0' | LLM creativity level (0 = deterministic, higher = more creative) | GLOBAL_DEFAULTS.temperature | 0/2/0.1`
+   - `time | --time | range | '0.25' | Reasoning allocation for compatible models (0 = minimal, 1 = maximum) | GLOBAL_DEFAULTS.time | 0/1/0.05`
+   - `verbose | --verbose | checkbox | '' | Increase output verbosity for debugging | GLOBAL_DEFAULTS.verbose`
+   - `quiet | --quiet | checkbox | '' | Decrease output verbosity | GLOBAL_DEFAULTS.quiet`
+   - `force | --force | checkbox | '' | Skip interactive prompts (useful for automation) | GLOBAL_DEFAULTS.force`
+   - `local | --local | checkbox | '' | Run commands locally instead of in the cloud | GLOBAL_DEFAULTS.local`
+   - `review-examples | --review-examples | checkbox | '' | Review and optionally exclude few-shot examples before execution | GLOBAL_DEFAULTS.reviewExamples`
+
+4) Export `COMMANDS: Record<CommandType, CommandConfig>` containing all command enum keys exactly once, in this order.
+   Command format: `COMMAND => backend | description | short | icon | flags | options`
+   Option format: `name:type:placeholder:description[:required][:default]`
+
+   - `SYNC => sync | Synchronize a prompt with its code, tests, and examples. Generates missing files and fixes failing tests. | Sync | 🔄 | requiresPrompt,group=sync-update | agentic:checkbox::Use agentic mode (skip iterative loops, trust agent results)::true; max-attempts:number:'3':Maximum fix attempts::'3'; budget:number:'20':Maximum cost in dollars::'20'; skip-tests:checkbox::Skip test generation`
+   - `UPDATE => update | Update prompts based on code changes. Syncs prompt content with modified code. | Update | 📝 | requiresPrompt,requiresCode,group=sync-update | git:checkbox::Use git history to find original code; simple:checkbox::Use legacy 2-stage LLM update`
+   - `GENERATE => generate | Generate code from a prompt file. Creates new implementation based on the prompt specification. | Generate code | ⚡ | requiresPrompt,group=generate | output:file:e.g., src/calculator.py:Where to save generated code; incremental:checkbox::Use incremental patching`
+   - `TEST => test | Generate unit tests for existing code based on its prompt specification. | Generate tests | 🧪 | requiresPrompt,requiresCode,group=generate | output:file:e.g., tests/test_calculator.py:Where to save generated tests; target-coverage:number:'80':Target code coverage %`
+   - `EXAMPLE => example | Generate example code that demonstrates how to use the implementation. | Generate example | 📖 | requiresPrompt,requiresCode,group=generate | output:file:e.g., examples/calculator_example.py:Where to save generated example`
+   - `FIX => fix | Fix code based on failing tests. Requires an error file with test output. | Fix failing tests | 🔧 | requiresPrompt,requiresCode,requiresTest | error-file:file:e.g., error.log or test_output.txt:File containing test errors (required):required; max-attempts:number:'3':Maximum fix attempts::'3'; budget:number:'5':Maximum cost in dollars::'5'; loop:checkbox::Enable iterative fixing (requires verification-program); verification-program:file:verify.py:Python program that verifies the fix (required for --loop); agentic-fallback:checkbox::Enable agentic fallback if primary fix fails; auto-submit:checkbox::Auto-submit if all tests pass`
+   - `BUG => bug | Investigate a bug from a GitHub issue URL (agentic mode) or generate a reproducing test case. | Investigate bug | 🐛 | requiresPrompt=false | issue-url:text:https://github.com/org/repo/issues/123:GitHub issue URL to investigate:required; output:file:e.g., tests/test_bug_123.py:Where to save generated test`
+   - `CRASH => crash | Fix code based on crash errors. Analyzes error file and proposes fixes. | Crash Fix | 💥 | requiresPrompt,requiresCode | program-file:file:program.py:Program file that crashed:required; error-file:file:error.log:File containing error messages:required; output:file:src/fixed_code.py:Where to save fixed code; output-program:file:program_fixed.py:Where to save fixed program; loop:checkbox::Enable iterative fixing process; max-attempts:number:'3':Maximum fix attempts::3; budget:number:'5':Maximum cost in dollars::5`
+   - `VERIFY => verify | Verify code against prompt requirements using a verification program. | Verify | ✅ | requiresPrompt,requiresCode | verification-program:file:verify.py:Verification program to run:required; output-code:file:src/verified_code.py:Where to save verified code; output-program:file:verify_fixed.py:Where to save fixed verification program; output-results:file:results.log:Where to save verification results; max-attempts:number:'3':Maximum verification attempts::3; budget:number:'5':Maximum cost in dollars::5; agentic-fallback:checkbox::Enable agentic fallback if primary fix fails::true`
+   - `SUBMIT_EXAMPLE => fix | Submit a successful fix as a few-shot example to PDD Cloud. Runs fix --loop --auto-submit with verification to iteratively fix and submit the example. | Submit Example | 🚀 | requiresPrompt,requiresCode,requiresTest | verification-program:file:examples/calculator_example.py:Verification program to check the fix (required). The example file typically serves as the verification program.:required; max-attempts:number:'5':Maximum fix attempts before giving up::5; budget:number:'10':Maximum cost in dollars::10`
+   - `SPLIT => split | Split a large prompt file into smaller, manageable sub-prompts for better organization and modularity. | Split Prompt | › | requiresPrompt,requiresCode,isAdvanced | example-code:file:examples/interface.py:Example code as interface to sub-module:required; output-sub:file:prompts/sub_module.prompt:Output path for the sub-prompt file; output-modified:file:prompts/modified.prompt:Output path for the modified prompt file`
+   - `CHANGE => change | Modify a prompt based on change instructions from a change prompt file. | Change Prompt | › | requiresPrompt,requiresCode,isAdvanced | change-prompt:file:changes.prompt:File containing change instructions:required; budget:number:'5':Maximum cost in dollars::'5'; output:file:prompts/modified.prompt:Output path for modified prompt`
+   - `DETECT => detect | Analyze prompts to determine which ones need changes based on a change description file. | Detect Changes | › | requiresPrompt=false,isAdvanced | prompt-files:text:file1.prompt, file2.prompt:Comma-separated list of prompt files to analyze:required; change-file:file:changes.prompt:File describing the changes to detect:required; output:file:detect_results.csv:Output CSV file for analysis results`
+   - `AUTO_DEPS => auto-deps | Analyze project dependencies and update the prompt file with discovered dependencies. | Auto Dependencies | › | requiresPrompt,isAdvanced | directory-path:text:src/:Directory to scan for dependencies:required; output:file:prompts/updated.prompt:Where to save modified prompt; csv:file:deps.csv:CSV file for dependency info; force-scan:checkbox::Force rescan all files`
+   - `CONFLICTS => conflicts | Check for conflicts between two prompt files. | Check Conflicts | › | requiresPrompt,isAdvanced | prompt2:file:prompts/other.prompt:Second prompt file to compare:required; output:file:conflicts.csv:Where to save conflict analysis`
+   - `PREPROCESS => preprocess | Preprocess a prompt file to prepare it for LLM use. | Preprocess | › | requiresPrompt,isAdvanced | output:file:prompts/preprocessed.prompt:Where to save preprocessed prompt; xml:checkbox::Insert XML delimiters for structure; recursive:checkbox::Recursively preprocess includes; double:checkbox::Double curly brackets`
+
+5) Export `getCommandByBackendName(backendName: string): CommandConfig | undefined` implemented as `Object.values(COMMANDS).find(cmd => cmd.backendName === backendName)`.
+
+6) Export `SUPPORTED_LANGUAGES` as `const` array in exact order:
+   `{ value: 'python', label: 'Python' }`,
+   `{ value: 'typescript', label: 'TypeScript' }`,
+   `{ value: 'javascript', label: 'JavaScript' }`,
+   `{ value: 'java', label: 'Java' }`,
+   `{ value: 'go', label: 'Go' }`,
+   `{ value: 'rust', label: 'Rust' }`.
+
+7) Export `getPromptTemplate(name: string, language: string, description?: string): string`:
+   compute `desc = description?.trim() || \`[describe what ${name} should do]\`` and return this exact template with trailing newline:
+   `Write a ${language} module "${name}" that ${desc}.`
+   blank line, `## Requirements`, blank line, `- [Add your requirements here]`,
+   blank line, `## Inputs`, blank line, `- [Define input parameters]`,
+   blank line, `## Outputs`, blank line, `- [Define expected outputs]`.
+
+% Constraints
+- Constants/helpers module only; no extra exports or behavior.
+- Preserve command and option ordering.
+- Preserve mixed `defaultValue` primitive types exactly (strings vs numbers vs booleans).

@@ -585,6 +585,63 @@ def _is_known_language(language_name: str) -> bool:
     return language_name_lower in builtin_languages
 
 
+# Languages that only produce a code output (no test/example).
+# Config, data, markup, and non-executable formats.
+_CODE_ONLY_LANGUAGES = {
+    'json', 'jsonl', 'yaml', 'yml', 'toml', 'ini', 'csv',
+    'xml', 'html', 'css', 'scss', 'sass', 'less',
+    'markdown', 'latex', 'log', 'restructuredtext', 'text',
+    'sql', 'graphql', 'protobuf',
+    'makefile', 'dockerfile',
+    'terraform', 'hcl', 'nix', 'starlark',
+    'glsl', 'wgsl',
+    'prisma',
+}
+
+
+def get_language_outputs(language_name: str) -> set[str]:
+    """Return the set of expected output types for a given language.
+
+    Executable/programmable languages produce {'code', 'test', 'example'}.
+    Config/data/markup languages produce {'code'} only.
+    Unknown languages default to {'code', 'test', 'example'}.
+
+    Uses the ``outputs`` column from ``language_format.csv`` when available,
+    falling back to the built-in ``_CODE_ONLY_LANGUAGES`` set.
+    """
+    language_lower = (language_name or '').lower()
+    if not language_lower:
+        return {'code', 'test', 'example'}
+
+    # Try CSV first (has an 'outputs' column after Step 2)
+    pdd_path_str = os.getenv('PDD_PATH')
+    if pdd_path_str:
+        csv_file_path = Path(pdd_path_str) / 'data' / 'language_format.csv'
+        if csv_file_path.is_file():
+            try:
+                with open(csv_file_path, mode='r', encoding='utf-8', newline='') as csvfile:
+                    reader = csv.DictReader(csvfile)
+                    for row in reader:
+                        if row.get('language', '').lower() == language_lower:
+                            outputs_val = row.get('outputs', '').strip()
+                            if outputs_val:
+                                return set(outputs_val.split('|'))
+                            # Column exists but empty – fall through to built-in
+                            break
+            except csv.Error:
+                pass
+
+    # Built-in fallback
+    if language_lower in _CODE_ONLY_LANGUAGES:
+        return {'code'}
+
+    if _is_known_language(language_lower):
+        return {'code', 'test', 'example'}
+
+    # Unknown language – assume full outputs
+    return {'code', 'test', 'example'}
+
+
 def _strip_language_suffix(path_like: os.PathLike[str]) -> str:
     """
     Remove trailing '_<language>' from a filename stem if it matches a known language.

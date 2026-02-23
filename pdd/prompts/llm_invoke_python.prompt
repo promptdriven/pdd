@@ -72,11 +72,13 @@
     - Soft fallback: If base model not in CSV, use first available model as surrogate (silently, no warning).
 
 % API Key Management:
-    - Check `os.getenv(key_name)` for the required API key.
+    - The CSV `api_key` column may be pipe-delimited (e.g. "VAR1|VAR2|VAR3").
+    - Use `parse_api_key_vars()` from provider_manager to split into individual env var names.
+    - Single var: check `os.getenv(var)`, pass as `api_key=` to litellm. If missing, prompt interactively.
+    - Multi var (pipe-delimited): check all env vars. Do NOT pass `api_key=` to litellm — it reads them from os.environ automatically. If any missing, log error and direct user to `pdd setup`.
+    - Empty: device flow or local model — no key needed, skip check. Exception: `github_copilot/` models in `PDD_FORCE` mode must check for an existing OAuth token at the path resolved from `GITHUB_COPILOT_TOKEN_DIR` (default `~/.config/litellm/github_copilot`) / `GITHUB_COPILOT_API_KEY_FILE` (default `api-key.json`). If the token file does not exist, skip the model to prevent litellm from hanging on an interactive device flow.
     - If missing and `PDD_FORCE` env var is set, skip model (non-interactive mode).
-    - Otherwise, prompt user via `input()`, sanitize key, set env var, save to .env file.
-    - Replace existing key in-place (no comment + append); remove old commented versions.
-    - Log security warning about key saved to .env file.
+    - For single-var: prompt user via `input()`, sanitize key, set env var, save to .env file.
     - Mark key as newly acquired for retry logic on auth errors.
 
 % Reasoning Parameters:
@@ -117,7 +119,7 @@
     - Define SchemaValidationError exception that triggers model fallback.
     - On auth error with newly acquired key: Re-prompt for same key and retry.
     - On schema validation failure: Raise SchemaValidationError to trigger fallback to next model.
-    - Preserve provider credentials in retries: Pass vertex_credentials, vertex_project, vertex_location, api_key, base_url from original call.
+    - Preserve provider credentials in retries: Pass api_key, base_url, api_version from original call.
     - Anthropic temperature auto-adjustment: If error mentions temperature+thinking, adjust and retry.
     - After exhausting all candidates: Raise RuntimeError.
 
@@ -146,11 +148,14 @@
       <include>../docs/api-documentation.md</include>
    </cloud_api_documentation>
 
-% Vertex AI Support:
-    - Detect Vertex AI models by provider or model name prefix.
-    - Load credentials from VERTEX_CREDENTIALS file path, VERTEX_PROJECT, VERTEX_LOCATION env vars.
-    - Per-model location override from CSV 'location' column.
-    - Pass vertex_credentials (as JSON string), vertex_project, vertex_location to litellm.
+% Multi-Credential Providers:
+    - Providers like AWS Bedrock, Azure OpenAI, Google Vertex AI use pipe-delimited api_key fields.
+    - litellm reads their env vars automatically by model prefix (bedrock/, azure/, vertex_ai/).
+    - Do NOT pass api_key= for multi-credential providers.
+    - Vertex AI uses GOOGLE_APPLICATION_CREDENTIALS, VERTEXAI_PROJECT, VERTEXAI_LOCATION env vars.
+    - AWS Bedrock uses AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION_NAME env vars.
+    - Azure OpenAI uses AZURE_API_KEY, AZURE_API_BASE, AZURE_API_VERSION env vars.
+    - GitHub Copilot has empty api_key — uses OAuth device flow auth handled by litellm at runtime. Token is cached at `GITHUB_COPILOT_TOKEN_DIR/GITHUB_COPILOT_API_KEY_FILE` (defaults: `~/.config/litellm/github_copilot/api-key.json`). In `PDD_FORCE` mode, skip the model if the token file does not exist.
 
 % LiteLLM Caching:
     - Prefer S3-compatible cache targeting GCS using HMAC keys (GCS_HMAC_ACCESS_KEY_ID, GCS_HMAC_SECRET_ACCESS_KEY, GCS_BUCKET_NAME).

@@ -1,0 +1,58 @@
+% You are an expert Python engineer. Your goal is to implement `pdd/user_story_tests.py`, which provides user story validation and user story-driven prompt fixing for PDD.
+
+<include>context/python_preamble.prompt</include>
+
+% Role & Scope
+Implement user story utilities that:
+- discover story files (`story__*.md`) and prompt files (`*.prompt`)
+- validate stories against prompts via `detect_change`
+- apply prompt fixes for a single story by orchestrating `change_main`
+
+% Inputs and Outputs
+- `run_user_story_tests(...) -> Tuple[bool, List[Dict[str, object]], float, str]`
+  - returns: `all_passed`, per-story results list, total cost, model name
+- `run_user_story_fix(...) -> Tuple[bool, str, float, str, List[str]]`
+  - returns: success flag, status message, total cost, model name, changed prompt paths
+
+% Requirements
+1. **Story and prompt discovery**
+   - Story directory defaults to `user_stories` and supports `PDD_USER_STORIES_DIR`.
+   - Prompt directory defaults to `prompts` and supports `PDD_PROMPTS_DIR`.
+   - Discover story files using `story__*.md`.
+   - Discover prompt files recursively and support `include_llm=False` default; when false, exclude `*_llm.prompt`.
+
+2. **Story validation**
+   - For each story file, read content and call:
+     `detect_change([prompt_paths], story_content, strength, temperature, time, verbose=verbose)`.
+   - A story passes when `changes_list` is empty.
+   - Support `fail_fast=True` to stop after first failure.
+   - Respect `quiet` for console output.
+   - If no stories are found, return success with zero cost.
+   - If no prompt files are found, return failure with a clear message and zero cost.
+
+3. **Story fix flow**
+   - `run_user_story_fix` must:
+     - load the target story file and run `detect_change` over prompt files
+     - for each reported prompt, resolve prompt path robustly (case-insensitive + basename fallback)
+     - map prompt file path to source file path via prompt naming convention (`<basename>_<language>.prompt`) and `get_extension(language)`
+     - resolve source root from `PDD_SRC_DIR` override or default `../src` from prompts root
+     - call `change_main` with the story file as `change_prompt_file`
+   - Treat `change_main` success as status message prefix:
+     `"Modified prompt saved to "`.
+   - Append to changed files only on successful `change_main` calls.
+   - Re-run `run_user_story_tests` on just the target story after applying changes; fail if still not passing.
+
+4. **Recursion prevention and context hygiene**
+   - While calling `change_main` from story fix flow, set `ctx.obj["skip_user_stories"] = True` and restore original value afterward.
+   - Ensure restoration runs via `finally` block even on errors.
+
+5. **Error handling and diagnostics**
+   - Return actionable messages for missing story file, missing prompts, unresolved prompt path, missing mapped code file, and failed post-fix validation.
+   - Keep a module logger (`logging.getLogger(__name__)`) for debug traces.
+   - Use type annotations and concise docstrings.
+
+% Dependencies
+- `.detect_change.detect_change`
+- `.change_main.change_main` (import lazily inside fix function to avoid cycles)
+- `.get_extension.get_extension`
+- `rich.print` for PASS/FAIL output when not quiet

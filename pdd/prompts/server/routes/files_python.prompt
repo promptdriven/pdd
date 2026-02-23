@@ -50,6 +50,7 @@
        - sync_basename: basename for sync command (without language suffix)
        - language: detected language (python, typescript, etc.)
        - context: matched .pddrc context name (for --context flag in pdd sync)
+       - expected_outputs: sorted list of output types the language produces (e.g., ["code"] for JSON/YAML/CSS, ["code", "example", "test"] for Python/TypeScript). Uses `get_language_outputs()` from construct_paths.
        - code, test, example: paths to related files if they exist
      - Uses .pddrc configuration for context-specific paths
      - Supports helper functions:

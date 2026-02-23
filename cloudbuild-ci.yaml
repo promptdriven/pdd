@@ -35,9 +35,11 @@ steps:
     env:
       - 'VERTEX_PROJECT=prompt-driven-development-stg'
       - 'VERTEX_LOCATION=global'
+      - 'VERTEXAI_PROJECT=prompt-driven-development-stg'
+      - 'VERTEXAI_LOCATION=global'
       - 'GOOGLE_GENAI_USE_VERTEXAI=true'
       - 'GOOGLE_CLOUD_PROJECT=prompt-driven-development-stg'
-      - 'PDD_MODEL_DEFAULT=vertex_ai/gemini-2.0-flash'
+      - 'PDD_MODEL_DEFAULT=vertex_ai/gemini-3.1-pro-preview'
     entrypoint: bash
     args:
       - '-c'
