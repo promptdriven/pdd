@@ -7,6 +7,7 @@ Implements fingerprint-based state analysis and deterministic operation selectio
 """
 
 import os
+import re
 import sys
 import json
 import hashlib
@@ -109,6 +110,7 @@ class Fingerprint:
     example_hash: Optional[str]
     test_hash: Optional[str]  # Keep for backward compat (primary test file)
     test_files: Optional[Dict[str, str]] = None  # Bug #156: {"test_foo.py": "hash1", ...}
+    include_deps: Optional[Dict[str, str]] = None  # Issue #522: {"path": "hash", ...}
 
 
 @dataclass
@@ -836,6 +838,121 @@ def calculate_sha256(file_path: Path) -> Optional[str]:
         return None
 
 
+_INCLUDE_PATTERN = re.compile(r'<include>(.*?)</include>')
+_BACKTICK_INCLUDE_PATTERN = re.compile(r'```<([^>]*?)>```')
+
+
+def _resolve_include_path(include_ref: str, prompt_dir: Path) -> Optional[Path]:
+    """Resolve an <include> reference to an absolute Path."""
+    p = Path(include_ref)
+    if p.is_absolute() and p.exists():
+        return p
+    candidate = prompt_dir / include_ref
+    if candidate.exists():
+        return candidate
+    candidate = Path.cwd() / include_ref
+    if candidate.exists():
+        return candidate
+    return None
+
+
+def extract_include_deps(prompt_path: Path) -> Dict[str, str]:
+    """Extract include dependency paths and their hashes from a prompt file.
+
+    Returns a dict mapping resolved dependency paths to their SHA256 hashes.
+    Only includes dependencies that exist on disk.
+    """
+    if not prompt_path.exists():
+        return {}
+
+    try:
+        prompt_content = prompt_path.read_text(encoding='utf-8', errors='ignore')
+    except (IOError, OSError):
+        return {}
+
+    include_refs = _INCLUDE_PATTERN.findall(prompt_content)
+    include_refs += _BACKTICK_INCLUDE_PATTERN.findall(prompt_content)
+
+    if not include_refs:
+        return {}
+
+    deps = {}
+    prompt_dir = prompt_path.parent
+    for ref in sorted(set(r.strip() for r in include_refs)):
+        dep_path = _resolve_include_path(ref, prompt_dir)
+        if dep_path and dep_path.exists():
+            dep_hash = calculate_sha256(dep_path)
+            if dep_hash:
+                deps[str(dep_path)] = dep_hash
+
+    return deps
+
+
+def calculate_prompt_hash(prompt_path: Path, stored_deps: Optional[Dict[str, str]] = None) -> Optional[str]:
+    """Hash a prompt file including the content of all its <include> dependencies.
+
+    If the prompt has <include> tags, extracts and hashes those dependencies.
+    If no tags are found but stored_deps is provided (from a previous fingerprint),
+    uses those stored dependency paths to compute the hash. This handles the case
+    where the auto-deps step strips <include> tags from the prompt file.
+
+    Args:
+        prompt_path: Path to the prompt file.
+        stored_deps: Previously stored dependency paths from fingerprint (issue #522).
+
+    Returns:
+        SHA256 hex digest of the prompt + dependency contents, or None.
+    """
+    if not prompt_path.exists():
+        return None
+
+    try:
+        prompt_content = prompt_path.read_text(encoding='utf-8', errors='ignore')
+    except (IOError, OSError):
+        return None
+
+    # Try to find include refs in current prompt content
+    include_refs = _INCLUDE_PATTERN.findall(prompt_content)
+    include_refs += _BACKTICK_INCLUDE_PATTERN.findall(prompt_content)
+
+    # Resolve to actual paths
+    prompt_dir = prompt_path.parent
+    dep_paths = []
+    if include_refs:
+        for ref in sorted(set(r.strip() for r in include_refs)):
+            dep_path = _resolve_include_path(ref, prompt_dir)
+            if dep_path and dep_path.exists():
+                dep_paths.append(dep_path)
+    elif stored_deps:
+        # No include tags in prompt — use stored dependency paths from fingerprint
+        for dep_path_str in sorted(stored_deps.keys()):
+            dep_path = Path(dep_path_str)
+            if dep_path.exists():
+                dep_paths.append(dep_path)
+
+    if not dep_paths:
+        return calculate_sha256(prompt_path)
+
+    # Build composite hash: prompt bytes + sorted dependency contents
+    hasher = hashlib.sha256()
+    try:
+        with open(prompt_path, 'rb') as f:
+            for chunk in iter(lambda: f.read(4096), b""):
+                hasher.update(chunk)
+    except (IOError, OSError):
+        return None
+
+    for dep_path in dep_paths:
+        try:
+            with open(dep_path, 'rb') as f:
+                for chunk in iter(lambda: f.read(4096), b""):
+                    hasher.update(chunk)
+        except (IOError, OSError):
+            pass
+
+    return hasher.hexdigest()
+
+
 def read_fingerprint(basename: str, language: str) -> Optional[Fingerprint]:
     """Reads and validates the JSON fingerprint file."""
     meta_dir = get_meta_dir()
@@ -857,7 +974,8 @@ def read_fingerprint(basename: str, language: str) -> Optional[Fingerprint]:
             code_hash=data.get('code_hash'),
             example_hash=data.get('example_hash'),
             test_hash=data.get('test_hash'),
-            test_files=data.get('test_files')  # Bug #156
+            test_files=data.get('test_files'),  # Bug #156
+            include_deps=data.get('include_deps'),  # Issue #522
         )
     except (json.JSONDecodeError, KeyError, IOError):
         return None
@@ -889,9 +1007,14 @@ def read_run_report(basename: str, language: str) -> Optional[RunReport]:
         return None
 
 
-def calculate_current_hashes(paths: Dict[str, Any]) -> Dict[str, Any]:
-    """Computes the hashes for all current files on disk."""
-    # Return hash keys that match what the fingerprint expects
+def calculate_current_hashes(paths: Dict[str, Any], stored_include_deps: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    """Computes the hashes for all current files on disk.
+
+    Args:
+        paths: Dictionary of PDD file paths.
+        stored_include_deps: Previously stored include dependency paths from fingerprint.
+            Used when the prompt no longer has <include> tags (issue #522).
+    """
     hashes = {}
     for file_type, file_path in paths.items():
         if file_type == 'test_files':
@@ -901,6 +1024,22 @@ def calculate_current_hashes(paths: Dict[str, Any]) -> Dict[str, Any]:
                 for f in file_path
                 if isinstance(f, Path) and f.exists()
             }
+        elif file_type == 'prompt' and isinstance(file_path, Path):
+            # Issue #522: Hash prompt with <include> dependencies
+            hashes['prompt_hash'] = calculate_prompt_hash(file_path, stored_deps=stored_include_deps)
+            # Also extract current include deps for persistence
+            hashes['include_deps'] = extract_include_deps(file_path)
+            # If no deps found in prompt but we have stored deps, preserve them
+            if not hashes['include_deps'] and stored_include_deps:
+                # Re-hash stored deps to check for changes
+                updated_deps = {}
+                for dep_path_str, old_hash in stored_include_deps.items():
+                    dep_path = Path(dep_path_str)
+                    if dep_path.exists():
+                        new_hash = calculate_sha256(dep_path)
+                        if new_hash:
+                            updated_deps[dep_path_str] = new_hash
+                hashes['include_deps'] = updated_deps
         elif isinstance(file_path, Path):
             hashes[f"{file_type}_hash"] = calculate_sha256(file_path)
     return hashes
@@ -1361,7 +1500,9 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
         # If the user modified the prompt, we need to regenerate regardless of runtime state
         if fingerprint:
             paths = get_pdd_file_paths(basename, language, prompts_dir, context_override=context_override)
-            current_prompt_hash = calculate_sha256(paths['prompt'])
+            # Issue #522: Use stored include deps so changes to included files are detected
+            # even when auto-deps has stripped <include> tags from the prompt
+            current_prompt_hash = calculate_prompt_hash(paths['prompt'], stored_deps=fingerprint.include_deps)
             if current_prompt_hash and current_prompt_hash != fingerprint.prompt_hash:
                 prompt_content = paths['prompt'].read_text(encoding='utf-8', errors='ignore') if paths['prompt'].exists() else ""
                 has_deps = check_for_dependencies(prompt_content)
@@ -1610,7 +1751,9 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
     
     # 2. Analyze File State
     paths = get_pdd_file_paths(basename, language, prompts_dir, context_override=context_override)
-    current_hashes = calculate_current_hashes(paths)
+    # Issue #522: Pass stored include deps so prompt hash accounts for dependency changes
+    stored_deps = fingerprint.include_deps if fingerprint else None
+    current_hashes = calculate_current_hashes(paths, stored_include_deps=stored_deps)
     
     # 3. Implement the Decision Tree
     if not fingerprint:

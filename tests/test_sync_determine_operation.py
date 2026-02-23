@@ -23,6 +23,8 @@ from sync_determine_operation import (
     RunReport,
     SyncDecision,
     calculate_sha256,
+    calculate_prompt_hash,
+    extract_include_deps,
     read_fingerprint,
     read_run_report,
     PDD_DIR,
@@ -3455,4 +3457,333 @@ class TestInfiniteLoopBugIssue349:
         assert decision.operation == 'fix', (
             f"exit_code=1 with tests_failed=2 should trigger 'fix', got '{decision.operation}'\n"
             f"Real test failures must still be handled."
+        )
+
+
+# --- GitHub Issue #522: Fingerprint ignores <include> dependencies ---
+
+class TestFingerprintIncludeDependencies:
+    """
+    Regression tests for GitHub issue #522: sync fingerprint ignores <include>
+    dependencies. When an included file changes but the top-level .prompt file
+    doesn't, sync should detect the change and regenerate.
+
+    Approach 2: Store include dependency paths + hashes in the fingerprint JSON
+    so changes are detected even after auto-deps strips <include> tags.
+    """
+
+    def test_extract_include_deps_finds_xml_includes(self, pdd_test_environment):
+        """extract_include_deps should find <include> tags and hash the files."""
+        prompts_dir = pdd_test_environment / "prompts"
+        dep_file = pdd_test_environment / "shared_types.py"
+        create_file(dep_file, "class User:\n    name: str\n")
+
+        prompt_path = prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt"
+        create_file(prompt_path, "Create a helper.\n<include>shared_types.py</include>\n")
+
+        deps = extract_include_deps(prompt_path)
+        assert len(deps) == 1, f"Expected 1 include dep, got {len(deps)}"
+        assert str(dep_file) in deps or any("shared_types.py" in k for k in deps)
+
+    def test_extract_include_deps_finds_backtick_includes(self, pdd_test_environment):
+        """extract_include_deps should find ```<file>``` backtick includes."""
+        prompts_dir = pdd_test_environment / "prompts"
+        dep_file = pdd_test_environment / "utils.py"
+        create_file(dep_file, "def helper(): pass\n")
+
+        prompt_path = prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt"
+        create_file(prompt_path, "Build module.\n```<utils.py>```\n")
+
+        deps = extract_include_deps(prompt_path)
+        assert len(deps) == 1, f"Expected 1 backtick include dep, got {len(deps)}"
+
+    def test_extract_include_deps_empty_when_no_includes(self, pdd_test_environment):
+        """extract_include_deps should return empty dict for prompts without includes."""
+        prompts_dir = pdd_test_environment / "prompts"
+        prompt_path = prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt"
+        create_file(prompt_path, "Simple prompt with no includes.\n")
+
+        deps = extract_include_deps(prompt_path)
+        assert deps == {}, f"Expected empty dict, got {deps}"
+
+    def test_calculate_prompt_hash_with_stored_deps(self, pdd_test_environment):
+        """calculate_prompt_hash should use stored deps when prompt has no include tags."""
+        prompts_dir = pdd_test_environment / "prompts"
+        dep_file = pdd_test_environment / "shared_types.py"
+        create_file(dep_file, "class User:\n    name: str\n")
+
+        # Prompt WITHOUT include tags (simulates post-auto-deps state)
+        prompt_path = prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt"
+        create_file(prompt_path, "Create a helper using User class.\n")
+
+        stored_deps = {str(dep_file): calculate_sha256(dep_file)}
+
+        # Hash with stored deps should differ from hash without
+        hash_without = calculate_prompt_hash(prompt_path)
+        hash_with = calculate_prompt_hash(prompt_path, stored_deps=stored_deps)
+
+        assert hash_without != hash_with, (
+            "Hash with stored deps should differ from hash without — "
+            "stored deps should contribute to the composite hash"
+        )
+
+    def test_calculate_prompt_hash_detects_dep_change_via_stored_deps(self, pdd_test_environment):
+        """When a stored dep file changes, the composite hash must change."""
+        prompts_dir = pdd_test_environment / "prompts"
+        dep_file = pdd_test_environment / "shared_types.py"
+        create_file(dep_file, "class User:\n    name: str\n")
+
+        prompt_path = prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt"
+        create_file(prompt_path, "Create a helper using User class.\n")
+
+        stored_deps = {str(dep_file): calculate_sha256(dep_file)}
+        hash_before = calculate_prompt_hash(prompt_path, stored_deps=stored_deps)
+
+        # Change the dependency file
+        create_file(dep_file, "class User:\n    name: str\n    email: str\n")
+
+        hash_after = calculate_prompt_hash(prompt_path, stored_deps=stored_deps)
+
+        assert hash_before != hash_after, (
+            "Composite prompt hash must change when a stored dependency file changes, "
+            "even when the prompt itself has no <include> tags"
+        )
+
+    def test_fingerprint_stores_include_deps(self, pdd_test_environment):
+        """Fingerprint dataclass should correctly store and serialize include_deps."""
+        fp = Fingerprint(
+            pdd_version="0.0.156",
+            timestamp="2026-02-23T00:00:00Z",
+            command="test",
+            prompt_hash="abc",
+            code_hash="def",
+            example_hash="ghi",
+            test_hash="jkl",
+            include_deps={"shared_types.py": "hash1", "utils.py": "hash2"},
+        )
+        from dataclasses import asdict
+        d = asdict(fp)
+        assert d["include_deps"] == {"shared_types.py": "hash1", "utils.py": "hash2"}
+
+    def test_fingerprint_include_deps_backward_compat(self, pdd_test_environment):
+        """Old fingerprint files without include_deps should load with include_deps=None."""
+        fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
+        create_fingerprint_file(fp_path, {
+            "pdd_version": "0.0.145",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "command": "generate",
+            "prompt_hash": "abc",
+            "code_hash": "def",
+            "example_hash": "ghi",
+            "test_hash": "jkl",
+        })
+
+        fp = read_fingerprint(BASENAME, LANGUAGE)
+        assert fp is not None
+        assert fp.include_deps is None, "Old fingerprints should have include_deps=None"
+
+    def test_fingerprint_with_include_deps_loads_correctly(self, pdd_test_environment):
+        """Fingerprint with include_deps field should load correctly."""
+        fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
+        create_fingerprint_file(fp_path, {
+            "pdd_version": "0.0.156",
+            "timestamp": "2026-02-23T00:00:00Z",
+            "command": "generate",
+            "prompt_hash": "abc",
+            "code_hash": "def",
+            "example_hash": "ghi",
+            "test_hash": "jkl",
+            "include_deps": {"shared.py": "hash1"},
+        })
+
+        fp = read_fingerprint(BASENAME, LANGUAGE)
+        assert fp is not None
+        assert fp.include_deps == {"shared.py": "hash1"}
+
+    def test_included_file_change_triggers_regeneration(self, pdd_test_environment):
+        """
+        Primary bug reproduction (Greg's scenario): After auto-deps strips <include>
+        tags, changing the included file should still trigger regeneration via stored deps.
+        """
+        prompts_dir = pdd_test_environment / "prompts"
+        prompts_dir.mkdir(exist_ok=True)
+
+        # Create dependency file
+        dep_file = pdd_test_environment / "shared_types.py"
+        create_file(dep_file, "class User:\n    def __init__(self, name): self.name = name\n")
+
+        # Prompt WITH includes (first sync)
+        prompt_path = prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt"
+        prompt_content_with_tags = "Create a helper.\n<include>shared_types.py</include>\n"
+        create_file(prompt_path, prompt_content_with_tags)
+
+        # Calculate what hash the first sync would have saved
+        first_sync_hash = calculate_prompt_hash(prompt_path)
+        first_sync_deps = extract_include_deps(prompt_path)
+
+        # Simulate auto-deps stripping the include tags (rewrites .prompt)
+        prompt_content_stripped = "Create a helper.\nclass User:\n    def __init__(self, name): self.name = name\n"
+        create_file(prompt_path, prompt_content_stripped)
+
+        # Create fingerprint from "first sync" with stored deps
+        fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
+        create_fingerprint_file(fp_path, {
+            "pdd_version": "0.0.156",
+            "timestamp": "2026-02-23T00:00:00Z",
+            "command": "test",
+            "prompt_hash": first_sync_hash,
+            "code_hash": None,
+            "example_hash": None,
+            "test_hash": None,
+            "include_deps": first_sync_deps,
+        })
+
+        # Create code/example/test files
+        paths = get_pdd_file_paths(BASENAME, LANGUAGE, prompts_dir="prompts")
+        code_hash = create_file(paths['code'], "def helper(): pass")
+        example_hash = create_file(paths['example'], "helper()")
+        test_hash = create_file(paths['test'], "def test_helper(): pass")
+
+        # Update fingerprint with file hashes
+        create_fingerprint_file(fp_path, {
+            "pdd_version": "0.0.156",
+            "timestamp": "2026-02-23T00:00:00Z",
+            "command": "test",
+            "prompt_hash": first_sync_hash,
+            "code_hash": code_hash,
+            "example_hash": example_hash,
+            "test_hash": test_hash,
+            "include_deps": first_sync_deps,
+        })
+
+        # Create passing run report
+        rr_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json"
+        create_run_report_file(rr_path, {
+            "timestamp": "2026-02-23T00:00:00Z",
+            "exit_code": 0,
+            "tests_passed": 5,
+            "tests_failed": 0,
+            "coverage": 95.0,
+        })
+
+        # NOW change the included file (this is the bug trigger)
+        create_file(dep_file, "class User:\n    def __init__(self, name, age, email): pass\n")
+
+        decision = sync_determine_operation(
+            BASENAME, LANGUAGE, TARGET_COVERAGE,
+            prompts_dir=str(prompts_dir)
+        )
+
+        assert decision.operation in ('generate', 'auto-deps'), (
+            f"Expected 'generate' or 'auto-deps' because included file changed "
+            f"(via stored deps), but got '{decision.operation}'. "
+            f"Stored include_deps in fingerprint must detect dependency changes "
+            f"even when auto-deps has stripped <include> tags from the prompt."
+        )
+
+    def test_no_change_no_false_positive_with_stored_deps(self, pdd_test_environment):
+        """When nothing changes, stored deps must not cause false positive regeneration."""
+        prompts_dir = pdd_test_environment / "prompts"
+        prompts_dir.mkdir(exist_ok=True)
+
+        dep_file = pdd_test_environment / "shared_types.py"
+        create_file(dep_file, "class User:\n    pass\n")
+
+        # Prompt WITH includes
+        prompt_path = prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt"
+        create_file(prompt_path, "Create a helper.\n<include>shared_types.py</include>\n")
+
+        prompt_hash = calculate_prompt_hash(prompt_path)
+        include_deps = extract_include_deps(prompt_path)
+
+        paths = get_pdd_file_paths(BASENAME, LANGUAGE, prompts_dir="prompts")
+        code_hash = create_file(paths['code'], "def helper(): pass")
+        example_hash = create_file(paths['example'], "helper()")
+        test_hash = create_file(paths['test'], "def test_helper(): pass")
+
+        fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
+        create_fingerprint_file(fp_path, {
+            "pdd_version": "0.0.156",
+            "timestamp": "2026-02-23T00:00:00Z",
+            "command": "test",
+            "prompt_hash": prompt_hash,
+            "code_hash": code_hash,
+            "example_hash": example_hash,
+            "test_hash": test_hash,
+            "include_deps": include_deps,
+        })
+
+        rr_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json"
+        create_run_report_file(rr_path, {
+            "timestamp": "2026-02-23T00:00:00Z",
+            "exit_code": 0,
+            "tests_passed": 5,
+            "tests_failed": 0,
+            "coverage": 95.0,
+        })
+
+        # Nothing changed
+        decision = sync_determine_operation(
+            BASENAME, LANGUAGE, TARGET_COVERAGE,
+            prompts_dir=str(prompts_dir)
+        )
+
+        assert decision.operation not in ('generate', 'auto-deps'), (
+            f"Expected no regeneration when nothing changed, got '{decision.operation}'. "
+            f"Stored include_deps must not cause false positives."
+        )
+
+    def test_one_of_multiple_deps_changes(self, pdd_test_environment):
+        """When one of multiple stored deps changes, sync should detect it."""
+        prompts_dir = pdd_test_environment / "prompts"
+        prompts_dir.mkdir(exist_ok=True)
+
+        dep1 = pdd_test_environment / "types.py"
+        dep2 = pdd_test_environment / "utils.py"
+        create_file(dep1, "class Foo: pass")
+        create_file(dep2, "def bar(): pass")
+
+        prompt_path = prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt"
+        create_file(prompt_path, "Build module.\n<include>types.py</include>\n<include>utils.py</include>\n")
+
+        prompt_hash = calculate_prompt_hash(prompt_path)
+        include_deps = extract_include_deps(prompt_path)
+
+        paths = get_pdd_file_paths(BASENAME, LANGUAGE, prompts_dir="prompts")
+        code_hash = create_file(paths['code'], "def module(): pass")
+        example_hash = create_file(paths['example'], "module()")
+        test_hash = create_file(paths['test'], "def test_module(): pass")
+
+        fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
+        create_fingerprint_file(fp_path, {
+            "pdd_version": "0.0.156",
+            "timestamp": "2026-02-23T00:00:00Z",
+            "command": "test",
+            "prompt_hash": prompt_hash,
+            "code_hash": code_hash,
+            "example_hash": example_hash,
+            "test_hash": test_hash,
+            "include_deps": include_deps,
+        })
+
+        rr_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json"
+        create_run_report_file(rr_path, {
+            "timestamp": "2026-02-23T00:00:00Z",
+            "exit_code": 0,
+            "tests_passed": 1,
+            "tests_failed": 0,
+            "coverage": 90.0,
+        })
+
+        # Change only dep2
+        create_file(dep2, "def bar(): return 42")
+
+        decision = sync_determine_operation(
+            BASENAME, LANGUAGE, TARGET_COVERAGE,
+            prompts_dir=str(prompts_dir)
+        )
+
+        assert decision.operation in ('generate', 'auto-deps'), (
+            f"Expected regeneration when one of multiple included files changed, "
+            f"got '{decision.operation}'."
         )
