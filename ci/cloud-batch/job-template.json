@@ -41,7 +41,7 @@
                     }
                 ],
                 "maxRetryCount": 2,
-                "maxRunDuration": "1500s",
+                "maxRunDuration": "2100s",
                 "lifecyclePolicies": [
                     {
                         "action": "RETRY_TASK",

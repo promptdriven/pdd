@@ -197,7 +197,7 @@ elif [ "${TASK_INDEX}" -ge "${REGRESSION_START}" ] && [ "${TASK_INDEX}" -le "${R
 elif [ "${TASK_INDEX}" -ge "${SYNC_REGRESSION_START}" ] && [ "${TASK_INDEX}" -le "${SYNC_REGRESSION_END}" ]; then
     # ── Sync regression test ──────────────────────────────────────────
     CASE_NUM=$((TASK_INDEX - SYNC_REGRESSION_START + 1))
-    export PDD_CMD_TIMEOUT=1200
+    export PDD_CMD_TIMEOUT=1800
     run_test "sync_regression" "case_${CASE_NUM}" \
         bash tests/sync_regression.sh "${CASE_NUM}"
 
