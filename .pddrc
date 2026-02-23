@@ -145,6 +145,36 @@ contexts:
       budget: 10.0
       max_attempts: 3
 
+  # Core utilities context
+  core:
+    paths: ["pdd/core/**", "**/pdd/core/**", "prompts/core/**"]
+    defaults:
+      generate_output_path: "pdd/core/"
+      test_output_path: "tests/core/"
+      example_output_path: "context/core/"
+      prompts_dir: "prompts/core"
+      default_language: "python"
+      target_coverage: 90.0
+      strength: 0.818
+      temperature: 0.0
+      budget: 10.0
+      max_attempts: 3
+
+  # PDD Connect frontend context
+  pdd_frontend:
+    paths: ["pdd/frontend/**", "**/pdd/frontend/**", "prompts/frontend/**"]
+    defaults:
+      generate_output_path: "pdd/frontend/"
+      test_output_path: "pdd/frontend/tests/"
+      example_output_path: "context/frontend/"
+      prompts_dir: "prompts/frontend"
+      default_language: "typescript"
+      target_coverage: 85.0
+      strength: 0.818
+      temperature: 0.0
+      budget: 10.0
+      max_attempts: 3
+
   # Main PDD CLI codebase context
   pdd_cli:
     paths: ["pdd/**", "*.py", "prompts/**", "tests/**"]

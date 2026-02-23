@@ -6,6 +6,7 @@ during pytest collection.
 """
 
 import asyncio
+import subprocess
 import sys
 import types
 from datetime import datetime, timedelta, timezone
@@ -401,4 +402,169 @@ class TestClickExecutorIntegration:
             job = Job(command="fail_click")
 
             with pytest.raises(RuntimeError, match="error occurred"):
+                await manager._run_click_command(job)
+
+
+@pytest.mark.asyncio
+class TestSubprocessTimeout:
+    """Tests for subprocess timeout and signal handling in _run_click_command."""
+
+    async def test_subprocess_timeout_kills_process(self, jobs_module, monkeypatch):
+        """Test that a hanging subprocess is terminated after JOB_TIMEOUT."""
+        from unittest.mock import patch
+        import pdd.server.jobs as jobs_mod
+
+        Job = jobs_module["Job"]
+        JobManager = jobs_module["JobManager"]
+
+        monkeypatch.setattr(jobs_mod, "JOB_TIMEOUT", 2)
+
+        manager = JobManager()
+
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [""]
+        mock_process.stderr.readline.side_effect = [""]
+
+        # First wait() (polling loop) raises TimeoutExpired,
+        # second wait() (after terminate, timeout=10) succeeds
+        mock_process.wait.side_effect = [
+            subprocess.TimeoutExpired(cmd="pdd", timeout=60),
+            0,  # after terminate, process exits cleanly
+        ]
+        mock_process.terminate.return_value = None
+
+        # Mock time.time so elapsed >= JOB_TIMEOUT on the second check
+        time_values = [100.0, 100.0, 100.0, 103.0]  # PDD_JOB_DEADLINE, start, elapsed check, post-timeout check
+        with patch("pdd.server.jobs.subprocess.Popen", return_value=mock_process), \
+             patch("pdd.server.jobs.time.time", side_effect=time_values):
+            job = Job(command="hanging_cmd")
+
+            with pytest.raises(RuntimeError, match="timed out"):
+                await manager._run_click_command(job)
+
+        mock_process.terminate.assert_called_once()
+
+    async def test_subprocess_timeout_escalates_to_kill(self, jobs_module, monkeypatch):
+        """Test that kill() is called when terminate() doesn't stop the process."""
+        from unittest.mock import patch
+        import pdd.server.jobs as jobs_mod
+
+        Job = jobs_module["Job"]
+        JobManager = jobs_module["JobManager"]
+
+        monkeypatch.setattr(jobs_mod, "JOB_TIMEOUT", 2)
+
+        manager = JobManager()
+
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [""]
+        mock_process.stderr.readline.side_effect = [""]
+        # All wait() calls raise TimeoutExpired — even after terminate and kill
+        # Third wait() (after kill) succeeds
+        mock_process.wait.side_effect = [
+            subprocess.TimeoutExpired(cmd="pdd", timeout=60),  # polling loop
+            subprocess.TimeoutExpired(cmd="pdd", timeout=10),  # after terminate
+            0,  # after kill
+        ]
+        mock_process.terminate.return_value = None
+        mock_process.kill.return_value = None
+
+        time_values = [100.0, 100.0, 100.0, 103.0]  # PDD_JOB_DEADLINE, start, elapsed check, post-timeout check
+        with patch("pdd.server.jobs.subprocess.Popen", return_value=mock_process), \
+             patch("pdd.server.jobs.time.time", side_effect=time_values):
+            job = Job(command="unkillable_cmd")
+
+            with pytest.raises(RuntimeError, match="timed out"):
+                await manager._run_click_command(job)
+
+        mock_process.terminate.assert_called_once()
+        mock_process.kill.assert_called_once()
+
+    async def test_subprocess_timeout_zombie_process(self, jobs_module, monkeypatch):
+        """Test that a zombie process (all wait() calls time out) logs a warning and still raises."""
+        from unittest.mock import patch
+        import pdd.server.jobs as jobs_mod
+
+        Job = jobs_module["Job"]
+        JobManager = jobs_module["JobManager"]
+
+        monkeypatch.setattr(jobs_mod, "JOB_TIMEOUT", 2)
+
+        manager = JobManager()
+
+        mock_process = MagicMock()
+        mock_process.pid = 12345
+        mock_process.stdout.readline.side_effect = [""]
+        mock_process.stderr.readline.side_effect = [""]
+        # All three wait() calls time out — zombie process
+        mock_process.wait.side_effect = [
+            subprocess.TimeoutExpired(cmd="pdd", timeout=60),   # polling loop
+            subprocess.TimeoutExpired(cmd="pdd", timeout=10),   # after terminate
+            subprocess.TimeoutExpired(cmd="pdd", timeout=10),   # after kill
+        ]
+        mock_process.terminate.return_value = None
+        mock_process.kill.return_value = None
+
+        time_values = [100.0, 100.0, 100.0, 103.0]
+        with patch("pdd.server.jobs.subprocess.Popen", return_value=mock_process), \
+             patch("pdd.server.jobs.time.time", side_effect=time_values), \
+             patch.object(jobs_mod.logger, "warning") as mock_warn:
+            job = Job(command="zombie_cmd")
+
+            with pytest.raises(RuntimeError, match="timed out"):
+                await manager._run_click_command(job)
+
+        mock_process.terminate.assert_called_once()
+        mock_process.kill.assert_called_once()
+        mock_warn.assert_called_once()
+        assert "zombie" in mock_warn.call_args[0][0].lower()
+
+    async def test_subprocess_normal_completion_unaffected(self, jobs_module, monkeypatch):
+        """Test that normal subprocess completion still works with timeout logic."""
+        from unittest.mock import patch
+        import pdd.server.jobs as jobs_mod
+
+        Job = jobs_module["Job"]
+        JobManager = jobs_module["JobManager"]
+
+        # Use default or large timeout — should not interfere
+        monkeypatch.setattr(jobs_mod, "JOB_TIMEOUT", 1800)
+
+        manager = JobManager()
+
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = ["done\n", ""]
+        mock_process.stderr.readline.side_effect = [""]
+        mock_process.wait.return_value = 0
+        mock_process.returncode = 0
+
+        with patch("pdd.server.jobs.subprocess.Popen", return_value=mock_process):
+            job = Job(command="normal_cmd")
+            result = await manager._run_click_command(job)
+
+        assert result["exit_code"] == 0
+        assert "done" in result["stdout"]
+
+    async def test_negative_exit_code_reports_signal(self, jobs_module, monkeypatch):
+        """Test that negative exit codes (killed by signal) raise with signal info."""
+        from unittest.mock import patch
+        import pdd.server.jobs as jobs_mod
+
+        Job = jobs_module["Job"]
+        JobManager = jobs_module["JobManager"]
+
+        monkeypatch.setattr(jobs_mod, "JOB_TIMEOUT", 1800)
+
+        manager = JobManager()
+
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [""]
+        mock_process.stderr.readline.side_effect = [""]
+        mock_process.wait.return_value = -9  # Killed by SIGKILL
+        mock_process.returncode = -9
+
+        with patch("pdd.server.jobs.subprocess.Popen", return_value=mock_process):
+            job = Job(command="killed_cmd")
+
+            with pytest.raises(RuntimeError, match="signal"):
                 await manager._run_click_command(job)

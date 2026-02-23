@@ -10,13 +10,18 @@ Provides endpoints for:
 
 from __future__ import annotations
 
+import asyncio
 import re
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
+
+from pdd.load_prompt_template import load_prompt_template
+from pdd.agentic_common import run_agentic_task
 
 from pdd.architecture_sync import (
     ARCHITECTURE_JSON_PATH,
@@ -29,6 +34,8 @@ from pdd.architecture_sync import (
 
 
 router = APIRouter(prefix="/api/v1/architecture", tags=["architecture"])
+
+_rearrange_executor = ThreadPoolExecutor(max_workers=2)
 
 
 class ArchitectureModule(BaseModel):
@@ -105,6 +112,24 @@ class GenerateTagsResult(BaseModel):
     tags: Optional[str] = None  # Generated XML tags or None if not found
     has_existing_tags: bool = False  # True if prompt already has PDD tags
     architecture_entry: Optional[Dict[str, Any]] = None  # The full architecture entry
+    error: Optional[str] = None
+
+
+class RearrangeRequest(BaseModel):
+    """Request body for agentic graph layout rearrangement."""
+
+    architecture_path: str = Field(
+        "architecture.json",
+        description="Path to the architecture file, relative to project root"
+    )
+
+
+class RearrangeResult(BaseModel):
+    """Result of agentic graph rearrangement."""
+
+    success: bool
+    modules: Optional[List[Dict[str, Any]]] = None
+    message: Optional[str] = None
     error: Optional[str] = None
 
 
@@ -567,3 +592,83 @@ async def generate_from_issue(request: GenerateFromIssueRequest) -> GenerateFrom
             message=f"Error starting architecture generation: {str(e)}",
             job_id=None,
         )
+
+
+# ============================================================================
+# Agentic Graph Layout Rearrangement
+# ============================================================================
+
+@router.post("/rearrange", response_model=RearrangeResult)
+async def rearrange_graph_layout(request: RearrangeRequest) -> RearrangeResult:
+    """
+    Use an agentic workflow to assign logical swimlane positions to all modules.
+
+    Runs arrange_graph_layout_LLM.prompt via run_agentic_task. The agent reads
+    the specified architecture file and any PRD from the project root, reasons
+    about the architecture's logical structure, assigns swimlane positions,
+    and writes the updated file in-place. Returns the updated modules array.
+    """
+    try:
+        from .commands import get_project_root
+        project_root = get_project_root()
+
+        arch_path = project_root / request.architecture_path
+        if not arch_path.exists():
+            return RearrangeResult(
+                success=False,
+                error=f"{request.architecture_path} not found"
+            )
+
+        # Snapshot the original file so we can restore it after the LLM runs.
+        # Re-arrange is treated as an in-memory-only operation: positions are
+        # returned to the frontend but the file on disk is kept as-is.  The
+        # user must explicitly click Save to persist them.  This ensures that
+        # clicking Discard truly reverts everything, including the on-disk file.
+        original_content = arch_path.read_text(encoding="utf-8")
+
+        template = load_prompt_template("arrange_graph_layout_LLM")
+        # Use str.replace instead of .format() to avoid escaping issues with
+        # any literal {} characters in the prompt body.
+        instruction = (template
+            .replace("{project_root}", str(project_root))
+            .replace("{architecture_path}", str(arch_path))
+        )
+
+        loop = asyncio.get_running_loop()
+        success, output, cost_usd, provider = await loop.run_in_executor(
+            _rearrange_executor,
+            lambda: run_agentic_task(
+                instruction=instruction,
+                cwd=project_root,
+                label="arrange_graph_layout",
+            )
+        )
+
+        if not success:
+            return RearrangeResult(success=False, error=f"Agent failed: {output[:500]}")
+
+        updated_content = arch_path.read_text(encoding="utf-8")
+        updated_modules = json.loads(updated_content)
+        if not isinstance(updated_modules, list):
+            return RearrangeResult(
+                success=False,
+                error="Updated architecture file is not a JSON array"
+            )
+
+        # Restore original file — positions live in the frontend state only
+        # until the user explicitly saves them.
+        arch_path.write_text(original_content, encoding="utf-8")
+
+        return RearrangeResult(
+            success=True,
+            modules=updated_modules,
+            message=output.strip(),
+        )
+
+    except json.JSONDecodeError as e:
+        return RearrangeResult(
+            success=False,
+            error=f"Updated architecture file has invalid JSON: {str(e)}"
+        )
+    except Exception as e:
+        return RearrangeResult(success=False, error=f"Rearrange failed: {str(e)}")

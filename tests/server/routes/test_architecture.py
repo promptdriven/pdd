@@ -30,6 +30,7 @@ Test Plan for pdd/server/routes/architecture.py
         - Assert that the validator returns `valid=False` and identifies the circular dependency.
 """
 
+import json
 import pytest
 import asyncio
 from unittest.mock import patch, MagicMock
@@ -43,6 +44,8 @@ from pdd.server.routes.architecture import (
     ValidationWarning,
     generate_from_issue,
     GenerateFromIssueRequest,
+    rearrange_graph_layout,
+    RearrangeRequest,
 )
 
 # Helper to create modules quickly
@@ -209,6 +212,58 @@ async def test_validate_architecture_complex_mixed():
     
     # Check warnings
     assert any(w.type == "orphan_module" for w in result.warnings)
+
+# -----------------------------------------------------------------------------
+# Rearrange Endpoint Tests
+# -----------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_rearrange_does_not_mutate_file(tmp_path):
+    """
+    rearrange_graph_layout must restore the architecture file on disk after the
+    LLM runs.  The endpoint is 'in-memory only': new positions are returned to
+    the frontend but are NOT written to disk until the user explicitly saves.
+    This guarantees that clicking Discard truly reverts the file, even when the
+    LLM wrote directly to architecture.json during its agentic run.
+    """
+    original_modules = [{"filename": "a.py", "position": {"x": 10, "y": 20}}]
+    new_modules = [{"filename": "a.py", "position": {"x": 100, "y": 200}}]
+
+    arch_file = tmp_path / "architecture.json"
+    arch_file.write_text(json.dumps(original_modules), encoding="utf-8")
+
+    def fake_run_agentic_task(instruction, cwd, label):
+        # Simulate the LLM rewriting the file with new positions
+        arch_file.write_text(json.dumps(new_modules), encoding="utf-8")
+        return (True, "layout done", 0.0, "mock")
+
+    with (
+        patch("pdd.server.routes.commands.get_project_root", return_value=tmp_path),
+        patch(
+            "pdd.server.routes.architecture.run_agentic_task",
+            side_effect=fake_run_agentic_task,
+        ),
+        patch(
+            "pdd.server.routes.architecture.load_prompt_template",
+            return_value="layout {project_root} {architecture_path}",
+        ),
+    ):
+        request = RearrangeRequest(architecture_path="architecture.json")
+        result = await rearrange_graph_layout(request)
+
+    # File on disk must have ORIGINAL content (restored after LLM ran)
+    disk_content = json.loads(arch_file.read_text(encoding="utf-8"))
+    assert disk_content == original_modules, (
+        "rearrange_graph_layout mutated the file on disk (snapshot was not restored)"
+    )
+
+    # Returned result must have the NEW positions from the LLM
+    assert result.success is True
+    assert result.modules is not None
+    assert result.modules[0]["position"]["x"] == 100, (
+        "rearrange_graph_layout did not return the LLM's rearranged positions"
+    )
+
 
 # -----------------------------------------------------------------------------
 # Z3 Formal Verification Tests

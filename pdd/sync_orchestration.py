@@ -1943,6 +1943,19 @@ def sync_orchestration(
                                      errors.append(error_msg)
                                      log_event(basename, language, "post_crash_verification_failed", {"error": str(e)}, invocation_mode="sync")
                     
+                        if success and operation == 'verify':
+                            if _use_agentic_path(language, agentic_mode):
+                                test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
+                                report = RunReport(
+                                    datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                                    exit_code=0,
+                                    tests_passed=1,
+                                    tests_failed=0,
+                                    coverage=0.0,
+                                    test_hash=test_hash
+                                )
+                                _save_run_report_atomic(asdict(report), basename, language)
+
                         if success and operation == 'fix':
                             # Re-run tests to update run_report after successful fix
                             # This prevents infinite loop by updating the state machine

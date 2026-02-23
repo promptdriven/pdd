@@ -106,7 +106,7 @@ TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
 # All Example files in context directory (recursive)
 EXAMPLE_FILES := $(shell find $(CONTEXT_DIR) -name "*_example.py" 2>/dev/null)
 
-.PHONY: all clean test requirements production coverage staging regression sync-regression all-regression cloud-regression install build analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public publish-public-cap public-ensure public-update public-import public-diff sync-public ensure-dev-deps cloud-test cloud-test-quick cloud-test-build cloud-test-push cloud-test-setup
+.PHONY: all clean test requirements production coverage staging regression sync-regression all-regression cloud-regression install build analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public publish-public-cap public-ensure public-update public-import public-diff sync-public ensure-dev-deps cloud-test cloud-test-quick cloud-test-build cloud-test-push cloud-test-setup test-frontend
 
 all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 
@@ -732,6 +732,10 @@ update-extension:
 	@pdd --strength .865 --verbose --force generate --output utils/vscode_prompt/syntaxes/prompt.tmLanguage.json prompts/prompt.tmLanguage_json.prompt
 	@cd utils/vscode_prompt && vsce package
 	@code --install-extension utils/vscode_prompt/prompt-0.0.1.vsix --force
+test-frontend:
+	@echo "Running frontend Vitest tests"
+	@cd pdd/frontend && npm test
+
 publish-public:
 	@# Ensure target directory is a Git repo (clone if empty and not a repo)
 	@if [ ! -d "$(PUBLIC_PDD_REPO_DIR)/.git" ]; then \

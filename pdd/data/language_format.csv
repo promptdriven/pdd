@@ -1,94 +1,94 @@
-language,comment,extension,run_command,run_test_command
-Python,#,.py,python {file},python -m pytest {file} -v
-Java,//,.java,java {file},
-C++,//,.cpp,,
-JavaScript,//,.js,node {file},node {file}
-HTML,"<!-- -->",.html,,
-CSS,"/**/",.css,,
-Ruby,#,.rb,ruby {file},
-PHP,//,.php,php {file},
-Swift,//,.swift,swift {file},swift test
-Go,//,.go,go run {file},go test -v {file}
-Rust,//,.rs,,cargo test
-Kotlin,//,.kt,kotlin {file},
-TypeScript,//,.ts,npx tsx {file},npx tsx {file}
-TypeScriptReact,//,.tsx,npx tsx {file},npx tsx {file}
-C#,//,.cs,dotnet run {file},dotnet test
-SQL,--,.sql,,
-Shell,#,.sh,sh {file},
-Bash,#,.sh,bash {file},
-Fish,#,.fish,fish {file},
-Zsh,#,.zsh,zsh {file},
-PowerShell,#,.ps1,pwsh {file},
-Perl,#,.pl,perl {file},
-R,#,.R,Rscript {file},
-MATLAB,%,.m,,
-Lua,--,.lua,lua {file},
-Haskell,--,.hs,runhaskell {file},
-Scala,//,.scala,scala {file},
-Groovy,//,.groovy,groovy {file},
-Dart,//,.dart,dart run {file},
-F#,//,.fs,dotnet fsi {file},
-YAML,#,.yml,,
-YAML,#,.yaml,,
-JSON,del,.json,,
-JSONL,del,.jsonl,,
-XML,"<!-- -->",.xml,,
-Makefile,#,,,
-CSV,del,.csv,,
-Markdown,del,.md,,
-LaTeX,%,.tex,,
-Assembly,;,.asm,,
-Fortran,!,.f90,gfortran -o {file}.out {file} && ./{file}.out,
-COBOL,*>,.cob,,
-Lisp,;,.lisp,sbcl --script {file},
-Prolog,%,.pl,swipl -s {file},
-Erlang,%,.erl,escript {file},
-Clojure,;,.clj,clojure {file},
-Julia,#,.jl,julia {file},
-Elixir,#,.ex,elixir {file},
-Pascal,//,.pas,fpc {file} && ./{file},
-VBScript,"'",.vbs,cscript {file},
-CoffeeScript,#,.coffee,coffee {file},
-Objective-C,//,.m,,
-Scheme,;,.scm,scheme --script {file},
-Tcl,#,.tcl,tclsh {file},
-D,//,.d,rdmd {file},
-Ada,--,.ada,,
-Nim,#,.nim,nim r {file},
-OCaml,"(**)",.ml,ocaml {file},
-LLM,del,.prompt,,
-prompt,del,.prompt,,
-TOML,#,.toml,,
-Log,del,.log,,
-reStructuredText,del,.rst,,
-Text,del,.txt,,
-INI,;,.ini,,
-Verilog,//,.v,,
-Systemverilog,//,.sv,,
-Prisma,///,.prisma,,
-Lean,--,.lean,lean {file},
-Agda,--,.agda,,
-JavaScriptReact,//,.jsx,node {file},node {file}
-Svelte,//,.svelte,,
-Vue,//,.vue,,
-SCSS,//,.scss,,
-Sass,//,.sass,,
-Less,//,.less,,
-Jinja,#,.jinja2,,
-Handlebars,{{!}},.hbs,,
-Pug,//,.pug,,
-EJS,//,.ejs,,
-Twig,{#},.twig,,
-Terraform,#,.tf,,
-HCL,#,.hcl,,
-Solidity,//,.sol,,
-Zig,//,.zig,zig run {file},zig test {file}
-Mojo,#,.mojo,mojo run {file},
-GraphQL,#,.graphql,,
-Protobuf,//,.proto,,
-Nix,#,.nix,,
-GLSL,//,.glsl,,
-WGSL,//,.wgsl,,
-Starlark,#,.bzl,,
-Dockerfile,#,.dockerfile,,
+language,comment,extension,run_command,run_test_command,outputs
+Python,#,.py,python {file},python -m pytest {file} -v,code|test|example
+Java,//,.java,java {file},,code|test|example
+C++,//,.cpp,,,code|test|example
+JavaScript,//,.js,node {file},node {file},code|test|example
+HTML,"<!-- -->",.html,,,code
+CSS,"/**/",.css,,,code
+Ruby,#,.rb,ruby {file},,code|test|example
+PHP,//,.php,php {file},,code|test|example
+Swift,//,.swift,swift {file},swift test,code|test|example
+Go,//,.go,go run {file},go test -v {file},code|test|example
+Rust,//,.rs,,cargo test,code|test|example
+Kotlin,//,.kt,kotlin {file},,code|test|example
+TypeScript,//,.ts,npx tsx {file},npx tsx {file},code|test|example
+TypeScriptReact,//,.tsx,npx tsx {file},npx tsx {file},code|test|example
+C#,//,.cs,dotnet run {file},dotnet test,code|test|example
+SQL,--,.sql,,,code
+Shell,#,.sh,sh {file},,code|test|example
+Bash,#,.sh,bash {file},,code|test|example
+Fish,#,.fish,fish {file},,code|test|example
+Zsh,#,.zsh,zsh {file},,code|test|example
+PowerShell,#,.ps1,pwsh {file},,code|test|example
+Perl,#,.pl,perl {file},,code|test|example
+R,#,.R,Rscript {file},,code|test|example
+MATLAB,%,.m,,,code|test|example
+Lua,--,.lua,lua {file},,code|test|example
+Haskell,--,.hs,runhaskell {file},,code|test|example
+Scala,//,.scala,scala {file},,code|test|example
+Groovy,//,.groovy,groovy {file},,code|test|example
+Dart,//,.dart,dart run {file},,code|test|example
+F#,//,.fs,dotnet fsi {file},,code|test|example
+YAML,#,.yml,,,code
+YAML,#,.yaml,,,code
+JSON,del,.json,,,code
+JSONL,del,.jsonl,,,code
+XML,"<!-- -->",.xml,,,code
+Makefile,#,,,,code
+CSV,del,.csv,,,code
+Markdown,del,.md,,,code
+LaTeX,%,.tex,,,code
+Assembly,;,.asm,,,code|test|example
+Fortran,!,.f90,gfortran -o {file}.out {file} && ./{file}.out,,code|test|example
+COBOL,*>,.cob,,,code|test|example
+Lisp,;,.lisp,sbcl --script {file},,code|test|example
+Prolog,%,.pl,swipl -s {file},,code|test|example
+Erlang,%,.erl,escript {file},,code|test|example
+Clojure,;,.clj,clojure {file},,code|test|example
+Julia,#,.jl,julia {file},,code|test|example
+Elixir,#,.ex,elixir {file},,code|test|example
+Pascal,//,.pas,fpc {file} && ./{file},,code|test|example
+VBScript,"'",.vbs,cscript {file},,code|test|example
+CoffeeScript,#,.coffee,coffee {file},,code|test|example
+Objective-C,//,.m,,,code|test|example
+Scheme,;,.scm,scheme --script {file},,code|test|example
+Tcl,#,.tcl,tclsh {file},,code|test|example
+D,//,.d,rdmd {file},,code|test|example
+Ada,--,.ada,,,code|test|example
+Nim,#,.nim,nim r {file},,code|test|example
+OCaml,"(**)",.ml,ocaml {file},,code|test|example
+LLM,del,.prompt,,,code
+prompt,del,.prompt,,,code
+TOML,#,.toml,,,code
+Log,del,.log,,,code
+reStructuredText,del,.rst,,,code
+Text,del,.txt,,,code
+INI,;,.ini,,,code
+Verilog,//,.v,,,code|test|example
+Systemverilog,//,.sv,,,code|test|example
+Prisma,///,.prisma,,,code
+Lean,--,.lean,lean {file},,code|test|example
+Agda,--,.agda,,,code|test|example
+JavaScriptReact,//,.jsx,node {file},node {file},code|test|example
+Svelte,//,.svelte,,,code|test|example
+Vue,//,.vue,,,code|test|example
+SCSS,//,.scss,,,code
+Sass,//,.sass,,,code
+Less,//,.less,,,code
+Jinja,#,.jinja2,,,code
+Handlebars,{{!}},.hbs,,,code
+Pug,//,.pug,,,code
+EJS,//,.ejs,,,code
+Twig,{#},.twig,,,code
+Terraform,#,.tf,,,code
+HCL,#,.hcl,,,code
+Solidity,//,.sol,,,code|test|example
+Zig,//,.zig,zig run {file},zig test {file},code|test|example
+Mojo,#,.mojo,mojo run {file},,code|test|example
+GraphQL,#,.graphql,,,code
+Protobuf,//,.proto,,,code
+Nix,#,.nix,,,code
+GLSL,//,.glsl,,,code
+WGSL,//,.wgsl,,,code
+Starlark,#,.bzl,,,code
+Dockerfile,#,.dockerfile,,,code

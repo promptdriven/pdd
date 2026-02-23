@@ -1243,6 +1243,17 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
 
     logger.warning(f"API key environment variable '{key_name}' for model '{model_info.get('model')}' is not set.")
 
+    # Vertex AI ADC fallback: when VERTEX_CREDENTIALS is missing but a
+    # GCP project is configured, Application Default Credentials (e.g.
+    # Cloud Build, GCE metadata, `gcloud auth application-default login`)
+    # can authenticate without an explicit key.
+    if key_name == "VERTEX_CREDENTIALS":
+        project = os.getenv("VERTEXAI_PROJECT") or os.getenv("VERTEX_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT")
+        if project:
+            logger.info(f"Using ADC for Vertex AI (project={project}).")
+            newly_acquired_keys[key_name] = False
+            return True
+
     # Skip prompting if --force flag is set (non-interactive mode)
     if os.environ.get('PDD_FORCE'):
         logger.error(f"API key '{key_name}' not set. In --force mode, skipping interactive prompt.")

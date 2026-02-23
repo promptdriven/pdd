@@ -2683,3 +2683,131 @@ def test_get_agent_provider_preference_empty_string(mock_env):
     """Empty string falls back to default."""
     mock_env["PDD_AGENTIC_PROVIDER"] = ""
     assert get_agent_provider_preference() == ["anthropic", "google", "openai"]
+
+
+# ---------------------------------------------------------------------------
+# get_job_deadline() Tests
+# ---------------------------------------------------------------------------
+
+from pdd.agentic_common import (
+    get_job_deadline,
+    JOB_TIMEOUT_MARGIN_SECONDS,
+    MIN_ATTEMPT_TIMEOUT_SECONDS,
+)
+
+
+def test_get_job_deadline_returns_float_from_env():
+    """PDD_JOB_DEADLINE env var is parsed as float."""
+    with patch.dict(os.environ, {"PDD_JOB_DEADLINE": "1700000000.0"}):
+        assert get_job_deadline() == 1700000000.0
+
+
+def test_get_job_deadline_returns_none_when_unset():
+    """Returns None when PDD_JOB_DEADLINE is not set."""
+    with patch.dict(os.environ, {}, clear=True):
+        assert get_job_deadline() is None
+
+
+def test_get_job_deadline_returns_none_for_invalid():
+    """Returns None for non-numeric PDD_JOB_DEADLINE values."""
+    with patch.dict(os.environ, {"PDD_JOB_DEADLINE": "garbage"}):
+        assert get_job_deadline() is None
+
+
+# ---------------------------------------------------------------------------
+# Deadline-aware retry Tests
+# ---------------------------------------------------------------------------
+
+import time
+
+
+def test_deadline_skips_attempt_when_insufficient_time(tmp_path):
+    """When remaining time is less than margin + min attempt, skip all attempts."""
+    deadline = time.time() + 30  # Only 30s left — less than margin(120) + min(60)
+    with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "k"}, clear=False), \
+         patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/claude"), \
+         patch("subprocess.run") as mock_run, \
+         patch("time.sleep"):
+        mock_run.return_value = MagicMock(
+            returncode=1, stdout="", stderr="fail"
+        )
+        success, output, cost, provider = run_agentic_task(
+            instruction="test",
+            cwd=tmp_path,
+            max_retries=3,
+            deadline=deadline,
+        )
+    assert success is False
+    # _run_with_provider should never have been called because budget is too tight
+    mock_run.assert_not_called()
+
+
+def test_deadline_caps_per_attempt_timeout(tmp_path):
+    """Per-attempt timeout is capped to remaining budget minus margin."""
+    deadline = time.time() + 300  # 300s left; after 120s margin → 180s available
+    with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "k"}, clear=False), \
+         patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/claude"), \
+         patch("subprocess.run") as mock_run, \
+         patch("time.sleep"):
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=json.dumps({"result": "ok", "total_cost_usd": 0.01}),
+            stderr=""
+        )
+        success, output, cost, provider = run_agentic_task(
+            instruction="test",
+            cwd=tmp_path,
+            max_retries=1,
+            deadline=deadline,
+        )
+    assert success is True
+    # Check the timeout passed to subprocess.run was ~180, not default 600
+    call_kwargs = mock_run.call_args
+    actual_timeout = call_kwargs.kwargs.get("timeout") or call_kwargs[1].get("timeout")
+    assert actual_timeout < DEFAULT_TIMEOUT_SECONDS
+    assert actual_timeout <= 185  # 300 - 120 + small tolerance
+
+
+def test_no_deadline_preserves_default_timeout(tmp_path):
+    """Without deadline, default timeout is used."""
+    with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "k"}, clear=False), \
+         patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/claude"), \
+         patch("subprocess.run") as mock_run, \
+         patch("time.sleep"):
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=json.dumps({"result": "ok", "total_cost_usd": 0.01}),
+            stderr=""
+        )
+        success, output, cost, provider = run_agentic_task(
+            instruction="test",
+            cwd=tmp_path,
+            max_retries=1,
+        )
+    assert success is True
+    call_kwargs = mock_run.call_args
+    actual_timeout = call_kwargs.kwargs.get("timeout") or call_kwargs[1].get("timeout")
+    assert actual_timeout == DEFAULT_TIMEOUT_SECONDS
+
+
+def test_deadline_from_env_used_when_param_not_passed(tmp_path):
+    """PDD_JOB_DEADLINE env var is picked up when deadline param is not passed."""
+    env_deadline = str(time.time() + 30)  # Only 30s — will skip all attempts
+    with patch.dict(os.environ, {
+        "ANTHROPIC_API_KEY": "k",
+        "PDD_JOB_DEADLINE": env_deadline,
+    }, clear=False), \
+         patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/claude"), \
+         patch("subprocess.run") as mock_run, \
+         patch("time.sleep"):
+        mock_run.return_value = MagicMock(
+            returncode=1, stdout="", stderr="fail"
+        )
+        success, output, cost, provider = run_agentic_task(
+            instruction="test",
+            cwd=tmp_path,
+            max_retries=3,
+            # No deadline param — should read from env
+        )
+    assert success is False
+    mock_run.assert_not_called()

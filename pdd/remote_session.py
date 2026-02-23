@@ -27,6 +27,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import httpx
 from rich.console import Console
+from rich.markup import escape as rich_escape
 
 from .core.cloud import CloudConfig
 from .get_jwt_token import _get_cached_jwt, FirebaseAuthenticator, KEYRING_AVAILABLE
@@ -576,7 +577,7 @@ class RemoteSessionManager:
                 return "unknown"
 
         except Exception as e:
-            console.print(f"[yellow]Failed to check command status: {e}[/yellow]")
+            console.print(f"[yellow]Failed to check command status: {rich_escape(str(e))}[/yellow]")
             return "unknown"
 
     async def _is_cancelled(self, command_id: str) -> bool:

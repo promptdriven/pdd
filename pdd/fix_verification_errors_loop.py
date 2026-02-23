@@ -12,6 +12,7 @@ import time
 import requests
 
 from rich.console import Console
+from rich.markup import escape as rich_escape
 
 # Use relative import assuming fix_verification_errors is in the same package
 try:
@@ -126,7 +127,7 @@ def _normalize_agentic_result(result):
     # Fallback (shouldn't happen)
     return False, "Invalid agentic result shape", 0.0, "agentic-cli", []
 
-def _safe_run_agentic_verify(*, prompt_file, code_file, program_file, verification_log_file, verbose=False, cwd=None):
+def _safe_run_agentic_verify(*, prompt_file, code_file, program_file, verification_log_file, verbose=False, cwd=None, deadline=None):
     """
     Call (possibly monkeypatched) run_agentic_verify and normalize its return.
 
@@ -144,7 +145,7 @@ def _safe_run_agentic_verify(*, prompt_file, code_file, program_file, verificati
             verification_log_file=Path(verification_log_file),
             verbose=verbose,
             quiet=not verbose,
-            # Note: cwd is not passed - run_agentic_verify uses prompt_file.parent as project root
+            deadline=deadline,
         )
         return _normalize_agentic_result(res)
     except Exception as e:
@@ -211,7 +212,7 @@ def _write_log_entry(log_file_path: Path, xml_content: str):
         with open(log_file_path, "a", encoding="utf-8") as f:
             f.write(xml_content + "\n")
     except IOError as e:
-        console.print(f"[bold red]Error writing to log file {log_file_path}: {e}[/bold red]")
+        console.print(f"[bold red]Error writing to log file {rich_escape(str(log_file_path))}: {rich_escape(str(e))}[/bold red]")
 
 def fix_verification_errors_loop(
     program_file: str,
@@ -289,7 +290,7 @@ def fix_verification_errors_loop(
                     f.write("Agentic fix will attempt to resolve the issue.\n")
 
             agent_cwd = Path(prompt_file).parent if prompt_file else None
-            console.print(f"[cyan]Attempting agentic verify fallback (prompt_file={prompt_file!r})...[/cyan]")
+            console.print(f"[cyan]Attempting agentic verify fallback (prompt_file={rich_escape(repr(prompt_file))})...[/cyan]")
             success, agent_msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_verify(
                 prompt_file=prompt_file,
                 code_file=code_file,
@@ -299,7 +300,7 @@ def fix_verification_errors_loop(
                 cwd=agent_cwd,
             )
             if not success:
-                console.print(f"[bold red]Agentic verify fallback failed: {agent_msg}[/bold red]")
+                console.print(f"[bold red]Agentic verify fallback failed: {rich_escape(str(agent_msg))}[/bold red]")
             if agent_changed_files:
                 console.print(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
                 for f in agent_changed_files:
@@ -335,7 +336,7 @@ def fix_verification_errors_loop(
             f.write(pytest_output)
         
         agent_cwd = Path(prompt_file).parent if prompt_file else None
-        console.print(f"[cyan]Attempting agentic verify fallback (prompt_file={prompt_file!r})...[/cyan]")
+        console.print(f"[cyan]Attempting agentic verify fallback (prompt_file={rich_escape(repr(prompt_file))})...[/cyan]")
         success, agent_msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_verify(
             prompt_file=prompt_file,
             code_file=code_file,
@@ -345,7 +346,7 @@ def fix_verification_errors_loop(
             cwd=agent_cwd,
         )
         if not success:
-            console.print(f"[bold red]Agentic verify fallback failed: {agent_msg}[/bold red]")
+            console.print(f"[bold red]Agentic verify fallback failed: {rich_escape(str(agent_msg))}[/bold red]")
         if agent_changed_files:
             console.print(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
             for f in agent_changed_files:
@@ -453,7 +454,7 @@ def fix_verification_errors_loop(
         program_contents = initial_program_content # Initialize current contents
         code_contents = initial_code_content       # Initialize current contents
     except IOError as e:
-        console.print(f"[bold red]Error reading initial program/code files: {e}[/bold red]")
+        console.print(f"[bold red]Error reading initial program/code files: {rich_escape(str(e))}[/bold red]")
         stats['status_message'] = f'Error reading initial files: {e}' # Add status message
         return {"success": False, "final_program": "", "final_code": "", "total_attempts": 0, "total_cost": 0.0, "model_name": None, "statistics": stats}
 
@@ -691,7 +692,7 @@ def fix_verification_errors_loop(
                 }
 
     except Exception as e:
-        console.print(f"[bold red]Error during initial assessment with fix_verification_errors: {e}[/bold red]")
+        console.print(f"[bold red]Error during initial assessment with fix_verification_errors: {rich_escape(str(e))}[/bold red]")
         stats['status_message'] = f'Error during initial assessment: {e}'
         # Cannot proceed without initial assessment
         return {"success": False, "final_program": initial_program_content, "final_code": initial_code_content, "total_attempts": 0, "total_cost": total_cost, "model_name": model_name, "statistics": stats}
@@ -755,7 +756,7 @@ def fix_verification_errors_loop(
             iteration_log_xml += f'    <Code>{escape(str(code_backup_path))}</Code>\n'
             iteration_log_xml += f'  </Backups>\n'
         except OSError as e:
-            console.print(f"[bold red]Error creating backup files during attempt {current_attempt}: {e}[/bold red]")
+            console.print(f"[bold red]Error creating backup files during attempt {current_attempt}: {rich_escape(str(e))}[/bold red]")
             iteration_log_xml += f'  <Status>Error Creating Backups</Status>\n</Iteration>'
             _write_log_entry(log_path, iteration_log_xml)
             stats['status_message'] = f'Error creating backups on attempt {current_attempt}'
@@ -839,7 +840,7 @@ def fix_verification_errors_loop(
             iteration_log_xml += f'  </FixerResult>\n'
 
         except Exception as e:
-            console.print(f"[bold red]Error calling fix_verification_errors on attempt {current_attempt}: {e}[/bold red]")
+            console.print(f"[bold red]Error calling fix_verification_errors on attempt {current_attempt}: {rich_escape(str(e))}[/bold red]")
             iteration_log_xml += f'  <Status>Error in Fixer Call: {escape(str(e))}</Status>\n</Iteration>'
             _write_log_entry(log_path, iteration_log_xml)
             stats['status_message'] = f'Error in fixer call on attempt {current_attempt}'
@@ -923,7 +924,7 @@ def fix_verification_errors_loop(
                         code_path.write_text(code_contents, encoding="utf-8") # Restore from memory state before this attempt
                 
                 except IOError as e:
-                    console.print(f"[bold red]Error during secondary verification I/O: {e}[/bold red]")
+                    console.print(f"[bold red]Error during secondary verification I/O: {rich_escape(str(e))}[/bold red]")
                     verify_output = f"Error during secondary verification I/O: {str(e)}"
                     secondary_verification_passed = False # Treat I/O error as failure
                     verify_ret_code = -1 # Indicate error
@@ -1006,7 +1007,7 @@ def fix_verification_errors_loop(
                     break # Exit loop on verified success
 
             except IOError as e:
-                 console.print(f"[bold red]Error writing applied changes: {e}[/bold red]")
+                 console.print(f"[bold red]Error writing applied changes: {rich_escape(str(e))}[/bold red]")
                  iteration_log_xml += f'  <Action>Error writing applied changes: {escape(str(e))}</Action>\n'
                  iteration_log_xml += f'  <Status>Error Applying Changes</Status>\n'
                  # Continue loop if possible
@@ -1119,7 +1120,7 @@ def fix_verification_errors_loop(
                     stats['final_issues'] = -1 # Indicate uncertainty
 
             except (OSError, IOError) as e:
-                console.print(f"[bold red]Error restoring files from best iteration {best_iteration['attempt']}: {e}[/bold red]")
+                console.print(f"[bold red]Error restoring files from best iteration {best_iteration['attempt']}: {rich_escape(str(e))}[/bold red]")
                 final_log_entry += f'  <Error>Error restoring files from best iteration {best_iteration["attempt"]}: {escape(str(e))}</Error>\n'
                 stats['status_message'] += f' - Error restoring best iteration: {e}'
                 stats['final_issues'] = -1 # Indicate uncertainty
@@ -1151,7 +1152,7 @@ def fix_verification_errors_loop(
                      code_path.write_text(initial_code_content, encoding='utf-8')
                      code_contents = initial_code_content
              except IOError as e:
-                 console.print(f"[bold red]Error restoring initial files: {e}[/bold red]")
+                 console.print(f"[bold red]Error restoring initial files: {rich_escape(str(e))}[/bold red]")
                  final_log_entry += f'  <Error>Error restoring initial files: {escape(str(e))}</Error>\n'
                  stats['status_message'] += f' - Error restoring initial files: {e}'
                  stats['final_issues'] = -1 # State uncertain
@@ -1248,7 +1249,7 @@ def fix_verification_errors_loop(
         overall_success = False
 
     if not overall_success and agentic_fallback:
-        console.print(f"[bold yellow]Initiating agentic fallback (prompt_file={prompt_file!r})...[/bold yellow]")
+        console.print(f"[bold yellow]Initiating agentic fallback (prompt_file={rich_escape(repr(prompt_file))})...[/bold yellow]")
         agent_cwd = Path(prompt_file).parent if prompt_file else None
         agent_success, agent_msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_verify(
             prompt_file=prompt_file,
@@ -1260,7 +1261,7 @@ def fix_verification_errors_loop(
         )
         total_cost += agent_cost
         if not agent_success:
-            console.print(f"[bold red]Agentic verify fallback failed: {agent_msg}[/bold red]")
+            console.print(f"[bold red]Agentic verify fallback failed: {rich_escape(str(agent_msg))}[/bold red]")
         if agent_changed_files:
             console.print(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
             for f in agent_changed_files:
@@ -1273,7 +1274,7 @@ def fix_verification_errors_loop(
                 final_code_content = Path(code_file).read_text(encoding="utf-8")
                 final_program_content = Path(program_file).read_text(encoding="utf-8")
             except Exception as e:
-                console.print(f"[yellow]Warning: Could not read files after successful agentic fix: {e}[/yellow]")
+                console.print(f"[yellow]Warning: Could not read files after successful agentic fix: {rich_escape(str(e))}[/yellow]")
         else:
             console.print("[bold red]Agentic fallback failed.[/bold red]")
 

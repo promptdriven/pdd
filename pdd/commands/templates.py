@@ -1,15 +1,26 @@
 """
 Templates command group.
 """
+import io
 import click
 from rich import box
+from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 from rich.markup import escape
 from typing import Optional, List, Tuple, Any
 
 from .. import template_registry
-from ..core.errors import handle_error, console
+from ..core.errors import handle_error, custom_theme
+
+
+def _echo_rich(*renderables):
+    """Render Rich objects to plain text and output via click.echo (CliRunner-compatible)."""
+    buf = io.StringIO()
+    c = Console(file=buf, highlight=False, force_terminal=False, theme=custom_theme)
+    for r in renderables:
+        c.print(r)
+    click.echo(buf.getvalue(), nl=False)
 
 @click.group(name="templates")
 def templates_group():
@@ -28,13 +39,13 @@ def templates_list(as_json: bool, filter_tag: Optional[str]):
             click.echo(_json.dumps(items, indent=2))
         else:
             if not items:
-                console.print("[info]No templates found.[/info]")
+                _echo_rich("[info]No templates found.[/info]")
                 return
-            console.print("[info]Available Templates:[/info]")
+            _echo_rich("[info]Available Templates:[/info]")
             for it in items:
                 # Print the template name on its own line to avoid Rich wrapping
                 name_line = Text(f"- {it['name']}", style="bold", no_wrap=True)
-                console.print(name_line)
+                _echo_rich(name_line)
                 # Print details on the next line(s) with a small indent; wrapping is fine here
                 version = it.get("version", "")
                 description = it.get("description", "")
@@ -47,7 +58,7 @@ def templates_list(as_json: bool, filter_tag: Optional[str]):
                 if tags:
                     details_parts.append(f"[{tags}]")
                 if details_parts:
-                    console.print("  " + " — ".join(details_parts))
+                    _echo_rich("  " + " — ".join(details_parts))
     except Exception as e:
         handle_error(e, "templates list", False)
 
@@ -85,8 +96,8 @@ def templates_show(name: str):
 
             if added_rows:
                 if title:
-                    console.print(f"[info]{title}[/info]")
-                console.print(table)
+                    _echo_rich(f"[info]{title}[/info]")
+                _echo_rich(table)
 
         summary_items = [
             ("Name", summary.get("name")),
@@ -100,7 +111,7 @@ def templates_show(name: str):
         _render_key_value_table("Template Summary:", summary_items, highlight_path=True)
 
         if data.get("variables"):
-            console.print("\n[info]Variables:[/info]")
+            _echo_rich("\n[info]Variables:[/info]")
             variables_table = Table(box=box.SIMPLE_HEAD, show_lines=False, expand=True)
             variables_table.add_column("Name", style="bold", no_wrap=True)
             variables_table.add_column("Required", style="info", no_wrap=True)
@@ -151,14 +162,14 @@ def templates_show(name: str):
                     escape(default_examples),
                 )
 
-            console.print(variables_table)
+            _echo_rich(variables_table)
 
         if data.get("usage"):
-            console.print("\n[info]Usage:[/info]")
+            _echo_rich("\n[info]Usage:[/info]")
             usage = data["usage"]
             if isinstance(usage, dict):
                 for group_name, entries in usage.items():
-                    console.print(f"[bold]{escape(str(group_name))}[/bold]")
+                    _echo_rich(f"[bold]{escape(str(group_name))}[/bold]")
                     usage_table = Table(box=box.SIMPLE, show_lines=False, expand=True)
                     usage_table.add_column("Name", style="bold", no_wrap=True)
                     usage_table.add_column("Command", overflow="fold")
@@ -178,28 +189,28 @@ def templates_show(name: str):
                         usage_table.add_row(name_value, f"[command]{command_value}[/command]")
 
                     if usage_table.row_count:
-                        console.print(usage_table)
+                        _echo_rich(usage_table)
             else:
-                console.print(usage)
+                _echo_rich(usage)
 
         if data.get("discover"):
-            console.print("\n[info]Discover:[/info]")
+            _echo_rich("\n[info]Discover:[/info]")
             discover = data["discover"]
             if isinstance(discover, dict):
                 discover_items = [(str(key), value) for key, value in discover.items()]
                 _render_key_value_table(None, discover_items)
             else:
-                console.print(discover)
+                _echo_rich(discover)
         if data.get("output_schema"):
-            console.print("\n[info]Output Schema:[/info]")
+            _echo_rich("\n[info]Output Schema:[/info]")
             try:
                 import json as _json
-                console.print(_json.dumps(data["output_schema"], indent=2))
+                _echo_rich(_json.dumps(data["output_schema"], indent=2))
             except Exception:
-                console.print(str(data["output_schema"]))
+                _echo_rich(str(data["output_schema"]))
         if data.get("notes"):
-            console.print("\n[info]Notes:[/info]")
-            console.print(data["notes"])  # plain text
+            _echo_rich("\n[info]Notes:[/info]")
+            _echo_rich(data["notes"])  # plain text
     except Exception as e:
         handle_error(e, "templates show", False)
 
@@ -210,6 +221,6 @@ def templates_show(name: str):
 def templates_copy(name: str, dest_dir: str):
     try:
         dest = template_registry.copy_template(name, dest_dir)
-        console.print(f"[success]Copied to:[/success] {dest}")
+        _echo_rich(f"[success]Copied to:[/success] {dest}")
     except Exception as e:
         handle_error(e, "templates copy", False)

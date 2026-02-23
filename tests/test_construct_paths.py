@@ -10,7 +10,7 @@ import os
 # Or mock within each test as currently done.
 
 # Import after potentially modifying sys.path
-from pdd.construct_paths import construct_paths, list_available_contexts, _resolve_config_hierarchy
+from pdd.construct_paths import construct_paths, list_available_contexts, _resolve_config_hierarchy, get_language_outputs
 
 # Helper to create absolute path for comparison
 def resolve_path(relative_path_str, base_dir):
@@ -3034,4 +3034,51 @@ def test_construct_paths_sync_mode_respects_env_prompts_dir(tmp_path, monkeypatc
     assert "prompts_dir" in resolved_config
     assert resolved_config["prompts_dir"] == "/custom/sync/prompts", \
         f"Expected prompts_dir='/custom/sync/prompts' from PDD_PROMPTS_DIR in sync mode, got '{resolved_config['prompts_dir']}'"
+
+
+# ============================================================================
+# Tests for get_language_outputs
+# ============================================================================
+
+def test_get_language_outputs_python():
+    """Executable languages like Python should return code, test, and example."""
+    result = get_language_outputs('python')
+    assert result == {'code', 'test', 'example'}
+
+
+def test_get_language_outputs_typescript():
+    """TypeScript is executable and should return all three outputs."""
+    result = get_language_outputs('typescript')
+    assert result == {'code', 'test', 'example'}
+
+
+def test_get_language_outputs_json():
+    """JSON is a config/data language and should return code only."""
+    result = get_language_outputs('json')
+    assert result == {'code'}
+
+
+def test_get_language_outputs_yaml():
+    """YAML is a config/data language and should return code only."""
+    result = get_language_outputs('yaml')
+    assert result == {'code'}
+
+
+def test_get_language_outputs_css():
+    """CSS is a non-executable language and should return code only."""
+    result = get_language_outputs('css')
+    assert result == {'code'}
+
+
+def test_get_language_outputs_unknown():
+    """Unknown languages should fall back to all three outputs."""
+    result = get_language_outputs('unknownlang99')
+    assert result == {'code', 'test', 'example'}
+
+
+def test_get_language_outputs_case_insensitive():
+    """Language matching should be case-insensitive."""
+    assert get_language_outputs('JSON') == {'code'}
+    assert get_language_outputs('Python') == {'code', 'test', 'example'}
+    assert get_language_outputs('YAML') == {'code'}
 

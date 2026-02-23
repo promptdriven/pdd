@@ -4,11 +4,11 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from rich.console import Console
 
-from .agentic_common import run_agentic_task, DEFAULT_MAX_RETRIES
+from .agentic_common import run_agentic_task, DEFAULT_MAX_RETRIES, get_job_deadline
 from .load_prompt_template import load_prompt_template
 
 console = Console()
@@ -70,6 +70,7 @@ def run_agentic_verify(
     *,
     verbose: bool = False,
     quiet: bool = False,
+    deadline: Optional[float] = None,
 ) -> tuple[bool, str, float, str, list[str]]:
     """
     Runs an agentic verification fallback.
@@ -126,7 +127,10 @@ def run_agentic_verify(
     # 4. Record State Before Execution
     mtimes_before = _get_file_mtimes(project_root)
 
-    # 5. Run Agentic Task
+    # 5. Resolve deadline (explicit param takes precedence over env var)
+    effective_deadline = deadline if deadline is not None else get_job_deadline()
+
+    # 6. Run Agentic Task
     # We use the project root as the CWD so the agent can explore freely
     agent_success, agent_output, cost, provider = run_agentic_task(
         instruction=instruction,
@@ -135,6 +139,7 @@ def run_agentic_verify(
         quiet=quiet,
         label="verify-explore",
         max_retries=DEFAULT_MAX_RETRIES,
+        deadline=effective_deadline,
     )
 
     # 6. Record State After Execution & Detect Changes

@@ -48,104 +48,119 @@ MAX_COST_PER_MTOK = 100.0  # Sanity cap — drop rows with absurd pricing (LiteL
 # ---------------------------------------------------------------------------
 ELO_SCORES: Dict[str, int] = {
     # -----------------------------------------------------------------------
-    # Source: LMArena CODE Arena leaderboard, scraped Feb 20, 2026.
+    # Source: LMArena CODE Arena leaderboard, scraped Feb 22, 2026.
     #   - Scores marked [CODE] are directly from the Code Arena.
     #   - Scores marked [EST]  are estimated from Text Arena scores,
     #     discounted by ~40-60 pts based on observed Text→Code deltas
     #     for similar-tier models.
-    #   - Only 40 models have Code Arena scores; many popular API models
-    #     (o3, gpt-5-mini, deepseek-r1, etc.) are not on the Code Arena.
     # -----------------------------------------------------------------------
 
     # -----------------------------------------------------------------------
     # Anthropic Claude
     # -----------------------------------------------------------------------
-    "claude-opus-4-6": 1569,            # [CODE] #2, 1824 votes
-    "claude-opus-4-5": 1471,            # [CODE] #5, non-thinking variant
-    "claude-opus-4-1": 1389,            # [CODE] #15
-    "claude-opus-4": 1370,              # [EST] from Text 1413, delta ~-43
-    "claude-sonnet-4-6": 1388,          # [EST] same tier as sonnet-4-5 (not yet on Code Arena)
-    "claude-sonnet-4-5": 1386,          # [CODE] #18
-    "claude-sonnet-4": 1350,            # [EST] from Text 1397, delta ~-47
-    "claude-3-7-sonnet": 1310,          # [EST] from Text 1341
-    "claude-3-5-sonnet-20241022": 1310, # [EST] from Text 1340
+    "claude-opus-4-6": 1561,            # [CODE] #1
+    "claude-opus-4-5": 1469,            # [CODE] #6
+    "claude-opus-4-1": 1389,            # [CODE] #20
+    "claude-opus-4": 1370,              # [EST]
+    "claude-sonnet-4-6": 1524,          # [CODE] #3
+    "claude-sonnet-4-5": 1390,          # [CODE] #19
+    "claude-sonnet-4": 1350,            # [EST]
+    "claude-3-7-sonnet": 1310,          # [EST]
+    "claude-3-5-sonnet-20241022": 1310, # [EST]
     "claude-3-5-sonnet": 1310,          # [EST]
-    "claude-haiku-4-5": 1303,           # [CODE] #28
+    "claude-haiku-4-5": 1303,           # [CODE]
     # Dot-separated aliases
-    "claude-opus-4.6": 1569,
-    "claude-opus-4.5": 1471,
+    "claude-opus-4.6": 1561,
+    "claude-opus-4.5": 1469,
     "claude-opus-4.1": 1389,
-    "claude-sonnet-4.6": 1388,
-    "claude-sonnet-4.5": 1386,
+    "claude-sonnet-4.6": 1524,
+    "claude-sonnet-4.5": 1390,
     "claude-haiku-4.5": 1303,
     "claude-3.5-sonnet": 1310,
     "claude-3.7-sonnet": 1310,
     # Alternate naming
     "claude-4-opus": 1370,
     "claude-4-sonnet": 1350,
+    "claude-opus-41": 1389,            # GitHub Copilot naming for claude-opus-4-1
+    "claude-opus-4.6-fast": 1561,      # GitHub Copilot fast variant
 
     # -----------------------------------------------------------------------
     # OpenAI — GPT-5 family
     # -----------------------------------------------------------------------
-    "gpt-5.2": 1397,                   # [CODE] #13 (default reasoning)
-    "gpt-5.1": 1348,                   # [CODE] #21 (default); gpt-5.1-medium = 1389
-    "gpt-5": 1394,                     # [CODE] #14 as gpt-5-medium
-    "gpt-5-mini": 1310,                # [EST] from Text ~1385, heavy code discount
+    "gpt-5.2": 1395,                   # [CODE] #17 (default reasoning)
+    "gpt-5.2-codex": 1336,             # [CODE] #22
+    "gpt-5.1": 1348,                   # [CODE] (default)
+    "gpt-5.1-codex": 1348,             # Codex variant
+    "gpt-5.1-codex-mini": 1243,        # [CODE] #31
+    "gpt-5.1-codex-max": 1389,         # [EST] same as gpt-5.1-medium
+    "gpt-5.3-codex": 1336,             # [EST] assume similar to gpt-5.2-codex
+    "gpt-5": 1393,                     # [CODE] #18 as gpt-5-medium
+    "gpt-5-mini": 1310,                # [EST]
+    "gpt-5-nano": 1300,                # [EST] smallest GPT-5 variant
     # OpenAI — GPT-4.x
-    "gpt-4.5": 1380,                   # [EST] from Text 1444, delta ~-64
-    "gpt-4.1": 1355,                   # [EST] from Text 1413, delta ~-58
-    "gpt-4.1-mini": 1310,              # [EST] from Text 1370
+    "gpt-4.5": 1380,                   # [EST]
+    "gpt-4.1": 1355,                   # [EST]
+    "gpt-4.1-mini": 1310,              # [EST]
     "gpt-4o": 1300,                    # [EST]
     # OpenAI — o-series
-    "o3": 1370,                        # [EST] from Text 1432, delta ~-62
-    "o4-mini": 1330,                   # [EST] from Text 1385
-    "o3-mini": 1310,                   # [EST] from Text 1361
-    "o1": 1340,                        # [EST] from Text 1402, delta ~-62
-    "o1-mini": 1315,                   # [EST] from Text 1366
+    "o3": 1370,                        # [EST]
+    "o4-mini": 1330,                   # [EST]
+    "o3-mini": 1310,                   # [EST]
+    "o1": 1340,                        # [EST]
+    "o1-mini": 1315,                   # [EST]
 
     # -----------------------------------------------------------------------
     # Google Gemini
     # -----------------------------------------------------------------------
-    "gemini-3-pro": 1449,              # [CODE] #6
-    "gemini-3-pro-preview": 1449,
-    "gemini-3-flash": 1443,            # [CODE] #8
-    "gemini-3-flash-preview": 1443,
-    "gemini-2.5-pro": 1206,            # [CODE] #35  ← huge Text→Code drop!
-    "gemini-2.5-flash": 1300,          # [EST] from Text 1411, delta ~-111 (like 2.5-pro)
+    "gemini-3.1-pro": 1461,             # [CODE] #7
+    "gemini-3.1-pro-preview": 1461,
+    "gemini-3-pro": 1444,              # [CODE] #9
+    "gemini-3-pro-preview": 1444,
+    "gemini-3-flash": 1440,            # [CODE] #12
+    "gemini-3-flash-preview": 1440,
+    "gemini-2.5-pro": 1206,            # [CODE] huge Text→Code drop
+    "gemini-2.5-flash": 1300,          # [EST]
 
     # -----------------------------------------------------------------------
     # DeepSeek
     # -----------------------------------------------------------------------
-    "deepseek-v3.2": 1310,             # [CODE] #27
-    "deepseek-v3.1": 1300,             # [EST] from Text 1418, similar to v3.2 code perf
-    "deepseek-r1-0528": 1370,          # [EST] from Text 1419; r1 models reason well
-    "deepseek-r1": 1340,               # [EST] from Text 1382
+    "deepseek-v3.2": 1310,             # [CODE]
+    "deepseek-v3.1": 1300,             # [EST]
+    "deepseek-r1-0528": 1370,          # [EST]
+    "deepseek-r1": 1340,               # [EST]
     "deepseek-reasoner": 1340,         # alias for deepseek-r1
-    "deepseek-v3-0324": 1300,          # [EST] from Text 1391
+    "deepseek-v3-0324": 1300,          # [EST]
     "deepseek-v3": 1300,               # [EST]
     "deepseek-chat": 1300,             # alias
 
     # -----------------------------------------------------------------------
     # xAI / Grok
     # -----------------------------------------------------------------------
-    "grok-4.1-thinking": 1204,         # [CODE] #36 — very low code score despite high text
-    "grok-4.1": 1200,                  # [EST] non-thinking likely similar or lower
-    "grok-4": 1200,                    # [EST] not on Code Arena; grok-4-fast-reasoning = 1153
-    "grok-4-fast": 1153,               # [CODE] #38
+    "grok-4-0709": 1467,               # Strong latest Grok model (Jul 2026 release)
+    "grok-4.1-thinking": 1402,         # [EST]
+    "grok-4.1": 1380,                  # [EST]
+    "grok-4-1-fast-reasoning": 1402,   # Fast reasoning variant
+    "grok-4-1-fast": 1380,             # Fast non-reasoning variant
+    "grok-4-1-fast-non-reasoning": 1350,
+    "grok-4": 1350,                    # [EST]
+    "grok-4-fast": 1300,               # [EST]
+    "grok-4-fast-reasoning": 1350,     # [EST]
+    "grok-4-fast-non-reasoning": 1300, # [EST]
     "grok-3": 1200,                    # [EST]
 
     # -----------------------------------------------------------------------
     # Mistral
     # -----------------------------------------------------------------------
-    "mistral-large": 1223,             # [CODE] #34
-    "mistral-large-3": 1223,           # [CODE] #34
+    "mistral-large": 1223,             # [CODE]
+    "mistral-large-3": 1223,           # [CODE]
 
     # -----------------------------------------------------------------------
     # Moonshot / Kimi
     # -----------------------------------------------------------------------
-    "kimi-k2.5": 1446,                 # [CODE] #7, kimi-k2.5-thinking
-    "kimi-k2.5-instant": 1421,         # [CODE] #10
-    "kimi-k2-thinking": 1333,          # [CODE] #23, kimi-k2-thinking-turbo
+    "kimi-k2.5": 1439,                 # [CODE] #13
+    "kimi-k2p5": 1439,                 # Fireworks alias for kimi-k2.5
+    "kimi-k2.5-instant": 1424,         # [CODE] #14
+    "kimi-k2-thinking": 1333,          # [CODE]
     "kimi-k2-instruct": 1310,          # [EST]
     "kimi-k2-0905": 1310,              # [EST]
     "kimi-k2-0711": 1310,              # [EST]
@@ -153,30 +168,32 @@ ELO_SCORES: Dict[str, int] = {
     # -----------------------------------------------------------------------
     # Qwen / Alibaba
     # -----------------------------------------------------------------------
-    "qwen3-coder-480b-a35b": 1280,     # [CODE] #30
-    "qwen3-235b-a22b-instruct-2507": 1280,  # [EST] similar to qwen3-coder code perf
+    "qwen3-coder-next": 1310,           # [EST] next-gen coder variant
+    "qwen3-coder-480b-a35b": 1280,     # [CODE]
+    "qwen3-235b-a22b-instruct-2507": 1280,  # [EST]
     "qwen3-235b-a22b-thinking-2507": 1300,  # [EST]
-    "qwen3-max": 1310,                 # [EST] from Text 1434
+    "qwen3-max": 1310,                 # [EST]
     "qwen3-235b-a22b": 1280,           # [EST]
     "qwen3-32b": 1260,                 # [EST]
 
     # -----------------------------------------------------------------------
     # GLM (Zhipu AI / ZAI)
     # -----------------------------------------------------------------------
-    "glm-4.7": 1441,                   # [CODE] #9
-    "glm-4.6": 1357,                   # [CODE] #20
-    "glm-5": 1420,                     # [EST] added to Code Arena Feb 12, not in my scrape
+    "glm-5": 1456,                     # [CODE] #8
+    "glm-4.7": 1440,                   # [CODE] #11
+    "glm-4.6": 1357,                   # [CODE]
 
     # -----------------------------------------------------------------------
     # Minimax
     # -----------------------------------------------------------------------
-    "minimax-m2.1": 1405,              # [CODE] #12
-    "minimax-m2": 1313,                # [CODE] #26
+    "minimax-m2.5": 1443,              # [CODE] #10
+    "minimax-m2.1": 1402,              # [CODE] #15
+    "minimax-m2": 1313,                # [CODE]
 
     # -----------------------------------------------------------------------
     # MiMo (Xiaomi)
     # -----------------------------------------------------------------------
-    "mimo-v2-flash": 1340,             # [CODE] #22
+    "mimo-v2-flash": 1340,             # [CODE]
 }
 
 # ---------------------------------------------------------------------------
@@ -256,6 +273,7 @@ PROVIDERS: Dict[str, Tuple[str, str]] = {
     "gmi":                ("GMI Cloud",                 "GMI_API_KEY"),
     "wandb":              ("W&B Inference",             "WANDB_API_KEY"),
     "vercel_ai_gateway":  ("Vercel AI Gateway",         "VERCEL_AI_GATEWAY_API_KEY"),
+    "minimax":            ("MiniMax",                    "MINIMAX_API_KEY"),
     "ollama":             ("Ollama",                    ""),
     "ollama_chat":        ("Ollama",                    ""),
     "lm_studio":          ("LM Studio",                 ""),
@@ -303,7 +321,7 @@ _SIMPLE_PREFIX_PROVIDERS = {
     "lambda_ai", "nscale", "oci", "gmi", "wandb", "ovhcloud",
     "llamagate", "gradient_ai", "moonshot", "snowflake", "heroku",
     "publicai", "deepseek", "xai", "mistral", "gemini", "perplexity",
-    "cohere", "cohere_chat", "meta_llama", "dashscope",
+    "cohere", "cohere_chat", "meta_llama", "dashscope", "minimax",
 }
 
 # Bedrock region paths: us-east-1/, ap-northeast-1/, us-gov-west-1/, etc.
@@ -339,7 +357,7 @@ _VENDOR_DOT_PREFIX = re.compile(
 _ORG_NAMESPACE = re.compile(
     r"^(?:deepseek-ai|deepseek|meta-llama|meta|anthropic|google|openai|"
     r"moonshotai|mistralai|qwen|Qwen|x-ai|xai|cohere|microsoft|"
-    r"allenai|NousResearch|nvidia|MiniMaxAI)/",
+    r"allenai|NousResearch|nvidia|MiniMaxAI|zai-org)/",
     re.IGNORECASE,
 )
 
@@ -601,8 +619,8 @@ def build_rows() -> List[dict]:
     skipped_previews = 0
 
     for model_id, entry in litellm.model_cost.items():
-        # Only chat mode
-        if entry.get("mode") != "chat":
+        # Only chat and responses modes (responses = OpenAI's newer API format)
+        if entry.get("mode") not in ("chat", "responses"):
             continue
         # Skip deprecated
         if _is_deprecated(entry):

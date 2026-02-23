@@ -3901,6 +3901,43 @@ class TestEnsureApiKey:
         result = llm_mod._ensure_api_key(model_info, newly_acquired, False)
         assert result is False
 
+    def test_vertex_credentials_adc_fallback_with_project(self, llm_mod, monkeypatch):
+        monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project")
+        monkeypatch.delenv("VERTEX_CREDENTIALS", raising=False)
+        model_info = {"model": "vertex-model", "api_key": "VERTEX_CREDENTIALS"}
+        newly_acquired = {}
+        result = llm_mod._ensure_api_key(model_info, newly_acquired, False)
+        assert result is True
+
+    def test_vertex_credentials_adc_fallback_with_vertex_project(self, llm_mod, monkeypatch):
+        monkeypatch.setenv("VERTEX_PROJECT", "test-project")
+        monkeypatch.delenv("VERTEX_CREDENTIALS", raising=False)
+        monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+        model_info = {"model": "vertex-model", "api_key": "VERTEX_CREDENTIALS"}
+        newly_acquired = {}
+        result = llm_mod._ensure_api_key(model_info, newly_acquired, False)
+        assert result is True
+
+    def test_vertex_credentials_no_adc_no_project(self, llm_mod, monkeypatch):
+        monkeypatch.setenv("PDD_FORCE", "1")
+        monkeypatch.delenv("VERTEX_CREDENTIALS", raising=False)
+        monkeypatch.delenv("VERTEXAI_PROJECT", raising=False)
+        monkeypatch.delenv("VERTEX_PROJECT", raising=False)
+        monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+        model_info = {"model": "vertex-model", "api_key": "VERTEX_CREDENTIALS"}
+        newly_acquired = {}
+        result = llm_mod._ensure_api_key(model_info, newly_acquired, False)
+        assert result is False
+
+    def test_non_vertex_key_no_adc_fallback(self, llm_mod, monkeypatch):
+        monkeypatch.setenv("PDD_FORCE", "1")
+        monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project")
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        model_info = {"model": "openai-model", "api_key": "OPENAI_API_KEY"}
+        newly_acquired = {}
+        result = llm_mod._ensure_api_key(model_info, newly_acquired, False)
+        assert result is False
+
 
 # ============================================================================
 # TESTS: llm_invoke input validation
