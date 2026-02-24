@@ -236,7 +236,8 @@ def _save_run_report_atomic(report: Dict[str, Any], basename: str, language: str
 
 def _save_fingerprint_atomic(basename: str, language: str, operation: str,
                                paths: Dict[str, Path], cost: float, model: str,
-                               atomic_state: Optional['AtomicStateUpdate'] = None):
+                               atomic_state: Optional['AtomicStateUpdate'] = None,
+                               include_deps_override: Optional[Dict[str, str]] = None):
     """Save fingerprint state after successful operation, supporting atomic updates.
 
     Args:
@@ -247,14 +248,26 @@ def _save_fingerprint_atomic(basename: str, language: str, operation: str,
         cost: The cost of the operation.
         model: The model used.
         atomic_state: Optional AtomicStateUpdate for atomic writes (Issue #159 fix).
+        include_deps_override: Pre-captured include deps (Issue #522). Used when
+            auto-deps may have stripped <include> tags before fingerprint save.
     """
     if atomic_state:
         # Buffer for atomic write
         from datetime import datetime, timezone
-        from .sync_determine_operation import calculate_current_hashes, Fingerprint
+        from .sync_determine_operation import calculate_current_hashes, Fingerprint, read_fingerprint
         from . import __version__
 
-        current_hashes = calculate_current_hashes(paths)
+        # Issue #522: Use override deps if provided (captured before auto-deps),
+        # otherwise fall back to stored deps from previous fingerprint
+        if include_deps_override is not None:
+            stored_deps = include_deps_override
+        else:
+            prev_fp = read_fingerprint(basename, language)
+            stored_deps = prev_fp.include_deps if prev_fp else None
+        current_hashes = calculate_current_hashes(paths, stored_include_deps=stored_deps)
+        # If override provided and current extraction found nothing, use the override
+        if include_deps_override and not current_hashes.get('include_deps'):
+            current_hashes['include_deps'] = include_deps_override
         fingerprint = Fingerprint(
             pdd_version=__version__,
             timestamp=datetime.now(timezone.utc).isoformat(),
@@ -264,6 +277,7 @@ def _save_fingerprint_atomic(basename: str, language: str, operation: str,
             example_hash=current_hashes.get('example_hash'),
             test_hash=current_hashes.get('test_hash'),
             test_files=current_hashes.get('test_files'),  # Bug #156
+            include_deps=current_hashes.get('include_deps'),  # Issue #522
         )
 
         fingerprint_file = META_DIR / f"{_safe_basename(basename)}_{language.lower()}.json"
@@ -1471,6 +1485,7 @@ def sync_orchestration(
                     result = {}
                     success = False
                     op_start_time = time.time()
+                    include_deps_override = None  # Issue #522: Captured before auto-deps strips tags
 
                     # Issue #159 fix: Use atomic state for consistent run_report + fingerprint writes
                     with AtomicStateUpdate(basename, language) as atomic_state:
@@ -1480,6 +1495,9 @@ def sync_orchestration(
                             if operation == 'auto-deps':
                                 temp_output = str(pdd_files['prompt']).replace('.prompt', '_with_deps.prompt')
                                 original_content = pdd_files['prompt'].read_text(encoding='utf-8')
+                                # Issue #522: Capture include deps BEFORE auto-deps may strip tags
+                                from .sync_determine_operation import extract_include_deps
+                                include_deps_override = extract_include_deps(pdd_files['prompt'])
                                 result = auto_deps_main(
                                     ctx,
                                     prompt_file=str(pdd_files['prompt']),
@@ -1622,7 +1640,7 @@ def sync_orchestration(
                                             crash_log_content = f"Auto-fixed: {auto_fix_msg}"
                                             # Fix for issue #430: Save fingerprint and track operation completion before continuing
                                             operations_completed.append('crash')
-                                            _save_fingerprint_atomic(basename, language, 'crash', pdd_files, 0.0, 'auto-fix', atomic_state=atomic_state)
+                                            _save_fingerprint_atomic(basename, language, 'crash', pdd_files, 0.0, 'auto-fix', atomic_state=atomic_state, include_deps_override=include_deps_override)
                                             continue  # Skip crash_main, move to next operation
                                         else:
                                             # Auto-fix didn't fully work, update error log and proceed
@@ -1920,7 +1938,7 @@ def sync_orchestration(
                                  model_name = _extract_model_from_result(operation, result)
                             last_model_name = str(model_name)
                             operations_completed.append(operation)
-                            _save_fingerprint_atomic(basename, language, operation, pdd_files, actual_cost, str(model_name), atomic_state=atomic_state)
+                            _save_fingerprint_atomic(basename, language, operation, pdd_files, actual_cost, str(model_name), atomic_state=atomic_state, include_deps_override=include_deps_override)
 
                         update_log_entry(log_entry, success=success, cost=actual_cost, model=model_name, duration=duration, error=errors[-1] if errors and not success else None)
                         append_log_entry(basename, language, log_entry)
