@@ -29,27 +29,31 @@ interface AuditResultsResponse {
 
 interface Stage10AuditProps {
   onAdvance: () => void;
-  /** Optional callback to prefill annotation form in parent */
-  onPrefillAnnotation?: (data: {
+  projectConfig?: any;
+  /** Optional callback to prefill annotation form in parent (mapped from onCreateAnnotation) */
+  onCreateAnnotation?: (data: {
     text: string;
     sectionId: string;
     compositeDataUrl: string;
+    timestamp: number;
+    drawingDataUrl: null;
+    videoFile: string;
   }) => void;
 }
 
 const statusClasses: Record<AuditStatus, string> = {
-  pending: 'bg-slate-200 text-slate-700',
-  running: 'bg-amber-200 text-amber-800',
-  done: 'bg-green-200 text-green-800',
-  error: 'bg-red-200 text-red-800',
+  pending: 'bg-slate-700 text-slate-200',
+  running: 'bg-amber-800 text-amber-200',
+  done: 'bg-green-800 text-green-200',
+  error: 'bg-red-800 text-red-200',
 };
 
 const verdictClasses: Record<Verdict, string> = {
-  PASS: 'bg-green-100 text-green-700',
-  FAIL: 'bg-red-100 text-red-700',
+  PASS: 'bg-green-800 text-green-200',
+  FAIL: 'bg-red-800 text-red-200',
 };
 
-export default function Stage10Audit({ onAdvance, onPrefillAnnotation }: Stage10AuditProps) {
+export default function Stage10Audit({ onAdvance, onCreateAnnotation }: Stage10AuditProps) {
   const [sections, setSections] = useState<SectionAudit[]>([]);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [specViewerOpen, setSpecViewerOpen] = useState<Record<string, boolean>>({});
@@ -155,14 +159,16 @@ export default function Stage10Audit({ onAdvance, onPrefillAnnotation }: Stage10
 
   const handleCreateAnnotation = useCallback(
     (sectionId: string, finding: string, frameUrl: string) => {
-      onPrefillAnnotation?.({
+      onCreateAnnotation?.({
         text: finding,
         sectionId,
         compositeDataUrl: frameUrl,
+        timestamp: 0,
+        drawingDataUrl: null,
+        videoFile: '',
       });
-      onAdvance();
     },
-    [onAdvance, onPrefillAnnotation]
+    [onCreateAnnotation]
   );
 
   const sectionOptions = useMemo(
@@ -184,15 +190,15 @@ export default function Stage10Audit({ onAdvance, onPrefillAnnotation }: Stage10
           </button>
 
           <details className="relative">
-            <summary className="cursor-pointer px-3 py-1.5 rounded bg-slate-200 text-slate-800 text-sm list-none">
+            <summary className="cursor-pointer px-3 py-1.5 rounded bg-white/10 text-white text-sm list-none">
               Audit Section ▾
             </summary>
-            <div className="absolute right-0 mt-2 bg-white border rounded shadow-md z-10 w-48">
+            <div className="absolute right-0 mt-2 bg-gray-800 border border-white/10 rounded shadow-md z-10 w-48">
               {sectionOptions.map((opt) => (
                 <button
                   key={opt.id}
                   onClick={() => handleAuditRun(opt.id)}
-                  className="w-full text-left px-3 py-2 hover:bg-slate-100 text-sm"
+                  className="w-full text-left px-3 py-2 hover:bg-white/10 text-sm text-white"
                 >
                   {opt.label}
                 </button>
@@ -204,25 +210,25 @@ export default function Stage10Audit({ onAdvance, onPrefillAnnotation }: Stage10
 
       {loading && (
         <div className="animate-pulse space-y-2">
-          <div className="h-8 bg-slate-200 rounded" />
-          <div className="h-8 bg-slate-200 rounded" />
-          <div className="h-8 bg-slate-200 rounded" />
+          <div className="h-8 bg-white/10 rounded" />
+          <div className="h-8 bg-white/10 rounded" />
+          <div className="h-8 bg-white/10 rounded" />
         </div>
       )}
 
       {error && (
-        <div className="p-4 bg-red-50 border border-red-200 rounded text-red-700">
+        <div className="p-4 bg-red-900/30 border border-red-500/30 rounded text-red-300">
           {error}
         </div>
       )}
 
       {!loading && !error && sections.length === 0 && (
-        <div className="text-slate-500">No audit results available.</div>
+        <div className="text-white/60">No audit results available.</div>
       )}
 
       {!loading && !error && sections.length > 0 && (
-        <div className="border rounded overflow-hidden">
-          <div className="grid grid-cols-6 gap-2 p-3 bg-slate-100 text-sm font-medium">
+        <div className="border border-white/10 rounded overflow-hidden">
+          <div className="grid grid-cols-6 gap-2 p-3 bg-white/5 text-sm font-medium text-white">
             <div>Section</div>
             <div>Pass</div>
             <div>Fail</div>
@@ -231,8 +237,8 @@ export default function Stage10Audit({ onAdvance, onPrefillAnnotation }: Stage10
           </div>
 
           {sections.map((section) => (
-            <div key={section.sectionId} className="border-t">
-              <div className="grid grid-cols-6 gap-2 p-3 items-center text-sm">
+            <div key={section.sectionId} className="border-t border-white/10">
+              <div className="grid grid-cols-6 gap-2 p-3 items-center text-sm text-white">
                 <div>{section.sectionLabel}</div>
                 <div>{section.passCount}</div>
                 <div>{section.failCount}</div>
@@ -245,13 +251,13 @@ export default function Stage10Audit({ onAdvance, onPrefillAnnotation }: Stage10
                 </div>
                 <div className="col-span-2 text-right space-x-2">
                   <button
-                    className="text-blue-600 hover:underline"
+                    className="text-blue-400 hover:underline"
                     onClick={() => toggleExpanded(section.sectionId)}
                   >
                     View Report
                   </button>
                   <button
-                    className="text-slate-600 hover:underline"
+                    className="text-white/60 hover:underline"
                     onClick={() => handleAuditRun(section.sectionId)}
                   >
                     ↺ Audit
@@ -260,8 +266,8 @@ export default function Stage10Audit({ onAdvance, onPrefillAnnotation }: Stage10
               </div>
 
               {expanded[section.sectionId] && (
-                <div className="bg-slate-50 border-t">
-                  <div className="grid grid-cols-12 gap-2 p-2 text-xs font-semibold text-slate-600">
+                <div className="bg-white/5 border-t border-white/10">
+                  <div className="grid grid-cols-12 gap-2 p-2 text-xs font-semibold text-white/60">
                     <div className="col-span-2">Verdict</div>
                     <div className="col-span-3">Spec</div>
                     <div className="col-span-7">Summary</div>
@@ -270,7 +276,7 @@ export default function Stage10Audit({ onAdvance, onPrefillAnnotation }: Stage10
                     const key = `${section.sectionId}:${spec.specName}`;
                     const frame = `/api/video/outputs/audit/${section.sectionId}/${spec.specName}_frame.png`;
                     return (
-                      <div key={key} className="border-t">
+                      <div key={key} className="border-t border-white/10">
                         <div className="grid grid-cols-12 gap-2 p-2 items-center text-sm">
                           <div className="col-span-2">
                             <span
@@ -279,20 +285,20 @@ export default function Stage10Audit({ onAdvance, onPrefillAnnotation }: Stage10
                               {spec.verdict}
                             </span>
                           </div>
-                          <div className="col-span-3 font-mono text-xs">{spec.specName}</div>
-                          <div className="col-span-7 text-slate-700">{spec.summary}</div>
+                          <div className="col-span-3 font-mono text-xs text-white/80">{spec.specName}</div>
+                          <div className="col-span-7 text-white/70">{spec.summary}</div>
                         </div>
 
                         {spec.verdict === 'FAIL' && (
-                          <div className="flex gap-4 px-2 pb-2 text-xs text-slate-600">
+                          <div className="flex gap-4 px-2 pb-2 text-xs text-white/60">
                             <button
-                              className="text-blue-600 hover:underline"
+                              className="text-blue-400 hover:underline"
                               onClick={() => openFrameModal(frame)}
                             >
                               View Frame
                             </button>
                             <button
-                              className="text-blue-600 hover:underline"
+                              className="text-blue-400 hover:underline"
                               onClick={() =>
                                 toggleSpecViewer(section.sectionId, spec.specName, spec.specPath)
                               }
@@ -300,7 +306,7 @@ export default function Stage10Audit({ onAdvance, onPrefillAnnotation }: Stage10
                               View Spec
                             </button>
                             <button
-                              className="text-blue-600 hover:underline"
+                              className="text-blue-400 hover:underline"
                               onClick={() =>
                                 handleCreateAnnotation(
                                   section.sectionId,
@@ -315,7 +321,7 @@ export default function Stage10Audit({ onAdvance, onPrefillAnnotation }: Stage10
                         )}
 
                         {specViewerOpen[key] && (
-                          <pre className="text-xs overflow-auto max-h-64 bg-white border-t p-2">
+                          <pre className="text-xs overflow-auto max-h-64 bg-black/30 border-t border-white/10 p-2 text-white/80">
                             {specContent[key] || 'Loading spec...'}
                           </pre>
                         )}
@@ -329,10 +335,10 @@ export default function Stage10Audit({ onAdvance, onPrefillAnnotation }: Stage10
         </div>
       )}
 
-      <dialog ref={dialogRef} className="rounded-lg p-0 max-w-3xl w-full">
-        <div className="p-4 border-b flex justify-between items-center">
-          <span className="font-semibold">Audit Frame</span>
-          <button onClick={closeFrameModal} className="text-slate-500 hover:text-slate-700">
+      <dialog ref={dialogRef} className="rounded-lg p-0 max-w-3xl w-full bg-gray-900 text-white">
+        <div className="p-4 border-b border-white/10 flex justify-between items-center">
+          <span className="font-semibold text-white">Audit Frame</span>
+          <button onClick={closeFrameModal} className="text-white/50 hover:text-white/80">
             ✕
           </button>
         </div>
