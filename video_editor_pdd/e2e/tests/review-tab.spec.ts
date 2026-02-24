@@ -107,14 +107,18 @@ test.describe('Review Tab', () => {
   test('Annotations panel heading text is readable (dark theme)', async ({ page }) => {
     const heading = page.getByText('Annotations', { exact: true });
     await expect(heading).toBeVisible();
-    const color = await heading.evaluate((el) => getComputedStyle(el).color);
-    const match = color.match(/(\d+)/g);
-    if (match) {
-      const [r, g, b] = match.map(Number);
-      // Text should be white/light
-      const isLight = r > 180 && g > 180 && b > 180;
-      expect(isLight).toBe(true);
-    }
+    const isLight = await heading.evaluate((el) => {
+      const color = getComputedStyle(el).color;
+      const canvas = document.createElement('canvas');
+      canvas.width = 1;
+      canvas.height = 1;
+      const ctx = canvas.getContext('2d')!;
+      ctx.fillStyle = color;
+      ctx.fillRect(0, 0, 1, 1);
+      const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
+      return r > 180 && g > 180 && b > 180;
+    });
+    expect(isLight).toBe(true);
   });
 
   test('Apply Fixes button is present and disabled when no annotations', async ({ page }) => {
