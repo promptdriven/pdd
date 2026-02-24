@@ -42,7 +42,7 @@ function createSseStream() {
  * Segment IDs are derived from heading markers.
  */
 export function parseSegmentsFromScript(): { id: string; text?: string }[] {
-  const scriptPath = path.join(process.cwd(), "tts_script.md");
+  const scriptPath = path.join(process.cwd(), "narrative", "tts_script.md");
   if (!fs.existsSync(scriptPath)) return [];
 
   const content = fs.readFileSync(scriptPath, "utf-8");
@@ -104,7 +104,7 @@ async function runRenderProcess(
   onLog: (line: string) => void
 ): Promise<void> {
   const args = [
-    "render_tts.py",
+    path.join("scripts", "render_tts.py"),
     ...(segments ?? []).flatMap((s) => ["--segment", s]),
   ];
 

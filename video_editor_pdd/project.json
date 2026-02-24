@@ -16,21 +16,21 @@
       "id": "cold_open",
       "label": "Cold Open",
       "videoFile": "cold_open.mp4",
-      "specDir": "00-cold-open",
+      "specDir": "cold_open",
       "remotionDir": "S00-ColdOpen",
       "compositionId": "ColdOpenSection",
-      "durationSeconds": 0,
+      "durationSeconds": 15.288,
       "offsetSeconds": 0
     },
     {
       "id": "part1_economics",
       "label": "Part 1: Economics",
       "videoFile": "part1_economics.mp4",
-      "specDir": "01-economics",
+      "specDir": "part1_economics",
       "remotionDir": "S01-Economics",
       "compositionId": "Part1Economics",
-      "durationSeconds": 0,
-      "offsetSeconds": 0
+      "durationSeconds": 382.176,
+      "offsetSeconds": 15.288
     },
     {
       "id": "part2_paradigm_shift",
@@ -86,8 +86,8 @@
 
   "audioSync": {
     "sectionGroups": {
-      "cold_open": { "startSegment": "cold_open_001", "endSegment": "cold_open_004" },
-      "part1_economics": { "startSegment": "part1_economics_001", "endSegment": "part1_economics_007" }
+      "cold_open": { "startSegment": "cold_open_001", "endSegment": "cold_open_006" },
+      "part1_economics": { "startSegment": "part1_economics_001", "endSegment": "part1_economics_030" }
     },
     "silenceGapDefault": 0.3
   },

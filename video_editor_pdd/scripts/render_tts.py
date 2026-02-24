@@ -129,39 +129,148 @@ class Segment:
 # Parsing
 # ---------------------------------------------------------------------------
 
-def parse_tts_script(script_path: str) -> List[Segment]:
+def _load_section_ids(project_dir: str) -> Dict[str, str]:
+    """Load section label-to-id mapping from project.json."""
+    project_path = os.path.join(project_dir, "project.json")
+    mapping: Dict[str, str] = {}
+    if os.path.exists(project_path):
+        with open(project_path, encoding="utf-8") as f:
+            proj = json.load(f)
+        for section in proj.get("sections", []):
+            label = section.get("label", "").upper()
+            sid = section.get("id", "")
+            if label and sid:
+                mapping[label] = sid
+    return mapping
+
+
+def _section_heading_to_id(heading: str, section_map: Optional[Dict[str, str]] = None) -> str:
+    """Convert a section heading like 'COLD OPEN (0:00 - 2:00)' to 'cold_open'.
+
+    First tries to match against project.json section labels, then falls back
+    to a generic snake_case conversion.
     """
-    Parse the tts_script.md file and extract NARRATOR: blocks.
+    # Strip timestamp portion in parens
+    clean_heading = re.sub(r"\(.*?\)", "", heading).strip().upper()
+
+    # Try exact match against project.json labels
+    if section_map:
+        for label, sid in section_map.items():
+            if label == clean_heading:
+                return sid
+            # Try fuzzy: label words are subset of heading words
+            label_words = set(label.split())
+            heading_words = set(clean_heading.split())
+            # Match "Part 1: Economics" → heading "PART 1: THE ECONOMICS OF DARNING"
+            if label_words and label_words.issubset(heading_words):
+                return sid
+
+    # Fallback: strip 'PART N:' prefix and snake_case
+    clean = re.sub(r"^PART\s+\d+\s*:\s*", "", clean_heading, flags=re.IGNORECASE).strip()
+    clean = re.sub(r"[^a-zA-Z0-9]+", "_", clean).strip("_").lower()
+    return clean
+
+
+# Pattern for section headings like ## COLD OPEN (0:00 - 2:00)
+SECTION_HEADING_PATTERN = re.compile(r"^##\s+(.+)$", re.MULTILINE)
+
+
+def _parse_section_based(content: str, project_dir: str = ".") -> List[Segment]:
+    """
+    Parse section-heading-based TTS script format.
+    Splits each section into multiple segments at major pause boundaries (>= 1.0s).
+    Segment IDs follow the pattern: {section_id}_{NNN}.
+    """
+    section_map = _load_section_ids(project_dir)
+
+    # Find all section headings and their positions
+    headings = list(SECTION_HEADING_PATTERN.finditer(content))
+    if not headings:
+        return []
+
+    segments: List[Segment] = []
+
+    for i, match in enumerate(headings):
+        heading_text = match.group(1).strip()
+        section_id = _section_heading_to_id(heading_text, section_map)
+        if not section_id:
+            continue
+
+        # Extract section body (from after heading to next heading or end)
+        start = match.end()
+        end = headings[i + 1].start() if i + 1 < len(headings) else len(content)
+        body = content[start:end].strip()
+
+        # Skip separator lines
+        body = re.sub(r"^---+\s*$", "", body, flags=re.MULTILINE).strip()
+
+        if not body:
+            continue
+
+        # Split into sub-segments at major pauses (>= 1.0s) or double newlines
+        # with significant text between them
+        parts = re.split(r"\[PAUSE\s*:\s*(?:[1-9]\d*\.?\d*|0\.\d*[5-9]\d*)\s*s?\]", body)
+
+        seg_counter = 0
+        for part in parts:
+            clean = TAG_PATTERN.sub("", part).strip()
+            if len(clean) < 10:
+                continue  # Skip trivially short fragments
+            seg_counter += 1
+            seg_id = f"{section_id}_{seg_counter:03d}"
+            segments.append(Segment(seg_id, part.strip()))
+
+        # If no sub-segments were created, use the whole section as one segment
+        if seg_counter == 0:
+            clean = TAG_PATTERN.sub("", body).strip()
+            if clean:
+                segments.append(Segment(f"{section_id}_001", body))
+
+    return segments
+
+
+def parse_tts_script(script_path: str, project_dir: str = ".") -> List[Segment]:
+    """
+    Parse the tts_script.md file and extract segments.
+
+    Supports two formats:
+    1. NARRATOR: blocks (original format)
+    2. Section-heading-based format (## SECTION_NAME)
 
     Args:
         script_path: Path to the tts_script.md file.
+        project_dir: Project root directory (for reading project.json).
 
     Returns:
         List of Segment objects in order of appearance.
 
     Raises:
         FileNotFoundError: If the script file does not exist.
-        ValueError: If no NARRATOR blocks are found.
+        ValueError: If no segments are found.
     """
     path = Path(script_path)
     if not path.exists():
         raise FileNotFoundError(f"TTS script not found: {script_path}")
 
     content = path.read_text(encoding="utf-8")
+
+    # Try NARRATOR: block format first
     matches = NARRATOR_PATTERN.findall(content)
+    if matches:
+        segments: List[Segment] = []
+        for idx, raw_text in enumerate(matches, start=1):
+            segment_id = f"seg_{idx:03d}"
+            segments.append(Segment(segment_id, raw_text))
+        return segments
 
-    if not matches:
-        raise ValueError(
-            f"No NARRATOR: blocks found in {script_path}. "
-            "Expected format: 'NARRATOR: <text>'"
-        )
+    # Fallback to section-heading-based format
+    segments = _parse_section_based(content, project_dir)
+    if segments:
+        return segments
 
-    segments: List[Segment] = []
-    for idx, raw_text in enumerate(matches, start=1):
-        segment_id = f"seg_{idx:03d}"
-        segments.append(Segment(segment_id, raw_text))
-
-    return segments
+    raise ValueError(
+        f"No NARRATOR: blocks or section headings found in {script_path}."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -342,6 +451,62 @@ class TTSEngine:
             raise RuntimeError(f"TTS synthesis failed for text: {e}") from e
 
 
+class EdgeTTSEngine:
+    """
+    Fallback TTS engine using Microsoft Edge TTS (edge-tts).
+    No model download required — uses Microsoft's online API.
+    """
+
+    def __init__(self, voice: str = "en-US-AndrewMultilingualNeural"):
+        self.voice = voice
+        self.sample_rate = SAMPLE_RATE
+
+    def synthesize(self, text: str, **kwargs: Any) -> bytes:
+        """Synthesize speech using edge-tts, return raw PCM 16-bit mono bytes."""
+        import asyncio
+        import io
+        import tempfile
+
+        if not text.strip():
+            return generate_silence_wav_bytes(0.1)
+
+        try:
+            import edge_tts
+        except ImportError:
+            raise RuntimeError("edge-tts is not installed. pip install edge-tts")
+
+        async def _synth() -> bytes:
+            communicate = edge_tts.Communicate(text, self.voice)
+            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
+                tmp_path = tmp.name
+            try:
+                await communicate.save(tmp_path)
+                # Convert MP3 to raw PCM using ffmpeg
+                import subprocess
+                result = subprocess.run(
+                    [
+                        "ffmpeg", "-y", "-i", tmp_path,
+                        "-f", "s16le", "-acodec", "pcm_s16le",
+                        "-ac", "1", "-ar", str(SAMPLE_RATE),
+                        "-"
+                    ],
+                    capture_output=True,
+                    timeout=30,
+                )
+                if result.returncode != 0:
+                    raise RuntimeError(f"ffmpeg conversion failed: {result.stderr.decode()[:200]}")
+                return result.stdout
+            finally:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(_synth())
+        finally:
+            loop.close()
+
+
 # ---------------------------------------------------------------------------
 # Segment rendering
 # ---------------------------------------------------------------------------
@@ -420,6 +585,13 @@ def build_parser() -> argparse.ArgumentParser:
         "Default: render all segments.",
     )
     parser.add_argument(
+        "--segment",
+        action="append",
+        default=None,
+        dest="segment_list",
+        help="Segment ID to render (can be specified multiple times).",
+    )
+    parser.add_argument(
         "--output-dir",
         type=str,
         default=DEFAULT_OUTPUT_DIR,
@@ -454,7 +626,7 @@ def main() -> None:
 
     # Parse the TTS script
     try:
-        all_segments = parse_tts_script(script_path)
+        all_segments = parse_tts_script(script_path, project_dir)
     except (FileNotFoundError, ValueError) as e:
         error_result = {
             "segmentId": "global",
@@ -464,9 +636,14 @@ def main() -> None:
         print(json.dumps(error_result), flush=True)
         sys.exit(1)
 
-    # Filter segments if --segments is specified
+    # Filter segments if --segments or --segment is specified
+    requested_ids: Optional[set] = None
     if args.segments:
         requested_ids = {s.strip() for s in args.segments.split(",") if s.strip()}
+    elif args.segment_list:
+        requested_ids = set(args.segment_list)
+
+    if requested_ids:
         segments_to_render = [s for s in all_segments if s.segment_id in requested_ids]
     else:
         segments_to_render = all_segments
@@ -475,17 +652,24 @@ def main() -> None:
         # No segments to render — this is not an error, just nothing to do
         sys.exit(0)
 
-    # Load the TTS model
+    # Load the TTS engine
+    engine = None
     try:
         engine = TTSEngine(args.model)
+        print(json.dumps({"type": "info", "message": f"Loaded Qwen3-TTS model: {args.model}"}), flush=True)
     except Exception as e:
-        error_result = {
-            "segmentId": "global",
-            "status": "error",
-            "error": f"Failed to load TTS model '{args.model}': {e}",
-        }
-        print(json.dumps(error_result), flush=True)
-        sys.exit(1)
+        print(json.dumps({"type": "info", "message": f"Qwen3-TTS unavailable ({e}), falling back to EdgeTTS"}), flush=True)
+        try:
+            engine = EdgeTTSEngine()
+            print(json.dumps({"type": "info", "message": "Using EdgeTTS (Microsoft) engine"}), flush=True)
+        except Exception as e2:
+            error_result = {
+                "segmentId": "global",
+                "status": "error",
+                "error": f"No TTS engine available. Qwen: {e}, EdgeTTS: {e2}",
+            }
+            print(json.dumps(error_result), flush=True)
+            sys.exit(1)
 
     # Render each segment
     has_errors = False

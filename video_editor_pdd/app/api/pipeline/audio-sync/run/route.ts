@@ -47,7 +47,7 @@ registerExecutor("audio-sync", (_params, send: SseSend) => {
     onLog(`[audio-sync] Loaded sectionGroups: ${JSON.stringify(sectionGroups)}`);
 
     // Spawn the Python script
-    const proc = spawn("python3", ["sync_audio_pipeline.py"], {
+    const proc = spawn("python3", ["scripts/sync_audio_pipeline.py"], {
       cwd: process.cwd(),
       env: {
         ...process.env,

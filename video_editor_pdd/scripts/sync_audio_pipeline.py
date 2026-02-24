@@ -19,35 +19,71 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 
-def load_project(project_dir: str) -> Dict[str, Any]:
-    """Load and validate project.json from the given directory.
+def _expand_segment_range(
+    section_id: str, start_seg: str, end_seg: str, output_dir: str
+) -> List[str]:
+    """Expand a startSegment/endSegment range into a list of segment IDs.
 
-    Args:
-        project_dir: Path to the directory containing project.json.
-
-    Returns:
-        Parsed project dictionary.
-
-    Raises:
-        FileNotFoundError: If project.json does not exist.
-        json.JSONDecodeError: If project.json is not valid JSON.
-        ValueError: If project.json is missing required fields.
+    Scans the output directory for WAV files matching the section prefix
+    and returns those within the numeric range [start, end].
     """
-    project_path = Path(project_dir) / "project.json"
-    if not project_path.exists():
-        raise FileNotFoundError(f"project.json not found at {project_path}")
+    # Extract numeric suffix from segment IDs
+    start_num = int(start_seg.rsplit("_", 1)[-1])
+    end_num = int(end_seg.rsplit("_", 1)[-1])
 
-    with open(project_path, "r", encoding="utf-8") as f:
-        project = json.load(f)
+    result = []
+    for num in range(start_num, end_num + 1):
+        seg_id = f"{section_id}_{num:03d}"
+        seg_path = Path(output_dir) / f"{seg_id}.wav"
+        if seg_path.exists():
+            result.append(seg_id)
+    return result
 
-    if "sectionGroups" not in project:
-        raise ValueError("project.json is missing 'sectionGroups' field")
 
-    section_groups = project["sectionGroups"]
-    if not isinstance(section_groups, dict):
-        raise ValueError("'sectionGroups' must be a dictionary mapping section IDs to segment ID lists")
+def load_section_groups(
+    project_dir: str, output_dir: str
+) -> Dict[str, List[str]]:
+    """Load section groups from SECTION_GROUPS env var or project.json.
 
-    return project
+    Returns a dict mapping section_id to a list of segment IDs.
+    Handles both formats:
+      - List format: {"cold_open": ["cold_open_001", "cold_open_002"]}
+      - Range format: {"cold_open": {"startSegment": "...", "endSegment": "..."}}
+    """
+    # Try SECTION_GROUPS env var first
+    env_groups = os.environ.get("SECTION_GROUPS")
+    if env_groups:
+        raw = json.loads(env_groups)
+    else:
+        # Read from project.json
+        project_path = Path(project_dir) / "project.json"
+        if not project_path.exists():
+            raise FileNotFoundError(f"project.json not found at {project_path}")
+        with open(project_path, "r", encoding="utf-8") as f:
+            project = json.load(f)
+        raw = project.get("audioSync", {}).get("sectionGroups", {})
+
+    if not raw:
+        raise ValueError("No sectionGroups found")
+
+    section_groups: Dict[str, List[str]] = {}
+    for section_id, value in raw.items():
+        if isinstance(value, list):
+            section_groups[section_id] = value
+        elif isinstance(value, dict):
+            start_seg = value.get("startSegment", "")
+            end_seg = value.get("endSegment", "")
+            if start_seg and end_seg:
+                expanded = _expand_segment_range(
+                    section_id, start_seg, end_seg, output_dir
+                )
+                section_groups[section_id] = expanded
+            else:
+                section_groups[section_id] = []
+        else:
+            section_groups[section_id] = []
+
+    return section_groups
 
 
 def get_segment_wav_path(output_dir: str, segment_id: str) -> Path:
@@ -378,19 +414,17 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    # Load project configuration
+    # Load section groups configuration
     try:
-        project = load_project(args.project_dir)
+        section_groups = load_section_groups(args.project_dir, args.output_dir)
     except (FileNotFoundError, json.JSONDecodeError, ValueError) as e:
         error_result = {
             "sectionId": "__global__",
             "status": "error",
-            "error": f"Failed to load project.json: {e}",
+            "error": f"Failed to load section groups: {e}",
         }
         print(json.dumps(error_result), flush=True)
         sys.exit(1)
-
-    section_groups: Dict[str, List[str]] = project["sectionGroups"]
 
     if not section_groups:
         error_result = {

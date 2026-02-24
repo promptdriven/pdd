@@ -2,24 +2,17 @@
 
 ### Feat
 
-- Implement comprehensive API routes for the video pipeline and add a new E2E test for Stage 8 Composition Generation.
-- Add comprehensive Playwright E2E tests for all video editor stages and enhance the script API to support TTS script management.
-- add E2E test for non-recursive circular include detection and update project configuration defaults for video editor.
-- Update test durations and modify `test_llm_invoke_integration.py`.
+- **Include-aware sync fingerprints (Issue #522)** — `sync_determine_operation` now stores `<include>` dependency paths and their SHA256 hashes in the fingerprint JSON. When an included file changes but the top-level `.prompt` file doesn't, sync correctly detects the change and regenerates code. New functions: `extract_include_deps()`, `calculate_prompt_hash()`, `_resolve_include_path()`. `_save_fingerprint_atomic()` and `save_fingerprint()` accept `include_deps_override` to capture deps before auto-deps strips `<include>` tags.
+- **Circular include detection for non-recursive preprocess (Issue #553)** — `process_include_tags()` and `process_backtick_includes()` now enforce a `_MAX_INCLUDE_ITERATIONS` limit (50) on the convergence loop, raising `ValueError` instead of hanging forever on circular `<include>` references.
+- **E2E tests for include fingerprint and circular include detection** — Two new E2E test suites: `test_e2e_issue_522_include_fingerprint.py` (verifies sync detects included file changes) and `test_e2e_issue_553_circular_includes_non_recursive.py` (verifies `pdd preprocess` exits with error on circular includes).
 
 ### Fix
 
+- **Vertex AI credential resolution** — `_ensure_api_key()` now resolves missing `VERTEXAI_PROJECT` from `GOOGLE_CLOUD_PROJECT` and missing `VERTEXAI_LOCATION` from CSV location column, and passes `vertex_location` to litellm kwargs.
+- **Centralized cost/model extraction** — New `_extract_cost_from_result()` and `_extract_model_from_result()` in `sync_orchestration` correctly index into varying tuple formats per operation type (`crash`/`fix`/`verify`, `generate`, `example`/`test`/`auto-deps`). `operation_log` now uses these instead of hardcoded indices.
 - make sync regression cases 5 and 9 non-fatal on LLM failures
 - handle multi-language sync failure gracefully in case 4
 - increase timeouts and add --max-attempts to sync regression tests
-
-### Refactor
-
-- improve color readability assertion in review tab E2E test by using canvas for RGB extraction.
-- Split audit results API into a dedicated route, implement the Stage 10 Audit UI, and add comprehensive E2E tests including dark theme readability checks.
-- Restructure ProjectConfig schema for output resolution, TTS, audio sync, VEO, and render settings, updating relevant UI and tests.
-- Centralize cost and model extraction logic in Python and update video project configuration.
-- Update Stage1ProjectSetup for StagePanelProps compatibility, correct annotation fetching API parameter, and switch to 'server-only' directive for database utilities.
 
 ## v0.0.157 (2026-02-22)
 

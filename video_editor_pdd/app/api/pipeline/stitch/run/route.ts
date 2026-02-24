@@ -1,5 +1,10 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "crypto";
+import path from "path";
+import fs from "fs/promises";
+
+import { stitchFullVideo } from "@/lib/render";
+import { loadProject } from "@/lib/project";
 
 /**
  * POST /api/pipeline/stitch/run
@@ -9,13 +14,35 @@ import { randomUUID } from "crypto";
  */
 export async function POST(): Promise<NextResponse> {
   try {
-    const jobId = randomUUID();
+    const project = loadProject();
+    const sectionPaths = project.sections
+      .map((s) => path.join("outputs", "sections", `${s.id}.mp4`))
+      .filter((p) => {
+        try {
+          require("fs").accessSync(p);
+          return true;
+        } catch {
+          return false;
+        }
+      });
 
-    // In a real implementation this would call stitchFullVideo from lib/render.
-    // For now, return a jobId to unblock the UI flow.
+    if (sectionPaths.length === 0) {
+      return NextResponse.json(
+        { error: "No rendered section videos found" },
+        { status: 400 }
+      );
+    }
+
+    const outputPath = path.join("outputs", "full_video.mp4");
+    await fs.mkdir("outputs", { recursive: true });
+
+    const jobId = randomUUID();
+    await stitchFullVideo(sectionPaths, outputPath, () => {});
+
     return NextResponse.json({ jobId }, { status: 200 });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
+    console.error("Stitch run failed:", err);
     return NextResponse.json(
       { error: message },
       { status: 500 }
