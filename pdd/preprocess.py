@@ -197,11 +197,30 @@ def process_backtick_includes(text: str, recursive: bool, _seen: Optional[set] =
             console.print(f"[bold red]Error processing include:[/bold red] {str(e)}")
             _dbg(f"Error processing backtick include {file_path}: {e}")
             return f"```[Error processing include: {file_path}]```"
+    _expanded_prior = set()
+    _expanded_current = set()
+
+    def replace_include_tracked(match):
+        file_path = match.group(1).strip()
+        try:
+            full_path = get_file_path(file_path)
+            resolved = os.path.realpath(full_path)
+            if resolved in _expanded_prior:
+                raise ValueError(f"Circular include detected: {file_path} is already in the include chain")
+            _expanded_current.add(resolved)
+        except (FileNotFoundError, ValueError):
+            raise
+        except Exception:
+            pass
+        return replace_include(match)
+
     prev_text = ""
     current_text = text
     while prev_text != current_text:
         prev_text = current_text
-        current_text = re.sub(pattern, replace_include, current_text, flags=re.DOTALL)
+        _expanded_current = set()
+        current_text = re.sub(pattern, replace_include_tracked, current_text, flags=re.DOTALL)
+        _expanded_prior.update(_expanded_current)
     return current_text
 
 def process_xml_tags(text: str, recursive: bool, _seen: Optional[set] = None) -> str:
@@ -290,16 +309,35 @@ def process_include_tags(text: str, recursive: bool, _seen: Optional[set] = None
             console.print(f"[bold red]Error processing include:[/bold red] {str(e)}")
             _dbg(f"Error processing XML include {file_path}: {e}")
             return f"[Error processing include: {file_path}]"
+    _expanded_prior = set()
+    _expanded_current = set()
+
+    def replace_include_tracked(match):
+        file_path = match.group(1).strip()
+        try:
+            full_path = get_file_path(file_path)
+            resolved = os.path.realpath(full_path)
+            if resolved in _expanded_prior:
+                raise ValueError(f"Circular include detected: {file_path} is already in the include chain")
+            _expanded_current.add(resolved)
+        except (FileNotFoundError, ValueError):
+            raise
+        except Exception:
+            pass
+        return replace_include(match)
+
     prev_text = ""
     current_text = text
     while prev_text != current_text:
         prev_text = current_text
+        _expanded_current = set()
         code_spans = _extract_code_spans(current_text)
         def replace_include_with_spans(match):
             if _intersects_any_span(match.start(), match.end(), code_spans):
                 return match.group(0)
-            return replace_include(match)
+            return replace_include_tracked(match)
         current_text = re.sub(pattern, replace_include_with_spans, current_text, flags=re.DOTALL)
+        _expanded_prior.update(_expanded_current)
     return current_text
 
 def process_pdd_tags(text: str) -> str:
