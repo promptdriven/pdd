@@ -24,15 +24,23 @@ class SimpleOutput(BaseModel):
 
 
 def has_vertex_credentials() -> bool:
-    """Check if Vertex AI credentials are available."""
-    creds_path = os.environ.get('VERTEX_CREDENTIALS', '')
-    if not creds_path:
+    """Check if Vertex AI credentials are available.
+
+    Checks both VERTEX_CREDENTIALS (service account JSON path) and the
+    env vars that llm_invoke actually needs for multi-credential Vertex AI
+    providers: VERTEXAI_PROJECT and VERTEXAI_LOCATION.
+    """
+    # llm_invoke checks these env vars for vertex_ai models (pipe-delimited in CSV)
+    project = os.environ.get('VERTEXAI_PROJECT', '')
+    location = os.environ.get('VERTEXAI_LOCATION', '')
+    if not project or not location:
         return False
-    # Check if it's a file path that exists, or if it looks like JSON
-    if os.path.isfile(creds_path):
+    # Also check for service account credentials or ADC
+    creds_path = os.environ.get('VERTEX_CREDENTIALS', '')
+    if creds_path and os.path.isfile(creds_path):
         return True
-    # Could be inline JSON or ADC - assume available if set
-    return bool(creds_path)
+    # VERTEXAI_PROJECT + VERTEXAI_LOCATION are set; assume ADC or gcloud auth is available
+    return True
 
 
 @pytest.mark.skipif(

@@ -1240,6 +1240,40 @@ def test_vertex_multi_credential_no_api_key_passed(mock_set_llm_cache):
                 assert 'vertex_location' not in call_kwargs
 
 
+def test_vertex_location_passed_from_csv(mock_set_llm_cache):
+    """Test that location from CSV is passed as vertex_location to litellm."""
+    with patch('pdd.llm_invoke._load_model_data') as mock_load_data:
+        mock_data = [{
+            'provider': 'Google Vertex AI',
+            'model': 'vertex_ai/gemini-3-flash-preview',
+            'input': 0.15, 'output': 0.6,
+            'coding_arena_elo': 1290,
+            'structured_output': True,
+            'base_url': '',
+            'api_key': 'GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION',
+            'reasoning_type': 'effort',
+            'max_reasoning_tokens': 0,
+            'location': 'global'
+        }]
+        mock_df = pd.DataFrame(mock_data)
+        mock_df['avg_cost'] = (mock_df['input'] + mock_df['output']) / 2
+        mock_load_data.return_value = mock_df
+
+        env_vars = {
+            'GOOGLE_APPLICATION_CREDENTIALS': '/fake/path.json',
+            'VERTEXAI_PROJECT': 'test-project',
+            'VERTEXAI_LOCATION': 'us-east4',
+        }
+
+        with patch.dict(os.environ, env_vars):
+            with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+                mock_completion.return_value = create_mock_litellm_response("test")
+                llm_invoke("test {x}", {"x": "y"}, 0.5, 0.7, True)
+
+                call_kwargs = mock_completion.call_args[1]
+                assert call_kwargs.get('vertex_location') == 'global'
+
+
 def test_vertex_adc_without_credentials_file(mock_set_llm_cache):
     """Test that _ensure_api_key allows ADC when GOOGLE_APPLICATION_CREDENTIALS is missing but VERTEXAI_PROJECT is set."""
     with patch('pdd.llm_invoke._load_model_data') as mock_load_data:
@@ -3936,6 +3970,80 @@ class TestEnsureApiKey:
         model_info = {"model": "openai-model", "api_key": "OPENAI_API_KEY"}
         newly_acquired = {}
         result = llm_mod._ensure_api_key(model_info, newly_acquired, False)
+        assert result is False
+
+    def test_vertex_pipe_delimited_creds_set_project_from_gcp(self, llm_mod, monkeypatch):
+        """Regression: GOOGLE_APPLICATION_CREDENTIALS set + GOOGLE_CLOUD_PROJECT set,
+        but VERTEXAI_PROJECT/VERTEXAI_LOCATION unset. CSV has location=global.
+        Should return True (this is the actual CI/regression test environment)."""
+        monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/path/to/sa.json")
+        monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project")
+        monkeypatch.delenv("VERTEXAI_PROJECT", raising=False)
+        monkeypatch.delenv("VERTEXAI_LOCATION", raising=False)
+        model_info = {
+            "model": "vertex_ai/gemini-3-flash-preview",
+            "api_key": "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION",
+            "location": "global",
+        }
+        result = llm_mod._ensure_api_key(model_info, {}, False)
+        assert result is True
+
+    def test_vertex_pipe_delimited_all_set(self, llm_mod, monkeypatch):
+        """All 3 env vars set — should pass (already works, guard against regression)."""
+        monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/path/to/sa.json")
+        monkeypatch.setenv("VERTEXAI_PROJECT", "my-project")
+        monkeypatch.setenv("VERTEXAI_LOCATION", "us-central1")
+        model_info = {
+            "model": "vertex_ai/gemini-3-flash-preview",
+            "api_key": "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION",
+            "location": "global",
+        }
+        result = llm_mod._ensure_api_key(model_info, {}, False)
+        assert result is True
+
+    def test_vertex_pipe_delimited_no_creds_no_project(self, llm_mod, monkeypatch):
+        """No credentials and no project at all — should fail."""
+        monkeypatch.setenv("PDD_FORCE", "1")
+        monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+        monkeypatch.delenv("VERTEXAI_PROJECT", raising=False)
+        monkeypatch.delenv("VERTEXAI_LOCATION", raising=False)
+        monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+        model_info = {
+            "model": "vertex_ai/gemini-3-flash-preview",
+            "api_key": "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION",
+            "location": "global",
+        }
+        result = llm_mod._ensure_api_key(model_info, {}, False)
+        assert result is False
+
+    def test_vertex_pipe_delimited_adc_login_with_project(self, llm_mod, monkeypatch):
+        """ADC login (no GOOGLE_APPLICATION_CREDENTIALS) but VERTEXAI_PROJECT +
+        VERTEXAI_LOCATION set — should pass."""
+        monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+        monkeypatch.setenv("VERTEXAI_PROJECT", "test-project")
+        monkeypatch.setenv("VERTEXAI_LOCATION", "global")
+        model_info = {
+            "model": "vertex_ai/gemini-3-flash-preview",
+            "api_key": "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION",
+            "location": "global",
+        }
+        result = llm_mod._ensure_api_key(model_info, {}, False)
+        assert result is True
+
+    def test_vertex_pipe_delimited_no_csv_location_fails(self, llm_mod, monkeypatch):
+        """GOOGLE_APPLICATION_CREDENTIALS set + GOOGLE_CLOUD_PROJECT set but
+        no VERTEXAI_LOCATION and no CSV location — should fail (can't resolve location)."""
+        monkeypatch.setenv("PDD_FORCE", "1")
+        monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/path/to/sa.json")
+        monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project")
+        monkeypatch.delenv("VERTEXAI_PROJECT", raising=False)
+        monkeypatch.delenv("VERTEXAI_LOCATION", raising=False)
+        model_info = {
+            "model": "vertex_ai/gemini-3-flash-preview",
+            "api_key": "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION",
+            # No "location" key — can't resolve location
+        }
+        result = llm_mod._ensure_api_key(model_info, {}, False)
         assert result is False
 
 

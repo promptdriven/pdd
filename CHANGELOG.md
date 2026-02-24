@@ -1,35 +1,55 @@
+## v0.0.158 (2026-02-23)
+
+### Feat
+
+- Implement comprehensive API routes for the video pipeline and add a new E2E test for Stage 8 Composition Generation.
+- Add comprehensive Playwright E2E tests for all video editor stages and enhance the script API to support TTS script management.
+- add E2E test for non-recursive circular include detection and update project configuration defaults for video editor.
+- Update test durations and modify `test_llm_invoke_integration.py`.
+
+### Fix
+
+- make sync regression cases 5 and 9 non-fatal on LLM failures
+- handle multi-language sync failure gracefully in case 4
+- increase timeouts and add --max-attempts to sync regression tests
+
+### Refactor
+
+- improve color readability assertion in review tab E2E test by using canvas for RGB extraction.
+- Split audit results API into a dedicated route, implement the Stage 10 Audit UI, and add comprehensive E2E tests including dark theme readability checks.
+- Restructure ProjectConfig schema for output resolution, TTS, audio sync, VEO, and render settings, updating relevant UI and tests.
+- Centralize cost and model extraction logic in Python and update video project configuration.
+- Update Stage1ProjectSetup for StagePanelProps compatibility, correct annotation fetching API parameter, and switch to 'server-only' directive for database utilities.
+
 ## v0.0.157 (2026-02-22)
 
 ### Feat
 
-- Implement command timeouts in sync regression and add retry logic for prerequisite generation in cloud regression.
-- Implement smooth quadratic bezier curves for waypoint edges and enhance graph layout with wire-length minimization, column reordering, and gravity refinement passes.
-- Introduce waypoint edges for improved dependency graph rendering and ensure backend layout operations are non-mutating.
-- Enhance graph layout with new column-split rules and ensure proper discard of rearranged positions.
-- Implement frontend job management with `useJobs` hook and `JobDashboard` component, alongside prompt file path refactoring.
-- Introduce a comprehensive set of prompts for generating frontend components, hooks, and backend commands, and update related frontend files and configuration.
-- Implement agentic graph layout rearrangement using an LLM to automatically position architecture modules.
-- Implement prompt refresh in ArchitectureView on sync completion and integrate Vitest for frontend testing.
+- **Deadline-aware agentic retry budgeting** — `run_agentic_task` now accepts a `deadline` parameter (also read from `PDD_JOB_DEADLINE` env var). Each retry attempt checks remaining budget against `JOB_TIMEOUT_MARGIN_SECONDS` and `MIN_ATTEMPT_TIMEOUT_SECONDS`, skipping attempts that cannot finish in time. `JobManager` sets a 30-minute job timeout and propagates the deadline to subprocess jobs, with graceful SIGTERM→SIGKILL escalation and zombie process detection.
+- **Agentic graph layout rearrangement** — New `/api/v1/architecture/rearrange` endpoint runs `arrange_graph_layout_LLM.prompt` via `run_agentic_task` to automatically assign swimlane positions to architecture modules. Changes are returned to the frontend without persisting to disk until explicitly saved.
+- **Waypoint edges and improved graph rendering** — Dependency graph now renders smooth quadratic bezier curves through waypoint nodes, with wire-length minimization, column reordering, gravity refinement passes, and new column-split rules. Backend layout operations are non-mutating (original positions preserved for discard).
+- **Frontend job management** — New `useJobs` hook and `JobDashboard` component for monitoring server-side job execution. Prompt refresh triggers automatically on sync completion via `syncCompletedCounter`.
+- **`get_language_outputs()` for config-type language detection** — New function in `construct_paths.py` distinguishes config/data/markup languages (JSON, YAML, CSS, etc.) that produce only `code` from executable languages that produce `code`, `test`, and `example`. Uses the `outputs` column from `language_format.csv` with a built-in fallback set. `moduleNeedsSync` in the frontend uses `expected_outputs` to avoid counting config modules as needing sync.
+- **Comprehensive frontend prompt coverage** — Added 60+ prompts covering all frontend components, hooks, pages, and backend command modules (`checkup`, `firecrawl`, `report`, `which`), plus `config_resolution`, `remote_session`, `generate_model_catalog`, `pin_example_hack`, and `template_expander`.
+- **Vitest integration** — Frontend testing now supports Vitest alongside Jest, with 5 new test suites: waypoint edges, rearrange positions, rearrange discard, sync-completed refresh, and module-needs-sync.
+- **Command timeouts in sync regression** — `run_pdd_command_base` now wraps commands with `PDD_CMD_TIMEOUT` (default 600s). Cloud regression adds retry logic for prerequisite generation failures.
 - Increase LLM call timeout and add project dependencies CSV.
-- Implement the video editor frontend application structure, including Stages 9 and 10, and add deadline propagation to agentic verification.
-- introduce multi-stage video editing workflow with components, examples, and tests for each stage.
-- Implement `VideoPlayer` component with rich annotation capabilities and add `StageSidebar` component, including examples and tests.
-- Add API endpoints for batch annotation resolution and video serving, introduce an SSE log panel component, and update related configuration and job processing.
-- Add annotation API routes for management and analysis, including tests and examples, and update LLM model ELO scores.
 
 ### Fix
 
-- Improve job timeout handling by logging potential zombie processes, add a corresponding test, and enhance error logging and progress reporting for section rendering.
-- Sync Remaining count no longer includes config-type dev units (JSON, YAML, CSS)
-- remove inaccurate RichLog max_lines claim from sync_tui prompt
-- add ADC fallback for VERTEX_CREDENTIALS in Cloud Build CI
-- save RunReport after agentic verify to prevent false crash-verify cycle
-- Correct ELO scores for codex models and expand model catalog
+- **Job timeout handling** — Jobs now enforce a 30-minute wall-clock timeout with SIGTERM→SIGKILL escalation, zombie process logging, and signal-killed process detection (`exit_code < 0`).
+- **Sync Remaining count** — No longer includes config-type dev units (JSON, YAML, CSS) that only produce code output.
+- **RunReport saved after agentic verify** — Prevents false crash-verify cycle where a successful agentic verify was not recorded, causing the state machine to re-enter the fix loop.
+- **Rich markup escaping in error messages** — `fix_verification_errors_loop` now escapes file paths and error messages with `rich_escape()` to prevent Rich markup injection from unusual filenames or error strings.
+- **ADC fallback for Vertex AI** — `_ensure_api_key()` now falls back to Application Default Credentials when `VERTEX_CREDENTIALS` is unset but a GCP project env var is available.
+- Remove inaccurate RichLog `max_lines` claim from `sync_tui` prompt.
+- **Updated ELO scores** — Refreshed from LMArena Code Arena (Feb 22, 2026). Notable changes: `claude-sonnet-4.6` jumps to #3 (1524), new entries for `gpt-5.2-codex`, `gpt-5.1-codex-mini/max`, `gpt-5.3-codex`, `gpt-5-nano`, `gemini-3.1-pro`, and GitHub Copilot naming aliases.
 
 ### Refactor
 
-- update architecture diagram component positions and replace Unicode escape sequences with actual characters."
-- apply custom theme to console output and adjust TypeScript import paths after removing baseUrl.
+- **`_echo_rich` for CliRunner-compatible Rich output** — `templates.py` now renders Rich objects through an in-memory `Console` and outputs via `click.echo`, fixing test capture under `CliRunner`.
+- Update architecture diagram component positions and replace Unicode escape sequences with actual characters.
+- Apply custom theme to console output and adjust TypeScript import paths after removing `baseUrl`.
 
 ## v0.0.156 (2026-02-21)
 

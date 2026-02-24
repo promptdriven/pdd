@@ -1210,14 +1210,22 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
             newly_acquired_keys[api_key_field] = False
             return True
 
-        # Vertex AI ADC fallback: GOOGLE_APPLICATION_CREDENTIALS may be unset
-        # if the user ran ``gcloud auth application-default login`` instead.
-        if "GOOGLE_APPLICATION_CREDENTIALS" in env_vars and "GOOGLE_APPLICATION_CREDENTIALS" in missing:
+        # Vertex AI fallback: resolve missing VERTEXAI_PROJECT from
+        # GOOGLE_CLOUD_PROJECT and missing VERTEXAI_LOCATION from CSV location column
+        # (the invocation code already reads CSV location).
+        if "GOOGLE_APPLICATION_CREDENTIALS" in env_vars:
             project = os.getenv("VERTEXAI_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT")
-            if project:
-                remaining = [v for v in missing if v != "GOOGLE_APPLICATION_CREDENTIALS"]
+            has_location = (
+                "VERTEXAI_LOCATION" not in missing
+                or bool(model_info.get("location"))
+            )
+            if project and has_location:
+                remaining = [
+                    v for v in missing
+                    if v not in ("GOOGLE_APPLICATION_CREDENTIALS", "VERTEXAI_PROJECT", "VERTEXAI_LOCATION")
+                ]
                 if not remaining:
-                    logger.info(f"Using ADC for Vertex AI (project={project}).")
+                    logger.info(f"Using Vertex AI credentials (project={project}).")
                     newly_acquired_keys[api_key_field] = False
                     return True
 
@@ -1999,6 +2007,11 @@ def llm_invoke(
                 # Empty api_key — device flow (GitHub Copilot) or local model
                 if verbose:
                     logger.info(f"[INFO] No API key for '{model_name_litellm}'; using device flow or default auth.")
+
+            # Pass vertex_location from CSV (e.g., "global" for gemini-3-flash-preview)
+            location = model_info.get('location')
+            if pd.notna(location) and location:
+                litellm_kwargs["vertex_location"] = str(location)
 
             # Add base_url/api_base override if present in CSV
             api_base = model_info.get('base_url')

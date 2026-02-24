@@ -349,3 +349,69 @@ class TestCircularIncludesNonRecursive:
             assert 'C' in result
             # D is included twice (via B and via C) — that's fine, not circular
             assert result.count('Shared') == 2
+
+    def test_asymmetric_diamond_non_recursive_not_falsely_flagged(self):
+        """Asymmetric diamond: A includes preamble directly AND gen (which also includes preamble).
+
+        This is the exact pattern from regression test 11:
+        - main.prompt includes python_preamble.prompt directly
+        - main.prompt includes code_generator_python.prompt
+        - code_generator_python.prompt also includes python_preamble.prompt
+        This is NOT circular — preamble is a shared leaf included from two parents.
+        """
+        file_map = {
+            'main.txt': '<include>preamble.txt</include>\n<include>gen.txt</include>',
+            'gen.txt': 'Generator\n<include>preamble.txt</include>',
+            'preamble.txt': 'Preamble content',
+        }
+        with patch('builtins.open', mock_open()) as m:
+            m.side_effect = _make_mock_open(file_map)
+
+            result = preprocess(
+                '<include>main.txt</include>',
+                recursive=False,
+                double_curly_brackets=False,
+            )
+
+            assert 'Generator' in result
+            assert 'Preamble content' in result
+
+    def test_deep_asymmetric_diamond_non_recursive_not_falsely_flagged(self):
+        """Shared file at different depths: A→shared directly, A→B→C→shared via chain."""
+        file_map = {
+            'a.txt': '<include>shared.txt</include>\n<include>b.txt</include>',
+            'b.txt': 'B\n<include>c.txt</include>',
+            'c.txt': 'C\n<include>shared.txt</include>',
+            'shared.txt': 'SharedLeaf',
+        }
+        with patch('builtins.open', mock_open()) as m:
+            m.side_effect = _make_mock_open(file_map)
+
+            result = preprocess(
+                '<include>a.txt</include>',
+                recursive=False,
+                double_curly_brackets=False,
+            )
+
+            assert 'B' in result
+            assert 'C' in result
+            assert 'SharedLeaf' in result
+
+    def test_asymmetric_diamond_backtick_non_recursive_not_falsely_flagged(self):
+        """Asymmetric diamond with backtick-style includes must not be falsely flagged."""
+        file_map = {
+            'main.txt': '```<preamble.txt>```\n```<gen.txt>```',
+            'gen.txt': 'Generator\n```<preamble.txt>```',
+            'preamble.txt': 'Preamble content',
+        }
+        with patch('builtins.open', mock_open()) as m:
+            m.side_effect = _make_mock_open(file_map)
+
+            result = preprocess(
+                '```<main.txt>```',
+                recursive=False,
+                double_curly_brackets=False,
+            )
+
+            assert 'Generator' in result
+            assert 'Preamble content' in result
