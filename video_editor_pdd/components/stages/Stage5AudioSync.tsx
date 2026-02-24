@@ -50,7 +50,21 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
         const data = (await res.json()) as ProjectConfig;
         if (!active) return;
         setProject(data);
-        setSectionGroups(data.audioSync?.sectionGroups ?? {});
+        // Normalize sectionGroups: API may return SegmentRange objects
+        // ({ startSegment, endSegment }) or string arrays.
+        const rawGroups = data.audioSync?.sectionGroups ?? {};
+        const normalized: Record<string, string[]> = {};
+        for (const [key, val] of Object.entries(rawGroups)) {
+          if (Array.isArray(val)) {
+            normalized[key] = val;
+          } else if (val && typeof val === 'object' && 'startSegment' in val) {
+            const sr = val as { startSegment: string; endSegment: string };
+            normalized[key] = [sr.startSegment, sr.endSegment].filter(Boolean);
+          } else {
+            normalized[key] = [];
+          }
+        }
+        setSectionGroups(normalized);
         // default section
         if (data.sections?.length > 0) {
           setSelectedSectionId(data.sections[0].id);
@@ -82,9 +96,16 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
             selectedSectionId
           )}`
         );
-        const data = (await res.json()) as WordTimestamp[];
+        if (!res.ok) {
+          if (!active) return;
+          setTimestamps([]);
+          return;
+        }
+        const data = await res.json();
         if (!active) return;
-        setTimestamps(data);
+        // API returns { words: [...] } or a raw array
+        const list: WordTimestamp[] = Array.isArray(data) ? data : (data.words ?? []);
+        setTimestamps(list);
       } catch (err) {
         if (!active) return;
         setTimestamps([]);
@@ -174,9 +195,9 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
   return (
     <div className="space-y-6">
       {/* Top Section: Section Grouping Table */}
-      <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="rounded-lg border border-slate-700 bg-slate-900 p-4 shadow-sm">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold">Audio Sync Section Groups</h2>
+          <h2 className="text-lg font-semibold text-slate-100">Audio Sync Section Groups</h2>
           <div className="flex items-center gap-2">
             <button
               onClick={handleSaveConfig}
@@ -196,18 +217,18 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
 
         <table className="w-full text-sm border-collapse">
           <thead>
-            <tr className="text-left border-b border-slate-200">
-              <th className="py-2">Section</th>
-              <th className="py-2">Segment IDs (comma-separated)</th>
+            <tr className="text-left border-b border-slate-700">
+              <th className="py-2 text-slate-300">Section</th>
+              <th className="py-2 text-slate-300">Segment IDs (comma-separated)</th>
             </tr>
           </thead>
           <tbody>
             {sections.map((section) => (
-              <tr key={section.id} className="border-b border-slate-100">
-                <td className="py-2 pr-4 font-medium">{section.label}</td>
+              <tr key={section.id} className="border-b border-slate-700">
+                <td className="py-2 pr-4 font-medium text-slate-200">{section.label}</td>
                 <td className="py-2">
                   <input
-                    className="w-full rounded border border-slate-300 px-2 py-1 text-sm"
+                    className="w-full rounded border border-slate-600 bg-slate-800 px-2 py-1 text-sm text-slate-200 placeholder-slate-500"
                     value={(sectionGroups[section.id] ?? []).join(', ')}
                     onChange={(e) =>
                       handleGroupChange(section.id, e.target.value)
@@ -226,14 +247,14 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
       </div>
 
       {/* Bottom Section: Word Timestamp Viewer */}
-      <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="rounded-lg border border-slate-700 bg-slate-900 p-4 shadow-sm">
         <div className="flex flex-wrap items-center gap-4 mb-4">
-          <h2 className="text-lg font-semibold">Word Timestamp Viewer</h2>
+          <h2 className="text-lg font-semibold text-slate-100">Word Timestamp Viewer</h2>
 
           <div className="flex items-center gap-2">
-            <label className="text-sm">Section:</label>
+            <label className="text-sm text-slate-300">Section:</label>
             <select
-              className="rounded border border-slate-300 px-2 py-1 text-sm"
+              className="rounded border border-slate-600 bg-slate-800 px-2 py-1 text-sm text-slate-200"
               value={selectedSectionId}
               onChange={(e) => setSelectedSectionId(e.target.value)}
             >
@@ -246,18 +267,18 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
           </div>
 
           <input
-            className="rounded border border-slate-300 px-2 py-1 text-sm"
+            className="rounded border border-slate-600 bg-slate-800 px-2 py-1 text-sm text-slate-200 placeholder-slate-500"
             placeholder="Search word…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
 
-          <div className="text-xs text-slate-500">
+          <div className="text-xs text-slate-400">
             {filteredWords.length} of {totalWords} words
           </div>
         </div>
 
-        <div className="text-xs text-slate-500 mb-2">
+        <div className="text-xs text-slate-400 mb-2">
           {loadingTimestamps ? 'Loading timestamps…' : ''}
         </div>
 
@@ -265,7 +286,7 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
         <div
           ref={scrollRef}
           onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
-          className="border border-slate-200 rounded overflow-y-auto"
+          className="border border-slate-700 rounded overflow-y-auto"
           style={{ height: VIEWPORT_HEIGHT, contain: 'strict' }}
         >
           <div style={{ height: totalHeight, position: 'relative' }}>
@@ -276,7 +297,7 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
             >
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="text-left bg-slate-50">
+                  <tr className="text-left bg-slate-800 text-slate-300">
                     <th className="py-2 px-2">Word</th>
                     <th className="py-2 px-2">Start</th>
                     <th className="py-2 px-2">End</th>
@@ -287,7 +308,7 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
                   {visibleWords.map((w, idx) => (
                     <tr
                       key={`${w.word}-${idx}`}
-                      className="border-b border-slate-100"
+                      className="border-b border-slate-700 text-slate-200"
                       style={{ height: ROW_HEIGHT }}
                     >
                       <td className="py-1 px-2">{w.word}</td>
@@ -305,7 +326,7 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
         <div className="mt-4 flex justify-end">
           <button
             onClick={onAdvance}
-            className="rounded-md bg-slate-800 px-4 py-2 text-white text-sm"
+            className="rounded-md bg-slate-700 px-4 py-2 text-white text-sm hover:bg-slate-600"
           >
             Continue
           </button>

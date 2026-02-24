@@ -33,6 +33,7 @@
     "zod": "^3.0.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.58.2",
     "@types/better-sqlite3": "^7.0.0",
     "@types/jest": "^30.0.0",
     "@types/node": "^20.0.0",
@@ -41,6 +42,7 @@
     "eslint": "^8.0.0",
     "eslint-config-next": "^15.0.0",
     "jest": "^30.2.0",
+    "playwright": "^1.58.2",
     "tailwindcss": "^4.0.0",
     "ts-jest": "^29.4.6",
     "tsx": "^4.21.0",

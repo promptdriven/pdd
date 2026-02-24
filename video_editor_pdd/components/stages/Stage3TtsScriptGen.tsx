@@ -34,7 +34,8 @@ export default function Stage3TtsScriptGen({ onAdvance }: Stage3TtsScriptGenProp
     try {
       const res = await fetch(`/api/project/script?file=${file}`);
       if (!res.ok) return null;
-      return await res.text();
+      const data = await res.json();
+      return data?.content ?? null;
     } catch {
       return null;
     }

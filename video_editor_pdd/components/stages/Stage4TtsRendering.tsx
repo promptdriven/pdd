@@ -58,8 +58,9 @@ export default function Stage4TtsRendering({ onAdvance }: Stage4TtsRenderingProp
     try {
       const res = await fetch('/api/pipeline/tts-render/segments');
       if (!res.ok) throw new Error('Failed to load TTS segments.');
-      const data: TtsSegment[] = await res.json();
-      setSegments(data);
+      const data = await res.json();
+      const list: TtsSegment[] = Array.isArray(data) ? data : (data.segments ?? []);
+      setSegments(list);
     } catch (err: any) {
       setError(err.message || 'Failed to load TTS segments.');
     } finally {
