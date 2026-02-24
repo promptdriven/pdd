@@ -11,9 +11,31 @@ error marker in output), NOT silently corrupted content.
 """
 
 import os
+import signal
 import pytest
 from unittest.mock import patch, mock_open, MagicMock
 from pdd.preprocess import preprocess
+
+
+def _timeout_handler(signum, frame):
+    raise TimeoutError("Test timed out — possible infinite loop")
+
+
+def _with_timeout(seconds=10):
+    """Decorator that enforces a real timeout using SIGALRM (Unix only)."""
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+            signal.alarm(seconds)
+            try:
+                return func(*args, **kwargs)
+            finally:
+                signal.alarm(0)
+                signal.signal(signal.SIGALRM, old_handler)
+        wrapper.__name__ = func.__name__
+        wrapper.__doc__ = func.__doc__
+        return wrapper
+    return decorator
 
 # Store original so we can restore
 _original_pdd_path = os.environ.get('PDD_PATH')
@@ -214,7 +236,7 @@ class TestCircularIncludesNonRecursive:
         elif 'PDD_PATH' in os.environ:
             del os.environ['PDD_PATH']
 
-    @pytest.mark.timeout(10)
+    @_with_timeout(10)
     def test_circular_xml_includes_non_recursive_must_error(self):
         """A→B→A circular XML include with recursive=False must raise ValueError, not loop forever."""
         file_map = {
@@ -233,7 +255,7 @@ class TestCircularIncludesNonRecursive:
                     double_curly_brackets=False,
                 )
 
-    @pytest.mark.timeout(10)
+    @_with_timeout(10)
     def test_circular_backtick_includes_non_recursive_must_error(self):
         """A→B→A circular backtick include with recursive=False must raise ValueError."""
         file_map = {
@@ -252,7 +274,7 @@ class TestCircularIncludesNonRecursive:
                     double_curly_brackets=False,
                 )
 
-    @pytest.mark.timeout(10)
+    @_with_timeout(10)
     def test_self_referencing_include_non_recursive_must_error(self):
         """A file that includes itself must be detected in non-recursive mode."""
         file_map = {
@@ -268,7 +290,7 @@ class TestCircularIncludesNonRecursive:
                     double_curly_brackets=False,
                 )
 
-    @pytest.mark.timeout(10)
+    @_with_timeout(10)
     def test_three_file_cycle_non_recursive_must_error(self):
         """A→B→C→A three-file cycle must be detected in non-recursive mode."""
         file_map = {

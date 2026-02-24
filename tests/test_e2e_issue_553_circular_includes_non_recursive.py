@@ -10,6 +10,7 @@ Issue #521 (fixed by PR #528) added cycle detection for --recursive mode.
 Issue #553 reports that the default (non-recursive) path was not covered by that fix.
 """
 
+import os
 import subprocess
 import sys
 import pytest
@@ -21,6 +22,16 @@ from pathlib import Path
 CLI_TIMEOUT = 10
 
 
+def _get_project_root() -> Path:
+    """Get the project root directory."""
+    current = Path(__file__).parent
+    while current != current.parent:
+        if (current / "pdd").is_dir() and (current / "pyproject.toml").exists():
+            return current
+        current = current.parent
+    raise RuntimeError("Could not find project root with pdd/ directory")
+
+
 def _run_pdd_preprocess(prompt_file: str, cwd: str, extra_args: list = None):
     """Run `pdd --force preprocess <prompt_file>` via subprocess with timeout.
 
@@ -30,11 +41,14 @@ def _run_pdd_preprocess(prompt_file: str, cwd: str, extra_args: list = None):
     cmd = [sys.executable, "-m", "pdd.cli", "--force", "preprocess", prompt_file]
     if extra_args:
         cmd.extend(extra_args)
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(_get_project_root())
     return subprocess.run(
         cmd,
         capture_output=True,
         text=True,
         cwd=cwd,
+        env=env,
         timeout=CLI_TIMEOUT,
     )
 
