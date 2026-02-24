@@ -26,7 +26,7 @@ from typing import Any, Dict, List, Optional, Tuple
 # Constants
 # ---------------------------------------------------------------------------
 
-DEFAULT_MODEL = "Qwen/Qwen3-TTS"
+DEFAULT_MODEL = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
 DEFAULT_OUTPUT_DIR = "outputs/tts/"
 DEFAULT_PROJECT_DIR = "."
 SAMPLE_RATE = 24000  # Qwen TTS models typically output 24kHz audio
@@ -329,126 +329,84 @@ class TTSEngine:
     """
     Wrapper around the Qwen3-TTS model for text-to-speech synthesis.
 
-    Handles model loading and inference, converting text to raw PCM audio bytes.
+    Uses the official `qwen-tts` package with Qwen3TTSModel API.
     """
 
-    def __init__(self, model_id: str):
+    def __init__(self, model_id: str, speaker: str = "Aiden", language: str = "English"):
         self.model_id = model_id
-        self.processor = None
+        self.speaker = speaker
+        self.language = language
         self.model = None
         self.sample_rate = SAMPLE_RATE
         self._load_model()
 
     def _load_model(self) -> None:
-        """Load the TTS model and processor."""
-        try:
-            from transformers import AutoProcessor, AutoModelForTextToWaveform
-        except ImportError:
-            try:
-                from transformers import AutoTokenizer, AutoModel
-                self._use_fallback = True
-            except ImportError:
-                raise RuntimeError(
-                    "transformers library is not installed. "
-                    "Install it with: pip install transformers"
-                )
-            else:
-                self._use_fallback = True
-                self._load_model_fallback()
-                return
+        """Load the Qwen3-TTS model via qwen-tts package."""
+        import torch
+        from qwen_tts import Qwen3TTSModel
 
-        self._use_fallback = False
-        try:
-            self.processor = AutoProcessor.from_pretrained(
-                self.model_id, trust_remote_code=True
-            )
-            self.model = AutoModelForTextToWaveform.from_pretrained(
-                self.model_id, trust_remote_code=True
-            )
-        except Exception:
-            # Fall back to generic Auto classes
-            self._use_fallback = True
-            self._load_model_fallback()
+        # Use MPS on Apple Silicon, fall back to CPU
+        if torch.backends.mps.is_available():
+            device = "mps"
+            dtype = torch.float32  # MPS doesn't support bfloat16
+        else:
+            device = "cpu"
+            dtype = torch.float32
 
-    def _load_model_fallback(self) -> None:
-        """Fallback model loading using AutoTokenizer + AutoModel."""
-        from transformers import AutoTokenizer, AutoModel
-
-        self.processor = AutoTokenizer.from_pretrained(
-            self.model_id, trust_remote_code=True
+        self.model = Qwen3TTSModel.from_pretrained(
+            self.model_id,
+            device_map=device,
+            dtype=dtype,
         )
-        self.model = AutoModel.from_pretrained(
-            self.model_id, trust_remote_code=True
-        )
+        self.sample_rate = SAMPLE_RATE
 
     def synthesize(self, text: str, **kwargs: Any) -> bytes:
         """
-        Synthesize speech from text.
+        Synthesize speech from text using Qwen3-TTS generate_custom_voice.
 
         Args:
             text: The text to synthesize.
-            **kwargs: Additional parameters (tone, pace, emotion) for
-                      voice control if supported by the model.
+            **kwargs: Additional parameters (tone, pace, emotion) — used
+                      as instruct text if provided.
 
         Returns:
             Raw PCM audio bytes (16-bit signed, little-endian, mono).
         """
-        import torch
         import numpy as np
 
         if not text.strip():
-            # Return a tiny bit of silence for empty text
             return generate_silence_wav_bytes(0.1)
 
-        try:
-            if self._use_fallback:
-                inputs = self.processor(text, return_tensors="pt")
-            else:
-                inputs = self.processor(
-                    text=text, return_tensors="pt"
-                )
+        # Build instruct string from annotations if available
+        instruct_parts = []
+        if kwargs.get("tone"):
+            instruct_parts.append(f"Tone: {kwargs['tone']}")
+        if kwargs.get("pace"):
+            instruct_parts.append(f"Pace: {kwargs['pace']}")
+        if kwargs.get("emotion"):
+            instruct_parts.append(f"Emotion: {kwargs['emotion']}")
+        instruct = ". ".join(instruct_parts) if instruct_parts else None
 
-            with torch.no_grad():
-                output = self.model(**inputs)
+        wavs, sr = self.model.generate_custom_voice(
+            text=text,
+            speaker=self.speaker,
+            language=self.language,
+            instruct=instruct,
+        )
 
-            # Extract waveform from model output
-            if hasattr(output, "waveform"):
-                waveform = output.waveform
-            elif hasattr(output, "audio"):
-                waveform = output.audio
-            elif isinstance(output, dict):
-                for key in ("waveform", "audio", "wav"):
-                    if key in output:
-                        waveform = output[key]
-                        break
-                else:
-                    waveform = list(output.values())[0]
-            elif isinstance(output, (tuple, list)):
-                waveform = output[0]
-            else:
-                waveform = output
+        if sr and sr != self.sample_rate:
+            self.sample_rate = sr
 
-            # Convert to numpy
-            if isinstance(waveform, torch.Tensor):
-                audio_np = waveform.squeeze().cpu().numpy()
-            elif isinstance(waveform, np.ndarray):
-                audio_np = waveform.squeeze()
-            else:
-                audio_np = np.array(waveform, dtype=np.float32).squeeze()
+        audio_np = wavs[0]
+        if audio_np.dtype in (np.float32, np.float64):
+            max_val = np.max(np.abs(audio_np))
+            if max_val > 0:
+                audio_np = audio_np / max_val
+            audio_np = (audio_np * 32767).astype(np.int16)
+        elif audio_np.dtype != np.int16:
+            audio_np = audio_np.astype(np.int16)
 
-            # Normalize to 16-bit PCM range
-            if audio_np.dtype in (np.float32, np.float64):
-                max_val = np.max(np.abs(audio_np))
-                if max_val > 0:
-                    audio_np = audio_np / max_val
-                audio_np = (audio_np * 32767).astype(np.int16)
-            elif audio_np.dtype != np.int16:
-                audio_np = audio_np.astype(np.int16)
-
-            return audio_np.tobytes()
-
-        except Exception as e:
-            raise RuntimeError(f"TTS synthesis failed for text: {e}") from e
+        return audio_np.tobytes()
 
 
 class EdgeTTSEngine:
@@ -652,11 +610,20 @@ def main() -> None:
         # No segments to render — this is not an error, just nothing to do
         sys.exit(0)
 
+    # Read speaker config from project.json
+    speaker = "Aiden"
+    project_json_path = os.path.join(project_dir, "project.json")
+    if os.path.exists(project_json_path):
+        with open(project_json_path, encoding="utf-8") as f:
+            proj_config = json.load(f)
+        tts_config = proj_config.get("tts", {})
+        speaker = tts_config.get("speaker", speaker)
+
     # Load the TTS engine
     engine = None
     try:
-        engine = TTSEngine(args.model)
-        print(json.dumps({"type": "info", "message": f"Loaded Qwen3-TTS model: {args.model}"}), flush=True)
+        engine = TTSEngine(args.model, speaker=speaker)
+        print(json.dumps({"type": "info", "message": f"Loaded Qwen3-TTS model: {args.model}, speaker: {speaker}"}), flush=True)
     except Exception as e:
         print(json.dumps({"type": "info", "message": f"Qwen3-TTS unavailable ({e}), falling back to EdgeTTS"}), flush=True)
         try:
