@@ -1,3 +1,26 @@
+## v0.0.158 (2026-02-23)
+
+### Feat
+
+- Implement comprehensive API routes for the video pipeline and add a new E2E test for Stage 8 Composition Generation.
+- Add comprehensive Playwright E2E tests for all video editor stages and enhance the script API to support TTS script management.
+- add E2E test for non-recursive circular include detection and update project configuration defaults for video editor.
+- Update test durations and modify `test_llm_invoke_integration.py`.
+
+### Fix
+
+- make sync regression cases 5 and 9 non-fatal on LLM failures
+- handle multi-language sync failure gracefully in case 4
+- increase timeouts and add --max-attempts to sync regression tests
+
+### Refactor
+
+- improve color readability assertion in review tab E2E test by using canvas for RGB extraction.
+- Split audit results API into a dedicated route, implement the Stage 10 Audit UI, and add comprehensive E2E tests including dark theme readability checks.
+- Restructure ProjectConfig schema for output resolution, TTS, audio sync, VEO, and render settings, updating relevant UI and tests.
+- Centralize cost and model extraction logic in Python and update video project configuration.
+- Update Stage1ProjectSetup for StagePanelProps compatibility, correct annotation fetching API parameter, and switch to 'server-only' directive for database utilities.
+
 ## v0.0.157 (2026-02-22)
 
 ### Feat
