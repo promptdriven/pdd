@@ -12,12 +12,12 @@ interface Stage1ProjectSetupProps {
 
 const DEFAULT_CONFIG: ProjectConfig = {
   name: '',
-  outputResolution: '1920x1080',
-  tts: { voice: '', rate: 1, model: '' },
+  outputResolution: { width: 1920, height: 1080 },
+  tts: { engine: 'qwen3-tts', modelPath: '', tokenizerPath: '', speaker: 'Aiden', speakingRate: 0.95, sampleRate: 24000 },
   sections: [],
-  audioSync: { sectionGroups: {} },
-  veo: { model: '', aspectRatio: '16:9', referenceImages: {} },
-  render: { maxParallelRenders: 1, outputDir: '', fps: 30, width: 1920, height: 1080 },
+  audioSync: { sectionGroups: {}, silenceGapDefault: 0.3 },
+  veo: { model: 'veo-3.1-generate-preview', defaultAspectRatio: '16:9', maxConcurrentGenerations: 4, references: [], frameChains: [] },
+  render: { maxParallelRenders: 3, useLambda: false, lambdaRegion: 'us-east-1' },
 };
 
 const OUTPUT_RESOLUTIONS = [
@@ -212,10 +212,11 @@ export default function Stage1ProjectSetup({
               Output Resolution
             </label>
             <select
-              value={localConfig.outputResolution}
-              onChange={(e) =>
-                updateConfig('outputResolution', e.target.value as ProjectConfig['outputResolution'])
-              }
+              value={`${localConfig.outputResolution.width}x${localConfig.outputResolution.height}`}
+              onChange={(e) => {
+                const [w, h] = e.target.value.split('x').map(Number);
+                updateConfig('outputResolution', { width: w, height: h });
+              }}
               className="w-full border rounded px-3 py-2"
             >
               {OUTPUT_RESOLUTIONS.map((opt) => (
@@ -227,24 +228,39 @@ export default function Stage1ProjectSetup({
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-1">TTS Voice</label>
+            <label className="block text-sm font-medium mb-1">TTS Speaker</label>
             <input
-              value={localConfig.tts.voice}
-              onChange={(e) => updateNested('tts', 'voice', e.target.value)}
+              value={localConfig.tts.speaker}
+              onChange={(e) => updateNested('tts', 'speaker', e.target.value)}
               className="w-full border rounded px-3 py-2"
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-1">TTS Rate</label>
+            <label className="block text-sm font-medium mb-1">TTS Speaking Rate</label>
             <input
               type="number"
               min={0.5}
               max={2}
-              step={0.1}
-              value={localConfig.tts.rate}
+              step={0.05}
+              value={localConfig.tts.speakingRate}
               onChange={(e) =>
-                updateNested('tts', 'rate', Number(e.target.value))
+                updateNested('tts', 'speakingRate', Number(e.target.value))
+              }
+              className="w-full border rounded px-3 py-2"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-1">TTS Sample Rate</label>
+            <input
+              type="number"
+              min={8000}
+              max={48000}
+              step={1000}
+              value={localConfig.tts.sampleRate}
+              onChange={(e) =>
+                updateNested('tts', 'sampleRate', Number(e.target.value))
               }
               className="w-full border rounded px-3 py-2"
             />
@@ -264,9 +280,9 @@ export default function Stage1ProjectSetup({
               Veo Aspect Ratio
             </label>
             <select
-              value={localConfig.veo.aspectRatio}
+              value={localConfig.veo.defaultAspectRatio}
               onChange={(e) =>
-                updateNested('veo', 'aspectRatio', e.target.value as '16:9' | '9:16')
+                updateNested('veo', 'defaultAspectRatio', e.target.value as '16:9' | '9:16')
               }
               className="w-full border rounded px-3 py-2"
             >

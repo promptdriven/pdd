@@ -24,8 +24,12 @@ import type {
   Section,
   TtsConfig,
   VeoConfig,
+  VeoReference,
+  VeoFrameChain,
   RenderConfig,
   AudioSyncConfig,
+  SegmentRange,
+  OutputResolution,
   ProjectConfig,
   RenderProgress,
   SseSend,
@@ -598,25 +602,40 @@ describe('Section', () => {
 
 describe('TtsConfig', () => {
   const validTts: TtsConfig = {
-    voice: 'en-US-Neural2-F',
-    rate: 1.0,
-    model: 'google-tts-v2',
+    engine: 'qwen3-tts',
+    modelPath: 'models/Qwen3-TTS-12Hz-1.7B-CustomVoice',
+    tokenizerPath: 'models/Qwen3-TTS-Tokenizer-12Hz',
+    speaker: 'Aiden',
+    speakingRate: 0.95,
+    sampleRate: 24000,
   };
 
-  it('has all required fields', () => {
-    expectExactKeys(validTts, ['voice', 'rate', 'model']);
+  it('has all required fields per PRD §4.5.1', () => {
+    expectExactKeys(validTts, ['engine', 'modelPath', 'tokenizerPath', 'speaker', 'speakingRate', 'sampleRate']);
   });
 
-  it('voice is a string', () => {
-    expect(typeof validTts.voice).toBe('string');
+  it('engine is a string', () => {
+    expect(typeof validTts.engine).toBe('string');
   });
 
-  it('rate is a number', () => {
-    expect(typeof validTts.rate).toBe('number');
+  it('modelPath is a string', () => {
+    expect(typeof validTts.modelPath).toBe('string');
   });
 
-  it('model is a string', () => {
-    expect(typeof validTts.model).toBe('string');
+  it('tokenizerPath is a string', () => {
+    expect(typeof validTts.tokenizerPath).toBe('string');
+  });
+
+  it('speaker is a string', () => {
+    expect(typeof validTts.speaker).toBe('string');
+  });
+
+  it('speakingRate is a number', () => {
+    expect(typeof validTts.speakingRate).toBe('number');
+  });
+
+  it('sampleRate is a number', () => {
+    expect(typeof validTts.sampleRate).toBe('number');
   });
 });
 
@@ -626,40 +645,56 @@ describe('TtsConfig', () => {
 
 describe('VeoConfig', () => {
   const validVeo: VeoConfig = {
-    model: 'veo-2.0-generate-001',
-    aspectRatio: '16:9',
-    referenceImages: { logo: 'assets/logo.png' },
+    model: 'veo-3.1-generate-preview',
+    defaultAspectRatio: '16:9',
+    maxConcurrentGenerations: 4,
+    references: [
+      { id: 'alex', label: 'Alex (protagonist)', imagePath: 'references/cold-open/developer_reference.png', sections: ['cold_open', 'part1_economics'] },
+    ],
+    frameChains: [
+      { clips: ['cold_open_veo_01', 'cold_open_veo_02'], referenceId: 'alex' },
+    ],
   };
 
-  it('has all required fields', () => {
-    expectExactKeys(validVeo, ['model', 'aspectRatio', 'referenceImages']);
+  it('has all required fields per PRD §4.5.1', () => {
+    expectExactKeys(validVeo, ['model', 'defaultAspectRatio', 'maxConcurrentGenerations', 'references', 'frameChains']);
   });
 
   it('model is a string', () => {
     expect(typeof validVeo.model).toBe('string');
   });
 
-  it('aspectRatio accepts 16:9', () => {
-    const v: VeoConfig = { ...validVeo, aspectRatio: '16:9' };
-    expect(v.aspectRatio).toBe('16:9');
+  it('defaultAspectRatio accepts 16:9', () => {
+    const v: VeoConfig = { ...validVeo, defaultAspectRatio: '16:9' };
+    expect(v.defaultAspectRatio).toBe('16:9');
   });
 
-  it('aspectRatio accepts 9:16', () => {
-    const v: VeoConfig = { ...validVeo, aspectRatio: '9:16' };
-    expect(v.aspectRatio).toBe('9:16');
+  it('defaultAspectRatio accepts 9:16', () => {
+    const v: VeoConfig = { ...validVeo, defaultAspectRatio: '9:16' };
+    expect(v.defaultAspectRatio).toBe('9:16');
   });
 
-  it('referenceImages is a Record<string, string>', () => {
-    expect(typeof validVeo.referenceImages).toBe('object');
-    for (const [k, val] of Object.entries(validVeo.referenceImages)) {
-      expect(typeof k).toBe('string');
-      expect(typeof val).toBe('string');
-    }
+  it('maxConcurrentGenerations is a number', () => {
+    expect(typeof validVeo.maxConcurrentGenerations).toBe('number');
   });
 
-  it('referenceImages can be empty', () => {
-    const v: VeoConfig = { ...validVeo, referenceImages: {} };
-    expect(Object.keys(v.referenceImages)).toHaveLength(0);
+  it('references is an array of VeoReference', () => {
+    expect(Array.isArray(validVeo.references)).toBe(true);
+    expect(validVeo.references[0]).toHaveProperty('id');
+    expect(validVeo.references[0]).toHaveProperty('label');
+    expect(validVeo.references[0]).toHaveProperty('imagePath');
+    expect(validVeo.references[0]).toHaveProperty('sections');
+  });
+
+  it('frameChains is an array of VeoFrameChain', () => {
+    expect(Array.isArray(validVeo.frameChains)).toBe(true);
+    expect(validVeo.frameChains[0]).toHaveProperty('clips');
+    expect(validVeo.frameChains[0]).toHaveProperty('referenceId');
+  });
+
+  it('references can be empty', () => {
+    const v: VeoConfig = { ...validVeo, references: [] };
+    expect(v.references).toHaveLength(0);
   });
 });
 
@@ -670,40 +705,24 @@ describe('VeoConfig', () => {
 describe('RenderConfig', () => {
   const validRender: RenderConfig = {
     maxParallelRenders: 3,
-    outputDir: 'output/final',
-    fps: 30,
-    width: 1920,
-    height: 1080,
+    useLambda: false,
+    lambdaRegion: 'us-east-1',
   };
 
-  it('has all required fields', () => {
-    expectExactKeys(validRender, [
-      'maxParallelRenders',
-      'outputDir',
-      'fps',
-      'width',
-      'height',
-    ]);
+  it('has all required fields per PRD §4.5.1', () => {
+    expectExactKeys(validRender, ['maxParallelRenders', 'useLambda', 'lambdaRegion']);
   });
 
   it('maxParallelRenders is a number', () => {
     expect(typeof validRender.maxParallelRenders).toBe('number');
   });
 
-  it('outputDir is a string', () => {
-    expect(typeof validRender.outputDir).toBe('string');
+  it('useLambda is a boolean', () => {
+    expect(typeof validRender.useLambda).toBe('boolean');
   });
 
-  it('fps is a number', () => {
-    expect(typeof validRender.fps).toBe('number');
-  });
-
-  it('width is a number', () => {
-    expect(typeof validRender.width).toBe('number');
-  });
-
-  it('height is a number', () => {
-    expect(typeof validRender.height).toBe('number');
+  it('lambdaRegion is a string', () => {
+    expect(typeof validRender.lambdaRegion).toBe('string');
   });
 });
 
@@ -714,28 +733,29 @@ describe('RenderConfig', () => {
 describe('AudioSyncConfig', () => {
   const validAudioSync: AudioSyncConfig = {
     sectionGroups: {
-      narration: ['intro', 'main', 'outro'],
-      music: ['intro', 'outro'],
+      cold_open: { startSegment: 'cold_open_001', endSegment: 'cold_open_004' },
+      part1_economics: { startSegment: 'part1_economics_001', endSegment: 'part1_economics_007' },
     },
+    silenceGapDefault: 0.3,
   };
 
-  it('has sectionGroups field', () => {
-    expectExactKeys(validAudioSync, ['sectionGroups']);
+  it('has all required fields per PRD §4.5.1', () => {
+    expectExactKeys(validAudioSync, ['sectionGroups', 'silenceGapDefault']);
   });
 
-  it('sectionGroups is a Record<string, string[]>', () => {
+  it('sectionGroups maps section IDs to segment ranges', () => {
     expect(typeof validAudioSync.sectionGroups).toBe('object');
-    for (const [key, arr] of Object.entries(validAudioSync.sectionGroups)) {
-      expect(typeof key).toBe('string');
-      expect(Array.isArray(arr)).toBe(true);
-      for (const item of arr) {
-        expect(typeof item).toBe('string');
-      }
-    }
+    const group = validAudioSync.sectionGroups['cold_open'];
+    expect(group).toHaveProperty('startSegment');
+    expect(group).toHaveProperty('endSegment');
+  });
+
+  it('silenceGapDefault is a number', () => {
+    expect(typeof validAudioSync.silenceGapDefault).toBe('number');
   });
 
   it('sectionGroups can be empty', () => {
-    const a: AudioSyncConfig = { sectionGroups: {} };
+    const a: AudioSyncConfig = { sectionGroups: {}, silenceGapDefault: 0.3 };
     expect(Object.keys(a.sectionGroups)).toHaveLength(0);
   });
 });
@@ -746,33 +766,43 @@ describe('AudioSyncConfig', () => {
 
 describe('ProjectConfig', () => {
   const section: Section = {
-    id: 'intro',
-    label: 'Introduction',
-    videoFile: 'output/sections/intro.mp4',
-    specDir: 'specs/intro',
-    remotionDir: 'remotion/intro',
-    compositionId: 'IntroComposition',
-    durationSeconds: 12.5,
+    id: 'cold_open',
+    label: 'Cold Open',
+    videoFile: 'cold_open.mp4',
+    specDir: '00-cold-open',
+    remotionDir: 'S00-ColdOpen',
+    compositionId: 'ColdOpenSection',
+    durationSeconds: 0,
     offsetSeconds: 0,
   };
 
   const validProject: ProjectConfig = {
-    name: 'Product Launch Video',
-    outputResolution: '1920x1080',
-    tts: { voice: 'en-US-Neural2-F', rate: 1.0, model: 'google-tts-v2' },
+    name: '3blue1brown-antibiotics',
+    outputResolution: { width: 1920, height: 1080 },
+    tts: {
+      engine: 'qwen3-tts',
+      modelPath: 'models/Qwen3-TTS-12Hz-1.7B-CustomVoice',
+      tokenizerPath: 'models/Qwen3-TTS-Tokenizer-12Hz',
+      speaker: 'Aiden',
+      speakingRate: 0.95,
+      sampleRate: 24000,
+    },
     sections: [section],
-    audioSync: { sectionGroups: { narration: ['intro'] } },
+    audioSync: {
+      sectionGroups: { cold_open: { startSegment: 'cold_open_001', endSegment: 'cold_open_004' } },
+      silenceGapDefault: 0.3,
+    },
     veo: {
-      model: 'veo-2.0-generate-001',
-      aspectRatio: '16:9',
-      referenceImages: {},
+      model: 'veo-3.1-generate-preview',
+      defaultAspectRatio: '16:9',
+      maxConcurrentGenerations: 4,
+      references: [],
+      frameChains: [],
     },
     render: {
       maxParallelRenders: 3,
-      outputDir: 'output/final',
-      fps: 30,
-      width: 1920,
-      height: 1080,
+      useLambda: false,
+      lambdaRegion: 'us-east-1',
     },
   };
 
@@ -792,25 +822,25 @@ describe('ProjectConfig', () => {
     expect(typeof validProject.name).toBe('string');
   });
 
-  it('outputResolution accepts 1920x1080', () => {
-    expect(validProject.outputResolution).toBe('1920x1080');
+  it('outputResolution is an object with width and height per PRD §4.5.1', () => {
+    expect(validProject.outputResolution).toHaveProperty('width');
+    expect(validProject.outputResolution).toHaveProperty('height');
+    expect(typeof validProject.outputResolution.width).toBe('number');
+    expect(typeof validProject.outputResolution.height).toBe('number');
   });
 
-  it('outputResolution accepts 1280x720', () => {
-    const p: ProjectConfig = { ...validProject, outputResolution: '1280x720' };
-    expect(p.outputResolution).toBe('1280x720');
-  });
-
-  it('tts is a TtsConfig', () => {
-    expect(validProject.tts).toHaveProperty('voice');
-    expect(validProject.tts).toHaveProperty('rate');
-    expect(validProject.tts).toHaveProperty('model');
+  it('tts is a TtsConfig with PRD fields', () => {
+    expect(validProject.tts).toHaveProperty('engine');
+    expect(validProject.tts).toHaveProperty('modelPath');
+    expect(validProject.tts).toHaveProperty('speaker');
+    expect(validProject.tts).toHaveProperty('speakingRate');
+    expect(validProject.tts).toHaveProperty('sampleRate');
   });
 
   it('sections is an ordered array of Section', () => {
     expect(Array.isArray(validProject.sections)).toBe(true);
     expect(validProject.sections).toHaveLength(1);
-    expect(validProject.sections[0].id).toBe('intro');
+    expect(validProject.sections[0].id).toBe('cold_open');
   });
 
   it('sections ordering is preserved', () => {
@@ -826,22 +856,23 @@ describe('ProjectConfig', () => {
     expect(p.sections[2].id).toBe('s3');
   });
 
-  it('audioSync is an AudioSyncConfig', () => {
+  it('audioSync has sectionGroups with segment ranges and silenceGapDefault', () => {
     expect(validProject.audioSync).toHaveProperty('sectionGroups');
+    expect(validProject.audioSync).toHaveProperty('silenceGapDefault');
   });
 
-  it('veo is a VeoConfig', () => {
+  it('veo is a VeoConfig with PRD fields', () => {
     expect(validProject.veo).toHaveProperty('model');
-    expect(validProject.veo).toHaveProperty('aspectRatio');
-    expect(validProject.veo).toHaveProperty('referenceImages');
+    expect(validProject.veo).toHaveProperty('defaultAspectRatio');
+    expect(validProject.veo).toHaveProperty('maxConcurrentGenerations');
+    expect(validProject.veo).toHaveProperty('references');
+    expect(validProject.veo).toHaveProperty('frameChains');
   });
 
-  it('render is a RenderConfig', () => {
+  it('render is a RenderConfig with PRD fields', () => {
     expect(validProject.render).toHaveProperty('maxParallelRenders');
-    expect(validProject.render).toHaveProperty('outputDir');
-    expect(validProject.render).toHaveProperty('fps');
-    expect(validProject.render).toHaveProperty('width');
-    expect(validProject.render).toHaveProperty('height');
+    expect(validProject.render).toHaveProperty('useLambda');
+    expect(validProject.render).toHaveProperty('lambdaRegion');
   });
 });
 

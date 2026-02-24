@@ -192,8 +192,8 @@ describe("left column — output resolution dropdown", () => {
     expect(sourceCode).toMatch(/1280[×x]720/);
   });
 
-  it("binds select value to localConfig.outputResolution", () => {
-    expect(sourceCode).toMatch(/value=\{localConfig\.outputResolution\}/);
+  it("binds select value to localConfig.outputResolution (formatted as WxH string)", () => {
+    expect(sourceCode).toMatch(/localConfig\.outputResolution\.width/);
   });
 
   it("updates outputResolution on change", () => {
@@ -201,40 +201,40 @@ describe("left column — output resolution dropdown", () => {
   });
 });
 
-describe("left column — TTS voice field", () => {
-  it("renders a TTS Voice label", () => {
-    expect(sourceCode).toMatch(/TTS Voice/);
+describe("left column — TTS speaker field", () => {
+  it("renders a TTS Speaker label", () => {
+    expect(sourceCode).toMatch(/TTS Speaker/);
   });
 
-  it("binds input to localConfig.tts.voice", () => {
-    expect(sourceCode).toMatch(/value=\{localConfig\.tts\.voice\}/);
+  it("binds input to localConfig.tts.speaker", () => {
+    expect(sourceCode).toMatch(/value=\{localConfig\.tts\.speaker\}/);
   });
 
-  it("updates tts.voice via nested updater", () => {
-    expect(sourceCode).toMatch(/updateNested\s*\(\s*['"]tts['"]\s*,\s*['"]voice['"]/);
+  it("updates tts.speaker via nested updater", () => {
+    expect(sourceCode).toMatch(/updateNested\s*\(\s*['"]tts['"]\s*,\s*['"]speaker['"]/);
   });
 });
 
-describe("left column — TTS rate field", () => {
-  it("renders a TTS Rate label", () => {
-    expect(sourceCode).toMatch(/TTS Rate/);
+describe("left column — TTS speaking rate field", () => {
+  it("renders a TTS Speaking Rate label", () => {
+    expect(sourceCode).toMatch(/TTS Speaking Rate/);
   });
 
-  it("uses number input type for TTS rate", () => {
-    expect(sourceCode).toMatch(/type=["']number["'][\s\S]*?localConfig\.tts\.rate/);
+  it("uses number input type for TTS speaking rate", () => {
+    expect(sourceCode).toMatch(/type=["']number["'][\s\S]*?localConfig\.tts\.speakingRate/);
   });
 
-  it("sets min=0.5 and max=2 for TTS rate", () => {
+  it("sets min=0.5 and max=2 for TTS speaking rate", () => {
     expect(sourceCode).toMatch(/min=\{0\.5\}/);
     expect(sourceCode).toMatch(/max=\{2\}/);
   });
 
-  it("binds input to localConfig.tts.rate", () => {
-    expect(sourceCode).toMatch(/value=\{localConfig\.tts\.rate\}/);
+  it("binds input to localConfig.tts.speakingRate", () => {
+    expect(sourceCode).toMatch(/value=\{localConfig\.tts\.speakingRate\}/);
   });
 
-  it("updates tts.rate via nested updater", () => {
-    expect(sourceCode).toMatch(/updateNested\s*\(\s*['"]tts['"]\s*,\s*['"]rate['"]/);
+  it("updates tts.speakingRate via nested updater", () => {
+    expect(sourceCode).toMatch(/updateNested\s*\(\s*['"]tts['"]\s*,\s*['"]speakingRate['"]/);
   });
 });
 
@@ -265,12 +265,12 @@ describe("left column — Veo aspect ratio dropdown", () => {
     expect(sourceCode).toMatch(/9:16/);
   });
 
-  it("binds select to localConfig.veo.aspectRatio", () => {
-    expect(sourceCode).toMatch(/value=\{localConfig\.veo\.aspectRatio\}/);
+  it("binds select to localConfig.veo.defaultAspectRatio", () => {
+    expect(sourceCode).toMatch(/value=\{localConfig\.veo\.defaultAspectRatio\}/);
   });
 
-  it("updates veo.aspectRatio via nested updater", () => {
-    expect(sourceCode).toMatch(/updateNested\s*\(\s*['"]veo['"]\s*,\s*['"]aspectRatio['"]/);
+  it("updates veo.defaultAspectRatio via nested updater", () => {
+    expect(sourceCode).toMatch(/updateNested\s*\(\s*['"]veo['"]\s*,\s*['"]defaultAspectRatio['"]/);
   });
 });
 

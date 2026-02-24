@@ -45,15 +45,18 @@ function createTmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "pdd-project-test-"));
 }
 
-/** Returns a valid ProjectConfig for testing. */
+/** Returns a valid ProjectConfig for testing (PRD §4.5.1 aligned). */
 function validConfig(): ProjectConfig {
   return {
     name: "Test Project",
-    outputResolution: "1920x1080",
+    outputResolution: { width: 1920, height: 1080 },
     tts: {
-      voice: "en-US-Neural2-F",
-      rate: 1.0,
-      model: "google-tts-v2",
+      engine: "qwen3-tts",
+      modelPath: "models/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+      tokenizerPath: "models/Qwen3-TTS-Tokenizer-12Hz",
+      speaker: "Aiden",
+      speakingRate: 0.95,
+      sampleRate: 24000,
     },
     sections: [
       {
@@ -79,23 +82,26 @@ function validConfig(): ProjectConfig {
     ],
     audioSync: {
       sectionGroups: {
-        narration: ["intro", "main"],
-        music: ["intro"],
+        intro: { startSegment: "intro_001", endSegment: "intro_004" },
+        main: { startSegment: "main_001", endSegment: "main_007" },
       },
+      silenceGapDefault: 0.3,
     },
     veo: {
-      model: "veo-2.0-generate-001",
-      aspectRatio: "16:9",
-      referenceImages: {
-        logo: "assets/logo.png",
-      },
+      model: "veo-3.1-generate-preview",
+      defaultAspectRatio: "16:9",
+      maxConcurrentGenerations: 4,
+      references: [
+        { id: "alex", label: "Alex", imagePath: "references/alex.png", sections: ["intro"] },
+      ],
+      frameChains: [
+        { clips: ["intro_veo_01", "intro_veo_02"], referenceId: "alex" },
+      ],
     },
     render: {
       maxParallelRenders: 3,
-      outputDir: "output/final",
-      fps: 30,
-      width: 1920,
-      height: 1080,
+      useLambda: false,
+      lambdaRegion: "us-east-1",
     },
   };
 }
@@ -117,7 +123,7 @@ describe("validateProjectConfig", () => {
   it("returns a typed ProjectConfig for valid data", () => {
     const result = validateProjectConfig(validConfig());
     expect(result.name).toBe("Test Project");
-    expect(result.outputResolution).toBe("1920x1080");
+    expect(result.outputResolution).toEqual({ width: 1920, height: 1080 });
   });
 
   it("throws ZodError for invalid data", () => {
@@ -136,15 +142,15 @@ describe("validateProjectConfig", () => {
     }
   });
 
-  it("throws ZodError for invalid outputResolution enum", () => {
-    const data = { ...validConfig(), outputResolution: "4K" };
+  it("throws ZodError for invalid outputResolution (missing width)", () => {
+    const data = { ...validConfig(), outputResolution: { height: 1080 } };
     expect(() => validateProjectConfig(data)).toThrow(z.ZodError);
   });
 
-  it("accepts '1280x720' as a valid outputResolution", () => {
-    const data = { ...validConfig(), outputResolution: "1280x720" };
+  it("accepts 1280x720 as a valid outputResolution", () => {
+    const data = { ...validConfig(), outputResolution: { width: 1280, height: 720 } };
     const result = validateProjectConfig(data);
-    expect(result.outputResolution).toBe("1280x720");
+    expect(result.outputResolution).toEqual({ width: 1280, height: 720 });
   });
 });
 
@@ -205,27 +211,35 @@ describe("projectConfigSchema", () => {
 describe("ttsConfigSchema", () => {
   it("validates a valid TTS config", () => {
     const result = ttsConfigSchema.parse({
-      voice: "en-US-Neural2-F",
-      rate: 1.0,
-      model: "google-tts-v2",
+      engine: "qwen3-tts",
+      modelPath: "models/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+      tokenizerPath: "models/Qwen3-TTS-Tokenizer-12Hz",
+      speaker: "Aiden",
+      speakingRate: 0.95,
+      sampleRate: 24000,
     });
-    expect(result.voice).toBe("en-US-Neural2-F");
-    expect(result.rate).toBe(1.0);
+    expect(result.engine).toBe("qwen3-tts");
+    expect(result.speakingRate).toBe(0.95);
   });
 
-  it("coerces rate from string to number", () => {
+  it("coerces speakingRate from string to number", () => {
     const result = ttsConfigSchema.parse({
-      voice: "en-US-Neural2-F",
-      rate: "1.5",
-      model: "google-tts-v2",
+      engine: "qwen3-tts",
+      modelPath: "m",
+      tokenizerPath: "t",
+      speaker: "Aiden",
+      speakingRate: "1.5",
+      sampleRate: "24000",
     });
-    expect(result.rate).toBe(1.5);
-    expect(typeof result.rate).toBe("number");
+    expect(result.speakingRate).toBe(1.5);
+    expect(typeof result.speakingRate).toBe("number");
+    expect(result.sampleRate).toBe(24000);
+    expect(typeof result.sampleRate).toBe("number");
   });
 
-  it("rejects missing voice", () => {
+  it("rejects missing engine", () => {
     expect(() =>
-      ttsConfigSchema.parse({ rate: 1, model: "m" })
+      ttsConfigSchema.parse({ speaker: "Aiden", speakingRate: 1 })
     ).toThrow(z.ZodError);
   });
 });
@@ -287,27 +301,50 @@ describe("sectionSchema", () => {
 });
 
 describe("veoConfigSchema", () => {
-  it("validates referenceImages as Record<string, string>", () => {
+  it("validates references as array of VeoReference", () => {
     const result = veoConfigSchema.parse({
-      model: "veo-2.0",
-      aspectRatio: "16:9",
-      referenceImages: { logo: "logo.png", bg: "bg.png" },
+      model: "veo-3.1-generate-preview",
+      defaultAspectRatio: "16:9",
+      maxConcurrentGenerations: 4,
+      references: [
+        { id: "alex", label: "Alex", imagePath: "refs/alex.png", sections: ["intro"] },
+      ],
+      frameChains: [
+        { clips: ["clip_01", "clip_02"], referenceId: "alex" },
+      ],
     });
-    expect(result.referenceImages).toEqual({ logo: "logo.png", bg: "bg.png" });
+    expect(result.references).toHaveLength(1);
+    expect(result.references[0].id).toBe("alex");
+    expect(result.frameChains[0].referenceId).toBe("alex");
   });
 
-  it("accepts empty referenceImages", () => {
+  it("accepts empty references and frameChains", () => {
     const result = veoConfigSchema.parse({
-      model: "veo-2.0",
-      aspectRatio: "16:9",
-      referenceImages: {},
+      model: "veo-3.1-generate-preview",
+      defaultAspectRatio: "16:9",
+      maxConcurrentGenerations: 4,
+      references: [],
+      frameChains: [],
     });
-    expect(result.referenceImages).toEqual({});
+    expect(result.references).toEqual([]);
+    expect(result.frameChains).toEqual([]);
   });
 
-  it("rejects missing referenceImages", () => {
+  it("rejects missing references", () => {
     expect(() =>
-      veoConfigSchema.parse({ model: "veo", aspectRatio: "16:9" })
+      veoConfigSchema.parse({ model: "veo", defaultAspectRatio: "16:9", maxConcurrentGenerations: 4, frameChains: [] })
+    ).toThrow(z.ZodError);
+  });
+
+  it("rejects invalid aspectRatio enum", () => {
+    expect(() =>
+      veoConfigSchema.parse({
+        model: "veo",
+        defaultAspectRatio: "4:3",
+        maxConcurrentGenerations: 4,
+        references: [],
+        frameChains: [],
+      })
     ).toThrow(z.ZodError);
   });
 });
@@ -316,42 +353,46 @@ describe("renderConfigSchema", () => {
   it("validates a complete render config", () => {
     const result = renderConfigSchema.parse({
       maxParallelRenders: 3,
-      outputDir: "output/final",
-      fps: 30,
-      width: 1920,
-      height: 1080,
+      useLambda: false,
+      lambdaRegion: "us-east-1",
     });
-    expect(result.fps).toBe(30);
-    expect(result.width).toBe(1920);
+    expect(result.maxParallelRenders).toBe(3);
+    expect(result.useLambda).toBe(false);
+    expect(result.lambdaRegion).toBe("us-east-1");
   });
 
-  it("coerces numeric fields from strings", () => {
+  it("coerces maxParallelRenders from string", () => {
     const result = renderConfigSchema.parse({
       maxParallelRenders: "4",
-      outputDir: "out",
-      fps: "60",
-      width: "1280",
-      height: "720",
+      useLambda: false,
+      lambdaRegion: "us-west-2",
     });
     expect(result.maxParallelRenders).toBe(4);
-    expect(typeof result.fps).toBe("number");
+    expect(typeof result.maxParallelRenders).toBe("number");
   });
 });
 
 describe("audioSyncSchema", () => {
-  it("validates sectionGroups as Record<string, string[]>", () => {
+  it("validates sectionGroups as Record<string, SegmentRange>", () => {
     const result = audioSyncSchema.parse({
       sectionGroups: {
-        narration: ["intro", "main"],
-        music: ["intro"],
+        intro: { startSegment: "intro_001", endSegment: "intro_004" },
       },
+      silenceGapDefault: 0.3,
     });
-    expect(result.sectionGroups.narration).toEqual(["intro", "main"]);
+    expect(result.sectionGroups.intro).toEqual({ startSegment: "intro_001", endSegment: "intro_004" });
+    expect(result.silenceGapDefault).toBe(0.3);
   });
 
   it("accepts empty sectionGroups", () => {
-    const result = audioSyncSchema.parse({ sectionGroups: {} });
+    const result = audioSyncSchema.parse({ sectionGroups: {}, silenceGapDefault: 0.3 });
     expect(result.sectionGroups).toEqual({});
+  });
+
+  it("coerces silenceGapDefault from string", () => {
+    const result = audioSyncSchema.parse({ sectionGroups: {}, silenceGapDefault: "0.5" });
+    expect(result.silenceGapDefault).toBe(0.5);
+    expect(typeof result.silenceGapDefault).toBe("number");
   });
 });
 
@@ -380,9 +421,10 @@ describe("loadProject", () => {
   it("returns a fully typed ProjectConfig", () => {
     writeProjectJson(tmpDir, validConfig());
     const result = loadProject(tmpDir);
-    expect(result.tts.voice).toBe("en-US-Neural2-F");
-    expect(result.veo.referenceImages).toEqual({ logo: "assets/logo.png" });
-    expect(result.render.fps).toBe(30);
+    expect(result.tts.engine).toBe("qwen3-tts");
+    expect(result.tts.speaker).toBe("Aiden");
+    expect(result.veo.references).toHaveLength(1);
+    expect(result.render.useLambda).toBe(false);
   });
 
   it("throws descriptive error when file not found", () => {
@@ -642,7 +684,7 @@ describe("integration: save and load round-trip", () => {
     const loaded = loadProject(tmpDir);
 
     expect(loaded.name).toBe(config.name);
-    expect(loaded.outputResolution).toBe(config.outputResolution);
+    expect(loaded.outputResolution).toEqual(config.outputResolution);
     expect(loaded.tts).toEqual(config.tts);
     expect(loaded.sections).toEqual(config.sections);
     expect(loaded.audioSync).toEqual(config.audioSync);
@@ -658,15 +700,15 @@ describe("integration: save and load round-trip", () => {
     expect(loaded.sections[1].id).toBe("main");
   });
 
-  it("preserves referenceImages map", () => {
+  it("preserves references array", () => {
     const config = validConfig();
-    config.veo.referenceImages = { logo: "logo.png", bg: "bg.png" };
+    config.veo.references = [
+      { id: "alex", label: "Alex", imagePath: "refs/alex.png", sections: ["intro"] },
+      { id: "bg", label: "Background", imagePath: "refs/bg.png", sections: ["main"] },
+    ];
     saveProject(config, tmpDir);
     const loaded = loadProject(tmpDir);
-    expect(loaded.veo.referenceImages).toEqual({
-      logo: "logo.png",
-      bg: "bg.png",
-    });
+    expect(loaded.veo.references).toEqual(config.veo.references);
   });
 
   it("preserves audioSync sectionGroups", () => {
