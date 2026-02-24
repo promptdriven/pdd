@@ -336,8 +336,9 @@ def log_operation(
                 model = "unknown"
                 if success and result:
                     if isinstance(result, tuple) and len(result) >= 3:
-                        if isinstance(result[1], (int, float)): cost = float(result[1])
-                        if isinstance(result[2], str): model = str(result[2])
+                        from .sync_orchestration import _extract_cost_from_result, _extract_model_from_result
+                        cost = _extract_cost_from_result(operation, result)
+                        model = _extract_model_from_result(operation, result)
 
                 update_log_entry(entry, success=success, cost=cost, model=model, duration=duration, error=error_msg)
                 if basename and language:

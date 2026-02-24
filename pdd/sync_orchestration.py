@@ -70,6 +70,46 @@ from . import DEFAULT_STRENGTH
 # Note: _safe_basename is imported from sync_determine_operation
 
 
+def _extract_cost_from_result(operation: str, result: tuple) -> float:
+    """Extract cost from an operation result tuple at the correct index.
+
+    Each operation returns a different tuple format:
+    - crash/fix/verify: 6-tuple (..., cost, model) — cost at index 4
+    - generate: 4-tuple (content, was_incremental, cost, model) — cost at index 2
+    - example/test/test_extend/auto-deps: 3-or-4-tuple (..., cost, model, ...) — cost at index 1
+    """
+    if operation in ('crash', 'fix', 'verify'):
+        idx = 4
+    elif operation == 'generate':
+        idx = 2
+    else:
+        idx = 1
+    if len(result) > idx:
+        val = result[idx]
+        if isinstance(val, (int, float)) and not isinstance(val, bool):
+            return float(val)
+    return 0.0
+
+
+def _extract_model_from_result(operation: str, result: tuple) -> str:
+    """Extract model name from an operation result tuple at the correct index.
+
+    Each operation returns a different tuple format:
+    - crash/fix/verify: 6-tuple (..., cost, model) — model at index 5
+    - generate: 4-tuple (content, was_incremental, cost, model) — model at index 3
+    - example/test/test_extend/auto-deps: 3-or-4-tuple (..., cost, model, ...) — model at index 2
+    """
+    if operation in ('crash', 'fix', 'verify'):
+        idx = 5
+    elif operation == 'generate':
+        idx = 3
+    else:
+        idx = 2
+    if len(result) > idx and isinstance(result[idx], str):
+        return result[idx]
+    return 'unknown'
+
+
 def _use_agentic_path(language: str, agentic_mode: bool) -> bool:
     """Returns True if we should use agentic path (non-Python OR agentic_mode for Python).
 
@@ -1854,8 +1894,7 @@ def sync_orchestration(
                                         success = pdd_files['test'].exists()
                                 else:
                                     success = bool(result[0])
-                                # Cost is always at index 1 in both 3-tuple and 4-tuple returns
-                                cost = result[1] if len(result) >= 2 and isinstance(result[1], (int, float)) else 0.0
+                                cost = _extract_cost_from_result(operation, result)
                                 current_cost_ref[0] += cost
                             else:
                                 success = result is not None
@@ -1877,17 +1916,8 @@ def sync_orchestration(
                                  actual_cost = result.get('cost', 0.0)
                                  model_name = result.get('model', 'unknown')
                             elif isinstance(result, tuple) and len(result) >= 3:
-                                 # cmd_test_main returns 4-tuple: (content, cost, model, agentic_success)
-                                 # Other commands may return either:
-                                 #   - 3-tuple: (content, cost, model), e.g. some context operations
-                                 #   - 4-tuple: (content, was_incremental, cost, model_name), e.g. code_generator_main
-                                 # For tests, cost is at index 1; for most other 4+ tuples, cost is at index -2 and model at -1.
-                                 if operation in ('test', 'test_extend') and len(result) >= 4:
-                                     actual_cost = result[1] if isinstance(result[1], (int, float)) else 0.0
-                                     model_name = result[2] if isinstance(result[2], str) else 'unknown'
-                                 else:
-                                     actual_cost = result[1] if isinstance(result[1], (int, float)) else 0.0
-                                     model_name = result[2] if len(result) >= 3 and isinstance(result[2], str) else 'unknown'
+                                 actual_cost = _extract_cost_from_result(operation, result)
+                                 model_name = _extract_model_from_result(operation, result)
                             last_model_name = str(model_name)
                             operations_completed.append(operation)
                             _save_fingerprint_atomic(basename, language, operation, pdd_files, actual_cost, str(model_name), atomic_state=atomic_state)
