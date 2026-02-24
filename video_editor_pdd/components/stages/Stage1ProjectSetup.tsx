@@ -4,9 +4,21 @@ import React, { useEffect, useState } from 'react';
 import type { ProjectConfig, Section } from '../../lib/types';
 
 interface Stage1ProjectSetupProps {
-  config: ProjectConfig;
-  onSave: (config: ProjectConfig) => void;
+  config?: ProjectConfig;
+  onSave?: (config: ProjectConfig) => void;
+  projectConfig?: ProjectConfig | null;
+  onAdvance?: () => void;
 }
+
+const DEFAULT_CONFIG: ProjectConfig = {
+  name: '',
+  outputResolution: '1920x1080',
+  tts: { voice: '', rate: 1, model: '' },
+  sections: [],
+  audioSync: { sectionGroups: {} },
+  veo: { model: '', aspectRatio: '16:9', referenceImages: {} },
+  render: { maxParallelRenders: 1, outputDir: '', fps: 30, width: 1920, height: 1080 },
+};
 
 const OUTPUT_RESOLUTIONS = [
   { label: '1920×1080', value: '1920x1080' },
@@ -21,8 +33,11 @@ const VEO_ASPECT_RATIOS = [
 export default function Stage1ProjectSetup({
   config,
   onSave,
+  projectConfig,
+  onAdvance,
 }: Stage1ProjectSetupProps) {
-  const [localConfig, setLocalConfig] = useState<ProjectConfig>(config);
+  const resolvedConfig = projectConfig ?? config ?? null;
+  const [localConfig, setLocalConfig] = useState<ProjectConfig>(resolvedConfig ?? DEFAULT_CONFIG);
   const [hasChanges, setHasChanges] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [editingSectionId, setEditingSectionId] = useState<string | null>(null);
@@ -30,13 +45,13 @@ export default function Stage1ProjectSetup({
   const [dragIndex, setDragIndex] = useState<number | null>(null);
 
   useEffect(() => {
-    setLocalConfig(config);
-  }, [config]);
+    if (resolvedConfig) setLocalConfig(resolvedConfig);
+  }, [resolvedConfig]);
 
   useEffect(() => {
-    const changed = JSON.stringify(localConfig) !== JSON.stringify(config);
+    const changed = JSON.stringify(localConfig) !== JSON.stringify(resolvedConfig ?? DEFAULT_CONFIG);
     setHasChanges(changed);
-  }, [localConfig, config]);
+  }, [localConfig, resolvedConfig]);
 
   useEffect(() => {
     if (!hasChanges) return;
@@ -149,7 +164,7 @@ export default function Stage1ProjectSetup({
 
       if (!res.ok) throw new Error('Failed to save');
       const data = await res.json();
-      onSave(data);
+      onSave?.(data);
       setToast('Saved successfully ✓');
     } catch (err) {
       setToast('Error saving project');

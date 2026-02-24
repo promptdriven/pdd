@@ -399,12 +399,14 @@ describe("annotations loading", () => {
     expect(sourceCode).toMatch(/const\s+loadAnnotations\s*=/);
   });
 
-  it("fetches annotations with sectionId parameter", () => {
-    expect(sourceCode).toMatch(/\/api\/annotations\?sectionId=/);
+  it("fetches annotations with section parameter matching API spec", () => {
+    // API uses ?section= not ?sectionId=
+    expect(sourceCode).toMatch(/\/api\/annotations\?section=/);
   });
 
-  it("sets annotations from response", () => {
-    expect(sourceCode).toMatch(/setAnnotations\s*\(\s*data\s*\)/);
+  it("extracts annotations array from response wrapper object", () => {
+    // API returns { annotations: [...] }, so we need data.annotations
+    expect(sourceCode).toMatch(/setAnnotations\s*\(\s*data\.annotations\s*\)/);
   });
 
   it("loads annotations when switching to Review tab", () => {

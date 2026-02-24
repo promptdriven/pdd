@@ -1,5 +1,4 @@
 {
-  "extends": "next/core-web-vitals",
   "compilerOptions": {
     "target": "ES2017",
     "lib": ["dom", "dom.iterable", "esnext"],

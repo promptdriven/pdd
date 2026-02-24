@@ -106,11 +106,11 @@ export default function Page() {
     if (!selectedSectionId) return;
     setLoadingAnnotations(true);
     try {
-      const url = `/api/annotations?sectionId=${selectedSectionId}`;
+      const url = `/api/annotations?section=${selectedSectionId}`;
       const res = await fetch(url);
       if (!res.ok) throw new Error('Failed to load annotations');
-      const data = (await res.json()) as Annotation[];
-      setAnnotations(data);
+      const data = await res.json();
+      setAnnotations(data.annotations);
     } catch (err) {
       console.error(err);
     } finally {

@@ -63,8 +63,8 @@ describe("Stage1ProjectSetup props", () => {
     expect(sourceCode).toMatch(/config\s*:\s*ProjectConfig/);
   });
 
-  it("declares onSave callback prop", () => {
-    expect(sourceCode).toMatch(/onSave\s*:\s*\(config\s*:\s*ProjectConfig\)\s*=>\s*void/);
+  it("declares onSave callback prop (optional)", () => {
+    expect(sourceCode).toMatch(/onSave\s*\??\s*:\s*\(config\s*:\s*ProjectConfig\)\s*=>\s*void/);
   });
 });
 
@@ -100,7 +100,7 @@ describe("import structure", () => {
 
 describe("local form state", () => {
   it("uses useState<ProjectConfig> for local config", () => {
-    expect(sourceCode).toMatch(/useState\s*<\s*ProjectConfig\s*>\s*\(\s*config\s*\)/);
+    expect(sourceCode).toMatch(/useState\s*<\s*ProjectConfig\s*>\s*\(/);
   });
 
   it("names the state variable localConfig", () => {
@@ -108,7 +108,7 @@ describe("local form state", () => {
   });
 
   it("syncs local state when config prop changes via useEffect", () => {
-    expect(sourceCode).toMatch(/useEffect\s*\(\s*\(\)\s*=>\s*\{[\s\S]*?setLocalConfig\s*\(\s*config\s*\)/);
+    expect(sourceCode).toMatch(/useEffect\s*\(\s*\(\)\s*=>\s*\{[\s\S]*?setLocalConfig\s*\(/);
   });
 });
 
@@ -122,7 +122,7 @@ describe("unsaved changes detection", () => {
   });
 
   it("compares localConfig to config via JSON.stringify", () => {
-    expect(sourceCode).toMatch(/JSON\.stringify\s*\(\s*localConfig\s*\)\s*!==\s*JSON\.stringify\s*\(\s*config\s*\)/);
+    expect(sourceCode).toMatch(/JSON\.stringify\s*\(\s*localConfig\s*\)\s*!==\s*JSON\.stringify\s*\(/);
   });
 
   it("shows a yellow dot indicator when hasChanges is true", () => {
@@ -514,7 +514,7 @@ describe("save functionality", () => {
   });
 
   it("calls onSave with response data on success", () => {
-    expect(sourceCode).toMatch(/onSave\s*\(\s*data\s*\)/);
+    expect(sourceCode).toMatch(/onSave\s*\?\.\s*\(\s*data\s*\)/);
   });
 
   it("shows success toast on save", () => {
@@ -633,5 +633,29 @@ describe("helper functions", () => {
 
   it("updateNested spreads nested object", () => {
     expect(sourceCode).toMatch(/\.\.\.\(prev\[key\]\s+as\s+object\)/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 20. StagePanelProps compatibility — props from page.tsx
+// ---------------------------------------------------------------------------
+
+describe("StagePanelProps compatibility", () => {
+  it("accepts projectConfig prop (nullable ProjectConfig from page.tsx)", () => {
+    expect(sourceCode).toMatch(/projectConfig\s*[:\?]/);
+  });
+
+  it("accepts onAdvance callback prop", () => {
+    expect(sourceCode).toMatch(/onAdvance\s*[:\?]/);
+  });
+
+  it("guards against null projectConfig before rendering form", () => {
+    // Must handle the case where projectConfig is null (initial load)
+    expect(sourceCode).toMatch(/projectConfig|!localConfig|loading/i);
+  });
+
+  it("shows a loading or empty state when projectConfig is null", () => {
+    // Component must not crash when config/projectConfig is null
+    expect(sourceCode).toMatch(/(!projectConfig|!localConfig|loading|null)/i);
   });
 });

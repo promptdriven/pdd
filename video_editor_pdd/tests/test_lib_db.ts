@@ -441,10 +441,15 @@ describe("lib/db.ts source structure", () => {
     );
   });
 
-  it('has "use server" directive at the top', () => {
-    // The first non-empty line should be the "use server" directive
+  it('imports server-only to prevent client-side usage', () => {
+    // "use server" is wrong here (marks exports as Server Actions which must be async).
+    // Instead, import "server-only" to prevent client imports.
+    expect(sourceCode).toMatch(/import\s+['"]server-only['"]/);
+  });
+
+  it('does not use "use server" directive (functions are sync, not Server Actions)', () => {
     const lines = sourceCode.split("\n").filter((l) => l.trim().length > 0);
-    expect(lines[0].trim()).toMatch(/^["']use server["'];?$/);
+    expect(lines[0].trim()).not.toMatch(/^["']use server["'];?$/);
   });
 
   it("exports getDb function", () => {
