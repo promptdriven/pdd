@@ -4,17 +4,17 @@
   "type": "module",
   "module": {{
     "functions": [
-      {{"name": "generate_architecture", "signature": "(issue_content: str, step1-5_outputs: str)", "returns": "str (valid JSON array matching architecture schema)"}}
+      {{"name": "generate_architecture", "signature": "(issue_content: str, step1-6_outputs: str)", "returns": "str (valid JSON array matching architecture schema)"}}
     ]
   }}
 }}
 </pdd-interface>
-<pdd-dependency>agentic_arch_step5_research_deps_LLM.prompt</pdd-dependency>
+<pdd-dependency>agentic_arch_step6_research_deps_LLM.prompt</pdd-dependency>
 % You are an expert software architect. Your task is to generate the complete architecture.json based on all previous analysis and research.
 
 % Context
 
-You are working on step 6 of 12 in an agentic architecture workflow. All analysis and research is complete. Now generate the final architecture.json.
+You are working on step 7 of 13 in an agentic architecture workflow. All analysis and research is complete. Now generate the final architecture.json.
 
 % Architecture Schema Reference
 
@@ -53,6 +53,10 @@ You are working on step 6 of 12 in an agentic architecture workflow. All analysi
 <step5_output>
 {step5_output}
 </step5_output>
+
+<step6_output>
+{step6_output}
+</step6_output>
 
 % Target Directory
 
@@ -119,14 +123,14 @@ Generate a complete, valid architecture.json following these rules:
    - Validate the JSON is syntactically correct before writing
 
 2. **Create project scaffolding files**
-   Based on the tech stack confirmed in Step 2 and the module design from Step 4, create ALL necessary files to make the project runnable after code generation.
+   Based on the tech stack confirmed in Step 2 and the module design from Step 5, create ALL necessary files to make the project runnable after code generation.
 
    **Required for ALL projects:**
    - `.gitignore` - Appropriate ignore patterns for the tech stack
    - `README.md` - Project description, setup instructions, architecture overview
 
    **Dependency management (based on tech stack):**
-   - Python: `requirements.txt` or `pyproject.toml` with all dependencies from Step 5
+   - Python: `requirements.txt` or `pyproject.toml` with all dependencies from Step 6
    - Node.js/TypeScript: `package.json` with scripts (dev, build, test, start)
    - TypeScript projects: `tsconfig.json` with appropriate compiler options
    - Go: `go.mod` with module path and dependencies
@@ -159,7 +163,7 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 ```
 
 ```markdown
-## Step 6: Architecture & Scaffolding Generated
+## Step 7: Architecture & Scaffolding Generated
 
 **Status:** Generation Complete
 
@@ -181,7 +185,7 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 | ... | ... |
 
 ---
-*Proceeding to Step 7: Validate*
+*Proceeding to Step 8: Validate*
 ```
 
 4. **Report ALL files created**
@@ -216,7 +220,7 @@ Use this matrix to determine which files to create based on the confirmed tech s
 - The JSON must be valid (no comments, no trailing commas)
 - Sort the array by ascending priority
 - Ensure all dependency references exist in the array
-- Include context_urls from step 5 where available
+- Include context_urls from step 6 where available
 - Always post your findings as a GitHub comment
 - Always output `FILES_CREATED:` with the complete list of ALL files created
 

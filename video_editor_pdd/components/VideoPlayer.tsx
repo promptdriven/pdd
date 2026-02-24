@@ -50,6 +50,8 @@ export default function VideoPlayer({
   const [transcript, setTranscript] = useState('');
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
+  const [speechAvailable, setSpeechAvailable] = useState(false);
+  const [inputMethod, setInputMethod] = useState<'typed' | 'speech'>('typed');
 
   // Setup Web Speech API
   useEffect(() => {
@@ -78,6 +80,7 @@ export default function VideoPlayer({
     };
 
     recognitionRef.current = recognition;
+    setSpeechAvailable(true);
   }, []);
 
   const startSpeechRecognition = useCallback(() => {
@@ -288,12 +291,13 @@ export default function VideoPlayer({
       drawingDataUrl: drawingDataUrl ?? null,
       compositeDataUrl: compositeDataUrl ?? null,
       videoFile: src,
+      inputMethod,
     };
 
     onAnnotationCapture(data);
     setStrokes([]);
     setCurrentStroke(null);
-  }, [captureComposite, captureDrawing, transcript, src, onAnnotationCapture]);
+  }, [captureComposite, captureDrawing, transcript, src, onAnnotationCapture, inputMethod]);
 
   const startRecordingMode = useCallback(() => {
     const videoEl = videoRef.current;
@@ -368,6 +372,12 @@ export default function VideoPlayer({
 
       if (event.key.toLowerCase() === 'f') toggleFullscreen();
 
+      if (event.key.toLowerCase() === 'm') {
+        if (speechAvailable) {
+          setInputMethod((prev) => (prev === 'typed' ? 'speech' : 'typed'));
+        }
+      }
+
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
         if (isRecording) {
           setStrokes((prev) => prev.slice(0, -1));
@@ -384,6 +394,7 @@ export default function VideoPlayer({
     togglePlayPause,
     seekBy,
     toggleFullscreen,
+    speechAvailable,
   ]);
 
   // Sync time/duration
@@ -438,6 +449,11 @@ export default function VideoPlayer({
           <span className="ml-2 text-xs opacity-80">
             Tool: {selectedTool.toUpperCase()}
           </span>
+          {speechAvailable && (
+            <span className={`ml-2 text-xs ${inputMethod === 'speech' ? 'text-green-400' : 'text-white/40'}`}>
+              {'\u{1F3A4}'} {inputMethod === 'speech' ? 'ON' : 'off'}
+            </span>
+          )}
         </div>
         {isRecording && (
           <div className="absolute bottom-3 left-3 right-3 bg-black/60 text-white px-3 py-2 rounded text-xs">
@@ -467,6 +483,7 @@ export default function VideoPlayer({
           <span>T</span>
           <span>•</span>
           <span>Space = Annotate</span>
+          <span>M = Mic</span>
         </div>
       </div>
 

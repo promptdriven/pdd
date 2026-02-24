@@ -9,12 +9,12 @@
   }}
 }}
 </pdd-interface>
-<pdd-dependency>agentic_arch_step7_pddrc_LLM.prompt</pdd-dependency>
+<pdd-dependency>agentic_arch_step8_pddrc_LLM.prompt</pdd-dependency>
 % You are an expert prompt writer for PDD (Prompt-Driven Development). Your task is to generate prompt files for all modules defined in architecture.json.
 
 % Context
 
-You are working on step 8 of the agentic architecture workflow. Step 6 generated architecture.json, Step 7 generated .pddrc. Now generate the actual prompt files.
+You are working on step 9 of the agentic architecture workflow. Step 7 generated architecture.json, Step 8 generated .pddrc. Now generate the actual prompt files.
 
 % Inputs
 
@@ -24,7 +24,7 @@ You are working on step 8 of the agentic architecture workflow. Step 6 generated
 
 % Architecture
 <architecture_json>
-{step6_output}
+{step7_output}
 </architecture_json>
 
 % PDD Configuration

@@ -205,9 +205,9 @@ export default function Stage4TtsRendering({ onAdvance }: Stage4TtsRenderingProp
 
   const renderStatusBadge = (status: SegmentStatus) => {
     const base = 'px-2 py-1 text-xs rounded font-semibold';
-    if (status === 'done') return <span className={`${base} bg-green-100 text-green-800`}>done</span>;
-    if (status === 'error') return <span className={`${base} bg-red-100 text-red-800`}>error</span>;
-    return <span className={`${base} bg-yellow-100 text-yellow-800`}>missing</span>;
+    if (status === 'done') return <span className={`${base} bg-green-900/50 text-green-400`}>done</span>;
+    if (status === 'error') return <span className={`${base} bg-red-900/50 text-red-400`}>error</span>;
+    return <span className={`${base} bg-yellow-900/50 text-yellow-400`}>missing</span>;
   };
 
   return (
@@ -233,7 +233,7 @@ export default function Stage4TtsRendering({ onAdvance }: Stage4TtsRenderingProp
           disabled={!allDone}
           onClick={onAdvance}
           className={`px-4 py-2 rounded-lg font-semibold ${
-            allDone ? 'bg-emerald-600 text-white hover:bg-emerald-700' : 'bg-slate-300 text-slate-600'
+            allDone ? 'bg-emerald-600 text-white hover:bg-emerald-700' : 'bg-slate-700 text-slate-500'
           }`}
         >
           Advance →
@@ -242,17 +242,17 @@ export default function Stage4TtsRendering({ onAdvance }: Stage4TtsRenderingProp
 
       {/* Batch progress bar */}
       {batchJobId && (
-        <div className="bg-white p-4 rounded-lg shadow border">
-          <div className="text-sm text-slate-600 mb-2">
+        <div className="bg-slate-800 p-4 rounded-lg shadow border border-slate-700">
+          <div className="text-sm text-slate-300 mb-2">
             Rendering segment: <strong>{batchProgress.currentSegment ?? '...'}</strong>
           </div>
-          <div className="w-full h-3 bg-slate-200 rounded-full overflow-hidden">
+          <div className="w-full h-3 bg-slate-700 rounded-full overflow-hidden">
             <div
               className="h-full bg-emerald-500 transition-all"
               style={{ width: `${batchProgress.percent}%` }}
             />
           </div>
-          <div className="text-xs text-slate-500 mt-2">
+          <div className="text-xs text-slate-400 mt-2">
             {batchProgress.completedCount}/{batchProgress.total} ({batchProgress.percent}%)
           </div>
         </div>
@@ -260,14 +260,14 @@ export default function Stage4TtsRendering({ onAdvance }: Stage4TtsRenderingProp
 
       {/* Error */}
       {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 p-3 rounded">
+        <div className="bg-red-900/30 border border-red-700 text-red-400 p-3 rounded">
           {error}
         </div>
       )}
 
       {/* Table */}
-      <div className="bg-white rounded-lg shadow border overflow-hidden">
-        <div className="grid grid-cols-6 px-4 py-2 bg-slate-100 text-xs font-semibold text-slate-600">
+      <div className="bg-slate-800 rounded-lg shadow border border-slate-700 overflow-hidden">
+        <div className="grid grid-cols-6 px-4 py-2 bg-slate-700 text-xs font-semibold text-slate-300">
           <div>#</div>
           <div>Segment ID</div>
           <div>Status</div>
@@ -277,23 +277,23 @@ export default function Stage4TtsRendering({ onAdvance }: Stage4TtsRenderingProp
         </div>
 
         {loading && (
-          <div className="p-4 text-sm text-slate-600">Loading segments...</div>
+          <div className="p-4 text-sm text-slate-400">Loading segments...</div>
         )}
 
         {!loading && segments.length === 0 && (
-          <div className="p-4 text-sm text-slate-600">No segments found.</div>
+          <div className="p-4 text-sm text-slate-400">No segments found.</div>
         )}
 
         {segments.map((seg, idx) => {
           const isExpanded = expandedId === seg.id;
           return (
-            <div key={seg.id} className="border-t">
+            <div key={`${seg.id}-${idx}`} className="border-t border-slate-700">
               <div
-                className="grid grid-cols-6 px-4 py-3 items-center hover:bg-slate-50 cursor-pointer"
+                className="grid grid-cols-6 px-4 py-3 items-center hover:bg-slate-700/50 cursor-pointer"
                 onClick={() => handleRowToggle(seg.id)}
               >
-                <div className="text-sm">{idx + 1}</div>
-                <div className="text-sm font-mono">{seg.id}</div>
+                <div className="text-sm text-slate-200">{idx + 1}</div>
+                <div className="text-sm font-mono text-slate-200">{seg.id}</div>
                 <div>{renderStatusBadge(seg.status)}</div>
                 <div>
                   <button
@@ -301,7 +301,7 @@ export default function Stage4TtsRendering({ onAdvance }: Stage4TtsRenderingProp
                       e.stopPropagation();
                       handlePlay(seg.id);
                     }}
-                    className="px-2 py-1 bg-slate-200 rounded hover:bg-slate-300 text-xs"
+                    className="px-2 py-1 bg-slate-600 rounded hover:bg-slate-500 text-xs text-slate-200"
                   >
                     ▶
                   </button>
@@ -312,7 +312,7 @@ export default function Stage4TtsRendering({ onAdvance }: Stage4TtsRenderingProp
                       e.stopPropagation();
                       handleRowRerender(seg.id);
                     }}
-                    className="px-2 py-1 bg-slate-200 rounded hover:bg-slate-300 text-xs"
+                    className="px-2 py-1 bg-slate-600 rounded hover:bg-slate-500 text-xs text-slate-200"
                   >
                     ↺
                   </button>
@@ -325,10 +325,10 @@ export default function Stage4TtsRendering({ onAdvance }: Stage4TtsRenderingProp
               {isExpanded && (
                 <div className="px-4 pb-4">
                   <div
-                    className="w-full rounded bg-slate-100 p-2"
+                    className="w-full rounded bg-slate-900 p-2"
                     ref={(el) => { waveformRefs.current.set(seg.id, el); }}
                   />
-                  <div className="mt-2 text-sm text-slate-700 whitespace-pre-line">
+                  <div className="mt-2 text-sm text-slate-300 whitespace-pre-line">
                     {seg.text}
                   </div>
 
@@ -360,7 +360,7 @@ export default function Stage4TtsRendering({ onAdvance }: Stage4TtsRenderingProp
           disabled={!allDone}
           onClick={onAdvance}
           className={`px-4 py-2 rounded-lg font-semibold ${
-            allDone ? 'bg-emerald-600 text-white hover:bg-emerald-700' : 'bg-slate-300 text-slate-600'
+            allDone ? 'bg-emerald-600 text-white hover:bg-emerald-700' : 'bg-slate-700 text-slate-500'
           }`}
         >
           Advance →

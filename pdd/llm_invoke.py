@@ -1,6 +1,7 @@
 # Corrected code_under_test (llm_invoke.py)
 # Added optional debugging prints in _select_model_candidates
 
+import copy
 import os
 import pandas as pd
 import litellm
@@ -1971,7 +1972,7 @@ def llm_invoke(
             # --- 5. Prepare LiteLLM Arguments ---
             litellm_kwargs: Dict[str, Any] = {
                 "model": model_name_litellm,
-                "messages": formatted_messages,
+                "messages": copy.deepcopy(formatted_messages),
                 # Use a local adjustable temperature to allow provider-specific fallbacks
                 "temperature": current_temperature,
                 # Retry on transient network errors (APIError, TimeoutError, ServiceUnavailableError)

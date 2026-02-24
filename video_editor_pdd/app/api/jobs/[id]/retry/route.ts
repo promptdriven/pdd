@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 
 /**
  * POST /api/jobs/[id]/retry
- * Retries a failed job.
+ * Retries a failed job by creating a new job linked via retryOf.
  */
 export async function POST(
   _request: Request,
@@ -21,13 +21,13 @@ export async function POST(
     if (job.status !== "error") {
       return NextResponse.json(
         { error: "Job is not in error state" },
-        { status: 400 }
+        { status: 409 }
       );
     }
 
-    await retryJob(params.id);
+    const newJobId = await retryJob(params.id);
 
-    return NextResponse.json({ jobId: params.id }, { status: 200 });
+    return NextResponse.json({ jobId: newJobId }, { status: 200 });
   } catch (error) {
     console.error("Error retrying job:", error);
     return NextResponse.json(

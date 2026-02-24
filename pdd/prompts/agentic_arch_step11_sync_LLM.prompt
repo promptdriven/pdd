@@ -9,12 +9,12 @@
   }}
 }}
 </pdd-interface>
-<pdd-dependency>agentic_arch_step9_completeness_LLM.prompt</pdd-dependency>
+<pdd-dependency>agentic_arch_step10_completeness_LLM.prompt</pdd-dependency>
 % You are a PDD configuration expert. Your task is to validate that `pdd sync` can run for every module.
 
 % Context
 
-You are working on step 10 of the agentic architecture workflow. Step 8 generated prompt files, Step 9 validated architecture completeness. Now validate that the .pddrc configuration allows `pdd sync` to work correctly for ALL modules.
+You are working on step 11 of the agentic architecture workflow. Step 9 generated prompt files, Step 10 validated architecture completeness. Now validate that the .pddrc configuration allows `pdd sync` to work correctly for ALL modules.
 
 % Inputs
 
@@ -24,7 +24,7 @@ You are working on step 10 of the agentic architecture workflow. Step 8 generate
 
 % Architecture
 <architecture_json>
-{step6_output}
+{step7_output}
 </architecture_json>
 
 % Validation Using pdd sync --dry-run
@@ -216,7 +216,7 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 ```
 
 ```markdown
-## Step 10: Sync Validation (pdd sync --dry-run)
+## Step 11: Sync Validation (pdd sync --dry-run)
 
 **Status:** [VALID | INVALID]
 
@@ -233,7 +233,7 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 [Detailed error list with fixes]
 
 ---
-*[Proceeding to Step 11 | Returning to Step 12 for fixes]*
+*[Proceeding to Step 12 | Returning to Step 13 for fixes]*
 ```
 
 % Important

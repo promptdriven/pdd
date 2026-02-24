@@ -86,10 +86,16 @@ describe("runMigrations", () => {
     expect(tables).toContain("pipeline_status");
   });
 
-  it("creates exactly three tables", () => {
+  it("creates exactly four tables", () => {
     runMigrations(db);
     const tables = getTableNames(db);
-    expect(tables).toHaveLength(3);
+    expect(tables).toHaveLength(4);
+  });
+
+  it("creates the job_costs table", () => {
+    runMigrations(db);
+    const tables = getTableNames(db);
+    expect(tables).toContain("job_costs");
   });
 
   // --- jobs schema ---
@@ -108,6 +114,7 @@ describe("runMigrations", () => {
       "logs",
       "createdAt",
       "updatedAt",
+      "retryOf",
     ]);
   });
 
@@ -144,7 +151,16 @@ describe("runMigrations", () => {
       "resolved",
       "resolveJobId",
       "createdAt",
+      "inputMethod",
     ]);
+  });
+
+  it("annotations.inputMethod has TEXT type with DEFAULT 'typed'", () => {
+    runMigrations(db);
+    const cols = getColumns(db, "annotations");
+    const inputMethodCol = cols.find((c) => c.name === "inputMethod")!;
+    expect(inputMethodCol.type).toBe("TEXT");
+    expect(inputMethodCol.dflt_value).toBe("'typed'");
   });
 
   it("annotations.id is TEXT PRIMARY KEY", () => {
@@ -191,6 +207,43 @@ describe("runMigrations", () => {
     const stageCol = cols.find((c) => c.name === "stage")!;
     expect(stageCol.type).toBe("TEXT");
     expect(stageCol.pk).toBe(1);
+  });
+
+  // --- job_costs schema ---
+
+  it("job_costs table has correct columns", () => {
+    runMigrations(db);
+    const cols = getColumns(db, "job_costs");
+    const names = cols.map((c) => c.name);
+    expect(names).toEqual([
+      "id",
+      "jobId",
+      "stage",
+      "provider",
+      "model",
+      "inputTokens",
+      "outputTokens",
+      "cost",
+      "createdAt",
+    ]);
+  });
+
+  it("job_costs.id is TEXT PRIMARY KEY", () => {
+    runMigrations(db);
+    const cols = getColumns(db, "job_costs");
+    const idCol = cols.find((c) => c.name === "id")!;
+    expect(idCol.type).toBe("TEXT");
+    expect(idCol.pk).toBe(1);
+  });
+
+  // --- jobs.retryOf column ---
+
+  it("jobs table has retryOf column", () => {
+    runMigrations(db);
+    const cols = getColumns(db, "jobs");
+    const retryOfCol = cols.find((c) => c.name === "retryOf");
+    expect(retryOfCol).toBeDefined();
+    expect(retryOfCol!.type).toBe("TEXT");
   });
 
   // --- idempotency ---
@@ -383,6 +436,7 @@ describe("getDb", () => {
     expect(tables).toContain("jobs");
     expect(tables).toContain("annotations");
     expect(tables).toContain("pipeline_status");
+    expect(tables).toContain("job_costs");
     db.close();
   });
 
@@ -471,7 +525,7 @@ describe("lib/db.ts source structure", () => {
   it("uses CREATE TABLE IF NOT EXISTS for idempotent migrations", () => {
     const matches = sourceCode.match(/CREATE TABLE IF NOT EXISTS/g);
     expect(matches).not.toBeNull();
-    expect(matches!.length).toBe(3);
+    expect(matches!.length).toBe(4);
   });
 
   it("uses db.exec for DDL statements in runMigrations", () => {

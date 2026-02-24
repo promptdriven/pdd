@@ -69,7 +69,7 @@ function makeJob(overrides: Record<string, unknown> = {}) {
 beforeEach(() => {
   mockGetJob.mockReset();
   mockRetryJob.mockReset();
-  mockRetryJob.mockResolvedValue(undefined);
+  mockRetryJob.mockResolvedValue("new-job-id-abc");
 });
 
 // ---------------------------------------------------------------------------
@@ -96,19 +96,22 @@ describe("POST — successful retry", () => {
     expect(response.status).toBe(200);
   });
 
-  it("returns { jobId } on success", async () => {
+  it("returns { jobId } with the NEW job ID on success", async () => {
+    mockRetryJob.mockResolvedValue("new-job-id-xyz");
     const response = await POST(mockRequest("job-abc"), makeParams("job-abc"));
     const body = await response.json();
-    expect(body).toEqual({ jobId: "job-abc" });
+    expect(body).toEqual({ jobId: "new-job-id-xyz" });
   });
 
-  it("returns the correct jobId matching params.id", async () => {
+  it("returns the new jobId from retryJob, not the original params.id", async () => {
+    mockRetryJob.mockResolvedValue("retry-new-001");
     const response = await POST(
       mockRequest("my-retry-job"),
       makeParams("my-retry-job")
     );
     const body = await response.json();
-    expect(body.jobId).toBe("my-retry-job");
+    expect(body.jobId).toBe("retry-new-001");
+    expect(body.jobId).not.toBe("my-retry-job");
   });
 
   it("calls getJob with params.id", async () => {
@@ -190,29 +193,29 @@ describe("POST — job not found", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 4. POST handler — job not in error state (400)
+// 4. POST handler — job not in error state (409 Conflict)
 // ---------------------------------------------------------------------------
 
 describe("POST — job not in error state", () => {
-  it("returns 400 when job status is 'pending'", async () => {
+  it("returns 409 when job status is 'pending'", async () => {
     mockGetJob.mockReturnValue(makeJob({ status: "pending" }));
 
     const response = await POST(mockRequest("job-123"), makeParams("job-123"));
-    expect(response.status).toBe(400);
+    expect(response.status).toBe(409);
   });
 
-  it("returns 400 when job status is 'running'", async () => {
+  it("returns 409 when job status is 'running'", async () => {
     mockGetJob.mockReturnValue(makeJob({ status: "running" }));
 
     const response = await POST(mockRequest("job-123"), makeParams("job-123"));
-    expect(response.status).toBe(400);
+    expect(response.status).toBe(409);
   });
 
-  it("returns 400 when job status is 'done'", async () => {
+  it("returns 409 when job status is 'done'", async () => {
     mockGetJob.mockReturnValue(makeJob({ status: "done" }));
 
     const response = await POST(mockRequest("job-123"), makeParams("job-123"));
-    expect(response.status).toBe(400);
+    expect(response.status).toBe(409);
   });
 
   it("returns { error: 'Job is not in error state' } body", async () => {
@@ -301,6 +304,7 @@ describe("no authentication required", () => {
   });
 
   it("does not inspect or validate request headers", async () => {
+    mockRetryJob.mockResolvedValue("new-job-from-retry");
     const request = new Request("http://localhost/api/jobs/job-123/retry", {
       method: "POST",
       headers: { "X-Custom-Header": "some-value" },
@@ -308,7 +312,7 @@ describe("no authentication required", () => {
 
     const response = await POST(request, makeParams("job-123"));
     const body = await response.json();
-    expect(body.jobId).toBe("job-123");
+    expect(body.jobId).toBe("new-job-from-retry");
   });
 });
 
@@ -381,7 +385,7 @@ describe("app/api/jobs/[id]/retry/route.ts source structure", () => {
     expect(sourceCode).toMatch(/404/);
   });
 
-  it("returns 400 status for non-error jobs", () => {
-    expect(sourceCode).toMatch(/400/);
+  it("returns 409 status for non-error jobs", () => {
+    expect(sourceCode).toMatch(/409/);
   });
 });

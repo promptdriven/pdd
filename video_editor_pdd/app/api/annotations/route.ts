@@ -39,6 +39,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       analysis: row.analysis ? JSON.parse(row.analysis) : null,
       resolved: Boolean(row.resolved),
       resolveJobId: row.resolveJobId ?? null,
+      inputMethod: row.inputMethod ?? "typed",
       createdAt: row.createdAt,
     }));
 
@@ -68,6 +69,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       drawingDataUrl,
       compositeDataUrl,
       videoFile,
+      inputMethod,
     } = body;
 
     if (!sectionId || !text) {
@@ -92,8 +94,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         analysis,
         resolved,
         resolveJobId,
-        createdAt
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 0, NULL, ?)`
+        createdAt,
+        inputMethod
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 0, NULL, ?, ?)`
     ).run(
       id,
       sectionId,
@@ -102,7 +105,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       videoFile ?? null,
       drawingDataUrl ?? null,
       compositeDataUrl ?? null,
-      createdAt
+      createdAt,
+      inputMethod ?? "typed"
     );
 
     const annotation: Annotation = {
@@ -116,6 +120,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       analysis: null,
       resolved: false,
       resolveJobId: null,
+      inputMethod: inputMethod ?? "typed",
       createdAt,
     };
 

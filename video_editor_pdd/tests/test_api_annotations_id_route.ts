@@ -21,8 +21,10 @@
 // ---------------------------------------------------------------------------
 
 const mockGet = jest.fn();
+const mockRun = jest.fn();
 const mockPrepare = jest.fn(() => ({
   get: mockGet,
+  run: mockRun,
 }));
 const mockDb = { prepare: mockPrepare };
 const mockGetDb = jest.fn(() => mockDb);
@@ -32,7 +34,7 @@ jest.mock("@/lib/db", () => ({
 }));
 
 // Import after mock setup
-import { GET, dynamic } from "../app/api/annotations/[id]/route";
+import { GET, PUT, DELETE, dynamic } from "../app/api/annotations/[id]/route";
 import fs from "fs";
 import path from "path";
 
@@ -78,8 +80,9 @@ beforeEach(() => {
   mockGetDb.mockReset();
   mockGetDb.mockReturnValue(mockDb);
   mockPrepare.mockReset();
-  mockPrepare.mockReturnValue({ get: mockGet });
+  mockPrepare.mockReturnValue({ get: mockGet, run: mockRun });
   mockGet.mockReset();
+  mockRun.mockReset();
   jest.spyOn(console, "error").mockImplementation(() => {});
 });
 
@@ -435,5 +438,228 @@ describe("app/api/annotations/[id]/route.ts source structure", () => {
   it("handles 500 internal server error case", () => {
     expect(sourceCode).toMatch(/500/);
     expect(sourceCode).toMatch(/Internal Server Error/);
+  });
+
+  it("exports async PUT function", () => {
+    expect(sourceCode).toMatch(/export\s+async\s+function\s+PUT/);
+  });
+
+  it("exports async DELETE function", () => {
+    expect(sourceCode).toMatch(/export\s+async\s+function\s+DELETE/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 8. PUT /api/annotations/[id] — update annotation
+// ---------------------------------------------------------------------------
+
+describe("PUT /api/annotations/[id] — successful update", () => {
+  it("returns 200 when annotation exists and fields are updated", async () => {
+    // First call: SELECT id for existence check
+    // Second call: UPDATE
+    // Third call: SELECT * for re-fetch
+    let callCount = 0;
+    mockPrepare.mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) return { get: () => ({ id: "ann-123" }) };
+      if (callCount === 2) return { run: mockRun };
+      return { get: () => makeDbRow({ text: "Updated text" }) };
+    });
+
+    const request = new Request("http://localhost/api/annotations/ann-123", {
+      method: "PUT",
+      body: JSON.stringify({ text: "Updated text" }),
+      headers: { "Content-Type": "application/json" },
+    });
+
+    const response = await PUT(request, makeParams("ann-123"));
+    expect(response.status).toBe(200);
+  });
+
+  it("returns updated annotation object", async () => {
+    let callCount = 0;
+    mockPrepare.mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) return { get: () => ({ id: "ann-123" }) };
+      if (callCount === 2) return { run: mockRun };
+      return {
+        get: () =>
+          makeDbRow({
+            id: "ann-123",
+            text: "New text",
+            sectionId: "section-1",
+            timestamp: 5.0,
+          }),
+      };
+    });
+
+    const request = new Request("http://localhost/api/annotations/ann-123", {
+      method: "PUT",
+      body: JSON.stringify({ text: "New text" }),
+      headers: { "Content-Type": "application/json" },
+    });
+
+    const response = await PUT(request, makeParams("ann-123"));
+    const body = await response.json();
+    expect(body.id).toBe("ann-123");
+    expect(body.text).toBe("New text");
+  });
+});
+
+describe("PUT /api/annotations/[id] — not found", () => {
+  it("returns 404 when annotation does not exist", async () => {
+    mockPrepare.mockReturnValue({ get: () => undefined });
+
+    const request = new Request("http://localhost/api/annotations/missing", {
+      method: "PUT",
+      body: JSON.stringify({ text: "Updated" }),
+      headers: { "Content-Type": "application/json" },
+    });
+
+    const response = await PUT(request, makeParams("missing"));
+    expect(response.status).toBe(404);
+  });
+
+  it("returns { error: 'Annotation not found' } body", async () => {
+    mockPrepare.mockReturnValue({ get: () => undefined });
+
+    const request = new Request("http://localhost/api/annotations/missing", {
+      method: "PUT",
+      body: JSON.stringify({ text: "Updated" }),
+      headers: { "Content-Type": "application/json" },
+    });
+
+    const response = await PUT(request, makeParams("missing"));
+    const body = await response.json();
+    expect(body).toEqual({ error: "Annotation not found" });
+  });
+});
+
+describe("PUT /api/annotations/[id] — no fields to update", () => {
+  it("returns 400 when no updatable fields are provided", async () => {
+    mockPrepare.mockReturnValue({ get: () => ({ id: "ann-123" }) });
+
+    const request = new Request("http://localhost/api/annotations/ann-123", {
+      method: "PUT",
+      body: JSON.stringify({}),
+      headers: { "Content-Type": "application/json" },
+    });
+
+    const response = await PUT(request, makeParams("ann-123"));
+    expect(response.status).toBe(400);
+  });
+
+  it("returns { error: 'No fields to update' } body", async () => {
+    mockPrepare.mockReturnValue({ get: () => ({ id: "ann-123" }) });
+
+    const request = new Request("http://localhost/api/annotations/ann-123", {
+      method: "PUT",
+      body: JSON.stringify({}),
+      headers: { "Content-Type": "application/json" },
+    });
+
+    const response = await PUT(request, makeParams("ann-123"));
+    const body = await response.json();
+    expect(body).toEqual({ error: "No fields to update" });
+  });
+});
+
+describe("PUT /api/annotations/[id] — error handling", () => {
+  it("returns 500 when getDb throws", async () => {
+    mockGetDb.mockImplementation(() => {
+      throw new Error("DB connection failed");
+    });
+
+    const request = new Request("http://localhost/api/annotations/ann-123", {
+      method: "PUT",
+      body: JSON.stringify({ text: "Updated" }),
+      headers: { "Content-Type": "application/json" },
+    });
+
+    const response = await PUT(request, makeParams("ann-123"));
+    expect(response.status).toBe(500);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 9. DELETE /api/annotations/[id] — delete annotation
+// ---------------------------------------------------------------------------
+
+describe("DELETE /api/annotations/[id] — successful deletion", () => {
+  it("returns 200 with { success: true } when annotation exists", async () => {
+    let callCount = 0;
+    mockPrepare.mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) return { get: () => ({ id: "ann-123" }) };
+      return { run: mockRun };
+    });
+
+    const request = new Request("http://localhost/api/annotations/ann-123", {
+      method: "DELETE",
+    });
+
+    const response = await DELETE(request, makeParams("ann-123"));
+    expect(response.status).toBe(200);
+
+    const body = await response.json();
+    expect(body).toEqual({ success: true });
+  });
+
+  it("calls DELETE FROM annotations WHERE id = ?", async () => {
+    let callCount = 0;
+    let deleteSQL = "";
+    mockPrepare.mockImplementation((sql: string) => {
+      callCount++;
+      if (callCount === 1) return { get: () => ({ id: "ann-123" }) };
+      deleteSQL = sql;
+      return { run: mockRun };
+    });
+
+    const request = new Request("http://localhost/api/annotations/ann-123", {
+      method: "DELETE",
+    });
+
+    await DELETE(request, makeParams("ann-123"));
+    expect(deleteSQL).toContain("DELETE FROM annotations WHERE id = ?");
+  });
+});
+
+describe("DELETE /api/annotations/[id] — not found", () => {
+  it("returns 404 when annotation does not exist", async () => {
+    mockPrepare.mockReturnValue({ get: () => undefined });
+
+    const request = new Request("http://localhost/api/annotations/missing", {
+      method: "DELETE",
+    });
+
+    const response = await DELETE(request, makeParams("missing"));
+    expect(response.status).toBe(404);
+  });
+
+  it("returns { error: 'Annotation not found' } body", async () => {
+    mockPrepare.mockReturnValue({ get: () => undefined });
+
+    const request = new Request("http://localhost/api/annotations/missing", {
+      method: "DELETE",
+    });
+
+    const response = await DELETE(request, makeParams("missing"));
+    const body = await response.json();
+    expect(body).toEqual({ error: "Annotation not found" });
+  });
+});
+
+describe("DELETE /api/annotations/[id] — error handling", () => {
+  it("returns 500 when getDb throws", async () => {
+    mockGetDb.mockImplementation(() => {
+      throw new Error("DB connection failed");
+    });
+
+    const request = new Request("http://localhost/api/annotations/ann-123", {
+      method: "DELETE",
+    });
+
+    const response = await DELETE(request, makeParams("ann-123"));
+    expect(response.status).toBe(500);
   });
 });

@@ -156,10 +156,10 @@ export default function Stage2ScriptEditor({ onAdvance }: Stage2ScriptEditorProp
     for (const line of lines) {
       if (/^##\s+/.test(line)) {
         blocks.push({ type: 'header', text: line.replace(/^##\s+/, '') });
-      } else if (/^NARRATOR:/.test(line)) {
-        blocks.push({ type: 'narrator', text: line.replace(/^NARRATOR:\s*/, '') });
-      } else if (/^\[VISUAL:/.test(line)) {
-        blocks.push({ type: 'visual', text: line.replace(/^\[VISUAL:\s*/, '').replace(/\]$/, '') });
+      } else if (/^\*{0,2}NARRATOR:\*{0,2}/.test(line)) {
+        blocks.push({ type: 'narrator', text: line.replace(/^\*{0,2}NARRATOR:\*{0,2}\s*/, '' ) });
+      } else if (/^\*{0,2}\[VISUAL:/.test(line)) {
+        blocks.push({ type: 'visual', text: line.replace(/^\*{0,2}\[VISUAL:\s*/, '' ).replace(/\]\*{0,2}$/, '' ) });
       } else if (line.trim().length > 0) {
         blocks.push({ type: 'text', text: line });
       }

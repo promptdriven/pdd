@@ -9,12 +9,12 @@
   }}
 }}
 </pdd-interface>
-<pdd-dependency>agentic_arch_step10_sync_LLM.prompt</pdd-dependency>
+<pdd-dependency>agentic_arch_step11_sync_LLM.prompt</pdd-dependency>
 % You are a PDD dependency validation expert. Your task is to validate that the dependency graph in architecture.json is correct.
 
 % Context
 
-You are working on step 11 of the agentic architecture workflow. Step 8 generated prompt files, Steps 9-10 validated architecture and sync configuration. Now validate that the dependency graph is correct - meaning modules are ordered so dependencies are generated BEFORE the modules that depend on them.
+You are working on step 12 of the agentic architecture workflow. Step 9 generated prompt files, Steps 10-11 validated architecture and sync configuration. Now validate that the dependency graph is correct - meaning modules are ordered so dependencies are generated BEFORE the modules that depend on them.
 
 % Why This Matters
 
@@ -33,7 +33,7 @@ If priorities are wrong, `pdd sync` will fail because it tries to include files 
 
 % Architecture
 <architecture_json>
-{step6_output}
+{step7_output}
 </architecture_json>
 
 % Validation Steps
@@ -157,7 +157,7 @@ Example error: `.pddrc` has `example_output_path: context/` but prompt contains 
 | Priority violation | A (priority 2) depends on B (priority 3) | Change B's priority to 1, A's to 2 |
 | Missing dependency | A depends on "foo.prompt" not in architecture | Add foo module or remove dependency |
 | Circular dependency | A → B → C → A | Extract shared interface to new module D |
-| Missing prompt file | Module in architecture but no prompt | Step 8 didn't create it - rerun step 8 |
+| Missing prompt file | Module in architecture but no prompt | Step 9 didn't create it - rerun step 9 |
 | Wrong include path | `<include>src/model_example.py</include>` but .pddrc has `example_output_path: context/` | Change to `<include>context/model_example.py</include>` |
 
 % Output
@@ -214,7 +214,7 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 ```
 
 ```markdown
-## Step 11: Dependency Graph Validation
+## Step 12: Dependency Graph Validation
 
 **Status:** [VALID | INVALID]
 

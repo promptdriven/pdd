@@ -54,7 +54,8 @@ export default function StageSidebar({
       try {
         const res = await fetch('/api/pipeline/status');
         if (!res.ok) return;
-        const data: Record<PipelineStage, StageStatusEntry> = await res.json();
+        const json = await res.json();
+        const data: Record<PipelineStage, StageStatusEntry> = json.stages ?? json;
         if (!mounted) return;
         // Update in place without flicker
         setStageStatuses((prev) => ({

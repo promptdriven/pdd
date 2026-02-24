@@ -43,7 +43,8 @@ function createTestDb(): Database {
       params TEXT,
       logs TEXT DEFAULT '',
       createdAt TEXT,
-      updatedAt TEXT
+      updatedAt TEXT,
+      retryOf TEXT
     );
     CREATE TABLE IF NOT EXISTS pipeline_status (
       stage TEXT PRIMARY KEY,
@@ -516,8 +517,7 @@ describe("registerExecutor", () => {
 });
 
 describe("retryJob", () => {
-  it("resets job status to pending then runs", async () => {
-    // Register an executor for setup
+  it("creates a new job instead of mutating the original", async () => {
     registerExecutor("setup", (_params, _send) => {
       return async (onLog) => {
         onLog("retried");
@@ -525,14 +525,68 @@ describe("retryJob", () => {
     });
 
     const jobId = createJob("setup", { retryTest: true });
-    // First run it as an error
     await runJob(jobId, failingExecutor("first failure"));
     expect(getJob(jobId)!.status).toBe("error");
 
-    // Retry
+    // Retry should create a new job
+    const newJobId = await retryJob(jobId);
+    expect(newJobId).not.toBe(jobId);
+
+    // Original job should remain in error state
+    const originalJob = getJob(jobId);
+    expect(originalJob!.status).toBe("error");
+
+    // New job should be done
+    const newJob = getJob(newJobId);
+    expect(newJob!.status).toBe("done");
+  });
+
+  it("returns the new job ID", async () => {
+    registerExecutor("setup", (_params, _send) => {
+      return async (onLog) => {
+        onLog("done");
+      };
+    });
+
+    const jobId = createJob("setup", {});
+    await runJob(jobId, failingExecutor("fail"));
+
+    const newJobId = await retryJob(jobId);
+    expect(typeof newJobId).toBe("string");
+    expect(newJobId.length).toBeGreaterThan(0);
+    expect(newJobId).not.toBe(jobId);
+  });
+
+  it("links new job to original via retryOf", async () => {
+    registerExecutor("setup", (_params, _send) => {
+      return async (onLog) => {
+        onLog("done");
+      };
+    });
+
+    const jobId = createJob("setup", {});
+    await runJob(jobId, failingExecutor("fail"));
+
+    const newJobId = await retryJob(jobId);
+    const newJob = getJob(newJobId);
+    expect(newJob!.retryOf).toBe(jobId);
+  });
+
+  it("preserves original job error status after retry", async () => {
+    registerExecutor("setup", (_params, _send) => {
+      return async (onLog) => {
+        onLog("done");
+      };
+    });
+
+    const jobId = createJob("setup", {});
+    await runJob(jobId, failingExecutor("original error"));
+
     await retryJob(jobId);
-    const job = getJob(jobId);
-    expect(job!.status).toBe("done");
+
+    const originalJob = getJob(jobId);
+    expect(originalJob!.status).toBe("error");
+    expect(originalJob!.error).toBe("original error");
   });
 
   it("throws if job not found", async () => {
@@ -563,6 +617,21 @@ describe("retryJob", () => {
     await retryJob(jobId);
 
     expect(capturedParams).toEqual(originalParams);
+  });
+
+  it("new job has same stage as original", async () => {
+    registerExecutor("tts-render", (_params, _send) => {
+      return async (onLog) => {
+        onLog("done");
+      };
+    });
+
+    const jobId = createJob("tts-render", {});
+    await runJob(jobId, failingExecutor("fail"));
+
+    const newJobId = await retryJob(jobId);
+    const newJob = getJob(newJobId);
+    expect(newJob!.stage).toBe("tts-render");
   });
 });
 

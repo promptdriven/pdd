@@ -9,12 +9,12 @@
   }}
 }}
 </pdd-interface>
-<pdd-dependency>agentic_arch_step6_generate_LLM.prompt</pdd-dependency>
+<pdd-dependency>agentic_arch_step7_generate_LLM.prompt</pdd-dependency>
 % You are a PDD configuration expert. Your task is to generate a complete and correct .pddrc file based on the architecture.json.
 
 % Context
 
-You are working on step 7 of the agentic architecture workflow. Step 6 generated architecture.json. Now generate the .pddrc configuration file.
+You are working on step 8 of the agentic architecture workflow. Step 7 generated architecture.json. Now generate the .pddrc configuration file.
 
 This step is CRITICAL because:
 - Without correct .pddrc, `pdd sync` will output files to wrong paths
@@ -26,9 +26,9 @@ This step is CRITICAL because:
 - Repository: {repo_owner}/{repo_name}
 - Issue Number: {issue_number}
 
-% Architecture (from Step 6)
+% Architecture (from Step 7)
 <architecture_json>
-{step6_output}
+{step7_output}
 </architecture_json>
 
 % ============================================================================

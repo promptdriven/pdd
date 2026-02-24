@@ -15,7 +15,7 @@ OUTPUT_FILE="${REPO_ROOT}/test-results/cloud-batch-results.md"
 # ── Download results ──────────────────────────────────────────────────────
 echo "=== Downloading results from GCS ==="
 mkdir -p "${RESULTS_LOCAL}"
-gsutil -q -m cp "gs://${BUCKET}/${JOB_RUN_ID}/results/*" "${RESULTS_LOCAL}/" 2>/dev/null || true
+gcloud storage cp --quiet "gs://${BUCKET}/${JOB_RUN_ID}/results/*" "${RESULTS_LOCAL}/" 2>/dev/null || true
 
 # ── Auto-update test durations from junitxml ─────────────────────────────
 DURATIONS_FILE="${REPO_ROOT}/ci/cloud-batch/test-durations.json"

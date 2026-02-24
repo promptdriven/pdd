@@ -37,7 +37,7 @@ gcloud artifacts repositories create "${AR_REPO}" \
 
 # ── Create GCS bucket ────────────────────────────────────────────────────
 echo "=== Creating GCS bucket: ${BUCKET} ==="
-gsutil mb -p "${PROJECT_ID}" -l "${REGION}" "gs://${BUCKET}" 2>/dev/null || echo "  (already exists)"
+gcloud storage buckets create "gs://${BUCKET}" --project="${PROJECT_ID}" --location="${REGION}" 2>/dev/null || echo "  (already exists)"
 
 # Set lifecycle policy: auto-delete objects after 30 days
 cat > /tmp/pdd-ci-lifecycle.json <<'EOF'
@@ -50,7 +50,7 @@ cat > /tmp/pdd-ci-lifecycle.json <<'EOF'
     ]
 }
 EOF
-gsutil lifecycle set /tmp/pdd-ci-lifecycle.json "gs://${BUCKET}"
+gcloud storage buckets update "gs://${BUCKET}" --lifecycle-file=/tmp/pdd-ci-lifecycle.json
 rm /tmp/pdd-ci-lifecycle.json
 
 # ── Create service account ────────────────────────────────────────────────

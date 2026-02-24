@@ -51,7 +51,7 @@ fi
 
 gzip /tmp/pdd-source.tar
 
-gsutil -q cp /tmp/pdd-source.tar.gz "${SOURCE_GCS}"
+gcloud storage cp --quiet /tmp/pdd-source.tar.gz "${SOURCE_GCS}"
 rm /tmp/pdd-source.tar.gz
 echo "Uploaded to ${SOURCE_GCS}"
 
@@ -95,7 +95,7 @@ while [ "${ELAPSED}" -lt "${POLL_TIMEOUT}" ]; do
         --format="value(status.state)" 2>/dev/null || echo "UNKNOWN")
 
     # ── Stream completed task results ─────────────────────────────────
-    _with_timeout 15 gsutil -q -m cp "gs://${BUCKET}/${JOB_RUN_ID}/results/task_*.json" "${STREAMING_DIR}/" 2>/dev/null || true
+    _with_timeout 15 gcloud storage cp --quiet "gs://${BUCKET}/${JOB_RUN_ID}/results/task_*.json" "${STREAMING_DIR}/" 2>/dev/null || true
     COMPLETED=$(find "${STREAMING_DIR}" -maxdepth 1 -name "task_*.json" | wc -l | tr -d ' ')
     COMPLETED=${COMPLETED:-0}
 
@@ -117,7 +117,7 @@ while [ "${ELAPSED}" -lt "${POLL_TIMEOUT}" ]; do
             TASK_DETAIL=$(python3 -c "import json; d=json.load(open('${json_file}')); print(d.get('detail',''))" 2>/dev/null || echo "")
             echo ""
             echo "!! FAILURE: Task ${TASK_NUM} (${TASK_SUITE} / ${TASK_DETAIL}) !!"
-            gsutil cat "gs://${BUCKET}/${JOB_RUN_ID}/results/task_${TASK_NUM}.log" 2>/dev/null || echo "(log not available)"
+            gcloud storage cat "gs://${BUCKET}/${JOB_RUN_ID}/results/task_${TASK_NUM}.log" 2>/dev/null || echo "(log not available)"
             echo ""
         fi
     done

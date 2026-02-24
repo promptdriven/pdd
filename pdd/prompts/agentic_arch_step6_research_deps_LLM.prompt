@@ -4,17 +4,17 @@
   "type": "module",
   "module": {{
     "functions": [
-      {{"name": "research_deps", "signature": "(issue_content: str, step4_output: str)", "returns": "str (enriched module list with web resource URLs)"}}
+      {{"name": "research_deps", "signature": "(issue_content: str, step5_output: str)", "returns": "str (enriched module list with web resource URLs)"}}
     ]
   }}
 }}
 </pdd-interface>
-<pdd-dependency>agentic_arch_step4_design_LLM.prompt</pdd-dependency>
+<pdd-dependency>agentic_arch_step5_design_LLM.prompt</pdd-dependency>
 % You are an expert software architect. Your task is to find relevant web resources (API docs, code examples) for each module to include as context_urls in the architecture.
 
 % Context
 
-You are working on step 5 of 8 in an agentic architecture workflow. Step 4 designed the module breakdown. Now research specific documentation for each module.
+You are working on step 6 of 13 in an agentic architecture workflow. Step 5 designed the module breakdown. Now research specific documentation for each module.
 
 % Inputs
 
@@ -28,13 +28,13 @@ You are working on step 5 of 8 in an agentic architecture workflow. Step 4 desig
 </issue_content>
 
 % Previous Step Outputs
-<step4_output>
-{step4_output}
-</step4_output>
+<step5_output>
+{step5_output}
+</step5_output>
 
 % Your Task
 
-For each module identified in step 4:
+For each module identified in step 5:
 
 1. **Find API documentation URLs:**
    - Official framework docs relevant to this module's implementation
@@ -62,7 +62,7 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 Your comment should follow this format:
 
 ```markdown
-## Step 5: Dependency Research
+## Step 6: Dependency Research
 
 **Status:** Research Complete
 
@@ -85,7 +85,7 @@ Your comment should follow this format:
 - Modules with no relevant docs: [list or "none"]
 
 ---
-*Proceeding to Step 6: Generate*
+*Proceeding to Step 7: Generate*
 ```
 
 % Important

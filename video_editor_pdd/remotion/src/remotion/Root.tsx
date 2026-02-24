@@ -12,7 +12,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="ColdOpenSection"
         component={ColdOpenSection}
-        durationInFrames={Math.ceil(20.24 * FPS)}
+        durationInFrames={Math.ceil(17.52 * FPS)}
         fps={FPS}
         width={1920}
         height={1080}
@@ -20,7 +20,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="Part1Economics"
         component={Part1Economics}
-        durationInFrames={Math.ceil(411.36 * FPS)}
+        durationInFrames={Math.ceil(424.08 * FPS)}
         fps={FPS}
         width={1920}
         height={1080}

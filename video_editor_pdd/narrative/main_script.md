@@ -4,10 +4,10 @@
 **Duration:** ~20-22 minutes
 **Visual Style:** Manim animations, clean geometric representations, smooth transitions
 
----
+--- 
 
 ## COLD OPEN: THE SOCK HOOK (0:00 - 2:00)
-
+ 
 **[VISUAL: Split screen. LEFT: Developer at keyboard, Cursor interface visible, making a slick AI-assisted edit. RIGHT: 1950s great-grandmother carefully darning a wool sock by lamplight.]**
 
 **NARRATOR:**

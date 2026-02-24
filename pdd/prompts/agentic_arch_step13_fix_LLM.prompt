@@ -9,7 +9,7 @@
   }}
 }}
 </pdd-interface>
-<pdd-dependency>agentic_arch_step11_deps_LLM.prompt</pdd-dependency>
+<pdd-dependency>agentic_arch_step12_deps_LLM.prompt</pdd-dependency>
 % You are an expert software architect and PDD configuration specialist. Your task is to fix the validation errors from a failed validation step.
 
 % PDD Path Construction Guide (CRITICAL - Read this carefully)
@@ -19,7 +19,7 @@
 
 % Context
 
-You are working on step 12 of the agentic architecture workflow. One of the validation steps (9, 10, or 11) failed. Fix the errors and the workflow will re-run validation from step 9.
+You are working on step 13 of the agentic architecture workflow. One of the validation steps (10, 11, or 12) failed. Fix the errors and the workflow will re-run validation from step 10.
 
 % Inputs
 
@@ -29,7 +29,7 @@ You are working on step 12 of the agentic architecture workflow. One of the vali
 
 % Current Architecture
 <architecture_json>
-{step6_output}
+{step7_output}
 </architecture_json>
 
 % PRD Summary (for completeness fixes)
@@ -47,7 +47,7 @@ You are working on step 12 of the agentic architecture workflow. One of the vali
 % FIX BASED ON WHICH STEP FAILED
 % ============================================================================
 
-**If failed_validation_step is "completeness" (Step 9):**
+**If failed_validation_step is "completeness" (Step 10):**
 
 Fix architecture completeness issues:
 
@@ -69,7 +69,7 @@ Fix architecture completeness issues:
 
 ---
 
-**If failed_validation_step is "sync" (Step 10):**
+**If failed_validation_step is "sync" (Step 11):**
 
 Fix .pddrc sync configuration issues.
 
@@ -133,7 +133,7 @@ Fix .pddrc sync configuration issues.
 
 ---
 
-**If failed_validation_step is "dependencies" (Step 11):**
+**If failed_validation_step is "dependencies" (Step 12):**
 
 Fix dependency graph issues in architecture.json:
 
@@ -569,7 +569,7 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 ```
 
 ```markdown
-## Step 12: Fix Applied
+## Step 13: Fix Applied
 
 **Failed Step:** {failed_validation_step}
 **Iteration:** [N]
@@ -583,7 +583,7 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 - [file2]: [what changed]
 
 ---
-*Returning to Step 9 for re-validation*
+*Returning to Step 10 for re-validation*
 ```
 
 **Step 8: Report ALL files modified AND deleted**
@@ -604,6 +604,6 @@ FILES_DELETED: prompts/api/old_module_TypeScript.prompt, prompts/nested/path.pro
 - Prompt files MUST be in the correct directory: FLAT in `prompts/` for Strategy A, or in the group's `prompts_dir` subdirectory for Strategy B
 - Every new module in architecture.json needs a prompt file at the correct path for its strategy
 - Clean up any incorrectly placed files BEFORE creating correct ones
-- After fixes, workflow will re-run ALL validations from step 9
+- After fixes, workflow will re-run ALL validations from step 10
 - Always post findings to GitHub
 - Always output `FILES_MODIFIED:` and `FILES_DELETED:` with complete file lists

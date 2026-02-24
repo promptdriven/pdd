@@ -5836,7 +5836,7 @@
     "reason": "LLM prompt template for updating architecture metadata after changes.",
     "description": "Step 10 of the agentic change workflow. Updates architecture metadata (PDD tags) for prompts created or modified and updates architecture.json.",
     "dependencies": [
-      "` tags:\n      - Extract from `<include>` directives in the prompt\n      - Only include .prompt file dependencies (not .py, .md, etc.)\n      - One `<pdd-dependency>` tag per dependency\n   e. Prepend tags to the prompt file (before first % line)\n\n4. **For each MODIFIED prompt in FILES_MODIFIED:**\n   a. Check if prompt already has PDD tags at the top\n   b. If tags exist and requirements changed significantly, update them\n   c. If no tags exist, add them following the same process as step 3\n   d. Skip if no meaningful interface changes\n\n5. **Update architecture.json (if it exists):**\n   a. For new prompts: Add new entry with reason, interface, dependencies\n   b. For modified prompts: Sync entry from prompt tags\n   c. Preserve existing entries not being modified\n\n% Output\n\nAfter completing your changes, use `gh issue comment` to post your findings to issue #{issue_number}:\n\n```\ngh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body \"...\"\n```\n\nYour comment should follow this format:\n\n**If tags added/updated:**\n```markdown\n## Step 10: Architecture Update\n\n**Status:** Updated\n\n### Tags Added/Updated\n| Prompt | Action | Interface Type |\n|--------|--------|---------------|\n| `prompts/xxx.prompt` | Added tags | module |\n| `prompts/yyy.prompt` | Updated tags | cli |\n\n### architecture.json Changes\n- Added: `xxx.prompt`\n- Updated: `yyy.prompt`\n\nARCHITECTURE_FILES_MODIFIED: prompts/xxx.prompt, prompts/yyy.prompt, architecture.json\n\n---\n*Proceeding to Step 11: Identify Issues*\n```\n\n**If no architecture.json exists:**\n```markdown\n## Step 10: Architecture Update\n\n**Status:** Tags Added (no architecture.json)\n\n### Tags Added/Updated\n| Prompt | Action | Interface Type |\n|--------|--------|---------------|\n| `prompts/xxx.prompt` | Added tags | module |\n\nARCHITECTURE_FILES_MODIFIED: prompts/xxx.prompt\n\n---\n*Proceeding to Step 11: Identify Issues*\n```\n\n**If no prompt files to update (only docs/non-prompt files changed):**\n```markdown\n## Step 10: Architecture Update\n\n**Status:** Skipped (no prompt files in changes)\n\nNo new or modified prompt files require architecture metadata updates.\n\n---\n*Proceeding to Step 11: Identify Issues*\n```\n\n% Important\n\n- Work in the worktree directory, not the main repo\n- Tags must be prepended BEFORE the first % line in prompts\n- Always post your findings as a GitHub comment before completing\n- The ARCHITECTURE_FILES_MODIFIED line is CRITICAL for the orchestrator to track changes\n- Use the exact format: `ARCHITECTURE_FILES_MODIFIED: file1, file2, file3` (comma-separated, same line)\n\n% Tag Format Examples\n\n**Example `<pdd-reason>` tag:**\n```xml\n<pdd-reason>Orchestrates the 13-step agentic change workflow for implementing GitHub issues.</pdd-reason>\n```\n\n**Example `<pdd-interface>` tag (module type):**\n```xml\n<pdd-interface>\n{{\n  \"type\": \"module\",\n  \"module\": {{\n    \"functions\": [\n      {{\"name\": \"run_agentic_change_orchestrator\", \"signature\": \"(issue_url, issue_content, ...)\", \"returns\": \"Tuple[bool, str, float, str, List[str]]\"}}\n    ]\n  }}\n}}\n</pdd-interface>\n```\n\n**Example `<pdd-interface>` tag (cli type):**\n```xml\n<pdd-interface>\n{{\n  \"type\": \"cli\",\n  \"cli\": {{\n    \"commands\": [\n      {{\"name\": \"change\", \"description\": \"Implement a GitHub issue as prompt changes\"}}\n    ]\n  }}\n}}\n</pdd-interface>\n```\n\n**Example `<pdd-dependency>` tags:**\n```xml\n<pdd-dependency>llm_invoke_python.prompt",
+      "llm_invoke_python.prompt",
       "path_resolution_python.prompt"
     ],
     "priority": 170,
@@ -7129,7 +7129,7 @@
     }
   },
   {
-    "reason": "Entry point for the agentic checkup workflow — fetches GitHub issue, loads project context, and dispatches to the checkup orchestrator.",
+    "reason": "Entry point for the agentic checkup workflow \u2014 fetches GitHub issue, loads project context, and dispatches to the checkup orchestrator.",
     "description": "Accepts a GitHub issue URL, fetches issue content and comments, loads architecture.json and .pddrc, then invokes the multi-step checkup orchestrator that explores the project, identifies problems, and optionally fixes them.",
     "dependencies": [
       "agentic_change_python.prompt",
@@ -7186,7 +7186,7 @@
     }
   },
   {
-    "reason": "Multi-step orchestrator for pdd checkup — 8 steps with iterative fix-verify loop and worktree isolation.",
+    "reason": "Multi-step orchestrator for pdd checkup \u2014 8 steps with iterative fix-verify loop and worktree isolation.",
     "description": "Orchestrates the 8-step agentic checkup workflow: discover, deps, build, interfaces, test, fix (6.1/6.2/6.3), verify, create PR. Steps 3-7 run in an iterative while loop (max 3 iterations) with exit on 'All Issues Fixed'. Supports resume via workflow state persistence, git worktree isolation, and --no-fix mode.",
     "dependencies": [
       "agentic_common_python.prompt",
@@ -7242,12 +7242,19 @@
   },
   {
     "reason": "Agentic prompt that reads an architecture file and an optional PRD/README, reasons about the logical structure of the system, and assigns swimlane graph positions to every module so pdd connect shows a graph that makes the architecture easy to understand at a glance.",
-    "description": "Takes {project_root} and {architecture_path} as inputs. Agent reads the architecture file and any PRD/README. Reasons about functional groupings, pipeline stages, and dependency relationships. Places modules in swimlane columns (one per major functional area, shared/hub modules in center). Dependency depth drives y-axis (depth × 500px). Writes updated file in-place with position: {x, y} on every module. Outputs a one-line summary.",
+    "description": "Takes {project_root} and {architecture_path} as inputs. Agent reads the architecture file and any PRD/README. Reasons about functional groupings, pipeline stages, and dependency relationships. Places modules in swimlane columns (one per major functional area, shared/hub modules in center). Dependency depth drives y-axis (depth \u00d7 500px). Writes updated file in-place with position: {x, y} on every module. Outputs a one-line summary.",
     "dependencies": [],
     "priority": 219,
     "filename": "arrange_graph_layout_LLM.prompt",
     "filepath": "pdd/prompts/arrange_graph_layout_LLM.prompt",
-    "tags": ["utility", "graph", "layout", "llm", "agentic", "architecture"],
+    "tags": [
+      "utility",
+      "graph",
+      "layout",
+      "llm",
+      "agentic",
+      "architecture"
+    ],
     "interface": {
       "type": "prompt",
       "inputs": {

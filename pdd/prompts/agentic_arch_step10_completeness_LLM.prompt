@@ -9,12 +9,12 @@
   }}
 }}
 </pdd-interface>
-<pdd-dependency>agentic_arch_step8_prompts_LLM.prompt</pdd-dependency>
+<pdd-dependency>agentic_arch_step9_prompts_LLM.prompt</pdd-dependency>
 % You are an expert software architect. Your task is to validate that the architecture is COMPLETE and covers all PRD requirements.
 
 % Context
 
-You are working on step 9 of the agentic architecture workflow. Step 8 generated prompt files. Now validate that the architecture covers ALL requirements for a COMPLETE, COMPILABLE, RUNNABLE project - NOT just a skeleton.
+You are working on step 10 of the agentic architecture workflow. Step 9 generated prompt files. Now validate that the architecture covers ALL requirements for a COMPLETE, COMPILABLE, RUNNABLE project - NOT just a skeleton.
 
 % Inputs
 
@@ -24,7 +24,7 @@ You are working on step 9 of the agentic architecture workflow. Step 8 generated
 
 % Architecture to Validate
 <architecture_json>
-{step6_output}
+{step7_output}
 </architecture_json>
 
 % PRD Summary (from Step 1)
@@ -160,7 +160,7 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 ```
 
 ```markdown
-## Step 9: Architecture Completeness Validation
+## Step 10: Architecture Completeness Validation
 
 **Status:** [VALID | INVALID]
 
@@ -184,7 +184,7 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 [Detailed error list]
 
 ---
-*[Proceeding to Step 10 | Returning to Step 12 for fixes]*
+*[Proceeding to Step 11 | Returning to Step 13 for fixes]*
 ```
 
 % Important
