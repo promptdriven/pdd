@@ -16,8 +16,6 @@ import os
 import re
 import sys
 import time
-import wave
-import struct
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -274,51 +272,129 @@ def parse_tts_script(script_path: str, project_dir: str = ".") -> List[Segment]:
 
 
 # ---------------------------------------------------------------------------
-# Audio utilities
+# Audio utilities (numpy float32 + soundfile)
 # ---------------------------------------------------------------------------
 
-def generate_silence_wav_bytes(duration_seconds: float, sample_rate: int = SAMPLE_RATE) -> bytes:
-    """
-    Generate raw PCM silence bytes (16-bit mono) for the given duration.
-
-    Args:
-        duration_seconds: Duration of silence in seconds.
-        sample_rate: Audio sample rate.
-
-    Returns:
-        Raw PCM bytes representing silence.
-    """
+def generate_silence(duration_seconds: float, sample_rate: int = SAMPLE_RATE):
+    """Generate silence as a numpy float32 array."""
+    import numpy as np
     num_samples = int(sample_rate * duration_seconds)
-    return struct.pack(f"<{num_samples}h", *([0] * num_samples))
+    return np.zeros(num_samples, dtype=np.float32)
 
 
-def write_wav(filepath: str, audio_data: bytes, sample_rate: int = SAMPLE_RATE) -> float:
-    """
-    Write raw PCM 16-bit mono audio data to a WAV file.
-
-    Args:
-        filepath: Output WAV file path.
-        audio_data: Raw PCM bytes (16-bit signed, little-endian, mono).
-        sample_rate: Audio sample rate.
-
-    Returns:
-        Duration of the audio in seconds.
-    """
-    num_samples = len(audio_data) // 2  # 16-bit = 2 bytes per sample
-    duration = num_samples / sample_rate
-
-    with wave.open(filepath, "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)  # 16-bit
-        wf.setframerate(sample_rate)
-        wf.writeframes(audio_data)
-
-    return duration
+def write_wav(filepath: str, audio: "np.ndarray", sample_rate: int = SAMPLE_RATE) -> float:
+    """Write a numpy float32 audio array to a WAV file via soundfile."""
+    import soundfile as sf
+    sf.write(filepath, audio, sample_rate)
+    return len(audio) / sample_rate
 
 
-def concatenate_pcm(chunks: List[bytes]) -> bytes:
-    """Concatenate multiple raw PCM byte chunks."""
-    return b"".join(chunks)
+# ---------------------------------------------------------------------------
+# Voice instruction mapping (from 3blue1brown demo)
+# ---------------------------------------------------------------------------
+
+TONE_MAP = {
+    "casual, observational": "in a relaxed, conversational manner",
+    "slightly impressed": "with subtle appreciation",
+    "knowing, conspiratorial": "as if sharing an insider insight",
+    "matter-of-fact, dry": "with dry wit and understatement",
+    "direct, punchy": "with sharp, decisive delivery",
+    "challenging, curious": "with an inquisitive edge",
+    "professorial, confident": "with academic authority",
+    "explanatory": "clearly and instructively",
+    "building momentum": "with increasing energy",
+    "pivoting, direct": "transitioning with purpose",
+    "historical, sweeping": "with grand perspective",
+    "significant, emphatic": "with weight and importance",
+    "appreciative but pivoting": "acknowledging then redirecting",
+    "pointed, landing the blow": "delivering the key insight",
+    "weary wisdom": "with experienced understanding",
+    "revealing a secret": "as if unveiling hidden truth",
+    "driving home the point": "with conviction",
+    "curious, investigative": "with intellectual curiosity",
+    "revelatory": "with the excitement of discovery",
+    "building wonder": "with growing amazement",
+    "setting up the insight": "building anticipation",
+    "key insight, slower": "delivering crucial information slowly",
+    "philosophical, important": "with gravitas",
+    "contrasting": "highlighting the difference",
+    "grand reveal": "with dramatic emphasis",
+    "crystallizing the metaphor": "bringing the concept into focus",
+    "getting technical, engaged": "with technical enthusiasm",
+    "introducing key concept": "marking an important new idea",
+    "explanatory, visual": "painting a picture with words",
+    "key insight, emphatic": "with strong emphasis",
+    "satisfying, resolving": "with a sense of completion",
+    "building excitement": "with mounting enthusiasm",
+    "comparative, driving home": "making a clear comparison",
+    "moving to next concept": "transitioning smoothly",
+    "clarifying": "making things clear",
+    "subtle, insightful": "with nuanced understanding",
+    "practical wisdom": "with practical authority",
+    "introducing third concept": "introducing another key point",
+    "synthesizing": "bringing ideas together",
+    "emphatic, memorable": "for lasting impact",
+    "intellectual, curious": "with thoughtful curiosity",
+    "connecting to PDD": "drawing the connection",
+    "liberating, positive": "with optimistic energy",
+    "insight landing": "delivering the realization",
+    "memorable phrase": "for retention",
+    "strategic, analytical": "with analytical precision",
+    "describing the old way": "explaining the traditional approach",
+    "dismissive": "with mild dismissal",
+    "building to contrast": "setting up comparison",
+    "summarizing powerfully": "with conclusive force",
+    "empathetic, reasonable": "with understanding",
+    "same empathy, present day": "with continued understanding",
+    "pivotal, serious": "with serious gravity",
+    "wry, pointed": "with subtle irony",
+    "addressing concerns, reassuring": "reassuringly",
+    "insightful": "with keen observation",
+    "empowering": "inspirationally",
+    "crystallizing": "with clarity",
+    "honest, grounded": "authentically",
+    "wrapping up, reflective": "reflectively",
+    "simple truth": "with straightforward honesty",
+    "direct, present": "immediacy",
+    "declarative, memorable": "with memorable weight",
+    "accepting, matter-of-fact": "accepting reality",
+    "final thesis, weight": "with ultimate significance",
+    "conclusive, resonant": "with resonant finality",
+}
+
+PACE_MAP = {
+    "moderate": "",
+    "steady": "",
+    "slightly slower": "Speak slightly slower.",
+    "slightly slower for emphasis": "Speak more slowly for emphasis.",
+    "slightly faster": "Speak with more energy and pace.",
+    "accelerating slightly": "Gradually increase pace.",
+    "deliberate": "Speak deliberately and clearly.",
+    "measured, deliberate": "Speak with measured, deliberate pace.",
+    "slower, giving each phrase weight": "Speak slowly, giving weight to each phrase.",
+    "slow, deliberate": "Speak slowly and deliberately.",
+}
+
+BASE_INSTRUCTION = "Speak with a confident, authoritative tone like a knowledgeable educator"
+
+
+def build_instruction(tone: Optional[str] = None, pace: Optional[str] = None,
+                      emotion: Optional[str] = None) -> str:
+    """Build a voice instruction string from annotation values."""
+    parts: List[str] = []
+
+    if tone and tone in TONE_MAP:
+        parts.append(TONE_MAP[tone])
+
+    if pace and pace in PACE_MAP and PACE_MAP[pace]:
+        parts.append(PACE_MAP[pace])
+
+    if emotion:
+        parts.append(f"with {emotion} emotion")
+
+    if parts:
+        return f"{BASE_INSTRUCTION}, {', '.join(parts)}."
+    return f"{BASE_INSTRUCTION}."
 
 
 # ---------------------------------------------------------------------------
@@ -330,6 +406,7 @@ class TTSEngine:
     Wrapper around the Qwen3-TTS model for text-to-speech synthesis.
 
     Uses the official `qwen-tts` package with Qwen3TTSModel API.
+    Returns numpy float32 arrays (native model output).
     """
 
     def __init__(self, model_id: str, speaker: str = "Aiden", language: str = "English"):
@@ -345,47 +422,43 @@ class TTSEngine:
         import torch
         from qwen_tts import Qwen3TTSModel
 
-        # Use MPS on Apple Silicon, fall back to CPU
-        if torch.backends.mps.is_available():
+        if torch.cuda.is_available():
+            device = "cuda:0"
+            dtype = torch.bfloat16
+            attn_impl = "flash_attention_2"
+        elif torch.backends.mps.is_available():
             device = "mps"
-            dtype = torch.float32  # MPS doesn't support bfloat16
+            dtype = torch.float32
+            attn_impl = "sdpa"
         else:
             device = "cpu"
             dtype = torch.float32
+            attn_impl = "sdpa"
 
         self.model = Qwen3TTSModel.from_pretrained(
             self.model_id,
             device_map=device,
             dtype=dtype,
+            attn_implementation=attn_impl,
         )
         self.sample_rate = SAMPLE_RATE
 
-    def synthesize(self, text: str, **kwargs: Any) -> bytes:
+    def synthesize(self, text: str, **kwargs: Any) -> "np.ndarray":
         """
         Synthesize speech from text using Qwen3-TTS generate_custom_voice.
 
-        Args:
-            text: The text to synthesize.
-            **kwargs: Additional parameters (tone, pace, emotion) — used
-                      as instruct text if provided.
-
-        Returns:
-            Raw PCM audio bytes (16-bit signed, little-endian, mono).
+        Returns a numpy float32 array (native model output, no int16 conversion).
         """
         import numpy as np
 
         if not text.strip():
-            return generate_silence_wav_bytes(0.1)
+            return generate_silence(0.1)
 
-        # Build instruct string from annotations if available
-        instruct_parts = []
-        if kwargs.get("tone"):
-            instruct_parts.append(f"Tone: {kwargs['tone']}")
-        if kwargs.get("pace"):
-            instruct_parts.append(f"Pace: {kwargs['pace']}")
-        if kwargs.get("emotion"):
-            instruct_parts.append(f"Emotion: {kwargs['emotion']}")
-        instruct = ". ".join(instruct_parts) if instruct_parts else None
+        instruct = build_instruction(
+            tone=kwargs.get("tone"),
+            pace=kwargs.get("pace"),
+            emotion=kwargs.get("emotion"),
+        )
 
         wavs, sr = self.model.generate_custom_voice(
             text=text,
@@ -397,16 +470,7 @@ class TTSEngine:
         if sr and sr != self.sample_rate:
             self.sample_rate = sr
 
-        audio_np = wavs[0]
-        if audio_np.dtype in (np.float32, np.float64):
-            max_val = np.max(np.abs(audio_np))
-            if max_val > 0:
-                audio_np = audio_np / max_val
-            audio_np = (audio_np * 32767).astype(np.int16)
-        elif audio_np.dtype != np.int16:
-            audio_np = audio_np.astype(np.int16)
-
-        return audio_np.tobytes()
+        return wavs[0]
 
 
 class EdgeTTSEngine:
@@ -419,44 +483,42 @@ class EdgeTTSEngine:
         self.voice = voice
         self.sample_rate = SAMPLE_RATE
 
-    def synthesize(self, text: str, **kwargs: Any) -> bytes:
-        """Synthesize speech using edge-tts, return raw PCM 16-bit mono bytes."""
+    def synthesize(self, text: str, **kwargs: Any) -> "np.ndarray":
+        """Synthesize speech using edge-tts, return numpy float32 array."""
         import asyncio
-        import io
         import tempfile
+        import numpy as np
+        import soundfile as sf
 
         if not text.strip():
-            return generate_silence_wav_bytes(0.1)
+            return generate_silence(0.1)
 
         try:
             import edge_tts
         except ImportError:
             raise RuntimeError("edge-tts is not installed. pip install edge-tts")
 
-        async def _synth() -> bytes:
+        async def _synth() -> "np.ndarray":
             communicate = edge_tts.Communicate(text, self.voice)
             with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
                 tmp_path = tmp.name
             try:
                 await communicate.save(tmp_path)
-                # Convert MP3 to raw PCM using ffmpeg
                 import subprocess
+                wav_path = tmp_path.replace(".mp3", ".wav")
                 result = subprocess.run(
-                    [
-                        "ffmpeg", "-y", "-i", tmp_path,
-                        "-f", "s16le", "-acodec", "pcm_s16le",
-                        "-ac", "1", "-ar", str(SAMPLE_RATE),
-                        "-"
-                    ],
-                    capture_output=True,
-                    timeout=30,
+                    ["ffmpeg", "-y", "-i", tmp_path,
+                     "-ac", "1", "-ar", str(SAMPLE_RATE), wav_path],
+                    capture_output=True, timeout=30,
                 )
                 if result.returncode != 0:
                     raise RuntimeError(f"ffmpeg conversion failed: {result.stderr.decode()[:200]}")
-                return result.stdout
+                audio, _ = sf.read(wav_path, dtype="float32")
+                return audio
             finally:
-                if os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
+                for p in (tmp_path, tmp_path.replace(".mp3", ".wav")):
+                    if os.path.exists(p):
+                        os.unlink(p)
 
         loop = asyncio.new_event_loop()
         try:
@@ -485,31 +547,29 @@ def render_segment(
     Returns:
         A dict with segmentId, status, and duration (or error).
     """
+    import numpy as np
+
     output_path = os.path.join(output_dir, f"{segment.segment_id}.wav")
-    start_time = time.time()
 
     try:
-        audio_chunks: List[bytes] = []
+        audio_chunks = []
 
         for chunk in segment.text_chunks:
             if chunk["type"] == "pause":
-                silence = generate_silence_wav_bytes(chunk["duration"])
-                audio_chunks.append(silence)
+                audio_chunks.append(generate_silence(chunk["duration"]))
             elif chunk["type"] == "text":
-                pcm = engine.synthesize(
+                audio_chunks.append(engine.synthesize(
                     chunk["content"],
                     tone=segment.annotations.get("tone"),
                     pace=segment.annotations.get("pace"),
                     emotion=segment.annotations.get("emotion"),
-                )
-                audio_chunks.append(pcm)
+                ))
 
         if not audio_chunks:
-            # Edge case: segment had no renderable content
-            audio_chunks.append(generate_silence_wav_bytes(0.1))
+            audio_chunks.append(generate_silence(0.1))
 
-        combined = concatenate_pcm(audio_chunks)
-        duration = write_wav(output_path, combined)
+        combined = np.concatenate(audio_chunks)
+        duration = write_wav(output_path, combined, engine.sample_rate)
 
         return {
             "segmentId": segment.segment_id,
