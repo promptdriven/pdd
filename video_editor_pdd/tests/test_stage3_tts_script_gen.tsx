@@ -198,8 +198,9 @@ describe("script fetching on mount", () => {
     expect(sourceCode).toMatch(/Promise\.all\s*\(\s*\[\s*fetchScript\s*\(\s*['"]main['"]\s*\)\s*,\s*fetchScript\s*\(\s*['"]tts['"]\s*\)\s*\]\s*\)/);
   });
 
-  it("parses response as text", () => {
-    expect(sourceCode).toMatch(/res\.text\s*\(\s*\)/);
+  it("parses response as JSON and extracts content", () => {
+    expect(sourceCode).toMatch(/res\.json\s*\(\s*\)/);
+    expect(sourceCode).toMatch(/data\?\.content\s*\?\?\s*null/);
   });
 
   it("returns null on fetch failure", () => {

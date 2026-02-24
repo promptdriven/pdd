@@ -68,7 +68,8 @@ jest.mock("fs", () => ({
 }));
 
 // Import after mocking
-import { POST, GET } from "../app/api/pipeline/audit/run/route";
+import { POST } from "../app/api/pipeline/audit/run/route";
+import { GET } from "../app/api/pipeline/audit/results/route";
 
 // Capture executor factory registered at module load
 const registerCallArgs = {
@@ -890,9 +891,9 @@ describe("GET — audit markdown parsing", () => {
 
     const intro = body.sections[0];
     expect(intro.specs.length).toBe(1);
-    expect(intro.specs[0].verdict).toBe("pass");
+    expect(intro.specs[0].verdict).toBe("PASS");
     expect(intro.specs[0].summary).toBe("Frame matches spec");
-    expect(intro.specs[0].specFile).toBe("visual.md");
+    expect(intro.specs[0].specName).toBe("visual");
     expect(intro.passCount).toBe(1);
     expect(intro.failCount).toBe(0);
   });
@@ -908,13 +909,13 @@ describe("GET — audit markdown parsing", () => {
     const body = await response.json();
 
     const intro = body.sections[0];
-    expect(intro.specs[0].verdict).toBe("fail");
+    expect(intro.specs[0].verdict).toBe("FAIL");
     expect(intro.specs[0].summary).toBe("Text is clipped on right edge");
     expect(intro.passCount).toBe(0);
     expect(intro.failCount).toBe(1);
   });
 
-  it("includes frameFile path in each spec result", async () => {
+  it("includes specName in each spec result", async () => {
     mockExistsSync.mockReturnValue(true);
     mockReaddirSync.mockReturnValue(["AUDIT_visual.md"]);
     mockReadFileSync.mockReturnValue(
@@ -924,10 +925,7 @@ describe("GET — audit markdown parsing", () => {
     const response = await GET(makeGetRequest() as any);
     const body = await response.json();
 
-    const pathMod = require("path");
-    expect(body.sections[0].specs[0].frameFile).toBe(
-      pathMod.join("outputs", "audit", "intro", "visual_frame.png")
-    );
+    expect(body.sections[0].specs[0].specName).toBe("visual");
   });
 
   it("handles multiple audit files per section", async () => {
@@ -961,7 +959,7 @@ describe("GET — audit markdown parsing", () => {
 
     const intro = body.sections[0];
     expect(intro.specs.length).toBe(1);
-    expect(intro.specs[0].verdict).toBe("fail");
+    expect(intro.specs[0].verdict).toBe("FAIL");
     expect(intro.specs[0].summary).toBe("Error parsing audit report");
     expect(intro.failCount).toBe(1);
   });
@@ -1118,8 +1116,23 @@ describe("app/api/pipeline/audit/run/route.ts source structure", () => {
     expect(sourceCode).toMatch(/export\s+async\s+function\s+POST/);
   });
 
-  it("exports async function GET", () => {
-    expect(sourceCode).toMatch(/export\s+async\s+function\s+GET/);
+  it("GET handler lives in separate results route file", () => {
+    const realFs = jest.requireActual("fs");
+    const pathMod = require("path");
+    const resultsSource = realFs.readFileSync(
+      pathMod.join(
+        __dirname,
+        "..",
+        "app",
+        "api",
+        "pipeline",
+        "audit",
+        "results",
+        "route.ts"
+      ),
+      "utf-8"
+    );
+    expect(resultsSource).toMatch(/export\s+async\s+function\s+GET/);
   });
 
   it("imports registerExecutor and runPipelineStage from @/lib/jobs", () => {

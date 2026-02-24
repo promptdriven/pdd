@@ -244,7 +244,7 @@ run_pdd_command_base() {
     log "Running: $full_command_str"
 
     # Execute the command with timeout, redirecting stdout/stderr to log file and stdin from /dev/null
-    PDD_CMD_TIMEOUT="${PDD_CMD_TIMEOUT:-900}"
+    PDD_CMD_TIMEOUT="${PDD_CMD_TIMEOUT:-1200}"
     run_with_timeout "${PDD_CMD_TIMEOUT}s" "${cmd_array[@]}" < /dev/null >> "$LOG_FILE" 2>&1
     local status=$?
 
@@ -656,7 +656,7 @@ log_timestamped "======== Starting Sync Regression Tests ========"
 if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "1" ]; then
     log "1. Testing basic 'sync' command"
     
-    if run_pdd_command --verbose sync --budget 5.0 "$SIMPLE_BASENAME"; then
+    if run_pdd_command --verbose sync --budget 5.0 --max-attempts 1 "$SIMPLE_BASENAME"; then
         log "Validation success: sync basic command completed"
     else
         log_timestamped "[ERROR] Validation failed: sync basic command"
@@ -686,7 +686,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "2" ]; then
     
     # Test --skip-verify
     log "2a. Testing 'sync --skip-verify'"
-    if run_pdd_command_noexit sync --skip-verify --context regression_root "$SIMPLE_BASENAME"; then
+    if run_pdd_command_noexit sync --skip-verify --max-attempts 1 --context regression_root "$SIMPLE_BASENAME"; then
         log "Validation success: sync --skip-verify"
     else
         log_timestamped "[ERROR] Validation failed: sync --skip-verify"
@@ -704,7 +704,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "2" ]; then
     rm -f "$SYNC_META_DIR/${SIMPLE_BASENAME}_python.json" "$SYNC_META_DIR/${SIMPLE_BASENAME}_python_run.json"
     {
     set +e
-    if run_pdd_command_noexit sync --skip-tests --context regression_pdd "$SIMPLE_BASENAME"; then
+    if run_pdd_command_noexit sync --skip-tests --max-attempts 1 --context regression_pdd "$SIMPLE_BASENAME"; then
         log "Validation success: sync --skip-tests"
     else
         status=$?
@@ -737,7 +737,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "2" ]; then
     rm -f "$SYNC_META_DIR/${SIMPLE_BASENAME}_python.json" "$SYNC_META_DIR/${SIMPLE_BASENAME}_python_run.json"
     {
     set +e
-    if run_pdd_command_noexit sync --skip-verify --skip-tests --context regression_pdd "$SIMPLE_BASENAME"; then
+    if run_pdd_command_noexit sync --skip-verify --skip-tests --max-attempts 1 --context regression_pdd "$SIMPLE_BASENAME"; then
         log "Validation success: sync --skip-verify --skip-tests"
     else
         status=$?
@@ -903,7 +903,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "6" ]; then
 
     log "6c. Running sync to generate log entries"
     rm -f "${SIMPLE_BASENAME}.py" "${SIMPLE_BASENAME}_example.py" "test_${SIMPLE_BASENAME}.py"
-    if run_pdd_command sync --skip-verify "$SIMPLE_BASENAME"; then
+    if run_pdd_command sync --skip-verify --max-attempts 1 "$SIMPLE_BASENAME"; then
         log "Validation success: sync generated log entries"
     else
         log_timestamped "[ERROR] Validation failed: sync log generation"

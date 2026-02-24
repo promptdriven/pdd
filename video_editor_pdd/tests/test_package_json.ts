@@ -125,8 +125,8 @@ describe('dependencies', () => {
     });
   }
 
-  it('has exactly 13 core dependencies', () => {
-    expect(Object.keys(pkg.dependencies)).toHaveLength(13);
+  it('has exactly 20 core dependencies', () => {
+    expect(Object.keys(pkg.dependencies)).toHaveLength(20);
   });
 
   it('uses "^" (caret) version ranges for all dependencies', () => {
@@ -163,8 +163,8 @@ describe('devDependencies', () => {
     });
   }
 
-  it('has exactly 8 devDependencies', () => {
-    expect(Object.keys(pkg.devDependencies)).toHaveLength(8);
+  it('has exactly 14 devDependencies', () => {
+    expect(Object.keys(pkg.devDependencies)).toHaveLength(14);
   });
 
   it('uses "^" (caret) version ranges for all devDependencies', () => {

@@ -329,8 +329,8 @@ describe("Spec viewer", () => {
 // ---------------------------------------------------------------------------
 
 describe("Create Annotation handler", () => {
-  it("handleCreateAnnotation calls onAdvance", () => {
-    expect(sourceCode).toMatch(/onAdvance\(\)/);
+  it("handleCreateAnnotation calls onCreateAnnotation", () => {
+    expect(sourceCode).toMatch(/onCreateAnnotation\?\.\(/);
   });
 
   it("pre-fill shape includes text field", () => {
@@ -345,8 +345,8 @@ describe("Create Annotation handler", () => {
     expect(sourceCode).toMatch(/compositeDataUrl:\s*frameUrl/);
   });
 
-  it("uses onPrefillAnnotation callback", () => {
-    expect(sourceCode).toMatch(/onPrefillAnnotation\?\.\(/);
+  it("uses onCreateAnnotation callback", () => {
+    expect(sourceCode).toMatch(/onCreateAnnotation\?\.\(/);
   });
 
   it("falls back to summary when finding is not present", () => {
@@ -454,7 +454,7 @@ describe("Loading and error states", () => {
   });
 
   it("error message has red styling", () => {
-    expect(sourceCode).toContain("bg-red-50");
+    expect(sourceCode).toContain("bg-red-900/30");
   });
 
   it("handles fetch error for audit results", () => {

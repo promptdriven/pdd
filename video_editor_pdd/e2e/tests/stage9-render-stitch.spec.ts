@@ -193,9 +193,9 @@ test.describe('Stage 9: Render & Stitch', () => {
   });
 
   test('all sections show 0% progress', async ({ page }) => {
+    await expect(page.locator('tbody tr')).toHaveCount(7);
     const progressTexts = page.locator('tbody .text-xs.text-slate-500', { hasText: '0%' });
-    const count = await progressTexts.count();
-    expect(count).toBe(7);
+    await expect(progressTexts).toHaveCount(7);
   });
 
   test('no console errors on load', async ({ page }) => {

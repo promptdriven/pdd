@@ -220,8 +220,8 @@ describe("project config loading on mount", () => {
     expect(sourceCode).toMatch(/setProject\s*\(\s*data\s*\)/);
   });
 
-  it("initializes sectionGroups from project audioSync config", () => {
-    expect(sourceCode).toMatch(/setSectionGroups\s*\(\s*data\.audioSync\?\.sectionGroups\s*\?\?\s*\{\}\s*\)/);
+  it("initializes sectionGroups from project audioSync config (normalized)", () => {
+    expect(sourceCode).toMatch(/setSectionGroups\s*\(\s*normalized\s*\)/);
   });
 
   it("sets default selectedSectionId to first section", () => {
@@ -256,8 +256,8 @@ describe("timestamp loading", () => {
     expect(sourceCode).toMatch(/encodeURIComponent\s*\(\s*[\s\S]*?selectedSectionId/);
   });
 
-  it("sets timestamps from response", () => {
-    expect(sourceCode).toMatch(/setTimestamps\s*\(\s*data\s*\)/);
+  it("sets timestamps from response (unwrapping wrapped JSON)", () => {
+    expect(sourceCode).toMatch(/setTimestamps\s*\(\s*list\s*\)/);
   });
 
   it("tracks loading state for timestamps", () => {

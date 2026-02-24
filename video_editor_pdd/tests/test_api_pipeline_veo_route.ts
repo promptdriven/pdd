@@ -87,7 +87,7 @@ jest.mock("fs", () => ({
 
 // Import after mocking
 import {
-  POST_run,
+  POST,
   GET_clips,
   POST_references,
   GET_staging,
@@ -149,6 +149,7 @@ function mockProjectConfig() {
     veo: {
       model: "veo-2.0-generate-001",
       aspectRatio: "16:9" as const,
+      defaultAspectRatio: "16:9" as const,
       referenceImages: {},
     },
     render: {
@@ -250,45 +251,45 @@ describe("registerExecutor at module load", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 2. POST_run — response shape and SSE headers
+// 2. POST — response shape and SSE headers
 // ---------------------------------------------------------------------------
 
-describe("POST_run response shape", () => {
+describe("POST response shape", () => {
   beforeEach(() => {
     const sseMock = makeSseStreamMock();
     mockCreateSseStream.mockReturnValue(sseMock.result);
   });
 
   it("returns a Response object", async () => {
-    const response = await POST_run(
+    const response = await POST(
       makeRequest("http://localhost/api/pipeline/veo/run") as any
     );
     expect(response).toBeInstanceOf(Response);
   });
 
   it("sets Content-Type to text/event-stream", async () => {
-    const response = await POST_run(
+    const response = await POST(
       makeRequest("http://localhost/api/pipeline/veo/run") as any
     );
     expect(response.headers.get("Content-Type")).toBe("text/event-stream");
   });
 
   it("sets Cache-Control to no-cache", async () => {
-    const response = await POST_run(
+    const response = await POST(
       makeRequest("http://localhost/api/pipeline/veo/run") as any
     );
     expect(response.headers.get("Cache-Control")).toBe("no-cache");
   });
 
   it("sets Connection to keep-alive", async () => {
-    const response = await POST_run(
+    const response = await POST(
       makeRequest("http://localhost/api/pipeline/veo/run") as any
     );
     expect(response.headers.get("Connection")).toBe("keep-alive");
   });
 
   it("returns a ReadableStream body", async () => {
-    const response = await POST_run(
+    const response = await POST(
       makeRequest("http://localhost/api/pipeline/veo/run") as any
     );
     expect(response.body).toBeInstanceOf(ReadableStream);
@@ -296,10 +297,10 @@ describe("POST_run response shape", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 3. POST_run — success flow
+// 3. POST — success flow
 // ---------------------------------------------------------------------------
 
-describe("POST_run — success flow", () => {
+describe("POST — success flow", () => {
   let sseMock: ReturnType<typeof makeSseStreamMock>;
 
   beforeEach(() => {
@@ -309,7 +310,7 @@ describe("POST_run — success flow", () => {
   });
 
   it("calls runPipelineStage with 'veo' stage", async () => {
-    await POST_run(
+    await POST(
       makeRequest("http://localhost/api/pipeline/veo/run") as any
     );
     await flushPromises();
@@ -319,7 +320,7 @@ describe("POST_run — success flow", () => {
   });
 
   it("passes clips param from body to runPipelineStage", async () => {
-    await POST_run(
+    await POST(
       makeRequest("http://localhost/api/pipeline/veo/run", {
         clips: ["intro", "outro"],
       }) as any
@@ -331,7 +332,7 @@ describe("POST_run — success flow", () => {
   });
 
   it("passes undefined clips when body has no clips", async () => {
-    await POST_run(
+    await POST(
       makeRequest("http://localhost/api/pipeline/veo/run", {}) as any
     );
     await flushPromises();
@@ -341,7 +342,7 @@ describe("POST_run — success flow", () => {
   });
 
   it("passes a send function to runPipelineStage", async () => {
-    await POST_run(
+    await POST(
       makeRequest("http://localhost/api/pipeline/veo/run") as any
     );
     await flushPromises();
@@ -350,7 +351,7 @@ describe("POST_run — success flow", () => {
   });
 
   it("emits complete event with jobId after runPipelineStage resolves", async () => {
-    await POST_run(
+    await POST(
       makeRequest("http://localhost/api/pipeline/veo/run") as any
     );
     await flushPromises();
@@ -363,7 +364,7 @@ describe("POST_run — success flow", () => {
   });
 
   it("calls done() on SSE stream after success", async () => {
-    await POST_run(
+    await POST(
       makeRequest("http://localhost/api/pipeline/veo/run") as any
     );
     await flushPromises();
@@ -373,17 +374,17 @@ describe("POST_run — success flow", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 4. POST_run — body parameter handling
+// 4. POST — body parameter handling
 // ---------------------------------------------------------------------------
 
-describe("POST_run — body parameter handling", () => {
+describe("POST — body parameter handling", () => {
   beforeEach(() => {
     const sseMock = makeSseStreamMock();
     mockCreateSseStream.mockReturnValue(sseMock.result);
   });
 
   it("works with no body (generates all clips)", async () => {
-    const response = await POST_run(
+    const response = await POST(
       makeRequest("http://localhost/api/pipeline/veo/run") as any
     );
     expect(response).toBeInstanceOf(Response);
@@ -391,7 +392,7 @@ describe("POST_run — body parameter handling", () => {
   });
 
   it("works with empty clips array", async () => {
-    const response = await POST_run(
+    const response = await POST(
       makeRequest("http://localhost/api/pipeline/veo/run", {
         clips: [],
       }) as any
@@ -400,7 +401,7 @@ describe("POST_run — body parameter handling", () => {
   });
 
   it("accepts specific clips array", async () => {
-    const response = await POST_run(
+    const response = await POST(
       makeRequest("http://localhost/api/pipeline/veo/run", {
         clips: ["intro", "outro"],
       }) as any
@@ -414,17 +415,17 @@ describe("POST_run — body parameter handling", () => {
       body: "not json",
     });
 
-    const response = await POST_run(request as any);
+    const response = await POST(request as any);
     expect(response).toBeInstanceOf(Response);
     expect(response.headers.get("Content-Type")).toBe("text/event-stream");
   });
 });
 
 // ---------------------------------------------------------------------------
-// 5. POST_run — error handling
+// 5. POST — error handling
 // ---------------------------------------------------------------------------
 
-describe("POST_run — error handling", () => {
+describe("POST — error handling", () => {
   let sseMock: ReturnType<typeof makeSseStreamMock>;
 
   beforeEach(() => {
@@ -435,7 +436,7 @@ describe("POST_run — error handling", () => {
   it("calls error() on SSE stream when runPipelineStage rejects with Error", async () => {
     mockRunPipelineStage.mockRejectedValue(new Error("Pipeline failed"));
 
-    await POST_run(
+    await POST(
       makeRequest("http://localhost/api/pipeline/veo/run") as any
     );
     await flushPromises();
@@ -446,7 +447,7 @@ describe("POST_run — error handling", () => {
   it("calls error() with 'Unknown error' for non-Error throws", async () => {
     mockRunPipelineStage.mockRejectedValue("string error");
 
-    await POST_run(
+    await POST(
       makeRequest("http://localhost/api/pipeline/veo/run") as any
     );
     await flushPromises();
@@ -457,7 +458,7 @@ describe("POST_run — error handling", () => {
   it("still returns SSE response even when pipeline will error", async () => {
     mockRunPipelineStage.mockRejectedValue(new Error("will fail"));
 
-    const response = await POST_run(
+    const response = await POST(
       makeRequest("http://localhost/api/pipeline/veo/run") as any
     );
     expect(response.headers.get("Content-Type")).toBe("text/event-stream");
@@ -465,10 +466,10 @@ describe("POST_run — error handling", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 6. POST_run — no authentication required
+// 6. POST — no authentication required
 // ---------------------------------------------------------------------------
 
-describe("POST_run — no authentication required", () => {
+describe("POST — no authentication required", () => {
   beforeEach(() => {
     const sseMock = makeSseStreamMock();
     mockCreateSseStream.mockReturnValue(sseMock.result);
@@ -480,12 +481,12 @@ describe("POST_run — no authentication required", () => {
       headers: { Authorization: "Bearer fake-token" },
     });
 
-    const response = await POST_run(request as any);
+    const response = await POST(request as any);
     expect(response.headers.get("Content-Type")).toBe("text/event-stream");
   });
 
   it("works with minimal request (no body, no auth)", async () => {
-    const response = await POST_run(
+    const response = await POST(
       makeRequest("http://localhost/api/pipeline/veo/run") as any
     );
     expect(response).toBeInstanceOf(Response);
@@ -1483,8 +1484,8 @@ describe("app/api/pipeline/veo/run/route.ts source structure", () => {
     );
   });
 
-  it("exports async function POST_run", () => {
-    expect(sourceCode).toMatch(/export\s+async\s+function\s+POST_run/);
+  it("exports async function POST", () => {
+    expect(sourceCode).toMatch(/export\s+async\s+function\s+POST/);
   });
 
   it("exports async function GET_clips", () => {

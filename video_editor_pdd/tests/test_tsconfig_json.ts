@@ -31,8 +31,8 @@ beforeAll(() => {
 // ---------------------------------------------------------------------------
 
 describe('tsconfig.json extends', () => {
-  it('extends "next/core-web-vitals"', () => {
-    expect(tsconfig.extends).toBe('next/core-web-vitals');
+  it('does not use extends field (config is self-contained)', () => {
+    expect(tsconfig.extends).toBeUndefined();
   });
 });
 
