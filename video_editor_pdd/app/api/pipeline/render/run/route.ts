@@ -143,7 +143,7 @@ registerExecutor("render", (params, send) => {
  * POST /api/pipeline/render/run
  * Starts rendering sections with SSE streaming.
  */
-export async function POST_render(request: NextRequest): Promise<NextResponse> {
+export async function POST(request: NextRequest): Promise<NextResponse> {
   const { stream, send, done, error } = createSseStream();
 
   (async () => {

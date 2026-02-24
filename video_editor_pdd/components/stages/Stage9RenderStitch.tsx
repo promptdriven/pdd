@@ -210,15 +210,15 @@ export default function Stage9RenderStitch({ onAdvance }: Stage9RenderStitchProp
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-xl font-semibold text-slate-800">Stage 9 — Render &amp; Stitch</h2>
-          <p className="text-sm text-slate-500">
+          <h2 className="text-xl font-semibold text-white">Stage 9 — Render &amp; Stitch</h2>
+          <p className="text-sm text-slate-300">
             Render Remotion sections in parallel, then stitch into the full video.
           </p>
         </div>
 
         <div className="flex items-center gap-2">
           <select
-            className="border rounded-md px-3 py-2 text-sm"
+            className="border rounded-md px-3 py-2 text-sm text-slate-700 bg-white"
             value={renderMode}
             onChange={(e) => setRenderMode(e.target.value as RenderMode)}
           >
@@ -280,8 +280,8 @@ export default function Stage9RenderStitch({ onAdvance }: Stage9RenderStitchProp
           <h3 className="text-sm font-semibold text-slate-700">Section Renders</h3>
           {loadingStatus && <span className="text-xs text-slate-400">Loading...</span>}
         </div>
-        <table className="w-full text-sm">
-          <thead className="bg-slate-50">
+        <table className="w-full text-sm text-slate-700">
+          <thead className="bg-slate-50 text-slate-600">
             <tr>
               <th className="px-4 py-2 text-left">Select</th>
               <th className="px-4 py-2 text-left">Section ID</th>
@@ -304,8 +304,8 @@ export default function Stage9RenderStitch({ onAdvance }: Stage9RenderStitchProp
                     }
                   />
                 </td>
-                <td className="px-4 py-2 font-mono">{s.id}</td>
-                <td className="px-4 py-2">{s.durationSeconds.toFixed(2)}</td>
+                <td className="px-4 py-2 font-mono text-slate-700">{s.id}</td>
+                <td className="px-4 py-2 text-slate-700">{s.durationSeconds.toFixed(2)}</td>
                 <td className="px-4 py-2">{statusBadge(s.status)}</td>
                 <td className="px-4 py-2">
                   <div className="h-2 bg-slate-200 rounded">

@@ -236,7 +236,7 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
             <select
               value={selectedSection}
               onChange={(e) => setSelectedSection(e.target.value)}
-              className="border rounded px-2 py-1 text-sm"
+              className="border rounded px-2 py-1 text-sm text-slate-800 bg-white"
             >
               {sections.map((section) => (
                 <option key={section} value={section}>
@@ -253,7 +253,7 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
               Generate Section
             </button>
           </div>
-          <div className="flex items-center gap-2 text-sm">
+          <div className="flex items-center gap-2 text-sm text-slate-700">
             <input
               type="checkbox"
               checked={autoComposite}
@@ -278,12 +278,12 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
             <tbody>
               {clips.map((clip) => (
                 <tr key={clip.id} className="border-t">
-                  <td className="px-4 py-2 font-medium">
+                  <td className="px-4 py-2 font-medium text-slate-800">
                     {clip.id}{' '}
                     {clip.stale && <span className="text-amber-500 ml-1">⚠</span>}
                   </td>
-                  <td className="px-4 py-2">{clip.sectionId}</td>
-                  <td className="px-4 py-2">{clip.aspectRatio}</td>
+                  <td className="px-4 py-2 text-slate-700">{clip.sectionId}</td>
+                  <td className="px-4 py-2 text-slate-700">{clip.aspectRatio}</td>
                   <td className="px-4 py-2">{statusBadge(clip.status)}</td>
                   <td className="px-4 py-2 text-right">
                     <button
@@ -306,7 +306,7 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
 
         {/* Per-clip logs */}
         <div className="bg-white rounded-lg shadow p-4">
-          <h3 className="font-semibold text-slate-800 mb-2">Clip Events</h3>
+          <h3 className="font-semibold text-slate-800 mb-2" data-testid="clip-events-heading">Clip Events</h3>
           <div className="space-y-1 text-xs text-slate-600 max-h-40 overflow-y-auto font-mono">
             {logs.map((log, idx) => (
               <div key={idx}>

@@ -70,7 +70,7 @@ jest.mock("crypto", () => ({
 
 // Import after mocking
 import {
-  POST_render,
+  POST,
   POST_stitch,
   GET_status,
 } from "../app/api/pipeline/render/run/route";
@@ -237,40 +237,40 @@ describe("registerExecutor at module load", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 2. POST_render — response shape and SSE headers
+// 2. POST — response shape and SSE headers
 // ---------------------------------------------------------------------------
 
-describe("POST_render response shape", () => {
+describe("POST response shape", () => {
   it("returns a Response object", async () => {
-    const response = await POST_render(
+    const response = await POST(
       makeRequest("http://localhost/api/pipeline/render/run") as any
     );
     expect(response).toBeInstanceOf(Response);
   });
 
   it("sets Content-Type to text/event-stream", async () => {
-    const response = await POST_render(
+    const response = await POST(
       makeRequest("http://localhost/api/pipeline/render/run") as any
     );
     expect(response.headers.get("Content-Type")).toBe("text/event-stream");
   });
 
   it("sets Cache-Control to no-cache", async () => {
-    const response = await POST_render(
+    const response = await POST(
       makeRequest("http://localhost/api/pipeline/render/run") as any
     );
     expect(response.headers.get("Cache-Control")).toBe("no-cache");
   });
 
   it("sets Connection to keep-alive", async () => {
-    const response = await POST_render(
+    const response = await POST(
       makeRequest("http://localhost/api/pipeline/render/run") as any
     );
     expect(response.headers.get("Connection")).toBe("keep-alive");
   });
 
   it("returns a ReadableStream body", async () => {
-    const response = await POST_render(
+    const response = await POST(
       makeRequest("http://localhost/api/pipeline/render/run") as any
     );
     expect(response.body).toBeInstanceOf(ReadableStream);
@@ -278,16 +278,16 @@ describe("POST_render response shape", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 3. POST_render — success flow with SSE events
+// 3. POST — success flow with SSE events
 // ---------------------------------------------------------------------------
 
-describe("POST_render — success flow", () => {
+describe("POST — success flow", () => {
   beforeEach(() => {
     mockRunPipelineStage.mockResolvedValue("test-job-render-42");
   });
 
   it("calls runPipelineStage with 'render' stage", async () => {
-    await POST_render(
+    await POST(
       makeRequest("http://localhost/api/pipeline/render/run") as any
     );
     await flushPromises();
@@ -297,7 +297,7 @@ describe("POST_render — success flow", () => {
   });
 
   it("passes sections param from body to runPipelineStage", async () => {
-    await POST_render(
+    await POST(
       makeRequest("http://localhost/api/pipeline/render/run", {
         sections: ["intro", "outro"],
       }) as any
@@ -309,7 +309,7 @@ describe("POST_render — success flow", () => {
   });
 
   it("passes undefined sections when body has no sections array", async () => {
-    await POST_render(
+    await POST(
       makeRequest("http://localhost/api/pipeline/render/run", {}) as any
     );
     await flushPromises();
@@ -319,7 +319,7 @@ describe("POST_render — success flow", () => {
   });
 
   it("passes a send function to runPipelineStage", async () => {
-    await POST_render(
+    await POST(
       makeRequest("http://localhost/api/pipeline/render/run") as any
     );
     await flushPromises();
@@ -328,7 +328,7 @@ describe("POST_render — success flow", () => {
   });
 
   it("emits jobId event after runPipelineStage resolves", async () => {
-    const response = await POST_render(
+    const response = await POST(
       makeRequest("http://localhost/api/pipeline/render/run") as any
     );
     await flushPromises();
@@ -341,12 +341,12 @@ describe("POST_render — success flow", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 4. POST_render — body parameter handling
+// 4. POST — body parameter handling
 // ---------------------------------------------------------------------------
 
-describe("POST_render — body parameter handling", () => {
+describe("POST — body parameter handling", () => {
   it("works with no body (renders all sections)", async () => {
-    const response = await POST_render(
+    const response = await POST(
       makeRequest("http://localhost/api/pipeline/render/run") as any
     );
     expect(response).toBeInstanceOf(Response);
@@ -354,7 +354,7 @@ describe("POST_render — body parameter handling", () => {
   });
 
   it("accepts specific sections array", async () => {
-    const response = await POST_render(
+    const response = await POST(
       makeRequest("http://localhost/api/pipeline/render/run", {
         sections: ["intro", "outro"],
       }) as any
@@ -368,13 +368,13 @@ describe("POST_render — body parameter handling", () => {
       body: "not json",
     });
 
-    const response = await POST_render(request as any);
+    const response = await POST(request as any);
     expect(response).toBeInstanceOf(Response);
     expect(response.headers.get("Content-Type")).toBe("text/event-stream");
   });
 
   it("handles body with sections as non-array gracefully", async () => {
-    await POST_render(
+    await POST(
       makeRequest("http://localhost/api/pipeline/render/run", {
         sections: "not-an-array",
       }) as any
@@ -387,14 +387,14 @@ describe("POST_render — body parameter handling", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 5. POST_render — error handling
+// 5. POST — error handling
 // ---------------------------------------------------------------------------
 
-describe("POST_render — error handling", () => {
+describe("POST — error handling", () => {
   it("emits error event when runPipelineStage rejects with Error", async () => {
     mockRunPipelineStage.mockRejectedValue(new Error("Render failed"));
 
-    const response = await POST_render(
+    const response = await POST(
       makeRequest("http://localhost/api/pipeline/render/run") as any
     );
     await flushPromises();
@@ -408,7 +408,7 @@ describe("POST_render — error handling", () => {
   it("emits generic error for non-Error throws", async () => {
     mockRunPipelineStage.mockRejectedValue("string error");
 
-    const response = await POST_render(
+    const response = await POST(
       makeRequest("http://localhost/api/pipeline/render/run") as any
     );
     await flushPromises();
@@ -422,7 +422,7 @@ describe("POST_render — error handling", () => {
   it("still returns SSE response even when pipeline will error", async () => {
     mockRunPipelineStage.mockRejectedValue(new Error("will fail"));
 
-    const response = await POST_render(
+    const response = await POST(
       makeRequest("http://localhost/api/pipeline/render/run") as any
     );
     expect(response.headers.get("Content-Type")).toBe("text/event-stream");
@@ -430,22 +430,22 @@ describe("POST_render — error handling", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 6. POST_render — no authentication required
+// 6. POST — no authentication required
 // ---------------------------------------------------------------------------
 
-describe("POST_render — no authentication required", () => {
+describe("POST — no authentication required", () => {
   it("does not require authorization headers", async () => {
     const request = new Request("http://localhost/api/pipeline/render/run", {
       method: "POST",
       headers: { Authorization: "Bearer fake-token" },
     });
 
-    const response = await POST_render(request as any);
+    const response = await POST(request as any);
     expect(response.headers.get("Content-Type")).toBe("text/event-stream");
   });
 
   it("works with minimal request (no body, no auth)", async () => {
-    const response = await POST_render(
+    const response = await POST(
       makeRequest("http://localhost/api/pipeline/render/run") as any
     );
     expect(response).toBeInstanceOf(Response);
@@ -944,12 +944,12 @@ describe("GET_status", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 10. POST_render — SSE event format
+// 10. POST — SSE event format
 // ---------------------------------------------------------------------------
 
-describe("POST_render — SSE event format", () => {
+describe("POST — SSE event format", () => {
   it("formats events as 'data: <JSON>\\n\\n'", async () => {
-    const response = await POST_render(
+    const response = await POST(
       makeRequest("http://localhost/api/pipeline/render/run") as any
     );
     await flushPromises();
@@ -999,8 +999,8 @@ describe("app/api/pipeline/render/run/route.ts source structure", () => {
     );
   });
 
-  it("exports async function POST_render", () => {
-    expect(sourceCode).toMatch(/export\s+async\s+function\s+POST_render/);
+  it("exports async function POST", () => {
+    expect(sourceCode).toMatch(/export\s+async\s+function\s+POST\s*\(/);
   });
 
   it("exports async function POST_stitch", () => {

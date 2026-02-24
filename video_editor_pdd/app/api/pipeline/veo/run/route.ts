@@ -76,7 +76,7 @@ registerExecutor('veo', (params, send: SseSend) => {
     for (let i = 0; i < ordered.length; i++) {
       const section = ordered[i];
       const clipId = section.id;
-      const aspectRatio = config.veo.aspectRatio;
+      const aspectRatio = config.veo.defaultAspectRatio;
 
       const outputPath = path.join(
         process.cwd(),
@@ -128,7 +128,7 @@ registerExecutor('veo', (params, send: SseSend) => {
   };
 });
 
-export async function POST_run(request: Request): Promise<Response> {
+export async function POST(request: Request): Promise<Response> {
   const body = await request.json().catch(() => ({}));
   const { clips } = body ?? {};
 

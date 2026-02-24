@@ -244,7 +244,7 @@ run_pdd_command_base() {
     log "Running: $full_command_str"
 
     # Execute the command with timeout, redirecting stdout/stderr to log file and stdin from /dev/null
-    PDD_CMD_TIMEOUT="${PDD_CMD_TIMEOUT:-600}"
+    PDD_CMD_TIMEOUT="${PDD_CMD_TIMEOUT:-900}"
     run_with_timeout "${PDD_CMD_TIMEOUT}s" "${cmd_array[@]}" < /dev/null >> "$LOG_FILE" 2>&1
     local status=$?
 

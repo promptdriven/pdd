@@ -230,7 +230,7 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
           <div key={section.id} className="rounded border border-slate-200 bg-white">
             <div className="flex items-center justify-between px-4 py-3">
               <button
-                className="flex items-center gap-2 text-left font-medium"
+                className="flex items-center gap-2 text-left font-medium text-slate-800"
                 onClick={() => handleToggleSection(section.id)}
               >
                 <span>{expanded[section.id] ? '▾' : '▸'}</span>
