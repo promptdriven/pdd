@@ -1,0 +1,123 @@
+<pdd-reason>Generates prompt files for all modules defined in architecture.json, placing them in the correct directories based on .pddrc configuration.</pdd-reason>
+<pdd-interface>
+{{
+  "type": "module",
+  "module": {{
+    "functions": [
+      {{"name": "generate_prompts", "signature": "(architecture_json: str, pddrc_content: str)", "returns": "str (list of generated prompt files)"}}
+    ]
+  }}
+}}
+</pdd-interface>
+<pdd-dependency>agentic_arch_step8_pddrc_LLM.prompt</pdd-dependency>
+% You are an expert prompt writer for PDD (Prompt-Driven Development). Your task is to generate prompt files for all modules defined in architecture.json.
+
+% Context
+
+You are working on step 9 of the agentic architecture workflow. Step 7 generated architecture.json, Step 8 generated .pddrc. Now generate the actual prompt files.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Architecture
+<architecture_json>
+{step7_output}
+</architecture_json>
+
+% PDD Configuration
+<pddrc>
+{pddrc_content}
+</pddrc>
+
+% Prompt Generation Template
+
+<prompt_template>
+<include>pdd/templates/generic/generate_prompt.prompt</include>
+</prompt_template>
+
+% Key Rules
+
+1. **Prompt file location:**
+   - Read `.pddrc` to find `prompts_dir` for the matching context
+   - **Per-module contexts (Strategy A):** Prompts go FLAT in `prompts/` (the default `prompts_dir`)
+     - Example: `prompts/home_page_TypeScriptReact.prompt`
+   - **Group contexts (Strategy B):** Prompts go in the group context's `prompts_dir` subdirectory
+     - Example: `prompts/backend/crm_models_Python.prompt` (when `prompts_dir: "prompts/backend"`)
+   - Filename comes DIRECTLY from architecture.json `filename` field
+
+2. **Prompt content structure:**
+   ```
+   [Role paragraph - module's responsibility]
+
+   Requirements
+   1. [Functional requirement]
+   2. [Interface requirement]
+   ...
+
+   Dependencies
+   <dependency_name>
+     <include>examples/BASENAME_example.EXT</include>
+   </dependency_name>
+
+   Instructions
+   - [Implementation guidance]
+   - [Edge cases]
+
+   Deliverable
+   - [Expected artifacts]
+   ```
+
+3. **Use architecture.json fields:**
+   - `reason` → understand why module exists
+   - `description` → architectural details
+   - `interface` → module contract
+   - `dependencies` → what to include
+
+% Output Requirements
+
+1. **Create prompt directories:**
+   - Read `.pddrc` to determine where prompts go
+   - For per-module contexts (Strategy A): `mkdir -p prompts`
+   - For group contexts (Strategy B): `mkdir -p prompts/SUBDIRECTORY` (e.g., `mkdir -p prompts/backend`)
+
+2. **Write each prompt file** to the correct directory:
+   - Strategy A: `prompts/{filename}`
+   - Strategy B: `prompts/{subdirectory}/{filename}` (matching the group context's `prompts_dir`)
+
+3. **Post summary to GitHub**
+
+4. **Report files:** `FILES_CREATED: prompts/home_page_TypeScriptReact.prompt, ...`
+
+% ============================================================================
+% VERIFIED WORKING EXAMPLE - FOLLOW THIS PATTERN EXACTLY
+% ============================================================================
+
+This example shows the correct prompt file structure and naming.
+
+<verified_working_example>
+<include>pdd/templates/architecture/example_nextjs_task_notes.prompt</include>
+</verified_working_example>
+
+% Your Task
+
+Generate prompt files for ALL modules in architecture.json.
+
+First, read `.pddrc` to determine the prompt placement strategy:
+- If .pddrc uses per-module contexts with `outputs.code.path` → place prompts FLAT in `prompts/`
+- If .pddrc uses group contexts with `prompts_dir` subdirectory → place prompts in that subdirectory
+
+For each module:
+1. Determine the correct directory from `.pddrc` (flat `prompts/` or subdirectory like `prompts/backend/`)
+2. Create file at the correct path (e.g., `prompts/{filename}` or `prompts/backend/{filename}`)
+3. Include rich context from reason, description, interface fields
+4. Add <include> tags for dependencies
+
+Remember:
+- Check `.pddrc` for the correct prompt directory before creating files
+- Filename comes directly from architecture.json
+- Filenames MUST use valid language suffixes: `TypeScript`, `TypeScriptReact`, `Python`, etc.
+  - ❌ WRONG: `_NextJS.prompt`, `_React.prompt`, `_Node.prompt`
+  - ✅ CORRECT: `_TypeScript.prompt`, `_TypeScriptReact.prompt`, `_Python.prompt`

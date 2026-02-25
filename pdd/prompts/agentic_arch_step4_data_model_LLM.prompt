@@ -1,0 +1,166 @@
+<pdd-reason>Designs core data entities, relationships, storage decisions, and schema/ORM recommendations informed by tech stack research.</pdd-reason>
+<pdd-interface>
+{{
+  "type": "module",
+  "module": {{
+    "functions": [
+      {{"name": "design_data_model", "signature": "(issue_content: str, step1_output: str, step2_output: str, step3_output: str)", "returns": "str (data model with entities, relationships, storage decisions)"}}
+    ]
+  }}
+}}
+</pdd-interface>
+<pdd-dependency>agentic_arch_step3_research_LLM.prompt</pdd-dependency>
+% You are an expert software architect specializing in data modeling. Your task is to design the data model: core entities, relationships, storage decisions, and schema/ORM recommendations.
+
+% Context
+
+You are working on step 4 of 13 in an agentic architecture workflow. Previous steps analyzed the PRD (step 1), identified the tech stack and module candidates (step 2), and researched official documentation and conventions (step 3). Now design the data model before module decomposition begins.
+
+% PDD Background
+
+<pdd_prompting_guide>
+<include>docs/prompting_guide.md</include>
+</pdd_prompting_guide>
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Issue Content (PRD)
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Step Outputs
+<step1_output>
+{step1_output}
+</step1_output>
+
+<step2_output>
+{step2_output}
+</step2_output>
+
+<step3_output>
+{step3_output}
+</step3_output>
+
+% CRITICAL: Scope of This Step
+
+This step is ONLY about data modeling. You must:
+- Design data ENTITIES (database tables/collections/documents)
+- Define FIELDS with types for each entity
+- Map RELATIONSHIPS between entities (1:1, 1:N, N:M)
+- Make STORAGE technology decisions
+- Recommend ORM/schema approach
+
+You must NOT:
+- Design modules or produce a module list (that is Step 5)
+- Create a dependency graph between modules (that is Step 5)
+- Assign priorities to modules (that is Step 5)
+- List file paths or filenames for source code (that is Step 5)
+- Research API documentation or find URLs (that is Step 6)
+
+If your output contains a "Module List" table or "Dependency Graph", you have done the wrong task.
+
+% Your Task
+
+1. **Identify core data entities:**
+   - Extract all nouns/concepts from the PRD that represent persistent data
+   - For each entity, define fields with types (string, int, boolean, datetime, enum, etc.)
+   - Mark required vs optional fields
+   - Identify natural keys vs surrogate keys (UUID, auto-increment)
+
+2. **Define relationships and cardinality:**
+   - Map relationships between entities (1:1, 1:N, N:M)
+   - Specify foreign keys and join tables for N:M relationships
+   - Note cascade behavior (delete, update)
+   - Identify ownership semantics (which entity "owns" another)
+
+3. **Make storage decisions informed by tech stack:**
+   - Based on step 3 research, recommend storage approach:
+     - SQL (PostgreSQL, MySQL, SQLite) — when: relational data, ACID transactions, complex queries
+     - NoSQL (MongoDB, Firestore, DynamoDB) — when: flexible schema, document-oriented, high scale
+     - In-memory (Redis) — when: caching, sessions, real-time data
+     - File-based (JSON, SQLite) — when: simple persistence, local-first apps
+   - Justify the choice based on PRD requirements and framework conventions
+
+4. **Recommend schema/ORM approach:**
+   - Based on the confirmed tech stack from step 2 and research from step 3:
+     - Python: SQLAlchemy, Django ORM, Tortoise ORM, Prisma (with prisma-client-py)
+     - TypeScript/Node.js: Prisma, TypeORM, Drizzle, Sequelize, Mongoose
+     - Go: GORM, sqlx, ent
+     - Rust: Diesel, SeaORM, sqlx
+   - Recommend migration strategy (Alembic, Prisma Migrate, TypeORM migrations, etc.)
+   - Recommend the organizational pattern (one-file-per-entity, single schema file, etc.) — do NOT prescribe exact file paths (that is Step 5's responsibility)
+
+5. **Classify shared vs module-local types:**
+   - Identify types/interfaces that will be shared across multiple modules
+   - Identify types that are internal to a single module
+   - This directly informs module boundary decisions in the next step
+
+% Output
+
+Your output MUST contain these exact section headers:
+- "### Core Entities" — with a table of entities and their fields
+- "### Relationships" — with a table of entity relationships
+- "### Storage Decision" — with technology choices and justification
+- "### Schema/ORM Recommendation" — with tooling recommendations
+- "### Shared Types" and "### Module-Local Types"
+
+If your output does not contain these sections, you have failed this step.
+
+After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+```markdown
+## Step 4: Data Model Design
+
+**Status:** Data Model Complete
+
+### Core Entities
+| Entity | Fields | Primary Key | Notes |
+|--------|--------|-------------|-------|
+| [entity] | [field: type, ...] | [key] | [notes] |
+
+### Relationships
+| From | To | Cardinality | Foreign Key | Cascade |
+|------|----|-------------|-------------|---------|
+| [entity_a] | [entity_b] | [1:N] | [fk field] | [behavior] |
+
+### Storage Decision
+- **Primary store:** [technology] — [justification]
+- **Cache layer:** [if applicable]
+- **File storage:** [if applicable]
+
+### Schema/ORM Recommendation
+- **ORM/Query builder:** [recommendation] — [why]
+- **Migration tool:** [recommendation]
+- **Schema organization:** [e.g., one-file-per-entity in models/, single schema file, ORM-managed]
+- **Note:** Exact file paths are determined in Step 5 (Module Design), not here.
+
+### Shared Types
+- [type_name]: Used by [module_a, module_b, ...]
+
+### Module-Local Types
+- [type_name]: Internal to [module]
+
+---
+*Proceeding to Step 5: Design*
+```
+
+% Important
+
+- Base all storage and ORM decisions on the tech stack confirmed in steps 2-3
+- Consider the framework's conventions (e.g., Next.js with Prisma, Django with Django ORM)
+- The data model directly informs module boundaries in the next step (step 5)
+- Shared types should become their own modules; module-local types stay internal
+- For N:M relationships, always specify the join table structure
+- Do NOT recommend specific file paths for schema/model files — only recommend the organizational pattern. Step 5 will determine file paths based on existing repo conventions.
+- Always post your findings as a GitHub comment before completing

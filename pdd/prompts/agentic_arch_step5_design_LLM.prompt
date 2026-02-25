@@ -1,0 +1,124 @@
+<pdd-reason>Designs module breakdown with dependency graph, priority ordering, and interface specifications.</pdd-reason>
+<pdd-interface>
+{{
+  "type": "module",
+  "module": {{
+    "functions": [
+      {{"name": "design_modules", "signature": "(issue_content: str, step1_output: str, step2_output: str, step3_output: str, step4_output: str)", "returns": "str (module list with dependencies, priorities, interfaces)"}}
+    ]
+  }}
+}}
+</pdd-interface>
+<pdd-dependency>agentic_arch_step4_data_model_LLM.prompt</pdd-dependency>
+% You are an expert software architect. Your task is to design the module breakdown with dependency graph and priority ordering for the architecture.
+
+% Context
+
+You are working on step 5 of 13 in an agentic architecture workflow. Previous steps analyzed the PRD, researched the tech stack, and designed the data model. Now design the complete module decomposition.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Issue Content (PRD)
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Step Outputs
+<step1_output>
+{step1_output}
+</step1_output>
+
+<step2_output>
+{step2_output}
+</step2_output>
+
+<step3_output>
+{step3_output}
+</step3_output>
+
+<step4_output>
+{step4_output}
+</step4_output>
+
+% Your Task
+
+1. **Use the data model from Step 4 to inform module boundaries:**
+   - Each data entity or group of closely-related entities typically maps to a module
+   - Shared types identified in Step 4 should become their own module(s)
+   - Storage decisions inform whether you need ORM/schema modules
+   - Relationship cardinality affects API route design
+
+2. **Define modules following PDD principles:**
+   - One prompt = one module (each module generates one code file)
+   - Each module has clear, single responsibility
+   - Modules should be independently testable
+
+3. **Determine dependency graph:**
+   - Which modules depend on which
+   - Foundational modules (no deps) vs. dependent modules
+   - Ensure no circular dependencies
+
+4. **Calculate priority ordering (topological sort):**
+   - Priority 1 = generated first (no dependencies)
+   - A module's priority must be > all its dependencies' priorities
+   - Sequential integers without gaps (1, 2, 3, ...)
+
+5. **Define interfaces:**
+   - For each module, determine the interface type (api, module, page, component, config, etc.)
+   - Specify key functions, endpoints, or props
+   - Note data sources and contracts between modules
+
+6. **Determine file paths:**
+   - Use framework-appropriate directory structure (from step 3 research)
+   - Follow standard naming conventions for the tech stack
+   - Include appropriate file extensions
+
+% Output
+
+If clarification is needed on a fundamental design choice, output "Clarification Needed" and explain what decision requires user input.
+
+Otherwise, use `gh issue comment` to post your design to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+```markdown
+## Step 5: Module Design
+
+**Status:** [Design Complete | Clarification Needed]
+
+### Module List
+| Priority | Module (filename) | Filepath | Dependencies | Interface Type |
+|----------|-------------------|----------|--------------|----------------|
+| 1 | [name]_[Lang].prompt | [path] | [] | [type] |
+| 2 | [name]_[Lang].prompt | [path] | [dep1] | [type] |
+
+### Dependency Graph
+```
+[module_a] -> [module_b] -> [module_c]
+                          -> [module_d]
+```
+
+### Interface Sketches
+#### [module_name]
+- Type: [api/module/page/component/config]
+- Key functions/endpoints: [list]
+
+---
+*Proceeding to Step 6: Research Dependencies*
+```
+
+% Important
+
+- Priority ordering must form a valid topological sort
+- No circular dependencies allowed
+- Each module must have a clear filename following PDD conventions: `<base>_<LangOrFramework>.prompt`
+- If a fundamental design choice is ambiguous (e.g., monolith vs. microservice), output "Clarification Needed"
+- Always post your findings as a GitHub comment before completing

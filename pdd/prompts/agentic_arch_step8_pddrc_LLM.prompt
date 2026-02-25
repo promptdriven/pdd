@@ -1,0 +1,173 @@
+<pdd-reason>Generates and validates .pddrc configuration file based on architecture.json, ensuring proper context mapping and output path templates.</pdd-reason>
+<pdd-interface>
+{{
+  "type": "module",
+  "module": {{
+    "functions": [
+      {{"name": "generate_pddrc", "signature": "(architecture_json: str)", "returns": "str (path to .pddrc file)"}}
+    ]
+  }}
+}}
+</pdd-interface>
+<pdd-dependency>agentic_arch_step7_generate_LLM.prompt</pdd-dependency>
+% You are a PDD configuration expert. Your task is to generate a complete and correct .pddrc file based on the architecture.json.
+
+% Context
+
+You are working on step 8 of the agentic architecture workflow. Step 7 generated architecture.json. Now generate the .pddrc configuration file.
+
+This step is CRITICAL because:
+- Without correct .pddrc, `pdd sync` will output files to wrong paths
+- The WRONG strategy causes duplicate syncs, wrong output files, and redundant config
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Architecture (from Step 7)
+<architecture_json>
+{step7_output}
+</architecture_json>
+
+% ============================================================================
+% STRATEGY DETECTION (CRITICAL - DO THIS FIRST)
+% ============================================================================
+
+There are TWO valid strategies for .pddrc. You MUST choose the right one based on
+the architecture.json before generating anything.
+
+**Strategy A: Per-module exact paths**
+- For Next.js, Nuxt, SvelteKit, and similar frameworks
+- Use when output filenames do NOT derive from the basename
+- Example: basename `home_page` → filepath `app/page.tsx` (no derivation)
+- Example: basename `api_tasks_route` → filepath `app/api/tasks/route.ts` (no derivation)
+- Creates one context per module with explicit `outputs.code.path`
+
+**Strategy B: Template-based group contexts**
+- For Python, Go, Rust, and standard backend projects
+- Use when output filenames DO derive from the basename
+- Example: basename `crm_models` → filepath `backend/crm_models.py` (basename appears in filepath)
+- Example: basename `auth_service` → filepath `backend/auth_service.py` (basename appears in filepath)
+- Creates one group context per directory with `generate_output_path` template
+
+**Decision Tree:**
+```
+For each module in architecture.json, check:
+  Does the filepath contain the basename as a filename component?
+  e.g., filepath "backend/crm_models.py" contains basename "crm_models" → YES
+  e.g., filepath "app/page.tsx" does NOT contain basename "home_page" → NO
+
+If ALL (or nearly all) modules: YES → Strategy B
+If ANY modules: NO → Strategy A
+If mixed: Use Strategy A for non-derivable modules, Strategy B for derivable groups
+```
+
+% ============================================================================
+% STRATEGY A: Per-Module Exact Paths (Next.js/Nuxt/SvelteKit)
+% ============================================================================
+
+For EACH module in architecture.json:
+
+```
+1. Extract basename from filename:
+   "home_page_TypeScriptReact.prompt" → "home_page"
+   "api_tasks_id_route_TypeScript.prompt" → "api_tasks_id_route"
+
+2. Create context entry:
+   - context name = basename
+   - paths = ["*{{basename}}*"]
+   - outputs.code.path = filepath from architecture.json
+
+3. Do NOT add prompts_dir to individual contexts
+```
+
+After all modules, add default context with `prompts_dir: "prompts/"`.
+
+**Strategy A Key Rules:**
+1. **One context per module** - each module needs its own context for exact filepath
+2. **paths pattern** - use `["*{{basename}}*"]` to match the basename
+3. **outputs.code.path** - use EXACT filepath from architecture.json (no templates!)
+4. **prompts_dir** - put ONLY in `default` context, never in other contexts
+
+% ============================================================================
+% STRATEGY B: Template-Based Group Contexts (Python/Go/Rust backends)
+% ============================================================================
+
+Group modules by their output directory:
+
+```
+1. Scan all filepaths in architecture.json and group by directory:
+   "backend/crm_models.py"      → directory "backend/"
+   "backend/crm_schemas.py"     → directory "backend/"
+   "backend/auth_service.py"    → directory "backend/"
+
+2. For each directory group, create ONE group context:
+   - context name = directory name (e.g., "backend")
+   - paths = ["*"] (matches all basenames in this group)
+   - generate_output_path = directory path (e.g., "backend/")
+   - prompts_dir = "prompts/{{directory}}" (e.g., "prompts/backend")
+
+3. Do NOT add outputs.code.path - template expansion handles it automatically
+```
+
+**Strategy B Key Rules:**
+1. **One context per directory group** - NOT one per module
+2. **generate_output_path** - directory where output files go (PDD appends `{{basename}}.{{ext}}`)
+3. **prompts_dir on group context** - points to subdirectory (e.g., `"prompts/backend"`)
+4. **No outputs.code.path** - template expansion derives the path from basename + extension
+5. **Prompt files in subdirectory** - place in `prompts/backend/`, NOT flat in `prompts/`
+
+% Output Requirements
+
+1. **Write .pddrc to disk**
+
+2. **Verify YAML syntax:**
+   ```bash
+   python3 -c "import yaml; yaml.safe_load(open('.pddrc'))" && echo "YAML OK"
+   ```
+
+3. **Post summary to GitHub**
+
+4. **Output status:** `PDDRC_STATUS: COMPLETE` and `FILES_CREATED: .pddrc`
+
+% ============================================================================
+% VERIFIED WORKING EXAMPLE A - Next.js (Per-Module Exact Paths)
+% ============================================================================
+
+Use this example when Strategy A is selected (output filenames don't derive from basename).
+
+<verified_example_strategy_a>
+<include>pdd/templates/architecture/example_nextjs_task_notes.prompt</include>
+</verified_example_strategy_a>
+
+% ============================================================================
+% VERIFIED WORKING EXAMPLE B - Python Backend (Template-Based Group Contexts)
+% ============================================================================
+
+Use this example when Strategy B is selected (output filenames derive from basename).
+
+<verified_example_strategy_b>
+<include>pdd/templates/architecture/example_python_backend.prompt</include>
+</verified_example_strategy_b>
+
+% Your Task
+
+1. **Detect strategy**: Examine the filepaths in architecture.json. Do filenames derive from basenames?
+2. **Choose strategy**: Strategy A (per-module) or Strategy B (template-based group), or mixed
+3. **Generate .pddrc**: Follow the matching example above exactly
+
+**For Strategy A (Next.js/Nuxt/SvelteKit):**
+- For each module: extract basename, create context with `paths: ["*{{basename}}*"]`, set exact `outputs.code.path`
+- `prompts_dir` goes ONLY in default context
+
+**For Strategy B (Python/Go/Rust):**
+- Group modules by directory, create one group context per directory
+- Set `generate_output_path` to the directory, `prompts_dir` to `"prompts/{{directory}}"`
+- No `outputs.code.path` needed — template expansion handles it
+
+**For mixed projects:**
+- Use Strategy A contexts for non-derivable modules (framework files)
+- Use Strategy B group contexts for derivable modules (backend files)
+- Both can coexist in the same .pddrc

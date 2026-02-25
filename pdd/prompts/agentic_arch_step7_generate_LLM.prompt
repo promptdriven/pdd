@@ -1,0 +1,240 @@
+<pdd-reason>Generates complete architecture.json with proper priority ordering, dependencies, and context_urls from prior analysis.</pdd-reason>
+<pdd-interface>
+{{
+  "type": "module",
+  "module": {{
+    "functions": [
+      {{"name": "generate_architecture", "signature": "(issue_content: str, step1-6_outputs: str)", "returns": "str (valid JSON array matching architecture schema)"}}
+    ]
+  }}
+}}
+</pdd-interface>
+<pdd-dependency>agentic_arch_step6_research_deps_LLM.prompt</pdd-dependency>
+% You are an expert software architect. Your task is to generate the complete architecture.json based on all previous analysis and research.
+
+% Context
+
+You are working on step 7 of 13 in an agentic architecture workflow. All analysis and research is complete. Now generate the final architecture.json.
+
+% Architecture Schema Reference
+
+<architecture_schema>
+<include>pdd/templates/architecture/architecture_json.prompt</include>
+</architecture_schema>
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Issue Content (PRD)
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Step Outputs
+<step1_output>
+{step1_output}
+</step1_output>
+
+<step2_output>
+{step2_output}
+</step2_output>
+
+<step3_output>
+{step3_output}
+</step3_output>
+
+<step4_output>
+{step4_output}
+</step4_output>
+
+<step5_output>
+{step5_output}
+</step5_output>
+
+<step6_output>
+{step6_output}
+</step6_output>
+
+% Target Directory
+
+{target_dir_note}
+
+- Write `architecture.json` to `{target_dir}/architecture.json` (NOT the repo root, unless target_dir is `.`)
+- Create all scaffolding files under `{target_dir}/`
+- In the FILES_CREATED marker, list all paths relative to the repo root (e.g. `{target_dir}/architecture.json`, `{target_dir}/src/main.py`)
+- If `{target_dir}/architecture.json` already exists, REPLACE it with the new project architecture
+
+% Your Task
+
+Generate a complete, valid architecture.json following these rules:
+
+1. **Output format:** A raw JSON array (NOT wrapped in an object)
+
+2. **Required fields per entry:**
+   - `reason`: Why this module needs to exist
+   - `description`: Architectural responsibilities, interfaces, error handling
+   - `dependencies`: Array of prompt filenames this module depends on
+   - `priority`: Integer starting at 1, sequential without gaps
+   - `filename`: PDD convention `<base>_<Language>.prompt` (see VALID LANGUAGE SUFFIXES below)
+   - `filepath`: Framework-appropriate output path
+
+3. **Optional fields:**
+   - `tags`: Lower-case categorization tags
+   - `context_urls`: Array of `{{url, purpose}}` objects from step 5 research
+   - `interface`: Object with `type` and type-specific sub-object
+
+4. **Priority ordering:**
+   - Must form a valid topological sort of the dependency graph
+   - If A depends on B, then B.priority < A.priority
+   - Sequential integers: 1, 2, 3, ... (no gaps)
+
+5. **VALID LANGUAGE SUFFIXES** (CRITICAL - use EXACTLY one of these):
+   - For TypeScript/JavaScript projects: `TypeScript`, `TypeScriptReact`, `JavaScript`, `JavaScriptReact`
+   - For Python projects: `Python`
+   - For other languages: `Go`, `Rust`, `Java`, `Prisma`, `SQL`, `YAML`, etc.
+
+   **WRONG suffixes (DO NOT USE):**
+   - ❌ `NextJS`, `Next`, `Nextjs` → Use `TypeScript` or `TypeScriptReact`
+   - ❌ `React`, `ReactJS` → Use `TypeScriptReact` or `JavaScriptReact`
+   - ❌ `Node`, `NodeJS` → Use `TypeScript` or `JavaScript`
+   - ❌ `FastAPI`, `Flask` → Use `Python`
+
+6. **Filename conventions:**
+   - `<descriptive_base>_<Language>.prompt`
+   - Language is the PROGRAMMING LANGUAGE, not the framework name
+
+7. **Interface types:**
+   - api: endpoints array with method, path, auth
+   - module: functions array with name, signature, returns
+   - page: route, params, dataSources
+   - component: props, emits, context
+   - config: keys with name, type, source
+   - cli, job, message, graphql as appropriate
+
+% Output
+
+1. **Write architecture.json to disk**
+   Save the JSON array directly to `{target_dir}/architecture.json`:
+   - The file must contain ONLY the valid JSON array
+   - No markdown fencing, no comments, no wrapper objects
+   - Validate the JSON is syntactically correct before writing
+
+2. **Create project scaffolding files**
+   Based on the tech stack confirmed in Step 2 and the module design from Step 5, create ALL necessary files to make the project runnable after code generation.
+
+   **Required for ALL projects:**
+   - `.gitignore` - Appropriate ignore patterns for the tech stack
+   - `README.md` - Project description, setup instructions, architecture overview
+
+   **Dependency management (based on tech stack):**
+   - Python: `requirements.txt` or `pyproject.toml` with all dependencies from Step 6
+   - Node.js/TypeScript: `package.json` with scripts (dev, build, test, start)
+   - TypeScript projects: `tsconfig.json` with appropriate compiler options
+   - Go: `go.mod` with module path and dependencies
+   - Rust: `Cargo.toml` with package info and dependencies
+   - Java: `pom.xml` or `build.gradle`
+   - Monorepo: Root workspace config (pnpm-workspace.yaml, turbo.json, etc.) + per-app configs
+
+   **Container/deployment (if applicable):**
+   - `Dockerfile` - Multi-stage build appropriate for the stack
+   - `docker-compose.yml` - If the project needs multiple services (database, cache, etc.)
+
+   **CI/CD:**
+   - `.github/workflows/ci.yml` - Basic workflow for lint, test, build
+
+   **Framework-specific configs:**
+   - Next.js: `next.config.js` or `next.config.ts`
+   - Vite: `vite.config.ts`
+   - Tailwind: `tailwind.config.js`, `postcss.config.js`
+   - ESLint: `.eslintrc.json` or `eslint.config.js`
+   - Prettier: `.prettierrc`
+   - Database migrations: `alembic.ini`, `prisma/schema.prisma`, etc.
+
+   **Use your judgment:** Only create files that make sense for this specific project. Don't create files that won't be used. Consider what the PRD requires and what the tech stack needs.
+
+3. **Post summary to GitHub**
+   Use `gh issue comment` to post a summary to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+```markdown
+## Step 7: Architecture & Scaffolding Generated
+
+**Status:** Generation Complete
+
+### Architecture Summary
+- Total modules: [N]
+- Priority range: 1-[max]
+- Technologies: [list]
+
+### Module Overview
+| Priority | Filename | Filepath | Dependencies |
+|----------|----------|----------|--------------|
+| 1 | [filename] | [filepath] | [] |
+
+### Scaffolding Files Created
+| File | Purpose |
+|------|---------|
+| package.json | Node.js dependencies and scripts |
+| Dockerfile | Container build configuration |
+| ... | ... |
+
+---
+*Proceeding to Step 8: Validate*
+```
+
+4. **Report ALL files created**
+   Output on its own line at the end, listing ALL files (architecture + scaffolding):
+   `FILES_CREATED: architecture.json, package.json, .gitignore, README.md, Dockerfile, ...`
+
+% Scaffolding Decision Guide
+
+Use this matrix to determine which files to create based on the confirmed tech stack:
+
+| Tech Stack | Required Scaffolding Files |
+|------------|---------------------------|
+| Python (FastAPI/Flask/Django) | requirements.txt OR pyproject.toml, Dockerfile, .gitignore, README.md |
+| Node.js (Express/NestJS) | package.json, Dockerfile, .gitignore, README.md |
+| TypeScript (any) | package.json, tsconfig.json, Dockerfile, .gitignore, README.md |
+| React/Next.js | package.json, tsconfig.json, next.config.js, tailwind.config.js, .gitignore, README.md |
+| Go (Gin/Echo/Fiber) | go.mod, Dockerfile, .gitignore, README.md |
+| Rust | Cargo.toml, Dockerfile, .gitignore, README.md |
+| Full-stack monorepo | Root package.json, pnpm-workspace.yaml OR turbo.json, per-app configs, docker-compose.yml |
+
+**Always include:**
+- README.md with: project description, prerequisites, installation, running locally, architecture overview
+- .gitignore appropriate for the tech stack (node_modules, __pycache__, .env, etc.)
+- Dockerfile if containerization is appropriate
+- docker-compose.yml if multiple services are needed (DB, Redis, etc.)
+- CI workflow (.github/workflows/ci.yml) for automated testing
+
+% Important
+
+- Write the JSON to `architecture.json` file directly - do NOT output JSON to stdout
+- Write ALL scaffolding files directly to disk at their appropriate paths
+- The JSON must be valid (no comments, no trailing commas)
+- Sort the array by ascending priority
+- Ensure all dependency references exist in the array
+- Include context_urls from step 6 where available
+- Always post your findings as a GitHub comment
+- Always output `FILES_CREATED:` with the complete list of ALL files created
+
+% ============================================================================
+% VERIFIED WORKING EXAMPLE - FOLLOW THIS PATTERN EXACTLY
+% ============================================================================
+
+This is a complete, verified working example for a Next.js project.
+Your architecture.json MUST follow this exact pattern for filename and filepath.
+
+<verified_working_example>
+<include>pdd/templates/architecture/example_nextjs_task_notes.prompt</include>
+</verified_working_example>
+
+% Now Generate
+
+Generate architecture.json following the pattern in the example above.
