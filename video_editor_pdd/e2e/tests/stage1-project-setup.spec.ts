@@ -244,4 +244,118 @@ test.describe('Stage 1: Project Setup', () => {
     await aspectRatioSelect.selectOption('16:9');
     await expect(aspectRatioSelect).toHaveValue('16:9');
   });
+
+  test('TTS Speaker input accepts new value', async ({ page }) => {
+    // The TTS Speaker label is followed by a regular text input with default "Aiden"
+    const ttsSpeakerLabel = page.locator('label', { hasText: 'TTS Speaker' });
+    await expect(ttsSpeakerLabel).toBeVisible();
+
+    // Find the enclosing div and locate the input within it
+    const ttsSpeakerDiv = ttsSpeakerLabel.locator('..');
+    const ttsSpeakerInput = ttsSpeakerDiv.locator('input');
+    await expect(ttsSpeakerInput).toBeVisible();
+
+    await ttsSpeakerInput.clear();
+    await ttsSpeakerInput.fill('Brian');
+    await expect(ttsSpeakerInput).toHaveValue('Brian');
+  });
+
+  test('TTS Sample Rate input accepts numeric value', async ({ page }) => {
+    // TTS Sample Rate is the second input[type="number"] on the page
+    // (first is TTS Speaking Rate)
+    const sampleRateInput = page.locator('input[type="number"]').nth(1);
+    await expect(sampleRateInput).toBeVisible();
+
+    await sampleRateInput.clear();
+    await sampleRateInput.fill('16000');
+    await expect(sampleRateInput).toHaveValue('16000');
+  });
+
+  test('Veo Model input accepts new value', async ({ page }) => {
+    // The Veo Model label is followed by a regular text input
+    const veoModelLabel = page.locator('label', { hasText: 'Veo Model' });
+    await expect(veoModelLabel).toBeVisible();
+
+    // Find the enclosing div and locate the input within it
+    const veoModelDiv = veoModelLabel.locator('..');
+    const veoModelInput = veoModelDiv.locator('input');
+    await expect(veoModelInput).toBeVisible();
+
+    await veoModelInput.clear();
+    await veoModelInput.fill('veo-2.0-preview');
+    await expect(veoModelInput).toHaveValue('veo-2.0-preview');
+  });
+
+  test('Max Parallel Renders input accepts numeric value', async ({ page }) => {
+    // Max Parallel Renders is the third input[type="number"] on the page
+    // (first is TTS Speaking Rate, second is TTS Sample Rate)
+    const maxRendersInput = page.locator('input[type="number"]').nth(2);
+    await expect(maxRendersInput).toBeVisible();
+
+    await maxRendersInput.clear();
+    await maxRendersInput.fill('2');
+    await expect(maxRendersInput).toHaveValue('2');
+  });
+
+  test('Edit mode inline fields can be modified and confirmed', async ({ page }) => {
+    // Click edit on the first section row (same row the existing edit test targets)
+    const firstRow = page.locator('tbody tr').first();
+    await expect(firstRow).toBeVisible();
+
+    // Enter edit mode
+    const editBtn = firstRow.locator('button', { hasText: '✎' });
+    await editBtn.click();
+    await page.waitForTimeout(500);
+
+    // Verify ✓ confirm button appeared (edit mode active)
+    const confirmBtn = firstRow.locator('button', { hasText: '✓' });
+    await expect(confirmBtn).toBeVisible({ timeout: 5000 });
+
+    // Fill in the Label input (td[2] in edit mode)
+    const labelInput = firstRow.locator('td').nth(2).locator('input');
+    await expect(labelInput).toBeVisible();
+    const originalLabel = await labelInput.inputValue();
+    await labelInput.clear();
+    await labelInput.fill('Modified Label');
+
+    // Confirm the edit
+    await confirmBtn.click();
+    await page.waitForTimeout(300);
+
+    // After confirm, the label cell should show the new value
+    const labelCell = firstRow.locator('td').nth(2);
+    await expect(labelCell).toHaveText('Modified Label');
+  });
+
+  test('Drag-and-drop section reorder uses native drag events', async ({ page }) => {
+    // Ensure there are at least 2 section rows
+    const tableRows = page.locator('tbody tr');
+    const count = await tableRows.count();
+    expect(count).toBeGreaterThanOrEqual(2);
+
+    // Verify rows have the draggable attribute
+    const isDraggable = await tableRows.first().getAttribute('draggable');
+    expect(isDraggable).toBe('true');
+
+    // Capture IDs before (td[1] is Section ID column)
+    const firstIdBefore = await tableRows.first().locator('td').nth(1).textContent();
+    const secondIdBefore = await tableRows.nth(1).locator('td').nth(1).textContent();
+    expect(firstIdBefore).not.toBe(secondIdBefore);
+
+    // Dispatch native drag events to trigger React's onDragStart/onDrop handlers
+    const firstRow = tableRows.first();
+    const secondRow = tableRows.nth(1);
+
+    await firstRow.dispatchEvent('dragstart');
+    await secondRow.dispatchEvent('dragover');
+    await secondRow.dispatchEvent('drop');
+    await page.waitForTimeout(300);
+
+    // After the drop handler fires, the order should swap
+    const firstIdAfter = await tableRows.first().locator('td').nth(1).textContent();
+    const secondIdAfter = await tableRows.nth(1).locator('td').nth(1).textContent();
+
+    expect(firstIdAfter).toBe(secondIdBefore);
+    expect(secondIdAfter).toBe(firstIdBefore);
+  });
 });

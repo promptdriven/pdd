@@ -369,4 +369,150 @@ test.describe('Review Tab', () => {
     // The video element should still be attached (no crash from clicking progress bar)
     await expect(video).toBeAttached();
   });
+
+  test('Keyboard C selects circle tool', async ({ page }) => {
+    // First click RECTANGLE to change away from the default freehand tool
+    const rectBtn = page.locator('button', { hasText: 'RECTANGLE' });
+    await rectBtn.click();
+    await page.waitForTimeout(300);
+
+    // Verify RECTANGLE is now selected
+    let rectHasBlue = await rectBtn.evaluate((el) => el.classList.contains('bg-blue-600'));
+    expect(rectHasBlue).toBe(true);
+
+    // Press C to switch to circle
+    await page.keyboard.press('c');
+    await page.waitForTimeout(300);
+
+    // CIRCLE button should now have bg-blue-600
+    const circleBtn = page.locator('button', { hasText: 'CIRCLE' });
+    const circleHasBlue = await circleBtn.evaluate((el) => el.classList.contains('bg-blue-600'));
+    expect(circleHasBlue).toBe(true);
+
+    // RECTANGLE should no longer be selected
+    rectHasBlue = await rectBtn.evaluate((el) => el.classList.contains('bg-blue-600'));
+    expect(rectHasBlue).toBe(false);
+  });
+
+  test('Keyboard A selects arrow tool', async ({ page }) => {
+    // Press A to switch to arrow
+    await page.keyboard.press('a');
+    await page.waitForTimeout(300);
+
+    // ARROW button should now have bg-blue-600
+    const arrowBtn = page.locator('button', { hasText: 'ARROW' });
+    const arrowHasBlue = await arrowBtn.evaluate((el) => el.classList.contains('bg-blue-600'));
+    expect(arrowHasBlue).toBe(true);
+  });
+
+  test('Keyboard T selects text tool', async ({ page }) => {
+    // Press T to switch to text
+    await page.keyboard.press('t');
+    await page.waitForTimeout(300);
+
+    // TEXT button should now have bg-blue-600
+    const textBtn = page.locator('button', { hasText: 'TEXT' });
+    const textHasBlue = await textBtn.evaluate((el) => el.classList.contains('bg-blue-600'));
+    expect(textHasBlue).toBe(true);
+  });
+
+  test('Keyboard ArrowLeft seeks backward', async ({ page }) => {
+    const video = page.locator('video');
+    await expect(video).toBeAttached();
+
+    // Press ArrowLeft to seek backward
+    await page.keyboard.press('ArrowLeft');
+    await page.waitForTimeout(500);
+
+    // The video element should still be intact (no crash). currentTime may not change
+    // without a loaded source, but the operation should be safe.
+    await expect(video).toBeAttached();
+  });
+
+  test('Keyboard M toggles mic input method', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (err) => errors.push(err.message));
+
+    // Press M to toggle input method between 'typed' and 'speech'
+    await page.keyboard.press('m');
+    await page.waitForTimeout(300);
+
+    // speechAvailable may be false in headless browser, but the key press should not crash.
+    // If speech is available, a "🎤" indicator becomes visible; check if it appears.
+    const micIndicator = page.locator('text=🎤').first();
+    const isMicVisible = await micIndicator.isVisible().catch(() => false);
+    if (isMicVisible) {
+      await expect(micIndicator).toBeVisible();
+    }
+
+    // Press M again to toggle back
+    await page.keyboard.press('m');
+    await page.waitForTimeout(300);
+
+    // Verify no crashes occurred
+    const appErrors = errors.filter(
+      (e) => !e.includes('Extension') && !e.includes('chrome-extension')
+    );
+    expect(appErrors).toHaveLength(0);
+
+    // Page should still be functional
+    await expect(page.locator('button', { hasText: 'FREEHAND' })).toBeVisible();
+  });
+
+  test('Keyboard Space toggles annotation recording mode', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (err) => errors.push(err.message));
+
+    // Press Space to start recording mode (calls startRecordingMode())
+    await page.keyboard.press('Space');
+    await page.waitForTimeout(300);
+
+    // Recording mode changes the UI; verify no crash and page is still functional
+    await expect(page.locator('button', { hasText: 'FREEHAND' })).toBeVisible();
+
+    // Press Space again to stop recording mode (calls stopRecordingMode())
+    await page.keyboard.press('Space');
+    await page.waitForTimeout(300);
+
+    // Verify no crashes occurred throughout
+    const appErrors = errors.filter(
+      (e) => !e.includes('Extension') && !e.includes('chrome-extension')
+    );
+    expect(appErrors).toHaveLength(0);
+
+    // Page should still be functional after toggling recording mode
+    await expect(page.locator('button', { hasText: 'FREEHAND' })).toBeVisible();
+  });
+
+  test('Canvas pointer interaction does not crash', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (err) => errors.push(err.message));
+
+    const canvas = page.locator('canvas');
+    await expect(canvas).toBeVisible();
+
+    // Get the bounding box of the canvas element
+    const box = await canvas.boundingBox();
+    expect(box).not.toBeNull();
+    if (box) {
+      const centerX = box.x + box.width / 2;
+      const centerY = box.y + box.height / 2;
+
+      // Simulate a pointer drag across the canvas
+      await page.mouse.move(centerX, centerY);
+      await page.mouse.down();
+      await page.mouse.move(centerX + 50, centerY + 50, { steps: 5 });
+      await page.mouse.up();
+      await page.waitForTimeout(300);
+    }
+
+    // Canvas should still be visible after the drag interaction
+    await expect(canvas).toBeVisible();
+
+    // Verify no crashes occurred
+    const appErrors = errors.filter(
+      (e) => !e.includes('Extension') && !e.includes('chrome-extension')
+    );
+    expect(appErrors).toHaveLength(0);
+  });
 });

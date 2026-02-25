@@ -329,4 +329,27 @@ test.describe('Stage 7: Veo Generation', () => {
     // After clicking Continue, should advance to Stage 8 (Compositions)
     await expect(page.locator('text=Composition').first()).toBeVisible();
   });
+
+  test('Character Reference Regenerate button click triggers POST to /api/pipeline/veo/references/run', async ({ page }) => {
+    let postCalled = false;
+    let requestBody: any = null;
+
+    await page.route('**/api/pipeline/veo/references/run', (route) => {
+      postCalled = true;
+      requestBody = route.request().postDataJSON();
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ jobId: 'test-veo-ref-job' }),
+      });
+    });
+
+    const refRegenBtn = page.locator('button', { hasText: '↺ Regenerate' }).first();
+    await expect(refRegenBtn).toBeVisible();
+    await refRegenBtn.click();
+    await page.waitForTimeout(500);
+
+    expect(postCalled).toBe(true);
+    expect(requestBody).toHaveProperty('referenceId');
+  });
 });
