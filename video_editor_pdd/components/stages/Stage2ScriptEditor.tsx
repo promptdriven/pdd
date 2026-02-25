@@ -38,6 +38,7 @@ export default function Stage2ScriptEditor({ onAdvance }: Stage2ScriptEditorProp
   const contentRef = useRef('');
   const [previewBlocks, setPreviewBlocks] = useState<PreviewBlock[]>([]);
   const [loading, setLoading] = useState(true);
+  const hasEditedRef = useRef(false);
 
   const [jobId, setJobId] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -58,20 +59,27 @@ export default function Stage2ScriptEditor({ onAdvance }: Stage2ScriptEditorProp
     }
   }, [splitRatio]);
 
-  // Initialize CodeMirror
+  // Initialize CodeMirror (once on mount)
   useEffect(() => {
     if (!editorContainerRef.current || editorViewRef.current) return;
 
+    const fullHeightTheme = EditorView.theme({
+      '&': { height: '100%' },
+      '.cm-scroller': { overflow: 'auto' },
+    });
+
     const state = EditorState.create({
-      doc: content,
+      doc: contentRef.current,
       extensions: [
         markdown(),
         keymap.of(defaultKeymap as unknown as KeyBinding[]),
         EditorView.lineWrapping,
+        fullHeightTheme,
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
             const newContent = update.state.doc.toString();
             if (newContent !== contentRef.current) {
+              hasEditedRef.current = true;
               contentRef.current = newContent;
               setContent(newContent);
             }
@@ -89,7 +97,8 @@ export default function Stage2ScriptEditor({ onAdvance }: Stage2ScriptEditorProp
       editorViewRef.current?.destroy();
       editorViewRef.current = null;
     };
-  }, [content]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Load script content on mount
   useEffect(() => {
@@ -129,9 +138,9 @@ export default function Stage2ScriptEditor({ onAdvance }: Stage2ScriptEditorProp
     }
   }, [content]);
 
-  // Auto-save with debounce (1s)
+  // Auto-save with debounce (1s) — only fires after user edits, not on initial load
   useEffect(() => {
-    if (loading) return;
+    if (loading || !hasEditedRef.current) return;
 
     const id = setTimeout(async () => {
       try {
@@ -192,13 +201,19 @@ export default function Stage2ScriptEditor({ onAdvance }: Stage2ScriptEditorProp
       if (data?.jobId) {
         setJobId(data.jobId);
       }
-
-      onAdvance();
     } catch (err) {
       console.error(err);
-    } finally {
       setIsGenerating(false);
     }
+  };
+
+  const handleSseDone = () => {
+    setIsGenerating(false);
+    onAdvance();
+  };
+
+  const handleSseError = () => {
+    setIsGenerating(false);
   };
 
   // Resizable split pane handlers
@@ -303,7 +318,7 @@ export default function Stage2ScriptEditor({ onAdvance }: Stage2ScriptEditorProp
       {/* SSE Log Panel */}
       {jobId && (
         <div className="border-t border-slate-700 bg-slate-900">
-          <SseLogPanel jobId={jobId} />
+          <SseLogPanel jobId={jobId} onDone={handleSseDone} onError={handleSseError} />
         </div>
       )}
     </div>
