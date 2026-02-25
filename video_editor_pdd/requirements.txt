@@ -1,0 +1,18 @@
+# Video Editor PDD - Python dependencies
+#
+# TTS rendering (Qwen3-TTS)
+torch>=2.0.0
+qwen-tts
+numpy
+soundfile
+
+# Audio sync pipeline
+pydub
+faster-whisper
+
+# TTS fallback
+edge-tts
+
+# Google AI (Veo / Imagen)
+google-genai
+google-auth

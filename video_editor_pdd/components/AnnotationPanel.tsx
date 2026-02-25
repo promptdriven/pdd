@@ -3,6 +3,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { Annotation, Job, JobStatus } from '../lib/types';
 import { SseLogPanel } from './SseLogPanel';
+import FixPreviewPanel from './FixPreviewPanel';
 
 type Props = {
   annotations: Annotation[];
@@ -125,6 +126,11 @@ function AnnotationCard({
   onRetryJob: (jobId: string) => void;
   onMarkResolved: (annotationId: string) => void;
 }) {
+  const [showDiff, setShowDiff] = useState(false);
+  const [diffText, setDiffText] = useState<string | null>(null);
+  const [diffLoading, setDiffLoading] = useState(false);
+  const [reverting, setReverting] = useState(false);
+
   const isResolved = a.resolved || isLocallyResolved;
   const isExpanded = defaultExpanded;
 
@@ -147,6 +153,40 @@ function AnnotationCard({
   const analysisSummary = analysis
     ? technicalAssessment.replace(/\s+/g, ' ').trim()
     : 'Awaiting analysis…';
+
+  const handleViewDiff = async () => {
+    if (showDiff) {
+      setShowDiff(false);
+      return;
+    }
+    if (!a.fixCommitSha) return;
+    setDiffLoading(true);
+    try {
+      const res = await fetch(`/api/annotations/${a.id}/diff`);
+      if (!res.ok) throw new Error('Failed to fetch diff');
+      const data = await res.json();
+      setDiffText(data.diff);
+      setShowDiff(true);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setDiffLoading(false);
+    }
+  };
+
+  const handleRevert = async () => {
+    if (!a.fixCommitSha) return;
+    if (!window.confirm('Revert this fix? This will create a new revert commit.')) return;
+    setReverting(true);
+    try {
+      const res = await fetch(`/api/annotations/${a.id}/revert`, { method: 'POST' });
+      if (!res.ok) throw new Error('Revert failed');
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setReverting(false);
+    }
+  };
 
   return (
     <div
@@ -251,6 +291,25 @@ function AnnotationCard({
             </div>
 
             <div className="flex flex-wrap items-center justify-end gap-2">
+              {a.fixCommitSha ? (
+                <>
+                  <button
+                    onClick={handleViewDiff}
+                    disabled={diffLoading}
+                    className="rounded bg-blue-500/20 px-3 py-1.5 text-xs font-medium text-blue-200 hover:bg-blue-500/30 disabled:opacity-50"
+                  >
+                    {diffLoading ? 'Loading...' : showDiff ? 'Hide Diff' : 'View Diff'}
+                  </button>
+                  <button
+                    onClick={handleRevert}
+                    disabled={reverting}
+                    className="rounded bg-red-500/20 px-3 py-1.5 text-xs font-medium text-red-200 hover:bg-red-500/30 disabled:opacity-50"
+                  >
+                    {reverting ? 'Reverting...' : 'Revert Fix'}
+                  </button>
+                </>
+              ) : null}
+
               {showFailed && a.resolveJobId ? (
                 <button
                   onClick={() => onRetryJob(a.resolveJobId!)}
@@ -269,6 +328,17 @@ function AnnotationCard({
                 </button>
               ) : null}
             </div>
+
+            {showDiff && diffText ? (
+              <div className="mt-2 rounded border border-white/10 bg-black/30 p-2">
+                <div className="text-[11px] font-semibold text-white/70 mb-1">
+                  Fix Diff ({a.fixCommitSha?.slice(0, 8)})
+                </div>
+                <pre className="overflow-x-auto text-[11px] leading-relaxed text-white/80 whitespace-pre-wrap font-mono max-h-64 overflow-y-auto">
+                  {diffText}
+                </pre>
+              </div>
+            ) : null}
           </div>
         </div>
       ) : null}
@@ -280,6 +350,7 @@ export default function AnnotationPanel({ annotations, sectionId, onBatchResolve
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [batchJobId, setBatchJobId] = useState<string | null>(null);
   const [batchPosting, setBatchPosting] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
 
   // Local-only resolve state (to support "Mark Resolved" without assuming an API exists).
   const [locallyResolvedIds, setLocallyResolvedIds] = useState<Set<string>>(() => new Set());
@@ -300,26 +371,25 @@ export default function AnnotationPanel({ annotations, sectionId, onBatchResolve
     setExpanded((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
-  const handleApplyBatch = async () => {
+  const handleApplyBatch = () => {
     if (unresolvedWithAnalysisCount === 0) return;
-    if (batchPosting) return;
+    setShowPreview(true);
+  };
 
+  const handlePreviewApply = async (annotationIds: string[]) => {
+    setShowPreview(false);
     setBatchPosting(true);
     try {
       const res = await fetch(`/api/sections/${sectionId}/resolve-batch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ annotationIds }),
       });
-
-      if (!res.ok) {
-        throw new Error(`Batch resolve failed (${res.status})`);
-      }
-
+      if (!res.ok) throw new Error(`Batch resolve failed (${res.status})`);
       const data = (await res.json()) as { jobId: string };
       setBatchJobId(data.jobId);
       onBatchResolve(data.jobId);
     } catch (e) {
-      // In production you may want a toast; keep UI resilient.
       console.error(e);
     } finally {
       setBatchPosting(false);
@@ -389,6 +459,14 @@ export default function AnnotationPanel({ annotations, sectionId, onBatchResolve
             }}
           />
         </div>
+      ) : null}
+
+      {showPreview ? (
+        <FixPreviewPanel
+          sectionId={sectionId}
+          onClose={() => setShowPreview(false)}
+          onApply={handlePreviewApply}
+        />
       ) : null}
 
       <div className="min-h-0 flex-1 overflow-y-auto rounded border border-white/10 bg-black/10 p-2">

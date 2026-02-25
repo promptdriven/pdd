@@ -5,6 +5,7 @@ import { runClaudeFix } from "@/lib/claude";
 import { createJob, runJob } from "@/lib/jobs";
 import { renderSection } from "@/lib/render";
 import { loadProject, getSection } from "@/lib/project";
+import { isGitAvailable, preFixCommit, fixCommit } from "@/lib/git";
 import type { Annotation } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -29,12 +30,33 @@ export async function POST(_request: Request, { params }: RouteParams) {
   const db = getDb();
 
   try {
+    // Check for optional annotationIds filter (from preview flow)
+    let annotationIds: string[] | null = null;
+    try {
+      const body = await _request.json();
+      if (body.annotationIds && Array.isArray(body.annotationIds)) {
+        annotationIds = body.annotationIds;
+      }
+    } catch {
+      // No body or invalid JSON — process all unresolved
+    }
+
     // 1. Load unresolved annotations for the section
-    const rows = db
-      .prepare(
-        `SELECT * FROM annotations WHERE sectionId = ? AND resolved = 0 ORDER BY timestamp ASC`
-      )
-      .all(sectionId) as Array<Record<string, unknown>>;
+    let rows: Array<Record<string, unknown>>;
+    if (annotationIds && annotationIds.length > 0) {
+      const placeholders = annotationIds.map(() => '?').join(',');
+      rows = db
+        .prepare(
+          `SELECT * FROM annotations WHERE sectionId = ? AND id IN (${placeholders}) AND resolved = 0 ORDER BY timestamp ASC`
+        )
+        .all(sectionId, ...annotationIds) as Array<Record<string, unknown>>;
+    } else {
+      rows = db
+        .prepare(
+          `SELECT * FROM annotations WHERE sectionId = ? AND resolved = 0 ORDER BY timestamp ASC`
+        )
+        .all(sectionId) as Array<Record<string, unknown>>;
+    }
 
     if (!rows || rows.length === 0) {
       return NextResponse.json(
@@ -59,6 +81,7 @@ export async function POST(_request: Request, { params }: RouteParams) {
         analysis,
         resolved: Boolean(row.resolved),
         resolveJobId: (row.resolveJobId as string | null) ?? null,
+        fixCommitSha: (row.fixCommitSha as string | null) ?? null,
         createdAt: String(row.createdAt ?? ""),
       };
     });
@@ -89,6 +112,13 @@ export async function POST(_request: Request, { params }: RouteParams) {
         if (byFixType[fixType]) byFixType[fixType].push(ann);
       }
 
+      // Pre-fix git snapshot
+      const gitAvail = isGitAvailable();
+      if (gitAvail) {
+        const preSha = preFixCommit(sectionId, jobId);
+        if (preSha) onLog(`Pre-fix snapshot committed: ${preSha.slice(0, 8)}`);
+      }
+
       // Remotion fixes via Claude
       for (const ann of byFixType.remotion) {
         onLog(`Running Claude fix for annotation ${ann.id}`);
@@ -97,6 +127,15 @@ export async function POST(_request: Request, { params }: RouteParams) {
           "remotion/src/remotion/",
           onLog
         );
+
+        // Git commit after fix
+        if (gitAvail) {
+          const sha = fixCommit(ann.id, ann.text.slice(0, 50));
+          if (sha) {
+            onLog(`Fix committed: ${sha.slice(0, 8)}`);
+            db.prepare("UPDATE annotations SET fixCommitSha = ? WHERE id = ?").run(sha, ann.id);
+          }
+        }
       }
 
       // Veo fixes (placeholder)

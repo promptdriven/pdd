@@ -152,6 +152,7 @@ describe("runMigrations", () => {
       "resolveJobId",
       "createdAt",
       "inputMethod",
+      "fixCommitSha",
     ]);
   });
 
