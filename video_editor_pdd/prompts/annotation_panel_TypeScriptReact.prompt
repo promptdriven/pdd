@@ -1,45 +1,46 @@
-You are implementing the annotation panel React component (`components/AnnotationPanel.tsx`) for a video production pipeline editor. This client component displays review annotation cards with analysis severity, fix type badges, batch resolve controls, and per-annotation retry.
+**Role and Responsibility**
+You are an expert Frontend Engineer responsible for developing the `AnnotationPanel` component, a critical part of the video analysis and correction UI. This component displays a list of AI-generated or user-provided annotations for a specific video section, allowing users to review technical assessments, view visual diffs of applied fixes, revert changes, and trigger batch resolution jobs for unresolved issues.
 
-Requirements
-1. Props: `annotations: Annotation[]`, `sectionId: string`, `onBatchResolve: (jobId: string) => void`.
-2. Renders a scrollable list of annotation cards sorted by timestamp ascending.
-3. Each card shows: timestamp (formatted as `MM:SS.ms`), thumbnail of `compositeDataUrl` (80×45px), annotation text (truncated to 2 lines), severity badge, fix type badge, analysis summary (1 line).
-4. Cards expand on click to show full `technicalAssessment`, `suggestedFixes` list, and [Retry] / [Mark Resolved] actions.
-5. `[Apply N Fixes]` button at top — N = count of unresolved annotations with non-null analysis. POSTs to `/api/sections/${sectionId}/resolve-batch`. Shows `SseLogPanel` for the returned `jobId`.
-6. Resolving annotations (with `resolveJobId` set): show inline progress spinner with job status from SSE.
-7. Resolved annotations: show green `✓ Resolved` badge. Collapsed by default.
-8. Failed annotations: show [Retry] button that POSTs to `/api/jobs/${annotation.resolveJobId}/retry`.
-9. `'use client'` directive.
-10. Severity badge colors: critical=red, major=orange, minor=yellow, pass=green.
+**Requirements**
+1.  **Data Display**: Render a sorted list of annotations (by timestamp) with thumbnails, timestamps, severity levels (critical, major, minor, pass), and fix types (remotion, veo, tts, none).
+2.  **State Management**: 
+    *   Manage expanded/collapsed states for individual annotation cards.
+    *   Track local "Mark Resolved" status to provide immediate UI feedback before server persistence.
+    *   Handle batch job states, including "posting" status and tracking the `batchJobId`.
+3.  **Job Integration**: 
+    *   Implement a custom `useJob` hook to poll and stream (via SSE) the status of specific resolution jobs.
+    *   Integrate `SseLogPanel` to display real-time logs when a batch job is active.
+4.  **Fix Workflow**:
+    *   Provide a "View Diff" feature that fetches and displays code changes for annotations with a `fixCommitSha`.
+    *   Implement a "Revert" action with user confirmation for applied fixes.
+    *   Support a "Batch Apply" workflow that opens a `FixPreviewPanel` before triggering the API.
+5.  **Resilience**: Handle loading states for diffs, reverting actions, and batch postings. Provide a "Retry" mechanism for failed jobs.
+6.  **Styling**: Use Tailwind CSS for a dark-themed, compact, and professional interface suitable for technical tools.
 
-Dependencies
-
+**Dependencies**
 <types>
-  <include>examples/types_example.ts</include>
+  <include>../lib/types.ts</include>
 </types>
-
 <sse_log_panel>
-  <include>examples/sse_log_panel_example.tsx</include>
+  <include>./SseLogPanel.tsx</include>
 </sse_log_panel>
+<fix_preview_panel>
+  <include>./FixPreviewPanel.tsx</include>
+</fix_preview_panel>
 
-Prompt Dependencies:
-- types_TypeScript.prompt — provides `Annotation`, `AnnotationAnalysis`, `FixType`
-- sse_log_panel_TypeScriptReact.prompt — provides `SseLogPanel`
+**Instructions**
+1.  **Component Architecture**: Split the implementation into a main `AnnotationPanel` and a sub-component `AnnotationCard` to ensure hooks (like `useJob`) are called correctly for each item.
+2.  **SSE & Polling**: In `useJob`, initialize an `EventSource` for `/api/jobs/[id]/stream`. Use a 2-second polling fallback to ensure the UI remains in sync even if SSE fails.
+3.  **Formatting**: Use the provided `formatTs` helper to convert numeric seconds into `M:SS.S` format.
+4.  **Batch Logic**: 
+    *   Calculate `unresolvedWithAnalysisCount` by filtering annotations that are not resolved and have an existing analysis.
+    *   The "Apply Fixes" button should trigger the `FixPreviewPanel`.
+5.  **API Contracts**:
+    *   `GET /api/jobs/[id]`: Fetch job status.
+    *   `POST /api/jobs/[id]/retry`: Retry a failed job.
+    *   `GET /api/annotations/[id]/diff`: Fetch git diff text.
+    *   `POST /api/annotations/[id]/revert`: Trigger a revert commit.
+    *   `POST /api/sections/[sectionId]/resolve-batch`: Start a batch resolution job.
 
-Instructions
-- Timestamp format helper: `const formatTs = (s: number) => { const m = Math.floor(s/60); const sec = (s%60).toFixed(1); return `${m}:${sec.padStart(4,'0')}`; }`.
-- Badge color map: `{ critical: 'bg-red-500', major: 'bg-orange-500', minor: 'bg-yellow-500', pass: 'bg-green-500' }`.
-- Fix type labels: `{ remotion: 'Remotion Fix', veo: 'Veo Regen', tts: 'TTS Re-render', none: 'No Fix' }`.
-- `[Apply N Fixes]` is disabled when N=0 or when a batch job is in progress.
-- After batch resolve POST, call `onBatchResolve(data.jobId)` and show `<SseLogPanel jobId={batchJobId} onDone={refetchAnnotations} />`.
-- Use `useState` for expanded card state: `Record<string, boolean>`.
-- Thumbnail: `<img src={annotation.compositeDataUrl} className="w-20 h-11 object-cover rounded flex-shrink-0" />`.
-
-Deliverable
-- `components/AnnotationPanel.tsx` — annotation list panel with batch resolve and SSE progress.
-
-Implementation assumptions (explicit)
-- Parent component refreshes `annotations` prop after batch resolve completes (via `onBatchResolve` callback).
-- `compositeDataUrl` is always a valid base64 data URL if set.
-
-Please produce production-ready prompt content that will generate the module consistent with the above.
+**Deliverables**
+A single TypeScript React file (`AnnotationPanel.tsx`) exporting the `AnnotationPanel` component as the default export, including all internal helper components (`AnnotationCard`, `Spinner`) and hooks (`useJob`).

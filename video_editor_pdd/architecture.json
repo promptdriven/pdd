@@ -1,7 +1,7 @@
 [
   {
     "reason": "Shared TypeScript types for the entire app: pipeline stages, jobs, annotations, sections, project config, and all API response/request shapes",
-    "description": "Central type definitions used across frontend components, API routes, and server libraries. Defines: PipelineStage, StageStatus, StageStatusEntry, Job, JobStatus, Annotation, AnnotationAnalysis, AnnotationCaptureData, CreateAnnotationInput, FixType, Section, ProjectConfig, TtsConfig, VeoConfig, RenderConfig, TtsSegment, WordTimestamp, RenderProgress, SseSend, ClaudeFixResult, VeoClip, AssetStagingEntry, SpecSection, CompositionSection, SectionRenderStatus, FullVideoInfo, AuditSectionResult. All other modules import from here — no circular deps.",
+    "description": "Central type definitions used across frontend components, API routes, and server libraries. Defines: PipelineStage, StageStatus, StageStatusEntry, Job, JobStatus, Annotation, AnnotationAnalysis, AnnotationCaptureData, CreateAnnotationInput, FixType, Section, ProjectConfig, TtsConfig, VeoConfig, RenderConfig, TtsSegment, WordTimestamp, RenderProgress, SseSend, ClaudeFixResult, VeoClip, AssetStagingEntry, SpecSection, CompositionSection, SectionRenderStatus, FullVideoInfo, AuditSectionResult. All other modules import from here \u2014 no circular deps.",
     "dependencies": [],
     "priority": 1,
     "filename": "types_TypeScript.prompt",
@@ -286,12 +286,12 @@
           {
             "name": "runMigrations",
             "signature": "function runMigrations(db: Database): void",
-            "returns": "void — creates tables if missing"
+            "returns": "void \u2014 creates tables if missing"
           },
           {
             "name": "recoverCrashedJobs",
             "signature": "function recoverCrashedJobs(db: Database): void",
-            "returns": "void — marks running→error on startup"
+            "returns": "void \u2014 marks running\u2192error on startup"
           }
         ]
       }
@@ -302,7 +302,7 @@
     }
   },
   {
-    "reason": "Project config module reads, writes, and hot-reloads project.json — the single source of truth for all pipeline state",
+    "reason": "Project config module reads, writes, and hot-reloads project.json \u2014 the single source of truth for all pipeline state",
     "description": "Server-only module managing project.json. Exports: loadProject() reads and validates project.json with Zod. saveProject(config) writes atomically (write to .tmp then rename). watchProject(callback) uses fs.watch for hot-reload. getSection(id) utility. validateProjectConfig(data) returns typed ProjectConfig or throws ZodError. Used by every API route that needs section registry or TTS/Veo config.",
     "dependencies": [
       "types_TypeScript.prompt"
@@ -326,7 +326,7 @@
           {
             "name": "saveProject",
             "signature": "function saveProject(config: ProjectConfig, dir?: string): void",
-            "returns": "void — atomic write"
+            "returns": "void \u2014 atomic write"
           },
           {
             "name": "getSection",
@@ -343,7 +343,7 @@
   },
   {
     "reason": "SSE utility module standardizes Server-Sent Events streaming across all API routes",
-    "description": "Server-only module providing SSE streaming helpers for Next.js Route Handlers. Exports: createSseStream() returns { stream: ReadableStream, send, done, error } — the send() function writes 'data: ...\\n\\n' events, done() sends event:done, error() sends event:error. Handles encoder/controller lifecycle. Used by all pipeline API routes that return streaming responses.",
+    "description": "Server-only module providing SSE streaming helpers for Next.js Route Handlers. Exports: createSseStream() returns { stream: ReadableStream, send, done, error } \u2014 the send() function writes 'data: ...\\n\\n' events, done() sends event:done, error() sends event:error. Handles encoder/controller lifecycle. Used by all pipeline API routes that return streaming responses.",
     "dependencies": [],
     "priority": 3,
     "filename": "lib_sse_TypeScript.prompt",
@@ -454,17 +454,17 @@
           {
             "name": "generateReferenceImage",
             "signature": "function generateReferenceImage(prompt: string, outputPath: string): Promise<void>",
-            "returns": "void — writes PNG to outputPath"
+            "returns": "void \u2014 writes PNG to outputPath"
           },
           {
             "name": "generateVeoClip",
             "signature": "function generateVeoClip(prompt: string, referenceImagePath: string | null, aspectRatio: '16:9' | '9:16', outputPath: string): Promise<void>",
-            "returns": "void — writes MP4 to outputPath"
+            "returns": "void \u2014 writes MP4 to outputPath"
           },
           {
             "name": "extractLastFrame",
             "signature": "function extractLastFrame(clipPath: string, outputPath: string): Promise<void>",
-            "returns": "void — writes PNG last frame via ffmpeg"
+            "returns": "void \u2014 writes PNG last frame via ffmpeg"
           }
         ]
       }
@@ -476,7 +476,7 @@
   },
   {
     "reason": "Render module wraps Remotion renderer API and ffmpeg for section rendering and full-video stitching",
-    "description": "Server-only module for Remotion rendering and ffmpeg stitching. Exports: renderSection(compositionId, outputPath, onProgress) uses @remotion/renderer renderMedia() — NOT CLI subprocess. stitchFullVideo(sectionPaths, outputPath, onProgress) runs ffmpeg -f concat -safe 0. getSectionDuration(mp4Path) runs ffprobe. renderStill(compositionId, frame, outputPath) for audit screenshots. All progress callbacks receive {percent: number, message: string}.",
+    "description": "Server-only module for Remotion rendering and ffmpeg stitching. Exports: renderSection(compositionId, outputPath, onProgress) uses @remotion/renderer renderMedia() \u2014 NOT CLI subprocess. stitchFullVideo(sectionPaths, outputPath, onProgress) runs ffmpeg -f concat -safe 0. getSectionDuration(mp4Path) runs ffprobe. renderStill(compositionId, frame, outputPath) for audit screenshots. All progress callbacks receive {percent: number, message: string}.",
     "dependencies": [
       "types_TypeScript.prompt"
     ],
@@ -506,12 +506,12 @@
           {
             "name": "renderSection",
             "signature": "function renderSection(compositionId: string, outputPath: string, onProgress: (p: RenderProgress) => void): Promise<void>",
-            "returns": "void — renders section MP4"
+            "returns": "void \u2014 renders section MP4"
           },
           {
             "name": "stitchFullVideo",
             "signature": "function stitchFullVideo(sectionPaths: string[], outputPath: string, onProgress: (p: RenderProgress) => void): Promise<void>",
-            "returns": "void — ffmpeg concat"
+            "returns": "void \u2014 ffmpeg concat"
           },
           {
             "name": "getSectionDuration",
@@ -521,7 +521,7 @@
           {
             "name": "renderStill",
             "signature": "function renderStill(compositionId: string, frame: number, outputPath: string): Promise<void>",
-            "returns": "void — renders single PNG frame"
+            "returns": "void \u2014 renders single PNG frame"
           }
         ]
       }
@@ -573,7 +573,7 @@
   },
   {
     "reason": "Job manager module is the critical orchestrator for pipeline stage execution, queueing, progress tracking, and retry logic",
-    "description": "Server-only module managing job lifecycle. Exports: createJob(stage, params) inserts into DB, returns jobId. runJob(jobId, executor) marks running, calls executor(onLog), marks done/error. getJob(jobId) reads from DB. retryJob(jobId) resets status and re-runs. cancelJob(jobId). runPipelineStage(stage, params, onEvent) handles prerequisite auto-run: checks dependency graph, runs incomplete upstream stages concurrently before requested stage. Dependency graph is defined here as a DAG: audio track (tts-script→tts-render→audio-sync) runs in parallel with visual track (specs→veo), then compositions, then render, then audit.",
+    "description": "Server-only module managing job lifecycle. Exports: createJob(stage, params) inserts into DB, returns jobId. runJob(jobId, executor) marks running, calls executor(onLog), marks done/error. getJob(jobId) reads from DB. retryJob(jobId) resets status and re-runs. cancelJob(jobId). runPipelineStage(stage, params, onEvent) handles prerequisite auto-run: checks dependency graph, runs incomplete upstream stages concurrently before requested stage. Dependency graph is defined here as a DAG: audio track (tts-script\u2192tts-render\u2192audio-sync) runs in parallel with visual track (specs\u2192veo), then compositions, then render, then audit.",
     "dependencies": [
       "types_TypeScript.prompt",
       "lib_db_TypeScript.prompt",
@@ -599,7 +599,7 @@
           {
             "name": "runJob",
             "signature": "function runJob(jobId: string, executor: (onLog: (msg: string) => void) => Promise<void>): Promise<void>",
-            "returns": "void — marks done or error"
+            "returns": "void \u2014 marks done or error"
           },
           {
             "name": "getJob",
@@ -609,12 +609,12 @@
           {
             "name": "retryJob",
             "signature": "function retryJob(jobId: string): Promise<void>",
-            "returns": "void — resets and re-runs same executor"
+            "returns": "void \u2014 resets and re-runs same executor"
           },
           {
             "name": "runPipelineStage",
             "signature": "function runPipelineStage(stage: PipelineStage, params: Record<string, unknown>, send: SseSend): Promise<string>",
-            "returns": "jobId — auto-runs prerequisites concurrently"
+            "returns": "jobId \u2014 auto-runs prerequisites concurrently"
           }
         ]
       }
@@ -644,7 +644,7 @@
           {
             "name": "main",
             "signature": "def main(segments: list[str] | None, output_dir: str) -> None",
-            "returns": "None — writes WAV files, prints JSON progress to stdout"
+            "returns": "None \u2014 writes WAV files, prints JSON progress to stdout"
           },
           {
             "name": "render_segment",
@@ -679,17 +679,17 @@
           {
             "name": "main",
             "signature": "def main(project_dir: str, output_dir: str, remotion_public: str) -> None",
-            "returns": "None — writes WAV + timestamps, prints JSON progress"
+            "returns": "None \u2014 writes WAV + timestamps, prints JSON progress"
           },
           {
             "name": "concatenate_section",
             "signature": "def concatenate_section(section_id: str, segment_paths: list[str], output_path: str) -> None",
-            "returns": "None — ffmpeg concat"
+            "returns": "None \u2014 ffmpeg concat"
           },
           {
             "name": "generate_timestamps",
             "signature": "def generate_timestamps(wav_path: str, output_json: str) -> None",
-            "returns": "None — writes word_timestamps.json via faster-whisper"
+            "returns": "None \u2014 writes word_timestamps.json via faster-whisper"
           }
         ]
       }
@@ -719,17 +719,17 @@
           {
             "name": "main",
             "signature": "def main(project_dir: str, remotion_dir: str, force: bool) -> None",
-            "returns": "None — generates TSX files, prints JSON progress"
+            "returns": "None \u2014 generates TSX files, prints JSON progress"
           },
           {
             "name": "generate_section_wrapper",
             "signature": "def generate_section_wrapper(section: dict, remotion_dir: str, force: bool) -> None",
-            "returns": "None — writes {sectionId}/index.tsx"
+            "returns": "None \u2014 writes {sectionId}/index.tsx"
           },
           {
             "name": "update_root",
             "signature": "def update_root(sections: list[dict], remotion_dir: str) -> None",
-            "returns": "None — rewrites Root.tsx registrations"
+            "returns": "None \u2014 rewrites Root.tsx registrations"
           }
         ]
       }
@@ -888,7 +888,7 @@
   },
   {
     "reason": "TTS render API triggers Qwen3-TTS rendering of all or specified segments from tts_script.md",
-    "description": "POST /api/pipeline/tts-render/run accepts { segments?: string[] } — if omitted, renders all. Spawns scripts/render_tts.py as a child process, streams stdout/stderr via SSE. Returns { jobId }. Each segment produces outputs/tts/{segmentId}.wav. GET /api/pipeline/tts-render/segments returns list of all segments parsed from tts_script.md with current WAV status.",
+    "description": "POST /api/pipeline/tts-render/run accepts { segments?: string[] } \u2014 if omitted, renders all. Spawns scripts/render_tts.py as a child process, streams stdout/stderr via SSE. Returns { jobId }. Each segment produces outputs/tts/{segmentId}.wav. GET /api/pipeline/tts-render/segments returns list of all segments parsed from tts_script.md with current WAV status.",
     "dependencies": [
       "types_TypeScript.prompt",
       "lib_jobs_TypeScript.prompt",
@@ -1028,7 +1028,7 @@
   },
   {
     "reason": "Veo generation API orchestrates character reference image creation, clip generation, frame chaining, and split-screen compositing",
-    "description": "POST /api/pipeline/veo/run accepts { clips?: string[] } — generates specified clips or all. Uses lib_veo for Imagen and Veo API calls, implements frame chaining by extracting last frame of clip N before generating clip N+1. Returns { jobId }. GET /api/pipeline/veo/clips returns clip list with section, aspect ratio, status, frameChain deps. POST /api/pipeline/veo/references/run regenerates a character reference portrait. GET /api/pipeline/veo/staging-manifest returns expected vs present remotion/public/ files.",
+    "description": "POST /api/pipeline/veo/run accepts { clips?: string[] } \u2014 generates specified clips or all. Uses lib_veo for Imagen and Veo API calls, implements frame chaining by extracting last frame of clip N before generating clip N+1. Returns { jobId }. GET /api/pipeline/veo/clips returns clip list with section, aspect ratio, status, frameChain deps. POST /api/pipeline/veo/references/run regenerates a character reference portrait. GET /api/pipeline/veo/staging-manifest returns expected vs present remotion/public/ files.",
     "dependencies": [
       "types_TypeScript.prompt",
       "lib_jobs_TypeScript.prompt",
@@ -1147,7 +1147,7 @@
   },
   {
     "reason": "Render API triggers Remotion section rendering and ffmpeg full-video stitching with parallel render support",
-    "description": "POST /api/pipeline/render/run accepts { sections?: string[] } — renders up to 3 in parallel per project.json render.maxParallelRenders. Uses lib_render renderSection(). Returns { jobId }. POST /api/pipeline/stitch/run runs ffmpeg concat using lib_render stitchFullVideo(). After render, reads ffprobe duration for each section and updates project.json durationSeconds + offsetSeconds. GET /api/pipeline/render/status returns per-section render status and full video info.",
+    "description": "POST /api/pipeline/render/run accepts { sections?: string[] } \u2014 renders up to 3 in parallel per project.json render.maxParallelRenders. Uses lib_render renderSection(). Returns { jobId }. POST /api/pipeline/stitch/run runs ffmpeg concat using lib_render stitchFullVideo(). After render, reads ffprobe duration for each section and updates project.json durationSeconds + offsetSeconds. GET /api/pipeline/render/status returns per-section render status and full video info.",
     "dependencies": [
       "types_TypeScript.prompt",
       "lib_jobs_TypeScript.prompt",
@@ -1196,7 +1196,7 @@
   },
   {
     "reason": "Audit API launches parallel Claude Code agents that render Remotion stills and compare against specs",
-    "description": "POST /api/pipeline/audit/run accepts { sections?: string[] } — defaults to all. Launches one agent per section concurrently, each calling lib_render renderStill() for segment midpoints then lib_claude runClaudeAnalysis() comparing frame vs spec. Writes AUDIT_*.md files. Returns { jobId }. GET /api/pipeline/audit/results returns per-section pass/fail counts and spec-level verdicts. The [Create Annotation →] action is handled client-side by pre-filling the annotation form.",
+    "description": "POST /api/pipeline/audit/run accepts { sections?: string[] } \u2014 defaults to all. Launches one agent per section concurrently, each calling lib_render renderStill() for segment midpoints then lib_claude runClaudeAnalysis() comparing frame vs spec. Writes AUDIT_*.md files. Returns { jobId }. GET /api/pipeline/audit/results returns per-section pass/fail counts and spec-level verdicts. The [Create Annotation \u2192] action is handled client-side by pre-filling the annotation form.",
     "dependencies": [
       "types_TypeScript.prompt",
       "lib_jobs_TypeScript.prompt",
@@ -1240,7 +1240,7 @@
   },
   {
     "reason": "Jobs SSE stream API provides real-time progress streaming for job execution via Server-Sent Events",
-    "description": "GET /api/jobs/[id]/stream opens an SSE stream (ReadableStream) — subscribes to job log events from DB and sends as SSE until job reaches done/error state. The SSE stream sends: { type: 'log', message }, { type: 'progress', percent }, then event: done or event: error. Used by SseLogPanel component.",
+    "description": "GET /api/jobs/[id]/stream opens an SSE stream (ReadableStream) \u2014 subscribes to job log events from DB and sends as SSE until job reaches done/error state. The SSE stream sends: { type: 'log', message }, { type: 'progress', percent }, then event: done or event: error. Used by SseLogPanel component.",
     "dependencies": [
       "types_TypeScript.prompt",
       "lib_jobs_TypeScript.prompt",
@@ -1416,7 +1416,7 @@
   },
   {
     "reason": "Annotation analyze API triggers Claude read-only analysis of a specific annotation using spec files and screenshot",
-    "description": "POST /api/annotations/[id]/analyze triggers Claude read-only analysis — spawns lib_claude runClaudeAnalysis() with the annotation's screenshot, the section's spec files, and the section's Remotion composition. Updates annotation.analysis field in DB with severity, fixType, technicalAssessment, suggestedFixes. Returns updated Annotation with analysis populated.",
+    "description": "POST /api/annotations/[id]/analyze triggers Claude read-only analysis \u2014 spawns lib_claude runClaudeAnalysis() with the annotation's screenshot, the section's spec files, and the section's Remotion composition. Updates annotation.analysis field in DB with severity, fixType, technicalAssessment, suggestedFixes. Returns updated Annotation with analysis populated.",
     "dependencies": [
       "types_TypeScript.prompt",
       "lib_db_TypeScript.prompt",
@@ -1523,7 +1523,7 @@
   },
   {
     "reason": "SSE log panel component streams real-time job output to users across all pipeline stages",
-    "description": "Client component displaying a scrollable, auto-tailing log panel fed by EventSource. Props: jobId (string | null), onDone, onError. Opens EventSource to /api/jobs/{jobId}/stream when jobId is set. Appends [timestamp] message lines. Shows green ✓ banner on 'done' event, red ✕ on 'error'. Falls back to polling /api/jobs/{jobId} if EventSource fails. Auto-scrolls to bottom. Virtualized list for large logs. Renders null when jobId is null.",
+    "description": "Client component displaying a scrollable, auto-tailing log panel fed by EventSource. Props: jobId (string | null), onDone, onError. Opens EventSource to /api/jobs/{jobId}/stream when jobId is set. Appends [timestamp] message lines. Shows green \u2713 banner on 'done' event, red \u2715 on 'error'. Falls back to polling /api/jobs/{jobId} if EventSource fails. Auto-scrolls to bottom. Virtualized list for large logs. Renders null when jobId is null.",
     "dependencies": [
       "types_TypeScript.prompt"
     ],
@@ -1569,7 +1569,7 @@
   },
   {
     "reason": "Stage sidebar is the left-column navigation showing all 10 pipeline stages with status badges",
-    "description": "Client component rendering the narrow left sidebar with 10 clickable stage rows. Each row shows: stage number, label, status badge (○ not_started, ◌ running, ● done, ✕ error). Active stage is highlighted. Polls /api/pipeline/status every 5s to refresh badges. Props: activeStage, onStageSelect(stage). Badges animate (pulse) when running. Error stages show tooltip with error message on hover.",
+    "description": "Client component rendering the narrow left sidebar with 10 clickable stage rows. Each row shows: stage number, label, status badge (\u25cb not_started, \u25cc running, \u25cf done, \u2715 error). Active stage is highlighted. Polls /api/pipeline/status every 5s to refresh badges. Props: activeStage, onStageSelect(stage). Badges animate (pulse) when running. Error stages show tooltip with error message on hover.",
     "dependencies": [
       "types_TypeScript.prompt"
     ],
@@ -1657,7 +1657,7 @@
   },
   {
     "reason": "Annotation panel component displays the list of review annotations with analysis status and batch resolve controls",
-    "description": "Client component showing annotation cards for the current section. Each card shows: timestamp, drawing thumbnail, text, analysis severity badge (color-coded), fix type (remotion/veo/tts), analysis summary. Cards can be expanded to show full technicalAssessment and suggestedFixes. [Apply N Fixes] button triggers POST /api/sections/{id}/resolve-batch. Each resolving annotation shows inline progress (SSE via resolveJob.jobId). Failed annotations show [Retry] button. Completed annotations show green ✓.",
+    "description": "Client component showing annotation cards for the current section. Each card shows: timestamp, drawing thumbnail, text, analysis severity badge (color-coded), fix type (remotion/veo/tts), analysis summary. Cards can be expanded to show full technicalAssessment and suggestedFixes. [Apply N Fixes] button triggers POST /api/sections/{id}/resolve-batch. Each resolving annotation shows inline progress (SSE via resolveJob.jobId). Failed annotations show [Retry] button. Completed annotations show green \u2713.",
     "dependencies": [
       "types_TypeScript.prompt",
       "sse_log_panel_TypeScriptReact.prompt"
@@ -1699,8 +1699,8 @@
     }
   },
   {
-    "reason": "Stage 1 panel: Project Setup — form for initializing and editing project.json with section registry",
-    "description": "Client component for Stage 1. Left: form fields for project name, outputResolution, TTS voice/rate, Veo model/aspectRatio, render config. Right: Section Registry table with inline-editable rows (click [✎] to edit). [+ Add Section] appends blank row with drag handles for reordering. [Save ✓] PUTs to /api/project. Unsaved changes show yellow dot and trigger beforeunload. Success shows toast.",
+    "reason": "Stage 1 panel: Project Setup \u2014 form for initializing and editing project.json with section registry",
+    "description": "Client component for Stage 1. Left: form fields for project name, outputResolution, TTS voice/rate, Veo model/aspectRatio, render config. Right: Section Registry table with inline-editable rows (click [\u270e] to edit). [+ Add Section] appends blank row with drag handles for reordering. [Save \u2713] PUTs to /api/project. Unsaved changes show yellow dot and trigger beforeunload. Success shows toast.",
     "dependencies": [
       "types_TypeScript.prompt"
     ],
@@ -1736,8 +1736,8 @@
     }
   },
   {
-    "reason": "Stage 2 panel: Script Editor — split-pane CodeMirror editor with structured preview and TTS trigger",
-    "description": "Client component for Stage 2. Left pane: CodeMirror 6 with Markdown syntax highlighting, auto-saves via PUT /api/project/script on 1s debounce. Right pane: structured preview re-rendering on 200ms debounce — NARRATOR: blocks get blue ■, [VISUAL:] blocks get teal ▣, ## headers get gray section labels. Resizable split via divider drag. [Generate TTS Script →] enabled only when ≥1 NARRATOR: block detected, POSTs to /api/pipeline/tts-script/run and advances to Stage 3.",
+    "reason": "Stage 2 panel: Script Editor \u2014 split-pane CodeMirror editor with structured preview and TTS trigger",
+    "description": "Client component for Stage 2. Left pane: CodeMirror 6 with Markdown syntax highlighting, auto-saves via PUT /api/project/script on 1s debounce. Right pane: structured preview re-rendering on 200ms debounce \u2014 NARRATOR: blocks get blue \u25a0, [VISUAL:] blocks get teal \u25a3, ## headers get gray section labels. Resizable split via divider drag. [Generate TTS Script \u2192] enabled only when \u22651 NARRATOR: block detected, POSTs to /api/pipeline/tts-script/run and advances to Stage 3.",
     "dependencies": [
       "types_TypeScript.prompt"
     ],
@@ -1774,8 +1774,8 @@
     }
   },
   {
-    "reason": "Stage 3 panel: TTS Script Generation — SSE log, unified diff view, and inline editor",
-    "description": "Client component for Stage 3. Header: [Generate TTS Script ↺] button + last run time. SSE log panel (SseLogPanel component). Below log: split diff view (source vs generated) with red/green/gray line coloring. Inline CodeMirror editor for tts_script.md (auto-saves on blur, 1s debounce). [Render Audio →] button enabled when tts_script.md exists. Generates diff client-side from both file contents.",
+    "reason": "Stage 3 panel: TTS Script Generation \u2014 SSE log, unified diff view, and inline editor",
+    "description": "Client component for Stage 3. Header: [Generate TTS Script \u21ba] button + last run time. SSE log panel (SseLogPanel component). Below log: split diff view (source vs generated) with red/green/gray line coloring. Inline CodeMirror editor for tts_script.md (auto-saves on blur, 1s debounce). [Render Audio \u2192] button enabled when tts_script.md exists. Generates diff client-side from both file contents.",
     "dependencies": [
       "types_TypeScript.prompt",
       "sse_log_panel_TypeScriptReact.prompt"
@@ -1807,8 +1807,8 @@
     }
   },
   {
-    "reason": "Stage 4 panel: TTS Rendering — segment list with per-row waveform playback and batch render controls",
-    "description": "Client component for Stage 4. Toolbar: [Render All] and [Render Missing] trigger batch jobs. Segment table: columns #, segment ID, status badge, [▶] play, [↺] re-render. Row expansion shows WaveSurfer.js waveform for the WAV file plus raw TTS text. Batch progress bar with current segment ID at right. Uses WaveSurfer.js initialized on row expand. Per-row [↺] shows inline SseLogPanel for that row's job.",
+    "reason": "Stage 4 panel: TTS Rendering \u2014 segment list with per-row waveform playback and batch render controls",
+    "description": "Client component for Stage 4. Toolbar: [Render All] and [Render Missing] trigger batch jobs. Segment table: columns #, segment ID, status badge, [\u25b6] play, [\u21ba] re-render. Row expansion shows WaveSurfer.js waveform for the WAV file plus raw TTS text. Batch progress bar with current segment ID at right. Uses WaveSurfer.js initialized on row expand. Per-row [\u21ba] shows inline SseLogPanel for that row's job.",
     "dependencies": [
       "types_TypeScript.prompt",
       "sse_log_panel_TypeScriptReact.prompt"
@@ -1846,7 +1846,7 @@
     }
   },
   {
-    "reason": "Stage 5 panel: Audio Sync Pipeline — section grouping config editor, run controls, word timestamp viewer",
+    "reason": "Stage 5 panel: Audio Sync Pipeline \u2014 section grouping config editor, run controls, word timestamp viewer",
     "description": "Client component for Stage 5. Top: section grouping table (inline-editable segment ranges per section), [Save Config] PUTs to /api/project. [Run Audio Sync] POSTs to /api/pipeline/audio-sync/run, shows SseLogPanel. Bottom: Word Timestamp Viewer table (word, start, end, segmentId) with section filter dropdown and search. Virtual scrolling for large datasets (react-virtual or CSS contain). Timestamps in seconds with 3 decimal places.",
     "dependencies": [
       "types_TypeScript.prompt",
@@ -1879,8 +1879,8 @@
     }
   },
   {
-    "reason": "Stage 6 panel: Spec Generation — collapsible section groups with spec file list, visual type badges, and inline editor",
-    "description": "Client component for Stage 6. [Generate All Specs] and [Regenerate Section] toolbar buttons. Section groups are collapsible (localStorage persisted). Each spec row shows visual type badge [Remotion]/[veo:]/[title:]/[split:], status, [✎] open in editor, [↺] regenerate. Inline CodeMirror Markdown editor auto-saves to spec file path via PUT /api/pipeline/specs/file. SSE log in expandable drawer. Per-section [↺] triggers section-scoped run.",
+    "reason": "Stage 6 panel: Spec Generation \u2014 collapsible section groups with spec file list, visual type badges, and inline editor",
+    "description": "Client component for Stage 6. [Generate All Specs] and [Regenerate Section] toolbar buttons. Section groups are collapsible (localStorage persisted). Each spec row shows visual type badge [Remotion]/[veo:]/[title:]/[split:], status, [\u270e] open in editor, [\u21ba] regenerate. Inline CodeMirror Markdown editor auto-saves to spec file path via PUT /api/pipeline/specs/file. SSE log in expandable drawer. Per-section [\u21ba] triggers section-scoped run.",
     "dependencies": [
       "types_TypeScript.prompt",
       "sse_log_panel_TypeScriptReact.prompt"
@@ -1912,8 +1912,8 @@
     }
   },
   {
-    "reason": "Stage 7 panel: Veo Generation — character references, frame chaining graph, clip list with stale warnings and auto-composite",
-    "description": "Client component for Stage 7. Left column: character reference panel (thumbnail per portrait, [↺ Regenerate] per reference) + frame chaining dependency graph (text-based chain display). Right column: clip list table (clip ID, section, aspect ratio, status, stale ⚠ warning). [Generate All] / [Generate Missing] / dropdown for single section. Auto-composite checkbox for split: clip pairs. SSE progress shows per-clip progress. Stale warning badge if upstream clip was regenerated.",
+    "reason": "Stage 7 panel: Veo Generation \u2014 character references, frame chaining graph, clip list with stale warnings and auto-composite",
+    "description": "Client component for Stage 7. Left column: character reference panel (thumbnail per portrait, [\u21ba Regenerate] per reference) + frame chaining dependency graph (text-based chain display). Right column: clip list table (clip ID, section, aspect ratio, status, stale \u26a0 warning). [Generate All] / [Generate Missing] / dropdown for single section. Auto-composite checkbox for split: clip pairs. SSE progress shows per-clip progress. Stale warning badge if upstream clip was regenerated.",
     "dependencies": [
       "types_TypeScript.prompt",
       "sse_log_panel_TypeScriptReact.prompt"
@@ -1945,8 +1945,8 @@
     }
   },
   {
-    "reason": "Stage 8 panel: Composition Generation — component list with preview, section wrappers, and asset staging manifest",
-    "description": "Client component for Stage 8. Left: component list by section (collapsible), each component has [Preview] (opens PNG still in modal) and [↺]. Section wrappers listed separately. [Generate All Compositions] runs batch. Right: asset staging manifest (expected vs present remotion/public/ files). ✓/✗ per file. [Stage Now] per missing file. [Stage All Missing] batch. Log drawer for per-component errors. Error status shows last error in tooltip.",
+    "reason": "Stage 8 panel: Composition Generation \u2014 component list with preview, section wrappers, and asset staging manifest",
+    "description": "Client component for Stage 8. Left: component list by section (collapsible), each component has [Preview] (opens PNG still in modal) and [\u21ba]. Section wrappers listed separately. [Generate All Compositions] runs batch. Right: asset staging manifest (expected vs present remotion/public/ files). \u2713/\u2717 per file. [Stage Now] per missing file. [Stage All Missing] batch. Log drawer for per-component errors. Error status shows last error in tooltip.",
     "dependencies": [
       "types_TypeScript.prompt",
       "sse_log_panel_TypeScriptReact.prompt"
@@ -1978,8 +1978,8 @@
     }
   },
   {
-    "reason": "Stage 9 panel: Render + Stitch — parallel render progress bars, section table, and full video panel",
-    "description": "Client component for Stage 9. Section render table: columns section, duration, status, progress bar (0-100%), [▶] modal preview, [↺] re-render. Active renders panel shows up to 3 simultaneous progress bars. [Render ▾] dropdown: All / Missing / Selected. [Stitch Full Video] POSTs to /api/pipeline/stitch/run. Full Video panel: file size, duration, [Open in Review →]. All progress bars update via SSE (jobId from each render call).",
+    "reason": "Stage 9 panel: Render + Stitch \u2014 parallel render progress bars, section table, and full video panel",
+    "description": "Client component for Stage 9. Section render table: columns section, duration, status, progress bar (0-100%), [\u25b6] modal preview, [\u21ba] re-render. Active renders panel shows up to 3 simultaneous progress bars. [Render \u25be] dropdown: All / Missing / Selected. [Stitch Full Video] POSTs to /api/pipeline/stitch/run. Full Video panel: file size, duration, [Open in Review \u2192]. All progress bars update via SSE (jobId from each render call).",
     "dependencies": [
       "types_TypeScript.prompt",
       "sse_log_panel_TypeScriptReact.prompt"
@@ -2011,8 +2011,8 @@
     }
   },
   {
-    "reason": "Stage 10 panel: Audit — multi-agent audit results table with per-spec pass/fail verdicts and Create Annotation bridge",
-    "description": "Client component for Stage 10. Section audit table: columns section, pass count, fail count, status, [View Report], [↺]. [Audit All Sections] / [Audit Section ▾] trigger jobs. [View Report] expands row to per-spec verdicts (pass/fail badge + one-line summary). FAIL rows show [View Frame] (opens still PNG in modal), [View Spec] (opens spec in inline viewer), [Create Annotation →] (pre-fills annotation form in Review tab with finding + frame). SSE shows per-agent progress.",
+    "reason": "Stage 10 panel: Audit \u2014 multi-agent audit results table with per-spec pass/fail verdicts and Create Annotation bridge",
+    "description": "Client component for Stage 10. Section audit table: columns section, pass count, fail count, status, [View Report], [\u21ba]. [Audit All Sections] / [Audit Section \u25be] trigger jobs. [View Report] expands row to per-spec verdicts (pass/fail badge + one-line summary). FAIL rows show [View Frame] (opens still PNG in modal), [View Spec] (opens spec in inline viewer), [Create Annotation \u2192] (pre-fills annotation form in Review tab with finding + frame). SSE shows per-agent progress.",
     "dependencies": [
       "types_TypeScript.prompt",
       "sse_log_panel_TypeScriptReact.prompt"
@@ -2122,6 +2122,738 @@
     "position": {
       "x": 5400,
       "y": 1640
+    }
+  },
+  {
+    "reason": "Git integration for committing, diffing, and reverting automated fixes in the video editor project",
+    "description": "Server-only utility wrapping git CLI commands. Provides isGitAvailable() to check git presence, preFixCommit() to snapshot before fixes, fixCommit() to commit after fixes with sanitized messages, getFixDiff() to retrieve commit diffs, and revertFix() to revert fix commits. Uses PROJECT_DIR env var or cwd for repo root. All operations scoped to remotion/src/remotion/ directory.",
+    "dependencies": [
+      "types_TypeScript.prompt"
+    ],
+    "priority": 2,
+    "filename": "lib_git_TypeScript.prompt",
+    "filepath": "lib/git.ts",
+    "tags": [
+      "backend",
+      "lib",
+      "git",
+      "fixes"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "isGitAvailable",
+            "signature": "()",
+            "returns": "boolean"
+          },
+          {
+            "name": "preFixCommit",
+            "signature": "(sectionId: string, batchId: string)",
+            "returns": "string | null"
+          },
+          {
+            "name": "fixCommit",
+            "signature": "(annotationId: string, summary: string)",
+            "returns": "string | null"
+          },
+          {
+            "name": "getFixDiff",
+            "signature": "(commitSha: string)",
+            "returns": "string"
+          },
+          {
+            "name": "revertFix",
+            "signature": "(commitSha: string)",
+            "returns": "string"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Dashboard widget for visualizing API usage costs and token consumption per pipeline stage",
+    "description": "Client component that fetches cost data from GET /api/costs and displays total cost summary plus per-stage breakdown table (cost, input/output tokens, call count). Handles loading, error, and empty states. Formats costs to 4 decimal places and tokens with K/M suffixes. Uses Tailwind CSS styling with card layout.",
+    "dependencies": [
+      "api_costs_route_TypeScript.prompt"
+    ],
+    "priority": 4,
+    "filename": "cost_dashboard_TypeScriptReact.prompt",
+    "filepath": "components/CostDashboard.tsx",
+    "tags": [
+      "frontend",
+      "component",
+      "costs",
+      "dashboard"
+    ],
+    "interface": {
+      "type": "frontend",
+      "frontend": {
+        "pages": [
+          {
+            "name": "CostDashboard",
+            "route": "/(component)"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Fix preview panel with accept/reject UI for reviewing automated annotation fixes before applying",
+    "description": "Client component that fetches fix previews from POST /api/sections/{id}/preview-fixes on mount. Displays list of proposed fixes with fix type badges (remotion=purple, veo=cyan, tts=amber), confidence percentages, preview text, and toggleable diff views. Users can select/deselect individual fixes and apply selected ones. Glassmorphism panel styling with header close button and footer apply button.",
+    "dependencies": [
+      "api_sections_id_preview_fixes_route_TypeScript.prompt",
+      "types_TypeScript.prompt"
+    ],
+    "priority": 4,
+    "filename": "fix_preview_panel_TypeScriptReact.prompt",
+    "filepath": "components/FixPreviewPanel.tsx",
+    "tags": [
+      "frontend",
+      "component",
+      "fixes",
+      "preview"
+    ],
+    "interface": {
+      "type": "frontend",
+      "frontend": {
+        "pages": [
+          {
+            "name": "FixPreviewPanel",
+            "route": "/(component)"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "API endpoint to retrieve git diff for an annotation's fix commit",
+    "description": "GET /api/annotations/[id]/diff queries the annotations table for fixCommitSha, then uses getFixDiff() to retrieve the commit diff. Returns { commitSha, diff } on success. Returns 404 if annotation not found or no fix commit associated. Force-dynamic export.",
+    "dependencies": [
+      "lib_db_TypeScript.prompt",
+      "lib_git_TypeScript.prompt"
+    ],
+    "priority": 3,
+    "filename": "api_annotations_id_diff_route_TypeScript.prompt",
+    "filepath": "app/api/annotations/[id]/diff/route.ts",
+    "tags": [
+      "backend",
+      "api",
+      "annotations",
+      "git"
+    ],
+    "interface": {
+      "type": "api",
+      "api": {
+        "endpoints": [
+          {
+            "method": "GET",
+            "path": "/api/annotations/[id]/diff",
+            "auth": "none",
+            "responseSchema": "{ commitSha: string, diff: string }"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "API endpoint to revert an annotation's fix commit via git revert",
+    "description": "POST /api/annotations/[id]/revert queries the annotations table for fixCommitSha, calls revertFix() to create a revert commit, then clears fixCommitSha and sets resolved=0 in the database. Returns { revertCommitSha, annotationId, sectionId }. Returns 404 if annotation not found or no fix commit. Force-dynamic export.",
+    "dependencies": [
+      "lib_db_TypeScript.prompt",
+      "lib_git_TypeScript.prompt"
+    ],
+    "priority": 3,
+    "filename": "api_annotations_id_revert_route_TypeScript.prompt",
+    "filepath": "app/api/annotations/[id]/revert/route.ts",
+    "tags": [
+      "backend",
+      "api",
+      "annotations",
+      "git"
+    ],
+    "interface": {
+      "type": "api",
+      "api": {
+        "endpoints": [
+          {
+            "method": "POST",
+            "path": "/api/annotations/[id]/revert",
+            "auth": "none",
+            "responseSchema": "{ revertCommitSha: string, annotationId: string, sectionId: string }"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "API endpoint for retrieving aggregated job cost statistics per pipeline stage",
+    "description": "GET /api/costs queries the job_costs table, aggregates by stage (sum cost, input/output tokens; count calls), and returns { totalCost, byStage[] }. Handles null values with 0 defaults. Force-dynamic export.",
+    "dependencies": [
+      "lib_db_TypeScript.prompt"
+    ],
+    "priority": 3,
+    "filename": "api_costs_route_TypeScript.prompt",
+    "filepath": "app/api/costs/route.ts",
+    "tags": [
+      "backend",
+      "api",
+      "costs"
+    ],
+    "interface": {
+      "type": "api",
+      "api": {
+        "endpoints": [
+          {
+            "method": "GET",
+            "path": "/api/costs",
+            "auth": "none",
+            "responseSchema": "{ totalCost: number, byStage: StageCost[] }"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "API endpoint to export all annotations as a downloadable JSON file",
+    "description": "GET /api/export fetches all annotations from the database ordered by createdAt, maps each row to a structured annotation object (parsing analysis JSON, converting types), and returns as a downloadable JSON file with Content-Disposition header. Response includes exportedAt timestamp, count, and annotations array.",
+    "dependencies": [
+      "lib_db_TypeScript.prompt"
+    ],
+    "priority": 3,
+    "filename": "api_export_route_TypeScript.prompt",
+    "filepath": "app/api/export/route.ts",
+    "tags": [
+      "backend",
+      "api",
+      "export",
+      "annotations"
+    ],
+    "interface": {
+      "type": "api",
+      "api": {
+        "endpoints": [
+          {
+            "method": "GET",
+            "path": "/api/export",
+            "auth": "none",
+            "responseSchema": "{ exportedAt: string, count: number, annotations: Annotation[] }"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "API endpoint to copy VEO output files to the Remotion public directory for composition access",
+    "description": "POST /api/pipeline/asset-staging/run accepts { files?: string[] }, copies each file from outputs/veo/ to remotion/public/ if source exists and destination doesn't (idempotent). Creates destination directories recursively. Returns { jobId, staged } with count of successfully staged files.",
+    "dependencies": [],
+    "priority": 3,
+    "filename": "api_pipeline_asset_staging_run_route_TypeScript.prompt",
+    "filepath": "app/api/pipeline/asset-staging/run/route.ts",
+    "tags": [
+      "backend",
+      "api",
+      "pipeline",
+      "assets"
+    ],
+    "interface": {
+      "type": "api",
+      "api": {
+        "endpoints": [
+          {
+            "method": "POST",
+            "path": "/api/pipeline/asset-staging/run",
+            "auth": "none",
+            "responseSchema": "{ jobId: string, staged: number }"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "API endpoint serving word-level timestamp data for audio synchronization visualization",
+    "description": "GET /api/pipeline/audio-sync/timestamps requires 'section' query param, reads word_timestamps.json from outputs/tts/{section}/, returns { words: WordTimestamp[] }. Returns 400 if section missing, 404 if file not found, 500 on other errors.",
+    "dependencies": [
+      "types_TypeScript.prompt"
+    ],
+    "priority": 3,
+    "filename": "api_pipeline_audio_sync_timestamps_route_TypeScript.prompt",
+    "filepath": "app/api/pipeline/audio-sync/timestamps/route.ts",
+    "tags": [
+      "backend",
+      "api",
+      "pipeline",
+      "audio"
+    ],
+    "interface": {
+      "type": "api",
+      "api": {
+        "endpoints": [
+          {
+            "method": "GET",
+            "path": "/api/pipeline/audio-sync/timestamps",
+            "auth": "none",
+            "responseSchema": "{ words: WordTimestamp[] }"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "API endpoint to retrieve and aggregate audit results for all video sections",
+    "description": "GET /api/pipeline/audit/results loads project config, scans each section's specDir for AUDIT_*.md files, parses verdict (PASS/FAIL) and summary, aggregates passCount/failCount per section, and returns { sections: AuditSectionResult[] }. Handles missing audits as 'pending' status.",
+    "dependencies": [
+      "lib_project_TypeScript.prompt",
+      "types_TypeScript.prompt"
+    ],
+    "priority": 3,
+    "filename": "api_pipeline_audit_results_route_TypeScript.prompt",
+    "filepath": "app/api/pipeline/audit/results/route.ts",
+    "tags": [
+      "backend",
+      "api",
+      "pipeline",
+      "audit"
+    ],
+    "interface": {
+      "type": "api",
+      "api": {
+        "endpoints": [
+          {
+            "method": "GET",
+            "path": "/api/pipeline/audit/results",
+            "auth": "none",
+            "responseSchema": "{ sections: AuditSectionResult[] }"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "SSE endpoint for real-time audit progress updates with heartbeats",
+    "description": "GET /api/pipeline/audit/stream establishes an SSE connection. Sends initial 'connected' event, then heartbeat every 15 seconds. Monitors request.signal for client disconnection and cleans up intervals. Uses ReadableStream with TextEncoder. Headers: text/event-stream, no-cache, keep-alive.",
+    "dependencies": [],
+    "priority": 3,
+    "filename": "api_pipeline_audit_stream_route_TypeScript.prompt",
+    "filepath": "app/api/pipeline/audit/stream/route.ts",
+    "tags": [
+      "backend",
+      "api",
+      "pipeline",
+      "audit",
+      "sse"
+    ],
+    "interface": {
+      "type": "api",
+      "api": {
+        "endpoints": [
+          {
+            "method": "GET",
+            "path": "/api/pipeline/audit/stream",
+            "auth": "none",
+            "responseSchema": "SSE stream: { type: 'connected' | 'heartbeat' }"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "API endpoint to list composition sections and their component generation status",
+    "description": "GET /api/pipeline/compositions/list loads project config sections, scans specs directories for component names, checks if corresponding .tsx files exist in remotion/src/remotion/, and returns { sections: CompositionSection[] } with component/wrapper status (done/missing).",
+    "dependencies": [
+      "lib_project_TypeScript.prompt",
+      "types_TypeScript.prompt"
+    ],
+    "priority": 3,
+    "filename": "api_pipeline_compositions_list_route_TypeScript.prompt",
+    "filepath": "app/api/pipeline/compositions/list/route.ts",
+    "tags": [
+      "backend",
+      "api",
+      "pipeline",
+      "compositions"
+    ],
+    "interface": {
+      "type": "api",
+      "api": {
+        "endpoints": [
+          {
+            "method": "GET",
+            "path": "/api/pipeline/compositions/list",
+            "auth": "none",
+            "responseSchema": "{ sections: CompositionSection[] }"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "API endpoint to check rendering status of video sections and final output",
+    "description": "GET /api/pipeline/render/status loads project config, checks filesystem for each section's rendered .mp4 in outputs/sections/ and full_video.mp4 in outputs/. Returns { sections: SectionRenderStatus[], fullVideo: FullVideoInfo } with status (done/missing), progress, and file size info.",
+    "dependencies": [
+      "lib_project_TypeScript.prompt",
+      "types_TypeScript.prompt"
+    ],
+    "priority": 3,
+    "filename": "api_pipeline_render_status_route_TypeScript.prompt",
+    "filepath": "app/api/pipeline/render/status/route.ts",
+    "tags": [
+      "backend",
+      "api",
+      "pipeline",
+      "render"
+    ],
+    "interface": {
+      "type": "api",
+      "api": {
+        "endpoints": [
+          {
+            "method": "GET",
+            "path": "/api/pipeline/render/status",
+            "auth": "none",
+            "responseSchema": "{ sections: SectionRenderStatus[], fullVideo: FullVideoInfo }"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "API endpoint for reading and writing spec files with path traversal protection",
+    "description": "GET /api/pipeline/specs/file reads a file from specs/ directory given a path query param. PUT creates/overwrites a file given { path, content } in body. Both validate paths against directory traversal (must start with specs/ and resolve within project root). GET returns empty content for missing files. PUT creates parent directories recursively.",
+    "dependencies": [],
+    "priority": 3,
+    "filename": "api_pipeline_specs_file_route_TypeScript.prompt",
+    "filepath": "app/api/pipeline/specs/file/route.ts",
+    "tags": [
+      "backend",
+      "api",
+      "pipeline",
+      "specs"
+    ],
+    "interface": {
+      "type": "api",
+      "api": {
+        "endpoints": [
+          {
+            "method": "GET",
+            "path": "/api/pipeline/specs/file",
+            "auth": "none",
+            "responseSchema": "{ content: string }"
+          },
+          {
+            "method": "PUT",
+            "path": "/api/pipeline/specs/file",
+            "auth": "none",
+            "responseSchema": "{ ok: true }"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "API endpoint to list spec files with metadata for each project section",
+    "description": "GET /api/pipeline/specs/list loads project config, scans specs/{section.specDir}/ for .md and .txt files, reads first line of each for type badges, and returns { sections[] } with id, label, and files array. Provides placeholder entry for sections with no spec files.",
+    "dependencies": [
+      "lib_project_TypeScript.prompt"
+    ],
+    "priority": 3,
+    "filename": "api_pipeline_specs_list_route_TypeScript.prompt",
+    "filepath": "app/api/pipeline/specs/list/route.ts",
+    "tags": [
+      "backend",
+      "api",
+      "pipeline",
+      "specs"
+    ],
+    "interface": {
+      "type": "api",
+      "api": {
+        "endpoints": [
+          {
+            "method": "GET",
+            "path": "/api/pipeline/specs/list",
+            "auth": "none",
+            "responseSchema": "{ sections: { id, label, files: { path, exists, firstLine }[] }[] }"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "API endpoint to trigger stitching of rendered section videos into final output",
+    "description": "POST /api/pipeline/stitch/run loads project config, locates rendered section .mp4 files in outputs/sections/, validates at least one exists, ensures output directory exists, then calls stitchFullVideo() to concatenate into outputs/full_video.mp4. Returns { jobId } on success, 400 if no sections found.",
+    "dependencies": [
+      "lib_project_TypeScript.prompt",
+      "lib_render_TypeScript.prompt"
+    ],
+    "priority": 3,
+    "filename": "api_pipeline_stitch_run_route_TypeScript.prompt",
+    "filepath": "app/api/pipeline/stitch/run/route.ts",
+    "tags": [
+      "backend",
+      "api",
+      "pipeline",
+      "render",
+      "stitch"
+    ],
+    "interface": {
+      "type": "api",
+      "api": {
+        "endpoints": [
+          {
+            "method": "POST",
+            "path": "/api/pipeline/stitch/run",
+            "auth": "none",
+            "responseSchema": "{ jobId: string }"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "API endpoint to report TTS segment rendering status by comparing script to filesystem",
+    "description": "GET /api/pipeline/tts-render/segments scans outputs/tts/ directory, compares .wav files against script segments from parseSegmentsFromScript(). Returns { segments: TtsSegment[] } with status (done/missing/error), duration for existing files, and text from script. Includes extra files not in script.",
+    "dependencies": [
+      "api_pipeline_tts_render_route_TypeScript.prompt"
+    ],
+    "priority": 3,
+    "filename": "api_pipeline_tts_render_segments_route_TypeScript.prompt",
+    "filepath": "app/api/pipeline/tts-render/segments/route.ts",
+    "tags": [
+      "backend",
+      "api",
+      "pipeline",
+      "tts"
+    ],
+    "interface": {
+      "type": "api",
+      "api": {
+        "endpoints": [
+          {
+            "method": "GET",
+            "path": "/api/pipeline/tts-render/segments",
+            "auth": "none",
+            "responseSchema": "{ segments: TtsSegment[] }"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "API endpoint to report VEO clip generation status with staleness detection",
+    "description": "GET /api/pipeline/veo/clips loads project config, checks outputs/veo/ for each section's .mp4. Reports status (done/missing), detects staleness by comparing mtime against frame-chain dependencies (_last_frame.png). Also returns character reference portraits from config. Returns { clips: VeoClip[], references: ReferencePortrait[] }.",
+    "dependencies": [
+      "lib_project_TypeScript.prompt",
+      "types_TypeScript.prompt"
+    ],
+    "priority": 3,
+    "filename": "api_pipeline_veo_clips_route_TypeScript.prompt",
+    "filepath": "app/api/pipeline/veo/clips/route.ts",
+    "tags": [
+      "backend",
+      "api",
+      "pipeline",
+      "veo"
+    ],
+    "interface": {
+      "type": "api",
+      "api": {
+        "endpoints": [
+          {
+            "method": "GET",
+            "path": "/api/pipeline/veo/clips",
+            "auth": "none",
+            "responseSchema": "{ clips: VeoClip[], references: ReferencePortrait[] }"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "API endpoint to trigger regeneration of character reference images for VEO pipeline",
+    "description": "POST /api/pipeline/veo/references/run accepts { referenceId: string }, validates input, generates a jobId in format ref-{referenceId}-{timestamp}, and returns { jobId }. Returns 400 if referenceId is missing or not a string. Handles malformed JSON gracefully.",
+    "dependencies": [],
+    "priority": 3,
+    "filename": "api_pipeline_veo_references_run_route_TypeScript.prompt",
+    "filepath": "app/api/pipeline/veo/references/run/route.ts",
+    "tags": [
+      "backend",
+      "api",
+      "pipeline",
+      "veo"
+    ],
+    "interface": {
+      "type": "api",
+      "api": {
+        "endpoints": [
+          {
+            "method": "POST",
+            "path": "/api/pipeline/veo/references/run",
+            "auth": "none",
+            "responseSchema": "{ jobId: string }"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "API endpoint to provide staging manifest showing which VEO assets are available in Remotion public directory",
+    "description": "GET /api/pipeline/veo/staging-manifest searches for manifest files (staging.json, staging-manifest.json, manifest.json) in outputs/veo/, falls back to scanning for .mp4/.webm files. For each filename, checks if present in remotion/public/. Returns array of { filename, expected, present } entries.",
+    "dependencies": [],
+    "priority": 3,
+    "filename": "api_pipeline_veo_staging_manifest_route_TypeScript.prompt",
+    "filepath": "app/api/pipeline/veo/staging-manifest/route.ts",
+    "tags": [
+      "backend",
+      "api",
+      "pipeline",
+      "veo",
+      "assets"
+    ],
+    "interface": {
+      "type": "api",
+      "api": {
+        "endpoints": [
+          {
+            "method": "GET",
+            "path": "/api/pipeline/veo/staging-manifest",
+            "auth": "none",
+            "responseSchema": "StagingManifestEntry[]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "SSE endpoint for streaming real-time VEO video generation progress updates",
+    "description": "GET /api/pipeline/veo/stream establishes an SSE connection using TransformStream. Sends initial 'connected' event, heartbeat every 30 seconds (comment-only), and auto-closes after 5 minutes. Uses nodejs runtime. Headers: text/event-stream, no-cache, keep-alive.",
+    "dependencies": [],
+    "priority": 3,
+    "filename": "api_pipeline_veo_stream_route_TypeScript.prompt",
+    "filepath": "app/api/pipeline/veo/stream/route.ts",
+    "tags": [
+      "backend",
+      "api",
+      "pipeline",
+      "veo",
+      "sse"
+    ],
+    "interface": {
+      "type": "api",
+      "api": {
+        "endpoints": [
+          {
+            "method": "GET",
+            "path": "/api/pipeline/veo/stream",
+            "auth": "none",
+            "responseSchema": "SSE stream: { type: 'connected' } + heartbeat comments"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "API endpoint generating dry-run fix previews for unresolved annotations in a section",
+    "description": "POST /api/sections/[id]/preview-fixes fetches unresolved annotations for a section, groups by fixType, generates previews. For remotion fixes, calls runClaudeFixDryRun() to produce diffs. For veo/tts, returns descriptive placeholders. Supports optional annotationIds filter in body. Returns { previews: FixPreview[] } with annotationId, fixType, preview, diff, filesModified, confidence.",
+    "dependencies": [
+      "lib_db_TypeScript.prompt",
+      "lib_claude_TypeScript.prompt",
+      "types_TypeScript.prompt"
+    ],
+    "priority": 3,
+    "filename": "api_sections_id_preview_fixes_route_TypeScript.prompt",
+    "filepath": "app/api/sections/[id]/preview-fixes/route.ts",
+    "tags": [
+      "backend",
+      "api",
+      "fixes",
+      "preview",
+      "annotations"
+    ],
+    "interface": {
+      "type": "api",
+      "api": {
+        "endpoints": [
+          {
+            "method": "POST",
+            "path": "/api/sections/[id]/preview-fixes",
+            "auth": "none",
+            "responseSchema": "{ previews: FixPreview[] }"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Project setup script for initializing development environment, prerequisites, and dependencies",
+    "description": "Bash setup script that validates prerequisites (Node.js 20+, Python 3.11+, ffmpeg required; git and Claude CLI optional with warnings), installs npm and pip dependencies (including remotion subdirectory), creates output directories (outputs, references, audits, data, models), and initializes SQLite database. Uses color-coded logging and set -euo pipefail for strict error handling.",
+    "dependencies": [
+      "package_json_JSON.prompt",
+      "lib_db_TypeScript.prompt"
+    ],
+    "priority": 6,
+    "filename": "setup_Bash.prompt",
+    "filepath": "setup.sh",
+    "tags": [
+      "devops",
+      "setup",
+      "bash"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "setup.sh",
+            "signature": "bash script",
+            "returns": "initialized development environment"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Build automation targets for setup, development, building, and testing the video editor project",
+    "description": "Makefile with phony targets: 'setup' runs ./setup.sh, 'dev' runs npm run dev, 'build' runs npm run build, 'test' runs npx jest --no-cache. Provides standardized task runner interface for common development lifecycle commands.",
+    "dependencies": [
+      "setup_Bash.prompt",
+      "package_json_JSON.prompt"
+    ],
+    "priority": 6,
+    "filename": "makefile_Make.prompt",
+    "filepath": "Makefile",
+    "tags": [
+      "devops",
+      "build",
+      "make"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "setup",
+            "signature": "make setup",
+            "returns": "runs ./setup.sh"
+          },
+          {
+            "name": "dev",
+            "signature": "make dev",
+            "returns": "runs npm run dev"
+          },
+          {
+            "name": "build",
+            "signature": "make build",
+            "returns": "runs npm run build"
+          },
+          {
+            "name": "test",
+            "signature": "make test",
+            "returns": "runs npx jest --no-cache"
+          }
+        ]
+      }
     }
   }
 ]

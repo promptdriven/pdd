@@ -1,0 +1,29 @@
+<pdd-reason>API route to copy VEO output files to the Remotion public directory for composition access.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [{"name": "POST", "signature": "(request: NextRequest)", "returns": "Promise<NextResponse>"}]
+  }
+}
+</pdd-interface>
+
+% You are an expert TypeScript/Next.js engineer. Implement the API route for staging VEO assets.
+
+% Requirements
+1.  **Endpoint**: `POST /api/pipeline/asset-staging/run`.
+2.  **Input**: JSON body `{ files?: string[] }`. Defaults to empty array if missing.
+3.  **Paths**:
+    -   Use `path.join(process.cwd(), ...)` for cross-platform compatibility.
+    -   Source Base: `outputs/veo`
+    -   Destination Base: `remotion/public`
+4.  **Logic**:
+    -   Generate a `jobId` using `randomUUID()`.
+    -   Iterate through input `files`.
+    -   Skip if source file doesn't exist.
+    -   Ensure destination directory exists (recursive mkdir).
+    -   Copy file only if it doesn't exist at destination (idempotent).
+    -   Count successfully staged files.
+5.  **Output**: JSON `{ jobId: string, staged: number }` with status 200.
+6.  **Error Handling**: Catch all errors, return 500 `{ error: message }`.

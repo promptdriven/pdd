@@ -1,0 +1,46 @@
+You are an expert Backend Engineer. Your task is to create a Next.js Route Handler for a video editing automation system that generates "fix previews" for video annotations. This module acts as a dry-run engine to analyze how specific annotations (feedback) will be applied to the project before final execution.
+
+### Requirements
+1. **Endpoint Definition**: Create a dynamic POST route handler for `api/sections/[id]/preview-fixes`.
+2. **Data Retrieval**: 
+   - Fetch unresolved annotations from a SQLite database for a specific `sectionId`.
+   - Support an optional filter via the request body (`annotationIds: string[]`) to process specific annotations; otherwise, process all unresolved ones.
+   - Ensure annotations are ordered by `timestamp` ascending.
+3. **Fix Classification**: Group annotations by their `fixType` (remotion, veo, tts, manual, none) based on the analysis metadata.
+4. **Preview Generation Logic**:
+   - **Remotion Fixes**: Execute a dry-run using a specialized Claude utility (`runClaudeFixDryRun`) to generate a proposed diff and change description.
+   - **Veo/TTS Fixes**: Provide descriptive placeholder previews indicating regeneration of assets.
+   - **Manual/None**: Handle these as non-automated fixes.
+5. **Error Handling**: 
+   - Gracefully handle individual preview failures (e.g., LLM timeouts) so one failure doesn't crash the entire batch.
+   - Return a 500 Internal Server Error for critical database or system failures.
+6. **Data Integrity**: Correctively deserialize JSON strings from the database into structured TypeScript objects (e.g., `AnnotationAnalysis`).
+
+### Dependencies
+<next_server>
+  <include>next/server</include>
+</next_server>
+<database_utility>
+  <include>@/lib/db</include>
+</database_utility>
+<claude_utility>
+  <include>@/lib/claude</include>
+</claude_utility>
+<types_definition>
+  <include>@/lib/types</include>
+</types_definition>
+
+### Instructions
+1. **Route Configuration**: Set `export const dynamic = "force-dynamic"`.
+2. **Type Safety**: Define an interface `FixPreview` containing `annotationId`, `fixType`, `preview` (string), `diff` (string | null), `filesModified` (string[]), and `confidence` (number).
+3. **Prompt Building**: Implement a helper function `buildPreviewPrompt(annotation)` that formats the annotation's ID, section, timestamp, and user note into a string for the LLM.
+4. **Implementation Flow**:
+   - Extract `id` from `params`.
+   - Parse the request body safely (handle cases where the body might be empty or invalid).
+   - Query the `annotations` table, filtering by `sectionId`, `resolved = 0`, and optionally the provided `annotationIds`.
+   - Map database rows to the `Annotation` type, ensuring `analysis` is parsed from JSON.
+   - Iterate through "remotion" type annotations and call `runClaudeFixDryRun` with the path `"remotion/src/remotion/"`.
+   - Construct the final JSON response containing an array of `previews`.
+
+### Deliverables
+- A single TypeScript file: `app/api/sections/[id]/preview-fixes/route.ts` containing the POST handler and necessary helper functions.

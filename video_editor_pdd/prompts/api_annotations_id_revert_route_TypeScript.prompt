@@ -1,0 +1,29 @@
+% You are an expert TypeScript/Next.js engineer. Implement the API route for reverting a fix commit for an annotation.
+
+% Requirements
+1.  **Endpoint**: `POST /api/annotations/[id]/revert`
+2.  **Input**: `id` from route parameters.
+3.  **Database Query**:
+    -   Use `getDb()` to access the database.
+    -   Query the `annotations` table for `fixCommitSha` and `sectionId` where `id` matches.
+    -   If the annotation is not found, return 404 with error "Annotation not found".
+    -   If `fixCommitSha` is null/empty, return 404 with error "No fix commit to revert".
+4.  **Git Operation**:
+    -   Use `revertFix(row.fixCommitSha)` to perform the revert.
+    -   Get the returned `revertSha`.
+5.  **Database Update**:
+    -   Update the `annotations` table: set `fixCommitSha` to `NULL` and `resolved` to `0` where `id` matches.
+6.  **Output**:
+    -   Success (200): JSON `{ revertCommitSha: string, annotationId: string, sectionId: string }`.
+    -   Error (500): JSON `{ error: "Failed to revert fix" }` on exception.
+7.  **Configuration**:
+    -   Export `dynamic = "force-dynamic"`.
+
+% Dependencies
+<lib_db>
+<include>video_editor_pdd/lib/db.ts</include>
+</lib_db>
+
+<lib_git>
+<include>video_editor_pdd/lib/git.ts</include>
+</lib_git>

@@ -1,0 +1,27 @@
+Create a Next.js API route that serves as a Server-Sent Events (SSE) endpoint to stream real-time progress updates for a video generation pipeline (Veo). This module acts as the communication bridge between the backend processing logic and the Stage 7 UI component.
+
+### Requirements
+1. **Functionality**: Implement a GET handler that establishes a persistent SSE connection.
+2. **Event Protocol**: 
+    - Send an initial "connected" event immediately upon connection.
+    - Implement a heartbeat mechanism (comment-only or specific event) every 30 seconds to prevent connection timeouts.
+3. **Lifecycle Management**: 
+    - The connection must automatically close after 5 minutes of inactivity to conserve server resources.
+    - Ensure intervals are cleared and writers are closed properly on timeout or client disconnect.
+4. **Runtime**: Explicitly set the runtime to "nodejs" to support streaming capabilities.
+5. **Headers**: Set appropriate SSE headers: `Content-Type: text/event-stream`, `Cache-Control: no-cache`, and `Connection: keep-alive`.
+
+### Dependencies
+<nextjs_api_utils>
+  <include>context/nextjs_api_utils_example.ts</include>
+</nextjs_api_utils>
+
+### Instructions
+- Use the `TransformStream` API to handle the streaming response.
+- Use `TextEncoder` to convert string messages into the Uint8Array format required by the stream writer.
+- Ensure the SSE data format follows the standard `data: {json}\n\n` or `: comment\n\n` structure.
+- Implement error handling within the heartbeat interval to clear the interval if the writer is no longer accessible.
+- The endpoint should be located at `/api/pipeline/veo/stream`.
+
+### Deliverables
+- A single TypeScript file (`route.ts`) containing the `GET` function and the `runtime` configuration.

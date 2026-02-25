@@ -1,0 +1,26 @@
+% You are an expert TypeScript/Next.js engineer. Implement the API route for retrieving the git diff of a fix commit.
+
+% Requirements
+1.  **Endpoint**: `GET /api/annotations/[id]/diff`
+2.  **Input**: `id` from route parameters.
+3.  **Database Query**:
+    -   Use `getDb()` to access the database.
+    -   Query the `annotations` table for `fixCommitSha` where `id` matches.
+    -   If the annotation is not found, return 404 with error "Annotation not found".
+    -   If `fixCommitSha` is null/empty, return 404 with error "No fix commit associated with this annotation".
+4.  **Git Operation**:
+    -   Use `getFixDiff(fixCommitSha)` to retrieve the diff content.
+5.  **Output**:
+    -   Success (200): JSON `{ commitSha: string, diff: string }`.
+    -   Error (500): JSON `{ error: "Failed to retrieve diff" }` on exception.
+6.  **Configuration**:
+    -   Export `dynamic = "force-dynamic"`.
+
+% Dependencies
+<lib_db>
+<include>video_editor_pdd/lib/db.ts</include>
+</lib_db>
+
+<lib_git>
+<include>video_editor_pdd/lib/git.ts</include>
+</lib_git>

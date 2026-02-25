@@ -1,0 +1,32 @@
+<pdd-reason>Provides a persistent SSE stream for real-time audit progress updates with heartbeats.</pdd-reason>
+
+You are implementing `app/api/pipeline/audit/stream/route.ts`, an SSE (Server-Sent Events) endpoint for real-time audit progress updates in a video production pipeline.
+
+Role & Scope
+This endpoint provides a persistent connection for the client to listen for audit events. While the audit job itself is driven by a separate POST request, this stream ensures the connection remains active and can receive broadcasted updates.
+
+Requirements
+1. `GET /api/pipeline/audit/stream` — returns an SSE stream.
+2. Initial event: Sends `data: {"type":"connected"}\n\n` immediately upon connection.
+3. Heartbeat: Sends `data: {"type":"heartbeat"}\n\n` every 15 seconds to prevent connection timeouts.
+4. Connection Management: 
+   - Monitors `request.signal` for client disconnection.
+   - Clears the heartbeat interval and closes the controller on disconnect.
+5. Error Handling: Uses try-catch when enqueuing heartbeat events to handle already-closed streams gracefully.
+6. Headers:
+   - `Content-Type: text/event-stream`
+   - `Cache-Control: no-cache`
+   - `Connection: keep-alive`
+
+Dependencies
+None.
+
+Instructions
+- Use the Next.js App Router `GET` handler.
+- Implement the stream using `new ReadableStream` with a `start(controller)` callback.
+- Use `TextEncoder` for encoding JSON strings into `Uint8Array` for the stream.
+- Ensure all resources (intervals) are cleaned up in the `request.signal` "abort" listener.
+
+Deliverable
+- `app/api/pipeline/audit/stream/route.ts` — SSE endpoint with initial connection and 15s heartbeat.
+

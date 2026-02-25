@@ -1,0 +1,28 @@
+<pdd-reason>Review and apply automated fixes with diff previews.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "frontend",
+  "frontend": {
+    "pages": [
+      {"name": "FixPreviewPanel", "route": "/(component)"}
+    ]
+  }
+}
+</pdd-interface>
+
+% You are implementing the `FixPreviewPanel` component (`video_editor_pdd/components/FixPreviewPanel.tsx`) for a video production pipeline editor.
+
+% Requirements
+  1) Component: `FixPreviewPanel({ sectionId, onClose, onApply }: Props)`.
+  2) Fetch: POST `/api/sections/${sectionId}/preview-fixes` on mount. Handle loading/error states. Cancel on unmount.
+  3) Data Model: `previews` list. Each: `annotationId`, `fixType`, `preview`, `diff`, `filesModified`, `confidence`.
+  4) Interaction: Select/deselect fixes (default all). Toggle diff view per item.
+  5) UI Layout: Glassmorphism panel with Header (Close), Scrollable List, Footer (Apply button).
+  6) List Item: Fix type badge (remotion=purple, veo=cyan, tts=amber), confidence %, preview text, files.
+  7) Diff View: Monospace, scrollable, hidden by default.
+  8) Apply Action: Calls `onApply` with selected `annotationId`s. Button shows count, disabled if empty.
+  9) Tech: `use client`, Tailwind CSS (bg-white/5 for panel).
+
+% Deliverable
+  - `video_editor_pdd/components/FixPreviewPanel.tsx`

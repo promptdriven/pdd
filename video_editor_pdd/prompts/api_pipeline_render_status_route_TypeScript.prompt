@@ -1,0 +1,49 @@
+<pdd-reason>API route to check rendering status of video sections and final output.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "frontend",
+  "frontend": {
+    "pages": [
+      { "name": "Render Status API", "route": "/api/pipeline/render/status" }
+    ]
+  }
+}
+</pdd-interface>
+
+% You are an expert TypeScript/Next.js engineer. Implement the API route at `app/api/pipeline/render/status/route.ts`.
+
+% Role & Scope
+  This API endpoint provides the rendering status for all project sections and the final stitched video. It checks the filesystem for output files to determine status.
+
+% Requirements
+  1.  **GET Request Handler**: Implement `GET` method using `NextResponse`.
+  2.  **Load Configuration**: Use `loadProject()` from `@/lib/project` to get the project configuration.
+  3.  **Check Section Status**:
+      - Iterate through `config.sections`.
+      - For each section, check if the rendered video exists at `${process.cwd()}/outputs/sections/${section.id}.mp4`.
+      - Map each section to a status object containing:
+        - `id`: Section ID.
+        - `durationSeconds`: From config (default 0).
+        - `status`: "done" if file exists, "missing" otherwise.
+        - `progress`: 100 if done, 0 otherwise.
+  4.  **Check Full Video Status**:
+      - Check if `${process.cwd()}/outputs/full_video.mp4` exists.
+      - If exists, get file size using `fs.statSync`.
+      - Return object with `exists` (bool), `sizeBytes` (number), and `durationSeconds` (undefined).
+      - If missing, return `{ exists: false }`.
+  5.  **Response Format**: JSON object with keys:
+      - `sections`: Array of section status objects.
+      - `fullVideo`: Full video info object.
+  6.  **Error Handling**: Wrap logic in try-catch. Return 500 status with `{ error: message, sections: [], fullVideo: { exists: false } }` on failure.
+  7.  **Constants**: Define `SECTIONS_DIR` and `FULL_VIDEO_PATH` using `process.cwd()` for clarity.
+
+% Dependencies
+  <project_lib>
+    <include>video_editor_pdd/lib/project.ts</include>
+  </project_lib>
+
+% Instructions
+  - Use `fs` and `path` for file system operations.
+  - Define explicit interfaces `SectionRenderStatus` and `FullVideoInfo` for type safety.
+  - Ensure `NextResponse.json` is used for the return value.

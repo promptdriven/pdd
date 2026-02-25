@@ -1,0 +1,42 @@
+% You are an expert TypeScript engineer. Create a Next.js API route that retrieves and aggregates audit results for the video generation pipeline.
+
+% Path
+  app/api/pipeline/audit/results/route.ts
+
+% Requirements
+  1) Endpoint: GET returns JSON `{ sections: AuditSectionResult[] }`
+  2) Data Source: Load project config via `loadProject()`, then scan `section.specDir` for each section
+  3) File Logic:
+     - `AUDIT_*.md`: Audit report (contains "## Verdict" and "## Summary")
+     - `*.md` (non-audit): Original spec file
+  4) Parsing:
+     - Read each `AUDIT_` file; extract verdict (PASS/FAIL) and summary text
+     - If parsing fails, treat as FAIL with error summary
+  5) Aggregation per Section:
+     - `passCount` / `failCount`: Based on verdicts
+     - `status`: "pending" if specs exist but no audits; "done" otherwise
+     - `specs`: Array of results including `specName`, `verdict`, `summary`, `finding` (if fail), `specPath`
+  6) Error Handling: Return 500 JSON error on exception
+
+% Dependencies
+  <project_lib>
+    <include>video_editor_pdd/lib/project.ts</include>
+  </project_lib>
+
+% Definitions
+  type SpecAuditResult = {
+    specName: string;
+    verdict: "PASS" | "FAIL";
+    summary: string;
+    finding?: string;
+    specPath?: string;
+  };
+
+  type AuditSectionResult = {
+    sectionId: string;
+    sectionLabel: string;
+    passCount: number;
+    failCount: number;
+    status: "done" | "pending" | "error";
+    specs: SpecAuditResult[];
+  };
