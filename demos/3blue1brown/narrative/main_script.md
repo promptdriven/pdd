@@ -1,7 +1,7 @@
 # Prompt-Driven Development: A 3Blue1Brown Style Video Script
 
 **Working Title:** "Why You're Still Darning Socks"
-**Duration:** ~20-22 minutes
+**Duration:** ~24-26 minutes
 **Visual Style:** Manim animations, clean geometric representations, smooth transitions
 
 ---
@@ -35,11 +35,36 @@ Code just got that cheap.
 
 So why are we still patching?
 
+**[VISUAL: Brief flash: a terminal compiling code — but the input isn't C. It's natural language. A subtle label: "gcc" crossed out, replaced with "pdd".]**
+
+What if there were a compiler — not for code, but for prompts?
+
 **[VISUAL: Title card fades in over the regenerated code: "Prompt-Driven Development"]**
 
 ---
 
-## PART 1: THE ECONOMICS OF DARNING (2:00 - 6:30)
+## THE THIRTY-SECOND DEMO (2:00 - 2:30)
+
+**[VISUAL: Clean terminal. A file labeled `email_validator.prompt` appears — about 15 lines of natural language. Clear, readable.]**
+
+**NARRATOR:**
+Watch this.
+
+**[VISUAL: Terminal runs `pdd generate email_validator`. Code flows out — roughly 200 lines. Clean, formatted, complete.]**
+
+Fifteen lines of prompt. Two hundred lines of generated code.
+
+**[VISUAL: A red test failure appears. A new test is added: `test_unicode_domain`. Terminal runs `pdd fix email_validator`. Code regenerates. All tests pass — green checkmarks.]**
+
+Now a failing test. Regenerate. Bug gone. Not patched — gone. The test is a permanent wall. That bug can never come back.
+
+**[VISUAL: Beat. Then a subtle text overlay: "Now let me show you WHY this matters."]**
+
+Now let me show you why this matters.
+
+---
+
+## PART 1: THE ECONOMICS OF DARNING (2:30 - 8:30)
 
 **[VISUAL: Price chart animation. 1950: A pair of quality wool socks costs about an hour of wages. Graph shows labor cost vs garment cost over time. The lines cross around 1960-65.]**
 
@@ -108,9 +133,13 @@ And here's what makes it worse. A 2025 EMNLP study proved that even when the mod
 
 **[VISUAL: Return to the chart. The "Context Rot" layer in the debt area pulses. Annotation: "Faster patching → faster growth → faster rot".]**
 
-This is why AI-assisted patching is really two stories.
+This is why AI-assisted patching is really two stories — and why every productivity study seems to contradict every other one.
 
-**[VISUAL: Return to the chart. The immediate patch cost line FORKS into two paths at 2020. Lower path labeled "Small codebase" plunges down. Upper path labeled "Large codebase" stays flat. Annotation: "Same tools. Different codebase sizes."]**
+**[VISUAL: A clean 2×2 grid appears. X-axis: "Greenfield → Brownfield". Y-axis: "In-Distribution → Out-of-Distribution". Top-left quadrant glows green: "GitHub study: +55%". Bottom-right quadrant glows red: "METR study: -19%". Top-right and bottom-left are intermediate. Label: "Every study is correct. They just measured different quadrants."]**
+
+The GitHub study measured greenfield, in-distribution work — exactly where AI shines. The METR study measured brownfield, out-of-distribution work — where AI flounders. They're not contradictory. They're measuring different quadrants. And most real enterprise work? It lives in the bottom-right.
+
+**[VISUAL: Transition back to the chart. The immediate patch cost line FORKS into two paths at 2020. Lower path labeled "Small codebase" plunges down. Upper path labeled "Large codebase" stays flat. Annotation: "Same tools. Different codebase sizes."]**
 
 On a small codebase—a few thousand lines—patching with AI is genuinely transformative. The context window covers everything. That's real.
 
@@ -129,6 +158,10 @@ Regeneration doesn't have this problem. A prompt is a fifth to a tenth the size 
 **[VISUAL: Side-by-side comparison. LEFT: "Agentic patching" — context window filled with 15,000 tokens of code, red highlights on irrelevant sections, tiny green section with relevant code. RIGHT: "PDD regeneration" — context window with a 300-token prompt, 2,000 tokens of tests, small grounding example. Clean. Focused. Room to think.]**
 
 And there's something else. These models are trained on up to thirty times more natural language than code. Natural language is their deepest fluency. MIT showed that giving models natural language context for coding tasks improved performance by up to eighty-nine percent. A prompt *is* natural language. You're speaking the model's strongest language and giving it room to think.
+
+**[VISUAL: Animation. Twenty code blocks, each representing a module, try to fit into a context window. They overflow — the window is too small. Then the code blocks compress into twenty compact prompt blocks. They all fit, with room to spare. A label: "Same system. 5-10× more fits."]**
+
+A team optimizing ad delivery latency had twenty modules on the critical path. As code? They overflowed the context window. As prompts — a fifth to a tenth the size — they all fit. The team optimized the entire critical path in prompt space and exceeded their half-millisecond latency target.
 
 Research also confirms: modules around two hundred fifty lines have the *lowest* defect density—a U-shaped curve where too small fragments logic and too large explodes complexity. That's exactly the size a focused prompt produces.
 
@@ -156,9 +189,33 @@ It's maintaining it. McKinsey found that organizations with high technical debt 
 
 And those costs compound—literally. Technical debt follows a compound interest curve. Unless you regenerate. Then the debt resets.
 
+### THE KEY INSIGHT
+
+**[VISUAL: The screen clears. A moment of deliberate stillness — the 3B1B "and HERE's the key insight" beat. Then a clean setup appears.]**
+
+Now here's the thing I want you to take away from everything I've just shown you.
+
+**[VISUAL: A question appears on screen: "What if you could take the same LLM and make it dramatically better at coding?"]**
+
+What if you could take the same LLM you're using today — same model, same parameters — and make it dramatically better at coding?
+
+**[VISUAL: Two side-by-side meters appear. LEFT: "Effective Context Window" — a bar that starts at 1× and grows to 5-10×. RIGHT: "Model Performance" — a bar that rises steadily. Both animate simultaneously.]**
+
+Working in prompt space gives you two things at once. First: prompts are a fifth to a tenth the size of the code they govern. So your effective context window is five to ten times larger. Every token in that window is author-curated — no system prompts eating space, no retrieval tool guessing wrong. The entire context window is devoted to your problem.
+
+Second: these models were trained on up to thirty times more natural language than code. Natural language is their deepest fluency. MIT showed giving models natural language context improves coding accuracy by up to eighty-nine percent.
+
+**[VISUAL: Both meters are now at their peak. They pulse together. Text appears: "Bigger window AND smarter model."]**
+
+You get a bigger window AND a smarter model. That's not an incremental improvement. That's a category shift.
+
+**[VISUAL: A challenge appears on screen, handwritten style: "Try it yourself."]**
+
+Don't take my word for it. Take your favorite LLM, give it a hard coding problem as code, then give it the same problem described in natural language. The natural language version will win. Every time.
+
 ---
 
-## PART 2: THE PARADIGM SHIFT (6:30 - 10:30)
+## PART 2: THE PARADIGM SHIFT (8:30 - 13:00)
 
 **[VISUAL: A factory floor. Industrial. An injection molding machine dominates the frame.]**
 
@@ -199,6 +256,8 @@ In molding, value lives in the specification—the mold. The plastic part? Dispo
 
 And it's not just plastics. The chip industry hit this exact wall.
 
+**[VISUAL: Subtle text overlay in corner: "Narrator designed the first commercial GPU at S3 Graphics, 1995."]**
+
 **[VISUAL: The hand-drawn schematic zooms out. Hundreds of transistors. Then thousands. The engineer's hand slows down. The schematic becomes impossibly dense.]**
 
 In the 1980s, chip designers drew every gate by hand. When transistor counts hit tens of thousands, they couldn't keep up. So in 1985, they moved up—from schematics to Verilog. A hardware description language. You described what you wanted the chip to *do*, and a synthesis tool generated the gates.
@@ -211,9 +270,19 @@ But here's the thing: synthesis was non-deterministic. Run it twice, get differe
 
 What Synopsys did was wrap a verification toolchain around the generator. Formal equivalence checking—using SAT and SMT solvers to produce mathematical proof that the output, whatever it looked like, behaved identically to the spec. The gates were different every time. The function was the same every time.
 
+**[VISUAL: Text overlay: "Synopsys Design Compiler was GCC for hardware descriptions. PDD is GCC for prompts."]**
+
+Synopsys Design Compiler was GCC for hardware descriptions. PDD is GCC for prompts.
+
 **[VISUAL: Timeline showing chip design abstraction levels rising: Transistors (1970s) → Schematics (1980s) → RTL/Verilog (1990s) → Behavioral/HLS (2010s). At each transition, an arrow labeled "Couldn't scale" pushes to the next level. A new level appears at the end, pulsing: "Natural language → Code (2020s)".]**
 
 By 1990, most designs were still schematic-based. By the mid-1990s, half had switched. Today, all but the most trivial chips use HDL. Every time component counts exceeded what the current abstraction could handle, the industry moved up a level. The designer stopped specifying *how* and started specifying *what*.
+
+**[VISUAL: A modern chip layout appears — billions of gates, impossibly dense. Camera zooms in. More gates. Zooms further. Still more gates. Unreviewable. Then: a massive code diff scrolls past, equally overwhelming.]**
+
+Today, a modern chip has billions of gates. Nobody reviews the netlist. It's impossible. The abstraction isn't just convenient — it's physically necessary.
+
+We're hitting the same wall with AI-generated code. When AI generates ten thousand lines in a day, code review becomes netlist review. The question isn't whether you *should* review it. It's whether you *can*.
 
 **[VISUAL: The Verilog code morphs into a glowing document labeled "PROMPT". The gate-level netlist morphs into lines of software code. The Synopsys verification checkmark morphs into a test suite with green checkmarks.]**
 
@@ -225,7 +294,7 @@ The prompt is your mold. The code is just plastic. And just like chip synthesis�
 
 ---
 
-## PART 3: THE MOLD HAS THREE PARTS (10:30 - 16:00)
+## PART 3: THE MOLD HAS THREE PARTS (13:00 - 18:30)
 
 **[VISUAL: Cross-section of an injection mold. Technical, precise. Three regions highlight one by one.]**
 
@@ -274,15 +343,17 @@ RIGHT: "PDD" - Bug found → Add test (`pdd bug`) → Regenerate (`pdd fix`) →
 
 In traditional development, a bug fix helps one place. In PDD, a test prevents that bug everywhere, forever.
 
-**[VISUAL: Brief sidebar. The Synopsys Formality logo from Part 2 reappears alongside the Z3 logo. Text: "Hardware: SMT-based formal proof. PDD: SMT-based formal proof. Same math."]**
+**[VISUAL: A fork in the road. Two branches from "Bug found". LEFT branch: "Code bug — add a wall." RIGHT branch: "Prompt defect — change the mold itself." The left branch adds a test. The right branch modifies the prompt.]**
 
-Now—here's something most people don't know. In chip design, Synopsys Formality uses SAT and SMT solvers to mathematically prove equivalence. PDD uses Z3—the same class of SMT solver—to formally verify properties of generated code. Not sampling. Not "run a bunch of inputs and hope." Mathematical proof that a property holds for *every possible input*.
+And sometimes the bug isn't in the code — it's in the prompt. The code correctly implements a wrong specification. PDD distinguishes between these. A code bug? Add a wall. A prompt defect? Change the mold itself.
 
-**[VISUAL: Side-by-side. LEFT: "Synopsys Formality: SMT solver proves RTL ≡ gates for all inputs." RIGHT: "PDD + Z3: SMT solver proves code satisfies spec for all inputs." Both labeled: "Mathematical proof, not testing."]**
+**[VISUAL: Five code generations appear side by side, like film frames. Two have red X marks. Two have yellow warnings. One glows green with a checkmark. Label: "Generate five. Pick the one that passes all tests."]**
 
-When Z3 proves that a function never returns null for any 32-bit integer input, it hasn't tried every input—it's reasoned symbolically over the entire space. The same math. The same certainty. The same category of guarantee the semiconductor industry relies on for billion-dollar tapeouts.
+Now — you might be thinking: "But LLMs don't follow instructions reliably." You're right. Today. But PDD doesn't need perfection on every run. Generate five versions. Pick the one that passes all tests. The walls don't care how many attempts it took.
 
-Traditional unit tests are still samples—and PDD uses those too. But Z3 gives you walls that are *proven*, not just tested. And in that sense, the chip design analogy isn't a metaphor. It's the same technology.
+**[VISUAL: Brief sidebar. Annotation on screen: "PDD also uses Z3 — the same class of SMT solver used in chip verification — to formally prove properties hold for every possible input. Same math as billion-dollar tapeouts." Small Synopsys Formality logo next to Z3 logo.]**
+
+And some of those walls aren't just tested — they're *proven*. PDD uses Z3, the same class of SMT solver that the chip industry uses for formal equivalence checking, to mathematically prove that properties hold for every possible input. Not sampling. Mathematical proof. The chip design analogy isn't a metaphor. It's the same technology.
 
 ### PROMPT CAPITAL: THE SPECIFICATION
 
@@ -300,13 +371,13 @@ And here's something subtle: the exact implementation can vary. What's locked is
 
 **[VISUAL: The prompt glows. It's small—maybe 10-15 lines. But it governs a 200-line code file. A ratio appears: "1:5 to 1:10".]**
 
-A good prompt is a fifth to a tenth the size of the code it generates. You're specifying *what* and *why*, not *how*. And that compression matters.
+A good prompt is a fifth to a tenth the size of the code it generates. Think of the prompt as your header file. The generated code is the OBJ file. You're specifying *what* and *why*, not *how*. And that compression matters.
 
 **[VISUAL: Two context windows side by side. LEFT: filled with 15,000 tokens of raw code—dense, hard to parse. RIGHT: filled with prompts for ten modules—clean natural language, clear intent. Both windows are the same size, but the right one represents ten times more system knowledge.]**
 
 Remember the context window problem? Code is token-expensive. But prompts are natural language—and these models were trained on up to thirty times more natural language than code. Researchers found that just adding natural language comments to code training data improved generation quality by forty-one percent. The prompt isn't fighting the model's strengths. It's leveraging them.
 
-And unlike agentic tools that dynamically guess which code to load into context—and increasingly guess wrong—each prompt declares its own dependencies. The context is author-defined, not machine-assembled.
+And unlike agentic tools that dynamically guess which code to load into context—and increasingly guess wrong—each prompt declares its own dependencies. The context is author-defined, not machine-assembled. Every token in that window is author-curated. No system prompts eating space. No retrieval tool guessing wrong. The entire context window is devoted to your problem.
 
 ### GROUNDING CAPITAL: THE MATERIAL
 
@@ -328,13 +399,25 @@ Your style. Your patterns. Your team's conventions. Grounding captures all of it
 
 Prompt plus tests plus grounding. Intent plus constraints plus style. Together, they form a complete specification.
 
+**[VISUAL: A clean table materializes:
+
+| Component | Encodes | Owner |
+|-----------|---------|-------|
+| Prompt | WHAT (intent) | Developer |
+| Grounding | HOW (style) | Automatic |
+| Tests | CORRECTNESS | Accumulated |
+
+Below the table, a single line pulses: "When these conflict, tests win. Always."]**
+
+When these conflict, tests win. Always. The walls override the specification. The specification overrides the style.
+
 **[VISUAL: The code that emerges is clean, consistent, correct. It glows briefly, then the glow fades—it's just output. The mold continues to glow.]**
 
 The code is output. The mold is what matters.
 
 ---
 
-## PART 4: THE PRECISION TRADEOFF (16:00 - 18:00)
+## PART 4: THE PRECISION TRADEOFF (18:30 - 21:00)
 
 **[VISUAL: Split screen. LEFT: A 3D printer depositing material precisely, layer by layer. RIGHT: Injection mold with liquid flowing until it hits walls.]**
 
@@ -371,9 +454,19 @@ This is why test accumulation matters. It's not just about catching bugs. It's a
 
 The more walls you have, the less you need to specify. The mold does the precision work.
 
+**[VISUAL: A prompt document with a highlighted embedded code block inside it. The code block is visually distinct — sharp edges, monospace — surrounded by flowing natural language. Label: "The boundary between prompt and code is fluid."]**
+
+But some things genuinely need code-level precision. Algorithm choice. Performance-critical inner loops. Bit-level operations.
+
+PDD handles this. A prompt can embed code snippets for exactly those critical sections. It's not all-or-nothing. You stay in prompt space for as long as possible — architecture, intent, constraints, edge cases — then dip into code when the precision demands it.
+
+**[VISUAL: A spectrum appears. LEFT end: "Pure natural language" (blue). RIGHT end: "Pure code" (gray). A slider sits mostly to the left, with a few notches toward the right. Label: "Stay in prompt space as long as possible. Dip into code when you must."]**
+
+Think of it as a spectrum. Natural language on one end, code on the other. The question isn't "prompts OR code." It's "how far into prompt space can you stay?" For most of the specification — further than you'd think.
+
 ---
 
-## PART 5: COMPOUND RETURNS (18:00 - 20:15)
+## PART 5: COMPOUND RETURNS (21:00 - 23:15)
 
 **[VISUAL: A graph with two curves. One labeled "Patching", one labeled "PDD". X-axis is time. Y-axis is "Cumulative Value of Investment".]**
 
@@ -418,14 +511,30 @@ And you're not stupid for patching code. Until now, the economics made it ration
 
 But the economics changed. And when economics change, behavior that was rational becomes... darning socks.
 
+**[VISUAL: A quote card, clean typography: "This is either the way of the future or it's going to crash and burn spectacularly." — Research engineer, after seeing PDD for the first time.]**
+
+A researcher at Microsoft, after seeing PDD for the first time, said: "This is either the way of the future or it's going to crash and burn spectacularly." He's right — it's a contrarian bet. But the economics are on our side.
+
 ---
 
-## CLOSING (20:15 - 21:30)
+## CLOSING (23:15 - 25:00)
 
 **[VISUAL: Pull back to show a complete system. Multiple modules, each with a prompt, tests, and generated code. The prompts and tests glow steadily. The code is present but not highlighted—it's output.]**
 
 **NARRATOR:**
 So here's the mental shift.
+
+**[VISUAL: A large, existing codebase. Dense. Legacy. Comments like "// don't touch", "// here be dragons". It's real. It's intimidating.]**
+
+Now — you don't work on a greenfield project. Nobody does.
+
+**[VISUAL: A single module highlights in the codebase. Terminal: `pdd update auth_handler.py`. A prompt file materializes from the existing code, glowing. The code turns gray — artifact. The prompt glows — source of truth.]**
+
+PDD can create prompts *from* existing code. Start with one module. Generate its prompt. Add tests. Regenerate. Compare. When the regenerated version passes all tests, the prompt is your new source of truth for that module.
+
+**[VISUAL: More modules highlight, one by one. Each generates a prompt. The glow spreads across the codebase. Not all at once — gradually, organically.]**
+
+One module at a time. No big bang. No rewrite. Just a gradual migration of where value lives — from code to specification.
 
 **[VISUAL: The sock metaphor returns one final time. A holey sock. A person considers it for a moment, then discards it and grabs a fresh one.]**
 
@@ -453,7 +562,7 @@ The code is just plastic.
 
 The mold is what matters.
 
-**[VISUAL: Fade to black. Title card: "Prompt-Driven Development" with URL. Below, subtle: `uv tool install pdd-cli`.]**
+**[VISUAL: Fade to black. Title card: "Prompt-Driven Development" with URL. Below, two lines: `uv tool install pdd-cli` and `pdd update your_module.py`.]**
 
 ---
 
@@ -489,6 +598,16 @@ The mold is what matters.
 
 8. **The Context Window Comparison** - Split context windows showing code-filled (noisy, red highlights) vs. prompt-filled (clean, focused). Used in Part 1 and referenced again in Part 3.
 
+9. **The Double Meter** - Two side-by-side meters (Effective Context Window + Model Performance) that animate simultaneously. The "key insight" moment. Used once, with weight.
+
+10. **The Brownfield Absorption** - Existing code being "absorbed" into a glowing prompt file. Code turns gray (artifact). Prompt glows (source of truth). Used in Closing.
+
+11. **The 2×2 Grid** - Greenfield/Brownfield × In/Out-of-Distribution quadrants. Explains why productivity studies contradict each other. Used once in Part 1.
+
+12. **The Prompt-Code Spectrum** - Slider on a gradient from pure natural language (blue) to pure code (gray). Shows the boundary is fluid. Used in Part 4.
+
+13. **The Netlist Zoom** - Billion-gate chip layout with infinite zoom revealing unreviewable density. Paralleled with overwhelming code diff. Used in Part 2.
+
 ### PDD Commands Visual Placement
 
 Commands appear as subtle terminal snippets in the corner or background. They should be:
@@ -500,16 +619,19 @@ Commands appear as subtle terminal snippets in the corner or background. They sh
 | Timestamp | Section | Command Shown |
 |-----------|---------|---------------|
 | 0:38 | Cold open regeneration | `pdd generate` |
-| 11:45 | Bug discovered, add test | `pdd bug user_parser` |
-| 12:02 | Regenerate after test | `pdd fix user_parser` |
-| 12:30 | Test accumulation | `pdd test` (scrolling output) |
-| 12:55 | Split screen comparison | `pdd bug` → `pdd fix` |
-| 13:40 | Prompt file | `user_parser.prompt` visible |
-| 13:55 | Generate variations | `pdd generate` (twice) |
-| 14:45 | Grounding feedback | Arrow to cloud after `pdd fix` |
-| 17:00 | Many tests | `pdd test parser` (47 passing) |
-| 20:15 | Final workflow | `pdd bug → pdd fix → ✓` |
-| 21:15 | End card | `uv tool install pdd-cli` |
+| 2:05 | 30-second demo: generate | `pdd generate email_validator` |
+| 2:15 | 30-second demo: fix | `pdd fix email_validator` |
+| 13:45 | Bug discovered, add test | `pdd bug user_parser` |
+| 14:02 | Regenerate after test | `pdd fix user_parser` |
+| 14:30 | Test accumulation | `pdd test` (scrolling output) |
+| 14:55 | Split screen comparison | `pdd bug` → `pdd fix` |
+| 16:00 | Prompt file | `user_parser.prompt` visible |
+| 16:15 | Generate variations | `pdd generate` (twice) |
+| 17:15 | Grounding feedback | Arrow to cloud after `pdd fix` |
+| 19:30 | Many tests | `pdd test parser` (47 passing) |
+| 22:30 | Final workflow | `pdd bug → pdd fix → ✓` |
+| 23:30 | Brownfield adoption | `pdd update auth_handler.py` |
+| 24:45 | End card | `uv tool install pdd-cli` + `pdd update your_module.py` |
 
 ### Animation Principles
 - Smooth easing on all transitions (3B1B signature style)

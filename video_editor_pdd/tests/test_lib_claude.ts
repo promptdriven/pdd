@@ -194,6 +194,13 @@ describe("parseJsonWithFallback — brace matching fallback", () => {
     );
     warnSpy.mockRestore();
   });
+
+  it("handles brace-in-text before actual JSON", () => {
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation();
+    const output = 'I\'ll use { braces } to explain:\n{"result": true}';
+    expect(parseJsonWithFallback(output)).toEqual({ result: true });
+    warnSpy.mockRestore();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -730,8 +737,9 @@ describe("lib/claude.ts source structure", () => {
   });
 
   it("uses brace matching for final fallback", () => {
-    expect(sourceCode).toMatch(/indexOf\s*\(\s*['"]?\{/);
     expect(sourceCode).toMatch(/lastIndexOf\s*\(\s*['"]?\}/);
+    // Scans '{' positions right-to-left for robust extraction
+    expect(sourceCode).toMatch(/stdout\[i\]\s*===\s*['"]?\{/);
   });
 
   it("calls console.warn for fallback strategies", () => {

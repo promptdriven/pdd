@@ -411,6 +411,22 @@ describe("keyboard shortcut input exclusion", () => {
 });
 
 // ---------------------------------------------------------------------------
+// 19b. Keyboard shortcut guard — contenteditable
+// ---------------------------------------------------------------------------
+
+describe("Keyboard shortcut guard", () => {
+  it("checks for contenteditable elements in keyboard handler", () => {
+    expect(sourceCode).toMatch(/isContentEditable/);
+  });
+
+  it("prevents shortcuts from firing in input, textarea, and contenteditable", () => {
+    expect(sourceCode).toMatch(/tagName === 'input'/);
+    expect(sourceCode).toMatch(/tagName === 'textarea'/);
+    expect(sourceCode).toMatch(/isContentEditable/);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 20. Web Speech API
 // ---------------------------------------------------------------------------
 

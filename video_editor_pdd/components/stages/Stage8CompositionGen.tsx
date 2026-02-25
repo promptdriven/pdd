@@ -40,11 +40,11 @@ const COLLAPSE_STORAGE_KEY = 'stage8-collapsed-sections';
  */
 function StatusBadge({ status, error }: { status: ComponentStatus; error?: string | null }) {
   const styleMap: Record<ComponentStatus, string> = {
-    done: 'bg-green-100 text-green-700 border-green-200',
-    missing: 'bg-yellow-100 text-yellow-700 border-yellow-200',
-    error: 'bg-red-100 text-red-700 border-red-200',
-    running: 'bg-blue-100 text-blue-700 border-blue-200',
-    pending: 'bg-slate-100 text-slate-600 border-slate-200',
+    done: 'bg-green-900/50 text-green-300 border-green-700',
+    missing: 'bg-yellow-900/50 text-yellow-300 border-yellow-700',
+    error: 'bg-red-900/50 text-red-300 border-red-700',
+    running: 'bg-blue-900/50 text-blue-300 border-blue-700',
+    pending: 'bg-slate-700 text-slate-200 border-slate-600',
   };
 
   const labelMap: Record<ComponentStatus, string> = {
@@ -242,9 +242,9 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
 
       <div className="grid gap-4 lg:grid-cols-2">
         {/* Left panel */}
-        <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="rounded-lg border border-slate-700 bg-slate-900 p-4 shadow-sm">
           <div className="mb-3 flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-slate-700">
+            <h3 className="text-sm font-semibold text-slate-200">
               Components ({totalComponents})
             </h3>
             <button
@@ -265,9 +265,9 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
             sections.map((section) => {
               const isCollapsed = collapsed[section.id];
               return (
-                <div key={section.id} className="mb-3 rounded border border-slate-100">
+                <div key={section.id} className="mb-3 rounded border border-slate-700">
                   <button
-                    className="flex w-full items-center justify-between px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                    className="flex w-full items-center justify-between px-3 py-2 text-left text-sm font-semibold text-slate-200 hover:bg-slate-700"
                     onClick={() => toggleSection(section.id)}
                   >
                     <span>{section.label}</span>
@@ -276,27 +276,27 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
                     </span>
                   </button>
                   {!isCollapsed && (
-                    <div className="divide-y divide-slate-100">
+                    <div className="divide-y divide-slate-700">
                       {section.components.map((component) => (
                         <div
                           key={component.name}
                           className="flex items-center justify-between px-3 py-2 text-sm"
                         >
                           <div className="flex items-center gap-2">
-                            <span className="font-medium text-slate-700">
+                            <span className="font-medium text-slate-200">
                               {component.name}
                             </span>
                             <StatusBadge status={component.status} error={component.error} />
                           </div>
                           <div className="flex items-center gap-2">
                             <button
-                              className="rounded border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50"
+                              className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700"
                               onClick={() => openPreview(component.name)}
                             >
                               Preview
                             </button>
                             <button
-                              className="rounded border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50"
+                              className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700"
                               onClick={() =>
                                 runJob(
                                   '/api/pipeline/compositions/run',
@@ -321,7 +321,7 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
             })}
 
           <div className="mt-4">
-            <h4 className="text-sm font-semibold text-slate-700">Section Wrappers</h4>
+            <h4 className="text-sm font-semibold text-slate-200">Section Wrappers</h4>
             <div className="mt-2 space-y-2">
               {sectionWrappers.length === 0 && (
                 <p className="text-xs text-slate-500">No section wrappers available.</p>
@@ -329,11 +329,11 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
               {sectionWrappers.map(({ wrapper, sectionId, sectionLabel }) => (
                 <div
                   key={`${sectionId}-${wrapper.name}`}
-                  className="flex items-center justify-between rounded border border-slate-100 px-3 py-2 text-sm"
+                  className="flex items-center justify-between rounded border border-slate-700 px-3 py-2 text-sm"
                 >
                   <div>
-                    <p className="font-medium text-slate-700">{wrapper.name}</p>
-                    <p className="text-xs text-slate-500">{sectionLabel}</p>
+                    <p className="font-medium text-slate-200">{wrapper.name}</p>
+                    <p className="text-xs text-slate-400">{sectionLabel}</p>
                   </div>
                   <StatusBadge status={wrapper.status} error={wrapper.error} />
                 </div>
@@ -343,9 +343,9 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
         </div>
 
         {/* Right panel */}
-        <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="rounded-lg border border-slate-700 bg-slate-900 p-4 shadow-sm">
           <div className="mb-3 flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-slate-700">Asset Staging Manifest</h3>
+            <h3 className="text-sm font-semibold text-slate-200">Asset Staging Manifest</h3>
             <button
               className="rounded bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
               onClick={() =>
@@ -369,7 +369,7 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
 
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
-              <thead className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
+              <thead className="border-b border-slate-700 text-left text-xs uppercase tracking-wide text-slate-400">
                 <tr>
                   <th className="py-2 pr-2">Filename</th>
                   <th className="py-2 pr-2">Expected</th>
@@ -377,10 +377,10 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
                   <th className="py-2">Action</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y divide-slate-700">
                 {stagingManifest.map((entry) => (
                   <tr key={entry.filename}>
-                    <td className="py-2 pr-2 text-slate-700">{entry.filename}</td>
+                    <td className="py-2 pr-2 text-slate-200">{entry.filename}</td>
                     <td className="py-2 pr-2">
                       {entry.expected ? (
                         <span className="text-green-600">✓</span>
@@ -398,7 +398,7 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
                     <td className="py-2">
                       {!entry.present && entry.expected && (
                         <button
-                          className="rounded border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50"
+                          className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700"
                           onClick={() =>
                             runJob(
                               '/api/pipeline/asset-staging/run',
@@ -427,7 +427,7 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
 
           <div className="mt-4">
             <button
-              className="flex w-full items-center justify-between rounded border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              className="flex w-full items-center justify-between rounded border border-slate-700 px-3 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-700"
               onClick={() => setLogOpen((prev) => !prev)}
             >
               <span>Job Logs</span>
@@ -436,7 +436,7 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
               </span>
             </button>
             {logOpen && (
-              <div className="mt-3 rounded border border-slate-100 bg-slate-50 p-3">
+              <div className="mt-3 rounded border border-slate-700 bg-slate-800 p-3">
                 <SseLogPanel
                   jobId={activeJobId}
                   onDone={() => {
@@ -455,14 +455,14 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
       {/* Preview modal */}
       <dialog
         ref={previewDialogRef}
-        className="rounded-lg border border-slate-200 p-0 shadow-xl backdrop:bg-black/40"
+        className="rounded-lg border border-slate-700 p-0 shadow-xl backdrop:bg-black/40"
       >
-        <div className="flex items-center justify-between border-b border-slate-200 px-4 py-2">
-          <div className="text-sm font-semibold text-slate-700">
+        <div className="flex items-center justify-between border-b border-slate-700 px-4 py-2">
+          <div className="text-sm font-semibold text-slate-200">
             Preview {previewName ? `· ${previewName}` : ''}
           </div>
           <button
-            className="rounded px-2 py-1 text-xs text-slate-500 hover:bg-slate-100"
+            className="rounded px-2 py-1 text-xs text-slate-400 hover:bg-slate-700"
             onClick={closePreview}
           >
             Close

@@ -545,3 +545,43 @@ describe("FullVideoInfo interface", () => {
     expect(sourceCode).toMatch(/durationSeconds\?:\s*number/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 20. Dark theme compliance
+// ---------------------------------------------------------------------------
+
+describe("Dark theme compliance", () => {
+  it("panels use dark background instead of bg-white", () => {
+    expect(sourceCode).not.toMatch(/className="[^"]*bg-white[^"]*"/);
+  });
+
+  it("select dropdown uses dark theme", () => {
+    expect(sourceCode).toMatch(/bg-slate-800/);
+  });
+
+  it("disabled stitch button uses dark colors", () => {
+    expect(sourceCode).not.toMatch(/bg-slate-300 text-slate-600/);
+    expect(sourceCode).toMatch(/bg-slate-700 text-slate-400/);
+  });
+
+  it("status badges use dark theme colors", () => {
+    expect(sourceCode).not.toMatch(/bg-green-100 text-green-700/);
+    expect(sourceCode).toMatch(/bg-green-900/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 21. handleRerenderSection logic
+// ---------------------------------------------------------------------------
+
+describe("handleRerenderSection logic", () => {
+  it("renders the specific section by ID instead of relying on selected state", () => {
+    // Should pass sectionId directly to fetch, not go through handleRender('selected')
+    const funcBody = sourceCode.slice(
+      sourceCode.indexOf('handleRerenderSection'),
+      sourceCode.indexOf('handleRerenderSection') + 500
+    );
+    expect(funcBody).toMatch(/sections:\s*\[sectionId\]/);
+    expect(funcBody).not.toMatch(/handleRender\('selected'\)/);
+  });
+});

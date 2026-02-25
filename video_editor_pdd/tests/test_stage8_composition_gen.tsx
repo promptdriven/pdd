@@ -218,3 +218,29 @@ describe("Log Drawer", () => {
     expect(sourceCode).toMatch(/jobId=\{activeJobId\}/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 11. Dark theme compliance
+// ---------------------------------------------------------------------------
+
+describe("Dark theme compliance", () => {
+  it("panels use dark background instead of bg-white", () => {
+    expect(sourceCode).not.toMatch(/border-slate-200 bg-white/);
+  });
+
+  it("text elements use light colors for dark theme", () => {
+    // Should not have text-slate-700 which is too dark
+    const nonStringMatches = sourceCode.match(/className="[^"]*text-slate-700[^"]*"/g) || [];
+    expect(nonStringMatches.length).toBe(0);
+  });
+
+  it("StatusBadge pending uses dark theme colors", () => {
+    expect(sourceCode).not.toMatch(/bg-slate-100 text-slate-600/);
+    expect(sourceCode).toMatch(/bg-slate-700 text-slate-200 border-slate-600/);
+  });
+
+  it("dividers use dark slate borders", () => {
+    expect(sourceCode).not.toMatch(/divide-slate-100/);
+    expect(sourceCode).not.toMatch(/border-slate-100/);
+  });
+});

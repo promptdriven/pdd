@@ -105,5 +105,14 @@ describe('lib/git', () => {
       mockExecSync.mockImplementation(() => { throw new Error('conflict'); });
       expect(() => revertFix('abc123')).toThrow('Failed to revert');
     });
+
+    it('includes original git error in revert failure message', () => {
+      // Simulate a realistic execSync error with stderr (as Node child_process produces)
+      const execError = new Error('Command failed: git revert --no-edit abc123');
+      (execError as any).stderr = Buffer.from('error: could not revert abc123... dirty working tree');
+      (execError as any).status = 1;
+      mockExecSync.mockImplementation(() => { throw execError; });
+      expect(() => revertFix('abc123')).toThrow('dirty working tree');
+    });
   });
 });

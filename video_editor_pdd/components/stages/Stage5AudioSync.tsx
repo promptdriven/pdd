@@ -297,7 +297,7 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
             >
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="text-left bg-slate-800 text-slate-300">
+                  <tr className="text-left bg-slate-800 text-slate-300 sticky top-0 z-10">
                     <th className="py-2 px-2">Word</th>
                     <th className="py-2 px-2">Start</th>
                     <th className="py-2 px-2">End</th>

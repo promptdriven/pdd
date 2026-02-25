@@ -278,7 +278,7 @@ describe("parseSegmentsFromScript", () => {
 
     const path = require("path");
     expect(mockExistsSync).toHaveBeenCalledWith(
-      path.join(process.cwd(), "tts_script.md")
+      path.join(process.cwd(), "narrative", "tts_script.md")
     );
   });
 
@@ -501,7 +501,7 @@ describe("POST — spawn command", () => {
     expect(mockSpawn).toHaveBeenCalled();
     const [cmd, args] = mockSpawn.mock.calls[0];
     expect(cmd).toBe("python3");
-    expect(args[0]).toBe("render_tts.py");
+    expect(args[0]).toBe("scripts/render_tts.py");
   });
 
   it("passes --segment flags when segments are provided", async () => {
@@ -524,7 +524,7 @@ describe("POST — spawn command", () => {
 
     const [, args] = mockSpawn.mock.calls[0];
     expect(args).toEqual([
-      "render_tts.py",
+      "scripts/render_tts.py",
       "--segment", "a",
       "--segment", "b",
       "--segment", "c",
@@ -548,7 +548,7 @@ describe("POST — spawn command", () => {
     await flushPromises();
 
     const [, args] = mockSpawn.mock.calls[0];
-    expect(args).toEqual(["render_tts.py"]);
+    expect(args).toEqual(["scripts/render_tts.py"]);
   });
 });
 

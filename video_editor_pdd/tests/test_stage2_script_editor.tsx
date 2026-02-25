@@ -255,12 +255,12 @@ describe("structured preview parser", () => {
     expect(sourceCode).toMatch(/text\.split\s*\(\s*\/\\r\?\\n\/\s*\)/);
   });
 
-  it("detects NARRATOR: blocks with regex /^NARRATOR:/", () => {
-    expect(sourceCode).toMatch(/\/\^NARRATOR:\/\.test\s*\(\s*line\s*\)/);
+  it("detects NARRATOR: blocks with regex /^\\*{0,2}NARRATOR:\\*{0,2}/", () => {
+    expect(sourceCode).toMatch(/\/\^\\\*\{0,2\}NARRATOR:\\\*\{0,2\}\/\.test\s*\(\s*line\s*\)/);
   });
 
-  it("detects [VISUAL: blocks with regex /^\\[VISUAL:/", () => {
-    expect(sourceCode).toMatch(/\/\^\\\[VISUAL:\/\.test\s*\(\s*line\s*\)/);
+  it("detects [VISUAL: blocks with regex /^\\*{0,2}\\[VISUAL:/", () => {
+    expect(sourceCode).toMatch(/\/\^\\\*\{0,2\}\\\[VISUAL:\/\.test\s*\(\s*line\s*\)/);
   });
 
   it("detects ## headers with regex /^##\\s+/", () => {
@@ -468,7 +468,7 @@ describe("Generate TTS Script button", () => {
   });
 
   it("button has disabled styling when no narrator or generating", () => {
-    expect(sourceCode).toMatch(/bg-slate-200\s+text-slate-500\s+cursor-not-allowed/);
+    expect(sourceCode).toMatch(/bg-slate-700\s+text-slate-400\s+cursor-not-allowed/);
   });
 });
 
@@ -533,7 +533,7 @@ describe("SseLogPanel integration", () => {
   });
 
   it("wraps SseLogPanel in a bordered container", () => {
-    expect(sourceCode).toMatch(/border-t\s+border-slate-200/);
+    expect(sourceCode).toMatch(/border-t\s+border-slate-700/);
   });
 });
 
@@ -572,8 +572,8 @@ describe("layout and structure", () => {
     expect(sourceCode).toMatch(/w-full\s+h-full\s+flex\s+flex-col/);
   });
 
-  it("header has border-b and bg-white", () => {
-    expect(sourceCode).toMatch(/border-b\s+border-slate-200\s+bg-white/);
+  it("header has border-b and dark background", () => {
+    expect(sourceCode).toMatch(/border-b\s+border-slate-700\s+bg-slate-900/);
   });
 
   it("split pane container has flex-1 and overflow-hidden", () => {
@@ -593,5 +593,39 @@ describe("ScriptResponse type", () => {
   it("defines ScriptResponse type with content: string", () => {
     expect(sourceCode).toMatch(/type\s+ScriptResponse\s*=\s*\{/);
     expect(sourceCode).toMatch(/content\s*:\s*string/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 22. Dark theme compliance
+// ---------------------------------------------------------------------------
+
+describe("Dark theme compliance", () => {
+  it("header uses dark background instead of bg-white", () => {
+    expect(sourceCode).not.toMatch(/className="[^"]*bg-white[^"]*".*Stage 2/);
+    expect(sourceCode).toMatch(/bg-slate-900/);
+  });
+
+  it("header text uses light color", () => {
+    expect(sourceCode).toMatch(/text-slate-100/);
+  });
+
+  it("footer/SSE panel uses dark background", () => {
+    expect(sourceCode).not.toMatch(/border-t border-slate-200 bg-white/);
+  });
+
+  it("disabled button uses dark theme colors", () => {
+    expect(sourceCode).not.toMatch(/bg-slate-200 text-slate-500/);
+    expect(sourceCode).toMatch(/bg-slate-700 text-slate-400/);
+  });
+
+  it("split pane uses dark background", () => {
+    expect(sourceCode).not.toMatch(/bg-slate-50/);
+  });
+
+  it("preview blocks use content-based keys instead of index", () => {
+    // Should not have bare key={idx} without prefix
+    const previewSection = sourceCode.slice(sourceCode.indexOf('previewBlocks.map'));
+    expect(previewSection).not.toMatch(/key=\{idx\}/);
   });
 });

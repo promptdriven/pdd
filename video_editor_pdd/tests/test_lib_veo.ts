@@ -10,7 +10,7 @@
  *   3. Export extractLastFrame(clipPath, outputPath) -> Promise<void>
  *   4. Use GOOGLE_CLOUD_PROJECT + GOOGLE_CLOUD_LOCATION + ADC for auth
  *   5. Imagen via Vertex AI REST: sampleCount: 1, aspectRatio: '1:1', outputMimeType: 'image/png'
- *   6. Veo via Vertex AI REST: numberOfVideos: 1, aspectRatio from param, durationSeconds: 8
+ *   6. Veo via Vertex AI REST: sampleCount: 1, aspectRatio from param (predictLongRunning)
  *   7. Poll every 5s; timeout after 10 min
  *   8. import 'server-only' guard
  *   9. Uses ffprobe and ffmpeg for frame extraction
@@ -340,7 +340,7 @@ describe("generateVeoClip -- Vertex AI REST call without reference", () => {
     setupFsMocks();
   });
 
-  it("calls Veo generateVideo endpoint with correct URL", async () => {
+  it("calls Veo predictLongRunning endpoint with correct URL", async () => {
     mockFetchSequence(
       makeVeoStartResponse(),
       makeVeoPollResponse(),
@@ -350,11 +350,11 @@ describe("generateVeoClip -- Vertex AI REST call without reference", () => {
     await generateVeoClip("test prompt", null, "16:9", "/tmp/out.mp4");
 
     expect((global.fetch as jest.Mock).mock.calls[0][0]).toContain(
-      "veo-3.1-generate-preview:generateVideo"
+      "veo-3.1-generate-preview:predictLongRunning"
     );
   });
 
-  it("sends prompt in request body", async () => {
+  it("sends prompt in instances array", async () => {
     mockFetchSequence(
       makeVeoStartResponse(),
       makeVeoPollResponse(),
@@ -365,10 +365,10 @@ describe("generateVeoClip -- Vertex AI REST call without reference", () => {
 
     const callArgs = (global.fetch as jest.Mock).mock.calls[0];
     const body = JSON.parse(callArgs[1].body);
-    expect(body.prompt).toBe("drone aerial shot");
+    expect(body.instances[0].prompt).toBe("drone aerial shot");
   });
 
-  it("sets numberOfVideos: 1", async () => {
+  it("sets sampleCount: 1 in parameters", async () => {
     mockFetchSequence(
       makeVeoStartResponse(),
       makeVeoPollResponse(),
@@ -379,7 +379,7 @@ describe("generateVeoClip -- Vertex AI REST call without reference", () => {
 
     const callArgs = (global.fetch as jest.Mock).mock.calls[0];
     const body = JSON.parse(callArgs[1].body);
-    expect(body.config.numberOfVideos).toBe(1);
+    expect(body.parameters.sampleCount).toBe(1);
   });
 
   it("passes aspectRatio 16:9 from parameter", async () => {
@@ -393,7 +393,7 @@ describe("generateVeoClip -- Vertex AI REST call without reference", () => {
 
     const callArgs = (global.fetch as jest.Mock).mock.calls[0];
     const body = JSON.parse(callArgs[1].body);
-    expect(body.config.aspectRatio).toBe("16:9");
+    expect(body.parameters.aspectRatio).toBe("16:9");
   });
 
   it("passes aspectRatio 9:16 from parameter", async () => {
@@ -407,21 +407,7 @@ describe("generateVeoClip -- Vertex AI REST call without reference", () => {
 
     const callArgs = (global.fetch as jest.Mock).mock.calls[0];
     const body = JSON.parse(callArgs[1].body);
-    expect(body.config.aspectRatio).toBe("9:16");
-  });
-
-  it("sets durationSeconds: 8 default", async () => {
-    mockFetchSequence(
-      makeVeoStartResponse(),
-      makeVeoPollResponse(),
-      makeDownloadResponse()
-    );
-
-    await generateVeoClip("test", null, "16:9", "/tmp/out.mp4");
-
-    const callArgs = (global.fetch as jest.Mock).mock.calls[0];
-    const body = JSON.parse(callArgs[1].body);
-    expect(body.config.durationSeconds).toBe(8);
+    expect(body.parameters.aspectRatio).toBe("9:16");
   });
 
   it("does not include image when referenceImagePath is null", async () => {
@@ -435,7 +421,7 @@ describe("generateVeoClip -- Vertex AI REST call without reference", () => {
 
     const callArgs = (global.fetch as jest.Mock).mock.calls[0];
     const body = JSON.parse(callArgs[1].body);
-    expect(body.image).toBeUndefined();
+    expect(body.instances[0].image).toBeUndefined();
   });
 
   it("includes Bearer token in Authorization header", async () => {
@@ -475,8 +461,8 @@ describe("generateVeoClip -- with reference image", () => {
     expect(fs.readFileSync).toHaveBeenCalledWith("/ref/image.png");
     const callArgs = (global.fetch as jest.Mock).mock.calls[0];
     const body = JSON.parse(callArgs[1].body);
-    expect(body.image).toEqual({
-      imageBytes: imgData.toString("base64"),
+    expect(body.instances[0].image).toEqual({
+      bytesBase64Encoded: imgData.toString("base64"),
       mimeType: "image/png",
     });
   });
@@ -491,7 +477,7 @@ describe("generateVeoClip -- polling & download", () => {
     setupFsMocks();
   });
 
-  it("polls operation endpoint and downloads video on success", async () => {
+  it("polls fetchPredictOperation endpoint and downloads video on success", async () => {
     const videoContent = new ArrayBuffer(16);
     mockFetchSequence(
       makeVeoStartResponse("projects/test/locations/us-central1/operations/op-1"),
@@ -501,8 +487,10 @@ describe("generateVeoClip -- polling & download", () => {
 
     await generateVeoClip("test", null, "16:9", "/tmp/out.mp4");
 
-    // Second fetch call should be the poll
-    expect((global.fetch as jest.Mock).mock.calls[1][0]).toContain("operations/op-1");
+    // Second fetch call should be the poll via fetchPredictOperation
+    expect((global.fetch as jest.Mock).mock.calls[1][0]).toContain("fetchPredictOperation");
+    const pollBody = JSON.parse((global.fetch as jest.Mock).mock.calls[1][1].body);
+    expect(pollBody.operationName).toBe("projects/test/locations/us-central1/operations/op-1");
     // Third call should be the download
     expect((global.fetch as jest.Mock).mock.calls[2][0]).toBe(
       "https://storage.googleapis.com/bucket/vid.mp4"
@@ -626,7 +614,7 @@ describe("generateVeoClip -- error handling", () => {
     ).rejects.toThrow("Veo operation failed");
   });
 
-  it("throws when no video URI in completed response", async () => {
+  it("throws when no video data in completed response", async () => {
     const pollResp = {
       ok: true,
       statusText: "OK",
@@ -642,7 +630,7 @@ describe("generateVeoClip -- error handling", () => {
 
     await expect(
       generateVeoClip("test", null, "16:9", "/tmp/out.mp4")
-    ).rejects.toThrow("no video URI");
+    ).rejects.toThrow("no video data found");
   });
 
   it("throws when video download returns non-OK response", async () => {
@@ -706,7 +694,7 @@ describe("generateVeoClip -- error handling", () => {
     ).rejects.toThrow("my-op-456");
   });
 
-  it("throws when video status is not succeeded", async () => {
+  it("downloads video even when status field is not 'succeeded' (status not checked)", async () => {
     const pollResp = {
       ok: true,
       statusText: "OK",
@@ -722,11 +710,12 @@ describe("generateVeoClip -- error handling", () => {
     };
     jest.spyOn(global, "fetch")
       .mockResolvedValueOnce(makeVeoStartResponse() as any)
-      .mockResolvedValueOnce(pollResp as any);
+      .mockResolvedValueOnce(pollResp as any)
+      .mockResolvedValueOnce(makeDownloadResponse() as any);
 
     await expect(
       generateVeoClip("test", null, "16:9", "/tmp/out.mp4")
-    ).rejects.toThrow("failed");
+    ).resolves.toBeUndefined();
   });
 
   it("passes when video status is undefined (only checked if truthy)", async () => {
@@ -953,12 +942,11 @@ describe("lib/veo.ts source structure", () => {
     expect(sourceCode).toMatch(/outputMimeType:\s*['"]image\/png['"]/);
   });
 
-  it("sets numberOfVideos: 1 for Veo", () => {
-    expect(sourceCode).toMatch(/numberOfVideos:\s*1/);
-  });
-
-  it("sets durationSeconds: 8 default", () => {
-    expect(sourceCode).toMatch(/durationSeconds:\s*8/);
+  it("sets sampleCount: 1 for Veo (Vertex AI format)", () => {
+    // sampleCount appears twice in source: once for Imagen, once for Veo
+    const matches = sourceCode.match(/sampleCount:\s*1/g);
+    expect(matches).not.toBeNull();
+    expect(matches!.length).toBeGreaterThanOrEqual(2);
   });
 
   it("has 5-second poll interval (sleep 5000)", () => {

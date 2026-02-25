@@ -515,17 +515,17 @@ describe("status badge rendering", () => {
   });
 
   it("renders green badge for done status", () => {
-    expect(sourceCode).toMatch(/bg-green-100\s+text-green-800/);
+    expect(sourceCode).toMatch(/bg-green-900\/50\s+text-green-400/);
     expect(sourceCode).toMatch(/>done</);
   });
 
   it("renders red badge for error status", () => {
-    expect(sourceCode).toMatch(/bg-red-100\s+text-red-800/);
+    expect(sourceCode).toMatch(/bg-red-900\/50\s+text-red-400/);
     expect(sourceCode).toMatch(/>error</);
   });
 
   it("renders yellow badge for missing status", () => {
-    expect(sourceCode).toMatch(/bg-yellow-100\s+text-yellow-800/);
+    expect(sourceCode).toMatch(/bg-yellow-900\/50\s+text-yellow-400/);
     expect(sourceCode).toMatch(/>missing</);
   });
 
@@ -582,7 +582,7 @@ describe("Advance button", () => {
   });
 
   it("button has disabled styling when allDone is false", () => {
-    expect(sourceCode).toMatch(/bg-slate-300\s+text-slate-600/);
+    expect(sourceCode).toMatch(/bg-slate-700\s+text-slate-500/);
   });
 
   it("conditionally applies styling based on allDone", () => {
@@ -779,7 +779,7 @@ describe("error display", () => {
   });
 
   it("uses red styling for error display", () => {
-    expect(sourceCode).toMatch(/bg-red-50\s+border\s+border-red-200\s+text-red-700/);
+    expect(sourceCode).toMatch(/bg-red-900\/30\s+border\s+border-red-700\s+text-red-400/);
   });
 });
 

@@ -368,8 +368,9 @@ describe("audio-sync executor factory", () => {
 
     expect(mockSpawn).toHaveBeenCalled();
     const [cmd, args] = mockSpawn.mock.calls[0];
+    const path = require("path");
     expect(cmd).toBe("python3");
-    expect(args).toEqual(["sync_audio_pipeline.py"]);
+    expect(args).toEqual([path.join("scripts", "sync_audio_pipeline.py")]);
   });
 
   it("spawns with cwd set to process.cwd()", async () => {

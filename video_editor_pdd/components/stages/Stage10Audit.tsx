@@ -60,6 +60,8 @@ export default function Stage10Audit({ onAdvance, onCreateAnnotation }: Stage10A
   const [specContent, setSpecContent] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [auditDropdownOpen, setAuditDropdownOpen] = useState(false);
+  const auditDropdownRef = useRef<HTMLDivElement>(null);
 
   // Frame modal
   const dialogRef = useRef<HTMLDialogElement | null>(null);
@@ -117,6 +119,17 @@ export default function Stage10Audit({ onAdvance, onCreateAnnotation }: Stage10A
     };
     return () => es.close();
   }, []);
+
+  useEffect(() => {
+    if (!auditDropdownOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (auditDropdownRef.current && !auditDropdownRef.current.contains(e.target as Node)) {
+        setAuditDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [auditDropdownOpen]);
 
   const handleAuditRun = useCallback(async (sectionId?: string) => {
     await fetch('/api/pipeline/audit/run', {
@@ -189,22 +202,30 @@ export default function Stage10Audit({ onAdvance, onCreateAnnotation }: Stage10A
             Audit All Sections
           </button>
 
-          <details className="relative">
-            <summary className="cursor-pointer px-3 py-1.5 rounded bg-white/10 text-white text-sm list-none">
+          <div className="relative" ref={auditDropdownRef}>
+            <button
+              onClick={() => setAuditDropdownOpen((prev) => !prev)}
+              className="cursor-pointer px-3 py-1.5 rounded bg-white/10 text-white text-sm"
+            >
               Audit Section ▾
-            </summary>
-            <div className="absolute right-0 mt-2 bg-gray-800 border border-white/10 rounded shadow-md z-10 w-48">
-              {sectionOptions.map((opt) => (
-                <button
-                  key={opt.id}
-                  onClick={() => handleAuditRun(opt.id)}
-                  className="w-full text-left px-3 py-2 hover:bg-white/10 text-sm text-white"
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-          </details>
+            </button>
+            {auditDropdownOpen && (
+              <div className="absolute right-0 mt-2 bg-gray-800 border border-white/10 rounded shadow-md z-10 w-48">
+                {sectionOptions.map((opt) => (
+                  <button
+                    key={opt.id}
+                    onClick={() => {
+                      handleAuditRun(opt.id);
+                      setAuditDropdownOpen(false);
+                    }}
+                    className="w-full text-left px-3 py-2 hover:bg-white/10 text-sm text-white"
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </header>
 

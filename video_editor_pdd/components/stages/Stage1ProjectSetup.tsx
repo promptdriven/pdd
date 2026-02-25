@@ -204,7 +204,7 @@ export default function Stage1ProjectSetup({
             <input
               value={localConfig.name}
               onChange={(e) => updateConfig('name', e.target.value)}
-              className="w-full border rounded px-3 py-2"
+              className="w-full border border-slate-600 rounded px-3 py-2 bg-slate-700 text-white"
             />
           </div>
 
@@ -218,7 +218,7 @@ export default function Stage1ProjectSetup({
                 const [w, h] = e.target.value.split('x').map(Number);
                 updateConfig('outputResolution', { width: w, height: h });
               }}
-              className="w-full border rounded px-3 py-2"
+              className="w-full border border-slate-600 rounded px-3 py-2 bg-slate-700 text-white"
             >
               {OUTPUT_RESOLUTIONS.map((opt) => (
                 <option key={opt.value} value={opt.value}>
@@ -233,7 +233,7 @@ export default function Stage1ProjectSetup({
             <input
               value={localConfig.tts.speaker}
               onChange={(e) => updateNested('tts', 'speaker', e.target.value)}
-              className="w-full border rounded px-3 py-2"
+              className="w-full border border-slate-600 rounded px-3 py-2 bg-slate-700 text-white"
             />
           </div>
 
@@ -248,7 +248,7 @@ export default function Stage1ProjectSetup({
               onChange={(e) =>
                 updateNested('tts', 'speakingRate', Number(e.target.value))
               }
-              className="w-full border rounded px-3 py-2"
+              className="w-full border border-slate-600 rounded px-3 py-2 bg-slate-700 text-white"
             />
           </div>
 
@@ -263,7 +263,7 @@ export default function Stage1ProjectSetup({
               onChange={(e) =>
                 updateNested('tts', 'sampleRate', Number(e.target.value))
               }
-              className="w-full border rounded px-3 py-2"
+              className="w-full border border-slate-600 rounded px-3 py-2 bg-slate-700 text-white"
             />
           </div>
 
@@ -272,7 +272,7 @@ export default function Stage1ProjectSetup({
             <input
               value={localConfig.veo.model}
               onChange={(e) => updateNested('veo', 'model', e.target.value)}
-              className="w-full border rounded px-3 py-2"
+              className="w-full border border-slate-600 rounded px-3 py-2 bg-slate-700 text-white"
             />
           </div>
 
@@ -285,7 +285,7 @@ export default function Stage1ProjectSetup({
               onChange={(e) =>
                 updateNested('veo', 'defaultAspectRatio', e.target.value as '16:9' | '9:16')
               }
-              className="w-full border rounded px-3 py-2"
+              className="w-full border border-slate-600 rounded px-3 py-2 bg-slate-700 text-white"
             >
               {VEO_ASPECT_RATIOS.map((opt) => (
                 <option key={opt.value} value={opt.value}>
@@ -307,7 +307,7 @@ export default function Stage1ProjectSetup({
               onChange={(e) =>
                 updateNested('render', 'maxParallelRenders', Number(e.target.value))
               }
-              className="w-full border rounded px-3 py-2"
+              className="w-full border border-slate-600 rounded px-3 py-2 bg-slate-700 text-white"
             />
           </div>
         </div>
@@ -358,7 +358,7 @@ export default function Stage1ProjectSetup({
                                 prev ? { ...prev, id: e.target.value } : prev
                               )
                             }
-                            className="border rounded px-2 py-1 w-full"
+                            className="border border-slate-600 rounded px-2 py-1 w-full bg-slate-700 text-white"
                           />
                         ) : (
                           section.id
@@ -373,7 +373,7 @@ export default function Stage1ProjectSetup({
                                 prev ? { ...prev, label: e.target.value } : prev
                               )
                             }
-                            className="border rounded px-2 py-1 w-full"
+                            className="border border-slate-600 rounded px-2 py-1 w-full bg-slate-700 text-white"
                           />
                         ) : (
                           section.label
@@ -390,7 +390,7 @@ export default function Stage1ProjectSetup({
                                   : prev
                               )
                             }
-                            className="border rounded px-2 py-1 w-full"
+                            className="border border-slate-600 rounded px-2 py-1 w-full bg-slate-700 text-white"
                           />
                         ) : (
                           section.compositionId

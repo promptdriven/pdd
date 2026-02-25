@@ -659,3 +659,26 @@ describe("StagePanelProps compatibility", () => {
     expect(sourceCode).toMatch(/(!projectConfig|!localConfig|loading|null)/i);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 21. Dark theme input styling
+// ---------------------------------------------------------------------------
+
+describe("Dark theme input styling", () => {
+  it("form inputs include dark background and text color", () => {
+    expect(sourceCode).toMatch(/bg-slate-700/);
+    expect(sourceCode).toMatch(/text-white/);
+  });
+
+  it("form inputs include dark border color", () => {
+    expect(sourceCode).toMatch(/border-slate-600/);
+  });
+
+  it("no bare unstyled inputs without bg color", () => {
+    // All border rounded inputs should also have bg-slate
+    const inputMatches = sourceCode.match(/className="[^"]*border rounded px-[23] py-[12][^"]*"/g) || [];
+    for (const match of inputMatches) {
+      expect(match).toContain("bg-slate-7");
+    }
+  });
+});

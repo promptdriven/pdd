@@ -153,9 +153,21 @@ export default function Stage9RenderStitch({ onAdvance }: Stage9RenderStitchProp
   };
 
   const handleRerenderSection = async (sectionId: string) => {
-    await handleRender('selected');
     setSelected((prev) => ({ ...prev, [sectionId]: true }));
-    handleRender('selected');
+    setError(null);
+    try {
+      const res = await fetch('/api/pipeline/render/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sections: [sectionId] }),
+      });
+      if (!res.ok) throw new Error('Failed to start render job.');
+      const data = await res.json();
+      if (data?.jobId) setRenderJobId(data.jobId);
+      await loadStatus();
+    } catch (err: any) {
+      setError(err?.message || 'Failed to start render job.');
+    }
   };
 
   const handleStitch = async () => {
@@ -183,12 +195,12 @@ export default function Stage9RenderStitch({ onAdvance }: Stage9RenderStitchProp
   const statusBadge = (status: SectionRenderStatus['status']) => {
     const color =
       status === 'done'
-        ? 'bg-green-100 text-green-700'
+        ? 'bg-green-900/50 text-green-300'
         : status === 'rendering'
-        ? 'bg-blue-100 text-blue-700'
+        ? 'bg-blue-900/50 text-blue-300'
         : status === 'error'
-        ? 'bg-red-100 text-red-700'
-        : 'bg-yellow-100 text-yellow-700';
+        ? 'bg-red-900/50 text-red-300'
+        : 'bg-yellow-900/50 text-yellow-300';
 
     const label =
       status === 'done'
@@ -218,7 +230,7 @@ export default function Stage9RenderStitch({ onAdvance }: Stage9RenderStitchProp
 
         <div className="flex items-center gap-2">
           <select
-            className="border rounded-md px-3 py-2 text-sm text-slate-700 bg-white"
+            className="border rounded-md px-3 py-2 text-sm text-slate-200 bg-slate-800 border-slate-600"
             value={renderMode}
             onChange={(e) => setRenderMode(e.target.value as RenderMode)}
           >
@@ -237,7 +249,7 @@ export default function Stage9RenderStitch({ onAdvance }: Stage9RenderStitchProp
             disabled={anyRenderInProgress || stitching}
             className={`px-4 py-2 rounded-md text-sm font-medium ${
               anyRenderInProgress || stitching
-                ? 'bg-slate-300 text-slate-600 cursor-not-allowed'
+                ? 'bg-slate-700 text-slate-400 cursor-not-allowed'
                 : 'bg-emerald-600 text-white hover:bg-emerald-700'
             }`}
           >
@@ -252,17 +264,17 @@ export default function Stage9RenderStitch({ onAdvance }: Stage9RenderStitchProp
 
       {/* Active renders panel */}
       {activeRenders.length > 0 && (
-        <div className="bg-white rounded-lg shadow-sm p-4 border">
-          <h3 className="text-sm font-semibold text-slate-700 mb-3">
+        <div className="bg-slate-900 rounded-lg shadow-sm p-4 border border-slate-700">
+          <h3 className="text-sm font-semibold text-slate-200 mb-3">
             Active Renders
           </h3>
           <div className="space-y-3">
             {activeRenders.map((s) => (
               <div key={s.id}>
-                <div className="text-xs text-slate-600 mb-1">
+                <div className="text-xs text-slate-300 mb-1">
                   Section: <span className="font-medium">{s.id}</span>
                 </div>
-                <div className="h-2 bg-slate-200 rounded">
+                <div className="h-2 bg-slate-700 rounded">
                   <div
                     className="h-2 bg-green-400 transition-all"
                     style={{ width: `${s.progress}%` }}
@@ -275,13 +287,13 @@ export default function Stage9RenderStitch({ onAdvance }: Stage9RenderStitchProp
       )}
 
       {/* Section render table */}
-      <div className="bg-white rounded-lg shadow-sm border">
+      <div className="bg-slate-900 rounded-lg shadow-sm border border-slate-700">
         <div className="px-4 py-3 border-b flex items-center justify-between">
-          <h3 className="text-sm font-semibold text-slate-700">Section Renders</h3>
+          <h3 className="text-sm font-semibold text-slate-200">Section Renders</h3>
           {loadingStatus && <span className="text-xs text-slate-400">Loading...</span>}
         </div>
-        <table className="w-full text-sm text-slate-700">
-          <thead className="bg-slate-50 text-slate-600">
+        <table className="w-full text-sm text-slate-200">
+          <thead className="bg-slate-800 text-slate-300">
             <tr>
               <th className="px-4 py-2 text-left">Select</th>
               <th className="px-4 py-2 text-left">Section ID</th>
@@ -304,17 +316,17 @@ export default function Stage9RenderStitch({ onAdvance }: Stage9RenderStitchProp
                     }
                   />
                 </td>
-                <td className="px-4 py-2 font-mono text-slate-700">{s.id}</td>
-                <td className="px-4 py-2 text-slate-700">{s.durationSeconds.toFixed(2)}</td>
+                <td className="px-4 py-2 font-mono text-slate-200">{s.id}</td>
+                <td className="px-4 py-2 text-slate-200">{s.durationSeconds.toFixed(2)}</td>
                 <td className="px-4 py-2">{statusBadge(s.status)}</td>
                 <td className="px-4 py-2">
-                  <div className="h-2 bg-slate-200 rounded">
+                  <div className="h-2 bg-slate-700 rounded">
                     <div
                       className="h-2 bg-green-400 transition-all"
                       style={{ width: `${s.progress}%` }}
                     />
                   </div>
-                  <div className="text-xs text-slate-500 mt-1">{s.progress}%</div>
+                  <div className="text-xs text-slate-400 mt-1">{s.progress}%</div>
                 </td>
                 <td className="px-4 py-2">
                   <button
@@ -328,7 +340,7 @@ export default function Stage9RenderStitch({ onAdvance }: Stage9RenderStitchProp
                 <td className="px-4 py-2">
                   <button
                     onClick={() => handleRerenderSection(s.id)}
-                    className="text-slate-700 hover:text-slate-900"
+                    className="text-slate-300 hover:text-slate-100"
                     title="Re-render"
                   >
                     ↺
@@ -338,7 +350,7 @@ export default function Stage9RenderStitch({ onAdvance }: Stage9RenderStitchProp
             ))}
             {sections.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-4 py-6 text-center text-slate-500">
+                <td colSpan={7} className="px-4 py-6 text-center text-slate-400">
                   No sections found.
                 </td>
               </tr>
@@ -349,10 +361,10 @@ export default function Stage9RenderStitch({ onAdvance }: Stage9RenderStitchProp
 
       {/* Full video panel */}
       {fullVideo.exists && (
-        <div className="bg-white rounded-lg shadow-sm p-4 border flex items-center justify-between">
+        <div className="bg-slate-900 rounded-lg shadow-sm p-4 border border-slate-700 flex items-center justify-between">
           <div>
-            <div className="text-sm font-semibold text-slate-700">Full Video</div>
-            <div className="text-xs text-slate-500">
+            <div className="text-sm font-semibold text-slate-200">Full Video</div>
+            <div className="text-xs text-slate-400">
               Size: {formatBytes(fullVideo.sizeBytes)} • Duration:{' '}
               {fullVideo.durationSeconds?.toFixed(2) ?? '—'}s
             </div>
@@ -373,16 +385,16 @@ export default function Stage9RenderStitch({ onAdvance }: Stage9RenderStitchProp
           onClick={() => setPreviewSectionId(null)}
         >
           <div
-            className="bg-white rounded-lg p-4 max-w-3xl w-full"
+            className="bg-slate-900 rounded-lg p-4 max-w-3xl w-full"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-3">
-              <div className="font-medium text-slate-700">
+              <div className="font-medium text-slate-200">
                 Preview — {previewSectionId}
               </div>
               <button
                 onClick={() => setPreviewSectionId(null)}
-                className="text-slate-500 hover:text-slate-700"
+                className="text-slate-400 hover:text-slate-200"
               >
                 ✕
               </button>

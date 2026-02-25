@@ -230,15 +230,15 @@ export default function Stage2ScriptEditor({ onAdvance }: Stage2ScriptEditorProp
   return (
     <div className="w-full h-full flex flex-col">
       {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-white">
-        <h2 className="text-lg font-semibold text-slate-800">Stage 2 — Script Editor</h2>
+      <div className="flex items-center justify-between px-6 py-4 border-b border-slate-700 bg-slate-900">
+        <h2 className="text-lg font-semibold text-slate-100">Stage 2 — Script Editor</h2>
         <button
           onClick={handleGenerateTts}
           disabled={!hasNarrator || isGenerating}
           className={`px-4 py-2 rounded-lg font-semibold transition-colors ${
             hasNarrator && !isGenerating
               ? 'bg-blue-600 hover:bg-blue-700 text-white'
-              : 'bg-slate-200 text-slate-500 cursor-not-allowed'
+              : 'bg-slate-700 text-slate-400 cursor-not-allowed'
           }`}
         >
           {isGenerating ? 'Generating…' : 'Generate TTS Script →'}
@@ -246,10 +246,10 @@ export default function Stage2ScriptEditor({ onAdvance }: Stage2ScriptEditorProp
       </div>
 
       {/* Main Split Pane */}
-      <div ref={containerRef} className="flex-1 flex overflow-hidden bg-slate-50">
+      <div ref={containerRef} className="flex-1 flex overflow-hidden bg-slate-900">
         {/* Left Pane - CodeMirror */}
         <div style={{ width: `${splitRatio * 100}%` }} className="h-full">
-          <div className="h-full border-r border-slate-200">
+          <div className="h-full border-r border-slate-700">
             <div className="h-full" ref={editorContainerRef} />
           </div>
         </div>
@@ -257,7 +257,7 @@ export default function Stage2ScriptEditor({ onAdvance }: Stage2ScriptEditorProp
         {/* Divider */}
         <div
           onMouseDown={handleMouseDown}
-          className="w-2 cursor-col-resize bg-slate-200 hover:bg-slate-300 transition-colors"
+          className="w-2 cursor-col-resize bg-slate-700 hover:bg-slate-600 transition-colors"
         />
 
         {/* Right Pane - Structured Preview */}
@@ -266,7 +266,7 @@ export default function Stage2ScriptEditor({ onAdvance }: Stage2ScriptEditorProp
             {previewBlocks.map((block, idx) => {
               if (block.type === 'header') {
                 return (
-                  <div key={idx} className="text-xs uppercase tracking-wider text-slate-500">
+                  <div key={`header-${idx}-${block.text.slice(0,20)}`} className="text-xs uppercase tracking-wider text-slate-500">
                     {block.text}
                   </div>
                 );
@@ -274,7 +274,7 @@ export default function Stage2ScriptEditor({ onAdvance }: Stage2ScriptEditorProp
 
               if (block.type === 'narrator') {
                 return (
-                  <div key={idx} className="flex items-start gap-3 text-slate-700">
+                  <div key={`narrator-${idx}-${block.text.slice(0,20)}`} className="flex items-start gap-3 text-slate-700">
                     <span className="text-blue-500">■</span>
                     <span>{block.text}</span>
                   </div>
@@ -283,7 +283,7 @@ export default function Stage2ScriptEditor({ onAdvance }: Stage2ScriptEditorProp
 
               if (block.type === 'visual') {
                 return (
-                  <div key={idx} className="flex items-start gap-3 text-slate-700">
+                  <div key={`visual-${idx}-${block.text.slice(0,20)}`} className="flex items-start gap-3 text-slate-700">
                     <span className="text-teal-500">▣</span>
                     <span>{block.text}</span>
                   </div>
@@ -291,7 +291,7 @@ export default function Stage2ScriptEditor({ onAdvance }: Stage2ScriptEditorProp
               }
 
               return (
-                <div key={idx} className="text-slate-700">
+                <div key={`text-${idx}-${block.text.slice(0,20)}`} className="text-slate-700">
                   {block.text}
                 </div>
               );
@@ -302,7 +302,7 @@ export default function Stage2ScriptEditor({ onAdvance }: Stage2ScriptEditorProp
 
       {/* SSE Log Panel */}
       {jobId && (
-        <div className="border-t border-slate-200 bg-white">
+        <div className="border-t border-slate-700 bg-slate-900">
           <SseLogPanel jobId={jobId} />
         </div>
       )}

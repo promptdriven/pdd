@@ -346,7 +346,7 @@ export default function VideoPlayer({
     const handler = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       const tagName = target?.tagName?.toLowerCase();
-      if (tagName === 'input' || tagName === 'textarea') return;
+      if (tagName === 'input' || tagName === 'textarea' || target?.isContentEditable) return;
 
       if (event.code === 'Space') {
         event.preventDefault();

@@ -374,6 +374,20 @@ describe("stitchFullVideo — ffmpeg concat", () => {
     expect(fs.promises.unlink).toHaveBeenCalled();
   });
 
+  it("escapes single quotes in paths for ffmpeg concat", async () => {
+    const sections = ["/a/scene's_intro.mp4", "/b/it's a test.mp4"];
+    await stitchFullVideo(sections, "/out/final.mp4", jest.fn());
+
+    const writeCall = (fs.promises.writeFile as jest.Mock).mock.calls[0];
+    const content = writeCall[1] as string;
+    // ffmpeg concat format escapes single quotes by ending the quote,
+    // inserting an escaped quote, and reopening the quote: '\''
+    expect(content).toContain("file '/a/scene'\\''s_intro.mp4'");
+    expect(content).toContain("file '/b/it'\\''s a test.mp4'");
+    // Must NOT contain unescaped single-quoted paths
+    expect(content).not.toContain("file '/a/scene's_intro.mp4'");
+  });
+
   it("deletes the temp concat file even if ffmpeg fails", async () => {
     mockExecPromisified.mockRejectedValue(new Error("ffmpeg failed"));
 

@@ -717,6 +717,24 @@ describe("Continue button", () => {
 // 27. Layout and structure
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// 28. Sticky table header
+// ---------------------------------------------------------------------------
+
+describe("Sticky table header", () => {
+  it("thead row has sticky positioning", () => {
+    expect(sourceCode).toMatch(/sticky top-0/);
+  });
+
+  it("sticky header has z-index", () => {
+    expect(sourceCode).toMatch(/sticky top-0 z-10/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 27. Layout and structure
+// ---------------------------------------------------------------------------
+
 describe("layout and structure", () => {
   it("uses space-y-6 for main layout spacing", () => {
     expect(sourceCode).toMatch(/space-y-6/);

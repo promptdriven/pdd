@@ -589,17 +589,35 @@ describe("React state management", () => {
 // ---------------------------------------------------------------------------
 
 describe("Dropdown section options", () => {
-  it("uses <details>/<summary> for the dropdown", () => {
-    expect(sourceCode).toMatch(/<details/);
-    expect(sourceCode).toMatch(/<summary/);
-  });
-
   it("maps section options to dropdown buttons", () => {
     expect(sourceCode).toMatch(/sectionOptions\.map/);
   });
 
   it("each dropdown option triggers handleAuditRun with section id", () => {
     expect(sourceCode).toMatch(/handleAuditRun\(opt\.id\)/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 19b. Audit section dropdown — auto-close behavior
+// ---------------------------------------------------------------------------
+
+describe("Audit section dropdown", () => {
+  it("uses custom dropdown instead of details/summary", () => {
+    expect(sourceCode).not.toMatch(/<details/);
+    expect(sourceCode).not.toMatch(/<summary/);
+  });
+
+  it("dropdown auto-closes after selection", () => {
+    expect(sourceCode).toMatch(/setAuditDropdownOpen\(false\)/);
+  });
+
+  it("has click-outside handler to close dropdown", () => {
+    expect(sourceCode).toMatch(/handleClickOutside/);
+  });
+
+  it("uses ref for click-outside detection", () => {
+    expect(sourceCode).toMatch(/auditDropdownRef/);
   });
 });
 

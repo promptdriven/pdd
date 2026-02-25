@@ -44,9 +44,39 @@ Code just got that cheap.
 [TONE: challenging, curious]
 So why are we still **patching**?
 
+[PAUSE: 1s]
+
+[TONE: intriguing, slightly provocative]
+What if there were a **compiler** — not for code, but for *prompts*?
+
 ---
 
-## PART 1: THE ECONOMICS OF DARNING (2:00 - 6:30)
+## THE THIRTY-SECOND DEMO (2:00 - 2:30)
+
+[PAUSE: 1.5s]
+
+[TONE: direct, demonstrative]
+[PACE: crisp, purposeful]
+Watch this.
+
+[PAUSE: 1.5s]
+
+[TONE: matter-of-fact]
+Fifteen lines of prompt. Two hundred lines of generated code.
+
+[PAUSE: 1s]
+
+[TONE: building, satisfying]
+Now a failing test. Regenerate. Bug **gone**. Not patched — *gone*. The test is a permanent wall. That bug can never come back.
+
+[PAUSE: 1.5s]
+
+[TONE: pivoting, inviting]
+Now let me show you **why** this matters.
+
+---
+
+## PART 1: THE ECONOMICS OF DARNING (2:30 - 8:30)
 
 [PAUSE: 2s]
 
@@ -140,9 +170,14 @@ And here's what makes it worse. A 2025 EMNLP study proved that even when the mod
 [PAUSE: 2s]
 
 [TONE: pivoting, analytical]
-This is why AI-assisted patching is really **two** stories.
+This is why AI-assisted patching is really **two** stories — and why every productivity study seems to *contradict* every other one.
 
 [PAUSE: 1s]
+
+[TONE: clarifying, resolving a mystery]
+The GitHub study measured greenfield, in-distribution work — exactly where AI shines. The METR study measured brownfield, out-of-distribution work — where AI *flounders*. They're not contradictory. They're measuring different **quadrants**. And most real enterprise work? [PAUSE: 0.5s] It lives in the bottom-right.
+
+[PAUSE: 1.5s]
 
 [TONE: validating]
 On a *small* codebase—a few thousand lines—patching with AI is genuinely transformative. The context window covers everything. That's **real**.
@@ -166,6 +201,11 @@ Regeneration doesn't have this problem. A prompt is a *fifth* to a *tenth* the s
 
 [TONE: insightful, building]
 And there's something else. These models are trained on up to **thirty times** more natural language than code. Natural language is their deepest fluency. MIT showed that giving models natural language context for coding tasks improved performance by up to **eighty-nine percent**. A prompt *is* natural language. You're speaking the model's strongest language and giving it room to think.
+
+[PAUSE: 1.5s]
+
+[TONE: storytelling, concrete]
+A team optimizing ad delivery latency had **twenty** modules on the critical path. As code? They overflowed the context window. As prompts — a fifth to a tenth the size — they *all* fit. The team optimized the entire critical path in prompt space and exceeded their half-millisecond latency target.
 
 [PAUSE: 1s]
 
@@ -204,9 +244,44 @@ It's *maintaining* it. McKinsey found that organizations with high technical deb
 [EMOTION: ominous but hopeful]
 And those costs **compound**—literally. Technical debt follows a compound interest curve. [PAUSE: 0.8s] Unless you regenerate. Then the debt resets.
 
+[PAUSE: 2s]
+
+### THE KEY INSIGHT
+
+[TONE: deliberate, signaling importance]
+[PACE: slower, weighted]
+Now here's the thing I want you to **take away** from everything I've just shown you.
+
+[PAUSE: 1.5s]
+
+[TONE: posing a question, building curiosity]
+What if you could take the **same LLM** you're using today — same model, same parameters — and make it **dramatically** better at coding?
+
+[PAUSE: 1.5s]
+
+[TONE: revelatory, building]
+[PACE: measured, giving each point weight]
+Working in prompt space gives you **two** things at once. First: prompts are a fifth to a tenth the size of the code they govern. So your effective context window is **five to ten times** larger. Every token in that window is author-curated — no system prompts eating space, no retrieval tool guessing wrong. The *entire* context window is devoted to your problem.
+
+[PAUSE: 1s]
+
+[TONE: building further]
+Second: these models were trained on up to **thirty times** more natural language than code. Natural language is their deepest fluency. MIT showed giving models natural language context improves coding accuracy by up to **eighty-nine percent**.
+
+[PAUSE: 1.5s]
+
+[TONE: emphatic, landing it]
+[PACE: slower]
+You get a **bigger** window AND a **smarter** model. That's not an incremental improvement. That's a **category shift**.
+
+[PAUSE: 2s]
+
+[TONE: challenging, personal]
+Don't take my word for it. Take your favorite LLM, give it a hard coding problem as code, then give it the same problem described in natural language. The natural language version will **win**. [PAUSE: 0.5s] Every time.
+
 ---
 
-## PART 2: THE PARADIGM SHIFT (6:30 - 10:30)
+## PART 2: THE PARADIGM SHIFT (8:30 - 13:00)
 
 [PAUSE: 2s]
 
@@ -269,11 +344,27 @@ But here's the thing: synthesis was **non-deterministic**. Run it twice, get dif
 [TONE: resolving]
 What Synopsys did was wrap a **verification toolchain** around the generator. Formal equivalence checking—using SAT and SMT solvers to produce mathematical proof that the output, whatever it looked like, behaved identically to the spec. The gates were different every time. The *function* was the same every time.
 
+[PAUSE: 1s]
+
+[TONE: crystallizing the analogy]
+Synopsys Design Compiler was **GCC** for hardware descriptions. PDD is **GCC** for prompts.
+
 [PAUSE: 2s]
 
 [TONE: sweeping, historical]
 [PACE: measured]
 By 1990, most designs were still schematic-based. By the mid-1990s, half had switched. Today, all but the most trivial chips use HDL. Every time component counts exceeded what the current abstraction could handle, the industry moved up a level. The designer stopped specifying *how*... and started specifying **what**.
+
+[PAUSE: 1.5s]
+
+[TONE: building to a powerful realization]
+[PACE: slightly slower]
+Today, a modern chip has **billions** of gates. Nobody reviews the netlist. It's *impossible*. The abstraction isn't just convenient — it's **physically necessary**.
+
+[PAUSE: 1.5s]
+
+[TONE: drawing the parallel, serious]
+We're hitting the **same wall** with AI-generated code. When AI generates ten thousand lines in a day, code review becomes **netlist review**. The question isn't whether you *should* review it. It's whether you *can*.
 
 [PAUSE: 2s]
 
@@ -288,7 +379,7 @@ The prompt is your mold. The code is just... *plastic*. And just like chip synth
 
 ---
 
-## PART 3: THE MOLD HAS THREE PARTS (10:30 - 16:00)
+## PART 3: THE MOLD HAS THREE PARTS (13:00 - 18:30)
 
 [PAUSE: 2s]
 
@@ -347,20 +438,20 @@ This is the **ratchet effect**. Tests only accumulate. The mold only gets more *
 [TONE: comparative, driving home]
 In traditional development, a bug fix helps *one place*. In PDD, a test prevents that bug **everywhere**, **forever**.
 
-[PAUSE: 2s]
+[PAUSE: 1.5s]
 
-[TONE: revealing deeper layer]
-Now—here's something most people don't know. In chip design, Synopsys Formality uses SAT and SMT solvers to mathematically **prove** equivalence. PDD uses Z3—the same class of SMT solver—to formally verify properties of generated code. Not sampling. Not "run a bunch of inputs and hope." [PAUSE: 0.5s] Mathematical **proof** that a property holds for *every possible input*.
+[TONE: clarifying, precise]
+And sometimes the bug isn't in the code — it's in the **prompt**. The code *correctly* implements a wrong specification. PDD distinguishes between these. A code bug? Add a wall. A prompt defect? Change the **mold itself**.
 
 [PAUSE: 1.5s]
 
-[TONE: precise, technical]
-When Z3 proves that a function never returns null for any 32-bit integer input, it hasn't tried every input—it's reasoned *symbolically* over the entire space. The same math. The same certainty. The same category of guarantee the semiconductor industry relies on for billion-dollar tapeouts.
+[TONE: preemptive, honest]
+Now — you might be thinking: "But LLMs don't follow instructions **reliably**." [PAUSE: 0.5s] You're right. *Today*. But PDD doesn't need perfection on every run. Generate **five** versions. Pick the one that passes all tests. The walls don't care how many attempts it took.
 
-[PAUSE: 1s]
+[PAUSE: 1.5s]
 
-[TONE: balanced]
-Traditional unit tests are still samples—and PDD uses those too. But Z3 gives you walls that are *proven*, not just tested. And in that sense, the chip design analogy isn't a metaphor. It's the **same technology**.
+[TONE: brief, authoritative]
+And some of those walls aren't just tested — they're *proven*. PDD uses Z3, the same class of SMT solver that the chip industry uses for formal equivalence checking, to mathematically prove that properties hold for **every possible input**. Not sampling. Mathematical **proof**. The chip design analogy isn't a metaphor. It's the **same technology**.
 
 ### PROMPT CAPITAL
 
@@ -382,7 +473,7 @@ And here's something subtle: the exact implementation can *vary*. What's locked 
 [PAUSE: 1s]
 
 [TONE: practical wisdom]
-A good prompt is a *fifth* to a *tenth* the size of the code it generates. You're specifying *what* and *why*... not *how*. And that compression matters.
+A good prompt is a *fifth* to a *tenth* the size of the code it generates. Think of the prompt as your **header file**. The generated code is the OBJ file. You're specifying *what* and *why*... not *how*. And that compression matters.
 
 [PAUSE: 1.5s]
 
@@ -392,7 +483,7 @@ Remember the context window problem? Code is token-expensive. But prompts are na
 [PAUSE: 1s]
 
 [TONE: precise]
-And unlike agentic tools that dynamically guess which code to load into context—and increasingly guess *wrong*—each prompt declares its own dependencies. The context is **author-defined**, not machine-assembled.
+And unlike agentic tools that dynamically guess which code to load into context—and increasingly guess *wrong*—each prompt declares its own dependencies. The context is **author-defined**, not machine-assembled. Every token in that window is author-curated. No system prompts eating space. No retrieval tool guessing wrong. The *entire* context window is devoted to your problem.
 
 ### GROUNDING CAPITAL
 
@@ -415,6 +506,11 @@ Your style. Your patterns. Your team's conventions. Grounding captures all of it
 [TONE: synthesizing]
 Prompt plus tests plus grounding. [PAUSE: 0.3s] Intent plus constraints plus style. [PAUSE: 0.3s] Together, they form a **complete specification**.
 
+[PAUSE: 1s]
+
+[TONE: precise, structural]
+When these conflict, tests **win**. Always. The walls override the specification. The specification overrides the style.
+
 [PAUSE: 1.5s]
 
 [TONE: emphatic, memorable]
@@ -422,7 +518,7 @@ The code is *output*. The mold is what **matters**.
 
 ---
 
-## PART 4: THE PRECISION TRADEOFF (16:00 - 18:00)
+## PART 4: THE PRECISION TRADEOFF (18:30 - 21:00)
 
 [PAUSE: 2s]
 
@@ -463,9 +559,24 @@ This is why test accumulation matters. It's not just about catching bugs. It's a
 [TONE: memorable phrase]
 The more walls you have, the less you need to specify. The **mold** does the precision work.
 
+[PAUSE: 1.5s]
+
+[TONE: honest, addressing skeptics head-on]
+But some things genuinely need code-level precision. Algorithm choice. Performance-critical inner loops. Bit-level operations.
+
+[PAUSE: 1s]
+
+[TONE: resolving, practical]
+PDD handles this. A prompt can embed code snippets for exactly those critical sections. It's not all-or-nothing. You stay in prompt space for as *long* as possible — architecture, intent, constraints, edge cases — then dip into code when the precision demands it.
+
+[PAUSE: 1s]
+
+[TONE: framing]
+Think of it as a **spectrum**. Natural language on one end, code on the other. The question isn't "prompts *or* code." It's "how far into prompt space can you stay?" For most of the specification — further than you'd think.
+
 ---
 
-## PART 5: COMPOUND RETURNS (18:00 - 20:15)
+## PART 5: COMPOUND RETURNS (21:00 - 23:15)
 
 [PAUSE: 2s]
 
@@ -513,9 +624,14 @@ And you're not *stupid* for patching code. Until now, the economics made it rati
 [TONE: pivotal, serious]
 But the economics **changed**. And when economics change, behavior that was rational becomes... [PAUSE: 0.8s] [TONE: wry, pointed] darning socks.
 
+[PAUSE: 1.5s]
+
+[TONE: honest, self-aware, a touch of humor]
+A researcher at Microsoft, after seeing PDD for the first time, said: [PAUSE: 0.5s] [TONE: quoting] *"This is either the way of the future or it's going to crash and burn spectacularly."* [PAUSE: 0.8s] [TONE: frank, confident] He's right — it's a contrarian bet. But the economics are on our side.
+
 ---
 
-## CLOSING (20:15 - 21:30)
+## CLOSING (23:15 - 25:00)
 
 [PAUSE: 2s]
 
@@ -524,6 +640,21 @@ But the economics **changed**. And when economics change, behavior that was rati
 So here's the mental shift.
 
 [PAUSE: 1.5s]
+
+[TONE: practical, addressing the real concern]
+Now — you don't work on a greenfield project. *Nobody* does.
+
+[PAUSE: 1s]
+
+[TONE: reassuring, concrete]
+PDD can create prompts *from* existing code. Start with **one** module. Generate its prompt. Add tests. Regenerate. Compare. When the regenerated version passes all tests, the prompt is your new source of truth for that module.
+
+[PAUSE: 1s]
+
+[TONE: measured, reasonable]
+One module at a time. No big bang. No rewrite. Just a gradual migration of where value lives — from code to *specification*.
+
+[PAUSE: 2s]
 
 [TONE: simple truth]
 You don't patch socks because socks got cheap. The economics made patching irrational.
@@ -564,4 +695,4 @@ The **mold**... is what matters.
 
 ---
 
-**Total runtime: ~20-22 minutes**
+**Total runtime: ~24-26 minutes**
