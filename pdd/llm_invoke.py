@@ -108,7 +108,25 @@ def set_verbose_logging(verbose=False):
 
     if want_verbose:
         logger.debug("Verbose logging enabled (including LiteLLM debug output)")
-    
+
+
+def set_quiet_logging():
+    """Suppress INFO/DEBUG output by raising logger levels to ERROR."""
+    logger.setLevel(logging.ERROR)
+    litellm_logger.setLevel(logging.ERROR)
+    try:
+        litellm.set_verbose = False
+        litellm.suppress_debug_info = True
+    except Exception:
+        pass
+
+
+# Apply quiet suppression at import time if PDD_QUIET env var is already set.
+# This handles the case where the CLI callback sets PDD_QUIET=1 before llm_invoke
+# is imported (lazy import), ensuring module-level logger.info() calls are suppressed.
+if os.getenv('PDD_QUIET'):
+    set_quiet_logging()
+
 # --- End Logging Configuration ---
 
 import json

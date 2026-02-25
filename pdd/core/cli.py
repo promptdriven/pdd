@@ -361,6 +361,7 @@ def cli(
     # Suppress verbose if quiet is enabled
     if quiet:
         ctx.obj["verbose"] = False
+        os.environ['PDD_QUIET'] = '1'
 
     # Warn users who have not completed interactive setup unless they are running it now
     if _should_show_onboarding_reminder(ctx):

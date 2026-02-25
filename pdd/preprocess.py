@@ -124,7 +124,8 @@ def preprocess(prompt: str, recursive: bool = False, double_curly_brackets: bool
         _DEBUG_EVENTS.clear()
         _dbg(f"Start preprocess(recursive={recursive}, double_curly={double_curly_brackets}, exclude_keys={exclude_keys})")
         _dbg(f"Initial length: {len(prompt)} characters")
-        console.print(Panel("Starting prompt preprocessing", style="bold blue"))
+        if not os.getenv('PDD_QUIET'):
+            console.print(Panel("Starting prompt preprocessing", style="bold blue"))
         prompt = process_backtick_includes(prompt, recursive, _seen=_seen)
         _dbg("After backtick includes processed")
         prompt = process_xml_tags(prompt, recursive, _seen=_seen)
@@ -143,7 +144,8 @@ def preprocess(prompt: str, recursive: bool = False, double_curly_brackets: bool
             for ln, frag in templates[:5]:
                 _dbg(f"  line {ln}: {frag}")
         # Don't trim whitespace that might be significant for the tests
-        console.print(Panel("Preprocessing complete", style="bold green"))
+        if not os.getenv('PDD_QUIET'):
+            console.print(Panel("Preprocessing complete", style="bold green"))
         _dbg(f"Final length: {len(prompt)} characters")
         _write_debug_report()
         return prompt
