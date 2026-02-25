@@ -1,3 +1,21 @@
+## v0.0.159 (2026-02-24)
+
+### Feat
+
+- Implement dark theme across video editor stages, refine UI components with custom dropdowns and improved rendering logic, and update demo content.
+- Introduce new video processing pipeline API routes, git-based change management, and UI components for the video editor.
+- validate prompt token count against model context window (#497) (#500)
+- add cross-cutting concern detection and channel enumeration to agentic prompts (#495) (#499)
+- Add Git-based fix management with API endpoints and UI for previewing, applying, and reverting annotation changes.
+- Implement detailed voice instruction mapping and refactor audio utilities to use numpy and soundfile, updating Qwen3TTS to return numpy arrays and support CUDA.
+- Upgrade TTS engine to Qwen3-TTS custom voice model with speaker support, regenerating narration and updating video segment durations.
+- Integrate Remotion for video generation, introduce cold open and part 1 economics sections, and enhance the audio synchronization pipeline with flexible section group loading.
+
+### Fix
+
+- complete dark theme sweep for remaining light-theme leaks in CostDashboard, Stage2 preview blocks, and Stage8/9 error messages
+- --quiet flag does not suppress all output (#541) (#543)
+
 ## v0.0.158 (2026-02-23)
 
 ### Feat
