@@ -768,3 +768,45 @@ describe("API endpoints", () => {
     expect(sourceCode).toMatch(/method\s*:\s*['"]POST['"]/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Dark theme compliance
+// ---------------------------------------------------------------------------
+
+describe("Dark theme compliance", () => {
+  it("section cards use dark background instead of bg-white", () => {
+    expect(sourceCode).not.toMatch(/border-slate-200 bg-white/);
+  });
+
+  it("section header text uses light color for dark theme", () => {
+    expect(sourceCode).not.toMatch(/text-slate-800/);
+  });
+
+  it("table text uses dark-theme-friendly colors", () => {
+    // text-slate-700 is too dark for a dark background
+    expect(sourceCode).not.toMatch(/className="[^"]*text-slate-700[^"]*"/);
+  });
+
+  it("buttons use dark theme borders and hover states", () => {
+    expect(sourceCode).not.toMatch(/hover:bg-slate-50/);
+  });
+
+  it("inline editor uses dark background", () => {
+    expect(sourceCode).not.toMatch(/bg-slate-50/);
+  });
+
+  it("badge colors use dark theme variants", () => {
+    expect(sourceCode).not.toMatch(/bg-blue-100 text-blue-700/);
+    expect(sourceCode).not.toMatch(/bg-purple-100 text-purple-700/);
+    expect(sourceCode).not.toMatch(/bg-teal-100 text-teal-700/);
+    expect(sourceCode).not.toMatch(/bg-orange-100 text-orange-700/);
+  });
+
+  it("SSE log drawer uses dark background", () => {
+    expect(sourceCode).toMatch(/bg-slate-900/);
+  });
+
+  it("Continue button uses dark theme styling", () => {
+    expect(sourceCode).not.toMatch(/border-slate-300[^"]*text-slate-600/);
+  });
+});

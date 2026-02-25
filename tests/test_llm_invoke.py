@@ -19,6 +19,7 @@ from pdd.llm_invoke import (
 )
 import openai # Import openai for exception types used by LiteLLM
 import httpx # Import httpx for mocking request/response
+import litellm
 import logging # For caplog
 
 # Define MockModelInfo locally in the test file using namedtuple
@@ -4937,6 +4938,7 @@ class TestGroqMessageMutation(_GroqMutationFixture):
             mock_litellm.completion = MagicMock(side_effect=side_effect)
             mock_litellm.cache = None
             mock_litellm.drop_params = True
+            mock_litellm.ContextWindowExceededError = litellm.ContextWindowExceededError
             llm_invoke(
                 messages=input_messages, strength=0.5, temperature=0.0,
                 time=0.0, output_pydantic=self.SimpleResult, use_cloud=False,

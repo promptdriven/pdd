@@ -638,3 +638,34 @@ describe("API endpoints", () => {
     expect(sourceCode).toMatch(/\/api\/video\/outputs\/veo\/references\//);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Dark theme compliance
+// ---------------------------------------------------------------------------
+
+describe("Dark theme compliance", () => {
+  it("panels use dark background instead of bg-white", () => {
+    expect(sourceCode).not.toMatch(/className="[^"]*bg-white rounded[^"]*"/);
+    expect(sourceCode).not.toMatch(/className="[^"]*bg-white rounded-lg[^"]*"/);
+  });
+
+  it("heading text uses light color for dark theme", () => {
+    expect(sourceCode).not.toMatch(/text-slate-800/);
+  });
+
+  it("body text uses dark-theme-friendly colors", () => {
+    expect(sourceCode).not.toMatch(/className="[^"]*text-slate-700[^"]*"/);
+  });
+
+  it("table header uses dark background", () => {
+    expect(sourceCode).not.toMatch(/bg-slate-100 text-slate-600/);
+  });
+
+  it("section select uses dark theme styling", () => {
+    expect(sourceCode).not.toMatch(/text-slate-800 bg-white/);
+  });
+
+  it("panels use dark background class", () => {
+    expect(sourceCode).toMatch(/bg-slate-900/);
+  });
+});

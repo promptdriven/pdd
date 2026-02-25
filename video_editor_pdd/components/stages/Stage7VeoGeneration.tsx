@@ -165,8 +165,8 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
       {/* Left Column */}
       <div className="w-1/3 space-y-6">
         {/* Character References */}
-        <div className="bg-white rounded-lg shadow p-4">
-          <h3 className="font-semibold text-slate-800 mb-3">Character References</h3>
+        <div className="bg-slate-900 rounded-lg shadow border border-slate-700 p-4">
+          <h3 className="font-semibold text-slate-200 mb-3">Character References</h3>
           {references.length === 0 ? (
             <p className="text-sm text-slate-500">No reference portraits found.</p>
           ) : (
@@ -179,7 +179,7 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
                       className="w-16 h-16 object-cover rounded"
                       alt={ref.label ?? ref.id}
                     />
-                    <div className="text-sm text-slate-700">{ref.label ?? ref.id}</div>
+                    <div className="text-sm text-slate-300">{ref.label ?? ref.id}</div>
                   </div>
                   <button
                     onClick={() => handleRegenerateReference(ref.id)}
@@ -194,13 +194,13 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
         </div>
 
         {/* Frame Chaining */}
-        <div className="bg-white rounded-lg shadow p-4">
-          <h3 className="font-semibold text-slate-800 mb-3">Frame Chaining</h3>
+        <div className="bg-slate-900 rounded-lg shadow border border-slate-700 p-4">
+          <h3 className="font-semibold text-slate-200 mb-3">Frame Chaining</h3>
           <div className="space-y-3">
             {Object.entries(clipsBySection).map(([sectionId, clips]) => (
               <div key={sectionId}>
-                <div className="font-medium text-slate-700 mb-1">{sectionId}</div>
-                <div className="text-xs text-slate-600 space-y-1">
+                <div className="font-medium text-slate-300 mb-1">{sectionId}</div>
+                <div className="text-xs text-slate-400 space-y-1">
                   {clips.map((clip) => {
                     const deps = clip.frameChainDeps ?? [];
                     const chain =
@@ -217,7 +217,7 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
       {/* Right Column */}
       <div className="flex-1 space-y-4">
         {/* Toolbar */}
-        <div className="flex items-center justify-between bg-white rounded-lg shadow p-4">
+        <div className="flex items-center justify-between bg-slate-900 rounded-lg shadow border border-slate-700 p-4">
           <div className="flex gap-2">
             <button
               onClick={() => handleRunClips(clips.map((c) => c.id))}
@@ -236,7 +236,7 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
             <select
               value={selectedSection}
               onChange={(e) => setSelectedSection(e.target.value)}
-              className="border rounded px-2 py-1 text-sm text-slate-800 bg-white"
+              className="border border-slate-600 rounded px-2 py-1 text-sm text-slate-200 bg-slate-800"
             >
               {sections.map((section) => (
                 <option key={section} value={section}>
@@ -253,7 +253,7 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
               Generate Section
             </button>
           </div>
-          <div className="flex items-center gap-2 text-sm text-slate-700">
+          <div className="flex items-center gap-2 text-sm text-slate-300">
             <input
               type="checkbox"
               checked={autoComposite}
@@ -264,9 +264,9 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
         </div>
 
         {/* Clip Table */}
-        <div className="bg-white rounded-lg shadow overflow-hidden">
+        <div className="bg-slate-900 rounded-lg shadow border border-slate-700 overflow-hidden">
           <table className="w-full text-sm">
-            <thead className="bg-slate-100 text-slate-600 text-xs uppercase">
+            <thead className="bg-slate-800 text-slate-300 text-xs uppercase">
               <tr>
                 <th className="text-left px-4 py-2">Clip</th>
                 <th className="text-left px-4 py-2">Section</th>
@@ -278,12 +278,12 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
             <tbody>
               {clips.map((clip) => (
                 <tr key={clip.id} className="border-t">
-                  <td className="px-4 py-2 font-medium text-slate-800">
+                  <td className="px-4 py-2 font-medium text-slate-200">
                     {clip.id}{' '}
                     {clip.stale && <span className="text-amber-500 ml-1">⚠</span>}
                   </td>
-                  <td className="px-4 py-2 text-slate-700">{clip.sectionId}</td>
-                  <td className="px-4 py-2 text-slate-700">{clip.aspectRatio}</td>
+                  <td className="px-4 py-2 text-slate-300">{clip.sectionId}</td>
+                  <td className="px-4 py-2 text-slate-300">{clip.aspectRatio}</td>
                   <td className="px-4 py-2">{statusBadge(clip.status)}</td>
                   <td className="px-4 py-2 text-right">
                     <button
@@ -305,9 +305,9 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
         </div>
 
         {/* Per-clip logs */}
-        <div className="bg-white rounded-lg shadow p-4">
-          <h3 className="font-semibold text-slate-800 mb-2" data-testid="clip-events-heading">Clip Events</h3>
-          <div className="space-y-1 text-xs text-slate-600 max-h-40 overflow-y-auto font-mono">
+        <div className="bg-slate-900 rounded-lg shadow border border-slate-700 p-4">
+          <h3 className="font-semibold text-slate-200 mb-2" data-testid="clip-events-heading">Clip Events</h3>
+          <div className="space-y-1 text-xs text-slate-400 max-h-40 overflow-y-auto font-mono">
             {logs.map((log, idx) => (
               <div key={idx}>
                 [{new Date(log.ts).toLocaleTimeString()}] {log.clipId}: {log.message}

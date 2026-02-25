@@ -36,19 +36,19 @@ const LOCAL_STORAGE_KEY = 'spec-sections-expanded';
 const badgeFromFirstLine = (line?: string): BadgeInfo | null => {
   if (!line) return null;
   if (/\[Remotion\]/i.test(line)) {
-    return { label: 'Remotion', colorClass: 'bg-blue-100 text-blue-700 border-blue-200' };
+    return { label: 'Remotion', colorClass: 'bg-blue-900/50 text-blue-300 border-blue-700' };
   }
   const veoMatch = line.match(/\[veo:.*?\]/i);
   if (veoMatch) {
-    return { label: veoMatch[0].replace(/\[|\]/g, ''), colorClass: 'bg-purple-100 text-purple-700 border-purple-200' };
+    return { label: veoMatch[0].replace(/\[|\]/g, ''), colorClass: 'bg-purple-900/50 text-purple-300 border-purple-700' };
   }
   const titleMatch = line.match(/\[title:.*?\]/i);
   if (titleMatch) {
-    return { label: titleMatch[0].replace(/\[|\]/g, ''), colorClass: 'bg-teal-100 text-teal-700 border-teal-200' };
+    return { label: titleMatch[0].replace(/\[|\]/g, ''), colorClass: 'bg-teal-900/50 text-teal-300 border-teal-700' };
   }
   const splitMatch = line.match(/\[split:.*?\]/i);
   if (splitMatch) {
-    return { label: splitMatch[0].replace(/\[|\]/g, ''), colorClass: 'bg-orange-100 text-orange-700 border-orange-200' };
+    return { label: splitMatch[0].replace(/\[|\]/g, ''), colorClass: 'bg-orange-900/50 text-orange-300 border-orange-700' };
   }
   return null;
 };
@@ -208,7 +208,7 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
             Generate All Specs
           </button>
           <button
-            className="rounded border border-slate-300 px-3 py-2 text-slate-600 hover:bg-slate-50"
+            className="rounded border border-slate-600 px-3 py-2 text-slate-300 hover:bg-slate-700"
             onClick={onAdvance}
           >
             Continue →
@@ -227,17 +227,17 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
       {!loading &&
         !error &&
         sections.map((section) => (
-          <div key={section.id} className="rounded border border-slate-200 bg-white">
+          <div key={section.id} className="rounded border border-slate-700 bg-slate-900">
             <div className="flex items-center justify-between px-4 py-3">
               <button
-                className="flex items-center gap-2 text-left font-medium text-slate-800"
+                className="flex items-center gap-2 text-left font-medium text-slate-200"
                 onClick={() => handleToggleSection(section.id)}
               >
                 <span>{expanded[section.id] ? '▾' : '▸'}</span>
                 <span>{section.label}</span>
               </button>
               <button
-                className="rounded border border-slate-200 px-2 py-1 text-xs text-slate-500 hover:bg-slate-50"
+                className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-400 hover:bg-slate-700"
                 onClick={() => handleRegenerateSection(section.id)}
                 title="Regenerate section"
               >
@@ -249,7 +249,7 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
               <div className="border-t px-4 py-4">
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="text-left text-slate-500">
+                    <tr className="text-left text-slate-400">
                       <th className="py-2">Type</th>
                       <th className="py-2">Path</th>
                       <th className="py-2">Status</th>
@@ -272,7 +272,7 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
                               <span className="text-xs text-slate-400">—</span>
                             )}
                           </td>
-                          <td className="py-2 font-mono text-xs text-slate-700">{file.path}</td>
+                          <td className="py-2 font-mono text-xs text-slate-300">{file.path}</td>
                           <td className="py-2">
                             {file.exists ? (
                               <span className="text-green-600">exists</span>
@@ -289,7 +289,7 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
                               ✎
                             </button>
                             <button
-                              className="rounded border border-slate-200 px-2 py-1 text-xs hover:bg-slate-50"
+                              className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700"
                               onClick={() => handleRegenerateFile(file.path)}
                               title="Regenerate file"
                             >
@@ -304,7 +304,7 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
 
                 {/* Inline Editor — only shown in the section owning the selected file */}
                 {selectedFile && selectedSectionId === section.id && (
-                  <div className="mt-4 rounded border border-slate-200 bg-slate-50 p-3">
+                  <div className="mt-4 rounded border border-slate-700 bg-slate-800 p-3">
                     <div className="mb-2 flex items-center justify-between">
                       <div className="text-sm font-medium">{editorTitle}</div>
                       {saving && <div className="text-xs text-slate-400">Saving…</div>}
@@ -326,7 +326,7 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
         ))}
 
       {/* SSE Log Drawer */}
-      <details className="mt-6 rounded border border-slate-200 bg-white">
+      <details className="mt-6 rounded border border-slate-700 bg-slate-900">
         <summary className="cursor-pointer px-4 py-2 font-medium">Spec Generation Logs</summary>
         <div className="p-4">
           <SseLogPanel jobId={latestJobId} />
