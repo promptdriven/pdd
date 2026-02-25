@@ -104,9 +104,11 @@ def parse_prompt_tags(prompt_content: str) -> Dict[str, Any]:
         # This distinguishes "no tags" (don't update) from "tags removed" (update to empty)
         result['has_dependency_tags'] = len(dep_elems) > 0 or '<pdd-dependency>' in prompt_content
         result['dependencies'] = [
-            elem.text.strip()
+            dep
             for elem in dep_elems
-            if elem.text and elem.text.strip()
+            if elem.text
+            for dep in [elem.text.strip()]
+            if dep and dep.endswith('.prompt') and '\n' not in dep and len(dep) <= 100
         ]
 
     except (etree.XMLSyntaxError, etree.ParserError):

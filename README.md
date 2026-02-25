@@ -2206,17 +2206,17 @@ pdd [GLOBAL OPTIONS] bug --manual PROMPT_FILE CODE_FILE PROGRAM_FILE CURRENT_OUT
 
 4. **Reproduce** - Attempt to reproduce the issue locally. Posts comment confirming reproduction (or failure to reproduce).
 
-5. **Root cause analysis** - Run experiments to identify the root cause. Posts comment explaining the root cause.
+5. **Root cause analysis** - Run experiments to identify the root cause. Assesses whether the fix is localized or cross-cutting. Posts comment explaining the root cause.
 
 5.5. **Prompt classification** - Determine if the bug is in the code implementation or in the prompt specification itself. If the prompt is defective, auto-fix the prompt file. Posts comment with classification and any prompt changes. Defaults to "code bug" when uncertain.
 
-6. **Test plan** - Design a plan for creating tests to detect the problem. Posts comment with the test plan.
+6. **Test plan** - Design a plan for creating tests to detect the problem. Enumerates all affected output channels to ensure complete coverage. Posts comment with the test plan.
 
 7. **Generate test** - Create the failing unit test. Posts comment with the generated test code.
 
 8. **Verify detection** - Confirm the unit test successfully detects the bug. Posts comment confirming verification.
 
-9. **E2E test** - Generate and run end-to-end tests to verify the bug at integration level. Posts comment with E2E test results.
+9. **E2E test** - Generate and run end-to-end tests to verify the bug at integration level. May be skipped when the LLM determines unit tests provide sufficient coverage. Posts comment with E2E test results or skip reason.
 
 10. **Create draft PR** - Create a draft pull request with the failing tests and link it to the issue. Posts comment with PR link.
 

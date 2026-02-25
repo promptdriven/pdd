@@ -510,24 +510,35 @@ def run_agentic_bug_orchestrator(
             if not quiet: console.print(f"⏹️  {msg}")
             return False, msg, total_cost, last_model_used, changed_files
 
-        # Step 9: E2E Test Failure & File Extraction
+        # Step 9: E2E Test — handle skip, failure, and file extraction
         if step_num == 9:
-            if "E2E_FAIL: Test does not catch bug correctly" in output:
+            if "E2E_SKIP:" in output:
+                # Simple bug — no E2E needed, treat as successful completion
+                if not quiet:
+                    for line in output.splitlines():
+                        if line.strip().startswith("E2E_SKIP:"):
+                            reason = line.split(":", 1)[1].strip()
+                            console.print(f"  → E2E test skipped: {reason}")
+                            break
+                # Skip E2E file parsing, continue to step 10
+            elif "E2E_FAIL: Test does not catch bug correctly" in output:
                 msg = "Stopped at Step 9: E2E test does not catch bug correctly."
                 if not quiet: console.print(f"⏹️  {msg}")
                 return False, msg, total_cost, last_model_used, changed_files
-            
-            # Parse output for E2E_FILES_CREATED to extend changed_files
-            e2e_files = []
-            for line in output.splitlines():
-                if line.startswith("E2E_FILES_CREATED:"):
-                    file_list = line.split(":", 1)[1].strip()
-                    e2e_files.extend([f.strip() for f in file_list.split(",") if f.strip()])
-            
-            if e2e_files:
-                changed_files.extend(e2e_files)
-                # Update files_to_stage so Step 10 (PR) includes E2E files
-                context["files_to_stage"] = ", ".join(changed_files)
+            else:
+                # Parse output for E2E_FILES_CREATED to extend changed_files
+                e2e_files = []
+                for line in output.splitlines():
+                    if line.startswith("E2E_FILES_CREATED:"):
+                        file_list = line.split(":", 1)[1].strip()
+                        e2e_files.extend([f.strip() for f in file_list.split(",") if f.strip()])
+
+                if e2e_files:
+                    changed_files.extend(e2e_files)
+                    # Deduplicate while preserving insertion order
+                    changed_files = list(dict.fromkeys(changed_files))
+                    # Update files_to_stage so Step 10 (PR) includes E2E files
+                    context["files_to_stage"] = ", ".join(changed_files)
 
         # Soft Failure Logging (if not a hard stop)
         if not success and not quiet:

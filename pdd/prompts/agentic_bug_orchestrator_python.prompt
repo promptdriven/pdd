@@ -92,6 +92,7 @@ The orchestrator must parse step output to detect stop conditions:
 | 7 | No test file generated | No FILES_CREATED or FILES_MODIFIED line in output, or empty file list |
 | 8 | Test doesn't fail correctly | Output contains "FAIL: Test does not work as expected" |
 | 9 | E2E test doesn't catch bug | Output contains "E2E_FAIL: Test does not catch bug correctly" |
+| 9 | E2E test skipped (non-failure) | Output contains "E2E_SKIP:" — continue to Step 10 normally |
 
 % Step 5.5 Special Handling
 After Step 5.5, parse output for:

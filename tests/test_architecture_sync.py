@@ -1373,3 +1373,132 @@ def test_interface_json_trailing_comma():
     # Should fail to parse due to trailing comma
     assert result['interface'] is None
     assert 'interface_parse_error' in result
+
+
+# --- Regression tests for issue #550: corrupted dependency values ---
+
+def test_parse_tags_rejects_multiline_dependency():
+    """Dependency containing newlines (prompt content blob) must be rejected.
+
+    Regression for issue #550: pdd change step 10 wrote the entire prompt file
+    content as a dependency string when it confused example tags with real ones.
+    """
+    corrupted_dep = "` tags:\n      - Extract from `<include>` directives\n      - Only include .prompt files\nllm_invoke_python.prompt"
+    content = f"<pdd-dependency>{corrupted_dep}</pdd-dependency>"
+
+    result = parse_prompt_tags(content)
+
+    assert result['dependencies'] == [], (
+        "Multiline dependency value should be rejected"
+    )
+
+
+def test_parse_tags_rejects_dependency_over_100_chars():
+    """Dependency longer than 100 chars must be rejected.
+
+    Regression for issue #550: the corrupted value was hundreds of characters long.
+    """
+    long_dep = "a" * 101 + ".prompt"
+    content = f"<pdd-dependency>{long_dep}</pdd-dependency>"
+
+    result = parse_prompt_tags(content)
+
+    assert result['dependencies'] == [], (
+        "Dependency value over 100 chars should be rejected"
+    )
+
+
+def test_parse_tags_rejects_dependency_not_ending_in_prompt():
+    """Dependency not ending in .prompt must be rejected."""
+    content = "<pdd-dependency>some_python_file.py</pdd-dependency>"
+
+    result = parse_prompt_tags(content)
+
+    assert result['dependencies'] == [], (
+        "Non-.prompt dependency should be rejected"
+    )
+
+
+def test_parse_tags_accepts_valid_dependency_alongside_corrupted():
+    """Valid .prompt dependency is kept even when another dep is corrupted.
+
+    Regression for issue #550: architecture.json had one corrupted dep and one
+    valid dep (path_resolution_python.prompt). The valid one must be preserved.
+    """
+    corrupted = "` tags:\n      - Extract from includes\nllm_invoke_python.prompt"
+    content = (
+        f"<pdd-dependency>{corrupted}</pdd-dependency>\n"
+        "<pdd-dependency>path_resolution_python.prompt</pdd-dependency>"
+    )
+
+    result = parse_prompt_tags(content)
+
+    assert result['dependencies'] == ['path_resolution_python.prompt']
+
+
+# --- Regression tests for _sanitize_architecture_dependencies ---
+
+def test_sanitize_architecture_dependencies_removes_corrupted_dep():
+    """_sanitize_architecture_dependencies cleans corrupted deps from architecture.json.
+
+    Regression for issue #550: after step 10 writes a corrupted dependency,
+    the sanitizer must strip it so Dev Units validation passes.
+    """
+    import json
+    import tempfile
+    from pathlib import Path
+    from pdd.agentic_change_orchestrator import _sanitize_architecture_dependencies
+
+    corrupted_dep = "` tags:\n      - Extract from `<include>` directives\nllm_invoke_python.prompt"
+    arch_data = [
+        {
+            "filename": "agentic_change_step10_architecture_update_LLM.prompt",
+            "dependencies": [corrupted_dep, "path_resolution_python.prompt"],
+        }
+    ]
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        arch_path = Path(tmpdir) / "architecture.json"
+        arch_path.write_text(json.dumps(arch_data, indent=2))
+
+        _sanitize_architecture_dependencies(Path(tmpdir))
+
+        result = json.loads(arch_path.read_text())
+        assert result[0]["dependencies"] == ["path_resolution_python.prompt"]
+
+
+def test_sanitize_architecture_dependencies_leaves_valid_deps_untouched():
+    """_sanitize_architecture_dependencies must not modify clean architecture.json."""
+    import json
+    import tempfile
+    from pathlib import Path
+    from pdd.agentic_change_orchestrator import _sanitize_architecture_dependencies
+
+    arch_data = [
+        {
+            "filename": "llm_invoke_python.prompt",
+            "dependencies": ["path_resolution_python.prompt", "construct_paths_python.prompt"],
+        }
+    ]
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        arch_path = Path(tmpdir) / "architecture.json"
+        arch_path.write_text(json.dumps(arch_data, indent=2))
+
+        _sanitize_architecture_dependencies(Path(tmpdir))
+
+        result = json.loads(arch_path.read_text())
+        assert result[0]["dependencies"] == [
+            "path_resolution_python.prompt",
+            "construct_paths_python.prompt",
+        ]
+
+
+def test_sanitize_architecture_dependencies_no_file_is_noop():
+    """_sanitize_architecture_dependencies must not crash if no architecture.json."""
+    import tempfile
+    from pathlib import Path
+    from pdd.agentic_change_orchestrator import _sanitize_architecture_dependencies
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        _sanitize_architecture_dependencies(Path(tmpdir))  # should not raise

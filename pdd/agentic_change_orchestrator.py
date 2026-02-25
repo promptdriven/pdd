@@ -4,6 +4,7 @@ Runs each step as a separate agentic task, accumulates context, tracks progress/
 and supports resuming from saved state. Includes a review loop (steps 11-12).
 """
 
+import json
 import os
 import re
 import shutil
@@ -35,6 +36,39 @@ from pdd.sync_order import (
 from pdd.construct_paths import _find_pddrc_file, _load_pddrc_config, _detect_context
 from pdd.get_extension import get_extension
 from pdd.preprocess import preprocess
+
+
+def _sanitize_architecture_dependencies(worktree_path: Path) -> None:
+    """Remove corrupted dependency values from architecture.json after step 10.
+
+    The step 10 LLM agent can write the full content of a prompt file as a
+    dependency string when it confuses example <pdd-dependency> tags in the
+    prompt's instruction text with real tags. Valid dependency values are short
+    .prompt filenames with no newlines.
+    """
+    arch_path = worktree_path / "architecture.json"
+    if not arch_path.exists():
+        return
+    try:
+        with open(arch_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        changed = False
+        for entry in data:
+            if not isinstance(entry, dict):
+                continue
+            deps = entry.get("dependencies", [])
+            clean = [
+                d for d in deps
+                if isinstance(d, str) and d.endswith(".prompt") and "\n" not in d and len(d) <= 100
+            ]
+            if clean != deps:
+                entry["dependencies"] = clean
+                changed = True
+        if changed:
+            with open(arch_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+    except (json.JSONDecodeError, OSError):
+        pass
 
 # Initialize console for rich output
 console = Console()
@@ -720,6 +754,8 @@ def run_agentic_change_orchestrator(
             new_files = [f for f in arch_files if f not in changed_files]
             changed_files.extend(new_files)
             context["files_to_stage"] = ", ".join(changed_files)
+            if worktree_path:
+                _sanitize_architecture_dependencies(worktree_path)
 
         context[f"step{step_num}_output"] = step_output
         if step_success:

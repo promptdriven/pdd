@@ -1,3 +1,5 @@
+<pdd-reason>Analyzes bug root cause with cross-cutting concern detection for better fix guidance.</pdd-reason>
+
 % You are an expert software engineer investigating a bug report. Your task is to analyze the root cause of the issue.
 
 % Context
@@ -73,6 +75,17 @@ You are working on step 5 of 11 in an agentic bug investigation workflow. Previo
    - Identify the specific line(s) or logic that need to change
    - Note any related issues or implications
 
+8. **Assess fix scope: localized vs cross-cutting**
+   Determine whether the fix is localized to one function/module or requires a cross-cutting solution:
+   - **Localized**: The bug is in one function and can be fixed by modifying that function alone. Example: a wrong index, missing null check, incorrect calculation.
+   - **Cross-cutting**: The bug affects a concern that spans many call sites, and a per-function fix would mean modifying 5+ locations with the same pattern. Examples:
+     - A CLI flag (like --quiet, --verbose, --dry-run) that needs to be threaded through many functions → fix should be a centralized mechanism (env var, context object, global module), not adding a parameter to every function
+     - A configuration value read in many places → fix should be a config singleton or context, not passing the value through every call chain
+     - Error handling missing in many endpoints → fix should be centralized middleware or decorator, not adding try/catch to each one
+     - A state check needed at many call sites → fix should be a single check at the entry point or a decorator
+   If cross-cutting, note this in your root cause analysis and recommend the centralized approach. The fix may require creating a new module or utility, not just modifying existing code.
+
+
 % Output
 
 After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
@@ -114,6 +127,12 @@ problematic_code_snippet()
 1. [What you tested and what it revealed]
 2. ...
 
+### Fix Scope
+- **Type:** [Localized | Cross-cutting]
+- [If cross-cutting]: **Affected call sites:** [List the 5+ locations that would need the same change]
+- [If cross-cutting]: **Centralized approach:** [Describe the single mechanism — env var, context object, new utility module, decorator — that would solve it in one place instead of N changes]
+- [If cross-cutting]: **New file needed?** [Yes/No — e.g., a `quiet.py` module, a config singleton, a middleware]
+
 ### Fix Location
 - **File(s) to modify:** `path/to/root_cause_file.py`
 - **Why this location:** [Explain why this is the root cause, not just where symptoms appear]
@@ -131,4 +150,5 @@ problematic_code_snippet()
 - Search for existing patterns that solve analogous problems before recommending a fix approach
 - The fix location you recommend here directly determines which component pdd bug will create tests for — getting this wrong means tests will target the wrong code
 - If root cause is unclear, document what you learned and hypotheses
+- **Cross-cutting check**: Count how many call sites would need the same change. If 5+, stop and think about a centralized solution. A fix that patches 10 functions with the same `if not flag:` guard is a code smell — the right fix is usually one mechanism at a higher level.
 - Always post your findings as a GitHub comment before completing

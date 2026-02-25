@@ -42,7 +42,12 @@ You are working on step 3 of 9 in an agentic e2e fix workflow. E2e tests are fai
    - What is the test expecting?
    - What is the code actually doing?
 
-4. **Determine root cause category**
+4. **Assess fix scope: localized vs cross-cutting**
+   Before jumping to a fix, count how many places would need the same change:
+   - If the same pattern (e.g., `if not flag:`, `try/except`, `config.get(...)`) would need to be added to 5+ call sites, the right fix is usually a **centralized mechanism** — a new utility module, a decorator, a context manager, a monkey-patch, an environment variable, or a config object. Don't patch 10 functions with the same guard when one mechanism at a higher level solves it.
+   - If the fix is truly localized to 1-4 places, a direct code change is fine.
+
+5. **Determine root cause category**
    - **CODE_BUG**: Code behavior doesn't match documented/expected behavior
    - **TEST_BUG**: Test expectations don't match documented/expected behavior
    - **BOTH**: Both code and tests have issues
