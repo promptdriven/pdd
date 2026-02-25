@@ -568,6 +568,11 @@ describe("Dark theme compliance", () => {
     expect(sourceCode).not.toMatch(/bg-green-100 text-green-700/);
     expect(sourceCode).toMatch(/bg-green-900/);
   });
+
+  it("error messages use dark theme (not bg-red-50)", () => {
+    expect(sourceCode).not.toMatch(/bg-red-50/);
+    expect(sourceCode).toMatch(/bg-red-900/);
+  });
 });
 
 // ---------------------------------------------------------------------------

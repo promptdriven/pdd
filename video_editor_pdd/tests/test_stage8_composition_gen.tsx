@@ -243,4 +243,9 @@ describe("Dark theme compliance", () => {
     expect(sourceCode).not.toMatch(/divide-slate-100/);
     expect(sourceCode).not.toMatch(/border-slate-100/);
   });
+
+  it("error messages use dark theme (not bg-red-50)", () => {
+    expect(sourceCode).not.toMatch(/bg-red-50/);
+    expect(sourceCode).toMatch(/bg-red-900/);
+  });
 });

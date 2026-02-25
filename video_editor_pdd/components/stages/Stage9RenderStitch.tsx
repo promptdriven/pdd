@@ -259,7 +259,7 @@ export default function Stage9RenderStitch({ onAdvance }: Stage9RenderStitchProp
       </div>
 
       {error && (
-        <div className="p-3 rounded-md bg-red-50 text-red-700 text-sm">{error}</div>
+        <div className="p-3 rounded-md bg-red-900/50 text-red-300 text-sm">{error}</div>
       )}
 
       {/* Active renders panel */}

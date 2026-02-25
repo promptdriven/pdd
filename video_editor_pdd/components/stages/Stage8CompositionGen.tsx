@@ -258,7 +258,7 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
 
           {loading && <p className="text-sm text-slate-500">Loading components…</p>}
           {listError && (
-            <p className="rounded bg-red-50 px-3 py-2 text-sm text-red-600">{listError}</p>
+            <p className="rounded bg-red-900/50 px-3 py-2 text-sm text-red-300">{listError}</p>
           )}
 
           {!loading &&
@@ -362,7 +362,7 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
           </div>
 
           {manifestError && (
-            <p className="rounded bg-red-50 px-3 py-2 text-sm text-red-600">
+            <p className="rounded bg-red-900/50 px-3 py-2 text-sm text-red-300">
               {manifestError}
             </p>
           )}

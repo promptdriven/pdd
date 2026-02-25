@@ -274,7 +274,7 @@ export default function Stage2ScriptEditor({ onAdvance }: Stage2ScriptEditorProp
 
               if (block.type === 'narrator') {
                 return (
-                  <div key={`narrator-${idx}-${block.text.slice(0,20)}`} className="flex items-start gap-3 text-slate-700">
+                  <div key={`narrator-${idx}-${block.text.slice(0,20)}`} className="flex items-start gap-3 text-slate-300">
                     <span className="text-blue-500">■</span>
                     <span>{block.text}</span>
                   </div>
@@ -283,7 +283,7 @@ export default function Stage2ScriptEditor({ onAdvance }: Stage2ScriptEditorProp
 
               if (block.type === 'visual') {
                 return (
-                  <div key={`visual-${idx}-${block.text.slice(0,20)}`} className="flex items-start gap-3 text-slate-700">
+                  <div key={`visual-${idx}-${block.text.slice(0,20)}`} className="flex items-start gap-3 text-slate-300">
                     <span className="text-teal-500">▣</span>
                     <span>{block.text}</span>
                   </div>
@@ -291,7 +291,7 @@ export default function Stage2ScriptEditor({ onAdvance }: Stage2ScriptEditorProp
               }
 
               return (
-                <div key={`text-${idx}-${block.text.slice(0,20)}`} className="text-slate-700">
+                <div key={`text-${idx}-${block.text.slice(0,20)}`} className="text-slate-300">
                   {block.text}
                 </div>
               );

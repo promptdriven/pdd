@@ -106,4 +106,27 @@ describe('CostDashboard component (US25)', () => {
   it('disables refresh button while loading', () => {
     expect(sourceCode).toMatch(/disabled=\{loading\}/);
   });
+
+  // Dark theme compliance
+  it('uses dark background instead of bg-white', () => {
+    expect(sourceCode).not.toMatch(/bg-white/);
+    expect(sourceCode).toMatch(/bg-slate-900/);
+  });
+
+  it('uses dark-friendly text colors (not text-slate-700/text-slate-600)', () => {
+    expect(sourceCode).not.toMatch(/text-slate-700/);
+    expect(sourceCode).not.toMatch(/text-slate-600/);
+    expect(sourceCode).toMatch(/text-slate-200/);
+    expect(sourceCode).toMatch(/text-slate-300/);
+  });
+
+  it('uses dark-friendly border colors', () => {
+    expect(sourceCode).not.toMatch(/border-slate-200/);
+    expect(sourceCode).toMatch(/border-slate-700/);
+  });
+
+  it('error message uses dark theme', () => {
+    expect(sourceCode).not.toMatch(/bg-red-50/);
+    expect(sourceCode).toMatch(/bg-red-900/);
+  });
 });

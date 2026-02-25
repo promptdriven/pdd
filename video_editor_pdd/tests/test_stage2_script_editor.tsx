@@ -628,4 +628,10 @@ describe("Dark theme compliance", () => {
     const previewSection = sourceCode.slice(sourceCode.indexOf('previewBlocks.map'));
     expect(previewSection).not.toMatch(/key=\{idx\}/);
   });
+
+  it("preview blocks use dark-friendly text color (not text-slate-700)", () => {
+    // Preview narrator, visual, and text blocks should use text-slate-300 instead of text-slate-700
+    expect(sourceCode).not.toMatch(/text-slate-700/);
+    expect(sourceCode).toMatch(/text-slate-300/);
+  });
 });
