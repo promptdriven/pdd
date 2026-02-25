@@ -135,10 +135,20 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ clips: clipIds, autoComposite }),
       });
-      if (!res.ok) throw new Error('Failed to start generation');
+      if (!res.ok) {
+        // Revert optimistic status on error
+        setClips((prev) =>
+          prev.map((c) => (clipIds.includes(c.id) ? { ...c, status: 'error' } : c))
+        );
+        return;
+      }
       const data = await res.json();
       if (data?.jobId) setJobId(data.jobId);
     } catch (err) {
+      // Revert optimistic status on network/parse error
+      setClips((prev) =>
+        prev.map((c) => (clipIds.includes(c.id) ? { ...c, status: 'error' } : c))
+      );
       console.error(err);
     }
   };
@@ -153,15 +163,27 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
   };
 
   if (loading) {
-    return <div className="p-6 text-slate-500">Loading Veo clips…</div>;
+    return (
+      <div className="p-6 space-y-4">
+        <h2 className="text-xl font-semibold">Stage 7 — Veo Generation</h2>
+        <div className="text-slate-500">Loading Veo clips…</div>
+      </div>
+    );
   }
 
   if (error) {
-    return <div className="p-6 text-red-500">Error: {error}</div>;
+    return (
+      <div className="p-6 space-y-4">
+        <h2 className="text-xl font-semibold">Stage 7 — Veo Generation</h2>
+        <div className="text-red-500">Error: {error}</div>
+      </div>
+    );
   }
 
   return (
-    <div className="w-full h-full flex gap-6 p-6">
+    <div className="w-full h-full flex flex-col gap-6 p-6">
+      <h2 className="text-xl font-semibold">Stage 7 — Veo Generation</h2>
+      <div className="flex gap-6 flex-1">
       {/* Left Column */}
       <div className="w-1/3 space-y-6">
         {/* Character References */}
@@ -325,6 +347,7 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
             Continue →
           </button>
         </div>
+      </div>
       </div>
     </div>
   );

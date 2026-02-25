@@ -542,6 +542,18 @@ test.describe('Concurrent operations', () => {
     const errors: string[] = [];
     page.on('pageerror', (err) => errors.push(err.message));
 
+    // Mock script content so Generate button is enabled
+    await page.route('**/api/project/script**', (route) => {
+      if (route.request().method() === 'GET') {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ content: 'NARRATOR: Race condition test content.' }),
+        });
+      }
+      return route.continue();
+    });
+
     await page.goto('/');
     await page.waitForLoadState('networkidle');
 
@@ -567,7 +579,7 @@ test.describe('Concurrent operations', () => {
     const sidebar = page.locator('aside');
     await sidebar.locator('div', { hasText: 'Script' }).first().click();
     await expect(page.locator('h2', { hasText: 'Stage 2' })).toBeVisible({ timeout: 10000 });
-    await page.waitForTimeout(1500); // Wait for CodeMirror init
+    await page.waitForTimeout(1500);
 
     // Mock TTS script generation
     await page.route('**/api/pipeline/tts-script/run', (route) => {
@@ -580,7 +592,7 @@ test.describe('Concurrent operations', () => {
 
     // Start generation on Stage 2
     const generateBtn = page.locator('button', { hasText: 'Generate TTS Script' });
-    await expect(generateBtn).toBeVisible();
+    await expect(generateBtn).toBeEnabled({ timeout: 5000 });
     await generateBtn.click();
 
     // Wait for both operations to settle

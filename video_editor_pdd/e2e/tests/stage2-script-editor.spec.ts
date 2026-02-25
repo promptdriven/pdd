@@ -24,10 +24,27 @@ test.describe('Stage 2: Script Editor', () => {
   });
 
   test('script content is loaded from API', async ({ page }) => {
-    // Wait for CodeMirror editor to be fully loaded with content
+    // Mock script API to return content
+    await page.route('**/api/project/script**', (route) => {
+      if (route.request().method() === 'GET') {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ content: 'NARRATOR: Hello world\nVISUAL: A sunset scene' }),
+        });
+      }
+      return route.continue();
+    });
+    // Re-navigate to pick up the mock
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    const sidebar = page.locator('aside');
+    await sidebar.locator('div', { hasText: 'Script' }).first().click();
+    await expect(page.locator('h2', { hasText: 'Stage 2' })).toBeVisible({ timeout: 10000 });
+    await page.waitForTimeout(1500);
+
     const editor = page.locator('.cm-editor');
     await expect(editor).toBeVisible({ timeout: 15000 });
-    // Wait for content lines to render
     await expect(page.locator('.cm-line').first()).toBeVisible({ timeout: 10000 });
     const text = await editor.textContent();
     expect(text).toBeTruthy();
@@ -50,16 +67,39 @@ test.describe('Stage 2: Script Editor', () => {
   });
 
   test('Generate TTS Script button is enabled when NARRATOR content exists', async ({ page }) => {
-    await page.waitForTimeout(1000);
+    await page.route('**/api/project/script**', (route) => {
+      if (route.request().method() === 'GET') {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ content: 'NARRATOR: The economy changed everything.\nVISUAL: A graph rising.' }),
+        });
+      }
+      return route.continue();
+    });
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    const sidebar = page.locator('aside');
+    await sidebar.locator('div', { hasText: 'Script' }).first().click();
+    await expect(page.locator('h2', { hasText: 'Stage 2' })).toBeVisible({ timeout: 10000 });
+    await page.waitForTimeout(1500);
+
     const generateBtn = page.locator('button', { hasText: 'Generate TTS Script' });
-    // If script has NARRATOR: lines, the button should be enabled
     const isDisabled = await generateBtn.getAttribute('disabled');
-    // The script has NARRATOR content, so button should NOT be disabled
     expect(isDisabled).toBeNull();
   });
 
   test('Generate TTS Script button is clickable and triggers API call', async ({ page }) => {
-    await page.waitForTimeout(1000);
+    await page.route('**/api/project/script**', (route) => {
+      if (route.request().method() === 'GET') {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ content: 'NARRATOR: Test content for generation.' }),
+        });
+      }
+      return route.continue();
+    });
 
     let apiCallTriggered = false;
     await page.route('**/api/pipeline/tts-script/run', (route) => {
@@ -71,7 +111,15 @@ test.describe('Stage 2: Script Editor', () => {
       });
     });
 
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    const sidebar = page.locator('aside');
+    await sidebar.locator('div', { hasText: 'Script' }).first().click();
+    await expect(page.locator('h2', { hasText: 'Stage 2' })).toBeVisible({ timeout: 10000 });
+    await page.waitForTimeout(1500);
+
     const generateBtn = page.locator('button', { hasText: 'Generate TTS Script' });
+    await expect(generateBtn).toBeEnabled({ timeout: 5000 });
     await generateBtn.click();
     await page.waitForTimeout(500);
 
@@ -79,26 +127,35 @@ test.describe('Stage 2: Script Editor', () => {
   });
 
   test('CodeMirror editor area is present and content is editable', async ({ page }) => {
+    await page.route('**/api/project/script**', (route) => {
+      if (route.request().method() === 'GET') {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ content: 'NARRATOR: Editable test content.' }),
+        });
+      }
+      return route.continue();
+    });
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    const sidebar = page.locator('aside');
+    await sidebar.locator('div', { hasText: 'Script' }).first().click();
+    await expect(page.locator('h2', { hasText: 'Stage 2' })).toBeVisible({ timeout: 10000 });
     await page.waitForTimeout(2000);
 
     const editor = page.locator('.cm-editor');
     await expect(editor).toBeVisible({ timeout: 15000 });
 
-    // Click into the editor content area to focus it
     const cmContent = page.locator('.cm-content');
     await expect(cmContent).toBeVisible();
     await cmContent.click();
 
-    // Verify the editor gains focus (cm-focused class appears)
-    await expect(editor).toHaveClass(/cm-focused/, { timeout: 5000 }).catch(() => {
-      // Some CodeMirror versions use different focus indicators
-    });
+    await expect(editor).toHaveClass(/cm-focused/, { timeout: 5000 }).catch(() => {});
 
-    // Verify the editor has contenteditable attribute (it's editable)
     const isEditable = await cmContent.getAttribute('contenteditable');
     expect(isEditable).toBe('true');
 
-    // Verify existing content is present in the editor
     const editorText = await editor.textContent();
     expect(editorText!.length).toBeGreaterThan(0);
   });

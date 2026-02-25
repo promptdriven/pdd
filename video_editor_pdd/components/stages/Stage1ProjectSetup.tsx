@@ -164,8 +164,11 @@ export default function Stage1ProjectSetup({
 
       if (!res.ok) throw new Error('Failed to save');
       const data = await res.json();
-      setLocalConfig(data);
-      onSave?.(data);
+      // Only update localConfig if the response looks like a valid ProjectConfig
+      if (data && data.outputResolution && data.tts) {
+        setLocalConfig(data);
+        onSave?.(data);
+      }
       setToast('Saved successfully ✓');
     } catch (err) {
       setToast('Error saving project');

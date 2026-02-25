@@ -49,7 +49,7 @@ test.describe('Stage 5: Audio Sync', () => {
   test('section grouping heading is visible with proper contrast', async ({ page }) => {
     // Bug: heading text was invisible (light text on white bg-white card).
     // The heading "Audio Sync Section Groups" must be visible to the user.
-    const heading = page.locator('h2', { hasText: 'Audio Sync Section Groups' });
+    const heading = page.locator('h3', { hasText: 'Audio Sync Section Groups' });
     await expect(heading).toBeVisible();
 
     // Verify the heading has dark text color (not inherited light theme color)

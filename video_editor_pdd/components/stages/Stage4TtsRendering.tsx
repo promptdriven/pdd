@@ -229,6 +229,7 @@ export default function Stage4TtsRendering({ onAdvance }: Stage4TtsRenderingProp
 
   return (
     <div className="p-6 space-y-6">
+      <h2 className="text-xl font-semibold">Stage 4 — TTS Rendering</h2>
       {/* Toolbar */}
       <div className="flex items-center justify-between gap-4">
         <div className="flex gap-3">

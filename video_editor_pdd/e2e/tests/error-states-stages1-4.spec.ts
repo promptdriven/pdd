@@ -230,11 +230,17 @@ test.describe('Stage 2: Script Editor - Error States', () => {
     const errors: string[] = [];
     page.on('pageerror', (e) => errors.push(e.message));
 
-    // Navigate to Stage 2
-    const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Script' }).first().click();
-    await expect(page.locator('h2', { hasText: 'Stage 2' })).toBeVisible({ timeout: 10000 });
-    await page.waitForTimeout(1500);
+    // Mock script content so Generate button is enabled
+    await page.route('**/api/project/script**', (route) => {
+      if (route.request().method() === 'GET') {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ content: 'NARRATOR: Test content for error state.' }),
+        });
+      }
+      return route.continue();
+    });
 
     // Mock POST /api/pipeline/tts-script/run to return 500
     await page.route('**/api/pipeline/tts-script/run', (route) => {
@@ -245,8 +251,15 @@ test.describe('Stage 2: Script Editor - Error States', () => {
       });
     });
 
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    const sidebar = page.locator('aside');
+    await sidebar.locator('div', { hasText: 'Script' }).first().click();
+    await expect(page.locator('h2', { hasText: 'Stage 2' })).toBeVisible({ timeout: 10000 });
+    await page.waitForTimeout(1500);
+
     const generateBtn = page.locator('button', { hasText: 'Generate TTS Script' });
-    await expect(generateBtn).toBeVisible();
+    await expect(generateBtn).toBeEnabled({ timeout: 5000 });
     await generateBtn.click();
     await page.waitForTimeout(1000);
 
@@ -267,11 +280,17 @@ test.describe('Stage 2: Script Editor - Error States', () => {
     const errors: string[] = [];
     page.on('pageerror', (e) => errors.push(e.message));
 
-    // Navigate to Stage 2
-    const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Script' }).first().click();
-    await expect(page.locator('h2', { hasText: 'Stage 2' })).toBeVisible({ timeout: 10000 });
-    await page.waitForTimeout(1500);
+    // Mock script content so Generate button is enabled
+    await page.route('**/api/project/script**', (route) => {
+      if (route.request().method() === 'GET') {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ content: 'NARRATOR: Test content for malformed SSE.' }),
+        });
+      }
+      return route.continue();
+    });
 
     // Mock POST /api/pipeline/tts-script/run to return malformed SSE data
     await page.route('**/api/pipeline/tts-script/run', (route) => {
@@ -282,8 +301,15 @@ test.describe('Stage 2: Script Editor - Error States', () => {
       });
     });
 
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    const sidebar = page.locator('aside');
+    await sidebar.locator('div', { hasText: 'Script' }).first().click();
+    await expect(page.locator('h2', { hasText: 'Stage 2' })).toBeVisible({ timeout: 10000 });
+    await page.waitForTimeout(1500);
+
     const generateBtn = page.locator('button', { hasText: 'Generate TTS Script' });
-    await expect(generateBtn).toBeVisible();
+    await expect(generateBtn).toBeEnabled({ timeout: 5000 });
     await generateBtn.click();
     await page.waitForTimeout(1000);
 

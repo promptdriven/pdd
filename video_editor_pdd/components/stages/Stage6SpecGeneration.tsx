@@ -122,17 +122,21 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
   }, []);
 
   const runSpecs = useCallback(async (payload: object) => {
-    const res = await fetch('/api/pipeline/specs/run', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
+    try {
+      const res = await fetch('/api/pipeline/specs/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
 
-    if (res.ok) {
-      const data = await res.json();
-      if (data?.jobId) {
-        setLatestJobId(data.jobId);
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.jobId) {
+          setLatestJobId(data.jobId);
+        }
       }
+    } catch {
+      // Ignore network/parse errors — button should not get stuck
     }
   }, []);
 

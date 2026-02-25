@@ -144,6 +144,7 @@ export default function Stage3TtsScriptGen({ onAdvance }: Stage3TtsScriptGenProp
 
   return (
     <div className="w-full space-y-6">
+      <h2 className="text-xl font-semibold">Stage 3 — TTS Script</h2>
       {/* Header */}
       <div className="flex items-center justify-between">
         <button

@@ -104,8 +104,8 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
         const data = await res.json();
         if (!active) return;
         // API returns { words: [...] } or a raw array
-        const list: WordTimestamp[] = Array.isArray(data) ? data : (data.words ?? []);
-        setTimestamps(list);
+        const raw = Array.isArray(data) ? data : (Array.isArray(data?.words) ? data.words : []);
+        setTimestamps(raw);
       } catch (err) {
         if (!active) return;
         setTimestamps([]);
@@ -179,13 +179,19 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
   // Render
   // ----------------------------------------
   if (loadingProject) {
-    return <div className="p-6 text-sm text-slate-500">Loading project…</div>;
+    return (
+      <div className="p-6 space-y-6">
+        <h2 className="text-xl font-semibold">Stage 5 — Audio Sync</h2>
+        <div className="text-sm text-slate-500">Loading project…</div>
+      </div>
+    );
   }
 
   if (projectError) {
     return (
-      <div className="p-6 text-sm text-red-500">
-        Error loading project: {projectError}
+      <div className="p-6 space-y-6">
+        <h2 className="text-xl font-semibold">Stage 5 — Audio Sync</h2>
+        <div className="text-sm text-red-500">Error loading project: {projectError}</div>
       </div>
     );
   }
@@ -194,10 +200,11 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
 
   return (
     <div className="space-y-6">
+      <h2 className="text-xl font-semibold">Stage 5 — Audio Sync</h2>
       {/* Top Section: Section Grouping Table */}
       <div className="rounded-lg border border-slate-700 bg-slate-900 p-4 shadow-sm">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-slate-100">Audio Sync Section Groups</h2>
+          <h3 className="text-lg font-semibold text-slate-100">Audio Sync Section Groups</h3>
           <div className="flex items-center gap-2">
             <button
               onClick={handleSaveConfig}
