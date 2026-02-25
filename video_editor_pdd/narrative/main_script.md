@@ -33,7 +33,7 @@ Code just got that cheap.
 
 **[VISUAL: The entire function DELETES. Then regenerates, clean, in under a second. In the corner, subtle: terminal showing `pdd generate` completing.]**
 
-So why are we still patching?
+So why are we still patching? 
 
 **[VISUAL: Title card fades in over the regenerated code: "Prompt-Driven Development"]**
 
