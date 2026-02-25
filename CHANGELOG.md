@@ -2,19 +2,21 @@
 
 ### Feat
 
-- Implement dark theme across video editor stages, refine UI components with custom dropdowns and improved rendering logic, and update demo content.
-- Introduce new video processing pipeline API routes, git-based change management, and UI components for the video editor.
-- validate prompt token count against model context window (#497) (#500)
-- add cross-cutting concern detection and channel enumeration to agentic prompts (#495) (#499)
-- Add Git-based fix management with API endpoints and UI for previewing, applying, and reverting annotation changes.
-- Implement detailed voice instruction mapping and refactor audio utilities to use numpy and soundfile, updating Qwen3TTS to return numpy arrays and support CUDA.
-- Upgrade TTS engine to Qwen3-TTS custom voice model with speaker support, regenerating narration and updating video segment durations.
-- Integrate Remotion for video generation, introduce cold open and part 1 economics sections, and enhance the audio synchronization pipeline with flexible section group loading.
+- **13-step agentic architecture workflow** — Expanded from 11 to 13 steps by adding a dedicated Step 4 (Data Model Design) for entities, relationships, and storage decisions. All subsequent steps renumbered accordingly. New `_check_step4_output()` validates that the LLM produces data model content rather than module design.
+- **Context window validation in `llm_invoke`** — Prompt token count is now checked against the model's context limit before each LLM call. Prompts exceeding the limit skip to the next candidate model. Post-call `ContextWindowExceededError` is also caught as a safety net. Error messages include a hint to reduce prompt size or use a larger-context model.
+- **Cross-cutting concern detection and channel enumeration in agentic prompts** — Architecture prompts now detect shared concerns across modules and enumerate communication channels.
+- **Validate prompt token count against model context window** — `token_counter.py` rewritten to use litellm's model-aware tokenizer and `get_model_info()` for context limits instead of hardcoded `MODEL_CONTEXT_LIMITS`. Falls back to tiktoken `cl100k_base` for unknown models. `get_context_limit()` returns `Optional[int]` (None for unknown models).
+- **Agentic bug orchestrator E2E skip support** — Step 9 now handles `E2E_SKIP:` markers for simple bugs that don't need E2E tests, treating them as successful completion. E2E file list is deduplicated with insertion-order preservation.
+- **Sanitize corrupted architecture dependencies** — New `_sanitize_architecture_dependencies()` in `agentic_change_orchestrator` removes dependency strings that contain newlines or are too long (LLM confusion between example `<pdd-dependency>` tags and real tags).
+- **Deep copy formatted_messages before LiteLLM calls** — Prevents Groq's structured output fallback from mutating the shared message list, which corrupted retries on other providers (upstream PR #598).
 
 ### Fix
 
-- complete dark theme sweep for remaining light-theme leaks in CostDashboard, Stage2 preview blocks, and Stage8/9 error messages
-- --quiet flag does not suppress all output (#541) (#543)
+- **`--quiet` flag does not suppress all output** — Pre-parse `--quiet` from `sys.argv` before importing `llm_invoke` to set `PDD_QUIET` env var early. New `set_quiet_logging()` raises logger levels to ERROR. `preprocess.py` Rich panels suppressed when `PDD_QUIET` is set. New E2E subprocess test and unit tests for quiet flag behavior.
+
+### Refactor
+
+- **Agentic architecture prompt renaming** — Steps 4-12 prompts renamed to steps 5-13 to accommodate the new data model step (e.g. `agentic_arch_step4_design_LLM.prompt` → `agentic_arch_step5_design_LLM.prompt`).
 
 ## v0.0.158 (2026-02-23)
 

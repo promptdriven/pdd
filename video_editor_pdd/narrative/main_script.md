@@ -10,7 +10,7 @@
  
 **[VISUAL: Split screen. LEFT: Developer at keyboard, Cursor interface visible, making a slick AI-assisted edit. RIGHT: 1950s great-grandmother carefully darning a wool sock by lamplight.]**
 
-**NARRATOR:**
+**NARRATOR:** 
 If you use Cursor, or Claude Code, or Copilot...
 
 **[VISUAL: Both complete their task simultaneously. The code edit lands cleanly. The sock patch finishes neatly.]**
