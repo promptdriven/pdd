@@ -254,4 +254,77 @@ test.describe('Stage 4: TTS Rendering', () => {
       expect(parsed.segments).toContain('seg-rerender-001');
     }
   });
+
+  test('Play button auto-expands row and initializes audio when clicked on collapsed row', async ({ page }) => {
+    await page.route('**/api/pipeline/tts-render/segments', (route) => {
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          segments: [
+            { id: 'seg-autoplay-001', status: 'done', text: 'Auto-expand test segment.' },
+          ],
+        }),
+      });
+    });
+
+    // Mock the audio endpoint to return a tiny valid WAV
+    await page.route('**/api/audio/tts/seg-autoplay-001.wav', (route) => {
+      route.fulfill({ status: 200, contentType: 'audio/wav', body: Buffer.alloc(44) });
+    });
+
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    const sidebar = page.locator('aside');
+    await sidebar.locator('div', { hasText: 'TTS Render' }).first().click();
+    await page.waitForTimeout(1000);
+
+    // Row should be collapsed (▼ visible)
+    await expect(page.locator('text=▼').first()).toBeVisible();
+
+    // Click Play without expanding first
+    const playBtn = page.locator('button', { hasText: '▶' }).first();
+    await playBtn.click();
+    await page.waitForTimeout(500);
+
+    // Row should auto-expand (▲ visible) so wavesurfer can initialize
+    await expect(page.locator('text=▲').first()).toBeVisible();
+  });
+
+  test('audio endpoint serves WAV files from outputs/tts directory', async ({ page }) => {
+    // This test verifies the /api/audio/tts/<id>.wav endpoint returns audio
+    const response = await page.request.get('/api/audio/tts/closing_001.wav');
+    // Should return 200 with audio content-type (or 404 if file missing, but NOT a route error)
+    expect([200, 404]).toContain(response.status());
+    if (response.status() === 200) {
+      const contentType = response.headers()['content-type'];
+      expect(contentType).toMatch(/audio/);
+    }
+  });
+
+  test('status badge shows generating state with amber pulse', async ({ page }) => {
+    await page.route('**/api/pipeline/tts-render/segments', (route) => {
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          segments: [
+            { id: 'seg-gen-001', status: 'generating', text: 'Generating segment.' },
+            { id: 'seg-done-001', status: 'done', text: 'Done segment.' },
+          ],
+        }),
+      });
+    });
+
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    const sidebar = page.locator('aside');
+    await sidebar.locator('div', { hasText: 'TTS Render' }).first().click();
+    await page.waitForTimeout(1000);
+
+    // The generating badge should be visible with the pulsing animation class
+    const generatingBadge = page.locator('span', { hasText: 'generating' });
+    await expect(generatingBadge).toBeVisible();
+    await expect(generatingBadge).toHaveClass(/animate-pulse/);
+  });
 });

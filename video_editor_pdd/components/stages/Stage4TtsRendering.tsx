@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import WaveSurfer from 'wavesurfer.js';
 import { SseLogPanel } from '../SseLogPanel';
 
-type SegmentStatus = 'done' | 'missing' | 'error';
+type SegmentStatus = 'done' | 'missing' | 'error' | 'generating';
 
 interface TtsSegment {
   id: string;
@@ -81,13 +81,21 @@ export default function Stage4TtsRendering({ onAdvance }: Stage4TtsRenderingProp
 
     const ws = WaveSurfer.create({
       container,
-      url: `/api/audio/${expandedId}.wav`,
+      url: `/api/audio/tts/${expandedId}.wav`,
       height: 64,
       waveColor: '#4ade80',
       progressColor: '#166534',
     });
 
     wavesurferMap.current.set(expandedId, ws);
+
+    // Auto-play if this expand was triggered by the Play button
+    if (pendingPlayRef.current === expandedId) {
+      ws.once('ready', () => {
+        ws.play();
+      });
+      pendingPlayRef.current = null;
+    }
 
     return () => {
       // Keep instance cached for reuse or cleanup if necessary
@@ -103,9 +111,17 @@ export default function Stage4TtsRendering({ onAdvance }: Stage4TtsRenderingProp
     };
   }, []);
 
+  const pendingPlayRef = useRef<string | null>(null);
+
   const handlePlay = (id: string) => {
     const ws = wavesurferMap.current.get(id);
-    if (ws) ws.playPause();
+    if (ws) {
+      ws.playPause();
+    } else {
+      // Auto-expand the row so WaveSurfer initializes, then play once ready
+      pendingPlayRef.current = id;
+      setExpandedId(id);
+    }
   };
 
   const handleRowToggle = (id: string) => {
@@ -206,6 +222,7 @@ export default function Stage4TtsRendering({ onAdvance }: Stage4TtsRenderingProp
   const renderStatusBadge = (status: SegmentStatus) => {
     const base = 'px-2 py-1 text-xs rounded font-semibold';
     if (status === 'done') return <span className={`${base} bg-green-900/50 text-green-400`}>done</span>;
+    if (status === 'generating') return <span className={`${base} bg-amber-900/50 text-amber-400 animate-pulse`}>generating</span>;
     if (status === 'error') return <span className={`${base} bg-red-900/50 text-red-400`}>error</span>;
     return <span className={`${base} bg-yellow-900/50 text-yellow-400`}>missing</span>;
   };
