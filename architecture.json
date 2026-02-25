@@ -1,7 +1,7 @@
 [
   {
-    "reason": "Provides unified LLM invocation across all PDD operations.",
-    "description": "Core abstraction for calling LLMs via LiteLLM. Handles provider selection, authentication, retries, token counting, and cost tracking. Supports batch mode and structured outputs.",
+    "reason": "Provides unified LLM invocation across all PDD operations with provider abstraction, retries, and context window validation.",
+    "description": "Core abstraction for calling LLMs via LiteLLM. Handles provider selection, authentication, retries, token counting, cost tracking, and pre-call context window validation. Supports batch mode and structured outputs.",
     "dependencies": [
       "path_resolution_python.prompt"
     ],

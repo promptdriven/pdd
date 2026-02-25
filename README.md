@@ -599,7 +599,7 @@ These options can be used with any command:
   - For models with discrete effort levels, `1.0` corresponds to the highest effort level.
   - Values between 0.0 and 1.0 scale the allocation proportionally.
 - `--temperature FLOAT`: Set the temperature of the AI model (default is 0.0).
-- `--verbose`: Increase output verbosity for more detailed information.
+- `--verbose`: Increase output verbosity for more detailed information. Includes token count and context window usage for each LLM call.
 - `--quiet`: Decrease output verbosity for minimal information.
 - `--output-cost PATH_TO_CSV_FILE`: Enable cost tracking and output a CSV file with usage details.
 - `--review-examples`: Review and optionally exclude few-shot examples before command execution.
@@ -2822,6 +2822,7 @@ PDD provides informative error messages when issues occur during command executi
 - Invalid input files or formats
 - Insufficient permissions to read/write files
 - AI model-related errors (e.g., API failures)
+- Prompt exceeding model context window — PDD validates prompt token count before sending to the LLM. If the prompt exceeds the model's context limit, PDD reports the token count, the model's limit, usage percentage, and which prompt caused the overflow. When multiple candidate models are configured, PDD automatically falls back to the next model.
 - Syntax errors in generated code
 
 When an error occurs, PDD will display a message describing the issue and, when possible, suggest steps to resolve it.
@@ -2871,7 +2872,15 @@ Here are some common issues and their solutions:
    - Increase timeout with `export PDD_CLOUD_TIMEOUT=1800` (30 minutes) for long-running operations
    - If persistent, check PDD Cloud status page
 
-8. **Sync-Specific Issues**:
+8. **Context Window Overflow**: If you see "Prompt exceeds context limit" errors:
+   - The error message includes token count and model limit — use this to gauge how much to reduce
+   - Reduce the size of your prompt files or split into smaller modules
+   - Remove unnecessary `<include>` directives or use targeted excerpts instead of full files
+   - Use a model with a larger context window (e.g., Gemini with 1M tokens, or Claude which automatically uses the 1M beta header)
+   - Run with `--verbose` to see exact token counts and context usage percentages
+   - If using `auto-deps`, review included dependencies for unnecessary bulk
+
+9. **Sync-Specific Issues**:
    - **"Another sync is running"**: Check for stale locks in `.pdd/locks/` directory and remove if process no longer exists
    - **Complex conflict resolution problems**: Use `pdd --verbose sync --dry-run basename` to see detailed LLM reasoning and decision analysis
    - **State corruption or unexpected behavior**: Delete `.pdd/meta/{basename}_{language}.json` to reset fingerprint state

@@ -1,3 +1,20 @@
+<pdd-reason>Provides unified LLM invocation across all PDD operations with provider abstraction, retries, and context window validation.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "llm_invoke", "signature": "(prompt, input_json, strength, temperature, verbose, output_pydantic, output_schema, time, use_batch_mode, messages, language, use_cloud)", "returns": "Dict[str, Any]"},
+      {"name": "setup_file_logging", "signature": "(log_file_path=None)", "returns": "None"},
+      {"name": "set_verbose_logging", "signature": "(verbose=False)", "returns": "None"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>path_resolution_python.prompt</pdd-dependency>
+
 % You are an expert Python engineer. Your goal is to write a python function, "llm_invoke", that will run a prompt with a given input using the LiteLLM library. The function will also handle fetching and saving missing API keys interactively. The entire code needed for this will be in a single file called llm_invoke.py.
 
 <include>context/python_preamble.prompt</include>
@@ -25,6 +42,9 @@
     - Environment variables: PDD_LOG_LEVEL (default: "INFO"), LITELLM_LOG_LEVEL (default: "WARNING" in production), PDD_ENVIRONMENT ("production" reduces to WARNING), PDD_VERBOSE_LOGGING=1 enables DEBUG.
     - Provide `setup_file_logging()` for rotating file handlers (10MB, 5 backups) and `set_verbose_logging()` to toggle DEBUG level.
     - Set `litellm.drop_params` based on `LITELLM_DROP_PARAMS` env var (default: true) to ignore unsupported provider parameters.
+    - When verbose=True, always log token count and context window limit for each model attempt.
+      When token usage exceeds 90% of the context limit, log a capacity warning regardless
+      of verbose setting.
 
 % Function Signature:
     llm_invoke(
@@ -95,6 +115,21 @@
     - Anthropic with thinking enabled: Force temperature=1.
     - LM Studio: Set base_url from LM_STUDIO_API_BASE env (default http://localhost:1234/v1) and api_key placeholder "lm-studio".
 
+% Context Window Validation:
+    - Before calling litellm.completion()/batch_completion()/responses(), validate the assembled prompt's
+      token count against the model's context window limit within the per-model candidate loop.
+    - Use litellm.token_counter(model, messages) for model-aware token counting and
+      litellm.get_model_info(model)["max_input_tokens"] for the model's context window size.
+      Do NOT use litellm.get_max_tokens() — that returns max output tokens, not the context window.
+    - Claude context override: When the anthropic-beta context-1m header is set for Claude models,
+      use 1,000,000 as the effective context limit instead of litellm's default (200K).
+    - Graceful fallback: If litellm.get_model_info() raises an exception or max_input_tokens is None,
+      skip context window validation for that model and proceed with the LLM call normally.
+      Log a debug message noting validation was skipped. Do not block the request.
+    - If prompt tokens exceed the context limit, skip to the next candidate model (consistent with
+      existing fallback pattern). Log a warning with: token count, model context limit, usage percentage,
+      and model name.
+
 % Structured Output:
     - Check 'structured_output' CSV flag.
     - Use response_format with type='json_schema', json_schema containing name, schema, and strict=True to enforce all required fields.
@@ -121,6 +156,13 @@
     - On schema validation failure: Raise SchemaValidationError to trigger fallback to next model.
     - Preserve provider credentials in retries: Pass api_key, base_url, api_version from original call.
     - Anthropic temperature auto-adjustment: If error mentions temperature+thinking, adjust and retry.
+    - Catch litellm.ContextWindowExceededError as a post-call safety net (for cases where
+      approximate pre-call token counting underestimates). Treat as model overflow: log warning
+      and skip to next candidate model.
+    - When all candidate models are exhausted due to context window overflow (either pre-call
+      validation or post-call ContextWindowExceededError), include actionable details in the
+      RuntimeError: token count, model context limits attempted, usage percentage, and guidance
+      to reduce prompt size or use a model with a larger context window.
     - After exhausting all candidates: Raise RuntimeError.
 
 % Cloud Execution:
@@ -180,3 +222,4 @@
     <litellm_json_mode_example><web>https://docs.litellm.ai/docs/completion/json_mode</web></litellm_json_mode_example>
     <litellm_batch_mode_example><web>https://docs.litellm.ai/docs/completion/batching</web></litellm_batch_mode_example>
     <litellm_exception_mapping_example><web>https://docs.litellm.ai/docs/exception_mapping</web></litellm_exception_mapping_example>
+    <litellm_context_window_example><web>https://docs.litellm.ai/docs/exception_mapping#context-window-errors</web></litellm_context_window_example>

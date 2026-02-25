@@ -79,6 +79,33 @@ def main():
     # Convert to dictionary for easy serialization/logging
     print(json.dumps(metrics.to_dict(), indent=2))
 
+    # 6. Show reported context limits for Claude 4 models
+    print("\n--- Claude 4 Context Limits (reported) ---")
+    for model in ["claude-sonnet-4-20250514", "claude-opus-4-20250514"]:
+        limit = token_counter.get_context_limit(model)
+        if limit is None:
+            print(f"  {model}: (no context limit info available)")
+        else:
+            print(f"  {model}: {limit:,} tokens")
+
+    # 7. Bedrock model name handling
+    # AWS Bedrock uses prefixed names like "anthropic.claude-opus-4-6-v1"
+    print("\n--- Bedrock Model Names ---")
+    bedrock_model = "anthropic.claude-opus-4-6-v1"
+    limit = token_counter.get_context_limit(bedrock_model)
+    if limit is None:
+        print(f"  {bedrock_model}: (no context limit info available)")
+    else:
+        print(f"  {bedrock_model}: {limit:,} tokens")
+
+    # 8. Unknown models return None (no configured context limit)
+    print("\n--- Unknown Model (no configured limit) ---")
+    unknown_limit = token_counter.get_context_limit("some-custom-model-v2")
+    if unknown_limit is None:
+        print("  some-custom-model-v2: no configured context limit (returned None)")
+    else:
+        print(f"  some-custom-model-v2: {unknown_limit:,} tokens")
+
     # Clean up dummy file (optional)
     # pricing_path.unlink()
 

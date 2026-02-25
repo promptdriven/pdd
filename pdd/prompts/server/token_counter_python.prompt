@@ -1,30 +1,36 @@
 % You are an expert Python engineer. Create a `token_counter` module for token counting and cost estimation.
 
 % Role & Scope
-A utility module that counts tokens using tiktoken and estimates costs from pricing CSV data. Used by the PDD server for prompt/context analysis.
+A utility module that counts tokens and looks up model context windows using litellm, and estimates costs from pricing CSV data. Used by the PDD server for prompt/context analysis.
 
 <include>context/python_preamble.prompt</include>
 
 % Requirements
-1. Function: `count_tokens(text: str) -> int` using tiktoken with cl100k_base encoding
-2. Function: `get_context_limit(model: str) -> int` returning context window size
+1. Function: `count_tokens(text: str, model: str = "gpt-4o") -> int`
+   - Use `litellm.token_counter(model=model, messages=[{"role": "user", "content": text}])`
+   - Fall back to tiktoken cl100k_base encoding if litellm raises any exception
+   - Return 0 for empty text
+2. Function: `get_context_limit(model: str) -> Optional[int]`
+   - Use `litellm.get_model_info(model)["max_input_tokens"]` to look up the input context window
+   - Return `None` if litellm raises any exception (unknown model — caller should skip validation)
+   - Do NOT use a hardcoded MODEL_CONTEXT_LIMITS dict
 3. Function: `estimate_cost(token_count, model, pricing_csv) -> Optional[CostEstimate]`
 4. Function: `get_token_metrics(text, model, pricing_csv) -> TokenMetrics` combining all metrics
 5. Dataclass `CostEstimate`: input_cost, model, tokens, cost_per_million, currency (default USD)
-6. Dataclass `TokenMetrics`: token_count, context_limit, context_usage_percent, cost_estimate
+6. Dataclass `TokenMetrics`: token_count, context_limit (Optional[int]), context_usage_percent (Optional[float]), cost_estimate
 7. Both dataclasses have `to_dict()` methods for serialization
-8. Model context limits: gpt-4 (128k), gpt-5 (200k), claude-3/4 variants (200k), gemini-2/3 (1M), default 128k
-9. Pricing loaded from CSV with columns: model, input (cost per million tokens)
-10. Model matching: exact match first, then partial/substring match, then fallback to defaults
-11. Cache tiktoken encoding and pricing data with lru_cache
-12. Return None for cost estimate if pricing CSV missing or model not found
+8. Pricing loaded from CSV with columns: model, input (cost per million tokens)
+9. Model matching for cost: exact match first, then partial/substring match, then fallback to defaults
+10. Cache pricing data with lru_cache; do NOT cache litellm calls (litellm has its own cache)
+11. Return None for cost estimate if pricing CSV missing or model not found
 
 % Dependencies
-- tiktoken: for token counting
+- litellm: for token counting and context window lookup (primary)
+- tiktoken: fallback for token counting only
 - CSV file at .pdd/llm_model.csv for pricing data
 
 % Instructions
-- Empty text returns 0 tokens
-- Model matching is case-insensitive for context limits
+- `get_context_limit` returning None means the model is unknown — callers must skip context validation, not raise an error
+- Context usage percent is None when context_limit is None
 - Cost calculation: (token_count / 1_000_000) * cost_per_million
 - Context usage is percentage: (tokens / limit) * 100
