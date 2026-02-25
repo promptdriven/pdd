@@ -169,26 +169,26 @@ describe("badgeFromFirstLine helper", () => {
 
   it("matches [Remotion] badge with blue colors", () => {
     expect(sourceCode).toContain("Remotion");
-    expect(sourceCode).toContain("bg-blue-100");
-    expect(sourceCode).toContain("text-blue-700");
+    expect(sourceCode).toContain("bg-blue-900/50");
+    expect(sourceCode).toContain("text-blue-300");
   });
 
   it("matches [veo:...] badge with purple colors", () => {
     expect(sourceCode).toMatch(/\[veo:.*?\]/);
-    expect(sourceCode).toMatch(/bg-purple-100/);
-    expect(sourceCode).toMatch(/text-purple-700/);
+    expect(sourceCode).toMatch(/bg-purple-900\/50/);
+    expect(sourceCode).toMatch(/text-purple-300/);
   });
 
   it("matches [title:...] badge with teal colors", () => {
     expect(sourceCode).toMatch(/\[title:.*?\]/);
-    expect(sourceCode).toMatch(/bg-teal-100/);
-    expect(sourceCode).toMatch(/text-teal-700/);
+    expect(sourceCode).toMatch(/bg-teal-900\/50/);
+    expect(sourceCode).toMatch(/text-teal-300/);
   });
 
   it("matches [split:...] badge with orange colors", () => {
     expect(sourceCode).toMatch(/\[split:.*?\]/);
-    expect(sourceCode).toMatch(/bg-orange-100/);
-    expect(sourceCode).toMatch(/text-orange-700/);
+    expect(sourceCode).toMatch(/bg-orange-900\/50/);
+    expect(sourceCode).toMatch(/text-orange-300/);
   });
 
   it("returns null when no badge pattern matches", () => {

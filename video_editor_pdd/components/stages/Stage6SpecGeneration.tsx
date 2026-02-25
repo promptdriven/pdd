@@ -282,7 +282,7 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
                           </td>
                           <td className="py-2 text-right">
                             <button
-                              className="mr-2 rounded border border-slate-200 px-2 py-1 text-xs hover:bg-slate-50"
+                              className="mr-2 rounded border border-slate-600 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700"
                               onClick={() => loadSpecFile(file, section.id)}
                               title="Open in editor"
                             >

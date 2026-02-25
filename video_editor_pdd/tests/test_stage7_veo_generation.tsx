@@ -606,8 +606,8 @@ describe("layout structure", () => {
     expect(sourceCode).toMatch(/flex\s+gap-6/);
   });
 
-  it("uses bg-white rounded-lg shadow for card panels", () => {
-    expect(sourceCode).toMatch(/bg-white rounded-lg shadow/);
+  it("uses dark-themed rounded-lg shadow for card panels", () => {
+    expect(sourceCode).toMatch(/bg-slate-900 rounded-lg shadow/);
   });
 });
 
