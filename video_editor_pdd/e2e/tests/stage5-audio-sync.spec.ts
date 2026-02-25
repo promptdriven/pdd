@@ -135,4 +135,180 @@ test.describe('Stage 5: Audio Sync', () => {
     await expect(page.locator('th', { hasText: 'End' }).first()).toBeVisible();
     await expect(page.locator('th', { hasText: 'Segment ID' }).first()).toBeVisible();
   });
+
+  // ── Interactive tests ──────────────────────────────────────────────
+
+  test('Save Config button click triggers a PUT /api/project call', async ({ page }) => {
+    // Mock the PUT endpoint so the test doesn't depend on a running backend
+    let putCalled = false;
+    await page.route('**/api/project', (route) => {
+      if (route.request().method() === 'PUT') {
+        putCalled = true;
+        return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+      }
+      return route.fallback();
+    });
+
+    const saveBtn = page.locator('button', { hasText: 'Save Config' });
+    await expect(saveBtn).toBeVisible();
+    await expect(saveBtn).toBeEnabled();
+
+    await saveBtn.click();
+    // The button text changes to "Saving…" while the request is in flight
+    await page.waitForTimeout(500);
+
+    // After the mocked response resolves the button should revert to "Save Config"
+    await expect(saveBtn).toContainText('Save Config');
+    expect(putCalled).toBe(true);
+  });
+
+  test('Run Audio Sync button click triggers a POST /api/pipeline/audio-sync/run call', async ({ page }) => {
+    let postCalled = false;
+    await page.route('**/api/pipeline/audio-sync/run', (route) => {
+      postCalled = true;
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ jobId: 'test-job-123' }),
+      });
+    });
+
+    const runBtn = page.locator('button', { hasText: 'Run Audio Sync' });
+    await expect(runBtn).toBeVisible();
+    await runBtn.click();
+    await page.waitForTimeout(500);
+
+    expect(postCalled).toBe(true);
+  });
+
+  test('section select dropdown changes the displayed section and re-fetches timestamps', async ({ page }) => {
+    const select = page.locator('select');
+    await expect(select).toBeVisible();
+
+    // Record the initial selected value
+    const initialValue = await select.inputValue();
+
+    // Intercept timestamp fetches to verify re-fetch happens
+    let timestampFetchCount = 0;
+    await page.route('**/api/pipeline/audio-sync/timestamps**', (route) => {
+      timestampFetchCount++;
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ words: [] }),
+      });
+    });
+
+    // Get all options and pick a different one if available
+    const options = select.locator('option');
+    const optionCount = await options.count();
+    if (optionCount > 1) {
+      // Select the second option
+      const secondValue = await options.nth(1).getAttribute('value');
+      await select.selectOption(secondValue!);
+      await page.waitForTimeout(500);
+
+      // The select value should have changed
+      const newValue = await select.inputValue();
+      expect(newValue).not.toBe(initialValue);
+
+      // A new timestamp fetch should have been triggered
+      expect(timestampFetchCount).toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  test('search input filters the word list', async ({ page }) => {
+    // Mock timestamps with known words so we can test filtering
+    await page.route('**/api/pipeline/audio-sync/timestamps**', (route) => {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          words: [
+            { word: 'hello', start: 0.0, end: 0.5, segmentId: 'seg1' },
+            { word: 'world', start: 0.5, end: 1.0, segmentId: 'seg1' },
+            { word: 'testing', start: 1.0, end: 1.5, segmentId: 'seg2' },
+            { word: 'playwright', start: 1.5, end: 2.0, segmentId: 'seg2' },
+            { word: 'hello', start: 2.0, end: 2.5, segmentId: 'seg3' },
+          ],
+        }),
+      });
+    });
+
+    // Re-navigate to trigger timestamp load with our mock
+    const sidebar = page.locator('aside');
+    await sidebar.locator('div', { hasText: 'Setup' }).first().click();
+    await page.waitForTimeout(500);
+    await sidebar.locator('div', { hasText: 'Audio Sync' }).first().click();
+    await page.waitForTimeout(1000);
+
+    // Before filtering: word count should show "5 of 5 words"
+    await expect(page.locator('text=/5 of 5 words/')).toBeVisible();
+
+    // Type "hello" in the search input to filter
+    const searchInput = page.locator('input[placeholder="Search word\u2026"]');
+    await searchInput.fill('hello');
+    await page.waitForTimeout(300);
+
+    // After filtering: should show "2 of 5 words"
+    await expect(page.locator('text=/2 of 5 words/')).toBeVisible();
+
+    // Clear the search to verify it resets
+    await searchInput.fill('');
+    await page.waitForTimeout(300);
+    await expect(page.locator('text=/5 of 5 words/')).toBeVisible();
+  });
+
+  test('virtualized table scrolls and renders rows on scroll', async ({ page }) => {
+    // Create enough mock data to exceed the viewport (VIEWPORT_HEIGHT=320, ROW_HEIGHT=32)
+    const manyWords = Array.from({ length: 50 }, (_, i) => ({
+      word: `word_${i}`,
+      start: i * 0.1,
+      end: (i + 1) * 0.1,
+      segmentId: `seg_${Math.floor(i / 10)}`,
+    }));
+
+    await page.route('**/api/pipeline/audio-sync/timestamps**', (route) => {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ words: manyWords }),
+      });
+    });
+
+    // Re-navigate to trigger timestamp load with our mock
+    const sidebar = page.locator('aside');
+    await sidebar.locator('div', { hasText: 'Setup' }).first().click();
+    await page.waitForTimeout(500);
+    await sidebar.locator('div', { hasText: 'Audio Sync' }).first().click();
+    await page.waitForTimeout(1000);
+
+    // Verify the word count
+    await expect(page.locator('text=/50 of 50 words/')).toBeVisible();
+
+    // The first word should be visible
+    await expect(page.locator('td', { hasText: 'word_0' })).toBeVisible();
+
+    // Scroll the virtualized container down
+    const scrollContainer = page.locator('div[style*="contain: strict"]');
+    await scrollContainer.evaluate((el) => {
+      el.scrollTop = 1200; // Scroll down ~37 rows
+    });
+    await page.waitForTimeout(500);
+
+    // After scrolling, late words should now be rendered
+    await expect(page.locator('td', { hasText: 'word_40' })).toBeVisible();
+  });
+
+  test('Continue button navigates to the next stage', async ({ page }) => {
+    const continueBtn = page.locator('button', { hasText: 'Continue' });
+    await expect(continueBtn).toBeVisible();
+    await expect(continueBtn).toBeEnabled();
+    await continueBtn.click();
+    await page.waitForTimeout(1000);
+
+    // After clicking Continue, we should advance to Stage 6 (Spec Gen)
+    // Verify the sidebar now highlights a different stage or the stage content changes
+    await expect(page.locator('text=Spec Generation').first()).toBeVisible();
+  });
 });

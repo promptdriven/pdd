@@ -86,21 +86,35 @@ test.describe('Stage 6: Spec Generation', () => {
   });
 
   test('accordion sections can collapse and expand', async ({ page }) => {
-    // Click on the Cold Open toggle button to collapse
+    // Sections use expanded state with ▾/▸ arrows. Find the first section toggle.
     const toggleBtn = page.locator('button', { hasText: 'Cold Open' }).first();
-    await toggleBtn.click();
-    await page.waitForTimeout(300);
+    await expect(toggleBtn).toBeVisible();
 
-    // The file table for Cold Open should be hidden
-    // Check that "specs/00-cold-open" text is no longer visible
-    const coldOpenPath = page.locator('text=specs/00-cold-open/spec.md');
-    const isVisible = await coldOpenPath.isVisible().catch(() => false);
-    expect(isVisible).toBe(false);
+    // Check if section is currently expanded (▾ arrow visible)
+    const isExpanded = await toggleBtn.locator('text=▾').isVisible().catch(() => false);
 
-    // Click again to expand
-    await toggleBtn.click();
-    await page.waitForTimeout(300);
-    await expect(coldOpenPath).toBeVisible();
+    if (isExpanded) {
+      // Collapse it
+      await toggleBtn.click();
+      await page.waitForTimeout(300);
+      // The ▸ arrow should now be visible (collapsed)
+      await expect(toggleBtn.locator('text=▸')).toBeVisible();
+
+      // Expand it again
+      await toggleBtn.click();
+      await page.waitForTimeout(300);
+      await expect(toggleBtn.locator('text=▾')).toBeVisible();
+    } else {
+      // Expand it
+      await toggleBtn.click();
+      await page.waitForTimeout(300);
+      await expect(toggleBtn.locator('text=▾')).toBeVisible();
+
+      // Collapse it
+      await toggleBtn.click();
+      await page.waitForTimeout(300);
+      await expect(toggleBtn.locator('text=▸')).toBeVisible();
+    }
   });
 
   test('Spec Generation Logs details element is present', async ({ page }) => {
@@ -128,5 +142,163 @@ test.describe('Stage 6: Spec Generation', () => {
       (e) => !e.includes('Extension') && !e.includes('chrome-extension')
     );
     expect(appErrors).toHaveLength(0);
+  });
+
+  // ── Interactive tests ──────────────────────────────────────────────
+
+  test('Generate All Specs button click triggers POST /api/pipeline/specs/run', async ({ page }) => {
+    let postCalled = false;
+    let requestBody: any = null;
+
+    await page.route('**/api/pipeline/specs/run', (route) => {
+      postCalled = true;
+      requestBody = route.request().postDataJSON();
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ jobId: 'test-spec-job-1' }),
+      });
+    });
+
+    const generateBtn = page.locator('button', { hasText: 'Generate All Specs' });
+    await expect(generateBtn).toBeVisible();
+    await generateBtn.click();
+    await page.waitForTimeout(500);
+
+    expect(postCalled).toBe(true);
+    // Generate All sends an empty payload (no section filter)
+    expect(requestBody).toEqual({});
+  });
+
+  test('Edit button opens inline CodeMirror editor', async ({ page }) => {
+    // Wait for sections to load
+    await expect(page.locator('text=Cold Open').first()).toBeVisible({ timeout: 10000 });
+
+    // Mock the file content endpoint
+    await page.route('**/api/pipeline/specs/file**', (route) => {
+      if (route.request().method() === 'GET') {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ content: '# Test spec content\nSome markdown here' }),
+        });
+      }
+      return route.fallback();
+    });
+
+    // The edit button is the pencil icon "✎" in the Actions column
+    const editBtn = page.locator('button[title="Open in editor"]').first();
+    await expect(editBtn).toBeVisible();
+    await editBtn.click();
+    await page.waitForTimeout(500);
+
+    // After clicking edit, a CodeMirror editor should appear with "Editing:" title
+    await expect(page.locator('text=Editing:').first()).toBeVisible();
+
+    // The CodeMirror editor container should be present
+    const cmEditor = page.locator('.cm-editor');
+    await expect(cmEditor.first()).toBeVisible();
+  });
+
+  test('File regenerate button triggers POST /api/pipeline/specs/run with file path', async ({ page }) => {
+    // Wait for sections to load
+    await expect(page.locator('text=Cold Open').first()).toBeVisible({ timeout: 10000 });
+
+    let postCalled = false;
+    let requestBody: any = null;
+
+    await page.route('**/api/pipeline/specs/run', (route) => {
+      postCalled = true;
+      requestBody = route.request().postDataJSON();
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ jobId: 'test-regen-file-job' }),
+      });
+    });
+
+    // The file regenerate button is the "↺" icon in the Actions column (second button per row)
+    const fileRegenBtn = page.locator('button[title="Regenerate file"]').first();
+    await expect(fileRegenBtn).toBeVisible();
+    await fileRegenBtn.click();
+    await page.waitForTimeout(500);
+
+    expect(postCalled).toBe(true);
+    // File regeneration sends { files: [filePath] }
+    expect(requestBody).toHaveProperty('files');
+    expect(Array.isArray(requestBody.files)).toBe(true);
+    expect(requestBody.files.length).toBe(1);
+  });
+
+  test('Section regenerate button triggers POST /api/pipeline/specs/run with section id', async ({ page }) => {
+    // Wait for sections to load
+    await expect(page.locator('text=Cold Open').first()).toBeVisible({ timeout: 10000 });
+
+    let postCalled = false;
+    let requestBody: any = null;
+
+    await page.route('**/api/pipeline/specs/run', (route) => {
+      postCalled = true;
+      requestBody = route.request().postDataJSON();
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ jobId: 'test-regen-section-job' }),
+      });
+    });
+
+    // The section-level Regenerate button contains "↺ Regenerate"
+    const sectionRegenBtn = page.locator('button', { hasText: '↺ Regenerate' }).first();
+    await expect(sectionRegenBtn).toBeVisible();
+    await sectionRegenBtn.click();
+    await page.waitForTimeout(500);
+
+    expect(postCalled).toBe(true);
+    // Section regeneration sends { sections: [sectionId] }
+    expect(requestBody).toHaveProperty('sections');
+    expect(Array.isArray(requestBody.sections)).toBe(true);
+    expect(requestBody.sections.length).toBe(1);
+  });
+
+  test('Continue button is clickable and navigates to next stage', async ({ page }) => {
+    const continueBtn = page.locator('button', { hasText: 'Continue' });
+    await expect(continueBtn).toBeVisible();
+    await expect(continueBtn).toBeEnabled();
+    await continueBtn.click();
+    await page.waitForTimeout(1000);
+
+    // After clicking Continue, we should advance to Stage 7 (Veo Gen)
+    // The Veo Gen content or heading should become visible
+    await expect(page.locator('text=Veo').first()).toBeVisible();
+  });
+
+  test('Logs accordion opens and closes', async ({ page }) => {
+    // Scroll to the bottom to find the logs <details> element
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await page.waitForTimeout(300);
+
+    const logsSummary = page.locator('summary', { hasText: 'Spec Generation Logs' });
+    await expect(logsSummary).toBeVisible();
+
+    // Initially the <details> should be closed (no <SseLogPanel> content visible inside)
+    const detailsEl = page.locator('details', { has: logsSummary });
+    const isOpenBefore = await detailsEl.getAttribute('open');
+    // When closed, the "open" attribute should not be present
+    expect(isOpenBefore).toBeNull();
+
+    // Click to open
+    await logsSummary.click();
+    await page.waitForTimeout(300);
+
+    // After clicking, the <details> should have the "open" attribute
+    const isOpenAfter = await detailsEl.getAttribute('open');
+    expect(isOpenAfter).not.toBeNull();
+
+    // Click again to close
+    await logsSummary.click();
+    await page.waitForTimeout(300);
+
+    const isOpenFinal = await detailsEl.getAttribute('open');
+    expect(isOpenFinal).toBeNull();
   });
 });

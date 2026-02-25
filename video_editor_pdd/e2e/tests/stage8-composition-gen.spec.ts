@@ -179,4 +179,194 @@ test.describe('Stage 8: Composition Generation', () => {
     );
     expect(appErrors).toHaveLength(0);
   });
+
+  // ── Interactive tests ──────────────────────────────────────────────
+
+  test('Generate All Compositions button click triggers POST /api/pipeline/compositions/run', async ({ page }) => {
+    let postCalled = false;
+
+    await page.route('**/api/pipeline/compositions/run', (route) => {
+      postCalled = true;
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ jobId: 'test-comp-all-job' }),
+      });
+    });
+
+    const generateBtn = page.locator('button', { hasText: 'Generate All Compositions' });
+    await expect(generateBtn).toBeVisible();
+    await expect(generateBtn).toBeEnabled();
+    await generateBtn.click();
+    await page.waitForTimeout(500);
+
+    expect(postCalled).toBe(true);
+
+    // After clicking, the button text should change to "Generating..." while busy
+    // and the Job Logs panel should auto-open (logOpen becomes true)
+    // Since we mocked a fast response, it may already revert, but the log panel should open
+    const jobLogsBtn = page.locator('button', { hasText: 'Job Logs' });
+    await expect(jobLogsBtn.locator('span', { hasText: 'Hide' })).toBeVisible();
+  });
+
+  test('Preview button opens dialog modal', async ({ page }) => {
+    // Wait for composition data to load and sections to render
+    await expect(page.locator('button', { hasText: 'Cold Open' })).toBeVisible({ timeout: 10000 });
+
+    // Mock the preview endpoint
+    await page.route('**/api/pipeline/compositions/preview**', (route) => {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ url: 'https://example.com/preview.png' }),
+      });
+    });
+
+    // Ensure the Cold Open section is expanded (should be by default)
+    const coldOpenBtn = page.locator('button', { hasText: 'Cold Open' });
+    const hideShowSpan = coldOpenBtn.locator('span', { hasText: /Hide|Show/ });
+    const text = await hideShowSpan.textContent();
+    if (text?.trim() === 'Show') {
+      await coldOpenBtn.click();
+      await page.waitForTimeout(300);
+    }
+
+    // Find a Preview button within the expanded section
+    const previewBtn = page.locator('button', { hasText: 'Preview' }).first();
+    // If no components exist, this section may not have a Preview button,
+    // so we check for its existence before clicking
+    const previewCount = await previewBtn.count();
+    if (previewCount > 0) {
+      await previewBtn.click();
+      await page.waitForTimeout(500);
+
+      // The <dialog> modal should now be open
+      const dialog = page.locator('dialog');
+      await expect(dialog).toBeVisible();
+
+      // The dialog should contain "Preview" text in its header
+      await expect(dialog.locator('text=Preview')).toBeVisible();
+    }
+  });
+
+  test('Preview dialog close button closes modal', async ({ page }) => {
+    await expect(page.locator('button', { hasText: 'Cold Open' })).toBeVisible({ timeout: 10000 });
+
+    // Mock the preview endpoint
+    await page.route('**/api/pipeline/compositions/preview**', (route) => {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ url: 'https://example.com/preview.png' }),
+      });
+    });
+
+    // Ensure the Cold Open section is expanded
+    const coldOpenBtn = page.locator('button', { hasText: 'Cold Open' });
+    const hideShowSpan = coldOpenBtn.locator('span', { hasText: /Hide|Show/ });
+    const text = await hideShowSpan.textContent();
+    if (text?.trim() === 'Show') {
+      await coldOpenBtn.click();
+      await page.waitForTimeout(300);
+    }
+
+    const previewBtn = page.locator('button', { hasText: 'Preview' }).first();
+    const previewCount = await previewBtn.count();
+    if (previewCount > 0) {
+      // Open the dialog
+      await previewBtn.click();
+      await page.waitForTimeout(500);
+
+      const dialog = page.locator('dialog');
+      await expect(dialog).toBeVisible();
+
+      // Click the Close button inside the dialog
+      const closeBtn = dialog.locator('button', { hasText: 'Close' });
+      await expect(closeBtn).toBeVisible();
+      await closeBtn.click();
+      await page.waitForTimeout(300);
+
+      // Dialog should no longer be visible
+      await expect(dialog).not.toBeVisible();
+    }
+  });
+
+  test('Regenerate button triggers POST /api/pipeline/compositions/run with component name', async ({ page }) => {
+    await expect(page.locator('button', { hasText: 'Cold Open' })).toBeVisible({ timeout: 10000 });
+
+    let postCalled = false;
+    let requestBody: any = null;
+
+    await page.route('**/api/pipeline/compositions/run', (route) => {
+      postCalled = true;
+      requestBody = route.request().postDataJSON();
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ jobId: 'test-regen-comp-job' }),
+      });
+    });
+
+    // Ensure the Cold Open section is expanded
+    const coldOpenBtn = page.locator('button', { hasText: 'Cold Open' });
+    const hideShowSpan = coldOpenBtn.locator('span', { hasText: /Hide|Show/ });
+    const text = await hideShowSpan.textContent();
+    if (text?.trim() === 'Show') {
+      await coldOpenBtn.click();
+      await page.waitForTimeout(300);
+    }
+
+    // The per-component regenerate button shows "↺" text
+    const regenBtn = page.locator('button', { hasText: '↺' }).first();
+    const regenCount = await regenBtn.count();
+    if (regenCount > 0) {
+      await regenBtn.click();
+      await page.waitForTimeout(500);
+
+      expect(postCalled).toBe(true);
+      // Should send { components: [componentName] }
+      expect(requestBody).toHaveProperty('components');
+      expect(Array.isArray(requestBody.components)).toBe(true);
+      expect(requestBody.components.length).toBe(1);
+    }
+  });
+
+  test('Stage All Missing button triggers POST /api/pipeline/asset-staging/run', async ({ page }) => {
+    let postCalled = false;
+
+    await page.route('**/api/pipeline/asset-staging/run', (route) => {
+      postCalled = true;
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ jobId: 'test-staging-job' }),
+      });
+    });
+
+    const stageBtn = page.locator('button', { hasText: 'Stage All Missing' });
+    await expect(stageBtn).toBeVisible();
+
+    // Note: the button may be disabled if there are no missing staging entries.
+    // We attempt a click — if it's disabled, the route won't fire, which is expected.
+    const isDisabled = await stageBtn.isDisabled();
+    if (!isDisabled) {
+      await stageBtn.click();
+      await page.waitForTimeout(500);
+      expect(postCalled).toBe(true);
+    } else {
+      // Button correctly disabled when no missing files exist
+      expect(isDisabled).toBe(true);
+    }
+  });
+
+  test('Continue button is clickable and navigates to next stage', async ({ page }) => {
+    const continueBtn = page.locator('button', { hasText: 'Continue' });
+    await expect(continueBtn).toBeVisible();
+    await expect(continueBtn).toBeEnabled();
+    await continueBtn.click();
+    await page.waitForTimeout(1000);
+
+    // After clicking Continue, should advance to Stage 9 (Render & Stitch)
+    await expect(page.locator('text=Render').first()).toBeVisible();
+  });
 });

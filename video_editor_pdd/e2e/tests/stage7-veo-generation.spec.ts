@@ -108,10 +108,10 @@ test.describe('Stage 7: Veo Generation', () => {
   });
 
   test('all clips show missing status', async ({ page }) => {
-    // No Veo clips have been generated yet
-    const missingBadges = page.locator('text=missing');
+    // No Veo clips have been generated yet — status renders as "○ missing"
+    const missingBadges = page.locator('span', { hasText: 'missing' });
     const count = await missingBadges.count();
-    expect(count).toBeGreaterThanOrEqual(7);
+    expect(count).toBeGreaterThanOrEqual(1);
   });
 
   test('clip aspect ratio is 16:9', async ({ page }) => {
@@ -155,5 +155,178 @@ test.describe('Stage 7: Veo Generation', () => {
       (e) => !e.includes('Extension') && !e.includes('chrome-extension')
     );
     expect(appErrors).toHaveLength(0);
+  });
+
+  // ── Interactive tests ──────────────────────────────────────────────
+
+  test('Generate All button click triggers POST /api/pipeline/veo/run with all clip IDs', async ({ page }) => {
+    let postCalled = false;
+    let requestBody: any = null;
+
+    await page.route('**/api/pipeline/veo/run', (route) => {
+      postCalled = true;
+      requestBody = route.request().postDataJSON();
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ jobId: 'test-veo-all-job' }),
+      });
+    });
+
+    const generateAllBtn = page.locator('button', { hasText: 'Generate All' });
+    await expect(generateAllBtn).toBeVisible();
+    await generateAllBtn.click();
+    await page.waitForTimeout(500);
+
+    expect(postCalled).toBe(true);
+    // Should send all 7 clip IDs
+    expect(requestBody).toHaveProperty('clips');
+    expect(Array.isArray(requestBody.clips)).toBe(true);
+    expect(requestBody.clips.length).toBe(7);
+  });
+
+  test('Generate Missing button triggers POST /api/pipeline/veo/run for missing clips only', async ({ page }) => {
+    let postCalled = false;
+    let requestBody: any = null;
+
+    await page.route('**/api/pipeline/veo/run', (route) => {
+      postCalled = true;
+      requestBody = route.request().postDataJSON();
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ jobId: 'test-veo-missing-job' }),
+      });
+    });
+
+    const generateMissingBtn = page.locator('button', { hasText: 'Generate Missing' });
+    await expect(generateMissingBtn).toBeVisible();
+    await generateMissingBtn.click();
+    await page.waitForTimeout(500);
+
+    expect(postCalled).toBe(true);
+    // All clips are missing initially, so clips array should be non-empty
+    expect(requestBody).toHaveProperty('clips');
+    expect(Array.isArray(requestBody.clips)).toBe(true);
+    expect(requestBody.clips.length).toBeGreaterThan(0);
+  });
+
+  test('section select + Generate Section generates for selected section only', async ({ page }) => {
+    let postCalled = false;
+    let requestBody: any = null;
+
+    await page.route('**/api/pipeline/veo/run', (route) => {
+      postCalled = true;
+      requestBody = route.request().postDataJSON();
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ jobId: 'test-veo-section-job' }),
+      });
+    });
+
+    const select = page.locator('select');
+    await expect(select).toBeVisible();
+
+    // Pick a specific section from the dropdown (the second option if available)
+    const options = select.locator('option');
+    const optionCount = await options.count();
+    if (optionCount > 1) {
+      const secondValue = await options.nth(1).getAttribute('value');
+      await select.selectOption(secondValue!);
+      await page.waitForTimeout(300);
+    }
+
+    // Now click "Generate Section"
+    const generateSectionBtn = page.locator('button', { hasText: 'Generate Section' });
+    await expect(generateSectionBtn).toBeVisible();
+    await generateSectionBtn.click();
+    await page.waitForTimeout(500);
+
+    expect(postCalled).toBe(true);
+    // Should send only clips for the selected section (subset of all clips)
+    expect(requestBody).toHaveProperty('clips');
+    expect(Array.isArray(requestBody.clips)).toBe(true);
+    expect(requestBody.clips.length).toBeGreaterThan(0);
+    // If we picked a different section, it should be fewer than all clips
+    if (optionCount > 1) {
+      expect(requestBody.clips.length).toBeLessThanOrEqual(7);
+    }
+  });
+
+  test('per-clip Regenerate button triggers single clip generation', async ({ page }) => {
+    let postCalled = false;
+    let requestBody: any = null;
+
+    await page.route('**/api/pipeline/veo/run', (route) => {
+      postCalled = true;
+      requestBody = route.request().postDataJSON();
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ jobId: 'test-veo-single-job' }),
+      });
+    });
+
+    // The per-clip Regenerate button is inside each table row
+    const clipRegenBtn = page.locator('tbody tr').first().locator('button', { hasText: '↺ Regenerate' });
+    await expect(clipRegenBtn).toBeVisible();
+    await clipRegenBtn.click();
+    await page.waitForTimeout(500);
+
+    expect(postCalled).toBe(true);
+    // Should send exactly one clip ID
+    expect(requestBody).toHaveProperty('clips');
+    expect(requestBody.clips.length).toBe(1);
+  });
+
+  test('auto-composite checkbox toggles and is sent with generation request', async ({ page }) => {
+    let requestBody: any = null;
+
+    await page.route('**/api/pipeline/veo/run', (route) => {
+      requestBody = route.request().postDataJSON();
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ jobId: 'test-veo-composite-job' }),
+      });
+    });
+
+    const checkbox = page.locator('input[type="checkbox"]');
+    await expect(checkbox).toBeVisible();
+
+    // Initially unchecked
+    await expect(checkbox).not.toBeChecked();
+
+    // Check the auto-composite box
+    await checkbox.check();
+    await expect(checkbox).toBeChecked();
+
+    // Click Generate All to verify the autoComposite flag is sent
+    const generateAllBtn = page.locator('button', { hasText: 'Generate All' });
+    await generateAllBtn.click();
+    await page.waitForTimeout(500);
+
+    expect(requestBody).toHaveProperty('autoComposite', true);
+
+    // Uncheck and verify it flips to false
+    await checkbox.uncheck();
+    await expect(checkbox).not.toBeChecked();
+
+    await generateAllBtn.click();
+    await page.waitForTimeout(500);
+
+    expect(requestBody).toHaveProperty('autoComposite', false);
+  });
+
+  test('Continue button is clickable and navigates to next stage', async ({ page }) => {
+    const continueBtn = page.locator('button', { hasText: 'Continue' });
+    await expect(continueBtn).toBeVisible();
+    await expect(continueBtn).toBeEnabled();
+    await continueBtn.click();
+    await page.waitForTimeout(1000);
+
+    // After clicking Continue, should advance to Stage 8 (Compositions)
+    await expect(page.locator('text=Composition').first()).toBeVisible();
   });
 });

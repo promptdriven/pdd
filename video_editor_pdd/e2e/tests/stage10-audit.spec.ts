@@ -48,7 +48,8 @@ test.describe('Stage 10: Audit', () => {
   });
 
   test('displays "Audit Section" dropdown', async ({ page }) => {
-    await expect(page.locator('summary', { hasText: 'Audit Section' })).toBeVisible();
+    // It's a <button> not a <summary>
+    await expect(page.locator('button', { hasText: 'Audit Section' })).toBeVisible();
   });
 
   test('section rows are present (7 sections)', async ({ page }) => {
@@ -165,5 +166,267 @@ test.describe('Stage 10: Audit', () => {
       (e) => !e.includes('Extension') && !e.includes('chrome-extension')
     );
     expect(appErrors).toHaveLength(0);
+  });
+
+  test('Audit All Sections button click triggers audit API call', async ({ page }) => {
+    let auditCalled = false;
+    let capturedBody: any = null;
+    await page.route('**/api/pipeline/audit/run', async (route) => {
+      auditCalled = true;
+      capturedBody = JSON.parse(route.request().postData() || '{}');
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ success: true }),
+      });
+    });
+
+    const auditAllButton = page.locator('button', { hasText: 'Audit All Sections' });
+    await auditAllButton.click();
+    await page.waitForTimeout(1000);
+
+    expect(auditCalled).toBe(true);
+    // When auditing all sections, the body should NOT contain a specific sectionId
+    expect(capturedBody).toBeDefined();
+    expect(capturedBody.sectionId).toBeUndefined();
+  });
+
+  test('Audit Section dropdown opens with section list', async ({ page }) => {
+    await expect(page.locator('button', { hasText: 'View Report' }).first()).toBeVisible({ timeout: 10000 });
+
+    // The dropdown menu should not be visible initially
+    const dropdownMenu = page.locator('.absolute.right-0.mt-2.bg-gray-800');
+    await expect(dropdownMenu).not.toBeVisible();
+
+    // Click the "Audit Section" dropdown button
+    const dropdownButton = page.locator('button', { hasText: 'Audit Section' });
+    await dropdownButton.click();
+    await page.waitForTimeout(500);
+
+    // The dropdown menu should now be visible
+    await expect(dropdownMenu).toBeVisible();
+
+    // It should contain buttons for each section
+    const dropdownItems = dropdownMenu.locator('button');
+    const count = await dropdownItems.count();
+    expect(count).toBe(7);
+  });
+
+  test('Audit Section dropdown closes on outside click', async ({ page }) => {
+    await expect(page.locator('button', { hasText: 'View Report' }).first()).toBeVisible({ timeout: 10000 });
+
+    // Open the dropdown
+    const dropdownButton = page.locator('button', { hasText: 'Audit Section' });
+    await dropdownButton.click();
+    await page.waitForTimeout(500);
+
+    const dropdownMenu = page.locator('.absolute.right-0.mt-2.bg-gray-800');
+    await expect(dropdownMenu).toBeVisible();
+
+    // Click outside the dropdown (on the heading area)
+    await page.locator('h2', { hasText: 'Audit Results' }).click();
+    await page.waitForTimeout(500);
+
+    // The dropdown should be closed
+    await expect(dropdownMenu).not.toBeVisible();
+  });
+
+  test('Audit Section dropdown item triggers section audit', async ({ page }) => {
+    await expect(page.locator('button', { hasText: 'View Report' }).first()).toBeVisible({ timeout: 10000 });
+
+    let capturedBody: any = null;
+    await page.route('**/api/pipeline/audit/run', async (route) => {
+      capturedBody = JSON.parse(route.request().postData() || '{}');
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ success: true }),
+      });
+    });
+
+    // Open the dropdown
+    const dropdownButton = page.locator('button', { hasText: 'Audit Section' });
+    await dropdownButton.click();
+    await page.waitForTimeout(500);
+
+    // Click the first item in the dropdown
+    const dropdownMenu = page.locator('.absolute.right-0.mt-2.bg-gray-800');
+    const firstItem = dropdownMenu.locator('button').first();
+    await firstItem.click();
+    await page.waitForTimeout(1000);
+
+    // The API should have been called with a specific sectionId
+    expect(capturedBody).not.toBeNull();
+    expect(capturedBody).toHaveProperty('sectionId');
+    expect(typeof capturedBody.sectionId).toBe('string');
+
+    // The dropdown should be closed after selection
+    await expect(dropdownMenu).not.toBeVisible();
+  });
+
+  test('View Report button expands section details', async ({ page }) => {
+    await expect(page.locator('button', { hasText: 'View Report' }).first()).toBeVisible({ timeout: 10000 });
+
+    // The expanded detail area should not be visible initially
+    // Detail area contains "Verdict", "Spec", "Summary" sub-headers
+    const detailArea = page.locator('text=Verdict').first();
+    await expect(detailArea).not.toBeVisible();
+
+    // Click the first "View Report" button
+    const firstViewReport = page.locator('button', { hasText: 'View Report' }).first();
+    await firstViewReport.click();
+    await page.waitForTimeout(500);
+
+    // The expanded section with Verdict/Spec/Summary headers should now be visible
+    await expect(page.locator('.text-xs.font-semibold', { hasText: 'Verdict' }).first()).toBeVisible();
+    await expect(page.locator('.text-xs.font-semibold', { hasText: 'Spec' }).first()).toBeVisible();
+    await expect(page.locator('.text-xs.font-semibold', { hasText: 'Summary' }).first()).toBeVisible();
+  });
+
+  test('Re-audit button triggers section re-audit', async ({ page }) => {
+    await expect(page.locator('button', { hasText: 'View Report' }).first()).toBeVisible({ timeout: 10000 });
+
+    let capturedBody: any = null;
+    await page.route('**/api/pipeline/audit/run', async (route) => {
+      capturedBody = JSON.parse(route.request().postData() || '{}');
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ success: true }),
+      });
+    });
+
+    // Click the first re-audit button
+    const firstReauditButton = page.locator('button', { hasText: '↺ Audit' }).first();
+    await firstReauditButton.click();
+    await page.waitForTimeout(1000);
+
+    // The API should have been called with the specific sectionId
+    expect(capturedBody).not.toBeNull();
+    expect(capturedBody).toHaveProperty('sectionId');
+    expect(typeof capturedBody.sectionId).toBe('string');
+  });
+
+  test('View Frame opens dialog with image', async ({ page }) => {
+    // Mock the audit results to include specs with View Frame
+    await page.route('**/api/pipeline/audit/results', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          sections: [
+            {
+              sectionId: 'cold_open',
+              sectionLabel: 'Cold Open',
+              passCount: 1,
+              failCount: 1,
+              status: 'done',
+              specs: [
+                { specName: 'framing', verdict: 'PASS', summary: 'Looks good' },
+                { specName: 'color_balance', verdict: 'FAIL', summary: 'Colors off', finding: 'Too dark', specPath: '/specs/color.yaml' },
+              ],
+            },
+          ],
+        }),
+      });
+    });
+
+    // Mock SSE stream to prevent connection issues
+    await page.route('**/api/pipeline/audit/stream', (route) => {
+      route.fulfill({ status: 200, contentType: 'text/event-stream', body: '' });
+    });
+
+    // Navigate to Audit stage with mocked data
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    const sidebar = page.locator('aside');
+    await sidebar.locator('div').filter({ hasText: /^10\s*Audit/ }).click();
+    await expect(page.locator('h2', { hasText: 'Audit Results' })).toBeVisible({ timeout: 15000 });
+    await page.waitForTimeout(1000);
+
+    // Expand the section
+    const viewReportButton = page.locator('button', { hasText: 'View Report' }).first();
+    await expect(viewReportButton).toBeVisible({ timeout: 10000 });
+    await viewReportButton.click();
+    await page.waitForTimeout(500);
+
+    // Click "View Frame" button
+    const viewFrameButton = page.locator('button', { hasText: 'View Frame' }).first();
+    await expect(viewFrameButton).toBeVisible({ timeout: 5000 });
+    await viewFrameButton.click();
+    await page.waitForTimeout(500);
+
+    // The dialog should be open with the "Audit Frame" heading
+    await expect(page.locator('text=Audit Frame')).toBeVisible();
+
+    // An img element should be visible inside the dialog
+    const dialogImg = page.locator('dialog img');
+    await expect(dialogImg).toBeAttached();
+  });
+
+  test('View Spec toggles spec content visibility', async ({ page }) => {
+    // Mock the audit results to include a spec with specPath
+    await page.route('**/api/pipeline/audit/results', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          sections: [
+            {
+              sectionId: 'cold_open',
+              sectionLabel: 'Cold Open',
+              passCount: 0,
+              failCount: 1,
+              status: 'done',
+              specs: [
+                { specName: 'color_balance', verdict: 'FAIL', summary: 'Colors off', finding: 'Too dark', specPath: '/specs/color.yaml' },
+              ],
+            },
+          ],
+        }),
+      });
+    });
+
+    // Mock the spec file fetch
+    await page.route('**/api/pipeline/specs/file**', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ content: 'name: color_balance\nthreshold: 0.8\ndescription: Check color balance' }),
+      });
+    });
+
+    // Mock SSE stream
+    await page.route('**/api/pipeline/audit/stream', (route) => {
+      route.fulfill({ status: 200, contentType: 'text/event-stream', body: '' });
+    });
+
+    // Navigate to Audit stage with mocked data
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    const sidebar = page.locator('aside');
+    await sidebar.locator('div').filter({ hasText: /^10\s*Audit/ }).click();
+    await expect(page.locator('h2', { hasText: 'Audit Results' })).toBeVisible({ timeout: 15000 });
+    await page.waitForTimeout(1000);
+
+    // Expand the section
+    const viewReportButton = page.locator('button', { hasText: 'View Report' }).first();
+    await expect(viewReportButton).toBeVisible({ timeout: 10000 });
+    await viewReportButton.click();
+    await page.waitForTimeout(500);
+
+    // Click "View Spec" to toggle it open
+    const viewSpecButton = page.locator('button', { hasText: 'View Spec' }).first();
+    await expect(viewSpecButton).toBeVisible({ timeout: 5000 });
+    await viewSpecButton.click();
+    await page.waitForTimeout(1000);
+
+    // The spec content should now be visible
+    const specContent = page.locator('pre').first();
+    await expect(specContent).toBeVisible({ timeout: 5000 });
+
+    // Click "View Spec" again to toggle it closed
+    await viewSpecButton.click();
+    await page.waitForTimeout(500);
   });
 });
