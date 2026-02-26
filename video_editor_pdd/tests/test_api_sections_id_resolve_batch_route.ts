@@ -729,7 +729,7 @@ describe("POST — buildRemotionPrompt content", () => {
     await executorFn(jest.fn());
 
     const prompt = mockRunClaudeFix.mock.calls[0][0] as string;
-    expect(prompt).toContain("Section ID: section-1");
+    expect(prompt).toContain("section-1");
   });
 
   it("includes timestamp with 's' suffix in the prompt", async () => {
@@ -781,7 +781,7 @@ describe("POST — buildRemotionPrompt content", () => {
     await executorFn(jest.fn());
 
     const prompt = mockRunClaudeFix.mock.calls[0][0] as string;
-    expect(prompt).toMatch(/^You are applying a Remotion fix/);
+    expect(prompt).toMatch(/^You are a Remotion developer/);
   });
 });
 

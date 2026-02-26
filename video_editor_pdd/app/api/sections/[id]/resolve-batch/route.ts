@@ -13,15 +13,29 @@ export const dynamic = "force-dynamic";
 type RouteParams = { params: { id: string } };
 
 function buildRemotionPrompt(annotation: Annotation): string {
+  const analysisJson = annotation.analysis ? JSON.stringify(annotation.analysis, null, 2) : "none";
   return `
-You are applying a Remotion fix for this annotation.
-Annotation ID: ${annotation.id}
-Section ID: ${annotation.sectionId}
-Timestamp: ${annotation.timestamp}s
-User note: ${annotation.text}
+You are a Remotion developer fixing a visual issue in the "${annotation.sectionId}" section.
 
-Provide a fix that resolves the issue. Return JSON:
-{ "fixType", "filesModified", "changeDescription", "confidence" }
+Issue details:
+- Annotation ID: ${annotation.id}
+- Timestamp: ${annotation.timestamp}s
+- User note: ${annotation.text}
+- Analysis: ${analysisJson}
+
+Instructions:
+1. Use Glob/Read tools to inspect the TSX source files in this directory (remotion/src/remotion/).
+2. Identify which file(s) need to change to resolve the issue described above.
+3. Apply the fix by editing the file(s) using the Edit or Write tool.
+4. Return JSON confirming what you changed:
+{
+  "fixType": "remotion",
+  "filesModified": ["list of relative file paths you edited"],
+  "changeDescription": "concise description of the change made",
+  "confidence": 0.0-1.0
+}
+
+Apply the fix NOW — do not just describe it. Edit the actual file(s).
 `.trim();
 }
 
