@@ -545,3 +545,79 @@ test.describe('Stage 8 Error States: Composition Generation', () => {
     expect(appErrors).toHaveLength(0);
   });
 });
+
+// ────────────────────────────────────────────────────────────────────────────
+// Stage 8: Staging Manifest and Asset Staging — error states
+// ────────────────────────────────────────────────────────────────────────────
+
+test.describe('Stage 8 Error States: Staging Manifest and Asset Staging', () => {
+  test('staging manifest API 500 — degrades gracefully without crash', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (err) => errors.push(err.message));
+
+    await page.route('**/api/pipeline/veo/staging-manifest**', (route) =>
+      route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'Internal Server Error' }),
+      })
+    );
+
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    const sidebar = page.locator('aside');
+    await sidebar.locator('div', { hasText: 'Compositions' }).first().click();
+    await page.waitForTimeout(2000);
+
+    // h3 "Asset Staging Manifest" should still be visible despite the 500
+    await expect(page.locator('h3', { hasText: 'Asset Staging Manifest' })).toBeVisible();
+
+    // No runtime crashes
+    const appErrors = errors.filter(
+      (e) => !e.includes('Extension') && !e.includes('chrome-extension')
+    );
+    expect(appErrors).toHaveLength(0);
+  });
+
+  test('asset staging API 500 — Stage Now button recovers from busy state', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (err) => errors.push(err.message));
+
+    // Mock manifest to show 1 missing file
+    await page.route('**/api/pipeline/veo/staging-manifest**', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([{ filename: 'test-asset.mp4', expected: true, present: false }]),
+      })
+    );
+
+    // Mock asset-staging run to return 500
+    await page.route('**/api/pipeline/asset-staging/run', (route) =>
+      route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'Asset staging failed' }),
+      })
+    );
+
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    const sidebar = page.locator('aside');
+    await sidebar.locator('div', { hasText: 'Compositions' }).first().click();
+    await expect(page.locator('h2', { hasText: 'Composition Generation' })).toBeVisible({ timeout: 15000 });
+
+    const stageNowBtn = page.locator('button', { hasText: 'Stage Now' });
+    await expect(stageNowBtn).toBeVisible();
+    await stageNowBtn.click();
+    await page.waitForTimeout(1000);
+
+    // Button should not be stuck in "..." — should revert to "Stage Now"
+    await expect(stageNowBtn).toHaveText('Stage Now');
+
+    const appErrors = errors.filter(
+      (e) => !e.includes('Extension') && !e.includes('chrome-extension')
+    );
+    expect(appErrors).toHaveLength(0);
+  });
+});
