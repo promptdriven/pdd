@@ -64,7 +64,7 @@ def _extract_exports(file_path: str) -> list[str]:
     if not file_path.endswith('.py'):
         return []
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
             tree = ast.parse(f.read())
         exports: list[str] = []
         for node in ast.iter_child_nodes(tree):

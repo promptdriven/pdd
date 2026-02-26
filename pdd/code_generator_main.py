@@ -281,17 +281,48 @@ def _detect_wireable_exports(code: str, file_path: str) -> list[str]:
 
 
 def _wire_to_parent_init(output_path: str, exports: list[str], verbose: bool = False) -> bool:
-    """Add import line for generated module to parent __init__.py if it exists."""
+    """Add import line for generated module to parent __init__.py if it exists.
+
+    If an import line for this module already exists, merge any missing exports
+    into that line instead of skipping wiring.
+    """
     output_p = pathlib.Path(output_path)
     init_path = output_p.parent / '__init__.py'
     if not init_path.exists():
         return False
     module_name = output_p.stem
     existing = init_path.read_text(encoding='utf-8')
-    if f"from .{module_name} import" in existing:
-        return False
-    import_line = f"from .{module_name} import {', '.join(exports)}"
-    new_content = existing.rstrip() + '\n' + import_line + '\n'
+
+    # Look for an existing "from .{module_name} import ..." line
+    pattern = rf"^from \.{re.escape(module_name)} import (.+)$"
+    match = re.search(pattern, existing, flags=re.MULTILINE)
+
+    if match:
+        # Parse existing names and merge with new exports
+        existing_names = [
+            name.strip()
+            for name in match.group(1).split(",")
+            if name.strip()
+        ]
+        updated = False
+        for name in exports:
+            if name not in existing_names:
+                existing_names.append(name)
+                updated = True
+
+        if not updated:
+            return False
+
+        import_line = f"from .{module_name} import {', '.join(existing_names)}"
+        new_content = (
+            existing[: match.start()]
+            + import_line
+            + existing[match.end():]
+        )
+    else:
+        import_line = f"from .{module_name} import {', '.join(exports)}"
+        new_content = existing.rstrip() + '\n' + import_line + '\n'
+
     init_path.write_text(new_content, encoding='utf-8')
     if verbose:
         console.print(f"[info]Wired exports to {init_path}: {import_line}[/info]")
@@ -1181,7 +1212,7 @@ def code_generator_main(
                 if verbose or not quiet:
                     console.print(f"Generated code saved to: [green]{p_output.resolve()}[/green]")
                 # Post-write: wire exports to parent __init__.py
-                if not os.environ.get("PDD_SKIP_WIRING") and str(p_output).endswith('.py'):
+                if not _env_flag_enabled("PDD_SKIP_WIRING") and str(p_output).endswith('.py'):
                     try:
                         wiring_exports = _detect_wireable_exports(final_content, str(p_output))
                         if wiring_exports:

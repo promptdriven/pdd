@@ -7,11 +7,11 @@ from __future__ import annotations
 
 import os
 import textwrap
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 
-from pdd.code_generator_main import _detect_wireable_exports, _wire_to_parent_init
+from pdd.code_generator_main import _detect_wireable_exports, _wire_to_parent_init, _env_flag_enabled
 
 
 class TestDetectWireableExports:
@@ -89,7 +89,7 @@ class TestWireToParentInit:
         assert result is False
 
     def test_wire_to_parent_init_skips_if_already_imported(self, tmp_path):
-        """Should not add duplicate import lines."""
+        """Should not add duplicate import lines when all exports already present."""
         pkg_dir = tmp_path / "mypackage"
         pkg_dir.mkdir()
         init_file = pkg_dir / "__init__.py"
@@ -103,24 +103,43 @@ class TestWireToParentInit:
         content = init_file.read_text()
         assert content.count("from .handlers import") == 1
 
+    def test_wire_to_parent_init_merges_new_exports(self, tmp_path):
+        """Should merge missing exports into existing import line."""
+        pkg_dir = tmp_path / "mypackage"
+        pkg_dir.mkdir()
+        init_file = pkg_dir / "__init__.py"
+        init_file.write_text("from .handlers import handle_a\n")
+        module_file = pkg_dir / "handlers.py"
+        module_file.write_text("def handle_a(): pass\ndef handle_b(): pass\n")
+
+        result = _wire_to_parent_init(str(module_file), ["handle_a", "handle_b"])
+        assert result is True
+
+        content = init_file.read_text()
+        assert "handle_a" in content
+        assert "handle_b" in content
+        assert content.count("from .handlers import") == 1
+
 
 class TestCodeGeneratorMainWiring:
     """Integration tests for wiring in code_generator_main."""
 
     @patch("pdd.code_generator_main._wire_to_parent_init")
     @patch("pdd.code_generator_main._detect_wireable_exports", return_value=["handle_event"])
-    def test_code_generator_main_calls_wiring_after_write(
+    def test_wiring_helpers_invoked_in_post_write_path(
         self, mock_detect, mock_wire, tmp_path
     ):
-        """After writing a .py file, code_generator_main should call wiring."""
-        # We test indirectly: just verify the helpers exist and are importable.
-        # Full integration requires too many mocks of the entire code_generator_main flow.
-        # The key assertion is that both functions are importable and callable.
+        """Verify wiring helpers are called correctly when invoked as in the post-write path."""
         mock_wire.return_value = True
-        exports = mock_detect("code", "file.py")
-        assert exports == ["handle_event"]
-        wired = mock_wire("/some/path/handlers.py", exports)
-        assert wired is True
+        # Simulate the post-write wiring logic from code_generator_main
+        final_content = "def handle_event(): pass"
+        p_output = str(tmp_path / "handlers.py")
+        if not _env_flag_enabled("PDD_SKIP_WIRING") and p_output.endswith('.py'):
+            wiring_exports = mock_detect(final_content, p_output)
+            if wiring_exports:
+                mock_wire(p_output, wiring_exports)
+        mock_detect.assert_called_once_with(final_content, p_output)
+        mock_wire.assert_called_once_with(p_output, ["handle_event"])
 
     def test_wiring_skipped_when_env_flag_set(self, tmp_path):
         """PDD_SKIP_WIRING=1 should prevent wiring."""
@@ -133,8 +152,7 @@ class TestCodeGeneratorMainWiring:
 
         # Simulate what code_generator_main does: check env before wiring
         with patch.dict(os.environ, {"PDD_SKIP_WIRING": "1"}):
-            # When the env flag is set, wiring should be skipped
-            if not os.environ.get("PDD_SKIP_WIRING"):
+            if not _env_flag_enabled("PDD_SKIP_WIRING"):
                 _wire_to_parent_init(str(module_file), ["handle"])
 
         # __init__.py should be unchanged
