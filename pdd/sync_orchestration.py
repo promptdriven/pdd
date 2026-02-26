@@ -520,6 +520,12 @@ def _try_auto_fix_import_error(
     import_error = re.search(r"ImportError: cannot import name ['\"]([^'\"]+)['\"]", error_output)
 
     if not module_not_found and not import_error:
+        # Issue #572: If error_output is a synthetic agentic delegation message,
+        # fall back to AST-based import validation on the code file
+        if "delegating crash detection to agentic handler" in error_output and code_file.exists():
+            unresolved = _validate_python_imports(code_file, code_file.parent)
+            if unresolved:
+                return False, f"Unresolved imports detected via AST validation: {', '.join(unresolved)}"
         return False, "No import error detected"
 
     if module_not_found:
@@ -588,6 +594,82 @@ def _try_auto_fix_import_error(
                 return False, f"Failed to run pip install: {e}"
 
     return False, "Import error detected but no auto-fix available"
+
+
+def _validate_python_imports(
+    code_file: Path,
+    project_root: Path,
+) -> list[str]:
+    """
+    Validate that local imports in generated Python code resolve to actual files on disk.
+
+    Uses ast.parse() to extract Import/ImportFrom nodes, filters out stdlib and
+    known third-party packages, then checks whether each remaining local import
+    corresponds to a .py file in the project directory.
+
+    Returns:
+        List of unresolved import module names (empty if all imports are valid).
+    """
+    import ast
+
+    if not code_file.exists():
+        return []
+
+    try:
+        source = code_file.read_text(encoding='utf-8')
+    except Exception:
+        return []
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+
+    # Collect top-level module names from import statements
+    imported_modules: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if node.module and node.level == 0:  # Skip relative imports
+                top_level = node.module.split('.')[0]
+                if top_level != '__future__':
+                    imported_modules.add(top_level)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                top_level = alias.name.split('.')[0]
+                imported_modules.add(top_level)
+
+    if not imported_modules:
+        return []
+
+    # Filter out stdlib modules
+    stdlib_modules = sys.stdlib_module_names if hasattr(sys, 'stdlib_module_names') else set()
+    non_stdlib = imported_modules - stdlib_modules
+
+    if not non_stdlib:
+        return []
+
+    # Filter out known third-party packages (check if they're importable)
+    # A module is considered third-party if it can be found by importlib
+    import importlib.util
+    unresolved: list[str] = []
+    code_dir = code_file.parent
+
+    for module_name in sorted(non_stdlib):
+        # Check if it exists as a local .py file in the same directory as the code
+        local_file = code_dir / f"{module_name}.py"
+        local_package = code_dir / module_name / "__init__.py"
+        if local_file.exists() or local_package.exists():
+            continue
+
+        # Check if it's an installable/importable third-party package
+        spec = importlib.util.find_spec(module_name)
+        if spec is not None:
+            continue
+
+        # Module is neither local nor third-party — it's unresolved
+        unresolved.append(module_name)
+
+    return unresolved
 
 
 def _try_auto_fix_env_var_error(
@@ -1522,6 +1604,23 @@ def sync_orchestration(
                                 result = code_generator_main(ctx, prompt_file=str(pdd_files['prompt'].resolve()), output=str(pdd_files['code'].resolve()), original_prompt_file_path=None, force_incremental_flag=False)
                                 # Clear stale run_report so crash/verify is required for newly generated code
                                 clear_run_report(basename, language)
+                                # Issue #572: Validate Python imports after generation in agentic mode
+                                if agentic_mode and language.lower() == 'python' and pdd_files['code'].exists():
+                                    unresolved = _validate_python_imports(
+                                        pdd_files['code'],
+                                        Path.cwd(),
+                                    )
+                                    if unresolved:
+                                        error_msg = (
+                                            f"Hallucinated imports detected in generated code: "
+                                            f"{', '.join(unresolved)}. "
+                                            f"These modules do not exist on disk or as installed packages."
+                                        )
+                                        errors.append(error_msg)
+                                        log_event(basename, language, "import_validation_failed", {
+                                            "unresolved_imports": unresolved,
+                                            "code_file": str(pdd_files['code']),
+                                        }, invocation_mode="sync")
                             elif operation == 'example':
                                 # Ensure example directory exists before generating
                                 pdd_files['example'].parent.mkdir(parents=True, exist_ok=True)
@@ -1543,8 +1642,8 @@ def sync_orchestration(
                                 if current_run_report and current_run_report.exit_code != 0:
                                     has_crash = True
                                     crash_log_content = f"Test execution failed exit code: {current_run_report.exit_code}\n"
-                                elif _use_agentic_path(language, agentic_mode):
-                                    # Bug #364 fix: For non-Python languages (or agentic mode), skip Python-based verification.
+                                elif _use_agentic_path(language, agentic_mode) and language.lower() != 'python':
+                                    # Bug #364 fix: For non-Python languages, skip Python-based verification.
                                     # Delegate crash detection and fixing to the agentic handler, which
                                     # uses the correct language-specific run command.
                                     has_crash = True
