@@ -72,9 +72,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       inputMethod,
     } = body;
 
-    if (!sectionId || (text === undefined && !drawingDataUrl)) {
+    if (!sectionId || (!drawingDataUrl && (text === undefined || text === "" || (typeof text === "string" && text.trim() === "")))) {
       return NextResponse.json(
-        { error: "Missing required fields: sectionId is required, and either text or drawingDataUrl must be provided." },
+        { error: "Missing required fields: sectionId is required, and either text (non-empty) or drawingDataUrl must be provided." },
         { status: 400 }
       );
     }

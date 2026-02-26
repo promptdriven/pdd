@@ -135,7 +135,7 @@ export default function FixPreviewPanel({ sectionId, onClose, onApply }: Props) 
                       </span>
                     </div>
                     <div className="text-xs text-white/85">{p.preview}</div>
-                    {p.filesModified?.length > 0 ? (
+                    {(p.filesModified?.length ?? 0) > 0 ? (
                       <div className="mt-1 text-[11px] text-white/50">
                         Files: {p.filesModified?.join(', ')}
                       </div>

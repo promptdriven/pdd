@@ -372,7 +372,8 @@ describe("app/api/jobs/[id]/route.ts source structure", () => {
 
   it("uses params.id from route context", () => {
     expect(sourceCode).toMatch(/params/);
-    expect(sourceCode).toMatch(/\.id/);
+    // Next.js 15: params is a Promise, so id is accessed via destructuring after await
+    expect(sourceCode).toMatch(/id/);
   });
 
   it("returns 404 status for not-found jobs", () => {

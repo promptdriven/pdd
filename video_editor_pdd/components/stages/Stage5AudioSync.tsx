@@ -104,8 +104,8 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
         const data = await res.json();
         if (!active) return;
         // API returns { words: [...] } or a raw array
-        const raw = Array.isArray(data) ? data : (Array.isArray(data?.words) ? data.words : []);
-        setTimestamps(raw);
+        const list = Array.isArray(data) ? data : (Array.isArray(data?.words) ? data.words : []);
+        setTimestamps(list);
       } catch (err) {
         if (!active) return;
         setTimestamps([]);

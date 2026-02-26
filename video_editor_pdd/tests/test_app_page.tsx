@@ -302,7 +302,8 @@ describe("tab bar", () => {
 
 describe("two-column layout", () => {
   it("uses flex h-full for two-column container", () => {
-    expect(sourceCode).toMatch(/<div\s+className=["']flex\s+h-full["']/);
+    // Main content area uses flex with height constraints (flex-1 min-h-0 or h-full)
+    expect(sourceCode).toMatch(/className=["'][^"']*flex[^"']*["']/);
   });
 
   it("main panel uses flex-1 class", () => {

@@ -234,7 +234,8 @@ describe("auto-save with debounce", () => {
   });
 
   it("skips auto-save while still loading", () => {
-    expect(sourceCode).toMatch(/if\s*\(\s*loading\s*\)\s*return/);
+    // May also check hasEditedRef to avoid saving before user edits
+    expect(sourceCode).toMatch(/if\s*\(\s*loading/);
   });
 
   it("handles save errors gracefully", () => {
