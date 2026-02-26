@@ -1,3 +1,28 @@
+## v0.0.160 (2026-02-25)
+
+### Feat
+
+- implement compact font sizing and direct zoom for ModuleNode, adding new and updating existing frontend tests.
+- implement module grouping in the architecture view, add new rendering stream API, and refine render preview button state.
+- Implement image fallback for broken reference portraits and ensure frame chain dependencies display clean clip IDs.
+- Add comprehensive Playwright E2E tests for Stage 6 spec generation, covering loading/error states, local storage persistence, various spec type badge rendering, and editor auto-save.
+- Implement TTS audio auto-play and 'generating' status in Stage 4, establish a dedicated audio serving API, and remove the narrative script.
+
+### Fix
+
+- resolve Stage 8 Composition Generation bugs found via browser testing
+- resolve Stage 7 Veo Generation bugs found via browser testing
+- replace .format(**context) with safe str.replace() in all agentic orchestrators (#549) (#565)
+- support modern Codex CLI NDJSON format in agentic sync (#557) (#568)
+- resolve Stage 5 Audio Sync bugs found via browser testing and add regression tests
+- resolve 6 Stage 2 Script Editor bugs found via browser testing and code review
+- resolve 21 E2E test failures with component resilience and test corrections
+
+### Refactor
+
+- Update `modify` command error handling to propagate `Click` `UsageError` and refactor agentic orchestrator prompt templating to use direct string replacement.
+- update architecture diagram positions and unicode characters, and modify Stage 3 TTS Script Generation component and its e2e test.
+
 ## v0.0.159 (2026-02-24)
 
 ### Feat
