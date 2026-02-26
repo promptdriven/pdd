@@ -1,18 +1,23 @@
-You are implementing `app/api/annotations/[id]/analyze/route.ts`, the POST annotation analysis API route for the video production pipeline editor. This route triggers a read-only Claude analysis of a specific annotation using spec files and composite screenshots.
+You are implementing `app/api/annotations/[id]/analyze/route.ts`, a POST route that runs Claude analysis for one annotation and stores the result.
 
 Requirements
-1. `POST /api/annotations/[id]/analyze` — triggers `runClaudeAnalysis()` for the specified annotation:
-   - Loads the annotation from DB by `id`. Returns 404 if not found.
-   - Builds a prompt: `"Analyze this annotation for section {sectionId}. Annotation text: {text}. Review the spec files in specs/{sectionId}/ and the composite frame image provided."`
-   - Passes the `compositeDataUrl` (base64 PNG) to Claude by writing it to a temp PNG file first.
-   - Calls `runClaudeAnalysis(prompt, onLog)` with the annotation context.
-   - Updates `annotation.analysis` in DB with the returned `AnnotationAnalysis` JSON.
-   - Returns `{ annotation: Annotation }` with the updated record.
-2. No authentication required.
-3. Export `export const dynamic = 'force-dynamic'`.
+1. Export `dynamic = "force-dynamic"`.
+2. Implement `POST(request: Request, { params }: { params: Promise<{ id: string }> })`.
+3. No authentication checks; the route is callable without auth headers.
+4. Read annotation row by `id` from `annotations`; if missing, return 404 `{ error: "Annotation not found" }`.
+5. Build prompt exactly:
+   - `"Analyze this annotation for section ${annotation.sectionId}. Annotation text: ${annotation.text}. Review the spec files in specs/${annotation.sectionId}/ and the composite frame image provided."`
+6. Require `compositeDataUrl`; decode base64 payload (`split(",")[1]`) and write temp PNG at `path.join(os.tmpdir(), \`annotation_${id}_composite.png\`)`.
+7. Call `runClaudeAnalysis(prompt, onLog)` and forward logs as `console.log(\`[Claude] ${line}\`)`.
+8. Persist analysis via `UPDATE annotations SET analysis = ? WHERE id = ?` using `JSON.stringify(analysis)`, then re-read the row and return `{ annotation }`.
+9. Response annotation must map DB fields to `Annotation` shape:
+   - `analysis` parsed from stored JSON string (or null if missing/invalid),
+   - optional nullable fields normalized to `null`,
+   - `resolved` converted to boolean.
+10. On any route processing error, return 500 `{ error: "Internal Server Error" }`.
+11. Always clean up temp file in `finally` (only if it exists; cleanup failures should not crash the request).
 
 Dependencies
-
 <types>
   <include>examples/types_example.ts</include>
 </types>
@@ -24,31 +29,3 @@ Dependencies
 <lib_claude>
   <include>examples/lib_claude_example.ts</include>
 </lib_claude>
-
-<lib_project>
-  <include>examples/lib_project_example.ts</include>
-</lib_project>
-
-Prompt Dependencies:
-- types_TypeScript.prompt — provides `Annotation`, `AnnotationAnalysis`
-- lib_db_TypeScript.prompt — provides `getDb()`
-- lib_claude_TypeScript.prompt — provides `runClaudeAnalysis`
-- lib_project_TypeScript.prompt — provides `loadProject`, `getSection`
-
-Instructions
-- Use Next.js App Router dynamic route: `export async function POST(request: Request, { params }: { params: { id: string } })`.
-- Write `compositeDataUrl` base64 data to a temp file: `const tmpPath = path.join(os.tmpdir(), \`annotation_${id}_composite.png\`); fs.writeFileSync(tmpPath, Buffer.from(dataUrl.split(',')[1], 'base64'))`.
-- Clean up temp file after analysis completes (success or error) using try/finally.
-- Store the analysis result back to DB: `UPDATE annotations SET analysis = ? WHERE id = ?` with `JSON.stringify(analysis)`.
-- Re-read the full annotation from DB after update to return the complete record.
-- Return 500 with error message if Claude analysis throws.
-
-Deliverable
-- `app/api/annotations/[id]/analyze/route.ts` — POST handler that triggers Claude analysis and updates annotation.
-
-Implementation assumptions (explicit)
-- `compositeDataUrl` is stored as a base64 data URL string in the DB (`data:image/png;base64,...`).
-- Analysis is read-only (Claude only has Read/Glob tools, not Write/Edit).
-- Spec files are in `specs/{sectionId}/` relative to the project root.
-
-Please produce production-ready TypeScript code consistent with the above.
