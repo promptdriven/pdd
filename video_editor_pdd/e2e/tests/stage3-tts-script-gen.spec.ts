@@ -362,10 +362,16 @@ test.describe('Stage 3: TTS Script Generation', () => {
       });
     });
 
-    const generateBtn = page.locator('button', { hasText: 'Generate TTS Script' });
-    // Rapid double-click
-    await generateBtn.click();
-    await generateBtn.click({ delay: 50 });
+    // Use synchronous double-click via evaluate to avoid Playwright await gaps
+    await page.evaluate(() => {
+      const btn = [...document.querySelectorAll('button')].find(
+        (b) => b.textContent?.includes('Generate TTS Script')
+      );
+      if (btn) {
+        btn.click();
+        btn.click();
+      }
+    });
     await page.waitForTimeout(500);
 
     // Only one API call should have been made

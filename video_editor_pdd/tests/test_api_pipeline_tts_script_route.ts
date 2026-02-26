@@ -259,21 +259,27 @@ describe("POST — success flow", () => {
     mockRunPipelineStage.mockResolvedValue("test-job-42");
   });
 
-  it("calls runPipelineStage with 'tts-script', empty params, and send", async () => {
+  it("calls runPipelineStage with 'tts-script', empty params, and a send wrapper", async () => {
     await POST(makeRequest());
     await flushPromises();
 
     expect(mockRunPipelineStage).toHaveBeenCalledWith(
       "tts-script",
       {},
-      mockSend
+      expect.any(Function)
     );
   });
 
-  it("sends started event with jobId", async () => {
+  it("sends started event when wrappedSend intercepts jobId from log events", async () => {
+    // Simulate runPipelineStage calling the wrappedSend with a log event that includes jobId
+    mockRunPipelineStage.mockImplementation(async (_stage: string, _params: any, wrappedSend: any) => {
+      wrappedSend({ type: "log", message: "test", jobId: "test-job-42" });
+      return "test-job-42";
+    });
     await POST(makeRequest());
     await flushPromises();
 
+    // The wrappedSend should have emitted a "started" event via the real send
     expect(mockSend).toHaveBeenCalledWith({
       type: "started",
       jobId: "test-job-42",
@@ -281,6 +287,10 @@ describe("POST — success flow", () => {
   });
 
   it("sends complete event with jobId", async () => {
+    mockRunPipelineStage.mockImplementation(async (_stage: string, _params: any, wrappedSend: any) => {
+      wrappedSend({ type: "log", message: "test", jobId: "test-job-42" });
+      return "test-job-42";
+    });
     await POST(makeRequest());
     await flushPromises();
 
@@ -291,6 +301,10 @@ describe("POST — success flow", () => {
   });
 
   it("sends started before complete", async () => {
+    mockRunPipelineStage.mockImplementation(async (_stage: string, _params: any, wrappedSend: any) => {
+      wrappedSend({ type: "log", message: "test", jobId: "test-job-42" });
+      return "test-job-42";
+    });
     await POST(makeRequest());
     await flushPromises();
 

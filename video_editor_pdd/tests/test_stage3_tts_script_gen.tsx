@@ -272,8 +272,8 @@ describe("save TTS script", () => {
     expect(sourceCode).toMatch(/body\s*:\s*content/);
   });
 
-  it("guards against double save with saving state", () => {
-    expect(sourceCode).toMatch(/if\s*\(\s*saving\s*\)\s*return/);
+  it("guards against double save with savingRef", () => {
+    expect(sourceCode).toMatch(/if\s*\(\s*savingRef\.current\s*\)/);
   });
 
   it("sets saving to true at start", () => {
