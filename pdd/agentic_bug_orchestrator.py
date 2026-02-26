@@ -310,12 +310,11 @@ def run_agentic_bug_orchestrator(
             context["worktree_path"] = str(worktree_path)
 
         # Restore context from step outputs
-        # Escape curly braces to prevent format string injection (Issue #393)
+        # No brace escaping needed: safe str.replace() substitution preserves JSON braces (Issue #549)
         # Transform step keys: "5.5" -> "5_5" to match template placeholders (Issue #279)
         for step_key, output in step_outputs.items():
             fixed_key = str(step_key).replace(".", "_")  # "5.5" -> "5_5"
-            escaped_output = output.replace("{", "{{").replace("}", "}}")
-            context[f"step{fixed_key}_output"] = escaped_output
+            context[f"step{fixed_key}_output"] = output
 
         # Restore files_to_stage if available
         if changed_files:
@@ -407,14 +406,13 @@ def run_agentic_bug_orchestrator(
         exclude_keys = list(context.keys())
         prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
 
-        # Format prompt with accumulated context
-        try:
-            formatted_prompt = prompt_template.format(**context)
-        except KeyError as e:
-            msg = f"Prompt formatting error in step {step_num}: missing key {e}"
-            if not quiet:
-                console.print(f"[red]Error: {msg}[/red]")
-            return False, msg, total_cost, last_model_used, changed_files
+        # Format prompt using safe str.replace() (Issue #549): un-double template literal
+        # braces from preprocess() first, then substitute context keys. This preserves JSON
+        # curly braces in context values (nested JSON etc.) without corruption.
+        prompt_template = prompt_template.replace("{{", "{").replace("}}", "}")
+        formatted_prompt = prompt_template
+        for key, value in context.items():
+            formatted_prompt = formatted_prompt.replace(f'{{{key}}}', str(value))
 
         # Run the task
         success, output, cost, model = run_agentic_task(
@@ -430,10 +428,8 @@ def run_agentic_bug_orchestrator(
         # Update tracking
         total_cost += cost
         last_model_used = model
-        # Escape curly braces in output to prevent format string injection (Issue #393)
-        # LLM outputs may contain {placeholders} that would cause KeyError in subsequent prompts
-        escaped_output = output.replace("{", "{{").replace("}", "}}")
-        context[f"step{step_suffix}_output"] = escaped_output
+        # No brace escaping needed: safe str.replace() substitution preserves JSON braces (Issue #549)
+        context[f"step{step_suffix}_output"] = output
 
         # --- Post-Step Logic: Hard Stops & Parsing ---
 

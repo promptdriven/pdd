@@ -654,10 +654,11 @@ def run_agentic_change_orchestrator(
         exclude_keys = list(context.keys())
         prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
 
-        try:
-            formatted_prompt = prompt_template.format(**context)
-        except KeyError as e:
-            return False, f"Context missing key for step {step_num}: {e}", total_cost, model_used, []
+        # Safe substitution (Issue #549): un-double template literal braces first, then substitute.
+        prompt_template = prompt_template.replace("{{", "{").replace("}}", "}")
+        formatted_prompt = prompt_template
+        for key, value in context.items():
+            formatted_prompt = formatted_prompt.replace(f'{{{key}}}', str(value))
 
         timeout = CHANGE_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder
         step_success, step_output, step_cost, step_model = run_agentic_task(
@@ -799,7 +800,10 @@ def run_agentic_change_orchestrator(
             # Preprocess to escape curly braces in included content
             exclude_keys = list(context.keys())
             s11_template = preprocess(s11_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
-            s11_prompt = s11_template.format(**context)
+            s11_template = s11_template.replace("{{", "{").replace("}}", "}")
+            s11_prompt = s11_template
+            for key, value in context.items():
+                s11_prompt = s11_prompt.replace(f'{{{key}}}', str(value))
             timeout11 = CHANGE_STEP_TIMEOUTS.get(11, 340.0) + timeout_adder
             s11_success, s11_output, s11_cost, s11_model = run_agentic_task(
                 instruction=s11_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout11, label=f"step11_iter{review_iteration}", max_retries=DEFAULT_MAX_RETRIES,
@@ -818,7 +822,10 @@ def run_agentic_change_orchestrator(
             # Preprocess to escape curly braces in included content
             exclude_keys = list(context.keys())
             s12_template = preprocess(s12_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
-            s12_prompt = s12_template.format(**context)
+            s12_template = s12_template.replace("{{", "{").replace("}}", "}")
+            s12_prompt = s12_template
+            for key, value in context.items():
+                s12_prompt = s12_prompt.replace(f'{{{key}}}', str(value))
             timeout12 = CHANGE_STEP_TIMEOUTS.get(12, 600.0) + timeout_adder
             s12_success, s12_output, s12_cost, s12_model = run_agentic_task(
                 instruction=s12_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout12, label=f"step12_iter{review_iteration}", max_retries=DEFAULT_MAX_RETRIES,
@@ -886,7 +893,10 @@ def run_agentic_change_orchestrator(
         # Preprocess to escape curly braces in included content
         exclude_keys = list(context.keys())
         s13_template = preprocess(s13_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
-        s13_prompt = s13_template.format(**context)
+        s13_template = s13_template.replace("{{", "{").replace("}}", "}")
+        s13_prompt = s13_template
+        for key, value in context.items():
+            s13_prompt = s13_prompt.replace(f'{{{key}}}', str(value))
         timeout13 = CHANGE_STEP_TIMEOUTS.get(13, 340.0) + timeout_adder
         s13_success, s13_output, s13_cost, s13_model = run_agentic_task(
             instruction=s13_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout13, label="step13", max_retries=DEFAULT_MAX_RETRIES,

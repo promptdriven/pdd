@@ -351,11 +351,12 @@ def _run_single_step(
         exclude_keys=exclude_keys,
     )
 
-    try:
-        formatted_prompt = prompt_template.format(**context)
-    except KeyError as exc:
-        # Return as a failed step with cost 0.
-        return (False, f"Prompt formatting error: missing key {exc}", 0.0, "unknown")
+    # Safe substitution (Issue #549): un-double template literal braces from preprocess()
+    # first, then substitute context keys. This preserves JSON braces in context values.
+    prompt_template = prompt_template.replace("{{", "{").replace("}}", "}")
+    formatted_prompt = prompt_template
+    for key, value in context.items():
+        formatted_prompt = formatted_prompt.replace(f'{{{key}}}', str(value))
 
     success, output, cost, model = run_agentic_task(
         instruction=formatted_prompt,
@@ -494,12 +495,9 @@ def run_agentic_checkup_orchestrator(
 
         # Restore context from cached step outputs.
         # State keys use underscores (e.g. "6_1"); context keys follow suit.
+        # No brace escaping needed: safe str.replace() substitution preserves JSON braces (Issue #549).
         for step_key, output in step_outputs.items():
-            escaped_output = output.replace("{", "{{").replace("}", "}}")
-            context[f"step{step_key}_output"] = escaped_output
-            # Also provide a dotted alias for integer keys (backward compat).
-            if "_" not in step_key and step_key.isdigit():
-                context[f"step{step_key}_output"] = escaped_output
+            context[f"step{step_key}_output"] = output
 
         # Restore files_to_stage if available
         if changed_files:
@@ -568,9 +566,9 @@ def run_agentic_checkup_orchestrator(
         last_model_used = model
 
         # Use underscore-based key for fractional steps: 6.1 -> "6_1"
+        # No brace escaping needed: safe str.replace() substitution preserves JSON braces (Issue #549).
         step_key = str(step_num).replace(".", "_")
-        escaped_output = output.replace("{", "{{").replace("}", "}}")
-        context[f"step{step_key}_output"] = escaped_output
+        context[f"step{step_key}_output"] = output
 
         # Steps 6.1/6.2/6.3: parse changed files.
         if step_num in (6.1, 6.2, 6.3) and success:
@@ -692,7 +690,7 @@ def run_agentic_checkup_orchestrator(
                     )
                 escaped = "Skipped: --no-fix mode"
                 step_outputs[sub_key] = escaped
-                context[f"step{sub_key}_output"] = escaped.replace("{", "{{").replace("}", "}}")
+                context[f"step{sub_key}_output"] = escaped
                 last_completed_step_to_save = sub_step
         if any(s >= start_step for s in (6.1, 6.2, 6.3)):
             _save_state()
@@ -726,7 +724,7 @@ def run_agentic_checkup_orchestrator(
                 console.print(f"[bold][Step 8/{TOTAL_STEPS}][/bold] Skipped (--no-fix mode)")
             escaped = "Skipped: --no-fix mode"
             step_outputs["8"] = escaped
-            context["step8_output"] = escaped.replace("{", "{{").replace("}", "}}")
+            context["step8_output"] = escaped
             last_completed_step_to_save = 8
             _save_state()
 

@@ -456,7 +456,11 @@ def run_agentic_e2e_fix_orchestrator(
                 # Preprocess to escape curly braces in included content
                 exclude_keys = list(context.keys())
                 prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
-                formatted_prompt = prompt_template.format(**context)
+                # Safe substitution (Issue #549): un-double template braces first, then substitute.
+                prompt_template = prompt_template.replace("{{", "{").replace("}}", "}")
+                formatted_prompt = prompt_template
+                for key, value in context.items():
+                    formatted_prompt = formatted_prompt.replace(f'{{{key}}}', str(value))
 
                 # 3. Run Task
                 base_timeout = E2E_FIX_STEP_TIMEOUTS.get(step_num, 340.0)
