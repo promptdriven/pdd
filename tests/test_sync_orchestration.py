@@ -5056,3 +5056,275 @@ def test_agentic_verify_saves_run_report(orchestration_fixture):
             f"(after crash AND after verify), but was called {len(save_calls)} time(s). "
             f"Missing post-verify RunReport causes false crash-verify cycle detection."
         )
+
+
+# --- Issue #572: Agentic Mode Hallucinated Import Detection Tests ---
+# These tests verify that auto-deps skipped in agentic mode does NOT allow
+# hallucinated imports (non-existent modules) to pass through undetected.
+
+
+def test_issue572_baseline_auto_deps_skipped_advances_to_generate(orchestration_fixture):
+    """
+    Baseline: Confirms auto-deps is skipped in agentic mode and the operation
+    advances to 'generate'. auto_deps_main should not be called, but
+    code_generator_main should be called.
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_determine.side_effect = [
+        SyncDecision(operation='auto-deps', reason='Dependencies need scanning'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    result = sync_orchestration(basename="calculator", language="python", agentic_mode=True)
+
+    assert result['success'] is True
+    # auto_deps_main should NOT be called — it was skipped
+    orchestration_fixture['auto_deps_main'].assert_not_called()
+    # code_generator_main SHOULD be called — auto-deps advanced to generate
+    orchestration_fixture['code_generator_main'].assert_called_once()
+
+
+def test_issue572_hallucinated_imports_detected_after_agentic_generate(orchestration_fixture):
+    """
+    PRIMARY BUG REPRODUCTION (Issue #572):
+    When auto-deps is skipped in agentic mode and code_generator_main produces
+    code with hallucinated imports (firestore_writes, brevo_results_email), the
+    sync should detect and fail on the invalid imports.
+
+    Currently FAILS: hallucinated imports pass through undetected.
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    tmp_path = Path(orchestration_fixture['get_pdd_file_paths'].return_value['prompt']).parent.parent
+
+    # Code with hallucinated imports from the issue report
+    hallucinated_code = (
+        '"""Hackathon results module."""\n'
+        'from firestore_writes import update_event_winners\n'
+        'from brevo_results_email import send_bulk_notifications\n'
+        '\n'
+        'def calculate_results():\n'
+        '    """Calculate hackathon results."""\n'
+        '    winners = update_event_winners()\n'
+        '    send_bulk_notifications(winners)\n'
+        '    return winners\n'
+    )
+
+    def mock_generate(*args, **kwargs):
+        """Mock code_generator_main that writes code with hallucinated imports."""
+        code_file = tmp_path / 'src' / 'calculator.py'
+        code_file.write_text(hallucinated_code, encoding='utf-8')
+        return {'success': True, 'cost': 0.05, 'model': 'mock-model'}
+
+    orchestration_fixture['code_generator_main'].side_effect = mock_generate
+
+    mock_determine.side_effect = [
+        SyncDecision(operation='auto-deps', reason='Dependencies need scanning'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    result = sync_orchestration(basename="calculator", language="python", agentic_mode=True)
+
+    # BUG: Currently result['success'] is True and errors is empty.
+    # EXPECTED: Should fail or report errors about non-existent imports
+    # (firestore_writes.py and brevo_results_email.py don't exist on disk).
+    assert result['success'] is False or len(result.get('errors', [])) > 0, (
+        "Hallucinated imports (firestore_writes, brevo_results_email) passed through "
+        "undetected in agentic mode. Expected post-generation import validation to "
+        "catch non-existent local modules, but sync reported success with no errors."
+    )
+
+
+def test_issue572_valid_local_imports_not_flagged(orchestration_fixture):
+    """
+    Ensures that when generated code imports a module that actually exists on disk,
+    import validation does NOT flag it as a false positive.
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    tmp_path = Path(orchestration_fixture['get_pdd_file_paths'].return_value['prompt']).parent.parent
+
+    # Create a real local module in the src directory
+    (tmp_path / 'src' / 'helper_utils.py').write_text(
+        'def helper(): pass\n', encoding='utf-8'
+    )
+
+    # Code that imports the real local module
+    valid_code = (
+        '"""Calculator module."""\n'
+        'from helper_utils import helper\n'
+        '\n'
+        'def calc():\n'
+        '    """Do calculation."""\n'
+        '    return helper()\n'
+    )
+
+    def mock_generate(*args, **kwargs):
+        """Mock code_generator_main that writes code with valid local imports."""
+        code_file = tmp_path / 'src' / 'calculator.py'
+        code_file.write_text(valid_code, encoding='utf-8')
+        return {'success': True, 'cost': 0.05, 'model': 'mock-model'}
+
+    orchestration_fixture['code_generator_main'].side_effect = mock_generate
+
+    mock_determine.side_effect = [
+        SyncDecision(operation='auto-deps', reason='Dependencies need scanning'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    result = sync_orchestration(basename="calculator", language="python", agentic_mode=True)
+
+    # Valid local imports should not trigger validation errors
+    assert result['success'] is True
+    assert not result.get('errors', [])
+
+
+def test_issue572_stdlib_imports_not_flagged(orchestration_fixture):
+    """
+    Ensures standard library imports are NOT flagged as hallucinated
+    when import validation runs after agentic code generation.
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    tmp_path = Path(orchestration_fixture['get_pdd_file_paths'].return_value['prompt']).parent.parent
+
+    # Code with only stdlib imports
+    stdlib_code = (
+        '"""Calculator with standard imports."""\n'
+        'import os\n'
+        'import json\n'
+        'import sys\n'
+        'from pathlib import Path\n'
+        'from datetime import datetime\n'
+        '\n'
+        'def calc():\n'
+        '    """Do calculation."""\n'
+        '    return str(Path.cwd())\n'
+    )
+
+    def mock_generate(*args, **kwargs):
+        """Mock code_generator_main that writes code with stdlib imports."""
+        code_file = tmp_path / 'src' / 'calculator.py'
+        code_file.write_text(stdlib_code, encoding='utf-8')
+        return {'success': True, 'cost': 0.05, 'model': 'mock-model'}
+
+    orchestration_fixture['code_generator_main'].side_effect = mock_generate
+
+    mock_determine.side_effect = [
+        SyncDecision(operation='auto-deps', reason='Dependencies need scanning'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    result = sync_orchestration(basename="calculator", language="python", agentic_mode=True)
+
+    # Stdlib imports should not trigger validation errors
+    assert result['success'] is True
+    assert not result.get('errors', [])
+
+
+def test_issue572_synthetic_crash_message_hides_import_error(orchestration_fixture):
+    """
+    In agentic mode, the crash handler produces a synthetic delegation message
+    instead of running the code. This synthetic message is passed to
+    _try_auto_fix_import_error, which cannot detect the real ModuleNotFoundError.
+
+    This test verifies that _try_auto_fix_import_error receives real error output
+    (containing ModuleNotFoundError) instead of a synthetic delegation message.
+
+    Currently FAILS: receives synthetic text 'Language python (agentic_mode=True)
+    - delegating crash detection to agentic handler.'
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    tmp_path = Path(orchestration_fixture['get_pdd_file_paths'].return_value['prompt']).parent.parent
+
+    # Create code and example files — code has a hallucinated import
+    code_file = tmp_path / 'src' / 'calculator.py'
+    code_file.write_text(
+        'from nonexistent_module import something\n\ndef calc():\n    pass\n',
+        encoding='utf-8'
+    )
+    example_file = tmp_path / 'examples' / 'calculator_example.py'
+    example_file.write_text(
+        'from calculator import calc\ncalc()\n',
+        encoding='utf-8'
+    )
+
+    mock_determine.side_effect = [
+        SyncDecision(operation='crash', reason='Example crashed'),
+        SyncDecision(operation='all_synced', reason='Done'),
+    ]
+
+    # crash_main returns success (using fixture default dict format)
+    orchestration_fixture['crash_main'].return_value = {'success': True, 'cost': 0.08, 'model': 'mock-model'}
+
+    with patch('pdd.sync_orchestration.read_run_report', return_value=None), \
+         patch('pdd.sync_orchestration._try_auto_fix_import_error') as mock_auto_fix, \
+         patch('pdd.sync_orchestration._try_auto_fix_env_var_error') as mock_env_fix, \
+         patch('pdd.sync_orchestration._save_run_report_atomic'):
+        mock_auto_fix.return_value = (False, "No import error detected")
+        mock_env_fix.return_value = (False, "No env var error detected")
+
+        result = sync_orchestration(basename="calculator", language="python", agentic_mode=True)
+
+        # Verify _try_auto_fix_import_error was called
+        assert mock_auto_fix.called, (
+            "_try_auto_fix_import_error should have been called in crash handler"
+        )
+
+        # BUG: The error_output argument should contain real error info
+        # (e.g., "ModuleNotFoundError: No module named 'nonexistent_module'")
+        # but instead receives a synthetic delegation message.
+        actual_error_output = mock_auto_fix.call_args[0][0]
+        assert "ModuleNotFoundError" in actual_error_output or "ImportError" in actual_error_output, (
+            f"_try_auto_fix_import_error received synthetic delegation message instead of "
+            f"real error output. Got: '{actual_error_output}'. In agentic mode, the crash "
+            f"handler should surface real import errors for auto-fix detection."
+        )
+
+
+def test_issue572_wrong_module_name_hackathon_volunteer(orchestration_fixture):
+    """
+    Tests the specific case from issue #572 where the LLM uses 'hackathon_volunteer'
+    as the module name, but the actual module is 'hackathon_volunteer_management'.
+    This wrong module name should be detected as a hallucinated/invalid import.
+
+    Currently FAILS: wrong module name passes through undetected.
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    tmp_path = Path(orchestration_fixture['get_pdd_file_paths'].return_value['prompt']).parent.parent
+
+    # Create the REAL module with the correct name
+    (tmp_path / 'src' / 'hackathon_volunteer_management.py').write_text(
+        'def manage_volunteers(): pass\n', encoding='utf-8'
+    )
+
+    # Code that imports the WRONG module name (hallucinated by LLM)
+    wrong_name_code = (
+        '"""Hackathon results module."""\n'
+        'from hackathon_volunteer import manage_volunteers\n'
+        '\n'
+        'def process_results():\n'
+        '    """Process hackathon results."""\n'
+        '    return manage_volunteers()\n'
+    )
+
+    def mock_generate(*args, **kwargs):
+        """Mock code_generator_main that writes code with wrong module name."""
+        code_file = tmp_path / 'src' / 'calculator.py'
+        code_file.write_text(wrong_name_code, encoding='utf-8')
+        return {'success': True, 'cost': 0.05, 'model': 'mock-model'}
+
+    orchestration_fixture['code_generator_main'].side_effect = mock_generate
+
+    mock_determine.side_effect = [
+        SyncDecision(operation='auto-deps', reason='Dependencies need scanning'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    result = sync_orchestration(basename="calculator", language="python", agentic_mode=True)
+
+    # BUG: Currently result['success'] is True despite using wrong module name.
+    # EXPECTED: Should detect that 'hackathon_volunteer' doesn't exist on disk
+    # (the real module is 'hackathon_volunteer_management').
+    assert result['success'] is False or len(result.get('errors', [])) > 0, (
+        "Wrong module name 'hackathon_volunteer' (actual: 'hackathon_volunteer_management') "
+        "passed through undetected in agentic mode. Expected import validation to catch "
+        "this non-existent module, but sync reported success with no errors."
+    )
