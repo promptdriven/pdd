@@ -44,11 +44,6 @@ Code just got that cheap.
 [TONE: challenging, curious]
 So why are we still **patching**?
 
-[PAUSE: 1s]
-
-[TONE: intriguing, slightly provocative]
-What if there were a **compiler** — not for code, but for *prompts*?
-
 ---
 
 ## THE THIRTY-SECOND DEMO (2:00 - 2:30)
@@ -76,7 +71,7 @@ Now let me show you **why** this matters.
 
 ---
 
-## PART 1: THE ECONOMICS OF DARNING (2:30 - 8:30)
+## PART 1: THE ECONOMICS OF DARNING (2:30 - 8:00)
 
 [PAUSE: 2s]
 
@@ -107,7 +102,7 @@ For *decades*, generating new code was expensive. Writing from scratch took hour
 [PAUSE: 1.5s]
 
 [TONE: acknowledging, fair]
-Now, here's where it gets interesting. AI made patching faster *too*. Cursor, Claude Code, Copilot—they're **incredible** tools. They understand your codebase, suggest fixes, catch bugs before you make them.
+But something else happened. AI made patching faster *too*. Cursor, Claude Code, Copilot—you *know* these tools. They understand your codebase, suggest fixes, catch bugs before you make them.
 
 [PAUSE: 1s]
 
@@ -144,7 +139,7 @@ And GitClear confirmed it across **two hundred eleven million** lines of code. S
 ### CONTEXT ROT
 
 [TONE: revealing something new]
-And there's something *else* hiding in that debt. Something specific to **AI-assisted** development.
+But there's a *second* kind of debt hiding in there. One that's specific to **AI-assisted** development.
 
 [PAUSE: 1.5s]
 
@@ -165,7 +160,7 @@ So now the AI has to *guess* what's relevant. Tools like Cursor use embeddings. 
 [PAUSE: 1.5s]
 
 [TONE: escalating]
-And here's what makes it worse. A 2025 EMNLP study proved that even when the model retrieves the *right* information, performance still degrades—**fourteen to eighty-five percent**—just from the sheer length of the input. It's not about finding the right code. The extra tokens *themselves* hurt the model's ability to reason. A separate Chroma study across eighteen state-of-the-art models confirmed the pattern—they call it *context rot*.
+And it gets worse. A 2025 EMNLP study proved that even when the model retrieves the *right* information, performance still degrades—**fourteen to eighty-five percent**—just from the sheer length of the input. It's not about finding the right code. The extra tokens *themselves* hurt the model's ability to reason. A separate Chroma study across eighteen state-of-the-art models confirmed the pattern—they call it *context rot*.
 
 [PAUSE: 2s]
 
@@ -185,12 +180,12 @@ On a *small* codebase—a few thousand lines—patching with AI is genuinely tra
 [PAUSE: 1s]
 
 [TONE: contrasting, serious]
-But on a *large* codebase—the kind you get after years of patching—experienced developers are actually **nineteen percent** *slower* with AI tools. [PAUSE: 0.5s] And here's the devastating part: those same developers *believed* AI was making them **twenty percent** *faster*. That's a **thirty-nine point** gap between what it felt like and what happened. The context window can't keep up. The model guesses wrong. But it guesses *confidently*—so you don't notice until the bugs hit production.
+But on a *large* codebase—the kind you end up with after years of patching—experienced developers are actually **nineteen percent** *slower* with AI tools. [PAUSE: 0.5s] And the devastating part: those same developers *believed* AI was making them **twenty percent** *faster*. That's a **thirty-nine point** gap between what it felt like and what happened. The context window can't keep up. The model guesses wrong. But it guesses *confidently*—so you don't notice until the bugs hit production.
 
 [PAUSE: 1.5s]
 
 [TONE: the trap revealed]
-And here's the catch: every patch makes the codebase **bigger**. So patching pushes you from the world where AI *helps*... into the world where it **doesn't**.
+And that's the trap: every patch makes the codebase **bigger**. So patching pushes you from the world where AI *helps*... into the world where it **doesn't**.
 
 [PAUSE: 2s]
 
@@ -200,12 +195,12 @@ Regeneration doesn't have this problem. A prompt is a *fifth* to a *tenth* the s
 [PAUSE: 1.5s]
 
 [TONE: insightful, building]
-And there's something else. These models are trained on up to **thirty times** more natural language than code. Natural language is their deepest fluency. MIT showed that giving models natural language context for coding tasks improved performance by up to **eighty-nine percent**. A prompt *is* natural language. You're speaking the model's strongest language and giving it room to think.
+And these models are trained on up to **thirty times** more natural language than code. Natural language is their deepest fluency. MIT showed that giving models natural language context for coding tasks improved performance by up to **eighty-nine percent**. A prompt *is* natural language. You're speaking the model's strongest language and giving it room to think.
 
 [PAUSE: 1.5s]
 
 [TONE: storytelling, concrete]
-A team optimizing ad delivery latency had **twenty** modules on the critical path. As code? They overflowed the context window. As prompts — a fifth to a tenth the size — they *all* fit. The team optimized the entire critical path in prompt space and exceeded their half-millisecond latency target.
+We saw this firsthand. A team optimizing ad delivery latency had **twenty** modules on the critical path. As code, they overflowed the context window — the model couldn't see the whole system. As prompts — a fifth to a tenth the size — they *all* fit. The team optimized the entire critical path in prompt space and beat their half-millisecond latency target.
 
 [PAUSE: 1s]
 
@@ -228,60 +223,34 @@ Tools like Cursor and Claude Code are the best darning needles **ever made**. I 
 [TONE: pointed, landing the blow]
 But they're still **darning needles**. And the fundamental problem with darning isn't *speed*—it's **accumulation**.
 
-[PAUSE: 1.5s]
-
-[TONE: revealing a secret]
-[PACE: slightly slower for emphasis]
-This is the part of software economics *nobody talks about*. **Eighty to ninety percent** of software cost isn't building the initial system.
-
-[PAUSE: 1s]
-
-[TONE: driving home the point]
-It's *maintaining* it. McKinsey found that organizations with high technical debt spend **forty percent** more on maintenance and deliver features **twenty-five to fifty percent** slower. Stripe measured developers wasting a *third* of their entire work week on technical debt and maintenance.
-
-[PAUSE: 1s]
-
-[EMOTION: ominous but hopeful]
-And those costs **compound**—literally. Technical debt follows a compound interest curve. [PAUSE: 0.8s] Unless you regenerate. Then the debt resets.
-
-[PAUSE: 2s]
-
 ### THE KEY INSIGHT
+
+[PAUSE: 1.5s]
 
 [TONE: deliberate, signaling importance]
 [PACE: slower, weighted]
-Now here's the thing I want you to **take away** from everything I've just shown you.
-
-[PAUSE: 1.5s]
-
-[TONE: posing a question, building curiosity]
-What if you could take the **same LLM** you're using today — same model, same parameters — and make it **dramatically** better at coding?
-
-[PAUSE: 1.5s]
-
-[TONE: revelatory, building]
-[PACE: measured, giving each point weight]
-Working in prompt space gives you **two** things at once. First: prompts are a fifth to a tenth the size of the code they govern. So your effective context window is **five to ten times** larger. Every token in that window is author-curated — no system prompts eating space, no retrieval tool guessing wrong. The *entire* context window is devoted to your problem.
+So let me put together what I just showed you.
 
 [PAUSE: 1s]
 
-[TONE: building further]
-Second: these models were trained on up to **thirty times** more natural language than code. Natural language is their deepest fluency. MIT showed giving models natural language context improves coding accuracy by up to **eighty-nine percent**.
+[TONE: connecting the dots]
+[PACE: measured, giving each point weight]
+You saw that prompts are a *fraction* the size of the code they govern. And you saw that natural language is what these models do **best**. That means working in prompt space gives you **two** things at once: your effective context window is five to ten times larger, AND the model performs dramatically better on every token in it.
 
 [PAUSE: 1.5s]
 
 [TONE: emphatic, landing it]
 [PACE: slower]
-You get a **bigger** window AND a **smarter** model. That's not an incremental improvement. That's a **category shift**.
+A **bigger** window AND a **smarter** model. Not one or the other. *Both*. That's not an incremental improvement. That's a **category shift**.
 
 [PAUSE: 2s]
 
 [TONE: challenging, personal]
-Don't take my word for it. Take your favorite LLM, give it a hard coding problem as code, then give it the same problem described in natural language. The natural language version will **win**. [PAUSE: 0.5s] Every time.
+Try it yourself. Take your favorite LLM, give it a hard coding problem as code, then give it the same problem described in natural language. The natural language version will **win**.
 
 ---
 
-## PART 2: THE PARADIGM SHIFT (8:30 - 13:00)
+## PART 2: THE PARADIGM SHIFT (8:00 - 12:30)
 
 [PAUSE: 2s]
 
@@ -326,8 +295,8 @@ In molding, value lives in *the specification*—the mold. The plastic part? [PA
 
 [PAUSE: 2s]
 
-[TONE: pivoting to new example]
-And it's not just plastics. The chip industry hit this **exact** wall.
+[TONE: pivoting, personal]
+And it's not just plastics. The chip industry hit this **exact** wall — and I watched it happen.
 
 [PAUSE: 1.5s]
 
@@ -337,7 +306,7 @@ In the 1980s, chip designers drew every gate by hand. When transistor counts hit
 [PAUSE: 1.5s]
 
 [TONE: building to key insight]
-But here's the thing: synthesis was **non-deterministic**. Run it twice, get different gates. Different wiring. Different layout. The output varied every single time.
+Now — synthesis was **non-deterministic**. Run it twice, get different gates. Different wiring. Different layout. The output varied every single time.
 
 [PAUSE: 1.5s]
 
@@ -346,8 +315,8 @@ What Synopsys did was wrap a **verification toolchain** around the generator. Fo
 
 [PAUSE: 1s]
 
-[TONE: crystallizing the analogy]
-Synopsys Design Compiler was **GCC** for hardware descriptions. PDD is **GCC** for prompts.
+[TONE: crystallizing]
+Synopsys turned hardware descriptions into verified *silicon*. PDD turns prompts into verified *software*. Same architecture. Specification in, verified artifact out.
 
 [PAUSE: 2s]
 
@@ -366,6 +335,11 @@ Today, a modern chip has **billions** of gates. Nobody reviews the netlist. It's
 [TONE: drawing the parallel, serious]
 We're hitting the **same wall** with AI-generated code. When AI generates ten thousand lines in a day, code review becomes **netlist review**. The question isn't whether you *should* review it. It's whether you *can*.
 
+[PAUSE: 1s]
+
+[TONE: resolving the tension]
+The chip industry's answer wasn't "review harder." It was: **verify the output** against the spec. Review the Verilog, not the gates. That's what tests do for generated code.
+
 [PAUSE: 2s]
 
 [TONE: connecting the threads]
@@ -379,7 +353,7 @@ The prompt is your mold. The code is just... *plastic*. And just like chip synth
 
 ---
 
-## PART 3: THE MOLD HAS THREE PARTS (13:00 - 18:30)
+## PART 3: THE MOLD HAS THREE PARTS (12:30 - 18:00)
 
 [PAUSE: 2s]
 
@@ -415,7 +389,7 @@ The walls aren't optional. They're what make regeneration *safe*. When the model
 [PAUSE: 1.5s]
 
 [TONE: setting up scenario]
-Now here's where it gets interesting. When you find a bug...
+Now watch what happens when you find a bug...
 
 [PAUSE: 1s]
 
@@ -453,6 +427,11 @@ Now — you might be thinking: "But LLMs don't follow instructions **reliably**.
 [TONE: brief, authoritative]
 And some of those walls aren't just tested — they're *proven*. PDD uses Z3, the same class of SMT solver that the chip industry uses for formal equivalence checking, to mathematically prove that properties hold for **every possible input**. Not sampling. Mathematical **proof**. The chip design analogy isn't a metaphor. It's the **same technology**.
 
+[PAUSE: 1s]
+
+[TONE: honest, grounded]
+One honest limitation: PDD works at the module level. Each prompt governs *one* module. Emergent behavior across modules — race conditions, cascading failures, architectural mismatches — still requires human judgment. The mold makes each part precise. The assembly is still *yours*.
+
 ### PROMPT CAPITAL
 
 [PAUSE: 2s]
@@ -468,7 +447,7 @@ The prompt doesn't define the walls—tests do that. The prompt defines what you
 [PAUSE: 1s]
 
 [TONE: subtle, insightful]
-And here's something subtle: the exact implementation can *vary*. What's locked is the **behavior**. The code is flexible; the contract is fixed.
+Notice something subtle: the exact implementation can *vary*. What's locked is the **behavior**. The code is flexible; the contract is fixed.
 
 [PAUSE: 1s]
 
@@ -477,13 +456,8 @@ A good prompt is a *fifth* to a *tenth* the size of the code it generates. Think
 
 [PAUSE: 1.5s]
 
-[TONE: connecting to earlier insight]
-Remember the context window problem? Code is token-expensive. But prompts are natural language—and these models were trained on up to **thirty times** more natural language than code. Researchers found that just adding natural language comments to code training data improved generation quality by **forty-one percent**. The prompt isn't fighting the model's strengths. It's *leveraging* them.
-
-[PAUSE: 1s]
-
-[TONE: precise]
-And unlike agentic tools that dynamically guess which code to load into context—and increasingly guess *wrong*—each prompt declares its own dependencies. The context is **author-defined**, not machine-assembled. Every token in that window is author-curated. No system prompts eating space. No retrieval tool guessing wrong. The *entire* context window is devoted to your problem.
+[TONE: connecting to earlier insight, not re-deriving]
+This is why the context window advantage we talked about is so powerful. You're not stuffing code into a window and hoping the model figures it out. You're giving it natural language — its strongest modality — in a window that's **five to ten times** more spacious. And every token is author-curated. No retrieval guessing. No wasted space. The *entire* context window is devoted to your problem.
 
 ### GROUNDING CAPITAL
 
@@ -518,12 +492,12 @@ The code is *output*. The mold is what **matters**.
 
 ---
 
-## PART 4: THE PRECISION TRADEOFF (18:30 - 21:00)
+## PART 4: THE PRECISION TRADEOFF (18:00 - 20:30)
 
 [PAUSE: 2s]
 
-[TONE: intellectual, curious]
-Here's something subtle that changes how you think about prompts.
+[TONE: intellectual, engaged]
+Let's talk about precision. Because there's a subtle tradeoff that changes how you think about prompts.
 
 [PAUSE: 1s]
 
@@ -576,38 +550,37 @@ Think of it as a **spectrum**. Natural language on one end, code on the other. T
 
 ---
 
-## PART 5: COMPOUND RETURNS (21:00 - 23:15)
+## PART 5: COMPOUND RETURNS (20:30 - 23:00)
 
 [PAUSE: 2s]
 
-[TONE: strategic, analytical]
-Let's talk about **compound returns**.
+[TONE: zooming out, strategic]
+Now let's zoom out. Because the numbers you just saw — individual patches, individual bugs — add up to something **staggering**.
 
 [PAUSE: 1s]
 
-[TONE: describing the old way]
-When you patch code, each fix has *local* returns. You fixed one bug in one place. Similar bugs can still occur elsewhere. And sometimes your patch introduces *new* bugs—CodeRabbit found AI patches carry **one-point-seven times** more issues than human code. So each patch risks creating *more* patches.
+[TONE: stark, data-driven]
+**Eighty to ninety percent** of software cost isn't building the initial system. It's *maintaining* it. McKinsey found organizations with high technical debt spend **forty percent** more on maintenance. Stripe measured developers wasting a *third* of their work week on debt alone.
+
+[PAUSE: 1s]
+
+[TONE: building, mathematical]
+And those costs **compound** — literally. Technical debt follows a compound interest curve. CISQ puts the US total at **one-point-five-two** *trillion* dollars annually. That's not a metaphor. It's the math of accumulation.
+
+[PAUSE: 1.5s]
+
+[TONE: contrasting, the turn]
+Patching accrues compound **costs**. Each patch adds debt. Debt generates more debt.
 
 [PAUSE: 0.8s]
 
-[TONE: dismissive]
-The returns are linear at best. Often *sub*linear. And the cost keeps compounding—CISQ estimates technical debt costs US companies **one-point-five-two** *trillion* dollars annually.
+[TONE: building to the contrast]
+But the mold works the *other* way. Each test you write constrains every future generation. Today's. Next month's. Next *year's*. Tests accrue compound **returns**.
 
 [PAUSE: 1.5s]
 
-[TONE: building to contrast]
-When you add a test in PDD, the returns are **different**.
-
-[PAUSE: 1s]
-
-[TONE: building excitement]
-[PACE: slightly faster]
-That test you wrote *today*? It constrains tomorrow's generation. And next week's. And next *year's*. It's a **permanent wall**.
-
-[PAUSE: 1.5s]
-
-[TONE: summarizing powerfully]
-Every investment in the mold has **compound** returns. Every investment in patching has **diminishing** returns.
+[TONE: crystallizing]
+One side of this equation compounds **against** you. The other compounds **for** you. Over time, that's *everything*.
 
 [PAUSE: 2s]
 
@@ -631,13 +604,7 @@ A researcher at Microsoft, after seeing PDD for the first time, said: [PAUSE: 0.
 
 ---
 
-## CLOSING (23:15 - 25:00)
-
-[PAUSE: 2s]
-
-[TONE: wrapping up, reflective]
-[PACE: measured, deliberate]
-So here's the mental shift.
+## WHERE TO START (23:00 - 23:45)
 
 [PAUSE: 1.5s]
 
@@ -653,6 +620,10 @@ PDD can create prompts *from* existing code. Start with **one** module. Generate
 
 [TONE: measured, reasonable]
 One module at a time. No big bang. No rewrite. Just a gradual migration of where value lives — from code to *specification*.
+
+---
+
+## CLOSING (23:45 - 24:30)
 
 [PAUSE: 2s]
 
@@ -695,4 +666,4 @@ The **mold**... is what matters.
 
 ---
 
-**Total runtime: ~24-26 minutes**
+**Total runtime: ~24-25 minutes**

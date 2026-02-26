@@ -81,9 +81,10 @@ test.describe('Stage 3: TTS Script Generation', () => {
     await page.route('**/api/pipeline/tts-script/run', (route) => {
       apiCallTriggered = true;
       route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ jobId: 'test-tts-gen-job' }),
+        status: 202,
+        contentType: 'text/event-stream',
+        headers: { 'Cache-Control': 'no-cache', Connection: 'keep-alive' },
+        body: 'data: {"type":"started","jobId":"test-tts-gen-job"}\n\n',
       });
     });
 
@@ -146,14 +147,15 @@ test.describe('Stage 3: TTS Script Generation', () => {
 
   // BUG-A: Generate button must be disabled while generation is in progress
   test('Generate button disables during active generation', async ({ page }) => {
-    // Mock the API to hold the response so we can observe the in-flight state
+    // Mock the API to hold the SSE response so we can observe the in-flight state
     await page.route('**/api/pipeline/tts-script/run', async (route) => {
       // Delay the response to simulate a long-running job
       await new Promise((resolve) => setTimeout(resolve, 3000));
       await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ jobId: 'test-gen-job-123' }),
+        status: 202,
+        contentType: 'text/event-stream',
+        headers: { 'Cache-Control': 'no-cache', Connection: 'keep-alive' },
+        body: 'data: {"type":"started","jobId":"test-gen-job-123"}\n\n',
       });
     });
 
@@ -173,12 +175,13 @@ test.describe('Stage 3: TTS Script Generation', () => {
 
   // BUG-B: Scripts must reload after generation completes (SseLogPanel onDone)
   test('diff view and editor reload after generation completes', async ({ page }) => {
-    // Mock the generate endpoint to return a jobId immediately
+    // Mock the generate endpoint to return a jobId via SSE stream
     await page.route('**/api/pipeline/tts-script/run', (route) => {
       route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ jobId: 'test-reload-job' }),
+        status: 202,
+        contentType: 'text/event-stream',
+        headers: { 'Cache-Control': 'no-cache', Connection: 'keep-alive' },
+        body: 'data: {"type":"started","jobId":"test-reload-job"}\n\n',
       });
     });
 
@@ -272,5 +275,100 @@ test.describe('Stage 3: TTS Script Generation', () => {
     // The last saved body should contain SECOND_EDIT — it must not be dropped
     const lastSave = savedBodies[savedBodies.length - 1] ?? '';
     expect(lastSave).toContain('SECOND_EDIT');
+  });
+
+  // BUG: Generate button must correctly parse SSE response to extract jobId
+  // The POST /api/pipeline/tts-script/run endpoint returns an SSE stream,
+  // not JSON. The component must read the stream and extract the jobId
+  // from the first SSE event, not call res.json().
+  test('Generate button correctly parses SSE response and extracts jobId', async ({ page }) => {
+    // Mock the generate endpoint to return a realistic SSE stream (not JSON)
+    await page.route('**/api/pipeline/tts-script/run', (route) => {
+      const sseBody = [
+        'data: {"type":"started","jobId":"sse-test-job-42"}\n\n',
+        'data: {"type":"log","message":"Reading main_script.md..."}\n\n',
+        'data: {"type":"complete","jobId":"sse-test-job-42"}\n\n',
+      ].join('');
+      route.fulfill({
+        status: 202,
+        contentType: 'text/event-stream',
+        headers: {
+          'Cache-Control': 'no-cache',
+          Connection: 'keep-alive',
+        },
+        body: sseBody,
+      });
+    });
+
+    // Mock the job stream endpoint to confirm the jobId was passed through
+    let streamJobId: string | null = null;
+    await page.route('**/api/jobs/*/stream', (route) => {
+      const url = route.request().url();
+      const match = url.match(/\/api\/jobs\/([^/]+)\/stream/);
+      streamJobId = match ? match[1] : null;
+      route.fulfill({
+        status: 200,
+        contentType: 'text/event-stream',
+        headers: { 'Cache-Control': 'no-cache', Connection: 'keep-alive' },
+        body: 'event: done\ndata: {}\n\n',
+      });
+    });
+
+    const generateBtn = page.locator('button', { hasText: 'Generate TTS Script' });
+    await generateBtn.click();
+    await page.waitForTimeout(2000);
+
+    // The component should have parsed the SSE stream and passed the jobId
+    // to SseLogPanel, which would have opened /api/jobs/sse-test-job-42/stream
+    expect(streamJobId).toBe('sse-test-job-42');
+  });
+
+  // BUG: Generate button must not throw console error parsing SSE as JSON
+  test('Generate button does not throw JSON parse error', async ({ page }) => {
+    const consoleErrors: string[] = [];
+    page.on('pageerror', (err) => consoleErrors.push(err.message));
+
+    // Mock with realistic SSE response
+    await page.route('**/api/pipeline/tts-script/run', (route) => {
+      route.fulfill({
+        status: 202,
+        contentType: 'text/event-stream',
+        headers: { 'Cache-Control': 'no-cache', Connection: 'keep-alive' },
+        body: 'data: {"type":"started","jobId":"no-error-job"}\n\n',
+      });
+    });
+
+    const generateBtn = page.locator('button', { hasText: 'Generate TTS Script' });
+    await generateBtn.click();
+    await page.waitForTimeout(1500);
+
+    // There should be no SyntaxError from trying to parse SSE as JSON
+    const jsonErrors = consoleErrors.filter(e => e.includes('SyntaxError') || e.includes('not valid JSON'));
+    expect(jsonErrors).toHaveLength(0);
+  });
+
+  // BUG: Double-clicking Generate must only trigger one API call
+  test('double-click on Generate only sends one API request', async ({ page }) => {
+    let apiCallCount = 0;
+    await page.route('**/api/pipeline/tts-script/run', async (route) => {
+      apiCallCount++;
+      // Hold the response so the second click has time to fire
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      await route.fulfill({
+        status: 202,
+        contentType: 'text/event-stream',
+        headers: { 'Cache-Control': 'no-cache', Connection: 'keep-alive' },
+        body: 'data: {"type":"started","jobId":"double-click-guard-job"}\n\n',
+      });
+    });
+
+    const generateBtn = page.locator('button', { hasText: 'Generate TTS Script' });
+    // Rapid double-click
+    await generateBtn.click();
+    await generateBtn.click({ delay: 50 });
+    await page.waitForTimeout(500);
+
+    // Only one API call should have been made
+    expect(apiCallCount).toBe(1);
   });
 });
