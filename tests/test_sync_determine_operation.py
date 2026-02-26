@@ -3460,6 +3460,133 @@ class TestInfiniteLoopBugIssue349:
         )
 
 
+# --- Bug #573: _is_workflow_complete accepts coverage=0.0 with passing tests ---
+
+class TestZeroCoverageBugIssue573:
+    """
+    Regression tests for GitHub issue #573: _is_workflow_complete() returns True
+    when tests_passed > 0 and tests_failed == 0, even if coverage is 0.0.
+    This is a defense-in-depth gap — the function should check coverage against
+    a minimum threshold.
+    """
+
+    def test_is_workflow_complete_rejects_zero_coverage_with_passing_tests(self, pdd_test_environment):
+        """
+        Bug #573 (Test 4): _is_workflow_complete should return False when
+        coverage=0.0 despite tests_passed > 0 and tests_failed == 0.
+
+        The Bug #349 fix at sync_determine_operation.py:1264 treats
+        (tests_passed > 0 and tests_failed == 0) as success without checking
+        coverage. This allows coverage=0.0 to be accepted as workflow complete.
+        """
+        tmp_path = pdd_test_environment
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir(exist_ok=True)
+
+        # Create files
+        prompt_path = prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt"
+        prompt_hash = create_file(prompt_path, "# Test prompt")
+
+        paths = get_pdd_file_paths(BASENAME, LANGUAGE, prompts_dir=str(prompts_dir))
+        code_hash = create_file(paths['code'], "def foo(): pass")
+        example_hash = create_file(paths['example'], "foo()")
+        test_hash = create_file(paths['test'], "def test_foo(): pass")
+
+        # Fingerprint shows workflow completed 'test'
+        create_fingerprint_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json", {
+            "pdd_version": "0.0.156",
+            "timestamp": "2026-02-23T00:00:00Z",
+            "command": "test",
+            "prompt_hash": prompt_hash,
+            "code_hash": code_hash,
+            "example_hash": example_hash,
+            "test_hash": test_hash
+        })
+
+        # Run report: tests pass but coverage is 0.0
+        # This reproduces the issue where sys.modules stubs mask import errors
+        create_run_report_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json", {
+            "timestamp": "2026-02-23T00:01:00Z",
+            "exit_code": 0,
+            "tests_passed": 62,
+            "tests_failed": 0,
+            "coverage": 0.0,
+            "test_hash": test_hash
+        })
+
+        result = _is_workflow_complete(
+            paths=paths,
+            skip_tests=False,
+            skip_verify=False,
+            basename=BASENAME,
+            language=LANGUAGE
+        )
+
+        # Bug #573: Currently returns True because is_success check at line 1264
+        # only checks tests_passed > 0 and tests_failed == 0, ignoring coverage.
+        # After fix: Should return False because coverage=0.0 indicates the tests
+        # are not actually measuring the module under test.
+        assert result is False, (
+            "Bug #573: _is_workflow_complete() returns True when coverage=0.0 "
+            "with 62 passing tests. This is a defense-in-depth gap — "
+            "coverage=0.0 means tests are not exercising the module "
+            "(likely due to sys.modules stub masking broken imports)."
+        )
+
+    def test_sync_determine_operation_returns_test_extend_for_zero_coverage(self, pdd_test_environment):
+        """
+        Bug #573 (Test 5): sync_determine_operation should return 'test_extend'
+        when tests pass but coverage is 0.0. This validates that the detection
+        side works correctly (it does — the bug is in the orchestration layer
+        that overrides this signal).
+        """
+        tmp_path = pdd_test_environment
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir(exist_ok=True)
+
+        prompt_path = prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt"
+        prompt_hash = create_file(prompt_path, "# Test prompt")
+
+        paths = get_pdd_file_paths(BASENAME, LANGUAGE, prompts_dir=str(prompts_dir))
+        code_hash = create_file(paths['code'], "def foo(): pass")
+        example_hash = create_file(paths['example'], "foo()")
+        test_hash = create_file(paths['test'], "def test_foo(): pass")
+
+        create_fingerprint_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json", {
+            "pdd_version": "0.0.156",
+            "timestamp": "2026-02-23T00:00:00Z",
+            "command": "test",
+            "prompt_hash": prompt_hash,
+            "code_hash": code_hash,
+            "example_hash": example_hash,
+            "test_hash": test_hash
+        })
+
+        # Run report: tests pass, exit_code=0, but coverage is 0.0
+        create_run_report_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json", {
+            "timestamp": "2026-02-23T00:01:00Z",
+            "exit_code": 0,
+            "tests_passed": 62,
+            "tests_failed": 0,
+            "coverage": 0.0,
+            "test_hash": test_hash
+        })
+
+        decision = sync_determine_operation(
+            BASENAME, LANGUAGE, TARGET_COVERAGE,
+            prompts_dir=str(prompts_dir)
+        )
+
+        # The detection side should correctly identify low coverage and return
+        # test_extend. This test validates that sync_determine_operation catches
+        # the problem even though the orchestration layer currently overrides it.
+        assert decision.operation == 'test_extend', (
+            f"Expected 'test_extend' for coverage=0.0 with passing tests, "
+            f"got '{decision.operation}'. sync_determine_operation should detect "
+            f"that coverage 0.0 < target {TARGET_COVERAGE} and request test extension."
+        )
+
+
 # --- GitHub Issue #522: Fingerprint ignores <include> dependencies ---
 
 class TestFingerprintIncludeDependencies:
