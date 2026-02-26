@@ -451,8 +451,8 @@ export default function AnnotationPanel({ annotations, sectionId, onBatchResolve
           <SseLogPanel
             jobId={batchJobId}
             onDone={() => {
-              // Parent is expected to refetch and pass updated annotations.
-              // Keep the panel visible; user may want the logs.
+              // Notify parent to reload annotations so resolved ones show ✓ Resolved.
+              onBatchResolve(batchJobId!);
             }}
             onError={() => {
               // Keep logs visible on error.

@@ -98,3 +98,87 @@ describe("confidence NaN-safety", () => {
     expect(hasSafePattern).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 4. Error state when fetch fails (item 12.2)
+// ---------------------------------------------------------------------------
+
+describe("error state when preview fetch fails (12.2)", () => {
+  it("shows a red error box when the API returns a non-ok response", () => {
+    // When fetch returns !res.ok, error state must be displayed.
+    expect(sourceCode).toMatch(/error\s*\?/);
+    // Red error styling
+    expect(sourceCode).toMatch(/bg-red-500\/10/);
+    expect(sourceCode).toMatch(/text-red-200/);
+  });
+
+  it("captures the error message from the thrown Error", () => {
+    expect(sourceCode).toMatch(/Preview failed \(\$\{res\.status\}\)/);
+  });
+
+  it("renders the error message string in the error box", () => {
+    // The {error} expression renders the caught error message
+    expect(sourceCode).toMatch(/\{error\}/);
+  });
+
+  it("uses useState<string | null> for error state", () => {
+    expect(sourceCode).toMatch(/useState\s*<\s*string\s*\|\s*null\s*>\s*\(\s*null\s*\)/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 5. Empty state when no fixes to preview (item 12.3)
+// ---------------------------------------------------------------------------
+
+describe("empty state when no previews returned (12.3)", () => {
+  it("renders 'No fixes to preview.' when previews array is empty", () => {
+    expect(sourceCode).toMatch(/No fixes to preview\./);
+  });
+
+  it("checks previews.length === 0 for empty state", () => {
+    expect(sourceCode).toMatch(/previews\.length\s*===\s*0/);
+  });
+
+  it("empty state is separate from error state", () => {
+    // error ? <error box> : previews.length === 0 ? <empty msg> : <list>
+    const errorIndex = sourceCode.indexOf('bg-red-500/10');
+    const emptyIndex = sourceCode.indexOf('No fixes to preview.');
+    expect(errorIndex).toBeGreaterThan(-1);
+    expect(emptyIndex).toBeGreaterThan(-1);
+    // empty state renders after error check
+    expect(emptyIndex).toBeGreaterThan(errorIndex);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 6. Preview card content (items 12.7–12.10)
+// ---------------------------------------------------------------------------
+
+describe("preview card content (12.7–12.10)", () => {
+  it("renders preview text description for each fix (12.7)", () => {
+    // p.preview is shown as the description text
+    expect(sourceCode).toMatch(/\{p\.preview\}/);
+  });
+
+  it("renders files modified list when present (12.8)", () => {
+    // filesModified row is only shown when there are files
+    expect(sourceCode).toMatch(/p\.filesModified\?\.length/);
+    expect(sourceCode).toMatch(/Files:/);
+  });
+
+  it("renders 'Show diff' / 'Hide diff' toggle link when diff exists (12.9)", () => {
+    expect(sourceCode).toMatch(/Show diff/);
+    expect(sourceCode).toMatch(/Hide diff/);
+    // Link is only rendered when p.diff is truthy
+    expect(sourceCode).toMatch(/p\.diff\s*\?/);
+  });
+
+  it("diff viewer uses <pre> with font-mono for monospaced rendering (12.10)", () => {
+    expect(sourceCode).toMatch(/<pre\s[^>]*font-mono/);
+  });
+
+  it("diff toggle is keyed per annotationId via expandedDiffs set", () => {
+    expect(sourceCode).toMatch(/expandedDiffs/);
+    expect(sourceCode).toMatch(/expandedDiffs\.has\(p\.annotationId\)/);
+  });
+});
