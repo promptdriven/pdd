@@ -1502,3 +1502,275 @@ def test_sanitize_architecture_dependencies_no_file_is_noop():
 
     with tempfile.TemporaryDirectory() as tmpdir:
         _sanitize_architecture_dependencies(Path(tmpdir))  # should not raise
+
+
+# --- Tests for issue #566: parse_prompt_tags must ignore tags inside code fences ---
+
+
+def test_parse_tags_ignores_fenced_example_prefers_real_tag():
+    """Tags inside code fences must be ignored; real tag in header is extracted.
+
+    Regression for issue #566: parse_prompt_tags() used to scan the entire file,
+    picking up example tags in code fences as real metadata.
+
+    Fix: only parse content before the first % section marker. Real tags are
+    always declared in the header (before any % section); examples live in the
+    body sections.
+    """
+    content = """<pdd-reason>Real reason for this module</pdd-reason>
+
+% Examples
+
+Here is an example of how to use pdd-reason:
+
+```xml
+<pdd-reason>Example reason shown in docs</pdd-reason>
+```
+"""
+
+    result = parse_prompt_tags(content)
+
+    # The real tag (in header) should be extracted, not the fenced example
+    assert result['reason'] == 'Real reason for this module', (
+        f"Expected 'Real reason for this module' but got '{result['reason']}' — "
+        "parser is extracting example tags from inside code fences"
+    )
+
+
+def test_parse_tags_ignores_all_tag_types_in_fences():
+    """All pdd-* tag types inside code fences must be ignored.
+
+    Regression for issue #566: the actual prompt file
+    agentic_change_step10_architecture_update_LLM.prompt has example
+    <pdd-reason>, <pdd-interface>, and <pdd-dependency> tags inside
+    code fences that get incorrectly extracted.
+    """
+    content = """<pdd-reason>Real module reason</pdd-reason>
+<pdd-interface>{"type": "module", "module": {"functions": []}}</pdd-interface>
+<pdd-dependency>real_dep.prompt</pdd-dependency>
+
+% Examples
+
+Here are examples of how to format the tags in your output:
+
+```xml
+<pdd-reason>The reason for this module's existence</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "example_func", "signature": "()", "returns": "None"}
+    ]
+  }
+}
+</pdd-interface>
+<pdd-dependency>example_dep.prompt</pdd-dependency>
+<pdd-dependency>another_example.prompt</pdd-dependency>
+```
+"""
+
+    result = parse_prompt_tags(content)
+
+    assert result['reason'] == 'Real module reason'
+    assert result['interface'] is not None
+    assert result['interface']['type'] == 'module'
+    # Only the real dependency should be extracted, not the fenced examples
+    assert result['dependencies'] == ['real_dep.prompt'], (
+        f"Expected ['real_dep.prompt'] but got {result['dependencies']} — "
+        "parser is extracting example dependencies from inside code fences"
+    )
+
+
+def test_parse_tags_returns_empty_when_all_tags_in_fences():
+    """When ALL pdd-* tags are inside code fences, parser should return empty results.
+
+    Regression for issue #566: the step10 prompt file has no real top-level tags,
+    only examples inside code fences. The parser should return None/empty for all
+    fields, not extract the fenced examples as real metadata.
+    """
+    content = """
+% This prompt instructs the LLM how to generate architecture tags.
+
+Your output should follow this structure:
+
+```xml
+<pdd-reason>Describe the module's purpose</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "my_func", "signature": "(arg: str)", "returns": "str"}
+    ]
+  }
+}
+</pdd-interface>
+<pdd-dependency>some_module.prompt</pdd-dependency>
+```
+
+Make sure to include all relevant tags.
+"""
+
+    result = parse_prompt_tags(content)
+
+    assert result['reason'] is None, (
+        f"Expected None but got '{result['reason']}' — "
+        "parser extracted a reason from inside a code fence"
+    )
+    assert result['interface'] is None, (
+        "Parser extracted an interface from inside a code fence"
+    )
+    assert result['dependencies'] == [], (
+        f"Expected [] but got {result['dependencies']} — "
+        "parser extracted dependencies from inside a code fence"
+    )
+
+
+def test_parse_tags_ignores_inline_backtick_references():
+    """Inline backtick references in body prose must not be extracted as tags.
+
+    Regression for issue #566: inline backtick references like `<pdd-reason>`
+    in instructional body text get recovered by lxml as actual XML elements with
+    garbled text content, corrupting the extracted metadata.
+
+    Fix: only parse the header (before first % section). Instructional prose with
+    inline backtick references lives in body sections, never in the header.
+    """
+    content = """<pdd-reason>Real reason value</pdd-reason>
+
+% Instructions
+
+Generate a `<pdd-reason>` tag with the module's purpose.
+Also generate `<pdd-interface>` and `<pdd-dependency>` tags.
+"""
+
+    result = parse_prompt_tags(content)
+
+    # Only the real header tag should be extracted, not the backtick references
+    assert result['reason'] == 'Real reason value', (
+        f"Expected 'Real reason value' but got '{result['reason']}' — "
+        "parser is confused by inline backtick references in body"
+    )
+    # Inline backtick references to interface/dependency should not produce results
+    assert result['interface'] is None
+    assert result['dependencies'] == []
+
+
+def test_parse_tags_extracts_real_tags_adjacent_to_fences():
+    """Real tags in the header are extracted even when fenced examples exist in body.
+
+    Ensures the fix doesn't over-strip — real tags declared in the header
+    (before the first % section) must still be extracted correctly, while
+    fenced example tags in body sections are ignored.
+    """
+    content = """<pdd-reason>Reason at top</pdd-reason>
+<pdd-dependency>real_dep.prompt</pdd-dependency>
+
+% Examples
+
+```xml
+<pdd-reason>Fenced example reason</pdd-reason>
+<pdd-dependency>fenced_dep.prompt</pdd-dependency>
+```
+"""
+
+    result = parse_prompt_tags(content)
+
+    assert result['reason'] == 'Reason at top', (
+        f"Expected 'Reason at top' but got '{result['reason']}'"
+    )
+    assert result['dependencies'] == ['real_dep.prompt'], (
+        f"Expected ['real_dep.prompt'] but got {result['dependencies']} — "
+        "parser should only extract real header dependencies, not fenced examples"
+    )
+
+
+def test_parse_tags_real_world_step10_prompt_pattern():
+    """Regression test matching the actual step10 prompt file structure.
+
+    The file agentic_change_step10_architecture_update_LLM.prompt has NO real
+    top-level pdd-* tags — only instructional examples inside code fences.
+    The parser must return empty results for this pattern.
+
+    This directly reproduces the bug reported in issue #566.
+    """
+    content = """% Architecture Update Step
+
+You are updating the architecture.json file for a PDD project.
+
+% Instructions
+
+For each module, generate the following tags:
+
+```xml
+<pdd-reason>Brief description of why this module exists</pdd-reason>
+```
+
+For interfaces, use this format:
+
+```xml
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "parse_prompt_tags", "signature": "(prompt_content: str)", "returns": "Dict[str, Any]"}
+    ]
+  }
+}
+</pdd-interface>
+```
+
+For dependencies, list each one:
+
+```xml
+<pdd-dependency>path_resolution_python.prompt</pdd-dependency>
+<pdd-dependency>construct_paths_python.prompt</pdd-dependency>
+```
+
+% Important: Only include dependencies that are actually used.
+"""
+
+    result = parse_prompt_tags(content)
+
+    # No real tags exist outside code fences — all fields should be empty
+    assert result['reason'] is None, (
+        f"Expected None but got '{result['reason']}' — "
+        "step10 prompt pattern: parser extracted example reason from code fence"
+    )
+    assert result['interface'] is None, (
+        "step10 prompt pattern: parser extracted example interface from code fence"
+    )
+    assert result['dependencies'] == [], (
+        f"Expected [] but got {result['dependencies']} — "
+        "step10 prompt pattern: parser extracted example dependencies from code fences"
+    )
+
+
+def test_parse_tags_ignores_tilde_fenced_tags():
+    """Tags inside tilde-style code fences (~~~) must also be ignored.
+
+    The _extract_fence_spans utility in preprocess.py recognizes both backtick
+    and tilde fences. The fix for parse_prompt_tags should be consistent.
+    """
+    content = """<pdd-reason>Real reason outside tilde fence</pdd-reason>
+
+% Examples
+
+~~~xml
+<pdd-reason>Tilde-fenced example reason</pdd-reason>
+<pdd-dependency>tilde_fenced_dep.prompt</pdd-dependency>
+~~~
+"""
+
+    result = parse_prompt_tags(content)
+
+    assert result['reason'] == 'Real reason outside tilde fence', (
+        f"Expected 'Real reason outside tilde fence' but got '{result['reason']}' — "
+        "parser is extracting tags from inside tilde code fences"
+    )
+    assert result['dependencies'] == [], (
+        f"Expected [] but got {result['dependencies']} — "
+        "parser is extracting dependencies from inside tilde code fences"
+    )

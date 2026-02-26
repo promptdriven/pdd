@@ -69,9 +69,21 @@ def parse_prompt_tags(prompt_content: str) -> Dict[str, Any]:
     }
 
     try:
+        # Only parse the header section (content before the first % section marker).
+        # Real pdd-* tags are always declared before any % section; everything
+        # after is prompt body / instructional examples that must not be treated
+        # as metadata declarations.
+        # Use line scanning instead of split('\n%') so that files whose first
+        # line starts with '%' (no preceding newline) are handled correctly.
+        header_lines = []
+        for line in prompt_content.splitlines(keepends=True):
+            if line.lstrip().startswith('%'):
+                break
+            header_lines.append(line)
+        header = ''.join(header_lines)
+
         # Wrap content in root element for XML parsing
-        # Replace CDATA markers if present to handle JSON with special chars
-        xml_content = f"<root>{prompt_content}</root>"
+        xml_content = f"<root>{header}</root>"
 
         # Parse with lxml (lenient on encoding)
         parser = etree.XMLParser(recover=True)  # Lenient parser
@@ -102,7 +114,7 @@ def parse_prompt_tags(prompt_content: str) -> Dict[str, Any]:
         dep_elems = root.findall('.//pdd-dependency')
         # Track if any dependency tags were present (even if empty)
         # This distinguishes "no tags" (don't update) from "tags removed" (update to empty)
-        result['has_dependency_tags'] = len(dep_elems) > 0 or '<pdd-dependency>' in prompt_content
+        result['has_dependency_tags'] = len(dep_elems) > 0 or '<pdd-dependency>' in header
         result['dependencies'] = [
             dep
             for elem in dep_elems
