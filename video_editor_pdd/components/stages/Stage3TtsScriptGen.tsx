@@ -27,8 +27,11 @@ export default function Stage3TtsScriptGen({ onAdvance }: Stage3TtsScriptGenProp
   const [lastRunTime, setLastRunTime] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [saving, setSaving] = useState<boolean>(false);
+  const [isGenerating, setIsGenerating] = useState<boolean>(false);
 
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
+  const savingRef = useRef<boolean>(false);
+  const pendingSaveRef = useRef<string | null>(null);
 
   const fetchScript = useCallback(async (file: 'main' | 'tts') => {
     try {
@@ -61,8 +64,12 @@ export default function Stage3TtsScriptGen({ onAdvance }: Stage3TtsScriptGenProp
 
   const saveTtsScript = useCallback(
     async (content: string) => {
-      if (saving) return;
+      if (savingRef.current) {
+        pendingSaveRef.current = content;
+        return;
+      }
       try {
+        savingRef.current = true;
         setSaving(true);
         await fetch('/api/project/script?file=tts', {
           method: 'POST',
@@ -71,10 +78,16 @@ export default function Stage3TtsScriptGen({ onAdvance }: Stage3TtsScriptGenProp
         });
         setTtsExists(Boolean(content.trim()));
       } finally {
+        savingRef.current = false;
         setSaving(false);
+        if (pendingSaveRef.current !== null) {
+          const queued = pendingSaveRef.current;
+          pendingSaveRef.current = null;
+          saveTtsScript(queued);
+        }
       }
     },
-    [saving]
+    []
   );
 
   const handleEditorChange = (value: string) => {
@@ -91,14 +104,20 @@ export default function Stage3TtsScriptGen({ onAdvance }: Stage3TtsScriptGenProp
   };
 
   const handleGenerate = async () => {
-    const res = await fetch('/api/pipeline/tts-script/run', { method: 'POST' });
-    if (!res.ok) return;
-    const data = await res.json();
-    if (data?.jobId) {
-      setJobId(data.jobId);
-      const ts = new Date().toISOString();
-      localStorage.setItem(LAST_RUN_KEY, ts);
-      setLastRunTime(ts);
+    if (isGenerating) return;
+    setIsGenerating(true);
+    try {
+      const res = await fetch('/api/pipeline/tts-script/run', { method: 'POST' });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data?.jobId) {
+        setJobId(data.jobId);
+        const ts = new Date().toISOString();
+        localStorage.setItem(LAST_RUN_KEY, ts);
+        setLastRunTime(ts);
+      }
+    } finally {
+      setIsGenerating(false);
     }
   };
 
@@ -149,9 +168,14 @@ export default function Stage3TtsScriptGen({ onAdvance }: Stage3TtsScriptGenProp
       <div className="flex items-center justify-between">
         <button
           onClick={handleGenerate}
-          className="px-4 py-2 rounded bg-blue-600 text-white font-semibold hover:bg-blue-700 transition"
+          disabled={isGenerating}
+          className={`px-4 py-2 rounded font-semibold transition ${
+            isGenerating
+              ? 'bg-gray-700 text-gray-400 cursor-not-allowed'
+              : 'bg-blue-600 text-white hover:bg-blue-700'
+          }`}
         >
-          Generate TTS Script ↺
+          {isGenerating ? 'Generating…' : 'Generate TTS Script ↺'}
         </button>
         <span className="text-xs text-gray-400">
           Last run: {lastRunTime ? new Date(lastRunTime).toLocaleString() : '—'}
@@ -159,7 +183,7 @@ export default function Stage3TtsScriptGen({ onAdvance }: Stage3TtsScriptGenProp
       </div>
 
       {/* SSE Log */}
-      <SseLogPanel jobId={jobId} />
+      <SseLogPanel jobId={jobId} onDone={loadScripts} />
 
       {/* Diff View */}
       <div className="grid grid-cols-2 gap-4">
