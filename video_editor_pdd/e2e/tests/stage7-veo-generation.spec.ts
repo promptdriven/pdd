@@ -45,6 +45,28 @@ test.describe('Stage 7: Veo Generation', () => {
     await expect(page.locator('text=part1_economics').first()).toBeVisible();
   });
 
+  test('frame chain display shows clean clip IDs not raw file paths', async ({ page }) => {
+    // Bug fix: frameChainDeps were returned as file paths like
+    // "outputs/veo/cold_open_last_frame.png" instead of clean clip IDs like "cold_open".
+    // The frame chaining panel should show "cold_open → part1_economics", not the raw path.
+    const frameChainPanel = page.locator('h3', { hasText: 'Frame Chaining' }).locator('..');
+    // Must NOT contain raw file paths
+    await expect(frameChainPanel.locator('text=outputs/veo')).toHaveCount(0);
+    // Must NOT contain .png file references in the chain text
+    const pngText = await frameChainPanel.locator('text=.png').count();
+    expect(pngText).toBe(0);
+  });
+
+  test('reference portrait shows fallback when image fails to load', async ({ page }) => {
+    // Bug fix: when the reference portrait 404s, a broken img icon was shown with no fallback.
+    // After fix, the component replaces the broken img with a fallback placeholder div.
+    // The image at /api/video/outputs/veo/references/alex.png always 404s in test env,
+    // so we expect the fallback element to appear (the img is removed from DOM on error).
+    // Wait for the image error to fire and the fallback to replace the img
+    const fallback = page.locator('[data-testid="ref-portrait-fallback"]');
+    await expect(fallback).toBeVisible({ timeout: 5000 });
+  });
+
   test('displays Generate All button', async ({ page }) => {
     await expect(page.locator('button', { hasText: 'Generate All' })).toBeVisible();
   });
