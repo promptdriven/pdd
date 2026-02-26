@@ -25,7 +25,7 @@ const Subtitles: React.FC = () => {
   );
 
   // Show a rolling window of recent words to prevent text from clipping frame edges
-  const recentWords = visible.slice(-10);
+  const recentWords = visible.slice(-6);
   const text = recentWords.map((w) => w.word).join(" ");
 
   return (
@@ -37,7 +37,7 @@ const Subtitles: React.FC = () => {
         right: 0,
         display: "flex",
         justifyContent: "center",
-        padding: "0 12%",
+        padding: "0 15%",
         boxSizing: "border-box",
       }}
     >
@@ -49,7 +49,7 @@ const Subtitles: React.FC = () => {
           borderRadius: 8,
           fontSize: 28,
           fontFamily: "sans-serif",
-          maxWidth: "80%",
+          maxWidth: "70%",
           textAlign: "center",
           overflowWrap: "break-word",
           wordBreak: "break-word",
