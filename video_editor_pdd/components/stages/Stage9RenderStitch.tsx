@@ -331,8 +331,13 @@ export default function Stage9RenderStitch({ onAdvance }: Stage9RenderStitchProp
                 <td className="px-4 py-2">
                   <button
                     onClick={() => setPreviewSectionId(s.id)}
-                    className="text-blue-600 hover:text-blue-700"
-                    title="Preview"
+                    disabled={s.status === 'missing'}
+                    className={
+                      s.status === 'missing'
+                        ? 'text-slate-600 cursor-not-allowed'
+                        : 'text-blue-600 hover:text-blue-700'
+                    }
+                    title={s.status === 'missing' ? 'Not yet rendered' : 'Preview'}
                   >
                     ▶
                   </button>

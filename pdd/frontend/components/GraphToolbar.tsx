@@ -16,6 +16,7 @@ interface GraphToolbarProps {
   onSyncFromPrompts?: () => void;  // New prop for sync button
   onRearrange?: () => void;
   isRearranging?: boolean;
+  onManageGroups?: () => void;
 }
 
 const GraphToolbar: React.FC<GraphToolbarProps> = ({
@@ -33,6 +34,7 @@ const GraphToolbar: React.FC<GraphToolbarProps> = ({
   onSyncFromPrompts,
   onRearrange,
   isRearranging = false,
+  onManageGroups,
 }) => {
   return (
     <div className="flex items-center gap-2 px-3 py-2 bg-surface-800/80 border-b border-surface-700/50">
@@ -90,6 +92,21 @@ const GraphToolbar: React.FC<GraphToolbarProps> = ({
               <span>Add Module</span>
             </button>
           </Tooltip>
+
+          {/* Manage Groups */}
+          {onManageGroups && (
+            <Tooltip content="Create or edit module groups for graph layout">
+              <button
+                onClick={onManageGroups}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-violet-600 text-white hover:bg-violet-500 transition-colors"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                </svg>
+                <span>Groups</span>
+              </button>
+            </Tooltip>
+          )}
 
           {/* Re-arrange Layout */}
           {onRearrange && (

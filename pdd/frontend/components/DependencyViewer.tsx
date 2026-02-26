@@ -17,6 +17,8 @@ import ReactFlow, {
   EdgeProps,
   BaseEdge,
   getBezierPath,
+  Viewport,
+  useViewport,
 } from 'reactflow';
 import dagre from 'dagre';
 import 'reactflow/dist/style.css';
@@ -25,12 +27,39 @@ import { ArchitectureModule, PromptInfo } from '../api';
 import { ChevronDownIcon, ChevronUpIcon, SparklesIcon, DocumentArrowDownIcon, SpinnerIcon } from './Icon';
 import Tooltip from './Tooltip';
 import ModuleNode, { ModuleNodeData } from './ModuleNode';
+import GroupNode, { GroupNodeData, GROUP_NODE_WIDTH, GROUP_NODE_HEIGHT } from './GroupNode';
 import BatchFilterDropdown from './BatchFilterDropdown';
 import type { Batch } from '../lib/batchUtils';
 import { getBatchForModule } from '../lib/batchUtils';
 
 const NODE_WIDTH = 200;
 const NODE_HEIGHT = 85;
+
+// Pure math helper that mirrors the CSS expression used in compact nodes:
+//   font-size: calc(14px / var(--vp-zoom, 1))
+// React Flow scales the viewport with transform:scale(zoom), so a node-space
+// font of (14/zoom)px always APPEARS as 14px on screen regardless of zoom.
+// No capping — CSS truncate handles overflow at extreme zoom levels.
+export function getCompactFontPx(zoom: number): number {
+  return Math.round(14 / zoom);
+}
+
+// VpZoomSync keeps the CSS custom property --vp-zoom on a target element in
+// sync with the current React Flow viewport zoom. It must be rendered as a
+// direct child of <ReactFlow> so it can access the viewport context via
+// useViewport().
+//
+// Unlike onMove (which only fires on user interaction), useViewport() is
+// reactive to ALL viewport changes — including programmatic ones like fitView
+// on initial load. This ensures compact-node font sizes are correct from the
+// very first frame, not just after the user pans or zooms.
+export const VpZoomSync: React.FC<{ target: HTMLElement | null }> = ({ target }) => {
+  const { zoom } = useViewport();
+  useEffect(() => {
+    target?.style.setProperty('--vp-zoom', String(zoom));
+  }, [zoom, target]);
+  return null;
+};
 
 interface DependencyViewerProps {
   architecture: ArchitectureModule[];
@@ -59,6 +88,10 @@ interface DependencyViewerProps {
   onSyncBatch?: (batch: Batch) => void;
   remainingCountByBatch?: Map<number, number>;
   rearrangeVersion?: number;
+  // Group collapse/expand props
+  expandedGroups?: Set<string>;
+  onToggleGroup?: (groupName: string) => void;
+  onEditGroup?: (groupName: string) => void;
 }
 
 // Determine category based on tags
@@ -100,32 +133,44 @@ const getCategoryColors = (category: 'frontend' | 'backend' | 'shared') => {
 };
 
 // Dagre layout algorithm
+// layoutOnlyEdges: edges added to Dagre for layout but not returned in output (e.g., group→child virtual edges)
 export const getLayoutedElements = (
-  nodes: Node<ModuleNodeData>[],
+  nodes: Node<ModuleNodeData | GroupNodeData>[],
   edges: Edge[],
-  direction: 'TB' | 'LR' = 'TB'
+  direction: 'TB' | 'LR' = 'TB',
+  layoutOnlyEdges: { source: string; target: string }[] = []
 ) => {
   const g = new dagre.graphlib.Graph();
   g.setGraph({ rankdir: direction, nodesep: 80, ranksep: 150, edgesep: 20 });
   g.setDefaultEdgeLabel(() => ({}));
 
   nodes.forEach((node) => {
-    g.setNode(node.id, { width: NODE_WIDTH, height: NODE_HEIGHT });
+    const w = (node.style as any)?.width ?? NODE_WIDTH;
+    const h = (node.style as any)?.height ?? NODE_HEIGHT;
+    g.setNode(node.id, { width: w, height: h });
   });
 
   edges.forEach((edge) => {
     g.setEdge(edge.source, edge.target);
   });
 
+  layoutOnlyEdges.forEach((edge) => {
+    if (g.hasNode(edge.source) && g.hasNode(edge.target)) {
+      g.setEdge(edge.source, edge.target);
+    }
+  });
+
   dagre.layout(g);
 
   const layoutedNodes = nodes.map((node) => {
     const nodeWithPosition = g.node(node.id);
+    const w = (node.style as any)?.width ?? NODE_WIDTH;
+    const h = (node.style as any)?.height ?? NODE_HEIGHT;
     return {
       ...node,
       position: {
-        x: nodeWithPosition.x - NODE_WIDTH / 2,
-        y: nodeWithPosition.y - NODE_HEIGHT / 2,
+        x: nodeWithPosition.x - w / 2,
+        y: nodeWithPosition.y - h / 2,
       },
     };
   });
@@ -181,6 +226,7 @@ const WaypointEdge: React.FC<EdgeProps> = ({
 // Custom node types
 const nodeTypes: NodeTypes = {
   moduleNode: ModuleNode,
+  groupNode: GroupNode,
 };
 
 const edgeTypes = { waypointEdge: WaypointEdge };
@@ -193,7 +239,7 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
   onRunSync,
   onGeneratePrompts,
   isGeneratingPrompts = false,
-  existingPrompts = new Set(),
+  existingPrompts = new Set<string>(),
   promptsInfo = [],
   editMode = false,
   onModuleEdit,
@@ -209,6 +255,9 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
   onSyncBatch,
   remainingCountByBatch = new Map(),
   rearrangeVersion,
+  expandedGroups = new Set(),
+  onToggleGroup,
+  onEditGroup,
 }) => {
   const [isPrdVisible, setIsPrdVisible] = useState(false);
   const [contextMenu, setContextMenu] = useState<{
@@ -216,6 +265,36 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
     y: number;
     edge: Edge;
   } | null>(null);
+
+  // Focus mode: clicking a node dims nodes not in its 1-2 hop neighborhood
+  const [focusedModule, setFocusedModule] = useState<string | null>(null);
+
+  // Compute the 1-hop neighborhood of the focused module (both in and out edges)
+  const focusNeighborhood = useMemo(() => {
+    if (!focusedModule) return null;
+    const neighborhood = new Set<string>();
+    neighborhood.add(focusedModule);
+    // Direct dependencies (1 hop out)
+    const focused = architecture.find(m => m.filename === focusedModule);
+    if (focused) {
+      focused.dependencies.forEach(dep => neighborhood.add(dep));
+    }
+    // Modules that depend on focused (1 hop in)
+    architecture.forEach(m => {
+      if (m.dependencies.includes(focusedModule)) neighborhood.add(m.filename);
+    });
+    return neighborhood;
+  }, [focusedModule, architecture]);
+
+  // Auto-clear focus mode when the focused module's group becomes collapsed
+  // (all visible nodes would appear dimmed otherwise)
+  useEffect(() => {
+    if (!focusedModule) return;
+    const focusedMod = architecture.find(m => m.filename === focusedModule);
+    if (focusedMod?.group && !expandedGroups.has(focusedMod.group)) {
+      setFocusedModule(null);
+    }
+  }, [expandedGroups, focusedModule, architecture]);
 
   // Create a lookup map from module filename to PromptInfo for file tracking
   const promptInfoMap = useMemo(() => {
@@ -228,27 +307,60 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
   }, [promptsInfo]);
 
   // Pre-compute position status for reuse across useMemo and useEffect
+  // Groups always need Dagre (synthetic group nodes have no saved positions)
   const allHavePositions = useMemo(
-    () => architecture.every((m) => m.position),
+    () => !architecture.some(m => m.group) && architecture.every((m) => m.position),
     [architecture]
   );
 
-  // Convert architecture to React Flow nodes and edges
+  // Convert architecture to React Flow nodes and edges, with group support
   const { initialNodes, initialEdges } = useMemo(() => {
-    // Check position scenarios
-    const noneHavePositions = architecture.every((m) => !m.position);
+    // --- Group computation ---
+    const groupMap = new Map<string, ArchitectureModule[]>();
+    for (const m of architecture) {
+      if (m.group) {
+        const existing = groupMap.get(m.group) || [];
+        existing.push(m);
+        groupMap.set(m.group, existing);
+      }
+    }
 
-    // Create initial nodes - positions will be set based on scenario
-    const nodes: Node<ModuleNodeData>[] = architecture.map((m) => {
+    // Modules hidden because their group is collapsed
+    const collapsedGroupChildren = new Set<string>();
+    for (const [gName, children] of groupMap.entries()) {
+      if (!expandedGroups.has(gName)) {
+        children.forEach(m => collapsedGroupChildren.add(m.filename));
+      }
+    }
+
+    // Modules that are visible (not hidden by collapsed groups)
+    const visibleModules = architecture.filter(m => !collapsedGroupChildren.has(m.filename));
+
+    const hasGroups = groupMap.size > 0;
+    const noneHavePositions = visibleModules.every((m) => !m.position);
+
+    // Build O(1) lookup map for group assignments
+    const moduleGroupMap = new Map(architecture.map(m => [m.filename, m.group]));
+
+    // Helper: map a module filename to its effective node ID (group node when collapsed)
+    const getEffectiveId = (filename: string): string => {
+      if (collapsedGroupChildren.has(filename)) {
+        const group = moduleGroupMap.get(filename);
+        if (group) return `__group__${group}`;
+      }
+      return filename;
+    };
+
+    // --- Build module nodes ---
+    const moduleNodes: Node<ModuleNodeData>[] = visibleModules.map((m) => {
       const category = getCategory(m);
       const hasPrompt = existingPrompts.has(m.filename);
       const isHighlighted = highlightedModules.has(m.filename);
-      // Get batch info for this module
+      const isDimmed = focusNeighborhood !== null && !focusNeighborhood.has(m.filename);
       const batch = getBatchForModule(m.filename, batches);
       return {
         id: m.filename,
         type: 'moduleNode',
-        // Temporary position - will be updated by Dagre if needed
         position: m.position || { x: 0, y: 0 },
         data: {
           label: m.filename.replace(/_[A-Za-z]+\.prompt$/, '').replace(/\.prompt$/, ''),
@@ -256,13 +368,18 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
           promptInfo: promptInfoMap.get(m.filename),
           hasPrompt,
           colors: getCategoryColors(category),
-          onClick: onModuleClick,
+          onClick: (mod: ArchitectureModule) => {
+            if (!editMode) {
+              setFocusedModule(prev => prev === mod.filename ? null : mod.filename);
+            }
+            onModuleClick(mod);
+          },
           onRunSync: onRunSync,
           editMode,
           onEdit: onModuleEdit,
           onDelete: onModuleDelete,
           isHighlighted,
-          // Batch info for visual indicator
+          isDimmed,
           batchId: batch?.id,
           batchColor: batch?.color,
           batchName: batch?.name,
@@ -270,14 +387,57 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
       };
     });
 
-    const nodeIds = new Set(architecture.map((m) => m.filename));
-    const edges: Edge[] = architecture.flatMap((m) =>
-      m.dependencies
-        .filter((dep) => nodeIds.has(dep))
-        .map((dep) => ({
-          id: `${dep}->${m.filename}`,
-          source: dep,
-          target: m.filename,
+    // --- Build group nodes ---
+    const groupNodes: Node<GroupNodeData>[] = [];
+    for (const [gName, children] of groupMap.entries()) {
+      const isExpanded = expandedGroups.has(gName);
+      // Group is dimmed if it has no members in focus neighborhood
+      const isDimmedGroup = focusNeighborhood !== null
+        && !children.some(c => focusNeighborhood.has(c.filename));
+      groupNodes.push({
+        id: `__group__${gName}`,
+        type: 'groupNode',
+        zIndex: isExpanded ? 0 : 10,
+        position: { x: 0, y: 0 },
+        style: isExpanded
+          ? { width: GROUP_NODE_WIDTH, height: GROUP_NODE_HEIGHT, opacity: isDimmedGroup ? 0.25 : 1 }
+          : { width: 200, minHeight: 85, opacity: isDimmedGroup ? 0.25 : 1 },
+        data: {
+          groupName: gName,
+          modules: children,
+          isExpanded,
+          onToggle: onToggleGroup || (() => {}),
+          existingPrompts,
+          editMode,
+          onEditGroup,
+        },
+      });
+    }
+
+    const allNodes: Node<ModuleNodeData | GroupNodeData>[] = [...moduleNodes, ...groupNodes];
+
+    // --- Build edges with rerouting for collapsed groups ---
+    const visibleNodeIds = new Set(allNodes.map(n => n.id));
+    const edgeSet = new Set<string>();
+    const edges: Edge[] = [];
+
+    for (const m of architecture) {
+      for (const dep of m.dependencies) {
+        const targetId = getEffectiveId(m.filename);
+        const sourceId = getEffectiveId(dep);
+
+        if (targetId === sourceId) continue; // skip self-edges after rerouting
+        if (!visibleNodeIds.has(sourceId) || !visibleNodeIds.has(targetId)) continue;
+
+        const edgeId = `${sourceId}->${targetId}`;
+        if (edgeSet.has(edgeId)) continue;
+        edgeSet.add(edgeId);
+
+        const isGroupEdge = sourceId.startsWith('__group__') || targetId.startsWith('__group__');
+        edges.push({
+          id: edgeId,
+          source: sourceId,
+          target: targetId,
           type: 'waypointEdge',
           style: { stroke: '#60a5fa', strokeWidth: 2 },
           markerEnd: {
@@ -287,46 +447,70 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
             height: 20,
           },
           animated: false,
-          selectable: editMode,
-          focusable: editMode,
-          deletable: editMode,
-          interactionWidth: 20, // Makes edge easier to click
-        }))
-    );
+          deletable: editMode && !isGroupEdge,
+          interactionWidth: 20,
+        } as Edge);
+      }
+    }
 
-    // Three-way position handling:
-    // 1. No modules have positions → full Dagre layout
-    // 2. All modules have positions → use saved positions (already set above)
-    // 3. Some modules have positions → hybrid: Dagre for all, then overlay saved positions
-    if (noneHavePositions) {
-      // Full Dagre layout for all nodes
-      const layouted = getLayoutedElements(nodes, edges, 'TB');
-      return { initialNodes: layouted.nodes, initialEdges: layouted.edges };
-    } else if (!allHavePositions) {
-      // Hybrid approach: Run Dagre to get positions for all nodes,
-      // then override with saved positions where available
-      const layouted = getLayoutedElements(nodes, edges, 'TB');
+    // --- Virtual layout-only edges (expanded group header → children) ---
+    const layoutOnlyEdges: { source: string; target: string }[] = [];
+    for (const [gName, children] of groupMap.entries()) {
+      if (expandedGroups.has(gName)) {
+        children.forEach(child => {
+          if (visibleModules.some(m => m.filename === child.filename)) {
+            layoutOnlyEdges.push({ source: `__group__${gName}`, target: child.filename });
+          }
+        });
+      }
+    }
+
+    // --- Position handling ---
+    // When no groups and all modules have saved positions → skip Dagre
+    if (!hasGroups && !noneHavePositions && allHavePositions) {
+      return { initialNodes: allNodes, initialEdges: edges };
+    }
+
+    // Run Dagre layout
+    const layouted = getLayoutedElements(allNodes, edges, 'TB', layoutOnlyEdges);
+
+    if (!noneHavePositions) {
+      // Hybrid: use Dagre positions but override module nodes with their saved positions
       const savedPositions = new Map(
-        architecture
+        visibleModules
           .filter((m) => m.position)
           .map((m) => [m.filename, m.position!])
       );
       const hybridNodes = layouted.nodes.map((node) => {
         const savedPos = savedPositions.get(node.id);
-        if (savedPos) {
-          return { ...node, position: savedPos };
-        }
+        if (savedPos) return { ...node, position: savedPos };
         return node;
       });
       return { initialNodes: hybridNodes, initialEdges: layouted.edges };
     }
 
-    // All modules have positions - use them as-is
-    return { initialNodes: nodes, initialEdges: edges };
-  }, [architecture, existingPrompts, promptInfoMap, onModuleClick, onRunSync, editMode, onModuleEdit, onModuleDelete, highlightedModules, batches]);
+    return { initialNodes: layouted.nodes, initialEdges: layouted.edges };
+  }, [
+    architecture, existingPrompts, promptInfoMap, onModuleClick, onRunSync,
+    editMode, onModuleEdit, onModuleDelete, highlightedModules, batches,
+    expandedGroups, onToggleGroup, onEditGroup, focusNeighborhood, allHavePositions,
+  ]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
+
+  // Track the graph wrapper div via useState (not useRef) so that DependencyViewer
+  // re-renders after the div mounts. This guarantees VpZoomSync receives a non-null
+  // target before React Flow's fitView fires its useEffect, ensuring --vp-zoom is
+  // set correctly on initial load (not just after user pan/zoom).
+  const [graphContainer, setGraphContainer] = useState<HTMLDivElement | null>(null);
+
+  // Belt-and-suspenders: also update --vp-zoom on every user pan/zoom via onMove.
+  // VpZoomSync (inside <ReactFlow>) handles fitView and programmatic changes;
+  // onMove catches any edge cases where the store subscription may lag.
+  const handleMove = useCallback((_: MouseEvent | TouchEvent | null, vp: Viewport) => {
+    graphContainer?.style.setProperty('--vp-zoom', String(vp.zoom));
+  }, [graphContainer]);
 
   // Track previous editMode to detect when entering edit mode
   const prevEditModeRef = useRef(editMode);
@@ -342,7 +526,10 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
     if (wasNotEditing && nowEditing && onPositionsChange && nodes.length > 0) {
       const positions = new Map<string, { x: number; y: number }>();
       nodes.forEach((n) => {
-        positions.set(n.id, { x: n.position.x, y: n.position.y });
+        // Exclude synthetic group nodes from position saving
+        if (!n.id.startsWith('__group__')) {
+          positions.set(n.id, { x: n.position.x, y: n.position.y });
+        }
       });
       onPositionsChange(positions);
     }
@@ -365,7 +552,10 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
       initialPositionsCalledRef.current = true;
       const positions = new Map<string, { x: number; y: number }>();
       nodes.forEach((n) => {
-        positions.set(n.id, { x: n.position.x, y: n.position.y });
+        // Only report positions for real module nodes, not synthetic group nodes
+        if (!n.id.startsWith('__group__')) {
+          positions.set(n.id, { x: n.position.x, y: n.position.y });
+        }
       });
       onInitialPositionsCalculated(positions);
     }
@@ -376,11 +566,13 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
     const layouted = getLayoutedElements(nodes, edges, 'TB');
     setNodes(layouted.nodes);
     setEdges(layouted.edges);
-    // Persist the new Dagre positions if in edit mode
+    // Persist the new Dagre positions if in edit mode (module nodes only)
     if (editMode && onPositionsChange) {
       const positions = new Map<string, { x: number; y: number }>();
       layouted.nodes.forEach((n) => {
-        positions.set(n.id, { x: n.position.x, y: n.position.y });
+        if (!n.id.startsWith('__group__')) {
+          positions.set(n.id, { x: n.position.x, y: n.position.y });
+        }
       });
       onPositionsChange(positions);
     }
@@ -390,6 +582,8 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
   const handleConnect = useCallback(
     (connection: Connection) => {
       if (!editMode || !connection.source || !connection.target) return;
+      // Skip connections involving group nodes
+      if (connection.source.startsWith('__group__') || connection.target.startsWith('__group__')) return;
       // In our architecture: source = dependency (what is being used)
       // target = the module that depends on source
       // So we add source to target's dependencies
@@ -417,11 +611,12 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
     [editMode, onDependencyAdd, setEdges]
   );
 
-  // Handle edge deletion (dependency removed)
+  // Handle edge deletion (dependency removed) — skip group-node edges
   const handleEdgesDelete = useCallback(
     (deletedEdges: Edge[]) => {
       if (!editMode) return;
       for (const edge of deletedEdges) {
+        if (edge.source.startsWith('__group__') || edge.target.startsWith('__group__')) continue;
         // edge.source = dependency, edge.target = dependent module
         onDependencyRemove?.(edge.target, edge.source);
       }
@@ -480,17 +675,20 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
     setContextMenu(null);
   }, [contextMenu, onDependencyRemove, setEdges]);
 
-  // Close context menu when clicking elsewhere
+  // Close context menu and clear focus mode when clicking pane background
   const handlePaneClick = useCallback(() => {
     setContextMenu(null);
+    setFocusedModule(null);
   }, []);
 
-  // Handle node deletion (module removed)
+  // Handle node deletion (module removed) — skip synthetic group nodes
   const handleNodesDelete = useCallback(
     (deletedNodes: Node[]) => {
       if (!editMode) return;
       for (const node of deletedNodes) {
-        onModuleDelete?.(node.id);
+        if (!node.id.startsWith('__group__')) {
+          onModuleDelete?.(node.id);
+        }
       }
     },
     [editMode, onModuleDelete]
@@ -500,10 +698,12 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
   const handleNodeDragStop = useCallback(
     (_event: React.MouseEvent, _node: Node, allNodes: Node[]) => {
       if (!editMode) return;
-      // Send all node positions to parent
+      // Send all node positions to parent, excluding synthetic group nodes
       const positions = new Map<string, { x: number; y: number }>();
       allNodes.forEach((n) => {
-        positions.set(n.id, { x: n.position.x, y: n.position.y });
+        if (!n.id.startsWith('__group__')) {
+          positions.set(n.id, { x: n.position.x, y: n.position.y });
+        }
       });
       onPositionsChange?.(positions);
     },
@@ -516,13 +716,17 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
   // Track previous rearrangeVersion to detect when a re-arrange has completed
   const prevRearrangeVersionRef = useRef(rearrangeVersion ?? 0);
 
+  // Track previous expandedGroups to detect group expand/collapse changes
+  const prevExpandedGroupsRef = useRef(expandedGroups);
+
   // Helper to check if architecture structure changed (ignoring positions)
   const getStructuralFingerprint = useCallback((modules: ArchitectureModule[]) => {
     return modules.map(m => ({
       filename: m.filename,
       dependencies: [...m.dependencies].sort().join(','),
+      group: m.group || '',
     })).sort((a, b) => a.filename.localeCompare(b.filename))
-      .map(m => `${m.filename}:${m.dependencies}`).join('|');
+      .map(m => `${m.filename}:${m.dependencies}:${m.group}`).join('|');
   }, []);
 
   // Update nodes/edges when architecture STRUCTURE changes (not just positions)
@@ -538,15 +742,19 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
 
     prevArchitectureRef.current = architecture;
 
+    const expandedGroupsChanged = prevExpandedGroupsRef.current !== expandedGroups;
+    prevExpandedGroupsRef.current = expandedGroups;
+
     // Only sync if:
     // 1) Structure changed (modules added/removed, dependencies changed)
     // 2) Not in edit mode (initial load or exiting edit mode)
     // 3) Re-arrange completed (positions updated by agent)
-    if (structureChanged || !editMode || rearrangeVersionChanged) {
+    // 4) Group expand/collapse state changed
+    if (structureChanged || !editMode || rearrangeVersionChanged || expandedGroupsChanged) {
       setNodes(initialNodes);
       setEdges(initialEdges);
     }
-  }, [initialNodes, initialEdges, setNodes, setEdges, editMode, architecture, getStructuralFingerprint, rearrangeVersion]);
+  }, [initialNodes, initialEdges, setNodes, setEdges, editMode, architecture, getStructuralFingerprint, rearrangeVersion, expandedGroups]);
 
   return (
     <div className="glass rounded-xl border border-surface-700/50 overflow-hidden h-full flex flex-col">
@@ -560,7 +768,10 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
             <h3 className="font-semibold text-sm text-white">
               {appName || 'Product Requirements Document'}
             </h3>
-            <p className="text-xs text-surface-400">{architecture.length} modules</p>
+            <p className="text-xs text-surface-400">
+              {architecture.length} modules
+              {focusedModule && <span className="text-violet-400 ml-2">· focus: {focusedModule.replace(/\.prompt$/, '')}</span>}
+            </p>
           </div>
           <div className="flex items-center gap-2 flex-shrink-0 ml-4">
             <Tooltip content={isPrdVisible ? 'Collapse' : 'Expand'}>
@@ -588,7 +799,12 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
       </div>
 
       {/* React Flow Graph - edges render behind nodes via CSS */}
-      <div className="flex-1 min-h-0 [&_.react-flow__edges]:z-0 [&_.react-flow__nodes]:z-10">
+      {/* --vp-zoom is written here; VpZoomSync inside <ReactFlow> keeps it current */}
+      <div
+        ref={setGraphContainer}
+        className="flex-1 min-h-0 [&_.react-flow__edges]:z-0 [&_.react-flow__nodes]:z-10"
+        style={{ '--vp-zoom': '1' } as React.CSSProperties}
+      >
         <ReactFlow
           nodes={nodes}
           edges={edges}
@@ -597,6 +813,7 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
           onConnect={editMode ? handleConnect : undefined}
           onEdgeClick={editMode ? handleEdgeClick : undefined}
           onEdgeContextMenu={editMode ? handleEdgeContextMenu : undefined}
+          onMove={handleMove}
           onPaneClick={handlePaneClick}
           onNodeDragStop={editMode ? handleNodeDragStop : undefined}
           onEdgesDelete={editMode ? handleEdgesDelete : undefined}
@@ -626,6 +843,10 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
           selectNodesOnDrag={false}
           proOptions={{ hideAttribution: true }}
         >
+          {/* VpZoomSync lives inside <ReactFlow> so it can access useViewport().
+              It fires for ALL viewport changes (including fitView on initial load),
+              unlike onMove which only fires on user interaction. */}
+          <VpZoomSync target={graphContainer} />
           <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#374151" />
           <Controls
             className="!bg-surface-800 !border-surface-700 !rounded-lg [&>button]:!bg-surface-700 [&>button]:!border-surface-600 [&>button]:!text-surface-300 [&>button:hover]:!bg-surface-600"
@@ -633,10 +854,11 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
           <MiniMap
             className="!bg-surface-800 !border-surface-700 !rounded-lg"
             nodeColor={(node) => {
+              if (node.type === 'groupNode') return '#8b5cf6';
               const data = node.data as ModuleNodeData;
               if (data.hasPrompt) return '#10b981';
-              if (data.colors.bg.includes('orange')) return '#f97316';
-              if (data.colors.bg.includes('blue')) return '#3b82f6';
+              if (data.colors?.bg?.includes('orange')) return '#f97316';
+              if (data.colors?.bg?.includes('blue')) return '#3b82f6';
               return '#22c55e';
             }}
             maskColor="rgba(0, 0, 0, 0.6)"
@@ -726,6 +948,19 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
                       {batches.length > 4 && <span className="text-[8px] text-surface-500">...</span>}
                     </div>
                     <span className="text-xs text-surface-300">Batch groups</span>
+                  </div>
+                )}
+                {architecture.some(m => m.group) && (
+                  <div className="flex items-center gap-2 pt-1 border-t border-surface-700/50 mt-1">
+                    <div className="w-3 h-3 rounded bg-violet-500/40 border border-violet-500/50" />
+                    <span className="text-xs text-surface-300">Group (click to collapse)</span>
+                  </div>
+                )}
+                {!editMode && (
+                  <div className="pt-1 border-t border-surface-700/50 mt-1">
+                    <p className="text-[10px] text-surface-400 leading-relaxed">
+                      <span className="text-violet-400">Click node</span> to focus its dependencies
+                    </p>
                   </div>
                 )}
                 {editMode && (

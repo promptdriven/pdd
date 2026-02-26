@@ -337,6 +337,8 @@ export interface ArchitectureModule {
     x: number;
     y: number;
   };
+  // Optional group name for graph layout hierarchy
+  group?: string;
 }
 
 export interface ArchitectureCheckResult {

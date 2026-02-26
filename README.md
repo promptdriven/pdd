@@ -517,40 +517,63 @@ Here is a brief overview of the main commands provided by PDD. Click the command
 The following diagram shows how PDD commands interact:
 
 ```mermaid
-flowchart TB
-    subgraph entry["Entry Points"]
-        connect["pdd connect<br/>(Web UI - Recommended)"]
+graph TB
+    subgraph Entry Points
+        connect["pdd connect (Web UI - Recommended)"]
         cli["Direct CLI"]
+        ghapp["GitHub App"]
     end
 
-    subgraph issue["Issue-Driven Commands"]
-        change["pdd change &lt;url&gt;"]
-        bug["pdd bug &lt;url&gt;"]
-        fix_url["pdd fix &lt;url&gt;"]
-        test_url["pdd test &lt;url&gt;"]
-        checkup["pdd checkup &lt;url&gt;"]
-        sync_url["pdd sync &lt;url&gt;"]
+    gen_url["pdd generate &lt;url&gt;"]
+
+    subgraph sync workflow
+        sync["pdd sync"]
+        s_deps["auto-deps"]
+        s_gen["generate"]
+        s_example["example"]
+        s_crash["crash"]
+        s_verify["verify"]
+        s_test["test"]
+        s_fix["fix"]
+        s_update["update"]
     end
 
-    sync["pdd sync"]
+    checkup["pdd checkup &lt;url&gt;"]
+    test_url["pdd test &lt;url&gt;"]
+    bug_url["pdd bug &lt;url&gt;"]
+    fix_url["pdd fix &lt;url&gt;"]
+    change["pdd change &lt;url&gt;"]
+    sync_url["pdd sync &lt;url&gt;"]
 
-    subgraph sync_flow["sync workflow"]
-        direction LR
-        generate["generate"] --> test["test"] --> fix["fix"] --> update["update"]
-    end
-
-    connect --> issue
-    connect --> sync
-    cli --> issue
-    cli --> sync
-
-    sync --> sync_flow
+    connect --> gen_url
+    cli --> gen_url
+    ghapp --> gen_url
+    gen_url --> sync
+    sync --> s_deps
+    s_deps --> s_gen
+    s_gen --> s_example
+    s_example --> s_crash
+    s_crash --> s_verify
+    s_verify --> s_test
+    s_test --> s_fix
+    s_fix --> s_update
+    sync --> checkup
+    checkup --> test_url
+    checkup --> bug_url
+    checkup --> change
+    test_url --> fix_url
+    bug_url --> fix_url
+    change --> sync_url
+    sync_url -.-> sync
 ```
 
 **Key concepts:**
-- **Entry points**: Use `pdd connect` (web UI) or run commands directly via CLI
-- **Issue-driven**: `change`, `bug`, `fix <url>`, `checkup`, `sync <url>` automate GitHub issue workflows
-- **`pdd sync`**: Orchestrates generate → test → fix → update for prompt-based development (also accepts issue URLs for multi-module sync)
+- **Entry points**: `pdd connect` (web UI), direct CLI, or the GitHub App
+- **Start**: `pdd generate <url>` scaffolds architecture, prompts, and `.pddrc` from a PRD GitHub issue
+- **Core loop**: `pdd sync` runs the full auto-deps → generate → example → crash → verify → test → fix → update cycle for each module
+- **Health check**: `pdd checkup <url>` identifies what needs attention next
+- **Defect path**: `test <url>` or `bug <url>` surfaces failing tests → `fix <url>` resolves them
+- **Feature path**: `change <url>` implements the feature → `sync <url>` re-runs sync across affected modules
 
 ### Getting Started
 - **[`connect`](#18-connect)**: **[RECOMMENDED]** Launch web interface for visual PDD interaction

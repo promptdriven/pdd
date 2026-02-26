@@ -1,5 +1,5 @@
 import React, { memo } from 'react';
-import { Handle, Position, NodeProps } from 'reactflow';
+import { Handle, Position, NodeProps, useViewport } from 'reactflow';
 import { ArchitectureModule, PromptInfo } from '../api';
 import Tooltip from './Tooltip';
 
@@ -21,17 +21,21 @@ export interface ModuleNodeData {
   onEdit?: (module: ArchitectureModule) => void;
   onDelete?: (filename: string) => void;
   isHighlighted?: boolean;  // For error highlighting (e.g., circular dependencies)
+  isDimmed?: boolean;       // For focus mode (dims non-neighborhood nodes)
   // Batch (connected component) info
   batchId?: number;
   batchColor?: string;
   batchName?: string;
 }
 
+
 const ModuleNode: React.FC<NodeProps<ModuleNodeData>> = ({ data, selected, xPos, yPos }) => {
-  const { label, module, promptInfo, hasPrompt, colors, onClick, onRunSync, editMode, onEdit, isHighlighted } = data;
+  const { label, module, promptInfo, hasPrompt, colors, onClick, onRunSync, editMode, onEdit, isHighlighted, isDimmed } = data;
   const hasCode = !!promptInfo?.code;
   const hasTest = !!promptInfo?.test;
   const hasExample = !!promptInfo?.example;
+  const { zoom } = useViewport();
+  const isCompact = zoom < 0.5;
 
   const handleClick = () => {
     if (onClick) {
@@ -52,6 +56,34 @@ const ModuleNode: React.FC<NodeProps<ModuleNodeData>> = ({ data, selected, xPos,
       onRunSync(module);
     }
   };
+
+  if (isCompact) {
+    return (
+      <>
+        <Handle type="target" position={Position.Top} className="!bg-blue-400 !w-1.5 !h-1.5" />
+        <div
+          onClick={handleClick}
+          className={`
+            px-2 py-1 rounded-lg border cursor-pointer transition-all duration-200
+            ${colors.bg} ${colors.border}
+            ${isDimmed ? 'opacity-20' : 'opacity-90'}
+          `}
+          style={{ width: 200, minHeight: 28 }}
+        >
+          {/* calc(14px / var(--vp-zoom, 1)) keeps apparent font size at ~14px on
+              screen regardless of viewport zoom. --vp-zoom is written by the parent
+              DependencyViewer on every onMove event — no React re-render needed. */}
+          <p
+            className="font-medium text-white truncate"
+            style={{ fontSize: 'calc(14px / var(--vp-zoom, 1))' }}
+          >
+            {label}
+          </p>
+        </div>
+        <Handle type="source" position={Position.Bottom} className="!bg-blue-400 !w-1.5 !h-1.5" />
+      </>
+    );
+  }
 
   return (
     <>
@@ -92,7 +124,7 @@ const ModuleNode: React.FC<NodeProps<ModuleNodeData>> = ({ data, selected, xPos,
             ${isHighlighted ? 'ring-2 ring-red-500 animate-pulse' : ''}
             backdrop-blur-sm
           `}
-          style={{ width: 200, minHeight: 85, opacity: 0.95 }}
+          style={{ width: 200, minHeight: 85, opacity: isDimmed ? 0.25 : 0.95, transition: 'opacity 0.2s' }}
         >
           {/* Batch color stripe indicator */}
           {data.batchColor && (

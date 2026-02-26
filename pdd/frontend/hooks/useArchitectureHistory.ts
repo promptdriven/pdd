@@ -17,6 +17,7 @@ interface UseArchitectureHistoryReturn {
   // Module operations
   addModule: (module: ArchitectureModule) => void;
   updateModule: (originalFilename: string, updatedModule: ArchitectureModule) => void;
+  batchUpdateModules: (updates: ArchitectureModule[]) => void;
   deleteModule: (filename: string) => void;
 
   // Dependency operations
@@ -88,6 +89,16 @@ export function useArchitectureHistory(
         }
         return m;
       });
+      pushState(newModules);
+    },
+    [state.present, pushState]
+  );
+
+  // Batch update multiple modules in a single history entry (e.g., for group assignment)
+  const batchUpdateModules = useCallback(
+    (updates: ArchitectureModule[]) => {
+      const updateMap = new Map(updates.map(m => [m.filename, m]));
+      const newModules = state.present.map(m => updateMap.get(m.filename) || m);
       pushState(newModules);
     },
     [state.present, pushState]
@@ -213,6 +224,7 @@ export function useArchitectureHistory(
     hasUnsavedChanges,
     addModule,
     updateModule,
+    batchUpdateModules,
     deleteModule,
     addDependency,
     removeDependency,
