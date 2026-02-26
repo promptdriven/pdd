@@ -1,6 +1,6 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { spawn } from "child_process";
-import { registerExecutor, startJobInBackground } from "@/lib/jobs";
+import { registerExecutor, runPipelineStage } from "@/lib/jobs";
 import { loadProject } from "@/lib/project";
 import type { SseSend } from "@/lib/types";
 

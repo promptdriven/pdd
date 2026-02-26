@@ -10,7 +10,7 @@ import type { Annotation } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
-type RouteParams = { params: { id: string } };
+type RouteParams = { params: Promise<{ id: string }> };
 
 function buildRemotionPrompt(annotation: Annotation): string {
   const analysisJson = annotation.analysis ? JSON.stringify(annotation.analysis, null, 2) : "none";
@@ -40,7 +40,7 @@ Apply the fix NOW — do not just describe it. Edit the actual file(s).
 }
 
 export async function POST(_request: Request, { params }: RouteParams) {
-  const sectionId = params.id;
+  const { id: sectionId } = await params;
   const db = getDb();
 
   try {

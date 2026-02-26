@@ -5,7 +5,7 @@ import type { Annotation, AnnotationAnalysis } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
-type RouteParams = { params: { id: string } };
+type RouteParams = { params: Promise<{ id: string }> };
 
 interface FixPreview {
   annotationId: string;
@@ -43,7 +43,7 @@ Instructions:
 }
 
 export async function POST(request: Request, { params }: RouteParams) {
-  const sectionId = params.id;
+  const { id: sectionId } = await params;
   const db = getDb();
 
   try {

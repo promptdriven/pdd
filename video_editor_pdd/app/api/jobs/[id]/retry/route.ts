@@ -9,10 +9,11 @@ export const dynamic = "force-dynamic";
  */
 export async function POST(
   _request: Request,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ): Promise<NextResponse> {
   try {
-    const job = getJob(params.id);
+    const { id } = await params;
+    const job = getJob(id);
 
     if (!job) {
       return NextResponse.json({ error: "Job not found" }, { status: 404 });
@@ -25,7 +26,7 @@ export async function POST(
       );
     }
 
-    const newJobId = await retryJob(params.id);
+    const newJobId = await retryJob(id);
 
     return NextResponse.json({ jobId: newJobId }, { status: 200 });
   } catch (error) {

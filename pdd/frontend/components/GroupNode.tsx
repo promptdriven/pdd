@@ -3,7 +3,7 @@ import { Handle, Position, NodeProps } from 'reactflow';
 import { ArchitectureModule } from '../api';
 
 export const GROUP_NODE_WIDTH = 220;
-export const GROUP_NODE_HEIGHT = 40;
+export const GROUP_NODE_HEIGHT = 56;
 
 export interface GroupNodeData {
   groupName: string;
@@ -34,26 +34,26 @@ const GroupNode: React.FC<NodeProps<GroupNodeData>> = ({ data }) => {
       <>
         <Handle type="target" position={Position.Top} className="!bg-violet-400 !w-2 !h-2" />
         <div
-          className="flex items-center gap-2 px-3 rounded-lg border border-violet-500/60 bg-violet-900/40 backdrop-blur-sm group"
+          className="flex items-center gap-2 px-3 rounded-xl border-2 border-violet-400/80 bg-violet-800/70 backdrop-blur-sm shadow-lg shadow-violet-900/40 group"
           style={{ width: GROUP_NODE_WIDTH, height: GROUP_NODE_HEIGHT }}
         >
           <button
             onClick={handleToggle}
-            className="p-0.5 hover:bg-violet-700/50 rounded text-violet-400 hover:text-violet-200 transition-colors flex-shrink-0"
+            className="flex items-center gap-1 px-2 py-1 rounded-md bg-violet-600/60 hover:bg-violet-500/80 border border-violet-400/50 text-violet-200 hover:text-white transition-colors flex-shrink-0"
             title="Collapse group"
           >
             <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 15l7-7 7 7" />
             </svg>
+            <span className="text-[10px] font-medium leading-none">Collapse</span>
           </button>
-          <span className="text-xs font-semibold text-violet-300 uppercase tracking-wider truncate flex-1">
+          <span className="text-xs font-bold text-violet-200 uppercase tracking-wider truncate flex-1">
             {groupName}
           </span>
-          <span className="text-[10px] text-violet-500 flex-shrink-0">{modules.length}m</span>
           {editMode && onEditGroup && (
             <button
               onClick={handleEdit}
-              className="p-0.5 hover:bg-violet-700/50 rounded text-violet-500 hover:text-violet-300 transition-colors flex-shrink-0 opacity-0 group-hover:opacity-100"
+              className="p-0.5 hover:bg-violet-700/50 rounded text-violet-400 hover:text-violet-200 transition-colors flex-shrink-0 opacity-0 group-hover:opacity-100"
               title="Edit group"
             >
               <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">

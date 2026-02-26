@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import path from "path";
 import fs from "fs/promises";
+import { randomUUID } from "crypto";
 
-import { registerExecutor, startJobInBackground } from "@/lib/jobs";
-import { renderSection, getSectionDuration } from "@/lib/render";
+import { registerExecutor, runPipelineStage } from "@/lib/jobs";
+import { renderSection, getSectionDuration, stitchFullVideo } from "@/lib/render";
 import { loadProject, saveProject } from "@/lib/project";
 import type { RenderProgress, SseSend } from "@/lib/types";
 
@@ -106,24 +107,65 @@ registerExecutor("render", (params, send) => {
 });
 
 /**
- * POST /api/pipeline/render/run
- * Creates a render job and returns { jobId } immediately as JSON.
- * The client should open GET /api/pipeline/render/stream?jobId=... for SSE progress.
+ * Simple SSE stream helper
  */
-export async function POST(request: NextRequest): Promise<NextResponse> {
-  try {
-    const body = await request.json().catch(() => ({}));
-    const sections = Array.isArray(body.sections)
-      ? (body.sections as string[])
-      : undefined;
+function createSseStream() {
+  const encoder = new TextEncoder();
+  let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
 
-    const jobId = startJobInBackground("render", { sections });
-    return NextResponse.json({ jobId });
-  } catch (err) {
-    console.error("Render run failed:", err);
-    const message = err instanceof Error ? err.message : "Unknown error";
-    return NextResponse.json({ error: message }, { status: 500 });
-  }
+  const stream = new ReadableStream<Uint8Array>({
+    start(c) {
+      controller = c;
+    },
+  });
+
+  const send = (data: object) => {
+    if (!controller) return;
+    controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+  };
+
+  const done = () => {
+    if (!controller) return;
+    try { controller.close(); } catch { /* already closed */ }
+  };
+
+  const error = (message: string) => {
+    send({ type: "error", message });
+    done();
+  };
+
+  return { stream, send, done, error };
+}
+
+/**
+ * POST /api/pipeline/render/run
+ * Streams render progress via SSE. Returns { jobId } event when complete.
+ */
+export async function POST(request: NextRequest): Promise<Response> {
+  const body = await request.json().catch(() => ({}));
+  const sections = Array.isArray(body.sections)
+    ? (body.sections as string[])
+    : undefined;
+
+  const { stream, send, done, error } = createSseStream();
+
+  (async () => {
+    try {
+      const jobId = await runPipelineStage("render", { sections }, send);
+      send({ jobId });
+      done();
+    } catch (err) {
+      error(err instanceof Error ? err.message : "Unknown error");
+    }
+  })();
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    },
+  });
 }
 
 /**

@@ -21,11 +21,11 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
            WHERE sectionId = ?
            ORDER BY timestamp ASC`
         )
-        .all(sectionId);
+        .all(sectionId) as Array<Record<string, any>>;
     } else {
       rows = db
         .prepare(`SELECT * FROM annotations ORDER BY timestamp ASC`)
-        .all();
+        .all() as Array<Record<string, any>>;
     }
 
     const annotations: Annotation[] = rows.map((row) => ({

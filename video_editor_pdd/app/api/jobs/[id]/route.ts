@@ -10,10 +10,11 @@ export const dynamic = "force-dynamic";
  */
 export async function GET(
   _request: Request,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ): Promise<NextResponse> {
   try {
-    const job = getJob(params.id);
+    const { id } = await params;
+    const job = getJob(id);
 
     if (!job) {
       return NextResponse.json({ error: "Job not found" }, { status: 404 });

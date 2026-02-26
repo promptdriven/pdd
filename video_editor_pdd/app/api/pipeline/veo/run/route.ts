@@ -177,7 +177,7 @@ function mtimeMs(filePath: string): number | null {
 export async function GET_clips(): Promise<Response> {
   const config = loadProject();
   const sections = config.sections;
-  const aspectRatio = config.veo.aspectRatio;
+  const aspectRatio = config.veo.defaultAspectRatio;
 
   const clips: VeoClip[] = sections.map((section, idx) => {
     const clipId = section.id;

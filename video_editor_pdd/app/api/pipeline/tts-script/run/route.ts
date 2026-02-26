@@ -55,9 +55,10 @@ export async function POST(_request: Request): Promise<Response> {
       // Wrap the send callback to capture the jobId from the first log event
       // and send a "started" event immediately, before the job finishes.
       let jobId: string | null = null;
-      const wrappedSend = (data: Record<string, unknown>) => {
-        if (!jobId && data.jobId) {
-          jobId = data.jobId as string;
+      const wrappedSend = (data: object) => {
+        const rec = data as Record<string, unknown>;
+        if (!jobId && rec.jobId) {
+          jobId = rec.jobId as string;
           send({ type: "started", jobId });
         }
         send(data);
