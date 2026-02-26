@@ -1,36 +1,28 @@
-You are implementing `app/api/annotations/[id]/route.ts`, the GET single annotation API route for the video production pipeline editor.
+Implement `app/api/annotations/[id]/route.ts` as the per-annotation CRUD API route.
 
 Requirements
-1. `GET /api/annotations/[id]` — returns a single `Annotation` record from the DB by its `id`.
-   - Returns the full `Annotation` shape including `analysis` (parsed from JSON text column).
-   - Returns 404 with `{ error: 'Annotation not found' }` if the ID does not exist.
-2. No authentication required.
-3. Export `export const dynamic = 'force-dynamic'`.
+1. Export `dynamic = "force-dynamic"`.
+2. Implement `GET`, `PUT`, and `DELETE` handlers using Next.js App Router dynamic params as `Promise<{ id: string }>`; `await params` in each handler.
+3. `GET /api/annotations/[id]`:
+   - Read one row from `annotations` by `id`.
+   - Return 404 `{ error: "Annotation not found" }` when missing.
+   - Return the annotation object directly (not wrapped), mapping DB row fields to `Annotation`:
+     `id`, `sectionId`, `timestamp`, `text`, `createdAt`, nullable fields normalized with `?? null`, `analysis` parsed from `row.analysis` JSON string (or `null`), `resolved` converted via `Boolean(row.resolved)`, and `inputMethod` defaulting to `"typed"`.
+4. `PUT /api/annotations/[id]`:
+   - Return 404 `{ error: "Annotation not found" }` if the record does not exist.
+   - Accept partial updates for `text`, `sectionId`, and `timestamp`.
+   - If none of those fields are provided, return 400 `{ error: "No fields to update" }`.
+   - Update only provided fields, then re-fetch and return the updated annotation using the same mapping as GET.
+5. `DELETE /api/annotations/[id]`:
+   - Return 404 `{ error: "Annotation not found" }` if the record does not exist.
+   - Delete by `id` and return `{ success: true }`.
+6. No authentication checks.
+7. On any unexpected error in any handler, log with `console.error(...)` and return 500 `{ error: "Internal Server Error" }`.
 
 Dependencies
-
-<types>
-  <include>examples/types_example.ts</include>
-</types>
-
 <lib_db>
-  <include>examples/lib_db_example.ts</include>
+<include>video_editor_pdd/lib/db.ts</include>
 </lib_db>
 
-Prompt Dependencies:
-- types_TypeScript.prompt — provides `Annotation`, `AnnotationAnalysis`
-- lib_db_TypeScript.prompt — provides `getDb()`
-
-Instructions
-- Use Next.js App Router dynamic route: `export async function GET(request: Request, { params }: { params: { id: string } })`.
-- Deserialize `analysis` from JSON text column: `annotation.analysis = annotation.analysisJson ? JSON.parse(annotation.analysisJson) : null`.
-- Return `NextResponse.json(annotation)` on success, `NextResponse.json({ error: 'Annotation not found' }, { status: 404 })` on miss.
-
 Deliverable
-- `app/api/annotations/[id]/route.ts` — GET handler for single annotation lookup.
-
-Implementation assumptions (explicit)
-- The annotations DB table stores `analysis` as a TEXT column named `analysis_json`.
-- The route file is in a separate directory from `app/api/annotations/route.ts` — Next.js treats each directory as an independent route handler.
-
-Please produce production-ready TypeScript code consistent with the above.
+- `app/api/annotations/[id]/route.ts`

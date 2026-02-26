@@ -1,44 +1,24 @@
-You are implementing the TTS script generation API route (`app/api/pipeline/tts-script/run/route.ts`) for a video production pipeline editor. This POST endpoint triggers a Claude Code invocation to generate `narrative/tts_script.md` from `narrative/main_script.md`.
+You are implementing `app/api/pipeline/tts-script/run/route.ts`.
+
+Build a non-authenticated POST API route that kicks off the `tts-script` pipeline stage and streams progress over SSE.
 
 Requirements
-1. `POST /api/pipeline/tts-script/run` — creates a job and runs it via `runPipelineStage('tts-script', {}, send)`. Returns `{ jobId: string }` with status 202 immediately (non-blocking start).
-2. The actual job execution calls `runClaudeFix` with a prompt instructing Claude to: read `narrative/main_script.md`, extract all NARRATOR: blocks, add TTS annotation markers `[TONE:]`, `[PACE:]`, `[PAUSE:]`, `[EMOTION:]`, and write the result to `narrative/tts_script.md`. Scope: `narrative/` directory.
-3. Uses SSE streaming: returns a `ReadableStream` response. The client reads the SSE stream to follow progress.
-4. Auto-runs prerequisite stages (setup, script) via `runPipelineStage` DAG logic if they are not yet done.
-5. No authentication required.
+1. Export `dynamic = "force-dynamic"`.
+2. Register `registerExecutor("tts-script", ...)` at module load.
+3. The executor must call `runClaudeFix(TTS_SCRIPT_PROMPT, path.join(process.cwd(), "narrative"), onLog)`.
+4. Define `TTS_SCRIPT_PROMPT` as a module-level string that tells Claude to:
+   - read `narrative/main_script.md`
+   - extract narrator blocks only
+   - add `[TONE:]`, `[PACE:]`, `[PAUSE:]`, `[EMOTION:]`
+   - write `narrative/tts_script.md`
+   - stay scoped to `narrative/`
+5. `POST` must use `createSseStream()` and run `runPipelineStage("tts-script", {}, wrappedSend)` in a fire-and-forget async task.
+6. `wrappedSend` should forward all events and, on first event containing `jobId`, emit `{ type: "started", jobId }` once.
+7. After successful stage completion, emit `{ type: "complete", jobId }` when a `jobId` was observed, then call `done()`.
+8. On failure, call `error(message)` where `message` is `err.message` for `Error` instances, otherwise `"Unknown error running tts-script"`.
+9. Return `new Response(stream, { status: 202, headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive" } })`.
 
 Dependencies
-
-<types>
-  <include>examples/types_example.ts</include>
-</types>
-
-<lib_jobs>
-  <include>examples/lib_jobs_example.ts</include>
-</lib_jobs>
-
-<lib_claude>
-  <include>examples/lib_claude_example.ts</include>
-</lib_claude>
-
-Prompt Dependencies:
-- types_TypeScript.prompt — provides `PipelineStage`
-- lib_jobs_TypeScript.prompt — provides `runPipelineStage`, `registerExecutor`
-- lib_claude_TypeScript.prompt — provides `runClaudeFix`
-
-Instructions
-- Register executor: `registerExecutor('tts-script', (params, send) => async (onLog) => { await runClaudeFix(TTS_SCRIPT_PROMPT, path.join(process.cwd(), 'narrative'), onLog); })`.
-- The TTS script prompt string instructs Claude to read main_script.md and write tts_script.md with annotation markers — define as a module-level constant `TTS_SCRIPT_PROMPT`.
-- Response pattern: use `createSseStream()`, call `runPipelineStage(...)` (which is async), and return `new Response(stream, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' } })`.
-- Return `{ jobId }` via the SSE stream's first event: `send({ type: 'started', jobId })`.
-- Export `export async function POST(request: Request)`.
-- Add `export const dynamic = 'force-dynamic'`.
-
-Deliverable
-- `app/api/pipeline/tts-script/run/route.ts` — TTS script generation trigger endpoint with SSE streaming.
-
-Implementation assumptions (explicit)
-- `narrative/` directory and `main_script.md` must exist (created in setup stage or manually).
-- Claude is invoked with Write tools scoped to `narrative/` — it can read and write files there.
-
-Please produce production-ready prompt content that will generate the module consistent with the above.
+- `@/lib/sse`: `createSseStream`
+- `@/lib/jobs`: `registerExecutor`, `runPipelineStage`
+- `@/lib/claude`: `runClaudeFix`

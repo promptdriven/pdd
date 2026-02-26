@@ -1,53 +1,26 @@
-You are implementing `app/api/jobs/[id]/stream/route.ts`, the SSE streaming API route for real-time job progress in a video production pipeline editor.
+You are implementing `app/api/jobs/[id]/stream/route.ts`, the SSE route that streams job progress and logs.
 
 Requirements
-1. `GET /api/jobs/[id]/stream` — opens an SSE `ReadableStream`:
-   - Subscribes to job log events by polling the DB every 200ms.
-   - Sends new log lines as `data: {"type":"log","message":"..."}\n\n` events.
-   - Tracks `lastLineIndex` to only send new lines since last poll.
-   - When job reaches `done` status: sends `event: done\ndata: {}\n\n` and closes the stream.
-   - When job reaches `error` status: sends `event: error\ndata: {"message":"..."}\n\n` and closes.
-2. SSE response headers: `Content-Type: text/event-stream`, `Cache-Control: no-cache`, `Connection: keep-alive`.
-3. No authentication required.
-4. Export `export const dynamic = 'force-dynamic'`.
+1. Export `export const dynamic = "force-dynamic"`.
+2. Implement:
+   `export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }): Promise<Response>`.
+   Resolve route params via `const { id } = await params`.
+3. Use `createSseStream(onCancel)` from `@/lib/sse`; `onCancel` must clear the active polling interval.
+4. Poll `getJob(id)` from `@/lib/jobs` immediately and then every 200ms via `setInterval`.
+5. Stream incremental updates:
+   - Progress: emit `send({ type: "progress", percent: job.progress })` only when `job.progress` changes.
+   - Logs: split `job.logs` by newline, ignore trailing empty line, and emit only unseen lines as `send({ type: "log", message })` using `lastLineIndex`.
+6. Terminal behavior:
+   - `job.status === "done"`: call `done()` and stop polling.
+   - `job.status === "error"`: call `error(job.error ?? "Unknown error")` and stop polling.
+7. Missing job behavior: if the first poll finds no job, call `error("Job not found")` and stop polling; do not emit this repeatedly.
+8. Error handling: wrap poll logic in `try/catch`; on exception log `console.error("SSE stream error:", err)`, call `error("Internal Server Error")`, and stop polling.
+9. Return `new Response(stream, { headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" } })`.
+10. No authentication checks.
 
 Dependencies
-
-<types>
-  <include>examples/types_example.ts</include>
-</types>
-
-<lib_jobs>
-  <include>examples/lib_jobs_example.ts</include>
-</lib_jobs>
-
-<lib_sse>
-  <include>examples/lib_sse_example.ts</include>
-</lib_sse>
-
-Prompt Dependencies:
-- types_TypeScript.prompt — provides `Job`
-- lib_jobs_TypeScript.prompt — provides `getJob`
-- lib_sse_TypeScript.prompt — provides `createSseStream`
-
-Instructions
-- Use Next.js App Router dynamic route: `export async function GET(request: Request, { params }: { params: { id: string } })`.
-- SSE polling pattern: inside `ReadableStream.start(controller)`, use `setInterval` (200ms) to poll `getJob(params.id)`.
-- Track `lastLineIndex` in closure; split `job.logs` on newline; send only new lines.
-- Clear interval when job reaches `done` or `error` status, then close the controller.
-- If job is not found on first poll, send `event: error\ndata: {"message":"Job not found"}\n\n` and close.
-- Return `new Response(stream, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' } })`.
+- `@/lib/jobs`: `getJob`
+- `@/lib/sse`: `createSseStream`
 
 Deliverable
-- `app/api/jobs/[id]/stream/route.ts` — SSE GET handler for real-time job progress streaming.
-
-Note: The following endpoints are in SEPARATE route files (not in this file):
-- `GET /api/jobs/[id]` → `app/api/jobs/[id]/route.ts`
-- `POST /api/jobs/[id]/retry` → `app/api/jobs/[id]/retry/route.ts`
-
-Implementation assumptions (explicit)
-- Job logs are persisted to the `jobs.logs` TEXT column as newline-delimited text.
-- Client `SseLogPanel` falls back to polling `/api/jobs/[id]` if EventSource fails.
-- The interval is cleared on stream close to prevent DB polling leaks.
-
-Please produce production-ready TypeScript code consistent with the above.
+- `app/api/jobs/[id]/stream/route.ts`

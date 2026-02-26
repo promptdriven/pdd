@@ -1,10 +1,39 @@
-You are implementing the audit API routes (`app/api/pipeline/audit/run/route.ts` and supporting routes) for a video production pipeline editor. These endpoints launch parallel Claude Code agents that render Remotion stills and compare frames against specs for each section.
+You are implementing audit API routes for the video pipeline:
+- `app/api/pipeline/audit/run/route.ts`
+- `app/api/pipeline/audit/results/route.ts`
 
 Requirements
-1. `POST /api/pipeline/audit/run` — accepts `{ sections?: string[] }` (defaults to all). Launches one agent per section concurrently. Returns SSE stream with `{ jobId }`.
-2. Each per-section agent: calls `renderStill()` for segment midpoints → calls `runClaudeAnalysis()` comparing the still PNG against the spec file → writes `specs/{sectionId}/AUDIT_{specName}.md` with pass/fail verdict and details.
-3. `GET /api/pipeline/audit/results` — returns `{ sections: AuditSectionResult[] }` where `AuditSectionResult = { sectionId: string; passCount: number; failCount: number; status: 'done' | 'pending' | 'error'; specs: SpecAuditResult[] }` and `SpecAuditResult = { specFile: string; verdict: 'pass' | 'fail'; summary: string; frameFile?: string }`.
-4. No authentication required.
+1. Register `registerExecutor("audit", ...)` at module load in the run route.
+2. Audit executor behavior (per selected section):
+   - Resolve target sections from `params.sections`; if omitted, audit all `loadProject().sections`.
+   - Read section spec files from `section.specDir`, including only `.md` files that do not start with `AUDIT_`.
+   - For each spec file:
+     - Render still image to `outputs/audit/{sectionId}/{specName}_frame.png`.
+     - Compute frame as `Math.floor((section.durationSeconds / 2) * (loadProject().render.fps ?? 30))`.
+     - Call `runClaudeAnalysis(prompt, onLog)` and treat `analysis.severity === "pass"` as pass, otherwise fail.
+     - Write `specs/{sectionId}/AUDIT_{specName}.md` with format:
+       `## Verdict\n{pass|fail}\n## Summary\n{text}\n`.
+   - Emit per-section SSE events:
+     `{ type: "audit-section", sectionId, status: "running" | "done" | "error", passCount, failCount }`.
+   - Run section audits concurrently with `Promise.all`.
+3. `POST /api/pipeline/audit/run`:
+   - Accept JSON `{ sections?: string[] }` and tolerate invalid/non-JSON body by defaulting to `{}`.
+   - Start `runPipelineStage("audit", { sections: body.sections }, send)` asynchronously.
+   - Stream SSE using `data: <json>\n\n` format.
+   - Emit `{ type: "job", jobId }` on success, or `{ type: "error", message }` on failure.
+   - Return SSE headers: `Content-Type: text/event-stream`, `Cache-Control: no-cache`, `Connection: keep-alive`.
+4. `GET /api/pipeline/audit/results`:
+   - Load sections via `loadProject()`.
+   - For each section, read `AUDIT_*.md` files from `section.specDir`.
+   - Parse markdown headings `## Verdict` and `## Summary`.
+   - Return:
+     - `sections: AuditSectionResult[]`
+     - `AuditSectionResult = { sectionId: string; sectionLabel: string; passCount: number; failCount: number; status: "done" | "pending" | "error"; specs: SpecAuditResult[] }`
+     - `SpecAuditResult = { specName: string; verdict: "PASS" | "FAIL"; summary: string; finding?: string; specPath?: string }`
+   - Status logic: `"pending"` when no audit files exist but section spec markdown files exist; otherwise `"done"`.
+   - If an audit file cannot be parsed, include a `"FAIL"` spec entry with summary `"Error parsing audit report"`.
+   - `specPath` must be compatible with `/api/pipeline/specs/file` by starting with `specs/` (without double prefixing).
+5. No authentication checks.
 
 Dependencies
 
@@ -28,28 +57,6 @@ Dependencies
   <include>examples/lib_project_example.ts</include>
 </lib_project>
 
-Prompt Dependencies:
-- types_TypeScript.prompt — provides `PipelineStage`, `AnnotationAnalysis`
-- lib_jobs_TypeScript.prompt — provides `runPipelineStage`, `registerExecutor`
-- lib_claude_TypeScript.prompt — provides `runClaudeAnalysis`
-- lib_render_TypeScript.prompt — provides `renderStill`
-- lib_project_TypeScript.prompt — provides `loadProject`
-
-Instructions
-- Still output path: `outputs/audit/{sectionId}/{specName}_frame.png`.
-- Audit report path: `specs/{sectionId}/AUDIT_{specName}.md`.
-- Claude analysis prompt: read the still PNG file and the spec file, return `AnnotationAnalysis` JSON with verdict.
-- Concurrent agents: `await Promise.all(sections.map(sectionId => auditSection(sectionId, send, onLog)))`.
-- Emit per-section events: `{ type: 'audit-section', sectionId, status: 'running' | 'done' | 'error', passCount, failCount }`.
-- `GET /api/pipeline/audit/results`: parse AUDIT_*.md files to extract verdicts (parse the `## Verdict` heading).
-- Register executor: `registerExecutor('audit', ...)`.
-
 Deliverable
 - `app/api/pipeline/audit/run/route.ts` — POST endpoint for parallel section auditing.
 - `app/api/pipeline/audit/results/route.ts` — GET endpoint for audit results.
-
-Implementation assumptions (explicit)
-- Audit MARKDOWN files have a structured format: `## Verdict\n{pass|fail}\n## Summary\n{text}`.
-- Multiple stills per section correspond to spec file count (one still per spec segment).
-
-Please produce production-ready prompt content that will generate the module consistent with the above.

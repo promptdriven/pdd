@@ -1,39 +1,26 @@
-You are implementing the video streaming API route (`app/api/video/[...path]/route.ts`) for a video production pipeline editor. This Route Handler serves MP4 video files with HTTP range request support for the VideoPlayer component's `<video>` element.
+You are an expert TypeScript engineer implementing `app/api/video/[...path]/route.ts` for a Next.js App Router project.
+
+Role
+- Serve local MP4 files for `/api/video/[...path]` with secure path validation and HTTP Range support.
 
 Requirements
-1. `GET /api/video/[...path]` — serves video files from `outputs/sections/` and `remotion/public/` with range request support (206 Partial Content).
-2. Reads `Range` header; returns appropriate byte slice. Returns 206 with `Content-Range: bytes {start}-{end}/{total}` and `Accept-Ranges: bytes` headers.
-3. Returns 200 for requests without a `Range` header (full file).
-4. Returns 404 if file not found.
-5. Returns 403 if path traversal is detected (path contains `..` or escapes the allowed directories).
-6. Sets `Content-Type: video/mp4` for all responses.
-7. Allowed root directories: `outputs/` and `remotion/public/`. Reject any path that resolves outside these.
+1. Export `async function GET(request: Request, { params }: { params: Promise<{ path: string[] }> }): Promise<NextResponse>` and `await params`.
+2. Reject path traversal with 403 JSON when any segment is `".."` or contains `".."`.
+3. Build the target path with `path.join(process.cwd(), ...pathSegments)`, resolve it, and allow only paths inside `path.resolve("outputs")` or `path.resolve("remotion/public")`.
+4. Use a boundary-safe allow check (`resolved === dir` or `resolved.startsWith(dir + path.sep)`) so prefix matches like `outputs_evil` are rejected (403).
+5. Return 404 JSON when the resolved file does not exist.
+6. Use `fs.statSync` to get total size. All successful stream responses must set:
+   - `Content-Type: video/mp4`
+   - `Accept-Ranges: bytes`
+7. If `Range` is present:
+   - Parse `bytes=(\d*)-(\d*)`; invalid format returns 400 JSON.
+   - Support explicit (`start-end`), open-ended (`start-`), and suffix (`-length`) ranges.
+   - Clamp `end` to `total - 1`.
+   - If unsatisfiable (`start > end` or `start >= total`), return 416 with `Content-Range: bytes */{total}` plus common headers.
+   - Stream with `fs.createReadStream(resolved, { start, end })`, convert via `Readable.toWeb`, return 206 with `Content-Range` and `Content-Length`.
+8. If `Range` is absent, stream full file with `fs.createReadStream(resolved)`, convert via `Readable.toWeb`, return 200 with `Content-Length`.
+9. Wrap in `try/catch`; log server errors and return 500 JSON `{ error: "Internal Server Error" }`.
 
 Dependencies
-
-<lib_project>
-  <include>examples/lib_project_example.ts</include>
-</lib_project>
-
-Prompt Dependencies:
-- lib_project_TypeScript.prompt — provides `loadProject` for base path resolution
-
-Instructions
-- Reconstruct file path: `const filePath = path.join(process.cwd(), ...params.path)`.
-- Security check: `const resolved = path.resolve(filePath); const allowed = [path.resolve('outputs'), path.resolve('remotion/public')]; if (!allowed.some(d => resolved.startsWith(d))) return 403`.
-- Parse Range header: `const range = request.headers.get('range')`. If present, parse `bytes={start}-{end}`.
-- Use `fs.statSync(filePath)` for file size; use `fs.createReadStream(filePath, { start, end })` for range reads.
-- Convert Node.js `ReadableStream` (from `fs.createReadStream`) to Web API `ReadableStream` using `Readable.toWeb()` or `ReadableStream.from()`.
-- `Content-Range: bytes {start}-{end}/{total}` header.
-- `Accept-Ranges: bytes` header always present.
-- Export `export async function GET(request: Request, { params }: { params: { path: string[] } })`.
-
-Deliverable
-- `app/api/video/[...path]/route.ts` — video file streaming handler with range support.
-
-Implementation assumptions (explicit)
-- Video files are always MP4; no content-type negotiation needed.
-- `fs.createReadStream` with `{ start, end }` provides correct byte ranges.
-- `Readable.toWeb()` is available in Node.js 18+.
-
-Please produce production-ready prompt content that will generate the module consistent with the above.
+- `next/server` (`NextResponse`)
+- Node built-ins: `fs`, `path`, `stream` (`Readable`)
