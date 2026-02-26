@@ -160,8 +160,8 @@ export default function Stage10Audit({ onAdvance, onCreateAnnotation }: Stage10A
       if (!specContent[key] && specPath) {
         const res = await fetch(`/api/pipeline/specs/file?path=${encodeURIComponent(specPath)}`);
         if (res.ok) {
-          const text = await res.text();
-          setSpecContent((prev) => ({ ...prev, [key]: text }));
+          const data = await res.json();
+          setSpecContent((prev) => ({ ...prev, [key]: data.content ?? '' }));
         } else {
           setSpecContent((prev) => ({ ...prev, [key]: 'Failed to load spec file.' }));
         }
