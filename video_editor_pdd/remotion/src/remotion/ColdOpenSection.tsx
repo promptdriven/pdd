@@ -43,12 +43,13 @@ const Subtitles: React.FC = () => {
           color: "white",
           padding: "12px 24px",
           borderRadius: 8,
-          fontSize: 48,
+          fontSize: 36,
           fontFamily: "sans-serif",
           maxWidth: "80%",
           textAlign: "center",
           overflowWrap: "break-word",
           wordBreak: "break-word",
+          overflow: "hidden",
         }}
       >
         {text}
