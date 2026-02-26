@@ -1,13 +1,12 @@
 import { describe, it, expect } from 'vitest';
 
-// getCompactFontPx is a pure math helper that mirrors the CSS expression:
-//   font-size: calc(14px / var(--vp-zoom, 1))
+// getCompactFontPx is a pure math helper: Math.round(14 / zoom).
 // React Flow applies transform:scale(zoom) to its viewport container, so a
 // font rendered at (14/zoom)px in node-space will always APPEAR as 14px on
 // screen regardless of the viewport zoom level.
 //
-// The function lives in DependencyViewer (not ModuleNode) because the font-
-// size update is driven by a CSS custom-property — no React re-render needed.
+// ModuleNode calls getCompactFontPx(zoom) directly with the zoom value from
+// useViewport(), producing an explicit pixel font-size in the inline style.
 
 import { getCompactFontPx } from '../components/DependencyViewer';
 

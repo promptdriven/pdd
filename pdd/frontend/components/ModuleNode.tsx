@@ -1,6 +1,7 @@
 import React, { memo } from 'react';
 import { Handle, Position, NodeProps, useViewport } from 'reactflow';
 import { ArchitectureModule, PromptInfo } from '../api';
+import { getCompactFontPx } from './DependencyViewer';
 import Tooltip from './Tooltip';
 
 export interface ModuleNodeData {
@@ -70,12 +71,9 @@ const ModuleNode: React.FC<NodeProps<ModuleNodeData>> = ({ data, selected, xPos,
           `}
           style={{ width: 200, minHeight: 28 }}
         >
-          {/* calc(14px / var(--vp-zoom, 1)) keeps apparent font size at ~14px on
-              screen regardless of viewport zoom. --vp-zoom is written by the parent
-              DependencyViewer on every onMove event — no React re-render needed. */}
           <p
             className="font-medium text-white truncate"
-            style={{ fontSize: 'calc(14px / var(--vp-zoom, 1))' }}
+            style={{ fontSize: `${getCompactFontPx(zoom)}px` }}
           >
             {label}
           </p>
