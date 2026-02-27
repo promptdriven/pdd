@@ -1,10 +1,9 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import path from "path";
 import fs from "fs/promises";
-import { randomUUID } from "crypto";
 
 import { registerExecutor, runPipelineStage } from "@/lib/jobs";
-import { renderSection, getSectionDuration, stitchFullVideo } from "@/lib/render";
+import { renderSection, getSectionDuration } from "@/lib/render";
 import { loadProject, saveProject } from "@/lib/project";
 import type { RenderProgress, SseSend } from "@/lib/types";
 
@@ -168,53 +167,3 @@ export async function POST(request: NextRequest): Promise<Response> {
   });
 }
 
-/**
- * POST /api/pipeline/stitch/run
- */
-export async function POST_stitch(_request: NextRequest): Promise<NextResponse> {
-  try {
-    const project = loadProject();
-    const sectionPaths = project.sections.map((s) =>
-      path.join("outputs", "sections", `${s.id}.mp4`)
-    );
-    const outputPath = path.join("outputs", "full_video.mp4");
-    await fs.mkdir("outputs", { recursive: true });
-    const jobId = randomUUID();
-    await stitchFullVideo(sectionPaths, outputPath, () => {});
-    return NextResponse.json({ jobId }, { status: 200 });
-  } catch (err) {
-    console.error("Stitch run failed:", err);
-    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
-  }
-}
-
-/**
- * GET /api/pipeline/render/status
- */
-export async function GET_status(_request: NextRequest): Promise<NextResponse> {
-  try {
-    const project = loadProject();
-    const sectionStatuses = await Promise.all(
-      project.sections.map(async (section) => {
-        const outputPath = path.join("outputs", "sections", `${section.id}.mp4`);
-        try {
-          await fs.access(outputPath);
-          const duration = await getSectionDuration(outputPath);
-          return { sectionId: section.id, status: "done", duration };
-        } catch {
-          return { sectionId: section.id, status: "missing" };
-        }
-      })
-    );
-    const fullVideoPath = path.join("outputs", "full_video.mp4");
-    let fullVideo: any = { exists: false };
-    try {
-      const stat = await fs.stat(fullVideoPath);
-      fullVideo = { exists: true, path: fullVideoPath, size: stat.size };
-      fullVideo.duration = await getSectionDuration(fullVideoPath);
-    } catch {}
-    return NextResponse.json({ sections: sectionStatuses, fullVideo }, { status: 200 });
-  } catch (err) {
-    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
-  }
-}

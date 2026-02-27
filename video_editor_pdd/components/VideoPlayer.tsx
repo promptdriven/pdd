@@ -503,7 +503,7 @@ export default function VideoPlayer({
               if (videoEl && a.timestamp != null) videoEl.currentTime = a.timestamp;
             }}
             className="absolute w-1.5 h-1.5 rounded-full bg-yellow-400 top-0 -translate-y-1"
-            style={{ left: `${((a.timestamp ?? 0) / duration) * 100}%` }}
+            style={{ left: `${a.timestamp != null ? (a.timestamp / duration) * 100 : 0}%` }}
             aria-label={`annotation at ${(a.timestamp ?? 0).toFixed(2)} seconds`}
           />
         ))}

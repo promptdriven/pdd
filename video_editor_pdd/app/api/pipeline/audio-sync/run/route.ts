@@ -117,7 +117,8 @@ export async function POST(_request: NextRequest): Promise<Response> {
   (async () => {
     try {
       const jobId = await runPipelineStage("audio-sync", {}, send);
-      send({ jobId });
+      send({ type: "job", jobId });
+      send({ type: "complete", jobId });
       done();
     } catch (err) {
       error(err instanceof Error ? err.message : "Unknown error");
