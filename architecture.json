@@ -33,6 +33,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 10200,
+      "y": 400
     }
   },
   {
@@ -70,6 +74,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 11680,
+      "y": 400
     }
   },
   {
@@ -125,6 +133,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 12600,
+      "y": 800
     }
   },
   {
@@ -307,6 +319,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 10480,
+      "y": 620
     }
   },
   {
@@ -369,6 +385,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 14400,
+      "y": 800
     }
   },
   {
@@ -398,6 +418,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 9560,
+      "y": 620
     }
   },
   {
@@ -457,6 +481,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 10800,
+      "y": 0
     }
   },
   {
@@ -496,6 +524,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 8080,
+      "y": 800
     }
   },
   {
@@ -526,6 +558,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 9000,
+      "y": 800
     }
   },
   {
@@ -563,6 +599,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 7200,
+      "y": 0
     }
   },
   {
@@ -593,6 +633,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 7800,
+      "y": 1200
     }
   },
   {
@@ -636,6 +680,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 12600,
+      "y": 0
     }
   },
   {
@@ -665,6 +713,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 9280,
+      "y": 400
     }
   },
   {
@@ -732,6 +784,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 7800,
+      "y": 0
     }
   },
   {
@@ -783,6 +839,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 9600,
+      "y": 1100
     }
   },
   {
@@ -820,6 +880,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 8400,
+      "y": 400
     }
   },
   {
@@ -858,6 +922,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 10200,
+      "y": 1020
     }
   },
   {
@@ -897,6 +965,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 10480,
+      "y": 1240
     }
   },
   {
@@ -928,6 +1000,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 13800,
+      "y": 1600
     }
   },
   {
@@ -960,6 +1036,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 10760,
+      "y": 1020
     }
   },
   {
@@ -991,6 +1071,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 11400,
+      "y": 1240
     }
   },
   {
@@ -1041,6 +1125,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 7480,
+      "y": 800
     }
   },
   {
@@ -1076,6 +1164,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 9600,
+      "y": 1600
     }
   },
   {
@@ -1110,6 +1202,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 9880,
+      "y": 1820
     }
   },
   {
@@ -1130,6 +1226,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 7480,
+      "y": 220
     }
   },
   {
@@ -1151,6 +1251,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 7760,
+      "y": 440
     }
   },
   {
@@ -1171,6 +1275,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 8080,
+      "y": 220
     }
   },
   {
@@ -1191,6 +1299,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 4760,
+      "y": 220
     }
   },
   {
@@ -1206,6 +1318,10 @@
     ],
     "interface": {
       "type": "module"
+    },
+    "position": {
+      "x": 8400,
+      "y": 660
     }
   },
   {
@@ -1234,6 +1350,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 12880,
+      "y": 1100
     }
   },
   {
@@ -1293,6 +1413,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 14960,
+      "y": 0
     }
   },
   {
@@ -1313,6 +1437,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 14400,
+      "y": 0
     }
   },
   {
@@ -1372,6 +1500,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 10480,
+      "y": 2420
     }
   },
   {
@@ -1425,6 +1557,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 11080,
+      "y": 1240
     }
   },
   {
@@ -1451,6 +1587,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 12600,
+      "y": 2000
     }
   },
   {
@@ -1477,6 +1617,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 9600,
+      "y": 2080
     }
   },
   {
@@ -1504,6 +1648,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 12000,
+      "y": 2220
     }
   },
   {
@@ -1535,6 +1683,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 6000,
+      "y": 800
     }
   },
   {
@@ -1565,6 +1717,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 11360,
+      "y": 1020
     }
   },
   {
@@ -1591,6 +1747,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 10200,
+      "y": 2740
     }
   },
   {
@@ -1629,6 +1789,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 11680,
+      "y": 1020
     }
   },
   {
@@ -1660,6 +1824,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 13760,
+      "y": 1860
     }
   },
   {
@@ -1692,6 +1860,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 11400,
+      "y": 1640
     }
   },
   {
@@ -1724,6 +1896,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 9880,
+      "y": 2740
     }
   },
   {
@@ -1771,6 +1947,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 12000,
+      "y": 1200
     }
   },
   {
@@ -1810,6 +1990,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 11080,
+      "y": 800
     }
   },
   {
@@ -1837,6 +2021,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 11400,
+      "y": 2000
     }
   },
   {
@@ -1869,6 +2057,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 11680,
+      "y": 2220
     }
   },
   {
@@ -1900,6 +2092,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 12600,
+      "y": 2260
     }
   },
   {
@@ -1932,6 +2128,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 10800,
+      "y": 2300
     }
   },
   {
@@ -1960,6 +2160,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 12280,
+      "y": 1640
     }
   },
   {
@@ -1991,6 +2195,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 11960,
+      "y": 800
     }
   },
   {
@@ -2022,6 +2230,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 12560,
+      "y": 1020
     }
   },
   {
@@ -2055,6 +2267,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 10160,
+      "y": 2520
     }
   },
   {
@@ -2083,6 +2299,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 11960,
+      "y": 2000
     }
   },
   {
@@ -2112,6 +2332,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 13160,
+      "y": 2000
     }
   },
   {
@@ -2157,6 +2381,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 12560,
+      "y": 1420
     }
   },
   {
@@ -2270,6 +2498,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 10160,
+      "y": 3140
     }
   },
   {
@@ -2311,6 +2543,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 7800,
+      "y": 1600
     }
   },
   {
@@ -2351,6 +2587,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 11680,
+      "y": 2480
     }
   },
   {
@@ -2375,6 +2615,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 9000,
+      "y": 1820
     }
   },
   {
@@ -2415,6 +2659,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 13760,
+      "y": 2220
     }
   },
   {
@@ -2457,6 +2705,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 6000,
+      "y": 1600
     }
   },
   {
@@ -2491,6 +2743,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 8400,
+      "y": 1600
     }
   },
   {
@@ -2557,6 +2813,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 9280,
+      "y": 1600
     }
   },
   {
@@ -2587,6 +2847,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 10800,
+      "y": 2000
     }
   },
   {
@@ -2773,6 +3037,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 14400,
+      "y": 1200
     }
   },
   {
@@ -2809,6 +3077,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 10200,
+      "y": 1600
     }
   },
   {
@@ -2862,6 +3134,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 7480,
+      "y": 1200
     }
   },
   {
@@ -3037,6 +3313,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 12000,
+      "y": 2620
     }
   },
   {
@@ -3054,6 +3334,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 4800,
+      "y": 440
     }
   },
   {
@@ -3074,6 +3358,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 15280,
+      "y": 0
     }
   },
   {
@@ -3094,6 +3382,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 15560,
+      "y": 220
     }
   },
   {
@@ -3114,6 +3406,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 15000,
+      "y": 440
     }
   },
   {
@@ -3134,6 +3430,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 15280,
+      "y": 660
     }
   },
   {
@@ -3154,6 +3454,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 15600,
+      "y": 0
     }
   },
   {
@@ -3175,6 +3479,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 15880,
+      "y": 220
     }
   },
   {
@@ -3196,6 +3504,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 16160,
+      "y": 0
     }
   },
   {
@@ -3216,6 +3528,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 15600,
+      "y": 660
     }
   },
   {
@@ -3237,6 +3553,10 @@
         "name": "agentic_bug_step10",
         "description": "Generate draft PR with failing tests and link to GitHub issue"
       }
+    },
+    "position": {
+      "x": 15000,
+      "y": 220
     }
   },
   {
@@ -3258,6 +3578,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 4760,
+      "y": 0
     }
   },
   {
@@ -3279,6 +3603,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 4200,
+      "y": 220
     }
   },
   {
@@ -3298,6 +3626,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 0,
+      "y": 0
     }
   },
   {
@@ -3341,6 +3673,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 8680,
+      "y": 0
     }
   },
   {
@@ -3361,6 +3697,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 3600,
+      "y": 0
     }
   },
   {
@@ -3380,6 +3720,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 280,
+      "y": 220
     }
   },
   {
@@ -3399,6 +3743,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 560,
+      "y": 0
     }
   },
   {
@@ -3426,6 +3774,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 8680,
+      "y": 880
     }
   },
   {
@@ -3445,6 +3797,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 0,
+      "y": 440
     }
   },
   {
@@ -3464,6 +3820,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 280,
+      "y": 660
     }
   },
   {
@@ -3483,6 +3843,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 560,
+      "y": 440
     }
   },
   {
@@ -3502,6 +3866,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 0,
+      "y": 880
     }
   },
   {
@@ -3522,6 +3890,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 3000,
+      "y": 0
     }
   },
   {
@@ -3542,6 +3914,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 1800,
+      "y": 0
     }
   },
   {
@@ -3562,6 +3938,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 2080,
+      "y": 220
     }
   },
   {
@@ -3582,6 +3962,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 2360,
+      "y": 0
     }
   },
   {
@@ -3602,6 +3986,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 1800,
+      "y": 440
     }
   },
   {
@@ -3623,6 +4011,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 2080,
+      "y": 660
     }
   },
   {
@@ -3643,6 +4035,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 2360,
+      "y": 440
     }
   },
   {
@@ -3663,6 +4059,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 1800,
+      "y": 880
     }
   },
   {
@@ -3683,6 +4083,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 2080,
+      "y": 1100
     }
   },
   {
@@ -3703,6 +4107,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 2400,
+      "y": 220
     }
   },
   {
@@ -3724,6 +4132,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 2680,
+      "y": 0
     }
   },
   {
@@ -3744,6 +4156,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 2960,
+      "y": 220
     }
   },
   {
@@ -3771,6 +4187,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 8680,
+      "y": 1100
     }
   },
   {
@@ -3790,6 +4210,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 280,
+      "y": 1100
     }
   },
   {
@@ -3810,6 +4234,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 4200,
+      "y": 440
     }
   },
   {
@@ -3830,6 +4258,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 4480,
+      "y": 660
     }
   },
   {
@@ -3851,6 +4283,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 3880,
+      "y": 220
     }
   },
   {
@@ -3871,6 +4307,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 3600,
+      "y": 440
     }
   },
   {
@@ -3890,6 +4330,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 600,
+      "y": 220
     }
   },
   {
@@ -3949,6 +4393,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 9000,
+      "y": 1320
     }
   },
   {
@@ -3966,6 +4414,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 5080,
+      "y": 0
     }
   },
   {
@@ -3983,6 +4435,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 5360,
+      "y": 220
     }
   },
   {
@@ -3998,6 +4454,10 @@
     ],
     "interface": {
       "type": "cli"
+    },
+    "position": {
+      "x": 4800,
+      "y": 660
     }
   },
   {
@@ -4013,6 +4473,10 @@
     ],
     "interface": {
       "type": "cli"
+    },
+    "position": {
+      "x": 5080,
+      "y": 880
     }
   },
   {
@@ -4028,6 +4492,10 @@
     ],
     "interface": {
       "type": "cli"
+    },
+    "position": {
+      "x": 5360,
+      "y": 660
     }
   },
   {
@@ -4045,6 +4513,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 4800,
+      "y": 1100
     }
   },
   {
@@ -4073,6 +4545,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 10160,
+      "y": 1320
     }
   },
   {
@@ -4090,6 +4566,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 5400,
+      "y": 0
     }
   },
   {
@@ -4107,6 +4587,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 5680,
+      "y": 220
     }
   },
   {
@@ -4199,6 +4683,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 6280,
+      "y": 0
     }
   },
   {
@@ -4216,6 +4704,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 5960,
+      "y": 0
     }
   },
   {
@@ -4231,6 +4723,10 @@
     ],
     "interface": {
       "type": "cli"
+    },
+    "position": {
+      "x": 5400,
+      "y": 440
     }
   },
   {
@@ -4274,6 +4770,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 10200,
+      "y": 0
     }
   },
   {
@@ -4290,6 +4790,10 @@
     ],
     "interface": {
       "type": "module"
+    },
+    "position": {
+      "x": 6880,
+      "y": 0
     }
   },
   {
@@ -4305,6 +4809,10 @@
     ],
     "interface": {
       "type": "module"
+    },
+    "position": {
+      "x": 10480,
+      "y": 1980
     }
   },
   {
@@ -4331,6 +4839,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 12000,
+      "y": 400
     }
   },
   {
@@ -4350,6 +4862,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 600,
+      "y": 660
     }
   },
   {
@@ -4650,6 +5166,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 14680,
+      "y": 220
     }
   },
   {
@@ -4717,6 +5237,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 10200,
+      "y": 2200
     }
   },
   {
@@ -4736,6 +5260,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 880,
+      "y": 880
     }
   },
   {
@@ -4755,6 +5283,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 1160,
+      "y": 440
     }
   },
   {
@@ -4774,6 +5306,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 600,
+      "y": 1100
     }
   },
   {
@@ -4793,6 +5329,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 880,
+      "y": 1320
     }
   },
   {
@@ -4828,6 +5368,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 10760,
+      "y": 1760
     }
   },
   {
@@ -4847,6 +5391,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 1200,
+      "y": 0
     }
   },
   {
@@ -4876,6 +5424,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 11080,
+      "y": 400
     }
   },
   {
@@ -4895,6 +5447,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 12000,
+      "y": 2920
     }
   },
   {
@@ -4913,6 +5469,10 @@
     ],
     "interface": {
       "type": "module"
+    },
+    "position": {
+      "x": 6280,
+      "y": 1020
     }
   },
   {
@@ -4983,6 +5543,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 15000,
+      "y": 1060
     }
   },
   {
@@ -5004,6 +5568,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 9000,
+      "y": 2220
     }
   },
   {
@@ -5030,6 +5598,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 13200,
+      "y": 2220
     }
   },
   {
@@ -5056,6 +5628,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 13480,
+      "y": 1200
     }
   },
   {
@@ -5083,6 +5659,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 12000,
+      "y": 3240
     }
   },
   {
@@ -5115,6 +5695,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 6600,
+      "y": 1200
     }
   },
   {
@@ -5143,6 +5727,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 11080,
+      "y": 1640
     }
   },
   {
@@ -5169,6 +5757,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 9600,
+      "y": 3100
     }
   },
   {
@@ -5194,6 +5786,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 21000,
+      "y": 0
     }
   },
   {
@@ -5231,6 +5827,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 21000,
+      "y": 620
     }
   },
   {
@@ -5256,6 +5856,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 20400,
+      "y": 0
     }
   },
   {
@@ -5283,6 +5887,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 20400,
+      "y": 400
     }
   },
   {
@@ -5310,6 +5918,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 20400,
+      "y": 800
     }
   },
   {
@@ -5330,6 +5942,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 15560,
+      "y": 440
     }
   },
   {
@@ -5351,6 +5967,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 15880,
+      "y": 440
     }
   },
   {
@@ -5382,6 +6002,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 14680,
+      "y": 1420
     }
   },
   {
@@ -5413,6 +6037,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 15600,
+      "y": 1600
     }
   },
   {
@@ -5436,6 +6064,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 16800,
+      "y": 800
     }
   },
   {
@@ -5456,6 +6088,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 16800,
+      "y": 0
     }
   },
   {
@@ -5477,6 +6113,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 17080,
+      "y": 220
     }
   },
   {
@@ -5497,6 +6137,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 17360,
+      "y": 0
     }
   },
   {
@@ -5517,6 +6161,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 16800,
+      "y": 440
     }
   },
   {
@@ -5537,6 +6185,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 17080,
+      "y": 1100
     }
   },
   {
@@ -5557,6 +6209,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 17400,
+      "y": 220
     }
   },
   {
@@ -5577,6 +6233,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 17680,
+      "y": 0
     }
   },
   {
@@ -5597,6 +6257,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 17960,
+      "y": 220
     }
   },
   {
@@ -5617,6 +6281,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 17400,
+      "y": 440
     }
   },
   {
@@ -5637,6 +6305,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 17680,
+      "y": 660
     }
   },
   {
@@ -5657,6 +6329,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 17960,
+      "y": 440
     }
   },
   {
@@ -5677,6 +6353,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 17400,
+      "y": 880
     }
   },
   {
@@ -5708,6 +6388,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 15000,
+      "y": 1420
     }
   },
   {
@@ -5747,6 +6431,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 14680,
+      "y": 1820
     }
   },
   {
@@ -5769,6 +6457,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 19200,
+      "y": 0
     }
   },
   {
@@ -5790,6 +6482,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 19480,
+      "y": 220
     }
   },
   {
@@ -5811,6 +6507,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 19760,
+      "y": 0
     }
   },
   {
@@ -5832,6 +6532,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 19200,
+      "y": 440
     }
   },
   {
@@ -5853,6 +6557,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 19480,
+      "y": 660
     }
   },
   {
@@ -5874,6 +6582,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 19760,
+      "y": 440
     }
   },
   {
@@ -5895,6 +6607,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 19800,
+      "y": 220
     }
   },
   {
@@ -5916,6 +6632,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 20080,
+      "y": 0
     }
   },
   {
@@ -5937,6 +6657,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 20360,
+      "y": 1100
     }
   },
   {
@@ -5958,6 +6682,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 18000,
+      "y": 0
     }
   },
   {
@@ -6021,6 +6749,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 13760,
+      "y": 2520
     }
   },
   {
@@ -6052,6 +6784,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 14960,
+      "y": 2080
     }
   },
   {
@@ -6083,6 +6819,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 14960,
+      "y": 2480
     }
   },
   {
@@ -6104,6 +6844,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 18280,
+      "y": 220
     }
   },
   {
@@ -6125,6 +6869,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 18560,
+      "y": 0
     }
   },
   {
@@ -6146,6 +6894,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 18000,
+      "y": 660
     }
   },
   {
@@ -6167,6 +6919,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 18280,
+      "y": 440
     }
   },
   {
@@ -6188,6 +6944,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 18600,
+      "y": 220
     }
   },
   {
@@ -6209,6 +6969,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 18880,
+      "y": 0
     }
   },
   {
@@ -6230,6 +6994,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 19160,
+      "y": 220
     }
   },
   {
@@ -6252,6 +7020,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 18600,
+      "y": 440
     }
   },
   {
@@ -6273,6 +7045,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 18880,
+      "y": 660
     }
   },
   {
@@ -6333,6 +7109,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 21280,
+      "y": 220
     }
   },
   {
@@ -6411,6 +7191,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 12600,
+      "y": 1720
     }
   },
   {
@@ -6431,6 +7215,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 4160,
+      "y": 0
     }
   },
   {
@@ -6459,6 +7247,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 10160,
+      "y": 660
     }
   },
   {
@@ -6478,6 +7270,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 880,
+      "y": 0
     }
   },
   {
@@ -6497,6 +7293,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 1160,
+      "y": 220
     }
   },
   {
@@ -6543,6 +7343,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 12880,
+      "y": 400
     }
   },
   {
@@ -6613,6 +7417,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 15000,
+      "y": 2700
     }
   },
   {
@@ -6662,6 +7470,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 15600,
+      "y": 2400
     }
   },
   {
@@ -6709,10 +7521,14 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 15600,
+      "y": 2000
     }
   },
   {
-    "reason": "Entry point for the agentic checkup workflow \u2014 fetches GitHub issue, loads project context, and dispatches to the checkup orchestrator.",
+    "reason": "Entry point for the agentic checkup workflow — fetches GitHub issue, loads project context, and dispatches to the checkup orchestrator.",
     "description": "Accepts a GitHub issue URL, fetches issue content and comments, loads architecture.json and .pddrc, then invokes the multi-step checkup orchestrator that explores the project, identifies problems, and optionally fixes them.",
     "dependencies": [
       "agentic_change_python.prompt",
@@ -6766,10 +7582,14 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 15600,
+      "y": 2800
     }
   },
   {
-    "reason": "Multi-step orchestrator for pdd checkup \u2014 8 steps with iterative fix-verify loop and worktree isolation.",
+    "reason": "Multi-step orchestrator for pdd checkup — 8 steps with iterative fix-verify loop and worktree isolation.",
     "description": "Orchestrates the 8-step agentic checkup workflow: discover, deps, build, interfaces, test, fix (6.1/6.2/6.3), verify, create PR. Steps 3-7 run in an iterative while loop (max 3 iterations) with exit on 'All Issues Fixed'. Supports resume via workflow state persistence, git worktree isolation, and --no-fix mode.",
     "dependencies": [
       "agentic_common_python.prompt",
@@ -6821,11 +7641,15 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 13800,
+      "y": 1200
     }
   },
   {
     "reason": "Agentic instruction for assigning logical graph positions to modules in an\narchitecture file. The agent reads the file and an optional PRD/README, reasons about the\nlogical structure of the system, groups modules into functional swimlanes, and writes the\nupdated file in-place so pdd connect shows a graph that makes the architecture easy to\nunderstand at a glance.",
-    "description": "Takes {project_root} and {architecture_path} as inputs. Agent reads the architecture file and any PRD/README. Reasons about functional groupings, pipeline stages, and dependency relationships. Places modules in swimlane columns (one per major functional area, shared/hub modules in center). Dependency depth drives y-axis (depth \u00d7 500px). Writes updated file in-place with position: {x, y} on every module. Outputs a one-line summary.",
+    "description": "Takes {project_root} and {architecture_path} as inputs. Agent reads the architecture file and any PRD/README. Reasons about functional groupings, pipeline stages, and dependency relationships. Places modules in swimlane columns (one per major functional area, shared/hub modules in center). Dependency depth drives y-axis (depth × 500px). Writes updated file in-place with position: {x, y} on every module. Outputs a one-line summary.",
     "dependencies": [],
     "priority": 219,
     "filename": "arrange_graph_layout_LLM.prompt",
@@ -6845,6 +7669,10 @@
         "architecture_path": "Absolute path to the architecture JSON file to update"
       },
       "output": "Writes updated architecture file in-place with position (x, y integers) on every module. Outputs one-line summary."
+    },
+    "position": {
+      "x": 21600,
+      "y": 0
     }
   },
   {
@@ -6870,6 +7698,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 20400,
+      "y": 3600
     }
   },
   {
@@ -6895,6 +7727,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 20400,
+      "y": 4000
     }
   },
   {
@@ -6920,6 +7756,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 20400,
+      "y": 4400
     }
   },
   {
@@ -6945,6 +7785,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 20400,
+      "y": 4800
     }
   },
   {
@@ -6970,6 +7814,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 20400,
+      "y": 1420
     }
   },
   {
@@ -6995,6 +7843,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 21000,
+      "y": 1600
     }
   },
   {
@@ -7020,6 +7872,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 21000,
+      "y": 2000
     }
   },
   {
@@ -7045,6 +7901,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 21000,
+      "y": 2400
     }
   },
   {
@@ -7070,6 +7930,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 21000,
+      "y": 2800
     }
   },
   {
@@ -7095,6 +7959,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 21000,
+      "y": 3200
     }
   },
   {
@@ -7124,6 +7992,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 11400,
+      "y": 0
     }
   },
   {
@@ -7165,6 +8037,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 12000,
+      "y": 0
     }
   },
   {
@@ -7189,6 +8065,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 8960,
+      "y": 220
     }
   },
   {
@@ -7223,6 +8103,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 9000,
+      "y": 0
     }
   },
   {
@@ -7252,6 +8136,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 9280,
+      "y": 1100
     }
   },
   {
@@ -7276,6 +8164,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 9880,
+      "y": 0
     }
   },
   {
@@ -7300,6 +8192,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 9880,
+      "y": 880
     }
   },
   {
@@ -7351,6 +8247,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 11400,
+      "y": 620
     }
   },
   {
@@ -7375,6 +8275,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 10760,
+      "y": 1540
     }
   }
 ]
