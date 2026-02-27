@@ -228,10 +228,105 @@ def _has_unpushed_commits(cwd: Path) -> bool:
     return False
 
 
+def _push_with_retry(
+    cwd: Path,
+    repo_owner: str,
+    repo_name: str,
+) -> Tuple[bool, str]:
+    """
+    Pushes to remote, retrying with PDD_GH_TOKEN_FILE on auth failure.
+
+    On push auth failure (Authentication failed, HTTP 401, could not read Username,
+    or HTTP Basic: Access denied):
+    - If PDD_GH_TOKEN_FILE env var is set and the file exists with non-empty content:
+      - Read the token from the file (strip whitespace)
+      - Save the current remote origin URL
+      - Set remote origin URL to https://x-access-token:{token}@github.com/{repo_owner}/{repo_name}.git
+      - Retry the push once
+      - Restore the original remote URL in a finally block (prevents token leakage in git config)
+    - If no token file available, file is empty, or retry also fails: return (False, error)
+
+    Returns:
+        (success, message)
+    """
+    push_result = subprocess.run(
+        ["git", "push"],
+        cwd=cwd,
+        capture_output=True,
+        text=True
+    )
+
+    if push_result.returncode == 0:
+        return True, ""
+
+    stderr = push_result.stderr
+    auth_errors = ["Authentication failed", "HTTP 401", "could not read Username", "HTTP Basic: Access denied"]
+    is_auth_failure = any(err in stderr for err in auth_errors)
+
+    if not is_auth_failure:
+        return False, stderr
+
+    # Auth failure — try PDD_GH_TOKEN_FILE
+    token_file_path = os.environ.get("PDD_GH_TOKEN_FILE")
+    if not token_file_path:
+        return False, stderr
+
+    token_path = Path(token_file_path)
+    if not token_path.exists():
+        return False, stderr
+
+    token = token_path.read_text().strip()
+    if not token:
+        return False, stderr
+
+    # Save original remote URL
+    url_result = subprocess.run(
+        ["git", "remote", "get-url", "origin"],
+        cwd=cwd,
+        capture_output=True,
+        text=True
+    )
+    original_url = url_result.stdout.strip() if url_result.returncode == 0 else ""
+
+    try:
+        # Set remote URL with token
+        token_url = f"https://x-access-token:{token}@github.com/{repo_owner}/{repo_name}.git"
+        subprocess.run(
+            ["git", "remote", "set-url", "origin", token_url],
+            cwd=cwd,
+            capture_output=True,
+            text=True
+        )
+
+        # Retry push
+        retry_result = subprocess.run(
+            ["git", "push"],
+            cwd=cwd,
+            capture_output=True,
+            text=True
+        )
+
+        if retry_result.returncode == 0:
+            return True, ""
+        else:
+            return False, retry_result.stderr
+    finally:
+        # Restore original remote URL (prevents token leakage in git config)
+        if original_url:
+            subprocess.run(
+                ["git", "remote", "set-url", "origin", original_url],
+                cwd=cwd,
+                capture_output=True,
+                text=True
+            )
+
+
 def _commit_and_push(
     cwd: Path,
     issue_number: int,
     issue_title: str,
+    repo_owner: str,
+    repo_name: str,
     initial_file_hashes: Dict[str, Optional[str]],
     quiet: bool = False
 ) -> Tuple[bool, str]:
@@ -244,10 +339,14 @@ def _commit_and_push(
     The PR was already created by `pdd bug`, so pushing
     automatically updates it.
 
+    On push auth failure, retries using PDD_GH_TOKEN_FILE if available.
+
     Args:
         cwd: Working directory
         issue_number: GitHub issue number
         issue_title: Issue title for commit message
+        repo_owner: GitHub repository owner
+        repo_name: GitHub repository name
         initial_file_hashes: File hashes from before workflow started
         quiet: Suppress output
 
@@ -276,16 +375,11 @@ def _commit_and_push(
             files_to_commit = list(fallback_files)
         elif _has_unpushed_commits(cwd):
             # Check if there are unpushed commits to push
-            push_result = subprocess.run(
-                ["git", "push"],
-                cwd=cwd,
-                capture_output=True,
-                text=True
-            )
-            if push_result.returncode == 0:
+            push_ok, push_err = _push_with_retry(cwd, repo_owner, repo_name)
+            if push_ok:
                 return True, "Pushed existing commits"
             else:
-                return False, f"Push failed: {push_result.stderr}"
+                return False, f"Push failed: {push_err}"
         else:
             return True, "No changes to commit"
 
@@ -311,18 +405,13 @@ def _commit_and_push(
     if commit_result.returncode != 0:
         return False, f"Failed to commit: {commit_result.stderr}"
 
-    # Push to remote (branch already exists from pdd bug)
-    push_result = subprocess.run(
-        ["git", "push"],
-        cwd=cwd,
-        capture_output=True,
-        text=True
-    )
+    # Push to remote with retry on auth failure
+    push_ok, push_err = _push_with_retry(cwd, repo_owner, repo_name)
 
-    if push_result.returncode == 0:
+    if push_ok:
         return True, f"Committed and pushed {len(files_to_commit)} file(s)"
     else:
-        return False, f"Push failed: {push_result.stderr}"
+        return False, f"Push failed: {push_err}"
 
 
 def run_agentic_e2e_fix_orchestrator(
@@ -607,6 +696,8 @@ def run_agentic_e2e_fix_orchestrator(
                 cwd=cwd,
                 issue_number=issue_number,
                 issue_title=issue_title,
+                repo_owner=repo_owner,
+                repo_name=repo_name,
                 initial_file_hashes=initial_file_hashes,
                 quiet=quiet
             )

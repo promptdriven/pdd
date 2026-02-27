@@ -1012,6 +1012,7 @@ class TestIssue545CommitAndPushWithTaintedHashes:
         success, message = _commit_and_push(
             cwd=worktree, issue_number=545,
             issue_title="Fix unstaged changes",
+            repo_owner="owner", repo_name="repo",
             initial_file_hashes=tainted_hashes, quiet=True
         )
 
@@ -1053,6 +1054,7 @@ class TestIssue545CommitAndPushWithTaintedHashes:
         success, message = _commit_and_push(
             cwd=worktree, issue_number=545,
             issue_title="Fix unstaged changes",
+            repo_owner="owner", repo_name="repo",
             initial_file_hashes=initial_hashes, quiet=True
         )
 
@@ -1083,6 +1085,7 @@ class TestIssue545CommitAndPushWithTaintedHashes:
         success, message = _commit_and_push(
             cwd=worktree, issue_number=545,
             issue_title="Fix unstaged changes",
+            repo_owner="owner", repo_name="repo",
             initial_file_hashes=initial_hashes, quiet=True
         )
 
@@ -1158,3 +1161,197 @@ class TestIssue545CommitAndPushWithTaintedHashes:
             f"_commit_and_push must detect and commit those changes. "
             f"Still uncommitted: {diff_after.stdout.strip()}"
         )
+
+
+# ============================================================================
+# Issue #629: PDD_GH_TOKEN_FILE push retry on auth failure
+# ============================================================================
+
+
+class TestPushWithRetryTokenFile:
+    """Tests for _push_with_retry and _commit_and_push token file retry behavior.
+
+    When git push fails with an auth error and PDD_GH_TOKEN_FILE is set,
+    the code should read the token, temporarily swap the remote URL to use
+    x-access-token auth, retry the push, and restore the original URL.
+    """
+
+    def test_push_with_retry_succeeds_on_first_try(self, tmp_path):
+        """When push succeeds on first try, no token retry is needed."""
+        from pdd.agentic_e2e_fix_orchestrator import _push_with_retry
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run") as mock_run:
+            mock_run.return_value = type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+            success, err = _push_with_retry(tmp_path, "owner", "repo")
+
+        assert success is True
+        assert err == ""
+        assert mock_run.call_count == 1
+
+    def test_push_with_retry_non_auth_failure_no_retry(self, tmp_path):
+        """When push fails with non-auth error, no retry is attempted."""
+        from pdd.agentic_e2e_fix_orchestrator import _push_with_retry
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run") as mock_run:
+            mock_run.return_value = type("Result", (), {
+                "returncode": 1, "stdout": "", "stderr": "fatal: remote hung up unexpectedly"
+            })()
+
+            success, err = _push_with_retry(tmp_path, "owner", "repo")
+
+        assert success is False
+        assert "remote hung up" in err
+        assert mock_run.call_count == 1
+
+    def test_push_with_retry_auth_failure_uses_token_file(self, tmp_path, monkeypatch):
+        """When push fails with auth error and PDD_GH_TOKEN_FILE exists, retry with token."""
+        from pdd.agentic_e2e_fix_orchestrator import _push_with_retry
+
+        # Create token file
+        token_file = tmp_path / "gh_token"
+        token_file.write_text("ghp_test_token_123\n")
+        monkeypatch.setenv("PDD_GH_TOKEN_FILE", str(token_file))
+
+        call_count = 0
+
+        def mock_run_side_effect(cmd, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            result = type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+            if cmd == ["git", "push"] and call_count == 1:
+                # First push fails with auth error
+                result.returncode = 1
+                result.stderr = "fatal: Authentication failed for 'https://github.com/owner/repo.git'"
+            elif cmd[0:3] == ["git", "remote", "get-url"]:
+                result.stdout = "https://github.com/owner/repo.git"
+            elif cmd[0:3] == ["git", "remote", "set-url"]:
+                pass  # No-op
+            elif cmd == ["git", "push"] and call_count > 1:
+                pass  # Second push succeeds
+
+            return result
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=mock_run_side_effect):
+            success, err = _push_with_retry(tmp_path, "owner", "repo")
+
+        assert success is True
+
+    def test_push_with_retry_auth_failure_no_token_file(self, tmp_path, monkeypatch):
+        """When push fails with auth error but no PDD_GH_TOKEN_FILE, return failure."""
+        from pdd.agentic_e2e_fix_orchestrator import _push_with_retry
+
+        monkeypatch.delenv("PDD_GH_TOKEN_FILE", raising=False)
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run") as mock_run:
+            mock_run.return_value = type("Result", (), {
+                "returncode": 1, "stdout": "", "stderr": "fatal: Authentication failed"
+            })()
+
+            success, err = _push_with_retry(tmp_path, "owner", "repo")
+
+        assert success is False
+        assert "Authentication failed" in err
+
+    def test_push_with_retry_auth_failure_empty_token_file(self, tmp_path, monkeypatch):
+        """When push fails with auth error and token file is empty, return failure."""
+        from pdd.agentic_e2e_fix_orchestrator import _push_with_retry
+
+        token_file = tmp_path / "gh_token"
+        token_file.write_text("  \n")
+        monkeypatch.setenv("PDD_GH_TOKEN_FILE", str(token_file))
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run") as mock_run:
+            mock_run.return_value = type("Result", (), {
+                "returncode": 1, "stdout": "", "stderr": "fatal: Authentication failed"
+            })()
+
+            success, err = _push_with_retry(tmp_path, "owner", "repo")
+
+        assert success is False
+
+    def test_push_with_retry_restores_original_url(self, tmp_path, monkeypatch):
+        """After token retry (success or fail), original remote URL must be restored."""
+        from pdd.agentic_e2e_fix_orchestrator import _push_with_retry
+
+        token_file = tmp_path / "gh_token"
+        token_file.write_text("ghp_test_token_123")
+        monkeypatch.setenv("PDD_GH_TOKEN_FILE", str(token_file))
+
+        set_url_calls = []
+
+        def mock_run_side_effect(cmd, **kwargs):
+            result = type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+            if cmd == ["git", "push"]:
+                if not set_url_calls:
+                    # First push fails
+                    result.returncode = 1
+                    result.stderr = "HTTP 401"
+                # Retry push succeeds
+            elif cmd[0:3] == ["git", "remote", "get-url"]:
+                result.stdout = "https://github.com/owner/repo.git"
+            elif cmd[0:3] == ["git", "remote", "set-url"]:
+                set_url_calls.append(cmd[4])  # cmd is ["git", "remote", "set-url", "origin", URL]
+
+            return result
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=mock_run_side_effect):
+            _push_with_retry(tmp_path, "owner", "repo")
+
+        # Should have 2 set-url calls: token URL, then restore original
+        assert len(set_url_calls) == 2, f"Expected 2 set-url calls, got {len(set_url_calls)}: {set_url_calls}"
+        assert "x-access-token" in set_url_calls[0], "First set-url should use token"
+        assert set_url_calls[1] == "https://github.com/owner/repo.git", "Second set-url should restore original"
+
+    def test_push_with_retry_detects_http_basic_access_denied(self, tmp_path, monkeypatch):
+        """Auth error 'HTTP Basic: Access denied' should trigger token retry."""
+        from pdd.agentic_e2e_fix_orchestrator import _push_with_retry
+
+        token_file = tmp_path / "gh_token"
+        token_file.write_text("ghp_test_token_123")
+        monkeypatch.setenv("PDD_GH_TOKEN_FILE", str(token_file))
+
+        call_count = 0
+
+        def mock_run_side_effect(cmd, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            result = type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+            if cmd == ["git", "push"] and call_count == 1:
+                result.returncode = 1
+                result.stderr = "remote: HTTP Basic: Access denied"
+            elif cmd[0:3] == ["git", "remote", "get-url"]:
+                result.stdout = "https://github.com/owner/repo.git"
+
+            return result
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=mock_run_side_effect):
+            success, err = _push_with_retry(tmp_path, "owner", "repo")
+
+        assert success is True
+
+    def test_commit_and_push_passes_repo_params_to_push(self, tmp_path):
+        """_commit_and_push should pass repo_owner/repo_name through to push logic."""
+        from pdd.agentic_e2e_fix_orchestrator import _commit_and_push
+
+        with patch("pdd.agentic_e2e_fix_orchestrator._get_file_hashes") as mock_hashes, \
+             patch("pdd.agentic_e2e_fix_orchestrator._push_with_retry") as mock_push, \
+             patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run") as mock_run:
+
+            # Simulate a file that changed
+            mock_hashes.return_value = {"new_file.py": "abc123"}
+            mock_push.return_value = (True, "")
+            mock_run.return_value = type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+            success, message = _commit_and_push(
+                cwd=tmp_path, issue_number=1,
+                issue_title="Test",
+                repo_owner="myowner", repo_name="myrepo",
+                initial_file_hashes={}, quiet=True
+            )
+
+        # Verify _push_with_retry was called with correct repo params
+        mock_push.assert_called_once_with(tmp_path, "myowner", "myrepo")
