@@ -647,6 +647,16 @@ def _validate_python_imports(
     unresolved: list[str] = []
     code_dir = code_file.parent
 
+    # Pre-compute installed package names for namespace package fallback.
+    # find_spec() returns None for some namespace packages (e.g., packages installed
+    # under a different distribution name). packages_distributions() (Python 3.11+)
+    # maps importable package names to their distribution names.
+    try:
+        import importlib.metadata
+        installed_packages = set(importlib.metadata.packages_distributions().keys())
+    except Exception:
+        installed_packages = set()
+
     for module_name in sorted(non_stdlib):
         # Check if it exists as a local .py file in the same directory as the code
         local_file = code_dir / f"{module_name}.py"
@@ -657,6 +667,10 @@ def _validate_python_imports(
         # Check if it's an installable/importable third-party package
         spec = importlib.util.find_spec(module_name)
         if spec is not None:
+            continue
+
+        # Fallback: check installed distributions for namespace packages
+        if module_name in installed_packages:
             continue
 
         # Module is neither local nor third-party — it's unresolved
