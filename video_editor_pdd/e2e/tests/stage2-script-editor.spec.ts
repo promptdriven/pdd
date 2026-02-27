@@ -4,9 +4,9 @@ test.describe('Stage 2: Script Editor', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
-    // Click on Script stage
+    // Click on Script stage — use exact text match to avoid hitting "TTS Script"
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Script' }).first().click();
+    await sidebar.getByText('Script', { exact: true }).click();
     // Wait for Stage 2 heading to confirm navigation
     await expect(page.locator('h2', { hasText: 'Stage 2' })).toBeVisible({ timeout: 10000 });
     // Give CodeMirror time to initialize
@@ -39,7 +39,7 @@ test.describe('Stage 2: Script Editor', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Script' }).first().click();
+    await sidebar.getByText('Script', { exact: true }).click();
     await expect(page.locator('h2', { hasText: 'Stage 2' })).toBeVisible({ timeout: 10000 });
     await page.waitForTimeout(1500);
 
@@ -80,7 +80,7 @@ test.describe('Stage 2: Script Editor', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Script' }).first().click();
+    await sidebar.getByText('Script', { exact: true }).click();
     await expect(page.locator('h2', { hasText: 'Stage 2' })).toBeVisible({ timeout: 10000 });
     await page.waitForTimeout(1500);
 
@@ -114,7 +114,7 @@ test.describe('Stage 2: Script Editor', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Script' }).first().click();
+    await sidebar.getByText('Script', { exact: true }).click();
     await expect(page.locator('h2', { hasText: 'Stage 2' })).toBeVisible({ timeout: 10000 });
     await page.waitForTimeout(1500);
 
@@ -140,7 +140,7 @@ test.describe('Stage 2: Script Editor', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Script' }).first().click();
+    await sidebar.getByText('Script', { exact: true }).click();
     await expect(page.locator('h2', { hasText: 'Stage 2' })).toBeVisible({ timeout: 10000 });
     await page.waitForTimeout(2000);
 
@@ -252,7 +252,7 @@ test.describe('Stage 2: Script Editor', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Script' }).first().click();
+    await sidebar.getByText('Script', { exact: true }).click();
     await expect(page.locator('h2', { hasText: 'Stage 2' })).toBeVisible({ timeout: 10000 });
     await page.waitForTimeout(2000);
 
@@ -306,7 +306,7 @@ test.describe('Stage 2: Script Editor', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Script' }).first().click();
+    await sidebar.getByText('Script', { exact: true }).click();
     await expect(page.locator('h2', { hasText: 'Stage 2' })).toBeVisible({ timeout: 10000 });
     await page.waitForTimeout(2000);
 
@@ -335,7 +335,7 @@ test.describe('Stage 2: Script Editor', () => {
     });
 
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Script' }).first().click();
+    await sidebar.getByText('Script', { exact: true }).click();
     await expect(page.locator('h2', { hasText: 'Stage 2' })).toBeVisible({ timeout: 10000 });
     await page.waitForTimeout(1500);
 
@@ -380,7 +380,7 @@ test.describe('Stage 2: Script Editor', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Script' }).first().click();
+    await sidebar.getByText('Script', { exact: true }).click();
     await expect(page.locator('h2', { hasText: 'Stage 2' })).toBeVisible({ timeout: 10000 });
 
     // Wait well past the 1s debounce without typing anything
@@ -425,7 +425,7 @@ test.describe('Stage 2: Script Editor', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Script' }).first().click();
+    await sidebar.getByText('Script', { exact: true }).click();
     await expect(page.locator('h2', { hasText: 'Stage 2' })).toBeVisible({ timeout: 10000 });
     await page.waitForTimeout(2000);
 
@@ -458,7 +458,7 @@ test.describe('Stage 2: Script Editor', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Script' }).first().click();
+    await sidebar.getByText('Script', { exact: true }).click();
     await expect(page.locator('h2', { hasText: 'Stage 2' })).toBeVisible({ timeout: 10000 });
     await page.waitForTimeout(2000);
 
@@ -489,7 +489,7 @@ test.describe('Stage 2: Script Editor', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Script' }).first().click();
+    await sidebar.getByText('Script', { exact: true }).click();
     await expect(page.locator('h2', { hasText: 'Stage 2' })).toBeVisible({ timeout: 10000 });
     await page.waitForTimeout(2000);
 
@@ -514,7 +514,7 @@ test.describe('Stage 2: Script Editor', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Script' }).first().click();
+    await sidebar.getByText('Script', { exact: true }).click();
     await expect(page.locator('h2', { hasText: 'Stage 2' })).toBeVisible({ timeout: 10000 });
     await page.waitForTimeout(2000);
 
@@ -545,7 +545,7 @@ test.describe('Stage 2: Script Editor', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Script' }).first().click();
+    await sidebar.getByText('Script', { exact: true }).click();
     await expect(page.locator('h2', { hasText: 'Stage 2' })).toBeVisible({ timeout: 10000 });
     await page.waitForTimeout(2000);
 
