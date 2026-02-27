@@ -7,7 +7,7 @@
   "type": "module",
   "module": {{
     "functions": [
-      {{"name": "run_agentic_e2e_fix_orchestrator", "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, *, cwd, timeout_adder, max_cycles, resume, verbose, quiet, use_github_state)", "returns": "Tuple[bool, str, float, str, List[str]]"}}
+      {{"name": "run_agentic_e2e_fix_orchestrator", "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, *, cwd, timeout_adder, max_cycles, resume, verbose, quiet, use_github_state, protect_tests)", "returns": "Tuple[bool, str, float, str, List[str]]"}}
     ]
   }}
 }}

@@ -279,14 +279,16 @@ def _push_with_retry(
     if not token:
         return False, stderr
 
-    # Save original remote URL
+    # Save original remote URL — abort retry if we can't capture it
     url_result = subprocess.run(
         ["git", "remote", "get-url", "origin"],
         cwd=cwd,
         capture_output=True,
         text=True
     )
-    original_url = url_result.stdout.strip() if url_result.returncode == 0 else ""
+    if url_result.returncode != 0:
+        return False, stderr
+    original_url = url_result.stdout.strip()
 
     try:
         # Set remote URL with token
