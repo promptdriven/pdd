@@ -17,44 +17,19 @@
       "module": {
         "functions": [
           {
+            "name": "llm_invoke",
+            "signature": "(prompt, input_json, strength, temperature, verbose, output_pydantic, output_schema, time, use_batch_mode, messages, language, use_cloud)",
+            "returns": "Dict[str, Any]"
+          },
+          {
             "name": "setup_file_logging",
-            "signature": "(log_file_path = None)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(log_file_path=None)",
+            "returns": "None"
           },
           {
             "name": "set_verbose_logging",
-            "signature": "(verbose = False)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "llm_invoke",
-            "signature": "(prompt: Optional[str] = None, input_json: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = None, strength: float = 0.5, temperature: float = 0.1, verbose: bool = False, output_pydantic: Optional[Type[BaseModel]] = None, output_schema: Optional[Dict[str, Any]] = None, time: Optional[float] = 0.25, use_batch_mode: bool = False, messages: Optional[Union[List[Dict[str, str]], List[List[Dict[str, str]]]]] = None, language: Optional[str] = None, use_cloud: Optional[bool] = None) -> Dict[str, Any]",
-            "returns": "Dict[str, Any]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "__init__",
-            "signature": "(self, message: str, raw_response: Any = None, item_index: int = 0)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "calc_strength",
-            "signature": "(candidate)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(verbose=False)",
+            "returns": "None"
           }
         ]
       }
@@ -3162,7 +3137,7 @@
     }
   },
   {
-    "reason": "LLM prompt template for agentic bug step5 root cause operations.",
+    "reason": "Analyzes bug root cause with cross-cutting concern detection for better fix guidance.",
     "description": "Defines the prompt structure for agentic bug step5 root cause. Invoked by the corresponding Python module to format LLM requests.",
     "dependencies": [],
     "priority": 76,
@@ -3182,7 +3157,7 @@
     }
   },
   {
-    "reason": "LLM prompt template for agentic bug step6 test plan operations.",
+    "reason": "Guides LLM to design observable-behavior test plans during pdd bug step 6.",
     "description": "Defines the prompt structure for agentic bug step6 test plan. Invoked by the corresponding Python module to format LLM requests.",
     "dependencies": [],
     "priority": 77,
@@ -3257,9 +3232,10 @@
       "template"
     ],
     "interface": {
-      "type": "config",
-      "config": {
-        "keys": []
+      "type": "command",
+      "command": {
+        "name": "agentic_bug_step10",
+        "description": "Generate draft PR with failing tests and link to GitHub issue"
       }
     }
   },
@@ -4332,9 +4308,11 @@
     }
   },
   {
-    "reason": "Configures PDD installation and environment.",
+    "reason": "Orchestrates pdd setup in two phases: (1) interactive CLI bootstrapping with minimal friction, (2) deterministic auto-configuration using existing Python modules (no LLM calls).",
     "description": "Handles initial setup, configuration, and environment variable management.",
-    "dependencies": [],
+    "dependencies": [
+      "cli_detector_python.prompt"
+    ],
     "priority": 129,
     "filename": "setup_tool_python.prompt",
     "filepath": "pdd/setup_tool.py",
@@ -4347,156 +4325,9 @@
       "module": {
         "functions": [
           {
-            "name": "print_colored",
-            "signature": "(text: str, color: str = WHITE, bold: bool = False) -> None",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "create_divider",
-            "signature": "(char: str = LIGHT_HORIZONTAL, width: int = 80) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "create_fat_divider",
-            "signature": "(width: int = 80) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "print_pdd_logo",
+            "name": "run_setup",
             "signature": "()",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "get_csv_variable_names",
-            "signature": "() -> Dict[str, str]",
-            "returns": "Dict[str, str]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "discover_api_keys",
-            "signature": "() -> Dict[str, Optional[str]]",
-            "returns": "Dict[str, Optional[str]]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "test_openai_key",
-            "signature": "(api_key: str) -> bool",
-            "returns": "bool",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "test_google_key",
-            "signature": "(api_key: str) -> bool",
-            "returns": "bool",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "test_anthropic_key",
-            "signature": "(api_key: str) -> bool",
-            "returns": "bool",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "test_api_keys",
-            "signature": "(keys: Dict[str, Optional[str]]) -> Dict[str, bool]",
-            "returns": "Dict[str, bool]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "get_user_keys",
-            "signature": "(current_keys: Dict[str, Optional[str]]) -> Dict[str, Optional[str]]",
-            "returns": "Dict[str, Optional[str]]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "detect_shell",
-            "signature": "() -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "get_shell_init_file",
-            "signature": "(shell: str) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "create_api_env_script",
-            "signature": "(keys: Dict[str, str], shell: str) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "save_configuration",
-            "signature": "(valid_keys: Dict[str, str]) -> Tuple[List[str], bool, Optional[str]]",
-            "returns": "Tuple[List[str], bool, Optional[str]]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "create_sample_prompt",
-            "signature": "()",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "show_menu",
-            "signature": "(keys: Dict[str, Optional[str]], test_results: Dict[str, bool]) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "create_exit_summary",
-            "signature": "(saved_files: List[str], created_pdd_dir: bool, sample_prompt_file: str, shell: str, valid_keys: Dict[str, str], init_file_updated: Optional[str] = None) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "main",
-            "signature": "()",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "None"
           }
         ]
       }
@@ -5385,7 +5216,7 @@
         "functions": [
           {
             "name": "run_agentic_architecture",
-            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool)",
+            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool, skip_prompts: bool)",
             "returns": "Tuple[bool, str, float, str, List[str]]"
           },
           {
@@ -5750,7 +5581,7 @@
     }
   },
   {
-    "reason": "LLM prompt template for generating E2E tests that verify a bug at system integration level.",
+    "reason": "Generates E2E tests that verify the bug at a system level.",
     "description": "Step 9 of the agentic bug workflow. Generates and runs end-to-end tests that verify a bug at the system integration level.",
     "dependencies": [],
     "priority": 167,
@@ -7129,7 +6960,7 @@
     }
   },
   {
-    "reason": "Entry point for the agentic checkup workflow \u2014 fetches GitHub issue, loads project context, and dispatches to the checkup orchestrator.",
+    "reason": "Entry point for the agentic checkup workflow — fetches GitHub issue, loads project context, and dispatches to the checkup orchestrator.",
     "description": "Accepts a GitHub issue URL, fetches issue content and comments, loads architecture.json and .pddrc, then invokes the multi-step checkup orchestrator that explores the project, identifies problems, and optionally fixes them.",
     "dependencies": [
       "agentic_change_python.prompt",
@@ -7186,7 +7017,7 @@
     }
   },
   {
-    "reason": "Multi-step orchestrator for pdd checkup \u2014 8 steps with iterative fix-verify loop and worktree isolation.",
+    "reason": "Multi-step orchestrator for pdd checkup — 8 steps with iterative fix-verify loop and worktree isolation.",
     "description": "Orchestrates the 8-step agentic checkup workflow: discover, deps, build, interfaces, test, fix (6.1/6.2/6.3), verify, create PR. Steps 3-7 run in an iterative while loop (max 3 iterations) with exit on 'All Issues Fixed'. Supports resume via workflow state persistence, git worktree isolation, and --no-fix mode.",
     "dependencies": [
       "agentic_common_python.prompt",
@@ -7241,8 +7072,8 @@
     }
   },
   {
-    "reason": "Agentic prompt that reads an architecture file and an optional PRD/README, reasons about the logical structure of the system, and assigns swimlane graph positions to every module so pdd connect shows a graph that makes the architecture easy to understand at a glance.",
-    "description": "Takes {project_root} and {architecture_path} as inputs. Agent reads the architecture file and any PRD/README. Reasons about functional groupings, pipeline stages, and dependency relationships. Places modules in swimlane columns (one per major functional area, shared/hub modules in center). Dependency depth drives y-axis (depth \u00d7 500px). Writes updated file in-place with position: {x, y} on every module. Outputs a one-line summary.",
+    "reason": "Agentic instruction for assigning logical graph positions to modules in an\narchitecture file. The agent reads the file and an optional PRD/README, reasons about the\nlogical structure of the system, groups modules into functional swimlanes, and writes the\nupdated file in-place so pdd connect shows a graph that makes the architecture easy to\nunderstand at a glance.",
+    "description": "Takes {project_root} and {architecture_path} as inputs. Agent reads the architecture file and any PRD/README. Reasons about functional groupings, pipeline stages, and dependency relationships. Places modules in swimlane columns (one per major functional area, shared/hub modules in center). Dependency depth drives y-axis (depth × 500px). Writes updated file in-place with position: {x, y} on every module. Outputs a one-line summary.",
     "dependencies": [],
     "priority": 219,
     "filename": "arrange_graph_layout_LLM.prompt",

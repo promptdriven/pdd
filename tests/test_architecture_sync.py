@@ -11,10 +11,14 @@ from pathlib import Path
 import pytest
 
 from pdd.architecture_sync import (
+    _find_renamed_prompt_file,
+    _infer_filepath,
+    _infer_module_tags,
     generate_tags_from_architecture,
     get_architecture_entry_for_prompt,
     has_pdd_tags,
     parse_prompt_tags,
+    register_untracked_prompts,
     sync_all_prompts_to_architecture,
     update_architecture_from_prompt,
     validate_dependencies,
@@ -1774,3 +1778,280 @@ def test_parse_tags_ignores_tilde_fenced_tags():
         f"Expected [] but got {result['dependencies']} — "
         "parser is extracting dependencies from inside tilde code fences"
     )
+
+
+# --- Tests for auto-rename and auto-register features ---
+
+def test_find_renamed_prompt_file_finds_step_file():
+    """_find_renamed_prompt_file returns renamed path when exactly one step-numbered variant exists."""
+    with tempfile.TemporaryDirectory() as tmp:
+        prompts_dir = Path(tmp)
+        # step5_design exists on disk but step4_design does not
+        (prompts_dir / 'agentic_arch_step5_design_LLM.prompt').write_text('content')
+
+        result = _find_renamed_prompt_file('agentic_arch_step4_design_LLM.prompt', prompts_dir)
+
+        assert result is not None
+        assert result.name == 'agentic_arch_step5_design_LLM.prompt'
+
+
+def test_find_renamed_prompt_file_no_match():
+    """_find_renamed_prompt_file returns None when no similarly-named file exists."""
+    with tempfile.TemporaryDirectory() as tmp:
+        prompts_dir = Path(tmp)
+        # No files at all
+
+        result = _find_renamed_prompt_file('agentic_arch_step4_design_LLM.prompt', prompts_dir)
+
+        assert result is None
+
+
+def test_find_renamed_prompt_file_ambiguous():
+    """_find_renamed_prompt_file returns None when multiple step-number variants exist."""
+    with tempfile.TemporaryDirectory() as tmp:
+        prompts_dir = Path(tmp)
+        (prompts_dir / 'agentic_arch_step5_design_LLM.prompt').write_text('content')
+        (prompts_dir / 'agentic_arch_step6_design_LLM.prompt').write_text('content')
+
+        result = _find_renamed_prompt_file('agentic_arch_step4_design_LLM.prompt', prompts_dir)
+
+        assert result is None
+
+
+def test_find_renamed_prompt_file_no_step_pattern():
+    """_find_renamed_prompt_file returns None for filenames without step number pattern."""
+    with tempfile.TemporaryDirectory() as tmp:
+        prompts_dir = Path(tmp)
+        (prompts_dir / 'cli_detector_python.prompt').write_text('content')
+
+        result = _find_renamed_prompt_file('cli_detector_python.prompt', prompts_dir)
+
+        assert result is None
+
+
+def test_update_uses_renamed_file():
+    """update_architecture_from_prompt auto-renames arch.json entry and syncs from the found file."""
+    with tempfile.TemporaryDirectory() as tmp:
+        prompts_dir = Path(tmp)
+        arch_path = Path(tmp) / 'architecture.json'
+
+        # Disk has step5 but arch.json references step4
+        step5_content = '<pdd-reason>Design step 5</pdd-reason>\n% body'
+        (prompts_dir / 'agentic_arch_step5_design_LLM.prompt').write_text(step5_content)
+
+        arch_data = [
+            {
+                'filename': 'agentic_arch_step4_design_LLM.prompt',
+                'filepath': 'prompts/agentic_arch_step4_design_LLM.prompt',
+                'reason': 'Old reason',
+                'dependencies': [],
+                'priority': 1,
+            }
+        ]
+        arch_path.write_text(json.dumps(arch_data, indent=2) + '\n')
+
+        result = update_architecture_from_prompt(
+            'agentic_arch_step4_design_LLM.prompt',
+            prompts_dir=prompts_dir,
+            architecture_path=arch_path,
+        )
+
+        assert result['success'] is True
+        # Should have updated filename and reason
+        updated_arch = json.loads(arch_path.read_text())
+        assert updated_arch[0]['filename'] == 'agentic_arch_step5_design_LLM.prompt'
+        assert updated_arch[0]['filepath'] == 'prompts/agentic_arch_step5_design_LLM.prompt'
+        assert updated_arch[0]['reason'] == 'Design step 5'
+
+
+def test_update_uses_renamed_file_dry_run():
+    """update_architecture_from_prompt dry_run does not write changes."""
+    with tempfile.TemporaryDirectory() as tmp:
+        prompts_dir = Path(tmp)
+        arch_path = Path(tmp) / 'architecture.json'
+
+        (prompts_dir / 'agentic_arch_step5_design_LLM.prompt').write_text(
+            '<pdd-reason>Design step 5</pdd-reason>\n% body'
+        )
+
+        arch_data = [
+            {
+                'filename': 'agentic_arch_step4_design_LLM.prompt',
+                'filepath': 'prompts/agentic_arch_step4_design_LLM.prompt',
+                'reason': 'Old reason',
+                'dependencies': [],
+                'priority': 1,
+            }
+        ]
+        original_text = json.dumps(arch_data, indent=2) + '\n'
+        arch_path.write_text(original_text)
+
+        result = update_architecture_from_prompt(
+            'agentic_arch_step4_design_LLM.prompt',
+            prompts_dir=prompts_dir,
+            architecture_path=arch_path,
+            dry_run=True,
+        )
+
+        assert result['success'] is True
+        # File should be unchanged in dry_run mode
+        assert arch_path.read_text() == original_text
+
+
+def test_infer_filepath_python():
+    """_infer_filepath returns pdd/<module>.py for _python.prompt files."""
+    assert _infer_filepath('cli_detector_python.prompt') == 'pdd/cli_detector.py'
+
+
+def test_infer_filepath_llm():
+    """_infer_filepath returns prompts/<filename> for _LLM.prompt files."""
+    assert _infer_filepath('agentic_arch_step5_design_LLM.prompt') == 'prompts/agentic_arch_step5_design_LLM.prompt'
+
+
+def test_infer_module_tags_python():
+    """_infer_module_tags returns ['module', 'python'] for _python.prompt files."""
+    assert _infer_module_tags('cli_detector_python.prompt') == ['module', 'python']
+
+
+def test_infer_module_tags_llm():
+    """_infer_module_tags returns ['llm'] for _LLM.prompt files."""
+    assert _infer_module_tags('agentic_arch_step5_design_LLM.prompt') == ['llm']
+
+
+def test_register_untracked_prompts_adds_entry():
+    """register_untracked_prompts registers a prompt with PDD tags not in arch.json."""
+    with tempfile.TemporaryDirectory() as tmp:
+        prompts_dir = Path(tmp)
+        arch_path = Path(tmp) / 'architecture.json'
+
+        # cli_detector_python.prompt has PDD tags but no arch.json entry
+        (prompts_dir / 'cli_detector_python.prompt').write_text(
+            '<pdd-reason>Detects CLI invocation context</pdd-reason>\n% body'
+        )
+        # Already-registered module
+        (prompts_dir / 'existing_python.prompt').write_text(
+            '<pdd-reason>Existing module</pdd-reason>\n% body'
+        )
+
+        arch_data = [
+            {
+                'filename': 'existing_python.prompt',
+                'filepath': 'pdd/existing.py',
+                'reason': 'Existing module',
+                'dependencies': [],
+                'priority': 1,
+            }
+        ]
+        arch_path.write_text(json.dumps(arch_data, indent=2) + '\n')
+
+        result = register_untracked_prompts(prompts_dir=prompts_dir, architecture_path=arch_path)
+
+        assert 'cli_detector_python.prompt' in result['registered']
+        assert 'existing_python.prompt' not in result['registered']
+
+        # Verify written to arch.json
+        updated = json.loads(arch_path.read_text())
+        filenames = [m['filename'] for m in updated]
+        assert 'cli_detector_python.prompt' in filenames
+
+        # Check inferred fields
+        cli_entry = next(m for m in updated if m['filename'] == 'cli_detector_python.prompt')
+        assert cli_entry['filepath'] == 'pdd/cli_detector.py'
+        assert cli_entry['reason'] == 'Detects CLI invocation context'
+        assert 'python' in cli_entry['tags']
+
+
+def test_register_skips_file_without_tags():
+    """register_untracked_prompts skips prompt files with no PDD tags."""
+    with tempfile.TemporaryDirectory() as tmp:
+        prompts_dir = Path(tmp)
+        arch_path = Path(tmp) / 'architecture.json'
+
+        # No PDD tags
+        (prompts_dir / 'bare_module_python.prompt').write_text('% Just a body, no tags\n')
+
+        arch_path.write_text(json.dumps([], indent=2) + '\n')
+
+        result = register_untracked_prompts(prompts_dir=prompts_dir, architecture_path=arch_path)
+
+        assert 'bare_module_python.prompt' not in result['registered']
+        assert 'bare_module_python.prompt' in result['skipped']
+
+        # Arch.json should remain empty
+        assert json.loads(arch_path.read_text()) == []
+
+
+def test_register_untracked_prompts_dry_run():
+    """register_untracked_prompts dry_run does not write to arch.json."""
+    with tempfile.TemporaryDirectory() as tmp:
+        prompts_dir = Path(tmp)
+        arch_path = Path(tmp) / 'architecture.json'
+
+        (prompts_dir / 'cli_detector_python.prompt').write_text(
+            '<pdd-reason>Detects CLI</pdd-reason>\n% body'
+        )
+        arch_path.write_text(json.dumps([], indent=2) + '\n')
+
+        result = register_untracked_prompts(
+            prompts_dir=prompts_dir, architecture_path=arch_path, dry_run=True
+        )
+
+        assert 'cli_detector_python.prompt' in result['registered']
+        # File should be unchanged
+        assert json.loads(arch_path.read_text()) == []
+
+
+def test_sync_all_auto_registers_before_syncing():
+    """sync_all_prompts_to_architecture registers untracked files and handles renamed files."""
+    with tempfile.TemporaryDirectory() as tmp:
+        prompts_dir = Path(tmp)
+        arch_path = Path(tmp) / 'architecture.json'
+
+        # Disk: step5_design exists, cli_detector exists
+        (prompts_dir / 'agentic_arch_step5_design_LLM.prompt').write_text(
+            '<pdd-reason>Design step</pdd-reason>\n% body'
+        )
+        (prompts_dir / 'cli_detector_python.prompt').write_text(
+            '<pdd-reason>Detects CLI</pdd-reason>\n% body'
+        )
+        (prompts_dir / 'existing_python.prompt').write_text(
+            '<pdd-reason>Existing updated</pdd-reason>\n% body'
+        )
+
+        # arch.json: step4_design (stale name), existing (registered), no cli_detector
+        arch_data = [
+            {
+                'filename': 'agentic_arch_step4_design_LLM.prompt',
+                'filepath': 'prompts/agentic_arch_step4_design_LLM.prompt',
+                'reason': 'Old design',
+                'dependencies': [],
+                'priority': 1,
+            },
+            {
+                'filename': 'existing_python.prompt',
+                'filepath': 'pdd/existing.py',
+                'reason': 'Old reason',
+                'dependencies': [],
+                'priority': 2,
+            },
+        ]
+        arch_path.write_text(json.dumps(arch_data, indent=2) + '\n')
+
+        result = sync_all_prompts_to_architecture(
+            prompts_dir=prompts_dir,
+            architecture_path=arch_path,
+        )
+
+        assert result['success'] is True
+
+        # Check registered field is present
+        assert 'registered' in result
+        assert 'cli_detector_python.prompt' in result['registered']
+
+        # Verify arch.json has all three modules
+        updated = json.loads(arch_path.read_text())
+        filenames = [m['filename'] for m in updated]
+        assert 'cli_detector_python.prompt' in filenames
+        assert 'agentic_arch_step5_design_LLM.prompt' in filenames
+        assert 'agentic_arch_step4_design_LLM.prompt' not in filenames
+        assert 'existing_python.prompt' in filenames
