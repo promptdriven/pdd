@@ -592,14 +592,13 @@ def _try_auto_fix_import_error(
 
 def _validate_python_imports(
     code_file: Path,
-    project_root: Path,
 ) -> list[str]:
     """
     Validate that local imports in generated Python code resolve to actual files on disk.
 
     Uses ast.parse() to extract Import/ImportFrom nodes, filters out stdlib and
     known third-party packages, then checks whether each remaining local import
-    corresponds to a .py file in the project directory.
+    corresponds to a .py file next to code_file or an installed package.
 
     Returns:
         List of unresolved import module names (empty if all imports are valid).
@@ -1602,7 +1601,6 @@ def sync_orchestration(
                                 if agentic_mode and language.lower() == 'python' and pdd_files['code'].exists():
                                     unresolved = _validate_python_imports(
                                         pdd_files['code'],
-                                        Path.cwd(),
                                     )
                                     if unresolved:
                                         error_msg = (
