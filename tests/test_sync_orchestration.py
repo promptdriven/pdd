@@ -5931,9 +5931,11 @@ def test_issue620_star_import_not_flagged(tmp_path):
 
 def test_issue620_dunder_all_controls_exports(tmp_path):
     """
-    Edge case: When a module defines __all__, only names listed in __all__
-    should be considered valid exports. Names not in __all__ that are imported
-    should be flagged.
+    Edge case: When a module defines __all__, it constrains what is exported
+    for 'from module import *'. Explicitly imported names that exist in the
+    module but are not in __all__ should NOT be flagged (they are valid Python).
+    Names that do not exist in the module at all (like nonexistent_func) must
+    be flagged.
     """
     from pdd.sync_orchestration import _validate_python_imports
 
@@ -5972,12 +5974,17 @@ def test_issue620_dunder_all_controls_exports(tmp_path):
 
     unresolved = _validate_python_imports(code_file)
 
-    # At minimum, nonexistent_func should be flagged (it doesn't exist at all).
-    # A stricter implementation might also flag _internal_helper (not in __all__).
-    # Bug #620: Currently returns [] because hackathon_api.py exists.
+    # nonexistent_func should be flagged (doesn't exist at all in the module).
+    # _internal_helper should NOT be flagged — it physically exists in the module;
+    # __all__ only restricts 'from module import *', not explicit imports.
     assert len(unresolved) > 0, (
-        "Bug #620: hackathon_api.py has __all__ = ['create_event', 'EventConfig'] "
+        "hackathon_api.py has __all__ = ['create_event', 'EventConfig'] "
         "but code imports nonexistent_func which doesn't exist anywhere in the module. "
-        "Should be flagged but _validate_python_imports() returned [] because it only "
-        "checks module file existence."
+        "Should be flagged as unresolved."
+    )
+    # Verify _internal_helper is NOT flagged (it exists in the module)
+    unresolved_names = [u.split('.')[-1] for u in unresolved]
+    assert '_internal_helper' not in unresolved_names, (
+        "_internal_helper exists in hackathon_api.py and should not be flagged — "
+        "__all__ only restricts star imports, not explicit imports."
     )

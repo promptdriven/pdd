@@ -597,9 +597,10 @@ def _get_module_exports(module_path: Path) -> 'set[str] | None':
     Returns a set of top-level names defined in the module, or None if
     the file cannot be parsed (to avoid false positives).
 
-    If __all__ is defined, returns those names. Otherwise returns all
-    top-level FunctionDef, AsyncFunctionDef, ClassDef, and Assign/AnnAssign
-    target names.
+    Collects all top-level definitions (functions, classes, assignments,
+    and re-exported imports). If __all__ is defined, its names are unioned
+    with the physically defined names — because __all__ only restricts
+    'from module import *', not explicit imports like 'from module import X'.
     """
     import ast
 
@@ -613,7 +614,9 @@ def _get_module_exports(module_path: Path) -> 'set[str] | None':
     except SyntaxError:
         return None
 
-    # Check for __all__ first
+    all_names: set[str] | None = None
+
+    # Check for __all__
     for node in ast.iter_child_nodes(tree):
         if isinstance(node, ast.Assign):
             for target in node.targets:
@@ -623,10 +626,8 @@ def _get_module_exports(module_path: Path) -> 'set[str] | None':
                         for elt in node.value.elts:
                             if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
                                 all_names.add(elt.value)
-                        if all_names:
-                            return all_names
 
-    # No __all__ — collect all top-level definitions
+    # Collect all top-level definitions
     exports: set[str] = set()
     for node in ast.iter_child_nodes(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
@@ -642,6 +643,21 @@ def _get_module_exports(module_path: Path) -> 'set[str] | None':
         elif isinstance(node, ast.AnnAssign):
             if isinstance(node.target, ast.Name):
                 exports.add(node.target.id)
+        elif isinstance(node, ast.ImportFrom):
+            # Re-exported imports: 'from X import Y' or 'from X import Y as Z'
+            if node.names:
+                for alias in node.names:
+                    if alias.name != '*':
+                        exports.add(alias.asname if alias.asname else alias.name)
+        elif isinstance(node, ast.Import):
+            # Top-level imports: 'import X' or 'import X as Y'
+            for alias in node.names:
+                exports.add(alias.asname if alias.asname else alias.name)
+
+    # Union __all__ names with physically defined names, since __all__
+    # only restricts 'from module import *', not explicit imports.
+    if all_names:
+        exports |= all_names
 
     return exports
 
