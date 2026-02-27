@@ -5473,3 +5473,511 @@ def test_test_extend_max_retries_with_adequate_coverage_succeeds(orchestration_f
         "Regression guard: test_extend followed by all_synced should succeed. "
         "Bug #573 fix must not break the case where test_extend improves coverage."
     )
+
+
+# --- Bug #620: pdd generate hallucinates Python module exports that don't exist ---
+#
+# Issue #620: _validate_python_imports() checks only whether module FILES exist on disk.
+# It does NOT verify that specific imported NAMES (functions, classes, constants)
+# actually exist within those modules. This allows hallucinated imports like:
+#   from hackathon_models import get_event  (hackathon_models has no get_event)
+#   from hackathon_auth import require_auth  (actual export is require_hackathon_role)
+#   from utils.firebase_admin_init import db (utils/firebase_admin_init.py doesn't exist)
+#
+# Root cause: sync_orchestration.py lines 660-665 — once a local .py file is found,
+# the validation immediately `continue`s without inspecting the module's exports.
+
+
+# ---- Tier 1: Direct unit tests of _validate_python_imports() ----
+
+
+def test_issue620_hallucinated_functions_from_typeddict_module(tmp_path):
+    """
+    Issue #620 Scenario 1: Module exists but imported functions don't.
+
+    When hackathon_models.py contains only TypedDicts and Enums (zero functions),
+    importing get_event, create_submission, etc. should be flagged as unresolved.
+
+    Currently FAILS because _validate_python_imports() only checks if the module
+    file exists on disk, not whether the imported names exist within it.
+    """
+    from pdd.sync_orchestration import _validate_python_imports
+
+    # Create a module that contains ONLY TypedDicts and Enums — no functions
+    models_module = tmp_path / "hackathon_models.py"
+    models_module.write_text(
+        '"""Hackathon data models."""\n'
+        'from typing import TypedDict\n'
+        'from enum import Enum\n'
+        '\n'
+        'class SubmissionStatus(Enum):\n'
+        '    PENDING = "pending"\n'
+        '    REVIEWED = "reviewed"\n'
+        '\n'
+        'class HackathonSubmission(TypedDict):\n'
+        '    id: str\n'
+        '    title: str\n'
+        '    status: SubmissionStatus\n',
+        encoding='utf-8',
+    )
+
+    # Generated code imports functions that DON'T exist in the module
+    code_file = tmp_path / "hackathon_submission.py"
+    code_file.write_text(
+        '"""Hackathon submission handler."""\n'
+        'from hackathon_models import get_event, get_submission, create_submission\n'
+        '\n'
+        'def handle_submission():\n'
+        '    """Handle a submission."""\n'
+        '    event = get_event()\n'
+        '    return create_submission(event)\n',
+        encoding='utf-8',
+    )
+
+    unresolved = _validate_python_imports(code_file)
+
+    # Bug #620: Currently returns [] because hackathon_models.py exists on disk.
+    # After fix: should detect that get_event, get_submission, create_submission
+    # do not exist in hackathon_models.py.
+    assert len(unresolved) > 0, (
+        "Bug #620 Scenario 1: hackathon_models.py exists but contains only TypedDicts "
+        "and Enums — no functions. Importing get_event, get_submission, create_submission "
+        "should be flagged as unresolved, but _validate_python_imports() returned [] "
+        "because it only checks module file existence, not exported names."
+    )
+
+
+def test_issue620_nonexistent_submodule_path(tmp_path):
+    """
+    Issue #620 Scenario 2: Import from non-existent submodule path.
+
+    'from utils.firebase_admin_init import db' where utils/ exists as a package
+    but firebase_admin_init.py does not exist within it.
+
+    Currently FAILS because _validate_python_imports() only resolves the top-level
+    module name ('utils') via split('.')[0], ignoring the full dotted path.
+    """
+    from pdd.sync_orchestration import _validate_python_imports
+
+    # Create utils/ as a package (with __init__.py) but WITHOUT firebase_admin_init.py
+    utils_dir = tmp_path / "utils"
+    utils_dir.mkdir()
+    (utils_dir / "__init__.py").write_text('"""Utils package."""\n', encoding='utf-8')
+    (utils_dir / "helpers.py").write_text('def helper(): pass\n', encoding='utf-8')
+
+    # Generated code imports from a submodule that doesn't exist
+    code_file = tmp_path / "hackathon_results.py"
+    code_file.write_text(
+        '"""Hackathon results module."""\n'
+        'from utils.firebase_admin_init import db\n'
+        '\n'
+        'def get_results():\n'
+        '    """Get results from database."""\n'
+        '    return db.collection("results").get()\n',
+        encoding='utf-8',
+    )
+
+    unresolved = _validate_python_imports(code_file)
+
+    # Bug #620: Currently returns [] because utils/__init__.py exists.
+    # The function only checks the top-level 'utils' via split('.')[0],
+    # never verifying that utils/firebase_admin_init.py exists.
+    assert len(unresolved) > 0, (
+        "Bug #620 Scenario 2: utils/ package exists but firebase_admin_init.py does not. "
+        "'from utils.firebase_admin_init import db' should be flagged, but "
+        "_validate_python_imports() only checks the top-level module 'utils' "
+        "(via split('.')[0]) and skips since utils/__init__.py exists."
+    )
+
+
+def test_issue620_wrong_function_name_from_auth_module(tmp_path):
+    """
+    Issue #620 Scenario 3: Module exists but imported function has wrong name.
+
+    hackathon_auth.py exports 'require_hackathon_role', but generated code imports
+    'require_auth' — a hallucinated function name guessed from the module name.
+
+    Currently FAILS because _validate_python_imports() never inspects the module's
+    actual exports.
+    """
+    from pdd.sync_orchestration import _validate_python_imports
+
+    # Create auth module with the REAL function name
+    auth_module = tmp_path / "hackathon_auth.py"
+    auth_module.write_text(
+        '"""Hackathon authentication module."""\n'
+        'from functools import wraps\n'
+        '\n'
+        'def require_hackathon_role(role: str):\n'
+        '    """Require a specific hackathon role."""\n'
+        '    def decorator(f):\n'
+        '        @wraps(f)\n'
+        '        def wrapper(*args, **kwargs):\n'
+        '            return f(*args, **kwargs)\n'
+        '        return wrapper\n'
+        '    return decorator\n',
+        encoding='utf-8',
+    )
+
+    # Generated code imports the WRONG function name (hallucinated by LLM)
+    code_file = tmp_path / "hackathon_judging.py"
+    code_file.write_text(
+        '"""Hackathon judging module."""\n'
+        'from hackathon_auth import require_auth\n'
+        '\n'
+        'def judge_submission():\n'
+        '    """Judge a submission."""\n'
+        '    return require_auth("judge")\n',
+        encoding='utf-8',
+    )
+
+    unresolved = _validate_python_imports(code_file)
+
+    # Bug #620: Currently returns [] because hackathon_auth.py exists on disk.
+    # After fix: should detect that 'require_auth' doesn't exist in
+    # hackathon_auth.py (actual export is 'require_hackathon_role').
+    assert len(unresolved) > 0, (
+        "Bug #620 Scenario 3: hackathon_auth.py exports 'require_hackathon_role', "
+        "but code imports 'require_auth'. Should be flagged as unresolved, "
+        "but _validate_python_imports() returned [] because it only checks "
+        "module file existence, not whether the imported name exists."
+    )
+
+
+def test_issue620_valid_imports_still_pass(tmp_path):
+    """
+    Regression guard: When imported names actually exist in the target module,
+    _validate_python_imports() should return an empty list (no false positives).
+    """
+    from pdd.sync_orchestration import _validate_python_imports
+
+    # Create a module with real exports
+    helper_module = tmp_path / "hackathon_helpers.py"
+    helper_module.write_text(
+        '"""Hackathon helpers."""\n'
+        'def calculate_score(submission):\n'
+        '    """Calculate a score."""\n'
+        '    return 100\n'
+        '\n'
+        'class ScoreResult:\n'
+        '    """Score result container."""\n'
+        '    pass\n'
+        '\n'
+        'MAX_SCORE = 100\n',
+        encoding='utf-8',
+    )
+
+    # Generated code imports names that DO exist
+    code_file = tmp_path / "hackathon_scoring.py"
+    code_file.write_text(
+        '"""Hackathon scoring module."""\n'
+        'from hackathon_helpers import calculate_score, ScoreResult, MAX_SCORE\n'
+        '\n'
+        'def score_all():\n'
+        '    """Score all entries."""\n'
+        '    result = ScoreResult()\n'
+        '    return calculate_score(result)\n',
+        encoding='utf-8',
+    )
+
+    unresolved = _validate_python_imports(code_file)
+
+    # Valid imports should not be flagged
+    assert len(unresolved) == 0, (
+        "Regression guard: All imported names (calculate_score, ScoreResult, MAX_SCORE) "
+        f"exist in hackathon_helpers.py, but got unresolved: {unresolved}"
+    )
+
+
+def test_issue620_mixed_valid_and_invalid_names(tmp_path):
+    """
+    When some imported names exist and others don't, only the invalid ones
+    should be flagged.
+    """
+    from pdd.sync_orchestration import _validate_python_imports
+
+    # Create a module with some exports
+    module = tmp_path / "hackathon_utils.py"
+    module.write_text(
+        '"""Hackathon utilities."""\n'
+        'def format_date(d):\n'
+        '    """Format a date."""\n'
+        '    return str(d)\n'
+        '\n'
+        'def validate_email(email):\n'
+        '    """Validate an email."""\n'
+        '    return "@" in email\n',
+        encoding='utf-8',
+    )
+
+    # Code imports one valid name and two hallucinated names
+    code_file = tmp_path / "hackathon_notify.py"
+    code_file.write_text(
+        '"""Hackathon notification module."""\n'
+        'from hackathon_utils import format_date, send_notification, get_template\n'
+        '\n'
+        'def notify():\n'
+        '    """Send notification."""\n'
+        '    send_notification(format_date("2024-01-01"), get_template("welcome"))\n',
+        encoding='utf-8',
+    )
+
+    unresolved = _validate_python_imports(code_file)
+
+    # Bug #620: Currently returns [] because hackathon_utils.py exists on disk.
+    # After fix: should flag send_notification and get_template as unresolved
+    # but NOT format_date (which actually exists).
+    assert len(unresolved) > 0, (
+        "Bug #620: hackathon_utils.py exists with format_date and validate_email, "
+        "but code imports hallucinated send_notification and get_template. "
+        "Should be flagged but _validate_python_imports() returned [] because it only "
+        "checks module file existence."
+    )
+
+
+def test_issue620_class_and_constant_exports_recognized(tmp_path):
+    """
+    Verify that class names and module-level constants are recognized as valid
+    exports, not just function definitions.
+    """
+    from pdd.sync_orchestration import _validate_python_imports
+
+    module = tmp_path / "hackathon_config.py"
+    module.write_text(
+        '"""Hackathon configuration."""\n'
+        'MAX_TEAMS = 50\n'
+        'DEFAULT_TIMEOUT = 3600\n'
+        '\n'
+        'class HackathonConfig:\n'
+        '    """Configuration container."""\n'
+        '    def __init__(self):\n'
+        '        self.max_teams = MAX_TEAMS\n',
+        encoding='utf-8',
+    )
+
+    # Import real class + constant, plus one hallucinated name
+    code_file = tmp_path / "hackathon_setup.py"
+    code_file.write_text(
+        '"""Hackathon setup."""\n'
+        'from hackathon_config import HackathonConfig, MAX_TEAMS, get_config\n'
+        '\n'
+        'def setup():\n'
+        '    """Set up hackathon."""\n'
+        '    config = get_config()\n'
+        '    return HackathonConfig()\n',
+        encoding='utf-8',
+    )
+
+    unresolved = _validate_python_imports(code_file)
+
+    # Bug #620: Currently returns [] because hackathon_config.py exists.
+    # After fix: should detect that 'get_config' doesn't exist (hallucinated),
+    # while HackathonConfig and MAX_TEAMS are real exports.
+    assert len(unresolved) > 0, (
+        "Bug #620: hackathon_config.py exports HackathonConfig and MAX_TEAMS, "
+        "but NOT get_config. Should flag get_config as unresolved, but "
+        "_validate_python_imports() returned [] because it only checks "
+        "module file existence."
+    )
+
+
+# ---- Tier 2: Integration tests through sync_orchestration() ----
+
+
+def test_issue620_integration_hallucinated_function_detected(orchestration_fixture):
+    """
+    Issue #620 Integration: End-to-end through sync_orchestration().
+
+    When code_generator_main produces code that imports hallucinated functions
+    from a real local module, the post-generation validation should catch it.
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    tmp_path = Path(orchestration_fixture['get_pdd_file_paths'].return_value['prompt']).parent.parent
+
+    # Create a real local module with ONLY TypedDicts
+    (tmp_path / 'src' / 'hackathon_models.py').write_text(
+        '"""Hackathon models."""\n'
+        'from typing import TypedDict\n'
+        '\n'
+        'class Submission(TypedDict):\n'
+        '    id: str\n'
+        '    title: str\n',
+        encoding='utf-8',
+    )
+
+    # Code that imports hallucinated functions from the real module
+    hallucinated_code = (
+        '"""Hackathon submission handler."""\n'
+        'from hackathon_models import get_event, create_submission, list_submissions\n'
+        '\n'
+        'def handle():\n'
+        '    """Handle submission."""\n'
+        '    return create_submission(get_event())\n'
+    )
+
+    def mock_generate(*args, **kwargs):
+        """Mock code_generator_main that writes code with hallucinated imports."""
+        code_file = tmp_path / 'src' / 'calculator.py'
+        code_file.write_text(hallucinated_code, encoding='utf-8')
+        return {'success': True, 'cost': 0.05, 'model': 'mock-model'}
+
+    orchestration_fixture['code_generator_main'].side_effect = mock_generate
+
+    mock_determine.side_effect = [
+        SyncDecision(operation='auto-deps', reason='Dependencies need scanning'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    result = sync_orchestration(basename="calculator", language="python", agentic_mode=True)
+
+    # Bug #620: Currently passes because _validate_python_imports() only checks
+    # that hackathon_models.py exists, not that get_event/create_submission exist in it.
+    assert result['success'] is False or len(result.get('errors', [])) > 0, (
+        "Bug #620 Integration: hackathon_models.py contains only TypedDicts, but "
+        "generated code imports get_event, create_submission, list_submissions. "
+        "Post-generation validation should catch these hallucinated names, but "
+        "sync_orchestration reported success with no errors."
+    )
+
+
+def test_issue620_integration_wrong_function_name_detected(orchestration_fixture):
+    """
+    Issue #620 Integration: End-to-end through sync_orchestration().
+
+    When code_generator_main produces code that imports a wrong function name
+    from a real module, the post-generation validation should catch it.
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    tmp_path = Path(orchestration_fixture['get_pdd_file_paths'].return_value['prompt']).parent.parent
+
+    # Create a real auth module with the CORRECT function name
+    (tmp_path / 'src' / 'hackathon_auth.py').write_text(
+        '"""Hackathon auth module."""\n'
+        'def require_hackathon_role(role):\n'
+        '    """Require a hackathon role."""\n'
+        '    pass\n',
+        encoding='utf-8',
+    )
+
+    # Code imports the WRONG function name
+    wrong_name_code = (
+        '"""Hackathon judging module."""\n'
+        'from hackathon_auth import require_auth\n'
+        '\n'
+        'def judge():\n'
+        '    """Judge submission."""\n'
+        '    return require_auth("judge")\n'
+    )
+
+    def mock_generate(*args, **kwargs):
+        """Mock code_generator_main that writes code with wrong function name."""
+        code_file = tmp_path / 'src' / 'calculator.py'
+        code_file.write_text(wrong_name_code, encoding='utf-8')
+        return {'success': True, 'cost': 0.05, 'model': 'mock-model'}
+
+    orchestration_fixture['code_generator_main'].side_effect = mock_generate
+
+    mock_determine.side_effect = [
+        SyncDecision(operation='auto-deps', reason='Dependencies need scanning'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    result = sync_orchestration(basename="calculator", language="python", agentic_mode=True)
+
+    # Bug #620: Currently passes because hackathon_auth.py exists on disk.
+    assert result['success'] is False or len(result.get('errors', [])) > 0, (
+        "Bug #620 Integration: hackathon_auth.py exports 'require_hackathon_role', "
+        "but generated code imports 'require_auth'. Post-generation validation should "
+        "catch this wrong name, but sync_orchestration reported success with no errors."
+    )
+
+
+# ---- Edge case tests ----
+
+
+def test_issue620_star_import_not_flagged(tmp_path):
+    """
+    Edge case: Star imports ('from module import *') should not be flagged
+    because they don't import specific names that can be validated.
+    """
+    from pdd.sync_orchestration import _validate_python_imports
+
+    module = tmp_path / "hackathon_helpers.py"
+    module.write_text(
+        '"""Helpers."""\n'
+        'def helper(): pass\n',
+        encoding='utf-8',
+    )
+
+    code_file = tmp_path / "hackathon_main.py"
+    code_file.write_text(
+        '"""Main module."""\n'
+        'from hackathon_helpers import *\n'
+        '\n'
+        'def main():\n'
+        '    """Run main."""\n'
+        '    return helper()\n',
+        encoding='utf-8',
+    )
+
+    unresolved = _validate_python_imports(code_file)
+
+    # Star imports should not cause false positives
+    assert len(unresolved) == 0, (
+        "Star imports should not be flagged since we can't validate specific names. "
+        f"Got unresolved: {unresolved}"
+    )
+
+
+def test_issue620_dunder_all_controls_exports(tmp_path):
+    """
+    Edge case: When a module defines __all__, only names listed in __all__
+    should be considered valid exports. Names not in __all__ that are imported
+    should be flagged.
+    """
+    from pdd.sync_orchestration import _validate_python_imports
+
+    module = tmp_path / "hackathon_api.py"
+    module.write_text(
+        '"""Hackathon API module."""\n'
+        '__all__ = ["create_event", "EventConfig"]\n'
+        '\n'
+        'class EventConfig:\n'
+        '    """Event configuration."""\n'
+        '    pass\n'
+        '\n'
+        'def create_event():\n'
+        '    """Create event."""\n'
+        '    pass\n'
+        '\n'
+        'def _internal_helper():\n'
+        '    """Internal helper, not in __all__."""\n'
+        '    pass\n',
+        encoding='utf-8',
+    )
+
+    # Code imports a name NOT in __all__
+    code_file = tmp_path / "hackathon_runner.py"
+    code_file.write_text(
+        '"""Hackathon runner."""\n'
+        'from hackathon_api import create_event, _internal_helper, nonexistent_func\n'
+        '\n'
+        'def run():\n'
+        '    """Run hackathon."""\n'
+        '    create_event()\n'
+        '    _internal_helper()\n'
+        '    nonexistent_func()\n',
+        encoding='utf-8',
+    )
+
+    unresolved = _validate_python_imports(code_file)
+
+    # At minimum, nonexistent_func should be flagged (it doesn't exist at all).
+    # A stricter implementation might also flag _internal_helper (not in __all__).
+    # Bug #620: Currently returns [] because hackathon_api.py exists.
+    assert len(unresolved) > 0, (
+        "Bug #620: hackathon_api.py has __all__ = ['create_event', 'EventConfig'] "
+        "but code imports nonexistent_func which doesn't exist anywhere in the module. "
+        "Should be flagged but _validate_python_imports() returned [] because it only "
+        "checks module file existence."
+    )
