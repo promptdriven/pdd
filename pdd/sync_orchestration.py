@@ -1395,22 +1395,39 @@ def sync_orchestration(
                         # Skip test_extend for non-Python languages (or agentic mode) - code coverage tooling is Python-specific
                         # This is a safety check in case sync_determine_operation doesn't catch it
                         if _use_agentic_path(language, agentic_mode):
+                            # Bug #573: Check coverage before accepting — don't declare success
+                            # if coverage is below target (e.g. 0.0 from sys.modules stubs)
+                            current_rr = read_run_report(basename, language)
+                            coverage_ok = current_rr is not None and current_rr.coverage >= target_coverage
                             log_event(basename, language, "test_extend_skipped", {
-                                "reason": f"test_extend not supported for {language} (or agentic_mode), accepting current state"
+                                "reason": f"test_extend not supported for {language} (or agentic_mode), {'accepting' if coverage_ok else 'rejecting'} current state",
+                                "coverage": current_rr.coverage if current_rr else None,
+                                "coverage_ok": coverage_ok
                             }, invocation_mode="sync")
-                            success = True
+                            if not coverage_ok:
+                                current_cov = current_rr.coverage if current_rr else 0.0
+                                errors.append(f"Coverage {current_cov:.1f}% below target {target_coverage:.1f}% after test_extend skip (agentic mode)")
+                            success = coverage_ok
                             break
 
                         # Count test_extend attempts to prevent infinite loop
                         extend_attempts = sum(1 for op in operation_history if op == 'test_extend')
                         if extend_attempts >= MAX_TEST_EXTEND_ATTEMPTS:
-                            # Accept current coverage after max attempts
+                            # Bug #573: Check coverage before accepting — don't declare success
+                            # if coverage is below target after exhausting retries
+                            current_rr = read_run_report(basename, language)
+                            coverage_ok = current_rr is not None and current_rr.coverage >= target_coverage
                             log_event(basename, language, "test_extend_limit", {
                                 "attempts": extend_attempts,
                                 "max_attempts": MAX_TEST_EXTEND_ATTEMPTS,
-                                "reason": "Accepting current coverage after max extend attempts"
+                                "reason": "Max extend attempts reached",
+                                "coverage": current_rr.coverage if current_rr else None,
+                                "coverage_ok": coverage_ok
                             }, invocation_mode="sync")
-                            success = True
+                            if not coverage_ok:
+                                current_cov = current_rr.coverage if current_rr else 0.0
+                                errors.append(f"Coverage {current_cov:.1f}% below target {target_coverage:.1f}% after {extend_attempts} test_extend attempts")
+                            success = coverage_ok
                             break
 
                     if operation in ['all_synced', 'nothing', 'fail_and_request_manual_merge', 'error']:
