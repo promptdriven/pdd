@@ -520,12 +520,6 @@ def _try_auto_fix_import_error(
     import_error = re.search(r"ImportError: cannot import name ['\"]([^'\"]+)['\"]", error_output)
 
     if not module_not_found and not import_error:
-        # Issue #572: If error_output is a synthetic agentic delegation message,
-        # fall back to AST-based import validation on the code file
-        if "delegating crash detection to agentic handler" in error_output and code_file.exists():
-            unresolved = _validate_python_imports(code_file, code_file.parent)
-            if unresolved:
-                return False, f"Unresolved imports detected via AST validation: {', '.join(unresolved)}"
         return False, "No import error detected"
 
     if module_not_found:

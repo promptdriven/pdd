@@ -5086,12 +5086,9 @@ def test_issue572_baseline_auto_deps_skipped_advances_to_generate(orchestration_
 
 def test_issue572_hallucinated_imports_detected_after_agentic_generate(orchestration_fixture):
     """
-    PRIMARY BUG REPRODUCTION (Issue #572):
-    When auto-deps is skipped in agentic mode and code_generator_main produces
-    code with hallucinated imports (firestore_writes, brevo_results_email), the
-    sync should detect and fail on the invalid imports.
-
-    Currently FAILS: hallucinated imports pass through undetected.
+    Issue #572: When auto-deps is skipped in agentic mode and code_generator_main
+    produces code with hallucinated imports (firestore_writes, brevo_results_email),
+    post-generation AST validation must detect and report them.
     """
     mock_determine = orchestration_fixture['sync_determine_operation']
     tmp_path = Path(orchestration_fixture['get_pdd_file_paths'].return_value['prompt']).parent.parent
@@ -5124,9 +5121,7 @@ def test_issue572_hallucinated_imports_detected_after_agentic_generate(orchestra
 
     result = sync_orchestration(basename="calculator", language="python", agentic_mode=True)
 
-    # BUG: Currently result['success'] is True and errors is empty.
-    # EXPECTED: Should fail or report errors about non-existent imports
-    # (firestore_writes.py and brevo_results_email.py don't exist on disk).
+    # Post-generation validation should catch non-existent imports
     assert result['success'] is False or len(result.get('errors', [])) > 0, (
         "Hallucinated imports (firestore_writes, brevo_results_email) passed through "
         "undetected in agentic mode. Expected post-generation import validation to "
@@ -5221,15 +5216,9 @@ def test_issue572_stdlib_imports_not_flagged(orchestration_fixture):
 
 def test_issue572_synthetic_crash_message_hides_import_error(orchestration_fixture):
     """
-    In agentic mode, the crash handler produces a synthetic delegation message
-    instead of running the code. This synthetic message is passed to
-    _try_auto_fix_import_error, which cannot detect the real ModuleNotFoundError.
-
-    This test verifies that _try_auto_fix_import_error receives real error output
-    (containing ModuleNotFoundError) instead of a synthetic delegation message.
-
-    Currently FAILS: receives synthetic text 'Language python (agentic_mode=True)
-    - delegating crash detection to agentic handler.'
+    Issue #572: Python in agentic mode must run the example directly instead of
+    producing a synthetic delegation message. This ensures _try_auto_fix_import_error
+    receives real error output (e.g., ModuleNotFoundError) for proper detection.
     """
     mock_determine = orchestration_fixture['sync_determine_operation']
     tmp_path = Path(orchestration_fixture['get_pdd_file_paths'].return_value['prompt']).parent.parent
@@ -5268,9 +5257,7 @@ def test_issue572_synthetic_crash_message_hides_import_error(orchestration_fixtu
             "_try_auto_fix_import_error should have been called in crash handler"
         )
 
-        # BUG: The error_output argument should contain real error info
-        # (e.g., "ModuleNotFoundError: No module named 'nonexistent_module'")
-        # but instead receives a synthetic delegation message.
+        # The error_output argument should contain real error info
         actual_error_output = mock_auto_fix.call_args[0][0]
         assert "ModuleNotFoundError" in actual_error_output or "ImportError" in actual_error_output, (
             f"_try_auto_fix_import_error received synthetic delegation message instead of "
@@ -5281,11 +5268,9 @@ def test_issue572_synthetic_crash_message_hides_import_error(orchestration_fixtu
 
 def test_issue572_wrong_module_name_hackathon_volunteer(orchestration_fixture):
     """
-    Tests the specific case from issue #572 where the LLM uses 'hackathon_volunteer'
-    as the module name, but the actual module is 'hackathon_volunteer_management'.
-    This wrong module name should be detected as a hallucinated/invalid import.
-
-    Currently FAILS: wrong module name passes through undetected.
+    Issue #572: When the LLM uses 'hackathon_volunteer' but the actual module is
+    'hackathon_volunteer_management', AST import validation must detect the
+    non-existent module name.
     """
     mock_determine = orchestration_fixture['sync_determine_operation']
     tmp_path = Path(orchestration_fixture['get_pdd_file_paths'].return_value['prompt']).parent.parent
@@ -5320,9 +5305,7 @@ def test_issue572_wrong_module_name_hackathon_volunteer(orchestration_fixture):
 
     result = sync_orchestration(basename="calculator", language="python", agentic_mode=True)
 
-    # BUG: Currently result['success'] is True despite using wrong module name.
-    # EXPECTED: Should detect that 'hackathon_volunteer' doesn't exist on disk
-    # (the real module is 'hackathon_volunteer_management').
+    # Should detect that 'hackathon_volunteer' doesn't exist on disk
     assert result['success'] is False or len(result.get('errors', [])) > 0, (
         "Wrong module name 'hackathon_volunteer' (actual: 'hackathon_volunteer_management') "
         "passed through undetected in agentic mode. Expected import validation to catch "
