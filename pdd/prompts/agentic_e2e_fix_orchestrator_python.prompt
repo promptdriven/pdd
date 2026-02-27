@@ -273,9 +273,11 @@ After successful completion (ALL_TESTS_PASS), commit only files that changed dur
      - If `PDD_GH_TOKEN_FILE` env var is set and the file exists with non-empty content:
        - Read the token from the file (strip whitespace)
        - Save the current remote origin URL
-       - Set remote origin URL to `https://x-access-token:{token}@github.com/{repo_owner}/{repo_name}.git`
+       - URL-encode the token with `urllib.parse.quote(token, safe='')` to guard against reserved characters
+       - Set remote origin URL to `https://x-access-token:{quoted_token}@github.com/{repo_owner}/{repo_name}.git`
        - Retry the push once
        - Restore the original remote URL in a finally block (prevents token leakage in git config)
+       - If restore fails, print a WARNING to stderr (token may remain in .git/config)
      - If no token file available, file is empty, or retry also fails: return `(False, error)` as before
 
 5. **Integration in orchestrator**:

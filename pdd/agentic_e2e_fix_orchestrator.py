@@ -291,8 +291,9 @@ def _push_with_retry(
     original_url = url_result.stdout.strip()
 
     try:
-        # Set remote URL with token
-        token_url = f"https://x-access-token:{token}@github.com/{repo_owner}/{repo_name}.git"
+        # Set remote URL with token (URL-encode to guard against reserved characters)
+        from urllib.parse import quote
+        token_url = f"https://x-access-token:{quote(token, safe='')}@github.com/{repo_owner}/{repo_name}.git"
         subprocess.run(
             ["git", "remote", "set-url", "origin", token_url],
             cwd=cwd,
@@ -315,12 +316,14 @@ def _push_with_retry(
     finally:
         # Restore original remote URL (prevents token leakage in git config)
         if original_url:
-            subprocess.run(
+            restore = subprocess.run(
                 ["git", "remote", "set-url", "origin", original_url],
                 cwd=cwd,
                 capture_output=True,
                 text=True
             )
+            if restore.returncode != 0:
+                print(f"WARNING: Failed to restore original remote URL: {restore.stderr}")
 
 
 def _commit_and_push(
