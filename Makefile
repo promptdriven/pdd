@@ -750,6 +750,10 @@ publish-public:
 	fi
 	@echo "Ensuring public repo directory exists: $(PUBLIC_PDD_REPO_DIR)"
 	@mkdir -p $(PUBLIC_PDD_REPO_DIR)
+	@# Reset to origin/main before copying so the copy lands on a clean baseline
+	@if git -C "$(PUBLIC_PDD_REPO_DIR)" rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
+		cd "$(PUBLIC_PDD_REPO_DIR)" && git fetch origin && git reset --hard origin/main; \
+	fi
 	@echo "Copying files from .sync-config.yml (shared section only)"
 	@python scripts/copy_package_data_to_public.py \
 		--dest $(PUBLIC_PDD_REPO_DIR) \
@@ -769,7 +773,7 @@ publish-public:
 	fi
 	@echo "Committing and pushing updates in public repo"
 	@if git -C "$(PUBLIC_PDD_REPO_DIR)" rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
-		cd "$(PUBLIC_PDD_REPO_DIR)" && git fetch origin && git reset --hard origin/main && git add . && \
+		cd "$(PUBLIC_PDD_REPO_DIR)" && git add . && \
 		if ! git diff --cached --quiet; then \
 			git commit -m "Bump version" && \
 			CURR_VER=$$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([0-9.]*\)"/\1/p' pyproject.toml | head -n1) && \
@@ -814,6 +818,10 @@ publish-public-cap:
 	fi
 	@echo "Ensuring CAP public repo directory exists: $(PUBLIC_PDD_CAP_REPO_DIR)"
 	@mkdir -p $(PUBLIC_PDD_CAP_REPO_DIR)
+	@# Reset to origin/main before copying so the copy lands on a clean baseline
+	@if git -C "$(PUBLIC_PDD_CAP_REPO_DIR)" rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
+		cd "$(PUBLIC_PDD_CAP_REPO_DIR)" && git fetch origin && git reset --hard origin/main; \
+	fi
 	@echo "Copying files from .sync-config.yml (shared + cap_only sections)"
 	@python scripts/copy_package_data_to_public.py \
 		--dest $(PUBLIC_PDD_CAP_REPO_DIR) \
@@ -833,7 +841,7 @@ publish-public-cap:
 	fi
 	@echo "Committing and pushing updates in CAP public repo"
 	@if git -C "$(PUBLIC_PDD_CAP_REPO_DIR)" rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
-		cd "$(PUBLIC_PDD_CAP_REPO_DIR)" && git fetch origin && git reset --hard origin/main && git add . && \
+		cd "$(PUBLIC_PDD_CAP_REPO_DIR)" && git add . && \
 		if ! git diff --cached --quiet; then \
 			git commit -m "Bump version" && \
 			CURR_VER=$$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([0-9.]*\)"/\1/p' pyproject.toml | head -n1) && \
