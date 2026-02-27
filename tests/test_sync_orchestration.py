@@ -5066,9 +5066,9 @@ def test_test_extend_agentic_skip_rejects_zero_coverage(orchestration_fixture):
     Bug #573: When test_extend is skipped in agentic mode (non-Python language),
     the orchestration should NOT declare success if coverage is below target.
 
-    Currently, the agentic skip path at sync_orchestration.py:1397-1402
-    unconditionally sets success=True without checking coverage against the
-    target. This allows coverage=0.0 to pass the pipeline.
+    Previously, the agentic skip path unconditionally set success=True without
+    checking coverage against the target, allowing coverage=0.0 to pass the
+    pipeline. The fix checks coverage against target before accepting.
     """
     mock_determine = orchestration_fixture['sync_determine_operation']
     mock_get_paths = orchestration_fixture['get_pdd_file_paths']
@@ -5114,8 +5114,9 @@ def test_test_extend_max_retries_rejects_zero_coverage(orchestration_fixture):
     Bug #573: When test_extend exhausts MAX_TEST_EXTEND_ATTEMPTS,
     the orchestration should NOT declare success if coverage is below target.
 
-    Currently, the retry exhaustion path at sync_orchestration.py:1405-1414
-    unconditionally sets success=True without checking coverage.
+    Previously, the retry exhaustion path unconditionally set success=True
+    without checking coverage. The fix checks coverage against target before
+    accepting.
     """
     mock_determine = orchestration_fixture['sync_determine_operation']
 

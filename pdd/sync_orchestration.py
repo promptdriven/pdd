@@ -1400,7 +1400,7 @@ def sync_orchestration(
                             current_rr = read_run_report(basename, language)
                             coverage_ok = current_rr is not None and current_rr.coverage >= target_coverage
                             log_event(basename, language, "test_extend_skipped", {
-                                "reason": f"test_extend not supported for {language} (or agentic_mode), accepting current state",
+                                "reason": f"test_extend not supported for {language} (or agentic_mode), {'accepting' if coverage_ok else 'rejecting'} current state",
                                 "coverage": current_rr.coverage if current_rr else None,
                                 "coverage_ok": coverage_ok
                             }, invocation_mode="sync")
