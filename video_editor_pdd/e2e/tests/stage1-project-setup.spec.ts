@@ -358,4 +358,20 @@ test.describe('Stage 1: Project Setup', () => {
     expect(firstIdAfter).toBe(secondIdBefore);
     expect(secondIdAfter).toBe(firstIdBefore);
   });
+
+  test('Editing a section ID field persists after confirm (regression: editingSectionId match)', async ({ page }) => {
+    const firstRow = page.locator('tbody tr').first();
+    await firstRow.locator('button', { hasText: '✎' }).click();
+
+    const idInput = firstRow.locator('td').nth(1).locator('input');
+    await expect(idInput).toHaveValue('cold_open');
+
+    await idInput.clear();
+    await idInput.fill('new_cold_open');
+
+    await firstRow.locator('button', { hasText: '✓' }).click();
+
+    const idCell = firstRow.locator('td').nth(1);
+    await expect(idCell).toHaveText('new_cold_open');
+  });
 });
