@@ -1296,7 +1296,7 @@ def test_issue624_completeness_validation_failure_does_not_block(mock_dependenci
     )
 
 
-def test_issue624_all_validations_fail_still_returns_success(mock_dependencies, base_args):
+def test_issue624_all_validations_fail_returns_failure(mock_dependencies, base_args):
     """
     Issue #624: Even when ALL three validation steps (10, 11, 12) fail after
     exhausting retries, the orchestrator should return success=False.
