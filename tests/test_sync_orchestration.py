@@ -5473,3 +5473,151 @@ def test_test_extend_max_retries_with_adequate_coverage_succeeds(orchestration_f
         "Regression guard: test_extend followed by all_synced should succeed. "
         "Bug #573 fix must not break the case where test_extend improves coverage."
     )
+
+
+# --- Bug #624: pdd generate calls functions it never defines or imports (TypeScript/JS) ---
+
+
+def test_issue624_typescript_phantom_functions_not_detected(orchestration_fixture):
+    """Issue #624: TypeScript phantom function calls should be detected."""
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_get_paths = orchestration_fixture['get_pdd_file_paths']
+    tmp_path = Path(mock_get_paths.return_value['prompt']).parent.parent
+
+    (tmp_path / "prompts" / "hackathon_admin_typescript.prompt").write_text("Create hackathon admin page.")
+    (tmp_path / "src" / "hackathon_admin.tsx").touch()
+
+    mock_get_paths.return_value = {
+        'prompt': tmp_path / 'prompts' / 'hackathon_admin_typescript.prompt',
+        'code': tmp_path / 'src' / 'hackathon_admin.tsx',
+        'example': tmp_path / 'examples' / 'hackathon_admin_example.tsx',
+        'test': tmp_path / 'tests' / 'test_hackathon_admin.tsx',
+    }
+
+    phantom_ts_code = ("'use client';\n"
+        "import React, { useState, useEffect } from 'react';\n\n"
+        "export default function HackathonAdminPage({ params }: { params: { eventId: string } }) {\n"
+        "    const [event, setEvent] = useState(null);\n"
+        "    useEffect(() => {\n"
+        "        async function loadEvent() {\n"
+        "            const data = await fetchEvent(params.eventId, idToken);\n"
+        "            setEvent(data);\n"
+        "        }\n"
+        "        loadEvent();\n"
+        "    }, [params.eventId]);\n"
+        "    const handleUpdate = async (eventData: any) => {\n"
+        "        await updateEvent(params.eventId, eventData, idToken);\n"
+        "    };\n"
+        "    const handleAdvance = async () => {\n"
+        "        await advanceStatus(params.eventId, idToken);\n"
+        "    };\n"
+        "    return <div>Admin Page</div>;\n"
+        "}\n")
+
+    def mock_generate(*args, **kwargs):
+        """Mock code_generator_main that writes TypeScript with phantom function calls."""
+        code_file = tmp_path / 'src' / 'hackathon_admin.tsx'
+        code_file.write_text(phantom_ts_code, encoding='utf-8')
+        return {'success': True, 'cost': 0.05, 'model': 'mock-model'}
+
+    orchestration_fixture['code_generator_main'].side_effect = mock_generate
+    mock_determine.side_effect = [
+        SyncDecision(operation='auto-deps', reason='Dependencies need scanning'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    result = sync_orchestration(basename="hackathon_admin", language="typescript", agentic_mode=True)
+    assert result['success'] is False or len(result.get('errors', [])) > 0, (
+        "Bug #624: TypeScript phantom function calls (fetchEvent, updateEvent, advanceStatus) "
+        "passed through undetected in agentic mode."
+    )
+
+
+def test_issue624_javascript_phantom_imports_not_detected(orchestration_fixture):
+    """Issue #624: JavaScript phantom imports should also be caught."""
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_get_paths = orchestration_fixture['get_pdd_file_paths']
+    tmp_path = Path(mock_get_paths.return_value['prompt']).parent.parent
+
+    (tmp_path / "prompts" / "score_page_javascript.prompt").write_text("Create score page.")
+    (tmp_path / "src" / "score_page.js").touch()
+
+    mock_get_paths.return_value = {
+        'prompt': tmp_path / 'prompts' / 'score_page_javascript.prompt',
+        'code': tmp_path / 'src' / 'score_page.js',
+        'example': tmp_path / 'examples' / 'score_page_example.js',
+        'test': tmp_path / 'tests' / 'test_score_page.js',
+    }
+
+    phantom_js_code = ("import { fetchSubmission, fetchEvent, submitScore, fetchSubmissionList } from '@/lib/api';\n\n"
+        "export default function ScorePage({ params }) {\n"
+        "    const submissionData = fetchSubmission({ action: 'get', submissionId: params.submissionId });\n"
+        "    const eventData = fetchEvent(params.eventId);\n"
+        "    const handleSubmit = () => submitScore({ action: 'submit_score', score: 95 });\n"
+        "    const submissions = fetchSubmissionList(params.eventId);\n"
+        "    return <div>Score Page</div>;\n"
+        "}\n")
+
+    def mock_generate(*args, **kwargs):
+        """Mock code_generator_main that writes JS with phantom imports."""
+        code_file = tmp_path / 'src' / 'score_page.js'
+        code_file.write_text(phantom_js_code, encoding='utf-8')
+        return {'success': True, 'cost': 0.05, 'model': 'mock-model'}
+
+    orchestration_fixture['code_generator_main'].side_effect = mock_generate
+    mock_determine.side_effect = [
+        SyncDecision(operation='auto-deps', reason='Dependencies need scanning'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    result = sync_orchestration(basename="score_page", language="javascript", agentic_mode=True)
+    assert result['success'] is False or len(result.get('errors', [])) > 0, (
+        "Bug #624: JavaScript phantom imports (fetchSubmission, fetchEvent, submitScore, "
+        "fetchSubmissionList from '@/lib/api') passed through undetected."
+    )
+
+
+@pytest.mark.parametrize("language", ["python", "typescript", "javascript", "typescriptreact"])
+def test_issue624_language_gate_validates_all_languages(orchestration_fixture, language):
+    """Issue #624: All languages should have import validation."""
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_get_paths = orchestration_fixture['get_pdd_file_paths']
+    tmp_path = Path(mock_get_paths.return_value['prompt']).parent.parent
+
+    ext = {'python': '.py', 'typescript': '.ts', 'javascript': '.js', 'typescriptreact': '.tsx'}[language]
+
+    prompt_file = tmp_path / "prompts" / f"module_{language}.prompt"
+    prompt_file.write_text("Create a module.")
+    code_file = tmp_path / "src" / f"module{ext}"
+    code_file.touch()
+
+    mock_get_paths.return_value = {
+        'prompt': prompt_file, 'code': code_file,
+        'example': tmp_path / 'examples' / f'module_example{ext}',
+        'test': tmp_path / 'tests' / f'test_module{ext}',
+    }
+
+    if language == 'python':
+        phantom_code = ('"""Module with phantom import."""\n'
+            'from phantom_utility import do_something\n\n'
+            'def main():\n    """Run main."""\n    return do_something()\n')
+    else:
+        phantom_code = ("import { doSomething } from './phantom_utility';\n\n"
+            "export function main() {\n    return doSomething();\n}\n")
+
+    def mock_generate(*args, **kwargs):
+        """Mock code_generator_main that writes code with phantom imports."""
+        code_file.write_text(phantom_code, encoding='utf-8')
+        return {'success': True, 'cost': 0.05, 'model': 'mock-model'}
+
+    orchestration_fixture['code_generator_main'].side_effect = mock_generate
+    mock_determine.side_effect = [
+        SyncDecision(operation='auto-deps', reason='Dependencies need scanning'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    result = sync_orchestration(basename="module", language=language, agentic_mode=True)
+    assert result['success'] is False or len(result.get('errors', [])) > 0, (
+        f"Language '{language}' should have import validation, but phantom imports "
+        "passed through undetected."
+    )
