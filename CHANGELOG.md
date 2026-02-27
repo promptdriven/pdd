@@ -1,3 +1,48 @@
+## v0.0.161 (2026-02-26)
+
+### Feat
+
+- implement PDD_GH_TOKEN_FILE push retry in agentic_e2e_fix_orchestrator (#629)
+- add PDD_GH_TOKEN_FILE push retry to e2e fix orchestrator prompt (#629)
+- Add position coordinates to various architectural components in `architecture.json`.
+- Implement and test node grouping with relative layout for sub-flow nodes in the DependencyViewer.
+- **architecture_sync**: auto-fix renamed step files and register untracked prompts
+- update Next.js API route handlers to await dynamic route parameters and refine pipeline configurations
+- verify all 116 checklist items and fix annotation refresh after batch resolve (TDD)
+- implement working Remotion/Claude environment (TDD)
+- Allow creation of drawing-only annotations via API and improve `FixPreviewPanel` robustness with null-safety checks for `filesModified` and `confidence`.
+
+### Fix
+
+- add namespace package fallback to import validation (#572)
+- validate Python imports after generation in agentic mode (#572)
+- address PR #631 review — URL-encode token and warn on restore failure
+- prevent token leakage and add missing protect_tests to prompt interface
+- correct misleading log message and outdated test docstrings (#573)
+- reject coverage=0.0 as pipeline success when tests pass (#573)
+- **test-batch-ann-1772149596067**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772145259285**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772144357396**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772144248964**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772138159325**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772138080231**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772137614567**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772137505532**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772137500794**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772133369466**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772132467714**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772132380789**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772129529612**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772129479688**: Subtitle font size 96px causes text to clip the ri
+- ensure Audit API `specPath` is consistently prefixed with `specs/` and Stage 10 Audit spec viewer correctly parses JSON responses.
+
+### Refactor
+
+- remove unused project_root param from _validate_python_imports
+- remove agentic architecture workflow LLM prompts from architecture.json.refactor: remove agentic architecture workflow LLM prompts from architecture.json.
+- update CLI core dump and output capture logic, add new TTS API prompt, and adjust video editor components and tests.
+- Update API route generation prompts to include explicit implementation details and dependency specifications for pipeline stages.
+
 ## v0.0.160 (2026-02-25)
 
 ### Feat
