@@ -273,6 +273,10 @@ test.describe('Stage 6: Spec Generation', () => {
   });
 
   test('Logs accordion opens and closes', async ({ page }) => {
+    // Wait for the stage to settle before scrolling (prevents "execution context destroyed" flakiness)
+    await page.waitForLoadState('domcontentloaded');
+    await expect(page.locator('h2', { hasText: 'Stage 6' })).toBeVisible({ timeout: 5000 });
+
     // Scroll to the bottom to find the logs <details> element
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
     await page.waitForTimeout(300);
@@ -300,5 +304,414 @@ test.describe('Stage 6: Spec Generation', () => {
 
     const isOpenFinal = await detailsEl.getAttribute('open');
     expect(isOpenFinal).toBeNull();
+  });
+
+  // ── New tests for known gaps ───────────────────────────────────────────────
+
+  test('loading state shows "Loading spec list…" on initial mount', async ({ page }) => {
+    // Navigate away and back to capture the loading state
+    // Intercept the list API to slow it down so we can observe loading text
+    await page.route('**/api/pipeline/specs/list', async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ sections: [] }),
+      });
+    });
+
+    // Navigate away then back to trigger fresh mount
+    const sidebar = page.locator('aside');
+    await sidebar.locator('div', { hasText: 'Setup' }).first().click();
+    await page.waitForTimeout(300);
+    await sidebar.locator('div', { hasText: 'Spec Gen' }).first().click();
+
+    // Loading text should appear immediately while API is in flight
+    await expect(page.locator('text=Loading spec list…')).toBeVisible({ timeout: 2000 });
+  });
+
+  test('error state shows error message when specs/list API fails', async ({ page }) => {
+    // Block the list API with an error response
+    await page.route('**/api/pipeline/specs/list', (route) => {
+      return route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'Internal Server Error' }),
+      });
+    });
+
+    // Navigate away and back to trigger fresh load with error
+    const sidebar = page.locator('aside');
+    await sidebar.locator('div', { hasText: 'Setup' }).first().click();
+    await page.waitForTimeout(300);
+    await sidebar.locator('div', { hasText: 'Spec Gen' }).first().click();
+    await page.waitForTimeout(1500);
+
+    // Error message should be visible
+    await expect(page.locator('text=Error:').first()).toBeVisible({ timeout: 5000 });
+  });
+
+  test('localStorage persists accordion collapsed state across page reload', async ({ page }) => {
+    // Wait for sections to load
+    await expect(page.locator('text=Cold Open').first()).toBeVisible({ timeout: 10000 });
+
+    // Find the Cold Open toggle button and ensure it's expanded (▾)
+    const toggleBtn = page.locator('button', { hasText: 'Cold Open' }).first();
+    const isExpanded = await toggleBtn.locator('text=▾').isVisible().catch(() => false);
+
+    if (!isExpanded) {
+      // Expand it first
+      await toggleBtn.click();
+      await page.waitForTimeout(300);
+    }
+
+    // Collapse Cold Open
+    await toggleBtn.click();
+    await page.waitForTimeout(300);
+    await expect(toggleBtn.locator('text=▸')).toBeVisible();
+
+    // Reload the page
+    await page.reload();
+    await page.waitForLoadState('networkidle');
+
+    // Navigate back to Stage 6
+    const sidebar = page.locator('aside');
+    await sidebar.locator('div', { hasText: 'Spec Gen' }).first().click();
+    await page.waitForTimeout(1500);
+
+    // Cold Open should still be collapsed (localStorage persisted)
+    const toggleBtnAfter = page.locator('button', { hasText: 'Cold Open' }).first();
+    await expect(toggleBtnAfter).toBeVisible({ timeout: 10000 });
+    await expect(toggleBtnAfter.locator('text=▸')).toBeVisible();
+  });
+
+  test('[Remotion] type badge renders with blue color class', async ({ page }) => {
+    // Mock the spec list to include a file with firstLine = "[Remotion] Title Card"
+    await page.route('**/api/pipeline/specs/list', (route) => {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          sections: [
+            {
+              id: 'cold-open',
+              label: 'Cold Open',
+              files: [
+                { path: 'specs/00-cold-open/spec.md', exists: true, firstLine: '[Remotion] Title Card' },
+              ],
+            },
+          ],
+        }),
+      });
+    });
+
+    const sidebar = page.locator('aside');
+    await sidebar.locator('div', { hasText: 'Setup' }).first().click();
+    await page.waitForTimeout(300);
+    await sidebar.locator('div', { hasText: 'Spec Gen' }).first().click();
+    await page.waitForTimeout(1000);
+
+    // The badge should exist and have blue styling
+    const badge = page.locator('span', { hasText: '[Remotion]' });
+    await expect(badge).toBeVisible();
+    const className = await badge.getAttribute('class');
+    expect(className).toContain('blue');
+  });
+
+  test('[veo:] type badge renders with purple color class', async ({ page }) => {
+    await page.route('**/api/pipeline/specs/list', (route) => {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          sections: [
+            {
+              id: 'cold-open',
+              label: 'Cold Open',
+              files: [
+                { path: 'specs/00-cold-open/veo.md', exists: true, firstLine: '[veo:aerial-shot] flyover' },
+              ],
+            },
+          ],
+        }),
+      });
+    });
+
+    const sidebar = page.locator('aside');
+    await sidebar.locator('div', { hasText: 'Setup' }).first().click();
+    await page.waitForTimeout(300);
+    await sidebar.locator('div', { hasText: 'Spec Gen' }).first().click();
+    await page.waitForTimeout(1000);
+
+    // The badge should have purple styling
+    const badge = page.locator('span').filter({ hasText: /\[veo:/ }).first();
+    await expect(badge).toBeVisible();
+    const className = await badge.getAttribute('class');
+    expect(className).toContain('purple');
+  });
+
+  test('[title:] type badge renders with gray color class (not teal)', async ({ page }) => {
+    await page.route('**/api/pipeline/specs/list', (route) => {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          sections: [
+            {
+              id: 'cold-open',
+              label: 'Cold Open',
+              files: [
+                { path: 'specs/00-cold-open/title.md', exists: true, firstLine: '[title:Part 1] Section Header' },
+              ],
+            },
+          ],
+        }),
+      });
+    });
+
+    const sidebar = page.locator('aside');
+    await sidebar.locator('div', { hasText: 'Setup' }).first().click();
+    await page.waitForTimeout(300);
+    await sidebar.locator('div', { hasText: 'Spec Gen' }).first().click();
+    await page.waitForTimeout(1000);
+
+    // PRD §4.6.7 says [title:] badge should be gray (not teal)
+    const badge = page.locator('span').filter({ hasText: /\[title:/ }).first();
+    await expect(badge).toBeVisible();
+    const className = await badge.getAttribute('class');
+    expect(className).toContain('gray');
+    expect(className).not.toContain('teal');
+  });
+
+  test('[split:] type badge renders with orange color class', async ({ page }) => {
+    await page.route('**/api/pipeline/specs/list', (route) => {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          sections: [
+            {
+              id: 'cold-open',
+              label: 'Cold Open',
+              files: [
+                { path: 'specs/00-cold-open/split.md', exists: true, firstLine: '[split:left] Left panel content' },
+              ],
+            },
+          ],
+        }),
+      });
+    });
+
+    const sidebar = page.locator('aside');
+    await sidebar.locator('div', { hasText: 'Setup' }).first().click();
+    await page.waitForTimeout(300);
+    await sidebar.locator('div', { hasText: 'Spec Gen' }).first().click();
+    await page.waitForTimeout(1000);
+
+    const badge = page.locator('span').filter({ hasText: /\[split:/ }).first();
+    await expect(badge).toBeVisible();
+    const className = await badge.getAttribute('class');
+    expect(className).toContain('orange');
+  });
+
+  test('editor auto-save triggers PUT /api/pipeline/specs/file after blur (1s debounce)', async ({
+    page,
+  }) => {
+    await expect(page.locator('text=Cold Open').first()).toBeVisible({ timeout: 10000 });
+
+    // Mock file GET
+    await page.route('**/api/pipeline/specs/file**', (route) => {
+      if (route.request().method() === 'GET') {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ content: '# Original content' }),
+        });
+      }
+      return route.fallback();
+    });
+
+    let putCalled = false;
+    let putBody: unknown = null;
+
+    await page.route('**/api/pipeline/specs/file', (route) => {
+      if (route.request().method() === 'PUT') {
+        putCalled = true;
+        putBody = route.request().postDataJSON();
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true }),
+        });
+      }
+      return route.fallback();
+    });
+
+    // Open the editor
+    const editBtn = page.locator('button[title="Open in editor"]').first();
+    await expect(editBtn).toBeVisible();
+    await editBtn.click();
+    await page.waitForTimeout(500);
+
+    // Verify editor is open
+    await expect(page.locator('text=Editing:').first()).toBeVisible();
+
+    // Click into the editor and type
+    const cmEditor = page.locator('.cm-editor').first();
+    await cmEditor.click();
+    await page.keyboard.type(' Modified');
+
+    // Trigger blur by clicking outside the editor (on the heading)
+    await page.locator('h2').first().click();
+
+    // Wait for debounce (1s) + network round trip
+    await page.waitForTimeout(1500);
+
+    expect(putCalled).toBe(true);
+    expect(putBody).toHaveProperty('path');
+    expect(putBody).toHaveProperty('content');
+  });
+
+  test('"Saving…" indicator appears during auto-save and disappears after', async ({ page }) => {
+    await expect(page.locator('text=Cold Open').first()).toBeVisible({ timeout: 10000 });
+
+    // Mock file GET
+    await page.route('**/api/pipeline/specs/file**', (route) => {
+      if (route.request().method() === 'GET') {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ content: '# Content' }),
+        });
+      }
+      return route.fallback();
+    });
+
+    // Slow the PUT to observe saving indicator
+    await page.route('**/api/pipeline/specs/file', async (route) => {
+      if (route.request().method() === 'PUT') {
+        await new Promise((resolve) => setTimeout(resolve, 600));
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ ok: true }),
+        });
+      }
+      return route.fallback();
+    });
+
+    // Open the editor
+    const editBtn = page.locator('button[title="Open in editor"]').first();
+    await editBtn.click();
+    await page.waitForTimeout(500);
+
+    await expect(page.locator('text=Editing:').first()).toBeVisible();
+
+    // Click editor and type, then blur by clicking outside
+    const cmEditor = page.locator('.cm-editor').first();
+    await cmEditor.click();
+    await page.keyboard.type(' change');
+    await page.locator('h2').first().click();
+
+    // Wait for 1s debounce to fire, then saving indicator should appear while fetch is in flight
+    await page.waitForTimeout(1200);
+    await expect(page.locator('text=Saving…')).toBeVisible({ timeout: 500 });
+
+    // After save completes (600ms fetch delay), indicator should disappear
+    await expect(page.locator('text=Saving…')).not.toBeVisible({ timeout: 3000 });
+  });
+
+  test('CodeMirror editor text is visible (not white-on-white)', async ({ page }) => {
+    // Bug: without theme="dark", CodeMirror uses a light (white) background but the
+    // parent container is dark and global CSS makes text white → white text on white bg.
+    await expect(page.locator('text=Cold Open').first()).toBeVisible({ timeout: 10000 });
+
+    // Mock the file GET to return content we can check
+    await page.route('**/api/pipeline/specs/file**', (route) => {
+      if (route.request().method() === 'GET') {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ content: '# Spec Content\nSome text here' }),
+        });
+      }
+      return route.fallback();
+    });
+
+    const editBtn = page.locator('button[title="Open in editor"]').first();
+    await editBtn.click();
+    await page.waitForTimeout(500);
+    await expect(page.locator('text=Editing:').first()).toBeVisible();
+
+    // The CodeMirror editor should NOT have white text on a white/light background.
+    // Use .cm-editor background (the actual visual background) vs. .cm-content text color.
+    const cmEditor = page.locator('.cm-editor').first();
+    await expect(cmEditor).toBeVisible();
+
+    const { editorBg, textColor } = await cmEditor.evaluate((el) => {
+      const editorStyle = getComputedStyle(el);
+      const content = el.querySelector('.cm-content');
+      const contentStyle = content ? getComputedStyle(content) : null;
+      return {
+        editorBg: editorStyle.backgroundColor,
+        textColor: contentStyle ? contentStyle.color : editorStyle.color,
+      };
+    });
+
+    // Parse RGB values
+    const parseRgb = (css: string) => {
+      const m = css.match(/\d+/g);
+      return m ? [Number(m[0]), Number(m[1]), Number(m[2])] : [0, 0, 0];
+    };
+    const [tr, tg, tb] = parseRgb(textColor);
+    const [br, bg2, bb] = parseRgb(editorBg);
+
+    // Text and background must not be the same color (catches white-on-white)
+    const diff = Math.abs(tr - br) + Math.abs(tg - bg2) + Math.abs(tb - bb);
+    expect(diff).toBeGreaterThan(100);
+  });
+
+  test('Generate All Specs SSE response sets jobId and activates log panel', async ({ page }) => {
+    // The run endpoint returns SSE stream. The component should parse the stream
+    // to extract the jobId from the "complete" event and pass it to SseLogPanel.
+    // SseLogPanel then opens an EventSource to /api/jobs/{jobId}/stream.
+    // If jobId is never set (old bug: res.json() on SSE), that EventSource call never happens.
+
+    const TEST_JOB_ID = 'test-sse-job-42';
+
+    // Mock the run endpoint to return a proper SSE stream
+    await page.route('**/api/pipeline/specs/run', async (route) => {
+      const sseBody = [
+        `data: {"type":"log","message":"Starting generation..."}\n\n`,
+        `data: {"type":"complete","jobId":"${TEST_JOB_ID}"}\n\n`,
+      ].join('');
+      return route.fulfill({
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+        body: sseBody,
+      });
+    });
+
+    // Intercept the EventSource connection that SseLogPanel makes when jobId is set
+    let jobStreamRequested = false;
+    await page.route(`**/api/jobs/${TEST_JOB_ID}/stream`, (route) => {
+      jobStreamRequested = true;
+      return route.fulfill({
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+        body: '',
+      });
+    });
+
+    // Trigger Generate All
+    const generateBtn = page.locator('button', { hasText: 'Generate All Specs' });
+    await generateBtn.click();
+
+    // Wait for SSE parsing + React re-render + EventSource creation
+    await page.waitForTimeout(2000);
+
+    // If the SSE parsing worked and jobId was set, SseLogPanel creates an EventSource
+    // to /api/jobs/{TEST_JOB_ID}/stream — this is the proof that latestJobId was set.
+    expect(jobStreamRequested).toBe(true);
   });
 });

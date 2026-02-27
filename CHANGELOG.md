@@ -1,3 +1,31 @@
+## v0.0.160 (2026-02-25)
+
+### Feat
+
+- **Module grouping in architecture view** — Modules can now be assigned to named groups that collapse into a single summary node. New `GroupNode` and `GroupEditModal` components; `ArchitectureModule` schema gains an optional `group` field. Groups auto-expand on first appearance and support edit-mode rename/reassignment via a batch update. Dagre layout uses virtual group→child edges for placement.
+- **Compact zoom mode for ModuleNode** — When the React Flow viewport zoom drops below 0.5, module nodes switch to a minimal single-line label using a `calc(14px / zoom)` font size that stays readable at any zoom level. New `VpZoomSync` component keeps the `--vp-zoom` CSS custom property in sync with all viewport changes (including programmatic `fitView`).
+- **Focus mode for dependency graph** — Clicking a module node dims all nodes outside its 1-hop neighborhood (direct dependencies and dependents). Focus auto-clears when the focused module's group is collapsed.
+- **API route coverage in architecture completeness check** — Step 10 completeness prompt now extracts every distinct URL pattern from the PRD and verifies a 1:1 corresponding route module exists. Step 5 design prompt reinforces one-module-per-distinct-URL-path. Prevents the LLM from collapsing multiple API endpoints under a single module.
+- **Header-only tag parsing in `architecture_sync`** — `parse_prompt_tags()` now extracts PDD metadata tags only from the header section (content before the first `%` section marker), preventing example `<pdd-dependency>` tags inside code fences or prose from being treated as real metadata declarations.
+
+### Fix
+
+- **Replace `.format(**context)` with safe `str.replace()` in all agentic orchestrators** — All six orchestrators (architecture, bug, change, checkup, e2e-fix, test) now use iterative `str.replace()` for prompt template substitution instead of Python's `.format()`. This prevents `KeyError` crashes when LLM outputs contain JSON curly braces and eliminates the need to double-escape braces in context values. Context outputs are no longer pre-escaped with `{{`/`}}`.
+- **Support modern Codex CLI NDJSON format in agentic sync** — `_run_with_provider()` now parses Codex CLI 0.104.0+ output, which splits agent text (`item.completed` with `agent_message` type) and usage stats (`session.end`) into separate NDJSON events. `_parse_provider_json()` extracts text from `data["item"]["text"]` for modern format.
+- **Resolve 'no changes to commit' on resume** — `_commit_and_push()` in the e2e-fix orchestrator now falls back to `git diff` when the hash snapshot is tainted by a prior interrupted run, catching orphaned unstaged changes that the snapshot missed.
+- **`modify` command propagates `click.UsageError`** — Both `split` and `change` subcommands now re-raise `click.UsageError` instead of swallowing it in the generic exception handler, allowing Click to display proper usage messages.
+
+### Refactor
+
+- **Agentic orchestrator prompt templating** — Prompt substitution across all orchestrators unified to a three-step pattern: preprocess with `double_curly_brackets=True`, un-double template braces, then iterate `str.replace()` per context key. Removes all `try/except KeyError` formatting blocks and brace-escaping of step outputs.
+
+### Test
+
+- **E2E regression suites for issues #545, #549, #557, #566** — Four new E2E test modules covering: format double-escaping across all orchestrators (`test_e2e_issue_549_format_double_escaping.py`, `test_e2e_issue_549_other_orchestrators.py`), Codex NDJSON parsing (`test_e2e_issue_557_codex_ndjson.py`), code-fence tag extraction (`test_e2e_issue_566_code_fence_tags.py`), and no-changes-to-commit on resume (`test_e2e_issue_545_no_changes_to_commit.py`). Total: ~2,300 new test lines.
+- **Unit tests for `agentic_common` and `agentic_e2e_fix_orchestrator`** — New `test_agentic_common.py` (305 lines) covers NDJSON parsing, provider JSON extraction, and cost calculation. New `test_agentic_e2e_fix_orchestrator.py` (226 lines) covers commit-and-push fallback logic.
+- **Unit tests for `architecture_sync` header parsing** — New `test_architecture_sync.py` (272 lines) verifies that tags in code fences and body sections are ignored.
+- **Frontend tests for compact font and zoom sync** — Three new test files covering `getCompactFontPx()` math, compact render mode at low zoom, and `VpZoomSync` CSS property propagation.
+
 ## v0.0.159 (2026-02-24)
 
 ### Feat

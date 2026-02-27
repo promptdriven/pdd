@@ -1,20 +1,13 @@
-% You are an expert TypeScript/Next.js engineer. Implement the API route for retrieving the git diff of a fix commit.
+You are implementing `app/api/annotations/[id]/diff/route.ts` (GET `/api/annotations/[id]/diff`) to return the git diff for an annotation's fix commit.
 
-% Requirements
-1.  **Endpoint**: `GET /api/annotations/[id]/diff`
-2.  **Input**: `id` from route parameters.
-3.  **Database Query**:
-    -   Use `getDb()` to access the database.
-    -   Query the `annotations` table for `fixCommitSha` where `id` matches.
-    -   If the annotation is not found, return 404 with error "Annotation not found".
-    -   If `fixCommitSha` is null/empty, return 404 with error "No fix commit associated with this annotation".
-4.  **Git Operation**:
-    -   Use `getFixDiff(fixCommitSha)` to retrieve the diff content.
-5.  **Output**:
-    -   Success (200): JSON `{ commitSha: string, diff: string }`.
-    -   Error (500): JSON `{ error: "Failed to retrieve diff" }` on exception.
-6.  **Configuration**:
-    -   Export `dynamic = "force-dynamic"`.
+Requirements
+1. Export `dynamic = "force-dynamic"`.
+2. Implement `GET(_request: Request, { params }: { params: Promise<{ id: string }> })`; await `params` and use `id` as the annotation id.
+3. Read `fixCommitSha` with `getDb().prepare("SELECT fixCommitSha FROM annotations WHERE id = ?").get(annotationId)`.
+4. If no row exists, return 404 `{ error: "Annotation not found" }`.
+5. If `fixCommitSha` is missing, return 404 `{ error: "No fix commit associated with this annotation" }`.
+6. Otherwise call `getFixDiff(fixCommitSha)` and return 200 `{ commitSha: fixCommitSha, diff }`.
+7. Wrap DB + git logic in `try/catch`; on failure log `console.error("Failed to get fix diff:", error)` and return 500 `{ error: "Failed to retrieve diff" }`.
 
 % Dependencies
 <lib_db>

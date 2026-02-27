@@ -297,7 +297,7 @@ describe("WaveSurfer initialization on expand", () => {
   it("creates WaveSurfer with correct container and url", () => {
     expect(sourceCode).toMatch(/WaveSurfer\.create\s*\(\s*\{/);
     expect(sourceCode).toMatch(/container/);
-    expect(sourceCode).toMatch(/url\s*:\s*`\/api\/audio\/\$\{expandedId\}\.wav`/);
+    expect(sourceCode).toMatch(/url\s*:\s*`\/api\/audio\/(?:tts\/)?\$\{expandedId\}\.wav`/);
   });
 
   it("sets WaveSurfer height to 64", () => {

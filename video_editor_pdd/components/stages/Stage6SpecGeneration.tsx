@@ -129,12 +129,57 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
         body: JSON.stringify(payload),
       });
 
-      if (res.ok) {
-        const data = await res.json();
-        if (data?.jobId) {
-          setLatestJobId(data.jobId);
+      if (!res.ok || !res.body) return;
+
+      // The endpoint returns text/event-stream. Read until we find the jobId
+      // in a "complete" event, then release the reader (SseLogPanel opens its own stream).
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let foundJobId = false;
+      let isErrorEvent = false;
+
+      while (!foundJobId) {
+        const { done: streamDone, value } = await reader.read();
+        if (streamDone) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+
+        for (const line of lines) {
+          if (line === 'event: error') {
+            isErrorEvent = true;
+            continue;
+          }
+
+          if (!line.startsWith('data: ')) continue;
+
+          try {
+            const data = JSON.parse(line.slice(6));
+
+            if (isErrorEvent) {
+              setError(data?.message ?? 'Spec generation failed');
+              foundJobId = true;
+              break;
+            }
+
+            if (data?.jobId) {
+              setLatestJobId(data.jobId);
+              foundJobId = true;
+              break;
+            }
+          } catch {
+            // Incomplete JSON fragment — will be re-processed once buffer grows
+          }
+          isErrorEvent = false;
         }
+
+        // Retain the last incomplete line across reads (handles chunk boundaries)
+        buffer = buffer.endsWith('\n') ? '' : (lines[lines.length - 1] ?? '');
       }
+
+      // Release the reader — SseLogPanel opens its own EventSource for logs
+      reader.cancel().catch(() => {});
     } catch {
       // Ignore network/parse errors — button should not get stuck
     }
@@ -320,6 +365,7 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
                       onChange={(value) => setEditorValue(value)}
                       onBlur={handleEditorBlur}
                       basicSetup={{ lineNumbers: true }}
+                      theme="dark"
                     />
                     {editorLoading && <div className="text-xs text-slate-400 mt-2">Loading file…</div>}
                   </div>

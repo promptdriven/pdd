@@ -180,30 +180,42 @@ def test_worktree_creation_failure(mock_dependencies, tmp_path):
     # Issue #352 moved worktree creation from before Step 7 to before Step 5.5
     assert mock_run.call_count == 5
 
-def test_prompt_formatting_error(mock_dependencies, tmp_path):
-    """Tests handling of malformed prompt templates.
+def test_prompt_formatting_unknown_placeholder_left_intact(mock_dependencies, tmp_path):
+    """Tests that unknown placeholders in prompt templates are left intact.
 
-    Note: With the preprocessing fix, unknown placeholders like {non_existent_key}
-    are normally escaped and become literal text. To test KeyError handling,
-    we mock preprocess to return the template unchanged.
+    Issue #549 fix: str.replace() substitution does not raise KeyError for
+    unknown placeholders — they are left as-is in the formatted prompt.
+    The orchestrator continues without error.
     """
     mock_load, mock_run, _ = mock_dependencies
 
-    # Template expects a key that isn't in context
-    mock_load.return_value = "Hello {non_existent_key}"
+    captured = {}
 
-    # Mock preprocess to return template unchanged so KeyError can occur
-    with patch("pdd.agentic_bug_orchestrator.preprocess") as mock_preprocess:
-        mock_preprocess.side_effect = lambda t, **kwargs: t  # Return unchanged
+    def run_side_effect(**kwargs):
+        label = kwargs.get("label", "")
+        captured[label] = kwargs.get("instruction", "")
+        if label == "step7":
+            return (True, "FILES_CREATED: tests/test_foo.py", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
 
-        success, msg, _, _, _ = run_agentic_bug_orchestrator(
-            issue_url="url", issue_content="content", repo_owner="owner",
-            repo_name="name", issue_number=123, issue_author="author",
-            issue_title="title", cwd=tmp_path, quiet=True
-        )
+    mock_run.side_effect = run_side_effect
 
-        assert success is False
-        assert "Prompt formatting error" in msg
+    # Template has a placeholder not in context — with str.replace(), it stays as-is
+    mock_load.return_value = "Hello {non_existent_key} and {issue_number}"
+
+    run_agentic_bug_orchestrator(
+        issue_url="url", issue_content="content", repo_owner="owner",
+        repo_name="name", issue_number=123, issue_author="author",
+        issue_title="title", cwd=tmp_path, quiet=True
+    )
+
+    step1_instr = captured.get("step1", "")
+    assert step1_instr, "step1 was not called"
+    # Known placeholder substituted, unknown one left as-is
+    assert "123" in step1_instr, "issue_number should be substituted"
+    assert "{non_existent_key}" in step1_instr, (
+        "Unknown placeholder should remain intact with str.replace() (Issue #549 fix)"
+    )
 
 def test_step_7_parsing_logic(mock_dependencies, tmp_path):
     """Verifies complex parsing of FILES_CREATED and FILES_MODIFIED."""

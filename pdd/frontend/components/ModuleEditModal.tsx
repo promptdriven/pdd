@@ -37,6 +37,7 @@ const ModuleEditModal: React.FC<ModuleEditModalProps> = ({
   const [reason, setReason] = useState('');
   const [priority, setPriority] = useState(5);
   const [tags, setTags] = useState('');
+  const [group, setGroup] = useState('');
   const [interfaceType, setInterfaceType] = useState('module');
   const [dependencies, setDependencies] = useState<string[]>([]);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -45,6 +46,13 @@ const ModuleEditModal: React.FC<ModuleEditModalProps> = ({
   const availableModules = useMemo(() => {
     return allModules.filter((m) => m.filename !== module?.filename);
   }, [allModules, module]);
+
+  // Existing group names for autocomplete
+  const existingGroups = useMemo(() => {
+    const groups = new Set<string>();
+    allModules.forEach(m => { if (m.group) groups.add(m.group); });
+    return Array.from(groups).sort();
+  }, [allModules]);
 
   // Initialize form when module changes
   useEffect(() => {
@@ -55,6 +63,7 @@ const ModuleEditModal: React.FC<ModuleEditModalProps> = ({
       setReason(module.reason);
       setPriority(module.priority);
       setTags(module.tags?.join(', ') || '');
+      setGroup(module.group || '');
       setInterfaceType(module.interface?.type || 'module');
       setDependencies(module.dependencies || []);
       setShowDeleteConfirm(false);
@@ -89,6 +98,7 @@ const ModuleEditModal: React.FC<ModuleEditModalProps> = ({
         .split(',')
         .map((t) => t.trim())
         .filter((t) => t),
+      group: group.trim() || undefined,
       dependencies,
       interface: {
         type: interfaceType,
@@ -209,6 +219,26 @@ const ModuleEditModal: React.FC<ModuleEditModalProps> = ({
                 ))}
               </select>
             </div>
+          </div>
+
+          {/* Group */}
+          <div>
+            <label className="block text-sm font-medium text-surface-300 mb-1">
+              Group <span className="text-surface-500">(optional, for graph layout)</span>
+            </label>
+            <input
+              type="text"
+              value={group}
+              onChange={(e) => setGroup(e.target.value)}
+              placeholder="e.g., Auth, Orders, API"
+              className="w-full px-3 py-2 bg-surface-900 border border-surface-700 rounded-lg text-white placeholder-surface-500 focus:outline-none focus:ring-2 focus:ring-accent-500 text-sm"
+              list="module-edit-groups"
+            />
+            {existingGroups.length > 0 && (
+              <datalist id="module-edit-groups">
+                {existingGroups.map(g => <option key={g} value={g} />)}
+              </datalist>
+            )}
           </div>
 
           {/* Tags */}

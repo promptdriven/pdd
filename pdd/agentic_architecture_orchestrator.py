@@ -360,10 +360,11 @@ def run_agentic_architecture_orchestrator(
         exclude_keys = list(context.keys())
         prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
 
-        try:
-            formatted_prompt = prompt_template.format(**context)
-        except KeyError as e:
-            return False, f"Context missing key for step {step_num}: {e}", total_cost, model_used, []
+        # Safe substitution (Issue #549): un-double template braces first, then substitute.
+        prompt_template = prompt_template.replace("{{", "{").replace("}}", "}")
+        formatted_prompt = prompt_template
+        for key, value in context.items():
+            formatted_prompt = formatted_prompt.replace(f'{{{key}}}', str(value))
 
         timeout = ARCH_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder
 
@@ -540,10 +541,11 @@ def run_agentic_architecture_orchestrator(
         exclude_keys_9 = list(context.keys())
         prompt_template_9 = preprocess(prompt_template_9, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys_9)
 
-        try:
-            formatted_prompt_9 = prompt_template_9.format(**context)
-        except KeyError as e:
-            return False, f"Context missing key for step 9: {e}", total_cost, model_used, []
+        # Safe substitution (Issue #549): un-double template braces first, then substitute.
+        prompt_template_9 = prompt_template_9.replace("{{", "{").replace("}}", "}")
+        formatted_prompt_9 = prompt_template_9
+        for key, value in context.items():
+            formatted_prompt_9 = formatted_prompt_9.replace(f'{{{key}}}', str(value))
 
         timeout_9 = ARCH_STEP_TIMEOUTS.get(9, 900.0) + timeout_adder
 
@@ -611,102 +613,100 @@ def run_agentic_architecture_orchestrator(
                 exclude_keys_val = list(context.keys())
                 prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys_val)
 
-                try:
-                    formatted_prompt = prompt_template.format(**context)
-                    timeout = ARCH_STEP_TIMEOUTS.get(step_num, 600.0) + timeout_adder
+                # Safe substitution (Issue #549): un-double template braces first, then substitute.
+                prompt_template = prompt_template.replace("{{", "{").replace("}}", "}")
+                formatted_prompt = prompt_template
+                for key, value in context.items():
+                    formatted_prompt = formatted_prompt.replace(f'{{{key}}}', str(value))
+                timeout = ARCH_STEP_TIMEOUTS.get(step_num, 600.0) + timeout_adder
 
-                    success, output, cost, model = run_agentic_task(
-                        instruction=formatted_prompt,
-                        cwd=cwd,
-                        verbose=verbose,
-                        quiet=quiet,
-                        timeout=timeout,
-                        label=f"step{step_num}_attempt{attempt}",
-                        max_retries=DEFAULT_MAX_RETRIES,
-                    )
+                success, output, cost, model = run_agentic_task(
+                    instruction=formatted_prompt,
+                    cwd=cwd,
+                    verbose=verbose,
+                    quiet=quiet,
+                    timeout=timeout,
+                    label=f"step{step_num}_attempt{attempt}",
+                    max_retries=DEFAULT_MAX_RETRIES,
+                )
 
-                    total_cost += cost
-                    model_used = model
-                    context[f"step{step_num}_output"] = output
+                total_cost += cost
+                model_used = model
+                context[f"step{step_num}_output"] = output
 
-                    if _check_validation_result(output):
-                        if not quiet:
-                            console.print(f"   → {step_name} validated ✓")
-                        return True
-
-                    # Validation failed - try to fix if not last attempt
-                    if attempt < MAX_STEP_RETRIES:
-                        if not quiet:
-                            console.print(f"   → {step_name} issues found, fixing...")
-
-                        # Run fix step
-                        fix_template = load_prompt_template(fix_template_name)
-                        if fix_template:
-                            context["failed_validation_step"] = step_name.lower()
-                            context["failed_validation_output"] = output
-
-                            # Preprocess to expand <include> tags and escape curly braces
-                            exclude_keys_fix = list(context.keys())
-                            fix_template = preprocess(fix_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys_fix)
-
-                            try:
-                                formatted_fix = fix_template.format(**context)
-                                fix_timeout = ARCH_STEP_TIMEOUTS.get(13, 900.0) + timeout_adder
-
-                                fix_success, fix_output, fix_cost, fix_model = run_agentic_task(
-                                    instruction=formatted_fix,
-                                    cwd=cwd,
-                                    verbose=verbose,
-                                    quiet=quiet,
-                                    timeout=fix_timeout,
-                                    label=f"step{step_num}_fix{attempt}",
-                                    max_retries=DEFAULT_MAX_RETRIES,
-                                )
-
-                                total_cost += fix_cost
-                                model_used = fix_model
-                                state["total_cost"] = total_cost
-
-                                # Track modified files
-                                modified_files = _parse_files_marker(fix_output, "FILES_MODIFIED:")
-                                if modified_files:
-                                    verified_modified = _verify_files_exist(cwd, modified_files, quiet)
-                                    for mf in verified_modified:
-                                        if mf not in scaffolding_files and mf != "architecture.json":
-                                            scaffolding_files.append(mf)
-                                    new_prompts = [f for f in verified_modified if f.endswith(".prompt")]
-                                    for np in new_prompts:
-                                        if np not in prompt_files:
-                                            prompt_files.append(np)
-                                    state["scaffolding_files"] = scaffolding_files
-                                    state["prompt_files"] = prompt_files
-                                    if not quiet:
-                                        console.print(f"   → Fixed: {len(verified_modified)} files modified")
-
-                                # Re-read architecture.json after fix (use base_dir for subproject)
-                                arch_file = base_dir / "architecture.json"
-                                if arch_file.exists():
-                                    try:
-                                        with open(arch_file, "r", encoding="utf-8") as f:
-                                            arch_content = f.read()
-                                        arch_data = json.loads(arch_content)
-                                        if isinstance(arch_data, list):
-                                            context["step7_output"] = arch_content
-                                    except (json.JSONDecodeError, ValueError):
-                                        pass
-
-                            except KeyError as e:
-                                if not quiet:
-                                    console.print(f"[yellow]Warning: Fix context missing key: {e}[/yellow]")
-                    else:
-                        if not quiet:
-                            console.print(f"   → {step_name} still failing after {MAX_STEP_RETRIES} attempts")
-                        return False
-
-                except KeyError as e:
+                if _check_validation_result(output):
                     if not quiet:
-                        console.print(f"[yellow]Warning: Context missing key for step {step_num}: {e}[/yellow]")
-                    return True  # Skip if context issue
+                        console.print(f"   → {step_name} validated ✓")
+                    return True
+
+                # Validation failed - try to fix if not last attempt
+                if attempt < MAX_STEP_RETRIES:
+                    if not quiet:
+                        console.print(f"   → {step_name} issues found, fixing...")
+
+                    # Run fix step
+                    fix_template = load_prompt_template(fix_template_name)
+                    if fix_template:
+                        context["failed_validation_step"] = step_name.lower()
+                        context["failed_validation_output"] = output
+
+                        # Preprocess to expand <include> tags and escape curly braces
+                        exclude_keys_fix = list(context.keys())
+                        fix_template = preprocess(fix_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys_fix)
+
+                        # Safe substitution (Issue #549): un-double template braces first, then substitute.
+                        fix_template = fix_template.replace("{{", "{").replace("}}", "}")
+                        formatted_fix = fix_template
+                        for key, value in context.items():
+                            formatted_fix = formatted_fix.replace(f'{{{key}}}', str(value))
+                        fix_timeout = ARCH_STEP_TIMEOUTS.get(13, 900.0) + timeout_adder
+
+                        fix_success, fix_output, fix_cost, fix_model = run_agentic_task(
+                            instruction=formatted_fix,
+                            cwd=cwd,
+                            verbose=verbose,
+                            quiet=quiet,
+                            timeout=fix_timeout,
+                            label=f"step{step_num}_fix{attempt}",
+                            max_retries=DEFAULT_MAX_RETRIES,
+                        )
+
+                        total_cost += fix_cost
+                        model_used = fix_model
+                        state["total_cost"] = total_cost
+
+                        # Track modified files
+                        modified_files = _parse_files_marker(fix_output, "FILES_MODIFIED:")
+                        if modified_files:
+                            verified_modified = _verify_files_exist(cwd, modified_files, quiet)
+                            for mf in verified_modified:
+                                if mf not in scaffolding_files and mf != "architecture.json":
+                                    scaffolding_files.append(mf)
+                            new_prompts = [f for f in verified_modified if f.endswith(".prompt")]
+                            for np in new_prompts:
+                                if np not in prompt_files:
+                                    prompt_files.append(np)
+                            state["scaffolding_files"] = scaffolding_files
+                            state["prompt_files"] = prompt_files
+                            if not quiet:
+                                console.print(f"   → Fixed: {len(verified_modified)} files modified")
+
+                        # Re-read architecture.json after fix (use base_dir for subproject)
+                        arch_file = base_dir / "architecture.json"
+                        if arch_file.exists():
+                            try:
+                                with open(arch_file, "r", encoding="utf-8") as f:
+                                    arch_content = f.read()
+                                arch_data = json.loads(arch_content)
+                                if isinstance(arch_data, list):
+                                    context["step7_output"] = arch_content
+                            except (json.JSONDecodeError, ValueError):
+                                pass
+
+                else:
+                    if not quiet:
+                        console.print(f"   → {step_name} still failing after {MAX_STEP_RETRIES} attempts")
+                    return False
 
             return False
 

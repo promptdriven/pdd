@@ -28,9 +28,11 @@ export default function Stage3TtsScriptGen({ onAdvance }: Stage3TtsScriptGenProp
   const [loading, setLoading] = useState<boolean>(true);
   const [saving, setSaving] = useState<boolean>(false);
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
+  const [generateError, setGenerateError] = useState<string | null>(null);
 
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
   const savingRef = useRef<boolean>(false);
+  const generatingRef = useRef<boolean>(false);
   const pendingSaveRef = useRef<string | null>(null);
 
   const fetchScript = useCallback(async (file: 'main' | 'tts') => {
@@ -104,19 +106,78 @@ export default function Stage3TtsScriptGen({ onAdvance }: Stage3TtsScriptGenProp
   };
 
   const handleGenerate = async () => {
-    if (isGenerating) return;
+    if (generatingRef.current) return;
+    generatingRef.current = true;
     setIsGenerating(true);
+    setGenerateError(null);
     try {
       const res = await fetch('/api/pipeline/tts-script/run', { method: 'POST' });
-      if (!res.ok) return;
-      const data = await res.json();
-      if (data?.jobId) {
-        setJobId(data.jobId);
-        const ts = new Date().toISOString();
-        localStorage.setItem(LAST_RUN_KEY, ts);
-        setLastRunTime(ts);
+      if (!res.ok) {
+        setGenerateError(`Server error: ${res.status}`);
+        return;
       }
+
+      // The endpoint returns an SSE stream (text/event-stream), not JSON.
+      // Read the stream and extract the jobId from the first event that has one.
+      const reader = res.body?.getReader();
+      if (!reader) return;
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let foundJobId = false;
+      let isErrorEvent = false;
+
+      while (!foundJobId) {
+        const { done: streamDone, value } = await reader.read();
+        if (streamDone) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+
+        for (const line of lines) {
+          // Detect SSE error events
+          if (line === 'event: error') {
+            isErrorEvent = true;
+            continue;
+          }
+
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const data = JSON.parse(line.slice(6));
+
+            // If this is an error event, show the error message
+            if (isErrorEvent) {
+              setGenerateError(data?.message ?? 'Generation failed');
+              foundJobId = true; // stop reading
+              break;
+            }
+
+            if (data?.jobId) {
+              setJobId(data.jobId);
+              const ts = new Date().toISOString();
+              localStorage.setItem(LAST_RUN_KEY, ts);
+              setLastRunTime(ts);
+              foundJobId = true;
+              break;
+            }
+          } catch {
+            // Not valid JSON yet, continue reading
+          }
+          isErrorEvent = false;
+        }
+
+        // Keep only the last incomplete line in the buffer
+        if (!buffer.endsWith('\n')) {
+          buffer = lines[lines.length - 1] ?? '';
+        } else {
+          buffer = '';
+        }
+      }
+
+      // Release the reader — SseLogPanel will open its own stream
+      reader.cancel().catch(() => {});
     } finally {
+      generatingRef.current = false;
       setIsGenerating(false);
     }
   };
@@ -184,6 +245,13 @@ export default function Stage3TtsScriptGen({ onAdvance }: Stage3TtsScriptGenProp
 
       {/* SSE Log */}
       <SseLogPanel jobId={jobId} onDone={loadScripts} />
+
+      {/* Generation Error */}
+      {generateError && (
+        <div className="text-red-400 font-mono text-sm bg-red-900/20 p-3 rounded">
+          Generation failed: {generateError}
+        </div>
+      )}
 
       {/* Diff View */}
       <div className="grid grid-cols-2 gap-4">

@@ -322,6 +322,18 @@ describe("Spec viewer", () => {
   it("stores spec content in state", () => {
     expect(sourceCode).toMatch(/setSpecContent/);
   });
+
+  it("parses JSON response to extract content field (not raw JSON text)", () => {
+    // The /api/pipeline/specs/file endpoint returns JSON: { content: string }
+    // The spec viewer fetch must NOT use res.text() to get raw JSON string;
+    // it must parse JSON and extract the content field
+    // Look for the pattern: res.json() followed by using .content in the spec viewer logic
+    const specViewerSection = sourceCode.slice(
+      sourceCode.indexOf("toggleSpecViewer"),
+      sourceCode.indexOf("toggleSpecViewer") + 500
+    );
+    expect(specViewerSection).not.toMatch(/res\.text\(\)/);
+  });
 });
 
 // ---------------------------------------------------------------------------

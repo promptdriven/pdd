@@ -70,13 +70,17 @@ export async function GET(_request: NextRequest): Promise<NextResponse> {
           else failCount++;
 
           const specSourcePath = path.join(specDir, `${specName}.md`);
+          // Ensure specPath starts with "specs/" for /api/pipeline/specs/file compatibility
+          const safeSpecPath = specSourcePath.startsWith("specs/")
+            ? specSourcePath
+            : `specs/${specSourcePath}`;
 
           specs.push({
             specName,
             verdict,
             summary,
             finding: verdict === "FAIL" ? summary : undefined,
-            specPath: fs.existsSync(specSourcePath) ? specSourcePath : undefined,
+            specPath: fs.existsSync(specSourcePath) ? safeSpecPath : undefined,
           });
         } catch {
           const specName = auditFile

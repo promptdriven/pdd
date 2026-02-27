@@ -9,8 +9,9 @@ export const dynamic = "force-dynamic";
  */
 export async function GET(
   _request: Request,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ): Promise<Response> {
+  const { id } = await params;
   let intervalId: ReturnType<typeof setInterval> | null = null;
   let lastLineIndex = 0;
   let lastProgress = -1;
@@ -22,7 +23,7 @@ export async function GET(
 
   const poll = () => {
     try {
-      const job = getJob(params.id);
+      const job = getJob(id);
 
       if (!job) {
         if (!checkedOnce) {

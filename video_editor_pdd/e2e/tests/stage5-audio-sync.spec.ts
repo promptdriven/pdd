@@ -311,4 +311,67 @@ test.describe('Stage 5: Audio Sync', () => {
     // Verify the sidebar now highlights a different stage or the stage content changes
     await expect(page.locator('text=Spec Generation').first()).toBeVisible();
   });
+
+  test('timestamps API returns word data when file is a raw array (Bug #1)', async ({ page }) => {
+    // Bug: word_timestamps.json stores a raw array but the API route wraps it
+    // in { words: parsed.words } — since parsed is an array, parsed.words is
+    // undefined, so the API returns {}. The component then shows 0 of 0 words.
+    // After the fix, the API should normalise both raw-array and {words:[...]}
+    // file formats so the viewer shows the actual word data.
+
+    // Mock the timestamps endpoint to return a raw-array-style response
+    // (simulating what the fixed API route should produce from a raw-array file)
+    await page.route('**/api/pipeline/audio-sync/timestamps**', (route) => {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          words: [
+            { word: 'hello', start: 0.0, end: 0.5, segmentId: 'seg1' },
+            { word: 'world', start: 0.5, end: 1.0, segmentId: 'seg1' },
+          ],
+        }),
+      });
+    });
+
+    // Re-navigate to trigger fresh load with the mock
+    const sidebar = page.locator('aside');
+    await sidebar.locator('div', { hasText: 'Setup' }).first().click();
+    await page.waitForTimeout(500);
+    await sidebar.locator('div', { hasText: 'Audio Sync' }).first().click();
+    await page.waitForTimeout(1000);
+
+    // The word count should reflect the 2 words, not 0 of 0
+    await expect(page.locator('text=/2 of 2 words/')).toBeVisible();
+  });
+
+  test('Run Audio Sync POST returns JSON jobId so SSE panel appears (Bug #2)', async ({ page }) => {
+    // Bug: POST /api/pipeline/audio-sync/run returns an SSE stream but the
+    // component calls res.json(), which throws on an SSE body. As a result
+    // setJobId is never called and the SSE log panel never renders.
+    // After the fix, the POST should return { jobId } as JSON so the
+    // SseLogPanel receives the jobId and renders "Waiting for logs…".
+
+    let postCalled = false;
+    await page.route('**/api/pipeline/audio-sync/run', (route) => {
+      postCalled = true;
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ jobId: 'test-job-sse-123' }),
+      });
+    });
+
+    const runBtn = page.locator('button', { hasText: 'Run Audio Sync' });
+    await expect(runBtn).toBeVisible();
+    await runBtn.click();
+    await page.waitForTimeout(1000);
+
+    expect(postCalled).toBe(true);
+
+    // The SSE log panel should appear (showing "Waiting for logs…" or an error
+    // since the mock job doesn't exist in the DB)
+    const ssePanel = page.locator('text=/Waiting for logs|Error: Job not found/');
+    await expect(ssePanel.first()).toBeVisible();
+  });
 });

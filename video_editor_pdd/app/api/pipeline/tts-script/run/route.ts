@@ -52,13 +52,24 @@ export async function POST(_request: Request): Promise<Response> {
   // Fire-and-forget execution with SSE progress
   (async () => {
     try {
-      const jobId = await runPipelineStage("tts-script", {}, send);
+      // Wrap the send callback to capture the jobId from the first log event
+      // and send a "started" event immediately, before the job finishes.
+      let jobId: string | null = null;
+      const wrappedSend = (data: object) => {
+        const rec = data as Record<string, unknown>;
+        if (!jobId && rec.jobId) {
+          jobId = rec.jobId as string;
+          send({ type: "started", jobId });
+        }
+        send(data);
+      };
 
-      // First SSE event includes jobId
-      send({ type: "started", jobId });
+      await runPipelineStage("tts-script", {}, wrappedSend);
 
       // Completion event
-      send({ type: "complete", jobId });
+      if (jobId) {
+        send({ type: "complete", jobId });
+      }
       done();
     } catch (err) {
       const message =

@@ -52,7 +52,10 @@ export async function GET(): Promise<NextResponse> {
       );
 
       const prevSection = sections[idx - 1];
-      const deps: string[] = prevSection
+      // frameChainDeps exposes clean clip IDs for the UI (e.g. "cold_open")
+      const frameChainDeps: string[] = prevSection ? [prevSection.id] : [];
+      // depFilePaths are used internally for staleness checking only
+      const depFilePaths: string[] = prevSection
         ? [
             path.join(
               "outputs",
@@ -66,9 +69,9 @@ export async function GET(): Promise<NextResponse> {
       const status: VeoClipStatus = clipExists ? "done" : "missing";
 
       let stale = false;
-      if (clipExists && deps.length > 0) {
+      if (clipExists && depFilePaths.length > 0) {
         const clipTime = mtimeMs(clipPath) ?? 0;
-        for (const dep of deps) {
+        for (const dep of depFilePaths) {
           const depAbs = path.join(process.cwd(), dep);
           const depTime = mtimeMs(depAbs);
           if (depTime && depTime > clipTime) {
@@ -84,7 +87,7 @@ export async function GET(): Promise<NextResponse> {
         aspectRatio,
         status,
         stale,
-        frameChainDeps: deps,
+        frameChainDeps,
       };
     });
 

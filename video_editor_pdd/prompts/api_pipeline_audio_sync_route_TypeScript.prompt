@@ -1,45 +1,26 @@
-You are implementing the audio sync pipeline API route (`app/api/pipeline/audio-sync/run/route.ts`) for a video production pipeline editor. This endpoint triggers `sync_audio_pipeline.py` to concatenate TTS segment WAVs per section and generate word timestamps.
+% You are an expert TypeScript engineer implementing the audio sync pipeline API routes.
 
-Requirements
-1. `POST /api/pipeline/audio-sync/run` — triggers `sync_audio_pipeline.py` subprocess. Returns SSE stream with `{ jobId }`.
-2. The script reads `sectionGroups` from `project.json` to determine which TTS segments belong to each section, concatenates them, copies the combined WAV to `remotion/public/{sectionId}_narration.wav`, and writes `outputs/tts/{sectionId}/word_timestamps.json`.
-3. Streams per-section progress events: `{ type: 'section', sectionId, status: 'done' | 'error' }`.
-4. `GET /api/pipeline/audio-sync/timestamps?section=X` — returns the word timestamps JSON for the specified section. Returns 404 if the file doesn't exist.
-5. No authentication required.
+% Role & Scope
+  API routes to trigger the audio sync pipeline job and retrieve generated timestamps.
 
-Dependencies
+% Requirements
+  1) `app/api/pipeline/audio-sync/run/route.ts`:
+     - `POST` endpoint that starts the job via `startJobInBackground("audio-sync", {})` and returns JSON `{ jobId }`.
+     - Registers an executor for `audio-sync` that reads `audioSync.sectionGroups` from `loadProject()`.
+     - The executor spawns `python3 scripts/sync_audio_pipeline.py` with `SECTION_GROUPS` passed as a JSON environment variable.
+     - Parses stdout line-by-line: JSON lines matching `{ type: 'section' }` are emitted via `send()`; all other stdout/stderr goes to `onLog()`.
+  
+  2) `app/api/pipeline/audio-sync/timestamps/route.ts`:
+     - `GET` endpoint that returns parsed word timestamps for a given `section` query param.
+     - Reads from `outputs/tts/{sectionId}/word_timestamps.json` (returns 404 if missing).
 
-<types>
-  <include>examples/types_example.ts</include>
-</types>
-
-<lib_jobs>
-  <include>examples/lib_jobs_example.ts</include>
-</lib_jobs>
-
-<lib_project>
-  <include>examples/lib_project_example.ts</include>
-</lib_project>
-
-Prompt Dependencies:
-- types_TypeScript.prompt — provides `PipelineStage`
-- lib_jobs_TypeScript.prompt — provides `runPipelineStage`, `registerExecutor`
-- lib_project_TypeScript.prompt — provides `loadProject`
-
-Instructions
-- Spawn: `child_process.spawn('python3', ['sync_audio_pipeline.py'], { cwd: process.cwd() })`.
-- Load `project.json` to get `audioSync.sectionGroups` before spawning, passing it as env var or stdin if needed.
-- For `GET /api/pipeline/audio-sync/timestamps?section=X`: path is `path.join(process.cwd(), 'outputs', 'tts', sectionId, 'word_timestamps.json')`.
-- Return timestamps as `{ words: WordTimestamp[] }` where `WordTimestamp = { word: string; start: number; end: number; segmentId: string }`.
-- Export `GET` and `POST`. The `GET` handler for timestamps is in a separate route file `app/api/pipeline/audio-sync/timestamps/route.ts`.
-- Register executor: `registerExecutor('audio-sync', ...)`.
-
-Deliverable
-- `app/api/pipeline/audio-sync/run/route.ts` — POST endpoint for audio sync pipeline.
-- `app/api/pipeline/audio-sync/timestamps/route.ts` — GET endpoint for word timestamps.
-
-Implementation assumptions (explicit)
-- `sync_audio_pipeline.py` is at project root.
-- Word timestamp JSON format uses `{ words: [{ word, start, end, segmentId }] }`.
-
-Please produce production-ready prompt content that will generate the module consistent with the above.
+% Dependencies
+  <types>
+    <include>examples/types_example.ts</include>
+  </types>
+  <lib_jobs>
+    <include>examples/lib_jobs_example.ts</include>
+  </lib_jobs>
+  <lib_project>
+    <include>examples/lib_project_example.ts</include>
+  </lib_project>

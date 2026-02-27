@@ -1,45 +1,11 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import path from "path";
 import fs from "fs/promises";
-import { randomUUID } from "crypto";
 
 import { registerExecutor, runPipelineStage } from "@/lib/jobs";
-import { renderSection, getSectionDuration, stitchFullVideo } from "@/lib/render";
+import { renderSection, getSectionDuration } from "@/lib/render";
 import { loadProject, saveProject } from "@/lib/project";
 import type { RenderProgress, SseSend } from "@/lib/types";
-
-/**
- * SSE stream helper (minimal, local implementation)
- */
-function createSseStream(): {
-  stream: ReadableStream<Uint8Array>;
-  send: SseSend;
-  done: () => void;
-  error: (message: string) => void;
-} {
-  const encoder = new TextEncoder();
-  let controller: ReadableStreamDefaultController<Uint8Array>;
-
-  const stream = new ReadableStream<Uint8Array>({
-    start(c) {
-      controller = c;
-    },
-  });
-
-  const send: SseSend = (data: object) => {
-    const payload = `data: ${JSON.stringify(data)}\n\n`;
-    controller.enqueue(encoder.encode(payload));
-  };
-
-  const done = () => controller.close();
-
-  const error = (message: string) => {
-    send({ type: "error", message });
-    controller.close();
-  };
-
-  return { stream, send, done, error };
-}
 
 /**
  * Update project.json with duration and recalculated offsets
@@ -140,30 +106,59 @@ registerExecutor("render", (params, send) => {
 });
 
 /**
- * POST /api/pipeline/render/run
- * Starts rendering sections with SSE streaming.
+ * Simple SSE stream helper
  */
-export async function POST(request: NextRequest): Promise<NextResponse> {
+function createSseStream() {
+  const encoder = new TextEncoder();
+  let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
+
+  const stream = new ReadableStream<Uint8Array>({
+    start(c) {
+      controller = c;
+    },
+  });
+
+  const send = (data: object) => {
+    if (!controller) return;
+    controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+  };
+
+  const done = () => {
+    if (!controller) return;
+    try { controller.close(); } catch { /* already closed */ }
+  };
+
+  const error = (message: string) => {
+    send({ type: "error", message });
+    done();
+  };
+
+  return { stream, send, done, error };
+}
+
+/**
+ * POST /api/pipeline/render/run
+ * Streams render progress via SSE. Returns { jobId } event when complete.
+ */
+export async function POST(request: NextRequest): Promise<Response> {
+  const body = await request.json().catch(() => ({}));
+  const sections = Array.isArray(body.sections)
+    ? (body.sections as string[])
+    : undefined;
+
   const { stream, send, done, error } = createSseStream();
 
   (async () => {
     try {
-      const body = await request.json().catch(() => ({}));
-      const sections = Array.isArray(body.sections)
-        ? (body.sections as string[])
-        : undefined;
-
       const jobId = await runPipelineStage("render", { sections }, send);
-
       send({ jobId });
       done();
     } catch (err) {
-      console.error("Render run failed:", err);
       error(err instanceof Error ? err.message : "Unknown error");
     }
   })();
 
-  return new NextResponse(stream, {
+  return new Response(stream, {
     headers: {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
@@ -172,53 +167,3 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   });
 }
 
-/**
- * POST /api/pipeline/stitch/run
- */
-export async function POST_stitch(_request: NextRequest): Promise<NextResponse> {
-  try {
-    const project = loadProject();
-    const sectionPaths = project.sections.map((s) =>
-      path.join("outputs", "sections", `${s.id}.mp4`)
-    );
-    const outputPath = path.join("outputs", "full_video.mp4");
-    await fs.mkdir("outputs", { recursive: true });
-    const jobId = randomUUID();
-    await stitchFullVideo(sectionPaths, outputPath, () => {});
-    return NextResponse.json({ jobId }, { status: 200 });
-  } catch (err) {
-    console.error("Stitch run failed:", err);
-    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
-  }
-}
-
-/**
- * GET /api/pipeline/render/status
- */
-export async function GET_status(_request: NextRequest): Promise<NextResponse> {
-  try {
-    const project = loadProject();
-    const sectionStatuses = await Promise.all(
-      project.sections.map(async (section) => {
-        const outputPath = path.join("outputs", "sections", `${section.id}.mp4`);
-        try {
-          await fs.access(outputPath);
-          const duration = await getSectionDuration(outputPath);
-          return { sectionId: section.id, status: "done", duration };
-        } catch {
-          return { sectionId: section.id, status: "missing" };
-        }
-      })
-    );
-    const fullVideoPath = path.join("outputs", "full_video.mp4");
-    let fullVideo: any = { exists: false };
-    try {
-      const stat = await fs.stat(fullVideoPath);
-      fullVideo = { exists: true, path: fullVideoPath, size: stat.size };
-      fullVideo.duration = await getSectionDuration(fullVideoPath);
-    } catch {}
-    return NextResponse.json({ sections: sectionStatuses, fullVideo }, { status: 200 });
-  } catch (err) {
-    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
-  }
-}

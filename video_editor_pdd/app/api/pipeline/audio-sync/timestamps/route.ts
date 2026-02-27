@@ -34,9 +34,16 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
   try {
     const raw = await fs.readFile(filePath, "utf-8");
-    const parsed = JSON.parse(raw) as { words: WordTimestamp[] };
+    const parsed = JSON.parse(raw);
 
-    return NextResponse.json({ words: parsed.words }, { status: 200 });
+    // Normalize: file may be a raw array or { words: [...] }
+    const words: WordTimestamp[] = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray(parsed?.words)
+      ? parsed.words
+      : [];
+
+    return NextResponse.json({ words }, { status: 200 });
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       return NextResponse.json(

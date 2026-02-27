@@ -268,8 +268,14 @@ def _commit_and_push(
             files_to_commit.append(filepath)
 
     if not files_to_commit:
-        # Check if there are unpushed commits to push
-        if _has_unpushed_commits(cwd):
+        # Fallback: hash snapshot may be tainted (captured after a prior
+        # interrupted run's modifications already existed on disk). Check
+        # git diff directly to catch orphaned unstaged changes (#545).
+        fallback_files = _get_modified_and_untracked(cwd)
+        if fallback_files:
+            files_to_commit = list(fallback_files)
+        elif _has_unpushed_commits(cwd):
+            # Check if there are unpushed commits to push
             push_result = subprocess.run(
                 ["git", "push"],
                 cwd=cwd,
@@ -280,7 +286,8 @@ def _commit_and_push(
                 return True, "Pushed existing commits"
             else:
                 return False, f"Push failed: {push_result.stderr}"
-        return True, "No changes to commit"
+        else:
+            return True, "No changes to commit"
 
     # Stage only workflow-changed files
     for filepath in files_to_commit:
@@ -456,7 +463,11 @@ def run_agentic_e2e_fix_orchestrator(
                 # Preprocess to escape curly braces in included content
                 exclude_keys = list(context.keys())
                 prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
-                formatted_prompt = prompt_template.format(**context)
+                # Safe substitution (Issue #549): un-double template braces first, then substitute.
+                prompt_template = prompt_template.replace("{{", "{").replace("}}", "}")
+                formatted_prompt = prompt_template
+                for key, value in context.items():
+                    formatted_prompt = formatted_prompt.replace(f'{{{key}}}', str(value))
 
                 # 3. Run Task
                 base_timeout = E2E_FIX_STEP_TIMEOUTS.get(step_num, 340.0)

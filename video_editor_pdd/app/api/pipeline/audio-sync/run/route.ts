@@ -109,20 +109,18 @@ registerExecutor("audio-sync", (_params, send: SseSend) => {
 
 /**
  * POST /api/pipeline/audio-sync/run
- * Launches the audio sync pipeline and streams SSE updates.
+ * Streams audio-sync progress via SSE. Returns { jobId } event when complete.
  */
 export async function POST(_request: NextRequest): Promise<Response> {
   const { stream, send, done, error } = createSseStream();
 
   (async () => {
     try {
-      // Run pipeline in background and stream events
       const jobId = await runPipelineStage("audio-sync", {}, send);
       send({ type: "job", jobId });
       send({ type: "complete", jobId });
       done();
     } catch (err) {
-      console.error("Audio sync pipeline failed:", err);
       error(err instanceof Error ? err.message : "Unknown error");
     }
   })();

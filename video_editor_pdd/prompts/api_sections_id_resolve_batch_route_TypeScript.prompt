@@ -1,54 +1,29 @@
 1) **Role and Scope**:
-You are an expert Backend Engineer. Your responsibility is to implement a Next.js API route for batch-resolving video annotations within a video editing and auditing system. This module acts as an orchestrator that identifies unresolved issues, triggers AI-driven fixes (via Claude), manages version control snapshots via Git, and initiates a background rendering process to reflect the changes.
+Expert Backend Engineer. Implement Next.js API route `POST /api/sections/[id]/resolve-batch` to orchestrate batch-resolving video annotations via AI fixes (Claude), Git version control, and background rendering.
 
 2) **Requirements**:
-   1. **Endpoint Definition**: Create a POST handler for the route `/api/sections/[id]/resolve-batch`.
-   2. **Input Handling**: 
-      - Extract `id` (sectionId) from the route parameters.
-      - Parse an optional JSON body containing `annotationIds` (an array of strings). If provided, only process these specific annotations; otherwise, process all unresolved annotations for the section.
-   3. **Data Retrieval**: Fetch unresolved annotations (`resolved = 0`) from the database, ordered by timestamp. Ensure the `analysis` JSON field is correctly deserialized into the `Annotation` object.
-   4. **Job Management**: 
-      - Create a top-level background job of type "audit" using the `createJob` utility.
-      - Update all targeted annotations in the database with the new `resolveJobId`.
-      - Execute the logic inside a non-blocking `runJob` wrapper.
-   5. **Fix Orchestration**:
-      - **Git Integration**: If Git is available, take a "pre-fix" snapshot before applying changes.
-      - **Remotion Fixes**: For annotations categorized as `fixType: 'remotion'`, call `runClaudeFix` with a generated prompt. After each fix, commit the change to Git and store the `fixCommitSha` in the database.
-      - **Placeholders**: Log placeholders for `veo` and `tts` fix types. Skip `manual` fixes.
-   6. **Rendering**: After processing fixes, trigger a re-render of the affected section using `renderSection`, passing progress updates to the job logger.
-   7. **Response**: Return the `jobId` immediately with a 200 status code to allow the client to poll for progress.
-   8. **Error Handling**: Implement robust try-catch blocks and log errors to the console and the job system.
+   1. **Input Handling**: Extract `sectionId` from route parameters (as a Promise). Accept an optional JSON body with `annotationIds` (string array). If missing or invalid, process all unresolved annotations (`resolved = 0`) for the section, ordered by timestamp.
+   2. **Job Lifecycle**: Create an "audit" job using `createJob`. Update targeted annotations with the `jobId` in the database. Execute the resolution logic asynchronously within `runJob` (fire-and-forget).
+   3. **Fix Logic**:
+      - **Git Integration**: Perform a "pre-fix" snapshot if Git is available. After each successful Claude fix, commit the change and store the `fixCommitSha`.
+      - **Fix Types**:
+         - `remotion`: Call `runClaudeFix` scoped to `remotion/src/remotion/`.
+         - `veo` / `tts`: Log as "pending" (placeholders).
+         - `manual`: Skip with a log message.
+   4. **Rendering**: After fixes, trigger `renderSection` using the section's `compositionId` and `videoFile` path. Pass progress updates to `onLog`.
+   5. **Response**: Return `{ jobId }` immediately (200). Return `{ jobId: null, message: "No unresolved annotations" }` if no work found. Handle errors with a 500 status.
 
 3) **Dependencies**:
-   <db_lib>
-     <include>lib/db.ts</include>
-   </db_lib>
-   <claude_lib>
-     <include>lib/claude.ts</include>
-   </claude_lib>
-   <jobs_lib>
-     <include>lib/jobs.ts</include>
-   </jobs_lib>
-   <render_lib>
-     <include>lib/render.ts</include>
-   </render_lib>
-   <project_lib>
-     <include>lib/project.ts</include>
-   </project_lib>
-   <git_lib>
-     <include>lib/git.ts</include>
-   </git_lib>
-   <types_lib>
-     <include>lib/types.ts</include>
-   </types_lib>
+   <db_lib><include>lib/db.ts</include></db_lib>
+   <claude_lib><include>lib/claude.ts</include></claude_lib>
+   <jobs_lib><include>lib/jobs.ts</include></jobs_lib>
+   <render_lib><include>lib/render.ts</include></render_lib>
+   <project_lib><include>lib/project.ts</include></project_lib>
+   <git_lib><include>lib/git.ts</include></git_lib>
+   <types_lib><include>lib/types.ts</include></types_lib>
 
 4) **Instructions**:
-   - Use `export const dynamic = "force-dynamic";` for the Next.js route.
-   - Implement a helper function `buildRemotionPrompt(annotation: Annotation)` to format the prompt sent to Claude.
-   - Ensure the database queries use prepared statements to prevent SQL injection.
-   - When calling `runClaudeFix`, target the directory `remotion/src/remotion/`.
-   - The `runJob` callback should be an `async` function that handles its own logging via the provided `onLog` utility.
-   - Ensure the `Annotation` type mapping correctly handles potential null values for fields like `videoFile`, `drawingDataUrl`, and `analysis`.
-
-5) **Deliverables**:
-   - A single TypeScript file: `app/api/sections/[id]/resolve-batch/route.ts`.
+   - Set `export const dynamic = "force-dynamic";`.
+   - Implement `buildRemotionPrompt(annotation: Annotation)` to provide ID, timestamp, user text, and analysis JSON to Claude.
+   - Use prepared SQL statements.
+   - Mapping: Deserialize `analysis` JSON and map all `Annotation` fields (id, sectionId, timestamp, text, videoFile, drawingDataUrl, compositeDataUrl, analysis, resolved, resolveJobId, fixCommitSha, createdAt), handling potential nulls.

@@ -7,7 +7,7 @@ interface FixPreview {
   fixType: string;
   preview: string;
   diff: string | null;
-  filesModified: string[];
+  filesModified?: string[];
   confidence: number;
 }
 
@@ -131,13 +131,13 @@ export default function FixPreviewPanel({ sectionId, onClose, onApply }: Props) 
                         {p.fixType}
                       </span>
                       <span className="text-[11px] text-white/50">
-                        {Math.round(p.confidence * 100)}% confidence
+                        {Math.round((p.confidence ?? 0) * 100)}% confidence
                       </span>
                     </div>
                     <div className="text-xs text-white/85">{p.preview}</div>
-                    {p.filesModified.length > 0 ? (
+                    {(p.filesModified?.length ?? 0) > 0 ? (
                       <div className="mt-1 text-[11px] text-white/50">
-                        Files: {p.filesModified.join(', ')}
+                        Files: {p.filesModified?.join(', ')}
                       </div>
                     ) : null}
                     {p.diff ? (

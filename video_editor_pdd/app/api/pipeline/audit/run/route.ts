@@ -57,7 +57,7 @@ async function auditSection(
     fs.mkdirSync(path.dirname(outputStill), { recursive: true });
 
     // Render midpoint still
-    const fps = loadProject().render.fps;
+    const fps = loadProject().render.fps ?? 30;
     const midpointFrame = Math.floor((section.durationSeconds / 2) * fps);
     onLog(
       `[audit] Rendering still for ${section.id} (${specName}) at frame ${midpointFrame}`

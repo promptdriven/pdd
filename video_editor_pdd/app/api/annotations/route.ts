@@ -21,11 +21,11 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
            WHERE sectionId = ?
            ORDER BY timestamp ASC`
         )
-        .all(sectionId);
+        .all(sectionId) as Array<Record<string, any>>;
     } else {
       rows = db
         .prepare(`SELECT * FROM annotations ORDER BY timestamp ASC`)
-        .all();
+        .all() as Array<Record<string, any>>;
     }
 
     const annotations: Annotation[] = rows.map((row) => ({
@@ -72,9 +72,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       inputMethod,
     } = body;
 
-    if (!sectionId || !text) {
+    if (!sectionId || (!drawingDataUrl && (text === undefined || text === "" || (typeof text === "string" && text.trim() === "")))) {
       return NextResponse.json(
-        { error: "Missing required fields: sectionId and text are required." },
+        { error: "Missing required fields: sectionId is required, and either text (non-empty) or drawingDataUrl must be provided." },
         { status: 400 }
       );
     }

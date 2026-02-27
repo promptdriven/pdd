@@ -932,3 +932,229 @@ class TestIssue467BlindResume:
             f"Step 4 should be re-executed because its cached output is FAILED, "
             f"but executed steps were: {executed_labels}."
         )
+
+
+# ============================================================================
+# Issue #545: _commit_and_push with tainted hash snapshot (resume scenario)
+# ============================================================================
+
+
+class TestIssue545CommitAndPushWithTaintedHashes:
+    """Tests for issue #545: _commit_and_push falls back to git diff when
+    hash snapshot is tainted (captured after pre-existing modifications).
+
+    On a resumed run:
+    - Prior run wrote code changes to disk but commit failed/timed out.
+    - New run starts: initial_file_hashes = _get_file_hashes(cwd) is called
+      AFTER the prior run's modifications already exist on disk.
+    - Hash snapshot is "tainted" — it already reflects the modifications.
+    - Hash delta is zero -> files_to_commit is empty.
+    - Buggy code returns "No changes to commit" without checking git diff.
+    - Fix: fall back to _get_modified_and_untracked() when hash delta is zero.
+    """
+
+    @staticmethod
+    def _init_git_repo_with_remote(tmp_path):
+        """Helper: creates a git repo cloned from a bare remote for push testing."""
+        import subprocess
+
+        bare = tmp_path / "bare.git"
+        worktree = tmp_path / "worktree"
+
+        subprocess.run(["git", "init", "--bare", str(bare)],
+                       check=True, capture_output=True)
+        subprocess.run(["git", "clone", str(bare), str(worktree)],
+                       check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@test.com"],
+                       cwd=worktree, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Test"],
+                       cwd=worktree, check=True, capture_output=True)
+
+        module = worktree / "module.py"
+        module.write_text("x = 1\n")
+        subprocess.run(["git", "add", "."],
+                       cwd=worktree, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"],
+                       cwd=worktree, check=True, capture_output=True)
+
+        branch = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=worktree, capture_output=True, text=True, check=True
+        ).stdout.strip()
+        subprocess.run(["git", "push", "-u", "origin", branch],
+                       cwd=worktree, check=True, capture_output=True)
+
+        return worktree, module
+
+    def test_commit_and_push_falls_back_to_git_diff_when_hashes_match(self, tmp_path):
+        """Primary bug test: fails on buggy code because hash delta is zero
+        but git diff shows the file IS modified and uncommitted.
+
+        Simulates a resume scenario where:
+        1. Prior run modified module.py on disk but commit failed
+        2. New run captures initial_file_hashes AFTER modification exists
+        3. Hash delta is zero (tainted snapshot matches current state)
+        4. _commit_and_push should fall back to _get_modified_and_untracked()
+           to detect the orphaned unstaged change
+        """
+        from pdd.agentic_e2e_fix_orchestrator import _commit_and_push, _get_file_hashes
+        import subprocess
+
+        worktree, module = self._init_git_repo_with_remote(tmp_path)
+
+        # Simulate prior run's modification (exists BEFORE hash snapshot)
+        module.write_text("x = 2  # fixed by prior run\n")
+
+        # Capture "initial" hashes AFTER modification — tainted snapshot
+        tainted_hashes = _get_file_hashes(worktree)
+
+        # Call _commit_and_push with tainted hashes
+        success, message = _commit_and_push(
+            cwd=worktree, issue_number=545,
+            issue_title="Fix unstaged changes",
+            initial_file_hashes=tainted_hashes, quiet=True
+        )
+
+        # BUG: On buggy code, message is "No changes to commit"
+        # FIX: Should detect unstaged change via _get_modified_and_untracked()
+        assert "No changes to commit" not in message, (
+            f"Issue #545: When initial_file_hashes was captured AFTER "
+            f"pre-existing modifications (resume scenario where prior run wrote "
+            f"files but commit failed), _commit_and_push must fall back to "
+            f"_get_modified_and_untracked() to detect uncommitted changes "
+            f"instead of returning 'No changes to commit'. Got: '{message}'"
+        )
+
+        # Verify the file was actually committed
+        diff_result = subprocess.run(
+            ["git", "diff", "--name-only", "HEAD"],
+            cwd=worktree, capture_output=True, text=True
+        )
+        assert diff_result.stdout.strip() == "", (
+            f"Issue #545: Pre-existing modification should have been committed. "
+            f"Still uncommitted: {diff_result.stdout.strip()}"
+        )
+
+    def test_commit_and_push_no_changes_when_nothing_modified(self, tmp_path):
+        """Regression guard: 'No changes to commit' preserved when nothing changed.
+
+        Ensures the fix doesn't introduce false positives — when there are truly
+        no changes (no hash delta AND no git diff), the function should still
+        return "No changes to commit".
+        """
+        from pdd.agentic_e2e_fix_orchestrator import _commit_and_push, _get_file_hashes
+        import subprocess
+
+        worktree, module = self._init_git_repo_with_remote(tmp_path)
+
+        # No modifications — clean worktree
+        initial_hashes = _get_file_hashes(worktree)
+
+        success, message = _commit_and_push(
+            cwd=worktree, issue_number=545,
+            issue_title="Fix unstaged changes",
+            initial_file_hashes=initial_hashes, quiet=True
+        )
+
+        assert success is True
+        assert "No changes to commit" in message, (
+            f"When nothing is modified, should return 'No changes to commit'. "
+            f"Got: '{message}'"
+        )
+
+    def test_commit_and_push_with_hash_changes_still_commits(self, tmp_path):
+        """Regression: normal hash-comparison path still works for fresh runs.
+
+        On a fresh run, initial_file_hashes is a clean snapshot (empty, no
+        unstaged files). When files are modified AFTER the snapshot, the hash
+        comparison detects real deltas and commits normally.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import _commit_and_push, _get_file_hashes
+        import subprocess
+
+        worktree, module = self._init_git_repo_with_remote(tmp_path)
+
+        # Take snapshot BEFORE modification (clean baseline — fresh run)
+        initial_hashes = _get_file_hashes(worktree)
+
+        # Modify file AFTER snapshot (simulating workflow modification)
+        module.write_text("x = 2  # fixed during workflow\n")
+
+        success, message = _commit_and_push(
+            cwd=worktree, issue_number=545,
+            issue_title="Fix unstaged changes",
+            initial_file_hashes=initial_hashes, quiet=True
+        )
+
+        assert success is True
+        assert "Committed and pushed" in message, (
+            f"Normal hash-comparison path should detect and commit the change. "
+            f"Got: '{message}'"
+        )
+
+        # Verify the file was committed (no remaining unstaged changes)
+        diff_result = subprocess.run(
+            ["git", "diff", "--name-only", "HEAD"],
+            cwd=worktree, capture_output=True, text=True
+        )
+        assert diff_result.stdout.strip() == "", (
+            f"File should be committed. Still uncommitted: {diff_result.stdout.strip()}"
+        )
+
+    def test_orchestrator_resume_with_pretainted_hashes_commits_changes(self, tmp_path):
+        """Integration: resumed orchestrator detects and commits pre-existing
+        unstaged modifications when ALL_TESTS_PASS at Step 2.
+
+        This test does NOT mock _get_file_hashes or _commit_and_push — they
+        run against a real git repo. Only the LLM (run_agentic_task) and
+        state persistence are mocked.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+        import subprocess
+
+        # Set up a real git repo with remote
+        worktree, module = self._init_git_repo_with_remote(tmp_path)
+
+        # Simulate prior run's orphaned modification
+        module.write_text("x = 2  # fixed by prior interrupted run\n")
+
+        def step_side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step2" in label:
+                return (True, "ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.run_agentic_task") as mock_run, \
+             patch("pdd.agentic_e2e_fix_orchestrator.load_workflow_state") as mock_load, \
+             patch("pdd.agentic_e2e_fix_orchestrator.save_workflow_state") as mock_save, \
+             patch("pdd.agentic_e2e_fix_orchestrator.clear_workflow_state") as mock_clear, \
+             patch("pdd.agentic_e2e_fix_orchestrator.load_prompt_template") as mock_template, \
+             patch("pdd.agentic_e2e_fix_orchestrator.console"):
+
+            mock_run.side_effect = step_side_effect
+            mock_load.return_value = (None, None)
+            mock_save.return_value = None
+            mock_template.return_value = "Prompt for {issue_number}"
+
+            success, message, cost, model, files = run_agentic_e2e_fix_orchestrator(
+                issue_url="http://github.com/owner/repo/issues/545",
+                issue_content="Bug: pdd fix exits 'no changes to commit'",
+                repo_owner="owner", repo_name="repo",
+                issue_number=545, issue_author="user",
+                issue_title="Fix unstaged changes on resume",
+                cwd=worktree, quiet=True, max_cycles=1,
+                resume=False, use_github_state=False,
+            )
+
+        assert success is True
+
+        # Assert on REAL git state — the orphaned file must be committed
+        diff_after = subprocess.run(
+            ["git", "diff", "--name-only", "HEAD"],
+            cwd=worktree, capture_output=True, text=True
+        )
+        assert diff_after.stdout.strip() == "", (
+            f"Issue #545: On resume with pre-existing unstaged modifications, "
+            f"_commit_and_push must detect and commit those changes. "
+            f"Still uncommitted: {diff_after.stdout.strip()}"
+        )

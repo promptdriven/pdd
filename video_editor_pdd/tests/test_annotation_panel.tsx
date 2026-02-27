@@ -586,3 +586,72 @@ describe("card rendering", () => {
     expect(sourceCode).toMatch(/sorted\.map\s*\(\s*\(a\)/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 25. View Diff / Revert Fix when fixCommitSha exists (items 10.8, 10.11)
+// ---------------------------------------------------------------------------
+
+describe("View Diff and Revert Fix buttons (10.8, 10.11)", () => {
+  it("conditionally renders View Diff button when fixCommitSha exists", () => {
+    // 10.8: "View Diff" button shown when fixCommitSha exists
+    expect(sourceCode).toMatch(/a\.fixCommitSha\s*\?/);
+    expect(sourceCode).toMatch(/View Diff/);
+  });
+
+  it("View Diff button toggles label to 'Hide Diff' when diff is visible (10.10)", () => {
+    // The button text flips between "View Diff" and "Hide Diff" based on showDiff state
+    expect(sourceCode).toMatch(/Hide Diff/);
+    expect(sourceCode).toMatch(/showDiff\s*\?\s*['"]Hide Diff['"]\s*:\s*['"]View Diff['"]/);
+  });
+
+  it("conditionally renders Revert Fix button when fixCommitSha exists (10.11)", () => {
+    expect(sourceCode).toMatch(/Revert Fix/);
+  });
+
+  it("both buttons are inside the fixCommitSha conditional block", () => {
+    // Both View Diff and Revert Fix must appear together inside `a.fixCommitSha ?`
+    const fixBlock = sourceCode.match(/a\.fixCommitSha\s*\?[\s\S]*?Revert Fix/);
+    expect(fixBlock).not.toBeNull();
+    expect(fixBlock![0]).toContain('View Diff');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 26. Diff panel display (items 10.9, 10.10)
+// ---------------------------------------------------------------------------
+
+describe("diff panel display (10.9, 10.10)", () => {
+  it("shows diff panel when showDiff and diffText are truthy (10.9)", () => {
+    expect(sourceCode).toMatch(/showDiff\s*&&\s*diffText/);
+  });
+
+  it("diff panel renders in a <pre> element (10.10)", () => {
+    expect(sourceCode).toMatch(/<pre\s[^>]*font-mono/);
+  });
+
+  it("diff panel shows commit SHA", () => {
+    expect(sourceCode).toMatch(/a\.fixCommitSha\?\.slice\(0,\s*8\)/);
+  });
+
+  it("fetches diff from /api/annotations/${id}/diff", () => {
+    expect(sourceCode).toMatch(/fetch\s*\(\s*`\/api\/annotations\/\$\{a\.id\}\/diff`/);
+  });
+
+  it("POSTs to /api/annotations/${id}/revert for revert action", () => {
+    expect(sourceCode).toMatch(/fetch\s*\(\s*`\/api\/annotations\/\$\{a\.id\}\/revert`/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 27. SSE onDone triggers annotation refresh (item 13.5) — EXPECTED TO FAIL BEFORE FIX
+// ---------------------------------------------------------------------------
+
+describe("SseLogPanel onDone triggers annotation refresh (13.5)", () => {
+  it("onDone callback calls onBatchResolve with batchJobId to refresh annotations", () => {
+    // After the SSE 'done' event fires the batch resolve job is complete and
+    // annotations must be re-fetched so resolved ones show '✓ Resolved'.
+    // A no-op onDone means the parent never reloads — this is the bug.
+    // Fix: call onBatchResolve(batchJobId) inside the onDone callback.
+    expect(sourceCode).toMatch(/onDone=\{\s*\(\)\s*=>\s*\{[^}]*onBatchResolve/);
+  });
+});

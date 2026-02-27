@@ -5,7 +5,7 @@ import type { Annotation, AnnotationAnalysis } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
-type RouteParams = { params: { id: string } };
+type RouteParams = { params: Promise<{ id: string }> };
 
 interface FixPreview {
   annotationId: string;
@@ -17,19 +17,33 @@ interface FixPreview {
 }
 
 function buildPreviewPrompt(annotation: Annotation): string {
+  const analysisJson = annotation.analysis ? JSON.stringify(annotation.analysis, null, 2) : "none";
   return `
-You are previewing a Remotion fix for this annotation.
-Annotation ID: ${annotation.id}
-Section ID: ${annotation.sectionId}
-Timestamp: ${annotation.timestamp}s
-User note: ${annotation.text}
+You are previewing a Remotion fix for a visual issue in the "${annotation.sectionId}" section.
 
-Analyze what needs to change and describe the fix.
+Issue details:
+- Annotation ID: ${annotation.id}
+- Timestamp: ${annotation.timestamp}s
+- User note: ${annotation.text}
+- Analysis: ${analysisJson}
+
+Instructions:
+1. Use Glob/Read tools to inspect the relevant TSX source files in this directory (remotion/src/remotion/).
+2. Identify which file(s) need to change to resolve the issue.
+3. Do NOT modify any files — this is a preview/dry-run only.
+4. Return JSON describing what you would change:
+{
+  "fixType": "remotion",
+  "filesModified": ["list of files you would modify"],
+  "changeDescription": "detailed description of what you would change and why",
+  "confidence": 0.0-1.0,
+  "proposedDiff": "unified diff format showing the proposed changes"
+}
 `.trim();
 }
 
 export async function POST(request: Request, { params }: RouteParams) {
-  const sectionId = params.id;
+  const { id: sectionId } = await params;
   const db = getDb();
 
   try {
