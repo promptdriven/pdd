@@ -5056,3 +5056,420 @@ def test_agentic_verify_saves_run_report(orchestration_fixture):
             f"(after crash AND after verify), but was called {len(save_calls)} time(s). "
             f"Missing post-verify RunReport causes false crash-verify cycle detection."
         )
+
+
+# --- Issue #572: Agentic Mode Hallucinated Import Detection Tests ---
+# These tests verify that auto-deps skipped in agentic mode does NOT allow
+# hallucinated imports (non-existent modules) to pass through undetected.
+
+
+def test_issue572_baseline_auto_deps_skipped_advances_to_generate(orchestration_fixture):
+    """
+    Baseline: Confirms auto-deps is skipped in agentic mode and the operation
+    advances to 'generate'. auto_deps_main should not be called, but
+    code_generator_main should be called.
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_determine.side_effect = [
+        SyncDecision(operation='auto-deps', reason='Dependencies need scanning'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    result = sync_orchestration(basename="calculator", language="python", agentic_mode=True)
+
+    assert result['success'] is True
+    # auto_deps_main should NOT be called — it was skipped
+    orchestration_fixture['auto_deps_main'].assert_not_called()
+    # code_generator_main SHOULD be called — auto-deps advanced to generate
+    orchestration_fixture['code_generator_main'].assert_called_once()
+
+
+def test_issue572_hallucinated_imports_detected_after_agentic_generate(orchestration_fixture):
+    """
+    Issue #572: When auto-deps is skipped in agentic mode and code_generator_main
+    produces code with hallucinated imports (firestore_writes, brevo_results_email),
+    post-generation AST validation must detect and report them.
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    tmp_path = Path(orchestration_fixture['get_pdd_file_paths'].return_value['prompt']).parent.parent
+
+    # Code with hallucinated imports from the issue report
+    hallucinated_code = (
+        '"""Hackathon results module."""\n'
+        'from firestore_writes import update_event_winners\n'
+        'from brevo_results_email import send_bulk_notifications\n'
+        '\n'
+        'def calculate_results():\n'
+        '    """Calculate hackathon results."""\n'
+        '    winners = update_event_winners()\n'
+        '    send_bulk_notifications(winners)\n'
+        '    return winners\n'
+    )
+
+    def mock_generate(*args, **kwargs):
+        """Mock code_generator_main that writes code with hallucinated imports."""
+        code_file = tmp_path / 'src' / 'calculator.py'
+        code_file.write_text(hallucinated_code, encoding='utf-8')
+        return {'success': True, 'cost': 0.05, 'model': 'mock-model'}
+
+    orchestration_fixture['code_generator_main'].side_effect = mock_generate
+
+    mock_determine.side_effect = [
+        SyncDecision(operation='auto-deps', reason='Dependencies need scanning'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    result = sync_orchestration(basename="calculator", language="python", agentic_mode=True)
+
+    # Post-generation validation should catch non-existent imports
+    assert result['success'] is False or len(result.get('errors', [])) > 0, (
+        "Hallucinated imports (firestore_writes, brevo_results_email) passed through "
+        "undetected in agentic mode. Expected post-generation import validation to "
+        "catch non-existent local modules, but sync reported success with no errors."
+    )
+
+
+def test_issue572_valid_local_imports_not_flagged(orchestration_fixture):
+    """
+    Ensures that when generated code imports a module that actually exists on disk,
+    import validation does NOT flag it as a false positive.
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    tmp_path = Path(orchestration_fixture['get_pdd_file_paths'].return_value['prompt']).parent.parent
+
+    # Create a real local module in the src directory
+    (tmp_path / 'src' / 'helper_utils.py').write_text(
+        'def helper(): pass\n', encoding='utf-8'
+    )
+
+    # Code that imports the real local module
+    valid_code = (
+        '"""Calculator module."""\n'
+        'from helper_utils import helper\n'
+        '\n'
+        'def calc():\n'
+        '    """Do calculation."""\n'
+        '    return helper()\n'
+    )
+
+    def mock_generate(*args, **kwargs):
+        """Mock code_generator_main that writes code with valid local imports."""
+        code_file = tmp_path / 'src' / 'calculator.py'
+        code_file.write_text(valid_code, encoding='utf-8')
+        return {'success': True, 'cost': 0.05, 'model': 'mock-model'}
+
+    orchestration_fixture['code_generator_main'].side_effect = mock_generate
+
+    mock_determine.side_effect = [
+        SyncDecision(operation='auto-deps', reason='Dependencies need scanning'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    result = sync_orchestration(basename="calculator", language="python", agentic_mode=True)
+
+    # Valid local imports should not trigger validation errors
+    assert result['success'] is True
+    assert not result.get('errors', [])
+
+
+def test_issue572_stdlib_imports_not_flagged(orchestration_fixture):
+    """
+    Ensures standard library imports are NOT flagged as hallucinated
+    when import validation runs after agentic code generation.
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    tmp_path = Path(orchestration_fixture['get_pdd_file_paths'].return_value['prompt']).parent.parent
+
+    # Code with only stdlib imports
+    stdlib_code = (
+        '"""Calculator with standard imports."""\n'
+        'import os\n'
+        'import json\n'
+        'import sys\n'
+        'from pathlib import Path\n'
+        'from datetime import datetime\n'
+        '\n'
+        'def calc():\n'
+        '    """Do calculation."""\n'
+        '    return str(Path.cwd())\n'
+    )
+
+    def mock_generate(*args, **kwargs):
+        """Mock code_generator_main that writes code with stdlib imports."""
+        code_file = tmp_path / 'src' / 'calculator.py'
+        code_file.write_text(stdlib_code, encoding='utf-8')
+        return {'success': True, 'cost': 0.05, 'model': 'mock-model'}
+
+    orchestration_fixture['code_generator_main'].side_effect = mock_generate
+
+    mock_determine.side_effect = [
+        SyncDecision(operation='auto-deps', reason='Dependencies need scanning'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    result = sync_orchestration(basename="calculator", language="python", agentic_mode=True)
+
+    # Stdlib imports should not trigger validation errors
+    assert result['success'] is True
+    assert not result.get('errors', [])
+
+
+def test_issue572_synthetic_crash_message_hides_import_error(orchestration_fixture):
+    """
+    Issue #572: Python in agentic mode must run the example directly instead of
+    producing a synthetic delegation message. This ensures _try_auto_fix_import_error
+    receives real error output (e.g., ModuleNotFoundError) for proper detection.
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    tmp_path = Path(orchestration_fixture['get_pdd_file_paths'].return_value['prompt']).parent.parent
+
+    # Create code and example files — code has a hallucinated import
+    code_file = tmp_path / 'src' / 'calculator.py'
+    code_file.write_text(
+        'from nonexistent_module import something\n\ndef calc():\n    pass\n',
+        encoding='utf-8'
+    )
+    example_file = tmp_path / 'examples' / 'calculator_example.py'
+    example_file.write_text(
+        'from calculator import calc\ncalc()\n',
+        encoding='utf-8'
+    )
+
+    mock_determine.side_effect = [
+        SyncDecision(operation='crash', reason='Example crashed'),
+        SyncDecision(operation='all_synced', reason='Done'),
+    ]
+
+    # crash_main returns success (using fixture default dict format)
+    orchestration_fixture['crash_main'].return_value = {'success': True, 'cost': 0.08, 'model': 'mock-model'}
+
+    with patch('pdd.sync_orchestration.read_run_report', return_value=None), \
+         patch('pdd.sync_orchestration._try_auto_fix_import_error') as mock_auto_fix, \
+         patch('pdd.sync_orchestration._try_auto_fix_env_var_error') as mock_env_fix, \
+         patch('pdd.sync_orchestration._save_run_report_atomic'):
+        mock_auto_fix.return_value = (False, "No import error detected")
+        mock_env_fix.return_value = (False, "No env var error detected")
+
+        result = sync_orchestration(basename="calculator", language="python", agentic_mode=True)
+
+        # Verify _try_auto_fix_import_error was called
+        assert mock_auto_fix.called, (
+            "_try_auto_fix_import_error should have been called in crash handler"
+        )
+
+        # The error_output argument should contain real error info
+        actual_error_output = mock_auto_fix.call_args[0][0]
+        assert "ModuleNotFoundError" in actual_error_output or "ImportError" in actual_error_output, (
+            f"_try_auto_fix_import_error received synthetic delegation message instead of "
+            f"real error output. Got: '{actual_error_output}'. In agentic mode, the crash "
+            f"handler should surface real import errors for auto-fix detection."
+        )
+
+
+def test_issue572_wrong_module_name_hackathon_volunteer(orchestration_fixture):
+    """
+    Issue #572: When the LLM uses 'hackathon_volunteer' but the actual module is
+    'hackathon_volunteer_management', AST import validation must detect the
+    non-existent module name.
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    tmp_path = Path(orchestration_fixture['get_pdd_file_paths'].return_value['prompt']).parent.parent
+
+    # Create the REAL module with the correct name
+    (tmp_path / 'src' / 'hackathon_volunteer_management.py').write_text(
+        'def manage_volunteers(): pass\n', encoding='utf-8'
+    )
+
+    # Code that imports the WRONG module name (hallucinated by LLM)
+    wrong_name_code = (
+        '"""Hackathon results module."""\n'
+        'from hackathon_volunteer import manage_volunteers\n'
+        '\n'
+        'def process_results():\n'
+        '    """Process hackathon results."""\n'
+        '    return manage_volunteers()\n'
+    )
+
+    def mock_generate(*args, **kwargs):
+        """Mock code_generator_main that writes code with wrong module name."""
+        code_file = tmp_path / 'src' / 'calculator.py'
+        code_file.write_text(wrong_name_code, encoding='utf-8')
+        return {'success': True, 'cost': 0.05, 'model': 'mock-model'}
+
+    orchestration_fixture['code_generator_main'].side_effect = mock_generate
+
+    mock_determine.side_effect = [
+        SyncDecision(operation='auto-deps', reason='Dependencies need scanning'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    result = sync_orchestration(basename="calculator", language="python", agentic_mode=True)
+
+    # Should detect that 'hackathon_volunteer' doesn't exist on disk
+    assert result['success'] is False or len(result.get('errors', [])) > 0, (
+        "Wrong module name 'hackathon_volunteer' (actual: 'hackathon_volunteer_management') "
+        "passed through undetected in agentic mode. Expected import validation to catch "
+        "this non-existent module, but sync reported success with no errors."
+    )
+
+
+# --- Bug #573: test_extend accepts coverage=0.0 as success ---
+
+
+def test_test_extend_agentic_skip_rejects_zero_coverage(orchestration_fixture):
+    """
+    Bug #573: When test_extend is skipped in agentic mode (non-Python language),
+    the orchestration should NOT declare success if coverage is below target.
+
+    Previously, the agentic skip path unconditionally set success=True without
+    checking coverage against the target, allowing coverage=0.0 to pass the
+    pipeline. The fix checks coverage against target before accepting.
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_get_paths = orchestration_fixture['get_pdd_file_paths']
+    tmp_path = Path(mock_get_paths.return_value['prompt']).parent.parent
+
+    # Set up TypeScript files (non-Python → agentic path)
+    (tmp_path / "prompts" / "calculator_typescript.prompt").write_text("Create a calculator.")
+    (tmp_path / "src" / "calculator.ts").write_text("// TS code")
+    (tmp_path / "examples" / "calculator_example.ts").write_text("// Example")
+    (tmp_path / "tests" / "test_calculator.ts").write_text("// Test")
+
+    mock_get_paths.return_value = {
+        'prompt': tmp_path / 'prompts' / 'calculator_typescript.prompt',
+        'code': tmp_path / 'src' / 'calculator.ts',
+        'example': tmp_path / 'examples' / 'calculator_example.ts',
+        'test': tmp_path / 'tests' / 'test_calculator.ts',
+    }
+
+    # Simulate: generate succeeds → sync_determine detects low coverage → returns test_extend
+    # test_extend means coverage < target, but agentic skip unconditionally sets success=True
+    mock_determine.side_effect = [
+        SyncDecision(operation='generate', reason='New unit'),
+        SyncDecision(operation='test_extend', reason='Coverage 0.0 below target 90.0'),
+    ]
+
+    # code_generator_main returns success (agentic tuple format for non-Python)
+    orchestration_fixture['code_generator_main'].return_value = (True, "", "", 1, 0.05, "agentic-cli")
+
+    result = sync_orchestration(basename="calculator", language="typescript")
+
+    # Bug #573: Currently success=True because agentic skip doesn't check coverage.
+    # After fix: should be False because coverage (0.0) is below target (90.0).
+    assert result['success'] is False, (
+        "Bug #573: test_extend agentic skip should NOT declare pipeline success "
+        "when coverage is below target. The agentic skip path at "
+        "sync_orchestration.py:1401 unconditionally sets success=True "
+        "without checking coverage against target_coverage."
+    )
+
+
+def test_test_extend_max_retries_rejects_zero_coverage(orchestration_fixture):
+    """
+    Bug #573: When test_extend exhausts MAX_TEST_EXTEND_ATTEMPTS,
+    the orchestration should NOT declare success if coverage is below target.
+
+    Previously, the retry exhaustion path unconditionally set success=True
+    without checking coverage. The fix checks coverage against target before
+    accepting.
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+
+    # Simulate: generate → test_extend (executes) → test_extend (hits max retries)
+    # 1st test_extend: extend_attempts=1 < MAX_TEST_EXTEND_ATTEMPTS=2, so it executes
+    # 2nd test_extend: extend_attempts=2 >= MAX_TEST_EXTEND_ATTEMPTS=2, triggers limit
+    mock_determine.side_effect = [
+        SyncDecision(operation='generate', reason='New unit'),
+        SyncDecision(operation='test_extend', reason='Coverage 0.0 below target 90.0'),
+        SyncDecision(operation='test_extend', reason='Coverage still 0.0 below target 90.0'),
+    ]
+
+    # cmd_test_main returns success dict for the first test_extend execution
+    orchestration_fixture['cmd_test_main'].side_effect = None
+    orchestration_fixture['cmd_test_main'].return_value = {'success': True, 'cost': 0.06, 'model': 'mock-model'}
+
+    with patch('pdd.sync_orchestration._execute_tests_and_create_run_report'):
+        result = sync_orchestration(basename="calculator", language="python")
+
+    # Bug #573: Currently success=True because retry exhaustion doesn't check coverage.
+    # After fix: should be False because coverage (0.0) is below target (90.0).
+    assert result['success'] is False, (
+        "Bug #573: test_extend retry exhaustion should NOT declare pipeline success "
+        "when coverage is below target. The exhaustion path at "
+        "sync_orchestration.py:1413 unconditionally sets success=True "
+        "without checking coverage against target_coverage."
+    )
+
+
+def test_test_extend_agentic_skip_with_adequate_coverage_succeeds(orchestration_fixture):
+    """
+    Regression guard for Bug #573 fix: When test_extend is skipped in agentic mode
+    but coverage is already adequate (>= target), the pipeline should still succeed.
+
+    This ensures the fix doesn't break the legitimate case where coverage is fine
+    but sync_determine_operation returns test_extend due to a borderline condition.
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_get_paths = orchestration_fixture['get_pdd_file_paths']
+    tmp_path = Path(mock_get_paths.return_value['prompt']).parent.parent
+
+    # Set up TypeScript files (non-Python → agentic path)
+    (tmp_path / "prompts" / "calculator_typescript.prompt").write_text("Create a calculator.")
+    (tmp_path / "src" / "calculator.ts").write_text("// TS code")
+    (tmp_path / "examples" / "calculator_example.ts").write_text("// Example")
+    (tmp_path / "tests" / "test_calculator.ts").write_text("// Test")
+
+    mock_get_paths.return_value = {
+        'prompt': tmp_path / 'prompts' / 'calculator_typescript.prompt',
+        'code': tmp_path / 'src' / 'calculator.ts',
+        'example': tmp_path / 'examples' / 'calculator_example.ts',
+        'test': tmp_path / 'tests' / 'test_calculator.ts',
+    }
+
+    # For agentic mode, after generate → test_extend → all_synced is the normal flow
+    # when coverage is adequate. The fix should not break this.
+    mock_determine.side_effect = [
+        SyncDecision(operation='generate', reason='New unit'),
+        SyncDecision(operation='all_synced', reason='Done, coverage adequate'),
+    ]
+
+    orchestration_fixture['code_generator_main'].return_value = (True, "", "", 1, 0.05, "agentic-cli")
+
+    result = sync_orchestration(basename="calculator", language="typescript")
+
+    # Should succeed: all_synced means everything is fine
+    assert result['success'] is True, (
+        "Regression guard: all_synced after generate should still succeed. "
+        "Bug #573 fix must not break the legitimate success path."
+    )
+
+
+def test_test_extend_max_retries_with_adequate_coverage_succeeds(orchestration_fixture):
+    """
+    Regression guard for Bug #573 fix: When test_extend exhausts retries but
+    the last run achieved adequate coverage (>= target), pipeline should succeed.
+
+    This ensures the fix only rejects zero/low coverage, not cases where
+    coverage was improved to target before retries were exhausted.
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+
+    # After test_extend retries are exhausted but coverage reaches target,
+    # sync_determine_operation should return all_synced (not test_extend again)
+    mock_determine.side_effect = [
+        SyncDecision(operation='generate', reason='New unit'),
+        SyncDecision(operation='test_extend', reason='Coverage 50.0 below target 90.0'),
+        SyncDecision(operation='all_synced', reason='Coverage reached 92.0'),
+    ]
+
+    orchestration_fixture['cmd_test_main'].side_effect = None
+    orchestration_fixture['cmd_test_main'].return_value = {'success': True, 'cost': 0.06, 'model': 'mock-model'}
+
+    with patch('pdd.sync_orchestration._execute_tests_and_create_run_report'):
+        result = sync_orchestration(basename="calculator", language="python")
+
+    # Should succeed: test_extend improved coverage enough for all_synced
+    assert result['success'] is True, (
+        "Regression guard: test_extend followed by all_synced should succeed. "
+        "Bug #573 fix must not break the case where test_extend improves coverage."
+    )

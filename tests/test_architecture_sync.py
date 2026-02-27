@@ -11,10 +11,14 @@ from pathlib import Path
 import pytest
 
 from pdd.architecture_sync import (
+    _find_renamed_prompt_file,
+    _infer_filepath,
+    _infer_module_tags,
     generate_tags_from_architecture,
     get_architecture_entry_for_prompt,
     has_pdd_tags,
     parse_prompt_tags,
+    register_untracked_prompts,
     sync_all_prompts_to_architecture,
     update_architecture_from_prompt,
     validate_dependencies,
@@ -1373,3 +1377,681 @@ def test_interface_json_trailing_comma():
     # Should fail to parse due to trailing comma
     assert result['interface'] is None
     assert 'interface_parse_error' in result
+
+
+# --- Regression tests for issue #550: corrupted dependency values ---
+
+def test_parse_tags_rejects_multiline_dependency():
+    """Dependency containing newlines (prompt content blob) must be rejected.
+
+    Regression for issue #550: pdd change step 10 wrote the entire prompt file
+    content as a dependency string when it confused example tags with real ones.
+    """
+    corrupted_dep = "` tags:\n      - Extract from `<include>` directives\n      - Only include .prompt files\nllm_invoke_python.prompt"
+    content = f"<pdd-dependency>{corrupted_dep}</pdd-dependency>"
+
+    result = parse_prompt_tags(content)
+
+    assert result['dependencies'] == [], (
+        "Multiline dependency value should be rejected"
+    )
+
+
+def test_parse_tags_rejects_dependency_over_100_chars():
+    """Dependency longer than 100 chars must be rejected.
+
+    Regression for issue #550: the corrupted value was hundreds of characters long.
+    """
+    long_dep = "a" * 101 + ".prompt"
+    content = f"<pdd-dependency>{long_dep}</pdd-dependency>"
+
+    result = parse_prompt_tags(content)
+
+    assert result['dependencies'] == [], (
+        "Dependency value over 100 chars should be rejected"
+    )
+
+
+def test_parse_tags_rejects_dependency_not_ending_in_prompt():
+    """Dependency not ending in .prompt must be rejected."""
+    content = "<pdd-dependency>some_python_file.py</pdd-dependency>"
+
+    result = parse_prompt_tags(content)
+
+    assert result['dependencies'] == [], (
+        "Non-.prompt dependency should be rejected"
+    )
+
+
+def test_parse_tags_accepts_valid_dependency_alongside_corrupted():
+    """Valid .prompt dependency is kept even when another dep is corrupted.
+
+    Regression for issue #550: architecture.json had one corrupted dep and one
+    valid dep (path_resolution_python.prompt). The valid one must be preserved.
+    """
+    corrupted = "` tags:\n      - Extract from includes\nllm_invoke_python.prompt"
+    content = (
+        f"<pdd-dependency>{corrupted}</pdd-dependency>\n"
+        "<pdd-dependency>path_resolution_python.prompt</pdd-dependency>"
+    )
+
+    result = parse_prompt_tags(content)
+
+    assert result['dependencies'] == ['path_resolution_python.prompt']
+
+
+# --- Regression tests for _sanitize_architecture_dependencies ---
+
+def test_sanitize_architecture_dependencies_removes_corrupted_dep():
+    """_sanitize_architecture_dependencies cleans corrupted deps from architecture.json.
+
+    Regression for issue #550: after step 10 writes a corrupted dependency,
+    the sanitizer must strip it so Dev Units validation passes.
+    """
+    import json
+    import tempfile
+    from pathlib import Path
+    from pdd.agentic_change_orchestrator import _sanitize_architecture_dependencies
+
+    corrupted_dep = "` tags:\n      - Extract from `<include>` directives\nllm_invoke_python.prompt"
+    arch_data = [
+        {
+            "filename": "agentic_change_step10_architecture_update_LLM.prompt",
+            "dependencies": [corrupted_dep, "path_resolution_python.prompt"],
+        }
+    ]
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        arch_path = Path(tmpdir) / "architecture.json"
+        arch_path.write_text(json.dumps(arch_data, indent=2))
+
+        _sanitize_architecture_dependencies(Path(tmpdir))
+
+        result = json.loads(arch_path.read_text())
+        assert result[0]["dependencies"] == ["path_resolution_python.prompt"]
+
+
+def test_sanitize_architecture_dependencies_leaves_valid_deps_untouched():
+    """_sanitize_architecture_dependencies must not modify clean architecture.json."""
+    import json
+    import tempfile
+    from pathlib import Path
+    from pdd.agentic_change_orchestrator import _sanitize_architecture_dependencies
+
+    arch_data = [
+        {
+            "filename": "llm_invoke_python.prompt",
+            "dependencies": ["path_resolution_python.prompt", "construct_paths_python.prompt"],
+        }
+    ]
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        arch_path = Path(tmpdir) / "architecture.json"
+        arch_path.write_text(json.dumps(arch_data, indent=2))
+
+        _sanitize_architecture_dependencies(Path(tmpdir))
+
+        result = json.loads(arch_path.read_text())
+        assert result[0]["dependencies"] == [
+            "path_resolution_python.prompt",
+            "construct_paths_python.prompt",
+        ]
+
+
+def test_sanitize_architecture_dependencies_no_file_is_noop():
+    """_sanitize_architecture_dependencies must not crash if no architecture.json."""
+    import tempfile
+    from pathlib import Path
+    from pdd.agentic_change_orchestrator import _sanitize_architecture_dependencies
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        _sanitize_architecture_dependencies(Path(tmpdir))  # should not raise
+
+
+# --- Tests for issue #566: parse_prompt_tags must ignore tags inside code fences ---
+
+
+def test_parse_tags_ignores_fenced_example_prefers_real_tag():
+    """Tags inside code fences must be ignored; real tag in header is extracted.
+
+    Regression for issue #566: parse_prompt_tags() used to scan the entire file,
+    picking up example tags in code fences as real metadata.
+
+    Fix: only parse content before the first % section marker. Real tags are
+    always declared in the header (before any % section); examples live in the
+    body sections.
+    """
+    content = """<pdd-reason>Real reason for this module</pdd-reason>
+
+% Examples
+
+Here is an example of how to use pdd-reason:
+
+```xml
+<pdd-reason>Example reason shown in docs</pdd-reason>
+```
+"""
+
+    result = parse_prompt_tags(content)
+
+    # The real tag (in header) should be extracted, not the fenced example
+    assert result['reason'] == 'Real reason for this module', (
+        f"Expected 'Real reason for this module' but got '{result['reason']}' — "
+        "parser is extracting example tags from inside code fences"
+    )
+
+
+def test_parse_tags_ignores_all_tag_types_in_fences():
+    """All pdd-* tag types inside code fences must be ignored.
+
+    Regression for issue #566: the actual prompt file
+    agentic_change_step10_architecture_update_LLM.prompt has example
+    <pdd-reason>, <pdd-interface>, and <pdd-dependency> tags inside
+    code fences that get incorrectly extracted.
+    """
+    content = """<pdd-reason>Real module reason</pdd-reason>
+<pdd-interface>{"type": "module", "module": {"functions": []}}</pdd-interface>
+<pdd-dependency>real_dep.prompt</pdd-dependency>
+
+% Examples
+
+Here are examples of how to format the tags in your output:
+
+```xml
+<pdd-reason>The reason for this module's existence</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "example_func", "signature": "()", "returns": "None"}
+    ]
+  }
+}
+</pdd-interface>
+<pdd-dependency>example_dep.prompt</pdd-dependency>
+<pdd-dependency>another_example.prompt</pdd-dependency>
+```
+"""
+
+    result = parse_prompt_tags(content)
+
+    assert result['reason'] == 'Real module reason'
+    assert result['interface'] is not None
+    assert result['interface']['type'] == 'module'
+    # Only the real dependency should be extracted, not the fenced examples
+    assert result['dependencies'] == ['real_dep.prompt'], (
+        f"Expected ['real_dep.prompt'] but got {result['dependencies']} — "
+        "parser is extracting example dependencies from inside code fences"
+    )
+
+
+def test_parse_tags_returns_empty_when_all_tags_in_fences():
+    """When ALL pdd-* tags are inside code fences, parser should return empty results.
+
+    Regression for issue #566: the step10 prompt file has no real top-level tags,
+    only examples inside code fences. The parser should return None/empty for all
+    fields, not extract the fenced examples as real metadata.
+    """
+    content = """
+% This prompt instructs the LLM how to generate architecture tags.
+
+Your output should follow this structure:
+
+```xml
+<pdd-reason>Describe the module's purpose</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "my_func", "signature": "(arg: str)", "returns": "str"}
+    ]
+  }
+}
+</pdd-interface>
+<pdd-dependency>some_module.prompt</pdd-dependency>
+```
+
+Make sure to include all relevant tags.
+"""
+
+    result = parse_prompt_tags(content)
+
+    assert result['reason'] is None, (
+        f"Expected None but got '{result['reason']}' — "
+        "parser extracted a reason from inside a code fence"
+    )
+    assert result['interface'] is None, (
+        "Parser extracted an interface from inside a code fence"
+    )
+    assert result['dependencies'] == [], (
+        f"Expected [] but got {result['dependencies']} — "
+        "parser extracted dependencies from inside a code fence"
+    )
+
+
+def test_parse_tags_ignores_inline_backtick_references():
+    """Inline backtick references in body prose must not be extracted as tags.
+
+    Regression for issue #566: inline backtick references like `<pdd-reason>`
+    in instructional body text get recovered by lxml as actual XML elements with
+    garbled text content, corrupting the extracted metadata.
+
+    Fix: only parse the header (before first % section). Instructional prose with
+    inline backtick references lives in body sections, never in the header.
+    """
+    content = """<pdd-reason>Real reason value</pdd-reason>
+
+% Instructions
+
+Generate a `<pdd-reason>` tag with the module's purpose.
+Also generate `<pdd-interface>` and `<pdd-dependency>` tags.
+"""
+
+    result = parse_prompt_tags(content)
+
+    # Only the real header tag should be extracted, not the backtick references
+    assert result['reason'] == 'Real reason value', (
+        f"Expected 'Real reason value' but got '{result['reason']}' — "
+        "parser is confused by inline backtick references in body"
+    )
+    # Inline backtick references to interface/dependency should not produce results
+    assert result['interface'] is None
+    assert result['dependencies'] == []
+
+
+def test_parse_tags_extracts_real_tags_adjacent_to_fences():
+    """Real tags in the header are extracted even when fenced examples exist in body.
+
+    Ensures the fix doesn't over-strip — real tags declared in the header
+    (before the first % section) must still be extracted correctly, while
+    fenced example tags in body sections are ignored.
+    """
+    content = """<pdd-reason>Reason at top</pdd-reason>
+<pdd-dependency>real_dep.prompt</pdd-dependency>
+
+% Examples
+
+```xml
+<pdd-reason>Fenced example reason</pdd-reason>
+<pdd-dependency>fenced_dep.prompt</pdd-dependency>
+```
+"""
+
+    result = parse_prompt_tags(content)
+
+    assert result['reason'] == 'Reason at top', (
+        f"Expected 'Reason at top' but got '{result['reason']}'"
+    )
+    assert result['dependencies'] == ['real_dep.prompt'], (
+        f"Expected ['real_dep.prompt'] but got {result['dependencies']} — "
+        "parser should only extract real header dependencies, not fenced examples"
+    )
+
+
+def test_parse_tags_real_world_step10_prompt_pattern():
+    """Regression test matching the actual step10 prompt file structure.
+
+    The file agentic_change_step10_architecture_update_LLM.prompt has NO real
+    top-level pdd-* tags — only instructional examples inside code fences.
+    The parser must return empty results for this pattern.
+
+    This directly reproduces the bug reported in issue #566.
+    """
+    content = """% Architecture Update Step
+
+You are updating the architecture.json file for a PDD project.
+
+% Instructions
+
+For each module, generate the following tags:
+
+```xml
+<pdd-reason>Brief description of why this module exists</pdd-reason>
+```
+
+For interfaces, use this format:
+
+```xml
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "parse_prompt_tags", "signature": "(prompt_content: str)", "returns": "Dict[str, Any]"}
+    ]
+  }
+}
+</pdd-interface>
+```
+
+For dependencies, list each one:
+
+```xml
+<pdd-dependency>path_resolution_python.prompt</pdd-dependency>
+<pdd-dependency>construct_paths_python.prompt</pdd-dependency>
+```
+
+% Important: Only include dependencies that are actually used.
+"""
+
+    result = parse_prompt_tags(content)
+
+    # No real tags exist outside code fences — all fields should be empty
+    assert result['reason'] is None, (
+        f"Expected None but got '{result['reason']}' — "
+        "step10 prompt pattern: parser extracted example reason from code fence"
+    )
+    assert result['interface'] is None, (
+        "step10 prompt pattern: parser extracted example interface from code fence"
+    )
+    assert result['dependencies'] == [], (
+        f"Expected [] but got {result['dependencies']} — "
+        "step10 prompt pattern: parser extracted example dependencies from code fences"
+    )
+
+
+def test_parse_tags_ignores_tilde_fenced_tags():
+    """Tags inside tilde-style code fences (~~~) must also be ignored.
+
+    The _extract_fence_spans utility in preprocess.py recognizes both backtick
+    and tilde fences. The fix for parse_prompt_tags should be consistent.
+    """
+    content = """<pdd-reason>Real reason outside tilde fence</pdd-reason>
+
+% Examples
+
+~~~xml
+<pdd-reason>Tilde-fenced example reason</pdd-reason>
+<pdd-dependency>tilde_fenced_dep.prompt</pdd-dependency>
+~~~
+"""
+
+    result = parse_prompt_tags(content)
+
+    assert result['reason'] == 'Real reason outside tilde fence', (
+        f"Expected 'Real reason outside tilde fence' but got '{result['reason']}' — "
+        "parser is extracting tags from inside tilde code fences"
+    )
+    assert result['dependencies'] == [], (
+        f"Expected [] but got {result['dependencies']} — "
+        "parser is extracting dependencies from inside tilde code fences"
+    )
+
+
+# --- Tests for auto-rename and auto-register features ---
+
+def test_find_renamed_prompt_file_finds_step_file():
+    """_find_renamed_prompt_file returns renamed path when exactly one step-numbered variant exists."""
+    with tempfile.TemporaryDirectory() as tmp:
+        prompts_dir = Path(tmp)
+        # step5_design exists on disk but step4_design does not
+        (prompts_dir / 'agentic_arch_step5_design_LLM.prompt').write_text('content')
+
+        result = _find_renamed_prompt_file('agentic_arch_step4_design_LLM.prompt', prompts_dir)
+
+        assert result is not None
+        assert result.name == 'agentic_arch_step5_design_LLM.prompt'
+
+
+def test_find_renamed_prompt_file_no_match():
+    """_find_renamed_prompt_file returns None when no similarly-named file exists."""
+    with tempfile.TemporaryDirectory() as tmp:
+        prompts_dir = Path(tmp)
+        # No files at all
+
+        result = _find_renamed_prompt_file('agentic_arch_step4_design_LLM.prompt', prompts_dir)
+
+        assert result is None
+
+
+def test_find_renamed_prompt_file_ambiguous():
+    """_find_renamed_prompt_file returns None when multiple step-number variants exist."""
+    with tempfile.TemporaryDirectory() as tmp:
+        prompts_dir = Path(tmp)
+        (prompts_dir / 'agentic_arch_step5_design_LLM.prompt').write_text('content')
+        (prompts_dir / 'agentic_arch_step6_design_LLM.prompt').write_text('content')
+
+        result = _find_renamed_prompt_file('agentic_arch_step4_design_LLM.prompt', prompts_dir)
+
+        assert result is None
+
+
+def test_find_renamed_prompt_file_no_step_pattern():
+    """_find_renamed_prompt_file returns None for filenames without step number pattern."""
+    with tempfile.TemporaryDirectory() as tmp:
+        prompts_dir = Path(tmp)
+        (prompts_dir / 'cli_detector_python.prompt').write_text('content')
+
+        result = _find_renamed_prompt_file('cli_detector_python.prompt', prompts_dir)
+
+        assert result is None
+
+
+def test_update_uses_renamed_file():
+    """update_architecture_from_prompt auto-renames arch.json entry and syncs from the found file."""
+    with tempfile.TemporaryDirectory() as tmp:
+        prompts_dir = Path(tmp)
+        arch_path = Path(tmp) / 'architecture.json'
+
+        # Disk has step5 but arch.json references step4
+        step5_content = '<pdd-reason>Design step 5</pdd-reason>\n% body'
+        (prompts_dir / 'agentic_arch_step5_design_LLM.prompt').write_text(step5_content)
+
+        arch_data = [
+            {
+                'filename': 'agentic_arch_step4_design_LLM.prompt',
+                'filepath': 'prompts/agentic_arch_step4_design_LLM.prompt',
+                'reason': 'Old reason',
+                'dependencies': [],
+                'priority': 1,
+            }
+        ]
+        arch_path.write_text(json.dumps(arch_data, indent=2) + '\n')
+
+        result = update_architecture_from_prompt(
+            'agentic_arch_step4_design_LLM.prompt',
+            prompts_dir=prompts_dir,
+            architecture_path=arch_path,
+        )
+
+        assert result['success'] is True
+        # Should have updated filename and reason
+        updated_arch = json.loads(arch_path.read_text())
+        assert updated_arch[0]['filename'] == 'agentic_arch_step5_design_LLM.prompt'
+        assert updated_arch[0]['filepath'] == 'prompts/agentic_arch_step5_design_LLM.prompt'
+        assert updated_arch[0]['reason'] == 'Design step 5'
+
+
+def test_update_uses_renamed_file_dry_run():
+    """update_architecture_from_prompt dry_run does not write changes."""
+    with tempfile.TemporaryDirectory() as tmp:
+        prompts_dir = Path(tmp)
+        arch_path = Path(tmp) / 'architecture.json'
+
+        (prompts_dir / 'agentic_arch_step5_design_LLM.prompt').write_text(
+            '<pdd-reason>Design step 5</pdd-reason>\n% body'
+        )
+
+        arch_data = [
+            {
+                'filename': 'agentic_arch_step4_design_LLM.prompt',
+                'filepath': 'prompts/agentic_arch_step4_design_LLM.prompt',
+                'reason': 'Old reason',
+                'dependencies': [],
+                'priority': 1,
+            }
+        ]
+        original_text = json.dumps(arch_data, indent=2) + '\n'
+        arch_path.write_text(original_text)
+
+        result = update_architecture_from_prompt(
+            'agentic_arch_step4_design_LLM.prompt',
+            prompts_dir=prompts_dir,
+            architecture_path=arch_path,
+            dry_run=True,
+        )
+
+        assert result['success'] is True
+        # File should be unchanged in dry_run mode
+        assert arch_path.read_text() == original_text
+
+
+def test_infer_filepath_python():
+    """_infer_filepath returns pdd/<module>.py for _python.prompt files."""
+    assert _infer_filepath('cli_detector_python.prompt') == 'pdd/cli_detector.py'
+
+
+def test_infer_filepath_llm():
+    """_infer_filepath returns prompts/<filename> for _LLM.prompt files."""
+    assert _infer_filepath('agentic_arch_step5_design_LLM.prompt') == 'prompts/agentic_arch_step5_design_LLM.prompt'
+
+
+def test_infer_module_tags_python():
+    """_infer_module_tags returns ['module', 'python'] for _python.prompt files."""
+    assert _infer_module_tags('cli_detector_python.prompt') == ['module', 'python']
+
+
+def test_infer_module_tags_llm():
+    """_infer_module_tags returns ['llm'] for _LLM.prompt files."""
+    assert _infer_module_tags('agentic_arch_step5_design_LLM.prompt') == ['llm']
+
+
+def test_register_untracked_prompts_adds_entry():
+    """register_untracked_prompts registers a prompt with PDD tags not in arch.json."""
+    with tempfile.TemporaryDirectory() as tmp:
+        prompts_dir = Path(tmp)
+        arch_path = Path(tmp) / 'architecture.json'
+
+        # cli_detector_python.prompt has PDD tags but no arch.json entry
+        (prompts_dir / 'cli_detector_python.prompt').write_text(
+            '<pdd-reason>Detects CLI invocation context</pdd-reason>\n% body'
+        )
+        # Already-registered module
+        (prompts_dir / 'existing_python.prompt').write_text(
+            '<pdd-reason>Existing module</pdd-reason>\n% body'
+        )
+
+        arch_data = [
+            {
+                'filename': 'existing_python.prompt',
+                'filepath': 'pdd/existing.py',
+                'reason': 'Existing module',
+                'dependencies': [],
+                'priority': 1,
+            }
+        ]
+        arch_path.write_text(json.dumps(arch_data, indent=2) + '\n')
+
+        result = register_untracked_prompts(prompts_dir=prompts_dir, architecture_path=arch_path)
+
+        assert 'cli_detector_python.prompt' in result['registered']
+        assert 'existing_python.prompt' not in result['registered']
+
+        # Verify written to arch.json
+        updated = json.loads(arch_path.read_text())
+        filenames = [m['filename'] for m in updated]
+        assert 'cli_detector_python.prompt' in filenames
+
+        # Check inferred fields
+        cli_entry = next(m for m in updated if m['filename'] == 'cli_detector_python.prompt')
+        assert cli_entry['filepath'] == 'pdd/cli_detector.py'
+        assert cli_entry['reason'] == 'Detects CLI invocation context'
+        assert 'python' in cli_entry['tags']
+
+
+def test_register_skips_file_without_tags():
+    """register_untracked_prompts skips prompt files with no PDD tags."""
+    with tempfile.TemporaryDirectory() as tmp:
+        prompts_dir = Path(tmp)
+        arch_path = Path(tmp) / 'architecture.json'
+
+        # No PDD tags
+        (prompts_dir / 'bare_module_python.prompt').write_text('% Just a body, no tags\n')
+
+        arch_path.write_text(json.dumps([], indent=2) + '\n')
+
+        result = register_untracked_prompts(prompts_dir=prompts_dir, architecture_path=arch_path)
+
+        assert 'bare_module_python.prompt' not in result['registered']
+        assert 'bare_module_python.prompt' in result['skipped']
+
+        # Arch.json should remain empty
+        assert json.loads(arch_path.read_text()) == []
+
+
+def test_register_untracked_prompts_dry_run():
+    """register_untracked_prompts dry_run does not write to arch.json."""
+    with tempfile.TemporaryDirectory() as tmp:
+        prompts_dir = Path(tmp)
+        arch_path = Path(tmp) / 'architecture.json'
+
+        (prompts_dir / 'cli_detector_python.prompt').write_text(
+            '<pdd-reason>Detects CLI</pdd-reason>\n% body'
+        )
+        arch_path.write_text(json.dumps([], indent=2) + '\n')
+
+        result = register_untracked_prompts(
+            prompts_dir=prompts_dir, architecture_path=arch_path, dry_run=True
+        )
+
+        assert 'cli_detector_python.prompt' in result['registered']
+        # File should be unchanged
+        assert json.loads(arch_path.read_text()) == []
+
+
+def test_sync_all_auto_registers_before_syncing():
+    """sync_all_prompts_to_architecture registers untracked files and handles renamed files."""
+    with tempfile.TemporaryDirectory() as tmp:
+        prompts_dir = Path(tmp)
+        arch_path = Path(tmp) / 'architecture.json'
+
+        # Disk: step5_design exists, cli_detector exists
+        (prompts_dir / 'agentic_arch_step5_design_LLM.prompt').write_text(
+            '<pdd-reason>Design step</pdd-reason>\n% body'
+        )
+        (prompts_dir / 'cli_detector_python.prompt').write_text(
+            '<pdd-reason>Detects CLI</pdd-reason>\n% body'
+        )
+        (prompts_dir / 'existing_python.prompt').write_text(
+            '<pdd-reason>Existing updated</pdd-reason>\n% body'
+        )
+
+        # arch.json: step4_design (stale name), existing (registered), no cli_detector
+        arch_data = [
+            {
+                'filename': 'agentic_arch_step4_design_LLM.prompt',
+                'filepath': 'prompts/agentic_arch_step4_design_LLM.prompt',
+                'reason': 'Old design',
+                'dependencies': [],
+                'priority': 1,
+            },
+            {
+                'filename': 'existing_python.prompt',
+                'filepath': 'pdd/existing.py',
+                'reason': 'Old reason',
+                'dependencies': [],
+                'priority': 2,
+            },
+        ]
+        arch_path.write_text(json.dumps(arch_data, indent=2) + '\n')
+
+        result = sync_all_prompts_to_architecture(
+            prompts_dir=prompts_dir,
+            architecture_path=arch_path,
+        )
+
+        assert result['success'] is True
+
+        # Check registered field is present
+        assert 'registered' in result
+        assert 'cli_detector_python.prompt' in result['registered']
+
+        # Verify arch.json has all three modules
+        updated = json.loads(arch_path.read_text())
+        filenames = [m['filename'] for m in updated]
+        assert 'cli_detector_python.prompt' in filenames
+        assert 'agentic_arch_step5_design_LLM.prompt' in filenames
+        assert 'agentic_arch_step4_design_LLM.prompt' not in filenames
+        assert 'existing_python.prompt' in filenames

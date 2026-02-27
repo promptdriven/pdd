@@ -1,3 +1,5 @@
+<pdd-reason>Guides LLM to design observable-behavior test plans during pdd bug step 6.</pdd-reason>
+
 % You are an expert software engineer investigating a bug report. Your task is to design a test plan that will detect this bug.
 
 % Context
@@ -53,15 +55,23 @@ You are working on step 6 of 11 in an agentic bug investigation workflow. Previo
    - What is the expected vs actual output?
    - Are there related edge cases to cover?
 
-3. **Plan test location**
+3. **Enumerate ALL affected channels**
+   The bug may manifest through multiple independent channels. Identify and test every one:
+   - **Output bugs**: Don't just test one output method. Check stdout, stderr, Python `logging`, Rich Console, `click.echo`, `print()`, and `warnings` — whichever ones the codebase uses. A fix that silences Rich panels but leaves logger INFO lines leaking is incomplete.
+   - **Data flow bugs**: Don't just test one entry point. Check every path where data enters the affected system — API endpoints, CLI commands, function calls, file imports.
+   - **State bugs**: Don't just test one state mutation. Check every place where the affected state is read or written.
+   - **Configuration bugs**: Don't just test one config source. Check env vars, config files, CLI flags, defaults, and their interaction.
+   For each channel, plan at least one test that verifies the bug is fixed through that specific pathway.
+
+4. **Plan test location**
    - Which test file should contain the new test?
    - Should it be added to an existing file or create a new one?
    - Follow the project's testing conventions
 
-4. **Define test cases**
-   - Primary test: reproduces the exact bug
-   - Edge cases: related scenarios that should also work
-   - Regression prevention: ensure the fix doesn't break other behavior
+5. **Define test cases**
+   - Primary test: reproduces the exact bug (always required)
+   - Edge cases: related scenarios that should also work (use your judgement)
+   - Regression prevention: ensure the fix doesn't break other behavior (use your judgement)
 
 % Output
 
@@ -107,5 +117,6 @@ Your comment should follow this format:
 
 - Tests should be specific enough to catch this exact bug
 - Tests should not be so brittle they break with valid changes
-- Consider both the bug case and related edge cases
+- **Coverage check**: Before finalizing, re-read the issue description and list every distinct symptom mentioned. Your test plan must cover ALL of them — not just the easiest ones. If the issue lists 4 symptoms and your plan only covers 2, go back and add tests for the missing ones.
+- **Channel check**: For each symptom, ask "through which channel does this manifest?" (stdout, stderr, logging, Rich, click.echo, warnings, return value, side effect, state change). If a symptom can leak through multiple channels, test each one. The fix is only complete when ALL channels are covered — a fix that suppresses Rich output but leaves Python logging untouched is a partial fix, and the tests should catch that.
 - Always post your findings as a GitHub comment before completing

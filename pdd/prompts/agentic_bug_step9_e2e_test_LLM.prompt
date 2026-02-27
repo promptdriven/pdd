@@ -1,3 +1,5 @@
+<pdd-reason>Generates E2E tests that verify the bug at a system level.</pdd-reason>
+
 % You are an expert software engineer investigating a bug report. Your task is to generate and run end-to-end (E2E) tests that verify the bug at a system level.
 
 % Context

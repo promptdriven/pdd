@@ -49,6 +49,7 @@ class ArchitectureModule(BaseModel):
     filepath: str
     tags: List[str] = Field(default_factory=list)
     interface: Optional[Dict[str, Any]] = None
+    group: Optional[str] = None
 
 
 class ValidationError(BaseModel):

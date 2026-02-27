@@ -11,6 +11,7 @@ Validation: Lenient - missing tags are OK, only update fields that have tags pre
 """
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -69,9 +70,21 @@ def parse_prompt_tags(prompt_content: str) -> Dict[str, Any]:
     }
 
     try:
+        # Only parse the header section (content before the first % section marker).
+        # Real pdd-* tags are always declared before any % section; everything
+        # after is prompt body / instructional examples that must not be treated
+        # as metadata declarations.
+        # Use line scanning instead of split('\n%') so that files whose first
+        # line starts with '%' (no preceding newline) are handled correctly.
+        header_lines = []
+        for line in prompt_content.splitlines(keepends=True):
+            if line.lstrip().startswith('%'):
+                break
+            header_lines.append(line)
+        header = ''.join(header_lines)
+
         # Wrap content in root element for XML parsing
-        # Replace CDATA markers if present to handle JSON with special chars
-        xml_content = f"<root>{prompt_content}</root>"
+        xml_content = f"<root>{header}</root>"
 
         # Parse with lxml (lenient on encoding)
         parser = etree.XMLParser(recover=True)  # Lenient parser
@@ -102,11 +115,13 @@ def parse_prompt_tags(prompt_content: str) -> Dict[str, Any]:
         dep_elems = root.findall('.//pdd-dependency')
         # Track if any dependency tags were present (even if empty)
         # This distinguishes "no tags" (don't update) from "tags removed" (update to empty)
-        result['has_dependency_tags'] = len(dep_elems) > 0 or '<pdd-dependency>' in prompt_content
+        result['has_dependency_tags'] = len(dep_elems) > 0 or '<pdd-dependency>' in header
         result['dependencies'] = [
-            elem.text.strip()
+            dep
             for elem in dep_elems
-            if elem.text and elem.text.strip()
+            if elem.text
+            for dep in [elem.text.strip()]
+            if dep and dep.endswith('.prompt') and '\n' not in dep and len(dep) <= 100
         ]
 
     except (etree.XMLSyntaxError, etree.ParserError):
@@ -114,6 +129,144 @@ def parse_prompt_tags(prompt_content: str) -> Dict[str, Any]:
         pass
 
     return result
+
+
+# --- Auto-rename / Auto-register Helpers ---
+
+def _find_renamed_prompt_file(filename: str, prompts_dir: Path) -> Optional[Path]:
+    """
+    Find a renamed prompt file when the exact filename doesn't exist.
+
+    Handles the case where a step number has changed, e.g.:
+    'agentic_arch_step4_design_LLM.prompt' → 'agentic_arch_step5_design_LLM.prompt'
+
+    Only matches if exactly one candidate file is found (no ambiguity).
+
+    Args:
+        filename: Prompt filename that doesn't exist on disk
+        prompts_dir: Directory to search for renamed files
+
+    Returns:
+        Path to the single matching file, or None if no unique match found
+    """
+    match = re.match(r'^(.+?_step)\d+(_.*\.prompt)$', filename)
+    if not match:
+        return None
+    prefix, suffix = match.group(1), match.group(2)
+
+    candidates = [
+        p for p in prompts_dir.glob(f"{prefix}*{suffix}")
+        if p.name != filename
+    ]
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _infer_filepath(filename: str) -> str:
+    """
+    Infer output filepath from prompt filename using naming conventions.
+
+    Args:
+        filename: Prompt filename (e.g., 'cli_detector_python.prompt')
+
+    Returns:
+        Inferred filepath string
+    """
+    stem = filename[:-len('.prompt')]
+    if stem.endswith('_python'):
+        module_name = stem[:-len('_python')]
+        return f'pdd/{module_name}.py'
+    return f'prompts/{filename}'
+
+
+def _infer_module_tags(filename: str) -> List[str]:
+    """
+    Infer module tags from prompt filename using naming conventions.
+
+    Args:
+        filename: Prompt filename (e.g., 'cli_detector_python.prompt')
+
+    Returns:
+        List of tag strings
+    """
+    if filename.endswith('_python.prompt'):
+        return ['module', 'python']
+    if filename.endswith('_LLM.prompt'):
+        return ['llm']
+    return ['module']
+
+
+def register_untracked_prompts(
+    prompts_dir: Path = PROMPTS_DIR,
+    architecture_path: Path = ARCHITECTURE_JSON_PATH,
+    dry_run: bool = False
+) -> Dict[str, Any]:
+    """
+    Discover prompt files that have PDD tags but no architecture.json entry,
+    and auto-register them with a minimal entry.
+
+    Used as a pre-pass in sync_all_prompts_to_architecture to ensure all
+    prompt files with PDD metadata are tracked before validation.
+
+    Args:
+        prompts_dir: Directory containing prompt files
+        architecture_path: Path to architecture.json
+        dry_run: If True, return results without writing to file
+
+    Returns:
+        Dict with keys:
+        - registered: List[str] (filenames added to architecture.json)
+        - skipped: List[str] (filenames without PDD tags)
+        - errors: List[str] (error messages)
+    """
+    if not architecture_path.exists():
+        return {'registered': [], 'skipped': [], 'errors': ['Architecture file not found']}
+
+    arch_data = json.loads(architecture_path.read_text(encoding='utf-8'))
+    existing_filenames = {m.get('filename') for m in arch_data}
+    max_priority = max((m.get('priority', 0) for m in arch_data), default=0)
+
+    registered = []
+    skipped = []
+    errors = []
+
+    for prompt_file in sorted(prompts_dir.glob('*.prompt')):
+        filename = prompt_file.name
+        if filename in existing_filenames:
+            continue
+
+        content = prompt_file.read_text(encoding='utf-8')
+        tags = parse_prompt_tags(content)
+
+        if not (tags['reason'] or tags['interface'] or tags.get('has_dependency_tags')):
+            skipped.append(filename)
+            continue
+
+        filepath = _infer_filepath(filename)
+        module_tags = _infer_module_tags(filename)
+        reason = tags['reason'] or f'Auto-registered module: {filename}'
+
+        max_priority += 1
+        entry = {
+            'reason': reason,
+            'description': reason,
+            'dependencies': tags['dependencies'],
+            'priority': max_priority,
+            'filename': filename,
+            'filepath': filepath,
+            'tags': module_tags,
+            'interface': tags['interface'] or {'type': 'module'},
+        }
+        arch_data.append(entry)
+        existing_filenames.add(filename)
+        registered.append(filename)
+
+    if registered and not dry_run:
+        architecture_path.write_text(
+            json.dumps(arch_data, indent=2, ensure_ascii=False) + '\n',
+            encoding='utf-8'
+        )
+
+    return {'registered': registered, 'skipped': skipped, 'errors': errors}
 
 
 # --- Architecture Update ---
@@ -156,29 +309,67 @@ def update_architecture_from_prompt(
     try:
         # 1. Read prompt file
         prompt_path = prompts_dir / prompt_filename
+        preloaded_arch_data = None  # Set when arch_data is loaded during rename
         if not prompt_path.exists():
-            return {
-                'success': False,
-                'updated': False,
-                'changes': {},
-                'error': f'Prompt file not found: {prompt_filename}'
-            }
+            renamed_path = _find_renamed_prompt_file(prompt_filename, prompts_dir)
+            if renamed_path is None:
+                return {
+                    'success': False,
+                    'updated': False,
+                    'changes': {},
+                    'error': f'Prompt file not found: {prompt_filename}'
+                }
+            # Auto-update architecture.json entry to use the found filename
+            new_filename = renamed_path.name
+            if not architecture_path.exists():
+                return {
+                    'success': False,
+                    'updated': False,
+                    'changes': {},
+                    'error': f'Architecture file not found: {architecture_path}'
+                }
+            arch_data_for_rename = json.loads(architecture_path.read_text(encoding='utf-8'))
+            for mod in arch_data_for_rename:
+                if mod.get('filename') == prompt_filename:
+                    old_filepath = mod.get('filepath', '')
+                    if old_filepath == f'prompts/{prompt_filename}':
+                        mod['filepath'] = f'prompts/{new_filename}'
+                    mod['filename'] = new_filename
+                    if not dry_run:
+                        architecture_path.write_text(
+                            json.dumps(arch_data_for_rename, indent=2, ensure_ascii=False) + '\n',
+                            encoding='utf-8'
+                        )
+                    prompt_filename = new_filename
+                    prompt_path = renamed_path
+                    # Keep the already-modified in-memory data to avoid re-loading from disk
+                    preloaded_arch_data = arch_data_for_rename
+                    break
+            else:
+                return {
+                    'success': False,
+                    'updated': False,
+                    'changes': {},
+                    'error': f'Prompt file not found: {prompt_filename}'
+                }
 
         prompt_content = prompt_path.read_text(encoding='utf-8')
 
         # 2. Extract tags
         tags = parse_prompt_tags(prompt_content)
 
-        # 3. Load architecture.json
-        if not architecture_path.exists():
-            return {
-                'success': False,
-                'updated': False,
-                'changes': {},
-                'error': f'Architecture file not found: {architecture_path}'
-            }
-
-        arch_data = json.loads(architecture_path.read_text(encoding='utf-8'))
+        # 3. Load architecture.json (reuse preloaded data if available from rename step)
+        if preloaded_arch_data is not None:
+            arch_data = preloaded_arch_data
+        else:
+            if not architecture_path.exists():
+                return {
+                    'success': False,
+                    'updated': False,
+                    'changes': {},
+                    'error': f'Architecture file not found: {architecture_path}'
+                }
+            arch_data = json.loads(architecture_path.read_text(encoding='utf-8'))
 
         # 4. Find matching module by filename
         module_entry = None
@@ -301,6 +492,9 @@ def sync_all_prompts_to_architecture(
         >>> print(f"Would update {result['updated_count']} modules")
         Would update 15 modules
     """
+    # Pre-pass: auto-register any prompt files with PDD tags not in architecture.json
+    reg_result = register_untracked_prompts(prompts_dir, architecture_path, dry_run)
+
     # Load architecture.json to get all prompt filenames
     if not architecture_path.exists():
         return {
@@ -308,7 +502,8 @@ def sync_all_prompts_to_architecture(
             'updated_count': 0,
             'skipped_count': 0,
             'results': [],
-            'errors': [f'Architecture file not found: {architecture_path}']
+            'errors': [f'Architecture file not found: {architecture_path}'],
+            'registered': reg_result['registered'],
         }
 
     arch_data = json.loads(architecture_path.read_text(encoding='utf-8'))
@@ -354,7 +549,8 @@ def sync_all_prompts_to_architecture(
         'updated_count': updated_count,
         'skipped_count': skipped_count,
         'results': results,
-        'errors': errors
+        'errors': errors,
+        'registered': reg_result['registered'],
     }
 
 

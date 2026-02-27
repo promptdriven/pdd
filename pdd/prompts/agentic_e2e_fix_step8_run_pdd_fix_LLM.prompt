@@ -109,6 +109,13 @@ FILES_MODIFIED: {{comma_separated_list_of_code_files}}
 *Proceeding to Step 9: Final Verification*
 ```
 
+% Cross-Cutting Fix Guidance
+
+If Step 3 identified this as a cross-cutting concern (same change needed in 5+ call sites), pdd fix on individual dev units may produce a fragmented solution — each dev unit adds its own local workaround instead of a single centralized fix. Watch for this pattern:
+- If pdd fix on dev unit A adds `if not flag:` guards and pdd fix on dev unit B adds the same guards, that's a sign the fix should be centralized
+- Consider whether the right fix is a new utility module, a decorator, a context manager, or an environment variable check — something that solves the problem once instead of N times
+- If pdd fix doesn't create the centralized solution, you may need to manually create the shared module and re-run pdd fix with the shared module available
+
 % Important
 
 - Run pdd fix SEQUENTIALLY, not in parallel

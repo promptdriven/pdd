@@ -40,16 +40,15 @@ def mock_dependencies():
          patch('pdd.agentic_test_orchestrator._setup_worktree') as mock_setup_wt, \
          patch('pdd.agentic_test_orchestrator.Console') as mock_console, \
          patch('pdd.agentic_test_orchestrator._get_git_root') as mock_git_root, \
+         patch('pdd.agentic_test_orchestrator.preprocess', side_effect=lambda prompt, **kw: prompt) as mock_preprocess, \
          patch('subprocess.run') as mock_subprocess:
-        
+
         # Default behaviors
         mock_load.return_value = (None, None)  # No existing state
         mock_save.return_value = 12345  # Mock comment ID
-        
-        # Create a mock template object that has a format method
-        mock_template_obj = MagicMock()
-        mock_template_obj.format.return_value = "Formatted Prompt"
-        mock_template.return_value = mock_template_obj
+
+        # Return a string template (orchestrator now uses preprocess + string replacement, not .format())
+        mock_template.return_value = "Mocked Prompt Template"
         
         mock_setup_wt.return_value = (Path("/tmp/worktree"), None)
         mock_git_root.return_value = Path("/repo/root")
@@ -169,7 +168,7 @@ def test_hard_stop_no_files_step6(mock_dependencies, default_args):
 def test_resume_from_state(mock_dependencies, default_args):
     """Verify resuming from saved state (skipping steps 1-4)."""
     mocks = mock_dependencies
-    
+
     # Mock existing state
     state = {
         "last_completed_step": 4,
@@ -180,6 +179,9 @@ def test_resume_from_state(mock_dependencies, default_args):
         "model_used": "gpt-3.5"
     }
     mocks['load'].return_value = (state, 100)
+
+    # Template with step1_output placeholder to verify context includes previous outputs
+    mocks['template'].return_value = "STEP1:{step1_output}:END"
 
     # Mock step 6 output to ensure files are found
     def side_effect(*args, **kwargs):
@@ -196,13 +198,13 @@ def test_resume_from_state(mock_dependencies, default_args):
     assert mocks['run'].call_count == 5
     # Total cost = 0.5 (initial) + 5 * 0.1 = 1.0
     assert cost == pytest.approx(1.0)
-    
+
     # Verify context passed to step 5 included previous outputs
-    # mocks['template'] is the mock for load_prompt_template
-    # mocks['template'].return_value is the mock template object
-    # mocks['template'].return_value.format is the mock format method
-    call_args = mocks['template'].return_value.format.call_args[1]
-    assert call_args['step1_output'] == "out1"
+    # Check via the instruction kwarg passed to run_agentic_task for step 5
+    step5_calls = [c for c in mocks['run'].call_args_list if c.kwargs.get('label') == 'step5']
+    assert step5_calls, "step5 should have been called"
+    instruction = step5_calls[-1].kwargs['instruction']
+    assert "out1" in instruction, f"Expected step1_output 'out1' in instruction, got: {instruction}"
 
 def test_worktree_creation_failure(mock_dependencies, default_args):
     """Verify behavior when worktree creation fails."""

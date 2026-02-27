@@ -55,14 +55,14 @@ def mock_dependencies(temp_cwd):
          patch("pdd.agentic_change_orchestrator.clear_workflow_state") as mock_clear_state, \
          patch("pdd.agentic_change_orchestrator.subprocess.run") as mock_subprocess, \
          patch("pdd.agentic_change_orchestrator.post_step_comment") as mock_post_comment, \
-         patch("pdd.agentic_change_orchestrator.console") as mock_console:
+         patch("pdd.agentic_change_orchestrator.console") as mock_console, \
+         patch("pdd.agentic_change_orchestrator.preprocess", side_effect=lambda prompt, **kw: prompt) as mock_preprocess:
 
         # Default mock behaviors
         mock_run.return_value = (True, "Default Agent Output", 0.1, "gpt-4")
 
-        mock_template = MagicMock()
-        mock_template.format.return_value = "Formatted Prompt"
-        mock_template_loader.return_value = mock_template
+        # Return a string template (orchestrator now uses preprocess + string replacement, not .format())
+        mock_template_loader.return_value = "Mocked Prompt Template"
 
         # Default state: No existing state
         mock_load_state.return_value = (None, None)
@@ -604,16 +604,8 @@ def test_sync_order_context_populated_before_step12(mock_dependencies, temp_cwd)
 
     mock_run.side_effect = side_effect_run
 
-    # Capture context passed to template.format()
-    last_context = {}
-    def capture_format(**kwargs):
-        last_context.clear()
-        last_context.update(kwargs)
-        return "Formatted"
-
-    mock_template = MagicMock()
-    mock_template.format.side_effect = capture_format
-    mock_template_loader.return_value = mock_template
+    # Template with placeholders so we can verify context keys are substituted
+    mock_template_loader.return_value = "SYNC_SCRIPT:{sync_order_script}:SYNC_LIST:{sync_order_list}:END"
 
     # Create worktree directory with prompt files
     issue_number = 999
@@ -633,8 +625,13 @@ def test_sync_order_context_populated_before_step12(mock_dependencies, temp_cwd)
         cwd=temp_cwd,
     )
 
-    assert "sync_order_script" in last_context
-    assert "sync_order_list" in last_context
+    # Find the step 13 call and verify context keys were substituted
+    step13_calls = [c for c in mock_run.call_args_list if c.kwargs.get("label") == "step13"]
+    assert step13_calls, "step13 should have been called"
+    instruction = step13_calls[-1].kwargs["instruction"]
+    # If keys were in context, the placeholders would be replaced (not literal)
+    assert "{sync_order_script}" not in instruction, "sync_order_script not substituted in context"
+    assert "{sync_order_list}" not in instruction, "sync_order_list not substituted in context"
 
 def test_sync_order_defaults_when_no_prompts_modified(mock_dependencies, temp_cwd):
     """
@@ -657,15 +654,8 @@ def test_sync_order_defaults_when_no_prompts_modified(mock_dependencies, temp_cw
 
     mock_run.side_effect = side_effect_run
 
-    last_context = {}
-    def capture_format(**kwargs):
-        last_context.clear()
-        last_context.update(kwargs)
-        return "Formatted"
-
-    mock_template = MagicMock()
-    mock_template.format.side_effect = capture_format
-    mock_template_loader.return_value = mock_template
+    # Template with placeholders for sync_order keys
+    mock_template_loader.return_value = "SYNC_SCRIPT:{sync_order_script}:SYNC_LIST:{sync_order_list}:END"
 
     run_agentic_change_orchestrator(
         issue_url="http://test",
@@ -678,8 +668,13 @@ def test_sync_order_defaults_when_no_prompts_modified(mock_dependencies, temp_cw
         cwd=temp_cwd,
     )
 
-    assert last_context.get("sync_order_script") == ""
-    assert last_context.get("sync_order_list") == "No modules to sync"
+    # Find the step 13 call and verify default values were substituted
+    step13_calls = [c for c in mock_run.call_args_list if c.kwargs.get("label") == "step13"]
+    assert step13_calls, "step13 should have been called"
+    instruction = step13_calls[-1].kwargs["instruction"]
+    # sync_order_script should be empty string (default when no prompts modified)
+    assert "SYNC_SCRIPT::SYNC_LIST:" in instruction, f"Expected empty sync_order_script, got: {instruction}"
+    assert "No modules to sync" in instruction
 
 
 def test_sync_order_script_written_to_cwd(mock_dependencies, temp_cwd):
@@ -709,9 +704,7 @@ def test_sync_order_script_written_to_cwd(mock_dependencies, temp_cwd):
 
     mock_run.side_effect = side_effect_run
 
-    mock_template = MagicMock()
-    mock_template.format.return_value = "Formatted"
-    mock_template_loader.return_value = mock_template
+    mock_template_loader.return_value = "Mocked Prompt Template"
 
     # Patch _setup_worktree to return our worktree path and create prompt files
     # after the mock setup (avoiding the rmtree in real _setup_worktree)
@@ -767,15 +760,8 @@ def test_sync_order_list_context_is_clean_commands(mock_dependencies, temp_cwd):
 
     mock_run.side_effect = side_effect_run
 
-    last_context = {}
-    def capture_format(**kwargs):
-        last_context.clear()
-        last_context.update(kwargs)
-        return "Formatted"
-
-    mock_template = MagicMock()
-    mock_template.format.side_effect = capture_format
-    mock_template_loader.return_value = mock_template
+    # Template with placeholder for sync_order_list
+    mock_template_loader.return_value = "SYNC_LIST:{sync_order_list}:END"
 
     issue_number = 556
     worktree_path = temp_cwd / ".pdd" / "worktrees" / f"change-issue-{issue_number}"
@@ -794,7 +780,14 @@ def test_sync_order_list_context_is_clean_commands(mock_dependencies, temp_cwd):
         cwd=temp_cwd,
     )
 
-    sync_list = last_context.get("sync_order_list", "")
+    # Extract sync_order_list from step 13 instruction
+    step13_calls = [c for c in mock_run.call_args_list if c.kwargs.get("label") == "step13"]
+    assert step13_calls, "step13 should have been called"
+    instruction = step13_calls[-1].kwargs["instruction"]
+    # Extract the sync_list value between markers
+    import re
+    m = re.search(r"SYNC_LIST:(.*?):END", instruction, re.DOTALL)
+    sync_list = m.group(1) if m else ""
     if sync_list and sync_list != "No modules to sync":
         # Should be clean commands, not a full bash script
         assert not sync_list.startswith("#!/bin/bash"), "sync_order_list should not contain shebang"
@@ -836,15 +829,8 @@ def test_worktree_path_in_context_when_resuming(mock_dependencies, temp_cwd):
 
     mock_run.side_effect = side_effect_run
 
-    last_context = {}
-    def capture_format(**kwargs):
-        last_context.clear()
-        last_context.update(kwargs)
-        return "Formatted"
-
-    mock_template = MagicMock()
-    mock_template.format.side_effect = capture_format
-    mock_template_loader.return_value = mock_template
+    # Template with worktree_path placeholder
+    mock_template_loader.return_value = "WORKTREE:{worktree_path}:END"
 
     run_agentic_change_orchestrator(
         issue_url="http://test",
@@ -857,8 +843,12 @@ def test_worktree_path_in_context_when_resuming(mock_dependencies, temp_cwd):
         cwd=temp_cwd,
     )
 
-    assert "worktree_path" in last_context
-    assert last_context["worktree_path"] == str(worktree_path)
+    # Verify worktree_path was substituted in step 10 instruction (first step after resume)
+    step10_calls = [c for c in mock_run.call_args_list if c.kwargs.get("label") == "step10"]
+    assert step10_calls, "step10 should have been called"
+    instruction = step10_calls[-1].kwargs["instruction"]
+    assert "{worktree_path}" not in instruction, "worktree_path not substituted in context"
+    assert str(worktree_path) in instruction, f"Expected worktree path in instruction, got: {instruction}"
 
 def test_parse_changed_files_strips_markdown_formatting():
     """
@@ -1177,15 +1167,11 @@ def test_orchestrator_populates_pddrc_context_keys_before_step6(mock_dependencie
     pddrc_path = temp_cwd / ".pddrc"
     pddrc_path.write_text(pddrc_content)
 
-    # Track what context is passed to template.format()
-    captured_contexts = []
-    def capture_format(**kwargs):
-        captured_contexts.append(kwargs.copy())
-        return "Formatted Prompt"
-
-    mock_template = MagicMock()
-    mock_template.format.side_effect = capture_format
-    mock_template_loader.return_value = mock_template
+    # Template with pddrc-derived key placeholders
+    mock_template_loader.return_value = (
+        "LANG:{language}:SRC:{source_dir}:TEST:{test_dir}:"
+        "EX:{example_dir}:EXT:{ext}:LANGSUFFIX:{lang}:END"
+    )
 
     # Run through step 6
     def side_effect_run(**kwargs):
@@ -1208,7 +1194,7 @@ def test_orchestrator_populates_pddrc_context_keys_before_step6(mock_dependencie
     with patch("pdd.agentic_change_orchestrator._find_pddrc_file") as mock_find, \
          patch("pdd.agentic_change_orchestrator._load_pddrc_config") as mock_load_config, \
          patch("pdd.agentic_change_orchestrator._detect_context") as mock_detect:
-        
+
         mock_find.return_value = Path("/path/to/.pddrc")
         mock_load_config.return_value = {
             "contexts": {
@@ -1236,25 +1222,26 @@ def test_orchestrator_populates_pddrc_context_keys_before_step6(mock_dependencie
             quiet=True
         )
 
-    # Find the context used for step 6 (6th template.format call, 0-indexed = 5)
-    assert len(captured_contexts) >= 6, f"Expected at least 6 template formats, got {len(captured_contexts)}"
-    step6_context = captured_contexts[5]  # Step 6 is the 6th step
+    # Find the step 6 call and verify pddrc context keys were substituted
+    step6_calls = [c for c in mock_run.call_args_list if c.kwargs.get("label") == "step6"]
+    assert step6_calls, "step6 should have been called"
+    instruction = step6_calls[-1].kwargs["instruction"]
 
-    # Verify required .pddrc-derived context keys are present
-    assert "language" in step6_context, "Context missing 'language' from .pddrc"
-    assert "source_dir" in step6_context, "Context missing 'source_dir' from .pddrc"
-    assert "test_dir" in step6_context, "Context missing 'test_dir' from .pddrc"
-    assert "example_dir" in step6_context, "Context missing 'example_dir' from .pddrc"
-    assert "ext" in step6_context, "Context missing 'ext' derived from language"
-    assert "lang" in step6_context, "Context missing 'lang' suffix derived from language"
+    # Verify required .pddrc-derived context keys were substituted (not literal placeholders)
+    assert "{language}" not in instruction, "Context missing 'language' from .pddrc"
+    assert "{source_dir}" not in instruction, "Context missing 'source_dir' from .pddrc"
+    assert "{test_dir}" not in instruction, "Context missing 'test_dir' from .pddrc"
+    assert "{example_dir}" not in instruction, "Context missing 'example_dir' from .pddrc"
+    assert "{ext}" not in instruction, "Context missing 'ext' derived from language"
+    assert "{lang}" not in instruction, "Context missing 'lang' suffix derived from language"
 
-    # Verify values match .pddrc
-    assert step6_context["language"] == "python"
-    assert step6_context["source_dir"] == "src/"
-    assert step6_context["test_dir"] == "tests/"
-    assert step6_context["example_dir"] == "examples/"
-    assert step6_context["ext"] == "py"
-    assert step6_context["lang"] == "_python"
+    # Verify actual values match .pddrc
+    assert "LANG:python:" in instruction
+    assert "SRC:src/:" in instruction
+    assert "TEST:tests/:" in instruction
+    assert "EX:examples/:" in instruction
+    assert "EXT:py:" in instruction
+    assert "LANGSUFFIX:_python:" in instruction
 
 
 def test_orchestrator_uses_defaults_when_no_pddrc(mock_dependencies, temp_cwd):
@@ -1267,14 +1254,11 @@ def test_orchestrator_uses_defaults_when_no_pddrc(mock_dependencies, temp_cwd):
 
     # No .pddrc file - temp_cwd is empty
 
-    captured_contexts = []
-    def capture_format(**kwargs):
-        captured_contexts.append(kwargs.copy())
-        return "Formatted Prompt"
-
-    mock_template = MagicMock()
-    mock_template.format.side_effect = capture_format
-    mock_template_loader.return_value = mock_template
+    # Template with pddrc-derived key placeholders
+    mock_template_loader.return_value = (
+        "LANG:{language}:SRC:{source_dir}:TEST:{test_dir}:"
+        "EX:{example_dir}:EXT:{ext}:LANGSUFFIX:{lang}:END"
+    )
 
     def side_effect_run(**kwargs):
         label = kwargs.get("label", "")
@@ -1302,17 +1286,18 @@ def test_orchestrator_uses_defaults_when_no_pddrc(mock_dependencies, temp_cwd):
         quiet=True
     )
 
-    # Even without .pddrc, context keys should have defaults
-    assert len(captured_contexts) >= 6
-    step6_context = captured_contexts[5]
+    # Find the step 6 call and verify default context keys were substituted
+    step6_calls = [c for c in mock_run.call_args_list if c.kwargs.get("label") == "step6"]
+    assert step6_calls, "step6 should have been called"
+    instruction = step6_calls[-1].kwargs["instruction"]
 
-    # Should have defaults (actual values may vary based on implementation)
-    assert "language" in step6_context, "Context missing 'language' default"
-    assert "source_dir" in step6_context, "Context missing 'source_dir' default"
-    assert "test_dir" in step6_context, "Context missing 'test_dir' default"
-    assert "example_dir" in step6_context, "Context missing 'example_dir' default"
-    assert "ext" in step6_context, "Context missing 'ext' default"
-    assert "lang" in step6_context, "Context missing 'lang' default"
+    # Even without .pddrc, context keys should have defaults (not literal placeholders)
+    assert "{language}" not in instruction, "Context missing 'language' default"
+    assert "{source_dir}" not in instruction, "Context missing 'source_dir' default"
+    assert "{test_dir}" not in instruction, "Context missing 'test_dir' default"
+    assert "{example_dir}" not in instruction, "Context missing 'example_dir' default"
+    assert "{ext}" not in instruction, "Context missing 'ext' default"
+    assert "{lang}" not in instruction, "Context missing 'lang' default"
 
 """
 Test plan for agentic_change_orchestrator.py

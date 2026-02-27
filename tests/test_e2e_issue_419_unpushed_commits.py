@@ -85,6 +85,7 @@ class TestIssue419UnpushedCommitsE2E:
                 cwd=repo_path,
                 issue_number=419,
                 issue_title="Bug: Agentic fix doesn't push commits when exiting early at Step 2",
+                repo_owner="owner", repo_name="repo",
                 initial_file_hashes=initial_file_hashes,
                 quiet=True
             )
@@ -145,6 +146,7 @@ class TestIssue419UnpushedCommitsE2E:
                 cwd=repo_path,
                 issue_number=419,
                 issue_title="Test issue",
+                repo_owner="owner", repo_name="repo",
                 initial_file_hashes=initial_file_hashes,
                 quiet=True
             )
@@ -187,6 +189,7 @@ class TestIssue419UnpushedCommitsE2E:
                 cwd=repo_path,
                 issue_number=419,
                 issue_title="Test issue",
+                repo_owner="owner", repo_name="repo",
                 initial_file_hashes=initial_file_hashes,
                 quiet=True
             )

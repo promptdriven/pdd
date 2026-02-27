@@ -50,7 +50,7 @@ def split(
         )
         return result_data, total_cost, model_name
 
-    except click.Abort:
+    except (click.Abort, click.UsageError):
         raise
     except Exception as e:
         handle_error(e, "split", ctx.obj.get("quiet", False))
@@ -180,7 +180,7 @@ def change(
 
             return message, cost, model
 
-    except (click.Abort, click.exceptions.Exit):
+    except (click.Abort, click.exceptions.Exit, click.UsageError):
         raise
     except Exception as e:
         handle_error(e, "change", ctx.obj.get("quiet", False))

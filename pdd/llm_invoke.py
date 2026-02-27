@@ -108,7 +108,25 @@ def set_verbose_logging(verbose=False):
 
     if want_verbose:
         logger.debug("Verbose logging enabled (including LiteLLM debug output)")
-    
+
+
+def set_quiet_logging():
+    """Suppress INFO/DEBUG output by raising logger levels to ERROR."""
+    logger.setLevel(logging.ERROR)
+    litellm_logger.setLevel(logging.ERROR)
+    try:
+        litellm.set_verbose = False
+        litellm.suppress_debug_info = True
+    except Exception:
+        pass
+
+
+# Apply quiet suppression at import time if PDD_QUIET env var is already set.
+# This handles the case where the CLI callback sets PDD_QUIET=1 before llm_invoke
+# is imported (lazy import), ensuring module-level logger.info() calls are suppressed.
+if os.getenv('PDD_QUIET'):
+    set_quiet_logging()
+
 # --- End Logging Configuration ---
 
 import json
@@ -121,6 +139,7 @@ import openai  # Import openai for exception handling as LiteLLM maps to its typ
 import warnings
 import time as time_module # Alias to avoid conflict with 'time' parameter
 from pdd.path_resolution import get_default_resolver
+from pdd.server.token_counter import get_context_limit
 
 # Opt-in to future pandas behavior regarding downcasting
 try:
@@ -2411,6 +2430,54 @@ def llm_invoke(
                                 pass
                         # Fall through to LiteLLM path as a fallback
 
+                # --- Context Window Validation ---
+                try:
+                    messages_for_count = litellm_kwargs.get("messages", [])
+                    token_count = litellm.token_counter(model=model_name_litellm, messages=messages_for_count)
+                    context_limit = get_context_limit(model_name_litellm)
+
+                    # If the Claude 1M beta header is active, honour it as the effective limit
+                    extra_headers = litellm_kwargs.get("extra_headers", {})
+                    if (context_limit is not None
+                            and "anthropic-beta" in extra_headers
+                            and "context-1m" in extra_headers.get("anthropic-beta", "")):
+                        context_limit = 1_000_000
+
+                    if context_limit is None:
+                        if verbose:
+                            logger.debug(
+                                f"[CONTEXT] Context limit unknown for {model_name_litellm}; "
+                                f"skipping validation. Token count: {token_count:,}"
+                            )
+                    else:
+                        usage_pct = (token_count / context_limit) * 100
+
+                        if token_count > context_limit:
+                            logger.error(
+                                f"[CONTEXT] Prompt ({token_count:,} tokens) exceeds {model_name_litellm} "
+                                f"context limit ({context_limit:,} tokens, {usage_pct:.1f}% usage). "
+                                f"Trying next model."
+                            )
+                            last_exception = RuntimeError(
+                                f"Prompt ({token_count:,} tokens) exceeds {model_name_litellm} "
+                                f"context limit ({context_limit:,} tokens)"
+                            )
+                            break  # try next candidate model
+
+                        if verbose and usage_pct > 90:
+                            logger.warning(
+                                f"[CONTEXT] Prompt is {usage_pct:.1f}% of {model_name_litellm} context "
+                                f"({token_count:,}/{context_limit:,} tokens)"
+                            )
+                        elif verbose:
+                            logger.info(
+                                f"[CONTEXT] Token count: {token_count:,}/{context_limit:,} "
+                                f"({usage_pct:.1f}%) for {model_name_litellm}"
+                            )
+                except Exception as ctx_err:
+                    if verbose:
+                        logger.debug(f"[CONTEXT] Token validation skipped: {ctx_err}")
+
                 if use_batch_mode:
                     if verbose:
                         logger.info(f"[INFO] Calling litellm.batch_completion for {model_name_litellm}...")
@@ -2928,6 +2995,15 @@ def llm_invoke(
                     logger.debug(f"Raw response that failed validation: {repr(e.raw_response)}")
                 break  # Break inner loop, try next model candidate
 
+            except litellm.ContextWindowExceededError as e:
+                # Post-call safety net: model rejected prompt as too large after the pre-call
+                # check (e.g. tokenizer mismatch). Fall back to the next candidate.
+                last_exception = e
+                logger.error(
+                    f"[CONTEXT] {model_name_litellm} rejected prompt as too large. Trying next model."
+                )
+                break  # Break inner loop, try next model candidate
+
             except (openai.RateLimitError, openai.APITimeoutError, openai.APIConnectionError,
                     openai.APIStatusError, openai.BadRequestError, openai.InternalServerError,
                     Exception) as e: # Catch generic Exception last
@@ -2977,6 +3053,11 @@ def llm_invoke(
     error_message = "All candidate models failed."
     if last_exception:
         error_message += f" Last error ({type(last_exception).__name__}): {last_exception}"
+    if last_exception and "context limit" in str(last_exception):
+        error_message += (
+            " Hint: Try reducing prompt size, splitting into smaller prompts, "
+            "or using a model with a larger context window."
+        )
     logger.error(f"[FATAL] {error_message}")
     raise RuntimeError(error_message) from last_exception
 

@@ -1,25 +1,111 @@
+## v0.0.161 (2026-02-26)
+
+### Feat
+
+- implement PDD_GH_TOKEN_FILE push retry in agentic_e2e_fix_orchestrator (#629)
+- add PDD_GH_TOKEN_FILE push retry to e2e fix orchestrator prompt (#629)
+- Add position coordinates to various architectural components in `architecture.json`.
+- Implement and test node grouping with relative layout for sub-flow nodes in the DependencyViewer.
+- **architecture_sync**: auto-fix renamed step files and register untracked prompts
+- update Next.js API route handlers to await dynamic route parameters and refine pipeline configurations
+- verify all 116 checklist items and fix annotation refresh after batch resolve (TDD)
+- implement working Remotion/Claude environment (TDD)
+- Allow creation of drawing-only annotations via API and improve `FixPreviewPanel` robustness with null-safety checks for `filesModified` and `confidence`.
+
+### Fix
+
+- add namespace package fallback to import validation (#572)
+- validate Python imports after generation in agentic mode (#572)
+- address PR #631 review — URL-encode token and warn on restore failure
+- prevent token leakage and add missing protect_tests to prompt interface
+- correct misleading log message and outdated test docstrings (#573)
+- reject coverage=0.0 as pipeline success when tests pass (#573)
+- **test-batch-ann-1772149596067**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772145259285**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772144357396**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772144248964**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772138159325**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772138080231**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772137614567**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772137505532**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772137500794**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772133369466**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772132467714**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772132380789**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772129529612**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772129479688**: Subtitle font size 96px causes text to clip the ri
+- ensure Audit API `specPath` is consistently prefixed with `specs/` and Stage 10 Audit spec viewer correctly parses JSON responses.
+
+### Refactor
+
+- remove unused project_root param from _validate_python_imports
+- remove agentic architecture workflow LLM prompts from architecture.json.refactor: remove agentic architecture workflow LLM prompts from architecture.json.
+- update CLI core dump and output capture logic, add new TTS API prompt, and adjust video editor components and tests.
+- Update API route generation prompts to include explicit implementation details and dependency specifications for pipeline stages.
+
+## v0.0.160 (2026-02-25)
+
+### Feat
+
+- **Module grouping in architecture view** — Modules can now be assigned to named groups that collapse into a single summary node. New `GroupNode` and `GroupEditModal` components; `ArchitectureModule` schema gains an optional `group` field. Groups auto-expand on first appearance and support edit-mode rename/reassignment via a batch update. Dagre layout uses virtual group→child edges for placement.
+- **Compact zoom mode for ModuleNode** — When the React Flow viewport zoom drops below 0.5, module nodes switch to a minimal single-line label using a `calc(14px / zoom)` font size that stays readable at any zoom level. New `VpZoomSync` component keeps the `--vp-zoom` CSS custom property in sync with all viewport changes (including programmatic `fitView`).
+- **Focus mode for dependency graph** — Clicking a module node dims all nodes outside its 1-hop neighborhood (direct dependencies and dependents). Focus auto-clears when the focused module's group is collapsed.
+- **API route coverage in architecture completeness check** — Step 10 completeness prompt now extracts every distinct URL pattern from the PRD and verifies a 1:1 corresponding route module exists. Step 5 design prompt reinforces one-module-per-distinct-URL-path. Prevents the LLM from collapsing multiple API endpoints under a single module.
+- **Header-only tag parsing in `architecture_sync`** — `parse_prompt_tags()` now extracts PDD metadata tags only from the header section (content before the first `%` section marker), preventing example `<pdd-dependency>` tags inside code fences or prose from being treated as real metadata declarations.
+
+### Fix
+
+- **Replace `.format(**context)` with safe `str.replace()` in all agentic orchestrators** — All six orchestrators (architecture, bug, change, checkup, e2e-fix, test) now use iterative `str.replace()` for prompt template substitution instead of Python's `.format()`. This prevents `KeyError` crashes when LLM outputs contain JSON curly braces and eliminates the need to double-escape braces in context values. Context outputs are no longer pre-escaped with `{{`/`}}`.
+- **Support modern Codex CLI NDJSON format in agentic sync** — `_run_with_provider()` now parses Codex CLI 0.104.0+ output, which splits agent text (`item.completed` with `agent_message` type) and usage stats (`session.end`) into separate NDJSON events. `_parse_provider_json()` extracts text from `data["item"]["text"]` for modern format.
+- **Resolve 'no changes to commit' on resume** — `_commit_and_push()` in the e2e-fix orchestrator now falls back to `git diff` when the hash snapshot is tainted by a prior interrupted run, catching orphaned unstaged changes that the snapshot missed.
+- **`modify` command propagates `click.UsageError`** — Both `split` and `change` subcommands now re-raise `click.UsageError` instead of swallowing it in the generic exception handler, allowing Click to display proper usage messages.
+
+### Refactor
+
+- **Agentic orchestrator prompt templating** — Prompt substitution across all orchestrators unified to a three-step pattern: preprocess with `double_curly_brackets=True`, un-double template braces, then iterate `str.replace()` per context key. Removes all `try/except KeyError` formatting blocks and brace-escaping of step outputs.
+
+### Test
+
+- **E2E regression suites for issues #545, #549, #557, #566** — Four new E2E test modules covering: format double-escaping across all orchestrators (`test_e2e_issue_549_format_double_escaping.py`, `test_e2e_issue_549_other_orchestrators.py`), Codex NDJSON parsing (`test_e2e_issue_557_codex_ndjson.py`), code-fence tag extraction (`test_e2e_issue_566_code_fence_tags.py`), and no-changes-to-commit on resume (`test_e2e_issue_545_no_changes_to_commit.py`). Total: ~2,300 new test lines.
+- **Unit tests for `agentic_common` and `agentic_e2e_fix_orchestrator`** — New `test_agentic_common.py` (305 lines) covers NDJSON parsing, provider JSON extraction, and cost calculation. New `test_agentic_e2e_fix_orchestrator.py` (226 lines) covers commit-and-push fallback logic.
+- **Unit tests for `architecture_sync` header parsing** — New `test_architecture_sync.py` (272 lines) verifies that tags in code fences and body sections are ignored.
+- **Frontend tests for compact font and zoom sync** — Three new test files covering `getCompactFontPx()` math, compact render mode at low zoom, and `VpZoomSync` CSS property propagation.
+
+## v0.0.159 (2026-02-24)
+
+### Feat
+
+- **13-step agentic architecture workflow** — Expanded from 11 to 13 steps by adding a dedicated Step 4 (Data Model Design) for entities, relationships, and storage decisions. All subsequent steps renumbered accordingly. New `_check_step4_output()` validates that the LLM produces data model content rather than module design.
+- **Context window validation in `llm_invoke`** — Prompt token count is now checked against the model's context limit before each LLM call. Prompts exceeding the limit skip to the next candidate model. Post-call `ContextWindowExceededError` is also caught as a safety net. Error messages include a hint to reduce prompt size or use a larger-context model.
+- **Cross-cutting concern detection and channel enumeration in agentic prompts** — Architecture prompts now detect shared concerns across modules and enumerate communication channels.
+- **Validate prompt token count against model context window** — `token_counter.py` rewritten to use litellm's model-aware tokenizer and `get_model_info()` for context limits instead of hardcoded `MODEL_CONTEXT_LIMITS`. Falls back to tiktoken `cl100k_base` for unknown models. `get_context_limit()` returns `Optional[int]` (None for unknown models).
+- **Agentic bug orchestrator E2E skip support** — Step 9 now handles `E2E_SKIP:` markers for simple bugs that don't need E2E tests, treating them as successful completion. E2E file list is deduplicated with insertion-order preservation.
+- **Sanitize corrupted architecture dependencies** — New `_sanitize_architecture_dependencies()` in `agentic_change_orchestrator` removes dependency strings that contain newlines or are too long (LLM confusion between example `<pdd-dependency>` tags and real tags).
+- **Deep copy formatted_messages before LiteLLM calls** — Prevents Groq's structured output fallback from mutating the shared message list, which corrupted retries on other providers (upstream PR #598).
+
+### Fix
+
+- **`--quiet` flag does not suppress all output** — Pre-parse `--quiet` from `sys.argv` before importing `llm_invoke` to set `PDD_QUIET` env var early. New `set_quiet_logging()` raises logger levels to ERROR. `preprocess.py` Rich panels suppressed when `PDD_QUIET` is set. New E2E subprocess test and unit tests for quiet flag behavior.
+
+### Refactor
+
+- **Agentic architecture prompt renaming** — Steps 4-12 prompts renamed to steps 5-13 to accommodate the new data model step (e.g. `agentic_arch_step4_design_LLM.prompt` → `agentic_arch_step5_design_LLM.prompt`).
+
 ## v0.0.158 (2026-02-23)
 
 ### Feat
 
-- Implement comprehensive API routes for the video pipeline and add a new E2E test for Stage 8 Composition Generation.
-- Add comprehensive Playwright E2E tests for all video editor stages and enhance the script API to support TTS script management.
-- add E2E test for non-recursive circular include detection and update project configuration defaults for video editor.
-- Update test durations and modify `test_llm_invoke_integration.py`.
+- **Include-aware sync fingerprints (Issue #522)** — `sync_determine_operation` now stores `<include>` dependency paths and their SHA256 hashes in the fingerprint JSON. When an included file changes but the top-level `.prompt` file doesn't, sync correctly detects the change and regenerates code. New functions: `extract_include_deps()`, `calculate_prompt_hash()`, `_resolve_include_path()`. `_save_fingerprint_atomic()` and `save_fingerprint()` accept `include_deps_override` to capture deps before auto-deps strips `<include>` tags.
+- **Circular include detection for non-recursive preprocess (Issue #553)** — `process_include_tags()` and `process_backtick_includes()` now enforce a `_MAX_INCLUDE_ITERATIONS` limit (50) on the convergence loop, raising `ValueError` instead of hanging forever on circular `<include>` references.
+- **E2E tests for include fingerprint and circular include detection** — Two new E2E test suites: `test_e2e_issue_522_include_fingerprint.py` (verifies sync detects included file changes) and `test_e2e_issue_553_circular_includes_non_recursive.py` (verifies `pdd preprocess` exits with error on circular includes).
 
 ### Fix
 
+- **Vertex AI credential resolution** — `_ensure_api_key()` now resolves missing `VERTEXAI_PROJECT` from `GOOGLE_CLOUD_PROJECT` and missing `VERTEXAI_LOCATION` from CSV location column, and passes `vertex_location` to litellm kwargs.
+- **Centralized cost/model extraction** — New `_extract_cost_from_result()` and `_extract_model_from_result()` in `sync_orchestration` correctly index into varying tuple formats per operation type (`crash`/`fix`/`verify`, `generate`, `example`/`test`/`auto-deps`). `operation_log` now uses these instead of hardcoded indices.
 - make sync regression cases 5 and 9 non-fatal on LLM failures
 - handle multi-language sync failure gracefully in case 4
 - increase timeouts and add --max-attempts to sync regression tests
-
-### Refactor
-
-- improve color readability assertion in review tab E2E test by using canvas for RGB extraction.
-- Split audit results API into a dedicated route, implement the Stage 10 Audit UI, and add comprehensive E2E tests including dark theme readability checks.
-- Restructure ProjectConfig schema for output resolution, TTS, audio sync, VEO, and render settings, updating relevant UI and tests.
-- Centralize cost and model extraction logic in Python and update video project configuration.
-- Update Stage1ProjectSetup for StagePanelProps compatibility, correct annotation fetching API parameter, and switch to 'server-only' directive for database utilities.
 
 ## v0.0.157 (2026-02-22)
 

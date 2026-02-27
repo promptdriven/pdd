@@ -773,22 +773,41 @@ def _run_with_provider(
         data = {}
         
         if provider == "openai" and "\n" in output_str:
-            # Parse JSONL, look for result type
+            # Parse NDJSON, collecting both the agent response and usage stats
             lines = output_str.splitlines()
+            agent_message_data = None
+            session_end = None
             for line in lines:
                 try:
                     item = json.loads(line)
+                    # Legacy Codex format: single event contains both text and usage
                     if item.get("type") == "result":
                         data = item
                         break
+                    # Modern Codex CLI (0.104.0+): text in item.completed agent_message
+                    if (item.get("type") == "item.completed"
+                            and isinstance(item.get("item"), dict)
+                            and item["item"].get("type") == "agent_message"):
+                        agent_message_data = item
+                    # usage/cost stats are in session.end (separate from the text event)
+                    if item.get("type") == "session.end":
+                        session_end = item
                 except json.JSONDecodeError:
                     continue
-            # If no result block found, try parsing last line
-            if not data and lines:
-                try:
-                    data = json.loads(lines[-1])
-                except:
-                    pass
+            if not data:
+                if agent_message_data is not None:
+                    # Merge usage from session.end so cost can be calculated
+                    if session_end is not None:
+                        data = {**agent_message_data, "usage": session_end.get("usage", {})}
+                    else:
+                        data = agent_message_data
+                elif session_end is not None:
+                    data = session_end
+                elif lines:
+                    try:
+                        data = json.loads(lines[-1])
+                    except:
+                        pass
         else:
             data = json.loads(output_str)
             
@@ -821,7 +840,12 @@ def _parse_provider_json(provider: str, data: Dict[str, Any]) -> Tuple[bool, str
         elif provider == "openai":
             usage = data.get("usage", {})
             cost = _calculate_codex_cost(usage)
-            output_text = data.get("result") or data.get("output") or ""
+            # Modern Codex CLI (0.104.0+): text at data["item"]["text"]
+            item = data.get("item", {})
+            if isinstance(item, dict) and item.get("type") == "agent_message":
+                output_text = item.get("text", "")
+            else:
+                output_text = data.get("result") or data.get("output") or ""
 
         return True, str(output_text), cost
 

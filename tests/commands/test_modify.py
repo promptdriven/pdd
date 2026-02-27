@@ -182,17 +182,13 @@ def test_change_agentic_success(runner, mock_run_agentic_change):
 
 def test_change_agentic_invalid_args(runner, mock_run_agentic_change, mock_handle_error):
     """Test agentic mode fails with wrong number of arguments."""
-    # 0 arguments
+    # 0 arguments - UsageError propagates directly to Click (exit code 2)
     result = runner.invoke(change, [])
-    assert result.exit_code == 0 # Handled by handle_error
-    mock_handle_error.assert_called()
-    # Check that the exception passed was a UsageError (or similar)
-    # Note: Click might handle 0 args differently if required, but here args is nargs=-1 (optional in signature)
-    
+    assert result.exit_code == 2
+
     # 2 arguments
-    mock_handle_error.reset_mock()
     result = runner.invoke(change, ['arg1', 'arg2'])
-    mock_handle_error.assert_called()
+    assert result.exit_code == 2
     # Verify it didn't call the agentic runner
     mock_run_agentic_change.assert_not_called()
 
@@ -245,11 +241,9 @@ def test_change_manual_file_not_found(runner, mock_change_main, mock_handle_erro
         result = runner.invoke(change, ['--manual', 'missing.prompt', 'code.py', 'input.prompt'])
 
     mock_change_main.assert_not_called()
-    mock_handle_error.assert_called_once()
-    # Ensure the error message relates to file not found
-    # The exception passed to handle_error should be a UsageError with the message
-    args, _ = mock_handle_error.call_args
-    assert "not found" in str(args[0])
+    # UsageError propagates directly to Click (exit code 2)
+    assert result.exit_code == 2
+    assert "not found" in result.output
 
 # --- Tests for 'update' command ---
 

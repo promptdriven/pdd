@@ -769,13 +769,18 @@ publish-public:
 	fi
 	@echo "Committing and pushing updates in public repo"
 	@if git -C "$(PUBLIC_PDD_REPO_DIR)" rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
-		cd "$(PUBLIC_PDD_REPO_DIR)" && git add . && git commit -m "Bump version" && git fetch origin && git rebase origin/main && \
-		CURR_VER=$$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([0-9.]*\)"/\1/p' pyproject.toml | head -n1) && \
-		(git tag -a "v$$CURR_VER" -m "Release v$$CURR_VER" 2>/dev/null || true) && \
-		git push && git push --tags; \
+		cd "$(PUBLIC_PDD_REPO_DIR)" && git fetch origin && git reset --hard origin/main && git add . && \
+		if ! git diff --cached --quiet; then \
+			git commit -m "Bump version" && \
+			CURR_VER=$$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([0-9.]*\)"/\1/p' pyproject.toml | head -n1) && \
+			(git tag -a "v$$CURR_VER" -m "Release v$$CURR_VER" 2>/dev/null || true) && \
+			git push && git push --tags; \
 		else \
-			echo "Skip commit: $(PUBLIC_PDD_REPO_DIR) is not a Git repo. Set PUBLIC_PDD_REPO_DIR to a clone of $(PUBLIC_PDD_REMOTE)."; \
-		fi
+			echo "No changes to commit in public repo — skipping push"; \
+		fi; \
+	else \
+		echo "Skip commit: $(PUBLIC_PDD_REPO_DIR) is not a Git repo. Set PUBLIC_PDD_REPO_DIR to a clone of $(PUBLIC_PDD_REMOTE)."; \
+	fi
 
 # Ensure the public repo clone exists at $(PUBLIC_PDD_REPO_DIR)
 public-ensure:
@@ -828,13 +833,18 @@ publish-public-cap:
 	fi
 	@echo "Committing and pushing updates in CAP public repo"
 	@if git -C "$(PUBLIC_PDD_CAP_REPO_DIR)" rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
-		cd "$(PUBLIC_PDD_CAP_REPO_DIR)" && git add . && git commit -m "Bump version" && git fetch origin && git rebase origin/main && \
-		CURR_VER=$$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([0-9.]*\)"/\1/p' pyproject.toml | head -n1) && \
-		(git tag -a "v$$CURR_VER" -m "Release v$$CURR_VER" 2>/dev/null || true) && \
-		git push && git push --tags; \
+		cd "$(PUBLIC_PDD_CAP_REPO_DIR)" && git fetch origin && git reset --hard origin/main && git add . && \
+		if ! git diff --cached --quiet; then \
+			git commit -m "Bump version" && \
+			CURR_VER=$$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([0-9.]*\)"/\1/p' pyproject.toml | head -n1) && \
+			(git tag -a "v$$CURR_VER" -m "Release v$$CURR_VER" 2>/dev/null || true) && \
+			git push && git push --tags; \
 		else \
-			echo "Skip commit: $(PUBLIC_PDD_CAP_REPO_DIR) is not a Git repo. Set PUBLIC_PDD_CAP_REPO_DIR to a clone of $(PUBLIC_PDD_CAP_REMOTE)."; \
-		fi
+			echo "No changes to commit in CAP public repo — skipping push"; \
+		fi; \
+	else \
+		echo "Skip commit: $(PUBLIC_PDD_CAP_REPO_DIR) is not a Git repo. Set PUBLIC_PDD_CAP_REPO_DIR to a clone of $(PUBLIC_PDD_CAP_REMOTE)."; \
+	fi
 
 # Update the public repo clone to its default branch
 public-update: public-ensure

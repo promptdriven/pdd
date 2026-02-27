@@ -2811,3 +2811,308 @@ def test_deadline_from_env_used_when_param_not_passed(tmp_path):
         )
     assert success is False
     mock_run.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Issue #557: Codex NDJSON Parsing & Output Extraction
+# ---------------------------------------------------------------------------
+# pdd sync --agentic only works with Claude because:
+#   Bug 1 (lines 775-791): NDJSON parser looks for {"type":"result"} which
+#          modern Codex CLI (0.104.0+) no longer emits. The response is in
+#          {"type":"item.completed","item":{"type":"agent_message","text":"..."}}.
+#   Bug 2 (lines 821-824): _parse_provider_json for openai tries
+#          data.get("result") / data.get("output") but modern schema stores
+#          text at data["item"]["text"].
+# ---------------------------------------------------------------------------
+
+def _build_modern_codex_ndjson(agent_text: str, include_tool_calls: bool = False) -> str:
+    """Helper: build realistic modern Codex NDJSON output (0.104.0+ format)."""
+    lines = []
+    lines.append(json.dumps({"type": "session.start", "session_id": "sess_abc123"}))
+    if include_tool_calls:
+        # Tool call events come before the final agent_message
+        lines.append(json.dumps({
+            "type": "item.completed",
+            "item": {"type": "tool_call", "name": "shell", "output": "file.py"}
+        }))
+    lines.append(json.dumps({
+        "type": "item.completed",
+        "item": {"type": "agent_message", "text": agent_text}
+    }))
+    lines.append(json.dumps({
+        "type": "session.end",
+        "usage": {"input_tokens": 100, "output_tokens": 50}
+    }))
+    return "\n".join(lines)
+
+
+def test_issue557_ndjson_modern_item_completed_parsing(tmp_path):
+    """
+    Issue #557 Bug 1: Modern Codex NDJSON uses 'item.completed' events with
+    nested agent_message text, not the legacy 'result' event type.
+
+    The parser at lines 775-791 searches for type=='result', misses the
+    agent_message, and falls back to the session.end line (usage stats only).
+    This causes _parse_provider_json to receive the wrong data and return
+    empty output.
+
+    EXPECTED: Parser finds the item.completed agent_message and passes its
+    data to _parse_provider_json, which extracts the text.
+    CURRENT BUG: Parser falls through to session.end → empty text.
+    """
+    from pdd.agentic_common import _run_with_provider
+
+    agent_response = "MODULES_TO_SYNC: [auth, payments]\nSYNC_CWD: /app"
+    ndjson_output = _build_modern_codex_ndjson(agent_response)
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=False), \
+         patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
+         patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=ndjson_output,
+            stderr=""
+        )
+        # Create a prompt file
+        prompt_file = tmp_path / ".agentic_prompt_test.txt"
+        prompt_file.write_text("test prompt")
+
+        success, output, cost = _run_with_provider(
+            "openai", prompt_file, tmp_path, timeout=60.0, verbose=False, quiet=False
+        )
+
+    # The core assertion: output must contain the agent's actual response text
+    assert success is True, f"Expected success=True, got {success}"
+    assert "MODULES_TO_SYNC" in output, (
+        f"Expected agent_message text in output, got: {output!r}"
+    )
+    assert "auth" in output and "payments" in output
+
+
+def test_issue557_ndjson_multiple_item_completed_picks_agent_message(tmp_path):
+    """
+    Issue #557 Bug 1 edge case: When NDJSON contains multiple item.completed
+    events (tool_call + agent_message), the parser must pick the agent_message,
+    not the tool_call.
+
+    CURRENT BUG: Neither is picked because parser only looks for type=='result'.
+    """
+    from pdd.agentic_common import _run_with_provider
+
+    agent_response = "Sync completed successfully for module auth."
+    ndjson_output = _build_modern_codex_ndjson(agent_response, include_tool_calls=True)
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=False), \
+         patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
+         patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=ndjson_output,
+            stderr=""
+        )
+        prompt_file = tmp_path / ".agentic_prompt_test.txt"
+        prompt_file.write_text("test prompt")
+
+        success, output, cost = _run_with_provider(
+            "openai", prompt_file, tmp_path, timeout=60.0, verbose=False, quiet=False
+        )
+
+    assert success is True
+    assert "Sync completed successfully" in output, (
+        f"Expected agent_message text, got: {output!r}"
+    )
+    # Must NOT contain the tool_call output
+    assert "tool_call" not in output.lower() or "Sync completed" in output
+
+
+def test_issue557_session_end_usage_for_cost(tmp_path):
+    """
+    Issue #557 Bug 1 edge case: Usage/cost stats are in the session.end event,
+    separate from the text in the agent_message event. The parser should combine
+    text from agent_message with usage from session.end.
+
+    CURRENT BUG: Parser falls back to session.end (which has usage but no text),
+    so cost may be calculated but text is empty.
+    """
+    from pdd.agentic_common import _run_with_provider
+
+    agent_response = "Task completed with detailed output here and more text for length."
+    ndjson_output = _build_modern_codex_ndjson(agent_response)
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=False), \
+         patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
+         patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=ndjson_output,
+            stderr=""
+        )
+        prompt_file = tmp_path / ".agentic_prompt_test.txt"
+        prompt_file.write_text("test prompt")
+
+        success, output, cost = _run_with_provider(
+            "openai", prompt_file, tmp_path, timeout=60.0, verbose=False, quiet=False
+        )
+
+    # Both text and cost should be present
+    assert success is True
+    assert len(output.strip()) > 0, "Output should not be empty"
+    assert "Task completed" in output
+    # session.end has input_tokens=100, output_tokens=50 — cost must be non-zero
+    assert cost > 0.0, (
+        f"Cost should be non-zero: session.end usage was not merged with agent_message. "
+        f"Got cost={cost}"
+    )
+
+
+def test_issue557_single_line_json_no_ndjson(tmp_path):
+    """
+    Issue #557 Bug 1 edge case: When Codex returns a single JSON object
+    (no newlines), it hits the else branch at line 793. This should still
+    work if the single object uses the modern schema.
+
+    Tests the else branch (single-line JSON) with modern item.completed format.
+    """
+    from pdd.agentic_common import _run_with_provider
+
+    # Single JSON object in modern format (no NDJSON, no newlines)
+    single_json = json.dumps({
+        "type": "item.completed",
+        "item": {"type": "agent_message", "text": "Single response with enough content to pass."}
+    })
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=False), \
+         patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
+         patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=single_json,
+            stderr=""
+        )
+        prompt_file = tmp_path / ".agentic_prompt_test.txt"
+        prompt_file.write_text("test prompt")
+
+        success, output, cost = _run_with_provider(
+            "openai", prompt_file, tmp_path, timeout=60.0, verbose=False, quiet=False
+        )
+
+    # The single-line JSON goes through _parse_provider_json directly
+    # Bug: _parse_provider_json tries data.get("result")/data.get("output")
+    # but the text is at data["item"]["text"]
+    assert success is True
+    assert "Single response" in output, (
+        f"Expected item.text content, got: {output!r}"
+    )
+
+
+def test_issue557_parse_provider_json_modern_codex_schema():
+    """
+    Issue #557 Bug 2: _parse_provider_json for openai tries
+    data.get('result') or data.get('output') but modern Codex stores
+    text at data['item']['text'].
+
+    CURRENT BUG: Returns empty string because neither 'result' nor 'output'
+    keys exist in the modern schema.
+    """
+    from pdd.agentic_common import _parse_provider_json
+
+    # Modern Codex event data (as parsed from a single NDJSON line)
+    modern_data = {
+        "type": "item.completed",
+        "item": {
+            "type": "agent_message",
+            "text": "MODULES_TO_SYNC: [auth]\nSYNC_CWD: /app"
+        }
+    }
+
+    success, output, cost = _parse_provider_json("openai", modern_data)
+
+    assert success is True
+    assert "MODULES_TO_SYNC" in output, (
+        f"Bug #557: _parse_provider_json returned empty for modern Codex schema. "
+        f"Expected 'MODULES_TO_SYNC' in output, got: {output!r}"
+    )
+
+
+def test_issue557_parse_provider_json_legacy_codex_schema():
+    """
+    Issue #557 regression prevention: The legacy Codex schema with
+    'result' or 'output' keys must continue to work after fixing the
+    modern schema extraction.
+
+    This test ensures backward compatibility is maintained.
+    """
+    from pdd.agentic_common import _parse_provider_json
+
+    # Legacy format with "result" key
+    legacy_data_result = {
+        "type": "result",
+        "result": "Legacy Codex response text here.",
+        "usage": {"input_tokens": 50, "output_tokens": 25}
+    }
+
+    success, output, cost = _parse_provider_json("openai", legacy_data_result)
+    assert success is True
+    assert output == "Legacy Codex response text here."
+
+    # Legacy format with "output" key
+    legacy_data_output = {
+        "type": "result",
+        "output": "Legacy Codex output text here.",
+        "usage": {"input_tokens": 50, "output_tokens": 25}
+    }
+
+    success2, output2, cost2 = _parse_provider_json("openai", legacy_data_output)
+    assert success2 is True
+    assert output2 == "Legacy Codex output text here."
+
+
+def test_issue557_full_chain_modern_codex_false_positive(tmp_path):
+    """
+    Issue #557 integration test: Full chain showing modern Codex NDJSON
+    → empty extraction → false positive detection.
+
+    This is the exact scenario reported: pdd calls codex, gets valid NDJSON
+    with agent_message text, but the parsing chain loses the text, producing
+    empty output that triggers the false-positive detector at line 583-584.
+
+    CURRENT BUG: run_agentic_task returns success=False because empty output
+    from the parsing bugs triggers false-positive retry loop exhaustion.
+    EXPECTED: run_agentic_task returns success=True with the agent's text.
+    """
+    agent_text = (
+        "MODULES_TO_SYNC: [auth, payments, users]\n"
+        "SYNC_CWD: /app\n"
+        "Analysis complete. The following modules need synchronization."
+    )
+    ndjson_output = _build_modern_codex_ndjson(agent_text)
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=False), \
+         patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
+         patch("pdd.agentic_common.get_available_agents", return_value=["openai"]), \
+         patch("pdd.agentic_common.get_agent_provider_preference", return_value=["openai"]), \
+         patch("subprocess.run") as mock_run, \
+         patch("time.sleep"):  # Skip retry delays
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=ndjson_output,
+            stderr=""
+        )
+
+        success, output, cost, provider = run_agentic_task(
+            instruction="test sync instruction",
+            cwd=tmp_path,
+            max_retries=1,
+        )
+
+    # With the bug, success is False (false positive detection kills it)
+    # After fix, success should be True with the actual agent text
+    assert success is True, (
+        f"Issue #557: Modern Codex NDJSON was treated as false positive. "
+        f"Output was: {output!r}"
+    )
+    assert "MODULES_TO_SYNC" in output, (
+        f"Issue #557: Agent text not extracted from modern Codex NDJSON. "
+        f"Got: {output!r}"
+    )
+    assert provider == "openai"

@@ -310,12 +310,11 @@ def run_agentic_bug_orchestrator(
             context["worktree_path"] = str(worktree_path)
 
         # Restore context from step outputs
-        # Escape curly braces to prevent format string injection (Issue #393)
+        # No brace escaping needed: safe str.replace() substitution preserves JSON braces (Issue #549)
         # Transform step keys: "5.5" -> "5_5" to match template placeholders (Issue #279)
         for step_key, output in step_outputs.items():
             fixed_key = str(step_key).replace(".", "_")  # "5.5" -> "5_5"
-            escaped_output = output.replace("{", "{{").replace("}", "}}")
-            context[f"step{fixed_key}_output"] = escaped_output
+            context[f"step{fixed_key}_output"] = output
 
         # Restore files_to_stage if available
         if changed_files:
@@ -407,14 +406,13 @@ def run_agentic_bug_orchestrator(
         exclude_keys = list(context.keys())
         prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
 
-        # Format prompt with accumulated context
-        try:
-            formatted_prompt = prompt_template.format(**context)
-        except KeyError as e:
-            msg = f"Prompt formatting error in step {step_num}: missing key {e}"
-            if not quiet:
-                console.print(f"[red]Error: {msg}[/red]")
-            return False, msg, total_cost, last_model_used, changed_files
+        # Format prompt using safe str.replace() (Issue #549): un-double template literal
+        # braces from preprocess() first, then substitute context keys. This preserves JSON
+        # curly braces in context values (nested JSON etc.) without corruption.
+        prompt_template = prompt_template.replace("{{", "{").replace("}}", "}")
+        formatted_prompt = prompt_template
+        for key, value in context.items():
+            formatted_prompt = formatted_prompt.replace(f'{{{key}}}', str(value))
 
         # Run the task
         success, output, cost, model = run_agentic_task(
@@ -430,10 +428,8 @@ def run_agentic_bug_orchestrator(
         # Update tracking
         total_cost += cost
         last_model_used = model
-        # Escape curly braces in output to prevent format string injection (Issue #393)
-        # LLM outputs may contain {placeholders} that would cause KeyError in subsequent prompts
-        escaped_output = output.replace("{", "{{").replace("}", "}}")
-        context[f"step{step_suffix}_output"] = escaped_output
+        # No brace escaping needed: safe str.replace() substitution preserves JSON braces (Issue #549)
+        context[f"step{step_suffix}_output"] = output
 
         # --- Post-Step Logic: Hard Stops & Parsing ---
 
@@ -510,24 +506,35 @@ def run_agentic_bug_orchestrator(
             if not quiet: console.print(f"⏹️  {msg}")
             return False, msg, total_cost, last_model_used, changed_files
 
-        # Step 9: E2E Test Failure & File Extraction
+        # Step 9: E2E Test — handle skip, failure, and file extraction
         if step_num == 9:
-            if "E2E_FAIL: Test does not catch bug correctly" in output:
+            if "E2E_SKIP:" in output:
+                # Simple bug — no E2E needed, treat as successful completion
+                if not quiet:
+                    for line in output.splitlines():
+                        if line.strip().startswith("E2E_SKIP:"):
+                            reason = line.split(":", 1)[1].strip()
+                            console.print(f"  → E2E test skipped: {reason}")
+                            break
+                # Skip E2E file parsing, continue to step 10
+            elif "E2E_FAIL: Test does not catch bug correctly" in output:
                 msg = "Stopped at Step 9: E2E test does not catch bug correctly."
                 if not quiet: console.print(f"⏹️  {msg}")
                 return False, msg, total_cost, last_model_used, changed_files
-            
-            # Parse output for E2E_FILES_CREATED to extend changed_files
-            e2e_files = []
-            for line in output.splitlines():
-                if line.startswith("E2E_FILES_CREATED:"):
-                    file_list = line.split(":", 1)[1].strip()
-                    e2e_files.extend([f.strip() for f in file_list.split(",") if f.strip()])
-            
-            if e2e_files:
-                changed_files.extend(e2e_files)
-                # Update files_to_stage so Step 10 (PR) includes E2E files
-                context["files_to_stage"] = ", ".join(changed_files)
+            else:
+                # Parse output for E2E_FILES_CREATED to extend changed_files
+                e2e_files = []
+                for line in output.splitlines():
+                    if line.startswith("E2E_FILES_CREATED:"):
+                        file_list = line.split(":", 1)[1].strip()
+                        e2e_files.extend([f.strip() for f in file_list.split(",") if f.strip()])
+
+                if e2e_files:
+                    changed_files.extend(e2e_files)
+                    # Deduplicate while preserving insertion order
+                    changed_files = list(dict.fromkeys(changed_files))
+                    # Update files_to_stage so Step 10 (PR) includes E2E files
+                    context["files_to_stage"] = ", ".join(changed_files)
 
         # Soft Failure Logging (if not a hard stop)
         if not success and not quiet:

@@ -52,6 +52,21 @@ For EACH PRD requirement, find the module(s) that implement it:
 - A PRD feature has NO corresponding module
 - A core user flow is incomplete (e.g., create without read/update/delete)
 
+**1b. API Route Coverage Check**
+
+If the PRD contains an API specification table or lists specific endpoint paths, extract EVERY distinct URL pattern and verify a 1:1 corresponding route module exists:
+
+```bash
+# List all route modules in architecture
+cat architecture.json | jq -r '.[].filepath' | grep -E "route\.(ts|js|py)$"
+```
+
+For EACH distinct route path mentioned in the PRD, there must be a **separate** route module — not just a parent module that "covers" the same resource. For example, if the PRD lists both `POST /api/pipeline/veo/run` and `GET /api/pipeline/veo/clips`, these require two separate modules (`api_pipeline_veo_route` and `api_pipeline_veo_clips_route`), not one.
+
+**Flag as ERROR if:**
+- A specific route path in the PRD has no corresponding module
+- Multiple distinct routes are collapsed under one module
+
 **2. Layer Completeness Check**
 
 Based on the project type, verify all essential layers exist:
@@ -168,6 +183,11 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 - Requirements found: [N]
 - Requirements covered: [M]/[N]
 - Missing: [list or "None"]
+
+### API Route Coverage
+- Routes found in PRD: [N]
+- Routes with modules: [M]/[N]
+- Missing route modules: [list or "None"]
 
 ### Layer Completeness
 - Entry points: [Yes/No]

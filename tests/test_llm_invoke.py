@@ -19,6 +19,7 @@ from pdd.llm_invoke import (
 )
 import openai # Import openai for exception types used by LiteLLM
 import httpx # Import httpx for mocking request/response
+import litellm
 import logging # For caplog
 
 # Define MockModelInfo locally in the test file using namedtuple
@@ -4937,6 +4938,7 @@ class TestGroqMessageMutation(_GroqMutationFixture):
             mock_litellm.completion = MagicMock(side_effect=side_effect)
             mock_litellm.cache = None
             mock_litellm.drop_params = True
+            mock_litellm.ContextWindowExceededError = litellm.ContextWindowExceededError
             llm_invoke(
                 messages=input_messages, strength=0.5, temperature=0.0,
                 time=0.0, output_pydantic=self.SimpleResult, use_cloud=False,
@@ -4985,3 +4987,99 @@ class TestGroqMessageMutation(_GroqMutationFixture):
         )
         assert schema_count == 0, \
             f"Fallback got {schema_count} accumulated schema instructions"
+
+
+# --- Context Window Validation Tests ---
+
+import pdd.llm_invoke as _llm_invoke_module
+
+
+class TestContextWindowValidation:
+    """Tests for pre-call context window validation in llm_invoke."""
+
+    def test_over_limit_skips_model(self, mock_load_models, mock_set_llm_cache):
+        """When token count exceeds context limit, all models are skipped and RuntimeError raised."""
+        mock_response = create_mock_litellm_response("result", model_name="cheap-model")
+
+        with patch.object(_llm_invoke_module.litellm, "token_counter", return_value=1_500_000):
+            with patch.object(_llm_invoke_module, "get_context_limit", return_value=100_000):
+                with patch.object(_llm_invoke_module.litellm, "completion", return_value=mock_response):
+                    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key", "ANTHROPIC_API_KEY": "test-key", "GOOGLE_API_KEY": "test-key"}):
+                        with pytest.raises(RuntimeError, match="context limit"):
+                            _llm_invoke_module.llm_invoke(
+                                prompt="test prompt",
+                                input_json={},
+                                strength=0.0,
+                                time=0.0,
+                                use_cloud=False,
+                            )
+
+    def test_all_candidates_exhausted_includes_context_hint(self, mock_load_models, mock_set_llm_cache):
+        """When all models fail due to context overflow, error message should include hint."""
+        with patch.object(_llm_invoke_module.litellm, "token_counter", return_value=2_000_000):
+            with patch.object(_llm_invoke_module, "get_context_limit", return_value=100_000):
+                with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key", "ANTHROPIC_API_KEY": "test-key", "GOOGLE_API_KEY": "test-key"}):
+                    with pytest.raises(RuntimeError, match="reducing prompt size"):
+                        _llm_invoke_module.llm_invoke(
+                            prompt="enormous prompt",
+                            input_json={},
+                            strength=0.0,
+                            time=0.0,
+                            use_cloud=False,
+                        )
+
+    def test_over_90_pct_logs_warning(self, mock_load_models, mock_set_llm_cache, caplog):
+        """When token count is >90% of limit and verbose, a warning should be logged."""
+        mock_response = create_mock_litellm_response("ok", model_name="gpt-5-nano")
+
+        with patch.object(_llm_invoke_module.litellm, "token_counter", return_value=95_000):
+            with patch.object(_llm_invoke_module, "get_context_limit", return_value=100_000):
+                with patch.object(_llm_invoke_module.litellm, "completion", return_value=mock_response):
+                    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+                        with caplog.at_level(logging.WARNING, logger="pdd.llm_invoke"):
+                            _llm_invoke_module.llm_invoke(
+                                prompt="big prompt",
+                                input_json={},
+                                strength=0.0,
+                                time=0.0,
+                                use_cloud=False,
+                                verbose=True,
+                            )
+        assert any("[CONTEXT]" in r.message and "95.0%" in r.message for r in caplog.records)
+
+    def test_verbose_logs_token_info(self, mock_load_models, mock_set_llm_cache, caplog):
+        """When verbose and within limits, token info should be logged."""
+        mock_response = create_mock_litellm_response("ok", model_name="gpt-5-nano")
+
+        with patch.object(_llm_invoke_module.litellm, "token_counter", return_value=50_000):
+            with patch.object(_llm_invoke_module, "get_context_limit", return_value=100_000):
+                with patch.object(_llm_invoke_module.litellm, "completion", return_value=mock_response):
+                    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+                        with caplog.at_level(logging.INFO, logger="pdd.llm_invoke"):
+                            _llm_invoke_module.llm_invoke(
+                                prompt="normal prompt",
+                                input_json={},
+                                strength=0.0,
+                                time=0.0,
+                                use_cloud=False,
+                                verbose=True,
+                            )
+        assert any("[CONTEXT]" in r.message and "50.0%" in r.message for r in caplog.records)
+
+    def test_within_limits_calls_completion(self, mock_load_models, mock_set_llm_cache):
+        """When token count is within limits, litellm.completion should be called normally."""
+        mock_response = create_mock_litellm_response("hello", model_name="gpt-5-nano")
+
+        with patch.object(_llm_invoke_module.litellm, "token_counter", return_value=50_000):
+            with patch.object(_llm_invoke_module, "get_context_limit", return_value=100_000):
+                with patch.object(_llm_invoke_module.litellm, "completion", return_value=mock_response) as mock_comp:
+                    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+                        result = _llm_invoke_module.llm_invoke(
+                            prompt="normal prompt",
+                            input_json={},
+                            strength=0.0,
+                            time=0.0,
+                            use_cloud=False,
+                        )
+                        assert result["result"] == "hello"
+                        mock_comp.assert_called_once()

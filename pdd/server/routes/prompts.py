@@ -25,7 +25,7 @@ except ImportError:
     console = Console()
 
 from ..security import PathValidator, SecurityError
-from ..token_counter import get_token_metrics
+from ..token_counter import get_context_limit, get_token_metrics
 from pdd.load_prompt_template import load_prompt_template
 
 
@@ -43,8 +43,8 @@ class CostEstimateResponse(BaseModel):
 class TokenMetricsResponse(BaseModel):
     """Token metrics result."""
     token_count: int = Field(..., description="Number of tokens")
-    context_limit: int = Field(..., description="Model context limit")
-    context_usage_percent: float = Field(..., description="Percentage of context used")
+    context_limit: Optional[int] = Field(None, description="Model context limit (None if model is unknown)")
+    context_usage_percent: Optional[float] = Field(None, description="Percentage of context used (None if model is unknown)")
     cost_estimate: Optional[CostEstimateResponse] = Field(None, description="Cost estimate if pricing available")
 
 
@@ -85,7 +85,7 @@ class ModelInfo(BaseModel):
     input_cost: float = Field(..., description="Input cost per million tokens (USD)")
     output_cost: float = Field(..., description="Output cost per million tokens (USD)")
     elo: int = Field(..., description="Coding arena ELO rating")
-    context_limit: int = Field(..., description="Maximum context window size in tokens")
+    context_limit: Optional[int] = Field(None, description="Maximum context window size in tokens (None if unknown)")
     max_thinking_tokens: int = Field(0, description="Maximum thinking/reasoning tokens (0 if not supported)")
     reasoning_type: str = Field("none", description="Reasoning type: none, effort, or budget")
     structured_output: bool = Field(True, description="Whether the model supports structured output")
@@ -473,19 +473,9 @@ async def get_available_models():
     try:
         # Import here to avoid circular imports
         from pdd.llm_invoke import _load_model_data, LLM_MODEL_CSV_PATH, DEFAULT_BASE_MODEL
-        from ..token_counter import MODEL_CONTEXT_LIMITS
 
         # Load model data from CSV
         model_df = _load_model_data(LLM_MODEL_CSV_PATH)
-
-        # Helper to determine context limit for a model
-        def get_context_limit(model_name: str) -> int:
-            """Get context limit based on model name."""
-            model_lower = model_name.lower()
-            for prefix, limit in MODEL_CONTEXT_LIMITS.items():
-                if prefix in model_lower:
-                    return limit
-            return MODEL_CONTEXT_LIMITS.get("default", 128000)
 
         # Convert DataFrame to list of ModelInfo
         models = []

@@ -1,7 +1,8 @@
 """
 Token counting and cost estimation utilities.
 
-Uses tiktoken for local token estimation without API calls.
+Uses litellm for model-aware token counting and context window lookup.
+Falls back to tiktoken for unknown models.
 Loads model pricing from .pdd/llm_model.csv.
 """
 
@@ -13,28 +14,17 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Optional, Dict
 
+import litellm
 import tiktoken
 
-# Default context limits by model family (tokens)
-MODEL_CONTEXT_LIMITS = {
-    "gpt-4": 128000,
-    "gpt-5": 200000,
-    "claude-3": 200000,
-    "claude-sonnet-4": 200000,
-    "claude-opus-4": 200000,
-    "claude-haiku-4": 200000,
-    "gemini-2": 1000000,
-    "gemini-3": 1000000,
-    "default": 128000,
-}
-
-# Tiktoken encodings - use cl100k_base for most modern models
-ENCODING_NAME = "cl100k_base"
+# Tiktoken fallback encoding for models litellm cannot identify
+_FALLBACK_ENCODING = "cl100k_base"
 
 
 @dataclass
 class CostEstimate:
     """Cost estimation result."""
+
     input_cost: float
     model: str
     tokens: int
@@ -42,6 +32,7 @@ class CostEstimate:
     currency: str = "USD"
 
     def to_dict(self) -> Dict:
+        """Serialize to dict."""
         return {
             "input_cost": round(self.input_cost, 6),
             "model": self.model,
@@ -54,73 +45,89 @@ class CostEstimate:
 @dataclass
 class TokenMetrics:
     """Combined token metrics result."""
+
     token_count: int
-    context_limit: int
-    context_usage_percent: float
+    context_limit: Optional[int]
+    context_usage_percent: Optional[float]
     cost_estimate: Optional[CostEstimate]
 
     def to_dict(self) -> Dict:
+        """Serialize to dict."""
         return {
             "token_count": self.token_count,
             "context_limit": self.context_limit,
-            "context_usage_percent": round(self.context_usage_percent, 2),
+            "context_usage_percent": (
+                round(self.context_usage_percent, 2)
+                if self.context_usage_percent is not None
+                else None
+            ),
             "cost_estimate": self.cost_estimate.to_dict() if self.cost_estimate else None,
         }
 
 
 @lru_cache(maxsize=1)
-def _get_encoding() -> tiktoken.Encoding:
-    """Get tiktoken encoding (cached)."""
-    return tiktoken.get_encoding(ENCODING_NAME)
+def _get_fallback_encoding() -> tiktoken.Encoding:
+    """Get tiktoken fallback encoding (cached)."""
+    return tiktoken.get_encoding(_FALLBACK_ENCODING)
 
 
-def count_tokens(text: str) -> int:
+def count_tokens(text: str, model: str = "gpt-4o") -> int:
     """
-    Count tokens in text using tiktoken.
+    Count tokens in text using litellm's model-aware tokenizer.
+
+    Falls back to tiktoken cl100k_base encoding if litellm raises an exception
+    (e.g. for unknown or locally-served models).
 
     Args:
-        text: The text to count tokens for
+        text: The text to count tokens for.
+        model: Model name used to select the correct tokenizer.
 
     Returns:
-        Token count
+        Token count.
     """
     if not text:
         return 0
 
-    encoding = _get_encoding()
-    return len(encoding.encode(text))
+    messages = [{"role": "user", "content": text}]
+    try:
+        return litellm.token_counter(model=model, messages=messages)
+    except Exception:
+        encoding = _get_fallback_encoding()
+        return len(encoding.encode(text))
 
 
-def get_context_limit(model: str) -> int:
+def get_context_limit(model: str) -> Optional[int]:
     """
-    Get the context limit for a model.
+    Get the input context window size for a model via litellm.
+
+    Returns None for unknown models. Callers should skip context-window
+    validation when None is returned rather than raising an error.
 
     Args:
-        model: Model name
+        model: Model name.
 
     Returns:
-        Context limit in tokens
+        Context window size in input tokens, or None if the model is unknown
+        to litellm.
     """
-    model_lower = model.lower()
-
-    for prefix, limit in MODEL_CONTEXT_LIMITS.items():
-        if prefix in model_lower:
-            return limit
-
-    return MODEL_CONTEXT_LIMITS["default"]
+    try:
+        info = litellm.get_model_info(model)
+        return info.get("max_input_tokens")
+    except Exception:
+        return None
 
 
 @lru_cache(maxsize=1)
 def _load_model_pricing(csv_path: str) -> Dict[str, float]:
     """Load model pricing from CSV (cached)."""
-    pricing = {}
+    pricing: Dict[str, float] = {}
 
     try:
-        with open(csv_path, 'r') as f:
+        with open(csv_path, "r") as f:
             reader = csv.DictReader(f)
             for row in reader:
-                model = row.get('model', '')
-                input_cost = row.get('input', '0')
+                model = row.get("model", "")
+                input_cost = row.get("input", "0")
                 try:
                     pricing[model] = float(input_cost)
                 except ValueError:
@@ -134,18 +141,18 @@ def _load_model_pricing(csv_path: str) -> Dict[str, float]:
 def estimate_cost(
     token_count: int,
     model: str,
-    pricing_csv: Optional[Path] = None
+    pricing_csv: Optional[Path] = None,
 ) -> Optional[CostEstimate]:
     """
     Estimate the input cost for a given token count.
 
     Args:
-        token_count: Number of input tokens
-        model: Model name
-        pricing_csv: Path to llm_model.csv (optional)
+        token_count: Number of input tokens.
+        model: Model name.
+        pricing_csv: Path to llm_model.csv (optional).
 
     Returns:
-        CostEstimate or None if pricing not found
+        CostEstimate or None if pricing not found.
     """
     if pricing_csv is None or not pricing_csv.exists():
         return None
@@ -155,15 +162,14 @@ def estimate_cost(
     if not pricing:
         return None
 
-    # Find matching model
     cost_per_million = None
     matched_model = model
 
-    # Try exact match first
+    # Exact match first
     if model in pricing:
         cost_per_million = pricing[model]
     else:
-        # Try partial match
+        # Partial/substring match
         model_lower = model.lower()
         for csv_model, cost in pricing.items():
             if model_lower in csv_model.lower() or csv_model.lower() in model_lower:
@@ -172,8 +178,8 @@ def estimate_cost(
                 break
 
     if cost_per_million is None:
-        # Use a default model for estimation
-        for default_model in ['claude-sonnet-4-20250514', 'gpt-4o', 'claude-3-5-sonnet-latest']:
+        # Fall back to well-known defaults present in most pricing CSVs
+        for default_model in ["claude-sonnet-4-20250514", "gpt-4o", "claude-3-5-sonnet-latest"]:
             if default_model in pricing:
                 cost_per_million = pricing[default_model]
                 matched_model = default_model
@@ -182,7 +188,7 @@ def estimate_cost(
     if cost_per_million is None:
         return None
 
-    # Calculate cost (pricing is per million tokens)
+    # Pricing is expressed per million tokens
     input_cost = (token_count / 1_000_000) * cost_per_million
 
     return CostEstimate(
@@ -196,22 +202,22 @@ def estimate_cost(
 def get_token_metrics(
     text: str,
     model: str = "claude-sonnet-4-20250514",
-    pricing_csv: Optional[Path] = None
+    pricing_csv: Optional[Path] = None,
 ) -> TokenMetrics:
     """
     Get comprehensive token metrics for text.
 
     Args:
-        text: The text to analyze
-        model: Model name
-        pricing_csv: Path to pricing CSV
+        text: The text to analyze.
+        model: Model name.
+        pricing_csv: Path to pricing CSV.
 
     Returns:
-        TokenMetrics with count, context usage, and cost
+        TokenMetrics with count, context usage (if model is known), and cost.
     """
-    token_count = count_tokens(text)
+    token_count = count_tokens(text, model)
     context_limit = get_context_limit(model)
-    context_usage = (token_count / context_limit) * 100 if context_limit > 0 else 0
+    context_usage = (token_count / context_limit) * 100 if context_limit else None
     cost = estimate_cost(token_count, model, pricing_csv)
 
     return TokenMetrics(

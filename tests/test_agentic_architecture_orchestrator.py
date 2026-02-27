@@ -10,14 +10,14 @@ sys.path.insert(0, str(project_root))
 """
 Test plan for pdd.agentic_architecture_orchestrator
 
-The orchestrator runs an 11-step workflow:
-- Steps 1-7: Linear analysis and generation (analyze_prd, analyze, research, design, research_deps, generate, pddrc)
-- Step 8: Prompt generation (if not skip_prompts)
-- Steps 9-11: Validation with in-place fixing (completeness, sync, dependencies) - each retries up to 3 times
+The orchestrator runs a 13-step workflow:
+- Steps 1-8: Linear analysis and generation (analyze_prd, analyze, research, data_model, design, research_deps, generate, pddrc)
+- Step 9: Prompt generation (if not skip_prompts)
+- Steps 10-12: Validation with in-place fixing (completeness, sync, dependencies) - each retries up to 3 times
 
 1. **Unit Tests**:
     - **Happy Path**: Verify the full workflow (Steps 1-8 + validations 9-11) runs correctly, accumulates context, tracks cost, saves files, and clears state.
-    - **Hard Stop Conditions**: Verify that specific outputs in Step 1 ("PRD Content Insufficient"), Step 2 ("Tech Stack Ambiguous"), and Step 4 ("Clarification Needed") trigger an early exit and return failure.
+    - **Hard Stop Conditions**: Verify that specific outputs in Step 1 ("PRD Content Insufficient"), Step 2 ("Tech Stack Ambiguous"), and Step 5 ("Clarification Needed") trigger an early exit and return failure.
     - **Validation Logic** (Steps 9-11):
         - Case A: Validation succeeds immediately on each step.
         - Case B: Validation fails, fix is applied, then succeeds.
@@ -28,6 +28,8 @@ The orchestrator runs an 11-step workflow:
 
 2. **Z3 Formal Verification**:
     - **Termination Analysis**: Model the control flow as a state machine. Verify that for any combination of "Valid"/"Invalid" outputs and "Hard Stop" signals, the orchestrator eventually reaches a terminal state (Success or Failure) and does not loop infinitely.
+
+Note: The pipeline has 13 steps total (steps 1-8 linear, step 9 prompt gen, steps 10-12 validation, step 13 fix).
 """
 
 import sys
@@ -90,7 +92,7 @@ def base_args(tmp_path):
 # --- Unit Tests ---
 
 def test_happy_path_full_run(mock_dependencies, base_args):
-    """Test a complete successful run through all 11 steps."""
+    """Test a complete successful run through all 13 steps."""
     mocks = mock_dependencies
     cwd = base_args["cwd"]
 
@@ -98,19 +100,19 @@ def test_happy_path_full_run(mock_dependencies, base_args):
     def side_effect(*args, **kwargs):
         instruction = kwargs.get("instruction", "")
         label = kwargs.get("label", "")
-        # Steps 9-11 validation - all pass immediately
-        if "step9" in label or "step10" in label or "step11" in label:
+        # Steps 10-12 validation - all pass immediately
+        if "step10" in label or "step11" in label or "step12" in label:
             return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
-        if "step6" in label:
-            # Step 6 writes architecture.json to disk
+        if "step7" in label:
+            # Step 7 writes architecture.json to disk
             (cwd / "architecture.json").write_text('[{"priority": 1, "filename": "test.prompt"}]')
             return (True, 'FILES_CREATED: architecture.json', 0.1, "gpt-4")
-        if "step7" in label:
-            # Step 7 creates .pddrc
+        if "step8" in label:
+            # Step 8 creates .pddrc
             (cwd / ".pddrc").write_text("prompts_dir: prompts\n")
             return (True, 'FILES_CREATED: .pddrc', 0.1, "gpt-4")
-        if "step8" in label:
-            # Step 8 creates prompt files
+        if "step9" in label:
+            # Step 9 creates prompt files
             return (True, 'FILES_CREATED: prompts/test.prompt', 0.1, "gpt-4")
         return (True, f"Output for {label}", 0.1, "gpt-4")
 
@@ -122,9 +124,9 @@ def test_happy_path_full_run(mock_dependencies, base_args):
     assert cost > 0
 
     # Verify all steps ran:
-    # Steps 1-7 = 7 calls, Step 8 = 1 call, Steps 9-11 = 3 calls (each passes first attempt)
-    # Total: 11 calls
-    assert mocks["run"].call_count == 11
+    # Steps 1-8 = 8 calls, Step 9 = 1 call, Steps 10-12 = 3 calls (each passes first attempt)
+    # Total: 12 calls
+    assert mocks["run"].call_count == 12
 
     # Verify state was cleared
     mocks["clear_state"].assert_called_once()
@@ -162,36 +164,36 @@ def test_validation_loop_fix_flow(mock_dependencies, base_args):
     cwd = base_args["cwd"]
 
     # Sequence:
-    # Steps 1-7: Normal (7 calls)
-    # Step 8: Normal (1 call)
-    # Step 9 attempt 1: INVALID
-    # Step 9 fix 1: Fixed
-    # Step 9 attempt 2: VALID
-    # Steps 10-11: VALID (2 calls)
-    # Total: 7 + 1 + 2 + 1 + 2 = 13 calls
+    # Steps 1-8: Normal (8 calls)
+    # Step 9: Normal (1 call)
+    # Step 10 attempt 1: INVALID
+    # Step 10 fix 1: Fixed
+    # Step 10 attempt 2: VALID
+    # Steps 11-12: VALID (2 calls)
+    # Total: 8 + 1 + 2 + 1 + 2 = 14 calls
 
     def side_effect(*args, **kwargs):
         label = kwargs.get("label", "")
-        if "step6" in label:
-            # Step 6 writes initial architecture to disk
+        if "step7" in label:
+            # Step 7 writes initial architecture to disk
             (cwd / "architecture.json").write_text('[{"ver": 1}]')
             return (True, 'FILES_CREATED: architecture.json', 0.1, "gpt-4")
-        if "step7" in label:
+        if "step8" in label:
             (cwd / ".pddrc").write_text("prompts_dir: prompts\n")
             return (True, 'FILES_CREATED: .pddrc', 0.1, "gpt-4")
-        if "step8" in label:
+        if "step9" in label:
             return (True, 'FILES_CREATED: prompts/test.prompt', 0.1, "gpt-4")
-        # Step 9 validation fails first, then passes
-        if "step9_attempt1" in label:
+        # Step 10 validation fails first, then passes
+        if "step10_attempt1" in label:
             return (True, "VALIDATION_RESULT: INVALID\n\n1. Missing database module", 0.1, "gpt-4")
-        if "step9_fix1" in label:
+        if "step10_fix1" in label:
             # Fix step updates architecture
             (cwd / "architecture.json").write_text('[{"ver": 2, "db": true}]')
             return (True, 'FILES_MODIFIED: architecture.json', 0.1, "gpt-4")
-        if "step9_attempt2" in label:
+        if "step10_attempt2" in label:
             return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
-        # Steps 10-11 pass immediately
-        if "step10" in label or "step11" in label:
+        # Steps 11-12 pass immediately
+        if "step11" in label or "step12" in label:
             return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
         return (True, f"Output for {label}", 0.1, "gpt-4")
 
@@ -200,8 +202,8 @@ def test_validation_loop_fix_flow(mock_dependencies, base_args):
     success, _, _, _, _ = run_agentic_architecture_orchestrator(**base_args)
 
     assert success is True
-    # Calls: steps 1-7 (7) + step 8 (1) + step 9 (attempt1 + fix1 + attempt2 = 3) + steps 10-11 (2) = 13
-    assert mocks["run"].call_count == 13
+    # Calls: steps 1-8 (8) + step 9 (1) + step 10 (attempt1 + fix1 + attempt2 = 3) + steps 11-12 (2) = 14
+    assert mocks["run"].call_count == 14
 
     # Verify the final architecture saved is the one from the fix
     with open(base_args["cwd"] / "architecture.json", "r") as f:
@@ -217,24 +219,24 @@ def test_max_validation_iterations(mock_dependencies, base_args):
 
     def side_effect(*args, **kwargs):
         label = kwargs.get("label", "")
-        if "step6" in label:
-            # Step 6 writes architecture to disk
+        if "step7" in label:
+            # Step 7 writes architecture to disk
             (cwd / "architecture.json").write_text('[{"ver": 1}]')
             return (True, 'FILES_CREATED: architecture.json', 0.1, "gpt-4")
-        if "step7" in label:
+        if "step8" in label:
             (cwd / ".pddrc").write_text("prompts_dir: prompts\n")
             return (True, 'FILES_CREATED: .pddrc', 0.1, "gpt-4")
-        if "step8" in label:
+        if "step9" in label:
             return (True, 'FILES_CREATED: prompts/test.prompt', 0.1, "gpt-4")
-        # Step 9 always fails validation
-        if "step9_attempt" in label:
+        # Step 10 always fails validation
+        if "step10_attempt" in label:
             return (True, "VALIDATION_RESULT: INVALID", 0.1, "gpt-4")
-        if "step9_fix" in label:
+        if "step10_fix" in label:
             fix_count["value"] += 1
             (cwd / "architecture.json").write_text(f'[{{"ver": "fixed_{fix_count["value"]}"}}]')
             return (True, 'FILES_MODIFIED: architecture.json', 0.1, "gpt-4")
-        # Steps 10-11 pass
-        if "step10" in label or "step11" in label:
+        # Steps 11-12 pass
+        if "step11" in label or "step12" in label:
             return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
         return (True, "ok", 0.1, "gpt-4")
 
@@ -246,12 +248,12 @@ def test_max_validation_iterations(mock_dependencies, base_args):
     assert success is True
 
     # Count calls:
-    # Steps 1-7: 7 calls
-    # Step 8: 1 call
-    # Step 9: 3 attempts + 2 fixes (can't fix after 3rd attempt) = 5 calls
-    # Steps 10-11: 2 calls (they still run after step 9 fails)
-    # Total: 7 + 1 + 5 + 2 = 15 calls
-    assert mocks["run"].call_count == 15
+    # Steps 1-8: 8 calls
+    # Step 9: 1 call
+    # Step 10: 3 attempts + 2 fixes (can't fix after 3rd attempt) = 5 calls
+    # Steps 11-12: 2 calls (they still run after step 10 fails)
+    # Total: 8 + 1 + 5 + 2 = 16 calls
+    assert mocks["run"].call_count == 16
 
 def test_resumption_from_state(mock_dependencies, base_args):
     """Test resuming from saved state (e.g., Step 3 completed)."""
@@ -271,17 +273,17 @@ def test_resumption_from_state(mock_dependencies, base_args):
 
     def side_effect(*args, **kwargs):
         label = kwargs.get("label", "")
-        if "step6" in label:
-            # Step 6 writes architecture to disk
+        if "step7" in label:
+            # Step 7 writes architecture to disk
             (cwd / "architecture.json").write_text('[{"ver": 1}]')
             return (True, 'FILES_CREATED: architecture.json', 0.1, "gpt-4")
-        if "step7" in label:
+        if "step8" in label:
             (cwd / ".pddrc").write_text("prompts_dir: prompts\n")
             return (True, 'FILES_CREATED: .pddrc', 0.1, "gpt-4")
-        if "step8" in label:
+        if "step9" in label:
             return (True, 'FILES_CREATED: prompts/test.prompt', 0.1, "gpt-4")
-        # Steps 9-11 validation pass
-        if "step9" in label or "step10" in label or "step11" in label:
+        # Steps 10-12 validation pass
+        if "step10" in label or "step11" in label or "step12" in label:
             return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
         return (True, "ok", 0.1, "gpt-4")
 
@@ -290,12 +292,12 @@ def test_resumption_from_state(mock_dependencies, base_args):
     success, _, cost, _, _ = run_agentic_architecture_orchestrator(**base_args)
 
     assert success is True
-    # Should run steps 4, 5, 6, 7 (4 calls) + step 8 (1) + steps 9-11 (3) = 8 calls
+    # Should run steps 4, 5, 6, 7, 8 (5 calls) + step 9 (1) + steps 10-12 (3) = 9 calls
     # Steps 1, 2, 3 should be skipped.
-    assert mocks["run"].call_count == 8
+    assert mocks["run"].call_count == 9
 
-    # Cost should include previous cost (0.5) + new costs (0.1 * 8)
-    assert cost == pytest.approx(1.3)
+    # Cost should include previous cost (0.5) + new costs (0.1 * 9)
+    assert cost == pytest.approx(1.4)
 
 def test_missing_template_failure(mock_dependencies, base_args):
     """Test failure when a prompt template is missing."""
@@ -313,34 +315,34 @@ def test_json_parsing_fallback(mock_dependencies, base_args):
     mocks = mock_dependencies
     cwd = base_args["cwd"]
 
-    # Step 6 writes invalid JSON to disk
+    # Step 7 writes invalid JSON to disk
     invalid_json = "Here is the json: {foo: bar} (invalid)"
 
     fix_count = {"value": 0}
 
     def side_effect(*args, **kwargs):
         label = kwargs.get("label", "")
-        if "step6" in label:
-            # Step 6 writes invalid JSON to disk
+        if "step7" in label:
+            # Step 7 writes invalid JSON to disk
             (cwd / "architecture.json").write_text(invalid_json)
             return (True, 'FILES_CREATED: architecture.json', 0.1, "gpt-4")
-        if "step7" in label:
+        if "step8" in label:
             (cwd / ".pddrc").write_text("prompts_dir: prompts\n")
             return (True, 'FILES_CREATED: .pddrc', 0.1, "gpt-4")
-        if "step8" in label:
+        if "step9" in label:
             return (True, 'FILES_CREATED: prompts/test.prompt', 0.1, "gpt-4")
-        # Step 9 validation fails first time due to invalid JSON, then fix, then pass
-        if "step9_attempt1" in label:
+        # Step 10 validation fails first time due to invalid JSON, then fix, then pass
+        if "step10_attempt1" in label:
             return (True, "VALIDATION_RESULT: INVALID\nJSON parse error", 0.1, "gpt-4")
-        if "step9_fix" in label:
+        if "step10_fix" in label:
             fix_count["value"] += 1
             # Fix step fixes the JSON
             (cwd / "architecture.json").write_text('[{"priority": 1, "fixed": true}]')
             return (True, 'FILES_MODIFIED: architecture.json', 0.1, "gpt-4")
-        if "step9_attempt2" in label:
+        if "step10_attempt2" in label:
             return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
-        # Steps 10-11 pass
-        if "step10" in label or "step11" in label:
+        # Steps 11-12 pass
+        if "step11" in label or "step12" in label:
             return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
         return (True, "ok", 0.1, "gpt-4")
 
@@ -366,11 +368,11 @@ def test_json_parsing_fallback(mock_dependencies, base_args):
 def test_z3_termination_proof():
     """
     Formal verification using Z3 to prove that the orchestration logic terminates.
-    We model the state machine of the 11-step orchestrator.
+    We model the state machine of the 13-step orchestrator.
 
     Workflow:
-    - Steps 1-8: Linear (hard stops at 1, 2, 4)
-    - Steps 9-11: Validation with in-place fixing (each up to 3 retries)
+    - Steps 1-9: Linear (hard stops at 1, 2, 5)
+    - Steps 10-12: Validation with in-place fixing (each up to 3 retries)
     """
     try:
         import z3
@@ -380,37 +382,37 @@ def test_z3_termination_proof():
     s = z3.Solver()
 
     # State variables
-    # step: 1..11 (current step)
+    # step: 1..12 (current step)
     # retry_count: 0..3 (retry count for current validation step)
     # status: 0=Running, 1=Success, 2=Fail
 
     MAX_RETRIES = 3  # Per-step retry limit
 
     def transition(step, retry_count, status, next_step, next_retry, next_status):
-        # Hard stops possible at steps 1, 2, 4
+        # Hard stops possible at steps 1, 2, 5
         hard_stop = z3.Bool(f"hard_stop_{step}")
         is_valid = z3.Bool(f"is_valid_{step}_{retry_count}")
 
-        # Logic for Steps 1-8 (linear)
-        linear_step = z3.If(step <= 8,
-            z3.If(z3.And(z3.Or(step == 1, step == 2, step == 4), hard_stop),
+        # Logic for Steps 1-9 (linear)
+        linear_step = z3.If(step <= 9,
+            z3.If(z3.And(z3.Or(step == 1, step == 2, step == 5), hard_stop),
                 # Hard stop triggers failure
                 z3.And(next_status == 2, next_step == step, next_retry == retry_count),
                 # Otherwise proceed to next step
                 z3.And(next_status == 0, next_step == step + 1, next_retry == 0)
             ),
-            # Logic for Steps 9-11 (validation with retries)
-            z3.If(z3.And(step >= 9, step <= 11),
+            # Logic for Steps 10-12 (validation with retries)
+            z3.If(z3.And(step >= 10, step <= 12),
                 z3.If(is_valid,
-                    # Valid -> move to next step (or success if step 11)
-                    z3.If(step == 11,
+                    # Valid -> move to next step (or success if step 12)
+                    z3.If(step == 12,
                         z3.And(next_status == 1, next_step == 11, next_retry == 0),  # Done!
                         z3.And(next_status == 0, next_step == step + 1, next_retry == 0)
                     ),
                     # Invalid -> retry or move on
                     z3.If(retry_count + 1 >= MAX_RETRIES,
                         # Max retries reached -> move to next step anyway (warn)
-                        z3.If(step == 11,
+                        z3.If(step == 12,
                             z3.And(next_status == 1, next_step == 11, next_retry == retry_count + 1),
                             z3.And(next_status == 0, next_step == step + 1, next_retry == 0)
                         ),
@@ -425,7 +427,7 @@ def test_z3_termination_proof():
         return linear_step
 
     # Bounded Model Checking
-    # Max steps = 8 (linear) + 3 * 3 (retries per validation step) = 17 worst case
+    # Max steps = 9 (linear) + 3 * 3 (retries per validation step) = 18 worst case
     # Let's check 25 transitions to be safe.
 
     MAX_TRANSITIONS = 25
@@ -585,29 +587,29 @@ class TestVerifyFilesExist:
 class TestScaffoldingFilesTracking:
     """Tests for scaffolding file tracking in the orchestrator."""
 
-    def test_scaffolding_files_tracked_from_step6(self, mock_dependencies, base_args):
-        """Test that scaffolding files from Step 6 are tracked in output."""
+    def test_scaffolding_files_tracked_from_step7(self, mock_dependencies, base_args):
+        """Test that scaffolding files from Step 7 are tracked in output."""
         mocks = mock_dependencies
         cwd = base_args["cwd"]
 
-        # Create scaffolding files that Step 6 would create
+        # Create scaffolding files that Step 7 would create
         (cwd / "package.json").write_text('{"name": "test"}')
         (cwd / ".gitignore").write_text("node_modules/")
         (cwd / "README.md").write_text("# Test")
 
         def side_effect(*args, **kwargs):
             label = kwargs.get("label", "")
-            if "step6" in label:
-                # Step 6 creates architecture.json + scaffolding files
+            if "step7" in label:
+                # Step 7 creates architecture.json + scaffolding files
                 (cwd / "architecture.json").write_text('[{"priority": 1}]')
                 return (True, 'FILES_CREATED: architecture.json, package.json, .gitignore, README.md', 0.1, "gpt-4")
-            if "step7" in label:
+            if "step8" in label:
                 (cwd / ".pddrc").write_text("prompts_dir: prompts\n")
                 return (True, 'FILES_CREATED: .pddrc', 0.1, "gpt-4")
-            if "step8" in label:
+            if "step9" in label:
                 return (True, 'FILES_CREATED: prompts/test.prompt', 0.1, "gpt-4")
-            # Steps 9-11 validation pass
-            if "step9" in label or "step10" in label or "step11" in label:
+            # Steps 10-12 validation pass
+            if "step10" in label or "step11" in label or "step12" in label:
                 return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
             return (True, f"Output for {label}", 0.1, "gpt-4")
 
@@ -624,34 +626,34 @@ class TestScaffoldingFilesTracking:
         assert "README.md" in file_names
 
     def test_scaffolding_files_tracked_from_validation_fix(self, mock_dependencies, base_args):
-        """Test that scaffolding files created during validation fix (step 9-11) are tracked."""
+        """Test that scaffolding files created during validation fix (step 10-12) are tracked."""
         mocks = mock_dependencies
         cwd = base_args["cwd"]
 
         def side_effect(*args, **kwargs):
             label = kwargs.get("label", "")
-            if "step6" in label:
-                # Step 6 creates only architecture.json
+            if "step7" in label:
+                # Step 7 creates only architecture.json
                 (cwd / "architecture.json").write_text('[{"priority": 1}]')
                 return (True, 'FILES_CREATED: architecture.json', 0.1, "gpt-4")
-            if "step7" in label:
+            if "step8" in label:
                 (cwd / ".pddrc").write_text("prompts_dir: prompts\n")
                 return (True, 'FILES_CREATED: .pddrc', 0.1, "gpt-4")
-            if "step8" in label:
+            if "step9" in label:
                 return (True, 'FILES_CREATED: prompts/test.prompt', 0.1, "gpt-4")
-            # Step 9 validation fails first attempt
-            if "step9_attempt1" in label:
+            # Step 10 validation fails first attempt
+            if "step10_attempt1" in label:
                 return (True, "VALIDATION_RESULT: INVALID\n\n## Validation Errors\n\n1. **Missing scaffolding:** .gitignore missing", 0.1, "gpt-4")
-            if "step9_fix1" in label:
+            if "step10_fix1" in label:
                 # Fix step creates missing files and updates architecture
                 (cwd / "architecture.json").write_text('[{"priority": 1, "fixed": true}]')
                 (cwd / ".gitignore").write_text("node_modules/")
                 (cwd / "README.md").write_text("# Test")
                 return (True, 'FILES_MODIFIED: architecture.json, .gitignore, README.md', 0.1, "gpt-4")
-            if "step9_attempt2" in label:
+            if "step10_attempt2" in label:
                 return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
-            # Steps 10-11 pass
-            if "step10" in label or "step11" in label:
+            # Steps 11-12 pass
+            if "step11" in label or "step12" in label:
                 return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
             return (True, f"Output for {label}", 0.1, "gpt-4")
 
@@ -676,25 +678,25 @@ class TestScaffoldingFilesTracking:
 
         def side_effect(*args, **kwargs):
             label = kwargs.get("label", "")
-            if "step6" in label:
+            if "step7" in label:
                 (cwd / "architecture.json").write_text('[{"priority": 1}]')
                 return (True, 'FILES_CREATED: architecture.json, package.json', 0.1, "gpt-4")
-            if "step7" in label:
+            if "step8" in label:
                 (cwd / ".pddrc").write_text("prompts_dir: prompts\n")
                 return (True, 'FILES_CREATED: .pddrc', 0.1, "gpt-4")
-            if "step8" in label:
+            if "step9" in label:
                 return (True, 'FILES_CREATED: prompts/test.prompt', 0.1, "gpt-4")
-            # Step 9 fails first, then passes
-            if "step9_attempt1" in label:
+            # Step 10 fails first, then passes
+            if "step10_attempt1" in label:
                 return (True, "VALIDATION_RESULT: INVALID", 0.1, "gpt-4")
-            if "step9_fix1" in label:
+            if "step10_fix1" in label:
                 # Fix step also reports package.json (already tracked)
                 (cwd / "architecture.json").write_text('[{"priority": 1, "fixed": true}]')
                 return (True, 'FILES_MODIFIED: architecture.json, package.json', 0.1, "gpt-4")
-            if "step9_attempt2" in label:
+            if "step10_attempt2" in label:
                 return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
-            # Steps 10-11 pass
-            if "step10" in label or "step11" in label:
+            # Steps 11-12 pass
+            if "step11" in label or "step12" in label:
                 return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
             return (True, f"Output for {label}", 0.1, "gpt-4")
 
@@ -713,35 +715,35 @@ class TestProgrammaticJSONValidation:
     """Tests for programmatic JSON validation preventing LLM hallucination."""
 
     def test_invalid_json_triggers_validation_error(self, mock_dependencies, base_args):
-        """Test that invalid JSON in architecture.json triggers validation failure in step 9."""
+        """Test that invalid JSON in architecture.json triggers validation failure in step 10."""
         mocks = mock_dependencies
         cwd = base_args["cwd"]
 
-        step9_attempts = {"count": 0}
+        step10_attempts = {"count": 0}
 
         def side_effect(*args, **kwargs):
             label = kwargs.get("label", "")
-            if "step6" in label:
-                # Step 6 writes invalid JSON
+            if "step7" in label:
+                # Step 7 writes invalid JSON
                 (cwd / "architecture.json").write_text("This is not valid JSON {broken")
                 return (True, 'FILES_CREATED: architecture.json', 0.1, "gpt-4")
-            if "step7" in label:
+            if "step8" in label:
                 (cwd / ".pddrc").write_text("prompts_dir: prompts\n")
                 return (True, 'FILES_CREATED: .pddrc', 0.1, "gpt-4")
-            if "step8" in label:
+            if "step9" in label:
                 return (True, 'FILES_CREATED: prompts/test.prompt', 0.1, "gpt-4")
-            # Step 9 validation should fail due to invalid JSON, then fix, then pass
-            if "step9_attempt" in label:
-                step9_attempts["count"] += 1
-                if step9_attempts["count"] == 1:
+            # Step 10 validation should fail due to invalid JSON, then fix, then pass
+            if "step10_attempt" in label:
+                step10_attempts["count"] += 1
+                if step10_attempts["count"] == 1:
                     return (True, "VALIDATION_RESULT: INVALID\nJSON parse error", 0.1, "gpt-4")
                 return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
-            if "step9_fix" in label:
+            if "step10_fix" in label:
                 # Fix step fixes the JSON
                 (cwd / "architecture.json").write_text('[{"priority": 1}]')
                 return (True, 'FILES_MODIFIED: architecture.json', 0.1, "gpt-4")
-            # Steps 10-11 pass
-            if "step10" in label or "step11" in label:
+            # Steps 11-12 pass
+            if "step11" in label or "step12" in label:
                 return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
             return (True, f"Output for {label}", 0.1, "gpt-4")
 
@@ -752,39 +754,39 @@ class TestProgrammaticJSONValidation:
         # Should eventually succeed after fix
         assert success is True
 
-        # Step 9 should have been called at least twice (once for invalid, once after fix)
-        assert step9_attempts["count"] >= 2, "Step 9 should retry after fix"
+        # Step 10 should have been called at least twice (once for invalid, once after fix)
+        assert step10_attempts["count"] >= 2, "Step 10 should retry after fix"
 
     def test_json_object_not_array_handled_gracefully(self, mock_dependencies, base_args):
         """Test that JSON object (not array) is handled during validation."""
         mocks = mock_dependencies
         cwd = base_args["cwd"]
 
-        step9_fix_count = {"value": 0}
+        step10_fix_count = {"value": 0}
 
         def side_effect(*args, **kwargs):
             label = kwargs.get("label", "")
-            if "step6" in label:
-                # Step 6 writes JSON object instead of array
+            if "step7" in label:
+                # Step 7 writes JSON object instead of array
                 (cwd / "architecture.json").write_text('{"modules": []}')
                 return (True, 'FILES_CREATED: architecture.json', 0.1, "gpt-4")
-            if "step7" in label:
+            if "step8" in label:
                 (cwd / ".pddrc").write_text("prompts_dir: prompts\n")
                 return (True, 'FILES_CREATED: .pddrc', 0.1, "gpt-4")
-            if "step8" in label:
+            if "step9" in label:
                 return (True, 'FILES_CREATED: prompts/test.prompt', 0.1, "gpt-4")
-            # Step 9 validation - fails first time, fix converts to array
-            if "step9_attempt1" in label:
+            # Step 10 validation - fails first time, fix converts to array
+            if "step10_attempt1" in label:
                 return (True, "VALIDATION_RESULT: INVALID\nExpected JSON array", 0.1, "gpt-4")
-            if "step9_fix" in label:
-                step9_fix_count["value"] += 1
+            if "step10_fix" in label:
+                step10_fix_count["value"] += 1
                 # Fix step converts to array
                 (cwd / "architecture.json").write_text('[{"priority": 1}]')
                 return (True, 'FILES_MODIFIED: architecture.json', 0.1, "gpt-4")
-            if "step9_attempt2" in label:
+            if "step10_attempt2" in label:
                 return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
-            # Steps 10-11 pass
-            if "step10" in label or "step11" in label:
+            # Steps 11-12 pass
+            if "step11" in label or "step12" in label:
                 return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
             return (True, f"Output for {label}", 0.1, "gpt-4")
 
@@ -796,20 +798,20 @@ class TestProgrammaticJSONValidation:
         assert success is True
 
         # Fix step should have been called at least once
-        assert step9_fix_count["value"] >= 1, "Fix step should be called to convert JSON object to array"
+        assert step10_fix_count["value"] >= 1, "Fix step should be called to convert JSON object to array"
 
 
 class TestIncludePathValidation:
-    """Tests for include path validation in Step 11 (issue #426)."""
+    """Tests for include path validation in Step 12 (issue #426)."""
 
-    def test_step11_detects_wrong_include_paths(self, mock_dependencies, base_args):
+    def test_step12_detects_wrong_include_paths(self, mock_dependencies, base_args):
         """
-        Test that Step 11 validation detects when generated prompts use wrong include paths.
+        Test that Step 12 validation detects when generated prompts use wrong include paths.
 
         Bug reproduction for issue #426:
         - .pddrc specifies examples should be in context/
         - Generated prompts incorrectly use src/models_example.py
-        - Step 11 should catch this and return VALIDATION_RESULT: INVALID
+        - Step 12 should catch this and return VALIDATION_RESULT: INVALID
         """
         mocks = mock_dependencies
         cwd = base_args["cwd"]
@@ -839,35 +841,35 @@ contexts:
 % Task: Generate models
 """
 
-        step11_validation_count = {"value": 0}
+        step12_validation_count = {"value": 0}
 
         def side_effect(*args, **kwargs):
             label = kwargs.get("label", "")
 
-            if "step6" in label:
-                # Step 6 writes architecture.json
+            if "step7" in label:
+                # Step 7 writes architecture.json
                 (cwd / "architecture.json").write_text(json.dumps(architecture))
                 return (True, 'FILES_CREATED: architecture.json', 0.1, "gpt-4")
 
-            if "step7" in label:
-                # Step 7 creates .pddrc
+            if "step8" in label:
+                # Step 8 creates .pddrc
                 (cwd / ".pddrc").write_text(pddrc_content)
                 return (True, 'FILES_CREATED: .pddrc', 0.1, "gpt-4")
 
-            if "step8" in label:
-                # Step 8 creates prompt files
+            if "step9" in label:
+                # Step 9 creates prompt files
                 prompts_dir = cwd / "prompts"
                 prompts_dir.mkdir(exist_ok=True)
                 (prompts_dir / "models_Python.prompt").write_text(prompt_content)
                 return (True, 'FILES_CREATED: prompts/models_Python.prompt', 0.1, "gpt-4")
 
-            # Steps 9-10 pass
-            if "step9" in label or "step10" in label:
+            # Steps 10-11 pass
+            if "step10" in label or "step11" in label:
                 return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
 
-            # Step 11 should detect the wrong include path
-            if "step11_attempt1" in label:
-                step11_validation_count["value"] += 1
+            # Step 12 should detect the wrong include path
+            if "step12_attempt1" in label:
+                step12_validation_count["value"] += 1
                 # The LLM would detect the wrong path and return INVALID
                 return (True, "VALIDATION_RESULT: INVALID\n\nINCLUDE PATH ERROR in prompts/models_Python.prompt: 'src/models_example.py' does not match any example_output_path in .pddrc. Expected paths: ['context/']", 0.1, "gpt-4")
 
@@ -877,24 +879,24 @@ contexts:
 
         success, msg, cost, model, files = run_agentic_architecture_orchestrator(**base_args)
 
-        # Step 11 validation should have detected the wrong include path
-        assert step11_validation_count["value"] >= 1, "Step 11 validation should have been called"
+        # Step 12 validation should have detected the wrong include path
+        assert step12_validation_count["value"] >= 1, "Step 12 validation should have been called"
 
         # Verify orchestrator triggered fix+retry flow after INVALID
         labels = [kwargs.get("label", "") for _, kwargs in mocks["run"].call_args_list]
-        step11_fix_labels = [l for l in labels if "step11_fix" in l]
-        assert len(step11_fix_labels) >= 1, (
-            f"Orchestrator should trigger step11_fix after INVALID, got labels: {labels}"
+        step12_fix_labels = [l for l in labels if "step12_fix" in l]
+        assert len(step12_fix_labels) >= 1, (
+            f"Orchestrator should trigger step12_fix after INVALID, got labels: {labels}"
         )
 
-    def test_step11_passes_with_correct_include_paths(self, mock_dependencies, base_args):
+    def test_step12_passes_with_correct_include_paths(self, mock_dependencies, base_args):
         """
-        Test that Step 11 validation passes when include paths correctly match .pddrc.
+        Test that Step 12 validation passes when include paths correctly match .pddrc.
 
         Happy path for issue #426:
         - .pddrc specifies examples should be in context/
         - Generated prompts correctly use context/models_example.py
-        - Step 11 should return VALIDATION_RESULT: VALID
+        - Step 12 should return VALIDATION_RESULT: VALID
         """
         mocks = mock_dependencies
         cwd = base_args["cwd"]
@@ -927,25 +929,25 @@ contexts:
         def side_effect(*args, **kwargs):
             label = kwargs.get("label", "")
 
-            if "step6" in label:
-                # Step 6 writes architecture.json
+            if "step7" in label:
+                # Step 7 writes architecture.json
                 (cwd / "architecture.json").write_text(json.dumps(architecture))
                 return (True, 'FILES_CREATED: architecture.json', 0.1, "gpt-4")
 
-            if "step7" in label:
-                # Step 7 creates .pddrc
+            if "step8" in label:
+                # Step 8 creates .pddrc
                 (cwd / ".pddrc").write_text(pddrc_content)
                 return (True, 'FILES_CREATED: .pddrc', 0.1, "gpt-4")
 
-            if "step8" in label:
-                # Step 8 creates prompt files
+            if "step9" in label:
+                # Step 9 creates prompt files
                 prompts_dir = cwd / "prompts"
                 prompts_dir.mkdir(exist_ok=True)
                 (prompts_dir / "models_Python.prompt").write_text(prompt_content)
                 return (True, 'FILES_CREATED: prompts/models_Python.prompt', 0.1, "gpt-4")
 
             # All validation steps pass
-            if "step9" in label or "step10" in label or "step11" in label:
+            if "step10" in label or "step11" in label or "step12" in label:
                 return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
 
             return (True, f"Output for {label}", 0.1, "gpt-4")
@@ -959,17 +961,17 @@ contexts:
 
         # All main steps should have run without any fix/retry steps
         labels = [kwargs.get("label", "") for _, kwargs in mocks["run"].call_args_list]
-        assert any("step11" in l for l in labels), "Step 11 should have run"
+        assert any("step12" in l for l in labels), "Step 12 should have run"
         assert not any("_fix" in l for l in labels), "No fix steps should have been triggered"
 
-    def test_step11_handles_multiple_wrong_include_paths(self, mock_dependencies, base_args):
+    def test_step12_handles_multiple_wrong_include_paths(self, mock_dependencies, base_args):
         """
-        Test that Step 11 detects multiple wrong include paths across different prompt files.
+        Test that Step 12 detects multiple wrong include paths across different prompt files.
 
         Edge case for issue #426:
         - Multiple contexts with different example_output_path values
         - Multiple prompts with wrong paths
-        - Step 11 should catch all of them
+        - Step 12 should catch all of them
         """
         mocks = mock_dependencies
         cwd = base_args["cwd"]
@@ -1011,36 +1013,36 @@ contexts:
 % Task: Generate routes
 """
 
-        step11_validation_count = {"value": 0}
+        step12_validation_count = {"value": 0}
 
         def side_effect(*args, **kwargs):
             label = kwargs.get("label", "")
 
-            if "step6" in label:
-                # Step 6 writes architecture.json
+            if "step7" in label:
+                # Step 7 writes architecture.json
                 (cwd / "architecture.json").write_text(json.dumps(architecture))
                 return (True, 'FILES_CREATED: architecture.json', 0.1, "gpt-4")
 
-            if "step7" in label:
-                # Step 7 creates .pddrc
+            if "step8" in label:
+                # Step 8 creates .pddrc
                 (cwd / ".pddrc").write_text(pddrc_content)
                 return (True, 'FILES_CREATED: .pddrc', 0.1, "gpt-4")
 
-            if "step8" in label:
-                # Step 8 creates prompt files
+            if "step9" in label:
+                # Step 9 creates prompt files
                 prompts_dir = cwd / "prompts"
                 prompts_dir.mkdir(exist_ok=True)
                 (prompts_dir / "models_Python.prompt").write_text(models_prompt)
                 (prompts_dir / "routes_Python.prompt").write_text(routes_prompt)
                 return (True, 'FILES_CREATED: prompts/models_Python.prompt, prompts/routes_Python.prompt', 0.1, "gpt-4")
 
-            # Steps 9-10 pass
-            if "step9" in label or "step10" in label:
+            # Steps 10-11 pass
+            if "step10" in label or "step11" in label:
                 return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
 
-            # Step 11 should detect multiple wrong include paths
-            if "step11_attempt1" in label:
-                step11_validation_count["value"] += 1
+            # Step 12 should detect multiple wrong include paths
+            if "step12_attempt1" in label:
+                step12_validation_count["value"] += 1
                 # The LLM would detect both wrong paths
                 return (True, """VALIDATION_RESULT: INVALID
 
@@ -1053,14 +1055,14 @@ INCLUDE PATH ERROR in prompts/routes_Python.prompt: 'src/context/routes_example.
 
         success, msg, cost, model, files = run_agentic_architecture_orchestrator(**base_args)
 
-        # Step 11 validation should have detected the wrong include paths
-        assert step11_validation_count["value"] >= 1, "Step 11 validation should have been called and detected errors"
+        # Step 12 validation should have detected the wrong include paths
+        assert step12_validation_count["value"] >= 1, "Step 12 validation should have been called and detected errors"
 
         # Verify orchestrator triggered fix+retry flow after INVALID
         labels = [kwargs.get("label", "") for _, kwargs in mocks["run"].call_args_list]
-        step11_fix_labels = [l for l in labels if "step11_fix" in l]
-        assert len(step11_fix_labels) >= 1, (
-            f"Orchestrator should trigger step11_fix after INVALID, got labels: {labels}"
+        step12_fix_labels = [l for l in labels if "step12_fix" in l]
+        assert len(step12_fix_labels) >= 1, (
+            f"Orchestrator should trigger step12_fix after INVALID, got labels: {labels}"
         )
 
 

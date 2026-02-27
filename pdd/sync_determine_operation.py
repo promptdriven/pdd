@@ -1262,8 +1262,14 @@ def _is_workflow_complete(paths: Dict[str, Path], skip_tests: bool = False, skip
             
         # Check for success: either exit_code is 0 OR tests passed successfully
         is_success = (run_report.exit_code == 0) or (run_report.tests_passed > 0 and run_report.tests_failed == 0)
-        
+
         if not is_success:
+            return False
+
+        # Bug #573: Reject coverage=0.0 with passing tests — this indicates tests
+        # are not actually exercising the module (e.g. sys.modules stubs masking
+        # broken imports). Coverage of exactly 0.0 with passing tests is never valid.
+        if run_report.tests_passed > 0 and run_report.coverage == 0.0:
             return False
 
         # Check that run_report corresponds to current test files (staleness detection)
