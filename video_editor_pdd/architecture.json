@@ -133,7 +133,7 @@
       }
     },
     "position": {
-      "x": 600,
+      "x": 2400,
       "y": 0
     }
   },
@@ -251,7 +251,7 @@
     },
     "position": {
       "x": 560,
-      "y": 440
+      "y": 0
     }
   },
   {
@@ -297,8 +297,8 @@
       }
     },
     "position": {
-      "x": 600,
-      "y": 840
+      "x": 2400,
+      "y": 400
     }
   },
   {
@@ -337,7 +337,7 @@
       }
     },
     "position": {
-      "x": 880,
+      "x": 2680,
       "y": 620
     }
   },
@@ -376,8 +376,8 @@
       }
     },
     "position": {
-      "x": 880,
-      "y": 220
+      "x": 2680,
+      "y": 880
     }
   },
   {
@@ -418,8 +418,8 @@
       }
     },
     "position": {
-      "x": 1160,
-      "y": 840
+      "x": 600,
+      "y": 400
     }
   },
   {
@@ -470,8 +470,8 @@
       }
     },
     "position": {
-      "x": 600,
-      "y": 1060
+      "x": 1800,
+      "y": 400
     }
   },
   {
@@ -527,8 +527,8 @@
       }
     },
     "position": {
-      "x": 880,
-      "y": 1280
+      "x": 3600,
+      "y": 400
     }
   },
   {
@@ -567,8 +567,8 @@
       }
     },
     "position": {
-      "x": 0,
-      "y": 440
+      "x": 4800,
+      "y": 0
     }
   },
   {
@@ -620,8 +620,8 @@
       }
     },
     "position": {
-      "x": 600,
-      "y": 1680
+      "x": 2400,
+      "y": 1240
     }
   },
   {
@@ -735,8 +735,8 @@
       }
     },
     "position": {
-      "x": 1800,
-      "y": 0
+      "x": 600,
+      "y": 660
     }
   },
   {
@@ -775,8 +775,8 @@
       }
     },
     "position": {
-      "x": 1200,
-      "y": 1460
+      "x": 0,
+      "y": 800
     }
   },
   {
@@ -814,8 +814,8 @@
       }
     },
     "position": {
-      "x": 1480,
-      "y": 800
+      "x": 600,
+      "y": 1020
     }
   },
   {
@@ -847,8 +847,8 @@
       }
     },
     "position": {
-      "x": 1760,
-      "y": 1020
+      "x": 2680,
+      "y": 1460
     }
   },
   {
@@ -883,7 +883,7 @@
     },
     "position": {
       "x": 1200,
-      "y": 1860
+      "y": 1200
     }
   },
   {
@@ -925,7 +925,7 @@
     },
     "position": {
       "x": 1480,
-      "y": 2080
+      "y": 1420
     }
   },
   {
@@ -967,7 +967,7 @@
     },
     "position": {
       "x": 1760,
-      "y": 1860
+      "y": 1200
     }
   },
   {
@@ -1141,8 +1141,8 @@
       }
     },
     "position": {
-      "x": 2360,
-      "y": 1420
+      "x": 3600,
+      "y": 1200
     }
   },
   {
@@ -1190,8 +1190,8 @@
       }
     },
     "position": {
-      "x": 1800,
-      "y": 1640
+      "x": 4200,
+      "y": 1200
     }
   },
   {
@@ -1234,7 +1234,7 @@
       }
     },
     "position": {
-      "x": 2400,
+      "x": 4800,
       "y": 1200
     }
   },
@@ -1269,8 +1269,8 @@
       }
     },
     "position": {
-      "x": 2680,
-      "y": 1420
+      "x": 2400,
+      "y": 1860
     }
   },
   {
@@ -1302,8 +1302,8 @@
       }
     },
     "position": {
-      "x": 2960,
-      "y": 1200
+      "x": 2680,
+      "y": 2080
     }
   },
   {
@@ -1335,8 +1335,8 @@
       }
     },
     "position": {
-      "x": 2400,
-      "y": 1640
+      "x": 3000,
+      "y": 1200
     }
   },
   {
@@ -1376,7 +1376,7 @@
       }
     },
     "position": {
-      "x": 2400,
+      "x": 4800,
       "y": 800
     }
   },
@@ -1410,8 +1410,8 @@
       }
     },
     "position": {
-      "x": 2680,
-      "y": 2120
+      "x": 5080,
+      "y": 1020
     }
   },
   {
@@ -1446,7 +1446,7 @@
       }
     },
     "position": {
-      "x": 2960,
+      "x": 5360,
       "y": 800
     }
   },
@@ -1484,8 +1484,8 @@
       }
     },
     "position": {
-      "x": 2680,
-      "y": 1860
+      "x": 5080,
+      "y": 1420
     }
   },
   {
@@ -1517,8 +1517,8 @@
       }
     },
     "position": {
-      "x": 2400,
-      "y": 2340
+      "x": 4800,
+      "y": 1680
     }
   },
   {
@@ -1563,7 +1563,7 @@
       }
     },
     "position": {
-      "x": 4200,
+      "x": 3000,
       "y": 400
     }
   },
@@ -1599,8 +1599,8 @@
       }
     },
     "position": {
-      "x": 4480,
-      "y": 620
+      "x": 880,
+      "y": 1280
     }
   },
   {
@@ -1651,7 +1651,7 @@
       }
     },
     "position": {
-      "x": 4760,
+      "x": 4800,
       "y": 400
     }
   },
@@ -1694,8 +1694,8 @@
       }
     },
     "position": {
-      "x": 4200,
-      "y": 1240
+      "x": 5400,
+      "y": 1020
     }
   },
   {
@@ -1731,8 +1731,8 @@
       }
     },
     "position": {
-      "x": 3000,
-      "y": 400
+      "x": 0,
+      "y": 1060
     }
   },
   {
@@ -1769,8 +1769,8 @@
       }
     },
     "position": {
-      "x": 3280,
-      "y": 620
+      "x": 5400,
+      "y": 400
     }
   },
   {
@@ -1802,8 +1802,8 @@
       }
     },
     "position": {
-      "x": 3000,
-      "y": 1460
+      "x": 5680,
+      "y": 800
     }
   },
   {
@@ -1841,8 +1841,8 @@
       }
     },
     "position": {
-      "x": 3280,
-      "y": 1680
+      "x": 5960,
+      "y": 1020
     }
   },
   {
@@ -1874,8 +1874,8 @@
       }
     },
     "position": {
-      "x": 3560,
-      "y": 1020
+      "x": 5400,
+      "y": 1240
     }
   },
   {
@@ -1907,8 +1907,8 @@
       }
     },
     "position": {
-      "x": 3600,
-      "y": 800
+      "x": 5680,
+      "y": 1460
     }
   },
   {
@@ -1940,8 +1940,8 @@
       }
     },
     "position": {
-      "x": 3880,
-      "y": 1020
+      "x": 5960,
+      "y": 1240
     }
   },
   {
@@ -1973,8 +1973,8 @@
       }
     },
     "position": {
-      "x": 4160,
-      "y": 1460
+      "x": 5400,
+      "y": 1680
     }
   },
   {
@@ -2006,8 +2006,8 @@
       }
     },
     "position": {
-      "x": 3600,
-      "y": 1240
+      "x": 6000,
+      "y": 800
     }
   },
   {
@@ -2039,8 +2039,8 @@
       }
     },
     "position": {
-      "x": 3880,
-      "y": 1680
+      "x": 6280,
+      "y": 1020
     }
   },
   {
@@ -2066,8 +2066,8 @@
       }
     },
     "position": {
-      "x": 4200,
-      "y": 840
+      "x": 1160,
+      "y": 400
     }
   },
   {
@@ -2120,8 +2120,8 @@
       }
     },
     "position": {
-      "x": 4200,
-      "y": 1860
+      "x": 600,
+      "y": 1640
     }
   },
   {
@@ -2172,16 +2172,14 @@
       }
     },
     "position": {
-      "x": 1160,
-      "y": 1060
+      "x": 6000,
+      "y": 400
     }
   },
   {
-    "reason": "Dashboard widget for visualizing API usage costs and token consumption per pipeline stage",
+    "reason": "Visualizes API usage costs and token consumption per pipeline stage.",
     "description": "Client component that fetches cost data from GET /api/costs and displays total cost summary plus per-stage breakdown table (cost, input/output tokens, call count). Handles loading, error, and empty states. Formats costs to 4 decimal places and tokens with K/M suffixes. Uses Tailwind CSS styling with card layout.",
-    "dependencies": [
-      "api_costs_route_TypeScript.prompt"
-    ],
+    "dependencies": [],
     "priority": 4,
     "filename": "cost_dashboard_TypeScriptReact.prompt",
     "filepath": "components/CostDashboard.tsx",
@@ -2203,17 +2201,14 @@
       }
     },
     "position": {
-      "x": 4480,
-      "y": 1640
+      "x": 6000,
+      "y": 0
     }
   },
   {
-    "reason": "Fix preview panel with accept/reject UI for reviewing automated annotation fixes before applying",
+    "reason": "Review and apply automated fixes with diff previews.",
     "description": "Client component that fetches fix previews from POST /api/sections/{id}/preview-fixes on mount. Displays list of proposed fixes with fix type badges (remotion=purple, veo=cyan, tts=amber), confidence percentages, preview text, and toggleable diff views. Users can select/deselect individual fixes and apply selected ones. Glassmorphism panel styling with header close button and footer apply button.",
-    "dependencies": [
-      "api_sections_id_preview_fixes_route_TypeScript.prompt",
-      "types_TypeScript.prompt"
-    ],
+    "dependencies": [],
     "priority": 4,
     "filename": "fix_preview_panel_TypeScriptReact.prompt",
     "filepath": "components/FixPreviewPanel.tsx",
@@ -2235,8 +2230,8 @@
       }
     },
     "position": {
-      "x": 4760,
-      "y": 1200
+      "x": 6280,
+      "y": 220
     }
   },
   {
@@ -2269,8 +2264,8 @@
       }
     },
     "position": {
-      "x": 2680,
-      "y": 2560
+      "x": 6560,
+      "y": 800
     }
   },
   {
@@ -2303,16 +2298,14 @@
       }
     },
     "position": {
-      "x": 2960,
-      "y": 2340
+      "x": 6000,
+      "y": 1460
     }
   },
   {
-    "reason": "API endpoint for retrieving aggregated job cost statistics per pipeline stage",
+    "reason": "API route to retrieve aggregated job cost statistics per stage.",
     "description": "GET /api/costs queries the job_costs table, aggregates by stage (sum cost, input/output tokens; count calls), and returns { totalCost, byStage[] }. Handles null values with 0 defaults. Force-dynamic export.",
-    "dependencies": [
-      "lib_db_TypeScript.prompt"
-    ],
+    "dependencies": [],
     "priority": 3,
     "filename": "api_costs_route_TypeScript.prompt",
     "filepath": "app/api/costs/route.ts",
@@ -2335,16 +2328,14 @@
       }
     },
     "position": {
-      "x": 2400,
-      "y": 2780
+      "x": 6560,
+      "y": 0
     }
   },
   {
-    "reason": "API endpoint to export all annotations as a downloadable JSON file",
+    "reason": "Provides API endpoint to export all annotations as a JSON file.",
     "description": "GET /api/export fetches all annotations from the database ordered by createdAt, maps each row to a structured annotation object (parsing analysis JSON, converting types), and returns as a downloadable JSON file with Content-Disposition header. Response includes exportedAt timestamp, count, and annotations array.",
-    "dependencies": [
-      "lib_db_TypeScript.prompt"
-    ],
+    "dependencies": [],
     "priority": 3,
     "filename": "api_export_route_TypeScript.prompt",
     "filepath": "app/api/export/route.ts",
@@ -2368,12 +2359,12 @@
       }
     },
     "position": {
-      "x": 2680,
-      "y": 3000
+      "x": 6600,
+      "y": 220
     }
   },
   {
-    "reason": "API endpoint to copy VEO output files to the Remotion public directory for composition access",
+    "reason": "API route to copy VEO output files to the Remotion public directory for composition access.",
     "description": "POST /api/pipeline/asset-staging/run accepts { files?: string[] }, copies each file from outputs/veo/ to remotion/public/ if source exists and destination doesn't (idempotent). Creates destination directories recursively. Returns { jobId, staged } with count of successfully staged files.",
     "dependencies": [],
     "priority": 3,
@@ -2399,16 +2390,14 @@
       }
     },
     "position": {
-      "x": 2080,
-      "y": 220
+      "x": 6880,
+      "y": 0
     }
   },
   {
-    "reason": "API endpoint serving word-level timestamp data for audio synchronization visualization",
+    "reason": "Serves word-level timestamp data for audio synchronization visualization.",
     "description": "GET /api/pipeline/audio-sync/timestamps requires 'section' query param, reads word_timestamps.json from outputs/tts/{section}/, returns { words: WordTimestamp[] }. Returns 400 if section missing, 404 if file not found, 500 on other errors.",
-    "dependencies": [
-      "types_TypeScript.prompt"
-    ],
+    "dependencies": [],
     "priority": 3,
     "filename": "api_pipeline_audio_sync_timestamps_route_TypeScript.prompt",
     "filepath": "app/api/pipeline/audio-sync/timestamps/route.ts",
@@ -2432,8 +2421,8 @@
       }
     },
     "position": {
-      "x": 1200,
-      "y": 2380
+      "x": 1760,
+      "y": 0
     }
   },
   {
@@ -2466,12 +2455,12 @@
       }
     },
     "position": {
-      "x": 2960,
-      "y": 2780
+      "x": 6600,
+      "y": 1020
     }
   },
   {
-    "reason": "SSE endpoint for real-time audit progress updates with heartbeats",
+    "reason": "Provides a persistent SSE stream for real-time audit progress updates with heartbeats.",
     "description": "GET /api/pipeline/audit/stream establishes an SSE connection. Sends initial 'connected' event, then heartbeat every 15 seconds. Monitors request.signal for client disconnection and cleans up intervals. Uses ReadableStream with TextEncoder. Headers: text/event-stream, no-cache, keep-alive.",
     "dependencies": [],
     "priority": 3,
@@ -2498,17 +2487,14 @@
       }
     },
     "position": {
-      "x": 2400,
-      "y": 220
+      "x": 3000,
+      "y": 0
     }
   },
   {
-    "reason": "API endpoint to list composition sections and their component generation status",
+    "reason": "Lists composition sections and their generation status from file system.",
     "description": "GET /api/pipeline/compositions/list loads project config sections, scans specs directories for component names, checks if corresponding .tsx files exist in remotion/src/remotion/, and returns { sections: CompositionSection[] } with component/wrapper status (done/missing).",
-    "dependencies": [
-      "lib_project_TypeScript.prompt",
-      "types_TypeScript.prompt"
-    ],
+    "dependencies": [],
     "priority": 3,
     "filename": "api_pipeline_compositions_list_route_TypeScript.prompt",
     "filepath": "app/api/pipeline/compositions/list/route.ts",
@@ -2519,30 +2505,25 @@
       "compositions"
     ],
     "interface": {
-      "type": "api",
-      "api": {
-        "endpoints": [
+      "type": "frontend",
+      "frontend": {
+        "pages": [
           {
-            "method": "GET",
-            "path": "/api/pipeline/compositions/list",
-            "auth": "none",
-            "responseSchema": "{ sections: CompositionSection[] }"
+            "name": "composition_list",
+            "route": "/api/pipeline/compositions/list"
           }
         ]
       }
     },
     "position": {
-      "x": 1800,
-      "y": 2120
+      "x": 3600,
+      "y": 0
     }
   },
   {
-    "reason": "API endpoint to check rendering status of video sections and final output",
+    "reason": "API route to check rendering status of video sections and final output.",
     "description": "GET /api/pipeline/render/status loads project config, checks filesystem for each section's rendered .mp4 in outputs/sections/ and full_video.mp4 in outputs/. Returns { sections: SectionRenderStatus[], fullVideo: FullVideoInfo } with status (done/missing), progress, and file size info.",
-    "dependencies": [
-      "lib_project_TypeScript.prompt",
-      "types_TypeScript.prompt"
-    ],
+    "dependencies": [],
     "priority": 3,
     "filename": "api_pipeline_render_status_route_TypeScript.prompt",
     "filepath": "app/api/pipeline/render/status/route.ts",
@@ -2553,21 +2534,19 @@
       "render"
     ],
     "interface": {
-      "type": "api",
-      "api": {
-        "endpoints": [
+      "type": "frontend",
+      "frontend": {
+        "pages": [
           {
-            "method": "GET",
-            "path": "/api/pipeline/render/status",
-            "auth": "none",
-            "responseSchema": "{ sections: SectionRenderStatus[], fullVideo: FullVideoInfo }"
+            "name": "Render Status API",
+            "route": "/api/pipeline/render/status"
           }
         ]
       }
     },
     "position": {
-      "x": 2080,
-      "y": 2340
+      "x": 4200,
+      "y": 0
     }
   },
   {
@@ -2603,8 +2582,8 @@
       }
     },
     "position": {
-      "x": 2360,
-      "y": 0
+      "x": 1800,
+      "y": 220
     }
   },
   {
@@ -2636,8 +2615,8 @@
       }
     },
     "position": {
-      "x": 2360,
-      "y": 1900
+      "x": 1800,
+      "y": 800
     }
   },
   {
@@ -2671,8 +2650,8 @@
       }
     },
     "position": {
-      "x": 1800,
-      "y": 2560
+      "x": 4200,
+      "y": 800
     }
   },
   {
@@ -2705,7 +2684,7 @@
     },
     "position": {
       "x": 1200,
-      "y": 2700
+      "y": 1820
     }
   },
   {
@@ -2739,7 +2718,7 @@
     },
     "position": {
       "x": 2080,
-      "y": 2780
+      "y": 1020
     }
   },
   {
@@ -2769,8 +2748,8 @@
       }
     },
     "position": {
-      "x": 1800,
-      "y": 440
+      "x": 2080,
+      "y": 0
     }
   },
   {
@@ -2801,7 +2780,7 @@
       }
     },
     "position": {
-      "x": 2080,
+      "x": 2360,
       "y": 660
     }
   },
@@ -2833,8 +2812,8 @@
       }
     },
     "position": {
-      "x": 2360,
-      "y": 440
+      "x": 3280,
+      "y": 220
     }
   },
   {
@@ -2869,8 +2848,8 @@
       }
     },
     "position": {
-      "x": 2400,
-      "y": 3220
+      "x": 6880,
+      "y": 800
     }
   },
   {
@@ -2901,8 +2880,8 @@
       }
     },
     "position": {
-      "x": 0,
-      "y": 800
+      "x": 280,
+      "y": 1460
     }
   },
   {
@@ -2949,7 +2928,35 @@
     },
     "position": {
       "x": 0,
-      "y": 1200
+      "y": 1860
+    }
+  },
+  {
+    "reason": "Serves TTS WAV files with HTTP Range support for efficient browser playback and waveform rendering.",
+    "description": "Serves TTS WAV files with HTTP Range support for efficient browser playback and waveform rendering.",
+    "dependencies": [],
+    "priority": 10,
+    "filename": "api_audio_tts_route_TypeScript.prompt",
+    "filepath": "prompts/api_audio_tts_route_TypeScript.prompt",
+    "tags": [
+      "module"
+    ],
+    "interface": {
+      "type": "api",
+      "api": {
+        "endpoints": [
+          {
+            "method": "GET",
+            "path": "/api/audio/tts/[...path]",
+            "auth": "none",
+            "responseSchema": "audio/wav stream with range support (206)"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 7160,
+      "y": 220
     }
   }
 ]

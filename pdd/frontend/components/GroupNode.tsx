@@ -5,6 +5,8 @@ import { ArchitectureModule } from '../api';
 export const GROUP_NODE_WIDTH = 220;
 export const GROUP_NODE_HEIGHT = 56;
 
+const HEADER_HEIGHT = 56;
+
 export interface GroupNodeData {
   groupName: string;
   modules: ArchitectureModule[];
@@ -13,10 +15,12 @@ export interface GroupNodeData {
   existingPrompts?: Set<string>;
   editMode?: boolean;
   onEditGroup?: (groupName: string) => void;
+  containerW?: number;
+  containerH?: number;
 }
 
 const GroupNode: React.FC<NodeProps<GroupNodeData>> = ({ data }) => {
-  const { groupName, modules, isExpanded, onToggle, existingPrompts = new Set(), editMode, onEditGroup } = data;
+  const { groupName, modules, isExpanded, onToggle, existingPrompts = new Set(), editMode, onEditGroup, containerW, containerH } = data;
   const promptCount = modules.filter(m => existingPrompts.has(m.filename)).length;
 
   const handleToggle = (e: React.MouseEvent) => {
@@ -34,33 +38,39 @@ const GroupNode: React.FC<NodeProps<GroupNodeData>> = ({ data }) => {
       <>
         <Handle type="target" position={Position.Top} className="!bg-violet-400 !w-2 !h-2" />
         <div
-          className="flex items-center gap-2 px-3 rounded-xl border-2 border-violet-400/80 bg-violet-800/70 backdrop-blur-sm shadow-lg shadow-violet-900/40 group"
-          style={{ width: GROUP_NODE_WIDTH, height: GROUP_NODE_HEIGHT }}
+          className="rounded-2xl border-2 border-violet-400/50 bg-violet-950/15 backdrop-blur-sm overflow-visible"
+          style={{ width: containerW ?? GROUP_NODE_WIDTH, height: containerH ?? HEADER_HEIGHT }}
         >
-          <button
-            onClick={handleToggle}
-            className="flex items-center gap-1 px-2 py-1 rounded-md bg-violet-600/60 hover:bg-violet-500/80 border border-violet-400/50 text-violet-200 hover:text-white transition-colors flex-shrink-0"
-            title="Collapse group"
+          {/* Header bar — children rendered by React Flow inside this container */}
+          <div
+            className="flex items-center gap-2 px-3 rounded-t-xl border-b-2 border-violet-400/50 bg-violet-800/70 backdrop-blur-sm shadow-lg shadow-violet-900/40 group"
+            style={{ height: HEADER_HEIGHT }}
           >
-            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 15l7-7 7 7" />
-            </svg>
-            <span className="text-[10px] font-medium leading-none">Collapse</span>
-          </button>
-          <span className="text-xs font-bold text-violet-200 uppercase tracking-wider truncate flex-1">
-            {groupName}
-          </span>
-          {editMode && onEditGroup && (
             <button
-              onClick={handleEdit}
-              className="p-0.5 hover:bg-violet-700/50 rounded text-violet-400 hover:text-violet-200 transition-colors flex-shrink-0 opacity-0 group-hover:opacity-100"
-              title="Edit group"
+              onClick={handleToggle}
+              className="flex items-center gap-1 px-2 py-1 rounded-md bg-violet-600/60 hover:bg-violet-500/80 border border-violet-400/50 text-violet-200 hover:text-white transition-colors flex-shrink-0"
+              title="Collapse group"
             >
               <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 15l7-7 7 7" />
               </svg>
+              <span className="text-[10px] font-medium leading-none">Collapse</span>
             </button>
-          )}
+            <span className="text-xs font-bold text-violet-200 uppercase tracking-wider truncate flex-1">
+              {groupName}
+            </span>
+            {editMode && onEditGroup && (
+              <button
+                onClick={handleEdit}
+                className="p-0.5 hover:bg-violet-700/50 rounded text-violet-400 hover:text-violet-200 transition-colors flex-shrink-0 opacity-0 group-hover:opacity-100"
+                title="Edit group"
+              >
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                </svg>
+              </button>
+            )}
+          </div>
         </div>
         <Handle type="source" position={Position.Bottom} className="!bg-violet-400 !w-2 !h-2" />
       </>

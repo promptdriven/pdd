@@ -27,13 +27,31 @@ import { ArchitectureModule, PromptInfo } from '../api';
 import { ChevronDownIcon, ChevronUpIcon, SparklesIcon, DocumentArrowDownIcon, SpinnerIcon } from './Icon';
 import Tooltip from './Tooltip';
 import ModuleNode, { ModuleNodeData } from './ModuleNode';
-import GroupNode, { GroupNodeData, GROUP_NODE_WIDTH, GROUP_NODE_HEIGHT } from './GroupNode';
+import GroupNode, { GroupNodeData, GROUP_NODE_WIDTH } from './GroupNode';
 import BatchFilterDropdown from './BatchFilterDropdown';
 import type { Batch } from '../lib/batchUtils';
 import { getBatchForModule } from '../lib/batchUtils';
 
 const NODE_WIDTH = 200;
 const NODE_HEIGHT = 85;
+
+const HEADER_HEIGHT = 56;
+const INNER_PAD = 20;
+const CHILD_GAP = 16;
+const CHILD_COLS = 2;
+
+export function computeGroupLayout(children: ArchitectureModule[]) {
+  const cols = Math.min(children.length, CHILD_COLS);
+  const rows = Math.ceil(children.length / cols);
+  const containerW = INNER_PAD * 2 + cols * (NODE_WIDTH + CHILD_GAP) - CHILD_GAP;
+  const containerH = HEADER_HEIGHT + INNER_PAD * 2 + rows * (NODE_HEIGHT + CHILD_GAP) - CHILD_GAP;
+  const childPositions = children.map((m, i) => ({
+    filename: m.filename,
+    x: INNER_PAD + (i % cols) * (NODE_WIDTH + CHILD_GAP),
+    y: HEADER_HEIGHT + INNER_PAD + Math.floor(i / cols) * (NODE_HEIGHT + CHILD_GAP),
+  }));
+  return { containerW, containerH, childPositions };
+}
 
 // Pure math helper that mirrors the CSS expression used in compact nodes:
 //   font-size: calc(14px / var(--vp-zoom, 1))
@@ -223,22 +241,10 @@ const WaypointEdge: React.FC<EdgeProps> = ({
   return <BaseEdge id={id} path={pathD} markerEnd={markerEnd} style={style} />;
 };
 
-// Translucent background container rendered behind an expanded group's nodes.
-// Purely visual — no handles, not interactive. Positioned and sized in the
-// useMemo after Dagre layout so it exactly encompasses the group header + children.
-interface GroupBackgroundData { width: number; height: number; }
-const GroupBackgroundNode: React.FC<NodeProps<GroupBackgroundData>> = ({ data }) => (
-  <div
-    className="rounded-2xl border border-dashed border-violet-400/30 bg-violet-950/20 pointer-events-none"
-    style={{ width: data.width, height: data.height }}
-  />
-);
-
 // Custom node types
 const nodeTypes: NodeTypes = {
   moduleNode: ModuleNode,
   groupNode: GroupNode,
-  groupBackground: GroupBackgroundNode,
 };
 
 const edgeTypes = { waypointEdge: WaypointEdge };
@@ -363,6 +369,14 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
       return filename;
     };
 
+    // Pre-compute layout for each expanded group
+    const groupLayouts = new Map<string, ReturnType<typeof computeGroupLayout>>();
+    for (const [gName, children] of groupMap.entries()) {
+      if (expandedGroups.has(gName)) {
+        groupLayouts.set(gName, computeGroupLayout(children));
+      }
+    }
+
     // --- Build module nodes ---
     const moduleNodes: Node<ModuleNodeData>[] = visibleModules.map((m) => {
       const category = getCategory(m);
@@ -370,10 +384,19 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
       const isHighlighted = highlightedModules.has(m.filename);
       const isDimmed = focusNeighborhood !== null && !focusNeighborhood.has(m.filename);
       const batch = getBatchForModule(m.filename, batches);
+
+      const parentGroupName = m.group && expandedGroups.has(m.group) ? m.group : undefined;
+      const layout = parentGroupName ? groupLayouts.get(parentGroupName) : undefined;
+      const childPos = layout?.childPositions.find(p => p.filename === m.filename);
+
       return {
         id: m.filename,
         type: 'moduleNode',
-        position: m.position || { x: 0, y: 0 },
+        parentNode: parentGroupName ? `__group__${parentGroupName}` : undefined,
+        extent: parentGroupName ? ('parent' as const) : undefined,
+        draggable: parentGroupName ? false : undefined,
+        zIndex: parentGroupName ? 10 : undefined,
+        position: childPos ? { x: childPos.x, y: childPos.y } : (m.position || { x: 0, y: 0 }),
         data: {
           label: m.filename.replace(/_[A-Za-z]+\.prompt$/, '').replace(/\.prompt$/, ''),
           module: m,
@@ -406,13 +429,16 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
       // Group is dimmed if it has no members in focus neighborhood
       const isDimmedGroup = focusNeighborhood !== null
         && !children.some(c => focusNeighborhood.has(c.filename));
+      const layout = groupLayouts.get(gName);
       groupNodes.push({
         id: `__group__${gName}`,
         type: 'groupNode',
         zIndex: isExpanded ? 0 : 10,
         position: { x: 0, y: 0 },
         style: isExpanded
-          ? { width: GROUP_NODE_WIDTH, height: GROUP_NODE_HEIGHT, opacity: isDimmedGroup ? 0.25 : 1 }
+          ? { width: layout?.containerW ?? GROUP_NODE_WIDTH,
+              height: layout?.containerH ?? HEADER_HEIGHT,
+              opacity: isDimmedGroup ? 0.25 : 1 }
           : { width: 200, minHeight: 85, opacity: isDimmedGroup ? 0.25 : 1 },
         data: {
           groupName: gName,
@@ -422,6 +448,8 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
           existingPrompts,
           editMode,
           onEditGroup,
+          containerW: layout?.containerW,
+          containerH: layout?.containerH,
         },
       });
     }
@@ -465,79 +493,36 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
       }
     }
 
-    // --- Virtual layout-only edges (expanded group header → children) ---
-    const layoutOnlyEdges: { source: string; target: string }[] = [];
-    for (const [gName, children] of groupMap.entries()) {
-      if (expandedGroups.has(gName)) {
-        children.forEach(child => {
-          if (visibleModules.some(m => m.filename === child.filename)) {
-            layoutOnlyEdges.push({ source: `__group__${gName}`, target: child.filename });
-          }
-        });
-      }
-    }
-
     // --- Position handling ---
     // When no groups and all modules have saved positions → skip Dagre
     if (!hasGroups && !noneHavePositions && allHavePositions) {
       return { initialNodes: allNodes, initialEdges: edges };
     }
 
-    // Run Dagre layout
-    const layouted = getLayoutedElements(allNodes, edges, 'TB', layoutOnlyEdges);
+    // Separate top-level nodes (go into Dagre) from child nodes (inside expanded group containers)
+    const topLevelNodes = allNodes.filter(n => !n.parentNode);
+    const childNodes = allNodes.filter(n => n.parentNode);
 
-    let positionedNodes: Node<ModuleNodeData | GroupNodeData>[];
+    // Run Dagre layout on top-level nodes only (children have pre-computed relative positions)
+    const layouted = getLayoutedElements(topLevelNodes, edges, 'TB');
+
+    let positionedTopLevelNodes: Node<ModuleNodeData | GroupNodeData>[];
     if (!noneHavePositions) {
-      // Hybrid: use Dagre positions but override module nodes with their saved positions
+      // Hybrid: use Dagre positions but override top-level module nodes with saved positions
       const savedPositions = new Map(
         visibleModules
-          .filter((m) => m.position)
+          .filter((m) => m.position && !(m.group && expandedGroups.has(m.group)))
           .map((m) => [m.filename, m.position!])
       );
-      positionedNodes = layouted.nodes.map((node) => {
+      positionedTopLevelNodes = layouted.nodes.map((node) => {
         const savedPos = savedPositions.get(node.id);
         return savedPos ? { ...node, position: savedPos } : node;
       });
     } else {
-      positionedNodes = layouted.nodes;
+      positionedTopLevelNodes = layouted.nodes;
     }
 
-    // Add a translucent background rectangle behind each expanded group's nodes.
-    // Computed after layout so we know the actual positions of header + children.
-    const BG_PADDING = 24;
-    const bgNodes: Node<GroupBackgroundData>[] = [];
-    for (const [gName, children] of groupMap.entries()) {
-      if (!expandedGroups.has(gName)) continue;
-      const headerNodeId = `__group__${gName}`;
-      const childNodeIds = new Set(children.map(c => c.filename));
-      const relevant = positionedNodes.filter(n => n.id === headerNodeId || childNodeIds.has(n.id));
-      if (relevant.length === 0) continue;
-
-      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-      for (const n of relevant) {
-        const w = (n.style as Record<string, number>)?.width ?? NODE_WIDTH;
-        const h = (n.style as Record<string, number>)?.height ?? NODE_HEIGHT;
-        minX = Math.min(minX, n.position.x);
-        minY = Math.min(minY, n.position.y);
-        maxX = Math.max(maxX, n.position.x + w);
-        maxY = Math.max(maxY, n.position.y + h);
-      }
-
-      const bgWidth = maxX - minX + BG_PADDING * 2;
-      const bgHeight = maxY - minY + BG_PADDING * 2;
-      bgNodes.push({
-        id: `__bg__${gName}`,
-        type: 'groupBackground',
-        position: { x: minX - BG_PADDING, y: minY - BG_PADDING },
-        zIndex: -1,
-        selectable: false,
-        draggable: false,
-        connectable: false,
-        data: { width: bgWidth, height: bgHeight },
-      });
-    }
-
-    return { initialNodes: [...positionedNodes, ...bgNodes], initialEdges: layouted.edges };
+    return { initialNodes: [...positionedTopLevelNodes, ...childNodes], initialEdges: layouted.edges };
   }, [
     architecture, existingPrompts, promptInfoMap, onModuleClick, onRunSync,
     editMode, onModuleEdit, onModuleDelete, highlightedModules, batches,
@@ -574,8 +559,8 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
     if (wasNotEditing && nowEditing && onPositionsChange && nodes.length > 0) {
       const positions = new Map<string, { x: number; y: number }>();
       nodes.forEach((n) => {
-        // Exclude synthetic group nodes from position saving
-        if (!n.id.startsWith('__group__') && !n.id.startsWith('__bg__')) {
+        // Exclude synthetic group nodes and child nodes (relative positions) from position saving
+        if (!n.id.startsWith('__group__') && !n.parentNode) {
           positions.set(n.id, { x: n.position.x, y: n.position.y });
         }
       });
@@ -600,8 +585,8 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
       initialPositionsCalledRef.current = true;
       const positions = new Map<string, { x: number; y: number }>();
       nodes.forEach((n) => {
-        // Only report positions for real module nodes, not synthetic group nodes
-        if (!n.id.startsWith('__group__') && !n.id.startsWith('__bg__')) {
+        // Only report positions for real top-level module nodes (not synthetic group nodes or children)
+        if (!n.id.startsWith('__group__') && !n.parentNode) {
           positions.set(n.id, { x: n.position.x, y: n.position.y });
         }
       });
@@ -611,14 +596,16 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
 
   // Re-layout when clicking the layout button
   const handleRelayout = useCallback(() => {
-    const layouted = getLayoutedElements(nodes, edges, 'TB');
-    setNodes(layouted.nodes);
+    const dagreNodes = nodes.filter(n => !n.parentNode);
+    const childNodes = nodes.filter(n => n.parentNode);
+    const layouted = getLayoutedElements(dagreNodes, edges, 'TB');
+    setNodes([...layouted.nodes, ...childNodes]);
     setEdges(layouted.edges);
-    // Persist the new Dagre positions if in edit mode (module nodes only)
+    // Persist the new Dagre positions if in edit mode (top-level module nodes only)
     if (editMode && onPositionsChange) {
       const positions = new Map<string, { x: number; y: number }>();
       layouted.nodes.forEach((n) => {
-        if (!n.id.startsWith('__group__') && !n.id.startsWith('__bg__')) {
+        if (!n.id.startsWith('__group__') && !n.parentNode) {
           positions.set(n.id, { x: n.position.x, y: n.position.y });
         }
       });
@@ -729,12 +716,12 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
     setFocusedModule(null);
   }, []);
 
-  // Handle node deletion (module removed) — skip synthetic group nodes
+  // Handle node deletion (module removed) — skip synthetic group nodes and child nodes
   const handleNodesDelete = useCallback(
     (deletedNodes: Node[]) => {
       if (!editMode) return;
       for (const node of deletedNodes) {
-        if (!node.id.startsWith('__group__') && !node.id.startsWith('__bg__')) {
+        if (!node.id.startsWith('__group__') && !node.parentNode) {
           onModuleDelete?.(node.id);
         }
       }
@@ -746,10 +733,10 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
   const handleNodeDragStop = useCallback(
     (_event: React.MouseEvent, _node: Node, allNodes: Node[]) => {
       if (!editMode) return;
-      // Send all node positions to parent, excluding synthetic group nodes
+      // Send all top-level node positions to parent, excluding synthetic group nodes and children
       const positions = new Map<string, { x: number; y: number }>();
       allNodes.forEach((n) => {
-        if (!n.id.startsWith('__group__') && !n.id.startsWith('__bg__')) {
+        if (!n.id.startsWith('__group__') && !n.parentNode) {
           positions.set(n.id, { x: n.position.x, y: n.position.y });
         }
       });
