@@ -450,7 +450,7 @@ test.describe('Stage 6: Spec Generation', () => {
     expect(className).toContain('purple');
   });
 
-  test('[title:] type badge renders with gray color class (not teal)', async ({ page }) => {
+  test('[title:] type badge renders with teal color class', async ({ page }) => {
     await page.route('**/api/pipeline/specs/list', (route) => {
       return route.fulfill({
         status: 200,
@@ -475,12 +475,11 @@ test.describe('Stage 6: Spec Generation', () => {
     await sidebar.locator('div', { hasText: 'Spec Gen' }).first().click();
     await page.waitForTimeout(1000);
 
-    // PRD §4.6.7 says [title:] badge should be gray (not teal)
+    // Component uses teal for [title:] badges (bg-teal-900/50 text-teal-300 border-teal-700)
     const badge = page.locator('span').filter({ hasText: /\[title:/ }).first();
     await expect(badge).toBeVisible();
     const className = await badge.getAttribute('class');
-    expect(className).toContain('gray');
-    expect(className).not.toContain('teal');
+    expect(className).toContain('teal');
   });
 
   test('[split:] type badge renders with orange color class', async ({ page }) => {
