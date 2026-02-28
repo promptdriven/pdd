@@ -244,8 +244,8 @@ def test_max_validation_iterations(mock_dependencies, base_args):
 
     success, msg, _, _, _ = run_agentic_architecture_orchestrator(**base_args)
 
-    # It returns True because it produces *something*, but step 9 failed after max retries
-    assert success is True
+    # Issue #624 fix: validation failures now correctly block generation
+    assert success is False
 
     # Count calls:
     # Steps 1-8: 8 calls
@@ -1245,3 +1245,86 @@ def test_resume_from_partial_failure_reruns_failed_steps(mock_dependencies, base
     assert "step1" not in executed_labels, "Step 1 succeeded and should not be re-run"
     assert "step2" not in executed_labels, "Step 2 succeeded and should not be re-run"
     assert "step3" not in executed_labels, "Step 3 succeeded and should not be re-run"
+
+
+# --- Bug #624: Validation failures don't block generation ---
+
+
+def test_issue624_completeness_validation_failure_does_not_block(mock_dependencies, base_args):
+    """
+    Issue #624: When Step 10 (completeness validation) fails after exhausting
+    all retries, the orchestrator should return success=False.
+    """
+    mocks = mock_dependencies
+    cwd = base_args["cwd"]
+
+    def side_effect(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if "step7" in label:
+            arch_content = json.dumps([{
+                "name": "hackathon_admin_page",
+                "language": "typescriptreact",
+                "description": "Admin page that calls fetchEvent, updateEvent, advanceStatus"
+            }])
+            (cwd / "architecture.json").write_text(arch_content)
+            return (True, 'FILES_CREATED: architecture.json', 0.1, "gpt-4")
+        if "step8" in label:
+            (cwd / ".pddrc").write_text("prompts_dir: prompts\n")
+            return (True, 'FILES_CREATED: .pddrc', 0.1, "gpt-4")
+        if "step9" in label:
+            return (True, 'FILES_CREATED: prompts/test.prompt', 0.1, "gpt-4")
+        if "step10_attempt" in label:
+            return (True, (
+                "VALIDATION_RESULT: INVALID\n\n"
+                "1. hackathon_admin_page calls fetchEvent, updateEvent, advanceStatus "
+                "but no module defines these functions.\n"
+                "2. Missing api_utilities module for shared API functions."
+            ), 0.1, "gpt-4")
+        if "step10_fix" in label:
+            return (True, 'No changes needed', 0.1, "gpt-4")
+        if "step11" in label or "step12" in label:
+            return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+        return (True, "ok", 0.1, "gpt-4")
+
+    mocks["run"].side_effect = side_effect
+
+    success, msg, _, _, _ = run_agentic_architecture_orchestrator(**base_args)
+
+    assert success is False, (
+        "Bug #624: Completeness validation failed after all retries (missing utility "
+        "modules for phantom functions), but the orchestrator returned success=True."
+    )
+
+
+def test_issue624_all_validations_fail_returns_failure(mock_dependencies, base_args):
+    """
+    Issue #624: Even when ALL three validation steps (10, 11, 12) fail after
+    exhausting retries, the orchestrator should return success=False.
+    """
+    mocks = mock_dependencies
+    cwd = base_args["cwd"]
+
+    def side_effect(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if "step7" in label:
+            (cwd / "architecture.json").write_text('[{"name": "mod"}]')
+            return (True, 'FILES_CREATED: architecture.json', 0.1, "gpt-4")
+        if "step8" in label:
+            (cwd / ".pddrc").write_text("prompts_dir: prompts\n")
+            return (True, 'FILES_CREATED: .pddrc', 0.1, "gpt-4")
+        if "step9" in label:
+            return (True, 'FILES_CREATED: prompts/test.prompt', 0.1, "gpt-4")
+        if "attempt" in label:
+            return (True, "VALIDATION_RESULT: INVALID\nMultiple issues found.", 0.1, "gpt-4")
+        if "fix" in label:
+            return (True, 'No changes made', 0.1, "gpt-4")
+        return (True, "ok", 0.1, "gpt-4")
+
+    mocks["run"].side_effect = side_effect
+
+    success, msg, _, _, _ = run_agentic_architecture_orchestrator(**base_args)
+
+    assert success is False, (
+        "Bug #624: All three validation steps failed after exhausting retries, "
+        "but the orchestrator returned success=True."
+    )
