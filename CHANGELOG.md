@@ -1,3 +1,35 @@
+## v0.0.162 (2026-02-27)
+
+### Feat
+
+- add Playwright E2E tests for Stage 8 UI components and generate associated screenshots.
+- Add comprehensive Playwright E2E tests for Stage 9 Render & Stitch interactive QA, covering status badges, progress bars, render modes, stitch button, SSE streaming, preview modal, error states, and edge cases.
+- Add comprehensive Playwright E2E tests for Stage 7 Veo Generation, including UI element verification, API mocking, and state-based screenshot generation.
+- Add comprehensive Playwright interactive QA tests and screenshots for Stage 5 and Stage 6, and update existing Stage 6 spec generation tests.
+- add Playwright E2E tests for Stage 4 TTS Rendering and generate associated screenshots.
+- Add Playwright E2E tests and associated screenshots for Stage 3 TTS Script interactive QA, covering UI, diff view, editor, and generation flows.
+- add comprehensive interactive QA E2E tests for Stage 2 script editor and update existing script editor tests.
+
+### Fix
+
+- Validate cloud execution only when the command succeeds in the regression test script.
+- validate TypeScript/JS imports and block on validation failures (#624)
+- validate TypeScript/JS imports and block on validation failures (#624)
+- address Greg's follow-up review on PR #640
+- implement _validate_typescript_imports and fix test operations
+- remove dead Python AST validator from TS/JS branch and fix misleading test name
+- validate TypeScript/JS imports and block on validation failures (#624)
+- Return JSON from POST /api/pipeline/render/run instead of SSE stream
+- address review feedback on PR #639 — narrow exceptions, add logging, improve coverage
+- prevent false positives in _get_module_exports for __all__ and re-exports
+- validate imported names against module exports (#620)
+- section ID edit not persisting after confirm in Stage 1
+- mock update_main in test_update_command to prevent real API calls in CI
+
+### Refactor
+
+- ensure public repos are reset to origin/main before updates and prevent empty commits.
+
 ## v0.0.161 (2026-02-26)
 
 ### Feat
