@@ -409,7 +409,7 @@ def _parse_test_output(output: str, language: str) -> tuple[int, int, float]:
             coverage = float(coverage_match.group(1))
 
     # Jest/Vitest (JavaScript/TypeScript)
-    elif lang in ('javascript', 'typescript', 'typescriptreact'):
+    elif lang in ('javascript', 'typescript', 'typescriptreact', 'javascriptreact'):
         # "Tests: X passed, Y failed" or "Tests: X passed, Y failed, Z total"
         match = re.search(r'Tests:\s*(\d+)\s+passed', output)
         if match:
@@ -725,14 +725,15 @@ def _validate_typescript_imports(
     if not import_paths:
         return []
 
-    # Node.js built-in modules
+    # Node.js built-in modules (targets Node.js 20 LTS)
     node_builtins = {
-        'assert', 'buffer', 'child_process', 'cluster', 'console', 'constants',
-        'crypto', 'dgram', 'dns', 'domain', 'events', 'fs', 'http', 'https',
-        'module', 'net', 'os', 'path', 'perf_hooks', 'process', 'punycode',
-        'querystring', 'readline', 'repl', 'stream', 'string_decoder', 'sys',
-        'timers', 'tls', 'tty', 'url', 'util', 'v8', 'vm', 'worker_threads',
-        'zlib',
+        'assert', 'async_hooks', 'buffer', 'child_process', 'cluster',
+        'console', 'constants', 'crypto', 'dgram', 'diagnostics_channel',
+        'dns', 'domain', 'events', 'fs', 'http', 'http2', 'https',
+        'inspector', 'module', 'net', 'os', 'path', 'perf_hooks', 'process',
+        'punycode', 'querystring', 'readline', 'repl', 'stream',
+        'string_decoder', 'sys', 'test', 'timers', 'tls', 'trace_events',
+        'tty', 'url', 'util', 'v8', 'vm', 'wasi', 'worker_threads', 'zlib',
     }
 
     code_dir = code_file.parent
@@ -1794,7 +1795,7 @@ def sync_orchestration(
                                             "code_file": str(pdd_files['code']),
                                         }, invocation_mode="sync")
                                 # Issue #624: Validate TypeScript/JavaScript imports after generation in agentic mode
-                                if agentic_mode and language.lower() in ('typescript', 'javascript', 'typescriptreact', 'javascriptreact', 'tsx', 'jsx') and pdd_files['code'].exists():
+                                if agentic_mode and language.lower() in ('typescript', 'javascript', 'typescriptreact', 'javascriptreact') and pdd_files['code'].exists():
                                     unresolved = _validate_typescript_imports(
                                         pdd_files['code'],
                                     )
