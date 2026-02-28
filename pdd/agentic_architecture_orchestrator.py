@@ -1,14 +1,14 @@
 """
-Orchestrator for the 11-step agentic architecture workflow.
+Orchestrator for the 13-step agentic architecture workflow.
 Runs each step as a separate agentic task, accumulates context between steps,
 tracks overall progress and cost, and supports resuming from saved state.
 
-Steps 1-6: Analysis and generation (architecture.json, scaffolding)
-Step 7: Generate and validate .pddrc configuration
-Step 8: Prompt generation
-Steps 9-11: Validation with in-place fixing (completeness, sync, dependencies)
+Steps 1-8: Analysis and generation (architecture.json, scaffolding, .pddrc)
+Step 9: Prompt generation
+Steps 10-12: Validation with in-place fixing (completeness, sync, dependencies)
+Step 13: Shared fix template used by failed validation steps
 
-Each validation step (9-11) retries up to 3 times with fixes before moving to next.
+Each validation step (10-12) retries up to 3 times with fixes before moving to next.
 Once a step passes, we don't re-validate it (prevents fix loops).
 """
 
@@ -49,15 +49,16 @@ ARCH_STEP_TIMEOUTS: Dict[int, float] = {
     1: 340.0,   # Analyze PRD
     2: 340.0,   # Deep Analysis
     3: 600.0,   # Research
-    4: 600.0,   # Design
-    5: 600.0,   # Research Dependencies
-    6: 1000.0,  # Generate (architecture.json + scaffolding)
-    7: 600.0,   # Generate and validate .pddrc
-    8: 900.0,   # Generate prompts
-    9: 340.0,   # Validate completeness
-    10: 600.0,  # Validate sync (pdd sync --dry-run for each module)
-    11: 600.0,  # Validate dependencies (preprocess)
-    12: 900.0,  # Fix all validation errors
+    4: 600.0,   # Data model
+    5: 600.0,   # Design
+    6: 600.0,   # Research dependencies
+    7: 1000.0,  # Generate (architecture.json + scaffolding)
+    8: 600.0,   # Generate and validate .pddrc
+    9: 900.0,   # Generate prompts
+    10: 340.0,  # Validate completeness
+    11: 600.0,  # Validate sync (pdd sync --dry-run for each module)
+    12: 600.0,  # Validate dependencies (preprocess)
+    13: 900.0,  # Fix all validation errors
 }
 
 MAX_VALIDATION_ITERATIONS = 5
@@ -69,7 +70,7 @@ def _check_hard_stop(step_num: int, output: str) -> Optional[str]:
         return "PRD insufficient"
     if step_num == 2 and "Tech Stack Ambiguous" in output:
         return "Tech stack ambiguous"
-    if step_num == 4 and "Clarification Needed" in output:
+    if step_num == 5 and "Clarification Needed" in output:
         return "Clarification needed"
     return None
 
@@ -186,18 +187,18 @@ def run_agentic_architecture_orchestrator(
     target_dir: Optional[str] = None
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
-    Orchestrates the 11-step agentic architecture workflow.
+    Orchestrates the 13-step agentic architecture workflow.
 
-    Steps 1-6: Analysis and generation (architecture.json, scaffolding)
-    Step 7: Generate and validate .pddrc configuration
-    Step 8: Prompt generation
-    Steps 9-11: Validation with in-place fixing (completeness, sync, dependencies)
+    Steps 1-8: Analysis and generation (architecture.json, scaffolding, .pddrc)
+    Step 9: Prompt generation
+    Steps 10-12: Validation with in-place fixing (completeness, sync, dependencies)
+    Step 13: Shared fix template for failed validation steps
 
-    Each validation step retries up to 3 times with fixes before moving to next step.
+    Each validation step retries up to 3 times with fixes before moving to the next step.
     Once a step passes, we don't re-validate it (prevents fix loops).
 
     Args:
-        skip_prompts: If True, skip Step 8 and validation steps 9-11.
+        skip_prompts: If True, skip Step 9 and validation steps 10-12.
 
     Returns:
         (success, final_message, total_cost, model_used, output_files)
@@ -267,45 +268,46 @@ def run_agentic_architecture_orchestrator(
     start_step = last_completed_step + 1
 
     # Handle resume logic
-    if last_completed_step >= 8:
-        # If we finished step 8 or later, start at validation loop (step 9)
+    if last_completed_step >= 9:
+        # If we finished step 9 or later, start at validation loop (step 10)
+        start_step = 10
+        if not quiet:
+            console.print(f"Resuming architecture generation for issue #{issue_number}")
+            console.print(f"   Steps 1-9 already complete (cached)")
+            console.print(f"   Starting Validation Loop (Step 10)")
+    elif last_completed_step >= 8:
+        # If we finished step 8, start at step 9 (prompt generation)
         start_step = 9
         if not quiet:
             console.print(f"Resuming architecture generation for issue #{issue_number}")
             console.print(f"   Steps 1-8 already complete (cached)")
-            console.print(f"   Starting Validation Loop (Step 9)")
+            console.print(f"   Starting Step 9 (Prompt Generation)")
     elif last_completed_step >= 7:
-        # If we finished step 7, start at step 8 (prompt generation)
+        # If we finished step 7, start at step 8 (.pddrc generation)
         start_step = 8
         if not quiet:
             console.print(f"Resuming architecture generation for issue #{issue_number}")
             console.print(f"   Steps 1-7 already complete (cached)")
-            console.print(f"   Starting Step 8 (Prompt Generation)")
-    elif last_completed_step >= 6:
-        # If we finished step 6, start at step 7 (.pddrc generation)
-        start_step = 7
-        if not quiet:
-            console.print(f"Resuming architecture generation for issue #{issue_number}")
-            console.print(f"   Steps 1-6 already complete (cached)")
-            console.print(f"   Starting Step 7 (.pddrc Generation)")
+            console.print(f"   Starting Step 8 (.pddrc Generation)")
     elif last_completed_step > 0:
         if not quiet:
             console.print(f"Resuming architecture generation for issue #{issue_number}")
             console.print(f"   Steps 1-{last_completed_step} already complete (cached)")
             console.print(f"   Starting from Step {start_step}")
 
-    # --- Steps 1-7: Analysis, Generation, and .pddrc ---
-    steps_1_7 = [
+    # --- Steps 1-8: Analysis, Generation, and .pddrc ---
+    steps_1_8 = [
         (1, "analyze_prd", "Extract features, tech stack, requirements from PRD"),
         (2, "analyze", "Deep analysis: module boundaries, shared concerns"),
         (3, "research", "Web research for tech stack docs and conventions"),
-        (4, "design", "Design module breakdown with dependency graph"),
-        (5, "research_deps", "Find API docs and code examples per module"),
-        (6, "generate", "Generate architecture.json and scaffolding"),
-        (7, "pddrc", "Generate and validate .pddrc configuration"),
+        (4, "data_model", "Define core data model and entities"),
+        (5, "design", "Design module breakdown with dependency graph"),
+        (6, "research_deps", "Find API docs and code examples per module"),
+        (7, "generate", "Generate architecture.json and scaffolding"),
+        (8, "pddrc", "Generate and validate .pddrc configuration"),
     ]
 
-    for step_num, name, description in steps_1_7:
+    for step_num, name, description in steps_1_8:
         if step_num < start_step:
             continue
 
@@ -326,11 +328,11 @@ def run_agentic_architecture_orchestrator(
 
         timeout = ARCH_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder
 
-        # Capture pre-hash for Step 6 to detect no-op (agent failed to create/modify arch)
-        arch_file_step6 = base_dir / "architecture.json"
-        pre_hash_step6 = (
-            hashlib.md5(arch_file_step6.read_bytes()).hexdigest()
-            if step_num == 6 and arch_file_step6.exists()
+        # Capture pre-hash for Step 7 to detect no-op (agent failed to create/modify arch)
+        arch_file_step7 = base_dir / "architecture.json"
+        pre_hash_step7 = (
+            hashlib.md5(arch_file_step7.read_bytes()).hexdigest()
+            if step_num == 7 and arch_file_step7.exists()
             else None
         )
 
@@ -362,8 +364,8 @@ def run_agentic_architecture_orchestrator(
         if not step_success:
             console.print(f"[yellow]Warning: Step {step_num} reported failure but continuing...[/yellow]")
 
-        # Special handling for Step 6
-        if step_num == 6:
+        # Special handling for Step 7
+        if step_num == 7:
             created_files = _parse_files_marker(step_output, "FILES_CREATED:")
             if created_files:
                 verified_files = _verify_files_exist(cwd, created_files, quiet)
@@ -380,21 +382,21 @@ def run_agentic_architecture_orchestrator(
             arch_file = base_dir / "architecture.json"
 
             # Hash check: detect no-op (agent reformatted existing arch or failed to create)
-            post_hash_step6 = (
+            post_hash_step7 = (
                 hashlib.md5(arch_file.read_bytes()).hexdigest()
                 if arch_file.exists()
                 else None
             )
-            if pre_hash_step6 is not None and pre_hash_step6 == post_hash_step6:
+            if pre_hash_step7 is not None and pre_hash_step7 == post_hash_step7:
                 step_success = False
-                step_output = "FAILED: Step 6 agent did not modify architecture.json (content unchanged)"
+                step_output = "FAILED: Step 7 agent did not modify architecture.json (content unchanged)"
                 if not quiet:
-                    console.print(f"[red]Error: Step 6 produced no change to architecture.json — agent likely reformatted existing file[/red]")
-            elif pre_hash_step6 is None and not arch_file.exists():
+                    console.print(f"[red]Error: Step 7 produced no change to architecture.json — agent likely reformatted existing file[/red]")
+            elif pre_hash_step7 is None and not arch_file.exists():
                 step_success = False
-                step_output = "FAILED: Step 6 agent did not create architecture.json"
+                step_output = "FAILED: Step 7 agent did not create architecture.json"
                 if not quiet:
-                    console.print(f"[red]Error: Step 6 did not create architecture.json[/red]")
+                    console.print(f"[red]Error: Step 7 did not create architecture.json[/red]")
             elif arch_file.exists():
                 try:
                     with open(arch_file, "r", encoding="utf-8") as f:
@@ -409,8 +411,8 @@ def run_agentic_architecture_orchestrator(
                     if not quiet:
                         console.print(f"[yellow]Warning: architecture.json issue: {e}[/yellow]")
 
-        # Special handling for Step 7 (.pddrc generation)
-        if step_num == 7:
+        # Special handling for Step 8 (.pddrc generation)
+        if step_num == 8:
             created_files = _parse_files_marker(step_output, "FILES_CREATED:")
             if created_files:
                 verified_files = _verify_files_exist(cwd, created_files, quiet)
@@ -457,10 +459,10 @@ def run_agentic_architecture_orchestrator(
             if len(brief) > 80: brief = brief[:77] + "..."
             console.print(f"   → {escape(brief)}")
 
-    # --- Step 8: Prompt Generation ---
-    if not skip_prompts and start_step <= 8:
+    # --- Step 9: Prompt Generation ---
+    if not skip_prompts and start_step <= 9:
         if not quiet:
-            console.print(f"[bold][Step 8/12][/bold] Generating prompt files...")
+            console.print(f"[bold][Step 9/12][/bold] Generating prompt files...")
 
         pddrc_path = cwd / ".pddrc"
         pddrc_content = ""
@@ -473,39 +475,39 @@ def run_agentic_architecture_orchestrator(
                     console.print(f"[yellow]Warning: Could not read .pddrc: {e}[/yellow]")
         else:
             if not quiet:
-                console.print(f"[yellow]Warning: .pddrc not found. Step 7 may have failed.[/yellow]")
+                console.print(f"[yellow]Warning: .pddrc not found. Step 8 may have failed.[/yellow]")
 
         context["pddrc_content"] = pddrc_content
 
-        template_name_8 = "agentic_arch_step8_prompts_LLM"
-        prompt_template_8 = load_prompt_template(template_name_8)
-        if not prompt_template_8:
-            return False, f"Missing prompt template: {template_name_8}", total_cost, model_used, []
+        template_name_9 = "agentic_arch_step9_prompts_LLM"
+        prompt_template_9 = load_prompt_template(template_name_9)
+        if not prompt_template_9:
+            return False, f"Missing prompt template: {template_name_9}", total_cost, model_used, []
 
         # Preprocess to expand <include> tags and escape curly braces
-        exclude_keys_8 = list(context.keys())
-        prompt_template_8 = preprocess(prompt_template_8, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys_8)
+        exclude_keys_9 = list(context.keys())
+        prompt_template_9 = preprocess(prompt_template_9, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys_9)
 
-        formatted_prompt_8 = substitute_template_variables(prompt_template_8, context)
+        formatted_prompt_9 = substitute_template_variables(prompt_template_9, context)
 
-        timeout_8 = ARCH_STEP_TIMEOUTS.get(8, 900.0) + timeout_adder
+        timeout_9 = ARCH_STEP_TIMEOUTS.get(9, 900.0) + timeout_adder
 
-        success_8, output_8, cost_8, model_8 = run_agentic_task(
-            instruction=formatted_prompt_8,
+        success_9, output_9, cost_9, model_9 = run_agentic_task(
+            instruction=formatted_prompt_9,
             cwd=cwd,
             verbose=verbose,
             quiet=quiet,
-            timeout=timeout_8,
-            label="step8",
+            timeout=timeout_9,
+            label="step9",
             max_retries=DEFAULT_MAX_RETRIES,
         )
 
-        total_cost += cost_8
-        model_used = model_8
+        total_cost += cost_9
+        model_used = model_9
         state["total_cost"] = total_cost
 
         # Track created prompt files
-        created_prompts = _parse_files_marker(output_8, "FILES_CREATED:")
+        created_prompts = _parse_files_marker(output_9, "FILES_CREATED:")
         if created_prompts:
             verified_prompts = _verify_files_exist(cwd, created_prompts, quiet)
             prompt_files = verified_prompts
@@ -513,16 +515,16 @@ def run_agentic_architecture_orchestrator(
             if not quiet and verified_prompts:
                 console.print(f"   → Prompt files generated: {len(verified_prompts)}")
 
-        context["step8_output"] = output_8
-        state["step_outputs"]["8"] = output_8
-        state["last_completed_step"] = 8
+        context["step9_output"] = output_9
+        state["step_outputs"]["9"] = output_9
+        state["last_completed_step"] = 9
 
         save_workflow_state(cwd, issue_number, "architecture", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
 
-    # --- Validation Steps (9-11) with In-Place Fixing ---
+    # --- Validation Steps (10-12) with In-Place Fixing ---
     # Design: Each validation step retries with fixes up to MAX_STEP_RETRIES times.
     # Once a step passes, we move to the next step and don't re-validate previous steps.
-    # This prevents the loop where fixing step 10 breaks step 9.
+    # This prevents the loop where fixing step 11 breaks step 10.
     MAX_STEP_RETRIES = 3
 
     if not skip_prompts:
@@ -542,7 +544,7 @@ def run_agentic_architecture_orchestrator(
             for attempt in range(1, MAX_STEP_RETRIES + 1):
                 if not quiet:
                     attempt_str = f" (attempt {attempt}/{MAX_STEP_RETRIES})" if attempt > 1 else ""
-                    console.print(f"[bold][Step {step_num}/11][/bold] {description}{attempt_str}...")
+                    console.print(f"[bold][Step {step_num}/12][/bold] {description}{attempt_str}...")
 
                 prompt_template = load_prompt_template(template_name)
                 if not prompt_template:
@@ -594,7 +596,7 @@ def run_agentic_architecture_orchestrator(
 
                             try:
                                 formatted_fix = substitute_template_variables(fix_template, context)
-                                fix_timeout = ARCH_STEP_TIMEOUTS.get(12, 900.0) + timeout_adder
+                                fix_timeout = ARCH_STEP_TIMEOUTS.get(13, 900.0) + timeout_adder
 
                                 fix_success, fix_output, fix_cost, fix_model = run_agentic_task(
                                     instruction=formatted_fix,
@@ -634,7 +636,7 @@ def run_agentic_architecture_orchestrator(
                                             arch_content = f.read()
                                         arch_data = json.loads(arch_content)
                                         if isinstance(arch_data, list):
-                                            context["step6_output"] = arch_content
+                                            context["step7_output"] = arch_content
                                     except (json.JSONDecodeError, ValueError):
                                         pass
 
@@ -653,28 +655,28 @@ def run_agentic_architecture_orchestrator(
 
             return False
 
-        # --- Step 9: Completeness Validation ---
+        # --- Step 10: Completeness Validation ---
         if not _run_validation_with_fix(
-            9, "Completeness", "agentic_arch_step9_completeness_LLM",
-            "agentic_arch_step12_fix_LLM", "Validating architecture completeness"
+            10, "Completeness", "agentic_arch_step10_completeness_LLM",
+            "agentic_arch_step13_fix_LLM", "Validating architecture completeness"
         ):
             validation_success = False
             if not quiet:
                 console.print("[yellow]Warning: Completeness validation failed, continuing anyway...[/yellow]")
 
-        # --- Step 10: Sync Validation ---
+        # --- Step 11: Sync Validation ---
         if not _run_validation_with_fix(
-            10, "Sync", "agentic_arch_step10_sync_LLM",
-            "agentic_arch_step12_fix_LLM", "Validating sync configuration (pdd sync --dry-run)"
+            11, "Sync", "agentic_arch_step11_sync_LLM",
+            "agentic_arch_step13_fix_LLM", "Validating sync configuration (pdd sync --dry-run)"
         ):
             validation_success = False
             if not quiet:
                 console.print("[yellow]Warning: Sync validation failed, continuing anyway...[/yellow]")
 
-        # --- Step 11: Dependency Validation ---
+        # --- Step 12: Dependency Validation ---
         if not _run_validation_with_fix(
-            11, "Dependencies", "agentic_arch_step11_deps_LLM",
-            "agentic_arch_step12_fix_LLM", "Validating prompt dependencies (preprocess)"
+            12, "Dependencies", "agentic_arch_step12_deps_LLM",
+            "agentic_arch_step13_fix_LLM", "Validating prompt dependencies (preprocess)"
         ):
             validation_success = False
             if not quiet:
@@ -684,7 +686,7 @@ def run_agentic_architecture_orchestrator(
             console.print("   → All validations passed!")
 
     # --- Post-Processing ---
-    final_architecture = context.get("step6_output", "")
+    final_architecture = context.get("step7_output", context.get("step6_output", ""))
     output_files = _save_architecture_files(base_dir, final_architecture, issue_title)
 
     # Add scaffolding files to output list
@@ -715,6 +717,10 @@ def run_agentic_architecture_orchestrator(
             console.print(f"     - {len(prompt_out_files)} prompt file(s) in prompts/")
         for f in other_files:
             console.print(f"     - {f}")
+
+    # Validation failures should block success.
+    if not skip_prompts and not validation_success:
+        return False, "Architecture generation failed validation", total_cost, model_used, output_files
 
     # Clear state on success
     clear_workflow_state(cwd, issue_number, "architecture", state_dir, repo_owner, repo_name, use_github_state)
