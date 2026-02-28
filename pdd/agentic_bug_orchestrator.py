@@ -148,8 +148,14 @@ def _setup_worktree(cwd: Path, issue_number: int, quiet: bool, resume_existing: 
                 # Fallback to rmtree if git command fails but dir exists
                 try:
                     shutil.rmtree(worktree_path)
-                except Exception:
-                    pass
+                    subprocess.run(
+                        ["git", "worktree", "prune"],
+                        cwd=git_root,
+                        capture_output=True,
+                    )
+                except OSError as e:
+                    if not quiet:
+                        console.print(f"[yellow]Warning: rmtree cleanup failed: {e}[/yellow]")
         else:
             # It's just a directory, not a registered worktree
             if not quiet:
