@@ -5477,15 +5477,9 @@ def test_test_extend_max_retries_with_adequate_coverage_succeeds(orchestration_f
 
 # --- Bug #620: pdd generate hallucinates Python module exports that don't exist ---
 #
-# Issue #620: _validate_python_imports() checks only whether module FILES exist on disk.
-# It does NOT verify that specific imported NAMES (functions, classes, constants)
-# actually exist within those modules. This allows hallucinated imports like:
-#   from hackathon_models import get_event  (hackathon_models has no get_event)
-#   from hackathon_auth import require_auth  (actual export is require_hackathon_role)
-#   from utils.firebase_admin_init import db (utils/firebase_admin_init.py doesn't exist)
-#
-# Root cause: sync_orchestration.py lines 660-665 — once a local .py file is found,
-# the validation immediately `continue`s without inspecting the module's exports.
+# Historical root cause (pre-fix in sync_orchestration.py): validation only checked
+# that local .py files existed and then skipped inspecting the module's exports; these
+# tests guard against regressions in the now-fixed behavior that validates exports too.
 
 
 # ---- Tier 1: Direct unit tests of _validate_python_imports() ----
@@ -5983,8 +5977,245 @@ def test_issue620_dunder_all_controls_exports(tmp_path):
         "Should be flagged as unresolved."
     )
     # Verify _internal_helper is NOT flagged (it exists in the module)
-    unresolved_names = [u.split('.')[-1] for u in unresolved]
-    assert '_internal_helper' not in unresolved_names, (
+    unresolved_str = ' '.join(unresolved)
+    assert '_internal_helper' not in unresolved_str, (
         "_internal_helper exists in hackathon_api.py and should not be flagged — "
         "__all__ only restricts star imports, not explicit imports."
     )
+
+
+# ---------------------------------------------------------------------------
+# Test Coverage Gap #1: Direct unit tests for _get_module_exports()
+# ---------------------------------------------------------------------------
+
+
+def test_get_module_exports_functions_classes_constants(tmp_path):
+    """_get_module_exports returns functions, classes, and constants."""
+    from pdd.sync_orchestration import _get_module_exports
+
+    module = tmp_path / "mymodule.py"
+    module.write_text(
+        'MY_CONST = 42\n'
+        '\n'
+        'class MyClass:\n'
+        '    pass\n'
+        '\n'
+        'def my_func():\n'
+        '    pass\n'
+        '\n'
+        'async def my_async_func():\n'
+        '    pass\n',
+        encoding='utf-8',
+    )
+
+    exports = _get_module_exports(module)
+    assert exports is not None
+    assert 'MY_CONST' in exports
+    assert 'MyClass' in exports
+    assert 'my_func' in exports
+    assert 'my_async_func' in exports
+
+
+def test_get_module_exports_dunder_all_union(tmp_path):
+    """__all__ names are unioned with physically defined names."""
+    from pdd.sync_orchestration import _get_module_exports
+
+    module = tmp_path / "mymodule.py"
+    module.write_text(
+        '__all__ = ["exported_only"]\n'
+        '\n'
+        'def real_func():\n'
+        '    pass\n',
+        encoding='utf-8',
+    )
+
+    exports = _get_module_exports(module)
+    assert exports is not None
+    assert 'exported_only' in exports
+    assert 'real_func' in exports
+
+
+def test_get_module_exports_dunder_all_augassign(tmp_path):
+    """__all__ += ['extra'] augments the export set."""
+    from pdd.sync_orchestration import _get_module_exports
+
+    module = tmp_path / "mymodule.py"
+    module.write_text(
+        '__all__ = ["base_name"]\n'
+        '__all__ += ["extra_name"]\n'
+        '\n'
+        'def base_name():\n'
+        '    pass\n',
+        encoding='utf-8',
+    )
+
+    exports = _get_module_exports(module)
+    assert exports is not None
+    assert 'base_name' in exports
+    assert 'extra_name' in exports
+
+
+def test_get_module_exports_syntax_error(tmp_path):
+    """Module with SyntaxError returns None."""
+    from pdd.sync_orchestration import _get_module_exports
+
+    module = tmp_path / "broken.py"
+    module.write_text('def broken(:\n    pass\n', encoding='utf-8')
+
+    result = _get_module_exports(module)
+    assert result is None
+
+
+def test_get_module_exports_nonexistent_file(tmp_path):
+    """Non-existent file returns None (OSError)."""
+    from pdd.sync_orchestration import _get_module_exports
+
+    result = _get_module_exports(tmp_path / "does_not_exist.py")
+    assert result is None
+
+
+def test_get_module_exports_names_inside_try_except(tmp_path):
+    """Names defined inside try/except are captured via ast.walk."""
+    from pdd.sync_orchestration import _get_module_exports
+
+    module = tmp_path / "conditional.py"
+    module.write_text(
+        'try:\n'
+        '    from fast_json import loads\n'
+        'except ImportError:\n'
+        '    from json import loads\n'
+        '\n'
+        'if True:\n'
+        '    CONDITIONAL_VAR = 1\n',
+        encoding='utf-8',
+    )
+
+    exports = _get_module_exports(module)
+    assert exports is not None
+    assert 'loads' in exports
+    assert 'CONDITIONAL_VAR' in exports
+
+
+# ---------------------------------------------------------------------------
+# Test Coverage Gap #2: Parse-failure fallback test
+# ---------------------------------------------------------------------------
+
+
+def test_validate_imports_skips_broken_target_module(tmp_path):
+    """When target module has SyntaxError, skip name validation (no false positives)."""
+    from pdd.sync_orchestration import _validate_python_imports
+
+    # Broken module — cannot be parsed
+    broken = tmp_path / "broken_module.py"
+    broken.write_text('def oops(:\n    pass\n', encoding='utf-8')
+
+    # Code that imports from the broken module
+    code = tmp_path / "main.py"
+    code.write_text(
+        'from broken_module import oops\n'
+        '\n'
+        'oops()\n',
+        encoding='utf-8',
+    )
+
+    unresolved = _validate_python_imports(code)
+    # Should NOT flag 'oops' as missing — the module couldn't be parsed,
+    # so we skip validation to avoid false positives.
+    assert len(unresolved) == 0
+
+
+# ---------------------------------------------------------------------------
+# Test Coverage Gap #3: __init__.py re-exports test
+# ---------------------------------------------------------------------------
+
+
+def test_validate_imports_init_py_reexports(tmp_path):
+    """from mypackage import SomeClass works when __init__.py re-exports it."""
+    from pdd.sync_orchestration import _validate_python_imports
+
+    pkg = tmp_path / "mypackage"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text(
+        'from .submodule import SomeClass\n',
+        encoding='utf-8',
+    )
+    (pkg / "submodule.py").write_text(
+        'class SomeClass:\n'
+        '    pass\n',
+        encoding='utf-8',
+    )
+
+    code = tmp_path / "app.py"
+    code.write_text(
+        'from mypackage import SomeClass\n'
+        '\n'
+        'obj = SomeClass()\n',
+        encoding='utf-8',
+    )
+
+    unresolved = _validate_python_imports(code)
+    assert len(unresolved) == 0
+
+
+# ---------------------------------------------------------------------------
+# Test Coverage Gap #4: Submodule exists but imported name doesn't
+# ---------------------------------------------------------------------------
+
+
+def test_validate_imports_submodule_missing_name(tmp_path):
+    """from utils.helpers import nonexistent_func is flagged when name doesn't exist."""
+    from pdd.sync_orchestration import _validate_python_imports
+
+    utils = tmp_path / "utils"
+    utils.mkdir()
+    (utils / "__init__.py").write_text('', encoding='utf-8')
+    (utils / "helpers.py").write_text(
+        'def real_func():\n'
+        '    pass\n',
+        encoding='utf-8',
+    )
+
+    code = tmp_path / "app.py"
+    code.write_text(
+        'from utils.helpers import nonexistent_func\n'
+        '\n'
+        'nonexistent_func()\n',
+        encoding='utf-8',
+    )
+
+    unresolved = _validate_python_imports(code)
+    assert len(unresolved) == 1
+    assert "nonexistent_func" in unresolved[0]
+    assert "not found" in unresolved[0]
+
+
+# ---------------------------------------------------------------------------
+# Test Coverage Gap #5: Non-literal __all__ patterns
+# ---------------------------------------------------------------------------
+
+
+def test_validate_imports_dunder_all_augassign_pattern(tmp_path):
+    """__all__ += ['extra'] is handled; imported names in the augmented set pass."""
+    from pdd.sync_orchestration import _validate_python_imports
+
+    module = tmp_path / "exports_module.py"
+    module.write_text(
+        '__all__ = ["base_func"]\n'
+        '__all__ += ["extra_func"]\n'
+        '\n'
+        'def base_func():\n'
+        '    pass\n',
+        encoding='utf-8',
+    )
+
+    code = tmp_path / "consumer.py"
+    code.write_text(
+        'from exports_module import extra_func\n'
+        '\n'
+        'extra_func()\n',
+        encoding='utf-8',
+    )
+
+    unresolved = _validate_python_imports(code)
+    # extra_func is in __all__ (via +=), so it should NOT be flagged
+    assert len(unresolved) == 0

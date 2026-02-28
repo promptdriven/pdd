@@ -22,6 +22,8 @@ from .sync_tui import maybe_steer_operation, DEFAULT_STEER_TIMEOUT_S
 import click
 import logging
 
+logger = logging.getLogger(__name__)
+
 # --- Constants ---
 MAX_CONSECUTIVE_TESTS = 3  # Allow up to 3 consecutive test attempts
 MAX_TEST_EXTEND_ATTEMPTS = 2  # Allow up to 2 attempts to extend tests for coverage
@@ -606,17 +608,19 @@ def _get_module_exports(module_path: Path) -> 'set[str] | None':
 
     try:
         source = module_path.read_text(encoding='utf-8')
-    except Exception:
+    except OSError as e:
+        logger.warning("Cannot read module %s: %s", module_path, e)
         return None
 
     try:
         tree = ast.parse(source)
-    except SyntaxError:
+    except SyntaxError as e:
+        logger.warning("SyntaxError parsing module %s — module may be broken: %s", module_path, e)
         return None
 
     all_names: set[str] | None = None
 
-    # Check for __all__
+    # Check for __all__ (top-level only — iter_child_nodes is correct here)
     for node in ast.iter_child_nodes(tree):
         if isinstance(node, ast.Assign):
             for target in node.targets:
@@ -626,10 +630,21 @@ def _get_module_exports(module_path: Path) -> 'set[str] | None':
                         for elt in node.value.elts:
                             if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
                                 all_names.add(elt.value)
+        # Handle __all__ += ['extra_name'] patterns
+        elif isinstance(node, ast.AugAssign):
+            if isinstance(node.target, ast.Name) and node.target.id == '__all__':
+                if isinstance(node.value, (ast.List, ast.Tuple)):
+                    if all_names is None:
+                        all_names = set()
+                    for elt in node.value.elts:
+                        if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                            all_names.add(elt.value)
+        # Note: fully dynamic __all__ construction (e.g., list comprehensions) is not supported.
 
-    # Collect all top-level definitions
+    # Use ast.walk() to capture names defined inside try/except, if/else, etc.
+    # (e.g., conditional imports: try: from fast_json import loads; except: from json import loads)
     exports: set[str] = set()
-    for node in ast.iter_child_nodes(tree):
+    for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             exports.add(node.name)
         elif isinstance(node, ast.Assign):
@@ -685,7 +700,7 @@ def _validate_python_imports(
 
     try:
         source = code_file.read_text(encoding='utf-8')
-    except Exception:
+    except OSError:
         return []
 
     try:
@@ -770,7 +785,7 @@ def _validate_python_imports(
                         target_file = submodule_package
                     else:
                         # Submodule path doesn't exist on disk
-                        unresolved.append(full_path)
+                        unresolved.append(f"module '{full_path}' not found on disk")
                         continue
 
                 # Validate imported names against the target module's exports
@@ -781,11 +796,12 @@ def _validate_python_imports(
                 exports = _get_module_exports(target_file)
                 if exports is None:
                     # Parse failure — skip validation to avoid false positives
+                    logger.debug("Skipping name validation for %s (parse failure)", target_file)
                     continue
 
                 for name in sorted(names_to_check):
                     if name not in exports:
-                        unresolved.append(f"{full_path}.{name}")
+                        unresolved.append(f"name '{name}' not found in module '{full_path}'")
             continue
 
         # Check if it's an installable/importable third-party package
@@ -798,7 +814,7 @@ def _validate_python_imports(
             continue
 
         # Module is neither local nor third-party — it's unresolved
-        unresolved.append(module_name)
+        unresolved.append(f"module '{module_name}' not found on disk")
 
     return unresolved
 
@@ -1760,8 +1776,7 @@ def sync_orchestration(
                                     if unresolved:
                                         error_msg = (
                                             f"Hallucinated imports detected in generated code: "
-                                            f"{', '.join(unresolved)}. "
-                                            f"These modules or imported names do not exist."
+                                            f"{'; '.join(unresolved)}."
                                         )
                                         errors.append(error_msg)
                                         log_event(basename, language, "import_validation_failed", {
