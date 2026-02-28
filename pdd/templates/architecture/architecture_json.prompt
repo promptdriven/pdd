@@ -97,6 +97,7 @@ output_schema:
             type: object
             properties:
               route: { type: string }
+              renderingModel: { type: string, enum: [server, client, hybrid] }
               params:
                 type: array
                 items:
@@ -197,7 +198,7 @@ WRONG (do NOT do this):
 ```
 
 INTERFACE TYPES (emit only applicable):
-- page: route (string), params? (array of {name, type, description?}), dataSources? (array), layout? (object)
+- page: route (string), renderingModel? (enum: "server" | "client" | "hybrid"), params? (array of {name, type, description?}), dataSources? (array), layout? (object)
 - component: props (array of {name, type, required?}), emits? (array), context? (array)
 - module: functions (array of {name, signature, returns?, errors?, sideEffects?})
 - api: endpoints (array of {method, path, auth?, requestSchema?, responseSchema?, errors?})
@@ -282,6 +283,20 @@ PATH-FILENAME RELATIONSHIP:
 
 Use forward slashes (/) for path separators regardless of OS.
 Follow standard directory structures for the framework (e.g., app/ for Next.js 13+, src/ for typical Python projects).
+
+NEXT.JS APP ROUTER RENDERING MODEL:
+For Next.js App Router pages, set `interface.page.renderingModel` to one of the following values:
+- "server" (default): React Server Component. May be `async` and use `await`. MUST NOT use `'use client'` directive or React hooks (`useState`, `useEffect`, `useRouter`, etc.). Use for pages that only need server-side data fetching with no client interactivity.
+- "client": React Client Component. MUST start with `'use client'` directive. May use hooks. MUST NOT be `async` or use `await` at the component level. Use for pages that only need client-side interactivity (forms, modals, live updates) with no server-side data fetching.
+- "hybrid": Server Component wrapper + Client Component child. The page file (`page.tsx`) is a server component that fetches data and passes it as props to a `'use client'` child component. Use when the page needs BOTH server-side data fetching AND client-side interactivity (hooks/state).
+
+CRITICAL RULES (Next.js App Router):
+- A component with `'use client'` CANNOT be `async` — async client components cause a Next.js runtime error.
+- A server component (no directive) CANNOT use hooks (`useState`, `useEffect`, `useRouter`) — hooks require a client component boundary.
+- `redirect()` from `next/navigation` is a server-side function and MUST NOT be called inside a client component.
+- When a page needs both hooks AND data fetching, ALWAYS use "hybrid" (server wrapper passes data to client child).
+
+Default to "server" unless the page explicitly requires hooks or browser APIs.
 
 DEPENDENCY RULES:
 - The "dependencies" array must list other items by their prompt filenames (the "filename" values), not code filenames.
