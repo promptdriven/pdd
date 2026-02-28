@@ -550,9 +550,6 @@ def test_run_agentic_task_timeout(mock_cwd, mock_env, mock_load_model_data, mock
 
 def test_environment_sanitization(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
     """Verify environment variables passed to subprocess.
-
-    Note: For Anthropic, we now use subscription auth which removes the
-    ANTHROPIC_API_KEY from the environment to force CLI subscription auth.
     This is more robust as it uses the user's Claude subscription.
     """
     mock_shutil_which.return_value = "/bin/exe"
@@ -571,8 +568,27 @@ def test_environment_sanitization(mock_cwd, mock_env, mock_load_model_data, mock
     assert env_passed["NO_COLOR"] == "1"
     assert env_passed["CI"] == "1"
     assert env_passed["EXISTING_VAR"] == "value"
-    # ANTHROPIC_API_KEY is intentionally removed for subscription auth
-    assert "ANTHROPIC_API_KEY" not in env_passed
+    # ANTHROPIC_API_KEY is preserved for API-key-based auth (Issue #492 fix)
+    assert env_passed["ANTHROPIC_API_KEY"] == "key"
+
+def test_anthropic_api_key_preserved_when_explicitly_set(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """ANTHROPIC_API_KEY must survive into the subprocess env.
+
+    The GitHub App executor injects the key from Firestore secrets.
+    Stripping it breaks API-key-based auth (Issue #492 root cause).
+    """
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["ANTHROPIC_API_KEY"] = "sk-ant-test-key"
+    # No CLAUDE_CODE_OAUTH_TOKEN set — this is the path that previously stripped the key.
+
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({"result": "done", "total_cost_usd": 0.0})
+
+    run_agentic_task("instruction", mock_cwd)
+
+    args, kwargs = mock_subprocess.call_args
+    env_passed = kwargs["env"]
+    assert env_passed["ANTHROPIC_API_KEY"] == "sk-ant-test-key"
 
 def test_gemini_cached_cost_logic(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
     """
@@ -1056,9 +1072,6 @@ def test_run_agentic_task_anthropic_success_env_check(mock_shutil_which, mock_su
     # Verify env sanitization
     env = kwargs['env']
     assert env['TERM'] == 'dumb'
-    # ANTHROPIC_API_KEY is removed unless CLAUDE_CODE_OAUTH_TOKEN is present
-    if not os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
-        assert "ANTHROPIC_API_KEY" not in env  # Removed for CLI subscription auth
 
 def test_run_agentic_task_gemini_success_2(mock_shutil_which, mock_subprocess_run, mock_env, mock_load_model_data, tmp_path):
     """Test successful execution with Gemini."""
