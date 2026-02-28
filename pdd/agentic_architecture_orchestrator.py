@@ -584,8 +584,9 @@ def run_agentic_architecture_orchestrator(
     # This prevents the loop where fixing step 11 breaks step 10.
     MAX_STEP_RETRIES = 3
 
+    validation_success = True  # Assume success, set to False if any step fails
+
     if not skip_prompts:
-        validation_success = True  # Assume success, set to False if any step fails
 
         # Helper function to run a validation step with retries
         def _run_validation_with_fix(
@@ -772,6 +773,10 @@ def run_agentic_architecture_orchestrator(
             console.print(f"     - {len(prompt_out_files)} prompt file(s) in prompts/")
         for f in other_files:
             console.print(f"     - {f}")
+
+    # Issue #624: Validation failures should block generation
+    if not validation_success:
+        return False, "Architecture generation failed: validation errors detected", total_cost, model_used, output_files
 
     # Clear state on success
     clear_workflow_state(cwd, issue_number, "architecture", state_dir, repo_owner, repo_name, use_github_state)

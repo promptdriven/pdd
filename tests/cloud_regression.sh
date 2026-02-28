@@ -300,13 +300,12 @@ run_pdd_command_base() {
     if [ $status -eq 0 ]; then
         log "Command completed successfully."
         log_timestamped "Command: $full_command_str - Completed successfully."
+        # Validate cloud execution only when command succeeded
+        validate_cloud_success "$temp_output" "$command_name"
     else
         log_error "Command failed with exit code $status."
         log_timestamped "Command: $full_command_str - Failed with exit code $status."
     fi
-
-    # Validate cloud execution
-    validate_cloud_success "$temp_output" "$command_name"
 
     rm -f "$temp_output"
 
