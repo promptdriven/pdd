@@ -238,6 +238,36 @@ def test_user_story_tests_caches_story_prompt_links(tmp_path):
     assert "<!-- pdd-story-prompts: one_python.prompt -->" in updated_story
 
 
+def test_user_story_tests_caches_story_prompt_links_when_detection_is_empty(tmp_path):
+    prompts_dir = tmp_path / "prompts"
+    stories_dir = tmp_path / "user_stories"
+    prompts_dir.mkdir()
+    stories_dir.mkdir()
+
+    (prompts_dir / "one_python.prompt").write_text("prompt one", encoding="utf-8")
+    (prompts_dir / "two_python.prompt").write_text("prompt two", encoding="utf-8")
+    story = stories_dir / "story__cache_on_pass.md"
+    story.write_text("As a user...", encoding="utf-8")
+
+    with patch("pdd.user_story_tests.detect_change") as mock_detect:
+        mock_detect.return_value = ([], 0.1, "gpt-test")
+        passed, results, cost, model = run_user_story_tests(
+            prompts_dir=str(prompts_dir),
+            stories_dir=str(stories_dir),
+            quiet=True,
+            cache_story_prompt_links=True,
+        )
+
+    assert passed is True
+    assert results[0]["passed"] is True
+    assert cost == 0.1
+    assert model == "gpt-test"
+    updated_story = story.read_text(encoding="utf-8")
+    assert "<!-- pdd-story-prompts:" in updated_story
+    assert "one_python.prompt" in updated_story
+    assert "two_python.prompt" in updated_story
+
+
 def test_cache_story_prompt_links_updates_metadata(tmp_path):
     prompts_dir = tmp_path / "prompts"
     stories_dir = tmp_path / "user_stories"
@@ -265,6 +295,65 @@ def test_cache_story_prompt_links_updates_metadata(tmp_path):
     assert linked_prompts == ["two_python.prompt"]
     updated_story = story.read_text(encoding="utf-8")
     assert "<!-- pdd-story-prompts: two_python.prompt -->" in updated_story
+
+
+def test_cache_story_prompt_links_empty_detection_uses_story_text_refs(tmp_path):
+    prompts_dir = tmp_path / "prompts"
+    stories_dir = tmp_path / "user_stories"
+    prompts_dir.mkdir()
+    stories_dir.mkdir()
+
+    (prompts_dir / "one_python.prompt").write_text("prompt one", encoding="utf-8")
+    (prompts_dir / "two_python.prompt").write_text("prompt two", encoding="utf-8")
+    story = stories_dir / "story__refs.md"
+    story.write_text(
+        "## Prompt Scope\n- Use `two_python.prompt` for notifications.\n",
+        encoding="utf-8",
+    )
+
+    with patch("pdd.user_story_tests.detect_change") as mock_detect:
+        mock_detect.return_value = ([], 0.4, "gpt-test")
+        success, message, cost, model, linked_prompts = cache_story_prompt_links(
+            story_file=str(story),
+            prompts_dir=str(prompts_dir),
+        )
+
+    assert success is True
+    assert message == "Story prompt metadata linked from story content."
+    assert cost == 0.4
+    assert model == "gpt-test"
+    assert linked_prompts == ["two_python.prompt"]
+    updated_story = story.read_text(encoding="utf-8")
+    assert "<!-- pdd-story-prompts: two_python.prompt -->" in updated_story
+
+
+def test_cache_story_prompt_links_empty_detection_falls_back_to_full_prompt_set(tmp_path):
+    prompts_dir = tmp_path / "prompts"
+    stories_dir = tmp_path / "user_stories"
+    prompts_dir.mkdir()
+    stories_dir.mkdir()
+
+    (prompts_dir / "one_python.prompt").write_text("prompt one", encoding="utf-8")
+    (prompts_dir / "two_python.prompt").write_text("prompt two", encoding="utf-8")
+    story = stories_dir / "story__full_set.md"
+    story.write_text("As a user...", encoding="utf-8")
+
+    with patch("pdd.user_story_tests.detect_change") as mock_detect:
+        mock_detect.return_value = ([], 0.4, "gpt-test")
+        success, message, cost, model, linked_prompts = cache_story_prompt_links(
+            story_file=str(story),
+            prompts_dir=str(prompts_dir),
+        )
+
+    assert success is True
+    assert message == "Story prompt metadata linked to full prompt set."
+    assert cost == 0.4
+    assert model == "gpt-test"
+    assert linked_prompts == ["one_python.prompt", "two_python.prompt"]
+    updated_story = story.read_text(encoding="utf-8")
+    assert "<!-- pdd-story-prompts:" in updated_story
+    assert "one_python.prompt" in updated_story
+    assert "two_python.prompt" in updated_story
 
 
 def test_cache_story_prompt_links_skips_existing_valid_metadata(tmp_path):
