@@ -22,6 +22,8 @@ from .sync_tui import maybe_steer_operation, DEFAULT_STEER_TIMEOUT_S
 import click
 import logging
 
+logger = logging.getLogger(__name__)
+
 # --- Constants ---
 MAX_CONSECUTIVE_TESTS = 3  # Allow up to 3 consecutive test attempts
 MAX_TEST_EXTEND_ATTEMPTS = 2  # Allow up to 2 attempts to extend tests for coverage
@@ -590,6 +592,91 @@ def _try_auto_fix_import_error(
     return False, "Import error detected but no auto-fix available"
 
 
+def _get_module_exports(module_path: Path) -> 'set[str] | None':
+    """
+    Extract exported names from a Python module file using AST parsing.
+
+    Returns a set of top-level names defined in the module, or None if
+    the file cannot be parsed (to avoid false positives).
+
+    Collects all top-level definitions (functions, classes, assignments,
+    and re-exported imports). If __all__ is defined, its names are unioned
+    with the physically defined names — because __all__ only restricts
+    'from module import *', not explicit imports like 'from module import X'.
+    """
+    import ast
+
+    try:
+        source = module_path.read_text(encoding='utf-8')
+    except OSError as e:
+        logger.warning("Cannot read module %s: %s", module_path, e)
+        return None
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as e:
+        logger.warning("SyntaxError parsing module %s — module may be broken: %s", module_path, e)
+        return None
+
+    all_names: set[str] | None = None
+
+    # Check for __all__ (top-level only — iter_child_nodes is correct here)
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == '__all__':
+                    if isinstance(node.value, (ast.List, ast.Tuple)):
+                        all_names = set()
+                        for elt in node.value.elts:
+                            if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                                all_names.add(elt.value)
+        # Handle __all__ += ['extra_name'] patterns
+        elif isinstance(node, ast.AugAssign):
+            if isinstance(node.target, ast.Name) and node.target.id == '__all__':
+                if isinstance(node.value, (ast.List, ast.Tuple)):
+                    if all_names is None:
+                        all_names = set()
+                    for elt in node.value.elts:
+                        if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                            all_names.add(elt.value)
+        # Note: fully dynamic __all__ construction (e.g., list comprehensions) is not supported.
+
+    # Use ast.walk() to capture names defined inside try/except, if/else, etc.
+    # (e.g., conditional imports: try: from fast_json import loads; except: from json import loads)
+    exports: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            exports.add(node.name)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    exports.add(target.id)
+                elif isinstance(target, ast.Tuple):
+                    for elt in target.elts:
+                        if isinstance(elt, ast.Name):
+                            exports.add(elt.id)
+        elif isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name):
+                exports.add(node.target.id)
+        elif isinstance(node, ast.ImportFrom):
+            # Re-exported imports: 'from X import Y' or 'from X import Y as Z'
+            if node.names:
+                for alias in node.names:
+                    if alias.name != '*':
+                        exports.add(alias.asname if alias.asname else alias.name)
+        elif isinstance(node, ast.Import):
+            # Top-level imports: 'import X' or 'import X as Y'
+            for alias in node.names:
+                exports.add(alias.asname if alias.asname else alias.name)
+
+    # Union __all__ names with physically defined names, since __all__
+    # only restricts 'from module import *', not explicit imports.
+    if all_names:
+        exports |= all_names
+
+    return exports
+
+
 def _validate_python_imports(
     code_file: Path,
 ) -> list[str]:
@@ -599,6 +686,9 @@ def _validate_python_imports(
     Uses ast.parse() to extract Import/ImportFrom nodes, filters out stdlib and
     known third-party packages, then checks whether each remaining local import
     corresponds to a .py file next to code_file or an installed package.
+
+    Also validates that specific imported names (functions, classes, constants)
+    actually exist within local modules (Issue #620).
 
     Returns:
         List of unresolved import module names (empty if all imports are valid).
@@ -610,7 +700,7 @@ def _validate_python_imports(
 
     try:
         source = code_file.read_text(encoding='utf-8')
-    except Exception:
+    except OSError:
         return []
 
     try:
@@ -618,18 +708,31 @@ def _validate_python_imports(
     except SyntaxError:
         return []
 
-    # Collect top-level module names from import statements
+    # Collect top-level module names and full dotted paths from import statements.
+    # Also track specific names imported from each module path (Issue #620).
     imported_modules: set[str] = set()
+    full_import_paths: dict[str, set[str]] = {}  # top_level -> {full dotted paths}
+    import_names: dict[str, set[str]] = {}  # full_module_path -> {name1, name2, ...}
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
             if node.module and node.level == 0:  # Skip relative imports
                 top_level = node.module.split('.')[0]
                 if top_level != '__future__':
                     imported_modules.add(top_level)
+                    full_import_paths.setdefault(top_level, set()).add(node.module)
+                    # Capture imported names (skip star imports)
+                    if node.names:
+                        names = {
+                            alias.name for alias in node.names
+                            if alias.name != '*'
+                        }
+                        if names:
+                            import_names.setdefault(node.module, set()).update(names)
         elif isinstance(node, ast.Import):
             for alias in node.names:
                 top_level = alias.name.split('.')[0]
                 imported_modules.add(top_level)
+                full_import_paths.setdefault(top_level, set()).add(alias.name)
 
     if not imported_modules:
         return []
@@ -662,6 +765,43 @@ def _validate_python_imports(
         local_file = code_dir / f"{module_name}.py"
         local_package = code_dir / module_name / "__init__.py"
         if local_file.exists() or local_package.exists():
+            # Issue #620: Also validate imported names against module exports.
+            for full_path in full_import_paths.get(module_name, set()):
+                target_file: Path | None = None
+                if full_path == module_name:
+                    # Simple import: "from hackathon_models import X"
+                    if local_file.exists():
+                        target_file = local_file
+                    elif local_package.exists():
+                        target_file = local_package
+                else:
+                    # Dotted import: "from utils.firebase_admin_init import X"
+                    parts = full_path.split('.')
+                    submodule_file = code_dir / '/'.join(parts[:-1]) / f"{parts[-1]}.py"
+                    submodule_package = code_dir / '/'.join(parts) / "__init__.py"
+                    if submodule_file.exists():
+                        target_file = submodule_file
+                    elif submodule_package.exists():
+                        target_file = submodule_package
+                    else:
+                        # Submodule path doesn't exist on disk
+                        unresolved.append(f"module '{full_path}' not found on disk")
+                        continue
+
+                # Validate imported names against the target module's exports
+                names_to_check = import_names.get(full_path, set())
+                if not names_to_check or target_file is None:
+                    continue
+
+                exports = _get_module_exports(target_file)
+                if exports is None:
+                    # Parse failure — skip validation to avoid false positives
+                    logger.debug("Skipping name validation for %s (parse failure)", target_file)
+                    continue
+
+                for name in sorted(names_to_check):
+                    if name not in exports:
+                        unresolved.append(f"name '{name}' not found in module '{full_path}'")
             continue
 
         # Check if it's an installable/importable third-party package
@@ -674,7 +814,7 @@ def _validate_python_imports(
             continue
 
         # Module is neither local nor third-party — it's unresolved
-        unresolved.append(module_name)
+        unresolved.append(f"module '{module_name}' not found on disk")
 
     return unresolved
 
@@ -1786,8 +1926,7 @@ def sync_orchestration(
                                     if unresolved:
                                         error_msg = (
                                             f"Hallucinated imports detected in generated code: "
-                                            f"{', '.join(unresolved)}. "
-                                            f"These modules do not exist on disk or as installed packages."
+                                            f"{'; '.join(unresolved)}."
                                         )
                                         errors.append(error_msg)
                                         log_event(basename, language, "import_validation_failed", {

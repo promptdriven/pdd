@@ -106,39 +106,9 @@ registerExecutor("render", (params, send) => {
 });
 
 /**
- * Simple SSE stream helper
- */
-function createSseStream() {
-  const encoder = new TextEncoder();
-  let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
-
-  const stream = new ReadableStream<Uint8Array>({
-    start(c) {
-      controller = c;
-    },
-  });
-
-  const send = (data: object) => {
-    if (!controller) return;
-    controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
-  };
-
-  const done = () => {
-    if (!controller) return;
-    try { controller.close(); } catch { /* already closed */ }
-  };
-
-  const error = (message: string) => {
-    send({ type: "error", message });
-    done();
-  };
-
-  return { stream, send, done, error };
-}
-
-/**
  * POST /api/pipeline/render/run
- * Streams render progress via SSE. Returns { jobId } event when complete.
+ * Starts the render job and returns JSON { jobId }.
+ * Progress is streamed separately via GET /api/pipeline/render/stream?jobId=...
  */
 export async function POST(request: NextRequest): Promise<Response> {
   const body = await request.json().catch(() => ({}));
@@ -146,24 +116,15 @@ export async function POST(request: NextRequest): Promise<Response> {
     ? (body.sections as string[])
     : undefined;
 
-  const { stream, send, done, error } = createSseStream();
-
-  (async () => {
-    try {
-      const jobId = await runPipelineStage("render", { sections }, send);
-      send({ jobId });
-      done();
-    } catch (err) {
-      error(err instanceof Error ? err.message : "Unknown error");
-    }
-  })();
-
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-    },
-  });
+  try {
+    const noop: SseSend = () => {};
+    const jobId = await runPipelineStage("render", { sections }, noop);
+    return Response.json({ jobId });
+  } catch (err) {
+    return Response.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      { status: 500 }
+    );
+  }
 }
 
