@@ -5522,7 +5522,7 @@ def test_issue624_typescript_phantom_functions_not_detected(orchestration_fixtur
 
     orchestration_fixture['code_generator_main'].side_effect = mock_generate
     mock_determine.side_effect = [
-        SyncDecision(operation='auto-deps', reason='Dependencies need scanning'),
+        SyncDecision(operation='generate', reason='Code needs generation'),
         SyncDecision(operation='all_synced', reason='All done'),
     ]
 
@@ -5566,7 +5566,7 @@ def test_issue624_javascript_phantom_imports_not_detected(orchestration_fixture)
 
     orchestration_fixture['code_generator_main'].side_effect = mock_generate
     mock_determine.side_effect = [
-        SyncDecision(operation='auto-deps', reason='Dependencies need scanning'),
+        SyncDecision(operation='generate', reason='Code needs generation'),
         SyncDecision(operation='all_synced', reason='All done'),
     ]
 
@@ -5612,7 +5612,7 @@ def test_issue624_language_gate_validates_all_languages(orchestration_fixture, l
 
     orchestration_fixture['code_generator_main'].side_effect = mock_generate
     mock_determine.side_effect = [
-        SyncDecision(operation='auto-deps', reason='Dependencies need scanning'),
+        SyncDecision(operation='generate', reason='Code needs generation'),
         SyncDecision(operation='all_synced', reason='All done'),
     ]
 

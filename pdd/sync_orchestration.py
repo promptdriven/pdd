@@ -679,6 +679,155 @@ def _validate_python_imports(
     return unresolved
 
 
+def _validate_typescript_imports(
+    code_file: Path,
+) -> list[str]:
+    """
+    Validate that imports in generated TypeScript/JavaScript code resolve to actual files.
+
+    Uses regex to extract ES6 (import ... from '...') and CommonJS (require('...'))
+    import paths, then checks whether each import resolves to a file on disk.
+
+    Skips:
+    - Node.js built-in modules (fs, path, http, etc.)
+    - Packages found in node_modules/
+
+    Returns:
+        List of unresolved import paths (empty if all imports are valid).
+    """
+    import re
+
+    if not code_file.exists():
+        return []
+
+    try:
+        source = code_file.read_text(encoding='utf-8')
+    except Exception:
+        return []
+
+    # Extract import paths from ES6 and CommonJS patterns
+    import_paths: set[str] = set()
+
+    # ES6: import ... from 'path'  or  import 'path'
+    for match in re.finditer(r'''(?:import\s+(?:.*?\s+from\s+)?['"]([^'"]+)['"]|from\s+['"]([^'"]+)['"]\s+import)''', source):
+        path = match.group(1) or match.group(2)
+        if path:
+            import_paths.add(path)
+
+    # CommonJS: require('path')
+    for match in re.finditer(r'''require\s*\(\s*['"]([^'"]+)['"]\s*\)''', source):
+        import_paths.add(match.group(1))
+
+    # Dynamic import: import('path')
+    for match in re.finditer(r'''import\s*\(\s*['"]([^'"]+)['"]\s*\)''', source):
+        import_paths.add(match.group(1))
+
+    if not import_paths:
+        return []
+
+    # Node.js built-in modules
+    node_builtins = {
+        'assert', 'buffer', 'child_process', 'cluster', 'console', 'constants',
+        'crypto', 'dgram', 'dns', 'domain', 'events', 'fs', 'http', 'https',
+        'module', 'net', 'os', 'path', 'perf_hooks', 'process', 'punycode',
+        'querystring', 'readline', 'repl', 'stream', 'string_decoder', 'sys',
+        'timers', 'tls', 'tty', 'url', 'util', 'v8', 'vm', 'worker_threads',
+        'zlib',
+    }
+
+    code_dir = code_file.parent
+
+    # Common file extensions for TypeScript/JavaScript
+    ts_extensions = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs']
+
+    # Walk up to find project root (where package.json or node_modules lives)
+    project_root = code_dir
+    for _ in range(10):
+        if (project_root / 'package.json').exists() or (project_root / 'node_modules').exists():
+            break
+        parent = project_root.parent
+        if parent == project_root:
+            break
+        project_root = parent
+
+    node_modules = project_root / 'node_modules'
+
+    unresolved: list[str] = []
+
+    for import_path in sorted(import_paths):
+        # Skip Node.js built-ins (with or without 'node:' prefix)
+        bare_path = import_path.removeprefix('node:')
+        if bare_path in node_builtins:
+            continue
+
+        # Relative imports (./foo, ../foo)
+        if import_path.startswith('.'):
+            resolved = code_dir / import_path
+            # Check with various extensions and as directory with index file
+            found = False
+            # Exact match (e.g., ./foo.ts)
+            if resolved.exists() and resolved.is_file():
+                found = True
+            if not found:
+                for ext in ts_extensions:
+                    if (resolved.parent / f"{resolved.name}{ext}").exists():
+                        found = True
+                        break
+            # Check as directory with index file
+            if not found and resolved.is_dir():
+                for ext in ts_extensions:
+                    if (resolved / f"index{ext}").exists():
+                        found = True
+                        break
+            if not found:
+                unresolved.append(import_path)
+            continue
+
+        # Path alias imports (@/, ~/, #/)
+        if import_path.startswith(('@/', '~/', '#/')):
+            # These rely on tsconfig/webpack aliases — check common src/ resolution
+            alias_path = import_path[2:]  # Strip @/ or ~/ or #/
+            found = False
+            # Check common alias roots: src/, app/, lib/
+            for alias_root in ['src', 'app', 'lib', '.']:
+                base = project_root / alias_root / alias_path
+                if base.exists() and base.is_file():
+                    found = True
+                    break
+                for ext in ts_extensions:
+                    if (base.parent / f"{base.name}{ext}").exists():
+                        found = True
+                        break
+                if not found and base.is_dir():
+                    for ext in ts_extensions:
+                        if (base / f"index{ext}").exists():
+                            found = True
+                            break
+                if found:
+                    break
+            if not found:
+                unresolved.append(import_path)
+            continue
+
+        # Scoped packages (@org/package)
+        if import_path.startswith('@') and '/' in import_path:
+            pkg_name = '/'.join(import_path.split('/')[:2])
+            if node_modules.exists() and (node_modules / pkg_name).exists():
+                continue
+            unresolved.append(import_path)
+            continue
+
+        # Bare module imports (react, next, lodash, etc.)
+        top_level = import_path.split('/')[0]
+        if node_modules.exists() and (node_modules / top_level).exists():
+            continue
+
+        # No node_modules found — module is unresolved
+        unresolved.append(import_path)
+
+    return unresolved
+
+
 def _try_auto_fix_env_var_error(
     error_output: str,
     example_file: Path,
