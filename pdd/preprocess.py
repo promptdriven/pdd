@@ -24,6 +24,10 @@ _DEBUG_PREPROCESS = str(os.getenv("PDD_PREPROCESS_DEBUG", "")).lower() in ("1", 
 _DEBUG_OUTPUT_FILE = os.getenv("PDD_PREPROCESS_DEBUG_FILE")  # Optional path to write a debug report
 _DEBUG_EVENTS: List[str] = []
 
+
+def _is_quiet_mode() -> bool:
+    return os.getenv("PDD_QUIET") == "1"
+
 def _dbg(msg: str) -> None:
     if _DEBUG_PREPROCESS:
         console.print(f"[dim][PPD][preprocess][/dim] {escape(msg)}")
@@ -116,6 +120,10 @@ def _scan_risky_placeholders(text: str) -> Tuple[List[Tuple[int, str]], List[Tup
 
 def preprocess(prompt: str, recursive: bool = False, double_curly_brackets: bool = True, exclude_keys: Optional[List[str]] = None, _seen: Optional[set] = None) -> str:
     try:
+        # Some tests patch template loading to return mock objects with .format().
+        # In that case preprocessing is not applicable; return as-is.
+        if not isinstance(prompt, str):
+            return prompt
         if not prompt:
             console.print("[bold red]Error:[/bold red] Empty prompt provided")
             return ""
@@ -124,7 +132,7 @@ def preprocess(prompt: str, recursive: bool = False, double_curly_brackets: bool
         _DEBUG_EVENTS.clear()
         _dbg(f"Start preprocess(recursive={recursive}, double_curly={double_curly_brackets}, exclude_keys={exclude_keys})")
         _dbg(f"Initial length: {len(prompt)} characters")
-        if not os.getenv('PDD_QUIET'):
+        if not _is_quiet_mode():
             console.print(Panel("Starting prompt preprocessing", style="bold blue"))
         prompt = process_backtick_includes(prompt, recursive, _seen=_seen)
         _dbg("After backtick includes processed")
@@ -144,7 +152,7 @@ def preprocess(prompt: str, recursive: bool = False, double_curly_brackets: bool
             for ln, frag in templates[:5]:
                 _dbg(f"  line {ln}: {frag}")
         # Don't trim whitespace that might be significant for the tests
-        if not os.getenv('PDD_QUIET'):
+        if not _is_quiet_mode():
             console.print(Panel("Preprocessing complete", style="bold green"))
         _dbg(f"Final length: {len(prompt)} characters")
         _write_debug_report()
@@ -468,7 +476,8 @@ def double_curly(text: str, exclude_keys: Optional[List[str]] = None) -> str:
     if exclude_keys is None:
         exclude_keys = []
     
-    console.print("Doubling curly brackets...")
+    if not _is_quiet_mode():
+        console.print("Doubling curly brackets...")
     _dbg("double_curly invoked")
     
     # Protect ${IDENT} placeholders so we can safely double braces, then restore

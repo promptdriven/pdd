@@ -22,6 +22,10 @@ STORY_PROMPTS_METADATA_RE = re.compile(
     r"<!--\s*pdd-story-prompts:\s*(?P<prompts>.*?)\s*-->",
     flags=re.IGNORECASE,
 )
+STORY_PROMPT_REFERENCE_RE = re.compile(
+    r"(?P<ref>[A-Za-z0-9_./-]+\.prompt)\b",
+    flags=re.IGNORECASE,
+)
 logger = logging.getLogger(__name__)
 
 
@@ -161,6 +165,49 @@ def _upsert_story_prompt_metadata(
     return True
 
 
+def _dedupe_prompt_paths(prompt_paths: Iterable[Path]) -> List[Path]:
+    """Preserve order while deduplicating prompt paths."""
+    deduped: List[Path] = []
+    seen_paths = set()
+    for prompt_path in prompt_paths:
+        key = str(prompt_path.resolve()).lower()
+        if key in seen_paths:
+            continue
+        deduped.append(prompt_path)
+        seen_paths.add(key)
+    return deduped
+
+
+def _extract_prompt_refs_from_story_text(story_content: str) -> List[str]:
+    """Extract .prompt references from story markdown text."""
+    refs: List[str] = []
+    seen_refs = set()
+    for match in STORY_PROMPT_REFERENCE_RE.finditer(story_content):
+        ref = match.group("ref").strip()
+        if not ref:
+            continue
+        key = ref.lower()
+        if key in seen_refs:
+            continue
+        refs.append(ref)
+        seen_refs.add(key)
+    return refs
+
+
+def _resolve_prompt_refs_to_paths(
+    prompt_refs: List[str],
+    prompt_files: List[Path],
+    prompts_root: Optional[Path],
+) -> List[Path]:
+    """Resolve prompt references to known prompt file paths."""
+    resolved_paths: List[Path] = []
+    for ref in prompt_refs:
+        resolved = _resolve_prompt_path(ref, prompt_files, prompts_root)
+        if resolved:
+            resolved_paths.append(resolved)
+    return _dedupe_prompt_paths(resolved_paths)
+
+
 def _resolve_src_dir(prompts_dir: Path) -> Path:
     """Resolve source directory from PDD_SRC_DIR or default to ../src from prompts_dir."""
     resolved = os.environ.get("PDD_SRC_DIR")
@@ -215,7 +262,35 @@ def _linked_prompts_from_changes(
         resolved_prompt = _resolve_prompt_path(prompt_name, prompt_files, prompts_root)
         if resolved_prompt:
             linked_prompt_paths.append(resolved_prompt)
-    return linked_prompt_paths
+    return _dedupe_prompt_paths(linked_prompt_paths)
+
+
+def _select_story_prompt_links(
+    *,
+    story_content: str,
+    prompt_files: List[Path],
+    prompts_root: Optional[Path],
+    changes_list: Optional[List[Dict[str, object]]] = None,
+) -> Tuple[List[Path], str]:
+    """
+    Select deterministic story prompt links.
+
+    Priority:
+    1) detect_change deltas
+    2) explicit .prompt refs in story text
+    3) all prompt files (full-project fallback)
+    """
+    if changes_list is not None:
+        linked_from_changes = _linked_prompts_from_changes(changes_list, prompt_files, prompts_root)
+        if linked_from_changes:
+            return linked_from_changes, "detect_change"
+
+    story_refs = _extract_prompt_refs_from_story_text(story_content)
+    linked_from_story = _resolve_prompt_refs_to_paths(story_refs, prompt_files, prompts_root)
+    if linked_from_story:
+        return linked_from_story, "story_content"
+
+    return _dedupe_prompt_paths(prompt_files), "all_prompts"
 
 
 def cache_story_prompt_links(
@@ -270,9 +345,12 @@ def cache_story_prompt_links(
         verbose=verbose,
     )
 
-    linked_prompt_paths = _linked_prompts_from_changes(changes_list, prompt_files, prompts_root)
-    if not linked_prompt_paths:
-        return True, "No touched prompts detected for story metadata linking.", cost, model, []
+    linked_prompt_paths, link_source = _select_story_prompt_links(
+        story_content=story_content,
+        prompt_files=prompt_files,
+        prompts_root=prompts_root,
+        changes_list=changes_list,
+    )
 
     updated = _upsert_story_prompt_metadata(
         story_path,
@@ -287,8 +365,16 @@ def cache_story_prompt_links(
         }
     )
     if updated:
-        return True, "Story prompt metadata linked.", cost, model, linked_refs
-    return True, "Story prompt metadata already up to date.", cost, model, linked_refs
+        if link_source == "detect_change":
+            return True, "Story prompt metadata linked.", cost, model, linked_refs
+        if link_source == "story_content":
+            return True, "Story prompt metadata linked from story content.", cost, model, linked_refs
+        return True, "Story prompt metadata linked to full prompt set.", cost, model, linked_refs
+    if link_source == "detect_change":
+        return True, "Story prompt metadata already up to date.", cost, model, linked_refs
+    if link_source == "story_content":
+        return True, "Story prompt metadata already up to date from story content.", cost, model, linked_refs
+    return True, "Story prompt metadata already up to date for full prompt set.", cost, model, linked_refs
 
 
 def _slugify_story_name(raw_name: str) -> str:
@@ -467,7 +553,7 @@ def generate_user_story(
         merged_pool.append(pf)
         seen_pool.add(key)
 
-    detect_success, _, detect_cost, detect_model, detected_links = cache_story_prompt_links(
+    detect_success, detect_message, detect_cost, detect_model, detected_links = cache_story_prompt_links(
         story_file=str(output_path),
         prompts_dir=prompts_dir,
         prompt_files=merged_pool,
@@ -482,11 +568,25 @@ def generate_user_story(
     model_name = detect_model or model_name
 
     if detect_success and detected_links:
-        linked_refs = detected_links
-        status_message = (
-            f"Generated story file: {output_path}. "
-            "Story prompt metadata auto-detected from story content."
-        )
+        message_lower = detect_message.lower()
+        if "full prompt set" in message_lower:
+            linked_refs = linked_refs_from_input
+            status_message = (
+                f"Generated story file: {output_path}. "
+                "Story prompt metadata linked from prompt inputs."
+            )
+        elif "story content" in message_lower:
+            linked_refs = linked_refs_from_input
+            status_message = (
+                f"Generated story file: {output_path}. "
+                "Story prompt metadata linked from prompt inputs."
+            )
+        else:
+            linked_refs = detected_links
+            status_message = (
+                f"Generated story file: {output_path}. "
+                "Story prompt metadata auto-detected from story content."
+            )
     else:
         # Preserve deterministic links from prompt inputs when detection
         # produces no touched prompts or cannot update metadata.
@@ -569,16 +669,7 @@ def run_user_story_tests(
                     f"{story_path}: {', '.join(unresolved_prompt_refs)}"
                 )
             if resolved_story_prompts:
-                # Preserve order while deduplicating exact paths
-                deduped: List[Path] = []
-                seen_paths = set()
-                for pf in resolved_story_prompts:
-                    key = str(pf.resolve()).lower()
-                    if key in seen_paths:
-                        continue
-                    deduped.append(pf)
-                    seen_paths.add(key)
-                story_prompt_files = deduped
+                story_prompt_files = _dedupe_prompt_paths(resolved_story_prompts)
             else:
                 all_passed = False
                 results.append(
@@ -614,21 +705,21 @@ def run_user_story_tests(
             "changes": changes_list,
         })
 
-        if cache_story_prompt_links and not metadata_prompt_refs and changes_list:
-            linked_prompt_paths = _linked_prompts_from_changes(
-                changes_list,
-                prompt_files,
+        if cache_story_prompt_links and not metadata_prompt_refs:
+            linked_prompt_paths, _ = _select_story_prompt_links(
+                story_content=story_content,
+                prompt_files=prompt_files,
+                prompts_root=prompts_root,
+                changes_list=changes_list,
+            )
+            updated = _upsert_story_prompt_metadata(
+                story_path,
+                story_content,
+                linked_prompt_paths,
                 prompts_root,
             )
-            if linked_prompt_paths:
-                updated = _upsert_story_prompt_metadata(
-                    story_path,
-                    story_content,
-                    linked_prompt_paths,
-                    prompts_root,
-                )
-                if updated:
-                    logger.info("Updated story prompt metadata links for %s", story_path)
+            if updated:
+                logger.info("Updated story prompt metadata links for %s", story_path)
 
         if not quiet:
             status = "PASS" if passed else "FAIL"
