@@ -164,6 +164,7 @@ def _setup_worktree(cwd: Path, issue_number: int, quiet: bool, resume_existing: 
 
     # 2. Handle existing branch
     branch_exists = _branch_exists(git_root, branch_name)
+    reset_after_attach = False
 
     if branch_exists:
         if resume_existing:
@@ -178,6 +179,10 @@ def _setup_worktree(cwd: Path, issue_number: int, quiet: bool, resume_existing: 
             success, _err = _delete_branch(git_root, branch_name)
             if success:
                 branch_exists = False
+            else:
+                # Branch couldn't be deleted — will reuse with --force,
+                # then reset to HEAD so old commits don't pollute the PR.
+                reset_after_attach = True
 
     # 3. Create worktree
     try:
@@ -192,6 +197,23 @@ def _setup_worktree(cwd: Path, issue_number: int, quiet: bool, resume_existing: 
                 capture_output=True,
                 check=True,
             )
+            if reset_after_attach:
+                # Fresh re-run: discard old commits so the branch starts
+                # clean from the main repo's current HEAD.
+                main_head = subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=git_root,
+                    capture_output=True,
+                    check=True,
+                ).stdout.decode().strip()
+                if not quiet:
+                    console.print(f"[yellow]Resetting branch to {main_head[:8]} for clean re-run[/yellow]")
+                subprocess.run(
+                    ["git", "reset", "--hard", main_head],
+                    cwd=worktree_path,
+                    capture_output=True,
+                    check=True,
+                )
         else:
             # Branch was deleted or didn't exist — create new
             subprocess.run(
