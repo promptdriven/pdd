@@ -484,7 +484,8 @@ def test_run_agentic_task_codex_success(mock_cwd, mock_env, mock_load_model_data
     args, _ = mock_subprocess.call_args
     cmd = args[0]
     assert cmd[0] == "/bin/codex"  # Uses discovered path, not hardcoded name
-    assert "--full-auto" in cmd
+    assert "--sandbox" in cmd
+    assert "danger-full-access" in cmd
     assert "--json" in cmd
 
 def test_run_agentic_task_fallback(mock_shutil_which, mock_subprocess_run, mock_env, mock_load_model_data, tmp_path):
@@ -3191,3 +3192,51 @@ def test_issue557_full_chain_modern_codex_false_positive(tmp_path):
         f"Got: {output!r}"
     )
     assert provider == "openai"
+
+
+def test_codex_turn_completed_usage_parsed_for_cost(tmp_path):
+    """
+    Issue #658: Codex CLI 0.105.0 emits turn.completed (not session.end)
+    with usage data. Verify cost is calculated from turn.completed.
+    """
+    agent_text = "FILES_CREATED: tests/test_fix.py\nDone."
+    ndjson_lines = [
+        json.dumps({"type": "thread.started", "thread_id": "thread_abc"}),
+        json.dumps({"type": "turn.started"}),
+        json.dumps({
+            "type": "item.completed",
+            "item": {"type": "agent_message", "text": agent_text}
+        }),
+        json.dumps({
+            "type": "turn.completed",
+            "usage": {"input_tokens": 18616, "cached_input_tokens": 12672, "output_tokens": 168}
+        }),
+    ]
+    ndjson_output = "\n".join(ndjson_lines)
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=False), \
+         patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
+         patch("pdd.agentic_common.get_available_agents", return_value=["openai"]), \
+         patch("pdd.agentic_common.get_agent_provider_preference", return_value=["openai"]), \
+         patch("subprocess.run") as mock_run, \
+         patch("time.sleep"):
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=ndjson_output,
+            stderr=""
+        )
+
+        success, output, cost, provider = run_agentic_task(
+            instruction="generate test",
+            cwd=tmp_path,
+            max_retries=1,
+        )
+
+    assert success is True
+    assert "FILES_CREATED" in output
+    assert provider == "openai"
+    # Cost should be non-zero since turn.completed has real usage data
+    assert cost > 0, (
+        f"Issue #658: turn.completed usage not parsed — cost was ${cost}. "
+        f"Expected non-zero cost from input_tokens=18616, output_tokens=168."
+    )

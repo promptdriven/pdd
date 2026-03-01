@@ -2731,3 +2731,63 @@ def test_e2e_skip_for_simple_bug(mock_dependencies, default_args):
     assert mock_run.call_count == 11
 
 
+def test_step7_filesystem_fallback_when_no_markers(mock_dependencies, default_args):
+    """Step 7 has no FILES_CREATED markers but files exist on disk → fallback detects them."""
+    mock_run, _, _ = mock_dependencies
+
+    def side_effect(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if label == "step7":
+            # Codex-style output: no FILES_CREATED markers
+            return (True, "I generated a test file for the bug.", 0.1, "openai")
+        return (True, "ok", 0.1, "openai")
+
+    mock_run.side_effect = side_effect
+
+    # Mock _get_modified_and_untracked: before step 7 has no test files,
+    # after step 7 has a new test file
+    call_count = {"n": 0}
+
+    def mock_git_files(cwd):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            # Pre-step 7 snapshot: only existing source files
+            return ["src/app.py"]
+        else:
+            # Post-step 7: new test file appeared
+            return ["src/app.py", "tests/test_bug_fix.py"]
+
+    with patch("pdd.agentic_bug_orchestrator._get_modified_and_untracked", side_effect=mock_git_files):
+        success, msg, cost, model, changed_files = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is True
+    assert "tests/test_bug_fix.py" in changed_files
+    # Should NOT have stopped at step 7 — all 11 steps should run
+    assert mock_run.call_count == 11
+
+
+def test_step7_no_markers_no_filesystem_files_still_hard_stops(mock_dependencies, default_args):
+    """Step 7 has no markers AND no new files on disk → hard stop as before."""
+    mock_run, _, _ = mock_dependencies
+
+    def side_effect(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if label == "step7":
+            return (True, "I could not generate a test.", 0.1, "openai")
+        return (True, "ok", 0.1, "openai")
+
+    mock_run.side_effect = side_effect
+
+    # Mock _get_modified_and_untracked: same files before and after (no new files)
+    def mock_git_files(cwd):
+        return ["src/app.py"]
+
+    with patch("pdd.agentic_bug_orchestrator._get_modified_and_untracked", side_effect=mock_git_files):
+        success, msg, cost, model, changed_files = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is False
+    assert "Stopped at Step 7" in msg
+    # Should stop at step 7: 8 calls (steps 1, 2, 3, 4, 5, 5.5, 6, 7)
+    assert mock_run.call_count == 8
+
+

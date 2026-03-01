@@ -21,6 +21,25 @@ from .preprocess import preprocess
 # Initialize console
 console = Console()
 
+
+def _get_modified_and_untracked(cwd: Path) -> List[str]:
+    """Returns modified tracked files plus untracked files via git."""
+    files: List[str] = []
+    result = subprocess.run(
+        ["git", "diff", "--name-only", "HEAD"],
+        cwd=cwd, capture_output=True, text=True
+    )
+    if result.returncode == 0:
+        files.extend(f for f in result.stdout.strip().split("\n") if f)
+    result = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard"],
+        cwd=cwd, capture_output=True, text=True
+    )
+    if result.returncode == 0:
+        files.extend(f for f in result.stdout.strip().split("\n") if f)
+    return files
+
+
 # Per-step timeouts for the 11-step agentic bug workflow (Issue #256)
 # Complex steps (reproduce, root cause, prompt classification, generate, e2e) get more time.
 BUG_STEP_TIMEOUTS: Dict[Union[int, float], float] = {
@@ -426,6 +445,11 @@ def run_agentic_bug_orchestrator(
         step_display = f"{step_num}" if isinstance(step_num, int) else f"{step_num}"
         step_suffix = str(step_num).replace(".", "_")  # 5.5 -> "5_5"
 
+        # Snapshot filesystem before Step 7 for fallback detection
+        pre_step7_files = None
+        if step_num == 7:
+            pre_step7_files = set(_get_modified_and_untracked(current_cwd))
+
         if not quiet:
             console.print(f"[bold][Step {step_display}/11][/bold] {description}...")
 
@@ -522,7 +546,21 @@ def run_agentic_bug_orchestrator(
                 if line.startswith("FILES_CREATED:") or line.startswith("FILES_MODIFIED:"):
                     file_list = line.split(":", 1)[1].strip()
                     extracted_files.extend([f.strip() for f in file_list.split(",") if f.strip()])
-            
+
+            # Filesystem fallback: if no markers found, detect files created on disk
+            # (some providers like Codex write files without emitting markers)
+            if not extracted_files and pre_step7_files is not None:
+                post_files = set(_get_modified_and_untracked(current_cwd))
+                new_files = sorted(post_files - pre_step7_files)
+                if new_files:
+                    extracted_files = new_files
+                    if not quiet:
+                        console.print(
+                            f"  → No FILES_CREATED markers; detected "
+                            f"{len(new_files)} new file(s) on disk: "
+                            f"{', '.join(new_files)}"
+                        )
+
             changed_files.extend(extracted_files)
             # Deduplicate while preserving insertion order for consistent git staging
             changed_files = list(dict.fromkeys(changed_files))

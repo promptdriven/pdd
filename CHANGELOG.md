@@ -1,13 +1,22 @@
 ## v0.0.163 (2026-02-28)
 
+### Feat
+
+- **Next.js App Router rendering model support** — Architecture template (`architecture_json.prompt`) now defines a `renderingModel` enum (`server`, `client`, `hybrid`) on the `page` interface schema, with guidance teaching the LLM the rules for each mode. The generate prompt template (`generate_prompt.prompt`) enforces these constraints: server components must not use `'use client'` or React hooks; client components must not be `async`; hybrid generates a server wrapper that passes data to a `'use client'` child component. Defaults to `server` when `renderingModel` is absent.
+
 ### Fix
 
-- reset branch to main HEAD on fresh re-run to avoid stale commits
-- catch OSError instead of bare Exception, add git worktree prune
-- port worktree --force fallback from change orchestrator to bug orchestrator
-- prevent truncation of provider and invalid JSON error messages for improved debuggability (fixes #492).
-- pdd generate mixes Next.js server and client component patterns
-- preserve ANTHROPIC_API_KEY in subprocess env (Issue #492)
+- **Reset branch to main HEAD on fresh re-run** — Bug orchestrator now resets the worktree branch to the main repo's current HEAD when re-running `pdd bug`/`pdd fix` on the same issue, preventing stale commits from polluting the PR.
+- **Port worktree `--force` fallback to bug orchestrator** — Ported worktree conflict handling from the change orchestrator (fixed in #445) to the bug orchestrator. When a branch can't be deleted (e.g., currently checked out), uses `git worktree add --force` instead of returning a hard error.
+- **Catch OSError instead of bare Exception in worktree cleanup** — Narrowed exception handling in worktree removal fallback; added `git worktree prune` after `shutil.rmtree` cleanup.
+- **Prevent truncation of provider and invalid JSON error messages** — Increased error snippet length from 200 to 2,000 characters (`MAX_ERROR_SNIPPET_LENGTH`) for improved debuggability when provider calls fail (fixes #492).
+- **Preserve ANTHROPIC_API_KEY in subprocess env** — Removed logic that stripped `ANTHROPIC_API_KEY` from the environment when no OAuth token was present, fixing authentication failures in non-OAuth setups (Issue #492).
+
+### Test
+
+- **E2E issue #579** — New `test_e2e_issue_579_bug_worktree_rerun.py` (486 lines) and `test_e2e_issue_579_orchestrator_rerun.py` (433 lines) covering worktree conflict handling on re-run, branch reset on fresh re-run, and resume preservation.
+- **Next.js rendering model** — New `test_nextjs_rendering_model.py` (359 lines) and `test_e2e_issue_626_nextjs_rendering_model.py` (563 lines) covering architecture schema `renderingModel` enum, generate prompt template enforcement, and end-to-end pipeline validation for server/client/hybrid modes.
+- **agentic_common** — New tests for `MAX_ERROR_SNIPPET_LENGTH` truncation and `ANTHROPIC_API_KEY` preservation in subprocess environment.
 
 ## v0.0.162 (2026-02-27)
 
