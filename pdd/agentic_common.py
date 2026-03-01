@@ -81,6 +81,7 @@ MIN_VALID_OUTPUT_LENGTH: int = 50
 DEFAULT_MAX_RETRIES: int = 3
 DEFAULT_RETRY_DELAY: float = 5.0
 MAX_PATH_DISPLAY_LENGTH: int = 200  # Truncation length for PATH in diagnostic messages
+MAX_ERROR_SNIPPET_LENGTH: int = 2000  # Truncation length for provider error messages (Issue #492)
 
 # Job deadline constants — prevent agentic retry loops from consuming the full job timeout
 JOB_TIMEOUT_MARGIN_SECONDS: float = 120.0   # Reserve for cleanup/reporting after last attempt
@@ -621,7 +622,7 @@ def run_agentic_task(
                     time.sleep(backoff)
 
             # All retries exhausted (or deadline budget exhausted) for this provider
-            provider_errors.append(f"{provider}: {last_output[:200]}")
+            provider_errors.append(f"{provider}: {last_output[:MAX_ERROR_SNIPPET_LENGTH]}")
             if verbose:
                 console.print(f"[yellow]Provider {provider} failed after {max_retries} attempts: {last_output}[/yellow]")
                 _log_agentic_interaction(
@@ -698,10 +699,6 @@ def _run_with_provider(
 
     # Construct Command using discovered cli_path (Issue #234 fix)
     if provider == "anthropic":
-        # In CI with OAuth token, keep it for authentication;
-        # otherwise remove API key to force subscription auth
-        if not env.get("CLAUDE_CODE_OAUTH_TOKEN"):
-            env.pop("ANTHROPIC_API_KEY", None)
         # Use -p - to pipe prompt as direct user message via stdin.
         # This prevents Claude from interpreting file-discovered instructions
         # as "automated bot workflow" and refusing to execute.
@@ -814,7 +811,7 @@ def _run_with_provider(
         return _parse_provider_json(provider, data)
     except json.JSONDecodeError:
         # Fallback if CLI didn't output valid JSON (sometimes happens on crash)
-        return False, f"Invalid JSON output: {result.stdout[:200]}...", 0.0
+        return False, f"Invalid JSON output: {result.stdout[:MAX_ERROR_SNIPPET_LENGTH]}...", 0.0
 
 def _parse_provider_json(provider: str, data: Dict[str, Any]) -> Tuple[bool, str, float]:
     """

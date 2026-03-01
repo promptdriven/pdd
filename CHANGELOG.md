@@ -1,34 +1,39 @@
+## v0.0.163 (2026-02-28)
+
+### Fix
+
+- reset branch to main HEAD on fresh re-run to avoid stale commits
+- catch OSError instead of bare Exception, add git worktree prune
+- port worktree --force fallback from change orchestrator to bug orchestrator
+- prevent truncation of provider and invalid JSON error messages for improved debuggability (fixes #492).
+- pdd generate mixes Next.js server and client component patterns
+- preserve ANTHROPIC_API_KEY in subprocess env (Issue #492)
+
 ## v0.0.162 (2026-02-27)
 
 ### Feat
 
-- add Playwright E2E tests for Stage 8 UI components and generate associated screenshots.
-- Add comprehensive Playwright E2E tests for Stage 9 Render & Stitch interactive QA, covering status badges, progress bars, render modes, stitch button, SSE streaming, preview modal, error states, and edge cases.
-- Add comprehensive Playwright E2E tests for Stage 7 Veo Generation, including UI element verification, API mocking, and state-based screenshot generation.
-- Add comprehensive Playwright interactive QA tests and screenshots for Stage 5 and Stage 6, and update existing Stage 6 spec generation tests.
-- add Playwright E2E tests for Stage 4 TTS Rendering and generate associated screenshots.
-- Add Playwright E2E tests and associated screenshots for Stage 3 TTS Script interactive QA, covering UI, diff view, editor, and generation flows.
-- add comprehensive interactive QA E2E tests for Stage 2 script editor and update existing script editor tests.
+- **TypeScript/JavaScript import validation (#624)** — New `_validate_typescript_imports()` in `sync_orchestration` validates TS/JS imports after code generation in agentic mode. Checks relative imports, path aliases (`@/`, `~/`, `#/`), scoped packages, bare module imports, and Node.js builtins. Unresolved imports now block generation. Also adds `javascriptreact` as a recognized language alongside `typescriptreact`.
+- **Validate imported names against module exports (#620)** — New `_get_module_exports()` uses AST parsing to extract exported names from Python modules (functions, classes, assignments, re-exports, `__all__`). `_validate_python_imports` now verifies that specific `from module import name` names actually exist in the target module, catching hallucinated function/class imports. Handles dotted import paths, `__all__ +=` patterns, and conditional imports inside `try/except`.
+- **Validation failures block architecture generation (#624)** — `agentic_architecture_orchestrator` now returns failure when any validation step fails, preventing generation from proceeding with invalid code. Previously, validation errors were logged but did not block the final output.
 
 ### Fix
 
-- Validate cloud execution only when the command succeeds in the regression test script.
-- validate TypeScript/JS imports and block on validation failures (#624)
-- validate TypeScript/JS imports and block on validation failures (#624)
-- address Greg's follow-up review on PR #640
-- implement _validate_typescript_imports and fix test operations
-- remove dead Python AST validator from TS/JS branch and fix misleading test name
-- validate TypeScript/JS imports and block on validation failures (#624)
-- Return JSON from POST /api/pipeline/render/run instead of SSE stream
-- address review feedback on PR #639 — narrow exceptions, add logging, improve coverage
-- prevent false positives in _get_module_exports for __all__ and re-exports
-- validate imported names against module exports (#620)
-- section ID edit not persisting after confirm in Stage 1
-- mock update_main in test_update_command to prevent real API calls in CI
+- **Validate cloud execution only on command success** — Regression test script now calls `validate_cloud_success` only when the command exits with status 0, preventing false validation failures on commands that were expected to fail.
+- **Return JSON from render endpoint** — POST `/api/pipeline/render/run` now returns JSON `{ jobId }` instead of an SSE stream. Removed inline `createSseStream()` helper; progress streaming is handled separately via `GET /api/pipeline/render/stream`.
+- **Section ID edit not persisting in Stage 1** — `handleConfirmEdit` now uses `editingSectionId` (the original section ID) instead of `draftSection.id` (which may have changed during editing) when mapping sections for update.
+- **Prevent false positives in `_get_module_exports`** — `__all__` names are now unioned with physically defined names, since `__all__` only restricts `from module import *`, not explicit `from module import X` imports. Re-exported imports (`from X import Y`) are included in the export set.
+- **Narrow exception handling in import validation** — Changed bare `except Exception` to `except OSError` for file reads; added structured logging via module-level logger.
+- **Mock `update_main` in test_update_command** — Prevents real API calls during CI test runs.
 
 ### Refactor
 
-- ensure public repos are reset to origin/main before updates and prevent empty commits.
+- **Public repo publish prevents empty commits** — `publish-public` and `publish-public-cap` Makefile targets now reset to `origin/main` before copying files and skip commit/push when there are no staged changes, preventing empty commits.
+
+### Test
+
+- **sync_orchestration** — New `test_sync_orchestration.py` (894 lines) covering TypeScript/JavaScript import validation, module export extraction via AST, and end-to-end orchestration flows.
+- **E2E issue #620** — New `test_e2e_issue_620_hallucinated_imports.py` (415 lines) covering hallucinated import name detection for both Python and TypeScript/JavaScript modules.
 
 ## v0.0.161 (2026-02-26)
 

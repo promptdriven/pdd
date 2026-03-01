@@ -145,15 +145,26 @@ def _setup_worktree(cwd: Path, issue_number: int, quiet: bool, resume_existing: 
                 console.print(f"[yellow]Removing existing worktree at {worktree_path}[/yellow]")
             success, err = _remove_worktree(git_root, worktree_path)
             if not success:
-                return None, f"Failed to remove existing worktree: {err}"
+                # Fallback to rmtree if git command fails but dir exists
+                try:
+                    shutil.rmtree(worktree_path)
+                    subprocess.run(
+                        ["git", "worktree", "prune"],
+                        cwd=git_root,
+                        capture_output=True,
+                    )
+                except OSError as e:
+                    if not quiet:
+                        console.print(f"[yellow]Warning: rmtree cleanup failed: {e}[/yellow]")
         else:
             # It's just a directory, not a registered worktree
             if not quiet:
                 console.print(f"[yellow]Removing stale directory at {worktree_path}[/yellow]")
             shutil.rmtree(worktree_path)
 
-    # 2. Handle existing branch based on resume_existing
+    # 2. Handle existing branch
     branch_exists = _branch_exists(git_root, branch_name)
+    reset_after_attach = False
 
     if branch_exists:
         if resume_existing:
@@ -161,32 +172,55 @@ def _setup_worktree(cwd: Path, issue_number: int, quiet: bool, resume_existing: 
             if not quiet:
                 console.print(f"[blue]Resuming with existing branch: {branch_name}[/blue]")
         else:
-            # Delete for fresh start
+            # Try to delete for fresh start; if it fails (e.g. branch is
+            # currently checked out), continue and use --force below.
             if not quiet:
                 console.print(f"[yellow]Removing existing branch {branch_name}[/yellow]")
-            success, err = _delete_branch(git_root, branch_name)
-            if not success:
-                return None, f"Failed to delete existing branch: {err}"
+            success, _err = _delete_branch(git_root, branch_name)
+            if success:
+                branch_exists = False
+            else:
+                # Branch couldn't be deleted — will reuse with --force,
+                # then reset to HEAD so old commits don't pollute the PR.
+                reset_after_attach = True
 
     # 3. Create worktree
     try:
         worktree_path.parent.mkdir(parents=True, exist_ok=True)
 
-        if branch_exists and resume_existing:
-            # Checkout existing branch into new worktree
+        if branch_exists:
+            # Branch couldn't be deleted (e.g. currently checked out) — use existing
+            # --force required: git refuses to checkout a branch already in use
             subprocess.run(
-                ["git", "worktree", "add", str(worktree_path), branch_name],
+                ["git", "worktree", "add", "--force", str(worktree_path), branch_name],
                 cwd=git_root,
                 capture_output=True,
-                check=True
+                check=True,
             )
+            if reset_after_attach:
+                # Fresh re-run: discard old commits so the branch starts
+                # clean from the main repo's current HEAD.
+                main_head = subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=git_root,
+                    capture_output=True,
+                    check=True,
+                ).stdout.decode().strip()
+                if not quiet:
+                    console.print(f"[yellow]Resetting branch to {main_head[:8]} for clean re-run[/yellow]")
+                subprocess.run(
+                    ["git", "reset", "--hard", main_head],
+                    cwd=worktree_path,
+                    capture_output=True,
+                    check=True,
+                )
         else:
-            # Create new branch from HEAD
+            # Branch was deleted or didn't exist — create new
             subprocess.run(
                 ["git", "worktree", "add", "-b", branch_name, str(worktree_path), "HEAD"],
                 cwd=git_root,
                 capture_output=True,
-                check=True
+                check=True,
             )
         return worktree_path, None
     except subprocess.CalledProcessError as e:
