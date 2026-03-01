@@ -26,6 +26,36 @@ except ImportError:
 _DEFAULT_PROVIDER_PREFERENCE: List[str] = ["anthropic", "google", "openai"]
 
 
+def substitute_template_variables(
+    template: Any,
+    context: Dict[str, Any],
+    *,
+    strict_unresolved: bool = False,
+) -> str:
+    """Safely substitute known {placeholders} without raising on unknown keys.
+
+    This intentionally uses iterative ``str.replace`` instead of ``str.format``
+    so unknown placeholders remain intact and context values containing braces
+    (e.g. JSON) are preserved verbatim.
+    """
+    # Compatibility path for tests/mocks that provide template objects with a
+    # .format(**context) method rather than a raw string prompt.
+    if not isinstance(template, str) and hasattr(template, "format") and callable(template.format):
+        return str(template.format(**context))
+
+    if strict_unresolved:
+        for match in re.finditer(r"(?<!\{)\{([A-Za-z_][A-Za-z0-9_]*)\}(?!\})", template):
+            key = match.group(1)
+            if key not in context:
+                raise KeyError(key)
+
+    rendered = template
+    for key, value in context.items():
+        rendered = rendered.replace("{" + str(key) + "}", str(value))
+
+    return rendered
+
+
 def get_agent_provider_preference() -> List[str]:
     """Return provider preference order, overridable via PDD_AGENTIC_PROVIDER env var.
 
@@ -770,41 +800,50 @@ def _run_with_provider(
         data = {}
         
         if provider == "openai" and "\n" in output_str:
-            # Parse NDJSON, collecting both the agent response and usage stats
+            # Parse NDJSON stream. Newer Codex emits `item.completed` events with
+            # text at `item.text` (instead of a single top-level `result` object).
             lines = output_str.splitlines()
-            agent_message_data = None
-            session_end = None
+            usage: Dict[str, Any] = {}
+            streamed_text_parts: List[str] = []
             for line in lines:
                 try:
                     item = json.loads(line)
-                    # Legacy Codex format: single event contains both text and usage
-                    if item.get("type") == "result":
-                        data = item
-                        break
-                    # Modern Codex CLI (0.104.0+): text in item.completed agent_message
-                    if (item.get("type") == "item.completed"
-                            and isinstance(item.get("item"), dict)
-                            and item["item"].get("type") == "agent_message"):
-                        agent_message_data = item
-                    # usage/cost stats are in session.end (separate from the text event)
-                    if item.get("type") == "session.end":
-                        session_end = item
                 except json.JSONDecodeError:
                     continue
-            if not data:
-                if agent_message_data is not None:
-                    # Merge usage from session.end so cost can be calculated
-                    if session_end is not None:
-                        data = {**agent_message_data, "usage": session_end.get("usage", {})}
-                    else:
-                        data = agent_message_data
-                elif session_end is not None:
-                    data = session_end
-                elif lines:
-                    try:
-                        data = json.loads(lines[-1])
-                    except:
-                        pass
+
+                item_type = item.get("type")
+                if item_type == "result":
+                    data = item
+                    break
+
+                if item_type == "item.completed":
+                    payload = item.get("item") or {}
+                    text_candidate = (
+                        payload.get("text")
+                        or payload.get("output_text")
+                        or payload.get("output")
+                        or ""
+                    )
+                    if text_candidate:
+                        streamed_text_parts.append(str(text_candidate))
+
+                if item_type in {"session.end", "response.completed", "session.completed"}:
+                    usage_obj = item.get("usage")
+                    if isinstance(usage_obj, dict):
+                        usage = usage_obj
+
+            if not data and (streamed_text_parts or usage):
+                data = {
+                    "output": "\n".join(streamed_text_parts),
+                    "usage": usage,
+                }
+
+            # If no structured content was recovered, try parsing the last line.
+            if not data and lines:
+                try:
+                    data = json.loads(lines[-1])
+                except Exception:
+                    pass
         else:
             data = json.loads(output_str)
             
@@ -837,12 +876,19 @@ def _parse_provider_json(provider: str, data: Dict[str, Any]) -> Tuple[bool, str
         elif provider == "openai":
             usage = data.get("usage", {})
             cost = _calculate_codex_cost(usage)
-            # Modern Codex CLI (0.104.0+): text at data["item"]["text"]
-            item = data.get("item", {})
-            if isinstance(item, dict) and item.get("type") == "agent_message":
-                output_text = item.get("text", "")
-            else:
-                output_text = data.get("result") or data.get("output") or ""
+            output_text = (
+                data.get("result")
+                or data.get("output")
+                or data.get("text")
+                or ""
+            )
+            if not output_text and isinstance(data.get("item"), dict):
+                output_text = (
+                    data["item"].get("text")
+                    or data["item"].get("output_text")
+                    or data["item"].get("output")
+                    or ""
+                )
 
         return True, str(output_text), cost
 

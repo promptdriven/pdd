@@ -20,6 +20,7 @@ from pdd.agentic_common import (
     load_workflow_state,
     save_workflow_state,
     clear_workflow_state,
+    substitute_template_variables,
     validate_cached_state,
     DEFAULT_MAX_RETRIES,
 )
@@ -394,11 +395,7 @@ def run_agentic_test_orchestrator(
         exclude_keys = list(context.keys())
         prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
 
-        # Safe substitution (Issue #549): un-double template literal braces first, then substitute.
-        prompt_template = prompt_template.replace("{{", "{").replace("}}", "}")
-        formatted_prompt = prompt_template
-        for key, value in context.items():
-            formatted_prompt = formatted_prompt.replace(f'{{{key}}}', str(value))
+        formatted_prompt = substitute_template_variables(prompt_template, context)
 
         timeout = TEST_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder
         step_success, step_output, step_cost, step_model = run_agentic_task(

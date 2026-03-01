@@ -3,11 +3,10 @@ Orchestrator for the 13-step agentic architecture workflow.
 Runs each step as a separate agentic task, accumulates context between steps,
 tracks overall progress and cost, and supports resuming from saved state.
 
-Steps 1-7: Analysis and generation (architecture.json, scaffolding)
-Step 8: Generate and validate .pddrc configuration
+Steps 1-8: Analysis and generation (architecture.json, scaffolding, .pddrc)
 Step 9: Prompt generation
 Steps 10-12: Validation with in-place fixing (completeness, sync, dependencies)
-Step 13: Fix validation errors
+Step 13: Shared fix template used by failed validation steps
 
 Each validation step (10-12) retries up to 3 times with fixes before moving to next.
 Once a step passes, we don't re-validate it (prevents fix loops).
@@ -29,6 +28,7 @@ from pdd.agentic_common import (
     load_workflow_state,
     save_workflow_state,
     clear_workflow_state,
+    substitute_template_variables,
     validate_cached_state,
     DEFAULT_MAX_RETRIES,
 )
@@ -49,9 +49,9 @@ ARCH_STEP_TIMEOUTS: Dict[int, float] = {
     1: 340.0,   # Analyze PRD
     2: 340.0,   # Deep Analysis
     3: 600.0,   # Research
-    4: 600.0,   # Data Model Design
+    4: 600.0,   # Data model
     5: 600.0,   # Design
-    6: 600.0,   # Research Dependencies
+    6: 600.0,   # Research dependencies
     7: 1000.0,  # Generate (architecture.json + scaffolding)
     8: 600.0,   # Generate and validate .pddrc
     9: 900.0,   # Generate prompts
@@ -73,42 +73,6 @@ def _check_hard_stop(step_num: int, output: str) -> Optional[str]:
     if step_num == 5 and "Clarification Needed" in output:
         return "Clarification needed"
     return None
-
-
-def _check_step4_output(output: str) -> bool:
-    """Check if step 4 output contains data model content instead of module design.
-
-    Returns True if the output looks like a valid data model design.
-    Returns False if the output looks like module design (wrong step).
-    """
-    output_lower = output.lower()
-
-    # Expected data model markers (need at least 2)
-    data_model_markers = [
-        "core entities",
-        "relationships",
-        "storage decision",
-        "schema/orm",
-        "cardinality",
-        "foreign key",
-    ]
-    data_model_hits = sum(1 for m in data_model_markers if m in output_lower)
-
-    # Wrong-step markers that indicate module design instead of data model
-    wrong_step_markers = [
-        "module list",
-        "dependency graph",
-        "module design",
-        "## step 4: module design",
-        "## step 5: module design",
-    ]
-    wrong_step_hits = sum(1 for m in wrong_step_markers if m in output_lower)
-
-    # Fail if wrong-step markers are present and data model markers are scarce
-    if wrong_step_hits > 0 and data_model_hits < 2:
-        return False
-
-    return True
 
 
 def _get_state_dir(cwd: Path) -> Path:
@@ -225,12 +189,12 @@ def run_agentic_architecture_orchestrator(
     """
     Orchestrates the 13-step agentic architecture workflow.
 
-    Steps 1-7: Analysis and generation (architecture.json, scaffolding)
-    Step 8: Generate and validate .pddrc configuration
+    Steps 1-8: Analysis and generation (architecture.json, scaffolding, .pddrc)
     Step 9: Prompt generation
     Steps 10-12: Validation with in-place fixing (completeness, sync, dependencies)
+    Step 13: Shared fix template for failed validation steps
 
-    Each validation step retries up to 3 times with fixes before moving to next step.
+    Each validation step retries up to 3 times with fixes before moving to the next step.
     Once a step passes, we don't re-validate it (prevents fix loops).
 
     Args:
@@ -336,7 +300,7 @@ def run_agentic_architecture_orchestrator(
         (1, "analyze_prd", "Extract features, tech stack, requirements from PRD"),
         (2, "analyze", "Deep analysis: module boundaries, shared concerns"),
         (3, "research", "Web research for tech stack docs and conventions"),
-        (4, "data_model", "Data model design: entities, relationships, storage"),
+        (4, "data_model", "Define core data model and entities"),
         (5, "design", "Design module breakdown with dependency graph"),
         (6, "research_deps", "Find API docs and code examples per module"),
         (7, "generate", "Generate architecture.json and scaffolding"),
@@ -348,7 +312,7 @@ def run_agentic_architecture_orchestrator(
             continue
 
         if not quiet:
-            console.print(f"[bold][Step {step_num}/13][/bold] {description}...")
+            console.print(f"[bold][Step {step_num}/12][/bold] {description}...")
 
         template_name = f"agentic_arch_step{step_num}_{name}_LLM"
         prompt_template = load_prompt_template(template_name)
@@ -360,11 +324,7 @@ def run_agentic_architecture_orchestrator(
         exclude_keys = list(context.keys())
         prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
 
-        # Safe substitution (Issue #549): un-double template braces first, then substitute.
-        prompt_template = prompt_template.replace("{{", "{").replace("}}", "}")
-        formatted_prompt = prompt_template
-        for key, value in context.items():
-            formatted_prompt = formatted_prompt.replace(f'{{{key}}}', str(value))
+        formatted_prompt = substitute_template_variables(prompt_template, context)
 
         timeout = ARCH_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder
 
@@ -404,20 +364,7 @@ def run_agentic_architecture_orchestrator(
         if not step_success:
             console.print(f"[yellow]Warning: Step {step_num} reported failure but continuing...[/yellow]")
 
-        # Special handling for Step 4 (data model): validate output content
-        if step_num == 4 and step_success and not _check_step4_output(step_output):
-            console.print(
-                "[yellow]Warning: Step 4 produced module design instead of data model. "
-                "Retrying...[/yellow]"
-            )
-            step_success = False
-            step_output = (
-                "FAILED: Output contains module design instead of data model. "
-                "Re-read the prompt — this step is about data entities, "
-                "relationships, and storage decisions."
-            )
-
-        # Special handling for Step 7 (generate)
+        # Special handling for Step 7
         if step_num == 7:
             created_files = _parse_files_marker(step_output, "FILES_CREATED:")
             if created_files:
@@ -515,7 +462,7 @@ def run_agentic_architecture_orchestrator(
     # --- Step 9: Prompt Generation ---
     if not skip_prompts and start_step <= 9:
         if not quiet:
-            console.print(f"[bold][Step 9/13][/bold] Generating prompt files...")
+            console.print(f"[bold][Step 9/12][/bold] Generating prompt files...")
 
         pddrc_path = cwd / ".pddrc"
         pddrc_content = ""
@@ -541,11 +488,7 @@ def run_agentic_architecture_orchestrator(
         exclude_keys_9 = list(context.keys())
         prompt_template_9 = preprocess(prompt_template_9, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys_9)
 
-        # Safe substitution (Issue #549): un-double template braces first, then substitute.
-        prompt_template_9 = prompt_template_9.replace("{{", "{").replace("}}", "}")
-        formatted_prompt_9 = prompt_template_9
-        for key, value in context.items():
-            formatted_prompt_9 = formatted_prompt_9.replace(f'{{{key}}}', str(value))
+        formatted_prompt_9 = substitute_template_variables(prompt_template_9, context)
 
         timeout_9 = ARCH_STEP_TIMEOUTS.get(9, 900.0) + timeout_adder
 
@@ -584,9 +527,8 @@ def run_agentic_architecture_orchestrator(
     # This prevents the loop where fixing step 11 breaks step 10.
     MAX_STEP_RETRIES = 3
 
-    validation_success = True  # Assume success, set to False if any step fails
-
     if not skip_prompts:
+        validation_success = True  # Assume success, set to False if any step fails
 
         # Helper function to run a validation step with retries
         def _run_validation_with_fix(
@@ -602,7 +544,7 @@ def run_agentic_architecture_orchestrator(
             for attempt in range(1, MAX_STEP_RETRIES + 1):
                 if not quiet:
                     attempt_str = f" (attempt {attempt}/{MAX_STEP_RETRIES})" if attempt > 1 else ""
-                    console.print(f"[bold][Step {step_num}/13][/bold] {description}{attempt_str}...")
+                    console.print(f"[bold][Step {step_num}/12][/bold] {description}{attempt_str}...")
 
                 prompt_template = load_prompt_template(template_name)
                 if not prompt_template:
@@ -614,100 +556,102 @@ def run_agentic_architecture_orchestrator(
                 exclude_keys_val = list(context.keys())
                 prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys_val)
 
-                # Safe substitution (Issue #549): un-double template braces first, then substitute.
-                prompt_template = prompt_template.replace("{{", "{").replace("}}", "}")
-                formatted_prompt = prompt_template
-                for key, value in context.items():
-                    formatted_prompt = formatted_prompt.replace(f'{{{key}}}', str(value))
-                timeout = ARCH_STEP_TIMEOUTS.get(step_num, 600.0) + timeout_adder
+                try:
+                    formatted_prompt = substitute_template_variables(prompt_template, context)
+                    timeout = ARCH_STEP_TIMEOUTS.get(step_num, 600.0) + timeout_adder
 
-                success, output, cost, model = run_agentic_task(
-                    instruction=formatted_prompt,
-                    cwd=cwd,
-                    verbose=verbose,
-                    quiet=quiet,
-                    timeout=timeout,
-                    label=f"step{step_num}_attempt{attempt}",
-                    max_retries=DEFAULT_MAX_RETRIES,
-                )
+                    success, output, cost, model = run_agentic_task(
+                        instruction=formatted_prompt,
+                        cwd=cwd,
+                        verbose=verbose,
+                        quiet=quiet,
+                        timeout=timeout,
+                        label=f"step{step_num}_attempt{attempt}",
+                        max_retries=DEFAULT_MAX_RETRIES,
+                    )
 
-                total_cost += cost
-                model_used = model
-                context[f"step{step_num}_output"] = output
+                    total_cost += cost
+                    model_used = model
+                    context[f"step{step_num}_output"] = output
 
-                if _check_validation_result(output):
-                    if not quiet:
-                        console.print(f"   → {step_name} validated ✓")
-                    return True
+                    if _check_validation_result(output):
+                        if not quiet:
+                            console.print(f"   → {step_name} validated ✓")
+                        return True
 
-                # Validation failed - try to fix if not last attempt
-                if attempt < MAX_STEP_RETRIES:
-                    if not quiet:
-                        console.print(f"   → {step_name} issues found, fixing...")
+                    # Validation failed - try to fix if not last attempt
+                    if attempt < MAX_STEP_RETRIES:
+                        if not quiet:
+                            console.print(f"   → {step_name} issues found, fixing...")
 
-                    # Run fix step
-                    fix_template = load_prompt_template(fix_template_name)
-                    if fix_template:
-                        context["failed_validation_step"] = step_name.lower()
-                        context["failed_validation_output"] = output
+                        # Run fix step
+                        fix_template = load_prompt_template(fix_template_name)
+                        if fix_template:
+                            context["failed_validation_step"] = step_name.lower()
+                            context["failed_validation_output"] = output
 
-                        # Preprocess to expand <include> tags and escape curly braces
-                        exclude_keys_fix = list(context.keys())
-                        fix_template = preprocess(fix_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys_fix)
+                            # Preprocess to expand <include> tags and escape curly braces
+                            exclude_keys_fix = list(context.keys())
+                            fix_template = preprocess(fix_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys_fix)
 
-                        # Safe substitution (Issue #549): un-double template braces first, then substitute.
-                        fix_template = fix_template.replace("{{", "{").replace("}}", "}")
-                        formatted_fix = fix_template
-                        for key, value in context.items():
-                            formatted_fix = formatted_fix.replace(f'{{{key}}}', str(value))
-                        fix_timeout = ARCH_STEP_TIMEOUTS.get(13, 900.0) + timeout_adder
-
-                        fix_success, fix_output, fix_cost, fix_model = run_agentic_task(
-                            instruction=formatted_fix,
-                            cwd=cwd,
-                            verbose=verbose,
-                            quiet=quiet,
-                            timeout=fix_timeout,
-                            label=f"step{step_num}_fix{attempt}",
-                            max_retries=DEFAULT_MAX_RETRIES,
-                        )
-
-                        total_cost += fix_cost
-                        model_used = fix_model
-                        state["total_cost"] = total_cost
-
-                        # Track modified files
-                        modified_files = _parse_files_marker(fix_output, "FILES_MODIFIED:")
-                        if modified_files:
-                            verified_modified = _verify_files_exist(cwd, modified_files, quiet)
-                            for mf in verified_modified:
-                                if mf not in scaffolding_files and mf != "architecture.json":
-                                    scaffolding_files.append(mf)
-                            new_prompts = [f for f in verified_modified if f.endswith(".prompt")]
-                            for np in new_prompts:
-                                if np not in prompt_files:
-                                    prompt_files.append(np)
-                            state["scaffolding_files"] = scaffolding_files
-                            state["prompt_files"] = prompt_files
-                            if not quiet:
-                                console.print(f"   → Fixed: {len(verified_modified)} files modified")
-
-                        # Re-read architecture.json after fix (use base_dir for subproject)
-                        arch_file = base_dir / "architecture.json"
-                        if arch_file.exists():
                             try:
-                                with open(arch_file, "r", encoding="utf-8") as f:
-                                    arch_content = f.read()
-                                arch_data = json.loads(arch_content)
-                                if isinstance(arch_data, list):
-                                    context["step7_output"] = arch_content
-                            except (json.JSONDecodeError, ValueError):
-                                pass
+                                formatted_fix = substitute_template_variables(fix_template, context)
+                                fix_timeout = ARCH_STEP_TIMEOUTS.get(13, 900.0) + timeout_adder
 
-                else:
+                                fix_success, fix_output, fix_cost, fix_model = run_agentic_task(
+                                    instruction=formatted_fix,
+                                    cwd=cwd,
+                                    verbose=verbose,
+                                    quiet=quiet,
+                                    timeout=fix_timeout,
+                                    label=f"step{step_num}_fix{attempt}",
+                                    max_retries=DEFAULT_MAX_RETRIES,
+                                )
+
+                                total_cost += fix_cost
+                                model_used = fix_model
+                                state["total_cost"] = total_cost
+
+                                # Track modified files
+                                modified_files = _parse_files_marker(fix_output, "FILES_MODIFIED:")
+                                if modified_files:
+                                    verified_modified = _verify_files_exist(cwd, modified_files, quiet)
+                                    for mf in verified_modified:
+                                        if mf not in scaffolding_files and mf != "architecture.json":
+                                            scaffolding_files.append(mf)
+                                    new_prompts = [f for f in verified_modified if f.endswith(".prompt")]
+                                    for np in new_prompts:
+                                        if np not in prompt_files:
+                                            prompt_files.append(np)
+                                    state["scaffolding_files"] = scaffolding_files
+                                    state["prompt_files"] = prompt_files
+                                    if not quiet:
+                                        console.print(f"   → Fixed: {len(verified_modified)} files modified")
+
+                                # Re-read architecture.json after fix (use base_dir for subproject)
+                                arch_file = base_dir / "architecture.json"
+                                if arch_file.exists():
+                                    try:
+                                        with open(arch_file, "r", encoding="utf-8") as f:
+                                            arch_content = f.read()
+                                        arch_data = json.loads(arch_content)
+                                        if isinstance(arch_data, list):
+                                            context["step7_output"] = arch_content
+                                    except (json.JSONDecodeError, ValueError):
+                                        pass
+
+                            except KeyError as e:
+                                if not quiet:
+                                    console.print(f"[yellow]Warning: Fix context missing key: {e}[/yellow]")
+                    else:
+                        if not quiet:
+                            console.print(f"   → {step_name} still failing after {MAX_STEP_RETRIES} attempts")
+                        return False
+
+                except KeyError as e:
                     if not quiet:
-                        console.print(f"   → {step_name} still failing after {MAX_STEP_RETRIES} attempts")
-                    return False
+                        console.print(f"[yellow]Warning: Context missing key for step {step_num}: {e}[/yellow]")
+                    return True  # Skip if context issue
 
             return False
 
@@ -742,7 +686,7 @@ def run_agentic_architecture_orchestrator(
             console.print("   → All validations passed!")
 
     # --- Post-Processing ---
-    final_architecture = context.get("step7_output", "")
+    final_architecture = context.get("step7_output", context.get("step6_output", ""))
     output_files = _save_architecture_files(base_dir, final_architecture, issue_title)
 
     # Add scaffolding files to output list
@@ -774,9 +718,9 @@ def run_agentic_architecture_orchestrator(
         for f in other_files:
             console.print(f"     - {f}")
 
-    # Issue #624: Validation failures should block generation
-    if not validation_success:
-        return False, "Architecture generation failed: validation errors detected", total_cost, model_used, output_files
+    # Validation failures should block success.
+    if not skip_prompts and not validation_success:
+        return False, "Architecture generation failed validation", total_cost, model_used, output_files
 
     # Clear state on success
     clear_workflow_state(cwd, issue_number, "architecture", state_dir, repo_owner, repo_name, use_github_state)
