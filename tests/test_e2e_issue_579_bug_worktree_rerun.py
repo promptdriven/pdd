@@ -322,6 +322,139 @@ class TestIssue579BugWorktreeRerunE2E:
         subprocess.run(["git", "worktree", "remove", str(worktree_path), "--force"],
                        cwd=main_repo, check=False, capture_output=True)
 
+    def test_fresh_rerun_resets_branch_to_main_head(self, tmp_path):
+        """
+        When resume_existing=False and the branch can't be deleted, the worktree
+        should be reset to the main repo's current HEAD so old commits from the
+        prior run don't leak into the new PR.
+
+        Without the reset, the worktree would start at the old branch tip (with
+        stale test files and commits from the first run).
+        """
+        from pdd.agentic_bug_orchestrator import _setup_worktree
+
+        # Set up a repo on main, with fix/issue-579 checked out in a worktree
+        # (simulating: user is on main, prior pdd bug created fix branch in a worktree)
+        main_repo = tmp_path / "main_repo"
+        main_repo.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=main_repo, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=main_repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=main_repo, check=True)
+
+        # Initial commit on main
+        (main_repo / "README.md").write_text("# Test\n")
+        subprocess.run(["git", "add", "."], cwd=main_repo, check=True)
+        subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=main_repo, check=True, capture_output=True)
+
+        main_head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=main_repo, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+
+        # Create fix/issue-579 in a separate worktree (simulating first pdd bug run)
+        old_worktree = tmp_path / "old_worktree"
+        subprocess.run(
+            ["git", "worktree", "add", "-b", "fix/issue-579", str(old_worktree), "HEAD"],
+            cwd=main_repo, check=True, capture_output=True,
+        )
+
+        # Add a commit on fix branch (stale work from prior run)
+        (old_worktree / "fix.py").write_text("# Old fix\n")
+        subprocess.run(["git", "add", "fix.py"], cwd=old_worktree, check=True)
+        subprocess.run(["git", "commit", "-m", "Old work from prior run"], cwd=old_worktree, check=True, capture_output=True)
+
+        old_branch_head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=old_worktree, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+
+        # Confirm the branch has diverged from main
+        assert old_branch_head != main_head, "Precondition: branch should have extra commits"
+
+        # Remove the old worktree directory but DON'T prune — branch is still
+        # registered to old worktree, so _delete_branch will fail
+        import shutil
+        shutil.rmtree(old_worktree)
+
+        # Verify main repo is on main (user's normal state)
+        current = subprocess.run(
+            ["git", "branch", "--show-current"],
+            cwd=main_repo, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        assert current == "main", "Precondition: repo should be on main"
+
+        # Fresh re-run: resume_existing=False
+        worktree_path, error = _setup_worktree(main_repo, 579, quiet=True, resume_existing=False)
+
+        assert worktree_path is not None, f"Should succeed, got: {error!r}"
+        assert error is None
+
+        # The worktree's HEAD should match main's HEAD, NOT the old branch tip
+        worktree_head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=worktree_path, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+
+        assert worktree_head == main_head, (
+            f"Fresh re-run should reset branch to main HEAD.\n"
+            f"  Main HEAD:     {main_head}\n"
+            f"  Worktree HEAD: {worktree_head}\n"
+            f"  Old branch:    {old_branch_head}\n"
+            f"Old commits from prior run are leaking into the worktree."
+        )
+
+        # The old file from the first run should not be present
+        assert not (worktree_path / "fix.py").exists(), (
+            "Old file 'fix.py' from prior run should be gone after reset"
+        )
+
+        # Clean up
+        subprocess.run(["git", "worktree", "remove", str(worktree_path), "--force"],
+                       cwd=main_repo, check=False, capture_output=True)
+
+    def test_resume_rerun_keeps_old_commits(self, mock_git_repo_with_checked_out_branch):
+        """
+        When resume_existing=True, the branch should NOT be reset — old commits
+        and files from the prior run should be preserved (that's the point of resuming).
+        """
+        from pdd.agentic_bug_orchestrator import _setup_worktree
+
+        main_repo = mock_git_repo_with_checked_out_branch["main_repo"]
+
+        # Get the branch's current tip (includes "Work from prior pdd bug run" commit)
+        branch_head_before = subprocess.run(
+            ["git", "rev-parse", "fix/issue-579"],
+            cwd=main_repo, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+
+        # Call with resume_existing=True
+        worktree_path, error = _setup_worktree(main_repo, 579, quiet=True, resume_existing=True)
+
+        assert worktree_path is not None, f"Should succeed, got: {error!r}"
+        assert error is None
+
+        # The worktree's HEAD should match the OLD branch tip (not reset)
+        worktree_head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=worktree_path, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+
+        assert worktree_head == branch_head_before, (
+            f"Resume should keep old branch commits.\n"
+            f"  Expected (old branch): {branch_head_before}\n"
+            f"  Got (worktree HEAD):   {worktree_head}\n"
+            f"Branch was unexpectedly reset during resume."
+        )
+
+        # The old file from the first run should still be present
+        assert (worktree_path / "fix.py").exists(), (
+            "Old file 'fix.py' should be preserved when resuming"
+        )
+
+        # Clean up
+        subprocess.run(["git", "worktree", "remove", str(worktree_path), "--force"],
+                       cwd=main_repo, check=False, capture_output=True)
+
     def test_change_orchestrator_handles_checked_out_branch(self, mock_git_repo_with_checked_out_branch):
         """
         Control test: verify the change orchestrator's _setup_worktree succeeds
