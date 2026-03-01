@@ -54,6 +54,9 @@ shared:
   - context/**/*_example.py
   - context/cloud_function_call.py
 
+  # Frontend (pdd connect UI)
+  - pdd/frontend/
+
   # LLM prompts (preprocessed for PyPI, also sync to public repo)
   - prompts/*_LLM.prompt
 
@@ -83,3 +86,6 @@ exclude:
   - context/**/__pycache__
   - context/**/*.log
   - context/**/*.csv
+  # Frontend exclusions
+  - pdd/frontend/node_modules/*
+  - pdd/frontend/dist/*
