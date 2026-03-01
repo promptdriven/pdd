@@ -44,15 +44,19 @@ Detailed Test Plan for agentic_bug_orchestrator
 def mock_dependencies():
     with patch("pdd.agentic_bug_orchestrator.load_prompt_template") as mock_load, \
          patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
-         patch("pdd.agentic_bug_orchestrator._setup_worktree") as mock_wt:
-        
+         patch("pdd.agentic_bug_orchestrator._setup_worktree") as mock_wt, \
+         patch("pdd.agentic_bug_orchestrator._get_modified_and_untracked") as mock_git_files:
+
         # Default behavior: return a template string that can be formatted
         mock_load.return_value = "Template for {issue_number}"
         # Default behavior: successful task
         mock_run.return_value = (True, "Default Output", 0.1, "gpt-4")
         # Default behavior: successful worktree
         mock_wt.return_value = (Path("/tmp/worktree"), None)
-        
+        # Default behavior: no modified/untracked files (avoids FileNotFoundError
+        # from subprocess using mock worktree path as cwd)
+        mock_git_files.return_value = []
+
         yield mock_load, mock_run, mock_wt
 
 def test_orchestrator_full_success(mock_dependencies, tmp_path):
