@@ -1,3 +1,14 @@
+## v0.0.163 (2026-02-28)
+
+### Fix
+
+- reset branch to main HEAD on fresh re-run to avoid stale commits
+- catch OSError instead of bare Exception, add git worktree prune
+- port worktree --force fallback from change orchestrator to bug orchestrator
+- prevent truncation of provider and invalid JSON error messages for improved debuggability (fixes #492).
+- pdd generate mixes Next.js server and client component patterns
+- preserve ANTHROPIC_API_KEY in subprocess env (Issue #492)
+
 ## v0.0.162 (2026-02-27)
 
 ### Feat
