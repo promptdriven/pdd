@@ -2619,6 +2619,68 @@ def test_provider_error_details_preserved(mock_cwd, mock_env, mock_load_model_da
     assert "anthropic" in msg
 
 
+def test_provider_error_not_truncated_at_200_chars(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """Issue #492: Provider error messages were truncated to 200 chars, making failures undebuggable.
+
+    The Gemini CLI failure on issue #489 was truncated mid-sentence at 200 chars,
+    hiding the actual error. Error messages up to 2000 chars should be preserved.
+    """
+    mock_shutil_which.return_value = "/bin/exe"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+
+    # Build an error with a unique marker well past the 200-char truncation point.
+    # _run_with_provider returns "Exit code 1: {stderr}" — the "Exit code 1: " prefix
+    # is 14 chars, so the 200-char slice of last_output captures ~186 chars of stderr.
+    # Place the marker at position 250 in stderr to ensure it's beyond the old limit.
+    padding = "x" * 250
+    marker = "REAL_ERROR_HERE"
+    long_error = padding + marker
+    assert len(long_error) > 200
+
+    mock_subprocess.return_value.returncode = 1
+    mock_subprocess.return_value.stderr = long_error
+    mock_subprocess.return_value.stdout = ""
+
+    success, msg, cost, provider = run_agentic_task("instruction", mock_cwd)
+
+    assert not success
+    assert "All agent providers failed" in msg
+    # The marker past the old 200-char boundary must be present
+    assert marker in msg, (
+        f"Error truncated: '{marker}' not found in message. "
+        f"Provider errors must preserve content beyond 200 chars for debuggability."
+    )
+
+
+def test_invalid_json_output_not_truncated_at_200_chars(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """Issue #492: Invalid JSON fallback error was truncated to 200 chars.
+
+    When a CLI returns non-JSON stdout on success (exit code 0), the error
+    message should preserve enough output to diagnose the problem.
+    """
+    mock_shutil_which.return_value = "/bin/exe"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+
+    # Place a unique marker past the 200-char truncation point in stdout.
+    # _parse_output uses result.stdout[:200], so content at position 250+ is lost.
+    padding = "x" * 250
+    marker = "JSON_PARSE_CLUE"
+    long_output = padding + marker
+
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = long_output
+    mock_subprocess.return_value.stderr = ""
+
+    success, msg, cost, provider = run_agentic_task("instruction", mock_cwd)
+
+    assert not success
+    assert "Invalid JSON output" in msg
+    assert marker in msg, (
+        f"Invalid JSON error truncated: '{marker}' not found in message. "
+        f"Must preserve content beyond 200 chars for debugging."
+    )
+
+
 def test_post_step_comment_posts_to_github(tmp_path):
     """Test that post_step_comment calls gh issue comment with correct args."""
     with patch("shutil.which", return_value="/usr/bin/gh"), \
