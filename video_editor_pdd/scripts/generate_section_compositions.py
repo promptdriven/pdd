@@ -11,6 +11,7 @@ Usage:
 
 import argparse
 import json
+import math
 import os
 import re
 import sys
@@ -53,8 +54,13 @@ def get_fps(project_data: Dict[str, Any]) -> int:
 def generate_section_component(
     section: Dict[str, Any],
     fps: int,
+    remotion_public: str = '',
 ) -> str:
-    """Generate the TSX source code for a section wrapper component."""
+    """Generate the TSX source code for a section wrapper component.
+
+    Includes audio narration from public/{section_id}/narration.wav and
+    Veo video from public/veo/{section_id}.mp4 when available.
+    """
     section_id = section['id']
     pascal_name = to_pascal_case(section_id)
     component_name = f'{pascal_name}Section'
@@ -62,11 +68,29 @@ def generate_section_component(
     offset_seconds = section.get('offsetSeconds', 0)
     compositions: List[Dict[str, Any]] = section.get('compositions', [])
 
+    # Detect available assets in remotion/public/
+    has_narration = False
+    has_veo_clip = False
+    if remotion_public:
+        narration_path = os.path.join(remotion_public, section_id, 'narration.wav')
+        has_narration = os.path.isfile(narration_path)
+        veo_clip_path = os.path.join(remotion_public, 'veo', f'{section_id}.mp4')
+        has_veo_clip = os.path.isfile(veo_clip_path)
+
     lines: List[str] = []
 
     # Imports
+    imports = ['React']
+    remotion_imports = ['Sequence']
+    if has_narration:
+        remotion_imports.append('Audio')
+    if has_veo_clip:
+        remotion_imports.append('OffthreadVideo')
+    if has_narration or has_veo_clip:
+        remotion_imports.append('staticFile')
+
     lines.append('import React from "react";')
-    lines.append('import { Sequence } from "remotion";')
+    lines.append(f'import {{ {", ".join(remotion_imports)} }} from "remotion";')
     lines.append('')
 
     # Import sub-compositions if present
@@ -75,13 +99,8 @@ def generate_section_component(
             comp_id = comp if isinstance(comp, str) else comp.get('id', '')
             if comp_id:
                 comp_pascal = to_pascal_case(comp_id)
-                # Sub-compositions are assumed to be sibling directories or relative imports
                 lines.append(f'import {{ {comp_pascal} }} from "../{comp_id}";')
         lines.append('')
-
-    # Calculate frame values
-    from_frame = f'{offset_seconds} * {fps}'
-    duration_frames = f'{duration_seconds} * {fps}'
 
     # Component definition
     lines.append(f'export const {component_name}: React.FC = () => {{')
@@ -90,7 +109,15 @@ def generate_section_component(
     lines.append(f'  const durationSeconds = {duration_seconds};')
     lines.append('')
     lines.append('  return (')
-    lines.append(f'    <Sequence from={{offsetSeconds * fps}} durationInFrames={{durationSeconds * fps}}>')
+    lines.append(f'    <Sequence from={{0}} durationInFrames={{Math.ceil(durationSeconds * fps)}}>')
+
+    # Audio narration
+    if has_narration:
+        lines.append(f'      <Audio src={{staticFile("{section_id}/narration.wav")}} />')
+
+    # Veo video clip (stretched to fill)
+    if has_veo_clip:
+        lines.append(f'      <OffthreadVideo src={{staticFile("veo/{section_id}.mp4")}} style={{{{ width: "100%", height: "100%" }}}} />')
 
     if compositions:
         for comp in compositions:
@@ -98,7 +125,7 @@ def generate_section_component(
             if comp_id:
                 comp_pascal = to_pascal_case(comp_id)
                 lines.append(f'      <{comp_pascal} />')
-    else:
+    elif not has_veo_clip:
         lines.append('      {/* Sub-compositions will be added here */}')
 
     lines.append('    </Sequence>')
@@ -139,14 +166,15 @@ def generate_root_tsx(
         section_id = section['id']
         pascal_name = to_pascal_case(section_id)
         component_name = f'{pascal_name}Section'
+        composition_id = section.get('compositionId', pascal_name + 'Section')
         duration_seconds = section.get('durationSeconds', 0)
-        duration_frames = duration_seconds * fps
+        duration_frames = math.ceil(duration_seconds * fps)
         # Use a reasonable default width/height
         width = section.get('width', 1920)
         height = section.get('height', 1080)
 
         lines.append(f'      <Composition')
-        lines.append(f'        id="{section_id}"')
+        lines.append(f'        id="{composition_id}"')
         lines.append(f'        component={{{component_name}}}')
         lines.append(f'        durationInFrames={{{duration_frames}}}')
         lines.append(f'        fps={{{fps}}}')
@@ -211,8 +239,9 @@ def _merge_root_tsx(
         section_id = section['id']
         pascal_name = to_pascal_case(section_id)
         component_name = f'{pascal_name}Section'
+        composition_id = section.get('compositionId', pascal_name + 'Section')
         duration_seconds = section.get('durationSeconds', 0)
-        duration_frames = duration_seconds * fps
+        duration_frames = math.ceil(duration_seconds * fps)
         width = section.get('width', 1920)
         height = section.get('height', 1080)
 
@@ -221,7 +250,7 @@ def _merge_root_tsx(
 
         comp_block = (
             f'      <Composition\n'
-            f'        id="{section_id}"\n'
+            f'        id="{composition_id}"\n'
             f'        component={{{component_name}}}\n'
             f'        durationInFrames={{{duration_frames}}}\n'
             f'        fps={{{fps}}}\n'
@@ -262,21 +291,27 @@ def _merge_root_tsx(
 
     content = '\n'.join(lines)
 
-    # Remove existing <Composition> blocks for our section IDs
+    # Remove existing <Composition> blocks for our section IDs (by both
+    # snake_case section_id and PascalCase compositionId for backwards compat)
     for section in sections:
         section_id = section['id']
-        # Match <Composition ... id="section_id" ... /> (possibly multiline)
-        pattern = re.compile(
-            r'\s*<Composition\s[^>]*id=["\']' + re.escape(section_id) + r'["\'][^>]*/>\s*',
-            re.DOTALL
-        )
-        # Also handle multi-line Composition blocks
-        pattern_multiline = re.compile(
-            r'\s*<Composition\s*\n(?:\s+\S+.*\n)*?\s+id=["\']' + re.escape(section_id) + r'["\'].*?\n(?:\s+\S+.*\n)*?\s*/>\s*',
-            re.DOTALL
-        )
-        content = pattern_multiline.sub('\n', content)
-        content = pattern.sub('\n', content)
+        pascal_name = to_pascal_case(section_id)
+        composition_id = section.get('compositionId', pascal_name + 'Section')
+        ids_to_remove = {section_id, composition_id}
+
+        for remove_id in ids_to_remove:
+            # Match <Composition ... id="remove_id" ... /> (possibly multiline)
+            pattern = re.compile(
+                r'\s*<Composition\s[^>]*id=["\']' + re.escape(remove_id) + r'["\'][^>]*/>\s*',
+                re.DOTALL
+            )
+            # Also handle multi-line Composition blocks
+            pattern_multiline = re.compile(
+                r'\s*<Composition\s*\n(?:\s+\S+.*\n)*?\s+id=["\']' + re.escape(remove_id) + r'["\'].*?\n(?:\s+\S+.*\n)*?\s*/>\s*',
+                re.DOTALL
+            )
+            content = pattern_multiline.sub('\n', content)
+            content = pattern.sub('\n', content)
 
     # Find the fragment or return block to insert our compositions
     # Look for </> or a closing fragment tag
@@ -382,7 +417,8 @@ def main() -> None:
         os.makedirs(section_dir, exist_ok=True)
 
         # Generate component source
-        tsx_content = generate_section_component(section, fps)
+        remotion_public = os.path.join(remotion_dir, 'public')
+        tsx_content = generate_section_component(section, fps, remotion_public)
 
         # Write file
         with open(output_path, 'w', encoding='utf-8') as f:

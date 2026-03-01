@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "build": "npx remotion bundle src/remotion/index.ts --out build"
+    "build": "npx remotion bundle src/index.ts --out build"
   },
   "keywords": [],
   "author": "",

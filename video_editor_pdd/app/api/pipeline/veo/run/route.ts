@@ -13,10 +13,20 @@ import type { SseSend } from '@/lib/types';
 
 export const runtime = 'nodejs';
 
+/**
+ * Extract a Veo prompt from a [veo: ...] marker inside markdown content.
+ * Returns null if no marker is found.
+ */
+function extractVeoMarker(content: string): string | null {
+  const match = content.match(/\[veo:\s*(.+?)\]/i);
+  return match ? match[1].trim() : null;
+}
+
 /** Resolve a Veo prompt from specs on disk */
 function resolveVeoPrompt(sectionId: string): string {
   const cwd = process.cwd();
 
+  // 1. Check JSON and text candidates first
   const candidates = [
     path.join(cwd, 'specs', sectionId, 'veo.json'),
     path.join(cwd, 'specs', sectionId, 'spec.json'),
@@ -41,10 +51,42 @@ function resolveVeoPrompt(sectionId: string): string {
     }
   }
 
+  // 2. Scan markdown files in specs/{sectionId}/ for [veo: ...] markers
+  const specDir = path.join(cwd, 'specs', sectionId);
+  if (fs.existsSync(specDir)) {
+    const mdFiles = fs
+      .readdirSync(specDir)
+      .filter((f) => f.endsWith('.md'))
+      .sort();
+
+    for (const mdFile of mdFiles) {
+      const content = fs.readFileSync(path.join(specDir, mdFile), 'utf-8');
+      const prompt = extractVeoMarker(content);
+      if (prompt) return prompt;
+    }
+  }
+
+  // 3. Check narrative/main_script.md for this section's [veo:] marker
+  const mainScript = path.join(cwd, 'narrative', 'main_script.md');
+  if (fs.existsSync(mainScript)) {
+    const content = fs.readFileSync(mainScript, 'utf-8');
+    // Find the section in the script and look for [veo:] marker within it
+    const sectionPattern = new RegExp(
+      `##\\s+.*${sectionId.replace(/_/g, '[\\s_]')}.*?\\n([\\s\\S]*?)(?=\\n##\\s|$)`,
+      'i'
+    );
+    const sectionMatch = content.match(sectionPattern);
+    if (sectionMatch) {
+      const prompt = extractVeoMarker(sectionMatch[1]);
+      if (prompt) return prompt;
+    }
+    // Also try the whole file as a last resort
+    const prompt = extractVeoMarker(content);
+    if (prompt) return prompt;
+  }
+
   throw new Error(
-    `No Veo prompt found for section "${sectionId}". Checked: ${candidates.join(
-      ', '
-    )}`
+    `No Veo prompt found for section "${sectionId}". Checked JSON/txt candidates and markdown files in specs/${sectionId}/.`
   );
 }
 

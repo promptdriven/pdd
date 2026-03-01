@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { SseLogPanel } from '../SseLogPanel';
+import { extractJobIdFromSse } from '@/lib/client/sse-utils';
 
 type ComponentStatus = 'done' | 'missing' | 'error' | 'running' | 'pending';
 
@@ -194,9 +195,9 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
         body: payload ? JSON.stringify(payload) : undefined,
       });
       if (!res.ok) throw new Error(`Request failed (${res.status})`);
-      const data = await res.json().catch(() => ({}));
-      if (data?.jobId) {
-        setActiveJobId(data.jobId as string);
+      const extractedJobId = await extractJobIdFromSse(res);
+      if (extractedJobId) {
+        setActiveJobId(extractedJobId);
         setLogOpen(true);
       }
     } catch (err) {

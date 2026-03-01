@@ -4,9 +4,8 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { promisify } from "util";
-import { exec } from "child_process";
+import { exec, spawn } from "child_process";
 import {
-  renderMedia,
   renderStill as remotionRenderStill,
   selectComposition,
 } from "@remotion/renderer";
@@ -50,7 +49,13 @@ const ensureDir = async (filePath: string): Promise<void> => {
 };
 
 /**
- * Render a Remotion composition to MP4.
+ * Render a Remotion composition to MP4 in a standalone Node.js child process.
+ *
+ * Remotion's renderMedia() hangs when called inside the Next.js dev server
+ * due to module resolution conflicts and event-loop contention. Spawning a
+ * separate Node process avoids this entirely.
+ *
+ * The child process communicates progress via JSON lines on stdout.
  */
 export const renderSection = async (
   compositionId: string,
@@ -60,23 +65,99 @@ export const renderSection = async (
   await ensureDir(outputPath);
 
   const serveUrl = getServeUrl();
-  const composition = await selectComposition({
-    serveUrl,
-    id: compositionId,
-  });
+
+  // Write a temporary .cjs script that performs the actual render
+  const scriptPath = path.join(
+    os.tmpdir(),
+    `remotion-render-${compositionId}-${Date.now()}.cjs`
+  );
+
+  const script = `
+const { selectComposition, renderMedia } = require('@remotion/renderer');
+const path = require('path');
+
+async function run() {
+  const serveUrl = ${JSON.stringify(serveUrl)};
+  const compositionId = ${JSON.stringify(compositionId)};
+  const outputLocation = ${JSON.stringify(outputPath)};
+
+  const composition = await selectComposition({ serveUrl, id: compositionId });
 
   await renderMedia({
     composition,
     serveUrl,
-    codec: "h264",
-    outputLocation: outputPath,
+    codec: 'h264',
+    outputLocation,
     onProgress: ({ progress }) => {
-      onProgress({
-        percent: Math.round(progress * 100),
-        message: `Rendering ${compositionId}...`,
-      });
+      const percent = Math.round(progress * 100);
+      process.stdout.write(JSON.stringify({ percent, compositionId }) + '\\n');
     },
   });
+
+  process.stdout.write(JSON.stringify({ percent: 100, compositionId, done: true }) + '\\n');
+}
+
+run().catch((err) => {
+  process.stderr.write(err.message || String(err));
+  process.exit(1);
+});
+`.trim();
+
+  await fs.promises.writeFile(scriptPath, script, "utf-8");
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn("node", [scriptPath], {
+        stdio: ["ignore", "pipe", "pipe"],
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          NODE_PATH: path.join(process.cwd(), "node_modules"),
+        },
+      });
+
+      let stderr = "";
+      let buffer = "";
+
+      child.stdout.on("data", (chunk: Buffer) => {
+        buffer += chunk.toString();
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const data = JSON.parse(line);
+            onProgress({
+              percent: data.percent ?? 0,
+              message: `Rendering ${compositionId}...`,
+            });
+          } catch {
+            // not JSON, ignore
+          }
+        }
+      });
+
+      child.stderr.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString();
+      });
+
+      child.on("error", reject);
+      child.on("close", (code) => {
+        if (code === 0) {
+          resolve();
+        } else {
+          reject(
+            new Error(
+              `Render process for "${compositionId}" exited with code ${code}: ${stderr.trim()}`
+            )
+          );
+        }
+      });
+    });
+  } finally {
+    await fs.promises.unlink(scriptPath).catch(() => undefined);
+  }
 };
 
 /**

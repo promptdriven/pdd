@@ -36,10 +36,12 @@ async function auditSection(
   send: SseSend,
   onLog: (msg: string) => void
 ): Promise<{ passCount: number; failCount: number }> {
-  const specDir = section.specDir;
-  const specFiles = fs
-    .readdirSync(specDir)
-    .filter((f) => f.endsWith(".md") && !f.startsWith("AUDIT_"));
+  const specDir = path.join(process.cwd(), "specs", section.specDir);
+  const specFiles = fs.existsSync(specDir)
+    ? fs
+        .readdirSync(specDir)
+        .filter((f) => f.endsWith(".md") && !f.startsWith("AUDIT_"))
+    : [];
 
   let passCount = 0;
   let failCount = 0;

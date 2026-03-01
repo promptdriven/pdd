@@ -1,0 +1,130 @@
+{
+  "name": "3blue1brown-antibiotics",
+  "outputResolution": {
+    "width": 1920,
+    "height": 1080
+  },
+  "tts": {
+    "engine": "qwen3-tts",
+    "modelPath": "models/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+    "tokenizerPath": "models/Qwen3-TTS-Tokenizer-12Hz",
+    "speaker": "Aiden",
+    "speakingRate": 0.95,
+    "sampleRate": 24000
+  },
+  "sections": [
+    {
+      "id": "cold_open",
+      "label": "Cold Open",
+      "videoFile": "cold_open.mp4",
+      "specDir": "cold_open",
+      "remotionDir": "S00-ColdOpen",
+      "compositionId": "ColdOpenSection",
+      "durationSeconds": 15.288,
+      "offsetSeconds": 0
+    },
+    {
+      "id": "part1_economics",
+      "label": "Part 1: Economics",
+      "videoFile": "part1_economics.mp4",
+      "specDir": "part1_economics",
+      "remotionDir": "S01-Economics",
+      "compositionId": "Part1Economics",
+      "durationSeconds": 382.176,
+      "offsetSeconds": 15.288
+    },
+    {
+      "id": "part2_paradigm_shift",
+      "label": "Part 2: Paradigm Shift",
+      "videoFile": "part2_paradigm_shift.mp4",
+      "specDir": "02-paradigm-shift",
+      "remotionDir": "S02-ParadigmShift",
+      "compositionId": "Part2ParadigmShift",
+      "durationSeconds": 0,
+      "offsetSeconds": 0
+    },
+    {
+      "id": "part3_mold",
+      "label": "Part 3: The Mold",
+      "videoFile": "part3_mold.mp4",
+      "specDir": "03-mold-has-three-parts",
+      "remotionDir": "S03-MoldThreeParts",
+      "compositionId": "Part3MoldThreeParts",
+      "durationSeconds": 0,
+      "offsetSeconds": 0
+    },
+    {
+      "id": "part4_precision",
+      "label": "Part 4: Precision Tradeoff",
+      "videoFile": "part4_precision.mp4",
+      "specDir": "04-precision-brings-cost",
+      "remotionDir": "S04-PrecisionTradeoff",
+      "compositionId": "Part4PrecisionTradeoff",
+      "durationSeconds": 0,
+      "offsetSeconds": 0
+    },
+    {
+      "id": "part5_compound",
+      "label": "Part 5: Compound Returns",
+      "videoFile": "part5_compound.mp4",
+      "specDir": "05-compound",
+      "remotionDir": "S05-CompoundReturns",
+      "compositionId": "Part5CompoundReturns",
+      "durationSeconds": 0,
+      "offsetSeconds": 0
+    },
+    {
+      "id": "closing",
+      "label": "Closing",
+      "videoFile": "closing.mp4",
+      "specDir": "06-closing",
+      "remotionDir": "S06-Closing",
+      "compositionId": "ClosingSection",
+      "durationSeconds": 0,
+      "offsetSeconds": 0
+    }
+  ],
+  "audioSync": {
+    "sectionGroups": {
+      "cold_open": {
+        "startSegment": "cold_open_001",
+        "endSegment": "cold_open_006"
+      },
+      "part1_economics": {
+        "startSegment": "part1_economics_001",
+        "endSegment": "part1_economics_030"
+      }
+    },
+    "silenceGapDefault": 0.3
+  },
+  "veo": {
+    "model": "veo-3.1-generate-preview",
+    "defaultAspectRatio": "16:9",
+    "maxConcurrentGenerations": 4,
+    "references": [
+      {
+        "id": "alex",
+        "label": "Alex (protagonist)",
+        "imagePath": "references/cold-open/developer_reference.png",
+        "sections": [
+          "cold_open",
+          "part1_economics"
+        ]
+      }
+    ],
+    "frameChains": [
+      {
+        "clips": [
+          "cold_open_veo_01",
+          "cold_open_veo_02"
+        ],
+        "referenceId": "alex"
+      }
+    ]
+  },
+  "render": {
+    "maxParallelRenders": 3,
+    "useLambda": false,
+    "lambdaRegion": "us-east-1"
+  }
+}

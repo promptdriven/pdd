@@ -72,11 +72,8 @@ jest.mock("crypto", () => ({
 }));
 
 // Import after mocking
-import {
-  POST,
-  parseSegmentsFromScript,
-  getWavDuration,
-} from "../app/api/pipeline/tts-render/run/route";
+import { POST } from "../app/api/pipeline/tts-render/run/route";
+import { parseSegmentsFromScript, getWavDuration } from "../lib/tts-segments";
 
 // Capture executor factory registered at module load
 const registerCallArgs = {
