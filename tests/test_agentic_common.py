@@ -484,7 +484,8 @@ def test_run_agentic_task_codex_success(mock_cwd, mock_env, mock_load_model_data
     args, _ = mock_subprocess.call_args
     cmd = args[0]
     assert cmd[0] == "/bin/codex"  # Uses discovered path, not hardcoded name
-    assert "--full-auto" in cmd
+    assert "--sandbox" in cmd
+    assert "danger-full-access" in cmd
     assert "--json" in cmd
 
 def test_run_agentic_task_fallback(mock_shutil_which, mock_subprocess_run, mock_env, mock_load_model_data, tmp_path):

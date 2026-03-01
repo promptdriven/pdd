@@ -728,10 +728,15 @@ def _run_with_provider(
         if gemini_model:
             cmd.extend(["--model", gemini_model])
     elif provider == "openai":
+        # --full-auto sets --sandbox workspace-write (Landlock+seccomp), which
+        # panics on gVisor (Cloud Run) and Docker-on-macOS. Since the PDD worker
+        # container IS the sandbox boundary, use danger-full-access instead.
+        # Ref: https://github.com/openai/codex/issues/6828
+        sandbox_mode = env.get("CODEX_SANDBOX_MODE", "danger-full-access")
         cmd = [
             cli_path,
             "exec",
-            "--full-auto",
+            "--sandbox", sandbox_mode,
             "--json",
             str(prompt_path)
         ]
