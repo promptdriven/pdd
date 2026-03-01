@@ -786,8 +786,9 @@ def _run_with_provider(
                             and isinstance(item.get("item"), dict)
                             and item["item"].get("type") == "agent_message"):
                         agent_message_data = item
-                    # usage/cost stats are in session.end (separate from the text event)
-                    if item.get("type") == "session.end":
+                    # usage/cost stats are in session.end or turn.completed
+                    # (Codex CLI 0.105.0+ uses turn.completed instead of session.end)
+                    if item.get("type") in ("session.end", "turn.completed"):
                         session_end = item
                 except json.JSONDecodeError:
                     continue
