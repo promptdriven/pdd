@@ -167,7 +167,7 @@ class TestBuildOneSessionPrompt:
         assert "PREPROCESSED(" in result
         assert "def hello():" in result
         mock_preprocess.assert_called_once()
-        mock_load.assert_called_once_with("one_session_sync_LLM")
+        mock_load.assert_called_once_with("one_session_agent_LLM")
 
     @patch("pdd.one_session_sync.load_prompt_template", return_value=_FAKE_TEMPLATE)
     @patch("pdd.one_session_sync.preprocess", return_value="spec content")
@@ -200,7 +200,7 @@ class TestBuildOneSessionPrompt:
     @patch("pdd.one_session_sync.preprocess", return_value="spec content")
     def test_missing_template_raises(self, mock_pre, mock_load, tmp_path):
         pdd_files = _make_pdd_files(tmp_path)
-        with pytest.raises(FileNotFoundError, match="one_session_sync_LLM"):
+        with pytest.raises(FileNotFoundError, match="one_session_agent_LLM"):
             build_one_session_prompt(
                 basename="my_module",
                 language="python",

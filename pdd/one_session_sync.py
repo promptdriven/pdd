@@ -115,11 +115,11 @@ def build_one_session_prompt(
     code_content = code_path.read_text(encoding="utf-8")
 
     # Load the mega-prompt template
-    template = load_prompt_template("one_session_sync_LLM")
+    template = load_prompt_template("one_session_agent_LLM")
     if template is None:
         raise FileNotFoundError(
-            "Could not find prompt template 'one_session_sync_LLM'. "
-            "Ensure prompts/one_session_sync_LLM.prompt exists."
+            "Could not find prompt template 'one_session_agent_LLM'. "
+            "Ensure prompts/one_session_agent_LLM.prompt exists."
         )
 
     # Progress file path for step-level reporting

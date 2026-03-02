@@ -10,7 +10,7 @@ Runs example generation, crash-fix, verify, test generation, and test-fix steps 
 1. Function: `build_one_session_prompt(basename: str, language: str, pdd_files: Dict[str, Path], project_root: Path, *, target_coverage: float = 90.0) -> str`
 2. Reads module prompt from `pdd_files["prompt"]`, preprocesses `<include>` tags via `preprocess(content, recursive=True, double_curly_brackets=False)`
 3. Reads generated code from `pdd_files["code"]`
-4. Loads the mega-prompt template via `load_prompt_template("one_session_sync_LLM")`
+4. Loads the mega-prompt template via `load_prompt_template("one_session_agent_LLM")`
 5. Computes `import_base` from code file path relative to project root (e.g., `pdd.crm_models`)
 6. Substitutes all placeholders: `{basename}`, `{language}`, `{prompt_path}`, `{code_path}`, `{example_path}`, `{test_path}`, `{project_root}`, `{resolved_prompt_content}`, `{code_content}`, `{target_coverage}`, `{progress_file}`, `{import_base}`, `{verify_step_num}`, `{test_step_num}`
 7. Function: `run_one_session_sync(basename, language, pdd_files, project_root, *, target_coverage=90.0, budget=None, verbose=False, quiet=False, timeout=None) -> Dict[str, Any]`
