@@ -2,6 +2,7 @@
 This module provides the `auto_include` function to automatically find and
 insert dependencies into a prompt.
 """
+import ast
 import re
 from io import StringIO
 from pathlib import Path
@@ -45,12 +46,40 @@ def _get_available_includes_from_csv(csv_output: str) -> list[str]:
     try:
         # pylint: disable=invalid-name
         dataframe = pd.read_csv(StringIO(csv_output))
-        return dataframe.apply(
-            lambda row: f"File: {row['full_path']}\nSummary: {row['file_summary']}",
-            axis=1
-        ).tolist()
+        results = []
+        for _, row in dataframe.iterrows():
+            entry = f"File: {row['full_path']}\nSummary: {row['file_summary']}"
+            exports = _extract_exports(str(row['full_path']))
+            if exports:
+                entry += f"\nExports: {', '.join(exports)}"
+            results.append(entry)
+        return results
     except Exception as ex:
         console.print(f"[red]Error parsing CSV: {str(ex)}[/red]")
+        return []
+
+
+def _extract_exports(file_path: str) -> list[str]:
+    """Extract top-level public exported names from a Python file using AST."""
+    if not file_path.endswith('.py'):
+        return []
+    try:
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            tree = ast.parse(f.read())
+        exports: list[str] = []
+        for node in ast.iter_child_nodes(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if not node.name.startswith('_'):
+                    exports.append(node.name)
+            elif isinstance(node, ast.ClassDef):
+                if not node.name.startswith('_'):
+                    exports.append(node.name)
+            elif isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id.isupper():
+                        exports.append(target.id)
+        return exports
+    except Exception:
         return []
 
 
