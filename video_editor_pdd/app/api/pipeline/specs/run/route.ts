@@ -1,34 +1,11 @@
 import { NextRequest } from "next/server";
+import fs from "fs";
 import path from "path";
 
 import { runPipelineStage, registerExecutor } from "@/lib/jobs";
+import { createSseStream } from "@/lib/sse";
 import { runClaudeFix } from "@/lib/claude";
 import { loadProject } from "@/lib/project";
-import type { SseSend } from "@/lib/types";
-
-// ----------------------------------------------------------------------------
-// SSE helper
-// ----------------------------------------------------------------------------
-function createSseStream() {
-  const stream = new TransformStream();
-  const writer = stream.writable.getWriter();
-  const encoder = new TextEncoder();
-
-  const send: SseSend = (data: object) => {
-    writer.write(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
-  };
-
-  const done = () => {
-    writer.close();
-  };
-
-  const error = (message: string) => {
-    send({ type: "error", error: message });
-    done();
-  };
-
-  return { stream: stream.readable, send, done, error };
-}
 
 // ----------------------------------------------------------------------------
 // Register specs executor (runs Claude scoped to /specs)
@@ -48,6 +25,29 @@ registerExecutor("specs", (params, _send) => {
         ? (params.files as string[])
         : [];
 
+    // Clean stale spec files for sections being regenerated so Claude CLI
+    // doesn't waste time reading/deconflicting with old content.
+    // Preserve veo.json (Veo prompt overrides placed by users or tests).
+    const specsBase = path.join(process.cwd(), "specs");
+    for (const sid of sectionIds) {
+      const sectionSpecDir = path.join(specsBase, sid);
+      if (fs.existsSync(sectionSpecDir)) {
+        // Preserve veo.json if it exists
+        const veoJsonPath = path.join(sectionSpecDir, "veo.json");
+        let veoJsonBackup: string | null = null;
+        if (fs.existsSync(veoJsonPath)) {
+          veoJsonBackup = fs.readFileSync(veoJsonPath, "utf-8");
+        }
+        fs.rmSync(sectionSpecDir, { recursive: true, force: true });
+        fs.mkdirSync(sectionSpecDir, { recursive: true });
+        if (veoJsonBackup !== null) {
+          fs.writeFileSync(veoJsonPath, veoJsonBackup);
+        }
+      } else {
+        fs.mkdirSync(sectionSpecDir, { recursive: true });
+      }
+    }
+
     const prompt = `
 You are generating visual spec markdown files for a video pipeline.
 
@@ -65,7 +65,7 @@ Files to focus on:
 ${files.length > 0 ? files.map((f) => `- ${f}`).join("\n") : "ALL spec files needed per section."}
 `.trim();
 
-    const scopeDir = path.join(process.cwd(), "specs");
+    const scopeDir = specsBase;
 
     const progressFn = (onLog as unknown as { progress?: (p: number) => void })
       .progress;

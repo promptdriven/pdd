@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { SseLogPanel } from '../SseLogPanel';
+import { extractJobIdFromSse } from '@/lib/client/sse-utils';
 
 type VeoClipStatus = 'done' | 'generating' | 'missing' | 'error';
 
@@ -143,8 +144,8 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
         );
         return;
       }
-      const data = await res.json();
-      if (data?.jobId) setJobId(data.jobId);
+      const extractedJobId = await extractJobIdFromSse(res);
+      if (extractedJobId) setJobId(extractedJobId);
     } catch (err) {
       // Revert optimistic status on network/parse error
       setClips((prev) =>

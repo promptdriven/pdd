@@ -728,10 +728,15 @@ def _run_with_provider(
         if gemini_model:
             cmd.extend(["--model", gemini_model])
     elif provider == "openai":
+        # --full-auto sets --sandbox workspace-write (Landlock+seccomp), which
+        # panics on gVisor (Cloud Run) and Docker-on-macOS. Since the PDD worker
+        # container IS the sandbox boundary, use danger-full-access instead.
+        # Ref: https://github.com/openai/codex/issues/6828
+        sandbox_mode = env.get("CODEX_SANDBOX_MODE", "danger-full-access")
         cmd = [
             cli_path,
             "exec",
-            "--full-auto",
+            "--sandbox", sandbox_mode,
             "--json",
             str(prompt_path)
         ]
@@ -786,8 +791,9 @@ def _run_with_provider(
                             and isinstance(item.get("item"), dict)
                             and item["item"].get("type") == "agent_message"):
                         agent_message_data = item
-                    # usage/cost stats are in session.end (separate from the text event)
-                    if item.get("type") == "session.end":
+                    # usage/cost stats are in session.end or turn.completed
+                    # (Codex CLI 0.105.0+ uses turn.completed instead of session.end)
+                    if item.get("type") in ("session.end", "turn.completed"):
                         session_end = item
                 except json.JSONDecodeError:
                     continue

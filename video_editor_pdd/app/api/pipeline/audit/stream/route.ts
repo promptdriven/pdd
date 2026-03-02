@@ -10,26 +10,30 @@ import { NextRequest } from "next/server";
  */
 export async function GET(_request: NextRequest) {
   const encoder = new TextEncoder();
+  let closed = false;
+
   const stream = new ReadableStream({
     start(controller) {
+      const enqueue = (text: string) => {
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(text));
+        } catch {
+          closed = true;
+        }
+      };
+
       // Send an initial connected event
-      controller.enqueue(
-        encoder.encode(`data: ${JSON.stringify({ type: "connected" })}\n\n`)
-      );
+      enqueue(`data: ${JSON.stringify({ type: "connected" })}\n\n`);
 
       // Keep alive with heartbeat every 15 seconds
       const interval = setInterval(() => {
-        try {
-          controller.enqueue(
-            encoder.encode(`data: ${JSON.stringify({ type: "heartbeat" })}\n\n`)
-          );
-        } catch {
-          clearInterval(interval);
-        }
+        enqueue(`data: ${JSON.stringify({ type: "heartbeat" })}\n\n`);
       }, 15000);
 
       // Clean up when the client disconnects
       _request.signal.addEventListener("abort", () => {
+        closed = true;
         clearInterval(interval);
         try {
           controller.close();
@@ -37,6 +41,9 @@ export async function GET(_request: NextRequest) {
           // Already closed
         }
       });
+    },
+    cancel() {
+      closed = true;
     },
   });
 

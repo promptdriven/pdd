@@ -264,10 +264,10 @@ class TestGenerateSectionComponent:
         assert "offsetSeconds = 2" in tsx
 
     def test_wraps_in_sequence_with_frame_calculations(self):
-        """Spec: <Sequence from={offsetSeconds * fps} durationInFrames={durationSeconds * fps}>."""
+        """Spec: <Sequence from={0} durationInFrames={Math.ceil(durationSeconds * fps)}>."""
         section = {"id": "intro", "durationSeconds": 5, "offsetSeconds": 0}
         tsx = generate_section_component(section, fps=30)
-        assert "<Sequence from={offsetSeconds * fps} durationInFrames={durationSeconds * fps}>" in tsx
+        assert "<Sequence from={0} durationInFrames={Math.ceil(durationSeconds * fps)}>" in tsx
 
     def test_renders_sub_composition_jsx_tags(self):
         section = {
@@ -338,8 +338,14 @@ class TestGenerateRootTsx:
         sections = [{"id": "intro", "durationSeconds": 5}]
         root = generate_root_tsx(sections, fps=30, remotion_dir="remotion/")
         assert '<Composition' in root
-        assert 'id="intro"' in root
+        # Default compositionId = PascalCase + "Section" when not explicitly set
+        assert 'id="IntroSection"' in root
         assert 'component={IntroSection}' in root
+
+    def test_uses_explicit_composition_id(self):
+        sections = [{"id": "intro", "durationSeconds": 5, "compositionId": "CustomId"}]
+        root = generate_root_tsx(sections, fps=30, remotion_dir="remotion/")
+        assert 'id="CustomId"' in root
 
     def test_duration_in_frames_calculated(self):
         """Spec: durationInFrames = durationSeconds * fps."""
@@ -371,9 +377,9 @@ class TestGenerateRootTsx:
             {"id": "outro", "durationSeconds": 4},
         ]
         root = generate_root_tsx(sections, fps=30, remotion_dir="remotion/")
-        assert 'id="intro"' in root
-        assert 'id="main_content"' in root
-        assert 'id="outro"' in root
+        assert 'id="IntroSection"' in root
+        assert 'id="MainContentSection"' in root
+        assert 'id="OutroSection"' in root
 
     def test_wraps_in_fragment(self):
         sections = [{"id": "intro", "durationSeconds": 5}]
@@ -441,7 +447,7 @@ class TestUpdateRootTsx:
         with open(root_path, "r") as f:
             content = f.read()
         assert "IntroSection" in content
-        assert 'id="intro"' in content
+        assert 'id="IntroSection"' in content
 
 
 class TestMergeRootTsx:
@@ -478,7 +484,7 @@ class TestMergeRootTsx:
         sections = [{"id": "intro", "durationSeconds": 5}]
         result = _merge_root_tsx(existing, sections, fps=30)
         assert '<Composition' in result
-        assert 'id="intro"' in result
+        assert 'id="IntroSection"' in result
 
     def test_replaces_existing_section_imports(self):
         existing = (
@@ -1151,3 +1157,108 @@ class TestEdgeCases:
             data = json.loads(line)
             assert data["status"] == "skipped"
             assert data["reason"] == "already exists"
+
+
+# ===========================================================================
+# Tests: Audio & Video asset detection in generate_section_component
+# ===========================================================================
+
+class TestAssetDetection:
+    """Verify that generate_section_component detects and includes audio/video assets."""
+
+    def test_includes_audio_when_narration_exists(self, tmp_path):
+        """When narration.wav exists in remotion/public/{section_id}/, include <Audio> tag."""
+        section = {"id": "animation_section", "durationSeconds": 7, "offsetSeconds": 0}
+        remotion_public = str(tmp_path / "public")
+        narration_dir = tmp_path / "public" / "animation_section"
+        narration_dir.mkdir(parents=True)
+        (narration_dir / "narration.wav").write_bytes(b"RIFF" + b"\x00" * 100)
+
+        tsx = generate_section_component(section, fps=30, remotion_public=remotion_public)
+        assert "Audio" in tsx
+        assert 'staticFile("animation_section/narration.wav")' in tsx
+
+    def test_no_audio_when_narration_missing(self, tmp_path):
+        """When no narration.wav exists, no <Audio> tag."""
+        section = {"id": "animation_section", "durationSeconds": 7, "offsetSeconds": 0}
+        remotion_public = str(tmp_path / "public")
+        (tmp_path / "public").mkdir(parents=True)
+
+        tsx = generate_section_component(section, fps=30, remotion_public=remotion_public)
+        assert "Audio" not in tsx
+
+    def test_includes_veo_video_when_clip_exists(self, tmp_path):
+        """When veo/{section_id}.mp4 exists, include <OffthreadVideo> tag."""
+        section = {"id": "veo_section", "durationSeconds": 7, "offsetSeconds": 0}
+        remotion_public = str(tmp_path / "public")
+        veo_dir = tmp_path / "public" / "veo"
+        veo_dir.mkdir(parents=True)
+        (veo_dir / "veo_section.mp4").write_bytes(b"\x00" * 100)
+
+        tsx = generate_section_component(section, fps=30, remotion_public=remotion_public)
+        assert "OffthreadVideo" in tsx
+        assert 'staticFile("veo/veo_section.mp4")' in tsx
+
+    def test_no_veo_video_when_clip_missing(self, tmp_path):
+        """When no veo clip exists, no <OffthreadVideo> tag."""
+        section = {"id": "animation_section", "durationSeconds": 7, "offsetSeconds": 0}
+        remotion_public = str(tmp_path / "public")
+        (tmp_path / "public").mkdir(parents=True)
+
+        tsx = generate_section_component(section, fps=30, remotion_public=remotion_public)
+        assert "OffthreadVideo" not in tsx
+
+    def test_both_audio_and_veo(self, tmp_path):
+        """Section with both narration and Veo clip includes both tags."""
+        section = {"id": "veo_section", "durationSeconds": 7, "offsetSeconds": 0}
+        remotion_public = str(tmp_path / "public")
+        narration_dir = tmp_path / "public" / "veo_section"
+        narration_dir.mkdir(parents=True)
+        (narration_dir / "narration.wav").write_bytes(b"RIFF" + b"\x00" * 100)
+        veo_dir = tmp_path / "public" / "veo"
+        veo_dir.mkdir(parents=True)
+        (veo_dir / "veo_section.mp4").write_bytes(b"\x00" * 100)
+
+        tsx = generate_section_component(section, fps=30, remotion_public=remotion_public)
+        assert "Audio" in tsx
+        assert "OffthreadVideo" in tsx
+        assert "staticFile" in tsx
+
+    def test_veo_section_no_placeholder_comment(self, tmp_path):
+        """Section with Veo clip should NOT have the placeholder comment."""
+        section = {"id": "veo_section", "durationSeconds": 7, "offsetSeconds": 0}
+        remotion_public = str(tmp_path / "public")
+        veo_dir = tmp_path / "public" / "veo"
+        veo_dir.mkdir(parents=True)
+        (veo_dir / "veo_section.mp4").write_bytes(b"\x00" * 100)
+
+        tsx = generate_section_component(section, fps=30, remotion_public=remotion_public)
+        assert "{/* Sub-compositions will be added here */}" not in tsx
+
+    def test_compositions_take_precedence_over_placeholder(self, tmp_path):
+        """Section with compositions listed should render them, not placeholder."""
+        section = {
+            "id": "animation_section",
+            "durationSeconds": 7,
+            "offsetSeconds": 0,
+            "compositions": ["blue_circle", "green_square"],
+        }
+        remotion_public = str(tmp_path / "public")
+        narration_dir = tmp_path / "public" / "animation_section"
+        narration_dir.mkdir(parents=True)
+        (narration_dir / "narration.wav").write_bytes(b"RIFF" + b"\x00" * 100)
+
+        tsx = generate_section_component(section, fps=30, remotion_public=remotion_public)
+        assert "<BlueCircle />" in tsx
+        assert "<GreenSquare />" in tsx
+        assert 'import { BlueCircle } from "../blue_circle";' in tsx
+        assert 'import { GreenSquare } from "../green_square";' in tsx
+        assert "{/* Sub-compositions will be added here */}" not in tsx
+        assert "Audio" in tsx  # Audio still included alongside compositions
+
+    def test_no_remotion_public_no_assets(self):
+        """When remotion_public is empty string, no asset detection happens."""
+        section = {"id": "intro", "durationSeconds": 5, "offsetSeconds": 0}
+        tsx = generate_section_component(section, fps=30, remotion_public="")
+        assert "Audio" not in tsx
+        assert "OffthreadVideo" not in tsx
