@@ -440,3 +440,111 @@ def test_generate_loops_when_unfinished_never_true(monkeypatch):
 
     # Assert: final code includes the continuation at least once (loop happened)
     assert "# cont" in final_code
+
+
+# ---------------------------------------------------------------------------
+# Issue #687: code_generator returns wrong model name after postprocessing
+# ---------------------------------------------------------------------------
+
+# Distinct model names to detect when the wrong one is returned
+MOCK_POSTPROCESS_RESPONSE_DISTINCT = ("runnable_code_here", 0.02, "claude-3-5-sonnet")
+
+
+def test_postprocess_model_name_returned_when_postprocess_runs(
+    mock_preprocess,
+    mock_llm_invoke,
+    mock_unfinished_prompt,
+    mock_continue_generation,
+    mock_postprocess
+):
+    """
+    Issue #687: When postprocessing runs, the returned model_name should
+    be from postprocess (the last LLM step), not from initial generation.
+
+    This test uses a *distinct* postprocess model name so we can detect
+    whether the return value comes from postprocess or initial generation.
+    """
+    # Override postprocess mock to return a distinct model name
+    mock_postprocess.return_value = MOCK_POSTPROCESS_RESPONSE_DISTINCT
+
+    runnable_code, total_cost, model_name = code_generator(
+        prompt="Generate a Python function to add two numbers.",
+        language="python",
+        strength=0.8,
+        temperature=0.5,
+        verbose=False
+    )
+
+    assert runnable_code == "runnable_code_here"
+    # BUG: currently returns "model_v1" (initial generation) instead of
+    # "claude-3-5-sonnet" (postprocess model)
+    assert model_name == "claude-3-5-sonnet", (
+        f"Expected postprocess model 'claude-3-5-sonnet', got '{model_name}'. "
+        "code_generator returns the initial generation model instead of the "
+        "postprocess model (issue #687)."
+    )
+
+
+def test_continuation_plus_postprocess_returns_postprocess_model(
+    mock_preprocess,
+    mock_llm_invoke,
+    mock_unfinished_prompt,
+    mock_continue_generation,
+    mock_postprocess
+):
+    """
+    Issue #687: When both continuation AND postprocessing run, the returned
+    model_name should be from postprocess (the very last LLM step).
+
+    Pipeline: initial → continuation → postprocess
+    Expected model_name: postprocess model (last step)
+    """
+    # Trigger continuation by marking generation as incomplete
+    mock_unfinished_prompt.return_value = MOCK_UNFINISHED_RESPONSE_INCOMPLETE
+    # Continuation returns its own model
+    mock_continue_generation.return_value = ("completed LLM output", 0.05, "gpt-4o-continue")
+    # Postprocess returns yet another distinct model
+    mock_postprocess.return_value = ("final_runnable_code", 0.03, "claude-3-5-sonnet-postprocess")
+
+    runnable_code, total_cost, model_name = code_generator(
+        prompt="Generate a Python function to multiply two numbers.",
+        language="python",
+        strength=0.8,
+        temperature=0.5,
+        verbose=False
+    )
+
+    assert runnable_code == "final_runnable_code"
+    # BUG: currently returns "gpt-4o-continue" (continuation model) instead of
+    # "claude-3-5-sonnet-postprocess" (postprocess model)
+    assert model_name == "claude-3-5-sonnet-postprocess", (
+        f"Expected postprocess model 'claude-3-5-sonnet-postprocess', got '{model_name}'. "
+        "code_generator returns the continuation model instead of the "
+        "postprocess model (issue #687)."
+    )
+
+
+def test_json_language_skips_postprocess_returns_initial_model(
+    mock_preprocess,
+    mock_llm_invoke,
+    mock_unfinished_prompt,
+    mock_continue_generation,
+    mock_postprocess
+):
+    """
+    Issue #687 (negative test): When language is 'json', postprocessing is
+    skipped. model_name_post is set to model_name, so the initial model
+    should be returned. This verifies the fix doesn't break the JSON path.
+    """
+    runnable_code, total_cost, model_name = code_generator(
+        prompt="Generate a JSON schema.",
+        language="json",
+        strength=0.8,
+        temperature=0.5,
+        verbose=False
+    )
+
+    # Postprocess should NOT have been called for JSON
+    mock_postprocess.assert_not_called()
+    # model_name should be the initial generation model (no postprocess ran)
+    assert model_name == MOCK_INITIAL_RESPONSE['model_name']
