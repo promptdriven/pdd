@@ -160,35 +160,6 @@ test.describe('Full pipeline end-to-end', () => {
     // Wait for compositions to complete (includes bundle rebuild)
     await waitForStageCompletion(page, 'compositions');
 
-    // Debug: read executor's debug log
-    const compDebugLog = path.join(PROJECT_ROOT, 'outputs', 'compositions_debug.log');
-    if (fs.existsSync(compDebugLog)) {
-      console.log('[DEBUG] compositions_debug.log:\n' + fs.readFileSync(compDebugLog, 'utf-8'));
-    } else {
-      console.log('[DEBUG] compositions_debug.log: NOT FOUND');
-    }
-    // Debug: inspect generated components for this run
-    const remotionDir = path.join(PROJECT_ROOT, 'remotion', 'src', 'remotion');
-    for (const f of ['animation_section_main.tsx', 'veo_section_main.tsx']) {
-      const fp = path.join(remotionDir, f);
-      if (fs.existsSync(fp)) {
-        const content = fs.readFileSync(fp, 'utf-8');
-        console.log(`[DEBUG] ${f} (${content.length} chars):\n${content.slice(0, 500)}`);
-      } else {
-        console.log(`[DEBUG] ${f}: NOT FOUND`);
-      }
-    }
-    // Check wrapper import
-    const wrapperPath = path.join(remotionDir, 'animation_section', 'index.tsx');
-    if (fs.existsSync(wrapperPath)) {
-      console.log(`[DEBUG] wrapper:\n${fs.readFileSync(wrapperPath, 'utf-8')}`);
-    }
-    // Check project.json compositions
-    const pj = JSON.parse(fs.readFileSync(path.join(PROJECT_ROOT, 'project.json'), 'utf-8'));
-    for (const s of pj.sections) {
-      console.log(`[DEBUG] project.json ${s.id}: compositions=${JSON.stringify(s.compositions)}`);
-    }
-
     // Navigate to Stage 9 via sidebar
     await navigateToStage(page, sidebar, /^9\s*Render/, 'Stage 9');
 

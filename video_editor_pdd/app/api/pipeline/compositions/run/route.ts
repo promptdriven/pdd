@@ -73,12 +73,19 @@ function buildComponentPrompt(name: string, spec: string, veoAssets: string[]): 
     ? `\n--- VEO ASSETS ---\nThe following video files are available in remotion/public/veo/.\nUse staticFile("veo/<filename>") to reference them (NOT staticFile("public/veo/...")).\n${veoAssets.map((f) => `- ${f}`).join("\n")}\n--- END VEO ASSETS ---\n`
     : "";
 
+  const exportName = toPascalCase(name);
+
   return `
 You are Claude Code. Generate a Remotion component.
 
 Component name: ${name}
 Target directory: remotion/src/remotion/
 Output file: remotion/src/remotion/${name}.tsx
+
+CRITICAL EXPORT REQUIREMENT:
+- The component MUST be exported as BOTH a named export AND a default export with EXACTLY this name: ${exportName}
+- Example: export const ${exportName}: React.FC = () => { ... }; export default ${exportName};
+- Do NOT use any other name for the export.
 
 CRITICAL RENDERING REQUIREMENTS:
 - The component MUST render visible content from frame 0 (no delayed fade-ins).
@@ -269,12 +276,6 @@ registerExecutor("compositions", (params, send: SseSend) => {
     let completed = 0;
 
     // Generate components via Claude Code (or deterministic fallback for _main)
-    onLog(`[compositions] Components to generate: ${JSON.stringify(components)}`);
-    onLog(`[compositions] Wrappers to generate: ${JSON.stringify(wrappers)}`);
-    // Debug: write to file for integration test diagnostics
-    const debugLogPath = path.join(process.cwd(), "outputs", "compositions_debug.log");
-    fs.mkdirSync(path.dirname(debugLogPath), { recursive: true });
-    fs.writeFileSync(debugLogPath, `components=${JSON.stringify(components)}\nwrappers=${JSON.stringify(wrappers)}\nveoAssets=${JSON.stringify(veoAssets)}\n`);
     for (const name of components) {
       send({ type: "component", name, status: "generating" });
       onLog(`[compositions] Generating component: ${name}`);
@@ -289,13 +290,6 @@ registerExecutor("compositions", (params, send: SseSend) => {
           const spec = findSpecForComponent(name);
           const prompt = buildComponentPrompt(name, spec, veoAssets);
           await runClaudeFix(prompt, REMOTION_SCOPE_DIR, (line) => onLog(line));
-        }
-
-        const genPath = path.join(REMOTION_SCOPE_DIR, `${name}.tsx`);
-        const exists = fs.existsSync(genPath);
-        fs.appendFileSync(debugLogPath, `generated ${name}: exists=${exists}\n`);
-        if (exists) {
-          fs.appendFileSync(debugLogPath, `content:\n${fs.readFileSync(genPath, "utf-8").slice(0, 300)}\n---\n`);
         }
 
         send({ type: "component", name, status: "done" });
