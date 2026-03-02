@@ -69,6 +69,7 @@ import {
   retryJob,
   runPipelineStage,
   registerExecutor,
+  clearExecutors,
   PIPELINE_DAG,
 } from "../lib/jobs";
 import type { ExecutorFactory } from "../lib/jobs";
@@ -810,6 +811,38 @@ describe("runPipelineStage", () => {
 
     await runPipelineStage("setup", inputParams, send);
     expect(capturedParams).toEqual(inputParams);
+  });
+
+  it("skips dependency stages that have no registered executor (UI-only stages)", async () => {
+    const { send } = createMockSend();
+
+    // Clear all executors, then only register for tts-script
+    clearExecutors();
+    registerExecutor("tts-script", (_params, _send) => {
+      return async (onLog) => {
+        onLog("tts-script executed");
+      };
+    });
+
+    // Should NOT throw "No executor registered for stage 'setup'"
+    const jobId = await runPipelineStage("tts-script", {}, send);
+    expect(typeof jobId).toBe("string");
+
+    const job = getJob(jobId);
+    expect(job).toBeDefined();
+    expect(job!.stage).toBe("tts-script");
+    expect(job!.status).toBe("done");
+  });
+
+  it("still throws when the explicitly requested stage has no executor", async () => {
+    const { send } = createMockSend();
+
+    // Clear all executors so "setup" has none
+    clearExecutors();
+
+    await expect(runPipelineStage("setup", {}, send)).rejects.toThrow(
+      'No executor registered for stage "setup"'
+    );
   });
 });
 

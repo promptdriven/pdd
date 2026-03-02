@@ -16,6 +16,11 @@ export function registerExecutor(stage: PipelineStage, factory: ExecutorFactory)
   EXECUTORS.set(stage, factory);
 }
 
+/** Remove all registered executors (test helper). */
+export function clearExecutors(): void {
+  EXECUTORS.clear();
+}
+
 // ---------------------------------------------------------------------------
 // Pipeline DAG
 // ---------------------------------------------------------------------------
@@ -191,6 +196,10 @@ export async function runJob(
 
   const send = JOB_SEND_MAP.get(jobId) ?? NOOP_SEND;
 
+  // Emit jobId immediately so the frontend can start tracking the job
+  // before the executor produces any output.
+  send({ type: 'started', jobId });
+
   const onLog: OnLog = Object.assign(
     (msg: string): void => {
       safeAppendLog(jobId, msg);
@@ -319,6 +328,10 @@ export async function runPipelineStage(
 
       const factory = EXECUTORS.get(current);
       if (!factory) {
+        if (!forceRun) {
+          // UI-only stage (e.g. setup, script) — no executor needed.
+          return undefined;
+        }
         throw new Error(`No executor registered for stage "${current}"`);
       }
 

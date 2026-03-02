@@ -3,7 +3,7 @@ try { require('server-only'); } catch { /* running outside Next.js bundler */ }
 import { spawn } from 'child_process';
 import type { AnnotationAnalysis, ClaudeFixResult } from './types';
 
-const TIMEOUT_MS = 300_000;
+const TIMEOUT_MS = 600_000;
 
 /**
  * Attempts to parse JSON from the Claude CLI output using multiple strategies.
@@ -62,7 +62,7 @@ function runClaude(
 
     const timeout = setTimeout(() => {
       proc.kill('SIGTERM');
-      reject(new Error('Claude CLI timeout after 300s'));
+      reject(new Error('Claude CLI timeout after 600s'));
     }, TIMEOUT_MS);
 
     proc.stdout.on('data', (chunk) => {
