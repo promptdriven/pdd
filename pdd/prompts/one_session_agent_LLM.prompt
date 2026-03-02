@@ -161,26 +161,59 @@ You are verifying that the program output aligns with the prompt's intent.
 The PROMPT FILE is the source of truth. The PROGRAM FILE runs the code to verify
 its behavior against the prompt's intent.
 
+**Step 3a: Run and Capture Output**
 1. Re-read the module specification above carefully.
 2. Run: `python {example_path}`
-3. Compare the output against the spec's expected behavior.
-   - Check every requirement in the spec against the actual output.
-   - Verify types, return values, error handling, and edge cases described in the spec.
-4. If the output is wrong or incomplete:
-   a. Explore related files (imports, dependencies, helper modules) to understand context.
-   b. Identify which part of {code_path} produces incorrect behavior.
-   c. Determine what needs fixing:
-      - Code doesn't produce output matching spec → fix the code ({code_path})
-      - Program has implementation issues → fix the program ({example_path})
-      - Issue in other supporting files → fix those files
-   d. Make ALL necessary changes so the program output aligns with the prompt.
-      Fix with minimal changes.
-   e. Run: `python {example_path}` again to confirm.
-   f. If still wrong, repeat from (a) — up to 3 iterations.
-5. Once output matches spec, report progress and proceed:
-   ```
-   echo "STEP_COMPLETE:verify" >> {progress_file}
-   ```
+3. Capture and save the full output (stdout and stderr).
+
+**Step 3b: Systematic Verification Analysis**
+Perform ALL of the following analysis steps — do NOT skip any:
+
+1. **Identify all functions and features** in the code file (`{code_path}`) that are used by the
+   example (`{example_path}`). These must all be preserved — they are required for compatibility.
+2. **Compare the program and code against the prompt specification.** Explain any discrepancies.
+   - The prompt may only describe part of the functionality needed by the program.
+   - Functions used by the program must exist in the code, even if not mentioned in the prompt.
+3. **Analyze the input/output behavior** of the program. Verify it meets the expected behavior
+   described in the prompt. Check return types, value ranges, units, error messages.
+4. **Identify potential edge cases, error handling issues, or performance concerns** that could
+   cause problems. Check code for potential bugs that haven't manifested yet.
+5. **When analyzing errors involving mocked dependencies:**
+   - Identify if the example uses MagicMock, unittest.mock, or similar mocking.
+   - Trace mock configuration to verify it matches expected real API behavior.
+   - For AttributeError on mock objects: check if mock.return_value has correct type.
+   - Distinguish "Mock Configuration Error" (mock setup wrong) from "Production Code Error"
+     (API usage wrong in the code).
+6. **Carefully distinguish between:**
+   a. Incompatibilities (functions called by program but missing from code) — CRITICAL issues
+   b. Prompt adherence issues (code doesn't match prompt requirements) — important but secondary
+   c. Implementation issues (bugs, edge cases) — address without breaking compatibility
+
+**Step 3c: Fix Issues (if any found)**
+If the analysis found zero issues, proceed directly to progress reporting.
+
+If issues were found, fix them — up to 3 iterations:
+```
+iteration = 0
+while iteration < 3 and issues_remain:
+    1. For each issue, develop a solution that addresses the root cause while satisfying
+       the prompt requirements AND maintaining backward compatibility.
+    2. Prioritize fixes in this order:
+       a. Keep the program working (preserve existing functions and their signatures)
+       b. Add any new functionality requested by the prompt
+       c. Improve/fix implementation details of existing functions
+    3. Do NOT remove functions called by the program, even if not in the prompt.
+       Prefer additive changes over removing functionality.
+    4. Make the fixes in {code_path} and/or {example_path} as needed.
+    5. Run: `python {example_path}` — verify the fix works.
+    6. Re-run the analysis from Step 3b to check for remaining issues.
+    iteration += 1
+```
+
+Once output matches spec and no issues remain, report progress:
+```
+echo "STEP_COMPLETE:verify" >> {progress_file}
+```
 
 ### Step 4: Generate & Fix Tests (iterative)
 
