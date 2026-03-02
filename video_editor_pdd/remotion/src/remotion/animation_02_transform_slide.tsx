@@ -39,7 +39,7 @@ export const Animation02TransformSlide: React.FC = () => {
   return (
     <AbsoluteFill
       style={{
-        backgroundColor: "#0A1628",
+        backgroundColor: "#FF0000",
         justifyContent: "center",
         alignItems: "center",
       }}
