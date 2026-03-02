@@ -10,7 +10,7 @@ Parallel sync engine that runs `pdd sync` for multiple modules concurrently usin
 1. Class: `AsyncSyncRunner(basenames, dep_graph, sync_options, github_info, quiet, verbose)`
    - `basenames: List[str]` — modules to sync
    - `dep_graph: Dict[str, List[str]]` — basename -> [dependency basenames]
-   - `sync_options: Dict` — budget, skip_verify, skip_tests, agentic, no_steer, max_attempts
+   - `sync_options: Dict` — budget, skip_verify, skip_tests, agentic, no_steer, max_attempts, one_session
    - `github_info: Optional[Dict]` — owner, repo, issue_number, cwd (None to disable comments)
    - Tracks per-module state: pending -> running -> success | failed
 2. Method: `run() -> Tuple[bool, str, float]` — returns (all_success, summary_message, total_cost)
@@ -18,7 +18,7 @@ Parallel sync engine that runs `pdd sync` for multiple modules concurrently usin
 4. Dependency-aware scheduling: a module starts only when all its dependencies (within target set) have status "success"
 5. Dependencies NOT in basenames are assumed already synced
 6. Pause-on-failure: when any module fails, set `self.failed = True`; let running modules finish but don't start new ones
-7. Each module runs as a `pdd sync` subprocess with `--force`, `--agentic`, `--no-steer` flags
+7. Each module runs as a `pdd sync` subprocess with `--force`, `--agentic`, `--no-steer` flags; append `--one-session` if `sync_options["one_session"]` is truthy
 8. Use `PDD_OUTPUT_COST_PATH` env var for cost capture from subprocess (CSV format)
 9. Sync failure detection: exit code != 0 OR "Overall status:" line contains "Failed"
 10. Per-module timeout: `MODULE_TIMEOUT = 900` seconds (15 minutes)
