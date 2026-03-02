@@ -132,15 +132,19 @@ OpenAI,gpt-4o-mini,0.15,0.6,1450,TRUE,,OPENAI_API_KEY,,,none,0
                             # Bypass postprocess LLM call (uses output_pydantic=ExtractedCode)
                             # This test is about #296 warning suppression, not code extraction
                             with patch('pdd.code_generator.postprocess', return_value=('def add(a, b):\n    return a + b', 0.0, 'mock-model')):
-                                from pdd import cli
+                                # Bypass pdd_preprocess which may fail in Cloud Batch
+                                # (missing <include> files, different cwd). This test is about
+                                # warning suppression, not prompt preprocessing.
+                                with patch('pdd.code_generator_main.pdd_preprocess', side_effect=lambda text, **kwargs: text):
+                                    from pdd import cli
 
-                                runner = CliRunner()
-                                result = runner.invoke(cli.cli, [
-                                    "--local",  # Force local execution
-                                    "generate",
-                                    "test_python.prompt",
-                                    "--output", "output.py"
-                                ], catch_exceptions=False)
+                                    runner = CliRunner()
+                                    result = runner.invoke(cli.cli, [
+                                        "--local",  # Force local execution
+                                        "generate",
+                                        "test_python.prompt",
+                                        "--output", "output.py"
+                                    ], catch_exceptions=False)
 
         # 6. THE KEY ASSERTION: No warning about missing base model
         # Check that the command completed successfully
@@ -234,15 +238,17 @@ OpenAI,gpt-4o-mini,0.15,0.6,1450,TRUE,,OPENAI_API_KEY,,,none,0
                 with patch('pdd.llm_invoke._load_model_data', side_effect=load_no_gpt5_csv):
                     with patch('pdd.llm_invoke.litellm.completion', side_effect=mock_completion):
                         with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": 0.001, "input_tokens": 20, "output_tokens": 10}):
-                            from pdd import cli
+                            # Bypass pdd_preprocess which may fail in Cloud Batch
+                            with patch('pdd.code_generator_main.pdd_preprocess', side_effect=lambda text, **kwargs: text):
+                                from pdd import cli
 
-                            runner = CliRunner()
-                            result = runner.invoke(cli.cli, [
-                                "--local",
-                                "generate",
-                                "hello.prompt",
-                                "--output", "hello.py"
-                            ], catch_exceptions=False)
+                                runner = CliRunner()
+                                result = runner.invoke(cli.cli, [
+                                    "--local",
+                                    "generate",
+                                    "hello.prompt",
+                                    "--output", "hello.py"
+                                ], catch_exceptions=False)
 
         # Verify success
         assert result.exit_code == 0, f"Command failed: {result.output}"

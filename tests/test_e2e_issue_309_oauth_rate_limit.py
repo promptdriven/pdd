@@ -384,6 +384,9 @@ class TestAuthLoginE2EEnvironment:
         monkeypatch.chdir(tmp_path)
         # Ensure no Firebase API key is set
         monkeypatch.delenv("NEXT_PUBLIC_FIREBASE_API_KEY", raising=False)
+        # Mock _load_firebase_api_key directly to guarantee isolation
+        # (in Cloud Batch, .env files or env vars may leak through)
+        monkeypatch.setattr("pdd.commands.auth._load_firebase_api_key", lambda: "")
 
         result = runner.invoke(cli.cli, ["auth", "login"])
 
@@ -398,6 +401,9 @@ class TestAuthLoginE2EEnvironment:
         jwt_cache = tmp_path / ".pdd" / "jwt_cache_nonexistent"
         monkeypatch.setattr("pdd.commands.auth.JWT_CACHE_FILE", jwt_cache)
         monkeypatch.setattr("pdd.auth_service.JWT_CACHE_FILE", jwt_cache)
+        # Mock has_refresh_token to guarantee no keyring entry is found
+        # (in Cloud Batch, keyring may have tokens from entrypoint JWT exchange)
+        monkeypatch.setattr("pdd.auth_service.has_refresh_token", lambda: False)
 
         result = runner.invoke(cli.cli, ["auth", "status"])
 

@@ -557,7 +557,7 @@ def run_agentic_bug_orchestrator(
                     if not quiet:
                         console.print(
                             f"  → No FILES_CREATED markers; detected "
-                            f"{len(new_files)} new file(s) on disk: "
+                            f"{len(new_files)} new or modified file(s) on disk: "
                             f"{', '.join(new_files)}"
                         )
 

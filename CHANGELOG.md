@@ -1,3 +1,20 @@
+## v0.0.164 (2026-03-01)
+
+### Feat
+
+- Implement a new detailed video script and associated content specifications, replacing previous integration test assets.
+- Add new integration spec markdown and Playwright test run artifacts.
+- update compositions list API route
+
+### Fix
+
+- enforce export names in Claude prompts and remove debug logging (#658)
+- harden auth and CSV tests for Cloud Batch environment
+- mock _get_modified_and_untracked in orchestrator tests
+- disable Codex CLI Landlock sandbox for Cloud Run (gVisor) compatibility
+- parse Codex turn.completed for usage/cost (#658)
+- Step 7 filesystem fallback when FILES_CREATED markers missing (#658)
+
 ## v0.0.163 (2026-02-28)
 
 ### Feat
