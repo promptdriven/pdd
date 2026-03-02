@@ -5,41 +5,35 @@ import {
   interpolateColors,
   useCurrentFrame,
   Easing,
+  spring,
+  useVideoConfig,
 } from "remotion";
 
 export const Animation02TransformSlide: React.FC = () => {
   const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
 
-  // Morph: frames 0–45
-  const borderRadius = interpolate(frame, [0, 45], [120, 12], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
+  // Morph phase: frames 0–45 (circle → rounded square)
+  const morphProgress = spring({
+    frame,
+    fps,
+    config: { damping: 15, stiffness: 80, mass: 0.8 },
+    durationInFrames: 45,
   });
 
-  const size = interpolate(frame, [0, 45], [240, 200], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
+  const borderRadius = interpolate(morphProgress, [0, 1], [120, 12]);
+  const size = interpolate(morphProgress, [0, 1], [240, 200]);
+  const fillColor = interpolateColors(
+    morphProgress,
+    [0, 1],
+    ["#3B82F6", "#22C55E"]
+  );
 
-  const fillColor = interpolateColors(frame, [0, 45], ["#3B82F6", "#22C55E"]);
-
-  // Slide: frames 45–105, easeInOut
-  const translateX = interpolate(frame, [45, 105], [0, 300], {
+  // Slide phase: frames 45–120 (center → right)
+  const slideX = interpolate(frame, [45, 120], [0, 25], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
     easing: Easing.inOut(Easing.ease),
-  });
-
-  // Shadow intensity follows morph completion
-  const shadowOpacity = interpolate(frame, [0, 45], [0, 0.5], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
-
-  // Exit fade: last 30 frames (assuming ~150 total = 5s at 30fps)
-  const opacity = interpolate(frame, [120, 150], [1, 0], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
   });
 
   return (
@@ -56,9 +50,7 @@ export const Animation02TransformSlide: React.FC = () => {
           height: size,
           borderRadius,
           backgroundColor: fillColor,
-          transform: `translateX(${translateX}px)`,
-          boxShadow: `0 0 24px rgba(34, 197, 94, ${shadowOpacity})`,
-          opacity,
+          transform: `translateX(${slideX}vw)`,
         }}
       />
     </AbsoluteFill>

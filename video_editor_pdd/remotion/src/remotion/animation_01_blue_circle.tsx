@@ -4,13 +4,13 @@ import { AbsoluteFill, interpolate, useCurrentFrame, Easing } from "remotion";
 export const Animation01BlueCircle: React.FC = () => {
   const frame = useCurrentFrame();
 
-  const opacity = interpolate(frame, [0, 15], [0, 1], {
+  const opacity = interpolate(frame, [0, 20], [0, 1], {
     extrapolateRight: "clamp",
   });
 
-  const scale = interpolate(frame, [0, 30, 60], [1.0, 1.15, 1.0], {
+  const scale = interpolate(frame, [0, 15, 30], [0.8, 1.1, 1.0], {
     extrapolateRight: "clamp",
-    easing: Easing.inOut(Easing.ease),
+    easing: Easing.out(Easing.ease),
   });
 
   return (
@@ -27,7 +27,6 @@ export const Animation01BlueCircle: React.FC = () => {
           height: 240,
           borderRadius: "50%",
           backgroundColor: "#3B82F6",
-          boxShadow: "0 0 24px rgba(59, 130, 246, 0.5)",
           opacity,
           transform: `scale(${scale})`,
         }}
