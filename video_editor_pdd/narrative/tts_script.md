@@ -1,44 +1,48 @@
-# Integration Test — TTS Script
+# TTS Script
 
 ## Annotations Key
 
 - `[TONE: ...]` — Overall vocal quality
 - `[PACE: ...]` — Speaking speed
-- `[PAUSE: Xs]` — Pause duration between lines
+- `[PAUSE: Xs]` — Silence between blocks
 - `[EMOTION: ...]` — Emotional coloring
-- `**word**` — Strong emphasis
-- `*word*` — Light emphasis
 
 ---
 
 ## ANIMATION SECTION
 
-[TONE: clear, introductory]
-[PACE: moderate]
-[EMOTION: neutral, friendly]
-This is the **first** section of the integration test video.
+[TONE: Clear, introductory]
+[PACE: Moderate]
+[EMOTION: Neutral, friendly]
 
-[PAUSE: 1s]
+> This is the first section of the integration test video.
 
-[TONE: informative, matter-of-fact]
-[PACE: moderate]
-[EMOTION: calm]
-It uses *only* Remotion animations with **no** Veo clips.
+[PAUSE: 0.8s]
+
+[TONE: Informative, matter-of-fact]
+[PACE: Moderate]
+[EMOTION: Calm]
+
+> It uses only Remotion animations with no Veo clips.
+
+[PAUSE: 1.5s]
 
 ---
 
 ## VEO SECTION
 
-[PAUSE: 1.5s]
+[TONE: Warm, cinematic]
+[PACE: Slightly slower]
+[EMOTION: Reflective, inviting]
 
-[TONE: warm, cinematic]
-[PACE: moderate, slightly slower]
-[EMOTION: reflective, inviting]
-This is the **second** section of the integration test video.
+> This is the second section of the integration test video.
 
-[PAUSE: 1s]
+[PAUSE: 0.8s]
 
-[TONE: informative, descriptive]
-[PACE: moderate]
-[EMOTION: calm, appreciative]
-It uses *Veo-generated* clips with narration overlay.
+[TONE: Descriptive, closing]
+[PACE: Moderate]
+[EMOTION: Calm, appreciative]
+
+> It uses Veo-generated clips with narration overlay.
+
+[PAUSE: 1.0s]

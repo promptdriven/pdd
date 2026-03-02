@@ -2,18 +2,13 @@
 
 ### Feat
 
-- Implement a new detailed video script and associated content specifications, replacing previous integration test assets.
-- Add new integration spec markdown and Playwright test run artifacts.
-- update compositions list API route
+- **Step 7 filesystem fallback for marker-less providers** — When the code-generation provider (e.g., Codex) writes files without emitting `FILES_CREATED` markers, the bug orchestrator now snapshots modified/untracked files before and after Step 7 and detects new files on disk, preventing a false hard-stop.
+- **Codex `--sandbox` mode replaces `--full-auto`** — Codex CLI invocation now uses `--sandbox danger-full-access` (configurable via `CODEX_SANDBOX_MODE` env var) instead of `--full-auto`, fixing Landlock/seccomp panics on gVisor (Cloud Run) and Docker-on-macOS. The PDD worker container itself serves as the sandbox boundary.
+- **Parse Codex `turn.completed` for usage/cost** — `_run_with_provider` now accepts both `session.end` and `turn.completed` event types for extracting usage statistics, supporting Codex CLI 0.105.0+ which changed the event name.
 
 ### Fix
 
-- enforce export names in Claude prompts and remove debug logging (#658)
-- harden auth and CSV tests for Cloud Batch environment
-- mock _get_modified_and_untracked in orchestrator tests
-- disable Codex CLI Landlock sandbox for Cloud Run (gVisor) compatibility
-- parse Codex turn.completed for usage/cost (#658)
-- Step 7 filesystem fallback when FILES_CREATED markers missing (#658)
+- **Harden auth and CSV tests for Cloud Batch environment** — `test_e2e_issue_296_custom_csv.py` now mocks `pdd_preprocess` to avoid missing `<include>` file failures in Cloud Batch. `test_e2e_issue_309_oauth_rate_limit.py` mocks `_load_firebase_api_key` and `has_refresh_token` to guarantee isolation from leaked env vars and keyring tokens in the Cloud Batch entrypoint.
 
 ## v0.0.163 (2026-02-28)
 
