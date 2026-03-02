@@ -1,22 +1,27 @@
 import React from "react";
-import { AbsoluteFill, interpolate, useCurrentFrame, Easing } from "remotion";
+import {
+  AbsoluteFill,
+  interpolate,
+  useCurrentFrame,
+  Easing,
+} from "remotion";
 
 export const Animation01BlueCircle: React.FC = () => {
   const frame = useCurrentFrame();
 
-  const opacity = interpolate(frame, [0, 20], [0, 1], {
+  const opacity = interpolate(frame, [0, 15], [0, 1], {
     extrapolateRight: "clamp",
   });
 
-  const scale = interpolate(frame, [0, 15, 30], [0.8, 1.1, 1.0], {
+  const scale = interpolate(frame, [0, 30, 60], [0.8, 1.1, 1.0], {
     extrapolateRight: "clamp",
-    easing: Easing.out(Easing.ease),
+    easing: Easing.inOut(Easing.ease),
   });
 
   return (
     <AbsoluteFill
       style={{
-        backgroundColor: "#FF0000",
+        backgroundColor: "#0A1628",
         justifyContent: "center",
         alignItems: "center",
       }}
