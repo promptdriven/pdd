@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import click
@@ -23,7 +24,8 @@ try:
     from pdd.preprocess import compute_cache_key, get_file_path, parse_include_tags
 except ImportError:
     def compute_cache_key(source_path: str, query: str) -> str:  # type: ignore[misc]
-        return hashlib.sha256((source_path + "\n" + query).encode()).hexdigest()
+        normalized = os.path.normpath(source_path)
+        return hashlib.sha256((normalized + "\n" + query).encode()).hexdigest()
 
     def get_file_path(raw_path: str, prompt_file: Path | None = None) -> Path:  # type: ignore[misc]
         if prompt_file is not None:
@@ -52,6 +54,7 @@ def _find_prompt_files(project_root: Path) -> list[Path]:
 def _collect_referenced_keys(project_root: Path) -> set[str]:
     """Scan every .prompt file and return the set of cache keys still in use."""
     referenced: set[str] = set()
+    resolved_root = project_root.resolve()
     for prompt_file in _find_prompt_files(project_root):
         try:
             text = prompt_file.read_text(encoding="utf-8")
@@ -64,7 +67,12 @@ def _collect_referenced_keys(project_root: Path) -> set[str]:
                 # Source file no longer exists – the entry is orphaned by
                 # definition, so we intentionally do *not* add it.
                 continue
-            key = compute_cache_key(str(resolved), query)
+            # Use project-relative path to match CLI and API cache keys.
+            try:
+                rel_path = str(Path(resolved).resolve().relative_to(resolved_root))
+            except ValueError:
+                rel_path = str(resolved)
+            key = compute_cache_key(rel_path, query)
             referenced.add(key)
     return referenced
 

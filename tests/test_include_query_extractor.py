@@ -6,7 +6,7 @@
 #   - `extract(file_path, query)` method that:
 #     1. Reads source file content
 #     2. Computes content hash for freshness detection
-#     3. Computes deterministic cache key from (resolved_path, query)
+#     3. Computes deterministic cache key from (project-relative path, query)
 #     4. Checks cache if enabled: returns cached content if hash matches
 #     5. Removes stale/corrupted cache entries
 #     6. Calls LLM via template loading, preprocessing, and invocation
@@ -154,6 +154,16 @@ def _write_cache_entry(cache_dir, cache_key, content, source_path, source_hash, 
     meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
 
+def _project_relative(source_file, project_root):
+    """Compute the project-relative path string for a source file."""
+    resolved = source_file.resolve()
+    pr = Path(project_root).resolve()
+    try:
+        return str(resolved.relative_to(pr))
+    except ValueError:
+        return str(resolved)
+
+
 # ===========================================================================
 # Tests: compute_cache_key
 # ===========================================================================
@@ -190,10 +200,11 @@ class TestComputeCacheKey:
         assert len(key) == 64
 
     def test_matches_manual_sha256(self):
-        """Key matches manually computed sha256."""
+        """Key matches manually computed sha256 (with normpath)."""
         path = "/some/file.py"
         query = "extract classes"
-        expected = hashlib.sha256((path + "\n" + query).encode()).hexdigest()
+        normalized = os.path.normpath(path)
+        expected = hashlib.sha256((normalized + "\n" + query).encode()).hexdigest()
         assert compute_cache_key(path, query) == expected
 
     def test_empty_inputs(self):
@@ -304,7 +315,9 @@ class TestExtractCacheHit:
         content = source_file.read_text(encoding="utf-8")
         source_hash = hashlib.sha256(content.encode()).hexdigest()
         query = "extract functions"
-        cache_key = compute_cache_key(str(resolved), query)
+        # Use project-relative path for cache key (matches extract() behavior)
+        rel_path = _project_relative(source_file, patched_config)
+        cache_key = compute_cache_key(rel_path, query)
         cache_dir = patched_config / ".pdd" / "extracts"
 
         _write_cache_entry(
@@ -343,7 +356,8 @@ class TestExtractStaleCache:
         """When source hash doesn't match, LLM is called again."""
         resolved = source_file.resolve()
         query = "extract functions"
-        cache_key = compute_cache_key(str(resolved), query)
+        rel_path = _project_relative(source_file, patched_config)
+        cache_key = compute_cache_key(rel_path, query)
         cache_dir = patched_config / ".pdd" / "extracts"
 
         _write_cache_entry(
@@ -361,7 +375,8 @@ class TestExtractStaleCache:
         """Stale cache files are replaced with new ones."""
         resolved = source_file.resolve()
         query = "q"
-        cache_key = compute_cache_key(str(resolved), query)
+        rel_path = _project_relative(source_file, patched_config)
+        cache_key = compute_cache_key(rel_path, query)
         cache_dir = patched_config / ".pdd" / "extracts"
 
         _write_cache_entry(
@@ -394,7 +409,8 @@ class TestExtractCorruptedCache:
         """Invalid JSON in meta file causes re-extraction."""
         resolved = source_file.resolve()
         query = "q"
-        cache_key = compute_cache_key(str(resolved), query)
+        rel_path = _project_relative(source_file, patched_config)
+        cache_key = compute_cache_key(rel_path, query)
         cache_dir = patched_config / ".pdd" / "extracts"
 
         md_path = cache_dir / f"{cache_key}.md"
@@ -686,7 +702,8 @@ class TestPartialCacheFiles:
         """If .md exists but .meta.json doesn't, LLM is called."""
         resolved = source_file.resolve()
         query = "q"
-        cache_key = compute_cache_key(str(resolved), query)
+        rel_path = _project_relative(source_file, patched_config)
+        cache_key = compute_cache_key(rel_path, query)
         cache_dir = patched_config / ".pdd" / "extracts"
 
         md_path = cache_dir / f"{cache_key}.md"
@@ -704,7 +721,8 @@ class TestPartialCacheFiles:
         content = source_file.read_text(encoding="utf-8")
         source_hash = hashlib.sha256(content.encode()).hexdigest()
         query = "q"
-        cache_key = compute_cache_key(str(resolved), query)
+        rel_path = _project_relative(source_file, patched_config)
+        cache_key = compute_cache_key(rel_path, query)
         cache_dir = patched_config / ".pdd" / "extracts"
 
         meta_path = cache_dir / f"{cache_key}.meta.json"
@@ -720,3 +738,105 @@ class TestPartialCacheFiles:
         result = extractor.extract(str(source_file), query)
         assert result == "extracted content here"
         extractor._llm_invoke.assert_called_once()
+
+
+# ===========================================================================
+# Tests: Cache key path form consistency (regression for absolute vs relative)
+# ===========================================================================
+
+class TestCacheKeyPathConsistency:
+    """Tests that cache keys are consistent regardless of path form.
+
+    The fix: extract() uses project-relative paths for cache keys, and
+    compute_cache_key normalizes paths with os.path.normpath, so both
+    CLI and API produce the same cache entries.
+    """
+
+    def test_absolute_vs_relative_path_produces_same_cache_key(self):
+        """compute_cache_key normalizes with normpath but cannot resolve
+        absolute-vs-relative without project root context.  extract()
+        handles this by always converting to project-relative paths.
+        Here we verify that normpath-level normalization works."""
+        # normpath handles redundant separators and dot components
+        key1 = compute_cache_key("/path/to/../to/file.py", "query")
+        key2 = compute_cache_key("/path/to/file.py", "query")
+        assert key1 == key2, (
+            "Cache keys differ for '/path/to/../to/file.py' vs '/path/to/file.py'. "
+            "Path should be normalized before hashing."
+        )
+
+    def test_dotslash_vs_bare_path_produces_same_cache_key(self):
+        """'./src.py' and 'src.py' should produce the same cache key."""
+        key_dot = compute_cache_key("./src.py", "query")
+        key_bare = compute_cache_key("src.py", "query")
+        assert key_dot == key_bare, (
+            "Cache keys differ for './src.py' vs 'src.py'. "
+            "Path should be normalized before hashing."
+        )
+
+    def test_extract_uses_project_relative_path_for_cache_key(
+        self, source_file, extractor, patched_config, cache_enabled
+    ):
+        """IncludeQueryExtractor.extract() uses the project-relative path
+        as the cache key input, so both CLI and API find the same entry."""
+        query = "extract functions"
+        extractor.extract(str(source_file), query)
+
+        # The cache key used internally should match project-relative path
+        resolved = source_file.resolve()
+        try:
+            rel_path = str(resolved.relative_to(patched_config.resolve()))
+        except ValueError:
+            pytest.skip("source_file not under project root")
+
+        expected_key = compute_cache_key(rel_path, query)
+        cache_dir = patched_config / ".pdd" / "extracts"
+        md_path = cache_dir / f"{expected_key}.md"
+        assert md_path.exists(), (
+            "Cache file not found under project-relative key. "
+            f"Expected key from rel_path='{rel_path}': {expected_key[:12]}..."
+        )
+
+    def test_cli_cache_entry_visible_to_api_path_logic(
+        self, tmp_path, extractor, cache_enabled
+    ):
+        """Simulate CLI creating a cache entry, then API trying to find it.
+
+        CLI path: IncludeQueryExtractor.extract(resolved_path, query)
+          -> internally converts to project-relative path
+          -> cache_key = compute_cache_key(rel_path, query)
+
+        API path: extracts_for_prompt resolves include relative to prompt parent,
+          then does: source_path = str(resolved.relative_to(project_root))
+          -> cache_key = compute_cache_key(source_path, query)
+
+        Both should produce the same cache key for the same file.
+        """
+        # Setup project
+        project_root = tmp_path
+        cache_dir = project_root / ".pdd" / "extracts"
+        cache_dir.mkdir(parents=True)
+
+        source = project_root / "lib" / "utils.py"
+        source.parent.mkdir(parents=True)
+        source.write_text("def helper(): pass", encoding="utf-8")
+
+        with patch(
+            "pdd.include_query_extractor.get_config",
+            return_value={"project_root": str(project_root)},
+        ):
+            query = "extract helper function"
+
+            # --- CLI path (what IncludeQueryExtractor.extract does) ---
+            extractor.extract(str(source), query)
+
+            # --- API path (what extracts.py extracts_for_prompt does) ---
+            resolved = source.resolve()
+            api_source_path = str(resolved.relative_to(project_root.resolve()))
+            api_key = compute_cache_key(api_source_path, query)
+
+            # The CLI should have created a cache entry findable by the API key
+            assert (cache_dir / f"{api_key}.md").exists(), (
+                f"CLI cache entry not findable under API key. "
+                f"API would use '{api_source_path}', key={api_key[:12]}..."
+            )

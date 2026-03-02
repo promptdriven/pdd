@@ -58,8 +58,13 @@ _ENV_CACHE_ENABLE = "EXTRACTS_CACHE_ENABLE"
 # ---------------------------------------------------------------------------
 
 def compute_cache_key(source_file_path: str, query: str) -> str:
-    """Deterministic cache key: sha256(source_file_path + '\\n' + query)."""
-    return hashlib.sha256((source_file_path + "\n" + query).encode()).hexdigest()
+    """Deterministic cache key: sha256(normpath(source_file_path) + '\\n' + query).
+
+    The path is normalized via ``os.path.normpath`` so that trivial
+    variations like ``./src.py`` vs ``src.py`` produce the same key.
+    """
+    normalized = os.path.normpath(source_file_path)
+    return hashlib.sha256((normalized + "\n" + query).encode()).hexdigest()
 
 
 def _file_content_hash(content: str) -> str:
@@ -80,6 +85,20 @@ def _cache_dir() -> Path:
     d = root / ".pdd" / "extracts"
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def _project_relative_path(resolved: Path) -> str:
+    """Return the project-relative path string for *resolved*.
+
+    Falls back to the absolute path if the file is not under the
+    project root.
+    """
+    cfg = get_config()
+    project_root = Path(cfg.get("project_root", ".")).resolve()
+    try:
+        return str(resolved.relative_to(project_root))
+    except ValueError:
+        return str(resolved)
 
 
 # ---------------------------------------------------------------------------
@@ -117,7 +136,10 @@ class IncludeQueryExtractor:
         source_content = resolved.read_text(encoding="utf-8")
         source_hash = _file_content_hash(source_content)
 
-        cache_key = compute_cache_key(str(resolved), query)
+        # Use project-relative path for cache key so that CLI and API
+        # produce the same cache entries for the same file.
+        rel_path = _project_relative_path(resolved)
+        cache_key = compute_cache_key(rel_path, query)
         cache = _cache_dir()
         md_path = cache / f"{cache_key}.md"
         meta_path = cache / f"{cache_key}.meta.json"
