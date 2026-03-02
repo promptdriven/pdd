@@ -1,6 +1,7 @@
 // app/api/sections/[id]/resolve-batch/route.ts
 import { NextResponse } from "next/server";
 import path from "path";
+import { execSync } from "child_process";
 import { getDb } from "@/lib/db";
 import { runClaudeFix } from "@/lib/claude";
 import { createJob, runJob } from "@/lib/jobs";
@@ -167,6 +168,16 @@ export async function POST(_request: Request, { params }: RouteParams) {
       for (const ann of byFixType.manual) {
         onLog(`Skipped manual annotation ${ann.id}`);
       }
+
+      // Rebuild Remotion bundle so renders pick up the edited TSX
+      const remotionDir = path.join(process.cwd(), "remotion");
+      onLog("Rebuilding Remotion bundle...");
+      execSync("npx remotion bundle src/index.ts --out build", {
+        cwd: remotionDir,
+        stdio: "pipe",
+        timeout: 120_000,
+      });
+      onLog("Bundle rebuilt.");
 
       // Render the affected section
       const project = loadProject();

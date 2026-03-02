@@ -7,6 +7,15 @@ const nextConfig: NextConfig = {
       bodySizeLimit: '10mb',
     },
   },
+  webpack: (config, { dev }) => {
+    if (dev) {
+      config.watchOptions = {
+        ...config.watchOptions,
+        ignored: /([/\\](remotion|outputs|\.git)[/\\])|node_modules/,
+      };
+    }
+    return config;
+  },
   async headers() {
     return [
       {
