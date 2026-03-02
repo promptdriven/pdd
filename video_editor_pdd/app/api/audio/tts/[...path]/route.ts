@@ -10,10 +10,10 @@ import { Readable } from "stream";
  */
 export async function GET(
   request: Request,
-  { params }: { params: { path: string[] } }
+  { params }: { params: Promise<{ path: string[] }> }
 ): Promise<NextResponse | Response> {
   try {
-    const pathSegments = params.path;
+    const { path: pathSegments } = await params;
 
     if (pathSegments.some((s) => s === ".." || s.includes(".."))) {
       return NextResponse.json(

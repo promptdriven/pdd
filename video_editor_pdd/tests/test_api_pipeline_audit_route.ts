@@ -1021,6 +1021,60 @@ describe("GET — status determination", () => {
 });
 
 // ---------------------------------------------------------------------------
+// 10b. GET — specPath compatibility with /api/pipeline/specs/file
+// ---------------------------------------------------------------------------
+
+describe("GET — specPath must start with specs/ for specs/file route compatibility", () => {
+  it("returns specPath prefixed with specs/ even when specDir has no prefix", async () => {
+    // Simulate project config where specDir is NOT prefixed with "specs/"
+    // (as in the real project.json: specDir: "cold_open")
+    const config = mockProjectConfig();
+    config.sections = [
+      {
+        ...config.sections[0],
+        specDir: "cold_open", // no specs/ prefix
+      },
+    ];
+    mockLoadProject.mockReturnValue(config);
+
+    mockExistsSync.mockReturnValue(true);
+    mockReaddirSync.mockReturnValue(["AUDIT_title_card.md", "title_card.md"]);
+    mockReadFileSync.mockReturnValue(
+      "## Verdict\nfail\n## Summary\nColors wrong\n"
+    );
+
+    const response = await GET(makeGetRequest() as any);
+    const body = await response.json();
+
+    const section = body.sections[0];
+    expect(section.specs[0].specPath).toBeDefined();
+    // The specPath MUST start with "specs/" so the /api/pipeline/specs/file
+    // route's resolveSafePath validation accepts it
+    expect(section.specs[0].specPath).toMatch(/^specs\//);
+  });
+
+  it("returns specPath prefixed with specs/ when specDir already has prefix", async () => {
+    const config = mockProjectConfig();
+    config.sections = [config.sections[0]]; // specDir: "specs/intro"
+    mockLoadProject.mockReturnValue(config);
+
+    mockExistsSync.mockReturnValue(true);
+    mockReaddirSync.mockReturnValue(["AUDIT_visual.md", "visual.md"]);
+    mockReadFileSync.mockReturnValue(
+      "## Verdict\nfail\n## Summary\nBad frame\n"
+    );
+
+    const response = await GET(makeGetRequest() as any);
+    const body = await response.json();
+
+    const section = body.sections[0];
+    expect(section.specs[0].specPath).toMatch(/^specs\//);
+    // Should NOT double-prefix: "specs/specs/intro/..."
+    expect(section.specs[0].specPath).not.toMatch(/^specs\/specs\//);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 11. GET — error handling
 // ---------------------------------------------------------------------------
 

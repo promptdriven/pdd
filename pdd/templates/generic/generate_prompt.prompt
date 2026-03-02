@@ -119,7 +119,7 @@ IMPORTANT: Your reply MUST begin with `<prompt>` on the very first line and end 
 % Do the following:
 - Explain concisely what you are going to do (create a prompt for the ${MODULE} module/component for the specified layer and stack).
 - Analyze any difficulties this prompt might encounter for ${MODULE} (e.g., data modeling, API or UI contracts, transactions, idempotency, auth, state management, error handling) and briefly state mitigation strategies tailored to the given LAYER and LANG_OR_FRAMEWORK.
-- Use the ARCHITECTURE_FILE to identify the item that corresponds to this prompt by matching `filename` to `${MODULE}_${LANG_OR_FRAMEWORK}.prompt` (or best match by basename and layer). Use that item’s `reason`, `description`, `dependencies`, `interface`, and `tags` to shape the sections below.
+- Use the ARCHITECTURE_FILE to identify the item that corresponds to this prompt by matching `filename` to `${MODULE}_${LANG_OR_FRAMEWORK}.prompt` (or best match by basename and layer). Use that item's `reason`, `description`, `dependencies`, `interface`, and `tags` to shape the sections below.
 - Then create the prompt content for ${MODULE} inside XML tags named prompt, ensuring conventions fit the stack and layer.
 - Ensure the final response consists solely of the `<prompt>...</prompt>` block; nothing else (including whitespace) may appear before `<prompt>` or after `</prompt>`.
 
@@ -147,8 +147,13 @@ IMPORTANT: Your reply MUST begin with `<prompt>` on the very first line and end 
   ```
 
 % Architecture awareness (ARCHITECTURE_FILE is required):
-- Align the "Requirements" and "Instructions" with the selected item’s `interface.type` (e.g., page, component, module, api, graphql, cli, job, message, config).
+- Align the "Requirements" and "Instructions" with the selected item's `interface.type` (e.g., page, component, module, api, graphql, cli, job, message, config).
 - For `api`, outline endpoints (method, path, auth) consistent with the architecture description; for `page`/`component`, describe route/props/data sources; for `job`, include trigger and retry policy; for `config`, list keys and sources.
+- For Next.js App Router `page` items, enforce the rendering model based on `interface.page.renderingModel`:
+  - "server" (or absent): Generate as React Server Component. The component may be `async`. MUST NOT use `'use client'` directive or React hooks (`useState`, `useEffect`, `useRouter`, etc.). Include these constraints explicitly in the Requirements and Instructions sections.
+  - "client": Generate with `'use client'` directive at the top. May use React hooks. MUST NOT be `async` or use `await` at the component level. Include these constraints explicitly in the Requirements and Instructions sections.
+  - "hybrid": Generate a server component `page.tsx` that fetches data and passes it as props to a child `'use client'` component (defined in a separate file, e.g., `{module}-client.tsx`). The Requirements section must instruct the LLM to create both the server wrapper and the client child component, and must state that the `page.tsx` file MUST NOT have `'use client'` while the child component MUST have `'use client'`.
+  - When renderingModel is missing for a Next.js page, default to "server" behavior.
 
 % Style and quality requirements:
 - The generated prompt must be detailed enough to yield production-ready code.

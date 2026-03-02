@@ -17,47 +17,26 @@
       "module": {
         "functions": [
           {
+            "name": "llm_invoke",
+            "signature": "(prompt, input_json, strength, temperature, verbose, output_pydantic, output_schema, time, use_batch_mode, messages, language, use_cloud)",
+            "returns": "Dict[str, Any]"
+          },
+          {
             "name": "setup_file_logging",
-            "signature": "(log_file_path = None)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(log_file_path=None)",
+            "returns": "None"
           },
           {
             "name": "set_verbose_logging",
-            "signature": "(verbose = False)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "llm_invoke",
-            "signature": "(prompt: Optional[str] = None, input_json: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = None, strength: float = 0.5, temperature: float = 0.1, verbose: bool = False, output_pydantic: Optional[Type[BaseModel]] = None, output_schema: Optional[Dict[str, Any]] = None, time: Optional[float] = 0.25, use_batch_mode: bool = False, messages: Optional[Union[List[Dict[str, str]], List[List[Dict[str, str]]]]] = None, language: Optional[str] = None, use_cloud: Optional[bool] = None) -> Dict[str, Any]",
-            "returns": "Dict[str, Any]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "__init__",
-            "signature": "(self, message: str, raw_response: Any = None, item_index: int = 0)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "calc_strength",
-            "signature": "(candidate)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(verbose=False)",
+            "returns": "None"
           }
         ]
       }
+    },
+    "position": {
+      "x": 10200,
+      "y": 400
     }
   },
   {
@@ -95,6 +74,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 11680,
+      "y": 400
     }
   },
   {
@@ -150,6 +133,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 12600,
+      "y": 800
     }
   },
   {
@@ -332,6 +319,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 10480,
+      "y": 620
     }
   },
   {
@@ -394,6 +385,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 14400,
+      "y": 800
     }
   },
   {
@@ -423,6 +418,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 9560,
+      "y": 620
     }
   },
   {
@@ -482,6 +481,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 10800,
+      "y": 0
     }
   },
   {
@@ -521,6 +524,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 8080,
+      "y": 800
     }
   },
   {
@@ -551,6 +558,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 9000,
+      "y": 800
     }
   },
   {
@@ -588,6 +599,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 7200,
+      "y": 0
     }
   },
   {
@@ -618,6 +633,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 7800,
+      "y": 1200
     }
   },
   {
@@ -661,6 +680,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 12600,
+      "y": 0
     }
   },
   {
@@ -690,6 +713,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 9280,
+      "y": 400
     }
   },
   {
@@ -757,6 +784,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 7800,
+      "y": 0
     }
   },
   {
@@ -808,6 +839,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 9600,
+      "y": 1100
     }
   },
   {
@@ -845,6 +880,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 8400,
+      "y": 400
     }
   },
   {
@@ -883,6 +922,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 10200,
+      "y": 1020
     }
   },
   {
@@ -922,6 +965,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 10480,
+      "y": 1240
     }
   },
   {
@@ -953,6 +1000,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 13800,
+      "y": 1600
     }
   },
   {
@@ -985,6 +1036,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 10760,
+      "y": 1020
     }
   },
   {
@@ -1016,6 +1071,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 11400,
+      "y": 1240
     }
   },
   {
@@ -1066,6 +1125,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 7480,
+      "y": 800
     }
   },
   {
@@ -1101,6 +1164,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 9600,
+      "y": 1600
     }
   },
   {
@@ -1135,6 +1202,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 9880,
+      "y": 1820
     }
   },
   {
@@ -1155,6 +1226,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 7480,
+      "y": 220
     }
   },
   {
@@ -1176,6 +1251,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 7760,
+      "y": 440
     }
   },
   {
@@ -1196,6 +1275,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 8080,
+      "y": 220
     }
   },
   {
@@ -1216,6 +1299,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 4760,
+      "y": 220
     }
   },
   {
@@ -1231,6 +1318,10 @@
     ],
     "interface": {
       "type": "module"
+    },
+    "position": {
+      "x": 8400,
+      "y": 660
     }
   },
   {
@@ -1259,6 +1350,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 12880,
+      "y": 1100
     }
   },
   {
@@ -1318,6 +1413,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 14960,
+      "y": 0
     }
   },
   {
@@ -1338,6 +1437,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 14400,
+      "y": 0
     }
   },
   {
@@ -1397,6 +1500,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 10480,
+      "y": 2420
     }
   },
   {
@@ -1450,6 +1557,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 11080,
+      "y": 1240
     }
   },
   {
@@ -1476,6 +1587,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 12600,
+      "y": 2000
     }
   },
   {
@@ -1502,6 +1617,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 9600,
+      "y": 2080
     }
   },
   {
@@ -1529,6 +1648,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 12000,
+      "y": 2220
     }
   },
   {
@@ -1560,6 +1683,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 6000,
+      "y": 800
     }
   },
   {
@@ -1590,6 +1717,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 11360,
+      "y": 1020
     }
   },
   {
@@ -1616,6 +1747,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 10200,
+      "y": 2740
     }
   },
   {
@@ -1654,6 +1789,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 11680,
+      "y": 1020
     }
   },
   {
@@ -1685,6 +1824,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 13760,
+      "y": 1860
     }
   },
   {
@@ -1717,6 +1860,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 11400,
+      "y": 1640
     }
   },
   {
@@ -1749,6 +1896,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 9880,
+      "y": 2740
     }
   },
   {
@@ -1796,6 +1947,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 12000,
+      "y": 1200
     }
   },
   {
@@ -1835,6 +1990,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 11080,
+      "y": 800
     }
   },
   {
@@ -1862,6 +2021,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 11400,
+      "y": 2000
     }
   },
   {
@@ -1894,6 +2057,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 11680,
+      "y": 2220
     }
   },
   {
@@ -1925,6 +2092,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 12600,
+      "y": 2260
     }
   },
   {
@@ -1957,6 +2128,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 10800,
+      "y": 2300
     }
   },
   {
@@ -1985,6 +2160,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 12280,
+      "y": 1640
     }
   },
   {
@@ -2016,6 +2195,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 11960,
+      "y": 800
     }
   },
   {
@@ -2047,6 +2230,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 12560,
+      "y": 1020
     }
   },
   {
@@ -2080,6 +2267,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 10160,
+      "y": 2520
     }
   },
   {
@@ -2108,6 +2299,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 11960,
+      "y": 2000
     }
   },
   {
@@ -2137,6 +2332,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 13160,
+      "y": 2000
     }
   },
   {
@@ -2182,6 +2381,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 12560,
+      "y": 1420
     }
   },
   {
@@ -2295,6 +2498,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 10160,
+      "y": 3140
     }
   },
   {
@@ -2336,6 +2543,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 7800,
+      "y": 1600
     }
   },
   {
@@ -2376,6 +2587,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 11680,
+      "y": 2480
     }
   },
   {
@@ -2400,6 +2615,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 9000,
+      "y": 1820
     }
   },
   {
@@ -2440,6 +2659,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 13760,
+      "y": 2220
     }
   },
   {
@@ -2482,6 +2705,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 6000,
+      "y": 1600
     }
   },
   {
@@ -2516,6 +2743,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 8400,
+      "y": 1600
     }
   },
   {
@@ -2582,6 +2813,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 9280,
+      "y": 1600
     }
   },
   {
@@ -2612,6 +2847,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 10800,
+      "y": 2000
     }
   },
   {
@@ -2798,6 +3037,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 14400,
+      "y": 1200
     }
   },
   {
@@ -2834,6 +3077,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 10200,
+      "y": 1600
     }
   },
   {
@@ -2887,6 +3134,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 7480,
+      "y": 1200
     }
   },
   {
@@ -3062,6 +3313,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 12000,
+      "y": 2620
     }
   },
   {
@@ -3079,6 +3334,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 4800,
+      "y": 440
     }
   },
   {
@@ -3099,6 +3358,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 15280,
+      "y": 0
     }
   },
   {
@@ -3119,6 +3382,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 15560,
+      "y": 220
     }
   },
   {
@@ -3139,6 +3406,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 15000,
+      "y": 440
     }
   },
   {
@@ -3159,10 +3430,14 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 15280,
+      "y": 660
     }
   },
   {
-    "reason": "LLM prompt template for agentic bug step5 root cause operations.",
+    "reason": "Analyzes bug root cause with cross-cutting concern detection for better fix guidance.",
     "description": "Defines the prompt structure for agentic bug step5 root cause. Invoked by the corresponding Python module to format LLM requests.",
     "dependencies": [],
     "priority": 76,
@@ -3179,10 +3454,14 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 15600,
+      "y": 0
     }
   },
   {
-    "reason": "LLM prompt template for agentic bug step6 test plan operations.",
+    "reason": "Guides LLM to design observable-behavior test plans during pdd bug step 6.",
     "description": "Defines the prompt structure for agentic bug step6 test plan. Invoked by the corresponding Python module to format LLM requests.",
     "dependencies": [],
     "priority": 77,
@@ -3200,6 +3479,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 15880,
+      "y": 220
     }
   },
   {
@@ -3221,6 +3504,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 16160,
+      "y": 0
     }
   },
   {
@@ -3241,6 +3528,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 15600,
+      "y": 660
     }
   },
   {
@@ -3257,10 +3548,15 @@
       "template"
     ],
     "interface": {
-      "type": "config",
-      "config": {
-        "keys": []
+      "type": "command",
+      "command": {
+        "name": "agentic_bug_step10",
+        "description": "Generate draft PR with failing tests and link to GitHub issue"
       }
+    },
+    "position": {
+      "x": 15000,
+      "y": 220
     }
   },
   {
@@ -3282,6 +3578,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 4760,
+      "y": 0
     }
   },
   {
@@ -3303,6 +3603,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 4200,
+      "y": 220
     }
   },
   {
@@ -3322,6 +3626,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 0,
+      "y": 0
     }
   },
   {
@@ -3365,6 +3673,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 8680,
+      "y": 0
     }
   },
   {
@@ -3385,6 +3697,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 3600,
+      "y": 0
     }
   },
   {
@@ -3404,6 +3720,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 280,
+      "y": 220
     }
   },
   {
@@ -3423,6 +3743,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 560,
+      "y": 0
     }
   },
   {
@@ -3450,6 +3774,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 8680,
+      "y": 880
     }
   },
   {
@@ -3469,6 +3797,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 0,
+      "y": 440
     }
   },
   {
@@ -3488,6 +3820,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 280,
+      "y": 660
     }
   },
   {
@@ -3507,6 +3843,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 560,
+      "y": 440
     }
   },
   {
@@ -3526,6 +3866,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 0,
+      "y": 880
     }
   },
   {
@@ -3546,6 +3890,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 3000,
+      "y": 0
     }
   },
   {
@@ -3566,6 +3914,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 1800,
+      "y": 0
     }
   },
   {
@@ -3586,6 +3938,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 2080,
+      "y": 220
     }
   },
   {
@@ -3606,6 +3962,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 2360,
+      "y": 0
     }
   },
   {
@@ -3626,6 +3986,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 1800,
+      "y": 440
     }
   },
   {
@@ -3647,6 +4011,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 2080,
+      "y": 660
     }
   },
   {
@@ -3667,6 +4035,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 2360,
+      "y": 440
     }
   },
   {
@@ -3687,6 +4059,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 1800,
+      "y": 880
     }
   },
   {
@@ -3707,6 +4083,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 2080,
+      "y": 1100
     }
   },
   {
@@ -3727,6 +4107,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 2400,
+      "y": 220
     }
   },
   {
@@ -3748,6 +4132,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 2680,
+      "y": 0
     }
   },
   {
@@ -3768,6 +4156,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 2960,
+      "y": 220
     }
   },
   {
@@ -3795,6 +4187,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 8680,
+      "y": 1100
     }
   },
   {
@@ -3814,6 +4210,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 280,
+      "y": 1100
     }
   },
   {
@@ -3834,6 +4234,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 4200,
+      "y": 440
     }
   },
   {
@@ -3854,6 +4258,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 4480,
+      "y": 660
     }
   },
   {
@@ -3875,6 +4283,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 3880,
+      "y": 220
     }
   },
   {
@@ -3895,6 +4307,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 3600,
+      "y": 440
     }
   },
   {
@@ -3914,6 +4330,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 600,
+      "y": 220
     }
   },
   {
@@ -3973,6 +4393,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 9000,
+      "y": 1320
     }
   },
   {
@@ -3990,6 +4414,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 5080,
+      "y": 0
     }
   },
   {
@@ -4007,6 +4435,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 5360,
+      "y": 220
     }
   },
   {
@@ -4022,6 +4454,10 @@
     ],
     "interface": {
       "type": "cli"
+    },
+    "position": {
+      "x": 4800,
+      "y": 660
     }
   },
   {
@@ -4037,6 +4473,10 @@
     ],
     "interface": {
       "type": "cli"
+    },
+    "position": {
+      "x": 5080,
+      "y": 880
     }
   },
   {
@@ -4052,6 +4492,10 @@
     ],
     "interface": {
       "type": "cli"
+    },
+    "position": {
+      "x": 5360,
+      "y": 660
     }
   },
   {
@@ -4069,6 +4513,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 4800,
+      "y": 1100
     }
   },
   {
@@ -4097,6 +4545,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 10160,
+      "y": 1320
     }
   },
   {
@@ -4114,6 +4566,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 5400,
+      "y": 0
     }
   },
   {
@@ -4131,6 +4587,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 5680,
+      "y": 220
     }
   },
   {
@@ -4223,6 +4683,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 6280,
+      "y": 0
     }
   },
   {
@@ -4240,6 +4704,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 5960,
+      "y": 0
     }
   },
   {
@@ -4255,6 +4723,10 @@
     ],
     "interface": {
       "type": "cli"
+    },
+    "position": {
+      "x": 5400,
+      "y": 440
     }
   },
   {
@@ -4298,6 +4770,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 10200,
+      "y": 0
     }
   },
   {
@@ -4314,6 +4790,10 @@
     ],
     "interface": {
       "type": "module"
+    },
+    "position": {
+      "x": 6880,
+      "y": 0
     }
   },
   {
@@ -4329,12 +4809,18 @@
     ],
     "interface": {
       "type": "module"
+    },
+    "position": {
+      "x": 10480,
+      "y": 1980
     }
   },
   {
-    "reason": "Configures PDD installation and environment.",
+    "reason": "Orchestrates pdd setup in two phases: (1) interactive CLI bootstrapping with minimal friction, (2) deterministic auto-configuration using existing Python modules (no LLM calls).",
     "description": "Handles initial setup, configuration, and environment variable management.",
-    "dependencies": [],
+    "dependencies": [
+      "cli_detector_python.prompt"
+    ],
     "priority": 129,
     "filename": "setup_tool_python.prompt",
     "filepath": "pdd/setup_tool.py",
@@ -4347,159 +4833,16 @@
       "module": {
         "functions": [
           {
-            "name": "print_colored",
-            "signature": "(text: str, color: str = WHITE, bold: bool = False) -> None",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "create_divider",
-            "signature": "(char: str = LIGHT_HORIZONTAL, width: int = 80) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "create_fat_divider",
-            "signature": "(width: int = 80) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "print_pdd_logo",
+            "name": "run_setup",
             "signature": "()",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "get_csv_variable_names",
-            "signature": "() -> Dict[str, str]",
-            "returns": "Dict[str, str]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "discover_api_keys",
-            "signature": "() -> Dict[str, Optional[str]]",
-            "returns": "Dict[str, Optional[str]]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "test_openai_key",
-            "signature": "(api_key: str) -> bool",
-            "returns": "bool",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "test_google_key",
-            "signature": "(api_key: str) -> bool",
-            "returns": "bool",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "test_anthropic_key",
-            "signature": "(api_key: str) -> bool",
-            "returns": "bool",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "test_api_keys",
-            "signature": "(keys: Dict[str, Optional[str]]) -> Dict[str, bool]",
-            "returns": "Dict[str, bool]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "get_user_keys",
-            "signature": "(current_keys: Dict[str, Optional[str]]) -> Dict[str, Optional[str]]",
-            "returns": "Dict[str, Optional[str]]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "detect_shell",
-            "signature": "() -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "get_shell_init_file",
-            "signature": "(shell: str) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "create_api_env_script",
-            "signature": "(keys: Dict[str, str], shell: str) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "save_configuration",
-            "signature": "(valid_keys: Dict[str, str]) -> Tuple[List[str], bool, Optional[str]]",
-            "returns": "Tuple[List[str], bool, Optional[str]]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "create_sample_prompt",
-            "signature": "()",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "show_menu",
-            "signature": "(keys: Dict[str, Optional[str]], test_results: Dict[str, bool]) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "create_exit_summary",
-            "signature": "(saved_files: List[str], created_pdd_dir: bool, sample_prompt_file: str, shell: str, valid_keys: Dict[str, str], init_file_updated: Optional[str] = None) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "main",
-            "signature": "()",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "None"
           }
         ]
       }
+    },
+    "position": {
+      "x": 12000,
+      "y": 400
     }
   },
   {
@@ -4519,6 +4862,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 600,
+      "y": 660
     }
   },
   {
@@ -4819,6 +5166,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 14680,
+      "y": 220
     }
   },
   {
@@ -4886,6 +5237,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 10200,
+      "y": 2200
     }
   },
   {
@@ -4905,6 +5260,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 880,
+      "y": 880
     }
   },
   {
@@ -4924,6 +5283,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 1160,
+      "y": 440
     }
   },
   {
@@ -4943,6 +5306,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 600,
+      "y": 1100
     }
   },
   {
@@ -4962,6 +5329,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 880,
+      "y": 1320
     }
   },
   {
@@ -4997,6 +5368,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 10760,
+      "y": 1760
     }
   },
   {
@@ -5016,6 +5391,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 1200,
+      "y": 0
     }
   },
   {
@@ -5045,6 +5424,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 11080,
+      "y": 400
     }
   },
   {
@@ -5064,6 +5447,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 12000,
+      "y": 2920
     }
   },
   {
@@ -5082,6 +5469,10 @@
     ],
     "interface": {
       "type": "module"
+    },
+    "position": {
+      "x": 6280,
+      "y": 1020
     }
   },
   {
@@ -5152,6 +5543,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 15000,
+      "y": 1060
     }
   },
   {
@@ -5173,6 +5568,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 9000,
+      "y": 2220
     }
   },
   {
@@ -5199,6 +5598,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 13200,
+      "y": 2220
     }
   },
   {
@@ -5225,6 +5628,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 13480,
+      "y": 1200
     }
   },
   {
@@ -5252,6 +5659,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 12000,
+      "y": 3240
     }
   },
   {
@@ -5284,6 +5695,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 6600,
+      "y": 1200
     }
   },
   {
@@ -5312,6 +5727,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 11080,
+      "y": 1640
     }
   },
   {
@@ -5338,6 +5757,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 9600,
+      "y": 3100
     }
   },
   {
@@ -5363,6 +5786,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 21000,
+      "y": 0
     }
   },
   {
@@ -5385,7 +5812,7 @@
         "functions": [
           {
             "name": "run_agentic_architecture",
-            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool)",
+            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool, skip_prompts: bool)",
             "returns": "Tuple[bool, str, float, str, List[str]]"
           },
           {
@@ -5400,6 +5827,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 21000,
+      "y": 620
     }
   },
   {
@@ -5425,6 +5856,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 20400,
+      "y": 0
     }
   },
   {
@@ -5452,6 +5887,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 20400,
+      "y": 400
     }
   },
   {
@@ -5479,254 +5918,10 @@
           }
         ]
       }
-    }
-  },
-  {
-    "reason": "Designs module breakdown with dependency graph, priority ordering, and interface specifications.",
-    "description": "Step 4 of the agentic architecture workflow. Designs the complete module decomposition following PDD principles (one prompt = one module). Determines dependency graph, calculates priority ordering via topological sort, defines interfaces, and determines file paths.",
-    "dependencies": [
-      "agentic_arch_step3_research_LLM.prompt"
-    ],
-    "priority": 157,
-    "filename": "agentic_arch_step4_design_LLM.prompt",
-    "filepath": "prompts/agentic_arch_step4_design_LLM.prompt",
-    "tags": [
-      "llm",
-      "agentic",
-      "architecture"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "design_modules",
-            "signature": "(issue_content: str, step1_output: str, step2_output: str, step3_output: str)",
-            "returns": "str (module list with dependencies, priorities, interfaces)"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Finds relevant API docs and code examples per module to populate context_urls in architecture.json.",
-    "description": "Step 5 of the agentic architecture workflow. For each module identified in step 4, searches for API documentation URLs, code examples, and framework-specific implementation guidance. Outputs enriched module list with web resource URLs formatted as context_urls.",
-    "dependencies": [
-      "agentic_arch_step4_design_LLM.prompt"
-    ],
-    "priority": 158,
-    "filename": "agentic_arch_step5_research_deps_LLM.prompt",
-    "filepath": "prompts/agentic_arch_step5_research_deps_LLM.prompt",
-    "tags": [
-      "llm",
-      "agentic",
-      "architecture"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "research_deps",
-            "signature": "(issue_content: str, step4_output: str)",
-            "returns": "str (enriched module list with web resource URLs)"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Generates complete architecture.json with proper priority ordering, dependencies, and context_urls from prior analysis.",
-    "description": "Step 6 of the agentic architecture workflow. Generates the final architecture.json based on all previous analysis and research. Produces a valid JSON array following the architecture schema with correct priority ordering (topological sort), proper filename/filepath conventions, and context_urls from step 5.",
-    "dependencies": [
-      "agentic_arch_step5_research_deps_LLM.prompt"
-    ],
-    "priority": 159,
-    "filename": "agentic_arch_step6_generate_LLM.prompt",
-    "filepath": "prompts/agentic_arch_step6_generate_LLM.prompt",
-    "tags": [
-      "llm",
-      "agentic",
-      "architecture"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "generate_architecture",
-            "signature": "(issue_content: str, step1_through_step5_outputs: str)",
-            "returns": "str (valid JSON array matching architecture schema)"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Generates and validates .pddrc configuration file based on architecture.json, ensuring proper context mapping and output path templates.",
-    "description": "Step 7 of the agentic architecture workflow. Generates a complete .pddrc configuration file from architecture.json. Critical because without correct .pddrc, pdd sync will output files to wrong paths. Handles Next.js/Nuxt/SvelteKit multi-context projects.",
-    "dependencies": [
-      "agentic_arch_step6_generate_LLM.prompt"
-    ],
-    "priority": 160,
-    "filename": "agentic_arch_step7_pddrc_LLM.prompt",
-    "filepath": "prompts/agentic_arch_step7_pddrc_LLM.prompt",
-    "tags": [
-      "llm",
-      "agentic",
-      "architecture"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "validate_architecture",
-            "signature": "(step6_output: str)",
-            "returns": "str ('VALID' or list of validation errors)"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Generates prompt files for all modules defined in architecture.json, placing them in the correct directories based on .pddrc configuration.",
-    "description": "Step 8 of the agentic architecture workflow. Generates actual prompt files for all modules in architecture.json. Uses .pddrc from step 7 to determine correct output directories.",
-    "dependencies": [
-      "agentic_arch_step7_pddrc_LLM.prompt"
-    ],
-    "priority": 161,
-    "filename": "agentic_arch_step8_prompts_LLM.prompt",
-    "filepath": "prompts/agentic_arch_step8_prompts_LLM.prompt",
-    "tags": [
-      "llm",
-      "agentic",
-      "architecture"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "fix_architecture",
-            "signature": "(current_architecture: str, step7_output: str)",
-            "returns": "str (corrected JSON array)"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Validates .pddrc configuration using pdd sync --dry-run for each module.",
-    "description": "Step 10 of the agentic architecture workflow. Validates that pdd sync can run for every module by checking the .pddrc configuration.",
-    "dependencies": [
-      "agentic_arch_step9_completeness_LLM.prompt"
-    ],
-    "priority": 162,
-    "filename": "agentic_arch_step10_sync_LLM.prompt",
-    "filepath": "prompts/agentic_arch_step10_sync_LLM.prompt",
-    "tags": [
-      "agentic",
-      "config",
-      "llm",
-      "template"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "validate_sync",
-            "signature": "(architecture_json: str)",
-            "returns": "str ('VALID' or list of sync errors)"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Validates dependency graph: ensures priorities are correct so dependencies are generated before dependents.",
-    "description": "Step 11 of the agentic architecture workflow. Validates the dependency graph in architecture.json to ensure modules are ordered so dependencies are generated before dependents.",
-    "dependencies": [
-      "agentic_arch_step10_sync_LLM.prompt"
-    ],
-    "priority": 163,
-    "filename": "agentic_arch_step11_deps_LLM.prompt",
-    "filepath": "prompts/agentic_arch_step11_deps_LLM.prompt",
-    "tags": [
-      "agentic",
-      "config",
-      "llm",
-      "template"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "validate_dependency_graph",
-            "signature": "()",
-            "returns": "str ('VALID' or list of dependency errors)"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Fixes validation errors from a single failed validation step (completeness, sync, or dependencies).",
-    "description": "Step 12 of the agentic architecture workflow. Fixes validation errors discovered by the completeness, sync, or dependency validation steps.",
-    "dependencies": [
-      "agentic_arch_step11_deps_LLM.prompt"
-    ],
-    "priority": 164,
-    "filename": "agentic_arch_step12_fix_LLM.prompt",
-    "filepath": "prompts/agentic_arch_step12_fix_LLM.prompt",
-    "tags": [
-      "agentic",
-      "config",
-      "llm",
-      "template",
-      "fix"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "fix_validation",
-            "signature": "(failed_step: str, failed_output: str)",
-            "returns": "str (list of fixes applied)"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Validates architecture completeness: PRD coverage, layer completeness, dependency graph validity.",
-    "description": "Step 9 of the agentic architecture workflow. Validates that the architecture covers all PRD requirements for a complete, compilable, runnable project.",
-    "dependencies": [
-      "agentic_arch_step8_prompts_LLM.prompt"
-    ],
-    "priority": 165,
-    "filename": "agentic_arch_step9_completeness_LLM.prompt",
-    "filepath": "prompts/agentic_arch_step9_completeness_LLM.prompt",
-    "tags": [
-      "agentic",
-      "config",
-      "llm",
-      "template"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "validate_completeness",
-            "signature": "(architecture_json: str, prd_summary: str)",
-            "returns": "str ('VALID' or list of completeness errors)"
-          }
-        ]
-      }
+    },
+    "position": {
+      "x": 20400,
+      "y": 800
     }
   },
   {
@@ -5747,10 +5942,14 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 15560,
+      "y": 440
     }
   },
   {
-    "reason": "LLM prompt template for generating E2E tests that verify a bug at system integration level.",
+    "reason": "Generates E2E tests that verify the bug at a system level.",
     "description": "Step 9 of the agentic bug workflow. Generates and runs end-to-end tests that verify a bug at the system integration level.",
     "dependencies": [],
     "priority": 167,
@@ -5768,6 +5967,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 15880,
+      "y": 440
     }
   },
   {
@@ -5799,6 +6002,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 14680,
+      "y": 1420
     }
   },
   {
@@ -5830,6 +6037,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 15600,
+      "y": 1600
     }
   },
   {
@@ -5853,6 +6064,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 16800,
+      "y": 800
     }
   },
   {
@@ -5873,6 +6088,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 16800,
+      "y": 0
     }
   },
   {
@@ -5894,6 +6113,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 17080,
+      "y": 220
     }
   },
   {
@@ -5914,6 +6137,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 17360,
+      "y": 0
     }
   },
   {
@@ -5934,6 +6161,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 16800,
+      "y": 440
     }
   },
   {
@@ -5954,6 +6185,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 17080,
+      "y": 1100
     }
   },
   {
@@ -5974,6 +6209,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 17400,
+      "y": 220
     }
   },
   {
@@ -5994,6 +6233,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 17680,
+      "y": 0
     }
   },
   {
@@ -6014,6 +6257,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 17960,
+      "y": 220
     }
   },
   {
@@ -6034,6 +6281,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 17400,
+      "y": 440
     }
   },
   {
@@ -6054,6 +6305,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 17680,
+      "y": 660
     }
   },
   {
@@ -6074,6 +6329,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 17960,
+      "y": 440
     }
   },
   {
@@ -6094,6 +6353,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 17400,
+      "y": 880
     }
   },
   {
@@ -6125,6 +6388,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 15000,
+      "y": 1420
     }
   },
   {
@@ -6164,6 +6431,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 14680,
+      "y": 1820
     }
   },
   {
@@ -6186,6 +6457,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 19200,
+      "y": 0
     }
   },
   {
@@ -6207,6 +6482,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 19480,
+      "y": 220
     }
   },
   {
@@ -6228,6 +6507,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 19760,
+      "y": 0
     }
   },
   {
@@ -6249,6 +6532,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 19200,
+      "y": 440
     }
   },
   {
@@ -6270,6 +6557,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 19480,
+      "y": 660
     }
   },
   {
@@ -6291,6 +6582,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 19760,
+      "y": 440
     }
   },
   {
@@ -6312,6 +6607,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 19800,
+      "y": 220
     }
   },
   {
@@ -6333,6 +6632,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 20080,
+      "y": 0
     }
   },
   {
@@ -6354,6 +6657,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 20360,
+      "y": 1100
     }
   },
   {
@@ -6375,6 +6682,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 18000,
+      "y": 0
     }
   },
   {
@@ -6438,6 +6749,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 13760,
+      "y": 2520
     }
   },
   {
@@ -6469,6 +6784,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 14960,
+      "y": 2080
     }
   },
   {
@@ -6500,6 +6819,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 14960,
+      "y": 2480
     }
   },
   {
@@ -6521,6 +6844,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 18280,
+      "y": 220
     }
   },
   {
@@ -6542,6 +6869,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 18560,
+      "y": 0
     }
   },
   {
@@ -6563,6 +6894,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 18000,
+      "y": 660
     }
   },
   {
@@ -6584,6 +6919,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 18280,
+      "y": 440
     }
   },
   {
@@ -6605,6 +6944,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 18600,
+      "y": 220
     }
   },
   {
@@ -6626,6 +6969,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 18880,
+      "y": 0
     }
   },
   {
@@ -6647,6 +6994,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 19160,
+      "y": 220
     }
   },
   {
@@ -6669,6 +7020,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 18600,
+      "y": 440
     }
   },
   {
@@ -6690,6 +7045,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 18880,
+      "y": 660
     }
   },
   {
@@ -6750,6 +7109,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 21280,
+      "y": 220
     }
   },
   {
@@ -6828,6 +7191,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 12600,
+      "y": 1720
     }
   },
   {
@@ -6848,6 +7215,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 4160,
+      "y": 0
     }
   },
   {
@@ -6876,6 +7247,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 10160,
+      "y": 660
     }
   },
   {
@@ -6895,6 +7270,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 880,
+      "y": 0
     }
   },
   {
@@ -6914,6 +7293,10 @@
       "config": {
         "keys": []
       }
+    },
+    "position": {
+      "x": 1160,
+      "y": 220
     }
   },
   {
@@ -6960,6 +7343,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 12880,
+      "y": 400
     }
   },
   {
@@ -7030,6 +7417,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 15000,
+      "y": 2700
     }
   },
   {
@@ -7079,6 +7470,10 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 15600,
+      "y": 2400
     }
   },
   {
@@ -7126,10 +7521,14 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 15600,
+      "y": 2000
     }
   },
   {
-    "reason": "Entry point for the agentic checkup workflow \u2014 fetches GitHub issue, loads project context, and dispatches to the checkup orchestrator.",
+    "reason": "Entry point for the agentic checkup workflow — fetches GitHub issue, loads project context, and dispatches to the checkup orchestrator.",
     "description": "Accepts a GitHub issue URL, fetches issue content and comments, loads architecture.json and .pddrc, then invokes the multi-step checkup orchestrator that explores the project, identifies problems, and optionally fixes them.",
     "dependencies": [
       "agentic_change_python.prompt",
@@ -7183,10 +7582,14 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 15600,
+      "y": 2800
     }
   },
   {
-    "reason": "Multi-step orchestrator for pdd checkup \u2014 8 steps with iterative fix-verify loop and worktree isolation.",
+    "reason": "Multi-step orchestrator for pdd checkup — 8 steps with iterative fix-verify loop and worktree isolation.",
     "description": "Orchestrates the 8-step agentic checkup workflow: discover, deps, build, interfaces, test, fix (6.1/6.2/6.3), verify, create PR. Steps 3-7 run in an iterative while loop (max 3 iterations) with exit on 'All Issues Fixed'. Supports resume via workflow state persistence, git worktree isolation, and --no-fix mode.",
     "dependencies": [
       "agentic_common_python.prompt",
@@ -7238,11 +7641,15 @@
           }
         ]
       }
+    },
+    "position": {
+      "x": 13800,
+      "y": 1200
     }
   },
   {
-    "reason": "Agentic prompt that reads an architecture file and an optional PRD/README, reasons about the logical structure of the system, and assigns swimlane graph positions to every module so pdd connect shows a graph that makes the architecture easy to understand at a glance.",
-    "description": "Takes {project_root} and {architecture_path} as inputs. Agent reads the architecture file and any PRD/README. Reasons about functional groupings, pipeline stages, and dependency relationships. Places modules in swimlane columns (one per major functional area, shared/hub modules in center). Dependency depth drives y-axis (depth \u00d7 500px). Writes updated file in-place with position: {x, y} on every module. Outputs a one-line summary.",
+    "reason": "Agentic instruction for assigning logical graph positions to modules in an\narchitecture file. The agent reads the file and an optional PRD/README, reasons about the\nlogical structure of the system, groups modules into functional swimlanes, and writes the\nupdated file in-place so pdd connect shows a graph that makes the architecture easy to\nunderstand at a glance.",
+    "description": "Takes {project_root} and {architecture_path} as inputs. Agent reads the architecture file and any PRD/README. Reasons about functional groupings, pipeline stages, and dependency relationships. Places modules in swimlane columns (one per major functional area, shared/hub modules in center). Dependency depth drives y-axis (depth × 500px). Writes updated file in-place with position: {x, y} on every module. Outputs a one-line summary.",
     "dependencies": [],
     "priority": 219,
     "filename": "arrange_graph_layout_LLM.prompt",
@@ -7262,6 +7669,616 @@
         "architecture_path": "Absolute path to the architecture JSON file to update"
       },
       "output": "Writes updated architecture file in-place with position (x, y integers) on every module. Outputs one-line summary."
+    },
+    "position": {
+      "x": 21600,
+      "y": 0
+    }
+  },
+  {
+    "reason": "Validates architecture completeness: PRD coverage, layer completeness, dependency graph validity.",
+    "description": "Validates architecture completeness: PRD coverage, layer completeness, dependency graph validity.",
+    "dependencies": [
+      "agentic_arch_step9_prompts_LLM.prompt"
+    ],
+    "priority": 220,
+    "filename": "agentic_arch_step10_completeness_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step10_completeness_LLM.prompt",
+    "tags": [
+      "llm"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "validate_completeness",
+            "signature": "(architecture_json: str, prd_summary: str)",
+            "returns": "str ('VALID' or list of completeness errors)"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 20400,
+      "y": 3600
+    }
+  },
+  {
+    "reason": "Validates .pddrc configuration using pdd sync --dry-run for each module.",
+    "description": "Validates .pddrc configuration using pdd sync --dry-run for each module.",
+    "dependencies": [
+      "agentic_arch_step10_completeness_LLM.prompt"
+    ],
+    "priority": 221,
+    "filename": "agentic_arch_step11_sync_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step11_sync_LLM.prompt",
+    "tags": [
+      "llm"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "validate_sync",
+            "signature": "(architecture_json: str)",
+            "returns": "str ('VALID' or list of sync errors)"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 20400,
+      "y": 4000
+    }
+  },
+  {
+    "reason": "Validates dependency graph: ensures priorities are correct so dependencies are generated before dependents.",
+    "description": "Validates dependency graph: ensures priorities are correct so dependencies are generated before dependents.",
+    "dependencies": [
+      "agentic_arch_step11_sync_LLM.prompt"
+    ],
+    "priority": 222,
+    "filename": "agentic_arch_step12_deps_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step12_deps_LLM.prompt",
+    "tags": [
+      "llm"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "validate_dependency_graph",
+            "signature": "()",
+            "returns": "str ('VALID' or list of dependency errors)"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 20400,
+      "y": 4400
+    }
+  },
+  {
+    "reason": "Fixes validation errors from a single failed validation step (completeness, sync, or dependencies).",
+    "description": "Fixes validation errors from a single failed validation step (completeness, sync, or dependencies).",
+    "dependencies": [
+      "agentic_arch_step12_deps_LLM.prompt"
+    ],
+    "priority": 223,
+    "filename": "agentic_arch_step13_fix_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step13_fix_LLM.prompt",
+    "tags": [
+      "llm"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "fix_validation",
+            "signature": "(failed_step: str, failed_output: str)",
+            "returns": "str (list of fixes applied)"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 20400,
+      "y": 4800
+    }
+  },
+  {
+    "reason": "Designs core data entities, relationships, storage decisions, and schema/ORM recommendations informed by tech stack research.",
+    "description": "Designs core data entities, relationships, storage decisions, and schema/ORM recommendations informed by tech stack research.",
+    "dependencies": [
+      "agentic_arch_step3_research_LLM.prompt"
+    ],
+    "priority": 224,
+    "filename": "agentic_arch_step4_data_model_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step4_data_model_LLM.prompt",
+    "tags": [
+      "llm"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "design_data_model",
+            "signature": "(issue_content: str, step1_output: str, step2_output: str, step3_output: str)",
+            "returns": "str (data model with entities, relationships, storage decisions)"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 20400,
+      "y": 1420
+    }
+  },
+  {
+    "reason": "Designs module breakdown with dependency graph, priority ordering, and interface specifications.",
+    "description": "Designs module breakdown with dependency graph, priority ordering, and interface specifications.",
+    "dependencies": [
+      "agentic_arch_step4_data_model_LLM.prompt"
+    ],
+    "priority": 225,
+    "filename": "agentic_arch_step5_design_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step5_design_LLM.prompt",
+    "tags": [
+      "llm"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "design_modules",
+            "signature": "(issue_content: str, step1_output: str, step2_output: str, step3_output: str, step4_output: str)",
+            "returns": "str (module list with dependencies, priorities, interfaces)"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 21000,
+      "y": 1600
+    }
+  },
+  {
+    "reason": "Finds relevant API docs and code examples per module to populate context_urls in architecture.json.",
+    "description": "Finds relevant API docs and code examples per module to populate context_urls in architecture.json.",
+    "dependencies": [
+      "agentic_arch_step5_design_LLM.prompt"
+    ],
+    "priority": 226,
+    "filename": "agentic_arch_step6_research_deps_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step6_research_deps_LLM.prompt",
+    "tags": [
+      "llm"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "research_deps",
+            "signature": "(issue_content: str, step5_output: str)",
+            "returns": "str (enriched module list with web resource URLs)"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 21000,
+      "y": 2000
+    }
+  },
+  {
+    "reason": "Generates complete architecture.json with proper priority ordering, dependencies, and context_urls from prior analysis.",
+    "description": "Generates complete architecture.json with proper priority ordering, dependencies, and context_urls from prior analysis.",
+    "dependencies": [
+      "agentic_arch_step6_research_deps_LLM.prompt"
+    ],
+    "priority": 227,
+    "filename": "agentic_arch_step7_generate_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step7_generate_LLM.prompt",
+    "tags": [
+      "llm"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "generate_architecture",
+            "signature": "(issue_content: str, step1-6_outputs: str)",
+            "returns": "str (valid JSON array matching architecture schema)"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 21000,
+      "y": 2400
+    }
+  },
+  {
+    "reason": "Generates and validates .pddrc configuration file based on architecture.json, ensuring proper context mapping and output path templates.",
+    "description": "Generates and validates .pddrc configuration file based on architecture.json, ensuring proper context mapping and output path templates.",
+    "dependencies": [
+      "agentic_arch_step7_generate_LLM.prompt"
+    ],
+    "priority": 228,
+    "filename": "agentic_arch_step8_pddrc_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step8_pddrc_LLM.prompt",
+    "tags": [
+      "llm"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "generate_pddrc",
+            "signature": "(architecture_json: str)",
+            "returns": "str (path to .pddrc file)"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 21000,
+      "y": 2800
+    }
+  },
+  {
+    "reason": "Generates prompt files for all modules defined in architecture.json, placing them in the correct directories based on .pddrc configuration.",
+    "description": "Generates prompt files for all modules defined in architecture.json, placing them in the correct directories based on .pddrc configuration.",
+    "dependencies": [
+      "agentic_arch_step8_pddrc_LLM.prompt"
+    ],
+    "priority": 229,
+    "filename": "agentic_arch_step9_prompts_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step9_prompts_LLM.prompt",
+    "tags": [
+      "llm"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "generate_prompts",
+            "signature": "(architecture_json: str, pddrc_content: str)",
+            "returns": "str (list of generated prompt files)"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 21000,
+      "y": 3200
+    }
+  },
+  {
+    "reason": "Discovers API keys needed by the user's configured models, checking existence across shell, .env, and PDD config with source transparency.",
+    "description": "Discovers API keys needed by the user's configured models, checking existence across shell, .env, and PDD config with source transparency.",
+    "dependencies": [],
+    "priority": 230,
+    "filename": "api_key_scanner_python.prompt",
+    "filepath": "pdd/api_key_scanner.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "scan_environment",
+            "signature": "() -> Dict[str, KeyInfo]",
+            "returns": "Dict[str, KeyInfo]"
+          },
+          {
+            "name": "get_provider_key_names",
+            "signature": "() -> List[str]",
+            "returns": "List[str]"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 11400,
+      "y": 0
+    }
+  },
+  {
+    "reason": "Detects and bootstraps agentic CLI tools for pdd setup, with minimal-friction interactive installation and API key configuration.",
+    "description": "Detects and bootstraps agentic CLI tools for pdd setup, with minimal-friction interactive installation and API key configuration.",
+    "dependencies": [],
+    "priority": 231,
+    "filename": "cli_detector_python.prompt",
+    "filepath": "pdd/cli_detector.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "detect_and_bootstrap_cli",
+            "signature": "() -> List[CliBootstrapResult]",
+            "returns": "List[CliBootstrapResult]"
+          },
+          {
+            "name": "detect_cli_tools",
+            "signature": "() -> None",
+            "returns": "None"
+          }
+        ],
+        "dataclasses": [
+          {
+            "name": "CliBootstrapResult",
+            "fields": [
+              "cli_name: str",
+              "provider: str",
+              "cli_path: str",
+              "api_key_configured: bool",
+              "skipped: bool"
+            ]
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 12000,
+      "y": 0
+    }
+  },
+  {
+    "reason": "Centralized config resolution for all commands, ensuring consistent priority ordering.",
+    "description": "Centralized config resolution for all commands, ensuring consistent priority ordering.",
+    "dependencies": [],
+    "priority": 232,
+    "filename": "config_resolution_python.prompt",
+    "filepath": "pdd/config_resolution.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "resolve_effective_config",
+            "signature": "(ctx, resolved_config, param_overrides=None)",
+            "returns": "Dict[str, Any]"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 8960,
+      "y": 220
+    }
+  },
+  {
+    "reason": "Persistent Firecrawl scrape cache using SQLite with TTL, URL normalization, and LRU cleanup.",
+    "description": "Persistent Firecrawl scrape cache using SQLite with TTL, URL normalization, and LRU cleanup.",
+    "dependencies": [],
+    "priority": 233,
+    "filename": "firecrawl_cache_python.prompt",
+    "filepath": "pdd/firecrawl_cache.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "get_firecrawl_cache",
+            "signature": "() -> FirecrawlCache",
+            "returns": "FirecrawlCache"
+          },
+          {
+            "name": "clear_firecrawl_cache",
+            "signature": "() -> int",
+            "returns": "int"
+          },
+          {
+            "name": "get_firecrawl_cache_stats",
+            "signature": "() -> dict",
+            "returns": "dict"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 9000,
+      "y": 0
+    }
+  },
+  {
+    "reason": "Regenerate pdd/data/llm_model.csv from LiteLLM metadata with curated ELO, pricing overrides, and provider-scoped filtering.",
+    "description": "Regenerate pdd/data/llm_model.csv from LiteLLM metadata with curated ELO, pricing overrides, and provider-scoped filtering.",
+    "dependencies": [],
+    "priority": 234,
+    "filename": "generate_model_catalog_python.prompt",
+    "filepath": "pdd/generate_model_catalog.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "build_rows",
+            "signature": "() -> List[dict]",
+            "returns": "List[dict]"
+          },
+          {
+            "name": "main",
+            "signature": "() -> None",
+            "returns": "None"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 9280,
+      "y": 1100
+    }
+  },
+  {
+    "reason": "Tests individual models via litellm.completion() with direct API key passing and diagnostics.",
+    "description": "Tests individual models via litellm.completion() with direct API key passing and diagnostics.",
+    "dependencies": [],
+    "priority": 235,
+    "filename": "model_tester_python.prompt",
+    "filepath": "pdd/model_tester.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "test_model_interactive",
+            "signature": "() -> None",
+            "returns": "None"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 9880,
+      "y": 0
+    }
+  },
+  {
+    "reason": "Creates .pddrc configuration files with sensible defaults for the current project directory.",
+    "description": "Creates .pddrc configuration files with sensible defaults for the current project directory.",
+    "dependencies": [],
+    "priority": 236,
+    "filename": "pddrc_initializer_python.prompt",
+    "filepath": "pdd/pddrc_initializer.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "offer_pddrc_init",
+            "signature": "() -> bool",
+            "returns": "bool"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 9880,
+      "y": 880
+    }
+  },
+  {
+    "reason": "Manages LLM providers: browse reference CSV to add models, custom providers, and model removal with shell-aware credential storage.",
+    "description": "Manages LLM providers: browse reference CSV to add models, custom providers, and model removal with shell-aware credential storage.",
+    "dependencies": [
+      "api_key_scanner_python.prompt"
+    ],
+    "priority": 237,
+    "filename": "provider_manager_python.prompt",
+    "filepath": "pdd/provider_manager.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "add_provider_from_registry",
+            "signature": "() -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "add_custom_provider",
+            "signature": "() -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "remove_models_by_provider",
+            "signature": "() -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "remove_individual_models",
+            "signature": "() -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "parse_api_key_vars",
+            "signature": "(api_key_field: str) -> List[str]",
+            "returns": "List[str]"
+          },
+          {
+            "name": "is_multi_credential",
+            "signature": "(api_key_field: str) -> bool",
+            "returns": "bool"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 11400,
+      "y": 620
+    }
+  },
+  {
+    "reason": "Utility for expanding path templates with dynamic placeholders for project layout generation.",
+    "description": "Utility for expanding path templates with dynamic placeholders for project layout generation.",
+    "dependencies": [],
+    "priority": 238,
+    "filename": "template_expander_python.prompt",
+    "filepath": "pdd/template_expander.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "expand_template",
+            "signature": "(template: str, context: Dict[str, Any])",
+            "returns": "str"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 10760,
+      "y": 1540
     }
   }
 ]

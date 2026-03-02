@@ -81,6 +81,7 @@ MIN_VALID_OUTPUT_LENGTH: int = 50
 DEFAULT_MAX_RETRIES: int = 3
 DEFAULT_RETRY_DELAY: float = 5.0
 MAX_PATH_DISPLAY_LENGTH: int = 200  # Truncation length for PATH in diagnostic messages
+MAX_ERROR_SNIPPET_LENGTH: int = 2000  # Truncation length for provider error messages (Issue #492)
 
 # Job deadline constants — prevent agentic retry loops from consuming the full job timeout
 JOB_TIMEOUT_MARGIN_SECONDS: float = 120.0   # Reserve for cleanup/reporting after last attempt
@@ -621,7 +622,7 @@ def run_agentic_task(
                     time.sleep(backoff)
 
             # All retries exhausted (or deadline budget exhausted) for this provider
-            provider_errors.append(f"{provider}: {last_output[:200]}")
+            provider_errors.append(f"{provider}: {last_output[:MAX_ERROR_SNIPPET_LENGTH]}")
             if verbose:
                 console.print(f"[yellow]Provider {provider} failed after {max_retries} attempts: {last_output}[/yellow]")
                 _log_agentic_interaction(
@@ -698,10 +699,6 @@ def _run_with_provider(
 
     # Construct Command using discovered cli_path (Issue #234 fix)
     if provider == "anthropic":
-        # In CI with OAuth token, keep it for authentication;
-        # otherwise remove API key to force subscription auth
-        if not env.get("CLAUDE_CODE_OAUTH_TOKEN"):
-            env.pop("ANTHROPIC_API_KEY", None)
         # Use -p - to pipe prompt as direct user message via stdin.
         # This prevents Claude from interpreting file-discovered instructions
         # as "automated bot workflow" and refusing to execute.
@@ -731,10 +728,15 @@ def _run_with_provider(
         if gemini_model:
             cmd.extend(["--model", gemini_model])
     elif provider == "openai":
+        # --full-auto sets --sandbox workspace-write (Landlock+seccomp), which
+        # panics on gVisor (Cloud Run) and Docker-on-macOS. Since the PDD worker
+        # container IS the sandbox boundary, use danger-full-access instead.
+        # Ref: https://github.com/openai/codex/issues/6828
+        sandbox_mode = env.get("CODEX_SANDBOX_MODE", "danger-full-access")
         cmd = [
             cli_path,
             "exec",
-            "--full-auto",
+            "--sandbox", sandbox_mode,
             "--json",
             str(prompt_path)
         ]
@@ -773,29 +775,49 @@ def _run_with_provider(
         data = {}
         
         if provider == "openai" and "\n" in output_str:
-            # Parse JSONL, look for result type
+            # Parse NDJSON, collecting both the agent response and usage stats
             lines = output_str.splitlines()
+            agent_message_data = None
+            session_end = None
             for line in lines:
                 try:
                     item = json.loads(line)
+                    # Legacy Codex format: single event contains both text and usage
                     if item.get("type") == "result":
                         data = item
                         break
+                    # Modern Codex CLI (0.104.0+): text in item.completed agent_message
+                    if (item.get("type") == "item.completed"
+                            and isinstance(item.get("item"), dict)
+                            and item["item"].get("type") == "agent_message"):
+                        agent_message_data = item
+                    # usage/cost stats are in session.end or turn.completed
+                    # (Codex CLI 0.105.0+ uses turn.completed instead of session.end)
+                    if item.get("type") in ("session.end", "turn.completed"):
+                        session_end = item
                 except json.JSONDecodeError:
                     continue
-            # If no result block found, try parsing last line
-            if not data and lines:
-                try:
-                    data = json.loads(lines[-1])
-                except:
-                    pass
+            if not data:
+                if agent_message_data is not None:
+                    # Merge usage from session.end so cost can be calculated
+                    if session_end is not None:
+                        data = {**agent_message_data, "usage": session_end.get("usage", {})}
+                    else:
+                        data = agent_message_data
+                elif session_end is not None:
+                    data = session_end
+                elif lines:
+                    try:
+                        data = json.loads(lines[-1])
+                    except:
+                        pass
         else:
             data = json.loads(output_str)
             
         return _parse_provider_json(provider, data)
     except json.JSONDecodeError:
         # Fallback if CLI didn't output valid JSON (sometimes happens on crash)
-        return False, f"Invalid JSON output: {result.stdout[:200]}...", 0.0
+        return False, f"Invalid JSON output: {result.stdout[:MAX_ERROR_SNIPPET_LENGTH]}...", 0.0
 
 def _parse_provider_json(provider: str, data: Dict[str, Any]) -> Tuple[bool, str, float]:
     """
@@ -821,7 +843,12 @@ def _parse_provider_json(provider: str, data: Dict[str, Any]) -> Tuple[bool, str
         elif provider == "openai":
             usage = data.get("usage", {})
             cost = _calculate_codex_cost(usage)
-            output_text = data.get("result") or data.get("output") or ""
+            # Modern Codex CLI (0.104.0+): text at data["item"]["text"]
+            item = data.get("item", {})
+            if isinstance(item, dict) and item.get("type") == "agent_message":
+                output_text = item.get("text", "")
+            else:
+                output_text = data.get("result") or data.get("output") or ""
 
         return True, str(output_text), cost
 

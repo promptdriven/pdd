@@ -274,16 +274,16 @@ describe("renderSection — bundle path resolution", () => {
     expect(selectCall.serveUrl).toBe("/custom/bundle/path");
   });
 
-  it("falls back to remotion/build/index.js when file exists", async () => {
+  it("falls back to remotion/build directory when index.html exists", async () => {
     delete process.env.REMOTION_BUNDLE_PATH;
     (fs.existsSync as jest.Mock).mockReturnValue(true);
 
     await renderSection("TestComp", "/tmp/out.mp4", jest.fn());
 
     const selectCall = mockSelectComposition.mock.calls[0][0];
-    expect(selectCall.serveUrl).toContain(
-      path.join("remotion", "build", "index.js")
-    );
+    // serveUrl should point to the build directory, not the file itself
+    expect(selectCall.serveUrl).toContain(path.join("remotion", "build"));
+    expect(selectCall.serveUrl).not.toMatch(/index\.html$/);
   });
 
   it("falls back to remotion directory when no build exists", async () => {

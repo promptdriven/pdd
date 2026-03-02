@@ -22,6 +22,8 @@ from .sync_tui import maybe_steer_operation, DEFAULT_STEER_TIMEOUT_S
 import click
 import logging
 
+logger = logging.getLogger(__name__)
+
 # --- Constants ---
 MAX_CONSECUTIVE_TESTS = 3  # Allow up to 3 consecutive test attempts
 MAX_TEST_EXTEND_ATTEMPTS = 2  # Allow up to 2 attempts to extend tests for coverage
@@ -409,7 +411,7 @@ def _parse_test_output(output: str, language: str) -> tuple[int, int, float]:
             coverage = float(coverage_match.group(1))
 
     # Jest/Vitest (JavaScript/TypeScript)
-    elif lang in ('javascript', 'typescript', 'typescriptreact'):
+    elif lang in ('javascript', 'typescript', 'typescriptreact', 'javascriptreact'):
         # "Tests: X passed, Y failed" or "Tests: X passed, Y failed, Z total"
         match = re.search(r'Tests:\s*(\d+)\s+passed', output)
         if match:
@@ -588,6 +590,383 @@ def _try_auto_fix_import_error(
                 return False, f"Failed to run pip install: {e}"
 
     return False, "Import error detected but no auto-fix available"
+
+
+def _get_module_exports(module_path: Path) -> 'set[str] | None':
+    """
+    Extract exported names from a Python module file using AST parsing.
+
+    Returns a set of top-level names defined in the module, or None if
+    the file cannot be parsed (to avoid false positives).
+
+    Collects all top-level definitions (functions, classes, assignments,
+    and re-exported imports). If __all__ is defined, its names are unioned
+    with the physically defined names — because __all__ only restricts
+    'from module import *', not explicit imports like 'from module import X'.
+    """
+    import ast
+
+    try:
+        source = module_path.read_text(encoding='utf-8')
+    except OSError as e:
+        logger.warning("Cannot read module %s: %s", module_path, e)
+        return None
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as e:
+        logger.warning("SyntaxError parsing module %s — module may be broken: %s", module_path, e)
+        return None
+
+    all_names: set[str] | None = None
+
+    # Check for __all__ (top-level only — iter_child_nodes is correct here)
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == '__all__':
+                    if isinstance(node.value, (ast.List, ast.Tuple)):
+                        all_names = set()
+                        for elt in node.value.elts:
+                            if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                                all_names.add(elt.value)
+        # Handle __all__ += ['extra_name'] patterns
+        elif isinstance(node, ast.AugAssign):
+            if isinstance(node.target, ast.Name) and node.target.id == '__all__':
+                if isinstance(node.value, (ast.List, ast.Tuple)):
+                    if all_names is None:
+                        all_names = set()
+                    for elt in node.value.elts:
+                        if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                            all_names.add(elt.value)
+        # Note: fully dynamic __all__ construction (e.g., list comprehensions) is not supported.
+
+    # Use ast.walk() to capture names defined inside try/except, if/else, etc.
+    # (e.g., conditional imports: try: from fast_json import loads; except: from json import loads)
+    exports: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            exports.add(node.name)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    exports.add(target.id)
+                elif isinstance(target, ast.Tuple):
+                    for elt in target.elts:
+                        if isinstance(elt, ast.Name):
+                            exports.add(elt.id)
+        elif isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name):
+                exports.add(node.target.id)
+        elif isinstance(node, ast.ImportFrom):
+            # Re-exported imports: 'from X import Y' or 'from X import Y as Z'
+            if node.names:
+                for alias in node.names:
+                    if alias.name != '*':
+                        exports.add(alias.asname if alias.asname else alias.name)
+        elif isinstance(node, ast.Import):
+            # Top-level imports: 'import X' or 'import X as Y'
+            for alias in node.names:
+                exports.add(alias.asname if alias.asname else alias.name)
+
+    # Union __all__ names with physically defined names, since __all__
+    # only restricts 'from module import *', not explicit imports.
+    if all_names:
+        exports |= all_names
+
+    return exports
+
+
+def _validate_python_imports(
+    code_file: Path,
+) -> list[str]:
+    """
+    Validate that local imports in generated Python code resolve to actual files on disk.
+
+    Uses ast.parse() to extract Import/ImportFrom nodes, filters out stdlib and
+    known third-party packages, then checks whether each remaining local import
+    corresponds to a .py file next to code_file or an installed package.
+
+    Also validates that specific imported names (functions, classes, constants)
+    actually exist within local modules (Issue #620).
+
+    Returns:
+        List of unresolved import module names (empty if all imports are valid).
+    """
+    import ast
+
+    if not code_file.exists():
+        return []
+
+    try:
+        source = code_file.read_text(encoding='utf-8')
+    except OSError:
+        return []
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+
+    # Collect top-level module names and full dotted paths from import statements.
+    # Also track specific names imported from each module path (Issue #620).
+    imported_modules: set[str] = set()
+    full_import_paths: dict[str, set[str]] = {}  # top_level -> {full dotted paths}
+    import_names: dict[str, set[str]] = {}  # full_module_path -> {name1, name2, ...}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if node.module and node.level == 0:  # Skip relative imports
+                top_level = node.module.split('.')[0]
+                if top_level != '__future__':
+                    imported_modules.add(top_level)
+                    full_import_paths.setdefault(top_level, set()).add(node.module)
+                    # Capture imported names (skip star imports)
+                    if node.names:
+                        names = {
+                            alias.name for alias in node.names
+                            if alias.name != '*'
+                        }
+                        if names:
+                            import_names.setdefault(node.module, set()).update(names)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                top_level = alias.name.split('.')[0]
+                imported_modules.add(top_level)
+                full_import_paths.setdefault(top_level, set()).add(alias.name)
+
+    if not imported_modules:
+        return []
+
+    # Filter out stdlib modules
+    stdlib_modules = sys.stdlib_module_names if hasattr(sys, 'stdlib_module_names') else set()
+    non_stdlib = imported_modules - stdlib_modules
+
+    if not non_stdlib:
+        return []
+
+    # Filter out known third-party packages (check if they're importable)
+    # A module is considered third-party if it can be found by importlib
+    import importlib.util
+    unresolved: list[str] = []
+    code_dir = code_file.parent
+
+    # Pre-compute installed package names for namespace package fallback.
+    # find_spec() returns None for some namespace packages (e.g., packages installed
+    # under a different distribution name). packages_distributions() (Python 3.11+)
+    # maps importable package names to their distribution names.
+    try:
+        import importlib.metadata
+        installed_packages = set(importlib.metadata.packages_distributions().keys())
+    except Exception:
+        installed_packages = set()
+
+    for module_name in sorted(non_stdlib):
+        # Check if it exists as a local .py file in the same directory as the code
+        local_file = code_dir / f"{module_name}.py"
+        local_package = code_dir / module_name / "__init__.py"
+        if local_file.exists() or local_package.exists():
+            # Issue #620: Also validate imported names against module exports.
+            for full_path in full_import_paths.get(module_name, set()):
+                target_file: Path | None = None
+                if full_path == module_name:
+                    # Simple import: "from hackathon_models import X"
+                    if local_file.exists():
+                        target_file = local_file
+                    elif local_package.exists():
+                        target_file = local_package
+                else:
+                    # Dotted import: "from utils.firebase_admin_init import X"
+                    parts = full_path.split('.')
+                    submodule_file = code_dir / '/'.join(parts[:-1]) / f"{parts[-1]}.py"
+                    submodule_package = code_dir / '/'.join(parts) / "__init__.py"
+                    if submodule_file.exists():
+                        target_file = submodule_file
+                    elif submodule_package.exists():
+                        target_file = submodule_package
+                    else:
+                        # Submodule path doesn't exist on disk
+                        unresolved.append(f"module '{full_path}' not found on disk")
+                        continue
+
+                # Validate imported names against the target module's exports
+                names_to_check = import_names.get(full_path, set())
+                if not names_to_check or target_file is None:
+                    continue
+
+                exports = _get_module_exports(target_file)
+                if exports is None:
+                    # Parse failure — skip validation to avoid false positives
+                    logger.debug("Skipping name validation for %s (parse failure)", target_file)
+                    continue
+
+                for name in sorted(names_to_check):
+                    if name not in exports:
+                        unresolved.append(f"name '{name}' not found in module '{full_path}'")
+            continue
+
+        # Check if it's an installable/importable third-party package
+        spec = importlib.util.find_spec(module_name)
+        if spec is not None:
+            continue
+
+        # Fallback: check installed distributions for namespace packages
+        if module_name in installed_packages:
+            continue
+
+        # Module is neither local nor third-party — it's unresolved
+        unresolved.append(f"module '{module_name}' not found on disk")
+
+    return unresolved
+
+
+def _validate_typescript_imports(
+    code_file: Path,
+) -> list[str]:
+    """
+    Validate that imports in generated TypeScript/JavaScript code resolve to actual files.
+
+    Uses regex to extract ES6 (import ... from '...') and CommonJS (require('...'))
+    import paths, then checks whether each import resolves to a file on disk.
+
+    Skips:
+    - Node.js built-in modules (fs, path, http, etc.)
+    - Packages found in node_modules/
+
+    Returns:
+        List of unresolved import paths (empty if all imports are valid).
+    """
+    import re
+
+    if not code_file.exists():
+        return []
+
+    try:
+        source = code_file.read_text(encoding='utf-8')
+    except Exception:
+        return []
+
+    # Extract import paths from ES6 and CommonJS patterns
+    import_paths: set[str] = set()
+
+    # ES6: import ... from 'path'  or  import 'path'
+    for match in re.finditer(r'''(?:import\s+(?:.*?\s+from\s+)?['"]([^'"]+)['"]|from\s+['"]([^'"]+)['"]\s+import)''', source):
+        path = match.group(1) or match.group(2)
+        if path:
+            import_paths.add(path)
+
+    # CommonJS: require('path')
+    for match in re.finditer(r'''require\s*\(\s*['"]([^'"]+)['"]\s*\)''', source):
+        import_paths.add(match.group(1))
+
+    # Dynamic import: import('path')
+    for match in re.finditer(r'''import\s*\(\s*['"]([^'"]+)['"]\s*\)''', source):
+        import_paths.add(match.group(1))
+
+    if not import_paths:
+        return []
+
+    # Node.js built-in modules (targets Node.js 20 LTS)
+    node_builtins = {
+        'assert', 'async_hooks', 'buffer', 'child_process', 'cluster',
+        'console', 'constants', 'crypto', 'dgram', 'diagnostics_channel',
+        'dns', 'domain', 'events', 'fs', 'http', 'http2', 'https',
+        'inspector', 'module', 'net', 'os', 'path', 'perf_hooks', 'process',
+        'punycode', 'querystring', 'readline', 'repl', 'stream',
+        'string_decoder', 'sys', 'test', 'timers', 'tls', 'trace_events',
+        'tty', 'url', 'util', 'v8', 'vm', 'wasi', 'worker_threads', 'zlib',
+    }
+
+    code_dir = code_file.parent
+
+    # Common file extensions for TypeScript/JavaScript
+    ts_extensions = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs']
+
+    # Walk up to find project root (where package.json or node_modules lives)
+    project_root = code_dir
+    for _ in range(10):
+        if (project_root / 'package.json').exists() or (project_root / 'node_modules').exists():
+            break
+        parent = project_root.parent
+        if parent == project_root:
+            break
+        project_root = parent
+
+    node_modules = project_root / 'node_modules'
+
+    unresolved: list[str] = []
+
+    for import_path in sorted(import_paths):
+        # Skip Node.js built-ins (with or without 'node:' prefix)
+        bare_path = import_path.removeprefix('node:')
+        if bare_path in node_builtins:
+            continue
+
+        # Relative imports (./foo, ../foo)
+        if import_path.startswith('.'):
+            resolved = code_dir / import_path
+            # Check with various extensions and as directory with index file
+            found = False
+            # Exact match (e.g., ./foo.ts)
+            if resolved.exists() and resolved.is_file():
+                found = True
+            if not found:
+                for ext in ts_extensions:
+                    if (resolved.parent / f"{resolved.name}{ext}").exists():
+                        found = True
+                        break
+            # Check as directory with index file
+            if not found and resolved.is_dir():
+                for ext in ts_extensions:
+                    if (resolved / f"index{ext}").exists():
+                        found = True
+                        break
+            if not found:
+                unresolved.append(import_path)
+            continue
+
+        # Path alias imports (@/, ~/, #/)
+        if import_path.startswith(('@/', '~/', '#/')):
+            # These rely on tsconfig/webpack aliases — check common src/ resolution
+            alias_path = import_path[2:]  # Strip @/ or ~/ or #/
+            found = False
+            # Check common alias roots: src/, app/, lib/
+            for alias_root in ['src', 'app', 'lib', '.']:
+                base = project_root / alias_root / alias_path
+                if base.exists() and base.is_file():
+                    found = True
+                    break
+                for ext in ts_extensions:
+                    if (base.parent / f"{base.name}{ext}").exists():
+                        found = True
+                        break
+                if not found and base.is_dir():
+                    for ext in ts_extensions:
+                        if (base / f"index{ext}").exists():
+                            found = True
+                            break
+                if found:
+                    break
+            if not found:
+                unresolved.append(import_path)
+            continue
+
+        # Scoped packages (@org/package)
+        if import_path.startswith('@') and '/' in import_path:
+            pkg_name = '/'.join(import_path.split('/')[:2])
+            if node_modules.exists() and (node_modules / pkg_name).exists():
+                continue
+            unresolved.append(import_path)
+            continue
+
+        # Bare module imports (react, next, lodash, etc.)
+        top_level = import_path.split('/')[0]
+        if node_modules.exists() and (node_modules / top_level).exists():
+            continue
+
+        # No node_modules found — module is unresolved
+        unresolved.append(import_path)
+
+    return unresolved
 
 
 def _try_auto_fix_env_var_error(
@@ -1395,22 +1774,39 @@ def sync_orchestration(
                         # Skip test_extend for non-Python languages (or agentic mode) - code coverage tooling is Python-specific
                         # This is a safety check in case sync_determine_operation doesn't catch it
                         if _use_agentic_path(language, agentic_mode):
+                            # Bug #573: Check coverage before accepting — don't declare success
+                            # if coverage is below target (e.g. 0.0 from sys.modules stubs)
+                            current_rr = read_run_report(basename, language)
+                            coverage_ok = current_rr is not None and current_rr.coverage >= target_coverage
                             log_event(basename, language, "test_extend_skipped", {
-                                "reason": f"test_extend not supported for {language} (or agentic_mode), accepting current state"
+                                "reason": f"test_extend not supported for {language} (or agentic_mode), {'accepting' if coverage_ok else 'rejecting'} current state",
+                                "coverage": current_rr.coverage if current_rr else None,
+                                "coverage_ok": coverage_ok
                             }, invocation_mode="sync")
-                            success = True
+                            if not coverage_ok:
+                                current_cov = current_rr.coverage if current_rr else 0.0
+                                errors.append(f"Coverage {current_cov:.1f}% below target {target_coverage:.1f}% after test_extend skip (agentic mode)")
+                            success = coverage_ok
                             break
 
                         # Count test_extend attempts to prevent infinite loop
                         extend_attempts = sum(1 for op in operation_history if op == 'test_extend')
                         if extend_attempts >= MAX_TEST_EXTEND_ATTEMPTS:
-                            # Accept current coverage after max attempts
+                            # Bug #573: Check coverage before accepting — don't declare success
+                            # if coverage is below target after exhausting retries
+                            current_rr = read_run_report(basename, language)
+                            coverage_ok = current_rr is not None and current_rr.coverage >= target_coverage
                             log_event(basename, language, "test_extend_limit", {
                                 "attempts": extend_attempts,
                                 "max_attempts": MAX_TEST_EXTEND_ATTEMPTS,
-                                "reason": "Accepting current coverage after max extend attempts"
+                                "reason": "Max extend attempts reached",
+                                "coverage": current_rr.coverage if current_rr else None,
+                                "coverage_ok": coverage_ok
                             }, invocation_mode="sync")
-                            success = True
+                            if not coverage_ok:
+                                current_cov = current_rr.coverage if current_rr else 0.0
+                                errors.append(f"Coverage {current_cov:.1f}% below target {target_coverage:.1f}% after {extend_attempts} test_extend attempts")
+                            success = coverage_ok
                             break
 
                     if operation in ['all_synced', 'nothing', 'fail_and_request_manual_merge', 'error']:
@@ -1522,6 +1918,37 @@ def sync_orchestration(
                                 result = code_generator_main(ctx, prompt_file=str(pdd_files['prompt'].resolve()), output=str(pdd_files['code'].resolve()), original_prompt_file_path=None, force_incremental_flag=False)
                                 # Clear stale run_report so crash/verify is required for newly generated code
                                 clear_run_report(basename, language)
+                                # Issue #572: Validate Python imports after generation in agentic mode
+                                if agentic_mode and language.lower() == 'python' and pdd_files['code'].exists():
+                                    unresolved = _validate_python_imports(
+                                        pdd_files['code'],
+                                    )
+                                    if unresolved:
+                                        error_msg = (
+                                            f"Hallucinated imports detected in generated code: "
+                                            f"{'; '.join(unresolved)}."
+                                        )
+                                        errors.append(error_msg)
+                                        log_event(basename, language, "import_validation_failed", {
+                                            "unresolved_imports": unresolved,
+                                            "code_file": str(pdd_files['code']),
+                                        }, invocation_mode="sync")
+                                # Issue #624: Validate TypeScript/JavaScript imports after generation in agentic mode
+                                if agentic_mode and language.lower() in ('typescript', 'javascript', 'typescriptreact', 'javascriptreact') and pdd_files['code'].exists():
+                                    unresolved = _validate_typescript_imports(
+                                        pdd_files['code'],
+                                    )
+                                    if unresolved:
+                                        error_msg = (
+                                            f"Hallucinated imports detected in generated code: "
+                                            f"{', '.join(unresolved)}. "
+                                            f"These modules do not exist on disk or in the project."
+                                        )
+                                        errors.append(error_msg)
+                                        log_event(basename, language, "import_validation_failed", {
+                                            "unresolved_imports": unresolved,
+                                            "code_file": str(pdd_files['code']),
+                                        }, invocation_mode="sync")
                             elif operation == 'example':
                                 # Ensure example directory exists before generating
                                 pdd_files['example'].parent.mkdir(parents=True, exist_ok=True)
@@ -1543,8 +1970,8 @@ def sync_orchestration(
                                 if current_run_report and current_run_report.exit_code != 0:
                                     has_crash = True
                                     crash_log_content = f"Test execution failed exit code: {current_run_report.exit_code}\n"
-                                elif _use_agentic_path(language, agentic_mode):
-                                    # Bug #364 fix: For non-Python languages (or agentic mode), skip Python-based verification.
+                                elif _use_agentic_path(language, agentic_mode) and language.lower() != 'python':
+                                    # Bug #364 fix: For non-Python languages, skip Python-based verification.
                                     # Delegate crash detection and fixing to the agentic handler, which
                                     # uses the correct language-specific run command.
                                     has_crash = True

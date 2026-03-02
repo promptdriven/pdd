@@ -1,5 +1,7 @@
 // app/api/sections/[id]/resolve-batch/route.ts
 import { NextResponse } from "next/server";
+import path from "path";
+import { execSync } from "child_process";
 import { getDb } from "@/lib/db";
 import { runClaudeFix } from "@/lib/claude";
 import { createJob, runJob } from "@/lib/jobs";
@@ -10,23 +12,37 @@ import type { Annotation } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
-type RouteParams = { params: { id: string } };
+type RouteParams = { params: Promise<{ id: string }> };
 
 function buildRemotionPrompt(annotation: Annotation): string {
+  const analysisJson = annotation.analysis ? JSON.stringify(annotation.analysis, null, 2) : "none";
   return `
-You are applying a Remotion fix for this annotation.
-Annotation ID: ${annotation.id}
-Section ID: ${annotation.sectionId}
-Timestamp: ${annotation.timestamp}s
-User note: ${annotation.text}
+You are a Remotion developer fixing a visual issue in the "${annotation.sectionId}" section.
 
-Provide a fix that resolves the issue. Return JSON:
-{ "fixType", "filesModified", "changeDescription", "confidence" }
+Issue details:
+- Annotation ID: ${annotation.id}
+- Timestamp: ${annotation.timestamp}s
+- User note: ${annotation.text}
+- Analysis: ${analysisJson}
+
+Instructions:
+1. Use Glob/Read tools to inspect the TSX source files in this directory (remotion/src/remotion/).
+2. Identify which file(s) need to change to resolve the issue described above.
+3. Apply the fix by editing the file(s) using the Edit or Write tool.
+4. Return JSON confirming what you changed:
+{
+  "fixType": "remotion",
+  "filesModified": ["list of relative file paths you edited"],
+  "changeDescription": "concise description of the change made",
+  "confidence": 0.0-1.0
+}
+
+Apply the fix NOW — do not just describe it. Edit the actual file(s).
 `.trim();
 }
 
 export async function POST(_request: Request, { params }: RouteParams) {
-  const sectionId = params.id;
+  const { id: sectionId } = await params;
   const db = getDb();
 
   try {
@@ -153,6 +169,16 @@ export async function POST(_request: Request, { params }: RouteParams) {
         onLog(`Skipped manual annotation ${ann.id}`);
       }
 
+      // Rebuild Remotion bundle so renders pick up the edited TSX
+      const remotionDir = path.join(process.cwd(), "remotion");
+      onLog("Rebuilding Remotion bundle...");
+      execSync("npx remotion bundle src/index.ts --out build", {
+        cwd: remotionDir,
+        stdio: "pipe",
+        timeout: 120_000,
+      });
+      onLog("Bundle rebuilt.");
+
       // Render the affected section
       const project = loadProject();
       const section = getSection(sectionId, project);
@@ -160,7 +186,7 @@ export async function POST(_request: Request, { params }: RouteParams) {
         throw new Error(`Section "${sectionId}" not found`);
       }
 
-      const outputPath = section.videoFile;
+      const outputPath = path.join("outputs", "sections", `${sectionId}.mp4`);
       onLog(`Rendering section ${sectionId} → ${outputPath}`);
       await renderSection(section.compositionId, outputPath, (progress) => {
         onLog.progress?.(progress.percent);

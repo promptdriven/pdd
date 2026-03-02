@@ -5056,3 +5056,1314 @@ def test_agentic_verify_saves_run_report(orchestration_fixture):
             f"(after crash AND after verify), but was called {len(save_calls)} time(s). "
             f"Missing post-verify RunReport causes false crash-verify cycle detection."
         )
+
+
+# --- Issue #572: Agentic Mode Hallucinated Import Detection Tests ---
+# These tests verify that auto-deps skipped in agentic mode does NOT allow
+# hallucinated imports (non-existent modules) to pass through undetected.
+
+
+def test_issue572_baseline_auto_deps_skipped_advances_to_generate(orchestration_fixture):
+    """
+    Baseline: Confirms auto-deps is skipped in agentic mode and the operation
+    advances to 'generate'. auto_deps_main should not be called, but
+    code_generator_main should be called.
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_determine.side_effect = [
+        SyncDecision(operation='auto-deps', reason='Dependencies need scanning'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    result = sync_orchestration(basename="calculator", language="python", agentic_mode=True)
+
+    assert result['success'] is True
+    # auto_deps_main should NOT be called — it was skipped
+    orchestration_fixture['auto_deps_main'].assert_not_called()
+    # code_generator_main SHOULD be called — auto-deps advanced to generate
+    orchestration_fixture['code_generator_main'].assert_called_once()
+
+
+def test_issue572_hallucinated_imports_detected_after_agentic_generate(orchestration_fixture):
+    """
+    Issue #572: When auto-deps is skipped in agentic mode and code_generator_main
+    produces code with hallucinated imports (firestore_writes, brevo_results_email),
+    post-generation AST validation must detect and report them.
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    tmp_path = Path(orchestration_fixture['get_pdd_file_paths'].return_value['prompt']).parent.parent
+
+    # Code with hallucinated imports from the issue report
+    hallucinated_code = (
+        '"""Hackathon results module."""\n'
+        'from firestore_writes import update_event_winners\n'
+        'from brevo_results_email import send_bulk_notifications\n'
+        '\n'
+        'def calculate_results():\n'
+        '    """Calculate hackathon results."""\n'
+        '    winners = update_event_winners()\n'
+        '    send_bulk_notifications(winners)\n'
+        '    return winners\n'
+    )
+
+    def mock_generate(*args, **kwargs):
+        """Mock code_generator_main that writes code with hallucinated imports."""
+        code_file = tmp_path / 'src' / 'calculator.py'
+        code_file.write_text(hallucinated_code, encoding='utf-8')
+        return {'success': True, 'cost': 0.05, 'model': 'mock-model'}
+
+    orchestration_fixture['code_generator_main'].side_effect = mock_generate
+
+    mock_determine.side_effect = [
+        SyncDecision(operation='auto-deps', reason='Dependencies need scanning'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    result = sync_orchestration(basename="calculator", language="python", agentic_mode=True)
+
+    # Post-generation validation should catch non-existent imports
+    assert result['success'] is False or len(result.get('errors', [])) > 0, (
+        "Hallucinated imports (firestore_writes, brevo_results_email) passed through "
+        "undetected in agentic mode. Expected post-generation import validation to "
+        "catch non-existent local modules, but sync reported success with no errors."
+    )
+
+
+def test_issue572_valid_local_imports_not_flagged(orchestration_fixture):
+    """
+    Ensures that when generated code imports a module that actually exists on disk,
+    import validation does NOT flag it as a false positive.
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    tmp_path = Path(orchestration_fixture['get_pdd_file_paths'].return_value['prompt']).parent.parent
+
+    # Create a real local module in the src directory
+    (tmp_path / 'src' / 'helper_utils.py').write_text(
+        'def helper(): pass\n', encoding='utf-8'
+    )
+
+    # Code that imports the real local module
+    valid_code = (
+        '"""Calculator module."""\n'
+        'from helper_utils import helper\n'
+        '\n'
+        'def calc():\n'
+        '    """Do calculation."""\n'
+        '    return helper()\n'
+    )
+
+    def mock_generate(*args, **kwargs):
+        """Mock code_generator_main that writes code with valid local imports."""
+        code_file = tmp_path / 'src' / 'calculator.py'
+        code_file.write_text(valid_code, encoding='utf-8')
+        return {'success': True, 'cost': 0.05, 'model': 'mock-model'}
+
+    orchestration_fixture['code_generator_main'].side_effect = mock_generate
+
+    mock_determine.side_effect = [
+        SyncDecision(operation='auto-deps', reason='Dependencies need scanning'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    result = sync_orchestration(basename="calculator", language="python", agentic_mode=True)
+
+    # Valid local imports should not trigger validation errors
+    assert result['success'] is True
+    assert not result.get('errors', [])
+
+
+def test_issue572_stdlib_imports_not_flagged(orchestration_fixture):
+    """
+    Ensures standard library imports are NOT flagged as hallucinated
+    when import validation runs after agentic code generation.
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    tmp_path = Path(orchestration_fixture['get_pdd_file_paths'].return_value['prompt']).parent.parent
+
+    # Code with only stdlib imports
+    stdlib_code = (
+        '"""Calculator with standard imports."""\n'
+        'import os\n'
+        'import json\n'
+        'import sys\n'
+        'from pathlib import Path\n'
+        'from datetime import datetime\n'
+        '\n'
+        'def calc():\n'
+        '    """Do calculation."""\n'
+        '    return str(Path.cwd())\n'
+    )
+
+    def mock_generate(*args, **kwargs):
+        """Mock code_generator_main that writes code with stdlib imports."""
+        code_file = tmp_path / 'src' / 'calculator.py'
+        code_file.write_text(stdlib_code, encoding='utf-8')
+        return {'success': True, 'cost': 0.05, 'model': 'mock-model'}
+
+    orchestration_fixture['code_generator_main'].side_effect = mock_generate
+
+    mock_determine.side_effect = [
+        SyncDecision(operation='auto-deps', reason='Dependencies need scanning'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    result = sync_orchestration(basename="calculator", language="python", agentic_mode=True)
+
+    # Stdlib imports should not trigger validation errors
+    assert result['success'] is True
+    assert not result.get('errors', [])
+
+
+def test_issue572_synthetic_crash_message_hides_import_error(orchestration_fixture):
+    """
+    Issue #572: Python in agentic mode must run the example directly instead of
+    producing a synthetic delegation message. This ensures _try_auto_fix_import_error
+    receives real error output (e.g., ModuleNotFoundError) for proper detection.
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    tmp_path = Path(orchestration_fixture['get_pdd_file_paths'].return_value['prompt']).parent.parent
+
+    # Create code and example files — code has a hallucinated import
+    code_file = tmp_path / 'src' / 'calculator.py'
+    code_file.write_text(
+        'from nonexistent_module import something\n\ndef calc():\n    pass\n',
+        encoding='utf-8'
+    )
+    example_file = tmp_path / 'examples' / 'calculator_example.py'
+    example_file.write_text(
+        'from calculator import calc\ncalc()\n',
+        encoding='utf-8'
+    )
+
+    mock_determine.side_effect = [
+        SyncDecision(operation='crash', reason='Example crashed'),
+        SyncDecision(operation='all_synced', reason='Done'),
+    ]
+
+    # crash_main returns success (using fixture default dict format)
+    orchestration_fixture['crash_main'].return_value = {'success': True, 'cost': 0.08, 'model': 'mock-model'}
+
+    with patch('pdd.sync_orchestration.read_run_report', return_value=None), \
+         patch('pdd.sync_orchestration._try_auto_fix_import_error') as mock_auto_fix, \
+         patch('pdd.sync_orchestration._try_auto_fix_env_var_error') as mock_env_fix, \
+         patch('pdd.sync_orchestration._save_run_report_atomic'):
+        mock_auto_fix.return_value = (False, "No import error detected")
+        mock_env_fix.return_value = (False, "No env var error detected")
+
+        result = sync_orchestration(basename="calculator", language="python", agentic_mode=True)
+
+        # Verify _try_auto_fix_import_error was called
+        assert mock_auto_fix.called, (
+            "_try_auto_fix_import_error should have been called in crash handler"
+        )
+
+        # The error_output argument should contain real error info
+        actual_error_output = mock_auto_fix.call_args[0][0]
+        assert "ModuleNotFoundError" in actual_error_output or "ImportError" in actual_error_output, (
+            f"_try_auto_fix_import_error received synthetic delegation message instead of "
+            f"real error output. Got: '{actual_error_output}'. In agentic mode, the crash "
+            f"handler should surface real import errors for auto-fix detection."
+        )
+
+
+def test_issue572_wrong_module_name_hackathon_volunteer(orchestration_fixture):
+    """
+    Issue #572: When the LLM uses 'hackathon_volunteer' but the actual module is
+    'hackathon_volunteer_management', AST import validation must detect the
+    non-existent module name.
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    tmp_path = Path(orchestration_fixture['get_pdd_file_paths'].return_value['prompt']).parent.parent
+
+    # Create the REAL module with the correct name
+    (tmp_path / 'src' / 'hackathon_volunteer_management.py').write_text(
+        'def manage_volunteers(): pass\n', encoding='utf-8'
+    )
+
+    # Code that imports the WRONG module name (hallucinated by LLM)
+    wrong_name_code = (
+        '"""Hackathon results module."""\n'
+        'from hackathon_volunteer import manage_volunteers\n'
+        '\n'
+        'def process_results():\n'
+        '    """Process hackathon results."""\n'
+        '    return manage_volunteers()\n'
+    )
+
+    def mock_generate(*args, **kwargs):
+        """Mock code_generator_main that writes code with wrong module name."""
+        code_file = tmp_path / 'src' / 'calculator.py'
+        code_file.write_text(wrong_name_code, encoding='utf-8')
+        return {'success': True, 'cost': 0.05, 'model': 'mock-model'}
+
+    orchestration_fixture['code_generator_main'].side_effect = mock_generate
+
+    mock_determine.side_effect = [
+        SyncDecision(operation='auto-deps', reason='Dependencies need scanning'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    result = sync_orchestration(basename="calculator", language="python", agentic_mode=True)
+
+    # Should detect that 'hackathon_volunteer' doesn't exist on disk
+    assert result['success'] is False or len(result.get('errors', [])) > 0, (
+        "Wrong module name 'hackathon_volunteer' (actual: 'hackathon_volunteer_management') "
+        "passed through undetected in agentic mode. Expected import validation to catch "
+        "this non-existent module, but sync reported success with no errors."
+    )
+
+
+# --- Bug #573: test_extend accepts coverage=0.0 as success ---
+
+
+def test_test_extend_agentic_skip_rejects_zero_coverage(orchestration_fixture):
+    """
+    Bug #573: When test_extend is skipped in agentic mode (non-Python language),
+    the orchestration should NOT declare success if coverage is below target.
+
+    Previously, the agentic skip path unconditionally set success=True without
+    checking coverage against the target, allowing coverage=0.0 to pass the
+    pipeline. The fix checks coverage against target before accepting.
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_get_paths = orchestration_fixture['get_pdd_file_paths']
+    tmp_path = Path(mock_get_paths.return_value['prompt']).parent.parent
+
+    # Set up TypeScript files (non-Python → agentic path)
+    (tmp_path / "prompts" / "calculator_typescript.prompt").write_text("Create a calculator.")
+    (tmp_path / "src" / "calculator.ts").write_text("// TS code")
+    (tmp_path / "examples" / "calculator_example.ts").write_text("// Example")
+    (tmp_path / "tests" / "test_calculator.ts").write_text("// Test")
+
+    mock_get_paths.return_value = {
+        'prompt': tmp_path / 'prompts' / 'calculator_typescript.prompt',
+        'code': tmp_path / 'src' / 'calculator.ts',
+        'example': tmp_path / 'examples' / 'calculator_example.ts',
+        'test': tmp_path / 'tests' / 'test_calculator.ts',
+    }
+
+    # Simulate: generate succeeds → sync_determine detects low coverage → returns test_extend
+    # test_extend means coverage < target, but agentic skip unconditionally sets success=True
+    mock_determine.side_effect = [
+        SyncDecision(operation='generate', reason='New unit'),
+        SyncDecision(operation='test_extend', reason='Coverage 0.0 below target 90.0'),
+    ]
+
+    # code_generator_main returns success (agentic tuple format for non-Python)
+    orchestration_fixture['code_generator_main'].return_value = (True, "", "", 1, 0.05, "agentic-cli")
+
+    result = sync_orchestration(basename="calculator", language="typescript")
+
+    # Bug #573: Currently success=True because agentic skip doesn't check coverage.
+    # After fix: should be False because coverage (0.0) is below target (90.0).
+    assert result['success'] is False, (
+        "Bug #573: test_extend agentic skip should NOT declare pipeline success "
+        "when coverage is below target. The agentic skip path at "
+        "sync_orchestration.py:1401 unconditionally sets success=True "
+        "without checking coverage against target_coverage."
+    )
+
+
+def test_test_extend_max_retries_rejects_zero_coverage(orchestration_fixture):
+    """
+    Bug #573: When test_extend exhausts MAX_TEST_EXTEND_ATTEMPTS,
+    the orchestration should NOT declare success if coverage is below target.
+
+    Previously, the retry exhaustion path unconditionally set success=True
+    without checking coverage. The fix checks coverage against target before
+    accepting.
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+
+    # Simulate: generate → test_extend (executes) → test_extend (hits max retries)
+    # 1st test_extend: extend_attempts=1 < MAX_TEST_EXTEND_ATTEMPTS=2, so it executes
+    # 2nd test_extend: extend_attempts=2 >= MAX_TEST_EXTEND_ATTEMPTS=2, triggers limit
+    mock_determine.side_effect = [
+        SyncDecision(operation='generate', reason='New unit'),
+        SyncDecision(operation='test_extend', reason='Coverage 0.0 below target 90.0'),
+        SyncDecision(operation='test_extend', reason='Coverage still 0.0 below target 90.0'),
+    ]
+
+    # cmd_test_main returns success dict for the first test_extend execution
+    orchestration_fixture['cmd_test_main'].side_effect = None
+    orchestration_fixture['cmd_test_main'].return_value = {'success': True, 'cost': 0.06, 'model': 'mock-model'}
+
+    with patch('pdd.sync_orchestration._execute_tests_and_create_run_report'):
+        result = sync_orchestration(basename="calculator", language="python")
+
+    # Bug #573: Currently success=True because retry exhaustion doesn't check coverage.
+    # After fix: should be False because coverage (0.0) is below target (90.0).
+    assert result['success'] is False, (
+        "Bug #573: test_extend retry exhaustion should NOT declare pipeline success "
+        "when coverage is below target. The exhaustion path at "
+        "sync_orchestration.py:1413 unconditionally sets success=True "
+        "without checking coverage against target_coverage."
+    )
+
+
+def test_test_extend_agentic_skip_with_adequate_coverage_succeeds(orchestration_fixture):
+    """
+    Regression guard for Bug #573 fix: When test_extend is skipped in agentic mode
+    but coverage is already adequate (>= target), the pipeline should still succeed.
+
+    This ensures the fix doesn't break the legitimate case where coverage is fine
+    but sync_determine_operation returns test_extend due to a borderline condition.
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_get_paths = orchestration_fixture['get_pdd_file_paths']
+    tmp_path = Path(mock_get_paths.return_value['prompt']).parent.parent
+
+    # Set up TypeScript files (non-Python → agentic path)
+    (tmp_path / "prompts" / "calculator_typescript.prompt").write_text("Create a calculator.")
+    (tmp_path / "src" / "calculator.ts").write_text("// TS code")
+    (tmp_path / "examples" / "calculator_example.ts").write_text("// Example")
+    (tmp_path / "tests" / "test_calculator.ts").write_text("// Test")
+
+    mock_get_paths.return_value = {
+        'prompt': tmp_path / 'prompts' / 'calculator_typescript.prompt',
+        'code': tmp_path / 'src' / 'calculator.ts',
+        'example': tmp_path / 'examples' / 'calculator_example.ts',
+        'test': tmp_path / 'tests' / 'test_calculator.ts',
+    }
+
+    # For agentic mode, after generate → test_extend → all_synced is the normal flow
+    # when coverage is adequate. The fix should not break this.
+    mock_determine.side_effect = [
+        SyncDecision(operation='generate', reason='New unit'),
+        SyncDecision(operation='all_synced', reason='Done, coverage adequate'),
+    ]
+
+    orchestration_fixture['code_generator_main'].return_value = (True, "", "", 1, 0.05, "agentic-cli")
+
+    result = sync_orchestration(basename="calculator", language="typescript")
+
+    # Should succeed: all_synced means everything is fine
+    assert result['success'] is True, (
+        "Regression guard: all_synced after generate should still succeed. "
+        "Bug #573 fix must not break the legitimate success path."
+    )
+
+
+def test_test_extend_max_retries_with_adequate_coverage_succeeds(orchestration_fixture):
+    """
+    Regression guard for Bug #573 fix: When test_extend exhausts retries but
+    the last run achieved adequate coverage (>= target), pipeline should succeed.
+
+    This ensures the fix only rejects zero/low coverage, not cases where
+    coverage was improved to target before retries were exhausted.
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+
+    # After test_extend retries are exhausted but coverage reaches target,
+    # sync_determine_operation should return all_synced (not test_extend again)
+    mock_determine.side_effect = [
+        SyncDecision(operation='generate', reason='New unit'),
+        SyncDecision(operation='test_extend', reason='Coverage 50.0 below target 90.0'),
+        SyncDecision(operation='all_synced', reason='Coverage reached 92.0'),
+    ]
+
+    orchestration_fixture['cmd_test_main'].side_effect = None
+    orchestration_fixture['cmd_test_main'].return_value = {'success': True, 'cost': 0.06, 'model': 'mock-model'}
+
+    with patch('pdd.sync_orchestration._execute_tests_and_create_run_report'):
+        result = sync_orchestration(basename="calculator", language="python")
+
+    # Should succeed: test_extend improved coverage enough for all_synced
+    assert result['success'] is True, (
+        "Regression guard: test_extend followed by all_synced should succeed. "
+        "Bug #573 fix must not break the case where test_extend improves coverage."
+    )
+
+
+# --- Bug #624: pdd generate calls functions it never defines or imports (TypeScript/JS) ---
+
+
+def test_issue624_typescript_phantom_functions_not_detected(orchestration_fixture):
+    """Issue #624: TypeScript phantom function calls should be detected."""
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_get_paths = orchestration_fixture['get_pdd_file_paths']
+    tmp_path = Path(mock_get_paths.return_value['prompt']).parent.parent
+
+    (tmp_path / "prompts" / "hackathon_admin_typescript.prompt").write_text("Create hackathon admin page.")
+    (tmp_path / "src" / "hackathon_admin.tsx").touch()
+
+    mock_get_paths.return_value = {
+        'prompt': tmp_path / 'prompts' / 'hackathon_admin_typescript.prompt',
+        'code': tmp_path / 'src' / 'hackathon_admin.tsx',
+        'example': tmp_path / 'examples' / 'hackathon_admin_example.tsx',
+        'test': tmp_path / 'tests' / 'test_hackathon_admin.tsx',
+    }
+
+    phantom_ts_code = ("'use client';\n"
+        "import React, { useState, useEffect } from 'react';\n\n"
+        "export default function HackathonAdminPage({ params }: { params: { eventId: string } }) {\n"
+        "    const [event, setEvent] = useState(null);\n"
+        "    useEffect(() => {\n"
+        "        async function loadEvent() {\n"
+        "            const data = await fetchEvent(params.eventId, idToken);\n"
+        "            setEvent(data);\n"
+        "        }\n"
+        "        loadEvent();\n"
+        "    }, [params.eventId]);\n"
+        "    const handleUpdate = async (eventData: any) => {\n"
+        "        await updateEvent(params.eventId, eventData, idToken);\n"
+        "    };\n"
+        "    const handleAdvance = async () => {\n"
+        "        await advanceStatus(params.eventId, idToken);\n"
+        "    };\n"
+        "    return <div>Admin Page</div>;\n"
+        "}\n")
+
+    def mock_generate(*args, **kwargs):
+        """Mock code_generator_main that writes TypeScript with phantom function calls."""
+        code_file = tmp_path / 'src' / 'hackathon_admin.tsx'
+        code_file.write_text(phantom_ts_code, encoding='utf-8')
+        return {'success': True, 'cost': 0.05, 'model': 'mock-model'}
+
+    orchestration_fixture['code_generator_main'].side_effect = mock_generate
+    mock_determine.side_effect = [
+        SyncDecision(operation='generate', reason='Code needs generation'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    result = sync_orchestration(basename="hackathon_admin", language="typescript", agentic_mode=True)
+    assert result['success'] is False or len(result.get('errors', [])) > 0, (
+        "Bug #624: TypeScript phantom function calls (fetchEvent, updateEvent, advanceStatus) "
+        "passed through undetected in agentic mode."
+    )
+
+
+def test_issue624_javascript_phantom_imports_not_detected(orchestration_fixture):
+    """Issue #624: JavaScript phantom imports should also be caught."""
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_get_paths = orchestration_fixture['get_pdd_file_paths']
+    tmp_path = Path(mock_get_paths.return_value['prompt']).parent.parent
+
+    (tmp_path / "prompts" / "score_page_javascript.prompt").write_text("Create score page.")
+    (tmp_path / "src" / "score_page.js").touch()
+
+    mock_get_paths.return_value = {
+        'prompt': tmp_path / 'prompts' / 'score_page_javascript.prompt',
+        'code': tmp_path / 'src' / 'score_page.js',
+        'example': tmp_path / 'examples' / 'score_page_example.js',
+        'test': tmp_path / 'tests' / 'test_score_page.js',
+    }
+
+    phantom_js_code = ("import { fetchSubmission, fetchEvent, submitScore, fetchSubmissionList } from '@/lib/api';\n\n"
+        "export default function ScorePage({ params }) {\n"
+        "    const submissionData = fetchSubmission({ action: 'get', submissionId: params.submissionId });\n"
+        "    const eventData = fetchEvent(params.eventId);\n"
+        "    const handleSubmit = () => submitScore({ action: 'submit_score', score: 95 });\n"
+        "    const submissions = fetchSubmissionList(params.eventId);\n"
+        "    return <div>Score Page</div>;\n"
+        "}\n")
+
+    def mock_generate(*args, **kwargs):
+        """Mock code_generator_main that writes JS with phantom imports."""
+        code_file = tmp_path / 'src' / 'score_page.js'
+        code_file.write_text(phantom_js_code, encoding='utf-8')
+        return {'success': True, 'cost': 0.05, 'model': 'mock-model'}
+
+    orchestration_fixture['code_generator_main'].side_effect = mock_generate
+    mock_determine.side_effect = [
+        SyncDecision(operation='generate', reason='Code needs generation'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    result = sync_orchestration(basename="score_page", language="javascript", agentic_mode=True)
+    assert result['success'] is False or len(result.get('errors', [])) > 0, (
+        "Bug #624: JavaScript phantom imports (fetchSubmission, fetchEvent, submitScore, "
+        "fetchSubmissionList from '@/lib/api') passed through undetected."
+    )
+
+
+@pytest.mark.parametrize("language", ["python", "typescript", "javascript", "typescriptreact"])
+def test_issue624_language_gate_validates_all_languages(orchestration_fixture, language):
+    """Issue #624: All languages should have import validation."""
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_get_paths = orchestration_fixture['get_pdd_file_paths']
+    tmp_path = Path(mock_get_paths.return_value['prompt']).parent.parent
+
+    ext = {'python': '.py', 'typescript': '.ts', 'javascript': '.js', 'typescriptreact': '.tsx'}[language]
+
+    prompt_file = tmp_path / "prompts" / f"module_{language}.prompt"
+    prompt_file.write_text("Create a module.")
+    code_file = tmp_path / "src" / f"module{ext}"
+    code_file.touch()
+
+    mock_get_paths.return_value = {
+        'prompt': prompt_file, 'code': code_file,
+        'example': tmp_path / 'examples' / f'module_example{ext}',
+        'test': tmp_path / 'tests' / f'test_module{ext}',
+    }
+
+    if language == 'python':
+        phantom_code = ('"""Module with phantom import."""\n'
+            'from phantom_utility import do_something\n\n'
+            'def main():\n    """Run main."""\n    return do_something()\n')
+    else:
+        phantom_code = ("import { doSomething } from './phantom_utility';\n\n"
+            "export function main() {\n    return doSomething();\n}\n")
+
+    def mock_generate(*args, **kwargs):
+        """Mock code_generator_main that writes code with phantom imports."""
+        code_file.write_text(phantom_code, encoding='utf-8')
+        return {'success': True, 'cost': 0.05, 'model': 'mock-model'}
+
+    orchestration_fixture['code_generator_main'].side_effect = mock_generate
+    mock_determine.side_effect = [
+        SyncDecision(operation='generate', reason='Code needs generation'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    result = sync_orchestration(basename="module", language=language, agentic_mode=True)
+    assert result['success'] is False or len(result.get('errors', [])) > 0, (
+        f"Language '{language}' should have import validation, but phantom imports "
+        "passed through undetected."
+    )
+
+
+# --- Bug #620: pdd generate hallucinates Python module exports that don't exist ---
+#
+# Historical root cause (pre-fix in sync_orchestration.py): validation only checked
+# that local .py files existed and then skipped inspecting the module's exports; these
+# tests guard against regressions in the now-fixed behavior that validates exports too.
+
+
+# ---- Tier 1: Direct unit tests of _validate_python_imports() ----
+
+
+def test_issue620_hallucinated_functions_from_typeddict_module(tmp_path):
+    """
+    Issue #620 Scenario 1: Module exists but imported functions don't.
+
+    When hackathon_models.py contains only TypedDicts and Enums (zero functions),
+    importing get_event, create_submission, etc. should be flagged as unresolved.
+
+    Currently FAILS because _validate_python_imports() only checks if the module
+    file exists on disk, not whether the imported names exist within it.
+    """
+    from pdd.sync_orchestration import _validate_python_imports
+
+    # Create a module that contains ONLY TypedDicts and Enums — no functions
+    models_module = tmp_path / "hackathon_models.py"
+    models_module.write_text(
+        '"""Hackathon data models."""\n'
+        'from typing import TypedDict\n'
+        'from enum import Enum\n'
+        '\n'
+        'class SubmissionStatus(Enum):\n'
+        '    PENDING = "pending"\n'
+        '    REVIEWED = "reviewed"\n'
+        '\n'
+        'class HackathonSubmission(TypedDict):\n'
+        '    id: str\n'
+        '    title: str\n'
+        '    status: SubmissionStatus\n',
+        encoding='utf-8',
+    )
+
+    # Generated code imports functions that DON'T exist in the module
+    code_file = tmp_path / "hackathon_submission.py"
+    code_file.write_text(
+        '"""Hackathon submission handler."""\n'
+        'from hackathon_models import get_event, get_submission, create_submission\n'
+        '\n'
+        'def handle_submission():\n'
+        '    """Handle a submission."""\n'
+        '    event = get_event()\n'
+        '    return create_submission(event)\n',
+        encoding='utf-8',
+    )
+
+    unresolved = _validate_python_imports(code_file)
+
+    # Bug #620: Currently returns [] because hackathon_models.py exists on disk.
+    # After fix: should detect that get_event, get_submission, create_submission
+    # do not exist in hackathon_models.py.
+    assert len(unresolved) > 0, (
+        "Bug #620 Scenario 1: hackathon_models.py exists but contains only TypedDicts "
+        "and Enums — no functions. Importing get_event, get_submission, create_submission "
+        "should be flagged as unresolved, but _validate_python_imports() returned [] "
+        "because it only checks module file existence, not exported names."
+    )
+
+
+def test_issue620_nonexistent_submodule_path(tmp_path):
+    """
+    Issue #620 Scenario 2: Import from non-existent submodule path.
+
+    'from utils.firebase_admin_init import db' where utils/ exists as a package
+    but firebase_admin_init.py does not exist within it.
+
+    Currently FAILS because _validate_python_imports() only resolves the top-level
+    module name ('utils') via split('.')[0], ignoring the full dotted path.
+    """
+    from pdd.sync_orchestration import _validate_python_imports
+
+    # Create utils/ as a package (with __init__.py) but WITHOUT firebase_admin_init.py
+    utils_dir = tmp_path / "utils"
+    utils_dir.mkdir()
+    (utils_dir / "__init__.py").write_text('"""Utils package."""\n', encoding='utf-8')
+    (utils_dir / "helpers.py").write_text('def helper(): pass\n', encoding='utf-8')
+
+    # Generated code imports from a submodule that doesn't exist
+    code_file = tmp_path / "hackathon_results.py"
+    code_file.write_text(
+        '"""Hackathon results module."""\n'
+        'from utils.firebase_admin_init import db\n'
+        '\n'
+        'def get_results():\n'
+        '    """Get results from database."""\n'
+        '    return db.collection("results").get()\n',
+        encoding='utf-8',
+    )
+
+    unresolved = _validate_python_imports(code_file)
+
+    # Bug #620: Currently returns [] because utils/__init__.py exists.
+    # The function only checks the top-level 'utils' via split('.')[0],
+    # never verifying that utils/firebase_admin_init.py exists.
+    assert len(unresolved) > 0, (
+        "Bug #620 Scenario 2: utils/ package exists but firebase_admin_init.py does not. "
+        "'from utils.firebase_admin_init import db' should be flagged, but "
+        "_validate_python_imports() only checks the top-level module 'utils' "
+        "(via split('.')[0]) and skips since utils/__init__.py exists."
+    )
+
+
+def test_issue620_wrong_function_name_from_auth_module(tmp_path):
+    """
+    Issue #620 Scenario 3: Module exists but imported function has wrong name.
+
+    hackathon_auth.py exports 'require_hackathon_role', but generated code imports
+    'require_auth' — a hallucinated function name guessed from the module name.
+
+    Currently FAILS because _validate_python_imports() never inspects the module's
+    actual exports.
+    """
+    from pdd.sync_orchestration import _validate_python_imports
+
+    # Create auth module with the REAL function name
+    auth_module = tmp_path / "hackathon_auth.py"
+    auth_module.write_text(
+        '"""Hackathon authentication module."""\n'
+        'from functools import wraps\n'
+        '\n'
+        'def require_hackathon_role(role: str):\n'
+        '    """Require a specific hackathon role."""\n'
+        '    def decorator(f):\n'
+        '        @wraps(f)\n'
+        '        def wrapper(*args, **kwargs):\n'
+        '            return f(*args, **kwargs)\n'
+        '        return wrapper\n'
+        '    return decorator\n',
+        encoding='utf-8',
+    )
+
+    # Generated code imports the WRONG function name (hallucinated by LLM)
+    code_file = tmp_path / "hackathon_judging.py"
+    code_file.write_text(
+        '"""Hackathon judging module."""\n'
+        'from hackathon_auth import require_auth\n'
+        '\n'
+        'def judge_submission():\n'
+        '    """Judge a submission."""\n'
+        '    return require_auth("judge")\n',
+        encoding='utf-8',
+    )
+
+    unresolved = _validate_python_imports(code_file)
+
+    # Bug #620: Currently returns [] because hackathon_auth.py exists on disk.
+    # After fix: should detect that 'require_auth' doesn't exist in
+    # hackathon_auth.py (actual export is 'require_hackathon_role').
+    assert len(unresolved) > 0, (
+        "Bug #620 Scenario 3: hackathon_auth.py exports 'require_hackathon_role', "
+        "but code imports 'require_auth'. Should be flagged as unresolved, "
+        "but _validate_python_imports() returned [] because it only checks "
+        "module file existence, not whether the imported name exists."
+    )
+
+
+def test_issue620_valid_imports_still_pass(tmp_path):
+    """
+    Regression guard: When imported names actually exist in the target module,
+    _validate_python_imports() should return an empty list (no false positives).
+    """
+    from pdd.sync_orchestration import _validate_python_imports
+
+    # Create a module with real exports
+    helper_module = tmp_path / "hackathon_helpers.py"
+    helper_module.write_text(
+        '"""Hackathon helpers."""\n'
+        'def calculate_score(submission):\n'
+        '    """Calculate a score."""\n'
+        '    return 100\n'
+        '\n'
+        'class ScoreResult:\n'
+        '    """Score result container."""\n'
+        '    pass\n'
+        '\n'
+        'MAX_SCORE = 100\n',
+        encoding='utf-8',
+    )
+
+    # Generated code imports names that DO exist
+    code_file = tmp_path / "hackathon_scoring.py"
+    code_file.write_text(
+        '"""Hackathon scoring module."""\n'
+        'from hackathon_helpers import calculate_score, ScoreResult, MAX_SCORE\n'
+        '\n'
+        'def score_all():\n'
+        '    """Score all entries."""\n'
+        '    result = ScoreResult()\n'
+        '    return calculate_score(result)\n',
+        encoding='utf-8',
+    )
+
+    unresolved = _validate_python_imports(code_file)
+
+    # Valid imports should not be flagged
+    assert len(unresolved) == 0, (
+        "Regression guard: All imported names (calculate_score, ScoreResult, MAX_SCORE) "
+        f"exist in hackathon_helpers.py, but got unresolved: {unresolved}"
+    )
+
+
+def test_issue620_mixed_valid_and_invalid_names(tmp_path):
+    """
+    When some imported names exist and others don't, only the invalid ones
+    should be flagged.
+    """
+    from pdd.sync_orchestration import _validate_python_imports
+
+    # Create a module with some exports
+    module = tmp_path / "hackathon_utils.py"
+    module.write_text(
+        '"""Hackathon utilities."""\n'
+        'def format_date(d):\n'
+        '    """Format a date."""\n'
+        '    return str(d)\n'
+        '\n'
+        'def validate_email(email):\n'
+        '    """Validate an email."""\n'
+        '    return "@" in email\n',
+        encoding='utf-8',
+    )
+
+    # Code imports one valid name and two hallucinated names
+    code_file = tmp_path / "hackathon_notify.py"
+    code_file.write_text(
+        '"""Hackathon notification module."""\n'
+        'from hackathon_utils import format_date, send_notification, get_template\n'
+        '\n'
+        'def notify():\n'
+        '    """Send notification."""\n'
+        '    send_notification(format_date("2024-01-01"), get_template("welcome"))\n',
+        encoding='utf-8',
+    )
+
+    unresolved = _validate_python_imports(code_file)
+
+    # Bug #620: Currently returns [] because hackathon_utils.py exists on disk.
+    # After fix: should flag send_notification and get_template as unresolved
+    # but NOT format_date (which actually exists).
+    assert len(unresolved) > 0, (
+        "Bug #620: hackathon_utils.py exists with format_date and validate_email, "
+        "but code imports hallucinated send_notification and get_template. "
+        "Should be flagged but _validate_python_imports() returned [] because it only "
+        "checks module file existence."
+    )
+
+
+def test_issue620_class_and_constant_exports_recognized(tmp_path):
+    """
+    Verify that class names and module-level constants are recognized as valid
+    exports, not just function definitions.
+    """
+    from pdd.sync_orchestration import _validate_python_imports
+
+    module = tmp_path / "hackathon_config.py"
+    module.write_text(
+        '"""Hackathon configuration."""\n'
+        'MAX_TEAMS = 50\n'
+        'DEFAULT_TIMEOUT = 3600\n'
+        '\n'
+        'class HackathonConfig:\n'
+        '    """Configuration container."""\n'
+        '    def __init__(self):\n'
+        '        self.max_teams = MAX_TEAMS\n',
+        encoding='utf-8',
+    )
+
+    # Import real class + constant, plus one hallucinated name
+    code_file = tmp_path / "hackathon_setup.py"
+    code_file.write_text(
+        '"""Hackathon setup."""\n'
+        'from hackathon_config import HackathonConfig, MAX_TEAMS, get_config\n'
+        '\n'
+        'def setup():\n'
+        '    """Set up hackathon."""\n'
+        '    config = get_config()\n'
+        '    return HackathonConfig()\n',
+        encoding='utf-8',
+    )
+
+    unresolved = _validate_python_imports(code_file)
+
+    # Bug #620: Currently returns [] because hackathon_config.py exists.
+    # After fix: should detect that 'get_config' doesn't exist (hallucinated),
+    # while HackathonConfig and MAX_TEAMS are real exports.
+    assert len(unresolved) > 0, (
+        "Bug #620: hackathon_config.py exports HackathonConfig and MAX_TEAMS, "
+        "but NOT get_config. Should flag get_config as unresolved, but "
+        "_validate_python_imports() returned [] because it only checks "
+        "module file existence."
+    )
+
+
+# ---- Tier 2: Integration tests through sync_orchestration() ----
+
+
+def test_issue620_integration_hallucinated_function_detected(orchestration_fixture):
+    """
+    Issue #620 Integration: End-to-end through sync_orchestration().
+
+    When code_generator_main produces code that imports hallucinated functions
+    from a real local module, the post-generation validation should catch it.
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    tmp_path = Path(orchestration_fixture['get_pdd_file_paths'].return_value['prompt']).parent.parent
+
+    # Create a real local module with ONLY TypedDicts
+    (tmp_path / 'src' / 'hackathon_models.py').write_text(
+        '"""Hackathon models."""\n'
+        'from typing import TypedDict\n'
+        '\n'
+        'class Submission(TypedDict):\n'
+        '    id: str\n'
+        '    title: str\n',
+        encoding='utf-8',
+    )
+
+    # Code that imports hallucinated functions from the real module
+    hallucinated_code = (
+        '"""Hackathon submission handler."""\n'
+        'from hackathon_models import get_event, create_submission, list_submissions\n'
+        '\n'
+        'def handle():\n'
+        '    """Handle submission."""\n'
+        '    return create_submission(get_event())\n'
+    )
+
+    def mock_generate(*args, **kwargs):
+        """Mock code_generator_main that writes code with hallucinated imports."""
+        code_file = tmp_path / 'src' / 'calculator.py'
+        code_file.write_text(hallucinated_code, encoding='utf-8')
+        return {'success': True, 'cost': 0.05, 'model': 'mock-model'}
+
+    orchestration_fixture['code_generator_main'].side_effect = mock_generate
+
+    mock_determine.side_effect = [
+        SyncDecision(operation='auto-deps', reason='Dependencies need scanning'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    result = sync_orchestration(basename="calculator", language="python", agentic_mode=True)
+
+    # Bug #620: Currently passes because _validate_python_imports() only checks
+    # that hackathon_models.py exists, not that get_event/create_submission exist in it.
+    assert result['success'] is False or len(result.get('errors', [])) > 0, (
+        "Bug #620 Integration: hackathon_models.py contains only TypedDicts, but "
+        "generated code imports get_event, create_submission, list_submissions. "
+        "Post-generation validation should catch these hallucinated names, but "
+        "sync_orchestration reported success with no errors."
+    )
+
+
+def test_issue620_integration_wrong_function_name_detected(orchestration_fixture):
+    """
+    Issue #620 Integration: End-to-end through sync_orchestration().
+
+    When code_generator_main produces code that imports a wrong function name
+    from a real module, the post-generation validation should catch it.
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    tmp_path = Path(orchestration_fixture['get_pdd_file_paths'].return_value['prompt']).parent.parent
+
+    # Create a real auth module with the CORRECT function name
+    (tmp_path / 'src' / 'hackathon_auth.py').write_text(
+        '"""Hackathon auth module."""\n'
+        'def require_hackathon_role(role):\n'
+        '    """Require a hackathon role."""\n'
+        '    pass\n',
+        encoding='utf-8',
+    )
+
+    # Code imports the WRONG function name
+    wrong_name_code = (
+        '"""Hackathon judging module."""\n'
+        'from hackathon_auth import require_auth\n'
+        '\n'
+        'def judge():\n'
+        '    """Judge submission."""\n'
+        '    return require_auth("judge")\n'
+    )
+
+    def mock_generate(*args, **kwargs):
+        """Mock code_generator_main that writes code with wrong function name."""
+        code_file = tmp_path / 'src' / 'calculator.py'
+        code_file.write_text(wrong_name_code, encoding='utf-8')
+        return {'success': True, 'cost': 0.05, 'model': 'mock-model'}
+
+    orchestration_fixture['code_generator_main'].side_effect = mock_generate
+
+    mock_determine.side_effect = [
+        SyncDecision(operation='auto-deps', reason='Dependencies need scanning'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    result = sync_orchestration(basename="calculator", language="python", agentic_mode=True)
+
+    # Bug #620: Currently passes because hackathon_auth.py exists on disk.
+    assert result['success'] is False or len(result.get('errors', [])) > 0, (
+        "Bug #620 Integration: hackathon_auth.py exports 'require_hackathon_role', "
+        "but generated code imports 'require_auth'. Post-generation validation should "
+        "catch this wrong name, but sync_orchestration reported success with no errors."
+    )
+
+
+# ---- Edge case tests ----
+
+
+def test_issue620_star_import_not_flagged(tmp_path):
+    """
+    Edge case: Star imports ('from module import *') should not be flagged
+    because they don't import specific names that can be validated.
+    """
+    from pdd.sync_orchestration import _validate_python_imports
+
+    module = tmp_path / "hackathon_helpers.py"
+    module.write_text(
+        '"""Helpers."""\n'
+        'def helper(): pass\n',
+        encoding='utf-8',
+    )
+
+    code_file = tmp_path / "hackathon_main.py"
+    code_file.write_text(
+        '"""Main module."""\n'
+        'from hackathon_helpers import *\n'
+        '\n'
+        'def main():\n'
+        '    """Run main."""\n'
+        '    return helper()\n',
+        encoding='utf-8',
+    )
+
+    unresolved = _validate_python_imports(code_file)
+
+    # Star imports should not cause false positives
+    assert len(unresolved) == 0, (
+        "Star imports should not be flagged since we can't validate specific names. "
+        f"Got unresolved: {unresolved}"
+    )
+
+
+def test_issue620_dunder_all_controls_exports(tmp_path):
+    """
+    Edge case: When a module defines __all__, it constrains what is exported
+    for 'from module import *'. Explicitly imported names that exist in the
+    module but are not in __all__ should NOT be flagged (they are valid Python).
+    Names that do not exist in the module at all (like nonexistent_func) must
+    be flagged.
+    """
+    from pdd.sync_orchestration import _validate_python_imports
+
+    module = tmp_path / "hackathon_api.py"
+    module.write_text(
+        '"""Hackathon API module."""\n'
+        '__all__ = ["create_event", "EventConfig"]\n'
+        '\n'
+        'class EventConfig:\n'
+        '    """Event configuration."""\n'
+        '    pass\n'
+        '\n'
+        'def create_event():\n'
+        '    """Create event."""\n'
+        '    pass\n'
+        '\n'
+        'def _internal_helper():\n'
+        '    """Internal helper, not in __all__."""\n'
+        '    pass\n',
+        encoding='utf-8',
+    )
+
+    # Code imports a name NOT in __all__
+    code_file = tmp_path / "hackathon_runner.py"
+    code_file.write_text(
+        '"""Hackathon runner."""\n'
+        'from hackathon_api import create_event, _internal_helper, nonexistent_func\n'
+        '\n'
+        'def run():\n'
+        '    """Run hackathon."""\n'
+        '    create_event()\n'
+        '    _internal_helper()\n'
+        '    nonexistent_func()\n',
+        encoding='utf-8',
+    )
+
+    unresolved = _validate_python_imports(code_file)
+
+    # nonexistent_func should be flagged (doesn't exist at all in the module).
+    # _internal_helper should NOT be flagged — it physically exists in the module;
+    # __all__ only restricts 'from module import *', not explicit imports.
+    assert len(unresolved) > 0, (
+        "hackathon_api.py has __all__ = ['create_event', 'EventConfig'] "
+        "but code imports nonexistent_func which doesn't exist anywhere in the module. "
+        "Should be flagged as unresolved."
+    )
+    # Verify _internal_helper is NOT flagged (it exists in the module)
+    unresolved_str = ' '.join(unresolved)
+    assert '_internal_helper' not in unresolved_str, (
+        "_internal_helper exists in hackathon_api.py and should not be flagged — "
+        "__all__ only restricts star imports, not explicit imports."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test Coverage Gap #1: Direct unit tests for _get_module_exports()
+# ---------------------------------------------------------------------------
+
+
+def test_get_module_exports_functions_classes_constants(tmp_path):
+    """_get_module_exports returns functions, classes, and constants."""
+    from pdd.sync_orchestration import _get_module_exports
+
+    module = tmp_path / "mymodule.py"
+    module.write_text(
+        'MY_CONST = 42\n'
+        '\n'
+        'class MyClass:\n'
+        '    pass\n'
+        '\n'
+        'def my_func():\n'
+        '    pass\n'
+        '\n'
+        'async def my_async_func():\n'
+        '    pass\n',
+        encoding='utf-8',
+    )
+
+    exports = _get_module_exports(module)
+    assert exports is not None
+    assert 'MY_CONST' in exports
+    assert 'MyClass' in exports
+    assert 'my_func' in exports
+    assert 'my_async_func' in exports
+
+
+def test_get_module_exports_dunder_all_union(tmp_path):
+    """__all__ names are unioned with physically defined names."""
+    from pdd.sync_orchestration import _get_module_exports
+
+    module = tmp_path / "mymodule.py"
+    module.write_text(
+        '__all__ = ["exported_only"]\n'
+        '\n'
+        'def real_func():\n'
+        '    pass\n',
+        encoding='utf-8',
+    )
+
+    exports = _get_module_exports(module)
+    assert exports is not None
+    assert 'exported_only' in exports
+    assert 'real_func' in exports
+
+
+def test_get_module_exports_dunder_all_augassign(tmp_path):
+    """__all__ += ['extra'] augments the export set."""
+    from pdd.sync_orchestration import _get_module_exports
+
+    module = tmp_path / "mymodule.py"
+    module.write_text(
+        '__all__ = ["base_name"]\n'
+        '__all__ += ["extra_name"]\n'
+        '\n'
+        'def base_name():\n'
+        '    pass\n',
+        encoding='utf-8',
+    )
+
+    exports = _get_module_exports(module)
+    assert exports is not None
+    assert 'base_name' in exports
+    assert 'extra_name' in exports
+
+
+def test_get_module_exports_syntax_error(tmp_path):
+    """Module with SyntaxError returns None."""
+    from pdd.sync_orchestration import _get_module_exports
+
+    module = tmp_path / "broken.py"
+    module.write_text('def broken(:\n    pass\n', encoding='utf-8')
+
+    result = _get_module_exports(module)
+    assert result is None
+
+
+def test_get_module_exports_nonexistent_file(tmp_path):
+    """Non-existent file returns None (OSError)."""
+    from pdd.sync_orchestration import _get_module_exports
+
+    result = _get_module_exports(tmp_path / "does_not_exist.py")
+    assert result is None
+
+
+def test_get_module_exports_names_inside_try_except(tmp_path):
+    """Names defined inside try/except are captured via ast.walk."""
+    from pdd.sync_orchestration import _get_module_exports
+
+    module = tmp_path / "conditional.py"
+    module.write_text(
+        'try:\n'
+        '    from fast_json import loads\n'
+        'except ImportError:\n'
+        '    from json import loads\n'
+        '\n'
+        'if True:\n'
+        '    CONDITIONAL_VAR = 1\n',
+        encoding='utf-8',
+    )
+
+    exports = _get_module_exports(module)
+    assert exports is not None
+    assert 'loads' in exports
+    assert 'CONDITIONAL_VAR' in exports
+
+
+# ---------------------------------------------------------------------------
+# Test Coverage Gap #2: Parse-failure fallback test
+# ---------------------------------------------------------------------------
+
+
+def test_validate_imports_skips_broken_target_module(tmp_path):
+    """When target module has SyntaxError, skip name validation (no false positives)."""
+    from pdd.sync_orchestration import _validate_python_imports
+
+    # Broken module — cannot be parsed
+    broken = tmp_path / "broken_module.py"
+    broken.write_text('def oops(:\n    pass\n', encoding='utf-8')
+
+    # Code that imports from the broken module
+    code = tmp_path / "main.py"
+    code.write_text(
+        'from broken_module import oops\n'
+        '\n'
+        'oops()\n',
+        encoding='utf-8',
+    )
+
+    unresolved = _validate_python_imports(code)
+    # Should NOT flag 'oops' as missing — the module couldn't be parsed,
+    # so we skip validation to avoid false positives.
+    assert len(unresolved) == 0
+
+
+# ---------------------------------------------------------------------------
+# Test Coverage Gap #3: __init__.py re-exports test
+# ---------------------------------------------------------------------------
+
+
+def test_validate_imports_init_py_reexports(tmp_path):
+    """from mypackage import SomeClass works when __init__.py re-exports it."""
+    from pdd.sync_orchestration import _validate_python_imports
+
+    pkg = tmp_path / "mypackage"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text(
+        'from .submodule import SomeClass\n',
+        encoding='utf-8',
+    )
+    (pkg / "submodule.py").write_text(
+        'class SomeClass:\n'
+        '    pass\n',
+        encoding='utf-8',
+    )
+
+    code = tmp_path / "app.py"
+    code.write_text(
+        'from mypackage import SomeClass\n'
+        '\n'
+        'obj = SomeClass()\n',
+        encoding='utf-8',
+    )
+
+    unresolved = _validate_python_imports(code)
+    assert len(unresolved) == 0
+
+
+# ---------------------------------------------------------------------------
+# Test Coverage Gap #4: Submodule exists but imported name doesn't
+# ---------------------------------------------------------------------------
+
+
+def test_validate_imports_submodule_missing_name(tmp_path):
+    """from utils.helpers import nonexistent_func is flagged when name doesn't exist."""
+    from pdd.sync_orchestration import _validate_python_imports
+
+    utils = tmp_path / "utils"
+    utils.mkdir()
+    (utils / "__init__.py").write_text('', encoding='utf-8')
+    (utils / "helpers.py").write_text(
+        'def real_func():\n'
+        '    pass\n',
+        encoding='utf-8',
+    )
+
+    code = tmp_path / "app.py"
+    code.write_text(
+        'from utils.helpers import nonexistent_func\n'
+        '\n'
+        'nonexistent_func()\n',
+        encoding='utf-8',
+    )
+
+    unresolved = _validate_python_imports(code)
+    assert len(unresolved) == 1
+    assert "nonexistent_func" in unresolved[0]
+    assert "not found" in unresolved[0]
+
+
+# ---------------------------------------------------------------------------
+# Test Coverage Gap #5: Non-literal __all__ patterns
+# ---------------------------------------------------------------------------
+
+
+def test_validate_imports_dunder_all_augassign_pattern(tmp_path):
+    """__all__ += ['extra'] is handled; imported names in the augmented set pass."""
+    from pdd.sync_orchestration import _validate_python_imports
+
+    module = tmp_path / "exports_module.py"
+    module.write_text(
+        '__all__ = ["base_func"]\n'
+        '__all__ += ["extra_func"]\n'
+        '\n'
+        'def base_func():\n'
+        '    pass\n',
+        encoding='utf-8',
+    )
+
+    code = tmp_path / "consumer.py"
+    code.write_text(
+        'from exports_module import extra_func\n'
+        '\n'
+        'extra_func()\n',
+        encoding='utf-8',
+    )
+
+    unresolved = _validate_python_imports(code)
+    # extra_func is in __all__ (via +=), so it should NOT be flagged
+    assert len(unresolved) == 0

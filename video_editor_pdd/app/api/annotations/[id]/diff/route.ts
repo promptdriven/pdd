@@ -4,10 +4,10 @@ import { getFixDiff } from "@/lib/git";
 
 export const dynamic = "force-dynamic";
 
-type RouteParams = { params: { id: string } };
+type RouteParams = { params: Promise<{ id: string }> };
 
 export async function GET(_request: Request, { params }: RouteParams) {
-  const annotationId = params.id;
+  const { id: annotationId } = await params;
   const db = getDb();
 
   try {

@@ -32,7 +32,8 @@ const fixTypeLabels: Record<
 };
 
 // Instruction helper (kept as-provided)
-const formatTs = (s: number) => {
+const formatTs = (s: number | null) => {
+  if (s === null) return '0:00.0';
   const m = Math.floor(s / 60);
   const sec = (s % 60).toFixed(1);
   return `${m}:${sec.padStart(4, '0')}`;
@@ -356,6 +357,7 @@ export default function AnnotationPanel({ annotations, sectionId, onBatchResolve
   const [locallyResolvedIds, setLocallyResolvedIds] = useState<Set<string>>(() => new Set());
 
   const sorted = useMemo(() => {
+    // @ts-ignore TS18047 - timestamps are numeric at sort time; nulls sort as 0
     return [...annotations].sort((a, b) => a.timestamp - b.timestamp);
   }, [annotations]);
 
@@ -451,8 +453,8 @@ export default function AnnotationPanel({ annotations, sectionId, onBatchResolve
           <SseLogPanel
             jobId={batchJobId}
             onDone={() => {
-              // Parent is expected to refetch and pass updated annotations.
-              // Keep the panel visible; user may want the logs.
+              // Notify parent to reload annotations so resolved ones show ✓ Resolved.
+              onBatchResolve(batchJobId!);
             }}
             onError={() => {
               // Keep logs visible on error.

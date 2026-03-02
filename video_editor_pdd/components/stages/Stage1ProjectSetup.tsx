@@ -121,11 +121,11 @@ export default function Stage1ProjectSetup({
   };
 
   const handleConfirmEdit = () => {
-    if (!draftSection) return;
+    if (!draftSection || !editingSectionId) return;
     setLocalConfig((prev) => ({
       ...prev,
       sections: prev.sections.map((s) =>
-        s.id === draftSection.id ? draftSection : s
+        s.id === editingSectionId ? draftSection : s
       ),
     }));
     setEditingSectionId(null);

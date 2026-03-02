@@ -1,5 +1,21 @@
 <include>context/python_preamble.prompt</include>
 
+<pdd-reason>Orchestrates the 9-step agentic E2E fix workflow for resolving end-to-end test failures.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "module",
+  "module": {{
+    "functions": [
+      {{"name": "run_agentic_e2e_fix_orchestrator", "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, *, cwd, timeout_adder, max_cycles, resume, verbose, quiet, use_github_state, protect_tests)", "returns": "Tuple[bool, str, float, str, List[str]]"}}
+    ]
+  }}
+}}
+</pdd-interface>
+
+<pdd-dependency>agentic_common_python.prompt</pdd-dependency>
+<pdd-dependency>load_prompt_template_python.prompt</pdd-dependency>
+
 % Goal
 Write the `pdd/agentic_e2e_fix_orchestrator.py` module.
 
@@ -242,7 +258,7 @@ After successful completion (ALL_TESTS_PASS), commit only files that changed dur
 3. **Snapshot before workflow**:
    - At start of orchestrator (after setup, before main loop): `initial_file_hashes = _get_file_hashes(cwd)`
 
-4. **Helper function**: `_commit_and_push(cwd: Path, issue_number: int, issue_title: str, initial_file_hashes: Dict[str, Optional[str]], quiet: bool = False) -> Tuple[bool, str]`
+4. **Helper function**: `_commit_and_push(cwd: Path, issue_number: int, issue_title: str, repo_owner: str, repo_name: str, initial_file_hashes: Dict[str, Optional[str]], quiet: bool = False) -> Tuple[bool, str]`
    - Get current hashes: `current_hashes = _get_file_hashes(cwd)`
    - Find files changed during workflow:
      - New files: in current_hashes but not in initial_file_hashes
@@ -253,9 +269,19 @@ After successful completion (ALL_TESTS_PASS), commit only files that changed dur
    - Push to remote: `git push`
    - Return `(True, f"Committed and pushed {N} file(s)")` on success
    - Return `(False, f"Push failed: {error}")` on failure
+   - On push auth failure (stderr contains "Authentication failed", "HTTP 401", "could not read Username", or "HTTP Basic: Access denied"):
+     - If `PDD_GH_TOKEN_FILE` env var is set and the file exists with non-empty content:
+       - Read the token from the file (strip whitespace)
+       - Save the current remote origin URL
+       - URL-encode the token with `urllib.parse.quote(token, safe='')` to guard against reserved characters
+       - Set remote origin URL to `https://x-access-token:{quoted_token}@github.com/{repo_owner}/{repo_name}.git`
+       - Retry the push once
+       - Restore the original remote URL in a finally block (prevents token leakage in git config)
+       - If restore fails, print a WARNING to stderr (token may remain in .git/config)
+     - If no token file available, file is empty, or retry also fails: return `(False, error)` as before
 
 5. **Integration in orchestrator**:
-   - Call `_commit_and_push(..., initial_file_hashes=initial_file_hashes)` after clearing workflow state
+   - Call `_commit_and_push(..., repo_owner=repo_owner, repo_name=repo_name, initial_file_hashes=initial_file_hashes)` after clearing workflow state
    - Log result to console (success message or warning)
    - Do NOT fail the overall workflow if push fails - just print warning
 

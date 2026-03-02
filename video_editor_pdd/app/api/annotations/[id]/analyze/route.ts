@@ -40,9 +40,9 @@ function mapAnnotationRow(row: any): Annotation {
 
 export async function POST(
   request: Request,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ): Promise<NextResponse> {
-  const { id } = params;
+  const { id } = await params;
   const db = getDb();
 
   // Load annotation

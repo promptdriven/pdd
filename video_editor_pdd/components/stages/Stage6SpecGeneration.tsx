@@ -44,7 +44,7 @@ const badgeFromFirstLine = (line?: string): BadgeInfo | null => {
   }
   const titleMatch = line.match(/\[title:.*?\]/i);
   if (titleMatch) {
-    return { label: titleMatch[0].replace(/\[|\]/g, ''), colorClass: 'bg-gray-800/80 text-gray-300 border-gray-600' };
+    return { label: titleMatch[0].replace(/\[|\]/g, ''), colorClass: 'bg-teal-900/50 text-teal-300 border-teal-700' };
   }
   const splitMatch = line.match(/\[split:.*?\]/i);
   if (splitMatch) {

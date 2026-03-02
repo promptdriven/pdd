@@ -126,6 +126,11 @@ export default function Page() {
   }, [activeTab, loadAnnotations]);
 
   const handleAdvanceStage = useCallback(() => {
+    // Stage 9 "Open in Review →" should switch to the Review tab
+    if (activeStage === 'render') {
+      setActiveTab('review');
+      return;
+    }
     const idx = STAGE_ORDER.indexOf(activeStage);
     const next = STAGE_ORDER[idx + 1];
     if (next) setActiveStage(next);
@@ -197,7 +202,7 @@ export default function Page() {
       </div>
 
       {/* Two-column layout */}
-      <div className="flex h-full">
+      <div className="flex flex-1 min-h-0">
         {activeTab === 'pipeline' && (
           <>
             <StageSidebar activeStage={activeStage} onStageSelect={setActiveStage} />

@@ -179,7 +179,8 @@ test.describe('Stage 9: Render & Stitch', () => {
   });
 
   test('each row has a preview button', async ({ page }) => {
-    const previewButtons = page.locator('tbody tr button[title="Preview"]');
+    // Rendered sections use title="Preview", missing sections use title="Not yet rendered"
+    const previewButtons = page.locator('tbody tr button[title="Preview"], tbody tr button[title="Not yet rendered"]');
     await expect(previewButtons).toHaveCount(7);
   });
 
@@ -388,5 +389,141 @@ test.describe('Stage 9: Render & Stitch', () => {
     await firstCheckbox.uncheck();
     await expect(firstCheckbox).not.toBeChecked();
     await expect(thirdCheckbox).toBeChecked();
+  });
+
+  // ── Bug regression tests ──────────────────────────────────────────────────
+
+  test('Bug #4: POST /api/pipeline/render/run returns JSON (not SSE stream)', async ({ page }) => {
+    // The endpoint must return application/json so the frontend can call res.json()
+    const result = await page.evaluate(async () => {
+      const response = await fetch('/api/pipeline/render/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sections: [] }),
+      });
+      return {
+        contentType: response.headers.get('content-type') ?? '',
+        status: response.status,
+      };
+    });
+    expect(result.contentType).toContain('application/json');
+    // Empty sections may error (500) but must still return JSON, not SSE
+    expect([200, 500]).toContain(result.status);
+  });
+
+  test('Bug #4: Render button does not show JSON parse error', async ({ page }) => {
+    // Mock the render status reload to avoid network errors
+    await page.route('**/api/pipeline/render/status', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          sections: [
+            { id: 'cold_open', durationSeconds: 15.29, status: 'done', progress: 100 },
+            { id: 'part1_economics', durationSeconds: 382.18, status: 'done', progress: 100 },
+            { id: 'part2_paradigm_shift', durationSeconds: 0, status: 'missing', progress: 0 },
+            { id: 'part3_mold', durationSeconds: 0, status: 'missing', progress: 0 },
+            { id: 'part4_precision', durationSeconds: 0, status: 'missing', progress: 0 },
+            { id: 'part5_compound', durationSeconds: 0, status: 'missing', progress: 0 },
+            { id: 'closing', durationSeconds: 0, status: 'missing', progress: 0 },
+          ],
+          fullVideo: { exists: false },
+        }),
+      });
+    });
+
+    const renderButton = page.locator('button', { hasText: /Render/ }).first();
+    await renderButton.click();
+    await page.waitForTimeout(1500);
+
+    // Must NOT show a JSON parse error
+    await expect(page.locator('text=not valid JSON')).not.toBeVisible();
+    await expect(page.locator('text=Unexpected token')).not.toBeVisible();
+  });
+
+  test('Bug #5: GET /api/pipeline/render/stream endpoint exists and returns SSE', async ({ page }) => {
+    const result = await page.evaluate(async () => {
+      const response = await fetch('/api/pipeline/render/stream?jobId=nonexistent-job-id');
+      return {
+        status: response.status,
+        contentType: response.headers.get('content-type') ?? '',
+      };
+    });
+    // Should not be 404
+    expect(result.status).not.toBe(404);
+    expect(result.contentType).toContain('text/event-stream');
+  });
+
+  test('Bug #6: "Open in Review →" navigates to Review tab, not Stage 10 Audit', async ({ page }) => {
+    await expect(page.locator('h2', { hasText: 'Stage 9' })).toBeVisible();
+
+    const openInReviewBtn = page.locator('button', { hasText: 'Open in Review' });
+    await openInReviewBtn.click();
+    await page.waitForTimeout(500);
+
+    // Must NOT navigate to Stage 10 Audit
+    await expect(page.locator('text=Audit Results')).not.toBeVisible();
+
+    // Review tab button should be active (has active styling)
+    const reviewTabBtn = page.locator('button').filter({ hasText: /^Review$/ });
+    await expect(reviewTabBtn).toHaveCSS('color', 'rgb(255, 255, 255)');
+  });
+
+  test('Bug #7: Preview button is disabled for Missing sections', async ({ page }) => {
+    // Mock status so row 0 is "done" and row 1 is "missing"
+    await page.route('**/api/pipeline/render/status', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          sections: [
+            { id: 'cold_open', durationSeconds: 15.29, status: 'done', progress: 100 },
+            { id: 'part2_paradigm_shift', durationSeconds: 0, status: 'missing', progress: 0 },
+          ],
+          fullVideo: { exists: false },
+        }),
+      });
+    });
+
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    const sidebar = page.locator('aside');
+    await sidebar.locator('div').filter({ hasText: /^9\s*Render/ }).click();
+    await expect(page.locator('th', { hasText: 'Section ID' })).toBeVisible({ timeout: 15000 });
+
+    // Row 0 (done) — preview button should be enabled (title="Preview")
+    const donePreviewBtn = page.locator('tbody tr').nth(0).locator('td').nth(5).locator('button');
+    await expect(donePreviewBtn).not.toBeDisabled();
+
+    // Row 1 (missing) — preview button should be disabled
+    const missingPreviewBtn = page.locator('tbody tr').nth(1).locator('td').nth(5).locator('button');
+    await expect(missingPreviewBtn).toBeDisabled();
+
+    // Clicking the disabled button must NOT open the modal
+    await missingPreviewBtn.click({ force: true });
+    await page.waitForTimeout(300);
+    await expect(page.locator('text=Preview —')).not.toBeVisible();
+  });
+
+  test('Bug #8: Pipeline/Review tab bar stays visible after scrolling', async ({ page }) => {
+    // Navigate to Stage 9 (beforeEach already did this)
+    await expect(page.locator('h2', { hasText: 'Stage 9' })).toBeVisible();
+
+    // Scroll the window (body-level) to the bottom to expose any layout overflow
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await page.waitForTimeout(300);
+
+    // The Pipeline and Review tab buttons must still be within the viewport (not scrolled off)
+    const pipelineBtn = page.locator('button', { hasText: /^Pipeline$/ });
+    const reviewBtn = page.locator('button', { hasText: /^Review$/ });
+
+    const pipelineBox = await pipelineBtn.boundingBox();
+    const reviewBox = await reviewBtn.boundingBox();
+
+    expect(pipelineBox).not.toBeNull();
+    expect(reviewBox).not.toBeNull();
+    // y >= 0 means it is within or below the viewport top
+    expect(pipelineBox!.y).toBeGreaterThanOrEqual(0);
+    expect(reviewBox!.y).toBeGreaterThanOrEqual(0);
   });
 });

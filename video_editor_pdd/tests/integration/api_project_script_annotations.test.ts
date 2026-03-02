@@ -562,6 +562,28 @@ describe("Integration: POST & GET /api/annotations", () => {
     expect(response.status).toBe(400);
   });
 
+  it("POST with empty text but drawingDataUrl creates annotation (drawing-only)", async () => {
+    const { NextRequest } = await import("next/server");
+    const response = await POST_annotations(
+      new NextRequest("http://localhost/api/annotations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sectionId: "intro",
+          timestamp: 71.0,
+          text: "",
+          drawingDataUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==",
+          compositeDataUrl: null,
+        }),
+      })
+    );
+    expect(response.status).toBe(201);
+    const { body } = await parseResponse(response);
+    expect(body.sectionId).toBe("intro");
+    expect(body.text).toBe("");
+    expect(body.drawingDataUrl).toBe("data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==");
+  });
+
   it("POST with valid sectionId, timestamp, text creates and returns annotation", async () => {
     const { NextRequest } = await import("next/server");
     const response = await POST_annotations(

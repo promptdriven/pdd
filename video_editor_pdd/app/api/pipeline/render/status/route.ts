@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 
 import { loadProject } from "@/lib/project";
+import { getSectionDuration } from "@/lib/render";
 
 /**
  * GET /api/pipeline/render/status
@@ -47,10 +48,16 @@ export async function GET(): Promise<NextResponse> {
     if (fs.existsSync(FULL_VIDEO_PATH)) {
       try {
         const stat = fs.statSync(FULL_VIDEO_PATH);
+        let durationSeconds: number | undefined;
+        try {
+          durationSeconds = await getSectionDuration(FULL_VIDEO_PATH);
+        } catch {
+          // ffprobe unavailable — leave undefined
+        }
         fullVideo = {
           exists: true,
           sizeBytes: stat.size,
-          durationSeconds: undefined, // ffprobe not available in all envs
+          durationSeconds,
         };
       } catch {
         // Ignore stat errors

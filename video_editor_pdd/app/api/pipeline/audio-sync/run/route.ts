@@ -1,6 +1,6 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { spawn } from "child_process";
-import { registerExecutor, startJobInBackground } from "@/lib/jobs";
+import { registerExecutor, runPipelineStage } from "@/lib/jobs";
 import { loadProject } from "@/lib/project";
 import type { SseSend } from "@/lib/types";
 
@@ -109,10 +109,27 @@ registerExecutor("audio-sync", (_params, send: SseSend) => {
 
 /**
  * POST /api/pipeline/audio-sync/run
- * Creates a job for the audio sync pipeline and returns { jobId }.
- * The client connects to GET /api/jobs/[id]/stream for real-time logs.
+ * Streams audio-sync progress via SSE. Returns { jobId } event when complete.
  */
-export function POST(_request: NextRequest): NextResponse {
-  const jobId = startJobInBackground("audio-sync", {});
-  return NextResponse.json({ jobId });
+export async function POST(_request: NextRequest): Promise<Response> {
+  const { stream, send, done, error } = createSseStream();
+
+  (async () => {
+    try {
+      const jobId = await runPipelineStage("audio-sync", {}, send);
+      send({ type: "job", jobId });
+      send({ type: "complete", jobId });
+      done();
+    } catch (err) {
+      error(err instanceof Error ? err.message : "Unknown error");
+    }
+  })();
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    },
+  });
 }

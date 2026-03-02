@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
 
-import { parseSegmentsFromScript, getWavDuration } from "../run/route";
+import { parseSegmentsFromScript, getWavDuration } from "@/lib/tts-segments";
 
 /**
  * Local TtsSegment type (required).

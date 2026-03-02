@@ -370,3 +370,445 @@ test.describe('Stage 8: Composition Generation', () => {
     await expect(page.locator('text=Render').first()).toBeVisible();
   });
 });
+
+// ── Bug 1: Wrapper rows missing Preview and ↺ buttons ────────────────────────
+
+test.describe('Stage 8: Wrapper Controls', () => {
+  const setupWrapperMocks = async (page: any) => {
+    await page.route('**/api/pipeline/compositions/list', (route: any) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          sections: [{
+            id: 'cold_open',
+            label: 'Cold Open',
+            components: [],
+            wrappers: [{ name: 'cold_openWrapper', status: 'missing', error: null }],
+          }],
+        }),
+      })
+    );
+    await page.route('**/api/pipeline/veo/staging-manifest', (route: any) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+    );
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    const sidebar = page.locator('aside');
+    await sidebar.locator('div', { hasText: 'Compositions' }).first().click();
+    await expect(page.locator('h2', { hasText: 'Composition Generation' })).toBeVisible({ timeout: 15000 });
+    await page.locator('h4', { hasText: 'Section Wrappers' }).scrollIntoViewIfNeeded();
+  };
+
+  test('wrapper rows have Preview buttons', async ({ page }) => {
+    await setupWrapperMocks(page);
+    // Section Wrappers area should contain a Preview button
+    const wrapperSection = page.locator('h4', { hasText: 'Section Wrappers' }).locator('..');
+    await expect(wrapperSection.locator('button', { hasText: 'Preview' })).toBeVisible();
+  });
+
+  test('wrapper rows have Regenerate (↺) buttons', async ({ page }) => {
+    await setupWrapperMocks(page);
+    const wrapperSection = page.locator('h4', { hasText: 'Section Wrappers' }).locator('..');
+    await expect(wrapperSection.locator('button', { hasText: '↺' })).toBeVisible();
+  });
+
+  test('wrapper Regenerate button triggers POST with wrapper name in wrappers array', async ({ page }) => {
+    let requestBody: any = null;
+    await page.route('**/api/pipeline/compositions/run', (route: any) => {
+      requestBody = route.request().postDataJSON();
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ jobId: 'test-wrapper-regen-job' }),
+      });
+    });
+    await setupWrapperMocks(page);
+    const wrapperSection = page.locator('h4', { hasText: 'Section Wrappers' }).locator('..');
+    const regenBtn = wrapperSection.locator('button', { hasText: '↺' });
+    await expect(regenBtn).toBeVisible();
+    await regenBtn.click();
+    await page.waitForTimeout(500);
+    expect(requestBody).not.toBeNull();
+    expect(requestBody).toHaveProperty('wrappers');
+    expect(requestBody.wrappers).toContain('cold_openWrapper');
+  });
+
+  test('wrapper Preview button opens dialog modal', async ({ page }) => {
+    await page.route('**/api/pipeline/compositions/preview**', (route: any) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ url: 'https://example.com/preview.png' }),
+      })
+    );
+    await setupWrapperMocks(page);
+    const wrapperSection = page.locator('h4', { hasText: 'Section Wrappers' }).locator('..');
+    const previewBtn = wrapperSection.locator('button', { hasText: 'Preview' });
+    await expect(previewBtn).toBeVisible();
+    await previewBtn.click();
+    await page.waitForTimeout(500);
+    const dialog = page.locator('dialog');
+    await expect(dialog).toBeVisible();
+  });
+});
+
+// ── Bug 2: Error-status row click does not expand log drawer ──────────────────
+
+test.describe('Stage 8: Error Row Log Drawer', () => {
+  const setupErrorComponentMocks = async (page: any) => {
+    await page.route('**/api/pipeline/compositions/list', (route: any) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          sections: [{
+            id: 'cold_open',
+            label: 'Cold Open',
+            components: [
+              { name: 'TitleSlide', status: 'error', error: 'Claude Code error: timeout' },
+              { name: 'CreditsSlide', status: 'done', error: null },
+            ],
+            wrappers: [],
+          }],
+        }),
+      })
+    );
+    await page.route('**/api/pipeline/veo/staging-manifest', (route: any) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+    );
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    const sidebar = page.locator('aside');
+    await sidebar.locator('div', { hasText: 'Compositions' }).first().click();
+    await expect(page.locator('h2', { hasText: 'Composition Generation' })).toBeVisible({ timeout: 15000 });
+  };
+
+  test('clicking a component row with error status expands log drawer', async ({ page }) => {
+    await setupErrorComponentMocks(page);
+    const errorRow = page.locator('[data-testid="component-row-TitleSlide"]');
+    await expect(errorRow).toBeVisible();
+    await errorRow.click();
+    const drawer = page.locator('[data-testid="error-log-drawer-TitleSlide"]');
+    await expect(drawer).toBeVisible();
+    await expect(drawer).toContainText('Claude Code error: timeout');
+  });
+
+  test('clicking the same error row again collapses the log drawer', async ({ page }) => {
+    await setupErrorComponentMocks(page);
+    const errorRow = page.locator('[data-testid="component-row-TitleSlide"]');
+    await errorRow.click();
+    const drawer = page.locator('[data-testid="error-log-drawer-TitleSlide"]');
+    await expect(drawer).toBeVisible();
+    // Second click should collapse
+    await errorRow.click();
+    await expect(drawer).not.toBeVisible();
+  });
+
+  test('non-error rows do not show a log drawer on click', async ({ page }) => {
+    await setupErrorComponentMocks(page);
+    const doneRow = page.locator('[data-testid="component-row-CreditsSlide"]');
+    await expect(doneRow).toBeVisible();
+    await doneRow.click();
+    const drawer = page.locator('[data-testid="error-log-drawer-CreditsSlide"]');
+    await expect(drawer).not.toBeVisible();
+  });
+});
+
+// ── Bug 3: Generate All Compositions sends no payload body ────────────────────
+
+test.describe('Stage 8: Generate All Compositions Payload', () => {
+  test('Generate All Compositions sends all component and wrapper IDs in payload', async ({ page }) => {
+    await page.route('**/api/pipeline/compositions/list', (route: any) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          sections: [
+            {
+              id: 'cold_open',
+              label: 'Cold Open',
+              components: [
+                { name: 'TitleSlide', status: 'missing', error: null },
+                { name: 'IntroSlide', status: 'missing', error: null },
+              ],
+              wrappers: [{ name: 'cold_openWrapper', status: 'missing', error: null }],
+            },
+            {
+              id: 'part1',
+              label: 'Part 1',
+              components: [{ name: 'Part1Main', status: 'missing', error: null }],
+              wrappers: [{ name: 'part1Wrapper', status: 'missing', error: null }],
+            },
+          ],
+        }),
+      })
+    );
+    await page.route('**/api/pipeline/veo/staging-manifest', (route: any) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+    );
+
+    let requestBody: any = null;
+    await page.route('**/api/pipeline/compositions/run', (route: any) => {
+      requestBody = route.request().postDataJSON();
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ jobId: 'test-gen-all-job' }),
+      });
+    });
+
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    const sidebar = page.locator('aside');
+    await sidebar.locator('div', { hasText: 'Compositions' }).first().click();
+    await expect(page.locator('h2', { hasText: 'Composition Generation' })).toBeVisible({ timeout: 15000 });
+
+    const generateBtn = page.locator('button', { hasText: 'Generate All Compositions' });
+    await generateBtn.click();
+    await page.waitForTimeout(500);
+
+    expect(requestBody).not.toBeNull();
+    expect(requestBody.components).toContain('TitleSlide');
+    expect(requestBody.components).toContain('IntroSlide');
+    expect(requestBody.components).toContain('Part1Main');
+    expect(requestBody.wrappers).toContain('cold_openWrapper');
+    expect(requestBody.wrappers).toContain('part1Wrapper');
+  });
+
+  test('Generate All Compositions with no sections sends empty arrays not undefined', async ({ page }) => {
+    await page.route('**/api/pipeline/compositions/list', (route: any) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ sections: [] }),
+      })
+    );
+    await page.route('**/api/pipeline/veo/staging-manifest', (route: any) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+    );
+
+    let requestBody: any = null;
+    await page.route('**/api/pipeline/compositions/run', (route: any) => {
+      requestBody = route.request().postDataJSON();
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ jobId: 'test-gen-all-empty-job' }),
+      });
+    });
+
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    const sidebar = page.locator('aside');
+    await sidebar.locator('div', { hasText: 'Compositions' }).first().click();
+    await expect(page.locator('h2', { hasText: 'Composition Generation' })).toBeVisible({ timeout: 15000 });
+
+    const generateBtn = page.locator('button', { hasText: 'Generate All Compositions' });
+    await generateBtn.click();
+    await page.waitForTimeout(500);
+
+    expect(requestBody).not.toBeNull();
+    expect(Array.isArray(requestBody.components)).toBe(true);
+    expect(requestBody.components).toHaveLength(0);
+    expect(Array.isArray(requestBody.wrappers)).toBe(true);
+    expect(requestBody.wrappers).toHaveLength(0);
+  });
+});
+
+// ── Bug A: Preview dialog not centered ───────────────────────────────────────
+
+test.describe('Stage 8: Preview Dialog Centering', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    const sidebar = page.locator('aside');
+    await sidebar.locator('div', { hasText: 'Compositions' }).first().click();
+    await expect(page.locator('h2', { hasText: 'Composition Generation' })).toBeVisible({ timeout: 15000 });
+  });
+
+  test('Preview dialog is horizontally centered in the viewport', async ({ page }) => {
+    await page.route('**/api/pipeline/compositions/preview**', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ url: 'https://example.com/preview.png' }),
+      })
+    );
+
+    // Wait for sections to load, then ensure Cold Open is expanded
+    const coldOpenBtn = page.locator('button', { hasText: 'Cold Open' });
+    await expect(coldOpenBtn).toBeVisible({ timeout: 15000 });
+    const spanText = await coldOpenBtn.locator('span', { hasText: /Hide|Show/ }).textContent();
+    if (spanText?.trim() === 'Show') {
+      await coldOpenBtn.click();
+      await page.waitForTimeout(300);
+    }
+
+    const previewBtn = page.locator('button', { hasText: 'Preview' }).first();
+    await expect(previewBtn).toBeVisible();
+    await previewBtn.click();
+    await page.waitForTimeout(500);
+
+    const dialog = page.locator('dialog');
+    await expect(dialog).toBeVisible();
+
+    const { dialogLeft, dialogWidth, viewportWidth } = await page.evaluate(() => {
+      const el = document.querySelector('dialog')!;
+      const rect = el.getBoundingClientRect();
+      return { dialogLeft: rect.left, dialogWidth: rect.width, viewportWidth: window.innerWidth };
+    });
+
+    // Dialog center should be within 50px of viewport center
+    const dialogCenter = dialogLeft + dialogWidth / 2;
+    const viewportCenter = viewportWidth / 2;
+    expect(Math.abs(dialogCenter - viewportCenter)).toBeLessThan(50);
+
+    await dialog.locator('button', { hasText: 'Close' }).click();
+  });
+
+  test('Preview dialog is vertically centered in the viewport', async ({ page }) => {
+    await page.route('**/api/pipeline/compositions/preview**', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ url: 'https://example.com/preview.png' }),
+      })
+    );
+
+    const coldOpenBtn = page.locator('button', { hasText: 'Cold Open' });
+    await expect(coldOpenBtn).toBeVisible({ timeout: 15000 });
+    const spanText = await coldOpenBtn.locator('span', { hasText: /Hide|Show/ }).textContent();
+    if (spanText?.trim() === 'Show') {
+      await coldOpenBtn.click();
+      await page.waitForTimeout(300);
+    }
+
+    const previewBtn = page.locator('button', { hasText: 'Preview' }).first();
+    await previewBtn.click();
+    await page.waitForTimeout(500);
+
+    const dialog = page.locator('dialog');
+    await expect(dialog).toBeVisible();
+
+    const { dialogTop, dialogHeight, viewportHeight } = await page.evaluate(() => {
+      const el = document.querySelector('dialog')!;
+      const rect = el.getBoundingClientRect();
+      return { dialogTop: rect.top, dialogHeight: rect.height, viewportHeight: window.innerHeight };
+    });
+
+    // Dialog center should be within 50px of viewport vertical center
+    const dialogCenter = dialogTop + dialogHeight / 2;
+    const viewportCenter = viewportHeight / 2;
+    expect(Math.abs(dialogCenter - viewportCenter)).toBeLessThan(50);
+
+    await dialog.locator('button', { hasText: 'Close' }).click();
+  });
+});
+
+// ── Bug B: Preview shows broken image instead of fallback ────────────────────
+
+test.describe('Stage 8: Preview Fallback Content', () => {
+  const setupAndOpenPreview = async (page: any, previewHandler: (route: any) => void) => {
+    await page.route('**/api/pipeline/compositions/list', (route: any) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          sections: [{
+            id: 'cold_open', label: 'Cold Open',
+            components: [{ name: 'spec', status: 'missing', error: null }],
+            wrappers: [],
+          }],
+        }),
+      })
+    );
+    await page.route('**/api/pipeline/veo/staging-manifest', (route: any) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+    );
+    await page.route('**/api/pipeline/compositions/preview**', previewHandler);
+
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    const sidebar = page.locator('aside');
+    await sidebar.locator('div', { hasText: 'Compositions' }).first().click();
+    await expect(page.locator('h2', { hasText: 'Composition Generation' })).toBeVisible({ timeout: 15000 });
+
+    const previewBtn = page.locator('button', { hasText: 'Preview' }).first();
+    await expect(previewBtn).toBeVisible();
+    await previewBtn.click();
+    await page.waitForTimeout(500);
+  };
+
+  test('shows fallback when API returns plain text that is not a URL', async ({ page }) => {
+    await setupAndOpenPreview(page, (route) =>
+      route.fulfill({ status: 200, contentType: 'text/plain', body: 'not-a-url-just-text' })
+    );
+    const dialog = page.locator('dialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator('text=Preview not available')).toBeVisible();
+    await expect(dialog.locator('img')).toHaveCount(0);
+  });
+
+  test('shows fallback when API returns 404', async ({ page }) => {
+    await setupAndOpenPreview(page, (route) =>
+      route.fulfill({ status: 404, contentType: 'text/plain', body: 'Not Found' })
+    );
+    const dialog = page.locator('dialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator('text=Preview not available')).toBeVisible();
+    await expect(dialog.locator('img')).toHaveCount(0);
+  });
+
+  test('shows fallback when API returns 500', async ({ page }) => {
+    await setupAndOpenPreview(page, (route) =>
+      route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'Internal Server Error' }) })
+    );
+    const dialog = page.locator('dialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator('text=Preview not available')).toBeVisible();
+    await expect(dialog.locator('img')).toHaveCount(0);
+  });
+
+  test('shows fallback when API returns JSON without url/path/previewUrl fields', async ({ page }) => {
+    await setupAndOpenPreview(page, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ status: 'pending', message: 'not ready' }),
+      })
+    );
+    const dialog = page.locator('dialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator('text=Preview not available')).toBeVisible();
+    await expect(dialog.locator('img')).toHaveCount(0);
+  });
+
+  test('shows image when API returns valid JSON with url field', async ({ page }) => {
+    await setupAndOpenPreview(page, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ url: 'https://example.com/preview.png' }),
+      })
+    );
+    const dialog = page.locator('dialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator('img')).toHaveCount(1);
+    await expect(dialog.locator('text=Preview not available')).toHaveCount(0);
+  });
+
+  test('shows image when API returns plain text that is a valid https URL', async ({ page }) => {
+    await setupAndOpenPreview(page, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'text/plain',
+        body: 'https://example.com/preview.png',
+      })
+    );
+    const dialog = page.locator('dialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator('img')).toHaveCount(1);
+    await expect(dialog.locator('text=Preview not available')).toHaveCount(0);
+  });
+});

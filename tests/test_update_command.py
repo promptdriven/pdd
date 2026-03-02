@@ -1,4 +1,6 @@
 """Test update command argument handling per prompt spec."""
+from unittest.mock import patch
+
 import pytest
 from click.testing import CliRunner
 from pdd.cli import cli
@@ -7,7 +9,8 @@ from pdd.cli import cli
 class TestUpdateCommandArgs:
     """Test update command accepts 1, 2, and 3 positional arguments."""
 
-    def test_three_args_manual_update(self, tmp_path):
+    @patch('pdd.commands.modify.update_main', return_value=("Updated prompt", 0.001, "mock-model"))
+    def test_three_args_manual_update(self, mock_update_main, tmp_path):
         """3-arg mode: pdd update <prompt> <modified_code> <original_code>"""
         prompt_file = tmp_path / "test_python.prompt"
         prompt_file.write_text("Original prompt content")

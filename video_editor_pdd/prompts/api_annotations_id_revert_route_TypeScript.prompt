@@ -1,23 +1,16 @@
-% You are an expert TypeScript/Next.js engineer. Implement the API route for reverting a fix commit for an annotation.
+% You are an expert TypeScript/Next.js engineer. Implement the API route for reverting an annotation fix commit.
 
 % Requirements
-1.  **Endpoint**: `POST /api/annotations/[id]/revert`
-2.  **Input**: `id` from route parameters.
-3.  **Database Query**:
-    -   Use `getDb()` to access the database.
-    -   Query the `annotations` table for `fixCommitSha` and `sectionId` where `id` matches.
-    -   If the annotation is not found, return 404 with error "Annotation not found".
-    -   If `fixCommitSha` is null/empty, return 404 with error "No fix commit to revert".
-4.  **Git Operation**:
-    -   Use `revertFix(row.fixCommitSha)` to perform the revert.
-    -   Get the returned `revertSha`.
-5.  **Database Update**:
-    -   Update the `annotations` table: set `fixCommitSha` to `NULL` and `resolved` to `0` where `id` matches.
-6.  **Output**:
-    -   Success (200): JSON `{ revertCommitSha: string, annotationId: string, sectionId: string }`.
-    -   Error (500): JSON `{ error: "Failed to revert fix" }` on exception.
-7.  **Configuration**:
-    -   Export `dynamic = "force-dynamic"`.
+1. Endpoint: `POST /api/annotations/[id]/revert`.
+2. Export `dynamic = "force-dynamic"`.
+3. Use Next.js route params as `type RouteParams = { params: Promise<{ id: string }> }`, then `await params` and map `id` to `annotationId`.
+4. Use `getDb()` and query `annotations` for `fixCommitSha, sectionId` by annotation id.
+5. If no row, return `404` with `{ error: "Annotation not found" }`.
+6. If `fixCommitSha` is missing, return `404` with `{ error: "No fix commit to revert" }`.
+7. Call `revertFix(row.fixCommitSha)` and store returned revert commit SHA.
+8. Update the annotation row to clear `fixCommitSha` (`NULL`) and set `resolved = 0`.
+9. Return `200` JSON `{ revertCommitSha, annotationId, sectionId }`.
+10. On errors, log and return `500` with `{ error: "Failed to revert fix" }`.
 
 % Dependencies
 <lib_db>

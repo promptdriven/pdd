@@ -1,59 +1,55 @@
-You are implementing the Veo generation API routes (`app/api/pipeline/veo/run/route.ts` and supporting routes) for a video production pipeline editor. These endpoints orchestrate character reference image creation, Veo clip generation with frame chaining, and staging manifest management.
+You are implementing `app/api/pipeline/veo/run/route.ts`, a consolidated Veo route module that exports handlers for run, clips, references, and staging behavior from one file.
 
 Requirements
-1. `POST /api/pipeline/veo/run` — accepts `{ clips?: string[] }`. Generates specified clips or all if omitted. Uses `lib/veo.ts` for Imagen and Veo API calls. Returns SSE stream with `{ jobId }`.
-2. Frame chaining: for clips in order, extract the last frame of clip N before generating clip N+1, pass it as `referenceImagePath` to `generateVeoClip`.
-3. `GET /api/pipeline/veo/clips` — returns `{ clips: VeoClip[] }` where `VeoClip = { id: string; sectionId: string; aspectRatio: '16:9' | '9:16'; status: 'done' | 'missing' | 'error'; stale: boolean; frameChainDeps: string[] }`.
-4. `POST /api/pipeline/veo/references/run` — accepts `{ referenceId: string }`. Regenerates a character reference portrait image. Returns `{ jobId }`.
-5. `GET /api/pipeline/veo/staging-manifest` — returns `{ files: AssetStagingEntry[] }` comparing expected vs present files in `remotion/public/`.
-6. No authentication required.
+1. Export `runtime = 'nodejs'`.
+2. Register `registerExecutor('veo', ...)` at module load. The executor must:
+   - load sections from `loadProject()`,
+   - honor optional `params.clips` filtering,
+   - process clips sequentially (no parallel generation),
+   - emit per-clip SSE events `{ type: 'clip', clipId, status: 'generating' | 'done' | 'error' }`.
+3. Resolve each clip prompt from disk with fallback order:
+   - `specs/{sectionId}/veo.json`,
+   - `specs/{sectionId}/spec.json`,
+   - `specs/{sectionId}/veo.txt`.
+   For JSON files, accept `prompt`, `veoPrompt`, or `videoPrompt`. Throw if no prompt is found.
+4. Clip outputs:
+   - video path: `outputs/veo/{clipId}.mp4`,
+   - frame-chain path: `outputs/veo/{clipId}_last_frame.png`.
+   Generate with `generateVeoClip(prompt, referenceImagePath, config.veo.defaultAspectRatio, outputPath)`, then for non-final clips call `extractLastFrame(...)` and pass that frame to the next clip.
+5. Progress reporting: use optional `(onLog as { progress?: (p: number) => void }).progress` and emit rounded percent after each completed clip.
+6. Export `POST(request)` for `/api/pipeline/veo/run`:
+   - safely parse JSON body and read `{ clips }`,
+   - create SSE stream via `createSseStream()`,
+   - run `runPipelineStage('veo', { clips }, send)` in a fire-and-forget async task,
+   - send `{ type: 'complete', jobId }` on success, `error(...)` on failure,
+   - return `new Response(stream, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' } })`.
+7. Export `GET_clips()` returning `{ clips: VeoClip[] }` where `VeoClip = { id: string; sectionId: string; aspectRatio: '16:9' | '9:16'; status: 'done' | 'missing' | 'error'; stale: boolean; frameChainDeps: string[] }`.
+   - Build one clip row per section from `loadProject().sections`.
+   - `frameChainDeps` for non-first clips must point to previous section frame (`outputs/veo/{prevId}_last_frame.png`).
+   - `stale` is true only when the clip exists and any dependency mtime is newer than clip mtime.
+8. Export `POST_references(request)` for `/api/pipeline/veo/references/run`:
+   - require string `referenceId` (else 400 `{ error: 'referenceId is required' }`),
+   - create a job via `createJob('veo', { referenceId, mode: 'reference' })`,
+   - run `runJob(jobId, ...)` asynchronously to call `generateReferenceImage(prompt, outputPath)`,
+   - return `{ jobId }`.
+9. Reference prompt resolution fallback:
+   - `specs/references.json` entry by `referenceId` (`string` or `{ prompt }`),
+   - `specs/references/{referenceId}.json` (`{ prompt }`),
+   - `specs/references/{referenceId}.txt`,
+   - fallback to `referenceId`.
+   Output path is `outputs/veo/references/{referenceId}.png`.
+10. Export `GET_staging()` returning `{ files: AssetStagingEntry[] }` where `AssetStagingEntry = { file: string; expected: boolean; present: boolean }`.
+    - Expected files come from sections: `veo/{sectionId}.mp4`.
+    - Present files come from recursive listing under `remotion/public` (normalized to forward slashes).
+    - Return expected+present matches and unexpected present files.
+11. No authentication checks in this module.
 
 Dependencies
-
-<types>
-  <include>examples/types_example.ts</include>
-</types>
-
-<lib_jobs>
-  <include>examples/lib_jobs_example.ts</include>
-</lib_jobs>
-
-<lib_veo>
-  <include>examples/lib_veo_example.ts</include>
-</lib_veo>
-
-<lib_project>
-  <include>examples/lib_project_example.ts</include>
-</lib_project>
-
-<veo_generatevideos_api_with_image_reference_and_frame_chaining>
-  <web>https://ai.google.dev/api/generate-content#v1beta.models.generateVideos</web>
-</veo_generatevideos_api_with_image_reference_and_frame_chaining>
-
-Prompt Dependencies:
-- types_TypeScript.prompt — provides shared types
-- lib_jobs_TypeScript.prompt — provides `runPipelineStage`, `registerExecutor`
-- lib_veo_TypeScript.prompt — provides `generateReferenceImage`, `generateVeoClip`, `extractLastFrame`
-- lib_project_TypeScript.prompt — provides `loadProject`
-
-Instructions
-- Clip output path: `outputs/veo/{clipId}.mp4`.
-- Frame chain path: `outputs/veo/{clipId}_last_frame.png`.
-- Stale detection: a clip is stale if any of its `frameChainDeps` have a newer mtime than the clip itself.
-- `AssetStagingEntry = { file: string; expected: boolean; present: boolean }`.
-- Expected files come from `loadProject().sections` mapped to Veo clip filenames.
-- Reference portrait output: `outputs/veo/references/{referenceId}.png`.
-- Register executor: `registerExecutor('veo', ...)`.
-- Emit per-clip SSE events: `{ type: 'clip', clipId, status: 'generating' | 'done' | 'error' }`.
+- `@/lib/sse`: `createSseStream`
+- `@/lib/project`: `loadProject`
+- `@/lib/veo`: `generateVeoClip`, `extractLastFrame`, `generateReferenceImage`
+- `@/lib/jobs`: `registerExecutor`, `runPipelineStage`, `createJob`, `runJob`
+- `@/lib/types`: `SseSend`
 
 Deliverable
-- `app/api/pipeline/veo/run/route.ts` — POST endpoint for Veo clip generation.
-- `app/api/pipeline/veo/clips/route.ts` — GET endpoint for clip list.
-- `app/api/pipeline/veo/references/run/route.ts` — POST endpoint for reference image regeneration.
-- `app/api/pipeline/veo/staging-manifest/route.ts` — GET endpoint for staging manifest.
-
-Implementation assumptions (explicit)
-- `veo.referenceImages` in `project.json` maps character names to file paths.
-- Clips are processed sequentially for frame chaining correctness, not in parallel.
-
-Please produce production-ready prompt content that will generate the module consistent with the above.
+- `app/api/pipeline/veo/run/route.ts` only, with exports: `POST`, `GET_clips`, `POST_references`, `GET_staging`.

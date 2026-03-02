@@ -28,8 +28,8 @@ def test_cli_change_command_csv_validation(mock_main, mock_construct, mock_auto_
     # Error: --csv requires directory for input_code (Validation inside 'change' command)
     result = runner.invoke(cli.cli, ["change", "--manual", "--csv", str(files["changes.csv"]), str(files["p.prompt"])]) # p.prompt is a file
     assert result.exit_code == 2  # UsageError exits with code 2
-    # Check output message from handle_error
-    assert "Usage Error: INPUT_CODE must be a directory when using --csv" in result.output
+    # Check output message (Click native format: "Error: ...")
+    assert "INPUT_CODE must be a directory when using --csv" in result.output
     mock_auto_update.assert_called_once()
     mock_main.assert_not_called() # Fails validation before main
     mock_construct.assert_not_called() # construct_paths is not called by CLI wrapper
@@ -40,8 +40,8 @@ def test_cli_change_command_csv_validation(mock_main, mock_construct, mock_auto_
     mock_construct.reset_mock()
     result = runner.invoke(cli.cli, ["change", "--manual", "--csv", str(files["changes.csv"]), str(code_dir), str(files["p.prompt"])])
     assert result.exit_code == 2  # UsageError exits with code 2
-    # Check output message from handle_error
-    assert "Usage Error: Cannot use --csv and specify an INPUT_PROMPT_FILE simultaneously." in result.output or "Usage" in result.output
+    # Check output message (Click native format: "Error: ...")
+    assert "Cannot use --csv and specify an INPUT_PROMPT_FILE simultaneously" in result.output or "Usage" in result.output
     mock_auto_update.assert_called_once()
     mock_main.assert_not_called() # Fails validation before main
     mock_construct.assert_not_called()
@@ -53,8 +53,8 @@ def test_cli_change_command_csv_validation(mock_main, mock_construct, mock_auto_
     # No need to mock main side effect, validation happens before
     result = runner.invoke(cli.cli, ["change", "--manual", str(files["changes.csv"]), str(code_dir / "some_code.py")]) # Missing input_prompt_file
     assert result.exit_code == 2  # UsageError exits with code 2
-    # Check output message from handle_error
-    assert "Usage Error: INPUT_PROMPT_FILE is required when not using --csv" in result.output or "Usage" in result.output
+    # Check output message (Click native format: "Error: ...")
+    assert "INPUT_PROMPT_FILE is required when not using --csv" in result.output or "Usage" in result.output
     mock_auto_update.assert_called_once()
     mock_main.assert_not_called() # Fails validation before main
     # mock_construct.assert_called_once() # Optional: assert if construct_paths is expected here
@@ -66,8 +66,8 @@ def test_cli_change_command_csv_validation(mock_main, mock_construct, mock_auto_
     # No need to mock main side effect, validation happens before
     result = runner.invoke(cli.cli, ["change", "--manual", str(files["changes.csv"]), str(code_dir), str(files["p.prompt"])]) # code_dir is a dir
     assert result.exit_code == 2  # UsageError exits with code 2
-    # Check output message from handle_error
-    assert "Usage Error: INPUT_CODE must be a file when not using --csv" in result.output or "Usage" in result.output
+    # Check output message (Click native format: "Error: ...")
+    assert "INPUT_CODE must be a file when not using --csv" in result.output or "Usage" in result.output
     mock_auto_update.assert_called_once()
     mock_main.assert_not_called() # Fails validation before main
 

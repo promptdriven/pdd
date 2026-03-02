@@ -1,65 +1,50 @@
 % You are an expert Python engineer. Your goal is to write the core CLI logic for PDD in `pdd/core/cli.py`.
 
 % Role & Scope
-  This module defines the main `click.Group` class (`PDDCLI`), the global configuration options, the `cli` entry function, and the result callback (`process_commands`) that summarizes execution.
+  This module defines the main `click.Group` class (`PDDCLI`), the global configuration options, the `cli` entry function, and the result callback (`process_commands`) that summarizes execution and manages core dumps.
 
 <include>context/python_preamble.prompt</include>
 
-% Program Specification (README.md):
-    <README.md>
-    <include>./README.md</include>
-    </README.md>
-
 % Requirements
-  1. **PDDCLI Class**: Inherit from `click.Group`. Override `format_help` to add a custom "Generate Suite" section for `generate`, `test`, and `example` commands as described in the README. Override `invoke` to handle exceptions centrally:
-     - `click.Abort`: User cancellation — exit silently with code 1, no error reporting. Use a `user_abort` flag to handle this outside try block.
-     - `KeyboardInterrupt`: Handle gracefully via `handle_error`.
-     - `SystemExit` / `click.exceptions.Exit`: Let code 0 pass through; convert non-zero to RuntimeError.
-     - Other exceptions: Report via `handle_error`, write core dump even on failure, exit code 2 for `UsageError`, else 1.
-  2. **Global Options**: Implement the `cli` group with all Global Options from the README.md "Global Options" section. Note: `--time` defaults to `DEFAULT_TIME` when not provided. When `--core-dump` is enabled, capture terminal output via `OutputCapture`.
-  3. **OutputCapture Class**: A "tee" class that captures terminal output while displaying it normally. Must wrap stdout/stderr, write to both original and internal buffer, provide `get_captured_output()`, and delegate `isatty()`/`fileno()` to original stream.
-  4. **Helper Function `_strip_ansi_codes`**: Remove ANSI escape codes using regex `r'\x1b\[[0-9;]*m'`.
-  5. **CLI Entry Point (`cli`)**:
-     - Initialize `PDD_PATH` via `get_local_pdd_path()`.
-     - Clear core dump errors, populate `ctx.obj` with all options.
-     - Propagate `--local` flag to environment: set `os.environ['PDD_FORCE_LOCAL'] = '1'` when `--local` is passed. This allows `llm_invoke` to detect local execution preference.
-     - Set up output capture if `--core-dump` enabled.
-     - Suppress verbose if quiet is enabled.
-     - Show onboarding reminder if needed.
-     - Handle `--list-contexts` and `--context` validation against available contexts.
-     - Run `auto_update()` unless `PDD_AUTO_UPDATE=false`.
-     - If no subcommand, show help and exit.
-  6. **Result Callback (`process_commands`)**:
-     - Normalize results (handle None, lists, single 3-tuples).
-     - Get `invoked_subcommands` from Click context or fall back to `ctx.obj` (except during pytest—check `PYTEST_CURRENT_TEST`).
-     - Print summary with appropriate status messages for each result type.
-     - Display `examplesUsed` for grounding (slug and title) when present in result dict.
-     - Print total cost only if at least one command contributed cost.
-     - Collect and restore terminal output if `--core-dump` was enabled.
-     - Write core dump via `_write_core_dump`.
-     - Handle exit codes based on `_fatal_exception` flag.
+  1. **OutputCapture & Stream Management**:
+     - `OutputCapture`: A "tee" class that wraps a stream, writing to both the original and an internal `io.StringIO` buffer. Delegate `isatty()` and `fileno()`.
+     - `_restore_captured_streams(ctx)`: Restore `sys.stdout/stderr` from `ctx.obj` if they were wrapped. Call this before any early `ctx.exit(0)`.
+     - `_strip_ansi_codes(text)`: Remove ANSI sequences via `r'\x1b\[[0-9;]*m'`.
+
+  2. **PDDCLI (click.Group)**:
+     - `format_help`: Add a "Generate Suite" section for `generate`, `test`, and `example` commands as described in README.
+     - `invoke`: Centralized exception handling.
+       - `click.Abort`: Exit code 1, silent (no error report).
+       - `KeyboardInterrupt`, `Exception`: Pass to `handle_error`.
+       - `SystemExit` / `click.exceptions.Exit`: Let code 0 pass; convert non-zero to `RuntimeError`.
+       - Fail-safe Core Dump: Even on exception, attempt to collect captured output, restore streams, and call `_write_core_dump` before exiting with code 2 (UsageError) or 1.
+
+  3. **Main Entry (`cli`)**:
+     - Global Options: `--force`, `--strength`, `--temperature`, `--time` (default `DEFAULT_TIME`), `--verbose`, `--quiet`, `--output-cost`, `--review-examples`, `--local`, `--context` (override), `--list-contexts`, `--core-dump` (default True), `--keep-core-dumps` (default 10).
+     - Initialization: Call `get_local_pdd_path()`, `clear_core_dump_errors()`, and `garbage_collect_core_dumps(keep=keep_core_dumps)`.
+     - Propagate flags to `ctx.obj` and env vars (`PDD_FORCE`, `PDD_FORCE_LOCAL`, `PDD_QUIET`).
+     - Only set `strength`/`temperature` in `ctx.obj` if explicitly provided.
+     - Early Actions: Handle `--list-contexts` and `--context` validation (against `list_available_contexts()`). Run `auto_update()` unless `PDD_AUTO_UPDATE=false`.
+     - Show onboarding reminder via `_should_show_onboarding_reminder`.
+     - Output Capture: If `--core-dump` enabled, wrap `sys.stdout/stderr` with `OutputCapture` and store in `ctx.obj`.
+
+  4. **Result Callback (`process_commands`)**:
+     - Normalize results (handle None, single 3-tuples, or lists).
+     - Command Tracking: Get `invoked_subcommands` from `ctx` or `ctx.obj` (skip `ctx.obj` if `PYTEST_CURRENT_TEST` is set).
+     - Summary: Print per-step status, cost, model, and `examplesUsed` (slug/title).
+     - Core Dump: Collect captured output (stripped of ANSI), restore streams, and call `_write_core_dump`.
+     - Exit code 1 if `ctx.obj.get("_fatal_exception")` is set.
 
 % Dependencies
-  <auto_update_example>
-  <include>context/auto_update_example.py</include>
-  </auto_update_example>
-  <track_cost_example>
-  <include>context/track_cost_example.py</include>
-  </track_cost_example>
+  <include-many>context/auto_update_example.py, context/track_cost_example.py</include-many>
   <pdd.core.cli><include>context/core/cli_example.py</include></pdd.core.cli>
-<pdd.core.dump><include>context/core/dump_example.py</include></pdd.core.dump>
-<pdd.core.errors><include>context/core/errors_example.py</include></pdd.core.errors>
-<pdd.core.utils><include>context/core/utils_example.py</include></pdd.core.utils>
+  <pdd.core.dump><include>context/core/dump_example.py</include></pdd.core.dump>
+  <pdd.core.errors><include>context/core/errors_example.py</include></pdd.core.errors>
+  <pdd.core.utils><include>context/core/utils_example.py</include></pdd.core.utils>
 
 % Instructions
-  - Import required modules: `os`, `sys`, `io`, `re`, `click` from standard library; types from `typing`.
-  - Import from package: `DEFAULT_STRENGTH`, `__version__`, `DEFAULT_TIME` from `..`.
-  - Import: `auto_update` from `..auto_update`, `list_available_contexts` from `..construct_paths`, `get_local_pdd_path` from `..install_completion`.
-  - Import from `.errors`: `console`, `handle_error`, `clear_core_dump_errors`.
-  - Import from `.utils`: `_first_pending_command`, `_should_show_onboarding_reminder`.
-  - Import from `.dump`: `_write_core_dump`.
-  - Implement `OutputCapture` class before `PDDCLI` class.
-  - Only set strength/temperature in ctx.obj if explicitly provided (allows `.get("key", default)` to work correctly).
+  - Imports: `os`, `sys`, `io`, `re`, `click`, `typing`. From package/submodules: `DEFAULT_STRENGTH`, `__version__`, `DEFAULT_TIME`, `auto_update`, `list_available_contexts`, `get_local_pdd_path`, `handle_error`, `clear_core_dump_errors`, `_first_pending_command`, `_should_show_onboarding_reminder`, `_write_core_dump`, `garbage_collect_core_dumps`.
+  - Use `click.version_option(version=__version__, package_name="pdd-cli")`.
 
 % Deliverables
-  - Code: `pdd/core/cli.py`
+  - `pdd/core/cli.py`

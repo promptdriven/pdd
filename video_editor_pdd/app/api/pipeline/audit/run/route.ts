@@ -36,10 +36,12 @@ async function auditSection(
   send: SseSend,
   onLog: (msg: string) => void
 ): Promise<{ passCount: number; failCount: number }> {
-  const specDir = section.specDir;
-  const specFiles = fs
-    .readdirSync(specDir)
-    .filter((f) => f.endsWith(".md") && !f.startsWith("AUDIT_"));
+  const specDir = path.join(process.cwd(), "specs", section.specDir);
+  const specFiles = fs.existsSync(specDir)
+    ? fs
+        .readdirSync(specDir)
+        .filter((f) => f.endsWith(".md") && !f.startsWith("AUDIT_"))
+    : [];
 
   let passCount = 0;
   let failCount = 0;
@@ -57,7 +59,7 @@ async function auditSection(
     fs.mkdirSync(path.dirname(outputStill), { recursive: true });
 
     // Render midpoint still
-    const fps = loadProject().render.fps;
+    const fps = loadProject().render.fps ?? 30;
     const midpointFrame = Math.floor((section.durationSeconds / 2) * fps);
     onLog(
       `[audit] Rendering still for ${section.id} (${specName}) at frame ${midpointFrame}`

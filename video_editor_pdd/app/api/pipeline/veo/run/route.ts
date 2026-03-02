@@ -3,8 +3,8 @@ import path from 'path';
 
 import { createSseStream } from '@/lib/sse';
 import { loadProject } from '@/lib/project';
-import { generateVeoClip, extractLastFrame, generateReferenceImage } from '@/lib/veo';
-import { registerExecutor, runPipelineStage, createJob, runJob } from '@/lib/jobs';
+import { generateVeoClip, extractLastFrame } from '@/lib/veo';
+import { registerExecutor, runPipelineStage } from '@/lib/jobs';
 import type { SseSend } from '@/lib/types';
 
 /**
@@ -13,10 +13,20 @@ import type { SseSend } from '@/lib/types';
 
 export const runtime = 'nodejs';
 
+/**
+ * Extract a Veo prompt from a [veo: ...] marker inside markdown content.
+ * Returns null if no marker is found.
+ */
+function extractVeoMarker(content: string): string | null {
+  const match = content.match(/\[veo:\s*(.+?)\]/i);
+  return match ? match[1].trim() : null;
+}
+
 /** Resolve a Veo prompt from specs on disk */
 function resolveVeoPrompt(sectionId: string): string {
   const cwd = process.cwd();
 
+  // 1. Check JSON and text candidates first
   const candidates = [
     path.join(cwd, 'specs', sectionId, 'veo.json'),
     path.join(cwd, 'specs', sectionId, 'spec.json'),
@@ -41,10 +51,42 @@ function resolveVeoPrompt(sectionId: string): string {
     }
   }
 
+  // 2. Scan markdown files in specs/{sectionId}/ for [veo: ...] markers
+  const specDir = path.join(cwd, 'specs', sectionId);
+  if (fs.existsSync(specDir)) {
+    const mdFiles = fs
+      .readdirSync(specDir)
+      .filter((f) => f.endsWith('.md'))
+      .sort();
+
+    for (const mdFile of mdFiles) {
+      const content = fs.readFileSync(path.join(specDir, mdFile), 'utf-8');
+      const prompt = extractVeoMarker(content);
+      if (prompt) return prompt;
+    }
+  }
+
+  // 3. Check narrative/main_script.md for this section's [veo:] marker
+  const mainScript = path.join(cwd, 'narrative', 'main_script.md');
+  if (fs.existsSync(mainScript)) {
+    const content = fs.readFileSync(mainScript, 'utf-8');
+    // Find the section in the script and look for [veo:] marker within it
+    const sectionPattern = new RegExp(
+      `##\\s+.*${sectionId.replace(/_/g, '[\\s_]')}.*?\\n([\\s\\S]*?)(?=\\n##\\s|$)`,
+      'i'
+    );
+    const sectionMatch = content.match(sectionPattern);
+    if (sectionMatch) {
+      const prompt = extractVeoMarker(sectionMatch[1]);
+      if (prompt) return prompt;
+    }
+    // Also try the whole file as a last resort
+    const prompt = extractVeoMarker(content);
+    if (prompt) return prompt;
+  }
+
   throw new Error(
-    `No Veo prompt found for section "${sectionId}". Checked: ${candidates.join(
-      ', '
-    )}`
+    `No Veo prompt found for section "${sectionId}". Checked JSON/txt candidates and markdown files in specs/${sectionId}/.`
   );
 }
 
@@ -153,223 +195,3 @@ export async function POST(request: Request): Promise<Response> {
   });
 }
 
-/**
- * API ROUTE: app/api/pipeline/veo/clips/route.ts
- */
-
-type VeoClip = {
-  id: string;
-  sectionId: string;
-  aspectRatio: '16:9' | '9:16';
-  status: 'done' | 'missing' | 'error';
-  stale: boolean;
-  frameChainDeps: string[];
-};
-
-function mtimeMs(filePath: string): number | null {
-  try {
-    return fs.statSync(filePath).mtimeMs;
-  } catch {
-    return null;
-  }
-}
-
-export async function GET_clips(): Promise<Response> {
-  const config = loadProject();
-  const sections = config.sections;
-  const aspectRatio = config.veo.aspectRatio;
-
-  const clips: VeoClip[] = sections.map((section, idx) => {
-    const clipId = section.id;
-
-    const clipPath = path.join(
-      process.cwd(),
-      'outputs',
-      'veo',
-      `${clipId}.mp4`
-    );
-
-    const prevSection = sections[idx - 1];
-    const deps: string[] = prevSection
-      ? [
-          path.join(
-            'outputs',
-            'veo',
-            `${prevSection.id}_last_frame.png`
-          ),
-        ]
-      : [];
-
-    const clipExists = fs.existsSync(clipPath);
-    const status: VeoClip['status'] = clipExists ? 'done' : 'missing';
-
-    let stale = false;
-    if (clipExists && deps.length > 0) {
-      const clipTime = mtimeMs(clipPath) ?? 0;
-      for (const dep of deps) {
-        const depAbs = path.join(process.cwd(), dep);
-        const depTime = mtimeMs(depAbs);
-        if (depTime && depTime > clipTime) {
-          stale = true;
-          break;
-        }
-      }
-    }
-
-    return {
-      id: clipId,
-      sectionId: section.id,
-      aspectRatio,
-      status,
-      stale,
-      frameChainDeps: deps,
-    };
-  });
-
-  return Response.json({ clips });
-}
-
-/**
- * API ROUTE: app/api/pipeline/veo/references/run/route.ts
- */
-
-/** Resolve a reference prompt from disk */
-function resolveReferencePrompt(referenceId: string): string {
-  const cwd = process.cwd();
-
-  const candidates = [
-    path.join(cwd, 'specs', 'references.json'),
-    path.join(cwd, 'specs', 'references', `${referenceId}.json`),
-    path.join(cwd, 'specs', 'references', `${referenceId}.txt`),
-  ];
-
-  // references.json { [id]: {prompt} | string }
-  if (fs.existsSync(candidates[0])) {
-    const raw = fs.readFileSync(candidates[0], 'utf-8');
-    const json = JSON.parse(raw);
-    const value = json?.[referenceId];
-    if (typeof value === 'string') return value;
-    if (value && typeof value.prompt === 'string') return value.prompt;
-  }
-
-  for (const file of candidates.slice(1)) {
-    if (!fs.existsSync(file)) continue;
-    const raw = fs.readFileSync(file, 'utf-8').trim();
-    if (!raw) continue;
-    if (file.endsWith('.txt')) return raw;
-    try {
-      const json = JSON.parse(raw);
-      if (typeof json.prompt === 'string') return json.prompt;
-    } catch {
-      // fall through
-    }
-  }
-
-  return referenceId;
-}
-
-export async function POST_references(request: Request): Promise<Response> {
-  const body = await request.json().catch(() => ({}));
-  const { referenceId } = body ?? {};
-
-  if (!referenceId || typeof referenceId !== 'string') {
-    return Response.json(
-      { error: 'referenceId is required' },
-      { status: 400 }
-    );
-  }
-
-  const jobId = createJob('veo', { referenceId, mode: 'reference' });
-
-  (async () => {
-    await runJob(jobId, async (onLog) => {
-      const prompt = resolveReferencePrompt(referenceId);
-
-      const outputPath = path.join(
-        process.cwd(),
-        'outputs',
-        'veo',
-        'references',
-        `${referenceId}.png`
-      );
-      ensureDir(outputPath);
-
-      onLog(`Generating reference image: ${referenceId}`);
-      onLog(`Prompt: ${prompt.substring(0, 120)}...`);
-
-      await generateReferenceImage(prompt, outputPath);
-      onLog(`Reference image generated at ${outputPath}`);
-    });
-  })();
-
-  return Response.json({ jobId });
-}
-
-/**
- * API ROUTE: app/api/pipeline/veo/staging-manifest/route.ts
- */
-
-type AssetStagingEntry = {
-  file: string;
-  expected: boolean;
-  present: boolean;
-};
-
-function listFilesRecursive(dir: string): string[] {
-  if (!fs.existsSync(dir)) return [];
-  const entries = fs.readdirSync(dir, { withFileTypes: true });
-
-  const files: string[] = [];
-
-  for (const entry of entries) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...listFilesRecursive(full));
-    } else if (entry.isFile()) {
-      files.push(full);
-    }
-  }
-
-  return files;
-}
-
-export async function GET_staging(): Promise<Response> {
-  const config = loadProject();
-  const sections = config.sections;
-
-  const publicDir = path.join(process.cwd(), 'remotion', 'public');
-
-  // Expected files
-  const expectedFiles = sections.map((s) => `veo/${s.id}.mp4`);
-  const expectedSet = new Set(expectedFiles);
-
-  // Present files
-  const presentFiles = listFilesRecursive(publicDir).map((absPath) =>
-    absPath
-      .replace(publicDir + path.sep, '')
-      .replace(/\\/g, '/')
-  );
-  const presentSet = new Set(presentFiles);
-
-  const entries: AssetStagingEntry[] = [];
-
-  for (const file of expectedFiles) {
-    entries.push({
-      file,
-      expected: true,
-      present: presentSet.has(file),
-    });
-  }
-
-  for (const file of presentFiles) {
-    if (!expectedSet.has(file)) {
-      entries.push({
-        file,
-        expected: false,
-        present: true,
-      });
-    }
-  }
-
-  return Response.json({ files: entries });
-}

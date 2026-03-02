@@ -56,6 +56,8 @@ You are working on step 5 of 13 in an agentic architecture workflow. Previous st
    - One prompt = one module (each module generates one code file)
    - Each module has clear, single responsibility
    - Modules should be independently testable
+   - **API route modules: one module per distinct URL path.** Do NOT consolidate multiple routes under a single module. Each distinct endpoint (e.g., `/api/pipeline/veo/run`, `/api/pipeline/veo/clips`, `/api/pipeline/veo/stream`) gets its own module.
+   - **Before finalizing:** cross-check against every route listed in the PRD's API specification table or data flow diagrams. A route mentioned in the PRD must have a corresponding module.
 
 3. **Determine dependency graph:**
    - Which modules depend on which

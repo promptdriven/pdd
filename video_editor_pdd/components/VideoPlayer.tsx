@@ -39,7 +39,8 @@ export default function VideoPlayer({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const recognitionRef = useRef<SpeechRecognition | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const recognitionRef = useRef<any>(null);
   const finalTranscriptRef = useRef<string>('');
 
   const [isRecording, setIsRecording] = useState(false);
@@ -62,11 +63,13 @@ export default function VideoPlayer({
 
     if (!SpeechRecognitionImpl) return;
 
-    const recognition: SpeechRecognition = new SpeechRecognitionImpl();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const recognition: any = new SpeechRecognitionImpl();
     recognition.continuous = true;
     recognition.interimResults = true;
 
-    recognition.onresult = (event: SpeechRecognitionEvent) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    recognition.onresult = (event: any) => {
       let interim = '';
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const result = event.results[i];
@@ -497,11 +500,11 @@ export default function VideoPlayer({
             key={a.id}
             onClick={() => {
               const videoEl = videoRef.current;
-              if (videoEl) videoEl.currentTime = a.timestamp;
+              if (videoEl && a.timestamp != null) videoEl.currentTime = a.timestamp;
             }}
             className="absolute w-1.5 h-1.5 rounded-full bg-yellow-400 top-0 -translate-y-1"
-            style={{ left: `${(a.timestamp / duration) * 100}%` }}
-            aria-label={`annotation at ${a.timestamp.toFixed(2)} seconds`}
+            style={{ left: `${a.timestamp != null ? (a.timestamp / duration) * 100 : 0}%` }}
+            aria-label={`annotation at ${(a.timestamp ?? 0).toFixed(2)} seconds`}
           />
         ))}
       </div>

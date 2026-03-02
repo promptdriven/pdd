@@ -394,10 +394,11 @@ def run_agentic_test_orchestrator(
         exclude_keys = list(context.keys())
         prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
 
-        try:
-            formatted_prompt = prompt_template.format(**context)
-        except KeyError as e:
-            return False, f"Context missing key for step {step_num}: {e}", total_cost, model_used, []
+        # Safe substitution (Issue #549): un-double template literal braces first, then substitute.
+        prompt_template = prompt_template.replace("{{", "{").replace("}}", "}")
+        formatted_prompt = prompt_template
+        for key, value in context.items():
+            formatted_prompt = formatted_prompt.replace(f'{{{key}}}', str(value))
 
         timeout = TEST_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder
         step_success, step_output, step_cost, step_model = run_agentic_task(

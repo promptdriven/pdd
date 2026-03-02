@@ -7,6 +7,7 @@ import { markdown } from '@codemirror/lang-markdown';
 import { keymap, type KeyBinding } from '@codemirror/view';
 import { defaultKeymap } from '@codemirror/commands';
 import SseLogPanel from '../SseLogPanel';
+import { extractJobIdFromSse } from '@/lib/client/sse-utils';
 
 type ScriptResponse = {
   content: string;
@@ -197,9 +198,9 @@ export default function Stage2ScriptEditor({ onAdvance }: Stage2ScriptEditorProp
       const res = await fetch('/api/pipeline/tts-script/run', { method: 'POST' });
       if (!res.ok) throw new Error('Failed to start TTS generation');
 
-      const data = await res.json();
-      if (data?.jobId) {
-        setJobId(data.jobId);
+      const jobId = await extractJobIdFromSse(res);
+      if (jobId) {
+        setJobId(jobId);
       }
     } catch (err) {
       console.error(err);

@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { SseLogPanel } from '../SseLogPanel';
+import { extractJobIdFromSse } from '@/lib/client/sse-utils';
 
 type ComponentStatus = 'done' | 'missing' | 'error' | 'running' | 'pending';
 
@@ -81,6 +82,16 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
   const previewDialogRef = useRef<HTMLDialogElement | null>(null);
 
   const [actionBusy, setActionBusy] = useState<Record<string, boolean>>({});
+  const [expandedErrorRows, setExpandedErrorRows] = useState<Set<string>>(new Set());
+
+  const toggleErrorRow = (name: string, status: ComponentStatus) => {
+    if (status !== 'error') return;
+    setExpandedErrorRows((prev) => {
+      const next = new Set(prev);
+      next.has(name) ? next.delete(name) : next.add(name);
+      return next;
+    });
+  };
 
   const totalComponents = useMemo(
     () => sections.reduce((sum, s) => sum + s.components.length, 0),
@@ -100,6 +111,15 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
     }
     return list;
   }, [sections]);
+
+  const allComponentNames = useMemo(
+    () => sections.flatMap((s) => s.components.map((c) => c.name)),
+    [sections]
+  );
+  const allWrapperNames = useMemo(
+    () => sections.flatMap((s) => (s.wrappers ?? []).map((w) => w.name)),
+    [sections]
+  );
 
   const loadCollapsed = () => {
     try {
@@ -175,9 +195,9 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
         body: payload ? JSON.stringify(payload) : undefined,
       });
       if (!res.ok) throw new Error(`Request failed (${res.status})`);
-      const data = await res.json().catch(() => ({}));
-      if (data?.jobId) {
-        setActiveJobId(data.jobId as string);
+      const extractedJobId = await extractJobIdFromSse(res);
+      if (extractedJobId) {
+        setActiveJobId(extractedJobId);
         setLogOpen(true);
       }
     } catch (err) {
@@ -196,12 +216,14 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
       const res = await fetch(
         `/api/pipeline/compositions/preview?component=${encodeURIComponent(componentName)}`
       );
+      if (!res.ok) throw new Error(`Preview unavailable (${res.status})`);
       let url: string | null = null;
       if (res.headers.get('content-type')?.includes('application/json')) {
         const data = await res.json();
         url = data.url || data.path || data.previewUrl || null;
       } else {
-        url = (await res.text()) || null;
+        const text = (await res.text()).trim();
+        url = (text.startsWith('http') || text.startsWith('/')) ? text : null;
       }
       if (!url) throw new Error('Preview unavailable');
       setPreviewUrl(url);
@@ -249,7 +271,7 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
             </h3>
             <button
               className="rounded bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
-              onClick={() => runJob('/api/pipeline/compositions/run', undefined, 'generate-all')}
+              onClick={() => runJob('/api/pipeline/compositions/run', { components: allComponentNames, wrappers: allWrapperNames }, 'generate-all')}
               disabled={actionBusy['generate-all']}
             >
               {actionBusy['generate-all'] ? 'Generating...' : 'Generate All Compositions'}
@@ -278,37 +300,49 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
                   {!isCollapsed && (
                     <div className="divide-y divide-slate-700">
                       {section.components.map((component) => (
-                        <div
-                          key={component.name}
-                          className="flex items-center justify-between px-3 py-2 text-sm"
-                        >
-                          <div className="flex items-center gap-2">
-                            <span className="font-medium text-slate-200">
-                              {component.name}
-                            </span>
-                            <StatusBadge status={component.status} error={component.error} />
+                        <div key={component.name}>
+                          <div
+                            data-testid={`component-row-${component.name}`}
+                            className={`flex items-center justify-between px-3 py-2 text-sm ${component.status === 'error' ? 'cursor-pointer hover:bg-slate-800' : ''}`}
+                            onClick={() => toggleErrorRow(component.name, component.status)}
+                          >
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium text-slate-200">
+                                {component.name}
+                              </span>
+                              <StatusBadge status={component.status} error={component.error} />
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <button
+                                className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700"
+                                onClick={(e) => { e.stopPropagation(); openPreview(component.name); }}
+                              >
+                                Preview
+                              </button>
+                              <button
+                                className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  runJob(
+                                    '/api/pipeline/compositions/run',
+                                    { components: [component.name] },
+                                    `regen-${component.name}`
+                                  );
+                                }}
+                                disabled={actionBusy[`regen-${component.name}`]}
+                              >
+                                {actionBusy[`regen-${component.name}`] ? '...' : '↺'}
+                              </button>
+                            </div>
                           </div>
-                          <div className="flex items-center gap-2">
-                            <button
-                              className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700"
-                              onClick={() => openPreview(component.name)}
+                          {component.status === 'error' && expandedErrorRows.has(component.name) && (
+                            <div
+                              data-testid={`error-log-drawer-${component.name}`}
+                              className="border-t border-slate-700 bg-slate-800 px-3 py-2 font-mono text-xs text-red-300 whitespace-pre-wrap"
                             >
-                              Preview
-                            </button>
-                            <button
-                              className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700"
-                              onClick={() =>
-                                runJob(
-                                  '/api/pipeline/compositions/run',
-                                  { components: [component.name] },
-                                  `regen-${component.name}`
-                                )
-                              }
-                              disabled={actionBusy[`regen-${component.name}`]}
-                            >
-                              {actionBusy[`regen-${component.name}`] ? '...' : '↺'}
-                            </button>
-                          </div>
+                              {component.error ?? 'No error details available.'}
+                            </div>
+                          )}
                         </div>
                       ))}
                       {section.components.length === 0 && (
@@ -335,7 +369,28 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
                     <p className="font-medium text-slate-200">{wrapper.name}</p>
                     <p className="text-xs text-slate-400">{sectionLabel}</p>
                   </div>
-                  <StatusBadge status={wrapper.status} error={wrapper.error} />
+                  <div className="flex items-center gap-2">
+                    <StatusBadge status={wrapper.status} error={wrapper.error} />
+                    <button
+                      className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700"
+                      onClick={() => openPreview(wrapper.name)}
+                    >
+                      Preview
+                    </button>
+                    <button
+                      className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700"
+                      onClick={() =>
+                        runJob(
+                          '/api/pipeline/compositions/run',
+                          { wrappers: [wrapper.name] },
+                          `regen-wrapper-${wrapper.name}`
+                        )
+                      }
+                      disabled={actionBusy[`regen-wrapper-${wrapper.name}`]}
+                    >
+                      {actionBusy[`regen-wrapper-${wrapper.name}`] ? '...' : '↺'}
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -455,7 +510,7 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
       {/* Preview modal */}
       <dialog
         ref={previewDialogRef}
-        className="rounded-lg border border-slate-700 p-0 shadow-xl backdrop:bg-black/40"
+        className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-slate-700 p-0 shadow-xl backdrop:bg-black/40"
       >
         <div className="flex items-center justify-between border-b border-slate-700 px-4 py-2">
           <div className="text-sm font-semibold text-slate-200">

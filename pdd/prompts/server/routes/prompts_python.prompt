@@ -1,82 +1,79 @@
 % You are an expert Python engineer. Your goal is to write `pdd/server/routes/prompts.py`.
 
 % Role & Scope
-  This module provides REST API endpoints for prompt analysis, preprocessing,
-  sync status, model listing, match checking, diff analysis, and git versioning.
+  Build one FastAPI router that provides prompt analysis, sync status, model listing,
+  prompt/code matching, bidirectional diff analysis, and prompt git history/diff APIs.
 
 <context.python_preamble><include>context/python_preamble.prompt</include></context.python_preamble>
 
-% Documentation References
-  - FastAPI Routers: https://fastapi.tiangolo.com/tutorial/bigger-applications/
-  - Pydantic Models: https://docs.pydantic.dev/latest/
-
 % Requirements
-  1. **POST /analyze**:
-     - Body: path (required), model (optional, default "claude-sonnet-4-20250514"),
-       preprocess (optional, default true), content (optional for direct analysis)
-     - Returns: raw_content, processed_content (if preprocess), raw_metrics,
-       processed_metrics, preprocessing_succeeded, preprocessing_error
-     - Size limit: 500KB for both file reading and direct content
-     - If content provided, analyze it instead of reading from file
-     - Preprocess using pdd.preprocess with recursive=True, double_curly_brackets=True
+  1. Router/dependencies:
+     - Export `router = APIRouter(prefix="/api/v1/prompts", tags=["prompts"])`.
+     - Keep module-global `_path_validator`; `get_path_validator()` raises RuntimeError if unset; `set_path_validator()` configures it.
+     - Use `rich.console.Console` with an ImportError fallback console that prints via builtins.
 
-  2. **GET /sync-status**:
-     - Query params: basename (module name), language (e.g., "python")
-     - Returns SyncStatusResponse with status, timestamps, modification flags
-     - Status: "in_sync", "prompt_changed", "code_changed", "conflict", "never_synced"
-     - Uses read_fingerprint, get_pdd_file_paths, calculate_sha256 from sync_determine_operation
+  2. Models:
+     - Define request/response Pydantic models for analyze, sync status, model catalog, match check, diff analysis, git history, and prompt diff endpoints.
+     - Diff models must include `PromptRange`, `CodeRange`, `DiffSection`, `LineMapping`, `HiddenKnowledgeLocation`, `HiddenKnowledge`, `DiffStats`, `DiffAnalysisResult`, `DiffAnalysisRequest`, `DiffAnalysisResponse`.
+     - `DiffAnalysisResult` includes `overallScore`, `canRegenerate`, `regenerationRisk`, `promptToCodeScore`, `codeToPromptScore`, `sections`, `codeSections`, `hiddenKnowledge`, `lineMappings`, `stats`, `missing`, `extra`, `suggestions`.
+     - Prompt diff response includes `version_a_label`, `version_b_label`, and `versions_swapped`.
 
-  3. **GET /models**:
-     - Returns ModelsResponse with list of available LLM models sorted by ELO descending
-     - Each ModelInfo includes: model, provider, costs, elo, context_limit, reasoning info
-     - Loads from llm_model.csv via _load_model_data
+  3. `POST /analyze`:
+     - Request: `path` (required), `model` default `claude-sonnet-4-20250514`, `preprocess` default true, optional direct `content`.
+     - Validate `path` with `PathValidator`; if `content` is provided it takes precedence over file reads.
+     - Enforce 500KB limit for both file and direct content; reject directory/nonexistent/binary text decode failures with HTTP errors.
+     - Compute raw metrics with `get_token_metrics`; use pricing CSV at `project_root/.pdd/llm_model.csv` when present.
+     - If preprocessing enabled: run `pdd.preprocess.preprocess(..., recursive=True, double_curly_brackets=True)` after `chdir(project_root)` and always restore cwd.
+     - Preprocessing failure is non-fatal: still return raw metrics with `preprocessing_succeeded=False` and `preprocessing_error`.
+     - Convert `SecurityError` to HTTP 403.
 
-  4. **POST /check-match**:
-     - Body: MatchCheckRequest with prompt_content, code_content, strength
-     - Uses llm_invoke to evaluate prompt-code match
-     - Returns: result (match_score, summary, missing, extra, suggestions), cost, model
+  4. `GET /sync-status`:
+     - Query params: `basename`, `language`; requires validator dependency.
+     - Use `read_fingerprint`, `get_pdd_file_paths`, `calculate_sha256` from `pdd.sync_determine_operation`.
+     - Return `never_synced`, `in_sync`, `prompt_changed`, `code_changed`, or `conflict` based on current hashes vs fingerprint hashes.
+     - Include fingerprint timestamp/command and prompt/code existence booleans.
 
-  5. **POST /diff-analysis**:
-     - Body: prompt_content, code_content, strength, mode, include_tests, prompt_path, code_path
-     - mode: "quick" (capped strength 0.25) or "detailed"
-     - Uses load_prompt_template("prompt_code_diff_LLM") for analysis
-     - Returns bidirectional analysis: promptToCodeScore, codeToPromptScore, sections, codeSections
-     - Includes hiddenKnowledge, lineMappings, stats with coverage metrics
-     - In-memory caching with 10-minute TTL based on content hash
-     - If include_tests=true, auto-finds and includes test files in analysis
+  5. `GET /models`:
+     - Load model table via `pdd.llm_invoke._load_model_data(LLM_MODEL_CSV_PATH)`.
+     - Build `ModelInfo` entries with provider/cost/ELO/context/reasoning fields, sort by ELO descending, return `default_model=DEFAULT_BASE_MODEL`.
 
-  6. **POST /git-history**:
-     - Body: prompt_path, limit (default 10)
-     - Returns git commit history for the prompt file
-     - Response: versions (list with commit_hash, date, message, author, content),
-       current_content, has_uncommitted_changes
+  6. `POST /check-match`:
+     - Use `llm_invoke` with a strict JSON schema returning `match_score`, `summary`, `missing`, `extra`, `suggestions`.
+     - Parse `result` whether dict or JSON string.
+     - Return `MatchCheckResponse(result, cost, model)`.
+     - Do not force local mode (`use_cloud=False` must not be passed).
 
-  7. **POST /prompt-diff**:
-     - Body: prompt_path, version_a, version_b, code_path (optional), strength
-     - Versions: commit hash, "HEAD", or "working" (working directory)
-     - Auto-orders versions chronologically (older=A, newer=B)
-     - Uses load_prompt_template("prompt_diff_LLM") for linguistic analysis
-     - Returns: prompt contents, text_diff, linguistic_changes (categorized changes),
-       code_diff (if code_path), summary, cost, model, version labels
+  7. Diff analysis cache helpers:
+     - Keep in-memory cache keyed by SHA256(prompt+code+mode+include_tests+test_content) with 10-minute TTL.
+     - Cached responses must set `cached=True`.
 
-  8. **Pydantic Models**:
-     - Token/Cost: CostEstimateResponse, TokenMetricsResponse
-     - Analyze: PromptAnalyzeRequest, PromptAnalyzeResponse
-     - Sync: SyncStatusResponse
-     - Models: ModelInfo, ModelsResponse
-     - Match: MatchCheckRequest, MatchCheckResult, MatchCheckResponse
-     - Diff: PromptRange, CodeRange, DiffSection, LineMapping, HiddenKnowledgeLocation,
-       HiddenKnowledge, DiffStats, DiffAnalysisResult, DiffAnalysisRequest, DiffAnalysisResponse
-     - Git: PromptVersionInfo, PromptHistoryRequest, PromptHistoryResponse,
-       LinguisticChange, PromptDiffRequest, PromptDiffResponse
+  8. `POST /diff-analysis`:
+     - Request includes `prompt_content`, `code_content`, `strength`, `mode` (`detailed` or `quick`), `include_tests`, `prompt_path`, `code_path`.
+     - If `include_tests` and a path is provided: read `tests_dir` from `.pddrc` via `_find_pddrc_file/_load_pddrc_config` (default `tests`), locate tests with `_find_default_test_files`, append their contents inside `<unit_test_content>...</unit_test_content>`, and return used file paths.
+     - For `mode="quick"`, cap strength at `0.25`.
+     - Load template `prompt_code_diff_LLM` via `load_prompt_template`; fail with HTTP 500 if missing.
+     - Number prompt/code lines and invoke LLM with structured `output_schema`.
+     - Diff `output_schema` must include fields requested by the template, especially `canRegenerate`, `regenerationRisk`, and `hiddenKnowledge`.
+     - Parse string/dict LLM result and build sections, codeSections, lineMappings, stats, missing/extra/suggestions, then cache response.
+     - Return `analysisMode`, `cached`, `tests_included`, `test_files`.
+     - Do not force local mode (`use_cloud=False` must not be passed).
 
-  9. **Error handling**:
-     - 403 for SecurityError, 404 for not found, 400 for invalid input
-     - 500 for internal errors; preprocessing errors captured in response
+  9. Git utilities and history endpoint:
+     - Implement helpers using subprocess: `_get_git_file_at_commit`, `_get_git_log`, `_has_uncommitted_changes`, `_get_commit_timestamp`, `_is_version_newer`.
+     - Implement `_get_text_diff` with `difflib.unified_diff`.
+     - `POST /git-history` returns versions with commit metadata + prompt content, current working content, and uncommitted-change flag.
 
-  10. **Security**:
-      - All file paths validated through PathValidator dependency
-      - Change to project_root during preprocessing (for relative includes)
+  10. `POST /prompt-diff`:
+      - Request compares `version_a` and `version_b` (commit hash, `HEAD`, or `working`) for `prompt_path`; optional `code_path`.
+      - Reorder versions to older->newer using `_is_version_newer`; set labels and `versions_swapped`.
+      - Build unified prompt diff and optional unified code diff for the same versions.
+      - Load template `prompt_diff_LLM`; if unavailable, return fallback response with text/code diffs and empty linguistic changes.
+      - Otherwise call `llm_invoke` with structured output (`summary` + categorized `changes`) and parse into `LinguisticChange` list.
+      - Do not force local mode (`use_cloud=False` must not be passed).
+
+  11. Error behavior:
+      - Use HTTP errors for invalid input/path conditions.
+      - Log endpoint failures with `console.print` and raise HTTP 500 for unexpected errors in sync/models/match/diff/git endpoints.
 
 % Dependencies
   <fastapi_example>
@@ -106,13 +103,6 @@
   <code_generator_main_example>
     <include>context/code_generator_main_example.py</include>
   </code_generator_main_example>
-
-% Instructions
-  - Create router with prefix="/api/v1/prompts", tags=["prompts"]
-  - Use Depends() for PathValidator injection via get_path_validator()
-  - Provide set_path_validator() for configuration
-  - Use rich.console.Console for logging (with ImportError fallback)
-  - Git operations use subprocess calls (git show, git log, git status)
 
 % Deliverables
   - Code: `pdd/server/routes/prompts.py`

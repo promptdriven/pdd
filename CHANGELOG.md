@@ -1,3 +1,121 @@
+## v0.0.164 (2026-03-01)
+
+### Feat
+
+- **Step 7 filesystem fallback for marker-less providers** — When the code-generation provider (e.g., Codex) writes files without emitting `FILES_CREATED` markers, the bug orchestrator now snapshots modified/untracked files before and after Step 7 and detects new files on disk, preventing a false hard-stop.
+- **Codex `--sandbox` mode replaces `--full-auto`** — Codex CLI invocation now uses `--sandbox danger-full-access` (configurable via `CODEX_SANDBOX_MODE` env var) instead of `--full-auto`, fixing Landlock/seccomp panics on gVisor (Cloud Run) and Docker-on-macOS. The PDD worker container itself serves as the sandbox boundary.
+- **Parse Codex `turn.completed` for usage/cost** — `_run_with_provider` now accepts both `session.end` and `turn.completed` event types for extracting usage statistics, supporting Codex CLI 0.105.0+ which changed the event name.
+
+### Fix
+
+- **Harden auth and CSV tests for Cloud Batch environment** — `test_e2e_issue_296_custom_csv.py` now mocks `pdd_preprocess` to avoid missing `<include>` file failures in Cloud Batch. `test_e2e_issue_309_oauth_rate_limit.py` mocks `_load_firebase_api_key` and `has_refresh_token` to guarantee isolation from leaked env vars and keyring tokens in the Cloud Batch entrypoint.
+
+## v0.0.163 (2026-02-28)
+
+### Feat
+
+- **Next.js App Router rendering model support** — Architecture template (`architecture_json.prompt`) now defines a `renderingModel` enum (`server`, `client`, `hybrid`) on the `page` interface schema, with guidance teaching the LLM the rules for each mode. The generate prompt template (`generate_prompt.prompt`) enforces these constraints: server components must not use `'use client'` or React hooks; client components must not be `async`; hybrid generates a server wrapper that passes data to a `'use client'` child component. Defaults to `server` when `renderingModel` is absent.
+
+### Fix
+
+- **Reset branch to main HEAD on fresh re-run** — Bug orchestrator now resets the worktree branch to the main repo's current HEAD when re-running `pdd bug`/`pdd fix` on the same issue, preventing stale commits from polluting the PR.
+- **Port worktree `--force` fallback to bug orchestrator** — Ported worktree conflict handling from the change orchestrator (fixed in #445) to the bug orchestrator. When a branch can't be deleted (e.g., currently checked out), uses `git worktree add --force` instead of returning a hard error.
+- **Catch OSError instead of bare Exception in worktree cleanup** — Narrowed exception handling in worktree removal fallback; added `git worktree prune` after `shutil.rmtree` cleanup.
+- **Prevent truncation of provider and invalid JSON error messages** — Increased error snippet length from 200 to 2,000 characters (`MAX_ERROR_SNIPPET_LENGTH`) for improved debuggability when provider calls fail (fixes #492).
+- **Preserve ANTHROPIC_API_KEY in subprocess env** — Removed logic that stripped `ANTHROPIC_API_KEY` from the environment when no OAuth token was present, fixing authentication failures in non-OAuth setups (Issue #492).
+
+### Test
+
+- **E2E issue #579** — New `test_e2e_issue_579_bug_worktree_rerun.py` (486 lines) and `test_e2e_issue_579_orchestrator_rerun.py` (433 lines) covering worktree conflict handling on re-run, branch reset on fresh re-run, and resume preservation.
+- **Next.js rendering model** — New `test_nextjs_rendering_model.py` (359 lines) and `test_e2e_issue_626_nextjs_rendering_model.py` (563 lines) covering architecture schema `renderingModel` enum, generate prompt template enforcement, and end-to-end pipeline validation for server/client/hybrid modes.
+- **agentic_common** — New tests for `MAX_ERROR_SNIPPET_LENGTH` truncation and `ANTHROPIC_API_KEY` preservation in subprocess environment.
+
+## v0.0.162 (2026-02-27)
+
+### Feat
+
+- **TypeScript/JavaScript import validation (#624)** — New `_validate_typescript_imports()` in `sync_orchestration` validates TS/JS imports after code generation in agentic mode. Checks relative imports, path aliases (`@/`, `~/`, `#/`), scoped packages, bare module imports, and Node.js builtins. Unresolved imports now block generation. Also adds `javascriptreact` as a recognized language alongside `typescriptreact`.
+- **Validate imported names against module exports (#620)** — New `_get_module_exports()` uses AST parsing to extract exported names from Python modules (functions, classes, assignments, re-exports, `__all__`). `_validate_python_imports` now verifies that specific `from module import name` names actually exist in the target module, catching hallucinated function/class imports. Handles dotted import paths, `__all__ +=` patterns, and conditional imports inside `try/except`.
+- **Validation failures block architecture generation (#624)** — `agentic_architecture_orchestrator` now returns failure when any validation step fails, preventing generation from proceeding with invalid code. Previously, validation errors were logged but did not block the final output.
+
+### Fix
+
+- **Validate cloud execution only on command success** — Regression test script now calls `validate_cloud_success` only when the command exits with status 0, preventing false validation failures on commands that were expected to fail.
+- **Return JSON from render endpoint** — POST `/api/pipeline/render/run` now returns JSON `{ jobId }` instead of an SSE stream. Removed inline `createSseStream()` helper; progress streaming is handled separately via `GET /api/pipeline/render/stream`.
+- **Section ID edit not persisting in Stage 1** — `handleConfirmEdit` now uses `editingSectionId` (the original section ID) instead of `draftSection.id` (which may have changed during editing) when mapping sections for update.
+- **Prevent false positives in `_get_module_exports`** — `__all__` names are now unioned with physically defined names, since `__all__` only restricts `from module import *`, not explicit `from module import X` imports. Re-exported imports (`from X import Y`) are included in the export set.
+- **Narrow exception handling in import validation** — Changed bare `except Exception` to `except OSError` for file reads; added structured logging via module-level logger.
+- **Mock `update_main` in test_update_command** — Prevents real API calls during CI test runs.
+
+### Refactor
+
+- **Public repo publish prevents empty commits** — `publish-public` and `publish-public-cap` Makefile targets now reset to `origin/main` before copying files and skip commit/push when there are no staged changes, preventing empty commits.
+
+### Test
+
+- **sync_orchestration** — New `test_sync_orchestration.py` (894 lines) covering TypeScript/JavaScript import validation, module export extraction via AST, and end-to-end orchestration flows.
+- **E2E issue #620** — New `test_e2e_issue_620_hallucinated_imports.py` (415 lines) covering hallucinated import name detection for both Python and TypeScript/JavaScript modules.
+
+## v0.0.161 (2026-02-26)
+
+### Feat
+
+- **PDD_GH_TOKEN_FILE push retry** — `agentic_e2e_fix_orchestrator` retries `git push` with a GitHub token file on auth failure, URL-encoding the token and restoring the original remote URL in a finally block to prevent token leakage (#629)
+- **architecture_sync auto-fix** — auto-detect renamed step files (e.g., `step4_design` → `step5_design`) and register untracked prompts with inferred filepath and module tags
+- **Validate Python imports after generation** — new `_validate_python_imports()` in `sync_orchestration` uses `ast.parse()` to verify local imports resolve to real files, with a namespace package fallback via `importlib.metadata.packages_distributions()` (#572)
+- **DependencyViewer node grouping** — implement relative layout for sub-flow nodes within groups, with position coordinates in `architecture.json`
+
+### Fix
+
+- **Namespace package fallback in import validation** — `_validate_python_imports` now checks `importlib.metadata.packages_distributions()` when `find_spec()` returns None, resolving false positives for namespace packages (#572)
+- **URL-encode token and warn on restore failure** — address review on push retry: token is URL-encoded with `urllib.parse.quote` and a warning is logged if the original remote URL cannot be restored (#631)
+- **Reject zero-coverage pipelines** — `coverage=0.0` is no longer accepted as a successful pipeline run when tests pass (#573)
+- **Correct misleading log messages** — fix outdated test docstrings and a misleading log message in sync orchestration (#573)
+- **Audit API specPath prefix** — ensure `specPath` is consistently prefixed with `specs/` and Stage 10 Audit spec viewer correctly parses JSON responses
+
+### Refactor
+
+- Remove agentic architecture workflow LLM prompts from `architecture.json` (9 step prompts removed)
+- Update API route generation prompts with explicit implementation details and dependency specifications
+- Update CLI core dump/output capture logic; add new TTS API prompt
+- Remove unused `project_root` param from `_validate_python_imports`
+
+### Test
+
+- **sync_orchestration** — new `test_sync_orchestration.py` (417 lines) covering import validation, auto-fix, and orchestration flows
+- **architecture_sync** — new `test_architecture_sync.py` (281 lines) covering renamed step detection and untracked prompt registration
+- **agentic_e2e_fix_orchestrator** — new `test_agentic_e2e_fix_orchestrator.py` (197 lines) covering push retry with token file
+- **sync_determine_operation** — new `test_sync_determine_operation.py` (127 lines) covering operation determination logic
+- Removed `test_e2e_issue_572_hallucinated_imports.py` (superseded by main #572 test coverage)
+
+## v0.0.160 (2026-02-25)
+
+### Feat
+
+- **Module grouping in architecture view** — Modules can now be assigned to named groups that collapse into a single summary node. New `GroupNode` and `GroupEditModal` components; `ArchitectureModule` schema gains an optional `group` field. Groups auto-expand on first appearance and support edit-mode rename/reassignment via a batch update. Dagre layout uses virtual group→child edges for placement.
+- **Compact zoom mode for ModuleNode** — When the React Flow viewport zoom drops below 0.5, module nodes switch to a minimal single-line label using a `calc(14px / zoom)` font size that stays readable at any zoom level. New `VpZoomSync` component keeps the `--vp-zoom` CSS custom property in sync with all viewport changes (including programmatic `fitView`).
+- **Focus mode for dependency graph** — Clicking a module node dims all nodes outside its 1-hop neighborhood (direct dependencies and dependents). Focus auto-clears when the focused module's group is collapsed.
+- **API route coverage in architecture completeness check** — Step 10 completeness prompt now extracts every distinct URL pattern from the PRD and verifies a 1:1 corresponding route module exists. Step 5 design prompt reinforces one-module-per-distinct-URL-path. Prevents the LLM from collapsing multiple API endpoints under a single module.
+- **Header-only tag parsing in `architecture_sync`** — `parse_prompt_tags()` now extracts PDD metadata tags only from the header section (content before the first `%` section marker), preventing example `<pdd-dependency>` tags inside code fences or prose from being treated as real metadata declarations.
+
+### Fix
+
+- **Replace `.format(**context)` with safe `str.replace()` in all agentic orchestrators** — All six orchestrators (architecture, bug, change, checkup, e2e-fix, test) now use iterative `str.replace()` for prompt template substitution instead of Python's `.format()`. This prevents `KeyError` crashes when LLM outputs contain JSON curly braces and eliminates the need to double-escape braces in context values. Context outputs are no longer pre-escaped with `{{`/`}}`.
+- **Support modern Codex CLI NDJSON format in agentic sync** — `_run_with_provider()` now parses Codex CLI 0.104.0+ output, which splits agent text (`item.completed` with `agent_message` type) and usage stats (`session.end`) into separate NDJSON events. `_parse_provider_json()` extracts text from `data["item"]["text"]` for modern format.
+- **Resolve 'no changes to commit' on resume** — `_commit_and_push()` in the e2e-fix orchestrator now falls back to `git diff` when the hash snapshot is tainted by a prior interrupted run, catching orphaned unstaged changes that the snapshot missed.
+- **`modify` command propagates `click.UsageError`** — Both `split` and `change` subcommands now re-raise `click.UsageError` instead of swallowing it in the generic exception handler, allowing Click to display proper usage messages.
+
+### Refactor
+
+- **Agentic orchestrator prompt templating** — Prompt substitution across all orchestrators unified to a three-step pattern: preprocess with `double_curly_brackets=True`, un-double template braces, then iterate `str.replace()` per context key. Removes all `try/except KeyError` formatting blocks and brace-escaping of step outputs.
+
+### Test
+
+- **E2E regression suites for issues #545, #549, #557, #566** — Four new E2E test modules covering: format double-escaping across all orchestrators (`test_e2e_issue_549_format_double_escaping.py`, `test_e2e_issue_549_other_orchestrators.py`), Codex NDJSON parsing (`test_e2e_issue_557_codex_ndjson.py`), code-fence tag extraction (`test_e2e_issue_566_code_fence_tags.py`), and no-changes-to-commit on resume (`test_e2e_issue_545_no_changes_to_commit.py`). Total: ~2,300 new test lines.
+- **Unit tests for `agentic_common` and `agentic_e2e_fix_orchestrator`** — New `test_agentic_common.py` (305 lines) covers NDJSON parsing, provider JSON extraction, and cost calculation. New `test_agentic_e2e_fix_orchestrator.py` (226 lines) covers commit-and-push fallback logic.
+- **Unit tests for `architecture_sync` header parsing** — New `test_architecture_sync.py` (272 lines) verifies that tags in code fences and body sections are ignored.
+- **Frontend tests for compact font and zoom sync** — Three new test files covering `getCompactFontPx()` math, compact render mode at low zoom, and `VpZoomSync` CSS property propagation.
+
 ## v0.0.159 (2026-02-24)
 
 ### Feat

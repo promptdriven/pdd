@@ -7,6 +7,7 @@ import PromptOrderModal from './PromptOrderModal';
 import GraphToolbar from './GraphToolbar';
 import ModuleEditModal from './ModuleEditModal';
 import AddModuleModal from './AddModuleModal';
+import GroupEditModal from './GroupEditModal';
 import SyncFromPromptModal from './SyncFromPromptModal';
 import SyncOptionsModal from './SyncOptionsModal';
 import { useArchitectureHistory } from '../hooks/useArchitectureHistory';
@@ -110,6 +111,11 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
   const [showEditModal, setShowEditModal] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const [selectedModule, setSelectedModule] = useState<ArchitectureModule | null>(null);
+
+  // Group management state
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [showGroupModal, setShowGroupModal] = useState(false);
+  const [editingGroupName, setEditingGroupName] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isRearranging, setIsRearranging] = useState(false);
   const [rearrangeVersion, setRearrangeVersion] = useState(0);
@@ -139,6 +145,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
     hasUnsavedChanges,
     addModule,
     updateModule,
+    batchUpdateModules,
     deleteModule,
     addDependency,
     removeDependency,
@@ -157,6 +164,20 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
       setOriginal(architecture);
     }
   }, [architecture, setOriginal]);
+
+  // Auto-expand any newly-appearing groups when architecture changes
+  useEffect(() => {
+    if (architecture) {
+      const groupNames = architecture.filter(m => m.group).map(m => m.group!);
+      if (groupNames.length > 0) {
+        setExpandedGroups(prev => {
+          const next = new Set(prev);
+          groupNames.forEach(g => { if (!next.has(g)) next.add(g); });
+          return next;
+        });
+      }
+    }
+  }, [architecture]);
 
   // Mobile detection useEffect
   useEffect(() => {
@@ -844,6 +865,47 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
     addModule(module);
   }, [addModule]);
 
+  // Handle group toggle (expand/collapse)
+  const handleToggleGroup = useCallback((groupName: string) => {
+    setExpandedGroups(prev => {
+      const next = new Set(prev);
+      if (next.has(groupName)) {
+        next.delete(groupName);
+      } else {
+        next.add(groupName);
+      }
+      return next;
+    });
+  }, []);
+
+  // Handle group edit button click
+  const handleEditGroupClick = useCallback((groupName: string) => {
+    setEditingGroupName(groupName);
+    setShowGroupModal(true);
+  }, []);
+
+  // Handle group save from modal (assigns modules to the group in one history entry)
+  const handleGroupSave = useCallback((groupName: string, moduleFilenames: string[]) => {
+    const filenameSet = new Set(moduleFilenames);
+    // When creating a new group that matches an existing group name, treat as an edit
+    // so stale members of that group are cleared if they weren't re-selected
+    const effectiveOldGroupName = editingGroupName || groupName;
+    const updatedModules = editableArchitecture.map(m => {
+      if (filenameSet.has(m.filename)) {
+        return { ...m, group: groupName };
+      }
+      // Clear group if this module was in the old group but wasn't re-selected
+      if (m.group === effectiveOldGroupName) {
+        return { ...m, group: undefined };
+      }
+      return m;
+    });
+    batchUpdateModules(updatedModules);
+    // Auto-expand the new/edited group
+    setExpandedGroups(prev => new Set([...prev, groupName]));
+    setEditingGroupName(null);
+  }, [editableArchitecture, editingGroupName, batchUpdateModules]);
+
   // Handle dependency add (from edge creation)
   const handleDependencyAdd = useCallback((targetFilename: string, sourceFilename: string) => {
     addDependency(targetFilename, sourceFilename);
@@ -1351,6 +1413,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
             onSyncFromPrompts={handleOpenSyncModal}
             onRearrange={handleRearrange}
             isRearranging={isRearranging}
+            onManageGroups={editMode ? () => { setEditingGroupName(null); setShowGroupModal(true); } : undefined}
           />
         )}
 
@@ -1459,6 +1522,9 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
                 onSyncBatch={handleSyncBatch}
                 remainingCountByBatch={remainingCountByBatch}
                 rearrangeVersion={rearrangeVersion}
+                expandedGroups={expandedGroups}
+                onToggleGroup={handleToggleGroup}
+                onEditGroup={editMode ? handleEditGroupClick : undefined}
               />
             )
           ) : (
@@ -1524,6 +1590,18 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
         onClose={() => {
           setShowEditModal(false);
           setSelectedModule(null);
+        }}
+      />
+
+      {/* Group Edit Modal */}
+      <GroupEditModal
+        isOpen={showGroupModal}
+        groupName={editingGroupName}
+        allModules={editableArchitecture}
+        onSave={handleGroupSave}
+        onClose={() => {
+          setShowGroupModal(false);
+          setEditingGroupName(null);
         }}
       />
 

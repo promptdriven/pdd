@@ -60,14 +60,15 @@ This module handles the synchronization of architecture metadata between `archit
 % Requirements
 1. Parse PDD metadata tags from prompt content using lxml with lenient recovery
 2. Extract `<pdd-reason>` (single line description), `<pdd-interface>` (JSON), `<pdd-dependency>` (multiple allowed)
-3. Update architecture.json entries from prompt file tags (only update fields with tags present)
-4. Support dry_run mode to preview changes without writing
-5. Track `has_dependency_tags` flag to distinguish "no tags" from "tags removed" (clearing dependencies)
-6. Validate dependencies (check file existence, detect duplicates)
-7. Validate interface structure (type must be module/cli/command/frontend with appropriate nested keys)
-8. Generate XML tags string from architecture entry for reverse direction (architecture.json -> prompt)
-9. Use Path.cwd() for default paths to work with user's project directory, not package installation
-10. Handle malformed XML/JSON gracefully without crashing (lenient validation)
+3. Before XML parsing, parse only the header section (content before the first `\n%` section marker) so that example tags in code fences or prose in the body are never extracted as real metadata
+4. Update architecture.json entries from prompt file tags (only update fields with tags present)
+5. Support dry_run mode to preview changes without writing
+6. Track `has_dependency_tags` flag to distinguish "no tags" from "tags removed" (clearing dependencies)
+7. Validate dependencies (check file existence, detect duplicates)
+8. Validate interface structure (type must be module/cli/command/frontend with appropriate nested keys)
+9. Generate XML tags string from architecture entry for reverse direction (architecture.json -> prompt)
+10. Use Path.cwd() for default paths to work with user's project directory, not package installation
+11. Handle malformed XML/JSON gracefully without crashing (lenient validation)
 
 % Dependencies
 Uses lxml.etree for XML parsing with recovery mode.
@@ -80,11 +81,12 @@ Uses pathlib.Path for file operations.
 
 % Instructions
 1. Implement `parse_prompt_tags()`:
+   - Parse only the header section: scan lines and collect everything before the first line whose stripped form starts with `%`; this correctly handles files that begin with `%` at byte 0 (no preceding newline), ensuring body examples are never seen by the XML parser
    - Wrap content in `<root>` tag for XML parsing
    - Use `etree.XMLParser(recover=True)` for lenient parsing
    - Extract reason as stripped text
    - Parse interface JSON with json.loads(), store parse errors in `interface_parse_error`
-   - Track `has_dependency_tags` based on presence of dependency elements or tag in content
+   - Track `has_dependency_tags` based on presence of dependency elements or tag in header
 
 2. Implement `update_architecture_from_prompt()`:
    - Load prompt file and extract tags

@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { SseLogPanel } from '../SseLogPanel';
+import { extractJobIdFromSse } from '@/lib/client/sse-utils';
 
 type VeoClipStatus = 'done' | 'generating' | 'missing' | 'error';
 
@@ -55,6 +56,7 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
 
   const [logs, setLogs] = useState<ClipLog[]>([]);
   const [jobId, setJobId] = useState<string | null>(null);
+  const [brokenRefs, setBrokenRefs] = useState<Set<string>>(new Set());
 
   const fetchClips = async () => {
     try {
@@ -142,8 +144,8 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
         );
         return;
       }
-      const data = await res.json();
-      if (data?.jobId) setJobId(data.jobId);
+      const extractedJobId = await extractJobIdFromSse(res);
+      if (extractedJobId) setJobId(extractedJobId);
     } catch (err) {
       // Revert optimistic status on network/parse error
       setClips((prev) =>
@@ -196,11 +198,23 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
               {references.map((ref) => (
                 <div key={ref.id} className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-3">
-                    <img
-                      src={`/api/video/outputs/veo/references/${ref.id}.png`}
-                      className="w-16 h-16 object-cover rounded"
-                      alt={ref.label ?? ref.id}
-                    />
+                    {brokenRefs.has(ref.id) ? (
+                      <div
+                        data-testid="ref-portrait-fallback"
+                        className="w-16 h-16 rounded bg-slate-700 flex items-center justify-center text-slate-500 text-xs"
+                      >
+                        No image
+                      </div>
+                    ) : (
+                      <img
+                        src={`/api/video/outputs/veo/references/${ref.id}.png`}
+                        className="w-16 h-16 object-cover rounded"
+                        alt={ref.label ?? ref.id}
+                        onError={() =>
+                          setBrokenRefs((prev) => new Set([...prev, ref.id]))
+                        }
+                      />
+                    )}
                     <div className="text-sm text-slate-300">{ref.label ?? ref.id}</div>
                   </div>
                   <button

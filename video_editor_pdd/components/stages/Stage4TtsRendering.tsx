@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import WaveSurfer from 'wavesurfer.js';
 import { SseLogPanel } from '../SseLogPanel';
+import { extractJobIdFromSse } from '@/lib/client/sse-utils';
 
 type SegmentStatus = 'done' | 'missing' | 'error' | 'generating';
 
@@ -140,9 +141,8 @@ export default function Stage4TtsRendering({ onAdvance }: Stage4TtsRenderingProp
       });
 
       if (!res.ok) throw new Error('Failed to start TTS render.');
-      const data = await res.json();
-
-      const jobId = data.jobId as string;
+      const jobId = await extractJobIdFromSse(res);
+      if (!jobId) throw new Error('Failed to get job ID from TTS render.');
       setBatchJobId(jobId);
 
       // Open SSE stream for batch progress
@@ -210,10 +210,10 @@ export default function Stage4TtsRendering({ onAdvance }: Stage4TtsRenderingProp
         body: JSON.stringify({ segments: [segmentId] }),
       });
       if (!res.ok) throw new Error('Failed to start segment render.');
-      const data = await res.json();
-      const jobId = data.jobId as string;
-
-      setRowJobIds((prev) => ({ ...prev, [segmentId]: jobId }));
+      const rowJobId = await extractJobIdFromSse(res);
+      if (rowJobId) {
+        setRowJobIds((prev) => ({ ...prev, [segmentId]: rowJobId }));
+      }
     } catch (err: any) {
       setError(err.message || 'Failed to start segment render.');
     }

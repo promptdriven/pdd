@@ -19,10 +19,10 @@ import { Readable } from "stream";
  */
 export async function GET(
   request: Request,
-  { params }: { params: { path: string[] } }
+  { params }: { params: Promise<{ path: string[] }> }
 ): Promise<NextResponse> {
   try {
-    const pathSegments = params.path;
+    const { path: pathSegments } = await params;
 
     // Security check: reject any segment containing ".."
     if (pathSegments.some((segment) => segment === ".." || segment.includes(".."))) {

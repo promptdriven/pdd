@@ -10,11 +10,11 @@ export const dynamic = "force-dynamic";
  */
 export async function GET(
   request: Request,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ): Promise<NextResponse> {
   try {
     const db = getDb();
-    const { id } = params;
+    const { id } = await params;
 
     const row = db
       .prepare(`SELECT * FROM annotations WHERE id = ?`)
@@ -59,11 +59,11 @@ export async function GET(
  */
 export async function PUT(
   request: Request,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ): Promise<NextResponse> {
   try {
     const db = getDb();
-    const { id } = params;
+    const { id } = await params;
 
     const existing = db.prepare('SELECT id FROM annotations WHERE id = ?').get(id);
     if (!existing) {
@@ -71,7 +71,7 @@ export async function PUT(
     }
 
     const body = await request.json();
-    const { text, sectionId, timestamp } = body;
+    const { text, sectionId, timestamp, analysis } = body;
 
     const updates: string[] = [];
     const values: unknown[] = [];
@@ -79,6 +79,7 @@ export async function PUT(
     if (text !== undefined) { updates.push('text = ?'); values.push(text); }
     if (sectionId !== undefined) { updates.push('sectionId = ?'); values.push(sectionId); }
     if (timestamp !== undefined) { updates.push('timestamp = ?'); values.push(timestamp); }
+    if (analysis !== undefined) { updates.push('analysis = ?'); values.push(JSON.stringify(analysis)); }
 
     if (updates.length === 0) {
       return NextResponse.json({ error: 'No fields to update' }, { status: 400 });
@@ -117,11 +118,11 @@ export async function PUT(
  */
 export async function DELETE(
   _request: Request,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ): Promise<NextResponse> {
   try {
     const db = getDb();
-    const { id } = params;
+    const { id } = await params;
 
     const existing = db.prepare('SELECT id FROM annotations WHERE id = ?').get(id);
     if (!existing) {
