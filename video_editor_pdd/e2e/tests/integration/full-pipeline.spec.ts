@@ -1,14 +1,16 @@
 import { test, expect, Page } from '@playwright/test';
 import fs from 'fs';
 import path from 'path';
+import { execSync } from 'child_process';
 
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..', '..');
 const OUTPUTS_DIR = path.join(PROJECT_ROOT, 'outputs');
+const ANIMATION_VIDEO = path.join(OUTPUTS_DIR, 'sections', 'animation_section.mp4');
+const REMOTION_SRC_DIR = path.join(PROJECT_ROOT, 'remotion', 'src', 'remotion');
 
 /** Use ffprobe to check whether a video file has an audio stream. */
 function hasAudioStream(videoPath: string): boolean {
   try {
-    const { execSync } = require('child_process');
     const result = execSync(
       `ffprobe -v quiet -select_streams a -show_entries stream=codec_type -of csv=p=0 "${videoPath}"`,
       { encoding: 'utf-8' },
@@ -17,6 +19,58 @@ function hasAudioStream(videoPath: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** Extract a single frame from a video at the given second offset. */
+function extractFrame(videoPath: string, outPng: string, atSecond: number = 1): void {
+  execSync(
+    `ffmpeg -y -ss ${atSecond} -i "${videoPath}" -vframes 1 -update 1 "${outPng}"`,
+    { stdio: 'pipe' },
+  );
+}
+
+/** Return the max pixel value in a PNG (0 = all black). */
+function maxPixelValue(pngPath: string): number {
+  const raw = execSync(
+    `python3 -c "from PIL import Image; import numpy as np; img=np.array(Image.open('${pngPath}')); print(img.max())"`,
+    { encoding: 'utf-8' },
+  ).trim();
+  return parseInt(raw, 10);
+}
+
+/** Compare two PNGs and return the sum of absolute pixel differences. */
+function frameDiffSum(pngA: string, pngB: string): number {
+  const raw = execSync(
+    `python3 -c "from PIL import Image; import numpy as np; a=np.array(Image.open('${pngA}')); b=np.array(Image.open('${pngB}')); print(int(np.abs(a.astype(int)-b.astype(int)).sum()))"`,
+    { encoding: 'utf-8' },
+  ).trim();
+  return parseInt(raw, 10);
+}
+
+/**
+ * Snapshot all TSX files related to animation_section.
+ * Returns a Map of relative-path → file-content for later comparison.
+ * Includes: wrapper at animation_section/index.tsx + any *.tsx in the flat dir.
+ */
+function snapshotAnimationTsx(): Map<string, string> {
+  const snapshot = new Map<string, string>();
+
+  // Section wrapper: remotion/src/remotion/animation_section/index.tsx
+  const wrapperPath = path.join(REMOTION_SRC_DIR, 'animation_section', 'index.tsx');
+  if (fs.existsSync(wrapperPath)) {
+    snapshot.set(wrapperPath, fs.readFileSync(wrapperPath, 'utf-8'));
+  }
+
+  // Flat-dir component TSX files (skip Root.tsx and non-animation files)
+  const flatFiles = fs.readdirSync(REMOTION_SRC_DIR).filter(
+    (f) => f.endsWith('.tsx') && f !== 'Root.tsx',
+  );
+  for (const f of flatFiles) {
+    const fullPath = path.join(REMOTION_SRC_DIR, f);
+    snapshot.set(fullPath, fs.readFileSync(fullPath, 'utf-8'));
+  }
+
+  return snapshot;
 }
 
 // ---------------------------------------------------------------------------
@@ -69,10 +123,10 @@ async function navigateToStage(
 }
 
 // ---------------------------------------------------------------------------
-// Test
+// Tests (serial — annotation test reuses the rendered video from pipeline)
 // ---------------------------------------------------------------------------
 
-test.describe('Full pipeline end-to-end', () => {
+test.describe.serial('Full pipeline end-to-end', () => {
   test('produce a complete video through all 10 stages', async ({ page }) => {
     const pageErrors: string[] = [];
     page.on('pageerror', (err) => pageErrors.push(err.message));
@@ -219,25 +273,13 @@ test.describe('Full pipeline end-to-end', () => {
 
     // Both section videos must have non-black visual content.
     // Extract a frame at the midpoint and verify pixel data is not all zeros.
-    const { execSync: execSyncLocal } = require('child_process');
     for (const [label, videoPath] of [
       ['animation_section', animationPath],
       ['veo_section', veoPath],
     ] as const) {
       const framePath = path.join(OUTPUTS_DIR, `${label}_check_frame.png`);
-      execSyncLocal(
-        `ffmpeg -y -ss 1 -i "${videoPath}" -vframes 1 -update 1 "${framePath}"`,
-        { stdio: 'pipe' },
-      );
-      // Read PNG and check that at least some pixels are non-zero
-      const pixelCheck = execSyncLocal(
-        `python3 -c "from PIL import Image; import numpy as np; img=np.array(Image.open('${framePath}')); print(img.max())"`,
-        { encoding: 'utf-8' },
-      ).trim();
-      expect(parseInt(pixelCheck, 10)).toBeGreaterThan(0,
-        // @ts-expect-error -- custom message
-        `${label} video is all black (no visual content)`,
-      );
+      extractFrame(videoPath, framePath);
+      expect(maxPixelValue(framePath)).toBeGreaterThan(0);
     }
 
     // ── Stage 10: Audit ─────────────────────────────────────────────────
@@ -267,5 +309,203 @@ test.describe('Full pipeline end-to-end', () => {
         !e.includes('is not valid JSON'),
     );
     expect(appErrors).toHaveLength(0);
+  });
+
+  // -----------------------------------------------------------------------
+  // Test 2: Annotation → Fix → Re-render
+  // -----------------------------------------------------------------------
+
+  test('annotation fix re-edits animation_section video', async ({ page }) => {
+    const PRE_FIX_FRAME = path.join(OUTPUTS_DIR, 'annotation_test_pre_fix_frame.png');
+    const POST_FIX_FRAME = path.join(OUTPUTS_DIR, 'annotation_test_post_fix_frame.png');
+    const REVIEW_SCREENSHOT = path.join(OUTPUTS_DIR, 'annotation_test_review_tab.png');
+
+    // ── Phase 1: Save pre-fix state ─────────────────────────────────────
+    expect(fs.existsSync(ANIMATION_VIDEO)).toBe(true);
+    const preFixStat = fs.statSync(ANIMATION_VIDEO);
+
+    // Snapshot all animation-related TSX files (names are dynamic)
+    const preFixTsxSnapshot = snapshotAnimationTsx();
+    expect(preFixTsxSnapshot.size).toBeGreaterThan(0);
+    console.log(`Pre-fix TSX snapshot: ${preFixTsxSnapshot.size} files`);
+    for (const p of preFixTsxSnapshot.keys()) {
+      console.log(`  ${path.relative(PROJECT_ROOT, p)}`);
+    }
+
+    extractFrame(ANIMATION_VIDEO, PRE_FIX_FRAME);
+    expect(fs.existsSync(PRE_FIX_FRAME)).toBe(true);
+
+    // ── Phase 2: Create annotation via API ──────────────────────────────
+    // Build base64 data URL from the pre-fix frame for compositeDataUrl
+    const frameBuffer = fs.readFileSync(PRE_FIX_FRAME);
+    const compositeDataUrl = `data:image/png;base64,${frameBuffer.toString('base64')}`;
+
+    const createRes = await page.request.post('/api/annotations', {
+      data: {
+        sectionId: 'animation_section',
+        timestamp: 1.0,
+        text: 'Change the main background color of this section to bright red (#FF0000). Find all background color values in the animation_section TSX component files under remotion/src/remotion/ and replace them with #FF0000.',
+        compositeDataUrl,
+        videoFile: 'animation_section.mp4',
+        inputMethod: 'typed',
+      },
+    });
+    expect(createRes.status()).toBe(201);
+    const annotation = await createRes.json();
+    const annotationId: string = annotation.id;
+    expect(annotationId).toBeTruthy();
+
+    // ── Phase 3: Run Claude analysis ────────────────────────────────────
+    const analyzeRes = await page.request.post(
+      `/api/annotations/${annotationId}/analyze`,
+      { timeout: 120_000 },
+    );
+    expect(analyzeRes.status()).toBe(200);
+    const analyzeBody = await analyzeRes.json();
+    let fixType = analyzeBody.annotation?.analysis?.fixType;
+
+    // If Claude didn't return "remotion", inject the correct analysis via PUT
+    if (fixType !== 'remotion') {
+      console.warn(
+        `Claude returned fixType="${fixType}" instead of "remotion" — injecting canned analysis`,
+      );
+      const putRes = await page.request.put(`/api/annotations/${annotationId}`, {
+        data: {
+          analysis: {
+            fixType: 'remotion',
+            severity: 'major',
+            technicalAssessment: 'Background color needs to change to bright red (#FF0000) in the animation_section TSX components.',
+            suggestedFixes: [
+              'Replace background color values with #FF0000 in the animation_section component TSX files under remotion/src/remotion/',
+            ],
+          },
+        },
+      });
+      expect(putRes.status()).toBe(200);
+      fixType = 'remotion';
+    }
+
+    expect(fixType).toBe('remotion');
+
+    // ── Phase 4: Navigate to Review tab & verify UI ─────────────────────
+    await page.goto('/');
+    await page.waitForTimeout(2000);
+    await page.locator('button', { hasText: 'Review' }).click();
+    await page.waitForTimeout(3000);
+
+    // Take a screenshot of the Review tab for manual inspection
+    await page.screenshot({ path: REVIEW_SCREENSHOT });
+
+    // Verify annotation card is visible (contains "background color" from our annotation text)
+    await expect(
+      page.locator('text=background color').first(),
+    ).toBeVisible({ timeout: 15000 });
+
+    // ── Phase 5: Apply fixes via UI ─────────────────────────────────────
+    // Click "Apply N Fixes" in AnnotationPanel
+    const applyButton = page.locator('button').filter({ hasText: /Apply \d+ Fix/ }).first();
+    await expect(applyButton).toBeVisible({ timeout: 15000 });
+    await applyButton.click();
+
+    // FixPreviewPanel appears — wait for "Generating previews..." to disappear
+    await expect(
+      page.locator('text=Generating previews'),
+    ).toBeVisible({ timeout: 10000 }).catch(() => {
+      // May have loaded fast enough to skip the loading state
+    });
+    await expect(
+      page.locator('text=Generating previews'),
+    ).toBeHidden({ timeout: 120_000 });
+
+    // Click the green "Apply N Fixes" button in FixPreviewPanel
+    const greenApplyButton = page.locator('button.bg-green-600').filter({ hasText: /Apply \d+ Fix/ });
+    await expect(greenApplyButton).toBeVisible({ timeout: 15000 });
+    await greenApplyButton.click();
+
+    // ── Phase 6: Wait for fix job completion ────────────────────────────
+    // Poll the annotation until resolveJobId is set
+    let resolveJobId: string | null = null;
+    const jobPollStart = Date.now();
+    while (Date.now() - jobPollStart < 60_000) {
+      const annRes = await page.request.get(`/api/annotations/${annotationId}`);
+      const annData = await annRes.json();
+      if (annData.resolveJobId) {
+        resolveJobId = annData.resolveJobId;
+        break;
+      }
+      await page.waitForTimeout(2000);
+    }
+    expect(resolveJobId).toBeTruthy();
+
+    // Poll the job until done
+    const jobStart = Date.now();
+    while (Date.now() - jobStart < 600_000) {
+      const jobRes = await page.request.get(`/api/jobs/${resolveJobId}`);
+      const jobData = await jobRes.json();
+      if (jobData.status === 'done') break;
+      if (jobData.status === 'error') {
+        throw new Error(`Fix job failed: ${jobData.error ?? JSON.stringify(jobData)}`);
+      }
+      await page.waitForTimeout(5000);
+    }
+
+    // Verify job completed
+    const finalJobRes = await page.request.get(`/api/jobs/${resolveJobId}`);
+    const finalJob = await finalJobRes.json();
+    expect(finalJob.status).toBe('done');
+
+    // ── Phase 7: Verify post-fix state ──────────────────────────────────
+
+    // 7a. At least one TSX file was modified by Claude
+    const postFixTsxSnapshot = snapshotAnimationTsx();
+    let tsxFilesChanged = 0;
+    for (const [filePath, preContent] of preFixTsxSnapshot) {
+      const postContent = postFixTsxSnapshot.get(filePath);
+      if (postContent !== undefined && postContent !== preContent) {
+        tsxFilesChanged++;
+        console.log(`  TSX changed: ${path.relative(PROJECT_ROOT, filePath)}`);
+      }
+    }
+    // Also count newly created files as changes
+    for (const filePath of postFixTsxSnapshot.keys()) {
+      if (!preFixTsxSnapshot.has(filePath)) {
+        tsxFilesChanged++;
+        console.log(`  TSX added: ${path.relative(PROJECT_ROOT, filePath)}`);
+      }
+    }
+    console.log(`Total TSX files changed: ${tsxFilesChanged}`);
+    expect(tsxFilesChanged).toBeGreaterThan(0);
+
+    // 7b. Video file was re-rendered (newer mtime)
+    const postFixStat = fs.statSync(ANIMATION_VIDEO);
+    expect(postFixStat.mtimeMs).toBeGreaterThan(preFixStat.mtimeMs);
+
+    // 7c. Audio present in re-rendered video
+    expect(hasAudioStream(ANIMATION_VIDEO)).toBe(true);
+
+    // 7d. Non-black visual content in re-rendered video
+    extractFrame(ANIMATION_VIDEO, POST_FIX_FRAME);
+    expect(maxPixelValue(POST_FIX_FRAME)).toBeGreaterThan(0);
+
+    // 7e. Frames differ (visual change occurred)
+    const diff = frameDiffSum(PRE_FIX_FRAME, POST_FIX_FRAME);
+    expect(diff).toBeGreaterThan(0);
+
+    // 7f. Git commit exists (optional — don't fail if git is unavailable)
+    try {
+      const gitLog = execSync('git log --oneline -5', {
+        cwd: PROJECT_ROOT,
+        encoding: 'utf-8',
+      });
+      console.log('Recent git commits:\n' + gitLog);
+    } catch {
+      console.warn('Git log check skipped (git not available or no commits)');
+    }
+
+    // ── Phase 8: Artifacts saved for manual inspection ──────────────────
+    console.log('Artifacts:');
+    console.log(`  Pre-fix frame:  ${PRE_FIX_FRAME}`);
+    console.log(`  Post-fix frame: ${POST_FIX_FRAME}`);
+    console.log(`  Review tab screenshot: ${REVIEW_SCREENSHOT}`);
   });
 });

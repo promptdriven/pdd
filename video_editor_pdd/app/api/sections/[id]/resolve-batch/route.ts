@@ -1,5 +1,6 @@
 // app/api/sections/[id]/resolve-batch/route.ts
 import { NextResponse } from "next/server";
+import path from "path";
 import { getDb } from "@/lib/db";
 import { runClaudeFix } from "@/lib/claude";
 import { createJob, runJob } from "@/lib/jobs";
@@ -174,7 +175,7 @@ export async function POST(_request: Request, { params }: RouteParams) {
         throw new Error(`Section "${sectionId}" not found`);
       }
 
-      const outputPath = section.videoFile;
+      const outputPath = path.join("outputs", "sections", `${sectionId}.mp4`);
       onLog(`Rendering section ${sectionId} → ${outputPath}`);
       await renderSection(section.compositionId, outputPath, (progress) => {
         onLog.progress?.(progress.percent);

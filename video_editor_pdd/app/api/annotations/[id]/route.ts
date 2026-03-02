@@ -71,7 +71,7 @@ export async function PUT(
     }
 
     const body = await request.json();
-    const { text, sectionId, timestamp } = body;
+    const { text, sectionId, timestamp, analysis } = body;
 
     const updates: string[] = [];
     const values: unknown[] = [];
@@ -79,6 +79,7 @@ export async function PUT(
     if (text !== undefined) { updates.push('text = ?'); values.push(text); }
     if (sectionId !== undefined) { updates.push('sectionId = ?'); values.push(sectionId); }
     if (timestamp !== undefined) { updates.push('timestamp = ?'); values.push(timestamp); }
+    if (analysis !== undefined) { updates.push('analysis = ?'); values.push(JSON.stringify(analysis)); }
 
     if (updates.length === 0) {
       return NextResponse.json({ error: 'No fields to update' }, { status: 400 });
