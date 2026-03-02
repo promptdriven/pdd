@@ -49,17 +49,24 @@ This is critical for the user to see progress. Do NOT forget these echo commands
 ## Steps — Execute In Order
 
 ### Step 1: Create Usage Example
+
+You are generating a concise example of how to use the module properly.
+Someone needs to be able to fully understand how to use the module from the example.
+
 Write a runnable example script at `{example_path}`:
 
 1. Read the code file (`{code_path}`) to understand what functions/classes it exports.
-   - Do NOT guess at imports or API names — read the actual source file.
+   - CRITICAL: Do NOT guess at imports or API names — read the actual source file.
+   - CRITICAL: Use the exact module name from the file path — do NOT use generic names.
+   - Import the specific functions/classes that are defined in the code module.
 2. Read the module specification above to understand expected behavior.
 3. Create the example file with:
    - Correct imports matching the actual file structure.
      The code module is at `{code_path}`. Import from `{import_base}` (e.g., `from {import_base} import ClassName`).
    - A complete, runnable script demonstrating the module's main functionality.
-   - Document input/output parameters and their units in docstrings/comments.
+   - Document input/output parameters and their units in docstrings/comments (e.g., "in dollars per million tokens").
    - Mock external dependencies (APIs, databases) so it runs standalone.
+   - Packages are already installed so just show how to use the module.
 4. Ensure the parent directory exists: create it if needed.
 
 After writing the example, report progress:
@@ -68,9 +75,15 @@ echo "STEP_COMPLETE:example_generate" >> {progress_file}
 ```
 
 #### Example File Rules
-- The script must NOT be interactive. No `input()`, `sys.stdin`, `readline()`, or servers/event loops that wait indefinitely.
+- The script must NOT be interactive. It must run to completion without any user interaction.
+  Do NOT use `input()`, `sys.stdin`, `readline()`, or any mechanism that waits for user input.
+  Do NOT create servers, event loops, or listeners that run indefinitely.
+  The script will be executed in a headless, non-interactive environment where stdin is not available —
+  any attempt to read from stdin will cause the program to hang indefinitely.
+  All values must be hardcoded or passed as arguments.
 - For environment variables (API keys, tokens, secrets): use `os.environ.get()` with a check.
-  If the variable is missing, print a clear message and exit with `sys.exit(0)` (NOT `sys.exit(1)` — missing config is not a crash).
+  If the variable is missing, print a clear message explaining which variable is needed,
+  then exit with `sys.exit(0)` (NOT `sys.exit(1)` — missing config is not a crash).
   ```python
   api_key = os.environ.get("MY_API_KEY")
   if not api_key:
@@ -78,13 +91,20 @@ echo "STEP_COMPLETE:example_generate" >> {progress_file}
       sys.exit(0)
   ```
 - The PDD_PATH environment variable IS always set and does not need this check.
-- Do NOT use `try/except` blocks for environment variable access.
-- Do NOT include hardcoded absolute paths. Use dynamic path resolution with `os.path.dirname(__file__)`.
+- Do NOT use `try/except` blocks for environment variable access. Use `os.environ.get()` with an if-check instead.
+- CRITICAL: Never include hardcoded absolute paths like "/Users/username/project/examples/" in comments or code.
+  Use only relative path descriptions in comments (e.g., "relative to project root").
+  Make the example portable across different development environments.
+  Use dynamic path resolution with `os.path.dirname(__file__)` and relative path construction.
 - All output files should go to the `./output` directory.
 - When working with files, create the content of required input files that the function would read.
 - For Click commands, pass in arguments so the example runs without user input.
 
 ### Step 2: Run Example & Fix Crashes (iterative)
+
+You are fixing a crash in the example file (program). The PROMPT FILE is the source of truth.
+The PROGRAM FILE calls the code and crashed. Both files may need fixes.
+
 Execute this loop — up to 5 iterations:
 
 ```
@@ -105,9 +125,15 @@ while attempt < 5:
        - Read the code file's imports to understand its dependencies
        - Check conftest.py, __init__.py, and other supporting files
        - Look at how other modules in the project import this code
-    5. FIX: Edit the file(s). Make minimal changes for this specific error only.
+       - Read the prompt file to understand the intended behavior
+    5. DETERMINE what needs fixing:
+       - Code has a bug → fix the code ({code_path})
+       - Program calls code incorrectly → fix the program ({example_path})
+       - Both have issues → fix both
+       - Issue requires changes to other files → make those changes
+    6. FIX: Make ALL necessary changes to stop the crash. Make minimal changes for this specific error only.
        - You MAY modify {code_path}, {example_path}, or other supporting files
-    6. Report: echo "STEP_COMPLETE:crash_fix_attempt:<attempt>" >> {progress_file}
+    7. Report: echo "STEP_COMPLETE:crash_fix_attempt:<attempt>" >> {progress_file}
        attempt += 1 → Go back to step 1.
 ```
 
@@ -124,22 +150,31 @@ If the error shows KeyError for an API key/token, or "Set the XXX environment va
 - Read the actual source file to see what it exports
 - Do NOT guess at class names, function names, or module paths
 - Check `__init__.py` files to understand package exports
+- Avoid package-style imports unless the file is actually in a package structure
 
 If after 5 iterations the example still crashes, STOP and report the remaining error.
 Do NOT proceed to later steps with a crashing example.
 
 ### Step 3: Verify Behavior
-1. Re-read the module specification above.
+
+You are verifying that the program output aligns with the prompt's intent.
+The PROMPT FILE is the source of truth. The PROGRAM FILE runs the code to verify
+its behavior against the prompt's intent.
+
+1. Re-read the module specification above carefully.
 2. Run: `python {example_path}`
 3. Compare the output against the spec's expected behavior.
+   - Check every requirement in the spec against the actual output.
+   - Verify types, return values, error handling, and edge cases described in the spec.
 4. If the output is wrong or incomplete:
    a. Explore related files (imports, dependencies, helper modules) to understand context.
    b. Identify which part of {code_path} produces incorrect behavior.
    c. Determine what needs fixing:
-      - Code doesn't produce output matching spec → fix the code
-      - Example has implementation issues → fix the example
+      - Code doesn't produce output matching spec → fix the code ({code_path})
+      - Program has implementation issues → fix the program ({example_path})
       - Issue in other supporting files → fix those files
-   d. Fix with minimal changes.
+   d. Make ALL necessary changes so the program output aligns with the prompt.
+      Fix with minimal changes.
    e. Run: `python {example_path}` again to confirm.
    f. If still wrong, repeat from (a) — up to 3 iterations.
 5. Once output matches spec, report progress and proceed:
@@ -149,32 +184,77 @@ Do NOT proceed to later steps with a crashing example.
 
 ### Step 4: Generate & Fix Tests (iterative)
 
+You are generating unit tests for the module, then fixing any failures.
+The PROMPT FILE is the source of truth. Tests verify that code conforms to the specification.
+
 **Step 4a: Analyze the Project & Existing Tests**
-- Explore the project structure to identify the test framework in use
-- Look for: conftest.py, pytest.ini, setup.cfg, pyproject.toml
+- Explore the project structure to identify the language and existing test framework
+- Look for: conftest.py, pytest.ini, setup.cfg, pyproject.toml, package.json, jest.config.*,
+  tsconfig.json, pom.xml, build.gradle, Cargo.toml, go.mod, etc.
 - Check existing tests to understand patterns and conventions
+- Determine the correct file extension for tests (e.g., .test.ts, .spec.js, _test.go)
 - Read the code file to understand actual exports, classes, and functions
 - **Read ALL existing test files** for this module (at `{test_path}` and any related test files)
   - Understand what is already tested
   - Identify gaps in coverage relative to the current spec and code
+- Install missing test dependencies if needed (npm install, pip install, etc.)
+- Ensure the test framework is available
 
 **Step 4b: Write / Update Tests**
-Write or update pytest tests at `{test_path}`:
+Write or update tests at `{test_path}`:
 - If tests already exist, **read them first**:
   - Keep existing tests that are still valid for the current spec
   - Update tests that no longer match the spec or code (e.g., changed API, renamed functions)
   - Add new tests for any functionality not yet covered
 - If no tests exist, create them from scratch
 - Follow the project's existing test patterns and conventions
-- Cover the module's public interface as defined in the spec:
-  - Normal functionality described in the prompt
+- Write comprehensive tests covering:
+  - Normal functionality as described in the prompt
   - Edge cases
   - Error handling
+- Use appropriate assertions for the test framework
 - Target coverage: {target_coverage}%
 - Tests must be self-contained and mock external dependencies
 - IMPORTANT: Read actual source files before writing imports
   - Do NOT guess at class names, function names, or module paths
   - Use correct imports matching the actual file structure
+
+#### Test Isolation Rules (Python/pytest)
+
+Tests MUST be isolated and not pollute state for other tests:
+
+1. **Environment Variables**: ALWAYS use `monkeypatch.setenv()` / `monkeypatch.delenv()` — NEVER
+   use direct `os.environ["VAR"] = "value"` (it persists beyond the test and pollutes other tests).
+
+2. **Mocking**: Use context managers or monkeypatch for mocks — they auto-cleanup.
+   Prefer `monkeypatch.setattr()` over `unittest.mock.patch()` decorators at module level.
+
+3. **Fixtures**: Use yield-based fixtures with cleanup code after yield. Prefer function-scoped
+   fixtures over module or session scope to ensure isolation.
+
+4. **sys.modules**: AVOID manipulating `sys.modules` directly. If unavoidable, ALWAYS save and
+   restore in try/finally or fixture with yield.
+
+5. **File System**: ALWAYS use the `tmp_path` fixture for creating temporary files and directories.
+   NEVER create files in the working directory or fixed paths.
+
+6. **Global State**: Never modify global variables or module-level state directly in tests.
+   Use `monkeypatch.setattr()` for module-level variables that need changing.
+
+7. **Module-level mocking for import-time dependencies**: If you must mock modules BEFORE importing
+   the code under test (e.g., decorators), save original values, apply mocks, import, then RESTORE
+   immediately. NEVER leave module-level mocks active.
+
+8. **sys.stdout/stderr**: If testing CLI or output-capturing code, save and restore streams in fixtures.
+
+9. **NEVER use `patcher.start()` at module level without immediate `stop()`** — this is the #1 cause
+   of mysterious test failures when running the full suite.
+
+10. **Top-level imports**: Patch bound names directly where imported, not in sys.modules.
+    Use `patch("module_under_test.imported_name", mock_func)` instead of `patch.dict(sys.modules, ...)`.
+
+11. **Mutable containers**: When restoring shared dicts/lists, use in-place operations (`dict.clear();
+    dict.update(original)`) — not reference assignment.
 
 After writing the tests, report progress:
 ```
@@ -182,6 +262,7 @@ echo "STEP_COMPLETE:test_generate" >> {progress_file}
 ```
 
 **Step 4c: Run & Fix Tests (iterative)**
+
 Execute this loop — up to 5 iterations:
 
 ```
@@ -205,6 +286,7 @@ while attempt < 5:
        - You may modify the test file, the code file, or other supporting files.
        - ALL existing tests must still pass after your fix (unless the test itself
          was wrong — i.e., it tested behavior that contradicts the spec).
+       - Keep changes minimal and focused on the failure.
     6. Report: echo "STEP_COMPLETE:test_fix_attempt:<attempt>" >> {progress_file}
        attempt += 1 → Go back to step 1.
 ```
@@ -217,7 +299,7 @@ echo "STEP_COMPLETE:done" >> {progress_file}
 ```
 
 ## Critical Rules
-- DO NOT modify the prompt file ({prompt_path})
+- DO NOT modify the prompt file ({prompt_path}) — it is the source of truth
 - You MAY modify {code_path} to fix bugs found during example/test execution
 - You MAY modify {example_path} to fix import paths, mocking issues, or env var handling
 - You MAY modify other supporting files (conftest.py, __init__.py, etc.) if needed
@@ -230,3 +312,4 @@ echo "STEP_COMPLETE:done" >> {progress_file}
 - Each run-check-fix loop MUST actually execute the command and check the real output
 - ALWAYS report progress via echo commands after each step completes
 - You may install missing packages with pip if needed
+- CRITICAL: Never include hardcoded absolute paths in generated files
