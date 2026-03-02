@@ -88,6 +88,12 @@ from ..core.utils import _run_setup_utility
     default=False,
     help="Disable GitHub comment updates (agentic sync mode).",
 )
+@click.option(
+    "--one-session",
+    is_flag=True,
+    default=False,
+    help="Run example/crash/verify/test/fix in a single agentic session (requires pdd generate first).",
+)
 @click.pass_context
 @track_cost
 def sync(
@@ -105,6 +111,7 @@ def sync(
     agentic: bool,
     timeout_adder: float,
     no_github_state: bool,
+    one_session: bool,
 ) -> Optional[Tuple[str, float, str]]:
     """
     Synchronize prompts with code and tests.
@@ -136,6 +143,7 @@ def sync(
             max_attempts=max_attempts,
             timeout_adder=timeout_adder,
             no_github_state=no_github_state,
+            one_session=one_session,
         )
 
     try:
@@ -151,6 +159,7 @@ def sync(
             no_steer=no_steer,
             steer_timeout=steer_timeout,
             agentic_mode=agentic,
+            one_session=one_session,
         )
         return str(result), total_cost, model_name
     except click.Abort:
@@ -171,6 +180,7 @@ def _run_agentic_sync_dispatch(
     max_attempts: Optional[int],
     timeout_adder: float,
     no_github_state: bool,
+    one_session: bool = False,
 ) -> Optional[Tuple[str, float, str]]:
     """Dispatch to agentic sync runner for GitHub issue URLs."""
     ctx.ensure_object(dict)
@@ -190,6 +200,7 @@ def _run_agentic_sync_dispatch(
             max_attempts=max_attempts,
             timeout_adder=timeout_adder,
             use_github_state=not no_github_state,
+            one_session=one_session,
         )
 
         if not quiet:

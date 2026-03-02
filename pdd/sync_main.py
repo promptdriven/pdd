@@ -405,6 +405,7 @@ def sync_main(
     no_steer: bool = False,
     steer_timeout: Optional[float] = None,
     agentic_mode: bool = False,
+    one_session: bool = False,
 ) -> Tuple[Dict[str, Any], float, str]:
     """
     CLI wrapper for the sync command. Handles parameter validation, path construction,
@@ -661,33 +662,91 @@ def sync_main(
             tests_dir = resolved_config.get("tests_dir", "tests")
             examples_dir = resolved_config.get("examples_dir", "examples")
 
-            sync_result = sync_orchestration(
-                basename=basename,
-                language=resolved_language,
-                prompts_dir=str(prompt_file_path.parent),  # Use discovered path's parent
-                code_dir=str(code_dir),
-                examples_dir=str(examples_dir),
-                tests_dir=str(tests_dir),
-                budget=remaining_budget,
-                max_attempts=final_max_attempts,
-                skip_verify=skip_verify,
-                skip_tests=skip_tests,
-                target_coverage=final_target_coverage,
-                strength=final_strength,
-                temperature=final_temp,
-                time_param=time_param,
-                force=force,
-                quiet=quiet,
-                verbose=verbose,
-                output_cost=output_cost,
-                review_examples=review_examples,
-                local=local,
-                context_config=resolved_config,
-                context_override=context_override,
-                no_steer=no_steer,
-                steer_timeout=steer_timeout if steer_timeout is not None else DEFAULT_STEER_TIMEOUT_S,
-                agentic_mode=agentic_mode,
-            )
+            if one_session:
+                from .one_session_sync import run_one_session_sync
+                from .sync_determine_operation import get_pdd_file_paths
+
+                # Get file paths for this module
+                pdd_files = get_pdd_file_paths(
+                    basename, resolved_language,
+                    str(prompt_file_path.parent),
+                    context_override=context_override,
+                )
+
+                # Phase 1: Run pdd generate to create the code file
+                pre_cost = 0.0
+                if not pdd_files["code"].exists() or force:
+                    from .code_generator_main import code_generator_main
+
+                    if not quiet:
+                        rprint("[dim]Running pdd generate...[/dim]")
+                    pdd_files["code"].parent.mkdir(parents=True, exist_ok=True)
+                    gen_result = code_generator_main(
+                        ctx,
+                        prompt_file=str(pdd_files["prompt"].resolve()),
+                        output=str(pdd_files["code"].resolve()),
+                        original_prompt_file_path=None,
+                        force_incremental_flag=False,
+                    )
+                    # code_generator_main returns (content, was_incremental, cost, model)
+                    pre_cost = gen_result[2] if gen_result and len(gen_result) > 2 else 0.0
+                    if remaining_budget is not None:
+                        remaining_budget -= pre_cost
+                elif not quiet:
+                    rprint("[dim]Code file exists, skipping generate.[/dim]")
+
+                if not pdd_files["code"].exists():
+                    # Generate failed — don't proceed
+                    sync_result = {
+                        "success": False,
+                        "total_cost": pre_cost,
+                        "model_name": "",
+                        "operations_completed": [],
+                        "errors": ["Code generation failed"],
+                    }
+                else:
+                    # Phase 2: Hand off to one-session agent for example + crash + verify + test
+                    one_session_result = run_one_session_sync(
+                        basename=basename,
+                        language=resolved_language,
+                        pdd_files=pdd_files,
+                        project_root=Path.cwd(),
+                        target_coverage=final_target_coverage,
+                        budget=remaining_budget,
+                        verbose=verbose,
+                        quiet=quiet,
+                    )
+                    # Merge costs from both phases
+                    one_session_result["total_cost"] = pre_cost + one_session_result.get("total_cost", 0.0)
+                    sync_result = one_session_result
+            else:
+                sync_result = sync_orchestration(
+                    basename=basename,
+                    language=resolved_language,
+                    prompts_dir=str(prompt_file_path.parent),  # Use discovered path's parent
+                    code_dir=str(code_dir),
+                    examples_dir=str(examples_dir),
+                    tests_dir=str(tests_dir),
+                    budget=remaining_budget,
+                    max_attempts=final_max_attempts,
+                    skip_verify=skip_verify,
+                    skip_tests=skip_tests,
+                    target_coverage=final_target_coverage,
+                    strength=final_strength,
+                    temperature=final_temp,
+                    time_param=time_param,
+                    force=force,
+                    quiet=quiet,
+                    verbose=verbose,
+                    output_cost=output_cost,
+                    review_examples=review_examples,
+                    local=local,
+                    context_config=resolved_config,
+                    context_override=context_override,
+                    no_steer=no_steer,
+                    steer_timeout=steer_timeout if steer_timeout is not None else DEFAULT_STEER_TIMEOUT_S,
+                    agentic_mode=agentic_mode,
+                )
 
             lang_cost = sync_result.get("total_cost", 0.0)
             total_cost += lang_cost

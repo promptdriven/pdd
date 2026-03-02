@@ -420,6 +420,7 @@ def run_agentic_sync(
     max_attempts: Optional[int] = None,
     timeout_adder: float = 0.0,
     use_github_state: bool = True,
+    one_session: bool = False,
 ) -> Tuple[bool, str, float, str]:
     """
     Run agentic sync workflow: identify modules from a GitHub issue and sync in parallel.
@@ -605,6 +606,7 @@ def run_agentic_sync(
         "agentic": agentic_mode,
         "no_steer": no_steer,
         "max_attempts": max_attempts,
+        "one_session": one_session,
     }
 
     github_info = {

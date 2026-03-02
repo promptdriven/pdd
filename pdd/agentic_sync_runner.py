@@ -525,6 +525,8 @@ class AsyncSyncRunner:
             cmd.extend(["--budget", str(self.sync_options["budget"])])
         if self.sync_options.get("max_attempts"):
             cmd.extend(["--max-attempts", str(self.sync_options["max_attempts"])])
+        if self.sync_options.get("one_session"):
+            cmd.append("--one-session")
 
         # Set up environment for headless mode and cost capture
         cost_file = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
