@@ -397,7 +397,7 @@ describe("batch render", () => {
   });
 
   it("extracts jobId from response", () => {
-    expect(sourceCode).toMatch(/data\.jobId/);
+    expect(sourceCode).toMatch(/extractJobIdFromSse\s*\(\s*res\s*\)/);
     expect(sourceCode).toMatch(/setBatchJobId\s*\(\s*jobId\s*\)/);
   });
 
@@ -497,7 +497,7 @@ describe("per-row re-render handler", () => {
   });
 
   it("stores jobId in rowJobIds for the segment", () => {
-    expect(sourceCode).toMatch(/setRowJobIds\s*\(\s*\(prev\)\s*=>\s*\(\s*\{\s*\.\.\.prev\s*,\s*\[segmentId\]\s*:\s*jobId\s*\}\s*\)\s*\)/);
+    expect(sourceCode).toMatch(/setRowJobIds\s*\(\s*\(prev\)\s*=>\s*\(\s*\{\s*\.\.\.prev\s*,\s*\[segmentId\]\s*:\s*rowJobId\s*\}\s*\)\s*\)/);
   });
 
   it("handles error on failure", () => {

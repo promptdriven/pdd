@@ -2,40 +2,28 @@
 
 ### Feat
 
-- add fingerprint saving and example auto-submit after one-session sync
-- emit PDD_PHASE markers in one-session sync and default agentic sync to --one-session
-- add --one-session flag to pdd sync for single-agent workflow
-- Implement Claude-powered script section extraction with SSE progress streaming and integrate into project setup UI.
-- update video script to "Why You're Still Darning Socks", extend Claude CLI timeout, and refine job execution logic.
-- refactor Remotion video compositions by replacing old sections with new ColdOpenSection and Part1Economics components.
-- add annotation fix integration test and fix resolve-batch output path
+- **One-session sync mode** — new `--one-session` flag on `pdd sync` runs example generation, crash-fix, verify, test generation, and test-fix in a single agentic session instead of separate sessions per step. New module `one_session_sync.py` builds a mega-prompt from the module spec and delegates to `run_agentic_task()` with a file-based heartbeat for step-level progress reporting. Agentic sync (issue URL) defaults to `--one-session`; single-module sync defaults to multi-step.
+- **Fingerprint saving and example auto-submit** — after a successful one-session sync, save a fingerprint so subsequent syncs see files as up-to-date, and auto-submit the example to the PDD cloud (skipped when `--local`).
+- **PDD_PHASE markers in one-session sync** — emit `PDD_PHASE: example|crash|verify|test|synced|conflict` markers so `AsyncSyncRunner` can parse step-level progress from subprocess stdout.
+- **Auto-wire generated exports to `__init__.py`** — `code_generator_main` now detects public functions/classes in generated Python files via AST and appends/merges import lines into the parent `__init__.py`. Skippable via `PDD_SKIP_WIRING=1`.
+- **Export metadata in auto-include** — `auto_include` enriches dependency summaries with actual export names (functions, classes, uppercase constants) extracted via AST, so the LLM can reference real API names instead of guessing.
+- **Import strategy guidance in python preamble** — `context/python_preamble.prompt` now includes an "Import Strategy" section directing external/heavy dependencies to function-scope imports, preventing `ImportError` during test collection.
 
 ### Fix
 
-- **test-batch-ann-1772523072079**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772522967240**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772522874705**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772522011302**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772521891326**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772521802455**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772521708518**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772521615542**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772521503777**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772520907862**: Subtitle font size 96px causes text to clip the ri
-- address Copilot review — remove unused import and add model name assertion
-- return postprocess model name from code_generator
-- code_generator.py returns wrong model name after postprocessing
-- address Copilot review comments on one-session sync
-- rebuild Remotion bundle before re-render and prevent HMR job kills
-- **c3a97c4e-09da-4953-98f0-7afdb805de16**: Change the main background color of this section t
-- **3fee5197-3a27-4412-9d67-97c6ec94310c**: Change the main background color of this section t
-- address Copilot review feedback
-- rename test files to follow test_e2e_issue_ naming convention
-- resolve 3 P0 CRM issues — import strategy, export metadata, handler wiring
+- **code_generator returns wrong model name after postprocessing** — `code_generator.py` now returns `model_name_post` (from the postprocess step) instead of `model_name` (from initial generation), so the reported model reflects the last LLM call in the pipeline. Prompt updated to document this semantic.
+- **3 P0 CRM issues** — fix import strategy (function-scope imports for external deps), export metadata enrichment, and handler wiring to `__init__.py`.
+- rename test files to follow `test_e2e_issue_` naming convention
 
 ### Refactor
 
-- rename one_session_sync_LLM to one_session_agent_LLM prompt
+- rename `one_session_sync_LLM` prompt to `one_session_agent_LLM`
+
+### Docs
+
+- new prompt files: `one_session_agent_LLM.prompt` (375-line mega-prompt template), `one_session_sync_python.prompt` (module spec)
+- update `sync_main_python.prompt`, `agentic_sync_python.prompt`, `agentic_sync_runner_python.prompt`, `code_generator_python.prompt`, and `maintenance_python.prompt` to document `one_session` parameter and corrected model name semantics
+
 
 ## v0.0.164 (2026-03-01)
 

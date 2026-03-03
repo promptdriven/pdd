@@ -468,7 +468,7 @@ describe("inline section editing", () => {
   });
 
   it("handleConfirmEdit replaces the section in the sections array", () => {
-    expect(sourceCode).toMatch(/s\.id\s*===\s*draftSection\.id\s*\?\s*draftSection\s*:\s*s/);
+    expect(sourceCode).toMatch(/s\.id\s*===\s*editingSectionId\s*\?\s*draftSection\s*:\s*s/);
   });
 
   it("handleCancelEdit resets editing state", () => {

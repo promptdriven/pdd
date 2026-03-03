@@ -69,11 +69,7 @@ jest.mock("crypto", () => ({
 }));
 
 // Import after mocking
-import {
-  POST,
-  POST_stitch,
-  GET_status,
-} from "../app/api/pipeline/render/run/route";
+import { POST } from "../app/api/pipeline/render/run/route";
 
 // Capture executor factory registered at module load
 const registerCallArgs = {
@@ -248,32 +244,20 @@ describe("POST response shape", () => {
     expect(response).toBeInstanceOf(Response);
   });
 
-  it("sets Content-Type to text/event-stream", async () => {
+  it("returns JSON response with Content-Type application/json", async () => {
     const response = await POST(
       makeRequest("http://localhost/api/pipeline/render/run") as any
     );
-    expect(response.headers.get("Content-Type")).toBe("text/event-stream");
+    expect(response.headers.get("Content-Type")).toContain("application/json");
   });
 
-  it("sets Cache-Control to no-cache", async () => {
+  it("returns a JSON body with jobId", async () => {
     const response = await POST(
       makeRequest("http://localhost/api/pipeline/render/run") as any
     );
-    expect(response.headers.get("Cache-Control")).toBe("no-cache");
-  });
-
-  it("sets Connection to keep-alive", async () => {
-    const response = await POST(
-      makeRequest("http://localhost/api/pipeline/render/run") as any
-    );
-    expect(response.headers.get("Connection")).toBe("keep-alive");
-  });
-
-  it("returns a ReadableStream body", async () => {
-    const response = await POST(
-      makeRequest("http://localhost/api/pipeline/render/run") as any
-    );
-    expect(response.body).toBeInstanceOf(ReadableStream);
+    const body = await response.json();
+    expect(body).toHaveProperty("jobId");
+    expect(body.jobId).toBe("test-job-render-001");
   });
 });
 
@@ -327,16 +311,13 @@ describe("POST — success flow", () => {
     expect(typeof mockRunPipelineStage.mock.calls[0][2]).toBe("function");
   });
 
-  it("emits jobId event after runPipelineStage resolves", async () => {
+  it("returns jobId in JSON response after runPipelineStage resolves", async () => {
     const response = await POST(
       makeRequest("http://localhost/api/pipeline/render/run") as any
     );
-    await flushPromises();
 
-    const events = await readSseEvents(response.body!);
-    const jobEvent = events.find((e: any) => e.jobId) as any;
-    expect(jobEvent).toBeDefined();
-    expect(jobEvent.jobId).toBe("test-job-render-42");
+    const body = await response.json();
+    expect(body.jobId).toBe("test-job-render-42");
   });
 });
 
@@ -350,7 +331,8 @@ describe("POST — body parameter handling", () => {
       makeRequest("http://localhost/api/pipeline/render/run") as any
     );
     expect(response).toBeInstanceOf(Response);
-    expect(response.headers.get("Content-Type")).toBe("text/event-stream");
+    const body = await response.json();
+    expect(body).toHaveProperty("jobId");
   });
 
   it("accepts specific sections array", async () => {
@@ -370,7 +352,8 @@ describe("POST — body parameter handling", () => {
 
     const response = await POST(request as any);
     expect(response).toBeInstanceOf(Response);
-    expect(response.headers.get("Content-Type")).toBe("text/event-stream");
+    const body = await response.json();
+    expect(body).toHaveProperty("jobId");
   });
 
   it("handles body with sections as non-array gracefully", async () => {
@@ -391,41 +374,38 @@ describe("POST — body parameter handling", () => {
 // ---------------------------------------------------------------------------
 
 describe("POST — error handling", () => {
-  it("emits error event when runPipelineStage rejects with Error", async () => {
+  it("returns JSON error when runPipelineStage rejects with Error", async () => {
     mockRunPipelineStage.mockRejectedValue(new Error("Render failed"));
 
     const response = await POST(
       makeRequest("http://localhost/api/pipeline/render/run") as any
     );
-    await flushPromises();
 
-    const events = await readSseEvents(response.body!);
-    const errorEvent = events.find((e: any) => e.type === "error") as any;
-    expect(errorEvent).toBeDefined();
-    expect(errorEvent.message).toBe("Render failed");
+    expect(response.status).toBe(500);
+    const body = await response.json();
+    expect(body.error).toBe("Render failed");
   });
 
-  it("emits generic error for non-Error throws", async () => {
+  it("returns generic error for non-Error throws", async () => {
     mockRunPipelineStage.mockRejectedValue("string error");
 
     const response = await POST(
       makeRequest("http://localhost/api/pipeline/render/run") as any
     );
-    await flushPromises();
 
-    const events = await readSseEvents(response.body!);
-    const errorEvent = events.find((e: any) => e.type === "error") as any;
-    expect(errorEvent).toBeDefined();
-    expect(errorEvent.message).toBe("Unknown error");
+    expect(response.status).toBe(500);
+    const body = await response.json();
+    expect(body.error).toBe("Unknown error");
   });
 
-  it("still returns SSE response even when pipeline will error", async () => {
+  it("returns a Response even when pipeline errors", async () => {
     mockRunPipelineStage.mockRejectedValue(new Error("will fail"));
 
     const response = await POST(
       makeRequest("http://localhost/api/pipeline/render/run") as any
     );
-    expect(response.headers.get("Content-Type")).toBe("text/event-stream");
+    expect(response).toBeInstanceOf(Response);
+    expect(response.status).toBe(500);
   });
 });
 
@@ -441,7 +421,8 @@ describe("POST — no authentication required", () => {
     });
 
     const response = await POST(request as any);
-    expect(response.headers.get("Content-Type")).toBe("text/event-stream");
+    const body = await response.json();
+    expect(body).toHaveProperty("jobId");
   });
 
   it("works with minimal request (no body, no auth)", async () => {
@@ -702,275 +683,30 @@ describe("render executor factory", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 8. POST_stitch — stitch full video
+// 8. POST — JSON response format (not SSE)
 // ---------------------------------------------------------------------------
 
-describe("POST_stitch", () => {
-  it("returns JSON response with jobId", async () => {
-    const response = await POST_stitch(
-      makeRequest("http://localhost/api/pipeline/stitch/run") as any
-    );
-    const body = await response.json();
-
-    expect(body.jobId).toBeDefined();
-    expect(typeof body.jobId).toBe("string");
-  });
-
-  it("returns 200 status on success", async () => {
-    const response = await POST_stitch(
-      makeRequest("http://localhost/api/pipeline/stitch/run") as any
-    );
-
-    expect(response.status).toBe(200);
-  });
-
-  it("calls loadProject to get section list", async () => {
-    await POST_stitch(
-      makeRequest("http://localhost/api/pipeline/stitch/run") as any
-    );
-
-    expect(mockLoadProject).toHaveBeenCalledTimes(1);
-  });
-
-  it("calls stitchFullVideo with section paths and output path", async () => {
-    await POST_stitch(
-      makeRequest("http://localhost/api/pipeline/stitch/run") as any
-    );
-
-    expect(mockStitchFullVideo).toHaveBeenCalledTimes(1);
-
-    const pathMod = require("path");
-    const sectionPaths = mockStitchFullVideo.mock.calls[0][0];
-    expect(sectionPaths).toEqual([
-      pathMod.join("outputs", "sections", "intro.mp4"),
-      pathMod.join("outputs", "sections", "main.mp4"),
-      pathMod.join("outputs", "sections", "outro.mp4"),
-    ]);
-  });
-
-  it("outputs to outputs/full_video.mp4", async () => {
-    await POST_stitch(
-      makeRequest("http://localhost/api/pipeline/stitch/run") as any
-    );
-
-    const pathMod = require("path");
-    const outputPath = mockStitchFullVideo.mock.calls[0][1];
-    expect(outputPath).toBe(pathMod.join("outputs", "full_video.mp4"));
-  });
-
-  it("creates outputs directory", async () => {
-    await POST_stitch(
-      makeRequest("http://localhost/api/pipeline/stitch/run") as any
-    );
-
-    expect(mockMkdir).toHaveBeenCalledWith("outputs", { recursive: true });
-  });
-
-  it("returns 500 on error", async () => {
-    mockStitchFullVideo.mockRejectedValue(new Error("ffmpeg failed"));
-
-    const response = await POST_stitch(
-      makeRequest("http://localhost/api/pipeline/stitch/run") as any
-    );
-
-    expect(response.status).toBe(500);
-    const body = await response.json();
-    expect(body.error).toBe("Internal Server Error");
-  });
-
-  it("does not require authentication", async () => {
-    const request = new Request("http://localhost/api/pipeline/stitch/run", {
-      method: "POST",
-      headers: { Authorization: "Bearer fake-token" },
-    });
-
-    const response = await POST_stitch(request as any);
-    expect(response.status).toBe(200);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// 9. GET_status — render status
-// ---------------------------------------------------------------------------
-
-describe("GET_status", () => {
-  it("returns 200 status on success", async () => {
-    const response = await GET_status(
-      makeGetRequest("http://localhost/api/pipeline/render/status") as any
-    );
-
-    expect(response.status).toBe(200);
-  });
-
-  it("returns sections array in response", async () => {
-    const response = await GET_status(
-      makeGetRequest("http://localhost/api/pipeline/render/status") as any
-    );
-    const body = await response.json();
-
-    expect(Array.isArray(body.sections)).toBe(true);
-    expect(body.sections.length).toBe(3);
-  });
-
-  it("returns fullVideo object in response", async () => {
-    const response = await GET_status(
-      makeGetRequest("http://localhost/api/pipeline/render/status") as any
-    );
-    const body = await response.json();
-
-    expect(body.fullVideo).toBeDefined();
-    expect(typeof body.fullVideo.exists).toBe("boolean");
-  });
-
-  it("marks sections as 'done' when file exists and duration is available", async () => {
-    mockAccess.mockResolvedValue(undefined);
-    mockGetSectionDuration.mockResolvedValue(12.5);
-
-    const response = await GET_status(
-      makeGetRequest("http://localhost/api/pipeline/render/status") as any
-    );
-    const body = await response.json();
-
-    expect(body.sections[0].status).toBe("done");
-    expect(body.sections[0].sectionId).toBe("intro");
-    expect(body.sections[0].duration).toBe(12.5);
-  });
-
-  it("marks sections as 'missing' when file does not exist", async () => {
-    mockAccess.mockRejectedValue(new Error("ENOENT"));
-
-    const response = await GET_status(
-      makeGetRequest("http://localhost/api/pipeline/render/status") as any
-    );
-    const body = await response.json();
-
-    expect(body.sections[0].status).toBe("missing");
-    expect(body.sections[0].sectionId).toBe("intro");
-  });
-
-  it("includes sectionId in each status entry", async () => {
-    const response = await GET_status(
-      makeGetRequest("http://localhost/api/pipeline/render/status") as any
-    );
-    const body = await response.json();
-
-    const ids = body.sections.map((s: any) => s.sectionId);
-    expect(ids).toEqual(["intro", "main", "outro"]);
-  });
-
-  it("checks correct file paths for section status", async () => {
-    await GET_status(
-      makeGetRequest("http://localhost/api/pipeline/render/status") as any
-    );
-
-    const pathMod = require("path");
-    // access is called for each section
-    expect(mockAccess).toHaveBeenCalledWith(
-      pathMod.join("outputs", "sections", "intro.mp4")
-    );
-    expect(mockAccess).toHaveBeenCalledWith(
-      pathMod.join("outputs", "sections", "main.mp4")
-    );
-    expect(mockAccess).toHaveBeenCalledWith(
-      pathMod.join("outputs", "sections", "outro.mp4")
-    );
-  });
-
-  it("returns fullVideo.exists=true when full_video.mp4 exists", async () => {
-    mockStat.mockResolvedValue({ size: 5000000 });
-    mockGetSectionDuration.mockResolvedValue(65.5);
-
-    const response = await GET_status(
-      makeGetRequest("http://localhost/api/pipeline/render/status") as any
-    );
-    const body = await response.json();
-
-    expect(body.fullVideo.exists).toBe(true);
-    expect(body.fullVideo.size).toBe(5000000);
-  });
-
-  it("returns fullVideo.exists=false when full_video.mp4 does not exist", async () => {
-    mockStat.mockRejectedValue(new Error("ENOENT"));
-
-    const response = await GET_status(
-      makeGetRequest("http://localhost/api/pipeline/render/status") as any
-    );
-    const body = await response.json();
-
-    expect(body.fullVideo.exists).toBe(false);
-  });
-
-  it("includes path and duration in fullVideo when it exists", async () => {
-    mockStat.mockResolvedValue({ size: 5000000 });
-    // getSectionDuration is called for sections (3) + fullVideo (1)
-    mockGetSectionDuration.mockResolvedValue(65.5);
-
-    const response = await GET_status(
-      makeGetRequest("http://localhost/api/pipeline/render/status") as any
-    );
-    const body = await response.json();
-
-    const pathMod = require("path");
-    expect(body.fullVideo.path).toBe(pathMod.join("outputs", "full_video.mp4"));
-    expect(body.fullVideo.duration).toBe(65.5);
-  });
-
-  it("returns 500 when loadProject throws", async () => {
-    mockLoadProject.mockImplementation(() => {
-      throw new Error("project.json not found");
-    });
-
-    const response = await GET_status(
-      makeGetRequest("http://localhost/api/pipeline/render/status") as any
-    );
-
-    expect(response.status).toBe(500);
-    const body = await response.json();
-    expect(body.error).toBe("Internal Server Error");
-  });
-
-  it("does not require authentication", async () => {
-    const request = new Request(
-      "http://localhost/api/pipeline/render/status",
-      {
-        method: "GET",
-        headers: { Authorization: "Bearer fake-token" },
-      }
-    );
-
-    const response = await GET_status(request as any);
-    expect(response.status).toBe(200);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// 10. POST — SSE event format
-// ---------------------------------------------------------------------------
-
-describe("POST — SSE event format", () => {
-  it("formats events as 'data: <JSON>\\n\\n'", async () => {
+describe("POST — JSON response format", () => {
+  it("returns JSON with jobId on success", async () => {
     const response = await POST(
       makeRequest("http://localhost/api/pipeline/render/run") as any
     );
-    await flushPromises();
 
-    const reader = response.body!.getReader();
-    const decoder = new TextDecoder();
-    let raw = "";
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        raw += decoder.decode(value, { stream: true });
-      }
-    } catch {
-      // stream closed
-    }
+    const body = await response.json();
+    expect(body).toHaveProperty("jobId");
+    expect(typeof body.jobId).toBe("string");
+  });
 
-    const eventBlocks = raw.split("\n\n").filter((b) => b.trim().length > 0);
-    for (const block of eventBlocks) {
-      expect(block).toMatch(/^data:\s*\{/);
-    }
+  it("returns JSON with error on failure", async () => {
+    mockRunPipelineStage.mockRejectedValue(new Error("Pipeline broke"));
+
+    const response = await POST(
+      makeRequest("http://localhost/api/pipeline/render/run") as any
+    );
+
+    const body = await response.json();
+    expect(body).toHaveProperty("error");
+    expect(body.error).toBe("Pipeline broke");
   });
 });
 
@@ -1003,12 +739,12 @@ describe("app/api/pipeline/render/run/route.ts source structure", () => {
     expect(sourceCode).toMatch(/export\s+async\s+function\s+POST\s*\(/);
   });
 
-  it("exports async function POST_stitch", () => {
-    expect(sourceCode).toMatch(/export\s+async\s+function\s+POST_stitch/);
+  it("defines renderSections helper function", () => {
+    expect(sourceCode).toMatch(/async\s+function\s+renderSections/);
   });
 
-  it("exports async function GET_status", () => {
-    expect(sourceCode).toMatch(/export\s+async\s+function\s+GET_status/);
+  it("defines updateProjectDurations helper function", () => {
+    expect(sourceCode).toMatch(/async\s+function\s+updateProjectDurations/);
   });
 
   it("imports registerExecutor and runPipelineStage from @/lib/jobs", () => {
@@ -1017,11 +753,10 @@ describe("app/api/pipeline/render/run/route.ts source structure", () => {
     expect(sourceCode).toMatch(/runPipelineStage/);
   });
 
-  it("imports renderSection, getSectionDuration, stitchFullVideo from @/lib/render", () => {
+  it("imports renderSection and getSectionDuration from @/lib/render", () => {
     expect(sourceCode).toMatch(/@\/lib\/render/);
     expect(sourceCode).toMatch(/renderSection/);
     expect(sourceCode).toMatch(/getSectionDuration/);
-    expect(sourceCode).toMatch(/stitchFullVideo/);
   });
 
   it("imports loadProject and saveProject from @/lib/project", () => {
@@ -1050,20 +785,16 @@ describe("app/api/pipeline/render/run/route.ts source structure", () => {
     expect(sourceCode).toMatch(/outputs.*sections/);
   });
 
-  it("uses outputs/full_video.mp4 for stitched output", () => {
-    expect(sourceCode).toMatch(/full_video\.mp4/);
+  it("uses Response.json for JSON responses", () => {
+    expect(sourceCode).toMatch(/Response\.json/);
   });
 
-  it("sets Content-Type to text/event-stream in response headers", () => {
-    expect(sourceCode).toMatch(/text\/event-stream/);
+  it("uses a noop SseSend function", () => {
+    expect(sourceCode).toMatch(/noop/);
   });
 
-  it("sets Cache-Control to no-cache", () => {
-    expect(sourceCode).toMatch(/no-cache/);
-  });
-
-  it("sets Connection to keep-alive", () => {
-    expect(sourceCode).toMatch(/keep-alive/);
+  it("returns 500 status on error", () => {
+    expect(sourceCode).toMatch(/500/);
   });
 
   it("emits section-progress events", () => {

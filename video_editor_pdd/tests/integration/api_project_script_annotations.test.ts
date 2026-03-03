@@ -184,7 +184,7 @@ describe("Integration: GET /api/project", () => {
     }
   });
 
-  it("returns 400 when project.json has invalid schema", async () => {
+  it("returns 400 when project.json has invalid schema (valid JSON, wrong shape)", async () => {
     const filePath = path.join(tmpDir, "project.json");
     const original = fs.readFileSync(filePath, "utf-8");
     fs.writeFileSync(filePath, JSON.stringify({ bad: "data" }));
@@ -192,6 +192,21 @@ describe("Integration: GET /api/project", () => {
     try {
       const response = await GET(makeRequest("/api/project"));
       expect(response.status).toBe(400);
+    } finally {
+      fs.writeFileSync(filePath, original);
+    }
+  });
+
+  it("returns 500 when project.json contains invalid JSON (not parseable)", async () => {
+    const filePath = path.join(tmpDir, "project.json");
+    const original = fs.readFileSync(filePath, "utf-8");
+    fs.writeFileSync(filePath, "NOT VALID JSON {{{");
+
+    try {
+      const response = await GET(makeRequest("/api/project"));
+      // JSON.parse throws SyntaxError (not ZodError), so the route
+      // falls through to the generic error handler → 500
+      expect(response.status).toBe(500);
     } finally {
       fs.writeFileSync(filePath, original);
     }
