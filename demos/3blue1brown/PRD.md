@@ -503,7 +503,7 @@ A settings form that initialises or edits `project.json`. This replaces the hard
 │  Output res:    [1920x1080 ▾]                                              │
 │  TTS voice:     [Aiden ▾]             Speaking rate: [0.95]               │
 │                                                                             │
-│  Section Registry                               [+ Add Section]             │
+│  Section Registry              [Extract from Script] [+ Add Section]         │
 │  ┌──────────────────┬──────────────────┬─────────────────┬──────────────┐ │
 │  │ Section ID       │ Video File        │ Remotion Comp    │ Spec Dir     │ │
 │  ├──────────────────┼──────────────────┼─────────────────┼──────────────┤ │
@@ -517,6 +517,7 @@ A settings form that initialises or edits `project.json`. This replaces the hard
 Key behaviors:
 - Each row in the Section Registry is **inline-editable**: clicking [✎] turns the row into text inputs.
 - [+ Add Section] appends a blank row. Row drag handles allow reordering; order is preserved in `project.json`.
+- **[Extract from Script]** uses Claude CLI to analyse `narrative/main_script.md` and auto-populate the Section Registry. Claude identifies `## HEADING (MM:SS - MM:SS)` markers that represent video sections (excluding appendix headings without timestamps), merges sub-sections into parents where appropriate, and returns a JSON array of `Section` objects. Extracted sections populate the registry for review — the user must still click [Save ✓] to persist. If sections already exist, a confirmation dialog warns before replacing.
 - [Save ✓] PUTs to `PUT /api/project`. A success toast appears; badge moves to `done`.
 - Unsaved changes show a yellow dot on [Save ✓] and trigger a browser `beforeunload` warning.
 - The server reloads the section registry on save **without restart**; `project.json` is the single source of truth.

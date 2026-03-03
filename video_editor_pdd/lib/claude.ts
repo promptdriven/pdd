@@ -38,6 +38,17 @@ export function parseJsonWithFallback(stdout: string): any {
     }
   }
 
+  // (d) bracket matching from first [ to last ]
+  const endBracket = stdout.lastIndexOf(']');
+  if (endBracket !== -1) {
+    console.warn('Claude CLI output not pure JSON, using bracket-matching fallback.');
+    for (let i = endBracket; i >= 0; i--) {
+      if (stdout[i] === '[') {
+        try { return JSON.parse(stdout.slice(i, endBracket + 1)); } catch {}
+      }
+    }
+  }
+
   throw new Error('Unable to parse JSON from Claude CLI output');
 }
 
@@ -153,6 +164,26 @@ export async function runClaudeAnalysis(
   ];
 
   return runClaude(prompt, args, {}, onLog) as Promise<AnnotationAnalysis>;
+}
+
+/**
+ * Runs a read-only extraction task using Claude with a generic return type.
+ */
+export async function runClaudeExtract<T>(
+  prompt: string,
+  onLog?: (line: string) => void
+): Promise<T> {
+  const args = [
+    '--model',
+    'claude-opus-4-6',
+    '--output-format',
+    'json',
+    '--allowedTools',
+    'Read,Glob',
+    '--no-session-persistence',
+  ];
+
+  return runClaude(prompt, args, {}, onLog) as Promise<T>;
 }
 
 /**
