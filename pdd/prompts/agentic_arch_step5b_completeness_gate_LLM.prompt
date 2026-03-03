@@ -131,6 +131,36 @@ Cross-reference identifiers across the module design:
 - API paths are inconsistent
 - Data model entity names don't match module references
 
+**8. Wiring Completeness Check**
+
+Verify that modules are not isolated — every module must be connected to the application through proper wiring:
+
+**8a. Route Registration:**
+- Every API route handler module MUST have a parent router/app module that imports and registers it
+- If a module defines endpoints (e.g., `POST /api/users`), there must be a router or app entry module that mounts it
+- Flag as MISSING if a route handler exists but no module imports/registers it
+
+**8b. Environment Variables:**
+- Every module that uses environment variables MUST have a corresponding entry in a config/env module
+- If a module references `process.env.DATABASE_URL` or `os.environ["DATABASE_URL"]`, the config module must define `DATABASE_URL`
+- A `.env.example` or config module should document all required env vars
+- Flag as MISSING if a module uses env vars but no config module defines them
+
+**8c. Navigation Wiring (web apps only):**
+- Every page module MUST be reachable from navigation, routing, or layout modules
+- If the design includes a page at `/dashboard`, a routing or navigation module must link to it
+- Flag as MISSING if a page exists but no navigation/layout/routing module connects to it
+
+**8d. Entry Point Connection:**
+- Every handler/service module MUST be imported by the main entry point (directly or transitively)
+- Trace the import chain from the application entry point — every module must be reachable
+- Flag as MISSING if a service is defined but no entry point or parent module imports it
+
+**8e. Test Coverage Intent:**
+- Every feature module SHOULD note what test scenarios are needed
+- This does not require separate test modules, but the design should acknowledge testability
+- Flag as WARNING (not ERROR) if a complex feature module has no testing consideration
+
 % Output
 
 **DO NOT run any bash commands. This is a text-only analysis.**

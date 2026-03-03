@@ -62,6 +62,88 @@ When generating prompt files, you MUST enforce cross-file consistency:
    - If a module needs env vars, the prompt must list them in a "Required Environment" section
    - Use the exact variable names from the naming registry
 
+% Interface Contract Table (Auto-Extracted from architecture.json) — CRITICAL
+
+Before writing ANY prompt file, you MUST build a flat Interface Contract Table from the architecture.json `interface` fields:
+
+**Step A: Build the table**
+
+Scan every module in architecture.json and extract its exported symbols:
+
+```
+| Module Filename | Exported Symbol | Signature/Type | Import Path |
+|-----------------|-----------------|----------------|-------------|
+| auth_service_Python.prompt | authenticate | (username: str, password: str) -> AuthResult | from src.auth.service import authenticate |
+| auth_service_Python.prompt | verify_token | (token: str) -> Optional[User] | from src.auth.service import verify_token |
+| user_models_Python.prompt | User | class(id, username, email, password_hash, created_at) | from src.models.user import User |
+| task_api_TypeScript.prompt | createTask | (data: CreateTaskInput) => Promise<Task> | import { createTask } from '@/lib/api/tasks' |
+```
+
+Derive the import path from the module's `filepath` field in architecture.json, using the project's import conventions (e.g., `@/` aliases for TypeScript/Next.js, `from src.` for Python).
+
+**Step B: Enforce the table in every prompt**
+
+For EVERY prompt that references another module:
+1. Look up the dependency in the Interface Contract Table
+2. Use the EXACT symbol name, signature, and import path from the table — no variations
+3. Add a `## Required Imports (from Interface Contract Table)` section to the prompt listing every cross-module import with its exact path and signature
+4. If a prompt calls a function from module X, include the EXACT import statement from the table
+5. If a prompt uses a type/class from module X, include the EXACT class definition reference from the table
+
+**Step C: Consistency check**
+
+After building all prompts, verify:
+- Every import path in every prompt matches the Interface Contract Table
+- No prompt invents a new function name or signature not in the table
+- If two prompts import the same symbol, they use identical import statements
+
+% Data Model Schema Injection (CRITICAL for correctness)
+
+When generating each prompt, you MUST inject the actual data model schemas from Step 4 output to prevent field hallucination:
+
+**1. For each module that has a data model module in its `dependencies`:**
+   - Extract the COMPLETE data model from Step 4 output (entity names, field names, field types, constraints, relationships)
+   - Inject the exact schema into the prompt as a `## Data Model Reference` section:
+     ```
+     ## Data Model Reference
+
+     ### User Entity
+     | Field | Type | Constraints |
+     |-------|------|-------------|
+     | id | UUID | primary key, auto-generated |
+     | username | string | unique, 3-50 chars |
+     | email | string | unique, valid email |
+     | password_hash | string | bcrypt, not exposed in API |
+     | created_at | datetime | auto-set on creation |
+
+     **IMPORTANT: Use ONLY these fields. Do NOT assume additional fields exist.**
+     ```
+   - The prompt MUST include the instruction: "Use ONLY these fields. Do NOT assume additional fields exist."
+
+**2. For each module that calls functions from another module:**
+   - Inject the exact function signatures from the Interface Contract Table as a `## Dependency API Reference` section:
+     ```
+     ## Dependency API Reference
+
+     ### auth_service
+     - `authenticate(username: str, password: str) -> AuthResult` — Returns AuthResult with token and user fields
+     - `verify_token(token: str) -> Optional[User]` — Returns None if token is invalid
+
+     **IMPORTANT: Call with EXACTLY these arguments. Do NOT pass additional parameters.**
+     ```
+   - The prompt MUST include the instruction: "Call with EXACTLY these arguments. Do NOT pass additional parameters."
+
+**3. For Firestore/MongoDB/database modules:**
+   - Inject exact collection schemas with field types and valid query operators
+   - Include the canonical collection names from the Step 2 naming registry
+   - Specify which fields are indexed and queryable
+
+**4. Schema source priority:**
+   - Step 4 data model output is the authoritative source for entity definitions
+   - architecture.json `interface` fields are authoritative for function signatures
+   - Step 2 naming registry is authoritative for collection/table names
+   - If there is a conflict, flag it and use Step 4 as ground truth for data fields
+
 % Key Rules
 
 1. **Prompt file location:**

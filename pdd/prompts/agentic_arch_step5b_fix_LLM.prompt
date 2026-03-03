@@ -65,6 +65,14 @@ This is a TEXT-ONLY step. Do NOT run bash commands or create files on disk. You 
    - **Interface type**: api/module/page/component/config
    - **Description**: What this module implements
 
+   **For wiring gaps specifically, apply these fix templates:**
+
+   - **Missing route registration**: Add or update a router/app module that imports and registers the orphan route handler. The router module should have the route handler in its `dependencies`.
+   - **Missing env var config**: Add or update a config/env module that defines all environment variables used across modules. Add `.env.example` entries listing the variable names.
+   - **Missing navigation wiring**: Add or update a navigation/layout/routing module that links to the orphan page. The routing module should have the page in its `dependencies`.
+   - **Missing entry point connection**: Update the main entry point module's `dependencies` to include the orphan service, or add an intermediate registry module that imports all services.
+   - **Missing test coverage intent**: Add a note in the module's description about what test scenarios are needed (no separate test module required unless explicitly in PRD).
+
 3. **Recalculate priorities** if needed to accommodate new modules:
    - Maintain valid topological sort (no module before its dependencies)
    - Use sequential integers without gaps

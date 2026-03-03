@@ -109,6 +109,12 @@ def test_happy_path_full_run(mock_dependencies, base_args):
         # Step 5b: completeness gate passes
         if "step5b" in label:
             return (True, "VALIDATION_RESULT: VALID\nAll requirements covered.", 0.1, "gpt-4")
+        # Step 7b: architecture review passes (must be before step7 check)
+        if "step7b" in label:
+            return (True, "REVIEW_RESULT: CLEAN\nArchitecture verified.", 0.1, "gpt-4")
+        # Step 9b: cross-audit passes (must be before step9 check)
+        if "step9b" in label:
+            return (True, "AUDIT_RESULT: CONSISTENT\nAll prompt files consistent.", 0.1, "gpt-4")
         # Steps 10-12 validation - all pass immediately
         if "step10" in label or "step11" in label or "step12" in label:
             return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
@@ -133,10 +139,10 @@ def test_happy_path_full_run(mock_dependencies, base_args):
     assert cost > 0
 
     # Verify all steps ran:
-    # Steps 1-5 = 5 calls + step 1b = 1 call + step 5b = 1 call
-    # Steps 6-8 = 3 calls + Step 9 = 1 call + Steps 10-12 = 3 calls
-    # Total: 5 + 1 + 1 + 3 + 1 + 3 = 14 calls
-    assert mocks["run"].call_count == 14
+    # Steps 1-5 = 5 + 1b = 1 + 2b = 1 + 5b = 1
+    # Steps 6-8 = 3 + 7b = 1 + Step 9 = 1 + 9b = 1 + Steps 10-12 = 3
+    # Total: 5 + 1 + 1 + 1 + 3 + 1 + 1 + 1 + 3 = 17 calls
+    assert mocks["run"].call_count == 17
 
     # Verify state was cleared
     mocks["clear_state"].assert_called_once()
@@ -180,6 +186,11 @@ def test_validation_loop_fix_flow(mock_dependencies, base_args):
             return (True, "COMPLEXITY_RESULT: MANAGEABLE", 0.1, "gpt-4")
         if "step5b" in label:
             return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+        # Step 7b and 9b pass (must be before step7/step9 checks)
+        if "step7b" in label:
+            return (True, "REVIEW_RESULT: CLEAN", 0.1, "gpt-4")
+        if "step9b" in label:
+            return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
         if "step7" in label:
             (cwd / "architecture.json").write_text('[{"ver": 1}]')
             return (True, 'FILES_CREATED: architecture.json', 0.1, "gpt-4")
@@ -206,8 +217,8 @@ def test_validation_loop_fix_flow(mock_dependencies, base_args):
     success, _, _, _, _ = run_agentic_architecture_orchestrator(**base_args)
 
     assert success is True
-    # Calls: steps 1-5 (5) + 1b (1) + 5b (1) + steps 6-8 (3) + step 9 (1) + step 10 (3) + steps 11-12 (2) = 16
-    assert mocks["run"].call_count == 16
+    # Calls: steps 1-5 (5) + 1b (1) + 2b (1) + 5b (1) + steps 6-8 (3) + 7b (1) + step 9 (1) + 9b (1) + step 10 (attempt1+fix1+attempt2=3) + steps 11-12 (2) = 19
+    assert mocks["run"].call_count == 19
 
     # Verify the final architecture saved is the one from the fix
     with open(base_args["cwd"] / "architecture.json", "r") as f:
@@ -228,6 +239,11 @@ def test_max_validation_iterations(mock_dependencies, base_args):
             return (True, "COMPLEXITY_RESULT: MANAGEABLE", 0.1, "gpt-4")
         if "step5b" in label:
             return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+        # Step 7b and 9b pass (must be before step7/step9 checks)
+        if "step7b" in label:
+            return (True, "REVIEW_RESULT: CLEAN", 0.1, "gpt-4")
+        if "step9b" in label:
+            return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
         if "step7" in label:
             (cwd / "architecture.json").write_text('[{"ver": 1}]')
             return (True, 'FILES_CREATED: architecture.json', 0.1, "gpt-4")
@@ -256,12 +272,12 @@ def test_max_validation_iterations(mock_dependencies, base_args):
     assert success is False
 
     # Count calls:
-    # Steps 1-5: 5 + 1b (1) + 5b (1) + Steps 6-8: 3
-    # Step 9: 1 call
+    # Steps 1-5: 5 + 1b (1) + 2b (1) + 5b (1) + Steps 6-8: 3 + 7b (1)
+    # Step 9: 1 call + 9b (1)
     # Step 10: 3 attempts + 2 fixes = 5 calls
     # Steps 11-12: 2 calls (they still run after step 10 fails)
-    # Total: 5 + 1 + 1 + 3 + 1 + 5 + 2 = 18 calls
-    assert mocks["run"].call_count == 18
+    # Total: 5 + 1 + 1 + 1 + 3 + 1 + 1 + 1 + 5 + 2 = 21 calls
+    assert mocks["run"].call_count == 21
 
 def test_resumption_from_state(mock_dependencies, base_args):
     """Test resuming from saved state (e.g., Step 3 completed)."""
@@ -284,6 +300,11 @@ def test_resumption_from_state(mock_dependencies, base_args):
         # Step 5b passes
         if "step5b" in label:
             return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+        # Step 7b and 9b pass (must be before step7/step9 checks)
+        if "step7b" in label:
+            return (True, "REVIEW_RESULT: CLEAN", 0.1, "gpt-4")
+        if "step9b" in label:
+            return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
         if "step7" in label:
             (cwd / "architecture.json").write_text('[{"ver": 1}]')
             return (True, 'FILES_CREATED: architecture.json', 0.1, "gpt-4")
@@ -302,12 +323,12 @@ def test_resumption_from_state(mock_dependencies, base_args):
     success, _, cost, _, _ = run_agentic_architecture_orchestrator(**base_args)
 
     assert success is True
-    # Should run steps 4, 5 (2 calls) + step 5b (1) + steps 6, 7, 8 (3 calls) + step 9 (1) + steps 10-12 (3) = 10 calls
+    # Should run steps 4, 5 (2 calls) + step 5b (1) + steps 6, 7, 8 (3 calls) + 7b (1) + step 9 (1) + 9b (1) + steps 10-12 (3) = 12 calls
     # Steps 1, 1b, 2, 3 should be skipped.
-    assert mocks["run"].call_count == 10
+    assert mocks["run"].call_count == 12
 
-    # Cost should include previous cost (0.5) + new costs (0.1 * 10)
-    assert cost == pytest.approx(1.5)
+    # Cost should include previous cost (0.5) + new costs (0.1 * 12)
+    assert cost == pytest.approx(1.7)
 
 def test_missing_template_failure(mock_dependencies, base_args):
     """Test failure when a prompt template is missing."""
@@ -336,6 +357,11 @@ def test_json_parsing_fallback(mock_dependencies, base_args):
             return (True, "COMPLEXITY_RESULT: MANAGEABLE", 0.1, "gpt-4")
         if "step5b" in label:
             return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+        # Step 7b and 9b pass (must be before step7/step9 checks)
+        if "step7b" in label:
+            return (True, "REVIEW_RESULT: CLEAN", 0.1, "gpt-4")
+        if "step9b" in label:
+            return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
         if "step7" in label:
             (cwd / "architecture.json").write_text(invalid_json)
             return (True, 'FILES_CREATED: architecture.json', 0.1, "gpt-4")
@@ -611,6 +637,11 @@ class TestScaffoldingFilesTracking:
                 return (True, "COMPLEXITY_RESULT: MANAGEABLE", 0.1, "gpt-4")
             if "step5b" in label:
                 return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+            # Step 7b and 9b pass (must be before step7/step9 checks)
+            if "step7b" in label:
+                return (True, "REVIEW_RESULT: CLEAN", 0.1, "gpt-4")
+            if "step9b" in label:
+                return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
             if "step7" in label:
                 # Step 7 creates architecture.json + scaffolding files
                 (cwd / "architecture.json").write_text('[{"priority": 1}]')
@@ -648,6 +679,11 @@ class TestScaffoldingFilesTracking:
                 return (True, "COMPLEXITY_RESULT: MANAGEABLE", 0.1, "gpt-4")
             if "step5b" in label:
                 return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+            # Step 7b and 9b pass (must be before step7/step9 checks)
+            if "step7b" in label:
+                return (True, "REVIEW_RESULT: CLEAN", 0.1, "gpt-4")
+            if "step9b" in label:
+                return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
             if "step7" in label:
                 # Step 7 creates only architecture.json
                 (cwd / "architecture.json").write_text('[{"priority": 1}]')
@@ -698,6 +734,11 @@ class TestScaffoldingFilesTracking:
                 return (True, "COMPLEXITY_RESULT: MANAGEABLE", 0.1, "gpt-4")
             if "step5b" in label:
                 return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+            # Step 7b and 9b pass (must be before step7/step9 checks)
+            if "step7b" in label:
+                return (True, "REVIEW_RESULT: CLEAN", 0.1, "gpt-4")
+            if "step9b" in label:
+                return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
             if "step7" in label:
                 (cwd / "architecture.json").write_text('[{"priority": 1}]')
                 return (True, 'FILES_CREATED: architecture.json, package.json', 0.1, "gpt-4")
@@ -747,6 +788,11 @@ class TestProgrammaticJSONValidation:
                 return (True, "COMPLEXITY_RESULT: MANAGEABLE", 0.1, "gpt-4")
             if "step5b" in label:
                 return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+            # Step 7b and 9b pass (must be before step7/step9 checks)
+            if "step7b" in label:
+                return (True, "REVIEW_RESULT: CLEAN", 0.1, "gpt-4")
+            if "step9b" in label:
+                return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
             if "step7" in label:
                 # Step 7 writes invalid JSON
                 (cwd / "architecture.json").write_text("This is not valid JSON {broken")
@@ -794,6 +840,11 @@ class TestProgrammaticJSONValidation:
                 return (True, "COMPLEXITY_RESULT: MANAGEABLE", 0.1, "gpt-4")
             if "step5b" in label:
                 return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+            # Step 7b and 9b pass (must be before step7/step9 checks)
+            if "step7b" in label:
+                return (True, "REVIEW_RESULT: CLEAN", 0.1, "gpt-4")
+            if "step9b" in label:
+                return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
             if "step7" in label:
                 # Step 7 writes JSON object instead of array
                 (cwd / "architecture.json").write_text('{"modules": []}')
@@ -878,6 +929,11 @@ contexts:
                 return (True, "COMPLEXITY_RESULT: MANAGEABLE", 0.1, "gpt-4")
             if "step5b" in label:
                 return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+            # Step 7b and 9b pass (must be before step7/step9 checks)
+            if "step7b" in label:
+                return (True, "REVIEW_RESULT: CLEAN", 0.1, "gpt-4")
+            if "step9b" in label:
+                return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
 
             if "step7" in label:
                 # Step 7 writes architecture.json
@@ -966,6 +1022,11 @@ contexts:
                 return (True, "COMPLEXITY_RESULT: MANAGEABLE", 0.1, "gpt-4")
             if "step5b" in label:
                 return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+            # Step 7b and 9b pass (must be before step7/step9 checks)
+            if "step7b" in label:
+                return (True, "REVIEW_RESULT: CLEAN", 0.1, "gpt-4")
+            if "step9b" in label:
+                return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
 
             if "step7" in label:
                 # Step 7 writes architecture.json
@@ -1000,7 +1061,9 @@ contexts:
         # All main steps should have run without any fix/retry steps
         labels = [kwargs.get("label", "") for _, kwargs in mocks["run"].call_args_list]
         assert any("step12" in l for l in labels), "Step 12 should have run"
-        assert not any("_fix" in l for l in labels), "No fix steps should have been triggered"
+        # Only step7b and step9b should have "b" labels, no "_fix" labels
+        fix_labels = [l for l in labels if "_fix" in l]
+        assert len(fix_labels) == 0, f"No fix steps should have been triggered, got: {fix_labels}"
 
     def test_step12_handles_multiple_wrong_include_paths(self, mock_dependencies, base_args):
         """
@@ -1060,6 +1123,11 @@ contexts:
                 return (True, "COMPLEXITY_RESULT: MANAGEABLE", 0.1, "gpt-4")
             if "step5b" in label:
                 return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+            # Step 7b and 9b pass (must be before step7/step9 checks)
+            if "step7b" in label:
+                return (True, "REVIEW_RESULT: CLEAN", 0.1, "gpt-4")
+            if "step9b" in label:
+                return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
 
             if "step7" in label:
                 # Step 7 writes architecture.json
@@ -1226,6 +1294,8 @@ def test_partial_failure_preserves_last_successful_step(mock_dependencies, base_
         label = kwargs.get("label", "")
         if "step1b" in label:
             return (True, "COMPLEXITY_RESULT: MANAGEABLE", 0.1, "gpt-4")
+        if "step2b" in label:
+            return (True, "Codebase scan done", 0.1, "gpt-4")
         if "step5b" in label:
             return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
         call_count["n"] += 1
@@ -1589,14 +1659,14 @@ def test_resume_from_step_5_5(mock_dependencies, base_args):
 
     assert success is True
 
-    # Should run steps 6, 7, 8 (3 calls) + step 9 (1) + steps 10-12 (3) = 7 calls
+    # Should run steps 6, 7 (2 calls) + 7b (1) + step 8 (1) + step 9 (1) + 9b (1) + steps 10-12 (3) = 9 calls
     # Steps 1-5 and 5b should be skipped
     labels = [kwargs.get("label", "") for _, kwargs in mocks["run"].call_args_list]
-    assert not any("step1" == l or "step1" in l and "step1b" not in l and "step10" not in l and "step11" not in l and "step12" not in l for l in labels if l in ["step1", "step2", "step3", "step4", "step5"]), \
-        f"Steps 1-5 should be skipped, got: {labels}"
     assert not any("step5b" in l for l in labels), "Step 5b should be skipped"
     assert any("step6" in l for l in labels), "Step 6 should run"
-    assert mocks["run"].call_count == 7
+    assert any("step7b" in l for l in labels), "Step 7b should run"
+    assert any("step9b" in l for l in labels), "Step 9b should run"
+    assert mocks["run"].call_count == 9
 
 
 # ============================================================================

@@ -8,8 +8,10 @@ Step 1b:  Complexity Assessment (may exit with sub-issues if PRD too complex)
 Steps 2-5: Analysis and design
 Step 5b:  Completeness Gate (hard stop if incomplete after 3 retries)
 Steps 6-7: Research dependencies and generate architecture.json
+Step 7b:  Architecture Self-Review (naming, deps, priority consistency)
 Step 8:   Generate .pddrc
 Step 9:   Prompt generation
+Step 9b:  Cross-File Consistency Audit (identifier consistency across prompts)
 Steps 10-12: Validation with in-place fixing (completeness, sync, dependencies)
 Step 13:  Fix validation errors
 
@@ -60,8 +62,10 @@ ARCH_STEP_TIMEOUTS: Dict[Union[int, float], float] = {
     5.5: 600.0,  # Early completeness gate (module design)
     6: 600.0,    # Research Dependencies
     7: 1000.0,   # Generate (architecture.json + scaffolding)
+    7.5: 340.0,  # Architecture self-review
     8: 600.0,    # Generate and validate .pddrc
     9: 900.0,    # Generate prompts
+    9.5: 600.0,  # Cross-file consistency audit
     10: 340.0,   # Validate completeness (prompt-level)
     11: 600.0,   # Validate sync (pdd sync --dry-run for each module)
     12: 600.0,   # Validate dependencies (preprocess)
@@ -241,8 +245,10 @@ def run_agentic_architecture_orchestrator(
     Steps 2-5: Analysis and design
     Step 5b:  Completeness Gate (hard stop if incomplete after 3 retries)
     Steps 6-7: Research dependencies and generate architecture.json
+    Step 7b:  Architecture Self-Review (naming, deps, priority consistency)
     Step 8:   Generate .pddrc
     Step 9:   Prompt generation
+    Step 9b:  Cross-File Consistency Audit (identifier consistency across prompts)
     Steps 10-12: Validation with in-place fixing (completeness, sync, dependencies)
 
     Each validation step retries up to 3 times with fixes before moving to next step.
@@ -324,7 +330,13 @@ def run_agentic_architecture_orchestrator(
     start_step = last_completed_step + 1
 
     # Handle resume logic for fractional steps
-    if last_completed_step == 5.5:
+    if last_completed_step == 9.5:
+        # Step 9b (cross-audit) passed, start at step 10
+        start_step = 10
+    elif last_completed_step == 7.5:
+        # Step 7b (architecture review) passed, start at step 8
+        start_step = 8
+    elif last_completed_step == 5.5:
         # Step 5b (completeness gate) passed, start at step 6
         start_step = 6
     elif last_completed_step == 2.5:
@@ -333,6 +345,10 @@ def run_agentic_architecture_orchestrator(
     elif last_completed_step == 1.5:
         # Step 1b (complexity) passed, start at step 2
         start_step = 2
+    elif 9 < last_completed_step < 10:
+        start_step = 10
+    elif 7 < last_completed_step < 8:
+        start_step = 8
     elif 5 < last_completed_step < 6:
         start_step = 6
     elif 2 < last_completed_step < 3:
@@ -340,9 +356,16 @@ def run_agentic_architecture_orchestrator(
     elif 1 < last_completed_step < 2:
         start_step = 2
 
-    if last_completed_step >= 9:
-        # If we finished step 9 or later, start at validation loop (step 10)
+    if last_completed_step >= 9.5:
+        # If we finished step 9b or later, start at validation loop (step 10)
         start_step = 10
+        if not quiet:
+            console.print(f"Resuming architecture generation for issue #{issue_number}")
+            console.print(f"   Steps 1-9b already complete (cached)")
+            console.print(f"   Starting Validation Loop (Step 10)")
+    elif last_completed_step >= 9:
+        # If we finished step 9, start at step 9b (cross-audit)
+        start_step = 10  # 9b is handled specially after step 9
         if not quiet:
             console.print(f"Resuming architecture generation for issue #{issue_number}")
             console.print(f"   Steps 1-9 already complete (cached)")
@@ -354,8 +377,15 @@ def run_agentic_architecture_orchestrator(
             console.print(f"Resuming architecture generation for issue #{issue_number}")
             console.print(f"   Steps 1-8 already complete (cached)")
             console.print(f"   Starting Step 9 (Prompt Generation)")
+    elif last_completed_step >= 7.5:
+        # If we finished step 7b, start at step 8 (.pddrc generation)
+        start_step = 8
+        if not quiet:
+            console.print(f"Resuming architecture generation for issue #{issue_number}")
+            console.print(f"   Steps 1-7b already complete (cached)")
+            console.print(f"   Starting Step 8 (.pddrc Generation)")
     elif last_completed_step >= 7:
-        # If we finished step 7, start at step 8 (.pddrc generation)
+        # If we finished step 7, start at step 8 (7b is handled specially)
         start_step = 8
         if not quiet:
             console.print(f"Resuming architecture generation for issue #{issue_number}")
@@ -367,8 +397,8 @@ def run_agentic_architecture_orchestrator(
             console.print(f"   Steps 1-{last_completed_step} already complete (cached)")
             console.print(f"   Starting from Step {start_step}")
 
-    # Total step count for display (1, 1b, 2, 2b, 3-5, 5b, 6-8, 9, 10-13)
-    TOTAL_STEPS = 16
+    # Total step count for display (1, 1b, 2, 2b, 3-5, 5b, 6-7, 7b, 8, 9, 9b, 10-13)
+    TOTAL_STEPS = 18
 
     # --- Steps 1-5: Analysis and Design ---
     steps_1_5 = [
@@ -797,6 +827,72 @@ def run_agentic_architecture_orchestrator(
             if len(brief) > 80: brief = brief[:77] + "..."
             console.print(f"   → {escape(brief)}")
 
+        # --- Step 7b: Architecture Self-Review (after Step 7) ---
+        if step_num == 7 and step_success and start_step <= 7.5 and state.get("last_completed_step", 0) < 7.5:
+            if not quiet:
+                console.print(f"[bold][Step 7b/{TOTAL_STEPS}][/bold] Reviewing architecture consistency...")
+
+            review_template_name = "agentic_arch_step7b_review_LLM"
+            review_template = load_prompt_template(review_template_name)
+            if review_template:
+                exclude_keys_7b = list(context.keys())
+                review_template = preprocess(review_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys_7b)
+                review_template = review_template.replace("{{", "{").replace("}}", "}")
+                formatted_review = review_template
+                for key, value in context.items():
+                    formatted_review = formatted_review.replace(f'{{{key}}}', str(value))
+
+                timeout_7b = ARCH_STEP_TIMEOUTS.get(7.5, 340.0) + timeout_adder
+                review_success, review_output, review_cost, review_model = run_agentic_task(
+                    instruction=formatted_review,
+                    cwd=cwd,
+                    verbose=verbose,
+                    quiet=quiet,
+                    timeout=timeout_7b,
+                    label="step7b",
+                    max_retries=DEFAULT_MAX_RETRIES,
+                )
+
+                total_cost += review_cost
+                model_used = review_model
+                state["total_cost"] = total_cost
+
+                context["step7b_output"] = review_output
+                state["step_outputs"]["7b"] = review_output
+                state["last_completed_step"] = 7.5
+
+                # If architecture was fixed, re-read it
+                if "REVIEW_RESULT: FIXED" in review_output:
+                    arch_file = base_dir / "architecture.json"
+                    if arch_file.exists():
+                        try:
+                            with open(arch_file, "r", encoding="utf-8") as f:
+                                arch_content = f.read()
+                            arch_data = json.loads(arch_content)
+                            if isinstance(arch_data, list):
+                                context["step7_output"] = arch_content
+                                state["step_outputs"]["7"] = arch_content
+                                if not quiet:
+                                    console.print("   → Architecture fixed, updated context")
+                        except (json.JSONDecodeError, ValueError):
+                            pass
+
+                save_result = save_workflow_state(cwd, issue_number, "architecture", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+                if save_result:
+                    github_comment_id = save_result
+                    state["github_comment_id"] = github_comment_id
+
+                if not quiet:
+                    if "REVIEW_RESULT: CLEAN" in review_output:
+                        console.print("   → Architecture review passed ✓")
+                    elif "REVIEW_RESULT: FIXED" in review_output:
+                        console.print("   → Architecture issues found and fixed")
+                    else:
+                        console.print("   → Architecture review complete")
+            else:
+                if not quiet:
+                    console.print(f"[yellow]Warning: Missing template {review_template_name}, skipping 7b[/yellow]")
+
     # --- Step 9: Prompt Generation ---
     if not skip_prompts and start_step <= 9:
         if not quiet:
@@ -862,6 +958,75 @@ def run_agentic_architecture_orchestrator(
         state["last_completed_step"] = 9
 
         save_workflow_state(cwd, issue_number, "architecture", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+
+    # --- Step 9b: Cross-File Consistency Audit ---
+    if not skip_prompts and state.get("last_completed_step", 0) >= 9 and state.get("last_completed_step", 0) < 9.5:
+        if not quiet:
+            console.print(f"[bold][Step 9b/{TOTAL_STEPS}][/bold] Cross-file consistency audit...")
+
+        audit_template_name = "agentic_arch_step9b_cross_audit_LLM"
+        audit_template = load_prompt_template(audit_template_name)
+        if audit_template:
+            # Ensure pddrc_content is in context
+            if "pddrc_content" not in context:
+                pddrc_path = cwd / ".pddrc"
+                if pddrc_path.exists():
+                    try:
+                        with open(pddrc_path, "r", encoding="utf-8") as f:
+                            context["pddrc_content"] = f.read()
+                    except Exception:
+                        context["pddrc_content"] = ""
+                else:
+                    context["pddrc_content"] = ""
+
+            exclude_keys_9b = list(context.keys())
+            audit_template = preprocess(audit_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys_9b)
+            audit_template = audit_template.replace("{{", "{").replace("}}", "}")
+            formatted_audit = audit_template
+            for key, value in context.items():
+                formatted_audit = formatted_audit.replace(f'{{{key}}}', str(value))
+
+            timeout_9b = ARCH_STEP_TIMEOUTS.get(9.5, 600.0) + timeout_adder
+            audit_success, audit_output, audit_cost, audit_model = run_agentic_task(
+                instruction=formatted_audit,
+                cwd=cwd,
+                verbose=verbose,
+                quiet=quiet,
+                timeout=timeout_9b,
+                label="step9b",
+                max_retries=DEFAULT_MAX_RETRIES,
+            )
+
+            total_cost += audit_cost
+            model_used = audit_model
+            state["total_cost"] = total_cost
+
+            context["step9b_output"] = audit_output
+            state["step_outputs"]["9b"] = audit_output
+            state["last_completed_step"] = 9.5
+
+            # Track modified prompt files
+            if "AUDIT_RESULT: INCONSISTENT" in audit_output:
+                modified_prompts = _parse_files_marker(audit_output, "FILES_MODIFIED:")
+                if modified_prompts:
+                    verified_modified = _verify_files_exist(cwd, modified_prompts, quiet)
+                    for mp in verified_modified:
+                        if mp not in prompt_files:
+                            prompt_files.append(mp)
+                    state["prompt_files"] = prompt_files
+                if not quiet:
+                    console.print("   → Inconsistencies found and fixed")
+            elif not quiet:
+                console.print("   → All prompt files are consistent ✓")
+
+            save_result = save_workflow_state(cwd, issue_number, "architecture", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+            if save_result:
+                github_comment_id = save_result
+                state["github_comment_id"] = github_comment_id
+        else:
+            if not quiet:
+                console.print(f"[yellow]Warning: Missing template {audit_template_name}, skipping 9b[/yellow]")
+            state["last_completed_step"] = 9.5
 
     # --- Validation Steps (10-12) with In-Place Fixing ---
     # Design: Each validation step retries with fixes up to MAX_STEP_RETRIES times.
