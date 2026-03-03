@@ -446,7 +446,7 @@ class TestUpdateMainRepoModeChangeDetection:
 class TestUpdateCommandBaseBranch:
     """Tests for the --base-branch option on pdd update."""
 
-    @patch("pdd.update_main.update_main", return_value=("done", 0.5, "model"))
+    @patch("pdd.commands.modify.update_main", return_value=("done", 0.5, "model"))
     def test_base_branch_passed_through(self, mock_main):
         """CLI --base-branch option is forwarded to update_main."""
         from pdd.cli import cli
