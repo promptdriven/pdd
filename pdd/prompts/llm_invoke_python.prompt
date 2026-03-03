@@ -7,13 +7,15 @@
     "functions": [
       {"name": "llm_invoke", "signature": "(prompt, input_json, strength, temperature, verbose, output_pydantic, output_schema, time, use_batch_mode, messages, language, use_cloud)", "returns": "Dict[str, Any]"},
       {"name": "setup_file_logging", "signature": "(log_file_path=None)", "returns": "None"},
-      {"name": "set_verbose_logging", "signature": "(verbose=False)", "returns": "None"}
+      {"name": "set_verbose_logging", "signature": "(verbose=False)", "returns": "None"},
+      {"name": "set_quiet_logging", "signature": "()", "returns": "None"}
     ]
   }
 }
 </pdd-interface>
 
 <pdd-dependency>path_resolution_python.prompt</pdd-dependency>
+<pdd-dependency>server/token_counter_python.prompt</pdd-dependency>
 
 % You are an expert Python engineer. Your goal is to write a python function, "llm_invoke", that will run a prompt with a given input using the LiteLLM library. The function will also handle fetching and saving missing API keys interactively. The entire code needed for this will be in a single file called llm_invoke.py.
 
@@ -39,8 +41,10 @@
 % Logging Configuration:
     - Use Python's standard logging module with a hierarchical logger named "pdd.llm_invoke".
     - Configure a separate logger for LiteLLM named "litellm".
+    - Suppress LiteLLM debug noise at module init: set `litellm.set_verbose = False` and `litellm.suppress_debug_info = True` to prevent "Give Feedback / Get Help" messages.
     - Environment variables: PDD_LOG_LEVEL (default: "INFO"), LITELLM_LOG_LEVEL (default: "WARNING" in production), PDD_ENVIRONMENT ("production" reduces to WARNING), PDD_VERBOSE_LOGGING=1 enables DEBUG.
-    - Provide `setup_file_logging()` for rotating file handlers (10MB, 5 backups) and `set_verbose_logging()` to toggle DEBUG level.
+    - Provide `setup_file_logging()` for rotating file handlers (10MB, 5 backups) and `set_verbose_logging()` to toggle DEBUG level (also re-enables `litellm.set_verbose` and disables `suppress_debug_info` when verbose).
+    - Provide `set_quiet_logging()` to raise all loggers to ERROR level. Apply automatically at import time if `PDD_QUIET` env var is set.
     - Set `litellm.drop_params` based on `LITELLM_DROP_PARAMS` env var (default: true) to ignore unsupported provider parameters.
     - When verbose=True, always log token count and context window limit for each model attempt.
       When token usage exceeds 90% of the context limit, log a capacity warning regardless
@@ -112,18 +116,21 @@
     - For other models: Call litellm.completion() or litellm.batch_completion().
     - Pass: model, messages, temperature, num_retries=2, timeout=LLM_CALL_TIMEOUT (600s).
     - Do NOT set max_tokens/max_completion_tokens; rely on provider defaults.
+    - Claude models: Auto-add `anthropic-beta: context-1m-2025-08-07` extra header to enable 1M context window. Safe for all prompt sizes (API only charges premium rates above 200K).
+    - Pass CSV `location` column as `vertex_location` kwarg (e.g., "global" for Vertex AI models).
+    - Pass CSV `base_url` column as both `base_url` and `api_base` kwargs for custom API endpoints.
     - Anthropic with thinking enabled: Force temperature=1.
     - LM Studio: Set base_url from LM_STUDIO_API_BASE env (default http://localhost:1234/v1) and api_key placeholder "lm-studio".
 
 % Context Window Validation:
     - Before calling litellm.completion()/batch_completion()/responses(), validate the assembled prompt's
       token count against the model's context window limit within the per-model candidate loop.
-    - Use litellm.token_counter(model, messages) for model-aware token counting and
-      litellm.get_model_info(model)["max_input_tokens"] for the model's context window size.
-      Do NOT use litellm.get_max_tokens() — that returns max output tokens, not the context window.
+    - Use litellm.token_counter(model, messages) for model-aware token counting.
+    - Use `get_context_limit(model)` from `pdd.server.token_counter` for the model's context window size.
+      This wraps litellm.get_model_info() with graceful fallback.
     - Claude context override: When the anthropic-beta context-1m header is set for Claude models,
       use 1,000,000 as the effective context limit instead of litellm's default (200K).
-    - Graceful fallback: If litellm.get_model_info() raises an exception or max_input_tokens is None,
+    - Graceful fallback: If context limit is None (model not found or info unavailable),
       skip context window validation for that model and proceed with the LLM call normally.
       Log a debug message noting validation was skipped. Do not block the request.
     - If prompt tokens exceed the context limit, skip to the next candidate model (consistent with
