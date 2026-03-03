@@ -1,19 +1,53 @@
+## v0.0.165 (2026-03-02)
+
+### Feat
+
+- add fingerprint saving and example auto-submit after one-session sync
+- emit PDD_PHASE markers in one-session sync and default agentic sync to --one-session
+- add --one-session flag to pdd sync for single-agent workflow
+- Implement Claude-powered script section extraction with SSE progress streaming and integrate into project setup UI.
+- update video script to "Why You're Still Darning Socks", extend Claude CLI timeout, and refine job execution logic.
+- refactor Remotion video compositions by replacing old sections with new ColdOpenSection and Part1Economics components.
+- add annotation fix integration test and fix resolve-batch output path
+
+### Fix
+
+- **test-batch-ann-1772523072079**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772522967240**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772522874705**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772522011302**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772521891326**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772521802455**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772521708518**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772521615542**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772521503777**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772520907862**: Subtitle font size 96px causes text to clip the ri
+- address Copilot review — remove unused import and add model name assertion
+- return postprocess model name from code_generator
+- code_generator.py returns wrong model name after postprocessing
+- address Copilot review comments on one-session sync
+- rebuild Remotion bundle before re-render and prevent HMR job kills
+- **c3a97c4e-09da-4953-98f0-7afdb805de16**: Change the main background color of this section t
+- **3fee5197-3a27-4412-9d67-97c6ec94310c**: Change the main background color of this section t
+- address Copilot review feedback
+- rename test files to follow test_e2e_issue_ naming convention
+- resolve 3 P0 CRM issues — import strategy, export metadata, handler wiring
+
+### Refactor
+
+- rename one_session_sync_LLM to one_session_agent_LLM prompt
+
 ## v0.0.164 (2026-03-01)
 
 ### Feat
 
-- Implement a new detailed video script and associated content specifications, replacing previous integration test assets.
-- Add new integration spec markdown and Playwright test run artifacts.
-- update compositions list API route
+- **Step 7 filesystem fallback for marker-less providers** — When the code-generation provider (e.g., Codex) writes files without emitting `FILES_CREATED` markers, the bug orchestrator now snapshots modified/untracked files before and after Step 7 and detects new files on disk, preventing a false hard-stop.
+- **Codex `--sandbox` mode replaces `--full-auto`** — Codex CLI invocation now uses `--sandbox danger-full-access` (configurable via `CODEX_SANDBOX_MODE` env var) instead of `--full-auto`, fixing Landlock/seccomp panics on gVisor (Cloud Run) and Docker-on-macOS. The PDD worker container itself serves as the sandbox boundary.
+- **Parse Codex `turn.completed` for usage/cost** — `_run_with_provider` now accepts both `session.end` and `turn.completed` event types for extracting usage statistics, supporting Codex CLI 0.105.0+ which changed the event name.
 
 ### Fix
 
-- enforce export names in Claude prompts and remove debug logging (#658)
-- harden auth and CSV tests for Cloud Batch environment
-- mock _get_modified_and_untracked in orchestrator tests
-- disable Codex CLI Landlock sandbox for Cloud Run (gVisor) compatibility
-- parse Codex turn.completed for usage/cost (#658)
-- Step 7 filesystem fallback when FILES_CREATED markers missing (#658)
+- **Harden auth and CSV tests for Cloud Batch environment** — `test_e2e_issue_296_custom_csv.py` now mocks `pdd_preprocess` to avoid missing `<include>` file failures in Cloud Batch. `test_e2e_issue_309_oauth_rate_limit.py` mocks `_load_firebase_api_key` and `has_refresh_token` to guarantee isolation from leaked env vars and keyring tokens in the Cloud Batch entrypoint.
 
 ## v0.0.163 (2026-02-28)
 
