@@ -1,64 +1,65 @@
-% You are an expert Python Programmer. Generate a Python function called `summarize_directory` that takes the following inputs and generates a csv output containing the following:
-    'full_path': str, the full path of the file,
-    'file_summary': str, the summary of the file, and
-    'content_hash': str, SHA-256 hash of the file contents for cache invalidation.
+% Role and Responsibility:
+You are an expert Python Programmer. Your goal is to generate a robust utility function called `summarize_directory` that performs automated file summarization for a codebase. This module acts as a documentation and indexing layer, using an LLM to generate concise summaries of source files while implementing an efficient caching mechanism to minimize API costs.
 
-<include>context/python_preamble.prompt</include>
-
-% Here are the inputs and outputs for the function:
+% Requirements:
+1. Functionality:
+    - Recursively discover files in a directory or via a glob pattern.
+    - Filter out binary files (images, videos, archives, executables, etc.) and common non-source directories (node_modules, .git, etc.).
+    - For each file, compute a SHA-256 hash of its contents.
+    - Implement a caching layer: if a CSV of previous results is provided, skip LLM calls for files where the path and content hash match.
+    - Use an LLM to summarize new or changed files.
+2. Contracts:
     - Inputs:
-        'directory_path': str, path to directory or glob pattern (e.g. /path/to/directory or /path/to/directory/*.py). If a directory path is provided, it will be converted to a recursive glob pattern.
-        'strength' - float, between 0 and 1 that is the strength of the LLM model to use.
-        'temperature' - float, controls the randomness of the LLM's output.
-        'time' - float, between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.
-        'verbose': bool, whether to print out the details of the function.
-        'csv_file': optional str, current csv file contents if it already exists.
-        'progress_callback': Optional[Callable[[int, int], None]], callback for progress updates, called with (current, total) for each file processed. Default is None.
-    - Outputs:
-        'csv_file' - A string containing the contents of the csv file that contains the full path of the file, summary, and content_hash of the files in the directory.
-        'total_cost' - A float representing the total cost of the LCEL runs.
-        'model_name' - A string representing the name of the LLM model used.
+        - `directory_path`: str (path or glob).
+        - `strength`: float (0.0 to 1.0).
+        - `temperature`: float (>= 0).
+        - `time`: float (0.0 to 1.0, default `DEFAULT_TIME`).
+        - `verbose`: bool.
+        - `csv_file`: Optional[str] (existing CSV content).
+        - `progress_callback`: Optional[Callable[[int, int], None]].
+    - Outputs: Tuple[`csv_output` (str), `total_cost` (float), `model_name` (str)].
+3. Validation:
+    - Raise `ValueError("Invalid 'directory_path'.")` if empty or not a string.
+    - Raise `ValueError("Invalid 'strength' value.")` if not between 0.0 and 1.0.
+    - Raise `ValueError("Invalid 'temperature' value.")` if < 0.
+    - Raise `ValueError("Invalid 'verbose' value.")` if not a boolean.
+    - Raise `ValueError("Invalid CSV file format.")` if `csv_file` is provided but lacks columns: `full_path`, `file_summary`, `content_hash`.
+4. Error Handling:
+    - If a specific file fails (read error or LLM error), do not crash. Store the error message in the `file_summary` column and "error" in the `content_hash` column.
+    - Raise `FileNotFoundError` if the required prompt template cannot be loaded.
+5. Performance & Logging:
+    - Use `git ls-files` as the primary discovery method (30s timeout) to respect `.gitignore`.
+    - Use `rich.progress` for a CLI progress bar if no `progress_callback` is provided.
 
-% Input validation requirements:
-    - Raise ValueError("Invalid 'directory_path'.") if directory_path is not a non-empty string
-    - Raise ValueError("Invalid 'strength' value.") if strength is not between 0.0 and 1.0
-    - Raise ValueError("Invalid 'temperature' value.") if temperature is not a number >= 0
-    - Raise ValueError("Invalid 'verbose' value.") if verbose is not a boolean
-    - Raise ValueError("Invalid CSV file format.") if csv_file is provided but doesn't have valid format with required columns (full_path, file_summary, content_hash)
+% Dependencies:
+<python_preamble>
+    <include>context/python_preamble.prompt</include>
+</python_preamble>
+<llm_invoke>
+    <include>context/llm_invoke_example.py</include>
+</llm_invoke>
+<load_prompt_template>
+    <include>context/load_prompt_template_example.py</include>
+</load_prompt_template>
 
-% Here is how to use the internal modules:
-    <internal_modules>
-    For llm_invoke to run prompts with the LLM model:
-        <llm_invoke_example>
-            <include>context/llm_invoke_example.py</include>
-        </llm_invoke_example>
+% Instructions:
+1. Implementation Strategy:
+    - Define a Pydantic model `FileSummary` with a single field `file_summary: str`.
+    - Create a helper `_get_files_from_git(directory_path)` that uses `subprocess` to run `git ls-files`.
+    - Create a helper `_get_files_from_glob(directory_path)` as a fallback that filters out `node_modules`, `.next`, `__pycache__`, `.git`, `dist`, `build`, and `coverage`.
+    - Define a `BINARY_EXTENSIONS` set to skip non-text files (e.g., .png, .zip, .pyc).
+2. Processing Logic:
+    - Load the prompt template `summarize_file_LLM.prompt`.
+    - Parse the `csv_file` input into a dictionary keyed by `os.path.normpath(full_path)`.
+    - For each discovered file:
+        - Read content (use `errors='ignore'` for safety).
+        - Compute SHA-256.
+        - If path and hash exist in cache, reuse the summary.
+        - Else, call `llm_invoke` with the template and `input_json={"file_contents": content}`.
+    - Track `total_cost` and the `model_name` from the last successful LLM call (default to "cached" if no calls made).
+3. Output Generation:
+    - Use `io.StringIO` and `csv.DictWriter` to generate the final CSV string.
+    - Ensure the CSV contains columns: `full_path`, `file_summary`, and `content_hash`.
 
-    For loading prompt templates:
-            <load_prompt_template_example>
-                <include>context/load_prompt_template_example.py</include>
-            </load_prompt_template_example>
-    </internal_modules>
-
-% This program will do the following:
-    Step 1: Validate all inputs according to the input validation requirements. Raise FileNotFoundError if the prompt template cannot be loaded.
-    Step 2: Load prompt template summarize_file_LLM.prompt
-    Step 3: Get list of files matching directory_path using glob.
-        - If directory_path is a directory (os.path.isdir returns True), convert it to a recursive glob pattern: os.path.join(directory_path, "**", "*")
-        - Filter out:
-            - Directories (only process files)
-            - Files in __pycache__ directories
-            - Files ending with .pyc or .pyo
-    Step 4: If no files found, return early with empty CSV header, 0.0 cost, and "None" model_name.
-    Step 5: Parse existing csv_file if provided to get cached entries.
-    Step 6: For each file, use progress_callback(current, total) if provided, or use Rich track() for progress display:
-        Step 6a: Read the file contents as a string
-        Step 6b: Compute the content hash using hashlib.sha256(file_contents.encode()).hexdigest()
-        Step 6c: Check if any existing entry in the CSV has a matching filename (use normalized path comparison)
-        Step 6d: Only proceed with summarization if either:
-            1. No matching filename is found in existing entries
-            2. The file's content_hash differs from the existing entry's content_hash
-        Step 6e: If a match is found and the content_hash matches, reuse the existing summary
-        Step 6f: If summarization is needed, summarize the file contents using llm_invoke, passing the loaded prompt template, input parameters {'file_contents': file_contents}, and the 'strength', 'temperature', and 'time' arguments.
-            - Use a Pydantic model called FileSummary with a field named 'file_summary' for consistent naming
-        Step 6g: Store the relative path (not the full path) of the file, the file_summary, and the content_hash in the current data dictionary.
-    Step 7: Return the tuple containing the updated csv output string, the total_cost and the model_name of the LLM model used.
+% Deliverables:
+A single Python file containing the `FileSummary` Pydantic model, the helper functions `_get_files_from_git` and `_get_files_from_glob`, and the primary `summarize_directory` function.

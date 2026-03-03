@@ -24,12 +24,15 @@ Uses `agentic_crash_explore_LLM` (loaded via load_prompt_template).
 
 % Requirements
 1. Single-pass: explore mode only
-2. Record file mtimes before agent runs, detect changes after
-3. Verification after fix:
+2. Project root is `Path.cwd()` (not derived from prompt file path)
+3. Record file mtimes before agent runs, detect changes after; merge with agent-reported changed_files (set union)
+4. Verification after fix:
    - Python: run the program file locally to verify no crash
+     - Use `subprocess.DEVNULL` for stdin to prevent hangs on `input()`
+     - 120-second timeout to prevent infinite loops/hangs
    - Non-Python: trust the agent's own verification result (the agent already ran the program using language-appropriate tools)
-4. Parse the json from the agentic CLI call to get the success, message, cost, model, and changed_files
-5. Return 5-tuple: `(success, message, cost, model, changed_files)`
+5. Parse the json from the agentic CLI call to get the success, message, cost, model, and changed_files
+6. Return 5-tuple: `(success, message, cost, model, changed_files)`
 
 % Dependencies
 <module_dependencies>

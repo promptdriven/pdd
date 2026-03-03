@@ -1,12 +1,14 @@
 {
-  "pdd_version": "0.0.108",
-  "timestamp": "2026-01-11T06:34:51.663564+00:00",
-  "command": "fix",
-  "prompt_hash": "90746fb538902b7dfe126feea162457e16da6d5c439e9d376d6eb3cd42c202cb",
-  "code_hash": "20541d609cddc0a503cbd94e100e54c97f6ec1242dbdd5e005aed466185c14b9",
-  "example_hash": "5c2a5da7c0281a5277e775bda0e64e1de379f546b59eef359179052fafe7dea9",
-  "test_hash": "e667ee536f4a66ee5cf806342ed64e40d054a9f47b0dd92eb1c118a83554ee7c",
-  "test_files": {
-    "test_agentic_common.py": "e667ee536f4a66ee5cf806342ed64e40d054a9f47b0dd92eb1c118a83554ee7c"
+  "pdd_version": "0.0.164",
+  "timestamp": "2026-03-03T17:49:21.872007+00:00",
+  "command": "update",
+  "prompt_hash": "de8f74eb287fe8f77a65086b76f82bce82105ac379a82ef821ce76a93a4e6fd4",
+  "code_hash": "5ccb8ebf79c5714deb1339123414dcd44743a20db48b75d5d463ce0a8651434f",
+  "example_hash": null,
+  "test_hash": null,
+  "test_files": null,
+  "include_deps": {
+    "/Users/caijiamin/Desktop/PDD_PRIVATE/pdd-fix-crash-hang/context/llm_invoke_example.py": "88e1071cf088837c1adb6738f0a1f8e5134efd4a44370758dd19d0719475ac48",
+    "/Users/caijiamin/Desktop/PDD_PRIVATE/pdd-fix-crash-hang/context/python_preamble.prompt": "57a3e51f529024ec0cb9658cd6ac61a7c8051ba0c8e887b31cf00b2e78a07d83"
   }
 }

@@ -1,14 +1,15 @@
 {
-  "pdd_version": "0.0.124",
-  "timestamp": "2026-01-21T23:18:42.234245+00:00",
-  "command": "fix",
-  "prompt_hash": "a9950d7670f0da2af9fda691f341e506f1603dd9ea862d491a188734bb985a89",
-  "code_hash": "4c0c77f028705761b4d5dc7d2260a1f9f65e7f566d474b0f8b3e5988871bf74a",
-  "example_hash": "5f8c96cf6f0c9236647fd2bffce4e0d84643006fe4c6e798e2c5f676f42fef25",
-  "test_hash": "1e0273c98105ca784d9d421ab47ab339f432a6d934b92bdd3674e162c8fec4da",
-  "test_files": {
-    "test_agentic_bug_orchestrator.py": "1e0273c98105ca784d9d421ab47ab339f432a6d934b92bdd3674e162c8fec4da",
-    "test_agentic_bug_orchestrator_1.py": "e8c40dd50fa9fc0135402d98196375d8dcb6f77d43a0b92d2fa56a18dfff809e",
-    "test_agentic_bug_orchestrator_test_agentic_bug_orchestrator_fixed.py": "2006d1374271cc61a82ca0cc07f2ed46d6a168b991d6742b441c3b279fba073f"
+  "pdd_version": "0.0.164",
+  "timestamp": "2026-03-03T17:53:38.286996+00:00",
+  "command": "update",
+  "prompt_hash": "3b6b96a30c152367595bcb5145f5d28297f0199515bde7a48363003bcec4dd76",
+  "code_hash": "40256fedcd85222487338314043a84a7621e75ce65fa0dd1cb9342744f20570d",
+  "example_hash": null,
+  "test_hash": null,
+  "test_files": null,
+  "include_deps": {
+    "/Users/caijiamin/Desktop/PDD_PRIVATE/pdd-fix-crash-hang/context/agentic_common_example.py": "5c2a5da7c0281a5277e775bda0e64e1de379f546b59eef359179052fafe7dea9",
+    "/Users/caijiamin/Desktop/PDD_PRIVATE/pdd-fix-crash-hang/context/load_prompt_template_example.py": "a1cd6619182c6c951f5856dda4070e202875a5884bbfab9cc191d24de2f4951f",
+    "/Users/caijiamin/Desktop/PDD_PRIVATE/pdd-fix-crash-hang/context/python_preamble.prompt": "57a3e51f529024ec0cb9658cd6ac61a7c8051ba0c8e887b31cf00b2e78a07d83"
   }
 }

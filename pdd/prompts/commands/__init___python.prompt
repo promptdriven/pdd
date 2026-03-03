@@ -12,20 +12,18 @@
     - `generate`, `test`, `example` (from `.generate`)
     - `fix` (from `.fix`)
     - `split`, `change`, `update` (from `.modify`)
-    - `sync`, `auto_deps`, `setup` (from `.maintenance`)
+    - `sync`, `auto_deps`, `setup`, `sync_code` (from `.maintenance`)
+    - `checkup` (from `.checkup`)
     - `detect_change`, `conflicts`, `bug`, `crash`, `trace` (from `.analysis`)
+    - `connect` (from `.connect`)
+    - `auth_group` (from `.auth`)
     - `preprocess` (from `.misc`)
-    - `install_completion_cmd` (as name="install_completion", from `.utility`)
-    - `verify` (from `.utility`)
+    - `sessions` (from `.sessions`)
+    - `report_core` (from `.report`)
     - `templates_group` (from `.templates`)
-    - `connect` (from `.connect`) - Web frontend server command
-    - `auth_group` (from `.auth`) - PDD Cloud authentication management
-    - `sessions` (from `.sessions`) - Remote session management command group
-
-% Instructions
-  - Ensure clean imports.
-  - Group imports logically.
-  - `templates_group` should be added as a command (which works for groups too).
+    - `install_completion_cmd` (as name="install_completion"), `verify` (from `.utility`)
+    - `which` (from `.which`)
+    - `firecrawl_cache` (from `.firecrawl`)
 
 % Deliverables
   - Code: `pdd/commands/__init__.py`

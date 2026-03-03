@@ -1,12 +1,15 @@
 {
-  "pdd_version": "0.0.104",
-  "timestamp": "2026-01-07T21:55:07.713869+00:00",
-  "command": "test_extend",
-  "prompt_hash": "736ac6a09c38dc329f403189fea2e9a86dd52c709d8eee87345e4193c549da87",
-  "code_hash": "fb3c07802f08b33b2d529972d531bb3110820aa9b7fce6b5a6bd69af2e65a9c6",
-  "example_hash": "a1fb936c45b2dc3b9995d22aed05e75af20b171d8990c4a483b1cf8a54dc6df3",
-  "test_hash": "d6c1eda9cee7cc94ce0e8787eb89221895fbefb7df26c68f91c62bcf50ad2eb7",
-  "test_files": {
-    "test_summarize_directory.py": "d6c1eda9cee7cc94ce0e8787eb89221895fbefb7df26c68f91c62bcf50ad2eb7"
+  "pdd_version": "0.0.164",
+  "timestamp": "2026-03-03T17:56:09.793440+00:00",
+  "command": "update",
+  "prompt_hash": "6437c665054a38cbb2fcc9260a7ef7a1208c118ad2435bbf44b092a0cc640c7e",
+  "code_hash": "e2628dc786736d82279e109725159085e1bfd2dd4882c25cb310581b6dac10b5",
+  "example_hash": null,
+  "test_hash": null,
+  "test_files": null,
+  "include_deps": {
+    "/Users/caijiamin/Desktop/PDD_PRIVATE/pdd-fix-crash-hang/context/llm_invoke_example.py": "88e1071cf088837c1adb6738f0a1f8e5134efd4a44370758dd19d0719475ac48",
+    "/Users/caijiamin/Desktop/PDD_PRIVATE/pdd-fix-crash-hang/context/load_prompt_template_example.py": "a1cd6619182c6c951f5856dda4070e202875a5884bbfab9cc191d24de2f4951f",
+    "/Users/caijiamin/Desktop/PDD_PRIVATE/pdd-fix-crash-hang/context/python_preamble.prompt": "57a3e51f529024ec0cb9658cd6ac61a7c8051ba0c8e887b31cf00b2e78a07d83"
   }
 }
