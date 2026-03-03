@@ -272,7 +272,11 @@ async function example6_errorHandling(): Promise<void> {
     throw new Error('Veo API rate limit exceeded');
   };
 
-  await runJob(failJobId, failingExecutor);
+  try {
+    await runJob(failJobId, failingExecutor);
+  } catch {
+    // Expected — runJob re-throws executor errors after recording them in DB
+  }
 
   const failedJob = getJob(failJobId);
   console.log(`  Status: ${failedJob?.status}`);   // 'error'
@@ -323,11 +327,15 @@ async function example7_retryJob(): Promise<void> {
     };
   });
 
-  await runJob(retryJobId, (onLog) => {
-    attemptCount++;
-    onLog(`Attempt #${attemptCount}`);
-    throw new Error('Transient network error');
-  });
+  try {
+    await runJob(retryJobId, (onLog) => {
+      attemptCount++;
+      onLog(`Attempt #${attemptCount}`);
+      throw new Error('Transient network error');
+    });
+  } catch {
+    // Expected — runJob re-throws executor errors after recording them in DB
+  }
 
   const afterFail = getJob(retryJobId);
   console.log(`  After first run: status=${afterFail?.status}, error=${afterFail?.error}`);

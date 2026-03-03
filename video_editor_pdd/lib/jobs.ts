@@ -1,139 +1,132 @@
-// lib/jobs.ts
-try { require('server-only'); } catch { /* running outside Next.js bundler */ }
+// server-only guard — enforced by Next.js bundler in production
+try { require('server-only'); } catch {}
 
-import * as crypto from 'crypto';
-import type { PipelineStage, Job, JobStatus, SseSend, OnLog } from './types';
-import { getDb } from './db';
+import * as crypto from "crypto";
+import type { Job, JobStatus, PipelineStage, SseSend } from "./types";
+import { getDb } from "./db";
+
+type Executor = (
+  onLog: (msg: string) => void,
+  onProgress?: (percent: number) => void
+) => Promise<void>;
 
 export type ExecutorFactory = (
   params: Record<string, unknown>,
   send: SseSend
-) => (onLog: (msg: string) => void) => Promise<void>;
+) => Executor;
 
-const EXECUTORS = new Map<PipelineStage, ExecutorFactory>();
+const executorRegistry = new Map<PipelineStage, ExecutorFactory>();
+const jobSendRegistry = new Map<string, SseSend>();
 
-export function registerExecutor(stage: PipelineStage, factory: ExecutorFactory): void {
-  EXECUTORS.set(stage, factory);
-}
+const noopSend: SseSend = () => {
+  // Intentionally empty
+};
 
-/** Remove all registered executors (test helper). */
-export function clearExecutors(): void {
-  EXECUTORS.clear();
-}
-
-// ---------------------------------------------------------------------------
-// Pipeline DAG
-// ---------------------------------------------------------------------------
-export const PIPELINE_DAG: Record<PipelineStage, PipelineStage[]> = {
+const DAG: Record<PipelineStage, PipelineStage[]> = {
   setup: [],
-  script: ['setup'],
-  'tts-script': ['script'],
-  'tts-render': ['tts-script'],
-  'audio-sync': ['tts-render'],
-  specs: ['script'],
-  veo: ['specs'],
-  compositions: ['audio-sync', 'veo'],
-  render: ['compositions'],
-  audit: ['render'],
+  script: ["setup"],
+  "tts-script": ["script"],
+  "tts-render": ["tts-script"],
+  "audio-sync": ["tts-render"],
+  specs: ["script"],
+  veo: ["specs"],
+  compositions: ["audio-sync", "veo"],
+  render: ["compositions"],
+  audit: ["render"],
 };
 
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
-const NOOP_SEND: SseSend = () => {
-  // intentionally empty
-};
-
-function nowIso(): string {
+function isoNow(): string {
   return new Date(Date.now()).toISOString();
 }
 
-function getStageStatus(stage: PipelineStage): {
-  status: string;
-  lastJobId: string | null;
-} | null {
-  const db = getDb();
-  const row = db
-    .prepare(
-      `SELECT status, lastJobId FROM pipeline_status WHERE stage = ? LIMIT 1`
-    )
-    .get(stage) as { status: string; lastJobId: string | null } | undefined;
+function parseParams(raw: unknown): Record<string, unknown> {
+  if (raw && typeof raw === "string") {
+    try {
+      return JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      return {};
+    }
+  }
+  if (raw && typeof raw === "object") {
+    return raw as Record<string, unknown>;
+  }
+  return {};
+}
 
-  return row ?? null;
+function appendLog(jobId: string, message: string): void {
+  const db = getDb();
+  const line = message.endsWith("\n") ? message : `${message}\n`;
+  try {
+    db.prepare(
+      `UPDATE jobs
+       SET logs = COALESCE(logs, '') || ?,
+           updatedAt = ?
+       WHERE id = ?`
+    ).run(line, isoNow(), jobId);
+  } catch {
+    // The logs column might not exist in older schemas; ignore if so.
+  }
+}
+
+function updateProgress(jobId: string, percent: number): number {
+  const normalized = Math.max(0, Math.min(100, Math.round(percent)));
+  const db = getDb();
+  db.prepare(`UPDATE jobs SET progress = ?, updatedAt = ? WHERE id = ?`).run(
+    normalized,
+    isoNow(),
+    jobId
+  );
+  return normalized;
 }
 
 function upsertPipelineStatus(
   stage: PipelineStage,
-  status: string,
-  lastJobId: string,
-  error: string | null = null
+  status: JobStatus,
+  jobId: string,
+  error: string | null
 ): void {
   const db = getDb();
-  const updatedAt = nowIso();
   db.prepare(
-    `INSERT INTO pipeline_status (stage, status, lastJobId, error, updatedAt)
-     VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(stage) DO UPDATE SET
-       status = excluded.status,
-       lastJobId = excluded.lastJobId,
-       error = excluded.error,
-       updatedAt = excluded.updatedAt`
-  ).run(stage, status, lastJobId, error, updatedAt);
+    `INSERT OR REPLACE INTO pipeline_status (stage, status, lastJobId, error, updatedAt)
+     VALUES (?, ?, ?, ?, ?)`
+  ).run(stage, status, jobId, error, isoNow());
 }
 
-function safeAppendLog(jobId: string, msg: string): void {
+function getPipelineStatus(stage: PipelineStage): {
+  status: JobStatus;
+  lastJobId: string | null;
+} | null {
   const db = getDb();
-  const updatedAt = nowIso();
-  const line = msg.endsWith('\n') ? msg : `${msg}\n`;
+  const row = db
+    .prepare(`SELECT status, lastJobId FROM pipeline_status WHERE stage = ?`)
+    .get(stage) as { status: JobStatus; lastJobId: string | null } | undefined;
 
-  try {
-    db.prepare(
-      `UPDATE jobs
-       SET logs = COALESCE(logs, '') || ?, updatedAt = ?
-       WHERE id = ?`
-    ).run(line, updatedAt, jobId);
-  } catch {
-    // logs column might not exist in older schema; ignore gracefully
-  }
+  return row ?? null;
 }
 
-function updateProgress(jobId: string, percent: number): void {
-  const db = getDb();
-  db.prepare(
-    `UPDATE jobs
-     SET progress = ?, updatedAt = ?, status = 'running'
-     WHERE id = ?`
-  ).run(percent, nowIso(), jobId);
+export function registerExecutor(stage: PipelineStage, factory: ExecutorFactory): void {
+  executorRegistry.set(stage, factory);
 }
-
-// ---------------------------------------------------------------------------
-// API
-// ---------------------------------------------------------------------------
 
 export function createJob(
   stage: PipelineStage,
-  params: Record<string, unknown>,
-  retryOf?: string
+  params: Record<string, unknown> = {}
 ): string {
   const db = getDb();
   const id = crypto.randomUUID();
-  const now = nowIso();
+  const now = isoNow();
 
-  const jsonParams = JSON.stringify(params ?? {});
-
+  const payload = JSON.stringify(params ?? {});
   try {
-    // Prefer insert with logs and retryOf columns
-    db.prepare(
-      `INSERT INTO jobs (id, stage, status, progress, error, params, logs, createdAt, updatedAt, retryOf)
-       VALUES (?, ?, 'pending', 0, NULL, ?, '', ?, ?, ?)`
-    ).run(id, stage, jsonParams, now, now, retryOf ?? null);
-  } catch {
-    // Fallback if retryOf column missing
     db.prepare(
       `INSERT INTO jobs (id, stage, status, progress, error, params, logs, createdAt, updatedAt)
        VALUES (?, ?, 'pending', 0, NULL, ?, '', ?, ?)`
-    ).run(id, stage, jsonParams, now, now);
+    ).run(id, stage, payload, now, now);
+  } catch {
+    db.prepare(
+      `INSERT INTO jobs (id, stage, status, progress, error, params, createdAt, updatedAt)
+       VALUES (?, ?, 'pending', 0, NULL, ?, ?, ?)`
+    ).run(id, stage, payload, now, now);
   }
 
   return id;
@@ -141,230 +134,145 @@ export function createJob(
 
 export function getJob(jobId: string): Job | undefined {
   const db = getDb();
-  const row = db
-    .prepare(`SELECT * FROM jobs WHERE id = ? LIMIT 1`)
-    .get(jobId) as Record<string, unknown> | undefined;
+  const row = db.prepare(`SELECT * FROM jobs WHERE id = ?`).get(jobId) as
+    | {
+        id: string;
+        stage: PipelineStage;
+        status: JobStatus;
+        progress: number;
+        error: string | null;
+        params: string | Record<string, unknown>;
+        createdAt: string;
+        updatedAt: string;
+      }
+    | undefined;
 
   if (!row) return undefined;
 
-  const params =
-    typeof row.params === 'string' ? JSON.parse(row.params) : row.params;
-
   return {
-    id: row.id as string,
-    stage: row.stage as PipelineStage,
-    status: row.status as JobStatus,
-    progress: (row.progress as number) ?? 0,
-    error: (row.error as string | null) ?? null,
-    params: params as Record<string, unknown>,
-    logs: (row.logs as string) ?? '',
-    retryOf: (row.retryOf as string | null) ?? null,
-    createdAt: row.createdAt as string,
-    updatedAt: row.updatedAt as string,
+    id: row.id,
+    stage: row.stage,
+    status: row.status,
+    progress: row.progress ?? 0,
+    error: row.error ?? null,
+    params: parseParams(row.params),
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
   };
 }
 
-/**
- * Run a job with an executor that accepts an onLog callback.
- * The onLog handler appends logs to DB and emits SSE events.
- * Progress can be emitted from executor via:
- *   (onLog as any).progress?.(percent)
- */
 export async function runJob(
   jobId: string,
-  executor: (onLog: OnLog) => Promise<void>
+  executor: (onLog: (msg: string) => void) => Promise<void>
 ): Promise<void> {
   const db = getDb();
-  const jobRow = db
-    .prepare(`SELECT stage FROM jobs WHERE id = ? LIMIT 1`)
-    .get(jobId) as { stage: PipelineStage } | undefined;
-
-  if (!jobRow) {
-    throw new Error(`Job not found: ${jobId}`);
-  }
-
-  const stage = jobRow.stage;
-  const updatedAt = nowIso();
-
-  db.prepare(
-    `UPDATE jobs
-     SET status = 'running', updatedAt = ?
-     WHERE id = ?`
-  ).run(updatedAt, jobId);
-
-  upsertPipelineStatus(stage, 'running', jobId);
-
-  const send = JOB_SEND_MAP.get(jobId) ?? NOOP_SEND;
-
-  // Emit jobId immediately so the frontend can start tracking the job
-  // before the executor produces any output.
-  send({ type: 'started', jobId });
-
-  const onLog: OnLog = Object.assign(
-    (msg: string): void => {
-      safeAppendLog(jobId, msg);
-      send({ type: 'log', message: msg, jobId });
-    },
-    {
-      progress: (percent: number): void => {
-        updateProgress(jobId, percent);
-        send({ type: 'progress', percent, jobId });
-      },
-    }
-  );
-
-  try {
-    await executor(onLog);
-
-    db.prepare(
-      `UPDATE jobs
-       SET status = 'done', progress = 100, error = NULL, updatedAt = ?
-       WHERE id = ?`
-    ).run(nowIso(), jobId);
-
-    upsertPipelineStatus(stage, 'done', jobId, null);
-  } catch (err) {
-    const message =
-      err instanceof Error ? err.message : 'Unknown job error';
-
-    db.prepare(
-      `UPDATE jobs
-       SET status = 'error', error = ?, updatedAt = ?
-       WHERE id = ?`
-    ).run(message, nowIso(), jobId);
-
-    upsertPipelineStatus(stage, 'error', jobId, message);
-  }
-}
-
-/**
- * Retry a failed job by creating a NEW job linked to the original via retryOf.
- * The original job is NOT mutated — it keeps its error status.
- * Returns the new job ID.
- */
-export async function retryJob(jobId: string): Promise<string> {
-  const db = getDb();
   const row = db
-    .prepare(`SELECT stage, params FROM jobs WHERE id = ? LIMIT 1`)
-    .get(jobId) as { stage: PipelineStage; params: string } | undefined;
+    .prepare(`SELECT stage FROM jobs WHERE id = ?`)
+    .get(jobId) as { stage: PipelineStage } | undefined;
 
   if (!row) {
     throw new Error(`Job not found: ${jobId}`);
   }
 
-  const params =
-    typeof row.params === 'string' ? JSON.parse(row.params) : row.params;
+  const stage = row.stage;
+  db.prepare(
+    `UPDATE jobs SET status = 'running', progress = 0, error = NULL, updatedAt = ? WHERE id = ?`
+  ).run(isoNow(), jobId);
+  upsertPipelineStatus(stage, "running", jobId, null);
 
-  const factory = EXECUTORS.get(row.stage);
-  if (!factory) {
-    throw new Error(`No executor registered for stage "${row.stage}"`);
+  const send = jobSendRegistry.get(jobId) ?? noopSend;
+
+  const onLog = (message: string): void => {
+    appendLog(jobId, message);
+    send({ type: "log", message, jobId });
+  };
+
+  const onProgress = (percent: number): void => {
+    const normalized = updateProgress(jobId, percent);
+    send({ type: "progress", percent: normalized, jobId });
+  };
+
+  // Attach progress callback to onLog so executors can use onLog.progress(percent)
+  (onLog as unknown as { progress: typeof onProgress }).progress = onProgress;
+
+  try {
+    await executor(onLog);
+
+    db.prepare(
+      `UPDATE jobs SET status = 'done', progress = 100, updatedAt = ? WHERE id = ?`
+    ).run(isoNow(), jobId);
+    upsertPipelineStatus(stage, "done", jobId, null);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    db.prepare(
+      `UPDATE jobs SET status = 'error', error = ?, updatedAt = ? WHERE id = ?`
+    ).run(message, isoNow(), jobId);
+    upsertPipelineStatus(stage, "error", jobId, message);
+    throw error;
+  } finally {
+    jobSendRegistry.delete(jobId);
+  }
+}
+
+export async function retryJob(jobId: string): Promise<void> {
+  const job = getJob(jobId);
+  if (!job) {
+    throw new Error(`Job not found: ${jobId}`);
   }
 
-  // Create a new job linked to the original
-  const newJobId = createJob(row.stage, params as Record<string, unknown>, jobId);
-
-  const executor = factory(params as Record<string, unknown>, NOOP_SEND);
-  await runJob(newJobId, executor);
-
-  return newJobId;
-}
-
-const JOB_SEND_MAP = new Map<string, SseSend>();
-
-export function setJobSend(jobId: string, send: SseSend): void {
-  JOB_SEND_MAP.set(jobId, send);
-}
-
-export function clearJobSend(jobId: string): void {
-  JOB_SEND_MAP.delete(jobId);
-}
-
-/**
- * Create a job and start its executor in the background (fire-and-forget).
- * Returns the jobId immediately so the caller can return it to the client.
- * The client should connect to GET /api/jobs/[id]/stream for live updates.
- */
-export function startJobInBackground(
-  stage: PipelineStage,
-  params: Record<string, unknown> = {}
-): string {
-  const factory = EXECUTORS.get(stage);
-  const jobId = createJob(stage, params);
-
+  const factory = executorRegistry.get(job.stage);
   if (!factory) {
-    console.warn(`No executor registered for stage "${stage}"; job created but not started`);
-    return jobId;
+    throw new Error(`No executor registered for stage "${job.stage}"`);
   }
 
-  const executor = factory(params, NOOP_SEND);
-  runJob(jobId, executor).catch((err) => {
-    console.error(`Background job ${jobId} (${stage}) failed:`, err);
-  });
+  const db = getDb();
+  db.prepare(
+    `UPDATE jobs SET status = 'pending', progress = 0, error = NULL, updatedAt = ? WHERE id = ?`
+  ).run(isoNow(), jobId);
 
-  return jobId;
+  const executor = factory(job.params, noopSend);
+  await runJob(jobId, executor);
 }
 
-/**
- * Orchestrate DAG execution. Upstream stages are auto-run concurrently
- * if not already complete, then the requested stage is run.
- */
 export async function runPipelineStage(
   stage: PipelineStage,
   params: Record<string, unknown>,
   send: SseSend
 ): Promise<string> {
-  const memo = new Map<PipelineStage, Promise<string | undefined>>();
+  const memo = new Map<PipelineStage, Promise<string>>();
 
-  const runStageWithDeps = async (
-    current: PipelineStage,
-    forceRun: boolean
-  ): Promise<string | undefined> => {
-    if (memo.has(current)) {
-      return memo.get(current)!;
+  const ensureStage = async (target: PipelineStage): Promise<string> => {
+    if (memo.has(target)) {
+      return memo.get(target)!;
     }
 
-    const promise = (async (): Promise<string | undefined> => {
-      const deps = PIPELINE_DAG[current] ?? [];
-      await Promise.all(deps.map((dep) => runStageWithDeps(dep, false)));
-
-      if (!forceRun) {
-        const status = getStageStatus(current);
-        if (status?.status === 'done' && status.lastJobId) {
-          return status.lastJobId;
-        }
+    const promise = (async (): Promise<string> => {
+      const statusRow = getPipelineStatus(target);
+      if (statusRow?.status === "done" && statusRow.lastJobId) {
+        return statusRow.lastJobId;
       }
 
-      const factory = EXECUTORS.get(current);
+      const prereqs = DAG[target] ?? [];
+      await Promise.all(prereqs.map((req) => ensureStage(req)));
+
+      const factory = executorRegistry.get(target);
       if (!factory) {
-        if (!forceRun) {
-          // UI-only stage (e.g. setup, script) — no executor needed.
-          return undefined;
-        }
-        throw new Error(`No executor registered for stage "${current}"`);
+        throw new Error(`No executor registered for stage "${target}"`);
       }
 
-      const jobId = createJob(current, params);
-
-      // Store send handler for runJob's onLog
-      JOB_SEND_MAP.set(jobId, send);
-
-      try {
-        const executor = factory(params, send);
-        await runJob(jobId, executor);
-      } finally {
-        JOB_SEND_MAP.delete(jobId);
-      }
+      const jobId = createJob(target, params);
+      jobSendRegistry.set(jobId, send);
+      const executor = factory(params, send);
+      await runJob(jobId, executor);
 
       return jobId;
     })();
 
-    memo.set(current, promise);
+    memo.set(target, promise);
     return promise;
   };
 
-  const jobId = await runStageWithDeps(stage, true);
-  if (!jobId) {
-    throw new Error(`Failed to run stage "${stage}"`);
-  }
-  return jobId;
+  return ensureStage(stage);
 }
+
+export { DAG, DAG as PIPELINE_DAG };

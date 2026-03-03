@@ -16,16 +16,35 @@ import type { RenderProgress } from './types';
 
 const execAsync = promisify(exec);
 
-// Resolve Remotion bundle path (serve URL)
-const REMOTION_BUNDLE_PATH =
-  process.env.REMOTION_BUNDLE_PATH ?? path.join(process.cwd(), 'remotion');
+/**
+ * Resolve the Remotion bundle serve URL.
+ * Priority: REMOTION_BUNDLE_PATH env var → remotion/build directory → remotion directory.
+ */
+function getServeUrl(): string {
+  const envPath = process.env.REMOTION_BUNDLE_PATH;
+  if (envPath) return envPath;
+
+  const buildIndex = path.join(process.cwd(), 'remotion', 'build', 'index.html');
+  if (fs.existsSync(buildIndex)) {
+    return path.join(process.cwd(), 'remotion', 'build');
+  }
+
+  return path.join(process.cwd(), 'remotion');
+}
 
 /**
  * Ensure output directory exists.
  */
-function ensureDir(filePath: string) {
+async function ensureDir(filePath: string): Promise<void> {
   const dir = path.dirname(filePath);
-  fs.mkdirSync(dir, { recursive: true });
+  await fs.promises.mkdir(dir, { recursive: true });
+}
+
+/**
+ * Escape single quotes in a file path for ffmpeg concat format.
+ */
+function escapeForConcat(p: string): string {
+  return p.replace(/'/g, "'\\''");
 }
 
 /**
@@ -36,16 +55,17 @@ export async function renderSection(
   outputPath: string,
   onProgress: (p: RenderProgress) => void
 ): Promise<void> {
-  ensureDir(outputPath);
+  await ensureDir(outputPath);
 
+  const serveUrl = getServeUrl();
   const composition = await selectComposition({
-    serveUrl: REMOTION_BUNDLE_PATH,
+    serveUrl,
     id: compositionId,
   });
 
   await renderMedia({
     composition,
-    serveUrl: REMOTION_BUNDLE_PATH,
+    serveUrl,
     codec: 'h264',
     outputLocation: outputPath,
     onProgress: ({ progress }) => {
@@ -66,14 +86,14 @@ export async function stitchFullVideo(
   outputPath: string,
   onProgress: (p: RenderProgress) => void
 ): Promise<void> {
-  ensureDir(outputPath);
+  await ensureDir(outputPath);
 
   const concatFile = path.join(os.tmpdir(), `concat-${Date.now()}.txt`);
   const concatContent = sectionPaths
-    .map((p) => `file '${path.resolve(p)}'`)
+    .map((p) => `file '${escapeForConcat(path.resolve(p))}'`)
     .join('\n');
 
-  fs.writeFileSync(concatFile, concatContent);
+  await fs.promises.writeFile(concatFile, concatContent, 'utf-8');
 
   try {
     await execAsync(
@@ -82,10 +102,10 @@ export async function stitchFullVideo(
 
     onProgress({
       percent: 100,
-      message: 'Stitching complete',
+      message: 'Stitching complete.',
     });
   } finally {
-    fs.unlinkSync(concatFile);
+    await fs.promises.unlink(concatFile).catch(() => undefined);
   }
 }
 
@@ -108,16 +128,17 @@ export async function renderStill(
   frame: number,
   outputPath: string
 ): Promise<void> {
-  ensureDir(outputPath);
+  await ensureDir(outputPath);
 
+  const serveUrl = getServeUrl();
   const composition = await selectComposition({
-    serveUrl: REMOTION_BUNDLE_PATH,
+    serveUrl,
     id: compositionId,
   });
 
   await remotionRenderStill({
     composition,
-    serveUrl: REMOTION_BUNDLE_PATH,
+    serveUrl,
     output: outputPath,
     frame,
   });
