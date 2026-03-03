@@ -220,8 +220,9 @@ yarn.lock
 !pdd/frontend/lib/
 !pdd/frontend/package-lock.json
 
-# PDD internal directory (backups, locks, meta, worktrees, etc.)
+# PDD internal directory (backups, locks, worktrees, etc.)
 .pdd/
+!.pdd/meta/
 Makefile.test-staging
 
 # Large model weights (HuggingFace clones)
