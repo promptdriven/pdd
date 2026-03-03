@@ -1,3 +1,4 @@
+import re
 import subprocess
 import sys
 from typing import Tuple, Optional, List, Dict, Any, Set
@@ -26,6 +27,18 @@ from .agentic_update import run_agentic_update
 from .sync_determine_operation import calculate_sha256, read_fingerprint
 from . import DEFAULT_TIME
 
+# Config/data files that should not get prompts in repo-scan mode.
+# Users can still target these explicitly with single-file mode.
+_SKIP_EXTENSIONS = {
+    '.json', '.jsonl', '.yaml', '.yml', '.md', '.toml', '.ini',
+    '.css', '.html', '.lock', '.svg', '.png', '.jpg', '.gif',
+    '.ico', '.woff', '.woff2', '.ttf', '.eot', '.map',
+}
+_SKIP_FILENAMES = {
+    'package-lock.json', '.prettierrc', '.eslintrc', '.gitignore',
+    'tsconfig.json', 'next-env.d.ts',
+}
+
 custom_theme = Theme({
     "info": "cyan",
     "warning": "yellow",
@@ -34,6 +47,119 @@ custom_theme = Theme({
     "path": "dim blue",
 })
 console = Console(theme=custom_theme)
+
+def _extract_template_vars(concrete_path: str, template: str) -> Optional[Dict[str, str]]:
+    """Reverse-match a concrete path against a template to extract variable values.
+
+    Args:
+        concrete_path: Actual file path (e.g., "frontend/src/app/billing/page.tsx")
+        template: Template pattern (e.g., "frontend/src/{category}/{name}/{name}.tsx")
+
+    Returns:
+        Dictionary of extracted variables, or None if no match.
+    """
+    # Split template into literal and placeholder parts
+    parts = re.split(r'(\{[^}]+\})', template)
+    regex_parts = []
+    seen_vars: Set[str] = set()
+    for part in parts:
+        m = re.match(r'\{(\w+)\}', part)
+        if m:
+            var = m.group(1)
+            if var in seen_vars:
+                regex_parts.append(f'(?P={var})')
+            else:
+                regex_parts.append(f'(?P<{var}>[^/]+)')
+                seen_vars.add(var)
+        else:
+            regex_parts.append(re.escape(part))
+
+    pattern = '^' + ''.join(regex_parts) + '$'
+    match = re.match(pattern, concrete_path)
+    if match:
+        return match.groupdict()
+    return None
+
+
+def _resolve_prompt_from_pddrc(code_file_path: str, repo_root: str, language: str) -> Optional[str]:
+    """Try to resolve prompt path using .pddrc template configuration.
+
+    Loads .pddrc, finds the matching context for the code file, and if the
+    context has outputs.prompt.path and outputs.code.path templates, extracts
+    template variables from the code path and expands the prompt template.
+
+    Args:
+        code_file_path: Path to the code file.
+        repo_root: Repository root directory.
+        language: Language name for the code file.
+
+    Returns:
+        Absolute prompt path string, or None to fall back to default behavior.
+    """
+    from .construct_paths import _find_pddrc_file, _load_pddrc_config, detect_context_for_file, BUILTIN_EXT_MAP
+
+    pddrc_path = _find_pddrc_file(Path(repo_root))
+    if not pddrc_path:
+        return None
+
+    try:
+        config = _load_pddrc_config(pddrc_path)
+    except Exception:
+        return None
+
+    pddrc_parent = pddrc_path.parent
+
+    # Find matching context
+    context_name, _ = detect_context_for_file(code_file_path, repo_root)
+    if not context_name:
+        return None
+
+    # Get outputs config from the context
+    contexts = config.get('contexts', {})
+    context_config = contexts.get(context_name, {})
+    defaults = context_config.get('defaults', {})
+    outputs = defaults.get('outputs', {})
+    prompt_template = outputs.get('prompt', {}).get('path')
+    code_template = outputs.get('code', {}).get('path')
+
+    if not prompt_template:
+        return None
+
+    # Get code file relative to pddrc_parent
+    code_abs = os.path.abspath(code_file_path)
+    try:
+        code_rel = os.path.relpath(code_abs, str(pddrc_parent))
+    except ValueError:
+        return None
+
+    # Extract name from filename (without extension)
+    base_name = os.path.splitext(os.path.basename(code_file_path))[0]
+
+    # Try to extract {category} and other vars from code template
+    category = ''
+    if code_template:
+        extracted = _extract_template_vars(code_rel, code_template)
+        if extracted:
+            category = extracted.get('category', '')
+            base_name = extracted.get('name', base_name)
+
+    # Get file extension for language
+    ext = BUILTIN_EXT_MAP.get(language.lower(), '')
+
+    # Expand prompt template
+    template_context = {
+        'name': base_name,
+        'category': category,
+        'dir_prefix': f'{category}/' if category else '',
+        'ext': ext,
+        'language': language,
+    }
+    expanded = prompt_template
+    for key, value in template_context.items():
+        expanded = expanded.replace('{' + key + '}', value)
+
+    return str(pddrc_parent / expanded)
+
 
 def resolve_prompt_code_pair(code_file_path: str, quiet: bool = False, output_dir: Optional[str] = None) -> Tuple[str, str]:
     """
@@ -48,7 +174,8 @@ def resolve_prompt_code_pair(code_file_path: str, quiet: bool = False, output_di
         output_dir: Custom output directory (overrides default 'prompts' directory)
     """
     language = get_language(os.path.splitext(code_file_path)[1])
-    language = language.lower() if language else "unknown"
+    if not language:
+        language = "unknown"
 
     # Extract the filename without extension and directory
     code_filename = os.path.basename(code_file_path)
@@ -67,6 +194,27 @@ def resolve_prompt_code_pair(code_file_path: str, quiet: bool = False, output_di
     except:
         # If not a git repo, use the directory containing the code file
         pass
+
+    # Try template-based resolution from .pddrc first (when no explicit output_dir)
+    if not output_dir:
+        template_path = _resolve_prompt_from_pddrc(code_file_path, repo_root, language)
+        if template_path:
+            prompt_path = Path(template_path)
+            if not prompt_path.parent.exists():
+                try:
+                    prompt_path.parent.mkdir(parents=True, exist_ok=True)
+                    if not quiet:
+                        console.print(f"[success]Created prompts directory:[/success] [path]{prompt_path.parent}[/path]")
+                except OSError as e:
+                    console.print(f"[error]Failed to create prompts directory: {e}[/error]")
+            if not prompt_path.exists():
+                try:
+                    prompt_path.touch()
+                    if not quiet:
+                        console.print(f"[success]Created missing prompt file:[/success] [path]{template_path}[/path]")
+                except OSError as e:
+                    console.print(f"[error]Failed to create file {template_path}: {e}[/error]")
+            return str(prompt_path), code_file_path
 
     # Determine the base prompts directory
     context_config = {}
@@ -160,7 +308,9 @@ def find_and_resolve_all_pairs(repo_root: str, quiet: bool = False, extensions: 
             get_language(os.path.splitext(f)[1]) and  # Pass extension, not full path
             not f.endswith('.prompt') and
             not os.path.splitext(os.path.basename(f))[0].startswith('test_') and
-            not os.path.splitext(os.path.basename(f))[0].endswith('_example')
+            not os.path.splitext(os.path.basename(f))[0].endswith('_example') and
+            os.path.splitext(f)[1].lower() not in _SKIP_EXTENSIONS and
+            os.path.basename(f) not in _SKIP_FILENAMES
         )
     ]
 
