@@ -132,7 +132,9 @@ def build_one_session_prompt(
         )
 
     # Progress file path for step-level reporting
-    progress_file = project_root / f".pdd_one_session_progress_{basename}"
+    # Sanitize basename to avoid nested paths for subdirectory modules (e.g., core/cloud)
+    safe_basename = basename.replace("/", "_")
+    progress_file = project_root / f".pdd_one_session_progress_{safe_basename}"
 
     # Compute import base for example generation guidance
     import_base = _compute_import_base(code_path, project_root)
@@ -211,7 +213,9 @@ def run_one_session_sync(
     logger.info("Starting one-session sync for %s (%s)", basename, language)
 
     # Progress file for step-level reporting from the agent
-    progress_file = project_root / f".pdd_one_session_progress_{basename}"
+    # Sanitize basename to avoid nested paths for subdirectory modules (e.g., core/cloud)
+    safe_basename = basename.replace("/", "_")
+    progress_file = project_root / f".pdd_one_session_progress_{safe_basename}"
     # Clean up any stale progress file from a previous run
     if progress_file.exists():
         progress_file.unlink()

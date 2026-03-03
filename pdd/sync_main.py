@@ -742,6 +742,12 @@ def sync_main(
             examples_dir = resolved_config.get("examples_dir", "examples")
 
             if one_session:
+                if skip_tests or skip_verify:
+                    raise click.UsageError(
+                        "--one-session cannot be combined with --skip-tests or --skip-verify; "
+                        "these flags are not supported in one-session mode."
+                    )
+
                 from .one_session_sync import run_one_session_sync
                 from .sync_determine_operation import get_pdd_file_paths
 
@@ -769,8 +775,6 @@ def sync_main(
                     )
                     # code_generator_main returns (content, was_incremental, cost, model)
                     pre_cost = gen_result[2] if gen_result and len(gen_result) > 2 else 0.0
-                    if remaining_budget is not None:
-                        remaining_budget -= pre_cost
                 elif not quiet:
                     rprint("[dim]Code file exists, skipping generate.[/dim]")
 

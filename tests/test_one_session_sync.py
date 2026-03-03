@@ -777,9 +777,9 @@ class TestAgenticSyncRunnerOneSession:
             except Exception:
                 pass
 
-            if mock_popen.called:
-                cmd = mock_popen.call_args[0][0]
-                assert "--one-session" in cmd
+            assert mock_popen.called, "Popen was never invoked"
+            cmd = mock_popen.call_args[0][0]
+            assert "--one-session" in cmd
 
     def test_one_session_not_in_cmd_when_false(self):
         """When sync_options has one_session=False, --one-session is not in cmd."""
@@ -813,9 +813,9 @@ class TestAgenticSyncRunnerOneSession:
             except Exception:
                 pass
 
-            if mock_popen.called:
-                cmd = mock_popen.call_args[0][0]
-                assert "--one-session" not in cmd
+            assert mock_popen.called, "Popen was never invoked"
+            cmd = mock_popen.call_args[0][0]
+            assert "--one-session" not in cmd
 
 
 # ---------------------------------------------------------------------------

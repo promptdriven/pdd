@@ -110,7 +110,7 @@ def sync(
     agentic: bool,
     timeout_adder: float,
     no_github_state: bool,
-    one_session: bool,
+    one_session: Optional[bool],
 ) -> Optional[Tuple[str, float, str]]:
     """
     Synchronize prompts with code and tests.
