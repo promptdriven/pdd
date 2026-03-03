@@ -284,7 +284,10 @@ def find_and_resolve_all_pairs(repo_root: str, quiet: bool = False, extensions: 
     Scans the repo for code files, resolves their prompt pairs, and returns all pairs.
     """
     pairs = []
-    ignored_dirs = {'.git', '.idea', '.vscode', '__pycache__', 'node_modules', '.venv', 'venv', 'dist', 'build'}
+    ignored_dirs = {'.git', '.idea', '.vscode', '__pycache__', 'node_modules',
+                     '.venv', 'venv', 'dist', 'build',
+                     '.next', '.nuxt', '.output', '.cache', '.turbo',
+                     '.parcel-cache', 'coverage', '.pdd'}
     
     if not quiet:
         console.print(f"[info]Scanning repository and resolving prompt/code pairs...[/info]")
