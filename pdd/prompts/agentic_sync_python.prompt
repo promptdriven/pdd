@@ -19,9 +19,18 @@ Entry point for the agentic sync workflow. Accepts a GitHub issue URL, fetches i
 10. If LLM flags dependency corrections: update architecture.json in-place before building the graph
 11. Build dependency subgraph from architecture.json (via `build_dep_graph_from_architecture`)
 12. Fallback: if no architecture.json, use `build_dependency_graph(prompts_dir)` from `sync_order.py`
-13. Dispatch to `AsyncSyncRunner` with basenames, dep graph, sync options, and GitHub info
-14. Aggregate costs from LLM identification + runner execution
-15. Include `one_session` in `sync_options` dict passed to `AsyncSyncRunner`
+13. Strip language suffixes from LLM-returned basenames using `extract_module_from_include(m + ".prompt")` before passing to dep graph or runner
+14. Dry-run validation (between dep graph building and runner dispatch): for each module, resolve its cwd then run `pdd sync <basename> --dry-run`; if dry-run fails, use LLM fallback to suggest the correct cwd/command
+15. Dispatch to `AsyncSyncRunner` with basenames, dep graph, sync options, GitHub info, `issue_url`, and `module_cwds` map from dry-run validation
+16. Aggregate costs from LLM identification + dry-run validation + runner execution
+17. Include `one_session` in `sync_options` dict passed to `AsyncSyncRunner`
+
+% Dry-Run Validation Pipeline
+The dry-run validation (step 14) uses a hybrid approach:
+1. `_resolve_module_cwd(basename, project_root)` — programmatically resolve the correct working directory by scanning `.pddrc` files (project root first, then subdirectories up to depth 2); uses `_detect_context_from_basename` and `_load_pddrc_config` from `construct_paths`; deepest non-default context match wins; skip catch-all patterns (`**`, `*`) from subdirectories via `_is_catchall_match`
+2. `_run_single_dry_run(basename, cwd)` — execute `pdd --force sync <basename> --dry-run --agentic --no-steer` via subprocess with `PDD_FORCE=1 CI=1` env vars, 60s timeout
+3. If dry-run fails, `_llm_fix_dry_run_failure(basename, project_root, error)` — load `agentic_sync_fix_dry_run_LLM` prompt template, provide project tree (2 levels) and .pddrc locations, parse `SYNC_CMD:` from response, execute via shell with pwd marker to extract effective cwd, validate cwd is within project root
+4. `_run_dry_run_validation(modules, project_root)` — orchestrates steps 1-3 for all modules, returns `(all_valid, module_cwds, errors, llm_cost)`
 
 % Helper Functions
 - `_is_github_issue_url(s: str) -> bool`: regex check for `github\.com/.+/issues/\d+`
@@ -29,6 +38,11 @@ Entry point for the agentic sync workflow. Accepts a GitHub issue URL, fetches i
 - `_load_architecture_json(project_root: Path) -> Tuple[Optional[List], Path]`: load and validate architecture.json
 - `_parse_llm_response(response: str) -> Tuple[List[str], bool, List[Dict]]`: extract modules, deps validity, corrections
 - `_apply_architecture_corrections(arch_path, architecture, corrections, quiet) -> List[Dict]`: patch and write architecture.json
+- `_is_catchall_match(basename: str, config: Dict) -> bool`: check if a .pddrc match is only from catch-all patterns (specificity 0)
+- `_resolve_module_cwd(basename: str, project_root: Path) -> Path`: determine correct cwd from .pddrc discovery
+- `_run_single_dry_run(basename: str, cwd: Path, quiet) -> Tuple[bool, str]`: run dry-run subprocess
+- `_llm_fix_dry_run_failure(basename, project_root, dry_run_error, quiet, verbose) -> Tuple[bool, Optional[Path], float, str]`: LLM fallback for failed dry-runs
+- `_run_dry_run_validation(modules, project_root, quiet, verbose) -> Tuple[bool, Dict[str, Path], List[str], float]`: orchestrate dry-run with LLM fallback
 - `_post_error_comment(owner, repo, issue_number, message)`: post error to GitHub issue
 
 % Dependencies
@@ -36,13 +50,16 @@ Entry point for the agentic sync workflow. Accepts a GitHub issue URL, fetches i
 <pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
 <pdd.agentic_sync_runner><include>context/agentic_sync_runner_example.py</include></pdd.agentic_sync_runner>
 <pdd.sync_order><include>context/sync_order_example.py</include></pdd.sync_order>
+- `pdd.construct_paths`: `_detect_context_from_basename(basename, config)` detects which context matches a basename; `_load_pddrc_config(pddrc_path)` loads and parses a .pddrc YAML file
+- `pdd.agentic_sync_runner`: also import `_find_pdd_executable` for locating the pdd CLI binary
 
 % Error Handling
 - Return `(False, "gh CLI not found...", 0.0, "")` if `gh` command not available
 - Return `(False, "Invalid GitHub issue URL: {url}", 0.0, "")` if URL parsing fails
 - Return `(False, "Failed to fetch issue: {error}", 0.0, "")` if GitHub API fails
 - Return `(False, "LLM identified no modules to sync", cost, provider)` if LLM returns empty list
-- Post error comment on GitHub issue when LLM fails (if `use_github_state` is True)
+- Return `(False, "Dry-run validation failed:\n{errors}", cost, provider)` if dry-run validation fails
+- Post error comment on GitHub issue when LLM or dry-run fails (if `use_github_state` is True)
 
 % Deliverables
 - Code: `pdd/agentic_sync.py`

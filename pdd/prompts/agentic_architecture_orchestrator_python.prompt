@@ -1,10 +1,10 @@
-<pdd-reason>Orchestrates the 8-step agentic architecture workflow with validation loop, state persistence, and context accumulation.</pdd-reason>
+<pdd-reason>Orchestrates the multi-step agentic architecture workflow with gates, validation, state persistence, and context accumulation.</pdd-reason>
 <pdd-interface>
 {
   "type": "module",
   "module": {
     "functions": [
-      {"name": "run_agentic_architecture_orchestrator", "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool)", "returns": "Tuple[bool, str, float, str, List[str]]"}
+      {"name": "run_agentic_architecture_orchestrator", "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool, skip_prompts: bool, target_dir: Optional[str], force_single: bool, sibling_architectures: str, existing_pddrc: str, related_issues: Optional[List[int]])", "returns": "Tuple[bool, str, float, str, List[str]]"}
     ]
   }
 }
@@ -15,113 +15,141 @@
 Write the `pdd/agentic_architecture_orchestrator.py` module.
 
 % Role & Scope
-Orchestrator for the 8-step agentic architecture workflow. Runs each step as a separate agentic task, accumulates context between steps, tracks overall progress and cost, and supports resuming from saved state. Includes a validation loop (steps 7-8) that iterates until no errors are found (max 5 iterations). Post-processes successful output via render_mermaid.py.
+Orchestrator for the agentic architecture workflow. Runs each step as a separate agentic task, accumulates context between steps, tracks overall progress and cost, and supports resuming from saved state. Includes gate steps (1b complexity, 5b completeness) and per-step validation with in-place fixing (steps 10-12). Post-processes successful output via render_mermaid.py.
 
 % Requirements
-1. Function: `run_agentic_architecture_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True) -> Tuple[bool, str, float, str, List[str]]`
+1. Function: `run_agentic_architecture_orchestrator(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, *, cwd, verbose=False, quiet=False, timeout_adder=0.0, use_github_state=True, skip_prompts=False, target_dir=None, force_single=False, sibling_architectures="", existing_pddrc="", related_issues=None) -> Tuple[bool, str, float, str, List[str]]`
 2. Return 5-tuple: (success, final_message, total_cost, model_used, output_files)
-3. Run 8 steps, with steps 7-8 in a validation loop (max MAX_VALIDATION_ITERATIONS = 5)
-4. Accumulate step outputs to pass as context to subsequent steps
-5. Track total cost across all steps
+3. Accumulate step outputs as context for subsequent steps; track total cost
+4. `base_dir = cwd / target_dir` if target_dir else cwd (create if needed)
 
 % Per-Step Timeouts
-Define locally:
 ```python
-ARCH_STEP_TIMEOUTS: Dict[int, float] = {
-    1: 340.0,   # Analyze PRD
-    2: 340.0,   # Deep Analysis
-    3: 600.0,   # Research
-    4: 600.0,   # Design
-    5: 600.0,   # Research Dependencies
-    6: 1000.0,  # Generate
-    7: 340.0,   # Validate
-    8: 600.0,   # Fix
+ARCH_STEP_TIMEOUTS: Dict[Union[int, float], float] = {
+    1: 340.0,    # Analyze PRD
+    1.5: 340.0,  # Complexity assessment
+    2: 340.0,    # Deep Analysis
+    3: 600.0,    # Research
+    4: 600.0,    # Data Model Design
+    5: 600.0,    # Design
+    5.5: 600.0,  # Early completeness gate
+    6: 600.0,    # Research Dependencies
+    7: 1000.0,   # Generate (architecture.json + scaffolding)
+    8: 600.0,    # Generate and validate .pddrc
+    9: 900.0,    # Generate prompts
+    10: 340.0,   # Validate completeness
+    11: 600.0,   # Validate sync
+    12: 600.0,   # Validate dependencies
+    13: 900.0,   # Fix all validation errors
 }
 ```
-
-% Step Execution
-For each step:
-1. Check if step already completed (from saved state) - if so, skip and use cached output
-2. Load step prompt template via `load_prompt_template(f"agentic_arch_step{n}_{name}_LLM")`
-3. Format template with: issue_url, repo_owner, repo_name, issue_number, issue_content, issue_author, step1_output, step2_output, etc.
-4. Call `run_agentic_task(formatted_prompt, cwd, ..., timeout=ARCH_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder, max_retries=DEFAULT_MAX_RETRIES)`
-5. Store output for subsequent steps
-6. Save state after step completes (for resumption)
-7. Accumulate cost: `total_cost += step_cost`
 
 % Step Sequence
 | Step | Template Name | Purpose |
 |------|---------------|---------|
 | 1 | agentic_arch_step1_analyze_prd_LLM | Extract features, tech stack, requirements from PRD |
+| 1b | agentic_arch_step1b_complexity_LLM | Assess PRD complexity; exit if COMPLEX (unless force_single) |
 | 2 | agentic_arch_step2_analyze_LLM | Deep analysis: module boundaries, shared concerns |
 | 3 | agentic_arch_step3_research_LLM | Web research for tech stack docs and conventions |
-| 4 | agentic_arch_step4_design_LLM | Design module breakdown with dependency graph |
-| 5 | agentic_arch_step5_research_deps_LLM | Find API docs and code examples per module |
-| 6 | agentic_arch_step6_generate_LLM | Generate complete architecture.json |
-| 7 | agentic_arch_step7_validate_LLM | Validate generated architecture |
-| 8 | agentic_arch_step8_fix_LLM | Fix validation errors |
+| 4 | agentic_arch_step4_data_model_LLM | Data model design: entities, relationships, storage |
+| 5 | agentic_arch_step5_design_LLM | Design module breakdown with dependency graph |
+| 5b | agentic_arch_step5b_completeness_gate_LLM | Validate module design completeness (max 3 retries; hard stop on failure) |
+| 6 | agentic_arch_step6_research_deps_LLM | Find API docs and code examples per module |
+| 7 | agentic_arch_step7_generate_LLM | Generate architecture.json and scaffolding files |
+| 8 | agentic_arch_step8_pddrc_LLM | Generate and validate .pddrc configuration |
+| 9 | agentic_arch_step9_prompts_LLM | Generate prompt files (skipped if skip_prompts) |
+| 10 | agentic_arch_step10_completeness_LLM | Validate architecture completeness |
+| 11 | agentic_arch_step11_sync_LLM | Validate sync configuration |
+| 12 | agentic_arch_step12_deps_LLM | Validate prompt dependencies |
 
-% Validation Loop (Steps 7-8)
-```python
-validation_iteration = 0
-while validation_iteration < MAX_VALIDATION_ITERATIONS:
-    validation_iteration += 1
-    step7_output = run_step_7(current_architecture)
-    if "VALID" in step7_output:
-        break
-    step8_output = run_step_8(step7_output, current_architecture)
-    current_architecture = step8_output  # Updated JSON
-if validation_iteration >= MAX_VALIDATION_ITERATIONS:
-    print("Warning: Maximum validation iterations reached")
-```
+% Step Execution (Steps 1-5 and 6-8)
+For each step in two groups (steps_1_5 and steps_6_8):
+1. Skip if step < start_step (cached)
+2. Load template via `load_prompt_template(f"agentic_arch_step{n}_{name}_LLM")`
+3. Call `preprocess(template, recursive=True, double_curly_brackets=True, exclude_keys=context.keys())` to expand includes
+4. Un-double curly braces (`{{` → `{`), then substitute all context keys via string replace
+5. Call `run_agentic_task(instruction=formatted, cwd=cwd, timeout=..., label=f"step{n}", max_retries=DEFAULT_MAX_RETRIES)`
+6. On success: store output, advance last_completed_step
+7. On failure (not hard stop): store "FAILED: {output}", do NOT advance last_completed_step
+8. Save state after each step
 
-% Context Accumulation
-- Step 1 receives: issue_content
-- Step 2 receives: issue_content, step1_output
-- Step 3 receives: issue_content, step1_output, step2_output
-- Step 4 receives: issue_content, step1_output, step2_output, step3_output
-- Step 5 receives: issue_content, step4_output
-- Step 6 receives: issue_content, step1_output through step5_output
-- Step 7 receives: step6_output (or current_architecture from step 8)
-- Step 8 receives: step7_output, current_architecture
+% Step 1b: Complexity Gate
+After step 1 succeeds (skipped if `force_single`):
+- Run `agentic_arch_step1b_complexity_LLM`
+- If output contains `COMPLEXITY_RESULT: COMPLEX`: return failure ("PRD too complex - sub-issues created")
+- Otherwise: continue to step 2, save last_completed_step = 1.5
+
+% Step 4: Output Validation
+After step 4 succeeds, call `_check_step4_output(output)` which checks for data model markers vs wrong-step markers (module design). If step 4 output looks like module design instead of data model, mark as failed and retry.
+
+% Step 5b: Completeness Gate (MAX_STEP5B_RETRIES = 3)
+After step 5, before step 6:
+- Run `agentic_arch_step5b_completeness_gate_LLM`
+- Check for `VALIDATION_RESULT: VALID` to pass
+- On failure: run `agentic_arch_step5b_fix_LLM`, replace step5_output with fix output, retry
+- Hard stop after exhausting retries
+
+% Step 7: Special Handling
+- Parse `FILES_CREATED:` marker to track scaffolding files
+- Hash architecture.json before and after; detect no-op (unchanged file = agent failure)
+- Validate architecture.json exists, is valid JSON, and is a JSON array
+- Read verified architecture content into step7_output
+
+% Step 8: .pddrc Generation
+- Parse `FILES_CREATED:` marker, track scaffolding files
+- Verify .pddrc exists and is valid YAML
+
+% Step 9: Prompt Generation (skipped if skip_prompts)
+- Read .pddrc content and add to context as `pddrc_content`
+- Parse `FILES_CREATED:` marker, track prompt files
+
+% Validation Steps 10-12 (skipped if skip_prompts)
+Each runs via a `_run_validation_with_fix()` helper with MAX_STEP_RETRIES = 3:
+- Run validation template; check for `VALIDATION_RESULT: VALID`
+- On failure: run fix template (`agentic_arch_step13_fix_LLM`), parse `FILES_MODIFIED:` marker, re-read architecture.json from base_dir
+- If still failing after max retries: mark validation_success = False but continue to next step
+- After all three: if any failed, return success=False
+
+% File Tracking Helpers
+- `_parse_files_marker(output, marker)`: Parse `FILES_CREATED:` or `FILES_MODIFIED:` lines → list of file paths
+- `_verify_files_exist(cwd, files, quiet)`: Filter to files that actually exist on disk
+- Track `scaffolding_files` and `prompt_files` lists in state; add to output_files at the end
 
 % Early Exit Conditions (Hard Stops)
 | Step | Stop Condition | Detection |
 |------|----------------|-----------|
 | 1 | PRD insufficient | Output contains "PRD Content Insufficient" |
 | 2 | Tech stack ambiguous | Output contains "Tech Stack Ambiguous" |
-| 4 | Clarification needed | Output contains "Clarification Needed" |
+| 5 | Clarification needed | Output contains "Clarification Needed" |
 
 % Post-Processing
-After successful generation (step 6 or fix loop completes):
-1. Write architecture.json to cwd
-2. Import and run `render_mermaid.py` to generate architecture_diagram.html
-3. Add both files to output_files list
+After all steps complete:
+1. Call `_save_architecture_files(base_dir, final_architecture, issue_title)` — validates architecture.json, strips markdown fencing, writes clean JSON, generates Mermaid HTML diagram
+2. Add scaffolding files and prompt files to output_files (deduplicated)
+3. If validation_success is False: return (False, "validation errors detected", ...)
+4. On full success: clear_workflow_state and return True
 
 % State Persistence
 Use shared functions from agentic_common:
 - `load_workflow_state(cwd, issue_number, "architecture", state_dir, repo_owner, repo_name, use_github_state)`
 - `save_workflow_state(cwd, issue_number, "architecture", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)`
 - `clear_workflow_state(cwd, issue_number, "architecture", state_dir, repo_owner, repo_name, use_github_state)`
-- `validate_cached_state(last_completed_step, step_outputs, quiet=quiet)` - Validate cached state on load
+- `validate_cached_state(last_completed_step, step_outputs, quiet=quiet)` - Correct last_completed_step by scanning for "FAILED:" prefixed outputs
 - State directory: `.pdd/arch-state/`
 
 Orchestrator logic:
-- On start: Call `load_workflow_state()`, validate cached state, determine `start_step`
-- **State validation on load**: After loading state, call `validate_cached_state()` to find the actual last *successfully* completed step by scanning `step_outputs` for entries that do NOT start with "FAILED:". This prevents resuming past failed steps.
-- For steps >= start_step: Execute normally, call `save_workflow_state()` after each
-  - On success: Store output in step_outputs, set `last_completed_step = step_num`
-  - On failure (not hard stop): Store "FAILED: {output}" in step_outputs, keep `last_completed_step` unchanged from its current value (do NOT set to `step_num - 1`, as that step may also have failed)
-- On successful completion: Call `clear_workflow_state()`
+- On start: load state, validate cached state, determine start_step
+- Handle fractional step resume: 1.5 → start at 2, 5.5 → start at 6
+- Handle high step resume: ≥9 → start at 10, ≥8 → start at 9, ≥7 → start at 8
+- On failure (not hard stop): store "FAILED: {output}", keep last_completed_step unchanged (do NOT advance)
+- On successful completion: clear_workflow_state
 
-% Console Output
-1. Header: `Generating architecture for issue #{issue_number}: "{issue_title}"`
-2. Step progress: `[Step N/8] {description}...`
-3. Validation iterations: `[Step 7/8] Validating (iteration 2/5)...`
-4. Final summary with total cost and output files
+% Context Dict
+Build context dict with: issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, target_dir, target_dir_note, sibling_architectures, existing_pddrc, related_issues. Populate with cached step outputs on resume.
 
 % Dependencies
 Import from `agentic_common`: `run_agentic_task`, `DEFAULT_MAX_RETRIES`, `load_workflow_state`, `save_workflow_state`, `clear_workflow_state`, `validate_cached_state`
+Import from `pdd.preprocess`: `preprocess`
 <pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
 <pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
 <pdd.render_mermaid><include>context/render_mermaid_example.py</include></pdd.render_mermaid>

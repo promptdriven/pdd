@@ -30,6 +30,11 @@
             "name": "set_verbose_logging",
             "signature": "(verbose=False)",
             "returns": "None"
+          },
+          {
+            "name": "set_quiet_logging",
+            "signature": "()",
+            "returns": "None"
           }
         ]
       }
@@ -5764,7 +5769,7 @@
     }
   },
   {
-    "reason": "Orchestrates the 8-step agentic architecture workflow with validation loop, state persistence, and context accumulation.",
+    "reason": "Orchestrates the multi-step agentic architecture workflow with gates, validation, state persistence, and context accumulation.",
     "description": "Multi-step orchestrator for architecture generation from a GitHub issue PRD. Runs 8 steps sequentially (analyze PRD, deep analysis, research, design, research deps, generate, validate, fix) with a validation loop (steps 7-8, max 5 iterations). Handles state persistence for resume, context accumulation between steps, and post-processing via render_mermaid.",
     "dependencies": [],
     "priority": 152,
@@ -5781,7 +5786,7 @@
         "functions": [
           {
             "name": "run_agentic_architecture_orchestrator",
-            "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool)",
+            "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool, skip_prompts: bool, target_dir: Optional[str], force_single: bool, sibling_architectures: str, existing_pddrc: str, related_issues: Optional[List[int]])",
             "returns": "Tuple[bool, str, float, str, List[str]]"
           }
         ]
@@ -5793,7 +5798,7 @@
     }
   },
   {
-    "reason": "CLI entry point for agentic architecture workflow: detects GitHub issue URLs, fetches issue content, invokes orchestrator.",
+    "reason": "CLI entry point for agentic architecture workflow: detects GitHub issue URLs, fetches issue content, discovers cross-project context, invokes orchestrator.",
     "description": "Entry point module for agentic architecture generation. Detects GitHub issue URLs, fetches issue content and comments via gh API, ensures repository context, then invokes the orchestrator. Follows the same pattern as agentic_change.py and agentic_bug.py.",
     "dependencies": [
       "agentic_architecture_orchestrator_python.prompt"
@@ -5812,7 +5817,7 @@
         "functions": [
           {
             "name": "run_agentic_architecture",
-            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool, skip_prompts: bool)",
+            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool, skip_prompts: bool, target_dir: Optional[str], force_single: bool)",
             "returns": "Tuple[bool, str, float, str, List[str]]"
           },
           {
