@@ -7,22 +7,17 @@
 
 % Requirements
   1) Function `get_test_command_for_file(test_file: str, language: Optional[str] = None) -> Optional[str]`:
-     - Accepts a path to a test file and an optional language override.
      - Returns the resolved test command with the `{file}` placeholder replaced by the actual file path, or `None` if no command can be determined.
      - Resolution order (first match wins):
-       a) CSV `run_test_command` column from `language_format.csv` (if non-empty)
+       a) CSV `run_test_command` column from `language_format.csv` (if non-empty after stripping)
        b) Smart detection via `default_verify_cmd_for()` from `agentic_langtest`
        c) `None` (signals to caller that agentic fallback is needed)
 
   2) Language resolution:
      - If `language` parameter is provided, use it directly.
-     - Otherwise, infer the language from the file extension using `get_language()`.
+     - Otherwise, infer from the file extension using `get_language()`.
 
-  3) CSV location:
-     - Try multiple candidate paths in order (first that exists wins):
-       a) `Path(__file__).parent / "data" / "language_format.csv"` (package-relative)
-       b) `Path(__file__).parent.parent / "data" / "language_format.csv"` (project-root-relative)
-     - If no CSV is found, return an empty dict so smart detection (step 2) can still handle it.
+  3) CSV lookup via a private `_load_language_format()` helper that returns a dict keyed by extension. Try package-relative then project-root-relative paths; return empty dict if CSV not found.
 
 % Dependencies
   <get_language>
@@ -34,15 +29,4 @@
   </agentic_langtest>
 
 % Data Source
-  The file at `data/language_format.csv` (relative to package root) is a CSV with columns:
-  - `extension` (e.g., .py, .ts, .go)
-  - `run_test_command` (e.g., "python -m pytest {file} -v", empty for smart detection)
-  - (Other columns like `language`, `comment`, `run_command` exist but are not primary for this task)
-
-% Instructions
-  - Use the `csv` module to read the data file.
-  - Use `pathlib.Path` for file path operations.
-  - Extract the file extension from the test file path to perform CSV lookup.
-  - When replacing `{file}` placeholder, use the original test_file string as provided.
-  - Include docstrings for all public functions.
-  - Call `default_verify_cmd_for()` with the language in lowercase.
+  The file at `data/language_format.csv` (relative to package root) is a CSV with columns including `extension` and `run_test_command`.

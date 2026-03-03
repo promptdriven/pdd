@@ -2,25 +2,35 @@
 <include>context/ctx_obj_params.prompt</include>
 
 % Goal
-Write `pdd/update_main.py` with an `update_main` function - the CLI wrapper for updating prompts.
+Write `pdd/update_main.py` — the CLI wrapper for updating prompts based on modified code.
 
 % Role & Scope
-CLI wrapper for updating prompts based on modified code. Supports three modes: true update, regeneration, and repository-wide updates. Routes to agentic or legacy update based on `simple` parameter and agent availability.
+Supports three modes: true update, regeneration, and repository-wide updates. Routes to agentic or legacy update based on `simple` parameter and agent availability. In repo mode, detects changed files via fingerprint comparison (with git fallback) and performs post-update architecture/PRD sync.
 
 % Requirements
-1. Function: `update_main(ctx, input_prompt_file, modified_code_file, input_code_file, output, use_git, repo, extensions, directory, strength, temperature, simple: bool = False) -> Optional[Tuple[str, float, str]]`
+1. Function: `update_main(ctx, input_prompt_file: Optional[str], modified_code_file: Optional[str], input_code_file: Optional[str], output: Optional[str], use_git, repo, extensions, directory, strength: Optional[float], temperature: Optional[float], simple: bool = False, base_branch: str = "main") -> Optional[Tuple[str, float, str]]`
 2. Return (prompt, cost, model) on success, None on error
-3. Agentic routing (when `simple=False` and agents available): try agentic first, fall back to legacy on failure
-4. Read updated prompt file content after successful agentic update (agentic writes directly)
+3. Agentic routing (when `simple=False` and agents available): try agentic first, fall back to legacy on failure — applies to all three modes
+4. Read updated prompt file content after successful agentic update (agentic writes directly to file)
 5. Retrieve verbose/quiet/time from ctx.obj; pass to update functions
-6. Validate prompt is non-empty before writing
-7. Without --output, overwrite input_prompt_file in place
-8. use_git and input_code_file are mutually exclusive
+6. Resolve strength/temperature: prefer explicit params over ctx.obj values; update ctx.obj with resolved values
+7. Validate prompt is non-empty before writing (true update mode)
+8. Without --output, overwrite input_prompt_file in place
+9. use_git and input_code_file are mutually exclusive (raise ValueError)
 
 % Modes
-1. **True update**: input_prompt_file + modified_code_file + (use_git OR input_code_file). Empty prompt triggers generation mode.
-2. **Regeneration**: Only modified_code_file provided. Derive prompt path via helper. Detect directory vs file for --output.
-3. **Repo mode** (repo=True): Scan repo, create missing prompts, update all pairs with progress bar and summary table.
+1. **True update**: input_prompt_file + modified_code_file + (use_git OR input_code_file). Empty prompt triggers generation mode. When --output differs from input, copy source to output before agentic update (protects source from mutation).
+2. **Regeneration**: Only modified_code_file provided. Derive prompt path via `resolve_prompt_code_pair`. Detect directory vs file for --output.
+3. **Repo mode** (repo=True): Scan repo, detect changes, update only changed pairs with progress bar, then run post-update sync.
+
+% Helper Functions
+- `resolve_prompt_code_pair(code_file_path, quiet, output_dir) -> (prompt_path, code_path)`: Derives prompt file path from code file. Supports .pddrc context-aware `prompts_dir`. Preserves subdirectory structure relative to repo root (stripping `generate_output_path` prefix). Creates missing directories and empty prompt files.
+- `find_and_resolve_all_pairs(repo_root, quiet, extensions, output_dir) -> List[Tuple]`: Walks repo, filters code files, resolves prompt pairs.
+- `get_git_changed_files(repo_root, base_branch) -> Set[str]`: Combines merge-base diff, uncommitted changes, and untracked files into a set of absolute paths.
+- `derive_basename_and_language(code_file_path, repo_root) -> (basename, language)`: Extract file stem and language via `get_language`.
+- `is_code_changed(code_file_path, repo_root, git_changed_files) -> (bool, reason)`: Check fingerprint code_hash first; fall back to git changed set if no fingerprint.
+- `update_file_pair(prompt_file, code_file, ctx, repo, simple) -> Dict`: Wrapper for single pair update. Tries agentic first, then legacy (untracked/empty -> update_prompt with generation sentinel, else -> git_update). Returns dict with prompt_file, status, cost, model, error.
+- `_find_prd_file(project_root) -> Optional[Path]`: Find PRD file by convention: PRD.md, prd.md, *_prd.md, *_PRD.md.
 
 % Repo Mode Behavior
 - If `directory` provided, scan from that path; otherwise scan from repo root
@@ -28,13 +38,19 @@ CLI wrapper for updating prompts based on modified code. Supports three modes: t
 - Exclude files: *.prompt, test_*, *_example
 - Only process files where `get_language()` returns non-None
 - Filter by extensions if provided
-- Update strategy: untracked/empty prompt -> update_prompt, else -> git_update
-- Return: ("Repository update complete.", total_cost, "models") or None if no files
+- **Change detection**: Use `get_git_changed_files` + `is_code_changed` to filter pairs to only changed files. Skip if no changes detected.
+- Progress bar: Rich Progress with spinner, bar, percentage, time remaining, and running total cost
+- **Post-update fingerprinting**: After successful update, `save_fingerprint` for the pair via `infer_module_identity`
+- **Post-update architecture sync**: For each successfully updated prompt, call `update_architecture_from_prompt` if architecture.json exists
+- **Post-update PRD sync**: If architecture entries were updated, find PRD file and use `run_agentic_task` to review/update PRD content (parse `<updated-prd>` tags from LLM output)
+- Summary table: prompt file, status, cost, model, error columns. Show architecture/PRD status if relevant.
+- Return: ("Repository update complete.", total_cost, "models") or None if no files/no changes
 
 % Error Handling
-- Print Rich error (unless quiet) and return None on errors
+- Print Rich error (unless quiet) and return None on errors (ValueError, InvalidGitRepositoryError, Exception)
 - Re-raise click.Abort
-- Pass confirm_callback and force from ctx.obj to construct_paths
+- Pass confirm_callback, force, and context from ctx.obj to construct_paths
+- Module-level Rich Console with custom theme (info=cyan, warning=yellow, error=bold red, success=green, path=dim blue)
 
 % Dependencies
 <module_dependencies>
@@ -42,6 +58,9 @@ CLI wrapper for updating prompts based on modified code. Supports three modes: t
   <update_prompt_example><include>context/update_prompt_example.py</include></update_prompt_example>
   <git_update_example><include>context/git_update_example.py</include></git_update_example>
   <agentic_common_example><include>context/agentic_common_example.py</include></agentic_common_example>
+  <sync_determine_operation_example><include>context/sync_determine_operation_example.py</include></sync_determine_operation_example>
+  <architecture_sync_example><include>context/architecture_sync_example.py</include></architecture_sync_example>
+  <operation_log_example><include>context/operation_log_example.py</include></operation_log_example>
 </module_dependencies>
 
 % Deliverables

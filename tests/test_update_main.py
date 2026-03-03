@@ -397,8 +397,11 @@ def test_create_and_find_prompt_code_pairs(temp_git_repo):
     assert len(pairs) == len(expected_pairs)
     assert sorted(p[1] for p in pairs) == sorted(ep[1] for ep in expected_pairs)
 
+@patch('pdd.architecture_sync.update_architecture_from_prompt', return_value={"success": False, "updated": False, "changes": {}})
+@patch('pdd.update_main.is_code_changed', return_value=(True, "no fingerprint, file in git changed set"))
+@patch('pdd.update_main.get_git_changed_files', return_value=set())
 @patch('pdd.update_main.update_file_pair')
-def test_update_main_repo_mode_orchestration(mock_update_file_pair, temp_git_repo, capsys):
+def test_update_main_repo_mode_orchestration(mock_update_file_pair, mock_git_changed, mock_is_changed, mock_arch, temp_git_repo, capsys):
     """
     Test the main orchestration logic of update_main in --repo mode.
     """
@@ -419,7 +422,7 @@ def test_update_main_repo_mode_orchestration(mock_update_file_pair, temp_git_rep
     # Run update_main in repo mode
     result = update_main(ctx=ctx, input_prompt_file=None, modified_code_file=None, input_code_file=None, output=None, use_git=False, repo=True)
 
-    # Assert that the update function was called for each pair
+    # Assert that the update function was called for each pair (all 3 marked as changed)
     assert mock_update_file_pair.call_count == 3
 
     # Check the console output for the summary table
@@ -430,7 +433,7 @@ def test_update_main_repo_mode_orchestration(mock_update_file_pair, temp_git_rep
     assert "prompts/src/module2_javascript.prompt" in captured.out
     assert "prompts/src/existing_module_python.prompt" in captured.out
     assert "Total Estimated Cost" in captured.out
-    
+
     assert result is not None
     assert result[0] == "Repository update complete."
 
