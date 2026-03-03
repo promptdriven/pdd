@@ -40,7 +40,7 @@ const Subtitles: React.FC = () => {
         right: 0,
         display: "flex",
         justifyContent: "center",
-        padding: "0 140px",
+        padding: "0 200px",
         boxSizing: "border-box",
       }}
     >
@@ -50,9 +50,9 @@ const Subtitles: React.FC = () => {
           color: "white",
           padding: "12px 24px",
           borderRadius: 8,
-          fontSize: 32,
+          fontSize: 30,
           fontFamily: "sans-serif",
-          maxWidth: "90%",
+          maxWidth: "80%",
           textAlign: "center",
           overflowWrap: "break-word",
           wordBreak: "break-word",
