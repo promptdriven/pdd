@@ -1,8 +1,8 @@
-% You are an expert LLM Prompt Engineer.
+% You are an expert Python engineer.
 <include>context/python_preamble.prompt</include>
 
 % Role & Scope
-Write `pdd/git_update.py`. This module is responsible for managing the prompt synchronization workflow. It retrieves original source code from Git HEAD, routes the update logic to either an agentic or legacy prompt update path, and ensures the user's local modifications are preserved on disk throughout the process.
+Write `pdd/git_update.py`. This module manages the prompt synchronization workflow: it retrieves original source code from Git HEAD, routes the update logic to either an agentic or legacy prompt update path, and ensures the user's local modifications are preserved on disk throughout the process.
 
 % Requirements
 1. **Function Signature**: Implement `git_update` with the following signature:
@@ -11,17 +11,17 @@ Write `pdd/git_update.py`. This module is responsible for managing the prompt sy
    ```
    - `input_prompt` is the raw text content of the prompt.
    - `prompt_file` is the filesystem path to the prompt (required for agentic updates).
-2. **State Management**: 
+2. **State Management**:
    - Read the `modified_code` from disk before performing any Git operations.
    - Use `git.Repo(path, search_parent_directories=True)` to locate the repository.
    - Restore the original code from `Git HEAD` using a local checkout (do not fetch).
-   - **Crucial**: Always restore the user's modified code to the disk in a `finally` block to prevent data loss.
+   - **Crucial**: Always restore the user's modified code to disk in a `finally` block (best-effort) to prevent data loss.
 3. **Routing Logic**:
    - Use `run_agentic_update()` if `simple=False`, `prompt_file` is provided, and `get_available_agents()` returns a non-empty list.
    - If the agentic path succeeds, read the updated content from `prompt_file` and return it.
    - Fall back to `update_prompt()` (legacy path) if agentic conditions are not met or if the agentic update fails.
 4. **Git Safety**: Never stage (`git add`) or commit changes to the repository.
-5. **Output**: Return a tuple containing `(updated_prompt_content, total_cost, model_name)`. Return `None` for the prompt content on failure.
+5. **Output**: Return `(updated_prompt_content, total_cost, model_name)`. Accumulate costs across agentic and legacy paths. Return `None` for prompt content on failure.
 6. **Logging**: Use `rich.panel.Panel` and `rich.console.Console` to display success and error messages.
 
 % Dependencies
@@ -38,11 +38,5 @@ Write `pdd/git_update.py`. This module is responsible for managing the prompt sy
 </module_dependencies>
 
 % Instructions
-- Ensure `relative_path` is calculated correctly from the repo root for the `git checkout` command.
+- When calling `update_prompt`, use the `original_input_code` (from Git HEAD) and the `modified_code` (from disk).
 - When calling `run_agentic_update`, pass the `verbose` and `quiet` flags.
-- When calling `update_prompt`, use the `original_input_code` (from Git) and the `modified_code` (from disk).
-- Handle exceptions by printing a Rich Panel with the error message and returning the current accumulated cost.
-- Use `DEFAULT_TIME` imported from the local package.
-
-% Deliverables
-- A single Python file: `pdd/git_update.py`

@@ -25,7 +25,7 @@ Uses `agentic_crash_explore_LLM` (loaded via load_prompt_template).
 % Requirements
 1. Single-pass: explore mode only
 2. Project root is `Path.cwd()` (not derived from prompt file path)
-3. Record file mtimes before agent runs, detect changes after
+3. Record file mtimes before agent runs, detect changes after; merge with agent-reported changed_files (set union)
 4. Verification after fix:
    - Python: run the program file locally to verify no crash
      - Use `subprocess.DEVNULL` for stdin to prevent hangs on `input()`

@@ -70,6 +70,7 @@ Shared infrastructure for agentic CLI invocations (Claude Code, Gemini, Codex). 
 - `MIN_VALID_OUTPUT_LENGTH: int = 50`
 - `DEFAULT_MAX_RETRIES: int = 3`
 - `DEFAULT_RETRY_DELAY: float = 5.0`
+- `MAX_PATH_DISPLAY_LENGTH: int = 200` — truncation length for PATH in diagnostic messages
 - `MAX_ERROR_SNIPPET_LENGTH: int = 2000` — truncation length for provider error messages
 - `JOB_TIMEOUT_MARGIN_SECONDS: float = 120.0` — reserve for cleanup/reporting after last attempt
 - `MIN_ATTEMPT_TIMEOUT_SECONDS: float = 60.0` — don't start an attempt if less than this remains
@@ -113,6 +114,9 @@ After a provider returns success, detect false positives:
 - Empty output (after strip) is ALWAYS a false positive, regardless of cost
 - Zero cost AND short output (< MIN_VALID_OUTPUT_LENGTH) is a false positive
 - Treat as failure and retry/fallback
+
+% Suspicious File Detection
+After a genuine success (not false positive), check for single-letter files named `C`, `E`, `T` in the working directory. If found, log a bold red warning. These indicate CLI argument misinterpretation artifacts.
 
 % Deadline-Aware Retry Budgeting
 `get_job_deadline() -> Optional[float]` reads `PDD_JOB_DEADLINE` env var (set by server for subprocess jobs).

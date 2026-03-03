@@ -7,14 +7,17 @@ You are an expert Python developer responsible for implementing the `agentic_fix
     - Compare snapshots to detect all changed, new, and deleted files.
     - Exclude `.git` and `__pycache__` directories from snapshots.
 3. **Verification Logic**:
-    - **Preflight**: If the error log is empty or useless (empty XML tags, no error indicators), run tests locally first to capture actual failure output. The preflight uses the same fallback chain as verification: `PDD_AGENTIC_VERIFY_CMD` or `default_verify_cmd_for` → `get_run_command_for_file` → Python interpreter.
-    - **Standard gate** (`_verify_and_log`): Uses `verify_cmd` → `get_run_command_for_file` → Python fallback. All commands run via `bash -lc`.
-    - **Verification enablement**: Controlled by `PDD_AGENTIC_VERIFY_FORCE` (always on), `verify_cmd` presence, and `PDD_AGENTIC_VERIFY` env var (`"0"` disables, `"auto"` disables, else enabled). Default is enabled.
-    - For non-Python languages, trust the agent's own verification result.
-4. **Logging & UI**: Use `rich.console` for formatted output. Support "quiet", "normal", and "verbose" log levels via `PDD_AGENTIC_LOGLEVEL`. Auto-quiet under pytest. Show unified diffs and truncated output previews in verbose mode.
+    - **Preflight**: If the error log is empty or "useless" (e.g., contains only empty XML tags or lacks keywords like "Error", "Exception", "Traceback", or "failed"), run tests locally first to capture actual failure output.
+    - **Standard Gate** (`_verify_and_log`): Uses `verify_cmd` (with `{test}` and `{cwd}` placeholders) or falls back to `get_run_command_for_file`. If no command is found, default to the Python interpreter.
+    - **Verification Enablement**: Controlled by `PDD_AGENTIC_VERIFY_FORCE` (always on), `verify_cmd` presence, and `PDD_AGENTIC_VERIFY` env var (`"0"` disables, `"auto"` disables, else enabled). Default is enabled.
+    - For non-Python languages, trust the agent's own verification result from the explore task.
+4. **Logging & UI**: Use `rich.console` for formatted output. 
+    - Support "quiet", "normal", and "verbose" log levels via `PDD_AGENTIC_LOGLEVEL`. 
+    - Default to "quiet" if `PYTEST_CURRENT_TEST` is set.
+    - In verbose mode, show unified diffs of changed files and truncated previews of command outputs.
 5. **Resilience**: Handle timeouts (`PDD_AGENTIC_VERIFY_TIMEOUT`) for agent calls and verification steps. Ensure instruction files are cleaned up after execution.
 6. **Test Protection**: Accept a `protect_tests` flag and pass it to the agent prompt template to prevent the agent from modifying test files.
-7. **LLM CSV Discovery** (`find_llm_csv_path`): Look for `.pdd/llm_model.csv` in `$HOME` first, then in project cwd.
+7. **LLM CSV Discovery**: Implement `find_llm_csv_path` to look for `.pdd/llm_model.csv` in `$HOME` first, then in the project current working directory.
 
 ### Dependencies
 <get_language>
@@ -38,15 +41,19 @@ You are an expert Python developer responsible for implementing the `agentic_fix
 
 ### Instructions
 1. **Entry Point**: Implement `run_agentic_fix(prompt_file, code_file, unit_test_file, error_log_file, verify_cmd, cwd, *, verbose, quiet, protect_tests)` returning `(success, message, est_cost, used_model, changed_files)`.
-2. **Path Resolution**: Resolve code and test paths relative to the provided `cwd` parameter (not `Path.cwd()`). Use `Path.resolve()` consistently.
-3. **Prompt Construction**: Load `agentic_fix_primary_LLM` (Python) or `agentic_fix_nonpython_LLM` (other languages). Python template includes `verify_cmd` placeholder; non-Python does not.
-4. **Verification Flow**:
-    - For Python: run `_verify_and_log` locally.
-    - For non-Python: trust the agent's own result.
-5. **Error Handling**: Catch `FileNotFoundError` and general exceptions, returning structured tuples. Clean up instruction file in all code paths.
+2. **Path Resolution**: Resolve code and test paths relative to the provided `cwd` parameter. Use `Path.resolve()` consistently to ensure the agent receives absolute paths.
+3. **Prompt Construction**: Load `agentic_fix_primary_LLM` (Python) or `agentic_fix_nonpython_LLM` (other languages). 
+    - The Python template requires: `code_abs`, `test_abs`, `prompt_content`, `error_content`, `verify_cmd`, and `protect_tests`.
+    - The non-Python template requires: `code_abs`, `test_abs`, `prompt_content`, `error_content`, and `protect_tests`.
+4. **Execution Flow**:
+    - Detect available agents and log authentication methods (e.g., `ANTHROPIC_API_KEY`, `vertex-ai-auth`).
+    - Perform the preflight check to ensure `error_content` is meaningful before calling the agent.
+    - Snapshot mtimes, run `run_agentic_task`, and snapshot again to identify `changed_files`.
+    - Perform local verification for Python files; for others, use the agent's success status.
+5. **Error Handling**: Catch `FileNotFoundError` (specifically for missing CLI tools) and general exceptions. Ensure the temporary `agentic_fix_instructions.txt` is unlinked in all exit paths.
 
 ### Deliverables
 A single Python file `agentic_fix.py` containing:
 - The `run_agentic_fix` public function.
-- Helper functions for mtime snapshots (`_snapshot_mtimes`, `_detect_mtime_changes`), verification (`_verify_and_log`), and CSV discovery (`find_llm_csv_path`).
-- Integration with `rich` for console logging.
+- Helper functions for mtime snapshots (`_snapshot_mtimes`, `_detect_mtime_changes`), verification (`_verify_and_log`, `_run_testcmd`), and CSV discovery (`find_llm_csv_path`).
+- Internal logging helpers (`_info`, `_verbose`, `_print_head`, `_print_diff`) utilizing `rich.console`.
