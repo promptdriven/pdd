@@ -24,8 +24,6 @@ from .git_update import git_update
 from .agentic_common import get_available_agents
 from .agentic_update import run_agentic_update
 from .sync_determine_operation import calculate_sha256, read_fingerprint
-from .architecture_sync import update_architecture_from_prompt
-from .operation_log import save_fingerprint, infer_module_identity
 from . import DEFAULT_TIME
 
 custom_theme = Theme({
@@ -540,6 +538,7 @@ def update_main(
 
                 # Save fingerprint so the file isn't detected as changed next run
                 if "Success" in result.get("status", ""):
+                    from .operation_log import save_fingerprint, infer_module_identity
                     basename, language = infer_module_identity(prompt_path)
                     if basename and language:
                         try:
@@ -573,6 +572,7 @@ def update_main(
         ]
 
         if successful_prompts and architecture_path.exists():
+            from .architecture_sync import update_architecture_from_prompt
             for prompt_file in successful_prompts:
                 prompt_filename = os.path.basename(prompt_file)
                 try:

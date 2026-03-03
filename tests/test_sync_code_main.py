@@ -306,7 +306,7 @@ class TestUpdateMainRepoModeChangeDetection:
         )
         assert result is None
 
-    @patch("pdd.update_main.update_architecture_from_prompt", return_value={"success": False, "updated": False, "changes": {}})
+    @patch("pdd.architecture_sync.update_architecture_from_prompt", return_value={"success": False, "updated": False, "changes": {}})
     @patch("pdd.update_main.update_file_pair")
     @patch("pdd.update_main.is_code_changed")
     @patch("pdd.update_main.get_git_changed_files", return_value=set())
@@ -347,7 +347,7 @@ class TestUpdateMainRepoModeChangeDetection:
         assert cost == pytest.approx(0.01)
         mock_update.assert_called_once()
 
-    @patch("pdd.update_main.update_architecture_from_prompt", return_value={"success": False, "updated": False, "changes": {}})
+    @patch("pdd.architecture_sync.update_architecture_from_prompt", return_value={"success": False, "updated": False, "changes": {}})
     @patch("pdd.update_main.update_file_pair")
     @patch("pdd.update_main.is_code_changed", return_value=(True, "differs"))
     @patch("pdd.update_main.get_git_changed_files", return_value=set())
@@ -380,7 +380,7 @@ class TestUpdateMainRepoModeChangeDetection:
         _, kwargs = mock_update.call_args
         assert kwargs.get("simple") is True or mock_update.call_args[0][4] is True
 
-    @patch("pdd.update_main.update_architecture_from_prompt", return_value={"success": False, "updated": False, "changes": {}})
+    @patch("pdd.architecture_sync.update_architecture_from_prompt", return_value={"success": False, "updated": False, "changes": {}})
     @patch("pdd.update_main.update_file_pair")
     @patch("pdd.update_main.is_code_changed", return_value=(True, "differs"))
     @patch("pdd.update_main.get_git_changed_files", return_value=set())

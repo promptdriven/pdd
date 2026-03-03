@@ -397,7 +397,7 @@ def test_create_and_find_prompt_code_pairs(temp_git_repo):
     assert len(pairs) == len(expected_pairs)
     assert sorted(p[1] for p in pairs) == sorted(ep[1] for ep in expected_pairs)
 
-@patch('pdd.update_main.update_architecture_from_prompt', return_value={"success": False, "updated": False, "changes": {}})
+@patch('pdd.architecture_sync.update_architecture_from_prompt', return_value={"success": False, "updated": False, "changes": {}})
 @patch('pdd.update_main.is_code_changed', return_value=(True, "no fingerprint, file in git changed set"))
 @patch('pdd.update_main.get_git_changed_files', return_value=set())
 @patch('pdd.update_main.update_file_pair')
