@@ -284,11 +284,7 @@ def find_and_resolve_all_pairs(repo_root: str, quiet: bool = False, extensions: 
     Scans the repo for code files, resolves their prompt pairs, and returns all pairs.
     """
     pairs = []
-    ignored_dirs = {'.git', '.idea', '.vscode', '__pycache__', 'node_modules',
-                     '.venv', 'venv', 'dist', 'build',
-                     '.next', '.nuxt', '.output', '.cache', '.turbo',
-                     '.parcel-cache', 'coverage', '.pdd'}
-    
+
     if not quiet:
         console.print(f"[info]Scanning repository and resolving prompt/code pairs...[/info]")
 
@@ -299,11 +295,27 @@ def find_and_resolve_all_pairs(repo_root: str, quiet: bool = False, extensions: 
         if not quiet:
             console.print(f"[info]Filtering for extensions: {', '.join(allowed_extensions)}[/info]")
 
+    # Use git ls-files to respect .gitignore automatically.
+    # Falls back to os.walk with hardcoded ignores if git is unavailable.
     all_files = []
-    for root, dirs, files in os.walk(repo_root, topdown=True):
-        dirs[:] = [d for d in dirs if d not in ignored_dirs]
-        for file in files:
-            all_files.append(os.path.join(root, file))
+    try:
+        result = subprocess.run(
+            ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
+            capture_output=True, text=True, cwd=repo_root, check=True,
+        )
+        for rel_path in result.stdout.strip().splitlines():
+            if rel_path:
+                all_files.append(os.path.join(repo_root, rel_path))
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        # Fallback: os.walk with hardcoded directory ignores
+        ignored_dirs = {'.git', '.idea', '.vscode', '__pycache__', 'node_modules',
+                         '.venv', 'venv', 'dist', 'build',
+                         '.next', '.nuxt', '.output', '.cache', '.turbo',
+                         '.parcel-cache', 'coverage', '.pdd'}
+        for root, dirs, files in os.walk(repo_root, topdown=True):
+            dirs[:] = [d for d in dirs if d not in ignored_dirs]
+            for file in files:
+                all_files.append(os.path.join(root, file))
 
     code_files = [
         f for f in all_files
