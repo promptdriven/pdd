@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict
 from unittest.mock import MagicMock, patch
 
+import click
 import pytest
 
 from pdd.one_session_sync import (
@@ -838,3 +839,232 @@ class TestAgenticSyncOneSession:
         import inspect
         source = inspect.getsource(mod.run_agentic_sync)
         assert '"one_session": one_session' in source or "'one_session': one_session" in source
+
+
+# ---------------------------------------------------------------------------
+# Post-sync: fingerprint saving and auto-submit
+# ---------------------------------------------------------------------------
+
+class TestPostSyncFingerprintAndAutoSubmit:
+    """Tests for fingerprint saving and auto-submit after one-session sync."""
+
+    _PATCHES = [
+        "pdd.sync_main._auto_submit_example",
+        "pdd.operation_log.save_fingerprint",
+        "pdd.one_session_sync.run_one_session_sync",
+        "pdd.sync_determine_operation.get_pdd_file_paths",
+        "pdd.sync_main.construct_paths",
+        "pdd.sync_main._find_prompt_in_contexts",
+        "pdd.sync_main._detect_languages_with_context",
+    ]
+
+    def _make_ctx(self, quiet: bool = False, local: bool = False) -> MagicMock:
+        """Create a mock Click context with obj dict."""
+        ctx = MagicMock(spec=click.Context)
+        ctx.obj = {"quiet": quiet, "local": local}
+        return ctx
+
+    def _setup_mocks(self, mocks, pdd_files, success=True, local=False):
+        """Configure standard mock return values.
+
+        Args:
+            mocks: dict of name -> mock (keys: detect_langs, find_prompt,
+                   construct, get_paths, run, save_fp, submit)
+            pdd_files: pdd_files dict from _make_pdd_files
+            success: whether run_one_session_sync should return success
+            local: whether ctx should use local=True
+        """
+        prompt_file = pdd_files["prompt"]
+        # _find_prompt_in_contexts returns None (fall through to construct_paths discovery)
+        mocks["find_prompt"].return_value = None
+        # First construct_paths call (discovery) returns config with prompts_dir
+        discovery_config = {"prompts_dir": str(prompt_file.parent)}
+        # Second construct_paths call (per-language) returns full config
+        lang_config = {
+            "code_dir": str(pdd_files["code"].parent),
+            "tests_dir": str(pdd_files["test"].parent),
+            "examples_dir": str(pdd_files["example"].parent),
+        }
+        mocks["construct"].side_effect = [
+            (discovery_config, {}, {}, None),
+            (lang_config, {}, {}, "python"),
+        ]
+        # _detect_languages_with_context returns single language
+        mocks["detect_langs"].return_value = {"python": prompt_file}
+        # get_pdd_file_paths returns our pdd_files
+        mocks["get_paths"].return_value = pdd_files
+        # run_one_session_sync
+        if success:
+            mocks["run"].return_value = {
+                "success": True,
+                "total_cost": 1.5,
+                "model_name": "claude-code",
+                "operations_completed": ["example", "crash_fix", "verify", "test"],
+                "errors": [],
+            }
+        else:
+            mocks["run"].return_value = {
+                "success": False,
+                "total_cost": 0.5,
+                "model_name": "claude-code",
+                "operations_completed": [],
+                "errors": ["Something failed"],
+            }
+
+    @patch("pdd.sync_main._detect_languages_with_context")
+    @patch("pdd.sync_main._find_prompt_in_contexts")
+    @patch("pdd.sync_main._auto_submit_example")
+    @patch("pdd.operation_log.save_fingerprint")
+    @patch("pdd.one_session_sync.run_one_session_sync")
+    @patch("pdd.sync_determine_operation.get_pdd_file_paths")
+    @patch("pdd.sync_main.construct_paths")
+    def test_fingerprint_saved_on_success(
+        self, mock_construct, mock_get_paths, mock_run, mock_save_fp,
+        mock_submit, mock_find_prompt, mock_detect_langs, tmp_path
+    ):
+        """save_fingerprint is called when one-session sync succeeds."""
+        from pdd.sync_main import sync_main
+
+        pdd_files = _make_pdd_files(tmp_path)
+        mocks = {
+            "construct": mock_construct, "get_paths": mock_get_paths,
+            "run": mock_run, "save_fp": mock_save_fp, "submit": mock_submit,
+            "find_prompt": mock_find_prompt, "detect_langs": mock_detect_langs,
+        }
+        self._setup_mocks(mocks, pdd_files, success=True, local=True)
+
+        ctx = self._make_ctx(local=True)
+        sync_main(
+            ctx=ctx, basename="my_module", max_attempts=3, budget=20.0,
+            skip_verify=False, skip_tests=False, target_coverage=80.0,
+            dry_run=False, one_session=True,
+        )
+
+        mock_save_fp.assert_called_once_with(
+            "my_module", "python", "fix",
+            pdd_files, 1.5, "claude-code",
+        )
+
+    @patch("pdd.sync_main._detect_languages_with_context")
+    @patch("pdd.sync_main._find_prompt_in_contexts")
+    @patch("pdd.sync_main._auto_submit_example")
+    @patch("pdd.operation_log.save_fingerprint")
+    @patch("pdd.one_session_sync.run_one_session_sync")
+    @patch("pdd.sync_determine_operation.get_pdd_file_paths")
+    @patch("pdd.sync_main.construct_paths")
+    def test_fingerprint_not_saved_on_failure(
+        self, mock_construct, mock_get_paths, mock_run, mock_save_fp,
+        mock_submit, mock_find_prompt, mock_detect_langs, tmp_path
+    ):
+        """save_fingerprint is NOT called when one-session sync fails."""
+        from pdd.sync_main import sync_main
+
+        pdd_files = _make_pdd_files(tmp_path)
+        mocks = {
+            "construct": mock_construct, "get_paths": mock_get_paths,
+            "run": mock_run, "save_fp": mock_save_fp, "submit": mock_submit,
+            "find_prompt": mock_find_prompt, "detect_langs": mock_detect_langs,
+        }
+        self._setup_mocks(mocks, pdd_files, success=False)
+
+        ctx = self._make_ctx()
+        sync_main(
+            ctx=ctx, basename="my_module", max_attempts=3, budget=20.0,
+            skip_verify=False, skip_tests=False, target_coverage=80.0,
+            dry_run=False, one_session=True,
+        )
+
+        mock_save_fp.assert_not_called()
+
+    @patch("pdd.sync_main._detect_languages_with_context")
+    @patch("pdd.sync_main._find_prompt_in_contexts")
+    @patch("pdd.sync_main._auto_submit_example")
+    @patch("pdd.operation_log.save_fingerprint")
+    @patch("pdd.one_session_sync.run_one_session_sync")
+    @patch("pdd.sync_determine_operation.get_pdd_file_paths")
+    @patch("pdd.sync_main.construct_paths")
+    def test_auto_submit_on_success(
+        self, mock_construct, mock_get_paths, mock_run, mock_save_fp,
+        mock_submit, mock_find_prompt, mock_detect_langs, tmp_path
+    ):
+        """_auto_submit_example is called on success when not local."""
+        from pdd.sync_main import sync_main
+
+        pdd_files = _make_pdd_files(tmp_path)
+        mocks = {
+            "construct": mock_construct, "get_paths": mock_get_paths,
+            "run": mock_run, "save_fp": mock_save_fp, "submit": mock_submit,
+            "find_prompt": mock_find_prompt, "detect_langs": mock_detect_langs,
+        }
+        self._setup_mocks(mocks, pdd_files, success=True, local=False)
+
+        ctx = self._make_ctx(local=False)
+        sync_main(
+            ctx=ctx, basename="my_module", max_attempts=3, budget=20.0,
+            skip_verify=False, skip_tests=False, target_coverage=80.0,
+            dry_run=False, one_session=True,
+        )
+
+        mock_submit.assert_called_once_with("my_module", "python", pdd_files, ctx)
+
+    @patch("pdd.sync_main._detect_languages_with_context")
+    @patch("pdd.sync_main._find_prompt_in_contexts")
+    @patch("pdd.sync_main._auto_submit_example")
+    @patch("pdd.operation_log.save_fingerprint")
+    @patch("pdd.one_session_sync.run_one_session_sync")
+    @patch("pdd.sync_determine_operation.get_pdd_file_paths")
+    @patch("pdd.sync_main.construct_paths")
+    def test_auto_submit_skipped_when_local(
+        self, mock_construct, mock_get_paths, mock_run, mock_save_fp,
+        mock_submit, mock_find_prompt, mock_detect_langs, tmp_path
+    ):
+        """_auto_submit_example is NOT called when local=True."""
+        from pdd.sync_main import sync_main
+
+        pdd_files = _make_pdd_files(tmp_path)
+        mocks = {
+            "construct": mock_construct, "get_paths": mock_get_paths,
+            "run": mock_run, "save_fp": mock_save_fp, "submit": mock_submit,
+            "find_prompt": mock_find_prompt, "detect_langs": mock_detect_langs,
+        }
+        self._setup_mocks(mocks, pdd_files, success=True, local=True)
+
+        ctx = self._make_ctx(local=True)
+        sync_main(
+            ctx=ctx, basename="my_module", max_attempts=3, budget=20.0,
+            skip_verify=False, skip_tests=False, target_coverage=80.0,
+            dry_run=False, one_session=True,
+        )
+
+        mock_submit.assert_not_called()
+
+    @patch("pdd.sync_main._detect_languages_with_context")
+    @patch("pdd.sync_main._find_prompt_in_contexts")
+    @patch("pdd.sync_main._auto_submit_example")
+    @patch("pdd.operation_log.save_fingerprint")
+    @patch("pdd.one_session_sync.run_one_session_sync")
+    @patch("pdd.sync_determine_operation.get_pdd_file_paths")
+    @patch("pdd.sync_main.construct_paths")
+    def test_auto_submit_skipped_on_failure(
+        self, mock_construct, mock_get_paths, mock_run, mock_save_fp,
+        mock_submit, mock_find_prompt, mock_detect_langs, tmp_path
+    ):
+        """_auto_submit_example is NOT called when sync fails."""
+        from pdd.sync_main import sync_main
+
+        pdd_files = _make_pdd_files(tmp_path)
+        mocks = {
+            "construct": mock_construct, "get_paths": mock_get_paths,
+            "run": mock_run, "save_fp": mock_save_fp, "submit": mock_submit,
+            "find_prompt": mock_find_prompt, "detect_langs": mock_detect_langs,
+        }
+        self._setup_mocks(mocks, pdd_files, success=False)
+
+        ctx = self._make_ctx(local=False)
+        sync_main(
+            ctx=ctx, basename="my_module", max_attempts=3, budget=20.0,
+            skip_verify=False, skip_tests=False, target_coverage=80.0,
+            dry_run=False, one_session=True,
+        )
+
+        mock_submit.assert_not_called()

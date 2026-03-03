@@ -670,6 +670,13 @@ class AsyncSyncRunner:
             status_str = "success" if success else "FAILED"
             console.print(f"[{'green' if success else 'red'}]Sync {basename}: {status_str}[/{'green' if success else 'red'}]")
 
+            # Forward notable status lines from child stdout
+            if success:
+                for line in stdout.splitlines():
+                    if "Successfully submitted example" in line:
+                        console.print(f"  [green]{basename}: Example submitted to cloud[/green]")
+                        break
+
         error = ""
         if not success:
             # Extract meaningful error lines from stderr and stdout,

@@ -393,6 +393,85 @@ def _detect_languages(basename: str, prompts_dir: Path) -> Dict[str, Path]:
     return _python_first_sorted(lang_to_path)
 
 
+def _auto_submit_example(
+    basename: str,
+    language: str,
+    pdd_files: Dict[str, Path],
+    ctx: click.Context,
+) -> None:
+    """Submit example to cloud after successful one-session sync."""
+    import asyncio
+    import os
+
+    import requests
+
+    from .get_jwt_token import get_jwt_token
+    from .preprocess import preprocess
+
+    quiet = ctx.obj.get("quiet", False)
+
+    if os.environ.get("PDD_FORCE_LOCAL", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return
+
+    jwt_token = asyncio.run(get_jwt_token(
+        firebase_api_key=os.environ.get("NEXT_PUBLIC_FIREBASE_API_KEY"),
+        github_client_id=os.environ.get("GITHUB_CLIENT_ID"),
+        app_name="PDD Code Generator",
+    ))
+
+    prompt_content = pdd_files["prompt"].read_text(encoding="utf-8")
+    processed_prompt = preprocess(prompt_content, recursive=False, double_curly_brackets=True)
+    code_content = pdd_files["code"].read_text(encoding="utf-8")
+
+    payload: Dict[str, Any] = {
+        "command": "fix",
+        "searchInput": prompt_content,
+        "input": {
+            "prompts": [{"content": processed_prompt, "filename": pdd_files["prompt"].name}],
+            "code": [{"content": code_content, "filename": pdd_files["code"].name}],
+        },
+        "output": {
+            "code": [{"content": code_content, "filename": pdd_files["code"].name}],
+        },
+        "metadata": {
+            "title": f"Auto-submitted fix for {basename}",
+            "description": "Automatically submitted successful one-session sync",
+            "language": language,
+            "framework": "",
+            "tags": ["auto-fix", "one-session", "example"],
+            "isPublic": True,
+            "price": 0.0,
+        },
+    }
+
+    # Add example if it exists
+    if pdd_files["example"].exists():
+        payload["input"]["example"] = [{
+            "content": pdd_files["example"].read_text(encoding="utf-8"),
+            "filename": pdd_files["example"].name,
+        }]
+
+    # Add test if it exists
+    if pdd_files["test"].exists():
+        test_content = pdd_files["test"].read_text(encoding="utf-8")
+        payload["input"]["test"] = [{"content": test_content, "filename": pdd_files["test"].name}]
+        payload["output"]["test"] = [{"content": test_content, "filename": pdd_files["test"].name}]
+
+    headers = {"Authorization": f"Bearer {jwt_token}", "Content-Type": "application/json"}
+    response = requests.post(
+        "https://us-central1-prompt-driven-development.cloudfunctions.net/submitExample",
+        json=payload,
+        headers=headers,
+    )
+
+    if response.status_code == 200:
+        if not quiet:
+            rprint("[bold green]Successfully submitted example[/bold green]")
+    else:
+        if not quiet:
+            rprint(f"[bold red]Failed to submit example: {response.text}[/bold red]")
+
+
 def sync_main(
     ctx: click.Context,
     basename: str,
@@ -719,6 +798,23 @@ def sync_main(
                     # Merge costs from both phases
                     one_session_result["total_cost"] = pre_cost + one_session_result.get("total_cost", 0.0)
                     sync_result = one_session_result
+
+                    # Post-sync: save fingerprint so next sync sees files as up-to-date
+                    if one_session_result.get("success"):
+                        from .operation_log import save_fingerprint
+                        save_fingerprint(
+                            basename, resolved_language, "fix",
+                            pdd_files, one_session_result.get("total_cost", 0.0),
+                            one_session_result.get("model_name", "unknown"),
+                        )
+
+                    # Post-sync: auto-submit example to cloud on success
+                    if one_session_result.get("success") and not local:
+                        try:
+                            _auto_submit_example(basename, resolved_language, pdd_files, ctx)
+                        except Exception as e:
+                            if not quiet:
+                                rprint(f"[yellow]Warning: Example submission failed: {e}[/yellow]")
             else:
                 sync_result = sync_orchestration(
                     basename=basename,
