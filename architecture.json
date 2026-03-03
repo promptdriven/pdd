@@ -8280,5 +8280,43 @@
       "x": 10760,
       "y": 1540
     }
+  },
+  {
+    "reason": "Runs example, crash-fix, verify, test, and fix steps in a single agentic session instead of separate sessions per step.",
+    "description": "Builds a mega-prompt from the module's specification and generated code, then delegates execution to run_agentic_task(). Reports step-level progress via a file-based heartbeat mechanism that polls for STEP_COMPLETE markers written by the agent.",
+    "dependencies": [
+      "agentic_common_python.prompt",
+      "load_prompt_template_python.prompt",
+      "preprocess_python.prompt"
+    ],
+    "priority": 239,
+    "filename": "one_session_sync_python.prompt",
+    "filepath": "pdd/one_session_sync.py",
+    "tags": [
+      "agentic",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "build_one_session_prompt",
+            "signature": "(basename: str, language: str, pdd_files: Dict[str, Path], project_root: Path, *, target_coverage: float) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "run_one_session_sync",
+            "signature": "(basename: str, language: str, pdd_files: Dict[str, Path], project_root: Path, *, target_coverage: float, budget: Optional[float], verbose: bool, quiet: bool, timeout: Optional[float]) -> Dict[str, Any]",
+            "returns": "Dict[str, Any]"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 15800,
+      "y": 2200
+    }
   }
 ]

@@ -1,3 +1,30 @@
+## v0.0.165 (2026-03-02)
+
+### Feat
+
+- **One-session sync mode** — new `--one-session` flag on `pdd sync` runs example generation, crash-fix, verify, test generation, and test-fix in a single agentic session instead of separate sessions per step. New module `one_session_sync.py` builds a mega-prompt from the module spec and delegates to `run_agentic_task()` with a file-based heartbeat for step-level progress reporting. Agentic sync (issue URL) defaults to `--one-session`; single-module sync defaults to multi-step.
+- **Fingerprint saving and example auto-submit** — after a successful one-session sync, save a fingerprint so subsequent syncs see files as up-to-date, and auto-submit the example to the PDD cloud (skipped when `--local`).
+- **PDD_PHASE markers in one-session sync** — emit `PDD_PHASE: example|crash|verify|test|synced|conflict` markers so `AsyncSyncRunner` can parse step-level progress from subprocess stdout.
+- **Auto-wire generated exports to `__init__.py`** — `code_generator_main` now detects public functions/classes in generated Python files via AST and appends/merges import lines into the parent `__init__.py`. Skippable via `PDD_SKIP_WIRING=1`.
+- **Export metadata in auto-include** — `auto_include` enriches dependency summaries with actual export names (functions, classes, uppercase constants) extracted via AST, so the LLM can reference real API names instead of guessing.
+- **Import strategy guidance in python preamble** — `context/python_preamble.prompt` now includes an "Import Strategy" section directing external/heavy dependencies to function-scope imports, preventing `ImportError` during test collection.
+
+### Fix
+
+- **code_generator returns wrong model name after postprocessing** — `code_generator.py` now returns `model_name_post` (from the postprocess step) instead of `model_name` (from initial generation), so the reported model reflects the last LLM call in the pipeline. Prompt updated to document this semantic.
+- **3 P0 CRM issues** — fix import strategy (function-scope imports for external deps), export metadata enrichment, and handler wiring to `__init__.py`.
+- rename test files to follow `test_e2e_issue_` naming convention
+
+### Refactor
+
+- rename `one_session_sync_LLM` prompt to `one_session_agent_LLM`
+
+### Docs
+
+- new prompt files: `one_session_agent_LLM.prompt` (375-line mega-prompt template), `one_session_sync_python.prompt` (module spec)
+- update `sync_main_python.prompt`, `agentic_sync_python.prompt`, `agentic_sync_runner_python.prompt`, `code_generator_python.prompt`, and `maintenance_python.prompt` to document `one_session` parameter and corrected model name semantics
+
+
 ## v0.0.164 (2026-03-01)
 
 ### Feat

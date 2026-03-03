@@ -15,7 +15,7 @@
     Outputs:
         'runnable_code' - A string that is runnable code
         'total_cost' - A float that is the total cost of all LLM calls within this function (initial generation, unfinished check, continuation if used, and postprocess)
-        'model_name' - A string that is the name of the selected LLM model used for the main generation (or continuation). Postprocess may use a different model internally and does not change this value.
+        'model_name' - A string that is the name of the LLM model used for the last LLM call in the pipeline (postprocessing if it ran, otherwise continuation or initial generation).
 
 % Here is how to use the internal modules:
     <internal_modules>

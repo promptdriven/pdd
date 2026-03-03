@@ -1,0 +1,41 @@
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write the `pdd/one_session_sync.py` module.
+
+% Role & Scope
+Runs example generation, crash-fix, verify, test generation, and test-fix steps in a single agentic session instead of separate sessions per step. Builds a mega-prompt from the module's spec and generated code, then delegates execution to `run_agentic_task()`. Reports step-level progress via a file-based heartbeat mechanism.
+
+% Requirements
+1. Function: `build_one_session_prompt(basename: str, language: str, pdd_files: Dict[str, Path], project_root: Path, *, target_coverage: float = 90.0) -> str`
+2. Reads module prompt from `pdd_files["prompt"]`, preprocesses `<include>` tags via `preprocess(content, recursive=True, double_curly_brackets=False)`
+3. Reads generated code from `pdd_files["code"]`
+4. Loads the mega-prompt template via `load_prompt_template("one_session_agent_LLM")`
+5. Computes `import_base` from code file path relative to project root (e.g., `pdd.crm_models`)
+6. Substitutes all placeholders: `{basename}`, `{language}`, `{prompt_path}`, `{code_path}`, `{example_path}`, `{test_path}`, `{project_root}`, `{resolved_prompt_content}`, `{code_content}`, `{target_coverage}`, `{progress_file}`, `{import_base}`, `{verify_step_num}`, `{test_step_num}`
+7. Function: `run_one_session_sync(basename, language, pdd_files, project_root, *, target_coverage=90.0, budget=None, verbose=False, quiet=False, timeout=None) -> Dict[str, Any]`
+8. Validates code file exists; raises `FileNotFoundError` if not
+9. Calls `run_agentic_task(instruction=prompt, cwd=project_root, label="one_session_sync:{basename}", timeout=timeout or 1200)`
+10. Returns dict with keys: `success`, `total_cost`, `model_name`, `operations_completed`, `errors`
+11. On success, `operations_completed` = `["example", "crash_fix", "verify", "test"]`
+12. Progress file at `{project_root}/.pdd_one_session_progress_{basename}` — agent writes `STEP_COMPLETE:<step>` lines
+13. Heartbeat thread polls progress file every 10s and prints step-level updates via Rich console
+14. Cleans up stale progress files before starting and after completion
+
+% Helper Functions
+- `_compute_import_base(code_path: Path, project_root: Path) -> str`: dotted module path from code file path
+- `_read_new_progress(progress_file: Path, skip_count: int) -> List[str]`: reads new STEP_COMPLETE lines from progress file
+- `_format_step_display(step_name: str) -> str`: maps step markers to user-friendly display strings
+
+% Dependencies
+<pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
+<pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
+<pdd.preprocess><include>context/preprocess_example.py</include></pdd.preprocess>
+
+% Error Handling
+- Raise `FileNotFoundError` if code file missing: "Code file not found: {path}\nRun `pdd generate {basename}` first."
+- Raise `FileNotFoundError` if prompt template missing
+- On agentic task failure, return `errors` list with first 500 chars of output text
+
+% Deliverables
+- Code: `pdd/one_session_sync.py`

@@ -10,7 +10,7 @@
  *   2. Export runClaudeFix(prompt, scopeDir, onLog?) → Promise<ClaudeFixResult>
  *   3. Both stream stderr lines to onLog callback in real time
  *   4. JSON parsing: (a) direct, (b) code fence, (c) brace-matching fallback
- *   5. Hard timeout: 300s → kill + reject
+ *   5. Hard timeout: 600s → kill + reject
  *   6. Non-zero exit + no parseable JSON → reject with stderr
  *   7. server-only guard
  *   8. Uses child_process.spawn (not exec)
@@ -555,18 +555,18 @@ describe("timeout behavior", () => {
     jest.useRealTimers();
   });
 
-  it("rejects with timeout error after 300s", async () => {
+  it("rejects with timeout error after 600s", async () => {
     const promise = runClaudeAnalysis("test");
 
-    jest.advanceTimersByTime(300_000);
+    jest.advanceTimersByTime(600_000);
 
-    await expect(promise).rejects.toThrow("Claude CLI timeout after 300s");
+    await expect(promise).rejects.toThrow("Claude CLI timeout after 600s");
   });
 
   it("kills the process with SIGTERM on timeout", async () => {
     const promise = runClaudeAnalysis("test");
 
-    jest.advanceTimersByTime(300_000);
+    jest.advanceTimersByTime(600_000);
 
     try {
       await promise;
@@ -576,10 +576,10 @@ describe("timeout behavior", () => {
     expect(mockProc.kill).toHaveBeenCalledWith("SIGTERM");
   });
 
-  it("does not timeout before 300s", async () => {
+  it("does not timeout before 600s", async () => {
     const promise = runClaudeAnalysis("test");
 
-    jest.advanceTimersByTime(299_999);
+    jest.advanceTimersByTime(599_999);
 
     // Process completes just in time
     mockProc.stdout.emit("data", Buffer.from(JSON.stringify(sampleAnalysis)));
@@ -728,8 +728,8 @@ describe("lib/claude.ts source structure", () => {
     expect(sourceCode).toMatch(/SIGTERM/);
   });
 
-  it("has 300-second timeout constant", () => {
-    expect(sourceCode).toMatch(/300[_,]?000/);
+  it("has 600-second timeout constant", () => {
+    expect(sourceCode).toMatch(/600[_,]?000/);
   });
 
   it("uses code fence regex for fallback extraction", () => {

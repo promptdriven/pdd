@@ -13,7 +13,7 @@
  *   4. Custom SSE headers for /api/pipeline/:path* and /api/jobs/:path*:
  *        Cache-Control: no-cache, no-transform
  *        X-Accel-Buffering: no
- *   5. No webpack overrides.
+ *   5. Dev-only webpack override to ignore remotion/outputs/.git in watch.
  *   6. No experimental.appDir.
  *   7. Minimal config — no reactStrictMode or unlisted settings.
  */
@@ -241,8 +241,9 @@ describe('next.config.ts — headers() function', () => {
 // ---------------------------------------------------------------------------
 
 describe('next.config.ts — prohibited settings', () => {
-  it('does not define webpack overrides', () => {
-    expect(nextConfig.webpack).toBeUndefined();
+  it('defines webpack as a dev-only watch-options override', () => {
+    expect(nextConfig.webpack).toBeDefined();
+    expect(typeof nextConfig.webpack).toBe('function');
   });
 
   it('does not enable experimental.appDir (default in Next.js 15)', () => {
@@ -261,6 +262,7 @@ describe('next.config.ts — prohibited settings', () => {
       'serverExternalPackages',
       'experimental',
       'headers',
+      'webpack',
     ]);
     const actualKeys = Object.keys(nextConfig);
     for (const key of actualKeys) {
@@ -284,10 +286,13 @@ describe('next.config.ts — file-level checks', () => {
     expect(CONFIG_PATH.endsWith('.ts')).toBe(true);
   });
 
-  it('source does not contain webpack configuration', () => {
+  it('source contains webpack override limited to dev watchOptions', () => {
     const source = fs.readFileSync(CONFIG_PATH, 'utf-8');
-    // No `webpack:` key in the config object
-    expect(source).not.toMatch(/\bwebpack\s*:/);
+    // webpack key exists for dev-only watch option overrides
+    expect(source).toMatch(/\bwebpack\s*:/);
+    // It should only modify watchOptions in dev mode
+    expect(source).toMatch(/watchOptions/);
+    expect(source).toMatch(/\bdev\b/);
   });
 
   it('source does not contain reactStrictMode', () => {

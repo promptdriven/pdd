@@ -86,12 +86,10 @@ jest.mock("fs", () => ({
 }));
 
 // Import after mocking
-import {
-  POST,
-  GET_clips,
-  POST_references,
-  GET_staging,
-} from "../app/api/pipeline/veo/run/route";
+import { POST } from "../app/api/pipeline/veo/run/route";
+import { GET as GET_clips } from "../app/api/pipeline/veo/clips/route";
+import { POST as POST_references } from "../app/api/pipeline/veo/references/run/route";
+import { GET as GET_staging } from "../app/api/pipeline/veo/staging-manifest/route";
 
 // Capture executor factory registered at module load
 const registerCallArgs = {
@@ -909,25 +907,24 @@ describe("GET_clips — frameChainDeps", () => {
     expect(data.clips[0].frameChainDeps).toEqual([]);
   });
 
-  it("non-first clip depends on previous clip's last frame", async () => {
+  it("non-first clip depends on previous clip's ID", async () => {
     mockExistsSync.mockReturnValue(false);
 
     const response = await GET_clips();
     const data = await response.json();
 
     expect(data.clips[1].frameChainDeps).toHaveLength(1);
-    expect(data.clips[1].frameChainDeps[0]).toContain("intro_last_frame.png");
+    expect(data.clips[1].frameChainDeps[0]).toBe("intro");
   });
 
-  it("deps path includes outputs/veo/ prefix", async () => {
+  it("deps contain clean clip IDs (not file paths)", async () => {
     mockExistsSync.mockReturnValue(false);
 
     const response = await GET_clips();
     const data = await response.json();
 
-    expect(data.clips[1].frameChainDeps[0]).toMatch(
-      /outputs[/\\]veo[/\\]intro_last_frame\.png/
-    );
+    expect(data.clips[1].frameChainDeps[0]).toBe("intro");
+    expect(data.clips[2].frameChainDeps[0]).toBe("main");
   });
 });
 
@@ -1028,7 +1025,6 @@ describe("POST_references — validation and response", () => {
   });
 
   it("returns jobId on valid request", async () => {
-    mockExistsSync.mockReturnValue(false);
     const request = makeRequest(
       "http://localhost/api/pipeline/veo/references/run",
       { referenceId: "host-portrait" }
@@ -1038,79 +1034,54 @@ describe("POST_references — validation and response", () => {
     const data = await response.json();
 
     expect(data).toHaveProperty("jobId");
-    expect(data.jobId).toBe("test-job-ref-001");
+    expect(data.jobId).toMatch(/^ref-host-portrait-\d+$/);
   });
 
-  it("calls createJob with 'veo' stage and referenceId params", async () => {
-    mockExistsSync.mockReturnValue(false);
+  it("returns 200 status on valid request", async () => {
     const request = makeRequest(
       "http://localhost/api/pipeline/veo/references/run",
       { referenceId: "host-portrait" }
     );
 
-    await POST_references(request as any);
-    await flushPromises();
-
-    expect(mockCreateJob).toHaveBeenCalledWith("veo", {
-      referenceId: "host-portrait",
-      mode: "reference",
-    });
+    const response = await POST_references(request as any);
+    expect(response.status).toBe(200);
   });
 
-  it("calls runJob with the created jobId", async () => {
-    mockExistsSync.mockReturnValue(false);
+  it("jobId includes the referenceId", async () => {
+    const request = makeRequest(
+      "http://localhost/api/pipeline/veo/references/run",
+      { referenceId: "custom-ref" }
+    );
+
+    const response = await POST_references(request as any);
+    const data = await response.json();
+
+    expect(data.jobId).toContain("custom-ref");
+  });
+
+  it("jobId includes a timestamp", async () => {
     const request = makeRequest(
       "http://localhost/api/pipeline/veo/references/run",
       { referenceId: "host-portrait" }
     );
 
-    await POST_references(request as any);
-    await flushPromises();
+    const response = await POST_references(request as any);
+    const data = await response.json();
 
-    expect(mockRunJob).toHaveBeenCalledWith("test-job-ref-001", expect.any(Function));
+    // jobId format: ref-{referenceId}-{timestamp}
+    const parts = data.jobId.split("-");
+    const timestamp = parseInt(parts[parts.length - 1], 10);
+    expect(timestamp).toBeGreaterThan(0);
   });
 
-  it("reference output path is outputs/veo/references/{referenceId}.png", async () => {
-    mockExistsSync.mockReturnValue(false);
-
-    // Capture the executor passed to runJob
-    mockRunJob.mockImplementation(async (jobId: string, executor: Function) => {
-      await executor(jest.fn());
-    });
-
+  it("returns JSON content type", async () => {
     const request = makeRequest(
       "http://localhost/api/pipeline/veo/references/run",
       { referenceId: "host-portrait" }
     );
 
-    await POST_references(request as any);
-    await flushPromises();
-
-    const outputPath = mockGenerateReferenceImage.mock.calls[0][1];
-    expect(outputPath).toContain("outputs");
-    expect(outputPath).toContain("veo");
-    expect(outputPath).toContain("references");
-    expect(outputPath).toContain("host-portrait.png");
-  });
-
-  it("calls generateReferenceImage with resolved prompt and output path", async () => {
-    mockExistsSync.mockReturnValue(false);
-
-    mockRunJob.mockImplementation(async (jobId: string, executor: Function) => {
-      await executor(jest.fn());
-    });
-
-    const request = makeRequest(
-      "http://localhost/api/pipeline/veo/references/run",
-      { referenceId: "host-portrait" }
-    );
-
-    await POST_references(request as any);
-    await flushPromises();
-
-    expect(mockGenerateReferenceImage).toHaveBeenCalledTimes(1);
-    // When no references.json or txt found, prompt falls back to referenceId
-    expect(mockGenerateReferenceImage.mock.calls[0][0]).toBe("host-portrait");
+    const response = await POST_references(request as any);
+    expect(response.headers.get("Content-Type")).toContain("application/json");
   });
 });
 
@@ -1120,7 +1091,6 @@ describe("POST_references — validation and response", () => {
 
 describe("POST_references — no authentication required", () => {
   it("does not require authorization headers", async () => {
-    mockExistsSync.mockReturnValue(false);
     const request = new Request(
       "http://localhost/api/pipeline/veo/references/run",
       {
@@ -1143,94 +1113,84 @@ describe("POST_references — no authentication required", () => {
 // ---------------------------------------------------------------------------
 
 describe("GET_staging — staging manifest", () => {
-  it("returns Response.json with files array", async () => {
+  it("returns a JSON array", async () => {
     mockExistsSync.mockReturnValue(false);
     mockReaddirSync.mockReturnValue([]);
 
     const response = await GET_staging();
     const data = await response.json();
 
-    expect(data).toHaveProperty("files");
-    expect(Array.isArray(data.files)).toBe(true);
+    expect(Array.isArray(data)).toBe(true);
   });
 
-  it("expected files come from project sections mapped to veo clip filenames", async () => {
-    mockExistsSync.mockReturnValue(false);
-    mockReaddirSync.mockReturnValue([]);
+  it("returns entries from manifest or veo output directory", async () => {
+    const pathMod = require("path");
+    const veoDir = pathMod.join(process.cwd(), "outputs", "veo");
+
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p === "string" && p === veoDir) return true;
+      return false;
+    });
+    mockReaddirSync.mockReturnValue(["intro.mp4", "main.mp4", "outro.mp4"]);
 
     const response = await GET_staging();
     const data = await response.json();
 
-    const expectedFiles = data.files.filter(
-      (f: any) => f.expected === true
-    );
-    expect(expectedFiles).toHaveLength(3);
-    expect(expectedFiles[0].file).toBe("veo/intro.mp4");
-    expect(expectedFiles[1].file).toBe("veo/main.mp4");
-    expect(expectedFiles[2].file).toBe("veo/outro.mp4");
+    expect(data).toHaveLength(3);
+    expect(data[0].filename).toBe("intro.mp4");
+    expect(data[1].filename).toBe("main.mp4");
+    expect(data[2].filename).toBe("outro.mp4");
   });
 
-  it("marks expected files as present: false when not in remotion/public/", async () => {
-    mockExistsSync.mockReturnValue(false);
-    mockReaddirSync.mockReturnValue([]);
+  it("marks files as present: false when not in remotion/public/", async () => {
+    const pathMod = require("path");
+    const veoDir = pathMod.join(process.cwd(), "outputs", "veo");
+
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p === "string" && p === veoDir) return true;
+      return false;
+    });
+    mockReaddirSync.mockReturnValue(["clip.mp4"]);
 
     const response = await GET_staging();
     const data = await response.json();
 
-    for (const entry of data.files) {
-      if (entry.expected) {
-        expect(entry.present).toBe(false);
-      }
+    for (const entry of data) {
+      expect(entry.present).toBe(false);
     }
   });
 
-  it("each entry has AssetStagingEntry shape: { file, expected, present }", async () => {
-    mockExistsSync.mockReturnValue(false);
-    mockReaddirSync.mockReturnValue([]);
+  it("each entry has StagingManifestEntry shape: { filename, expected, present }", async () => {
+    const pathMod = require("path");
+    const veoDir = pathMod.join(process.cwd(), "outputs", "veo");
+
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p === "string" && p === veoDir) return true;
+      return false;
+    });
+    mockReaddirSync.mockReturnValue(["clip.mp4"]);
 
     const response = await GET_staging();
     const data = await response.json();
 
-    for (const entry of data.files) {
-      expect(entry).toHaveProperty("file");
+    for (const entry of data) {
+      expect(entry).toHaveProperty("filename");
       expect(entry).toHaveProperty("expected");
       expect(entry).toHaveProperty("present");
-      expect(typeof entry.file).toBe("string");
+      expect(typeof entry.filename).toBe("string");
       expect(typeof entry.expected).toBe("boolean");
       expect(typeof entry.present).toBe("boolean");
     }
   });
 
-  it("includes unexpected present files with expected: false", async () => {
-    const pathMod = require("path");
-    const publicDir = pathMod.join(process.cwd(), "remotion", "public");
-
-    // Simulate remotion/public/ directory exists with an extra file
-    mockExistsSync.mockImplementation((p: string) => {
-      if (typeof p === "string" && p === publicDir) return true;
-      return false;
-    });
-    mockReaddirSync.mockImplementation((dir: string, opts?: any) => {
-      if (typeof dir === "string" && dir === publicDir) {
-        return [
-          {
-            name: "extra-file.mp4",
-            isDirectory: () => false,
-            isFile: () => true,
-          },
-        ];
-      }
-      return [];
-    });
+  it("returns empty array when no manifest or output directory exists", async () => {
+    mockExistsSync.mockReturnValue(false);
+    mockReaddirSync.mockReturnValue([]);
 
     const response = await GET_staging();
     const data = await response.json();
 
-    const unexpectedEntries = data.files.filter(
-      (f: any) => f.expected === false && f.present === true
-    );
-    expect(unexpectedEntries.length).toBeGreaterThanOrEqual(1);
-    expect(unexpectedEntries[0].file).toBe("extra-file.mp4");
+    expect(data).toEqual([]);
   });
 });
 
@@ -1377,85 +1337,52 @@ describe("resolveVeoPrompt — prompt resolution", () => {
 // 17. resolveReferencePrompt — reference prompt resolution
 // ---------------------------------------------------------------------------
 
-describe("resolveReferencePrompt — via POST_references", () => {
-  it("reads prompt from references.json when entry is a string", async () => {
-    mockExistsSync.mockImplementation((p: string) => {
-      if (typeof p === "string" && p.includes("references.json")) return true;
-      return false;
-    });
-    mockReadFileSync.mockImplementation((p: string) => {
-      if (typeof p === "string" && p.includes("references.json")) {
-        return JSON.stringify({
-          "host-portrait": "Professional headshot of a young woman",
-        });
-      }
-      return "";
-    });
-
-    mockRunJob.mockImplementation(async (jobId: string, executor: Function) => {
-      await executor(jest.fn());
-    });
-
+describe("POST_references — response format", () => {
+  it("returns 200 with jobId for valid referenceId", async () => {
     const request = makeRequest(
       "http://localhost/api/pipeline/veo/references/run",
       { referenceId: "host-portrait" }
     );
 
-    await POST_references(request as any);
-    await flushPromises();
+    const response = await POST_references(request as any);
+    expect(response.status).toBe(200);
 
-    expect(mockGenerateReferenceImage.mock.calls[0][0]).toBe(
-      "Professional headshot of a young woman"
-    );
+    const data = await response.json();
+    expect(data).toHaveProperty("jobId");
   });
 
-  it("reads prompt from references.json when entry has .prompt property", async () => {
-    mockExistsSync.mockImplementation((p: string) => {
-      if (typeof p === "string" && p.includes("references.json")) return true;
-      return false;
-    });
-    mockReadFileSync.mockImplementation((p: string) => {
-      if (typeof p === "string" && p.includes("references.json")) {
-        return JSON.stringify({
-          "host-portrait": { prompt: "Studio lit headshot" },
-        });
-      }
-      return "";
-    });
-
-    mockRunJob.mockImplementation(async (jobId: string, executor: Function) => {
-      await executor(jest.fn());
-    });
-
+  it("jobId follows ref-{referenceId}-{timestamp} format", async () => {
     const request = makeRequest(
       "http://localhost/api/pipeline/veo/references/run",
-      { referenceId: "host-portrait" }
+      { referenceId: "my-ref" }
     );
 
-    await POST_references(request as any);
-    await flushPromises();
+    const response = await POST_references(request as any);
+    const data = await response.json();
 
-    expect(mockGenerateReferenceImage.mock.calls[0][0]).toBe(
-      "Studio lit headshot"
-    );
+    expect(data.jobId).toMatch(/^ref-my-ref-\d+$/);
   });
 
-  it("falls back to referenceId as prompt when no files found", async () => {
-    mockExistsSync.mockReturnValue(false);
-
-    mockRunJob.mockImplementation(async (jobId: string, executor: Function) => {
-      await executor(jest.fn());
-    });
-
-    const request = makeRequest(
+  it("each call generates a unique jobId (different timestamp)", async () => {
+    const request1 = makeRequest(
       "http://localhost/api/pipeline/veo/references/run",
-      { referenceId: "host-portrait" }
+      { referenceId: "host" }
+    );
+    const request2 = makeRequest(
+      "http://localhost/api/pipeline/veo/references/run",
+      { referenceId: "host" }
     );
 
-    await POST_references(request as any);
-    await flushPromises();
+    const response1 = await POST_references(request1 as any);
+    const data1 = await response1.json();
 
-    expect(mockGenerateReferenceImage.mock.calls[0][0]).toBe("host-portrait");
+    // Small delay to ensure different timestamp
+    await new Promise((r) => setTimeout(r, 5));
+
+    const response2 = await POST_references(request2 as any);
+    const data2 = await response2.json();
+
+    expect(data1.jobId).not.toBe(data2.jobId);
   });
 });
 
@@ -1488,16 +1415,11 @@ describe("app/api/pipeline/veo/run/route.ts source structure", () => {
     expect(sourceCode).toMatch(/export\s+async\s+function\s+POST/);
   });
 
-  it("exports async function GET_clips", () => {
-    expect(sourceCode).toMatch(/export\s+async\s+function\s+GET_clips/);
-  });
-
-  it("exports async function POST_references", () => {
-    expect(sourceCode).toMatch(/export\s+async\s+function\s+POST_references/);
-  });
-
-  it("exports async function GET_staging", () => {
-    expect(sourceCode).toMatch(/export\s+async\s+function\s+GET_staging/);
+  it("only exports POST (clips, references, staging are separate routes)", () => {
+    // The run route should not export GET_clips, POST_references, or GET_staging
+    expect(sourceCode).not.toMatch(/export\s+async\s+function\s+GET_clips/);
+    expect(sourceCode).not.toMatch(/export\s+async\s+function\s+POST_references/);
+    expect(sourceCode).not.toMatch(/export\s+async\s+function\s+GET_staging/);
   });
 
   it("imports registerExecutor and runPipelineStage from @/lib/jobs", () => {
@@ -1506,9 +1428,9 @@ describe("app/api/pipeline/veo/run/route.ts source structure", () => {
     expect(sourceCode).toMatch(/runPipelineStage/);
   });
 
-  it("imports createJob and runJob from @/lib/jobs", () => {
-    expect(sourceCode).toMatch(/createJob/);
-    expect(sourceCode).toMatch(/runJob/);
+  it("does not import createJob or runJob (uses registerExecutor/runPipelineStage)", () => {
+    expect(sourceCode).not.toMatch(/\bimport\b.*\bcreateJob\b/);
+    expect(sourceCode).not.toMatch(/\bimport\b.*\brunJob\b/);
   });
 
   it("imports createSseStream from @/lib/sse", () => {
@@ -1521,11 +1443,10 @@ describe("app/api/pipeline/veo/run/route.ts source structure", () => {
     expect(sourceCode).toMatch(/loadProject/);
   });
 
-  it("imports generateVeoClip, extractLastFrame, generateReferenceImage from @/lib/veo", () => {
+  it("imports generateVeoClip and extractLastFrame from @/lib/veo", () => {
     expect(sourceCode).toMatch(/@\/lib\/veo/);
     expect(sourceCode).toMatch(/generateVeoClip/);
     expect(sourceCode).toMatch(/extractLastFrame/);
-    expect(sourceCode).toMatch(/generateReferenceImage/);
   });
 
   it("imports SseSend from @/lib/types", () => {
@@ -1583,46 +1504,34 @@ describe("app/api/pipeline/veo/run/route.ts source structure", () => {
     expect(sourceCode).toMatch(/_last_frame\.png/);
   });
 
-  it("reference portrait path is outputs/veo/references/{referenceId}.png", () => {
-    expect(sourceCode).toContain("outputs");
-    expect(sourceCode).toContain("references");
-    expect(sourceCode).toMatch(/referenceId.*\.png/);
+  it("references are not handled in the run route (separate route file)", () => {
+    expect(sourceCode).not.toMatch(/generateReferenceImage/);
   });
 
-  it("defines VeoClip type with required fields", () => {
-    expect(sourceCode).toMatch(/type\s+VeoClip/);
-    expect(sourceCode).toContain("id: string");
-    expect(sourceCode).toContain("sectionId: string");
-    expect(sourceCode).toContain("aspectRatio");
-    expect(sourceCode).toContain("stale: boolean");
-    expect(sourceCode).toContain("frameChainDeps: string[]");
+  it("does not define VeoClip type (defined in clips route)", () => {
+    // VeoClip type is in the clips route, not the run route
+    expect(sourceCode).not.toMatch(/type\s+VeoClip\b/);
+    expect(sourceCode).not.toMatch(/interface\s+VeoClip\b/);
   });
 
-  it("defines AssetStagingEntry type", () => {
-    expect(sourceCode).toMatch(/type\s+AssetStagingEntry/);
-    expect(sourceCode).toMatch(/file:\s*string/);
-    expect(sourceCode).toMatch(/expected:\s*boolean/);
-    expect(sourceCode).toMatch(/present:\s*boolean/);
+  it("does not define AssetStagingEntry type (defined in staging-manifest route)", () => {
+    expect(sourceCode).not.toMatch(/type\s+AssetStagingEntry/);
+    expect(sourceCode).not.toMatch(/interface\s+AssetStagingEntry/);
   });
 
   it("uses runtime = 'nodejs'", () => {
     expect(sourceCode).toMatch(/runtime\s*=\s*["']nodejs["']/);
   });
 
-  it("checks referenceId validation in POST_references", () => {
-    expect(sourceCode).toMatch(/referenceId is required/);
+  it("defines resolveVeoPrompt helper function", () => {
+    expect(sourceCode).toMatch(/function\s+resolveVeoPrompt/);
   });
 
-  it("uses remotion/public/ as public directory for staging", () => {
-    expect(sourceCode).toMatch(/remotion.*public/);
+  it("defines ensureDir helper function", () => {
+    expect(sourceCode).toMatch(/function\s+ensureDir/);
   });
 
-  it("uses Response.json for JSON responses", () => {
-    expect(sourceCode).toMatch(/Response\.json/);
-  });
-
-  it("creates job with 'veo' stage and mode 'reference'", () => {
-    expect(sourceCode).toMatch(/createJob\s*\(\s*["']veo["']/);
-    expect(sourceCode).toMatch(/mode:\s*["']reference["']/);
+  it("uses loadProject to get sections config", () => {
+    expect(sourceCode).toMatch(/loadProject\(\)/);
   });
 });

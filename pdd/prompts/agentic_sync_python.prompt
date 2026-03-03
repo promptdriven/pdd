@@ -7,7 +7,7 @@ Write the `pdd/agentic_sync.py` module.
 Entry point for the agentic sync workflow. Accepts a GitHub issue URL, fetches issue content, uses an LLM to identify which modules need syncing and validate architecture.json dependencies, then dispatches to the AsyncSyncRunner for parallel execution with dependency-aware scheduling.
 
 % Requirements
-1. Function: `run_agentic_sync(issue_url: str, *, verbose: bool = False, quiet: bool = False, budget: Optional[float] = None, skip_verify: bool = False, skip_tests: bool = False, agentic_mode: bool = True, no_steer: bool = True, max_attempts: Optional[int] = None, timeout_adder: float = 0.0, use_github_state: bool = True) -> Tuple[bool, str, float, str]`
+1. Function: `run_agentic_sync(issue_url: str, *, verbose: bool = False, quiet: bool = False, budget: Optional[float] = None, skip_verify: bool = False, skip_tests: bool = False, agentic_mode: bool = True, no_steer: bool = True, max_attempts: Optional[int] = None, timeout_adder: float = 0.0, use_github_state: bool = True, one_session: bool = False) -> Tuple[bool, str, float, str]`
 2. Return 4-tuple: (success, message, total_cost, model_used)
 3. Parse GitHub issue URL to extract: owner, repo, issue_number (reuse `_parse_issue_url` from `agentic_change.py`)
 4. Fetch issue content and comments via `gh api` (reuse `_run_gh_command` from `agentic_change.py`)
@@ -21,6 +21,7 @@ Entry point for the agentic sync workflow. Accepts a GitHub issue URL, fetches i
 12. Fallback: if no architecture.json, use `build_dependency_graph(prompts_dir)` from `sync_order.py`
 13. Dispatch to `AsyncSyncRunner` with basenames, dep graph, sync options, and GitHub info
 14. Aggregate costs from LLM identification + runner execution
+15. Include `one_session` in `sync_options` dict passed to `AsyncSyncRunner`
 
 % Helper Functions
 - `_is_github_issue_url(s: str) -> bool`: regex check for `github\.com/.+/issues/\d+`

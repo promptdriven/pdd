@@ -271,6 +271,14 @@ export async function retryJob(jobId: string): Promise<string> {
 
 const JOB_SEND_MAP = new Map<string, SseSend>();
 
+export function setJobSend(jobId: string, send: SseSend): void {
+  JOB_SEND_MAP.set(jobId, send);
+}
+
+export function clearJobSend(jobId: string): void {
+  JOB_SEND_MAP.delete(jobId);
+}
+
 /**
  * Create a job and start its executor in the background (fire-and-forget).
  * Returns the jobId immediately so the caller can return it to the client.

@@ -639,7 +639,7 @@ describe("POST — runJob executor: section rendering after fixes", () => {
 
     expect(mockRenderSection).toHaveBeenCalledTimes(1);
     expect(mockRenderSection.mock.calls[0][0]).toBe("IntroComposition");
-    expect(mockRenderSection.mock.calls[0][1]).toBe("output/sections/intro.mp4");
+    expect(mockRenderSection.mock.calls[0][1]).toBe("outputs/sections/section-1.mp4");
     expect(typeof mockRenderSection.mock.calls[0][2]).toBe("function");
   });
 

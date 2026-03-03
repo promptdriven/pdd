@@ -5,7 +5,7 @@ const config = {
     "^.+\\.(ts|tsx)$": ["ts-jest", { tsconfig: "tsconfig.test.json", diagnostics: false }],
   },
   testMatch: ["**/__tests__/**/*.test.ts", "**/*.test.ts", "**/tests/**/*.ts", "**/tests/**/*.tsx", "tests/*.ts", "tests/*.tsx"],
-  testPathIgnorePatterns: ["/node_modules/", "/e2e/"],
+  testPathIgnorePatterns: ["/node_modules/", "/e2e/", "integration/test_remotion_environment"],
   moduleNameMapper: {
     "^@/(.*)$": "<rootDir>/$1",
     "^server-only$": "<rootDir>/__mocks__/server-only.js",

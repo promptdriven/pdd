@@ -95,10 +95,13 @@ async function readSseEvents(
       const parts = buffer.split("\n\n");
       buffer = parts.pop() ?? "";
       for (const part of parts) {
-        const dataLine = part.replace(/^data:\s*/, "");
+        // Extract the data line from SSE blocks (handles both "data: ..." and "event: ...\ndata: ...")
+        const lines = part.split("\n");
+        const dataLine = lines.find((l) => l.startsWith("data:"));
         if (dataLine) {
+          const json = dataLine.replace(/^data:\s*/, "");
           try {
-            events.push(JSON.parse(dataLine));
+            events.push(JSON.parse(json));
           } catch {
             // skip non-JSON
           }
@@ -354,9 +357,9 @@ describe("POST — error handling", () => {
     await flushPromises();
 
     const events = await readSseEvents(response.body!);
-    const errorEvent = events.find((e: any) => e.type === "error") as any;
+    const errorEvent = events.find((e: any) => e.message) as any;
     expect(errorEvent).toBeDefined();
-    expect(errorEvent.error).toBe("Pipeline failed");
+    expect(errorEvent.message).toBe("Pipeline failed");
   });
 
   it("emits generic error for non-Error throws", async () => {
@@ -366,9 +369,9 @@ describe("POST — error handling", () => {
     await flushPromises();
 
     const events = await readSseEvents(response.body!);
-    const errorEvent = events.find((e: any) => e.type === "error") as any;
+    const errorEvent = events.find((e: any) => e.message) as any;
     expect(errorEvent).toBeDefined();
-    expect(errorEvent.error).toBe("Unknown error");
+    expect(errorEvent.message).toBe("Unknown error");
   });
 
   it("still returns SSE response even when pipeline will error", async () => {
@@ -607,7 +610,8 @@ describe("POST — SSE event format", () => {
 
     const eventBlocks = raw.split("\n\n").filter((b) => b.trim().length > 0);
     for (const block of eventBlocks) {
-      expect(block).toMatch(/^data:\s*\{/);
+      // Each SSE block should contain a data: line
+      expect(block).toMatch(/data:\s*/);
     }
   });
 });
@@ -657,9 +661,9 @@ describe("app/api/pipeline/specs/run/route.ts source structure", () => {
     expect(sourceCode).toMatch(/loadProject/);
   });
 
-  it("imports SseSend from @/lib/types", () => {
-    expect(sourceCode).toMatch(/@\/lib\/types/);
-    expect(sourceCode).toMatch(/SseSend/);
+  it("imports createSseStream from @/lib/sse", () => {
+    expect(sourceCode).toMatch(/@\/lib\/sse/);
+    expect(sourceCode).toMatch(/createSseStream/);
   });
 
   it("imports path from 'path'", () => {
@@ -713,12 +717,12 @@ describe("app/api/pipeline/specs/run/route.ts source structure", () => {
     expect(sourceCode).toMatch(/loadProject\(\)/);
   });
 
-  it("creates SSE stream with TransformStream", () => {
-    expect(sourceCode).toMatch(/TransformStream/);
+  it("creates SSE stream with createSseStream()", () => {
+    expect(sourceCode).toMatch(/createSseStream\(\)/);
   });
 
-  it("sends data in SSE format (data: JSON)", () => {
-    expect(sourceCode).toMatch(/data:\s/);
+  it("uses send() for emitting SSE events", () => {
+    expect(sourceCode).toMatch(/send\(/);
   });
 
   it("imports NextRequest from next/server", () => {

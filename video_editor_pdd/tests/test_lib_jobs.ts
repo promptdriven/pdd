@@ -70,6 +70,8 @@ import {
   runPipelineStage,
   registerExecutor,
   clearExecutors,
+  setJobSend,
+  clearJobSend,
   PIPELINE_DAG,
 } from "../lib/jobs";
 import type { ExecutorFactory } from "../lib/jobs";
@@ -1119,5 +1121,69 @@ describe("edge cases", () => {
       .get(jobId) as any;
     expect(row.logs).toContain("line 0");
     expect(row.logs).toContain("line 99");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 14. setJobSend / clearJobSend
+// ---------------------------------------------------------------------------
+
+describe("setJobSend / clearJobSend", () => {
+  it("setJobSend associates a send handler that runJob uses for SSE events", async () => {
+    const { send, calls } = createMockSend();
+    const jobId = createJob("setup", {});
+
+    setJobSend(jobId, send);
+    await runJob(jobId, async (onLog) => {
+      onLog("hello from executor");
+    });
+    clearJobSend(jobId);
+
+    // Should have received started + log events via the custom send
+    const startedEvents = calls.filter((c: any) => c.type === "started");
+    expect(startedEvents.length).toBe(1);
+    expect((startedEvents[0] as any).jobId).toBe(jobId);
+
+    const logEvents = calls.filter((c: any) => c.type === "log");
+    expect(logEvents.some((e: any) => e.message === "hello from executor")).toBe(true);
+  });
+
+  it("clearJobSend removes the send handler so subsequent runJob uses NOOP", async () => {
+    const { send, calls } = createMockSend();
+    const jobId1 = createJob("setup", {});
+
+    setJobSend(jobId1, send);
+    await runJob(jobId1, successExecutor());
+    clearJobSend(jobId1);
+
+    // Create a second job with same stage — no send handler set
+    const jobId2 = createJob("setup", {});
+    const callsBefore = calls.length;
+    await runJob(jobId2, async (onLog) => {
+      onLog("should not appear in calls");
+    });
+
+    // No new calls should have been added for jobId2
+    const newCalls = calls.slice(callsBefore);
+    const jobId2Events = newCalls.filter((c: any) => c.jobId === jobId2);
+    expect(jobId2Events).toHaveLength(0);
+  });
+
+  it("setJobSend can be called before runJob and handler receives events", async () => {
+    const { send, calls } = createMockSend();
+    const jobId = createJob("script", {});
+
+    setJobSend(jobId, send);
+    await runJob(jobId, async (onLog) => {
+      onLog("step 1");
+      onLog("step 2");
+    });
+    clearJobSend(jobId);
+
+    const logMessages = calls
+      .filter((c: any) => c.type === "log")
+      .map((c: any) => c.message);
+    expect(logMessages).toContain("step 1");
+    expect(logMessages).toContain("step 2");
   });
 });

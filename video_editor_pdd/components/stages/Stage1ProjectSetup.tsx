@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import type { ProjectConfig, Section } from '../../lib/types';
+import { SseLogPanel } from '../SseLogPanel';
 
 interface Stage1ProjectSetupProps {
   config?: ProjectConfig;
@@ -43,6 +44,9 @@ export default function Stage1ProjectSetup({
   const [editingSectionId, setEditingSectionId] = useState<string | null>(null);
   const [draftSection, setDraftSection] = useState<Section | null>(null);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [isExtracting, setIsExtracting] = useState(false);
+  const [extractError, setExtractError] = useState<string | null>(null);
+  const [extractJobId, setExtractJobId] = useState<string | null>(null);
 
   useEffect(() => {
     if (resolvedConfig) setLocalConfig(resolvedConfig);
@@ -152,6 +156,68 @@ export default function Stage1ProjectSetup({
       return { ...prev, sections: next };
     });
     setDragIndex(null);
+  };
+
+  const handleExtractSections = async () => {
+    if (localConfig.sections.length > 0) {
+      const ok = window.confirm(
+        `This will replace ${localConfig.sections.length} existing section(s). Continue?`
+      );
+      if (!ok) return;
+    }
+
+    setIsExtracting(true);
+    setExtractError(null);
+    setExtractJobId(null);
+
+    try {
+      const res = await fetch('/api/pipeline/setup/extract-sections', {
+        method: 'POST',
+      });
+
+      if (!res.ok || !res.body) {
+        throw new Error(`Request failed: ${res.status}`);
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const data = JSON.parse(line.slice(6));
+            if (data.type === 'started' && data.jobId) {
+              setExtractJobId(data.jobId);
+            }
+            if (data.type === 'sections' && Array.isArray(data.sections)) {
+              setLocalConfig((prev) => ({
+                ...prev,
+                sections: data.sections,
+              }));
+            }
+            if (data.type === 'error' || data.type === 'complete') {
+              // handled by stream close
+            }
+          } catch {
+            // ignore parse errors for non-data lines
+          }
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Extraction failed';
+      setExtractError(msg);
+    } finally {
+      setIsExtracting(false);
+    }
   };
 
   const handleSave = async () => {
@@ -319,13 +385,25 @@ export default function Stage1ProjectSetup({
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <h3 className="text-lg font-semibold">Section Registry</h3>
-            <button
-              onClick={handleAddSection}
-              className="text-sm px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"
-            >
-              + Add Section
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={handleExtractSections}
+                disabled={isExtracting}
+                className="text-sm px-3 py-1 bg-purple-600 text-white rounded hover:bg-purple-700 disabled:opacity-50"
+              >
+                {isExtracting ? 'Extracting...' : 'Extract from Script'}
+              </button>
+              <button
+                onClick={handleAddSection}
+                className="text-sm px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"
+              >
+                + Add Section
+              </button>
+            </div>
           </div>
+          {extractError && (
+            <div className="text-red-400 text-sm">{extractError}</div>
+          )}
 
           <div className="overflow-x-auto border rounded">
             <table className="min-w-full text-sm">
@@ -449,6 +527,7 @@ export default function Stage1ProjectSetup({
           <p className="text-xs text-gray-500">
             Drag rows to reorder sections.
           </p>
+          <SseLogPanel jobId={extractJobId} />
         </div>
       </div>
     </div>

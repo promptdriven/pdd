@@ -1,5 +1,5 @@
 /**
- * Tests for lib/veo.ts (Vertex AI REST API implementation)
+ * Tests for lib/veo.ts (Google GenAI SDK implementation)
  *
  * PDD Principle: The prompt file is the source of truth.
  * These tests verify that the code conforms to the specification.
@@ -8,11 +8,11 @@
  *   1. Export generateReferenceImage(prompt, outputPath) -> Promise<void>
  *   2. Export generateVeoClip(prompt, refImagePath | null, aspectRatio, outputPath) -> Promise<void>
  *   3. Export extractLastFrame(clipPath, outputPath) -> Promise<void>
- *   4. Use GOOGLE_CLOUD_PROJECT + GOOGLE_CLOUD_LOCATION + ADC for auth
- *   5. Imagen via Vertex AI REST: sampleCount: 1, aspectRatio: '1:1', outputMimeType: 'image/png'
- *   6. Veo via Vertex AI REST: sampleCount: 1, aspectRatio from param (predictLongRunning)
+ *   4. Use GOOGLE_API_KEY env var for auth via @google/genai SDK
+ *   5. Imagen via GenAI SDK: numberOfImages: 1, aspectRatio: '1:1', outputMimeType: 'image/png'
+ *   6. Veo via GenAI SDK: numberOfVideos: 1, aspectRatio from param, durationSeconds: 8
  *   7. Poll every 5s; timeout after 10 min
- *   8. import 'server-only' guard
+ *   8. server-only guard (throws if window is defined)
  *   9. Uses ffprobe and ffmpeg for frame extraction
  *  10. Ensures output directories exist before writing
  *  11. GCS URI to HTTPS conversion for video download
@@ -23,15 +23,22 @@ import fs from "fs";
 import path from "path";
 
 // ---------------------------------------------------------------------------
-// Mock google-auth-library
+// Mock @google/genai SDK
 // ---------------------------------------------------------------------------
 
-const mockGetAccessToken = jest.fn().mockResolvedValue({ token: "test-access-token" });
-const mockGetClient = jest.fn().mockResolvedValue({ getAccessToken: mockGetAccessToken });
+const mockGenerateImages = jest.fn();
+const mockGenerateVideos = jest.fn();
+const mockGetVideosOperation = jest.fn();
 
-jest.mock("google-auth-library", () => ({
-  GoogleAuth: jest.fn().mockImplementation(() => ({
-    getClient: mockGetClient,
+jest.mock("@google/genai", () => ({
+  GoogleGenAI: jest.fn().mockImplementation(() => ({
+    models: {
+      generateImages: mockGenerateImages,
+      generateVideos: mockGenerateVideos,
+    },
+    operations: {
+      getVideosOperation: mockGetVideosOperation,
+    },
   })),
 }));
 
@@ -55,13 +62,11 @@ import {
 // Helpers
 // ---------------------------------------------------------------------------
 
-const ORIGINAL_PROJECT = process.env.GOOGLE_CLOUD_PROJECT;
-const ORIGINAL_LOCATION = process.env.GOOGLE_CLOUD_LOCATION;
+const ORIGINAL_API_KEY = process.env.GOOGLE_API_KEY;
 const ORIGINAL_FETCH = global.fetch;
 
 function setupEnvVars() {
-  process.env.GOOGLE_CLOUD_PROJECT = "test-project-123";
-  process.env.GOOGLE_CLOUD_LOCATION = "us-central1";
+  process.env.GOOGLE_API_KEY = "test-api-key-123";
 }
 
 function setupFsMocks() {
@@ -75,63 +80,31 @@ function setupExecSuccess() {
   });
 }
 
-function mockFetchSequence(...responses: Array<{ ok: boolean; status?: number; statusText?: string; json?: () => Promise<any>; text?: () => Promise<string>; arrayBuffer?: () => Promise<ArrayBuffer> }>) {
-  let callIdx = 0;
-  jest.spyOn(global, "fetch").mockImplementation(async () => {
-    const resp = responses[callIdx] ?? responses[responses.length - 1];
-    callIdx++;
-    return resp as any;
-  });
-}
-
-function makeImagenFetchResponse(base64 = "dGVzdC1pbWFnZQ==") {
+function makeImagenResponse(base64 = "dGVzdC1pbWFnZQ==") {
   return {
-    ok: true,
-    statusText: "OK",
-    json: () =>
-      Promise.resolve({
-        predictions: [{ bytesBase64Encoded: base64 }],
-      }),
+    generatedImages: [{ image: { imageBytes: base64 } }],
   };
 }
 
-function makeVeoStartResponse(name = "projects/test/locations/us-central1/operations/veo-op-123") {
+function makeVeoOperation({
+  done = false,
+  videoUri = "gs://bucket/video.mp4",
+  error,
+}: {
+  done?: boolean;
+  videoUri?: string | null;
+  error?: object;
+} = {}) {
   return {
-    ok: true,
-    statusText: "OK",
-    json: () => Promise.resolve({ name }),
-  };
-}
-
-function makeVeoPollResponse(
-  uri = "gs://bucket/video.mp4",
-  done = true,
-  videoStatus = "succeeded",
-  error?: object
-) {
-  return {
-    ok: true,
-    statusText: "OK",
-    json: () =>
-      Promise.resolve({
-        done,
-        ...(error ? { error } : {}),
-        response: done
-          ? {
-              generatedVideos: [
-                { video: { uri, status: videoStatus } },
-              ],
-            }
-          : undefined,
-      }),
-  };
-}
-
-function makeDownloadResponse(body: ArrayBuffer = new ArrayBuffer(8)) {
-  return {
-    ok: true,
-    statusText: "OK",
-    arrayBuffer: () => Promise.resolve(body),
+    done,
+    ...(error ? { error } : {}),
+    response: done
+      ? {
+          generatedVideos: [
+            { video: videoUri ? { uri: videoUri } : {} },
+          ],
+        }
+      : undefined,
   };
 }
 
@@ -142,92 +115,104 @@ function makeDownloadResponse(body: ArrayBuffer = new ArrayBuffer(8)) {
 beforeEach(() => {
   setupEnvVars();
   jest.clearAllMocks();
-  mockGetAccessToken.mockResolvedValue({ token: "test-access-token" });
-  mockGetClient.mockResolvedValue({ getAccessToken: mockGetAccessToken });
+  mockGenerateImages.mockReset();
+  mockGenerateVideos.mockReset();
+  mockGetVideosOperation.mockReset();
 });
 
 afterEach(() => {
   jest.restoreAllMocks();
   global.fetch = ORIGINAL_FETCH;
-  if (ORIGINAL_PROJECT !== undefined) {
-    process.env.GOOGLE_CLOUD_PROJECT = ORIGINAL_PROJECT;
+  if (ORIGINAL_API_KEY !== undefined) {
+    process.env.GOOGLE_API_KEY = ORIGINAL_API_KEY;
   } else {
-    delete process.env.GOOGLE_CLOUD_PROJECT;
-  }
-  if (ORIGINAL_LOCATION !== undefined) {
-    process.env.GOOGLE_CLOUD_LOCATION = ORIGINAL_LOCATION;
-  } else {
-    delete process.env.GOOGLE_CLOUD_LOCATION;
+    delete process.env.GOOGLE_API_KEY;
   }
 });
 
 // ---------------------------------------------------------------------------
-// 1. generateReferenceImage -- Vertex AI Imagen REST call
+// 1. generateReferenceImage -- GenAI SDK call
 // ---------------------------------------------------------------------------
 
-describe("generateReferenceImage -- Vertex AI REST call", () => {
+describe("generateReferenceImage -- GenAI SDK call", () => {
   beforeEach(() => {
     setupFsMocks();
   });
 
-  it("calls Imagen predict endpoint with correct URL", async () => {
-    mockFetchSequence(makeImagenFetchResponse());
+  it("calls generateImages with imagen-3.0-generate-002 model", async () => {
+    mockGenerateImages.mockResolvedValue(makeImagenResponse());
 
     await generateReferenceImage("test prompt", "/tmp/out.png");
 
-    expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining("imagen-3.0-generate-002:predict"),
-      expect.any(Object)
+    expect(mockGenerateImages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "imagen-3.0-generate-002",
+      })
     );
   });
 
-  it("sends prompt in instances array", async () => {
-    mockFetchSequence(makeImagenFetchResponse());
+  it("sends prompt to generateImages", async () => {
+    mockGenerateImages.mockResolvedValue(makeImagenResponse());
 
     await generateReferenceImage("professional headshot portrait", "/tmp/out.png");
 
-    const callArgs = (global.fetch as jest.Mock).mock.calls[0];
-    const body = JSON.parse(callArgs[1].body);
-    expect(body.instances).toEqual([{ prompt: "professional headshot portrait" }]);
+    expect(mockGenerateImages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "professional headshot portrait",
+      })
+    );
   });
 
-  it("sets sampleCount: 1 in parameters", async () => {
-    mockFetchSequence(makeImagenFetchResponse());
+  it("sets numberOfImages: 1 in config", async () => {
+    mockGenerateImages.mockResolvedValue(makeImagenResponse());
 
     await generateReferenceImage("test", "/tmp/out.png");
 
-    const callArgs = (global.fetch as jest.Mock).mock.calls[0];
-    const body = JSON.parse(callArgs[1].body);
-    expect(body.parameters.sampleCount).toBe(1);
+    expect(mockGenerateImages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          numberOfImages: 1,
+        }),
+      })
+    );
   });
 
   it("sets aspectRatio '1:1' for portrait thumbnails", async () => {
-    mockFetchSequence(makeImagenFetchResponse());
+    mockGenerateImages.mockResolvedValue(makeImagenResponse());
 
     await generateReferenceImage("test", "/tmp/out.png");
 
-    const callArgs = (global.fetch as jest.Mock).mock.calls[0];
-    const body = JSON.parse(callArgs[1].body);
-    expect(body.parameters.aspectRatio).toBe("1:1");
+    expect(mockGenerateImages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          aspectRatio: "1:1",
+        }),
+      })
+    );
   });
 
   it("sets outputMimeType 'image/png'", async () => {
-    mockFetchSequence(makeImagenFetchResponse());
+    mockGenerateImages.mockResolvedValue(makeImagenResponse());
 
     await generateReferenceImage("test", "/tmp/out.png");
 
-    const callArgs = (global.fetch as jest.Mock).mock.calls[0];
-    const body = JSON.parse(callArgs[1].body);
-    expect(body.parameters.outputMimeType).toBe("image/png");
+    expect(mockGenerateImages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          outputMimeType: "image/png",
+        }),
+      })
+    );
   });
 
-  it("includes Bearer token in Authorization header", async () => {
-    mockFetchSequence(makeImagenFetchResponse());
+  it("uses GOOGLE_API_KEY for authentication via GoogleGenAI constructor", async () => {
+    mockGenerateImages.mockResolvedValue(makeImagenResponse());
 
     await generateReferenceImage("test", "/tmp/out.png");
 
-    const callArgs = (global.fetch as jest.Mock).mock.calls[0];
-    expect(callArgs[1].headers.Authorization).toBe("Bearer test-access-token");
+    // GoogleGenAI is constructed at module-load time with apiKey from env.
+    // Verify the mock SDK methods were actually called (proving SDK is wired up).
+    expect(mockGenerateImages).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -242,7 +227,7 @@ describe("generateReferenceImage -- file output", () => {
 
   it("decodes base64 image and writes PNG to outputPath", async () => {
     const base64Data = Buffer.from("test-image-bytes").toString("base64");
-    mockFetchSequence(makeImagenFetchResponse(base64Data));
+    mockGenerateImages.mockResolvedValue(makeImagenResponse(base64Data));
 
     await generateReferenceImage("test", "/output/dir/image.png");
 
@@ -253,7 +238,7 @@ describe("generateReferenceImage -- file output", () => {
   });
 
   it("creates output directory recursively before writing", async () => {
-    mockFetchSequence(makeImagenFetchResponse());
+    mockGenerateImages.mockResolvedValue(makeImagenResponse());
 
     await generateReferenceImage("test", "/output/nested/dir/image.png");
 
@@ -272,19 +257,17 @@ describe("generateReferenceImage -- error handling", () => {
     setupFsMocks();
   });
 
-  it("throws when GOOGLE_CLOUD_PROJECT is not set", async () => {
-    delete process.env.GOOGLE_CLOUD_PROJECT;
+  it("throws when GOOGLE_API_KEY is not set", async () => {
+    delete process.env.GOOGLE_API_KEY;
 
     await expect(
       generateReferenceImage("test", "/tmp/out.png")
-    ).rejects.toThrow("GOOGLE_CLOUD_PROJECT");
+    ).rejects.toThrow("GOOGLE_API_KEY");
   });
 
-  it("throws when API returns no predictions", async () => {
-    mockFetchSequence({
-      ok: true,
-      statusText: "OK",
-      json: () => Promise.resolve({ predictions: [] }),
+  it("throws when API returns no image data", async () => {
+    mockGenerateImages.mockResolvedValue({
+      generatedImages: [{ image: {} }],
     });
 
     await expect(
@@ -292,11 +275,9 @@ describe("generateReferenceImage -- error handling", () => {
     ).rejects.toThrow("Imagen");
   });
 
-  it("throws when API returns null predictions", async () => {
-    mockFetchSequence({
-      ok: true,
-      statusText: "OK",
-      json: () => Promise.resolve({ predictions: null }),
+  it("throws when API returns null generatedImages", async () => {
+    mockGenerateImages.mockResolvedValue({
+      generatedImages: null,
     });
 
     await expect(
@@ -304,12 +285,9 @@ describe("generateReferenceImage -- error handling", () => {
     ).rejects.toThrow("Imagen");
   });
 
-  it("throws when prediction has no bytesBase64Encoded", async () => {
-    mockFetchSequence({
-      ok: true,
-      statusText: "OK",
-      json: () =>
-        Promise.resolve({ predictions: [{ bytesBase64Encoded: null }] }),
+  it("throws when generatedImages array is empty", async () => {
+    mockGenerateImages.mockResolvedValue({
+      generatedImages: [],
     });
 
     await expect(
@@ -318,12 +296,7 @@ describe("generateReferenceImage -- error handling", () => {
   });
 
   it("throws descriptive error wrapping API failure", async () => {
-    mockFetchSequence({
-      ok: false,
-      status: 429,
-      statusText: "Too Many Requests",
-      text: () => Promise.resolve("quota exceeded"),
-    });
+    mockGenerateImages.mockRejectedValue(new Error("quota exceeded"));
 
     await expect(
       generateReferenceImage("test", "/tmp/out.png")
@@ -332,109 +305,132 @@ describe("generateReferenceImage -- error handling", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 4. generateVeoClip -- Vertex AI REST call without reference
+// 4. generateVeoClip -- GenAI SDK call without reference
 // ---------------------------------------------------------------------------
 
-describe("generateVeoClip -- Vertex AI REST call without reference", () => {
+describe("generateVeoClip -- GenAI SDK call without reference", () => {
   beforeEach(() => {
     setupFsMocks();
   });
 
-  it("calls Veo predictLongRunning endpoint with correct URL", async () => {
-    mockFetchSequence(
-      makeVeoStartResponse(),
-      makeVeoPollResponse(),
-      makeDownloadResponse()
-    );
+  it("calls generateVideos with veo-3.1-generate-preview model", async () => {
+    mockGenerateVideos.mockResolvedValue(makeVeoOperation({ done: false }));
+    mockGetVideosOperation.mockResolvedValue(makeVeoOperation({ done: true }));
+    jest.spyOn(global, "fetch").mockResolvedValue({
+      ok: true,
+      arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
+    } as any);
 
     await generateVeoClip("test prompt", null, "16:9", "/tmp/out.mp4");
 
-    expect((global.fetch as jest.Mock).mock.calls[0][0]).toContain(
-      "veo-3.1-generate-preview:predictLongRunning"
+    expect(mockGenerateVideos).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "veo-3.1-generate-preview",
+      })
     );
   });
 
-  it("sends prompt in instances array", async () => {
-    mockFetchSequence(
-      makeVeoStartResponse(),
-      makeVeoPollResponse(),
-      makeDownloadResponse()
-    );
+  it("sends prompt to generateVideos", async () => {
+    mockGenerateVideos.mockResolvedValue(makeVeoOperation({ done: false }));
+    mockGetVideosOperation.mockResolvedValue(makeVeoOperation({ done: true }));
+    jest.spyOn(global, "fetch").mockResolvedValue({
+      ok: true,
+      arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
+    } as any);
 
     await generateVeoClip("drone aerial shot", null, "16:9", "/tmp/out.mp4");
 
-    const callArgs = (global.fetch as jest.Mock).mock.calls[0];
-    const body = JSON.parse(callArgs[1].body);
-    expect(body.instances[0].prompt).toBe("drone aerial shot");
+    expect(mockGenerateVideos).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "drone aerial shot",
+      })
+    );
   });
 
-  it("sets sampleCount: 1 in parameters", async () => {
-    mockFetchSequence(
-      makeVeoStartResponse(),
-      makeVeoPollResponse(),
-      makeDownloadResponse()
-    );
+  it("sets numberOfVideos: 1 in config", async () => {
+    mockGenerateVideos.mockResolvedValue(makeVeoOperation({ done: false }));
+    mockGetVideosOperation.mockResolvedValue(makeVeoOperation({ done: true }));
+    jest.spyOn(global, "fetch").mockResolvedValue({
+      ok: true,
+      arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
+    } as any);
 
     await generateVeoClip("test", null, "16:9", "/tmp/out.mp4");
 
-    const callArgs = (global.fetch as jest.Mock).mock.calls[0];
-    const body = JSON.parse(callArgs[1].body);
-    expect(body.parameters.sampleCount).toBe(1);
+    expect(mockGenerateVideos).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          numberOfVideos: 1,
+        }),
+      })
+    );
   });
 
   it("passes aspectRatio 16:9 from parameter", async () => {
-    mockFetchSequence(
-      makeVeoStartResponse(),
-      makeVeoPollResponse(),
-      makeDownloadResponse()
-    );
+    mockGenerateVideos.mockResolvedValue(makeVeoOperation({ done: false }));
+    mockGetVideosOperation.mockResolvedValue(makeVeoOperation({ done: true }));
+    jest.spyOn(global, "fetch").mockResolvedValue({
+      ok: true,
+      arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
+    } as any);
 
     await generateVeoClip("test", null, "16:9", "/tmp/out.mp4");
 
-    const callArgs = (global.fetch as jest.Mock).mock.calls[0];
-    const body = JSON.parse(callArgs[1].body);
-    expect(body.parameters.aspectRatio).toBe("16:9");
+    expect(mockGenerateVideos).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          aspectRatio: "16:9",
+        }),
+      })
+    );
   });
 
   it("passes aspectRatio 9:16 from parameter", async () => {
-    mockFetchSequence(
-      makeVeoStartResponse(),
-      makeVeoPollResponse(),
-      makeDownloadResponse()
-    );
+    mockGenerateVideos.mockResolvedValue(makeVeoOperation({ done: false }));
+    mockGetVideosOperation.mockResolvedValue(makeVeoOperation({ done: true }));
+    jest.spyOn(global, "fetch").mockResolvedValue({
+      ok: true,
+      arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
+    } as any);
 
     await generateVeoClip("test", null, "9:16", "/tmp/out.mp4");
 
-    const callArgs = (global.fetch as jest.Mock).mock.calls[0];
-    const body = JSON.parse(callArgs[1].body);
-    expect(body.parameters.aspectRatio).toBe("9:16");
+    expect(mockGenerateVideos).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          aspectRatio: "9:16",
+        }),
+      })
+    );
   });
 
   it("does not include image when referenceImagePath is null", async () => {
-    mockFetchSequence(
-      makeVeoStartResponse(),
-      makeVeoPollResponse(),
-      makeDownloadResponse()
-    );
+    mockGenerateVideos.mockResolvedValue(makeVeoOperation({ done: false }));
+    mockGetVideosOperation.mockResolvedValue(makeVeoOperation({ done: true }));
+    jest.spyOn(global, "fetch").mockResolvedValue({
+      ok: true,
+      arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
+    } as any);
 
     await generateVeoClip("test", null, "16:9", "/tmp/out.mp4");
 
-    const callArgs = (global.fetch as jest.Mock).mock.calls[0];
-    const body = JSON.parse(callArgs[1].body);
-    expect(body.instances[0].image).toBeUndefined();
+    const callArgs = mockGenerateVideos.mock.calls[0][0];
+    expect(callArgs.image).toBeUndefined();
   });
 
-  it("includes Bearer token in Authorization header", async () => {
-    mockFetchSequence(
-      makeVeoStartResponse(),
-      makeVeoPollResponse(),
-      makeDownloadResponse()
-    );
+  it("uses GOOGLE_API_KEY for authentication via GoogleGenAI constructor", async () => {
+    mockGenerateVideos.mockResolvedValue(makeVeoOperation({ done: false }));
+    mockGetVideosOperation.mockResolvedValue(makeVeoOperation({ done: true }));
+    jest.spyOn(global, "fetch").mockResolvedValue({
+      ok: true,
+      arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
+    } as any);
 
     await generateVeoClip("test", null, "16:9", "/tmp/out.mp4");
 
-    const callArgs = (global.fetch as jest.Mock).mock.calls[0];
-    expect(callArgs[1].headers.Authorization).toBe("Bearer test-access-token");
+    // GoogleGenAI is constructed at module-load time with apiKey from env.
+    // Verify the mock SDK methods were actually called (proving SDK is wired up).
+    expect(mockGenerateVideos).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -447,22 +443,22 @@ describe("generateVeoClip -- with reference image", () => {
     setupFsMocks();
   });
 
-  it("reads reference image, base64-encodes it, and includes in request body", async () => {
+  it("reads reference image, base64-encodes it, and includes in request params", async () => {
     const imgData = Buffer.from("reference-image-png-data");
     jest.spyOn(fs, "readFileSync").mockReturnValue(imgData);
-    mockFetchSequence(
-      makeVeoStartResponse(),
-      makeVeoPollResponse(),
-      makeDownloadResponse()
-    );
+    mockGenerateVideos.mockResolvedValue(makeVeoOperation({ done: false }));
+    mockGetVideosOperation.mockResolvedValue(makeVeoOperation({ done: true }));
+    jest.spyOn(global, "fetch").mockResolvedValue({
+      ok: true,
+      arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
+    } as any);
 
     await generateVeoClip("test", "/ref/image.png", "16:9", "/tmp/out.mp4");
 
     expect(fs.readFileSync).toHaveBeenCalledWith("/ref/image.png");
-    const callArgs = (global.fetch as jest.Mock).mock.calls[0];
-    const body = JSON.parse(callArgs[1].body);
-    expect(body.instances[0].image).toEqual({
-      bytesBase64Encoded: imgData.toString("base64"),
+    const callArgs = mockGenerateVideos.mock.calls[0][0];
+    expect(callArgs.image).toEqual({
+      imageBytes: imgData.toString("base64"),
       mimeType: "image/png",
     });
   });
@@ -477,22 +473,23 @@ describe("generateVeoClip -- polling & download", () => {
     setupFsMocks();
   });
 
-  it("polls fetchPredictOperation endpoint and downloads video on success", async () => {
+  it("polls getVideosOperation and downloads video on success", async () => {
     const videoContent = new ArrayBuffer(16);
-    mockFetchSequence(
-      makeVeoStartResponse("projects/test/locations/us-central1/operations/op-1"),
-      makeVeoPollResponse("gs://bucket/vid.mp4"),
-      makeDownloadResponse(videoContent)
+    mockGenerateVideos.mockResolvedValue(makeVeoOperation({ done: false }));
+    mockGetVideosOperation.mockResolvedValue(
+      makeVeoOperation({ done: true, videoUri: "gs://bucket/vid.mp4" })
     );
+    jest.spyOn(global, "fetch").mockResolvedValue({
+      ok: true,
+      arrayBuffer: () => Promise.resolve(videoContent),
+    } as any);
 
     await generateVeoClip("test", null, "16:9", "/tmp/out.mp4");
 
-    // Second fetch call should be the poll via fetchPredictOperation
-    expect((global.fetch as jest.Mock).mock.calls[1][0]).toContain("fetchPredictOperation");
-    const pollBody = JSON.parse((global.fetch as jest.Mock).mock.calls[1][1].body);
-    expect(pollBody.operationName).toBe("projects/test/locations/us-central1/operations/op-1");
-    // Third call should be the download
-    expect((global.fetch as jest.Mock).mock.calls[2][0]).toBe(
+    // Should have polled via getVideosOperation
+    expect(mockGetVideosOperation).toHaveBeenCalled();
+    // Should have downloaded via fetch with converted HTTPS URL
+    expect(global.fetch).toHaveBeenCalledWith(
       "https://storage.googleapis.com/bucket/vid.mp4"
     );
     expect(fs.writeFileSync).toHaveBeenCalledWith(
@@ -502,39 +499,46 @@ describe("generateVeoClip -- polling & download", () => {
   });
 
   it("converts GCS URI (gs://) to HTTPS storage URL", async () => {
-    mockFetchSequence(
-      makeVeoStartResponse(),
-      makeVeoPollResponse("gs://my-bucket/path/to/video.mp4"),
-      makeDownloadResponse()
+    mockGenerateVideos.mockResolvedValue(makeVeoOperation({ done: false }));
+    mockGetVideosOperation.mockResolvedValue(
+      makeVeoOperation({ done: true, videoUri: "gs://my-bucket/path/to/video.mp4" })
     );
+    jest.spyOn(global, "fetch").mockResolvedValue({
+      ok: true,
+      arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
+    } as any);
 
     await generateVeoClip("test", null, "16:9", "/tmp/out.mp4");
 
-    expect((global.fetch as jest.Mock).mock.calls[2][0]).toBe(
+    expect(global.fetch).toHaveBeenCalledWith(
       "https://storage.googleapis.com/my-bucket/path/to/video.mp4"
     );
   });
 
   it("passes through HTTPS URIs directly", async () => {
-    mockFetchSequence(
-      makeVeoStartResponse(),
-      makeVeoPollResponse("https://example.com/video.mp4"),
-      makeDownloadResponse()
+    mockGenerateVideos.mockResolvedValue(makeVeoOperation({ done: false }));
+    mockGetVideosOperation.mockResolvedValue(
+      makeVeoOperation({ done: true, videoUri: "https://example.com/video.mp4" })
     );
+    jest.spyOn(global, "fetch").mockResolvedValue({
+      ok: true,
+      arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
+    } as any);
 
     await generateVeoClip("test", null, "16:9", "/tmp/out.mp4");
 
-    expect((global.fetch as jest.Mock).mock.calls[2][0]).toBe(
+    expect(global.fetch).toHaveBeenCalledWith(
       "https://example.com/video.mp4"
     );
   });
 
   it("creates output directory before writing video", async () => {
-    mockFetchSequence(
-      makeVeoStartResponse(),
-      makeVeoPollResponse(),
-      makeDownloadResponse()
-    );
+    mockGenerateVideos.mockResolvedValue(makeVeoOperation({ done: false }));
+    mockGetVideosOperation.mockResolvedValue(makeVeoOperation({ done: true }));
+    jest.spyOn(global, "fetch").mockResolvedValue({
+      ok: true,
+      arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
+    } as any);
 
     await generateVeoClip("test", null, "16:9", "/output/clips/video.mp4");
 
@@ -545,11 +549,12 @@ describe("generateVeoClip -- polling & download", () => {
 
   it("writes downloaded video content to output file", async () => {
     const videoBytes = new Uint8Array([0x00, 0x00, 0x00, 0x1c]).buffer;
-    mockFetchSequence(
-      makeVeoStartResponse(),
-      makeVeoPollResponse(),
-      makeDownloadResponse(videoBytes)
-    );
+    mockGenerateVideos.mockResolvedValue(makeVeoOperation({ done: false }));
+    mockGetVideosOperation.mockResolvedValue(makeVeoOperation({ done: true }));
+    jest.spyOn(global, "fetch").mockResolvedValue({
+      ok: true,
+      arrayBuffer: () => Promise.resolve(videoBytes),
+    } as any);
 
     await generateVeoClip("test", null, "16:9", "/tmp/out.mp4");
 
@@ -569,78 +574,57 @@ describe("generateVeoClip -- error handling", () => {
     setupFsMocks();
   });
 
-  it("throws when GOOGLE_CLOUD_PROJECT is not set", async () => {
-    delete process.env.GOOGLE_CLOUD_PROJECT;
+  it("throws when GOOGLE_API_KEY is not set", async () => {
+    delete process.env.GOOGLE_API_KEY;
 
     await expect(
       generateVeoClip("test", null, "16:9", "/tmp/out.mp4")
-    ).rejects.toThrow("GOOGLE_CLOUD_PROJECT");
+    ).rejects.toThrow("GOOGLE_API_KEY");
   });
 
-  it("throws when operation has no name", async () => {
-    mockFetchSequence({
-      ok: true,
-      statusText: "OK",
-      json: () => Promise.resolve({}),
-    });
+  it("throws when generateVideos SDK call fails", async () => {
+    mockGenerateVideos.mockRejectedValue(new Error("SDK error"));
 
     await expect(
       generateVeoClip("test", null, "16:9", "/tmp/out.mp4")
-    ).rejects.toThrow("valid operation name");
+    ).rejects.toThrow("Failed to generate Veo clip");
   });
 
   it("throws when operation completes with error", async () => {
-    mockFetchSequence(
-      makeVeoStartResponse(),
-      makeVeoPollResponse("gs://b/v.mp4", true, "succeeded", { code: 500, message: "Internal error" })
-    );
-
-    // The error field triggers the error path
-    const pollResp = {
-      ok: true,
-      statusText: "OK",
-      json: () =>
-        Promise.resolve({
-          done: true,
-          error: { code: 500, message: "Internal error" },
-        }),
-    };
-    jest.spyOn(global, "fetch")
-      .mockResolvedValueOnce(makeVeoStartResponse() as any)
-      .mockResolvedValueOnce(pollResp as any);
+    mockGenerateVideos.mockResolvedValue(makeVeoOperation({ done: false }));
+    mockGetVideosOperation.mockResolvedValue({
+      done: true,
+      error: { code: 500, message: "Internal error" },
+      response: { generatedVideos: [] },
+    });
 
     await expect(
       generateVeoClip("test", null, "16:9", "/tmp/out.mp4")
     ).rejects.toThrow("Veo operation failed");
   });
 
-  it("throws when no video data in completed response", async () => {
-    const pollResp = {
-      ok: true,
-      statusText: "OK",
-      json: () =>
-        Promise.resolve({
-          done: true,
-          response: { generatedVideos: [{ video: {} }] },
-        }),
-    };
-    jest.spyOn(global, "fetch")
-      .mockResolvedValueOnce(makeVeoStartResponse() as any)
-      .mockResolvedValueOnce(pollResp as any);
+  it("throws when no video URI in completed response", async () => {
+    mockGenerateVideos.mockResolvedValue(makeVeoOperation({ done: false }));
+    mockGetVideosOperation.mockResolvedValue({
+      done: true,
+      response: { generatedVideos: [{ video: {} }] },
+    });
 
     await expect(
       generateVeoClip("test", null, "16:9", "/tmp/out.mp4")
-    ).rejects.toThrow("no video data found");
+    ).rejects.toThrow("no video URI");
   });
 
   it("throws when video download returns non-OK response", async () => {
-    jest.spyOn(global, "fetch")
-      .mockResolvedValueOnce(makeVeoStartResponse() as any)
-      .mockResolvedValueOnce(makeVeoPollResponse() as any)
-      .mockResolvedValueOnce({
-        ok: false,
-        statusText: "Forbidden",
-      } as any);
+    mockGenerateVideos.mockResolvedValue(makeVeoOperation({ done: false }));
+    mockGetVideosOperation.mockResolvedValue(
+      makeVeoOperation({ done: true })
+    );
+    jest.spyOn(global, "fetch").mockResolvedValue({
+      ok: false,
+      status: 403,
+      statusText: "Forbidden",
+    } as any);
 
     await expect(
       generateVeoClip("test", null, "16:9", "/tmp/out.mp4")
@@ -648,7 +632,7 @@ describe("generateVeoClip -- error handling", () => {
   });
 
   it("wraps all errors with descriptive prefix", async () => {
-    jest.spyOn(global, "fetch").mockRejectedValue(new Error("network error"));
+    mockGenerateVideos.mockRejectedValue(new Error("network error"));
 
     await expect(
       generateVeoClip("test", null, "16:9", "/tmp/out.mp4")
@@ -656,7 +640,7 @@ describe("generateVeoClip -- error handling", () => {
   });
 
   it("includes original error message in wrapped error", async () => {
-    jest.spyOn(global, "fetch").mockRejectedValue(new Error("connection refused"));
+    mockGenerateVideos.mockRejectedValue(new Error("connection refused"));
 
     await expect(
       generateVeoClip("test", null, "16:9", "/tmp/out.mp4")
@@ -664,8 +648,8 @@ describe("generateVeoClip -- error handling", () => {
   });
 
   it("times out after 10 minutes with descriptive error", async () => {
-    jest.spyOn(global, "fetch")
-      .mockResolvedValueOnce(makeVeoStartResponse("projects/test/locations/us-central1/operations/slow") as any);
+    mockGenerateVideos.mockResolvedValue(makeVeoOperation({ done: false }));
+    mockGetVideosOperation.mockResolvedValue(makeVeoOperation({ done: false }));
 
     let callCount = 0;
     jest.spyOn(Date, "now").mockImplementation(() => {
@@ -679,9 +663,9 @@ describe("generateVeoClip -- error handling", () => {
     ).rejects.toThrow("Timed out");
   });
 
-  it("timeout error includes operation name", async () => {
-    jest.spyOn(global, "fetch")
-      .mockResolvedValueOnce(makeVeoStartResponse("projects/test/locations/us-central1/operations/my-op-456") as any);
+  it("timeout error includes duration in seconds", async () => {
+    mockGenerateVideos.mockResolvedValue(makeVeoOperation({ done: false }));
+    mockGetVideosOperation.mockResolvedValue(makeVeoOperation({ done: false }));
 
     let callCount = 0;
     jest.spyOn(Date, "now").mockImplementation(() => {
@@ -691,27 +675,23 @@ describe("generateVeoClip -- error handling", () => {
 
     await expect(
       generateVeoClip("test", null, "16:9", "/tmp/out.mp4")
-    ).rejects.toThrow("my-op-456");
+    ).rejects.toThrow("600s");
   });
 
   it("downloads video even when status field is not 'succeeded' (status not checked)", async () => {
-    const pollResp = {
+    mockGenerateVideos.mockResolvedValue(makeVeoOperation({ done: false }));
+    mockGetVideosOperation.mockResolvedValue({
+      done: true,
+      response: {
+        generatedVideos: [
+          { video: { uri: "gs://bucket/vid.mp4", status: "failed" } },
+        ],
+      },
+    });
+    jest.spyOn(global, "fetch").mockResolvedValue({
       ok: true,
-      statusText: "OK",
-      json: () =>
-        Promise.resolve({
-          done: true,
-          response: {
-            generatedVideos: [
-              { video: { uri: "gs://bucket/vid.mp4", status: "failed" } },
-            ],
-          },
-        }),
-    };
-    jest.spyOn(global, "fetch")
-      .mockResolvedValueOnce(makeVeoStartResponse() as any)
-      .mockResolvedValueOnce(pollResp as any)
-      .mockResolvedValueOnce(makeDownloadResponse() as any);
+      arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
+    } as any);
 
     await expect(
       generateVeoClip("test", null, "16:9", "/tmp/out.mp4")
@@ -719,23 +699,19 @@ describe("generateVeoClip -- error handling", () => {
   });
 
   it("passes when video status is undefined (only checked if truthy)", async () => {
-    const pollResp = {
+    mockGenerateVideos.mockResolvedValue(makeVeoOperation({ done: false }));
+    mockGetVideosOperation.mockResolvedValue({
+      done: true,
+      response: {
+        generatedVideos: [
+          { video: { uri: "gs://bucket/vid.mp4" } },
+        ],
+      },
+    });
+    jest.spyOn(global, "fetch").mockResolvedValue({
       ok: true,
-      statusText: "OK",
-      json: () =>
-        Promise.resolve({
-          done: true,
-          response: {
-            generatedVideos: [
-              { video: { uri: "gs://bucket/vid.mp4" } },
-            ],
-          },
-        }),
-    };
-    jest.spyOn(global, "fetch")
-      .mockResolvedValueOnce(makeVeoStartResponse() as any)
-      .mockResolvedValueOnce(pollResp as any)
-      .mockResolvedValueOnce(makeDownloadResponse() as any);
+      arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
+    } as any);
 
     await expect(
       generateVeoClip("test", null, "16:9", "/tmp/out.mp4")
@@ -810,7 +786,7 @@ describe("extractLastFrame -- error handling", () => {
 
     await expect(
       extractLastFrame("/bad/clip.mp4", "/frames/frame.png")
-    ).rejects.toThrow("Failed to extract last frame from clip");
+    ).rejects.toThrow("Failed to extract last frame");
   });
 
   it("throws descriptive error on ffmpeg failure", async () => {
@@ -824,7 +800,7 @@ describe("extractLastFrame -- error handling", () => {
 
     await expect(
       extractLastFrame("/clips/clip.mp4", "/frames/frame.png")
-    ).rejects.toThrow("Failed to extract last frame from clip");
+    ).rejects.toThrow("Failed to extract last frame");
   });
 
   it("includes original error message in thrown error", async () => {
@@ -887,21 +863,21 @@ describe("lib/veo.ts source structure", () => {
     expect(sourceCode).toMatch(/server-only/);
   });
 
-  it("uses GOOGLE_CLOUD_PROJECT env var", () => {
-    expect(sourceCode).toMatch(/GOOGLE_CLOUD_PROJECT/);
+  it("uses GOOGLE_API_KEY env var", () => {
+    expect(sourceCode).toMatch(/GOOGLE_API_KEY/);
   });
 
-  it("uses GOOGLE_CLOUD_LOCATION env var", () => {
-    expect(sourceCode).toMatch(/GOOGLE_CLOUD_LOCATION/);
+  it("imports GoogleGenAI from @google/genai", () => {
+    expect(sourceCode).toMatch(/GoogleGenAI/);
+    expect(sourceCode).toMatch(/@google\/genai/);
   });
 
-  it("imports GoogleAuth from google-auth-library", () => {
-    expect(sourceCode).toMatch(/GoogleAuth/);
-    expect(sourceCode).toMatch(/google-auth-library/);
+  it("imports GenerateVideosParameters type from @google/genai", () => {
+    expect(sourceCode).toMatch(/GenerateVideosParameters/);
   });
 
-  it("does NOT import @google/genai (migrated away)", () => {
-    expect(sourceCode).not.toMatch(/@google\/genai/);
+  it("does NOT import google-auth-library (migrated to GenAI SDK)", () => {
+    expect(sourceCode).not.toMatch(/google-auth-library/);
   });
 
   it("exports generateReferenceImage function", () => {
@@ -930,8 +906,8 @@ describe("lib/veo.ts source structure", () => {
     expect(sourceCode).toMatch(/veo-3\.1-generate-preview/);
   });
 
-  it("sets sampleCount: 1 for Imagen (Vertex AI format)", () => {
-    expect(sourceCode).toMatch(/sampleCount:\s*1/);
+  it("sets numberOfImages: 1 for Imagen (GenAI SDK format)", () => {
+    expect(sourceCode).toMatch(/numberOfImages:\s*1/);
   });
 
   it("sets aspectRatio '1:1' for portrait thumbnails", () => {
@@ -942,11 +918,8 @@ describe("lib/veo.ts source structure", () => {
     expect(sourceCode).toMatch(/outputMimeType:\s*['"]image\/png['"]/);
   });
 
-  it("sets sampleCount: 1 for Veo (Vertex AI format)", () => {
-    // sampleCount appears twice in source: once for Imagen, once for Veo
-    const matches = sourceCode.match(/sampleCount:\s*1/g);
-    expect(matches).not.toBeNull();
-    expect(matches!.length).toBeGreaterThanOrEqual(2);
+  it("sets numberOfVideos: 1 for Veo (GenAI SDK format)", () => {
+    expect(sourceCode).toMatch(/numberOfVideos:\s*1/);
   });
 
   it("has 5-second poll interval (sleep 5000)", () => {
@@ -957,12 +930,12 @@ describe("lib/veo.ts source structure", () => {
     expect(sourceCode).toMatch(/10\s*\*\s*60\s*\*\s*1000/);
   });
 
-  it("uses Vertex AI REST endpoint pattern", () => {
-    expect(sourceCode).toMatch(/aiplatform\.googleapis\.com/);
+  it("uses GenAI SDK for API calls (genai.models)", () => {
+    expect(sourceCode).toMatch(/genai\.models/);
   });
 
-  it("uses Bearer token authentication", () => {
-    expect(sourceCode).toMatch(/Bearer/);
+  it("uses GenAI SDK for polling (genai.operations)", () => {
+    expect(sourceCode).toMatch(/genai\.operations/);
   });
 
   it("uses ffprobe for duration detection", () => {

@@ -12,29 +12,39 @@
 // Attempting to import it in a Client Component will throw a build error
 // thanks to the "server-only" guard.
 
+// --- Standalone execution setup ---
+// When running outside Next.js (e.g., via tsx), the "server-only" package
+// unconditionally throws because the "react-server" export condition is not
+// active.  We register a no-op in the require cache so the guard is skipped
+// for this standalone demo while keeping db.ts unchanged for production.
+const _serverOnlyResolved = require.resolve("server-only");
+require.cache[_serverOnlyResolved] = {
+  id: _serverOnlyResolved,
+  filename: _serverOnlyResolved,
+  loaded: true,
+  exports: {},
+  children: [],
+  paths: [],
+} as any;
+
 // Use an in-memory database for this example so each run starts fresh
 process.env.DB_PATH = ":memory:";
 
-import { getDb, runMigrations, recoverCrashedJobs } from "../lib/db";
-import type { Database } from "better-sqlite3";
+// Use require() instead of import to guarantee ordering after the mock above
+// (ES import declarations are hoisted above statements by the transpiler).
+const { getDb, runMigrations, recoverCrashedJobs } = require("../lib/db") as typeof import("../lib/db");
 import { randomUUID } from "crypto";
 
 // ============================================================================
-// Example 1: Basic singleton access with getDb()
+// Example 1: Initialize the database
 // ============================================================================
 
 /**
  * getDb() returns the singleton better-sqlite3 Database instance.
- *
- * - On first call: opens (or creates) the SQLite file at
- *   `process.env.DB_PATH` (default: `<cwd>/pipeline.db`),
- *   enables WAL journal mode, runs schema migrations, and
- *   recovers any jobs left in "running" state from a prior crash.
- * - On subsequent calls: returns the cached instance immediately.
- *
- * @returns {Database} The better-sqlite3 Database instance (synchronous API).
+ * On first call it enables WAL mode, runs migrations, and recovers
+ * any crashed jobs automatically.
  */
-const db: Database = getDb();
+const db = getDb();
 
 console.log("Database connection established. WAL mode active.");
 
@@ -44,16 +54,6 @@ console.log("Database connection established. WAL mode active.");
 
 /**
  * Insert a new job into the `jobs` table.
- *
- * Table schema:
- *   id        TEXT PRIMARY KEY  — UUID identifying the job
- *   stage     TEXT              — pipeline stage (e.g. 'tts-render', 'veo', 'render')
- *   status    TEXT              — lifecycle state: 'pending' | 'running' | 'done' | 'error'
- *   progress  REAL              — completion percentage 0.0–100.0
- *   error     TEXT              — error message or null
- *   params    TEXT              — JSON-serialized Record<string, unknown>
- *   createdAt TEXT              — ISO 8601 timestamp
- *   updatedAt TEXT              — ISO 8601 timestamp
  */
 function createJob(
   stage: string,
@@ -81,12 +81,6 @@ const jobId = createJob("tts-render", {
 // Example 3: Updating job status and progress
 // ============================================================================
 
-/**
- * Transition a job to "running" status and update its progress.
- *
- * @param jobId    — The UUID of the job to update
- * @param progress — Completion percentage (0–100)
- */
 function updateJobProgress(jobId: string, progress: number): void {
   const db = getDb();
   const now = new Date().toISOString();
@@ -100,11 +94,6 @@ function updateJobProgress(jobId: string, progress: number): void {
   console.log(`Updated job ${jobId}: progress=${progress}%, rows changed=${result.changes}`);
 }
 
-/**
- * Mark a job as completed successfully.
- *
- * @param jobId — The UUID of the job to complete
- */
 function completeJob(jobId: string): void {
   const db = getDb();
   const now = new Date().toISOString();
@@ -114,23 +103,6 @@ function completeJob(jobId: string): void {
   ).run(now, jobId);
 
   console.log(`Job ${jobId} completed successfully.`);
-}
-
-/**
- * Mark a job as failed with an error message.
- *
- * @param jobId   — The UUID of the job
- * @param error   — Human-readable error description
- */
-function failJob(jobId: string, error: string): void {
-  const db = getDb();
-  const now = new Date().toISOString();
-
-  db.prepare(
-    `UPDATE jobs SET status='error', error=?, updatedAt=? WHERE id=?`
-  ).run(error, now, jobId);
-
-  console.log(`Job ${jobId} failed: ${error}`);
 }
 
 // Simulate a job lifecycle
@@ -143,13 +115,6 @@ completeJob(jobId);
 // Example 4: Querying jobs by stage
 // ============================================================================
 
-/**
- * Retrieve all jobs for a given pipeline stage, ordered by creation time.
- *
- * @param stage — The pipeline stage to filter by (e.g. 'tts-render')
- * @returns Array of job row objects. The `params` field is a JSON string
- *          that must be parsed with JSON.parse() by the caller.
- */
 function getJobsByStage(stage: string): Array<Record<string, unknown>> {
   const db = getDb();
 
@@ -163,7 +128,6 @@ function getJobsByStage(stage: string): Array<Record<string, unknown>> {
 
 const ttsJobs = getJobsByStage("tts-render");
 for (const job of ttsJobs) {
-  // Parse the JSON params column back into an object
   const params =
     typeof job.params === "string" ? JSON.parse(job.params) : job.params;
   console.log(`  Job ${job.id}: status=${job.status}, params=`, params);
@@ -173,29 +137,8 @@ for (const job of ttsJobs) {
 // Example 5: Creating and querying annotations
 // ============================================================================
 
-/**
- * Insert an annotation into the `annotations` table.
- *
- * Table schema:
- *   id               TEXT PRIMARY KEY  — UUID
- *   sectionId        TEXT              — which video section this targets
- *   timestamp        REAL              — playback time in seconds
- *   text             TEXT              — user description of the issue
- *   videoFile        TEXT              — path to the video file (nullable)
- *   drawingDataUrl   TEXT              — base64 data URL of drawing (nullable)
- *   compositeDataUrl TEXT              — base64 data URL of frame+drawing (nullable)
- *   analysis         TEXT              — JSON-serialized AnnotationAnalysis (nullable)
- *   resolved         INTEGER           — 0 = unresolved, 1 = resolved
- *   resolveJobId     TEXT              — job ID that fixed this (nullable)
- *   createdAt        TEXT              — ISO 8601 timestamp
- *
- * @param sectionId — The section this annotation belongs to
- * @param timestamp — Playback position in seconds
- * @param text      — User's description of the issue
- * @param videoFile — Path to the video file being annotated
- * @returns The generated annotation ID
- */
 function createAnnotation(
+  jobId: string,
   sectionId: string,
   timestamp: number,
   text: string,
@@ -206,101 +149,64 @@ function createAnnotation(
   const now = new Date().toISOString();
 
   db.prepare(
-    `INSERT INTO annotations (id, sectionId, timestamp, text, videoFile, drawingDataUrl, compositeDataUrl, analysis, resolved, resolveJobId, createdAt)
-     VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, 0, NULL, ?)`
+    `INSERT INTO annotations (id, sectionId, timestamp, text, videoFile, createdAt)
+     VALUES (?, ?, ?, ?, ?, ?)`
   ).run(id, sectionId, timestamp, text, videoFile, now);
 
   console.log(`Created annotation ${id} on section "${sectionId}" at ${timestamp}s`);
   return id;
 }
 
-/**
- * Store Claude's analysis result on an existing annotation.
- *
- * @param annotationId — The annotation to update
- * @param analysis     — The AnnotationAnalysis object (will be JSON-serialized)
- */
 function setAnnotationAnalysis(
   annotationId: string,
-  analysis: {
-    severity: string;
-    fixType: string;
-    technicalAssessment: string;
-    suggestedFixes: string[];
-    confidence: number;
-  }
+  analysisResult: string
 ): void {
   const db = getDb();
 
   db.prepare(`UPDATE annotations SET analysis = ? WHERE id = ?`).run(
-    JSON.stringify(analysis),
+    analysisResult,
     annotationId
   );
 
-  console.log(
-    `Set analysis on annotation ${annotationId}: severity=${analysis.severity}, fixType=${analysis.fixType}`
-  );
+  console.log(`Set analysis on annotation ${annotationId}`);
 }
 
-/**
- * Get all unresolved annotations for a section.
- *
- * @param sectionId — The section to query
- * @returns Array of annotation rows. The `analysis` field is a JSON string
- *          (or null) that must be parsed by the caller.
- */
-function getUnresolvedAnnotations(
+function getAnnotationsBySection(
   sectionId: string
 ): Array<Record<string, unknown>> {
   const db = getDb();
 
   return db
     .prepare(
-      `SELECT * FROM annotations WHERE sectionId = ? AND resolved = 0 ORDER BY timestamp ASC`
+      `SELECT * FROM annotations WHERE sectionId = ? ORDER BY timestamp ASC`
     )
     .all(sectionId) as Array<Record<string, unknown>>;
 }
 
 const annId = createAnnotation(
+  jobId,
   "intro",
   3.2,
   "Text is cut off on the right side",
   "output/sections/intro.mp4"
 );
 
-setAnnotationAnalysis(annId, {
+setAnnotationAnalysis(annId, JSON.stringify({
   severity: "major",
   fixType: "remotion",
   technicalAssessment:
     "Text overlay at 3.2s is clipped by the safe-zone boundary.",
   suggestedFixes: ["Reduce font size from 48px to 40px"],
   confidence: 0.87,
-});
+}));
 
-const unresolvedAnns = getUnresolvedAnnotations("intro");
-console.log(`Unresolved annotations for "intro":`, unresolvedAnns.length);
+const sectionAnnotations = getAnnotationsBySection("intro");
+console.log(`Annotations for section "intro":`, sectionAnnotations.length);
 
 // ============================================================================
-// Example 6: Managing pipeline_status for stage badges
+// Example 6: Managing pipeline_status
 // ============================================================================
 
-/**
- * Upsert the pipeline status for a given stage.
- * The `pipeline_status` table provides a fast lookup for UI stage badges
- * without scanning the entire jobs table.
- *
- * Table schema:
- *   stage     TEXT PRIMARY KEY  — pipeline stage name
- *   status    TEXT              — 'not_started' | 'running' | 'done' | 'error'
- *   lastJobId TEXT              — most recent job ID for this stage
- *   error     TEXT              — error message (nullable)
- *   updatedAt TEXT              — ISO 8601 timestamp
- *
- * @param stage     — The pipeline stage (e.g. 'tts-render')
- * @param status    — The new status
- * @param lastJobId — The job ID that triggered this status change
- * @param error     — Optional error message
- */
 function upsertPipelineStatus(
   stage: string,
   status: string,
@@ -320,14 +226,9 @@ function upsertPipelineStatus(
        updatedAt = excluded.updatedAt`
   ).run(stage, status, lastJobId, error, now);
 
-  console.log(`Pipeline status: stage="${stage}" → ${status}`);
+  console.log(`Pipeline status: stage="${stage}" -> ${status}`);
 }
 
-/**
- * Get the current status of all pipeline stages.
- *
- * @returns Array of pipeline_status rows
- */
 function getAllPipelineStatuses(): Array<Record<string, unknown>> {
   const db = getDb();
   return db
@@ -342,65 +243,41 @@ const statuses = getAllPipelineStatuses();
 console.log("Pipeline statuses:", statuses);
 
 // ============================================================================
-// Example 7: Using transactions for atomic multi-table updates
+// Example 7: Recording job costs
 // ============================================================================
 
-/**
- * Resolve an annotation by marking it resolved and linking the fix job.
- * Uses a transaction to ensure both the annotation update and the
- * pipeline status update happen atomically.
- *
- * @param annotationId — The annotation to resolve
- * @param fixJobId     — The job that performed the fix
- * @param stage        — The pipeline stage for status update
- */
-function resolveAnnotation(
-  annotationId: string,
-  fixJobId: string,
-  stage: string
+function recordJobCost(
+  jobId: string,
+  stage: string,
+  provider: string,
+  model: string,
+  inputTokens: number,
+  outputTokens: number,
+  cost: number
 ): void {
   const db = getDb();
+  const id = randomUUID();
+  const now = new Date().toISOString();
 
-  const resolveTransaction = db.transaction(() => {
-    // Mark annotation as resolved
-    db.prepare(
-      `UPDATE annotations SET resolved = 1, resolveJobId = ? WHERE id = ?`
-    ).run(fixJobId, annotationId);
+  db.prepare(
+    `INSERT INTO job_costs (id, jobId, stage, provider, model, inputTokens, outputTokens, cost, createdAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(id, jobId, stage, provider, model, inputTokens, outputTokens, cost, now);
 
-    // Update the fix job to done
-    const now = new Date().toISOString();
-    db.prepare(
-      `UPDATE jobs SET status = 'done', progress = 100, updatedAt = ? WHERE id = ?`
-    ).run(now, fixJobId);
-
-    // Update pipeline status
-    upsertPipelineStatus(stage, "done", fixJobId);
-  });
-
-  resolveTransaction();
-  console.log(
-    `Annotation ${annotationId} resolved by job ${fixJobId}`
-  );
+  console.log(`Recorded cost for job ${jobId}: ${provider}/${model} = $${cost}`);
 }
 
-// Create a fix job and resolve the annotation
-const fixJobId = createJob("audit", { annotationId: annId, fixType: "remotion" });
-resolveAnnotation(annId, fixJobId, "audit");
+recordJobCost(jobId, "tts-render", "google", "tts-neural2", 0, 0, 0.015);
+recordJobCost(jobId, "tts-render", "anthropic", "claude-3-opus", 1200, 350, 0.042);
+
+const totalCost = (db.prepare(
+  `SELECT SUM(cost) as total FROM job_costs WHERE jobId = ?`
+).get(jobId) as any)?.total ?? 0;
+console.log(`Total cost for job ${jobId}: $${totalCost}`);
 
 // ============================================================================
 // Example 8: Crash recovery demonstration
 // ============================================================================
-
-/**
- * recoverCrashedJobs(db) is called automatically by getDb() on first
- * initialization. It finds all jobs with status='running' and marks them
- * as status='error' with the message "Server restarted during pipeline".
- *
- * This handles the case where the Node.js process crashed or was killed
- * while a pipeline job was in progress.
- *
- * You typically don't call this manually — it's shown here for illustration.
- */
 
 // Simulate a "crashed" job by inserting one with status='running'
 const crashedJobId = randomUUID();
@@ -421,75 +298,6 @@ const recoveredJob = db
   .get(crashedJobId) as Record<string, unknown>;
 
 console.log("Recovered job:", recoveredJob);
-// => { id: '...', status: 'error', error: 'Server restarted during pipeline' }
-
-// ============================================================================
-// Example 9: Using getDb() in a Next.js Route Handler
-// ============================================================================
-
-/**
- * In a real Next.js app, you'd use getDb() inside Route Handlers like this:
- *
- * ```typescript
- * // app/api/jobs/route.ts
- * import { getDb } from '@/lib/db';
- * import { NextResponse } from 'next/server';
- *
- * export async function GET(request: Request) {
- *   const db = getDb();
- *   const url = new URL(request.url);
- *   const stage = url.searchParams.get('stage');
- *
- *   let jobs;
- *   if (stage) {
- *     jobs = db.prepare('SELECT * FROM jobs WHERE stage = ? ORDER BY createdAt DESC').all(stage);
- *   } else {
- *     jobs = db.prepare('SELECT * FROM jobs ORDER BY createdAt DESC LIMIT 50').all();
- *   }
- *
- *   // Parse JSON params for each job
- *   const parsed = jobs.map((job: any) => ({
- *     ...job,
- *     params: job.params ? JSON.parse(job.params) : null,
- *   }));
- *
- *   return NextResponse.json(parsed);
- * }
- *
- * export async function POST(request: Request) {
- *   const db = getDb();
- *   const body = await request.json();
- *   const id = randomUUID();
- *   const now = new Date().toISOString();
- *
- *   db.prepare(
- *     `INSERT INTO jobs (id, stage, status, progress, error, params, createdAt, updatedAt)
- *      VALUES (?, ?, 'pending', 0, NULL, ?, ?, ?)`
- *   ).run(id, body.stage, JSON.stringify(body.params ?? {}), now, now);
- *
- *   return NextResponse.json({ id, status: 'pending' }, { status: 201 });
- * }
- * ```
- *
- * Because better-sqlite3 is synchronous and Node.js is single-threaded,
- * concurrent requests are safe without any locking mechanism.
- */
-
-// ============================================================================
-// Example 10: Custom DB_PATH via environment variable
-// ============================================================================
-
-/**
- * To use a custom database file location, set the DB_PATH environment variable
- * before the first call to getDb():
- *
- *   DB_PATH=/data/my-project/pipeline.db npm run dev
- *
- * Or in .env.local:
- *   DB_PATH=./data/pipeline.db
- *
- * If DB_PATH is not set, the database defaults to `<cwd>/pipeline.db`.
- */
 
 // ============================================================================
 // Cleanup: Show final state of all tables
@@ -501,9 +309,12 @@ const allJobs = db.prepare("SELECT id, stage, status, progress FROM jobs").all()
 console.log("Jobs:", allJobs);
 
 const allAnnotations = db
-  .prepare("SELECT id, sectionId, resolved, timestamp FROM annotations")
+  .prepare("SELECT id, sectionId, videoFile, resolved FROM annotations")
   .all();
 console.log("Annotations:", allAnnotations);
 
 const allStatuses = db.prepare("SELECT * FROM pipeline_status").all();
 console.log("Pipeline statuses:", allStatuses);
+
+const allCosts = db.prepare("SELECT * FROM job_costs").all();
+console.log("Job costs:", allCosts);

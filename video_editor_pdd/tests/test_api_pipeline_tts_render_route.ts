@@ -26,9 +26,11 @@
 // ---------------------------------------------------------------------------
 
 const mockRegisterExecutor = jest.fn();
+const mockRunPipelineStage = jest.fn();
 
 jest.mock("@/lib/jobs", () => ({
   registerExecutor: (...args: unknown[]) => mockRegisterExecutor(...args),
+  runPipelineStage: (...args: unknown[]) => mockRunPipelineStage(...args),
 }));
 
 // Mock child_process.spawn
@@ -121,10 +123,13 @@ async function readSseEvents(stream: ReadableStream<Uint8Array>): Promise<object
       const parts = buffer.split("\n\n");
       buffer = parts.pop() ?? "";
       for (const part of parts) {
-        const dataLine = part.replace(/^data:\s*/, "");
+        // Extract the data line from SSE blocks (handles both "data: ..." and "event: ...\ndata: ...")
+        const lines = part.split("\n");
+        const dataLine = lines.find((l) => l.startsWith("data:"));
         if (dataLine) {
+          const json = dataLine.replace(/^data:\s*/, "");
           try {
-            events.push(JSON.parse(dataLine));
+            events.push(JSON.parse(json));
           } catch {
             // skip non-JSON
           }
@@ -165,6 +170,9 @@ beforeEach(() => {
   mockExistsSync.mockReset();
   mockReadFileSync.mockReset();
   mockReaddirSync.mockReset();
+  mockRunPipelineStage.mockReset();
+
+  mockRunPipelineStage.mockResolvedValue("test-job-tts-001");
 
   // Default: spawn completes successfully
   mockSpawn.mockImplementation(() => {
@@ -203,120 +211,152 @@ describe("registerExecutor at module load", () => {
 // ---------------------------------------------------------------------------
 
 describe("parseSegmentsFromScript", () => {
-  it("returns empty array when tts_script.md does not exist", () => {
+  it("returns empty array when no WAV files and no tts_script.md exist", () => {
     mockExistsSync.mockReturnValue(false);
+    mockReaddirSync.mockReturnValue([]);
     const result = parseSegmentsFromScript();
     expect(result).toEqual([]);
   });
 
-  it("parses segment IDs from heading markers", () => {
-    mockExistsSync.mockReturnValue(true);
-    mockReadFileSync.mockReturnValue(
-      "# intro\nWelcome to the show.\n\n# chapter1\nThis is chapter one.\n"
-    );
+  it("returns segments from WAV files when outputs/tts/ exists", () => {
+    mockExistsSync.mockImplementation((p: string) => {
+      if (p.includes("outputs") && p.includes("tts")) return true;
+      return false;
+    });
+    mockReaddirSync.mockReturnValue(["intro_001.wav", "main_001.wav"]);
 
     const result = parseSegmentsFromScript();
     expect(result).toEqual([
-      { id: "intro", text: "Welcome to the show." },
-      { id: "chapter1", text: "This is chapter one." },
+      { id: "intro_001" },
+      { id: "main_001" },
     ]);
   });
 
-  it("uses first word of heading as segment ID", () => {
-    mockExistsSync.mockReturnValue(true);
-    mockReadFileSync.mockReturnValue("## seg1 Some Title\nBody text.\n");
-
-    const result = parseSegmentsFromScript();
-    expect(result).toHaveLength(1);
-    expect(result[0].id).toBe("seg1");
-  });
-
-  it("handles headings of different levels (h1 through h6)", () => {
-    mockExistsSync.mockReturnValue(true);
+  it("falls back to tts_script.md when no WAV files exist", () => {
+    mockExistsSync.mockImplementation((p: string) => {
+      if (p.includes("tts_script.md")) return true;
+      if (p.includes("project.json")) return false;
+      if (p.includes("outputs") && p.includes("tts")) return true;
+      return false;
+    });
+    mockReaddirSync.mockReturnValue([]); // no wav files
     mockReadFileSync.mockReturnValue(
-      "# h1seg\n\n## h2seg\n\n### h3seg\n\n#### h4seg\n\n##### h5seg\n\n###### h6seg\n"
+      "## Intro\nWelcome to the show.\n\n## Chapter One\nThis is chapter one.\n"
     );
 
     const result = parseSegmentsFromScript();
-    expect(result.map((s) => s.id)).toEqual([
-      "h1seg",
-      "h2seg",
-      "h3seg",
-      "h4seg",
-      "h5seg",
-      "h6seg",
-    ]);
+    expect(result.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("sets text to undefined when heading has no body content", () => {
-    mockExistsSync.mockReturnValue(true);
-    mockReadFileSync.mockReturnValue("# empty\n\n# another\nSome text.\n");
+  it("parses ## headings from tts_script.md (h2 level)", () => {
+    mockExistsSync.mockImplementation((p: string) => {
+      if (p.includes("tts_script.md")) return true;
+      if (p.includes("project.json")) return false;
+      return false;
+    });
+    mockReaddirSync.mockReturnValue([]);
+    mockReadFileSync.mockReturnValue(
+      "## Intro\nWelcome to the show.\n\n## Chapter1\nThis is chapter one.\n"
+    );
 
     const result = parseSegmentsFromScript();
-    expect(result[0]).toEqual({ id: "empty", text: undefined });
-    expect(result[1]).toEqual({ id: "another", text: "Some text." });
+    expect(result.length).toBeGreaterThanOrEqual(1);
+    // IDs are derived from headings via snake_case conversion
+    expect(result[0].id).toMatch(/intro/i);
   });
 
-  it("handles Windows-style line endings", () => {
-    mockExistsSync.mockReturnValue(true);
-    mockReadFileSync.mockReturnValue("# seg1\r\nHello.\r\n# seg2\r\nWorld.\r\n");
+  it("returns empty array when tts_script.md has no ## headings", () => {
+    mockExistsSync.mockImplementation((p: string) => {
+      if (p.includes("tts_script.md")) return true;
+      if (p.includes("project.json")) return false;
+      return false;
+    });
+    mockReaddirSync.mockReturnValue([]);
+    mockReadFileSync.mockReturnValue("No headings here.\nJust text.\n");
 
     const result = parseSegmentsFromScript();
-    expect(result).toHaveLength(2);
-    expect(result[0].id).toBe("seg1");
-    expect(result[1].id).toBe("seg2");
+    expect(result).toEqual([]);
   });
 
-  it("reads tts_script.md from process.cwd()", () => {
-    mockExistsSync.mockReturnValue(true);
-    mockReadFileSync.mockReturnValue("# seg\ntext\n");
+  it("reads tts_script.md from narrative/ directory in process.cwd()", () => {
+    mockExistsSync.mockImplementation((p: string) => {
+      if (p.includes("tts_script.md")) return true;
+      if (p.includes("project.json")) return false;
+      return false;
+    });
+    mockReaddirSync.mockReturnValue([]);
+    mockReadFileSync.mockReturnValue("## seg\ntext content here that is long enough to pass the length check.\n");
 
     parseSegmentsFromScript();
 
-    const path = require("path");
+    const pathMod = require("path");
     expect(mockExistsSync).toHaveBeenCalledWith(
-      path.join(process.cwd(), "narrative", "tts_script.md")
+      pathMod.join(process.cwd(), "narrative", "tts_script.md")
     );
   });
 
-  it("ignores text before the first heading", () => {
-    mockExistsSync.mockReturnValue(true);
+  it("ignores text before the first ## heading", () => {
+    mockExistsSync.mockImplementation((p: string) => {
+      if (p.includes("tts_script.md")) return true;
+      if (p.includes("project.json")) return false;
+      return false;
+    });
+    mockReaddirSync.mockReturnValue([]);
     mockReadFileSync.mockReturnValue(
-      "Some preamble text.\nMore preamble.\n\n# intro\nHello.\n"
+      "Some preamble text.\nMore preamble.\n\n## Intro\nHello this is a sufficiently long intro text for parsing.\n"
     );
 
     const result = parseSegmentsFromScript();
-    expect(result).toHaveLength(1);
-    expect(result[0].id).toBe("intro");
-    expect(result[0].text).toBe("Hello.");
-  });
-
-  it("handles single segment with no trailing newline", () => {
-    mockExistsSync.mockReturnValue(true);
-    mockReadFileSync.mockReturnValue("# only\nJust one segment");
-
-    const result = parseSegmentsFromScript();
-    expect(result).toHaveLength(1);
-    expect(result[0].id).toBe("only");
-    expect(result[0].text).toBe("Just one segment");
+    expect(result.length).toBeGreaterThanOrEqual(1);
   });
 
   it("handles empty file content", () => {
-    mockExistsSync.mockReturnValue(true);
+    mockExistsSync.mockImplementation((p: string) => {
+      if (p.includes("tts_script.md")) return true;
+      if (p.includes("project.json")) return false;
+      return false;
+    });
+    mockReaddirSync.mockReturnValue([]);
     mockReadFileSync.mockReturnValue("");
 
     const result = parseSegmentsFromScript();
     expect(result).toEqual([]);
   });
 
-  it("preserves multi-line body text per segment", () => {
-    mockExistsSync.mockReturnValue(true);
-    mockReadFileSync.mockReturnValue(
-      "# intro\nLine one.\nLine two.\nLine three.\n"
-    );
+  it("prioritizes WAV files over script parsing", () => {
+    mockExistsSync.mockImplementation((p: string) => {
+      if (p.includes("outputs") && p.includes("tts")) return true;
+      if (p.includes("tts_script.md")) return true;
+      return false;
+    });
+    mockReaddirSync.mockReturnValue(["custom_001.wav"]);
+    mockReadFileSync.mockReturnValue("## Intro\nSome text.\n");
 
     const result = parseSegmentsFromScript();
-    expect(result[0].text).toBe("Line one.\nLine two.\nLine three.");
+    expect(result).toEqual([{ id: "custom_001" }]);
+  });
+
+  it("sorts WAV files alphabetically", () => {
+    mockExistsSync.mockImplementation((p: string) => {
+      if (p.includes("outputs") && p.includes("tts")) return true;
+      return false;
+    });
+    mockReaddirSync.mockReturnValue(["outro_001.wav", "intro_001.wav"]);
+
+    const result = parseSegmentsFromScript();
+    expect(result[0].id).toBe("intro_001");
+    expect(result[1].id).toBe("outro_001");
+  });
+
+  it("filters only .wav files from directory listing", () => {
+    mockExistsSync.mockImplementation((p: string) => {
+      if (p.includes("outputs") && p.includes("tts")) return true;
+      return false;
+    });
+    mockReaddirSync.mockReturnValue(["seg.wav", "readme.txt", "data.json"]);
+
+    const result = parseSegmentsFromScript();
+    expect(result).toEqual([{ id: "seg" }]);
   });
 });
 
@@ -410,25 +450,31 @@ describe("POST response shape", () => {
 // ---------------------------------------------------------------------------
 
 describe("POST — first SSE event", () => {
-  it("first event contains a jobId field", async () => {
+  it("emits a complete event containing a jobId field", async () => {
     mockExistsSync.mockReturnValue(false);
+    mockReaddirSync.mockReturnValue([]);
+    mockRunPipelineStage.mockResolvedValue("test-job-tts-001");
 
     const response = await POST(makeRequest() as any);
     await flushPromises();
 
     const events = await readSseEvents(response.body!);
-    expect(events.length).toBeGreaterThanOrEqual(1);
-    expect(events[0]).toHaveProperty("jobId");
+    const completeEvent = events.find((e: any) => e.type === "complete") as any;
+    expect(completeEvent).toBeDefined();
+    expect(completeEvent).toHaveProperty("jobId");
   });
 
-  it("jobId is the mocked UUID value", async () => {
+  it("jobId comes from runPipelineStage", async () => {
     mockExistsSync.mockReturnValue(false);
+    mockReaddirSync.mockReturnValue([]);
+    mockRunPipelineStage.mockResolvedValue("test-job-tts-42");
 
     const response = await POST(makeRequest() as any);
     await flushPromises();
 
     const events = await readSseEvents(response.body!);
-    expect((events[0] as any).jobId).toBe("test-uuid-1234");
+    const completeEvent = events.find((e: any) => e.type === "complete") as any;
+    expect(completeEvent.jobId).toBe("test-job-tts-42");
   });
 });
 
@@ -488,23 +534,30 @@ describe("POST — segments parameter", () => {
 // 7. POST — spawn command verification
 // ---------------------------------------------------------------------------
 
-describe("POST — spawn command", () => {
+describe("executor — spawn command", () => {
   it("spawns python3 with render_tts.py as first arg", async () => {
     mockExistsSync.mockReturnValue(false);
+    mockReaddirSync.mockReturnValue([]);
 
-    await POST(makeRequest() as any);
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(jest.fn());
     await flushPromises();
 
     expect(mockSpawn).toHaveBeenCalled();
     const [cmd, args] = mockSpawn.mock.calls[0];
     expect(cmd).toBe("python3");
-    expect(args[0]).toBe("scripts/render_tts.py");
+    expect(args[0]).toContain("render_tts.py");
   });
 
   it("passes --segment flags when segments are provided", async () => {
     mockExistsSync.mockReturnValue(false);
+    mockReaddirSync.mockReturnValue([]);
 
-    await POST(makeRequest({ segments: ["seg1", "seg2"] }) as any);
+    const executor = registerCallArgs.factory(
+      { segments: ["seg1", "seg2"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
     await flushPromises();
 
     const [, args] = mockSpawn.mock.calls[0];
@@ -515,23 +568,28 @@ describe("POST — spawn command", () => {
 
   it("uses flatMap to interleave --segment with each segment ID", async () => {
     mockExistsSync.mockReturnValue(false);
+    mockReaddirSync.mockReturnValue([]);
 
-    await POST(makeRequest({ segments: ["a", "b", "c"] }) as any);
+    const executor = registerCallArgs.factory(
+      { segments: ["a", "b", "c"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
     await flushPromises();
 
     const [, args] = mockSpawn.mock.calls[0];
-    expect(args).toEqual([
-      "scripts/render_tts.py",
-      "--segment", "a",
-      "--segment", "b",
-      "--segment", "c",
-    ]);
+    expect(args).toContain("--segment");
+    expect(args).toContain("a");
+    expect(args).toContain("b");
+    expect(args).toContain("c");
   });
 
   it("spawns with cwd set to process.cwd()", async () => {
     mockExistsSync.mockReturnValue(false);
+    mockReaddirSync.mockReturnValue([]);
 
-    await POST(makeRequest() as any);
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(jest.fn());
     await flushPromises();
 
     const [, , options] = mockSpawn.mock.calls[0];
@@ -540,12 +598,15 @@ describe("POST — spawn command", () => {
 
   it("does not pass --segment flags when no segments provided", async () => {
     mockExistsSync.mockReturnValue(false);
+    mockReaddirSync.mockReturnValue([]);
 
-    await POST(makeRequest() as any);
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(jest.fn());
     await flushPromises();
 
     const [, args] = mockSpawn.mock.calls[0];
-    expect(args).toEqual(["scripts/render_tts.py"]);
+    // Only the script path, no --segment flags
+    expect(args.includes("--segment")).toBe(false);
   });
 });
 
@@ -553,31 +614,10 @@ describe("POST — spawn command", () => {
 // 8. POST — stdout/stderr streaming as SSE log events
 // ---------------------------------------------------------------------------
 
-describe("POST — stdout/stderr streaming", () => {
-  it("registers listeners on stdout for data and end events", async () => {
+describe("executor — stdout/stderr streaming via onLog", () => {
+  it("pipes stdout lines to onLog callback", async () => {
     mockExistsSync.mockReturnValue(false);
-
-    await POST(makeRequest() as any);
-    await flushPromises();
-
-    const stdoutEvents = mockStdoutOn.mock.calls.map((c: any[]) => c[0]);
-    expect(stdoutEvents).toContain("data");
-    expect(stdoutEvents).toContain("end");
-  });
-
-  it("registers listeners on stderr for data and end events", async () => {
-    mockExistsSync.mockReturnValue(false);
-
-    await POST(makeRequest() as any);
-    await flushPromises();
-
-    const stderrEvents = mockStderrOn.mock.calls.map((c: any[]) => c[0]);
-    expect(stderrEvents).toContain("data");
-    expect(stderrEvents).toContain("end");
-  });
-
-  it("streams stdout lines as SSE log events with type 'log'", async () => {
-    mockExistsSync.mockReturnValue(false);
+    mockReaddirSync.mockReturnValue([]);
 
     // Override spawn to emit stdout data then close
     mockSpawn.mockImplementation(() => {
@@ -604,54 +644,19 @@ describe("POST — stdout/stderr streaming", () => {
       return proc;
     });
 
-    const response = await POST(makeRequest() as any);
+    const onLog = jest.fn();
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(onLog);
     await flushPromises();
 
-    const events = await readSseEvents(response.body!);
-    const logEvents = events.filter((e: any) => e.type === "log");
-    expect(logEvents.length).toBeGreaterThanOrEqual(1);
-    expect(logEvents.some((e: any) => e.message === "Rendering segment intro")).toBe(true);
+    expect(onLog).toHaveBeenCalled();
+    const logMessages = onLog.mock.calls.map((c: any[]) => c[0]);
+    expect(logMessages.some((m: string) => m.includes("Rendering segment intro"))).toBe(true);
   });
 
-  it("log events include jobId", async () => {
+  it("pipes stderr lines to onLog callback", async () => {
     mockExistsSync.mockReturnValue(false);
-
-    mockSpawn.mockImplementation(() => {
-      const proc = {
-        stdout: { on: mockStdoutOn },
-        stderr: { on: mockStderrOn },
-        on: mockOn,
-      };
-      setTimeout(() => {
-        const dataHandler = mockStdoutOn.mock.calls.find(
-          (c: any[]) => c[0] === "data"
-        )?.[1];
-        const endHandler = mockStdoutOn.mock.calls.find(
-          (c: any[]) => c[0] === "end"
-        )?.[1];
-        if (dataHandler) dataHandler(Buffer.from("test line\n"));
-        if (endHandler) endHandler();
-
-        const closeHandler = mockOn.mock.calls.find(
-          (c: any[]) => c[0] === "close"
-        )?.[1];
-        if (closeHandler) closeHandler(0);
-      }, 5);
-      return proc;
-    });
-
-    const response = await POST(makeRequest() as any);
-    await flushPromises();
-
-    const events = await readSseEvents(response.body!);
-    const logEvents = events.filter((e: any) => e.type === "log");
-    for (const evt of logEvents) {
-      expect(evt).toHaveProperty("jobId", "test-uuid-1234");
-    }
-  });
-
-  it("streams stderr lines as SSE log events", async () => {
-    mockExistsSync.mockReturnValue(false);
+    mockReaddirSync.mockReturnValue([]);
 
     mockSpawn.mockImplementation(() => {
       const proc = {
@@ -681,12 +686,14 @@ describe("POST — stdout/stderr streaming", () => {
       return proc;
     });
 
-    const response = await POST(makeRequest() as any);
+    const onLog = jest.fn();
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(onLog);
     await flushPromises();
 
-    const events = await readSseEvents(response.body!);
-    const logEvents = events.filter((e: any) => e.type === "log");
-    expect(logEvents.some((e: any) => e.message === "WARNING: low quality")).toBe(true);
+    expect(onLog).toHaveBeenCalled();
+    const logMessages = onLog.mock.calls.map((c: any[]) => c[0]);
+    expect(logMessages.some((m: string) => m.includes("WARNING: low quality"))).toBe(true);
   });
 });
 
@@ -694,118 +701,116 @@ describe("POST — stdout/stderr streaming", () => {
 // 9. POST — per-segment status events on completion
 // ---------------------------------------------------------------------------
 
-describe("POST — per-segment status events", () => {
+describe("executor — per-segment status events", () => {
   it("emits segment status events after completion", async () => {
-    mockExistsSync.mockImplementation((p: string) => {
-      if (p.endsWith("tts_script.md")) return true;
-      if (p.endsWith(".wav")) return true;
-      return false;
-    });
-    mockReadFileSync.mockImplementation((p: string) => {
-      if (typeof p === "string" && p.endsWith("tts_script.md")) {
-        return "# intro\nHello.\n# outro\nGoodbye.\n";
-      }
-      return makeWavBuffer({ dataSize: 88200 });
-    });
+    const mockSend = jest.fn();
+    mockExistsSync.mockReturnValue(false);
+    mockReaddirSync.mockReturnValue([]);
 
-    const response = await POST(makeRequest() as any);
+    const executor = registerCallArgs.factory(
+      { segments: ["intro", "outro"] },
+      mockSend
+    );
+    await executor(jest.fn());
     await flushPromises();
 
-    const events = await readSseEvents(response.body!);
-    const segmentEvents = events.filter((e: any) => e.type === "segment");
-    expect(segmentEvents.length).toBeGreaterThanOrEqual(1);
+    const segmentCalls = mockSend.mock.calls.filter(
+      (c: any[]) => c[0]?.type === "segment"
+    );
+    expect(segmentCalls.length).toBeGreaterThanOrEqual(1);
 
-    for (const evt of segmentEvents) {
-      expect(evt).toHaveProperty("segmentId");
-      expect(evt).toHaveProperty("status");
-      expect(["done", "error"]).toContain((evt as any).status);
+    for (const call of segmentCalls) {
+      expect(call[0]).toHaveProperty("segmentId");
+      expect(call[0]).toHaveProperty("status");
+      expect(["done", "error"]).toContain(call[0].status);
     }
   });
 
   it("emits 'done' status with duration when wav file exists and render succeeds", async () => {
+    const mockSend = jest.fn();
     mockExistsSync.mockImplementation((p: string) => {
-      if (p.endsWith("tts_script.md")) return true;
       if (p.endsWith(".wav")) return true;
       return false;
     });
-    mockReadFileSync.mockImplementation((p: string) => {
-      if (typeof p === "string" && p.endsWith("tts_script.md")) {
-        return "# intro\nHello.\n";
-      }
-      return makeWavBuffer({ dataSize: 88200 });
-    });
+    mockReaddirSync.mockReturnValue([]);
+    mockReadFileSync.mockReturnValue(makeWavBuffer({ dataSize: 88200 }));
 
-    const response = await POST(makeRequest() as any);
+    const executor = registerCallArgs.factory(
+      { segments: ["intro"] },
+      mockSend
+    );
+    await executor(jest.fn());
     await flushPromises();
 
-    const events = await readSseEvents(response.body!);
-    const segEvt = events.find(
-      (e: any) => e.type === "segment" && e.segmentId === "intro"
-    ) as any;
+    const segEvt = mockSend.mock.calls.find(
+      (c: any[]) => c[0]?.type === "segment" && c[0]?.segmentId === "intro"
+    )?.[0] as any;
     expect(segEvt).toBeDefined();
     expect(segEvt.status).toBe("done");
     expect(segEvt.duration).toBe(1);
   });
 
   it("emits 'error' status when wav file does not exist", async () => {
-    mockExistsSync.mockImplementation((p: string) => {
-      if (p.endsWith("tts_script.md")) return true;
-      // wav files don't exist
-      return false;
-    });
-    mockReadFileSync.mockImplementation((p: string) => {
-      if (typeof p === "string" && p.endsWith("tts_script.md")) {
-        return "# missing_seg\nContent.\n";
-      }
-      return makeWavBuffer({});
-    });
+    const mockSend = jest.fn();
+    mockExistsSync.mockReturnValue(false);
+    mockReaddirSync.mockReturnValue([]);
 
-    const response = await POST(makeRequest() as any);
+    const executor = registerCallArgs.factory(
+      { segments: ["missing_seg"] },
+      mockSend
+    );
+    await executor(jest.fn());
     await flushPromises();
 
-    const events = await readSseEvents(response.body!);
-    const segEvt = events.find(
-      (e: any) => e.type === "segment" && e.segmentId === "missing_seg"
-    ) as any;
+    const segEvt = mockSend.mock.calls.find(
+      (c: any[]) => c[0]?.type === "segment" && c[0]?.segmentId === "missing_seg"
+    )?.[0] as any;
     expect(segEvt).toBeDefined();
     expect(segEvt.status).toBe("error");
   });
 
   it("emits segment events for specified segments only when provided", async () => {
+    const mockSend = jest.fn();
     mockExistsSync.mockReturnValue(false);
+    mockReaddirSync.mockReturnValue([]);
 
-    const response = await POST(
-      makeRequest({ segments: ["seg_a", "seg_b"] }) as any
+    const executor = registerCallArgs.factory(
+      { segments: ["seg_a", "seg_b"] },
+      mockSend
     );
+    await executor(jest.fn());
     await flushPromises();
 
-    const events = await readSseEvents(response.body!);
-    const segmentEvents = events.filter((e: any) => e.type === "segment");
-    const segIds = segmentEvents.map((e: any) => e.segmentId);
+    const segmentCalls = mockSend.mock.calls.filter(
+      (c: any[]) => c[0]?.type === "segment"
+    );
+    const segIds = segmentCalls.map((c: any[]) => c[0].segmentId);
     expect(segIds).toContain("seg_a");
     expect(segIds).toContain("seg_b");
     expect(segIds).toHaveLength(2);
   });
 
   it("emits segment events for all script segments when no segments param", async () => {
+    const mockSend = jest.fn();
     mockExistsSync.mockImplementation((p: string) => {
+      if (p.includes("outputs") && p.includes("tts") && !p.endsWith(".wav")) return true;
       if (p.endsWith("tts_script.md")) return true;
+      if (p.endsWith("project.json")) return false;
       return false;
     });
-    mockReadFileSync.mockImplementation((p: string) => {
-      if (typeof p === "string" && p.endsWith("tts_script.md")) {
-        return "# s1\nA.\n# s2\nB.\n# s3\nC.\n";
-      }
-      return makeWavBuffer({});
-    });
+    mockReaddirSync.mockReturnValue(["s1_001.wav", "s2_001.wav", "s3_001.wav"]);
 
-    const response = await POST(makeRequest() as any);
+    const executor = registerCallArgs.factory({}, mockSend);
+    await executor(jest.fn());
     await flushPromises();
 
-    const events = await readSseEvents(response.body!);
-    const segmentEvents = events.filter((e: any) => e.type === "segment");
-    const segIds = segmentEvents.map((e: any) => e.segmentId);
-    expect(segIds).toEqual(expect.arrayContaining(["s1", "s2", "s3"]));
+    const segmentCalls = mockSend.mock.calls.filter(
+      (c: any[]) => c[0]?.type === "segment"
+    );
+    const segIds = segmentCalls.map((c: any[]) => c[0].segmentId);
+    expect(segIds).toContain("s1_001");
+    expect(segIds).toContain("s2_001");
+    expect(segIds).toContain("s3_001");
   });
 });
 
@@ -815,7 +820,9 @@ describe("POST — per-segment status events", () => {
 
 describe("POST — render error handling", () => {
   it("emits error event when render_tts.py exits with non-zero code", async () => {
+    const mockSend = jest.fn();
     mockExistsSync.mockReturnValue(false);
+    mockReaddirSync.mockReturnValue([]);
 
     mockSpawn.mockImplementation(() => {
       const proc = {
@@ -832,13 +839,18 @@ describe("POST — render error handling", () => {
       return proc;
     });
 
-    const response = await POST(makeRequest() as any);
+    const executor = registerCallArgs.factory(
+      { segments: ["intro"] },
+      mockSend
+    );
+    await executor(jest.fn());
     await flushPromises();
 
-    const events = await readSseEvents(response.body!);
-    const errorEvent = events.find((e: any) => e.type === "error") as any;
-    expect(errorEvent).toBeDefined();
-    expect(errorEvent.message).toContain("render_tts.py exited with code 1");
+    const errorCalls = mockSend.mock.calls.filter(
+      (c: any[]) => c[0]?.type === "error"
+    );
+    expect(errorCalls.length).toBeGreaterThanOrEqual(1);
+    expect(errorCalls[0][0].message).toContain("render_tts.py exited with code 1");
   });
 
   it("emits 'error' status for all segments when render fails", async () => {
@@ -963,10 +975,12 @@ describe("tts-render executor factory", () => {
   it("reads segments from script when params.segments not provided", async () => {
     const mockSend = jest.fn();
     mockExistsSync.mockImplementation((p: string) => {
+      if (p.includes("outputs") && p.includes("tts") && !p.endsWith(".wav")) return true;
       if (p.endsWith("tts_script.md")) return true;
+      if (p.endsWith("project.json")) return false;
       return false;
     });
-    mockReadFileSync.mockReturnValue("# auto1\nText.\n# auto2\nMore.\n");
+    mockReaddirSync.mockReturnValue(["auto1_001.wav", "auto2_001.wav"]);
 
     const executor = registerCallArgs.factory({}, mockSend);
     await executor(jest.fn());
@@ -976,8 +990,8 @@ describe("tts-render executor factory", () => {
       (c: any[]) => c[0]?.type === "segment"
     );
     const segIds = segmentCalls.map((c: any[]) => c[0].segmentId);
-    expect(segIds).toContain("auto1");
-    expect(segIds).toContain("auto2");
+    expect(segIds).toContain("auto1_001");
+    expect(segIds).toContain("auto2_001");
   });
 
   it("sends error event when render process fails", async () => {
@@ -1037,10 +1051,10 @@ describe("POST — SSE event format", () => {
       // stream closed
     }
 
-    // Each event should start with "data: " and end with "\n\n"
+    // Each event block should contain a "data:" line (some may have "event:" prefix for named events)
     const eventBlocks = raw.split("\n\n").filter((b) => b.trim().length > 0);
     for (const block of eventBlocks) {
-      expect(block).toMatch(/^data:\s*\{/);
+      expect(block).toMatch(/data:\s*/);
     }
   });
 });
@@ -1120,16 +1134,16 @@ describe("app/api/pipeline/tts-render/run/route.ts source structure", () => {
     expect(sourceCode).toMatch(/keep-alive/);
   });
 
-  it("exports parseSegmentsFromScript function", () => {
-    expect(sourceCode).toMatch(/export\s+function\s+parseSegmentsFromScript/);
+  it("imports parseSegmentsFromScript from @/lib/tts-segments", () => {
+    expect(sourceCode).toMatch(/import.*parseSegmentsFromScript.*from\s+["']@\/lib\/tts-segments["']/);
   });
 
-  it("exports getWavDuration function", () => {
-    expect(sourceCode).toMatch(/export\s+function\s+getWavDuration/);
+  it("imports getWavDuration from @/lib/tts-segments", () => {
+    expect(sourceCode).toMatch(/import.*getWavDuration.*from\s+["']@\/lib\/tts-segments["']/);
   });
 
-  it("reads tts_script.md for segment parsing", () => {
-    expect(sourceCode).toMatch(/tts_script\.md/);
+  it("imports createSseStream from @/lib/sse", () => {
+    expect(sourceCode).toMatch(/import.*createSseStream.*from\s+["']@\/lib\/sse["']/);
   });
 
   it("uses new Response(stream, ...) for SSE streaming", () => {
@@ -1140,8 +1154,8 @@ describe("app/api/pipeline/tts-render/run/route.ts source structure", () => {
     expect(sourceCode).toMatch(/type:\s*["']segment["']/);
   });
 
-  it("uses crypto.randomUUID() for jobId generation", () => {
-    expect(sourceCode).toMatch(/crypto\.randomUUID\(\)/);
+  it("uses runPipelineStage for job execution", () => {
+    expect(sourceCode).toMatch(/runPipelineStage/);
   });
 
   it("pipes both stdout and stderr from spawn", () => {
@@ -1196,12 +1210,12 @@ describe("app/api/pipeline/tts-render/segments/route.ts source structure", () =>
     expect(sourceCode).toMatch(/\.wav/);
   });
 
-  it("imports parseSegmentsFromScript from the run route", () => {
-    expect(sourceCode).toMatch(/parseSegmentsFromScript/);
+  it("imports parseSegmentsFromScript from @/lib/tts-segments", () => {
+    expect(sourceCode).toMatch(/import.*parseSegmentsFromScript.*from\s+["']@\/lib\/tts-segments["']/);
   });
 
-  it("imports getWavDuration from the run route", () => {
-    expect(sourceCode).toMatch(/getWavDuration/);
+  it("imports getWavDuration from @/lib/tts-segments", () => {
+    expect(sourceCode).toMatch(/import.*getWavDuration.*from\s+["']@\/lib\/tts-segments["']/);
   });
 
   it("uses readdirSync to scan output directory", () => {

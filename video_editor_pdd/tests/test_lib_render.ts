@@ -21,10 +21,11 @@
 
 import fs from "fs";
 import path from "path";
+import { EventEmitter } from "events";
 import { promisify } from "util";
 
 // ---------------------------------------------------------------------------
-// Mock @remotion/renderer
+// Mock @remotion/renderer (still used by renderStill)
 // ---------------------------------------------------------------------------
 
 const mockRenderMedia = jest.fn();
@@ -38,8 +39,69 @@ jest.mock("@remotion/renderer", () => ({
 }));
 
 // ---------------------------------------------------------------------------
-// Mock child_process.exec with promisify.custom support
+// Mock child_process.exec (with promisify.custom) and spawn
 // ---------------------------------------------------------------------------
+
+/**
+ * Create a fake ChildProcess that emits events on stdout/stderr.
+ * Tests drive the fake by calling helpers on the returned object:
+ *   emitStdout(data)  – push data to stdout
+ *   emitStderr(data)  – push data to stderr
+ *   close(code)       – emit the 'close' event with exit code
+ */
+interface FakeChild extends EventEmitter {
+  stdout: EventEmitter;
+  stderr: EventEmitter;
+  emitStdout: (data: string) => void;
+  emitStderr: (data: string) => void;
+  close: (code: number) => void;
+}
+
+function createFakeChild(): FakeChild {
+  const child = new EventEmitter() as FakeChild;
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.emitStdout = (data: string) => child.stdout.emit("data", Buffer.from(data));
+  child.emitStderr = (data: string) => child.stderr.emit("data", Buffer.from(data));
+  child.close = (code: number) => child.emit("close", code);
+  return child;
+}
+
+/** The most recent FakeChild returned by mockSpawn, for driving from tests. */
+let lastFakeChild: FakeChild;
+
+const mockSpawn = jest.fn().mockImplementation(() => {
+  lastFakeChild = createFakeChild();
+  // Auto-resolve with exit 0 on next tick so tests that don't need to
+  // drive stdout manually still complete.
+  // Tests that want to control behaviour can override via setupSpawn().
+  return lastFakeChild;
+});
+
+/**
+ * Configure mockSpawn to create a child that emits the given stdout lines
+ * and then exits with the given code (default 0).
+ */
+function setupSpawn(
+  stdoutLines: string[] = [],
+  exitCode = 0,
+  stderrData = ""
+) {
+  mockSpawn.mockImplementation(() => {
+    lastFakeChild = createFakeChild();
+    // Schedule events on next tick so the caller has time to attach listeners.
+    process.nextTick(() => {
+      for (const line of stdoutLines) {
+        lastFakeChild.emitStdout(line + "\n");
+      }
+      if (stderrData) {
+        lastFakeChild.emitStderr(stderrData);
+      }
+      lastFakeChild.close(exitCode);
+    });
+    return lastFakeChild;
+  });
+}
 
 const mockExecPromisified = jest.fn();
 const mockExec = Object.assign(jest.fn(), {
@@ -47,6 +109,7 @@ const mockExec = Object.assign(jest.fn(), {
 });
 jest.mock("child_process", () => ({
   exec: mockExec,
+  spawn: mockSpawn,
 }));
 
 // Must import after jest.mock
@@ -146,77 +209,101 @@ describe("module exports", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 2. renderSection — Remotion renderMedia integration
+// 2. renderSection — child-process spawn integration
+//    renderSection now spawns a standalone Node.js child process that uses
+//    @remotion/renderer internally. Tests verify the generated script content,
+//    the spawn invocation, and progress/error handling.
 // ---------------------------------------------------------------------------
 
-describe("renderSection — renderMedia integration", () => {
+describe("renderSection — child-process spawn integration", () => {
   beforeEach(() => {
     setupFsMocks();
+    // Default: child exits successfully with no stdout.
+    setupSpawn([], 0);
   });
 
-  it("calls selectComposition with compositionId", async () => {
-    setupSelectComposition("IntroComposition");
-    mockRenderMedia.mockResolvedValue(undefined);
-
+  it("spawns a node child process", async () => {
     await renderSection("IntroComposition", "/tmp/out.mp4", jest.fn());
 
-    expect(mockSelectComposition).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "IntroComposition" })
+    expect(mockSpawn).toHaveBeenCalledWith(
+      "node",
+      expect.any(Array),
+      expect.objectContaining({ stdio: ["ignore", "pipe", "pipe"] })
     );
   });
 
-  it("calls renderMedia with codec h264", async () => {
-    setupSelectComposition();
-    mockRenderMedia.mockResolvedValue(undefined);
+  it("writes a .cjs render script that calls selectComposition with compositionId", async () => {
+    await renderSection("IntroComposition", "/tmp/out.mp4", jest.fn());
 
+    // The second writeFile call is the mkdir + writeFile in renderSection;
+    // The first writeFile is in ensureDir/mkdir, so script writeFile is the
+    // one whose path ends with .cjs
+    const writeCalls = (fs.promises.writeFile as jest.Mock).mock.calls;
+    const scriptCall = writeCalls.find((c: any[]) =>
+      (c[0] as string).endsWith(".cjs")
+    );
+    expect(scriptCall).toBeDefined();
+    const script = scriptCall![1] as string;
+    expect(script).toContain("selectComposition");
+    expect(script).toContain('"IntroComposition"');
+  });
+
+  it("writes a render script that uses codec h264", async () => {
     await renderSection("TestComp", "/tmp/out.mp4", jest.fn());
 
-    expect(mockRenderMedia).toHaveBeenCalledWith(
-      expect.objectContaining({ codec: "h264" })
+    const writeCalls = (fs.promises.writeFile as jest.Mock).mock.calls;
+    const scriptCall = writeCalls.find((c: any[]) =>
+      (c[0] as string).endsWith(".cjs")
     );
+    const script = scriptCall![1] as string;
+    expect(script).toContain("codec: 'h264'");
   });
 
-  it("calls renderMedia with outputLocation set to outputPath", async () => {
-    setupSelectComposition();
-    mockRenderMedia.mockResolvedValue(undefined);
-
+  it("writes a render script with outputLocation set to outputPath", async () => {
     await renderSection("TestComp", "/output/sections/intro.mp4", jest.fn());
 
-    expect(mockRenderMedia).toHaveBeenCalledWith(
-      expect.objectContaining({ outputLocation: "/output/sections/intro.mp4" })
+    const writeCalls = (fs.promises.writeFile as jest.Mock).mock.calls;
+    const scriptCall = writeCalls.find((c: any[]) =>
+      (c[0] as string).endsWith(".cjs")
     );
+    const script = scriptCall![1] as string;
+    expect(script).toContain("/output/sections/intro.mp4");
   });
 
-  it("passes composition from selectComposition to renderMedia", async () => {
-    const comp = setupSelectComposition("MyComp");
-    mockRenderMedia.mockResolvedValue(undefined);
-
+  it("writes a render script that passes composition to renderMedia", async () => {
     await renderSection("MyComp", "/tmp/out.mp4", jest.fn());
 
-    expect(mockRenderMedia).toHaveBeenCalledWith(
-      expect.objectContaining({ composition: comp })
+    const writeCalls = (fs.promises.writeFile as jest.Mock).mock.calls;
+    const scriptCall = writeCalls.find((c: any[]) =>
+      (c[0] as string).endsWith(".cjs")
     );
+    const script = scriptCall![1] as string;
+    expect(script).toContain("renderMedia");
+    expect(script).toContain("composition");
   });
 
-  it("passes serveUrl to both selectComposition and renderMedia", async () => {
-    setupSelectComposition();
-    mockRenderMedia.mockResolvedValue(undefined);
-
+  it("writes a render script with a serveUrl for both selectComposition and renderMedia", async () => {
     await renderSection("TestComp", "/tmp/out.mp4", jest.fn());
 
-    const selectCall = mockSelectComposition.mock.calls[0][0];
-    const renderCall = mockRenderMedia.mock.calls[0][0];
-    expect(selectCall.serveUrl).toBeDefined();
-    expect(renderCall.serveUrl).toBe(selectCall.serveUrl);
+    const writeCalls = (fs.promises.writeFile as jest.Mock).mock.calls;
+    const scriptCall = writeCalls.find((c: any[]) =>
+      (c[0] as string).endsWith(".cjs")
+    );
+    const script = scriptCall![1] as string;
+    // serveUrl appears in the script for both calls
+    expect(script).toMatch(/serveUrl/);
+    // selectComposition uses serveUrl
+    expect(script).toContain("selectComposition");
+    // renderMedia uses serveUrl
+    expect(script).toContain("renderMedia");
   });
 
   it("maps Remotion progress 0–1 to RenderProgress percent 0–100", async () => {
-    setupSelectComposition("IntroComposition");
-    mockRenderMedia.mockImplementation(async (opts: any) => {
-      opts.onProgress({ progress: 0 });
-      opts.onProgress({ progress: 0.5 });
-      opts.onProgress({ progress: 1.0 });
-    });
+    setupSpawn([
+      JSON.stringify({ percent: 0, compositionId: "IntroComposition" }),
+      JSON.stringify({ percent: 50, compositionId: "IntroComposition" }),
+      JSON.stringify({ percent: 100, compositionId: "IntroComposition", done: true }),
+    ]);
 
     const progressCalls: Array<{ percent: number; message: string }> = [];
     await renderSection("IntroComposition", "/tmp/out.mp4", (p) =>
@@ -229,10 +316,9 @@ describe("renderSection — renderMedia integration", () => {
   });
 
   it("includes compositionId in progress message", async () => {
-    setupSelectComposition("IntroComposition");
-    mockRenderMedia.mockImplementation(async (opts: any) => {
-      opts.onProgress({ progress: 0.5 });
-    });
+    setupSpawn([
+      JSON.stringify({ percent: 50, compositionId: "IntroComposition" }),
+    ]);
 
     const progressCalls: Array<{ percent: number; message: string }> = [];
     await renderSection("IntroComposition", "/tmp/out.mp4", (p) =>
@@ -243,9 +329,6 @@ describe("renderSection — renderMedia integration", () => {
   });
 
   it("ensures output directory exists before rendering", async () => {
-    setupSelectComposition();
-    mockRenderMedia.mockResolvedValue(undefined);
-
     await renderSection("TestComp", "/output/sections/intro.mp4", jest.fn());
 
     expect(fs.promises.mkdir).toHaveBeenCalledWith("/output/sections", {
@@ -256,13 +339,14 @@ describe("renderSection — renderMedia integration", () => {
 
 // ---------------------------------------------------------------------------
 // 3. renderSection — bundle path resolution
+//    The serveUrl is embedded in the generated .cjs script. We verify the
+//    script content to ensure the correct bundle path was resolved.
 // ---------------------------------------------------------------------------
 
 describe("renderSection — bundle path resolution", () => {
   beforeEach(() => {
     setupFsMocks();
-    setupSelectComposition();
-    mockRenderMedia.mockResolvedValue(undefined);
+    setupSpawn([], 0);
   });
 
   it("uses REMOTION_BUNDLE_PATH env var when set", async () => {
@@ -270,8 +354,12 @@ describe("renderSection — bundle path resolution", () => {
 
     await renderSection("TestComp", "/tmp/out.mp4", jest.fn());
 
-    const selectCall = mockSelectComposition.mock.calls[0][0];
-    expect(selectCall.serveUrl).toBe("/custom/bundle/path");
+    const writeCalls = (fs.promises.writeFile as jest.Mock).mock.calls;
+    const scriptCall = writeCalls.find((c: any[]) =>
+      (c[0] as string).endsWith(".cjs")
+    );
+    const script = scriptCall![1] as string;
+    expect(script).toContain("/custom/bundle/path");
   });
 
   it("falls back to remotion/build directory when index.html exists", async () => {
@@ -280,10 +368,14 @@ describe("renderSection — bundle path resolution", () => {
 
     await renderSection("TestComp", "/tmp/out.mp4", jest.fn());
 
-    const selectCall = mockSelectComposition.mock.calls[0][0];
+    const writeCalls = (fs.promises.writeFile as jest.Mock).mock.calls;
+    const scriptCall = writeCalls.find((c: any[]) =>
+      (c[0] as string).endsWith(".cjs")
+    );
+    const script = scriptCall![1] as string;
     // serveUrl should point to the build directory, not the file itself
-    expect(selectCall.serveUrl).toContain(path.join("remotion", "build"));
-    expect(selectCall.serveUrl).not.toMatch(/index\.html$/);
+    expect(script).toContain(path.join("remotion", "build"));
+    expect(script).not.toMatch(/index\.html/);
   });
 
   it("falls back to remotion directory when no build exists", async () => {
@@ -292,8 +384,12 @@ describe("renderSection — bundle path resolution", () => {
 
     await renderSection("TestComp", "/tmp/out.mp4", jest.fn());
 
-    const selectCall = mockSelectComposition.mock.calls[0][0];
-    expect(selectCall.serveUrl).toMatch(/remotion$/);
+    const writeCalls = (fs.promises.writeFile as jest.Mock).mock.calls;
+    const scriptCall = writeCalls.find((c: any[]) =>
+      (c[0] as string).endsWith(".cjs")
+    );
+    const script = scriptCall![1] as string;
+    expect(script).toMatch(/remotion"/);
   });
 });
 

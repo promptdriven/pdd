@@ -487,8 +487,8 @@ describe("TTS generation trigger", () => {
   });
 
   it("extracts jobId from response", () => {
-    expect(sourceCode).toMatch(/data\?\.jobId/);
-    expect(sourceCode).toMatch(/setJobId\s*\(\s*data\.jobId\s*\)/);
+    expect(sourceCode).toMatch(/extractJobIdFromSse\s*\(\s*res\s*\)/);
+    expect(sourceCode).toMatch(/setJobId\s*\(\s*jobId\s*\)/);
   });
 
   it("calls onAdvance() on success", () => {

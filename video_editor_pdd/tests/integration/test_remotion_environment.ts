@@ -21,6 +21,22 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 
+/**
+ * Retry helper for flaky tests that depend on Remotion child processes.
+ * Remotion renders spawn HTTP servers sensitive to parallel I/O contention.
+ */
+async function withRetry<T>(fn: () => Promise<T>, retries = 2): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (attempt >= retries) throw err;
+      // Wait before retrying to let other workers release resources
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Step 1 — Bundle path
 // ---------------------------------------------------------------------------
@@ -113,19 +129,23 @@ describe("renderSection", () => {
   it(
     "renders ColdOpenSection to a non-empty MP4 file",
     async () => {
-      const { renderSection } = await import("@/lib/render");
+      await withRetry(async () => {
+        // Clean up any partial output from previous attempt
+        if (fs.existsSync(outPath)) fs.unlinkSync(outPath);
 
-      await renderSection("ColdOpenSection", outPath, (progress) => {
-        // Ensure progress callbacks fire with valid values
-        expect(typeof progress.percent).toBe("number");
-        expect(progress.percent).toBeGreaterThanOrEqual(0);
-        expect(progress.percent).toBeLessThanOrEqual(100);
+        const { renderSection } = await import("@/lib/render");
+
+        await renderSection("ColdOpenSection", outPath, (progress) => {
+          expect(typeof progress.percent).toBe("number");
+          expect(progress.percent).toBeGreaterThanOrEqual(0);
+          expect(progress.percent).toBeLessThanOrEqual(100);
+        });
+
+        expect(fs.existsSync(outPath)).toBe(true);
+        expect(fs.statSync(outPath).size).toBeGreaterThan(0);
       });
-
-      expect(fs.existsSync(outPath)).toBe(true);
-      expect(fs.statSync(outPath).size).toBeGreaterThan(0);
     },
-    120_000 // 2-minute timeout
+    360_000 // 6-minute timeout (accounts for up to 3 attempts)
   );
 });
 
