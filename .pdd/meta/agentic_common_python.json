@@ -1,14 +1,14 @@
 {
-  "pdd_version": "0.0.164",
-  "timestamp": "2026-03-03T17:49:21.872007+00:00",
+  "pdd_version": "0.0.165",
+  "timestamp": "2026-03-03T22:00:26.838513+00:00",
   "command": "update",
-  "prompt_hash": "de8f74eb287fe8f77a65086b76f82bce82105ac379a82ef821ce76a93a4e6fd4",
-  "code_hash": "5ccb8ebf79c5714deb1339123414dcd44743a20db48b75d5d463ce0a8651434f",
+  "prompt_hash": "b320bbabbd975b92de2d9c381d7e2cca13569517343728c0e619739d1ae66b30",
+  "code_hash": "14cf534f27e08acecc7fb3a5485d9926af63a68da01375453516274b4c8d1f4c",
   "example_hash": null,
   "test_hash": null,
   "test_files": null,
   "include_deps": {
-    "/Users/caijiamin/Desktop/PDD_PRIVATE/pdd-fix-crash-hang/context/llm_invoke_example.py": "88e1071cf088837c1adb6738f0a1f8e5134efd4a44370758dd19d0719475ac48",
-    "/Users/caijiamin/Desktop/PDD_PRIVATE/pdd-fix-crash-hang/context/python_preamble.prompt": "57a3e51f529024ec0cb9658cd6ac61a7c8051ba0c8e887b31cf00b2e78a07d83"
+    "/Users/caijiamin/Desktop/PDD_PRIVATE/pdd-backup-fix/context/llm_invoke_example.py": "88e1071cf088837c1adb6738f0a1f8e5134efd4a44370758dd19d0719475ac48",
+    "/Users/caijiamin/Desktop/PDD_PRIVATE/pdd-backup-fix/context/python_preamble.prompt": "57a3e51f529024ec0cb9658cd6ac61a7c8051ba0c8e887b31cf00b2e78a07d83"
   }
 }
