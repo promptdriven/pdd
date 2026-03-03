@@ -97,6 +97,7 @@ def _resolve_prompt_from_pddrc(code_file_path: str, repo_root: str, language: st
         Absolute prompt path string, or None to fall back to default behavior.
     """
     from .construct_paths import _find_pddrc_file, _load_pddrc_config, detect_context_for_file, BUILTIN_EXT_MAP
+    from .template_expander import expand_template
 
     pddrc_path = _find_pddrc_file(Path(repo_root))
     if not pddrc_path:
@@ -125,10 +126,10 @@ def _resolve_prompt_from_pddrc(code_file_path: str, repo_root: str, language: st
     if not prompt_template:
         return None
 
-    # Get code file relative to pddrc_parent
+    # Get code file relative to pddrc_parent (normalize to forward slashes for template matching)
     code_abs = os.path.abspath(code_file_path)
     try:
-        code_rel = os.path.relpath(code_abs, str(pddrc_parent))
+        code_rel = os.path.relpath(code_abs, str(pddrc_parent)).replace('\\', '/')
     except ValueError:
         return None
 
@@ -143,10 +144,10 @@ def _resolve_prompt_from_pddrc(code_file_path: str, repo_root: str, language: st
             category = extracted.get('category', '')
             base_name = extracted.get('name', base_name)
 
-    # Get file extension for language
-    ext = BUILTIN_EXT_MAP.get(language.lower(), '')
+    # Get file extension for language (without leading dot, matching template convention)
+    ext = BUILTIN_EXT_MAP.get(language.lower(), '').lstrip('.')
 
-    # Expand prompt template
+    # Expand prompt template using shared template_expander
     template_context = {
         'name': base_name,
         'category': category,
@@ -154,9 +155,7 @@ def _resolve_prompt_from_pddrc(code_file_path: str, repo_root: str, language: st
         'ext': ext,
         'language': language,
     }
-    expanded = prompt_template
-    for key, value in template_context.items():
-        expanded = expanded.replace('{' + key + '}', value)
+    expanded = expand_template(prompt_template, template_context)
 
     return str(pddrc_parent / expanded)
 
