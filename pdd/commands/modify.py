@@ -282,7 +282,7 @@ def update(
                 )
 
         # Call update_main with correct parameters
-        result, cost, model = update_main(
+        ret = update_main(
             ctx=ctx,
             input_prompt_file=input_prompt_file,
             modified_code_file=modified_code_file,
@@ -296,7 +296,9 @@ def update(
             base_branch=base_branch,
         )
 
-        return result, cost, model
+        if ret is None:
+            return None
+        return ret
 
     except (click.Abort, click.UsageError):
         raise
