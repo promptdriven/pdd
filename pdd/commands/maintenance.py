@@ -6,6 +6,7 @@ from typing import Optional, Tuple
 from pathlib import Path
 
 from ..sync_main import sync_main
+from ..sync_code_main import sync_code_main
 from ..auto_deps_main import auto_deps_main
 from ..agentic_sync import _is_github_issue_url, run_agentic_sync
 from ..track_cost import track_cost
@@ -280,3 +281,58 @@ def setup(ctx: click.Context):
         _run_setup_utility()
     except Exception as e:
         handle_error(e, "setup", False)
+
+
+@click.command("sync-code")
+@click.option(
+    "--directory",
+    type=click.Path(exists=True, file_okay=False),
+    default=None,
+    help="Directory to scan for code files (defaults to repo root).",
+)
+@click.option(
+    "--extensions",
+    type=str,
+    default=None,
+    help="Comma-separated file extensions to filter (e.g., 'py,js').",
+)
+@click.option(
+    "--simple",
+    is_flag=True,
+    default=False,
+    help="Skip agentic routing; use legacy update path only.",
+)
+@click.option(
+    "--base-branch",
+    type=str,
+    default="main",
+    help="Base branch for git-based change detection fallback (default: main).",
+)
+@click.pass_context
+@track_cost
+def sync_code(
+    ctx: click.Context,
+    directory: Optional[str],
+    extensions: Optional[str],
+    simple: bool,
+    base_branch: str,
+) -> Optional[Tuple[str, float, str]]:
+    """Reverse-sync changed code back into prompts.
+
+    Scans the repository for code files whose content has changed
+    (via fingerprint hash comparison or git diff fallback) and runs
+    `pdd update` on each to keep prompts in sync with the code.
+    """
+    try:
+        return sync_code_main(
+            ctx=ctx,
+            directory=directory,
+            extensions=extensions,
+            simple=simple,
+            base_branch=base_branch,
+        )
+    except click.Abort:
+        raise
+    except Exception as exception:
+        handle_error(exception, "sync-code", ctx.obj.get("quiet", False))
+        return None
