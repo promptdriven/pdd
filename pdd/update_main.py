@@ -25,6 +25,7 @@ from .agentic_common import get_available_agents
 from .agentic_update import run_agentic_update
 from .sync_determine_operation import calculate_sha256, read_fingerprint
 from .architecture_sync import update_architecture_from_prompt
+from .operation_log import save_fingerprint, infer_module_identity
 from . import DEFAULT_TIME
 
 custom_theme = Theme({
@@ -536,6 +537,25 @@ def update_main(
                 results.append(result)
 
                 total_repo_cost += result.get("cost", 0.0)
+
+                # Save fingerprint so the file isn't detected as changed next run
+                if "Success" in result.get("status", ""):
+                    basename, language = infer_module_identity(prompt_path)
+                    if basename and language:
+                        try:
+                            paths = {
+                                "prompt": Path(prompt_path),
+                                "code": Path(code_path),
+                            }
+                            save_fingerprint(
+                                basename, language,
+                                operation="update",
+                                paths=paths,
+                                cost=result.get("cost", 0.0),
+                                model=result.get("model", "unknown"),
+                            )
+                        except Exception:
+                            pass  # Best-effort; don't fail the update
 
                 progress.update(task, advance=1, total_cost=total_repo_cost)
 
