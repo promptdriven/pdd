@@ -165,7 +165,7 @@ def test_code_generator_valid_input_incomplete(
         MOCK_CONTINUE_RESPONSE[1] +
         MOCK_POSTPROCESS_RESPONSE[1]
     )
-    assert model_name == MOCK_CONTINUE_RESPONSE[2]
+    assert model_name == MOCK_POSTPROCESS_RESPONSE[2]
 
 @pytest.mark.parametrize("prompt,language,strength,temperature,expected_error", [
     ("", "python", 0.5, 0.5, ValueError),
