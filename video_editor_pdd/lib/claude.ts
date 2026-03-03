@@ -1,283 +1,242 @@
-// server-only check
-try {
-  require("server-only");
-} catch (e) {
-  // In development or test environments, server-only might not be available
-  if (process.env.NODE_ENV === "production") {
-    console.warn(
-      "Warning: server-only module not found. Ensure this module is not bundled into client-side code."
-    );
-  }
-}
+try { require('server-only'); } catch { /* running outside Next.js bundler */ }
 
-import { spawn } from "child_process";
+import { spawn } from 'child_process';
+import type { AnnotationAnalysis, ClaudeFixResult } from './types';
 
-const TIMEOUT_MS = 300_000; // 5 minutes
-const DEFAULT_MODEL = "claude-opus-4-6";
-
-// ---------------------------------------------------------------------------
-// JSON Fallback Parsing
-// ---------------------------------------------------------------------------
+const TIMEOUT_MS = 600_000;
 
 /**
- * Attempts to parse JSON from CLI stdout using multiple strategies:
- * 1. Direct JSON.parse
- * 2. Extraction from Markdown code fences (```json ... ```)
- * 3. Manual brace matching (first `{` to last `}`)
+ * Attempts to parse JSON from the Claude CLI output using multiple strategies.
+ * Handles cases where the LLM might include conversational text or markdown fences.
  */
-export function parseJsonWithFallback(stdout: string): unknown {
-  const trimmed = stdout.trim();
-
-  // Strategy 1: Direct parse
+export function parseJsonWithFallback(stdout: string): any {
+  // (a) direct parse
   try {
-    return JSON.parse(trimmed);
-  } catch {
-    // fall through
-  }
+    return JSON.parse(stdout);
+  } catch {}
 
-  // Strategy 2: Markdown code fence extraction
-  const fenceRegex = /```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/;
-  const fenceMatch = trimmed.match(fenceRegex);
+  // (b) code fence ```json ... ```
+  const fenceMatch = stdout.match(/```json\s*([\s\S]*?)```/);
   if (fenceMatch && fenceMatch[1]) {
-    console.warn(
-      "parseJsonWithFallback: Direct parse failed. Attempting extraction from Markdown code fence."
-    );
+    console.warn('Claude CLI output not pure JSON, using code-fence extraction fallback.');
     try {
-      return JSON.parse(fenceMatch[1].trim());
-    } catch {
-      // fall through
+      return JSON.parse(fenceMatch[1]);
+    } catch {}
+  }
+
+  // (c) brace matching from first { to last }
+  const end = stdout.lastIndexOf('}');
+  if (end !== -1) {
+    console.warn('Claude CLI output not pure JSON, using brace-matching fallback.');
+    // Try each '{' position from right to left; first successful parse wins
+    for (let i = end; i >= 0; i--) {
+      if (stdout[i] === '{') {
+        try {
+          return JSON.parse(stdout.slice(i, end + 1));
+        } catch {}
+      }
     }
   }
 
-  // Strategy 3: Manual brace matching
-  const firstBrace = trimmed.indexOf("{");
-  const lastBrace = trimmed.lastIndexOf("}");
-  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-    console.warn(
-      "parseJsonWithFallback: Code fence extraction failed or not found. Attempting manual brace matching."
-    );
-    const candidate = trimmed.substring(firstBrace, lastBrace + 1);
-    try {
-      return JSON.parse(candidate);
-    } catch {
-      // fall through
+  // (d) bracket matching from first [ to last ]
+  const endBracket = stdout.lastIndexOf(']');
+  if (endBracket !== -1) {
+    console.warn('Claude CLI output not pure JSON, using bracket-matching fallback.');
+    for (let i = endBracket; i >= 0; i--) {
+      if (stdout[i] === '[') {
+        try { return JSON.parse(stdout.slice(i, endBracket + 1)); } catch {}
+      }
     }
   }
 
-  throw new Error(
-    'Unable to parse JSON from Claude CLI output'
-  );
+  throw new Error('Unable to parse JSON from Claude CLI output');
 }
 
-// ---------------------------------------------------------------------------
-// Core Execution Engine
-// ---------------------------------------------------------------------------
-
-interface RunClaudeOptions {
-  args: string[];
-  onLog?: (line: string) => void;
-  cwd?: string;
-}
-
-function runClaude(options: RunClaudeOptions): Promise<unknown> {
-  const { args, onLog, cwd } = options;
-
+/**
+ * Spawns the Claude CLI process and handles communication and timeouts.
+ */
+function runClaude(
+  prompt: string,
+  args: string[],
+  options: { cwd?: string },
+  onLog?: (line: string) => void
+): Promise<any> {
   return new Promise((resolve, reject) => {
-    let stdoutBuffer = "";
-    let stderrBuffer = "";
-    let settled = false;
-    let timeoutId: ReturnType<typeof setTimeout> | null = null;
-
-    const child = spawn("claude", args, {
-      stdio: ["ignore", "pipe", "pipe"],
-      cwd: cwd || process.cwd(),
-      env: {
-        ...process.env,
-      },
+    const proc = spawn('claude', ['-p', prompt, ...args], {
+      cwd: options.cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
 
-    // Timeout management
-    timeoutId = setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        child.kill("SIGTERM");
-        reject(
-          new Error(
-            'Claude CLI timeout after 300s'
-          )
-        );
-      }
+    let stdout = '';
+    let stderr = '';
+    let stderrBuf = '';
+
+    const timeout = setTimeout(() => {
+      proc.kill('SIGTERM');
+      reject(new Error('Claude CLI timeout after 600s'));
     }, TIMEOUT_MS);
 
-    // Accumulate stdout
-    child.stdout.on("data", (chunk: Buffer) => {
-      stdoutBuffer += chunk.toString("utf-8");
+    proc.stdout.on('data', (chunk) => {
+      stdout += chunk.toString();
     });
 
-    // Stream stderr line-by-line
-    let stderrPartial = "";
-    child.stderr.on("data", (chunk: Buffer) => {
-      const text = chunk.toString("utf-8");
-      stderrBuffer += text;
+    proc.stderr.on('data', (chunk) => {
+      const text = chunk.toString();
+      stderr += text;
 
+      // Stream stderr lines to onLog in real time
       if (onLog) {
-        stderrPartial += text;
-        const lines = stderrPartial.split("\n");
-        // Keep the last partial line in the buffer
-        stderrPartial = lines.pop() || "";
-        for (const line of lines) {
-          if (line.length > 0) {
-            onLog(line);
-          }
+        stderrBuf += text;
+        let idx: number;
+        while ((idx = stderrBuf.indexOf('\n')) !== -1) {
+          const line = stderrBuf.slice(0, idx).replace(/\r$/, '');
+          stderrBuf = stderrBuf.slice(idx + 1);
+          if (line.length > 0) onLog(line);
         }
       }
     });
 
-    child.on("error", (err: Error) => {
-      if (!settled) {
-        settled = true;
-        if (timeoutId) clearTimeout(timeoutId);
-        reject(
-          new Error(`Failed to spawn Claude CLI process: ${err.message}`)
-        );
+    proc.on('close', (code) => {
+      clearTimeout(timeout);
+
+      // Flush any remaining stderr buffer
+      if (onLog && stderrBuf.trim().length > 0) {
+        onLog(stderrBuf.trim());
+      }
+
+      try {
+        const outer = parseJsonWithFallback(stdout);
+
+        // The Claude CLI's --output-format json wraps the response in an
+        // envelope: { type: "result", result: "<claude text>", is_error: ... }
+        // If we detect this envelope, extract and parse the inner payload.
+        if (
+          outer &&
+          typeof outer === 'object' &&
+          typeof outer.result === 'string' &&
+          outer.result.trim().length > 0
+        ) {
+          if (outer.is_error) {
+            reject(new Error(`Claude CLI returned error: ${outer.result}`));
+            return;
+          }
+          try {
+            const inner = parseJsonWithFallback(outer.result);
+            resolve(inner);
+            return;
+          } catch {
+            // Inner text is not JSON; fall through and return the envelope as-is
+          }
+        }
+
+        resolve(outer);
+      } catch (err) {
+        if (code !== 0) {
+          reject(new Error(`Claude CLI failed: ${stderr}`));
+          return;
+        }
+        reject(err);
       }
     });
 
-    child.on("close", (code: number | null, signal: string | null) => {
-      if (settled) return;
-      settled = true;
-      if (timeoutId) clearTimeout(timeoutId);
-
-      // Flush any remaining stderr partial line
-      if (onLog && stderrPartial.length > 0) {
-        onLog(stderrPartial);
-        stderrPartial = "";
-      }
-
-      // Non-zero exit code → process execution error
-      if (code !== null && code !== 0) {
-        const errorMessage = stderrBuffer.trim() || `Process exited with code ${code}`;
-        reject(
-          new Error(
-            `Claude CLI failed: ${errorMessage}`
-          )
-        );
-        return;
-      }
-
-      if (signal) {
-        reject(
-          new Error(`Claude CLI was killed by signal: ${signal}`)
-        );
-        return;
-      }
-
-      // Parse the output
-      try {
-        const parsed = parseJsonWithFallback(stdoutBuffer);
-        resolve(parsed);
-      } catch (parseError: unknown) {
-        const msg =
-          parseError instanceof Error ? parseError.message : String(parseError);
-        reject(
-          new Error(
-            `Claude CLI completed successfully but output parsing failed: ${msg}`
-          )
-        );
-      }
+    proc.on('error', (err) => {
+      clearTimeout(timeout);
+      reject(err);
     });
   });
 }
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
 /**
- * Runs a read-only analysis using the Claude CLI.
- * Uses a restricted toolset (Read, Glob) to prevent any file modifications.
+ * Runs an analysis task using Claude.
  */
 export async function runClaudeAnalysis(
   prompt: string,
   onLog?: (line: string) => void
-): Promise<unknown> {
+): Promise<AnnotationAnalysis> {
   const args = [
-    '-p',
-    prompt,
     '--model',
-    DEFAULT_MODEL,
+    'claude-opus-4-6',
     '--output-format',
     'json',
-    '--no-session-persistence',
     '--allowedTools',
     'Read,Glob',
+    '--no-session-persistence',
   ];
 
-  return runClaude({ args, onLog });
+  return runClaude(prompt, args, {}, onLog) as Promise<AnnotationAnalysis>;
 }
 
 /**
- * Runs a fix/edit operation using the Claude CLI.
- * Uses a broader toolset (Read, Write, Edit, Glob, Grep) and operates
- * within the specified working directory.
+ * Runs a read-only extraction task using Claude with a generic return type.
+ */
+export async function runClaudeExtract<T>(
+  prompt: string,
+  onLog?: (line: string) => void
+): Promise<T> {
+  const args = [
+    '--model',
+    'claude-opus-4-6',
+    '--output-format',
+    'json',
+    '--allowedTools',
+    'Read,Glob',
+    '--no-session-persistence',
+  ];
+
+  return runClaude(prompt, args, {}, onLog) as Promise<T>;
+}
+
+/**
+ * Runs a fix/edit task using Claude with file system write permissions.
  */
 export async function runClaudeFix(
   prompt: string,
   scopeDir: string,
   onLog?: (line: string) => void
-): Promise<unknown> {
+): Promise<ClaudeFixResult> {
   const args = [
-    '-p',
-    prompt,
     '--model',
-    DEFAULT_MODEL,
+    'claude-opus-4-6',
     '--output-format',
     'json',
-    '--no-session-persistence',
     '--allowedTools',
     'Read,Write,Edit,Glob,Grep',
+    '--no-session-persistence',
   ];
 
-  return runClaude({ args, onLog, cwd: scopeDir });
+  return runClaude(prompt, args, { cwd: scopeDir }, onLog) as Promise<ClaudeFixResult>;
 }
 
 /**
- * Runs a dry-run fix operation using the Claude CLI.
- * Injects instructions to prevent actual file modifications and instead
- * requests a structured JSON response with proposed changes.
+ * Runs Claude in read-only mode to preview what a fix would change,
+ * without actually modifying files.
  */
 export async function runClaudeFixDryRun(
   prompt: string,
   scopeDir: string,
   onLog?: (line: string) => void
-): Promise<unknown> {
-  const dryRunPrompt = `IMPORTANT: This is a DRY RUN. Do NOT modify, write, or edit any files. Instead, analyze the requested changes and respond with a JSON object describing what changes WOULD be made.
+): Promise<ClaudeFixResult & { proposedDiff: string }> {
+  const dryRunPrompt = `${prompt}
 
-Your response MUST be a valid JSON object with the following schema:
+IMPORTANT: This is a DRY RUN / PREVIEW. Do NOT modify any files.
+Instead, describe what changes you would make. Return JSON:
 {
-  "fixType": "string - the category/type of fix being proposed (e.g., 'bug-fix', 'refactor', 'style', 'performance', 'security')",
-  "filesModified": ["string[] - list of file paths that would be modified"],
-  "changeDescription": "string - a detailed human-readable description of all changes that would be made",
-  "confidence": "number - a confidence score from 0.0 to 1.0 indicating how confident you are in the proposed fix",
-  "proposedDiff": "string - a unified diff showing the exact changes that would be made"
-}
-
-Only use Read, Glob, and Grep tools to analyze the codebase. Do NOT use Write or Edit tools.
-
-Original request:
-${prompt}`;
+  "fixType": "remotion",
+  "filesModified": ["list of files you would modify"],
+  "changeDescription": "detailed description of what you would change",
+  "confidence": 0.0-1.0,
+  "proposedDiff": "unified diff format showing the proposed changes"
+}`;
 
   const args = [
-    '-p',
-    dryRunPrompt,
     '--model',
-    DEFAULT_MODEL,
+    'claude-opus-4-6',
     '--output-format',
     'json',
-    '--no-session-persistence',
     '--allowedTools',
     'Read,Glob,Grep',
+    '--no-session-persistence',
   ];
 
-  return runClaude({ args, onLog, cwd: scopeDir });
+  return runClaude(dryRunPrompt, args, { cwd: scopeDir }, onLog) as Promise<ClaudeFixResult & { proposedDiff: string }>;
 }

@@ -1,133 +1,215 @@
-// lib/render.ts
-try { require('server-only'); } catch {}
+try { require('server-only'); } catch { /* running outside Next.js bundler */ }
 
-import path from 'path';
-import os from 'os';
-import fs from 'fs';
-import { promisify } from 'util';
-import { exec } from 'child_process';
+import fs from "fs";
+import os from "os";
+import path from "path";
+import { promisify } from "util";
+import { exec, spawn } from "child_process";
 import {
-  renderMedia,
   renderStill as remotionRenderStill,
   selectComposition,
-} from '@remotion/renderer';
-
-import type { RenderProgress } from './types';
+} from "@remotion/renderer";
+import type { RenderProgress } from "./types";
 
 const execAsync = promisify(exec);
 
 /**
- * Resolve the Remotion bundle serve URL.
- * Priority: REMOTION_BUNDLE_PATH env var → remotion/build directory → remotion directory.
+ * Resolve the Remotion bundle path.
+ * Priority:
+ * 1) REMOTION_BUNDLE_PATH env var
+ * 2) remotion/build/index.js (if present)
+ * 3) remotion (project root)
  */
-function getServeUrl(): string {
+const getServeUrl = (): string => {
   const envPath = process.env.REMOTION_BUNDLE_PATH;
-  if (envPath) return envPath;
-
-  const buildIndex = path.join(process.cwd(), 'remotion', 'build', 'index.html');
-  if (fs.existsSync(buildIndex)) {
-    return path.join(process.cwd(), 'remotion', 'build');
+  if (envPath) {
+    // Resolve relative paths to absolute so Remotion can locate the bundle
+    return path.isAbsolute(envPath)
+      ? envPath
+      : path.join(process.cwd(), envPath);
   }
 
-  return path.join(process.cwd(), 'remotion');
-}
+  // Auto-detect pre-compiled bundle: check for index.html in remotion/build/
+  const buildIndexHtml = path.join(
+    process.cwd(),
+    "remotion",
+    "build",
+    "index.html"
+  );
+  if (fs.existsSync(buildIndexHtml)) {
+    return path.join(process.cwd(), "remotion", "build");
+  }
 
-/**
- * Ensure output directory exists.
- */
-async function ensureDir(filePath: string): Promise<void> {
+  return path.join(process.cwd(), "remotion");
+};
+
+const ensureDir = async (filePath: string): Promise<void> => {
   const dir = path.dirname(filePath);
   await fs.promises.mkdir(dir, { recursive: true });
-}
+};
 
 /**
- * Escape single quotes in a file path for ffmpeg concat format.
+ * Render a Remotion composition to MP4 in a standalone Node.js child process.
+ *
+ * Remotion's renderMedia() hangs when called inside the Next.js dev server
+ * due to module resolution conflicts and event-loop contention. Spawning a
+ * separate Node process avoids this entirely.
+ *
+ * The child process communicates progress via JSON lines on stdout.
  */
-function escapeForConcat(p: string): string {
-  return p.replace(/'/g, "'\\''");
-}
-
-/**
- * Render a Remotion composition section to MP4.
- */
-export async function renderSection(
+export const renderSection = async (
   compositionId: string,
   outputPath: string,
   onProgress: (p: RenderProgress) => void
-): Promise<void> {
+): Promise<void> => {
   await ensureDir(outputPath);
 
   const serveUrl = getServeUrl();
-  const composition = await selectComposition({
-    serveUrl,
-    id: compositionId,
-  });
+
+  // Write a temporary .cjs script that performs the actual render
+  const scriptPath = path.join(
+    os.tmpdir(),
+    `remotion-render-${compositionId}-${Date.now()}.cjs`
+  );
+
+  const script = `
+const { selectComposition, renderMedia } = require('@remotion/renderer');
+const path = require('path');
+
+async function run() {
+  const serveUrl = ${JSON.stringify(serveUrl)};
+  const compositionId = ${JSON.stringify(compositionId)};
+  const outputLocation = ${JSON.stringify(outputPath)};
+
+  const composition = await selectComposition({ serveUrl, id: compositionId });
 
   await renderMedia({
     composition,
     serveUrl,
     codec: 'h264',
-    outputLocation: outputPath,
+    outputLocation,
     onProgress: ({ progress }) => {
       const percent = Math.round(progress * 100);
-      onProgress({
-        percent,
-        message: `Rendering ${compositionId}...`,
-      });
+      process.stdout.write(JSON.stringify({ percent, compositionId }) + '\\n');
     },
   });
+
+  process.stdout.write(JSON.stringify({ percent: 100, compositionId, done: true }) + '\\n');
 }
 
+run().catch((err) => {
+  process.stderr.write(err.message || String(err));
+  process.exit(1);
+});
+`.trim();
+
+  await fs.promises.writeFile(scriptPath, script, "utf-8");
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn("node", [scriptPath], {
+        stdio: ["ignore", "pipe", "pipe"],
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          NODE_PATH: path.join(process.cwd(), "node_modules"),
+        },
+      });
+
+      let stderr = "";
+      let buffer = "";
+
+      child.stdout.on("data", (chunk: Buffer) => {
+        buffer += chunk.toString();
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const data = JSON.parse(line);
+            onProgress({
+              percent: data.percent ?? 0,
+              message: `Rendering ${compositionId}...`,
+            });
+          } catch {
+            // not JSON, ignore
+          }
+        }
+      });
+
+      child.stderr.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString();
+      });
+
+      child.on("error", reject);
+      child.on("close", (code) => {
+        if (code === 0) {
+          resolve();
+        } else {
+          reject(
+            new Error(
+              `Render process for "${compositionId}" exited with code ${code}: ${stderr.trim()}`
+            )
+          );
+        }
+      });
+    });
+  } finally {
+    await fs.promises.unlink(scriptPath).catch(() => undefined);
+  }
+};
+
 /**
- * Stitch MP4 sections into a full video using ffmpeg concat.
+ * Stitch MP4 sections into a single final output using ffmpeg concat.
  */
-export async function stitchFullVideo(
+export const stitchFullVideo = async (
   sectionPaths: string[],
   outputPath: string,
   onProgress: (p: RenderProgress) => void
-): Promise<void> {
+): Promise<void> => {
   await ensureDir(outputPath);
 
   const concatFile = path.join(os.tmpdir(), `concat-${Date.now()}.txt`);
-  const concatContent = sectionPaths
-    .map((p) => `file '${escapeForConcat(path.resolve(p))}'`)
-    .join('\n');
+  const concatContents = sectionPaths
+    .map((p) => `file '${path.resolve(p).replace(/'/g, "'\\''")}'`)
+    .join("\n");
 
-  await fs.promises.writeFile(concatFile, concatContent, 'utf-8');
+  await fs.promises.writeFile(concatFile, concatContents, "utf-8");
 
   try {
-    await execAsync(
-      `ffmpeg -f concat -safe 0 -i "${concatFile}" -c copy "${outputPath}"`
-    );
+    const cmd = `ffmpeg -f concat -safe 0 -i "${concatFile}" -c copy "${outputPath}"`;
+    await execAsync(cmd);
 
     onProgress({
       percent: 100,
-      message: 'Stitching complete.',
+      message: "Stitching complete.",
     });
   } finally {
     await fs.promises.unlink(concatFile).catch(() => undefined);
   }
-}
+};
 
 /**
- * Get duration of an MP4 file in seconds using ffprobe.
+ * Get duration (seconds) of a rendered MP4 using ffprobe.
  */
-export async function getSectionDuration(mp4Path: string): Promise<number> {
-  const { stdout } = await execAsync(
-    `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${mp4Path}"`
-  );
+export const getSectionDuration = async (mp4Path: string): Promise<number> => {
+  const cmd =
+    `ffprobe -v error -show_entries format=duration ` +
+    `-of default=noprint_wrappers=1:nokey=1 "${mp4Path}"`;
 
+  const { stdout } = await execAsync(cmd);
   return parseFloat(stdout.trim());
-}
+};
 
 /**
- * Render a still PNG frame for audit screenshots.
+ * Render a single frame as PNG for audit screenshots.
  */
-export async function renderStill(
+export const renderStill = async (
   compositionId: string,
   frame: number,
   outputPath: string
-): Promise<void> {
+): Promise<void> => {
   await ensureDir(outputPath);
 
   const serveUrl = getServeUrl();
@@ -142,4 +224,4 @@ export async function renderStill(
     output: outputPath,
     frame,
   });
-}
+};
