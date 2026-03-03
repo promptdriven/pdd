@@ -118,6 +118,19 @@ Verify each data entity from Step 4 has corresponding modules:
 - All dependency references point to modules that exist in the list
 - File paths use correct framework conventions
 
+**7. Naming Consistency Check**
+
+Cross-reference identifiers across the module design:
+- If two modules reference the same database entity, they must use the same name
+- If the data model (Step 4) defines entity names, all modules must use those exact names
+- API endpoint paths must be consistent (no `/api/users` in one module and `/users` in another)
+- All enum/status values must be consistent across modules
+
+**Flag as ERROR if:**
+- The same entity is referred to by different names in different modules
+- API paths are inconsistent
+- Data model entity names don't match module references
+
 % Output
 
 **DO NOT run any bash commands. This is a text-only analysis.**

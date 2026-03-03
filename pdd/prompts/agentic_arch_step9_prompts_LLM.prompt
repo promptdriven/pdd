@@ -38,6 +38,30 @@ You are working on step 9 of the agentic architecture workflow. Step 7 generated
 <include>pdd/templates/generic/generate_prompt.prompt</include>
 </prompt_template>
 
+% Cross-File Consistency Rules (CRITICAL)
+
+When generating prompt files, you MUST enforce cross-file consistency:
+
+1. **Use the Naming Registry from Step 2:**
+   - Every prompt must use the EXACT canonical names for collections, endpoints, types, env vars
+   - If two prompts reference the same database collection, they must use identical names
+   - If two prompts import the same hook/utility, they must use identical import paths
+
+2. **Shared patterns must be identical across prompts:**
+   - Auth pattern: ALL prompts that use authentication must reference the SAME auth module with the SAME hook/function name
+   - Error handling: ALL prompts must use the SAME error handling utility
+   - API client: ALL prompts that make API calls must use the SAME client/fetch utility
+   - Toast/notification: ALL prompts must use the SAME notification pattern
+
+3. **Include explicit import instructions:**
+   - Each prompt must specify EXACT import paths for its dependencies
+   - Use relative imports consistently (always `@/lib/...` or always `../../lib/...`, not mixed)
+   - Import path format must match the project's tsconfig/path aliases
+
+4. **Environment variable documentation:**
+   - If a module needs env vars, the prompt must list them in a "Required Environment" section
+   - Use the exact variable names from the naming registry
+
 % Key Rules
 
 1. **Prompt file location:**
@@ -100,6 +124,17 @@ This example shows the correct prompt file structure and naming.
 <verified_working_example>
 <include>pdd/templates/architecture/example_nextjs_task_notes.prompt</include>
 </verified_working_example>
+
+% Existing Codebase Profile (from Step 2b)
+
+<step2b_output>
+{step2b_output}
+</step2b_output>
+
+When generating prompts, you MUST reference real import paths from the codebase scan.
+You MUST use existing packages — do NOT introduce packages not in package.json/requirements.txt.
+You MUST follow existing patterns for auth, data fetching, error handling.
+You MUST reuse existing modules where applicable — reference their actual export signatures.
 
 % Existing Sibling Architectures
 

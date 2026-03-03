@@ -170,6 +170,30 @@ Verify the architecture would compile without import errors:
 - For Python: All imported modules should exist
 - Shared utilities referenced by multiple modules should exist
 
+**7. Stub/Placeholder Detection Check**
+
+Read each prompt file and check for patterns that indicate incomplete specifications:
+
+FORBIDDEN patterns in prompt files:
+- "coming soon", "TODO", "placeholder", "to be implemented"
+- Requirements sections with fewer than 3 items for non-trivial modules
+- Missing error handling requirements
+- Missing input validation requirements
+- Vague instructions like "handle edge cases" without specifying which ones
+
+REQUIRED completeness per prompt:
+- At least 3 specific, implementable requirements
+- At least 1 error handling requirement
+- Explicit input/output data shapes
+- For API modules: request/response schema
+- For page modules: data sources and user interactions
+- For data modules: all CRUD operations that the PRD requires
+
+**Flag as ERROR if:**
+- Any prompt file contains stub/placeholder language
+- Any prompt has fewer than 3 concrete requirements
+- Any API prompt lacks request/response schemas
+
 % Output
 
 **1. Run all validation checks**

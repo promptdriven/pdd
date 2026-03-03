@@ -44,6 +44,17 @@ You are working on step 5 of 13 in an agentic architecture workflow. Previous st
 {step4_output}
 </step4_output>
 
+<step2b_output>
+{step2b_output}
+</step2b_output>
+
+% Existing Codebase Profile (from Step 2b)
+
+The codebase scan found existing packages, patterns, and modules.
+You MUST reuse existing modules where applicable — do NOT design new modules that duplicate existing functionality.
+You MUST follow existing naming conventions and patterns.
+If existing reusable modules are listed, reference them as dependencies rather than redesigning them.
+
 % Existing Sibling Architectures
 
 {sibling_architectures}
@@ -69,6 +80,14 @@ CRITICAL — Cross-Project Rules:
    - Modules should be independently testable
    - **API route modules: one module per distinct URL path.** Do NOT consolidate multiple routes under a single module. Each distinct endpoint (e.g., `/api/pipeline/veo/run`, `/api/pipeline/veo/clips`, `/api/pipeline/veo/stream`) gets its own module.
    - **Before finalizing:** cross-check against every route listed in the PRD's API specification table or data flow diagrams. A route mentioned in the PRD must have a corresponding module.
+   - **Each module MUST include acceptance criteria** — a concrete list of what "done" means:
+     - What functions/endpoints must exist and be callable
+     - What error cases must be handled
+     - What environment variables/config must be present
+     - What test scenarios must pass
+   - If a module handles data: it must include parsing/extraction logic, not just model definitions
+   - If a module produces output: it must include formatting/rendering logic
+   - If a module uses external services: it must document required env vars and config
 
 3. **Determine dependency graph:**
    - Which modules depend on which
@@ -108,10 +127,10 @@ Your comment should follow this format:
 **Status:** [Design Complete | Clarification Needed]
 
 ### Module List
-| Priority | Module (filename) | Filepath | Dependencies | Interface Type |
-|----------|-------------------|----------|--------------|----------------|
-| 1 | [name]_[Lang].prompt | [path] | [] | [type] |
-| 2 | [name]_[Lang].prompt | [path] | [dep1] | [type] |
+| Priority | Module (filename) | Filepath | Dependencies | Interface Type | Acceptance Criteria |
+|----------|-------------------|----------|--------------|----------------|---------------------|
+| 1 | [name]_[Lang].prompt | [path] | [] | [type] | [2-3 testable criteria] |
+| 2 | [name]_[Lang].prompt | [path] | [dep1] | [type] | [2-3 testable criteria] |
 
 ### Dependency Graph
 ```

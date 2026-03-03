@@ -53,6 +53,7 @@ ARCH_STEP_TIMEOUTS: Dict[Union[int, float], float] = {
     1: 340.0,    # Analyze PRD
     1.5: 340.0,  # Complexity assessment
     2: 340.0,    # Deep Analysis
+    2.5: 340.0,  # Codebase Scan
     3: 600.0,    # Research
     4: 600.0,    # Data Model Design
     5: 600.0,    # Design
@@ -308,6 +309,7 @@ def run_agentic_architecture_orchestrator(
         "sibling_architectures": sibling_architectures or "No existing sibling architectures found.",
         "existing_pddrc": existing_pddrc or "No existing .pddrc found.",
         "related_issues": ", ".join(f"#{n}" for n in related_issues) if related_issues else "None",
+        "step2b_output": "No codebase scan performed.",
     }
 
     # Populate context with previous step outputs
@@ -325,11 +327,16 @@ def run_agentic_architecture_orchestrator(
     if last_completed_step == 5.5:
         # Step 5b (completeness gate) passed, start at step 6
         start_step = 6
+    elif last_completed_step == 2.5:
+        # Step 2b (codebase scan) passed, start at step 3
+        start_step = 3
     elif last_completed_step == 1.5:
         # Step 1b (complexity) passed, start at step 2
         start_step = 2
     elif 5 < last_completed_step < 6:
         start_step = 6
+    elif 2 < last_completed_step < 3:
+        start_step = 3
     elif 1 < last_completed_step < 2:
         start_step = 2
 
@@ -360,8 +367,8 @@ def run_agentic_architecture_orchestrator(
             console.print(f"   Steps 1-{last_completed_step} already complete (cached)")
             console.print(f"   Starting from Step {start_step}")
 
-    # Total step count for display (1, 1b, 2-5, 5b, 6-8, 9, 10-13)
-    TOTAL_STEPS = 15
+    # Total step count for display (1, 1b, 2, 2b, 3-5, 5b, 6-8, 9, 10-13)
+    TOTAL_STEPS = 16
 
     # --- Steps 1-5: Analysis and Design ---
     steps_1_5 = [
@@ -509,6 +516,52 @@ def run_agentic_architecture_orchestrator(
 
                     if not quiet:
                         console.print("   → PRD complexity: manageable, continuing...")
+
+        # --- Step 2b: Codebase Scan (after Step 2) ---
+        if step_num == 2 and step_success and start_step <= 2.5:
+            if not quiet:
+                console.print(f"[bold][Step 2b/{TOTAL_STEPS}][/bold] Scanning existing codebase...")
+
+            scan_template_name = "agentic_arch_step2b_codebase_scan_LLM"
+            scan_template = load_prompt_template(scan_template_name)
+            if scan_template:
+                exclude_keys_2b = list(context.keys())
+                scan_template = preprocess(scan_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys_2b)
+                scan_template = scan_template.replace("{{", "{").replace("}}", "}")
+                formatted_scan = scan_template
+                for key, value in context.items():
+                    formatted_scan = formatted_scan.replace(f'{{{key}}}', str(value))
+
+                timeout_2b = ARCH_STEP_TIMEOUTS.get(2.5, 340.0) + timeout_adder
+                scan_success, scan_output, scan_cost, scan_model = run_agentic_task(
+                    instruction=formatted_scan,
+                    cwd=cwd,
+                    verbose=verbose,
+                    quiet=quiet,
+                    timeout=timeout_2b,
+                    label="step2b",
+                    max_retries=DEFAULT_MAX_RETRIES,
+                )
+
+                total_cost += scan_cost
+                model_used = scan_model
+                state["total_cost"] = total_cost
+
+                context["step2b_output"] = scan_output
+                state["step_outputs"]["2b"] = scan_output
+                state["last_completed_step"] = 2.5
+
+                save_result = save_workflow_state(cwd, issue_number, "architecture", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+                if save_result:
+                    github_comment_id = save_result
+                    state["github_comment_id"] = github_comment_id
+
+                if not quiet:
+                    console.print("   → Codebase scan complete")
+            else:
+                if not quiet:
+                    console.print(f"[yellow]Warning: Missing template {scan_template_name}, skipping 2b[/yellow]")
+                context["step2b_output"] = "No codebase scan performed (template missing)."
 
     # --- Step 5b: Early Completeness Gate (after Step 5, before Step 6) ---
     MAX_STEP5B_RETRIES = 3
