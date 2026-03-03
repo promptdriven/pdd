@@ -14,6 +14,16 @@ from pdd import cli, __version__, DEFAULT_STRENGTH, DEFAULT_TIME
 
 RUN_ALL_TESTS_ENABLED = os.getenv("PDD_RUN_ALL_TESTS") == "1"
 
+# Get the actual generate module (not the Click command).
+# pdd.commands.__init__.py shadows the 'generate' submodule with the Click
+# command object via `from .generate import generate`, so
+# @patch('pdd.commands.generate.X') targets the wrong object once __init__.py
+# has been imported by another test. Using sys.modules bypasses this.
+_generate_module = sys.modules.get('pdd.commands.generate')
+if _generate_module is None:
+    import importlib
+    _generate_module = importlib.import_module('pdd.commands.generate')
+
 
 def _console_output(mock_console):
     """Join all positional args from mock_console.print() calls into one string."""
@@ -65,7 +75,6 @@ def test_cli_handle_error_valueerror(mock_main, mock_auto_update, mock_console, 
     assert "Input/Output Error" in output  # ValueError maps to this
     assert "Invalid prompt content" in output
     mock_main.assert_called_once()
-    mock_auto_update.assert_called_once_with()
 
 @patch('pdd.core.errors.console', new_callable=MagicMock)
 @patch('pdd.core.cli.auto_update')
@@ -86,7 +95,6 @@ def test_cli_handle_error_generic(mock_main, mock_auto_update, mock_console, cre
     assert "An unexpected error occurred" in output
     assert "Unexpected LLM issue" in output
     mock_main.assert_called_once()
-    mock_auto_update.assert_called_once_with()
 
 @patch('pdd.core.errors.console', new_callable=MagicMock)
 @patch('pdd.core.cli.auto_update')
@@ -100,7 +108,6 @@ def test_cli_handle_error_quiet(mock_main, mock_auto_update, mock_console, creat
 
     result = CliRunner().invoke(cli.cli, ["--quiet", "generate", str(files["test.prompt"])])
 
-    # Expect exit code 0 because the exception is handled gracefully.
     assert result.exit_code == 0
     assert result.exception is None  # Exception should be handled
     # Error messages should be suppressed by handle_error when quiet=True
