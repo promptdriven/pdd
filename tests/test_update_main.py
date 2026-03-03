@@ -805,3 +805,378 @@ def test_resolve_prompt_code_pair_no_output_dir_subdirectory_still_works(tmp_pat
 
     assert os.path.exists(prompt_path)
     assert prompt_path.endswith("module_python.prompt")
+
+
+# --- Tests for _extract_template_vars ---
+
+from pdd.update_main import _extract_template_vars
+
+
+class TestExtractTemplateVars:
+    """Tests for reverse-matching concrete paths against templates."""
+
+    def test_simple_name_extraction(self):
+        """Extract {name} from a simple template."""
+        result = _extract_template_vars(
+            "frontend/src/Button.tsx",
+            "frontend/src/{name}.tsx"
+        )
+        assert result == {"name": "Button"}
+
+    def test_name_and_category_extraction(self):
+        """Extract both {name} and {category} from a template."""
+        result = _extract_template_vars(
+            "frontend/src/components/billing/AutoBuy.tsx",
+            "frontend/src/components/{category}/{name}.tsx"
+        )
+        assert result == {"category": "billing", "name": "AutoBuy"}
+
+    def test_repeated_name_backreference(self):
+        """Templates with repeated {name} should use backreferences."""
+        result = _extract_template_vars(
+            "frontend/src/components/billing/AutoBuy/AutoBuy.tsx",
+            "frontend/src/components/{category}/{name}/{name}.tsx"
+        )
+        assert result == {"category": "billing", "name": "AutoBuy"}
+
+    def test_repeated_name_mismatch_returns_none(self):
+        """If repeated {name} segments differ, should not match."""
+        result = _extract_template_vars(
+            "frontend/src/components/billing/AutoBuy/SomethingElse.tsx",
+            "frontend/src/components/{category}/{name}/{name}.tsx"
+        )
+        assert result is None
+
+    def test_no_match_returns_none(self):
+        """Non-matching path returns None."""
+        result = _extract_template_vars(
+            "backend/utils/helper.py",
+            "frontend/src/{name}.tsx"
+        )
+        assert result is None
+
+    def test_exact_path_no_vars(self):
+        """Template without variables should match exact path."""
+        result = _extract_template_vars(
+            "app/api/project/route.ts",
+            "app/api/project/route.ts"
+        )
+        assert result == {}
+
+    def test_exact_path_no_vars_mismatch(self):
+        """Template without variables should not match different path."""
+        result = _extract_template_vars(
+            "app/api/other/route.ts",
+            "app/api/project/route.ts"
+        )
+        assert result is None
+
+
+# --- Tests for _resolve_prompt_from_pddrc ---
+
+from pdd.update_main import _resolve_prompt_from_pddrc
+
+
+class TestResolvePromptFromPddrc:
+    """Tests for template-based prompt path resolution."""
+
+    def test_returns_none_without_pddrc(self, tmp_path, monkeypatch):
+        """Should return None when no .pddrc exists."""
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+        monkeypatch.chdir(repo_path)
+        result = _resolve_prompt_from_pddrc(
+            str(repo_path / "src" / "module.py"), str(repo_path), "python"
+        )
+        assert result is None
+
+    def test_returns_none_without_outputs_config(self, tmp_path, monkeypatch):
+        """Should return None when .pddrc exists but has no outputs templates."""
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+        pddrc = repo_path / ".pddrc"
+        pddrc.write_text("""
+contexts:
+  backend:
+    paths:
+      - "backend/**"
+    defaults:
+      prompts_dir: "prompts/backend"
+""")
+        (repo_path / "backend").mkdir()
+        code_file = repo_path / "backend" / "module.py"
+        code_file.write_text("def foo(): pass")
+        monkeypatch.chdir(repo_path)
+        result = _resolve_prompt_from_pddrc(str(code_file), str(repo_path), "python")
+        assert result is None
+
+    def test_resolves_prompt_from_template(self, tmp_path, monkeypatch):
+        """Should resolve prompt path using outputs.prompt.path template."""
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+        pddrc = repo_path / ".pddrc"
+        pddrc.write_text("""
+contexts:
+  frontend:
+    paths:
+      - "frontend/**"
+    defaults:
+      outputs:
+        prompt:
+          path: "prompts/frontend/{category}/{name}_{language}.prompt"
+        code:
+          path: "frontend/src/{category}/{name}/{name}.tsx"
+""")
+        # Create the code file
+        code_dir = repo_path / "frontend" / "src" / "billing" / "AutoBuy"
+        code_dir.mkdir(parents=True)
+        code_file = code_dir / "AutoBuy.tsx"
+        code_file.write_text("export default function AutoBuy() {}")
+
+        monkeypatch.chdir(repo_path)
+        git.Repo.init(repo_path)
+
+        result = _resolve_prompt_from_pddrc(
+            str(code_file), str(repo_path), "TypescriptReact"
+        )
+        assert result is not None
+        expected = str(repo_path / "prompts" / "frontend" / "billing" / "AutoBuy_TypescriptReact.prompt")
+        assert result == expected
+
+    def test_resolves_prompt_without_code_template(self, tmp_path, monkeypatch):
+        """Should still resolve when outputs.code.path is missing (uses filename as name)."""
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+        pddrc = repo_path / ".pddrc"
+        pddrc.write_text("""
+contexts:
+  backend:
+    paths:
+      - "backend/**"
+    defaults:
+      outputs:
+        prompt:
+          path: "prompts/backend/{name}_{language}.prompt"
+""")
+        code_dir = repo_path / "backend"
+        code_dir.mkdir()
+        code_file = code_dir / "module.py"
+        code_file.write_text("def foo(): pass")
+
+        monkeypatch.chdir(repo_path)
+        git.Repo.init(repo_path)
+
+        result = _resolve_prompt_from_pddrc(
+            str(code_file), str(repo_path), "python"
+        )
+        assert result is not None
+        expected = str(repo_path / "prompts" / "backend" / "module_python.prompt")
+        assert result == expected
+
+
+# --- Tests for resolve_prompt_code_pair with template resolution ---
+
+class TestResolvePromptCodePairWithTemplates:
+    """Tests for resolve_prompt_code_pair using .pddrc template paths."""
+
+    def test_uses_template_path_when_pddrc_has_outputs(self, tmp_path, monkeypatch):
+        """resolve_prompt_code_pair should use .pddrc template paths when available."""
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+        pddrc = repo_path / ".pddrc"
+        pddrc.write_text("""
+contexts:
+  frontend:
+    paths:
+      - "frontend/**"
+    defaults:
+      outputs:
+        prompt:
+          path: "prompts/frontend/{name}_{language}.prompt"
+        code:
+          path: "frontend/src/app/{name}/{name}.tsx"
+""")
+        # Create code file at the template code path
+        code_dir = repo_path / "frontend" / "src" / "app" / "billing"
+        code_dir.mkdir(parents=True)
+        code_file = code_dir / "billing.tsx"
+        code_file.write_text("export default function Billing() {}")
+
+        monkeypatch.chdir(repo_path)
+        git.Repo.init(repo_path)
+
+        with patch("pdd.update_main.get_language") as mock_lang:
+            mock_lang.return_value = "TypescriptReact"
+            prompt_path, code_path = resolve_prompt_code_pair(
+                str(code_file), quiet=True
+            )
+
+        # Should use template path, NOT path-mirroring
+        expected_prompt = str(repo_path / "prompts" / "frontend" / "billing_TypescriptReact.prompt")
+        assert prompt_path == expected_prompt
+        assert os.path.exists(prompt_path)
+
+
+# --- Tests for language casing preservation ---
+
+class TestLanguageCasingPreservation:
+    """Tests for Bug 2 fix: language suffix should preserve original casing."""
+
+    def test_resolve_prompt_code_pair_preserves_language_case(self, tmp_path, monkeypatch):
+        """Language suffix should use original casing (e.g., TypescriptReact, not typescriptreact)."""
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+        code_file = repo_path / "page.tsx"
+        code_file.write_text("export default function Page() {}")
+
+        monkeypatch.chdir(repo_path)
+        git.Repo.init(repo_path)
+
+        with patch("pdd.update_main.get_language") as mock_lang:
+            mock_lang.return_value = "TypescriptReact"
+            prompt_path, _ = resolve_prompt_code_pair(str(code_file), quiet=True)
+
+        assert prompt_path.endswith("page_TypescriptReact.prompt")
+
+    def test_resolve_prompt_code_pair_unknown_language_fallback(self, tmp_path, monkeypatch):
+        """Unknown extension should fall back to 'unknown' language suffix."""
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+        code_file = repo_path / "file.xyz"
+        code_file.write_text("content")
+
+        monkeypatch.chdir(repo_path)
+        git.Repo.init(repo_path)
+
+        with patch("pdd.update_main.get_language") as mock_lang:
+            mock_lang.return_value = ""
+            prompt_path, _ = resolve_prompt_code_pair(str(code_file), quiet=True)
+
+        assert prompt_path.endswith("file_unknown.prompt")
+
+
+# --- Tests for config/data file exclusion ---
+
+class TestConfigFileExclusion:
+    """Tests for Bug 3 fix: config/data files should not get prompts in repo scan."""
+
+    def test_find_and_resolve_excludes_json_files(self, tmp_path, monkeypatch):
+        """JSON files should be excluded from repo scan."""
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+        git.Repo.init(repo_path)
+
+        (repo_path / "module.py").write_text("def foo(): pass")
+        (repo_path / "package.json").write_text("{}")
+        (repo_path / "tsconfig.json").write_text("{}")
+
+        monkeypatch.chdir(repo_path)
+
+        with patch("pdd.update_main.get_language") as mock_lang:
+            def lang_for_ext(ext):
+                if ext == ".py":
+                    return "python"
+                if ext == ".json":
+                    return "json"
+                return None
+            mock_lang.side_effect = lang_for_ext
+
+            pairs = find_and_resolve_all_pairs(str(repo_path), quiet=True)
+
+        code_files = [p[1] for p in pairs]
+        assert any("module.py" in f for f in code_files)
+        assert not any("package.json" in f for f in code_files)
+        assert not any("tsconfig.json" in f for f in code_files)
+
+    def test_find_and_resolve_excludes_css_and_html(self, tmp_path, monkeypatch):
+        """CSS and HTML files should be excluded from repo scan."""
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+        git.Repo.init(repo_path)
+
+        (repo_path / "app.ts").write_text("const x = 1;")
+        (repo_path / "styles.css").write_text("body {}")
+        (repo_path / "index.html").write_text("<html></html>")
+
+        monkeypatch.chdir(repo_path)
+
+        with patch("pdd.update_main.get_language") as mock_lang:
+            def lang_for_ext(ext):
+                if ext == ".ts":
+                    return "typescript"
+                if ext == ".css":
+                    return "css"
+                if ext == ".html":
+                    return "html"
+                return None
+            mock_lang.side_effect = lang_for_ext
+
+            pairs = find_and_resolve_all_pairs(str(repo_path), quiet=True)
+
+        code_files = [p[1] for p in pairs]
+        assert any("app.ts" in f for f in code_files)
+        assert not any("styles.css" in f for f in code_files)
+        assert not any("index.html" in f for f in code_files)
+
+    def test_find_and_resolve_excludes_markdown_and_yaml(self, tmp_path, monkeypatch):
+        """Markdown and YAML files should be excluded from repo scan."""
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+        git.Repo.init(repo_path)
+
+        (repo_path / "app.py").write_text("pass")
+        (repo_path / "README.md").write_text("# README")
+        (repo_path / "config.yaml").write_text("key: value")
+
+        monkeypatch.chdir(repo_path)
+
+        with patch("pdd.update_main.get_language") as mock_lang:
+            def lang_for_ext(ext):
+                if ext == ".py":
+                    return "python"
+                if ext == ".md":
+                    return "markdown"
+                if ext == ".yaml":
+                    return "yaml"
+                return None
+            mock_lang.side_effect = lang_for_ext
+
+            pairs = find_and_resolve_all_pairs(str(repo_path), quiet=True)
+
+        code_files = [p[1] for p in pairs]
+        assert any("app.py" in f for f in code_files)
+        assert not any("README.md" in f for f in code_files)
+        assert not any("config.yaml" in f for f in code_files)
+
+    def test_find_and_resolve_excludes_skip_filenames(self, tmp_path, monkeypatch):
+        """Specific filenames like .prettierrc should be excluded."""
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+        git.Repo.init(repo_path)
+
+        (repo_path / "app.js").write_text("const x = 1;")
+        (repo_path / ".prettierrc").write_text("{}")
+        (repo_path / ".eslintrc").write_text("{}")
+        (repo_path / ".gitignore").write_text("node_modules/")
+        (repo_path / "next-env.d.ts").write_text("/// <reference />")
+
+        monkeypatch.chdir(repo_path)
+
+        with patch("pdd.update_main.get_language") as mock_lang:
+            # get_language receives extensions, not full paths
+            def lang_for_ext(ext):
+                if ext == ".js":
+                    return "javascript"
+                if ext == ".ts":
+                    return "typescript"
+                return "unknown"  # Return something for all
+            mock_lang.side_effect = lang_for_ext
+
+            pairs = find_and_resolve_all_pairs(str(repo_path), quiet=True)
+
+        code_files = [os.path.basename(p[1]) for p in pairs]
+        assert "app.js" in code_files
+        assert ".prettierrc" not in code_files
+        assert ".eslintrc" not in code_files
+        assert ".gitignore" not in code_files
+        assert "next-env.d.ts" not in code_files
