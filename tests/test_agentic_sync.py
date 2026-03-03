@@ -13,6 +13,7 @@ import pytest
 from pdd.agentic_sync import (
     _apply_architecture_corrections,
     _find_project_root,
+    _is_catchall_match,
     _is_github_issue_url,
     _llm_fix_dry_run_failure,
     _load_architecture_json,
@@ -464,6 +465,81 @@ class TestResolveModuleCwd:
         })
         result = _resolve_module_cwd("shared/mod", tmp_path)
         assert result == sub2
+
+    def test_catchall_subdirectory_skipped(self, tmp_path):
+        """Subdirectory with catch-all '**' pattern should NOT match unrelated modules."""
+        # Subdirectory with catch-all pattern
+        sub = tmp_path / "test_debug2"
+        sub.mkdir()
+        self._write_pddrc(sub / ".pddrc", {
+            "test_ctx": {
+                "paths": ["**"],
+            },
+        })
+        # Module that doesn't belong to test_debug2
+        result = _resolve_module_cwd("bug_main", tmp_path)
+        # Should fall back to project root, not test_debug2
+        assert result == tmp_path
+
+    def test_catchall_star_subdirectory_skipped(self, tmp_path):
+        """Subdirectory with catch-all '*' pattern should NOT match unrelated modules."""
+        sub = tmp_path / "some_subdir"
+        sub.mkdir()
+        self._write_pddrc(sub / ".pddrc", {
+            "catch_all": {
+                "paths": ["*"],
+            },
+        })
+        result = _resolve_module_cwd("any_module", tmp_path)
+        assert result == tmp_path
+
+    def test_specific_subdirectory_match_still_works(self, tmp_path):
+        """Subdirectory with specific path pattern should still match correctly."""
+        sub = tmp_path / "frontend"
+        sub.mkdir()
+        self._write_pddrc(sub / ".pddrc", {
+            "components": {
+                "paths": ["components/**"],
+            },
+        })
+        result = _resolve_module_cwd("components/button", tmp_path)
+        assert result == sub
+
+
+# ---------------------------------------------------------------------------
+# _is_catchall_match
+# ---------------------------------------------------------------------------
+
+class TestIsCatchallMatch:
+    def test_catchall_double_star(self):
+        """Pattern '**' is a catch-all."""
+        config = {"contexts": {"ctx": {"paths": ["**"]}}}
+        assert _is_catchall_match("any_module", config) is True
+
+    def test_catchall_single_star(self):
+        """Pattern '*' is a catch-all."""
+        config = {"contexts": {"ctx": {"paths": ["*"]}}}
+        assert _is_catchall_match("any_module", config) is True
+
+    def test_specific_pattern_not_catchall(self):
+        """Pattern 'src/**' is specific, not a catch-all."""
+        config = {"contexts": {"ctx": {"paths": ["src/**"]}}}
+        assert _is_catchall_match("src/widget", config) is False
+
+    def test_prompts_dir_match_not_catchall(self):
+        """Match via prompts_dir is always specific."""
+        config = {"contexts": {"ctx": {"defaults": {"prompts_dir": "prompts/mymod"}, "paths": []}}}
+        assert _is_catchall_match("mymod/widget", config) is False
+
+    def test_default_context_ignored(self):
+        """Default context is skipped."""
+        config = {"contexts": {"default": {"paths": ["**"]}}}
+        assert _is_catchall_match("any_module", config) is True  # no non-default match
+
+    def test_no_match_at_all(self):
+        """No matching pattern at all returns True (specificity 0)."""
+        config = {"contexts": {"ctx": {"paths": ["frontend/**"]}}}
+        assert _is_catchall_match("backend_api", config) is True
 
 
 # ---------------------------------------------------------------------------

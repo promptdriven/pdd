@@ -65,6 +65,47 @@ def _load_architecture_json(project_root: Path) -> Tuple[Optional[List[Dict[str,
         return None, arch_path
 
 
+def _is_catchall_match(basename: str, config: Dict[str, Any]) -> bool:
+    """Check if a basename match against a .pddrc config is only from catch-all patterns.
+
+    Returns True if the match is purely from wildcard patterns like '**' or '*'
+    (i.e., specificity 0 — no meaningful path prefix). These should not be used
+    to claim a module belongs to a subdirectory.
+    """
+    import fnmatch as _fnmatch
+
+    contexts = config.get("contexts", {})
+    best_specificity = 0
+
+    for context_name, context_config in contexts.items():
+        if context_name == "default":
+            continue
+
+        # Check prompts_dir-based matching (always specific if it matches)
+        defaults = context_config.get("defaults", {})
+        prompts_dir = defaults.get("prompts_dir", "")
+        if prompts_dir:
+            normalized = prompts_dir.rstrip("/")
+            prefix = normalized
+            if normalized == "prompts":
+                prefix = ""
+            elif normalized.startswith("prompts/"):
+                prefix = normalized[len("prompts/"):]
+            if prefix and (basename == prefix or basename.startswith(prefix + "/")):
+                return False  # prompts_dir match is always specific
+
+        # Check path patterns
+        for path_pattern in context_config.get("paths", []):
+            pattern_base = path_pattern.rstrip("/**").rstrip("/*")
+            if _fnmatch.fnmatch(basename, path_pattern) or \
+               basename.startswith(pattern_base + "/") or \
+               basename == pattern_base:
+                if len(pattern_base) > best_specificity:
+                    best_specificity = len(pattern_base)
+
+    return best_specificity == 0
+
+
 def _resolve_module_cwd(basename: str, project_root: Path) -> Path:
     """Determine the correct working directory for a module based on .pddrc discovery.
 
@@ -73,6 +114,8 @@ def _resolve_module_cwd(basename: str, project_root: Path) -> Path:
     2. If matched, return project_root.
     3. If not, scan subdirectories (recursive, max depth 2) for .pddrc files.
        For each, load and check if a context matches. Deepest match wins.
+       Skip catch-all matches (e.g. paths: ['**']) from subdirectories —
+       they match everything and should not claim ownership of unrelated modules.
     4. Fall back to project_root.
     """
     # 1. Check project root .pddrc
@@ -97,6 +140,10 @@ def _resolve_module_cwd(basename: str, project_root: Path) -> Path:
                 config = _load_pddrc_config(pddrc_path)
                 detected = _detect_context_from_basename(basename, config)
                 if detected and detected != "default":
+                    # Skip catch-all patterns from subdirectories — they match
+                    # everything and would incorrectly claim unrelated modules
+                    if _is_catchall_match(basename, config):
+                        continue
                     candidate_dir = pddrc_path.parent
                     candidate_depth = len(candidate_dir.relative_to(project_root).parts)
                     if candidate_depth > best_depth:
@@ -215,39 +262,67 @@ def _llm_fix_dry_run_failure(
     if not llm_success:
         return False, None, llm_cost, f"LLM failed to suggest fix: {llm_output}"
 
-    # Parse SYNC_CWD from response
-    match = re.search(r"SYNC_CWD:\s*(.+)", llm_output)
-    if not match:
-        return False, None, llm_cost, "LLM response did not contain SYNC_CWD marker"
+    # Parse SYNC_CMD from response
+    cmd_match = re.search(r"SYNC_CMD:\s*(.+)", llm_output)
+    if not cmd_match:
+        return False, None, llm_cost, "LLM response did not contain SYNC_CMD marker"
 
-    suggested_rel = match.group(1).strip()
-    project_root_resolved = project_root.resolve()
-    suggested_cwd = (project_root_resolved / suggested_rel).resolve()
+    suggested_cmd = cmd_match.group(1).strip()
 
-    # Guard against symlink-based directory traversal outside project root
+    # Safety: reject commands that don't look like a pdd sync invocation
+    if "pdd" not in suggested_cmd or "sync" not in suggested_cmd:
+        return False, None, llm_cost, f"LLM suggested unexpected command: {suggested_cmd}"
+
+    # Append a pwd marker after the command so we can extract the effective cwd.
+    # This avoids fragile regex parsing of cd segments from the command string.
+    pwd_marker = "__PDD_EFFECTIVE_CWD__"
+    augmented_cmd = f"{suggested_cmd} && echo {pwd_marker} && pwd"
+
+    # Run the suggested command directly via shell from project root.
+    # This handles relative cd paths, chained cd's, etc. naturally.
     try:
-        suggested_cwd.relative_to(project_root_resolved)
-    except ValueError:
-        return (
-            False,
-            None,
-            llm_cost,
-            f"LLM suggested directory outside project root: {suggested_rel}",
+        result = subprocess.run(
+            augmented_cmd,
+            shell=True,
+            cwd=str(project_root),
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env={**os.environ, "PDD_FORCE": "1", "CI": "1"},
         )
+    except subprocess.TimeoutExpired:
+        return False, None, llm_cost, f"LLM suggested command timed out: {suggested_cmd}"
+    except Exception as e:
+        return False, None, llm_cost, f"Failed to run LLM suggested command: {e}"
 
-    if not suggested_cwd.is_dir():
-        return False, None, llm_cost, f"LLM suggested non-existent directory: {suggested_rel}"
+    if result.returncode == 0:
+        # Extract effective cwd from the pwd output after our marker
+        stdout_lines = result.stdout.strip().splitlines()
+        effective_cwd = project_root.resolve()
+        for i, line in enumerate(stdout_lines):
+            if line.strip() == pwd_marker and i + 1 < len(stdout_lines):
+                effective_cwd = Path(stdout_lines[i + 1].strip()).resolve()
+                break
 
-    # Re-validate with dry-run from suggested cwd
-    revalidate_ok, revalidate_err = _run_single_dry_run(basename, suggested_cwd, quiet=quiet)
-    if revalidate_ok:
-        return True, suggested_cwd, llm_cost, ""
+        # Validate resolved cwd is within project root
+        try:
+            effective_cwd.relative_to(project_root.resolve())
+        except ValueError:
+            return (
+                False,
+                None,
+                llm_cost,
+                f"LLM command resolves outside project root: {suggested_cmd}",
+            )
+
+        return True, effective_cwd, llm_cost, ""
     else:
+        err_output = result.stderr or result.stdout or f"Exit code {result.returncode}"
         return (
             False,
             None,
             llm_cost,
-            f"LLM suggested cwd '{suggested_rel}' but dry-run still failed: {revalidate_err[:500]}",
+            f"LLM suggested command failed: {err_output[:500]}",
         )
 
 

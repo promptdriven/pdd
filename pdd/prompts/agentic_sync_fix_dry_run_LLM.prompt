@@ -13,11 +13,17 @@ You are debugging a failed `pdd sync` dry-run for module "{basename}".
 The dry-run failed when running `pdd sync {basename} --dry-run` from `{attempted_cwd}`.
 This usually means the prompt file was not found, or the working directory is wrong.
 
-Determine the correct working directory to run `pdd sync {basename}` from.
+Determine the correct working directory and output the full command to run.
 Look at where .pddrc files are located and which subdirectory contains the relevant prompt files.
 
 ## Output Format
-SYNC_CWD: <relative-path-from-project-root>
+Output the full shell command on a single line, prefixed with `SYNC_CMD:`.
+The command MUST use `cd <dir> && pdd --force sync {basename} --dry-run --agentic --no-steer`.
 
-Example: SYNC_CWD: examples/hello
-If the command should run from the project root: SYNC_CWD: .
+SYNC_CMD: cd <relative-path-from-project-root> && pdd --force sync {basename} --dry-run --agentic --no-steer
+
+Examples:
+- SYNC_CMD: cd examples/hello && pdd --force sync {basename} --dry-run --agentic --no-steer
+- SYNC_CMD: cd . && pdd --force sync {basename} --dry-run --agentic --no-steer
+
+Only output ONE SYNC_CMD line. Do not output SYNC_CWD.
