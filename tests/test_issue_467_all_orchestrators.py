@@ -270,11 +270,15 @@ class TestArchitectureOrchestratorIssue467:
 
         def run_side_effect(*args, **kwargs):
             label = kwargs.get("label", "")
-            call_count[0] += 1
             # Step 1b must return MANAGEABLE to continue
             if "step1b" in label:
                 return (True, "COMPLEXITY_RESULT: MANAGEABLE", 0.1, "gpt-4")
-            if call_count[0] <= 4:
+            # Step 2b (codebase scan) is an intermediate step, don't count it
+            if "step2b" in label:
+                return (True, "Codebase scan done", 0.1, "gpt-4")
+            call_count[0] += 1
+            # Steps 1, 2, 3 succeed (calls 1-3), step 4+ fail
+            if call_count[0] <= 3:
                 return (True, "Success", 0.1, "gpt-4")
             return (False, "Provider error", 0.0, "")
 
