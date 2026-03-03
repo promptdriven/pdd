@@ -51,7 +51,7 @@ const Subtitles: React.FC = () => {
           color: "white",
           padding: "12px 24px",
           borderRadius: 8,
-          fontSize: 42,
+          fontSize: 36,
           fontFamily: "sans-serif",
           maxWidth: "70%",
           textAlign: "center",
