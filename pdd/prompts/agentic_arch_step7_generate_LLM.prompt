@@ -161,7 +161,7 @@ Generate a complete, valid architecture.json following these rules:
    Based on the tech stack confirmed in Step 2 and the module design from Step 5, create ALL necessary files to make the project runnable after code generation.
 
    **Required for ALL projects:**
-   - `.gitignore` - Appropriate ignore patterns for the tech stack
+   - `.gitignore` - Appropriate ignore patterns for the tech stack. MUST include `.pdd/` and `!.pdd/meta/` lines
    - `README.md` - Project description, setup instructions, architecture overview
 
    **Dependency management (based on tech stack):**
@@ -247,7 +247,12 @@ Use this matrix to determine which files to create based on the confirmed tech s
 
 **Always include:**
 - README.md with: project description, prerequisites, installation, running locally, architecture overview
-- .gitignore appropriate for the tech stack (node_modules, __pycache__, .env, etc.)
+- .gitignore appropriate for the tech stack (node_modules, __pycache__, .env, etc.) — MUST include these PDD lines:
+  ```
+  .pdd/
+  !.pdd/meta/
+  ```
+  This ignores PDD internal files (locks, caches, worktrees) while tracking fingerprint metadata that enables portable sync state.
 - Dockerfile if containerization is appropriate
 - docker-compose.yml if multiple services are needed (DB, Redis, etc.)
 - CI workflow (.github/workflows/ci.yml) for automated testing
