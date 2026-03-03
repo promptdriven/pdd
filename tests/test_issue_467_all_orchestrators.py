@@ -251,7 +251,12 @@ class TestArchitectureOrchestratorIssue467:
         )
 
     def test_partial_failure_preserves_last_success(self, mock_deps, base_args):
-        """Steps 1-3 succeed, 4+ fail: last_completed_step should be 3."""
+        """Steps 1-3 succeed, 4+ fail: last_completed_step should be 3.
+
+        Note: Step 1b (complexity check) runs between step 1 and step 2,
+        so the call sequence is: step1, step1b, step2, step3, step4...
+        We need 4 successful calls for steps 1-3 to all pass (1, 1b, 2, 3).
+        """
         saved_states = []
 
         def capture_save(*args, **kwargs):
@@ -264,8 +269,12 @@ class TestArchitectureOrchestratorIssue467:
         call_count = [0]
 
         def run_side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
             call_count[0] += 1
-            if call_count[0] <= 3:
+            # Step 1b must return MANAGEABLE to continue
+            if "step1b" in label:
+                return (True, "COMPLEXITY_RESULT: MANAGEABLE", 0.1, "gpt-4")
+            if call_count[0] <= 4:
                 return (True, "Success", 0.1, "gpt-4")
             return (False, "Provider error", 0.0, "")
 
