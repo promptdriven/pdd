@@ -525,6 +525,8 @@ class AsyncSyncRunner:
             cmd.extend(["--budget", str(self.sync_options["budget"])])
         if self.sync_options.get("max_attempts"):
             cmd.extend(["--max-attempts", str(self.sync_options["max_attempts"])])
+        if self.sync_options.get("one_session"):
+            cmd.append("--one-session")
 
         # Set up environment for headless mode and cost capture
         cost_file = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
@@ -667,6 +669,13 @@ class AsyncSyncRunner:
         if not self.quiet:
             status_str = "success" if success else "FAILED"
             console.print(f"[{'green' if success else 'red'}]Sync {basename}: {status_str}[/{'green' if success else 'red'}]")
+
+            # Forward notable status lines from child stdout
+            if success:
+                for line in stdout.splitlines():
+                    if "Successfully submitted example" in line:
+                        console.print(f"  [green]{basename}: Example submitted to cloud[/green]")
+                        break
 
         error = ""
         if not success:

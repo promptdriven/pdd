@@ -1,3 +1,4 @@
+import ast
 import os
 import re
 import json
@@ -258,6 +259,74 @@ def _find_default_test_files(tests_dir: Optional[str], code_file_path: Optional[
     found_files = list(tests_path.glob(pattern))
 
     return [str(p) for p in sorted(found_files)]
+
+
+def _detect_wireable_exports(code: str, file_path: str) -> list[str]:
+    """Extract public function/class names from generated Python code."""
+    if not file_path.endswith('.py'):
+        return []
+    try:
+        tree = ast.parse(code)
+        exports: list[str] = []
+        for node in ast.iter_child_nodes(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if not node.name.startswith('_'):
+                    exports.append(node.name)
+            elif isinstance(node, ast.ClassDef):
+                if not node.name.startswith('_'):
+                    exports.append(node.name)
+        return exports
+    except SyntaxError:
+        return []
+
+
+def _wire_to_parent_init(output_path: str, exports: list[str], verbose: bool = False) -> bool:
+    """Add import line for generated module to parent __init__.py if it exists.
+
+    If an import line for this module already exists, merge any missing exports
+    into that line instead of skipping wiring.
+    """
+    output_p = pathlib.Path(output_path)
+    init_path = output_p.parent / '__init__.py'
+    if not init_path.exists():
+        return False
+    module_name = output_p.stem
+    existing = init_path.read_text(encoding='utf-8')
+
+    # Look for an existing "from .{module_name} import ..." line
+    pattern = rf"^from \.{re.escape(module_name)} import (.+)$"
+    match = re.search(pattern, existing, flags=re.MULTILINE)
+
+    if match:
+        # Parse existing names and merge with new exports
+        existing_names = [
+            name.strip()
+            for name in match.group(1).split(",")
+            if name.strip()
+        ]
+        updated = False
+        for name in exports:
+            if name not in existing_names:
+                existing_names.append(name)
+                updated = True
+
+        if not updated:
+            return False
+
+        import_line = f"from .{module_name} import {', '.join(existing_names)}"
+        new_content = (
+            existing[: match.start()]
+            + import_line
+            + existing[match.end():]
+        )
+    else:
+        import_line = f"from .{module_name} import {', '.join(exports)}"
+        new_content = existing.rstrip() + '\n' + import_line + '\n'
+
+    init_path.write_text(new_content, encoding='utf-8')
+    if verbose:
+        console.print(f"[info]Wired exports to {init_path}: {import_line}[/info]")
+    return True
 
 
 def code_generator_main(
@@ -1142,6 +1211,17 @@ def code_generator_main(
                 p_output.write_text(final_content, encoding="utf-8")
                 if verbose or not quiet:
                     console.print(f"Generated code saved to: [green]{p_output.resolve()}[/green]")
+                # Post-write: wire exports to parent __init__.py
+                if not _env_flag_enabled("PDD_SKIP_WIRING") and str(p_output).endswith('.py'):
+                    try:
+                        wiring_exports = _detect_wireable_exports(final_content, str(p_output))
+                        if wiring_exports:
+                            wired = _wire_to_parent_init(str(p_output), wiring_exports, verbose=verbose)
+                            if wired and verbose and not quiet:
+                                console.print(f"[green]Auto-wired {len(wiring_exports)} export(s) to parent __init__.py[/green]")
+                    except Exception as wire_err:
+                        if verbose:
+                            console.print(f"[yellow]Warning: Auto-wiring failed: {wire_err}[/yellow]")
                 # Safety net: ensure architecture HTML is generated post-write if applicable
                 try:
                     # Prefer resolved script if available; else default for architecture outputs

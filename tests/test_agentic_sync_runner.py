@@ -872,6 +872,31 @@ class TestSyncOneModule:
         env = mock_popen.call_args[1]["env"]
         assert env.get("PYTHONUNBUFFERED") == "1"
 
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.15)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_example_submitted_message_forwarded(self, mock_find, mock_popen, mock_cost, mock_unlink, capsys):
+        """When child stdout contains 'Successfully submitted example', parent prints confirmation."""
+        mock_popen.return_value = _make_mock_popen(
+            stdout_text="Overall status: Success\nSuccessfully submitted example\n",
+            exit_code=0,
+        )
+
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=False,
+        )
+
+        success, cost, error = runner._sync_one_module("foo")
+        assert success
+
+        captured = capsys.readouterr()
+        assert "Example submitted to cloud" in captured.out
+
 
 # ---------------------------------------------------------------------------
 # Resumability: state file persistence

@@ -393,6 +393,85 @@ def _detect_languages(basename: str, prompts_dir: Path) -> Dict[str, Path]:
     return _python_first_sorted(lang_to_path)
 
 
+def _auto_submit_example(
+    basename: str,
+    language: str,
+    pdd_files: Dict[str, Path],
+    ctx: click.Context,
+) -> None:
+    """Submit example to cloud after successful one-session sync."""
+    import asyncio
+    import os
+
+    import requests
+
+    from .get_jwt_token import get_jwt_token
+    from .preprocess import preprocess
+
+    quiet = ctx.obj.get("quiet", False)
+
+    if os.environ.get("PDD_FORCE_LOCAL", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return
+
+    jwt_token = asyncio.run(get_jwt_token(
+        firebase_api_key=os.environ.get("NEXT_PUBLIC_FIREBASE_API_KEY"),
+        github_client_id=os.environ.get("GITHUB_CLIENT_ID"),
+        app_name="PDD Code Generator",
+    ))
+
+    prompt_content = pdd_files["prompt"].read_text(encoding="utf-8")
+    processed_prompt = preprocess(prompt_content, recursive=False, double_curly_brackets=True)
+    code_content = pdd_files["code"].read_text(encoding="utf-8")
+
+    payload: Dict[str, Any] = {
+        "command": "fix",
+        "searchInput": prompt_content,
+        "input": {
+            "prompts": [{"content": processed_prompt, "filename": pdd_files["prompt"].name}],
+            "code": [{"content": code_content, "filename": pdd_files["code"].name}],
+        },
+        "output": {
+            "code": [{"content": code_content, "filename": pdd_files["code"].name}],
+        },
+        "metadata": {
+            "title": f"Auto-submitted fix for {basename}",
+            "description": "Automatically submitted successful one-session sync",
+            "language": language,
+            "framework": "",
+            "tags": ["auto-fix", "one-session", "example"],
+            "isPublic": True,
+            "price": 0.0,
+        },
+    }
+
+    # Add example if it exists
+    if pdd_files["example"].exists():
+        payload["input"]["example"] = [{
+            "content": pdd_files["example"].read_text(encoding="utf-8"),
+            "filename": pdd_files["example"].name,
+        }]
+
+    # Add test if it exists
+    if pdd_files["test"].exists():
+        test_content = pdd_files["test"].read_text(encoding="utf-8")
+        payload["input"]["test"] = [{"content": test_content, "filename": pdd_files["test"].name}]
+        payload["output"]["test"] = [{"content": test_content, "filename": pdd_files["test"].name}]
+
+    headers = {"Authorization": f"Bearer {jwt_token}", "Content-Type": "application/json"}
+    response = requests.post(
+        "https://us-central1-prompt-driven-development.cloudfunctions.net/submitExample",
+        json=payload,
+        headers=headers,
+    )
+
+    if response.status_code == 200:
+        if not quiet:
+            rprint("[bold green]Successfully submitted example[/bold green]")
+    else:
+        if not quiet:
+            rprint(f"[bold red]Failed to submit example: {response.text}[/bold red]")
+
+
 def sync_main(
     ctx: click.Context,
     basename: str,
@@ -405,6 +484,7 @@ def sync_main(
     no_steer: bool = False,
     steer_timeout: Optional[float] = None,
     agentic_mode: bool = False,
+    one_session: bool = False,
 ) -> Tuple[Dict[str, Any], float, str]:
     """
     CLI wrapper for the sync command. Handles parameter validation, path construction,
@@ -661,33 +741,112 @@ def sync_main(
             tests_dir = resolved_config.get("tests_dir", "tests")
             examples_dir = resolved_config.get("examples_dir", "examples")
 
-            sync_result = sync_orchestration(
-                basename=basename,
-                language=resolved_language,
-                prompts_dir=str(prompt_file_path.parent),  # Use discovered path's parent
-                code_dir=str(code_dir),
-                examples_dir=str(examples_dir),
-                tests_dir=str(tests_dir),
-                budget=remaining_budget,
-                max_attempts=final_max_attempts,
-                skip_verify=skip_verify,
-                skip_tests=skip_tests,
-                target_coverage=final_target_coverage,
-                strength=final_strength,
-                temperature=final_temp,
-                time_param=time_param,
-                force=force,
-                quiet=quiet,
-                verbose=verbose,
-                output_cost=output_cost,
-                review_examples=review_examples,
-                local=local,
-                context_config=resolved_config,
-                context_override=context_override,
-                no_steer=no_steer,
-                steer_timeout=steer_timeout if steer_timeout is not None else DEFAULT_STEER_TIMEOUT_S,
-                agentic_mode=agentic_mode,
-            )
+            if one_session:
+                if skip_tests or skip_verify:
+                    raise click.UsageError(
+                        "--one-session cannot be combined with --skip-tests or --skip-verify; "
+                        "these flags are not supported in one-session mode."
+                    )
+
+                from .one_session_sync import run_one_session_sync
+                from .sync_determine_operation import get_pdd_file_paths
+
+                # Get file paths for this module
+                pdd_files = get_pdd_file_paths(
+                    basename, resolved_language,
+                    str(prompt_file_path.parent),
+                    context_override=context_override,
+                )
+
+                # Phase 1: Run pdd generate to create the code file
+                pre_cost = 0.0
+                if not pdd_files["code"].exists() or force:
+                    from .code_generator_main import code_generator_main
+
+                    if not quiet:
+                        rprint("[dim]Running pdd generate...[/dim]")
+                    pdd_files["code"].parent.mkdir(parents=True, exist_ok=True)
+                    gen_result = code_generator_main(
+                        ctx,
+                        prompt_file=str(pdd_files["prompt"].resolve()),
+                        output=str(pdd_files["code"].resolve()),
+                        original_prompt_file_path=None,
+                        force_incremental_flag=False,
+                    )
+                    # code_generator_main returns (content, was_incremental, cost, model)
+                    pre_cost = gen_result[2] if gen_result and len(gen_result) > 2 else 0.0
+                elif not quiet:
+                    rprint("[dim]Code file exists, skipping generate.[/dim]")
+
+                if not pdd_files["code"].exists():
+                    # Generate failed — don't proceed
+                    sync_result = {
+                        "success": False,
+                        "total_cost": pre_cost,
+                        "model_name": "",
+                        "operations_completed": [],
+                        "errors": ["Code generation failed"],
+                    }
+                else:
+                    # Phase 2: Hand off to one-session agent for example + crash + verify + test
+                    one_session_result = run_one_session_sync(
+                        basename=basename,
+                        language=resolved_language,
+                        pdd_files=pdd_files,
+                        project_root=Path.cwd(),
+                        target_coverage=final_target_coverage,
+                        budget=remaining_budget,
+                        verbose=verbose,
+                        quiet=quiet,
+                    )
+                    # Merge costs from both phases
+                    one_session_result["total_cost"] = pre_cost + one_session_result.get("total_cost", 0.0)
+                    sync_result = one_session_result
+
+                    # Post-sync: save fingerprint so next sync sees files as up-to-date
+                    if one_session_result.get("success"):
+                        from .operation_log import save_fingerprint
+                        save_fingerprint(
+                            basename, resolved_language, "fix",
+                            pdd_files, one_session_result.get("total_cost", 0.0),
+                            one_session_result.get("model_name", "unknown"),
+                        )
+
+                    # Post-sync: auto-submit example to cloud on success
+                    if one_session_result.get("success") and not local:
+                        try:
+                            _auto_submit_example(basename, resolved_language, pdd_files, ctx)
+                        except Exception as e:
+                            if not quiet:
+                                rprint(f"[yellow]Warning: Example submission failed: {e}[/yellow]")
+            else:
+                sync_result = sync_orchestration(
+                    basename=basename,
+                    language=resolved_language,
+                    prompts_dir=str(prompt_file_path.parent),  # Use discovered path's parent
+                    code_dir=str(code_dir),
+                    examples_dir=str(examples_dir),
+                    tests_dir=str(tests_dir),
+                    budget=remaining_budget,
+                    max_attempts=final_max_attempts,
+                    skip_verify=skip_verify,
+                    skip_tests=skip_tests,
+                    target_coverage=final_target_coverage,
+                    strength=final_strength,
+                    temperature=final_temp,
+                    time_param=time_param,
+                    force=force,
+                    quiet=quiet,
+                    verbose=verbose,
+                    output_cost=output_cost,
+                    review_examples=review_examples,
+                    local=local,
+                    context_config=resolved_config,
+                    context_override=context_override,
+                    no_steer=no_steer,
+                    steer_timeout=steer_timeout if steer_timeout is not None else DEFAULT_STEER_TIMEOUT_S,
+                    agentic_mode=agentic_mode,
+                )
 
             lang_cost = sync_result.get("total_cost", 0.0)
             total_cost += lang_cost

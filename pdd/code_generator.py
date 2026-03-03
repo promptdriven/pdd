@@ -159,7 +159,7 @@ def code_generator(
             )
             total_cost += postprocess_cost
 
-        return runnable_code, total_cost, model_name
+        return runnable_code, total_cost, model_name_post
 
     except ValueError as ve:
         if verbose:

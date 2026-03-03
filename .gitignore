@@ -22,8 +22,9 @@ litellm_cache.sqlite/
 # Cost tracking CSV (generated at runtime, should not be committed)
 pdd_cost.csv
 
-# Claude folder
-.claude/
+# Claude folder (ignore contents, but keep skills/)
+.claude/*
+!.claude/skills/
 
 # Test sync folder
 test_sync/
