@@ -1,13 +1,17 @@
 """
-Orchestrator for the 13-step agentic architecture workflow.
+Orchestrator for the agentic architecture workflow.
 Runs each step as a separate agentic task, accumulates context between steps,
 tracks overall progress and cost, and supports resuming from saved state.
 
-Steps 1-7: Analysis and generation (architecture.json, scaffolding)
-Step 8: Generate and validate .pddrc configuration
-Step 9: Prompt generation
+Step 1:   Analyze PRD
+Step 1b:  Complexity Assessment (may exit with sub-issues if PRD too complex)
+Steps 2-5: Analysis and design
+Step 5b:  Completeness Gate (hard stop if incomplete after 3 retries)
+Steps 6-7: Research dependencies and generate architecture.json
+Step 8:   Generate .pddrc
+Step 9:   Prompt generation
 Steps 10-12: Validation with in-place fixing (completeness, sync, dependencies)
-Step 13: Fix validation errors
+Step 13:  Fix validation errors
 
 Each validation step (10-12) retries up to 3 times with fixes before moving to next.
 Once a step passes, we don't re-validate it (prevents fix loops).
@@ -45,20 +49,22 @@ except ImportError:
 console = Console()
 
 # Per-Step Timeouts (Workflow specific)
-ARCH_STEP_TIMEOUTS: Dict[int, float] = {
-    1: 340.0,   # Analyze PRD
-    2: 340.0,   # Deep Analysis
-    3: 600.0,   # Research
-    4: 600.0,   # Data Model Design
-    5: 600.0,   # Design
-    6: 600.0,   # Research Dependencies
-    7: 1000.0,  # Generate (architecture.json + scaffolding)
-    8: 600.0,   # Generate and validate .pddrc
-    9: 900.0,   # Generate prompts
-    10: 340.0,  # Validate completeness
-    11: 600.0,  # Validate sync (pdd sync --dry-run for each module)
-    12: 600.0,  # Validate dependencies (preprocess)
-    13: 900.0,  # Fix all validation errors
+ARCH_STEP_TIMEOUTS: Dict[Union[int, float], float] = {
+    1: 340.0,    # Analyze PRD
+    1.5: 340.0,  # Complexity assessment
+    2: 340.0,    # Deep Analysis
+    3: 600.0,    # Research
+    4: 600.0,    # Data Model Design
+    5: 600.0,    # Design
+    5.5: 600.0,  # Early completeness gate (module design)
+    6: 600.0,    # Research Dependencies
+    7: 1000.0,   # Generate (architecture.json + scaffolding)
+    8: 600.0,    # Generate and validate .pddrc
+    9: 900.0,    # Generate prompts
+    10: 340.0,   # Validate completeness (prompt-level)
+    11: 600.0,   # Validate sync (pdd sync --dry-run for each module)
+    12: 600.0,   # Validate dependencies (preprocess)
+    13: 900.0,   # Fix all validation errors
 }
 
 MAX_VALIDATION_ITERATIONS = 5
@@ -220,14 +226,22 @@ def run_agentic_architecture_orchestrator(
     timeout_adder: float = 0.0,
     use_github_state: bool = True,
     skip_prompts: bool = False,
-    target_dir: Optional[str] = None
+    target_dir: Optional[str] = None,
+    force_single: bool = False,
+    sibling_architectures: str = "",
+    existing_pddrc: str = "",
+    related_issues: Optional[List[int]] = None,
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
-    Orchestrates the 13-step agentic architecture workflow.
+    Orchestrates the agentic architecture workflow.
 
-    Steps 1-7: Analysis and generation (architecture.json, scaffolding)
-    Step 8: Generate and validate .pddrc configuration
-    Step 9: Prompt generation
+    Step 1:   Analyze PRD
+    Step 1b:  Complexity Assessment (may exit with sub-issues)
+    Steps 2-5: Analysis and design
+    Step 5b:  Completeness Gate (hard stop if incomplete after 3 retries)
+    Steps 6-7: Research dependencies and generate architecture.json
+    Step 8:   Generate .pddrc
+    Step 9:   Prompt generation
     Steps 10-12: Validation with in-place fixing (completeness, sync, dependencies)
 
     Each validation step retries up to 3 times with fixes before moving to next step.
@@ -235,6 +249,7 @@ def run_agentic_architecture_orchestrator(
 
     Args:
         skip_prompts: If True, skip Step 9 and validation steps 10-12.
+        force_single: If True, skip complexity check and force single-project generation.
 
     Returns:
         (success, final_message, total_cost, model_used, output_files)
@@ -290,6 +305,9 @@ def run_agentic_architecture_orchestrator(
             if target_dir else
             "Create files in the repository root."
         ),
+        "sibling_architectures": sibling_architectures or "No existing sibling architectures found.",
+        "existing_pddrc": existing_pddrc or "No existing .pddrc found.",
+        "related_issues": ", ".join(f"#{n}" for n in related_issues) if related_issues else "None",
     }
 
     # Populate context with previous step outputs
@@ -303,7 +321,18 @@ def run_agentic_architecture_orchestrator(
     # Determine start step
     start_step = last_completed_step + 1
 
-    # Handle resume logic
+    # Handle resume logic for fractional steps
+    if last_completed_step == 5.5:
+        # Step 5b (completeness gate) passed, start at step 6
+        start_step = 6
+    elif last_completed_step == 1.5:
+        # Step 1b (complexity) passed, start at step 2
+        start_step = 2
+    elif 5 < last_completed_step < 6:
+        start_step = 6
+    elif 1 < last_completed_step < 2:
+        start_step = 2
+
     if last_completed_step >= 9:
         # If we finished step 9 or later, start at validation loop (step 10)
         start_step = 10
@@ -331,50 +360,46 @@ def run_agentic_architecture_orchestrator(
             console.print(f"   Steps 1-{last_completed_step} already complete (cached)")
             console.print(f"   Starting from Step {start_step}")
 
-    # --- Steps 1-8: Analysis, Generation, and .pddrc ---
-    steps_1_8 = [
+    # Total step count for display (1, 1b, 2-5, 5b, 6-8, 9, 10-13)
+    TOTAL_STEPS = 15
+
+    # --- Steps 1-5: Analysis and Design ---
+    steps_1_5 = [
         (1, "analyze_prd", "Extract features, tech stack, requirements from PRD"),
         (2, "analyze", "Deep analysis: module boundaries, shared concerns"),
         (3, "research", "Web research for tech stack docs and conventions"),
         (4, "data_model", "Data model design: entities, relationships, storage"),
         (5, "design", "Design module breakdown with dependency graph"),
+    ]
+
+    # --- Steps 6-8: Dependencies, Generation, and .pddrc ---
+    steps_6_8 = [
         (6, "research_deps", "Find API docs and code examples per module"),
         (7, "generate", "Generate architecture.json and scaffolding"),
         (8, "pddrc", "Generate and validate .pddrc configuration"),
     ]
 
-    for step_num, name, description in steps_1_8:
+    # --- Run Steps 1-5: Analysis and Design ---
+    for step_num, name, description in steps_1_5:
         if step_num < start_step:
             continue
 
         if not quiet:
-            console.print(f"[bold][Step {step_num}/13][/bold] {description}...")
+            console.print(f"[bold][Step {step_num}/{TOTAL_STEPS}][/bold] {description}...")
 
         template_name = f"agentic_arch_step{step_num}_{name}_LLM"
         prompt_template = load_prompt_template(template_name)
         if not prompt_template:
             return False, f"Missing prompt template: {template_name}", total_cost, model_used, []
 
-        # Preprocess to expand <include> tags and escape curly braces
-        # Exclude context keys from escaping so they can be substituted
         exclude_keys = list(context.keys())
         prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
-
-        # Safe substitution (Issue #549): un-double template braces first, then substitute.
         prompt_template = prompt_template.replace("{{", "{").replace("}}", "}")
         formatted_prompt = prompt_template
         for key, value in context.items():
             formatted_prompt = formatted_prompt.replace(f'{{{key}}}', str(value))
 
         timeout = ARCH_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder
-
-        # Capture pre-hash for Step 7 to detect no-op (agent failed to create/modify arch)
-        arch_file_step7 = base_dir / "architecture.json"
-        pre_hash_step7 = (
-            hashlib.md5(arch_file_step7.read_bytes()).hexdigest()
-            if step_num == 7 and arch_file_step7.exists()
-            else None
-        )
 
         step_success, step_output, step_cost, step_model = run_agentic_task(
             instruction=formatted_prompt,
@@ -416,6 +441,211 @@ def run_agentic_architecture_orchestrator(
                 "Re-read the prompt — this step is about data entities, "
                 "relationships, and storage decisions."
             )
+
+        context[f"step{step_num}_output"] = step_output
+
+        if step_success:
+            state["step_outputs"][str(step_num)] = step_output
+            state["last_completed_step"] = step_num
+        else:
+            state["step_outputs"][str(step_num)] = f"FAILED: {step_output}"
+
+        save_result = save_workflow_state(cwd, issue_number, "architecture", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+        if save_result:
+            github_comment_id = save_result
+            state["github_comment_id"] = github_comment_id
+
+        if not quiet:
+            lines = step_output.strip().split('\n')
+            brief = lines[-1] if lines else "Done"
+            if len(brief) > 80: brief = brief[:77] + "..."
+            console.print(f"   → {escape(brief)}")
+
+        # --- Step 1b: Complexity Assessment (after Step 1) ---
+        if step_num == 1 and step_success and start_step <= 1.5:
+            if not force_single:
+                if not quiet:
+                    console.print(f"[bold][Step 1b/{TOTAL_STEPS}][/bold] Assessing PRD complexity...")
+
+                complexity_template_name = "agentic_arch_step1b_complexity_LLM"
+                complexity_template = load_prompt_template(complexity_template_name)
+                if complexity_template:
+                    exclude_keys_1b = list(context.keys())
+                    complexity_template = preprocess(complexity_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys_1b)
+                    complexity_template = complexity_template.replace("{{", "{").replace("}}", "}")
+                    formatted_complexity = complexity_template
+                    for key, value in context.items():
+                        formatted_complexity = formatted_complexity.replace(f'{{{key}}}', str(value))
+
+                    timeout_1b = ARCH_STEP_TIMEOUTS.get(1.5, 340.0) + timeout_adder
+                    c_success, c_output, c_cost, c_model = run_agentic_task(
+                        instruction=formatted_complexity,
+                        cwd=cwd,
+                        verbose=verbose,
+                        quiet=quiet,
+                        timeout=timeout_1b,
+                        label="step1b",
+                        max_retries=DEFAULT_MAX_RETRIES,
+                    )
+
+                    total_cost += c_cost
+                    model_used = c_model
+                    state["total_cost"] = total_cost
+
+                    context["step1b_output"] = c_output
+                    state["step_outputs"]["1b"] = c_output
+
+                    if "COMPLEXITY_RESULT: COMPLEX" in c_output:
+                        if not quiet:
+                            console.print("[yellow]⏹️  PRD is too complex for single-project generation.[/yellow]")
+                            console.print("   Sub-issues have been created. Run pdd generate on each sub-issue.")
+                            console.print("   Use --force-single to override this check.")
+                        state["last_completed_step"] = 1.5
+                        save_workflow_state(cwd, issue_number, "architecture", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+                        return False, "PRD too complex - sub-issues created, run pdd generate on each", total_cost, model_used, []
+
+                    state["last_completed_step"] = 1.5
+                    save_workflow_state(cwd, issue_number, "architecture", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+
+                    if not quiet:
+                        console.print("   → PRD complexity: manageable, continuing...")
+
+    # --- Step 5b: Early Completeness Gate (after Step 5, before Step 6) ---
+    MAX_STEP5B_RETRIES = 3
+
+    if state.get("last_completed_step", 0) >= 5 and start_step <= 6 and state.get("last_completed_step", 0) < 5.5:
+        for attempt_5b in range(1, MAX_STEP5B_RETRIES + 1):
+            if not quiet:
+                attempt_str = f" (attempt {attempt_5b}/{MAX_STEP5B_RETRIES})" if attempt_5b > 1 else ""
+                console.print(f"[bold][Step 5b/{TOTAL_STEPS}][/bold] Validating module design completeness{attempt_str}...")
+
+            gate_template_name = "agentic_arch_step5b_completeness_gate_LLM"
+            gate_template = load_prompt_template(gate_template_name)
+            if not gate_template:
+                if not quiet:
+                    console.print(f"[yellow]Warning: Missing template {gate_template_name}, skipping 5b[/yellow]")
+                break
+
+            exclude_keys_5b = list(context.keys())
+            gate_template = preprocess(gate_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys_5b)
+            gate_template = gate_template.replace("{{", "{").replace("}}", "}")
+            formatted_gate = gate_template
+            for key, value in context.items():
+                formatted_gate = formatted_gate.replace(f'{{{key}}}', str(value))
+
+            timeout_5b = ARCH_STEP_TIMEOUTS.get(5.5, 600.0) + timeout_adder
+            gate_success, gate_output, gate_cost, gate_model = run_agentic_task(
+                instruction=formatted_gate,
+                cwd=cwd,
+                verbose=verbose,
+                quiet=quiet,
+                timeout=timeout_5b,
+                label=f"step5b_attempt{attempt_5b}",
+                max_retries=DEFAULT_MAX_RETRIES,
+            )
+
+            total_cost += gate_cost
+            model_used = gate_model
+            state["total_cost"] = total_cost
+
+            if _check_validation_result(gate_output):
+                if not quiet:
+                    console.print("   → Module design completeness validated ✓")
+                state["last_completed_step"] = 5.5
+                save_workflow_state(cwd, issue_number, "architecture", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+                break
+
+            # Validation failed - try to fix if not last attempt
+            if attempt_5b < MAX_STEP5B_RETRIES:
+                if not quiet:
+                    console.print("   → Module design gaps found, fixing...")
+
+                fix_template_name = "agentic_arch_step5b_fix_LLM"
+                fix_template = load_prompt_template(fix_template_name)
+                if fix_template:
+                    context["step5b_validation_output"] = gate_output
+                    exclude_keys_fix = list(context.keys())
+                    fix_template = preprocess(fix_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys_fix)
+                    fix_template = fix_template.replace("{{", "{").replace("}}", "}")
+                    formatted_fix = fix_template
+                    for key, value in context.items():
+                        formatted_fix = formatted_fix.replace(f'{{{key}}}', str(value))
+
+                    fix_timeout = ARCH_STEP_TIMEOUTS.get(5.5, 600.0) + timeout_adder
+                    fix_success, fix_output, fix_cost, fix_model = run_agentic_task(
+                        instruction=formatted_fix,
+                        cwd=cwd,
+                        verbose=verbose,
+                        quiet=quiet,
+                        timeout=fix_timeout,
+                        label=f"step5b_fix{attempt_5b}",
+                        max_retries=DEFAULT_MAX_RETRIES,
+                    )
+
+                    total_cost += fix_cost
+                    model_used = fix_model
+                    state["total_cost"] = total_cost
+
+                    # Replace step5_output with corrected design
+                    context["step5_output"] = fix_output
+                    state["step_outputs"]["5"] = fix_output
+
+                    if not quiet:
+                        console.print("   → Module design updated with missing modules")
+            else:
+                # Exhausted retries - hard stop
+                if not quiet:
+                    console.print(f"[red]⏹️  Module design incomplete after {MAX_STEP5B_RETRIES} attempts. Stopping.[/red]")
+                save_workflow_state(cwd, issue_number, "architecture", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+                return False, "Module design incomplete - completeness gate failed after max retries", total_cost, model_used, []
+
+    # --- Run Steps 6-8: Dependencies, Generation, and .pddrc ---
+    for step_num, name, description in steps_6_8:
+        if step_num < start_step:
+            continue
+
+        if not quiet:
+            console.print(f"[bold][Step {step_num}/{TOTAL_STEPS}][/bold] {description}...")
+
+        template_name = f"agentic_arch_step{step_num}_{name}_LLM"
+        prompt_template = load_prompt_template(template_name)
+        if not prompt_template:
+            return False, f"Missing prompt template: {template_name}", total_cost, model_used, []
+
+        exclude_keys = list(context.keys())
+        prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
+        prompt_template = prompt_template.replace("{{", "{").replace("}}", "}")
+        formatted_prompt = prompt_template
+        for key, value in context.items():
+            formatted_prompt = formatted_prompt.replace(f'{{{key}}}', str(value))
+
+        timeout = ARCH_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder
+
+        # Capture pre-hash for Step 7 to detect no-op (agent failed to create/modify arch)
+        arch_file_step7 = base_dir / "architecture.json"
+        pre_hash_step7 = (
+            hashlib.md5(arch_file_step7.read_bytes()).hexdigest()
+            if step_num == 7 and arch_file_step7.exists()
+            else None
+        )
+
+        step_success, step_output, step_cost, step_model = run_agentic_task(
+            instruction=formatted_prompt,
+            cwd=cwd,
+            verbose=verbose,
+            quiet=quiet,
+            timeout=timeout,
+            label=f"step{step_num}",
+            max_retries=DEFAULT_MAX_RETRIES,
+        )
+
+        total_cost += step_cost
+        model_used = step_model
+        state["total_cost"] = total_cost
+        state["model_used"] = model_used
+
+        if not step_success:
+            console.print(f"[yellow]Warning: Step {step_num} reported failure but continuing...[/yellow]")
 
         # Special handling for Step 7 (generate)
         if step_num == 7:
@@ -483,7 +713,10 @@ def run_agentic_architecture_orchestrator(
                         pddrc_content = f.read()
                     yaml.safe_load(pddrc_content)
                     if not quiet:
-                        console.print(f"   → .pddrc created and validated")
+                        if existing_pddrc:
+                            console.print(f"   → .pddrc merged with existing configuration")
+                        else:
+                            console.print(f"   → .pddrc created and validated")
                 except Exception as e:
                     if not quiet:
                         console.print(f"[yellow]Warning: .pddrc issue: {e}[/yellow]")
@@ -494,7 +727,6 @@ def run_agentic_architecture_orchestrator(
         context[f"step{step_num}_output"] = step_output
 
         # Issue #467: Only advance last_completed_step on success.
-        # On failure, prefix output with "FAILED:" and keep cursor unchanged.
         if step_success:
             state["step_outputs"][str(step_num)] = step_output
             state["last_completed_step"] = step_num
@@ -515,7 +747,7 @@ def run_agentic_architecture_orchestrator(
     # --- Step 9: Prompt Generation ---
     if not skip_prompts and start_step <= 9:
         if not quiet:
-            console.print(f"[bold][Step 9/13][/bold] Generating prompt files...")
+            console.print(f"[bold][Step 9/{TOTAL_STEPS}][/bold] Generating prompt files...")
 
         pddrc_path = cwd / ".pddrc"
         pddrc_content = ""
@@ -602,7 +834,7 @@ def run_agentic_architecture_orchestrator(
             for attempt in range(1, MAX_STEP_RETRIES + 1):
                 if not quiet:
                     attempt_str = f" (attempt {attempt}/{MAX_STEP_RETRIES})" if attempt > 1 else ""
-                    console.print(f"[bold][Step {step_num}/13][/bold] {description}{attempt_str}...")
+                    console.print(f"[bold][Step {step_num}/{TOTAL_STEPS}][/bold] {description}{attempt_str}...")
 
                 prompt_template = load_prompt_template(template_name)
                 if not prompt_template:

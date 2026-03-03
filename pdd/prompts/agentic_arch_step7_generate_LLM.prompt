@@ -65,7 +65,19 @@ You are working on step 7 of 13 in an agentic architecture workflow. All analysi
 - Write `architecture.json` to `{target_dir}/architecture.json` (NOT the repo root, unless target_dir is `.`)
 - Create all scaffolding files under `{target_dir}/`
 - In the FILES_CREATED marker, list all paths relative to the repo root (e.g. `{target_dir}/architecture.json`, `{target_dir}/src/main.py`)
-- If `{target_dir}/architecture.json` already exists, REPLACE it with the new project architecture
+- Write architecture.json for THIS sub-project to `{target_dir}/architecture.json`
+- Do NOT modify architecture.json files in other directories — they belong to other sub-projects
+- For cross-project dependencies, use `"external:<dir>/<module_filename>"` in the `dependencies` array
+
+% Existing Sibling Architectures
+
+{sibling_architectures}
+
+When generating architecture.json:
+1. Read sibling architecture.json files (shown above) to understand existing modules
+2. Do NOT duplicate modules that exist in siblings
+3. Reference sibling modules using `"external:sibling_dir/module_filename"` in dependencies
+4. Note cross-project dependencies in the `reason` field
 
 % Your Task
 

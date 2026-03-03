@@ -1,0 +1,124 @@
+<pdd-reason>Fixes module design gaps identified by the completeness gate, adding missing modules to the design.</pdd-reason>
+<pdd-interface>
+{{
+  "type": "module",
+  "module": {{
+    "functions": [
+      {{"name": "fix_module_design", "signature": "(issue_content: str, step1_output: str, step4_output: str, step5_output: str, completeness_errors: str)", "returns": "str (corrected module design)"}}
+    ]
+  }}
+}}
+</pdd-interface>
+<pdd-dependency>agentic_arch_step5b_completeness_gate_LLM.prompt</pdd-dependency>
+% You are an expert software architect. Your task is to fix the module design by adding missing modules identified by the completeness gate.
+
+% Context
+
+You are working on step 5b (fix) of the agentic architecture workflow. The completeness gate found gaps in the module design from Step 5. You must add the missing modules and output a CORRECTED, COMPLETE module design.
+
+This is a TEXT-ONLY step. Do NOT run bash commands or create files on disk. You are updating the module design TEXT that will be used by subsequent steps (6-7) to generate the actual architecture.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Original PRD (Source of Truth)
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Step 1: PRD Analysis
+<step1_output>
+{step1_output}
+</step1_output>
+
+% Step 4: Data Model Design
+<step4_output>
+{step4_output}
+</step4_output>
+
+% Current Module Design (Step 5 - has gaps)
+<step5_output>
+{step5_output}
+</step5_output>
+
+% Completeness Errors (from Step 5b validation)
+<completeness_errors>
+{step5b_validation_output}
+</completeness_errors>
+
+% Your Task
+
+1. **Review the completeness errors carefully.** Each error identifies a specific gap:
+   - Missing requirements (Rx: no module implements this)
+   - Missing commonly-overlooked items (auth, error handling, etc.)
+   - API route gaps (specific endpoints without modules)
+   - Data model gaps (entities without CRUD modules)
+
+2. **Add missing modules to the design.** For EACH gap, add a module entry with:
+   - **Priority**: Must be higher than its dependencies' priorities, forming valid topological sort
+   - **Filename**: Follow PDD convention `<base>_<LangOrFramework>.prompt`
+   - **Filepath**: Use framework-appropriate path from Step 3 research
+   - **Dependencies**: List modules this new module depends on
+   - **Interface type**: api/module/page/component/config
+   - **Description**: What this module implements
+
+3. **Recalculate priorities** if needed to accommodate new modules:
+   - Maintain valid topological sort (no module before its dependencies)
+   - Use sequential integers without gaps
+
+4. **Preserve ALL existing modules.** Do NOT remove or modify existing modules unless absolutely necessary to fix a dependency issue.
+
+5. **Update dependency graph** if new modules create new relationships.
+
+% Output
+
+Output the COMPLETE corrected module design in the SAME FORMAT as the original Step 5 output. This means:
+
+```markdown
+## Step 5: Module Design (Corrected)
+
+**Status:** Design Complete
+
+### Module List
+| Priority | Module (filename) | Filepath | Dependencies | Interface Type |
+|----------|-------------------|----------|--------------|----------------|
+| 1 | [name]_[Lang].prompt | [path] | [] | [type] |
+| 2 | [name]_[Lang].prompt | [path] | [dep1] | [type] |
+... (ALL modules, both original and newly added)
+
+### Dependency Graph
+```
+[complete dependency graph including new modules]
+```
+
+### Interface Sketches
+#### [module_name]
+- Type: [api/module/page/component/config]
+- Key functions/endpoints: [list]
+... (ALL modules, both original and newly added)
+
+### Additions Made
+- Added [module_name]: [reason - which gap it fills]
+- Added [module_name]: [reason]
+
+---
+*Module design corrected. Proceeding to Step 6: Research Dependencies*
+```
+
+% Important
+
+- Do NOT run bash commands — this is a pure text output step
+- Do NOT create files on disk
+- Output the FULL module design (original + additions), not just the additions
+- Every added module must reference a specific gap from the completeness errors
+- Do NOT add modules that aren't justified by PRD requirements
+- Maintain valid topological sort in priority ordering
+- The output of this step REPLACES the Step 5 output for all subsequent steps
+- Post findings to GitHub using gh issue comment:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "## Step 5b: Module Design Corrected\n\n### Gaps Fixed\n- [list of additions]\n\n---\n*Proceeding to Step 6*"
+```

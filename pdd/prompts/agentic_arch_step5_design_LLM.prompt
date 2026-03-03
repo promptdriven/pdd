@@ -44,6 +44,17 @@ You are working on step 5 of 13 in an agentic architecture workflow. Previous st
 {step4_output}
 </step4_output>
 
+% Existing Sibling Architectures
+
+{sibling_architectures}
+
+CRITICAL — Cross-Project Rules:
+1. DO NOT design modules that duplicate functionality from sibling projects
+2. If a sibling has shared types, auth, or config — reference them as external dependencies
+3. Mark cross-project dependencies with prefix `[external:<dir>/]` in the dependency graph
+4. If this sub-project needs a shared module that doesn't exist yet, create it and note it should be shared
+5. Read sibling architecture.json files before designing to understand existing interfaces
+
 % Your Task
 
 1. **Use the data model from Step 4 to inform module boundaries:**

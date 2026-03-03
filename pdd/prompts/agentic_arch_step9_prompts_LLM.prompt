@@ -101,6 +101,15 @@ This example shows the correct prompt file structure and naming.
 <include>pdd/templates/architecture/example_nextjs_task_notes.prompt</include>
 </verified_working_example>
 
+% Existing Sibling Architectures
+
+{sibling_architectures}
+
+When generating prompts for modules that depend on sibling project modules:
+1. Add a "Cross-Project Dependencies" section in the prompt body
+2. Include the sibling module's API contract (endpoints, function signatures) from the table above
+3. Only use `<pdd-dependency>` tags for modules within THIS project — cross-project deps go in the prompt body
+
 % Your Task
 
 Generate prompt files for ALL modules in architecture.json.

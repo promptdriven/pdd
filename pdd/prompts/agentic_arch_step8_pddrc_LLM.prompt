@@ -31,6 +31,19 @@ This step is CRITICAL because:
 {step7_output}
 </architecture_json>
 
+% Existing .pddrc
+
+{existing_pddrc}
+
+CRITICAL — If an existing .pddrc is shown above:
+1. READ the existing .pddrc content first
+2. MERGE your new contexts INTO the existing file — do NOT delete existing contexts from other sub-projects
+3. The `default` context should be shared — update only if needed
+4. Add your sub-project's contexts alongside existing ones
+5. Write the MERGED result to `.pddrc` at the repo root
+
+If no existing .pddrc is shown, create from scratch as before.
+
 % ============================================================================
 % STRATEGY DETECTION (CRITICAL - DO THIS FIRST)
 % ============================================================================

@@ -32,6 +32,12 @@ You are working on step 2 of 11 in an agentic architecture workflow. Step 1 extr
 {step1_output}
 </step1_output>
 
+% Existing Sibling Architectures
+
+{sibling_architectures}
+
+When analyzing modules, consider what already exists in sibling projects. Note existing modules as available dependencies rather than re-designing them.
+
 % Your Task
 
 1. **Feature decomposition:**
