@@ -6,7 +6,7 @@ import click
 from .generate import generate, test, example
 from .fix import fix
 from .modify import split, change, update
-from .maintenance import sync, auto_deps, setup, sync_code
+from .maintenance import sync, auto_deps, setup
 from .checkup import checkup
 from .analysis import detect_change, conflicts, bug, crash, trace
 from .connect import connect
@@ -52,4 +52,3 @@ def register_commands(cli: click.Group) -> None:
     cli.add_command(auth_group)
     cli.add_command(sessions)
     cli.add_command(firecrawl_cache)
-    cli.add_command(sync_code)

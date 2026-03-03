@@ -194,6 +194,7 @@ def change(
 @click.option("--git", is_flag=True, help="Use git history for original code.")
 @click.option("--output", help="Output path for the updated prompt.")
 @click.option("--simple", is_flag=True, default=False, help="Use legacy simple update.")
+@click.option("--base-branch", type=str, default="main", help="Base branch for change detection in repo mode (default: main).")
 @click.pass_context
 @log_operation(operation="update", clears_run_report=True)
 @track_cost
@@ -205,6 +206,7 @@ def update(
     git: bool,
     output: Optional[str],
     simple: bool,
+    base_branch: str,
 ) -> Optional[Tuple[Any, float, str]]:
     """
     Update the original prompt file based on code changes.
@@ -265,7 +267,7 @@ def update(
                     "Cannot use --output in repository-wide mode"
                 )
         else:
-            # File modes: --extensions and --directory are not allowed
+            # File modes: --extensions, --directory, and --base-branch are not allowed
             if extensions:
                 raise click.UsageError(
                     "--extensions can only be used in repository-wide mode"
@@ -273,6 +275,10 @@ def update(
             if directory:
                 raise click.UsageError(
                     "--directory can only be used in repository-wide mode"
+                )
+            if base_branch != "main":
+                raise click.UsageError(
+                    "--base-branch can only be used in repository-wide mode"
                 )
 
         # Call update_main with correct parameters
@@ -286,7 +292,8 @@ def update(
             repo=is_repo_mode,
             extensions=extensions,
             directory=directory,
-            simple=simple
+            simple=simple,
+            base_branch=base_branch,
         )
 
         return result, cost, model

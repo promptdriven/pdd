@@ -1,13 +1,13 @@
 # tests/test_sync_code_main.py
 """
-Tests for pdd sync-code command.
+Tests for change-detection functions (formerly in pdd sync-code, now in pdd.update_main).
 
 Covers:
 - derive_basename_and_language: basename/language extraction
 - is_code_changed: fingerprint primary, git fallback
 - get_git_changed_files: git subprocess mocking
-- sync_code_main: end-to-end orchestration with mocked dependencies
-- CLI integration via CliRunner
+- update_main repo-mode with change detection: end-to-end orchestration
+- CLI integration via CliRunner (pdd update --base-branch)
 """
 
 import os
@@ -18,11 +18,11 @@ from unittest.mock import patch, MagicMock, call
 import click
 from click.testing import CliRunner
 
-from pdd.sync_code_main import (
+from pdd.update_main import (
     derive_basename_and_language,
     get_git_changed_files,
     is_code_changed,
-    sync_code_main,
+    update_main,
 )
 
 
@@ -34,7 +34,7 @@ from pdd.sync_code_main import (
 class TestDeriveBasenameAndLanguage:
     """Tests for basename and language extraction from code file paths."""
 
-    @patch("pdd.sync_code_main.get_language", return_value="Python")
+    @patch("pdd.update_main.get_language", return_value="Python")
     def test_python_file(self, mock_lang):
         """Extracts basename and lowercased language for a .py file."""
         basename, lang = derive_basename_and_language("/repo/src/my_module.py", "/repo")
@@ -42,28 +42,28 @@ class TestDeriveBasenameAndLanguage:
         assert lang == "python"
         mock_lang.assert_called_once_with(".py")
 
-    @patch("pdd.sync_code_main.get_language", return_value="JavaScript")
+    @patch("pdd.update_main.get_language", return_value="JavaScript")
     def test_javascript_file(self, mock_lang):
         """Extracts basename and lowercased language for a .js file."""
         basename, lang = derive_basename_and_language("/repo/app/index.js", "/repo")
         assert basename == "index"
         assert lang == "javascript"
 
-    @patch("pdd.sync_code_main.get_language", return_value="")
+    @patch("pdd.update_main.get_language", return_value="")
     def test_unknown_extension_returns_none(self, mock_lang):
         """Returns (None, None) for files with unknown extensions."""
         basename, lang = derive_basename_and_language("/repo/data.xyz", "/repo")
         assert basename is None
         assert lang is None
 
-    @patch("pdd.sync_code_main.get_language", return_value=None)
+    @patch("pdd.update_main.get_language", return_value=None)
     def test_none_language_returns_none(self, mock_lang):
         """Returns (None, None) when get_language returns None."""
         basename, lang = derive_basename_and_language("/repo/file.bin", "/repo")
         assert basename is None
         assert lang is None
 
-    @patch("pdd.sync_code_main.get_language", return_value="Python")
+    @patch("pdd.update_main.get_language", return_value="Python")
     def test_nested_path(self, mock_lang):
         """Extracts only the filename stem, not the directory structure."""
         basename, lang = derive_basename_and_language(
@@ -81,16 +81,16 @@ class TestDeriveBasenameAndLanguage:
 class TestIsCodeChanged:
     """Tests for change detection via fingerprint or git fallback."""
 
-    @patch("pdd.sync_code_main.derive_basename_and_language", return_value=(None, None))
+    @patch("pdd.update_main.derive_basename_and_language", return_value=(None, None))
     def test_unknown_extension_not_changed(self, mock_derive):
         """Files with unknown extensions are never considered changed."""
         changed, reason = is_code_changed("/repo/data.xyz", "/repo", set())
         assert changed is False
         assert "unknown extension" in reason
 
-    @patch("pdd.sync_code_main.calculate_sha256", return_value="aaa111")
-    @patch("pdd.sync_code_main.read_fingerprint")
-    @patch("pdd.sync_code_main.derive_basename_and_language", return_value=("mod", "python"))
+    @patch("pdd.update_main.calculate_sha256", return_value="aaa111")
+    @patch("pdd.update_main.read_fingerprint")
+    @patch("pdd.update_main.derive_basename_and_language", return_value=("mod", "python"))
     def test_fingerprint_hash_matches(self, mock_derive, mock_fp, mock_sha):
         """When fingerprint code_hash matches current hash, not changed."""
         fp = MagicMock()
@@ -101,9 +101,9 @@ class TestIsCodeChanged:
         assert changed is False
         assert "matches fingerprint" in reason
 
-    @patch("pdd.sync_code_main.calculate_sha256", return_value="bbb222")
-    @patch("pdd.sync_code_main.read_fingerprint")
-    @patch("pdd.sync_code_main.derive_basename_and_language", return_value=("mod", "python"))
+    @patch("pdd.update_main.calculate_sha256", return_value="bbb222")
+    @patch("pdd.update_main.read_fingerprint")
+    @patch("pdd.update_main.derive_basename_and_language", return_value=("mod", "python"))
     def test_fingerprint_hash_differs(self, mock_derive, mock_fp, mock_sha):
         """When fingerprint code_hash differs from current hash, changed."""
         fp = MagicMock()
@@ -114,8 +114,8 @@ class TestIsCodeChanged:
         assert changed is True
         assert "differs from fingerprint" in reason
 
-    @patch("pdd.sync_code_main.read_fingerprint")
-    @patch("pdd.sync_code_main.derive_basename_and_language", return_value=("mod", "python"))
+    @patch("pdd.update_main.read_fingerprint")
+    @patch("pdd.update_main.derive_basename_and_language", return_value=("mod", "python"))
     def test_fingerprint_no_code_hash(self, mock_derive, mock_fp):
         """When fingerprint exists but has no code_hash, consider changed."""
         fp = MagicMock()
@@ -126,9 +126,9 @@ class TestIsCodeChanged:
         assert changed is True
         assert "no code_hash" in reason
 
-    @patch("pdd.sync_code_main.calculate_sha256", return_value=None)
-    @patch("pdd.sync_code_main.read_fingerprint")
-    @patch("pdd.sync_code_main.derive_basename_and_language", return_value=("mod", "python"))
+    @patch("pdd.update_main.calculate_sha256", return_value=None)
+    @patch("pdd.update_main.read_fingerprint")
+    @patch("pdd.update_main.derive_basename_and_language", return_value=("mod", "python"))
     def test_fingerprint_cannot_compute_hash(self, mock_derive, mock_fp, mock_sha):
         """When current hash can't be computed, not changed."""
         fp = MagicMock()
@@ -139,8 +139,8 @@ class TestIsCodeChanged:
         assert changed is False
         assert "could not compute" in reason
 
-    @patch("pdd.sync_code_main.read_fingerprint", return_value=None)
-    @patch("pdd.sync_code_main.derive_basename_and_language", return_value=("mod", "python"))
+    @patch("pdd.update_main.read_fingerprint", return_value=None)
+    @patch("pdd.update_main.derive_basename_and_language", return_value=("mod", "python"))
     def test_no_fingerprint_in_git_set(self, mock_derive, mock_fp):
         """No fingerprint + file in git changed set -> changed."""
         git_set = {"/repo/mod.py"}
@@ -148,8 +148,8 @@ class TestIsCodeChanged:
         assert changed is True
         assert "git changed set" in reason
 
-    @patch("pdd.sync_code_main.read_fingerprint", return_value=None)
-    @patch("pdd.sync_code_main.derive_basename_and_language", return_value=("mod", "python"))
+    @patch("pdd.update_main.read_fingerprint", return_value=None)
+    @patch("pdd.update_main.derive_basename_and_language", return_value=("mod", "python"))
     def test_no_fingerprint_not_in_git_set(self, mock_derive, mock_fp):
         """No fingerprint + file not in git changed set -> not changed."""
         git_set = {"/repo/other.py"}
@@ -166,7 +166,7 @@ class TestIsCodeChanged:
 class TestGetGitChangedFiles:
     """Tests for git-based change detection."""
 
-    @patch("pdd.sync_code_main.subprocess.run")
+    @patch("pdd.update_main.subprocess.run")
     def test_all_three_sources(self, mock_run):
         """Combines committed, uncommitted, and untracked files."""
         repo_root = "/repo"
@@ -197,7 +197,7 @@ class TestGetGitChangedFiles:
             "/repo/file4.py",
         }
 
-    @patch("pdd.sync_code_main.subprocess.run")
+    @patch("pdd.update_main.subprocess.run")
     def test_empty_when_all_fail(self, mock_run):
         """Returns empty set when all git commands fail."""
         import subprocess as sp
@@ -207,7 +207,7 @@ class TestGetGitChangedFiles:
         result = get_git_changed_files("/repo", "main")
         assert result == set()
 
-    @patch("pdd.sync_code_main.subprocess.run")
+    @patch("pdd.update_main.subprocess.run")
     def test_deduplication(self, mock_run):
         """Same file from multiple sources is not duplicated."""
         def side_effect(cmd, **kwargs):
@@ -228,7 +228,7 @@ class TestGetGitChangedFiles:
         result = get_git_changed_files("/repo", "main")
         assert result == {"/repo/shared.py"}
 
-    @patch("pdd.sync_code_main.subprocess.run")
+    @patch("pdd.update_main.subprocess.run")
     def test_empty_output_lines(self, mock_run):
         """Empty stdout produces no entries."""
         def side_effect(cmd, **kwargs):
@@ -245,32 +245,35 @@ class TestGetGitChangedFiles:
 
 
 # ---------------------------------------------------------------------------
-# sync_code_main
+# update_main repo-mode with change detection (replaces sync_code_main tests)
 # ---------------------------------------------------------------------------
 
 
-class TestSyncCodeMain:
-    """Tests for the sync_code_main orchestrator."""
+class TestUpdateMainRepoModeChangeDetection:
+    """Tests for update_main repo-mode with change-detection filtering."""
 
     def _make_ctx(self, **obj_overrides):
         """Helper to create a Click context with defaults."""
         obj = {"quiet": False, "verbose": False, "strength": 0.5, "temperature": 0}
         obj.update(obj_overrides)
-        ctx = click.Context(click.Command("sync-code"), obj=obj)
+        ctx = click.Context(click.Command("update"), obj=obj)
         return ctx
 
-    @patch("pdd.sync_code_main.git.Repo")
+    @patch("pdd.update_main.git.Repo")
     def test_not_a_git_repo(self, mock_repo_cls):
         """Returns None and prints error when not in a git repo."""
         import git as gitmod
 
         mock_repo_cls.side_effect = gitmod.InvalidGitRepositoryError("not a repo")
         ctx = self._make_ctx()
-        result = sync_code_main(ctx, None, None, False, "main")
+        result = update_main(
+            ctx, input_prompt_file=None, modified_code_file=None,
+            input_code_file=None, output=None, repo=True,
+        )
         assert result is None
 
-    @patch("pdd.sync_code_main.find_and_resolve_all_pairs", return_value=[])
-    @patch("pdd.sync_code_main.git.Repo")
+    @patch("pdd.update_main.find_and_resolve_all_pairs", return_value=[])
+    @patch("pdd.update_main.git.Repo")
     def test_no_pairs_found(self, mock_repo_cls, mock_find):
         """Returns None when no code files are found."""
         mock_repo = MagicMock()
@@ -278,15 +281,18 @@ class TestSyncCodeMain:
         mock_repo_cls.return_value = mock_repo
 
         ctx = self._make_ctx()
-        result = sync_code_main(ctx, None, None, False, "main")
+        result = update_main(
+            ctx, input_prompt_file=None, modified_code_file=None,
+            input_code_file=None, output=None, repo=True,
+        )
         assert result is None
 
-    @patch("pdd.sync_code_main.is_code_changed", return_value=(False, "matches"))
-    @patch("pdd.sync_code_main.get_git_changed_files", return_value=set())
-    @patch("pdd.sync_code_main.find_and_resolve_all_pairs", return_value=[
+    @patch("pdd.update_main.is_code_changed", return_value=(False, "matches"))
+    @patch("pdd.update_main.get_git_changed_files", return_value=set())
+    @patch("pdd.update_main.find_and_resolve_all_pairs", return_value=[
         ("/repo/prompts/mod_python.prompt", "/repo/mod.py"),
     ])
-    @patch("pdd.sync_code_main.git.Repo")
+    @patch("pdd.update_main.git.Repo")
     def test_no_changed_files(self, mock_repo_cls, mock_find, mock_git, mock_changed):
         """Returns None when no code files have changed."""
         mock_repo = MagicMock()
@@ -294,19 +300,23 @@ class TestSyncCodeMain:
         mock_repo_cls.return_value = mock_repo
 
         ctx = self._make_ctx()
-        result = sync_code_main(ctx, None, None, False, "main")
+        result = update_main(
+            ctx, input_prompt_file=None, modified_code_file=None,
+            input_code_file=None, output=None, repo=True,
+        )
         assert result is None
 
-    @patch("pdd.sync_code_main.update_file_pair")
-    @patch("pdd.sync_code_main.is_code_changed")
-    @patch("pdd.sync_code_main.get_git_changed_files", return_value=set())
-    @patch("pdd.sync_code_main.find_and_resolve_all_pairs", return_value=[
+    @patch("pdd.update_main.update_architecture_from_prompt", return_value={"success": False, "updated": False, "changes": {}})
+    @patch("pdd.update_main.update_file_pair")
+    @patch("pdd.update_main.is_code_changed")
+    @patch("pdd.update_main.get_git_changed_files", return_value=set())
+    @patch("pdd.update_main.find_and_resolve_all_pairs", return_value=[
         ("/repo/prompts/a_python.prompt", "/repo/a.py"),
         ("/repo/prompts/b_python.prompt", "/repo/b.py"),
     ])
-    @patch("pdd.sync_code_main.git.Repo")
+    @patch("pdd.update_main.git.Repo")
     def test_processes_changed_pairs_only(
-        self, mock_repo_cls, mock_find, mock_git, mock_changed, mock_update
+        self, mock_repo_cls, mock_find, mock_git, mock_changed, mock_update, mock_arch
     ):
         """Only changed files are passed to update_file_pair."""
         mock_repo = MagicMock()
@@ -327,22 +337,26 @@ class TestSyncCodeMain:
         }
 
         ctx = self._make_ctx(quiet=True)
-        result = sync_code_main(ctx, None, None, False, "main")
+        result = update_main(
+            ctx, input_prompt_file=None, modified_code_file=None,
+            input_code_file=None, output=None, repo=True,
+        )
 
         assert result is not None
         msg, cost, model = result
         assert cost == pytest.approx(0.01)
         mock_update.assert_called_once()
 
-    @patch("pdd.sync_code_main.update_file_pair")
-    @patch("pdd.sync_code_main.is_code_changed", return_value=(True, "differs"))
-    @patch("pdd.sync_code_main.get_git_changed_files", return_value=set())
-    @patch("pdd.sync_code_main.find_and_resolve_all_pairs", return_value=[
+    @patch("pdd.update_main.update_architecture_from_prompt", return_value={"success": False, "updated": False, "changes": {}})
+    @patch("pdd.update_main.update_file_pair")
+    @patch("pdd.update_main.is_code_changed", return_value=(True, "differs"))
+    @patch("pdd.update_main.get_git_changed_files", return_value=set())
+    @patch("pdd.update_main.find_and_resolve_all_pairs", return_value=[
         ("/repo/prompts/a_python.prompt", "/repo/a.py"),
     ])
-    @patch("pdd.sync_code_main.git.Repo")
+    @patch("pdd.update_main.git.Repo")
     def test_passes_simple_flag(
-        self, mock_repo_cls, mock_find, mock_git, mock_changed, mock_update
+        self, mock_repo_cls, mock_find, mock_git, mock_changed, mock_update, mock_arch
     ):
         """The simple flag is forwarded to update_file_pair."""
         mock_repo = MagicMock()
@@ -358,21 +372,25 @@ class TestSyncCodeMain:
         }
 
         ctx = self._make_ctx(quiet=True)
-        sync_code_main(ctx, None, None, True, "main")
+        update_main(
+            ctx, input_prompt_file=None, modified_code_file=None,
+            input_code_file=None, output=None, repo=True, simple=True,
+        )
 
         _, kwargs = mock_update.call_args
         assert kwargs.get("simple") is True or mock_update.call_args[0][4] is True
 
-    @patch("pdd.sync_code_main.update_file_pair")
-    @patch("pdd.sync_code_main.is_code_changed", return_value=(True, "differs"))
-    @patch("pdd.sync_code_main.get_git_changed_files", return_value=set())
-    @patch("pdd.sync_code_main.find_and_resolve_all_pairs", return_value=[
+    @patch("pdd.update_main.update_architecture_from_prompt", return_value={"success": False, "updated": False, "changes": {}})
+    @patch("pdd.update_main.update_file_pair")
+    @patch("pdd.update_main.is_code_changed", return_value=(True, "differs"))
+    @patch("pdd.update_main.get_git_changed_files", return_value=set())
+    @patch("pdd.update_main.find_and_resolve_all_pairs", return_value=[
         ("/repo/prompts/a_python.prompt", "/repo/a.py"),
         ("/repo/prompts/b_python.prompt", "/repo/b.py"),
     ])
-    @patch("pdd.sync_code_main.git.Repo")
+    @patch("pdd.update_main.git.Repo")
     def test_accumulates_cost(
-        self, mock_repo_cls, mock_find, mock_git, mock_changed, mock_update
+        self, mock_repo_cls, mock_find, mock_git, mock_changed, mock_update, mock_arch
     ):
         """Total cost accumulates across all processed pairs."""
         mock_repo = MagicMock()
@@ -385,7 +403,10 @@ class TestSyncCodeMain:
         ]
 
         ctx = self._make_ctx(quiet=True)
-        result = sync_code_main(ctx, None, None, False, "main")
+        result = update_main(
+            ctx, input_prompt_file=None, modified_code_file=None,
+            input_code_file=None, output=None, repo=True,
+        )
 
         assert result is not None
         _, cost, models = result
@@ -393,12 +414,12 @@ class TestSyncCodeMain:
         assert "m1" in models
         assert "m2" in models
 
-    @patch("pdd.sync_code_main.find_and_resolve_all_pairs", return_value=[
+    @patch("pdd.update_main.find_and_resolve_all_pairs", return_value=[
         ("/repo/prompts/a_python.prompt", "/repo/src/a.py"),
     ])
-    @patch("pdd.sync_code_main.git.Repo")
-    @patch("pdd.sync_code_main.is_code_changed", return_value=(False, "no change"))
-    @patch("pdd.sync_code_main.get_git_changed_files", return_value=set())
+    @patch("pdd.update_main.git.Repo")
+    @patch("pdd.update_main.is_code_changed", return_value=(False, "no change"))
+    @patch("pdd.update_main.get_git_changed_files", return_value=set())
     def test_directory_passed_to_find_pairs(
         self, mock_git, mock_changed, mock_repo_cls, mock_find
     ):
@@ -408,57 +429,44 @@ class TestSyncCodeMain:
         mock_repo_cls.return_value = mock_repo
 
         ctx = self._make_ctx(quiet=True)
-        sync_code_main(ctx, "/repo/src", None, False, "main")
+        update_main(
+            ctx, input_prompt_file=None, modified_code_file=None,
+            input_code_file=None, output=None, repo=True,
+            directory="/repo/src",
+        )
 
-        mock_find.assert_called_once_with("/repo/src", True, None)
+        mock_find.assert_called_once_with("/repo/src", True, None, None)
 
 
 # ---------------------------------------------------------------------------
-# CLI integration
+# CLI integration — pdd update with --base-branch
 # ---------------------------------------------------------------------------
 
 
-class TestSyncCodeCommand:
-    """Tests for the sync-code Click command."""
+class TestUpdateCommandBaseBranch:
+    """Tests for the --base-branch option on pdd update."""
 
-    @patch("pdd.commands.maintenance.sync_code_main", return_value=None)
-    def test_command_exists_and_runs(self, mock_main):
-        """The sync-code command is registered and callable."""
+    @patch("pdd.update_main.update_main", return_value=("done", 0.5, "model"))
+    def test_base_branch_passed_through(self, mock_main):
+        """CLI --base-branch option is forwarded to update_main."""
         from pdd.cli import cli
 
         runner = CliRunner()
-        result = runner.invoke(cli, ["sync-code"], catch_exceptions=False)
-        # Should not error out (exit code 0 even if sync_code_main returns None)
-        assert result.exit_code == 0
-
-    @patch("pdd.commands.maintenance.sync_code_main", return_value=("done", 0.5, "model"))
-    def test_options_passed_through(self, mock_main):
-        """CLI options are forwarded to sync_code_main."""
-        from pdd.cli import cli
-
-        runner = CliRunner()
-        with runner.isolated_filesystem():
-            os.makedirs("mydir")
-            result = runner.invoke(
-                cli,
-                ["sync-code", "--directory", "mydir", "--extensions", "py", "--simple", "--base-branch", "develop"],
-                catch_exceptions=False,
-            )
+        result = runner.invoke(
+            cli,
+            ["update", "--base-branch", "develop"],
+            catch_exceptions=False,
+        )
 
         assert result.exit_code == 0
-        mock_main.assert_called_once()
         _, kwargs = mock_main.call_args
-        assert kwargs["extensions"] == "py"
-        assert kwargs["simple"] is True
         assert kwargs["base_branch"] == "develop"
 
-    def test_help_text(self):
-        """The sync-code command shows help text."""
+    def test_help_text_includes_base_branch(self):
+        """The update command shows --base-branch in help text."""
         from pdd.cli import cli
 
         runner = CliRunner()
-        result = runner.invoke(cli, ["sync-code", "--help"])
+        result = runner.invoke(cli, ["update", "--help"])
         assert result.exit_code == 0
-        assert "Reverse-sync" in result.output
-        assert "--directory" in result.output
         assert "--base-branch" in result.output

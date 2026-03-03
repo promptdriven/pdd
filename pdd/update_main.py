@@ -1,5 +1,6 @@
+import subprocess
 import sys
-from typing import Tuple, Optional, List, Dict, Any
+from typing import Tuple, Optional, List, Dict, Any, Set
 import click
 from rich import print as rprint
 import os
@@ -22,6 +23,8 @@ from .update_prompt import update_prompt
 from .git_update import git_update
 from .agentic_common import get_available_agents
 from .agentic_update import run_agentic_update
+from .sync_determine_operation import calculate_sha256, read_fingerprint
+from .architecture_sync import update_architecture_from_prompt
 from . import DEFAULT_TIME
 
 custom_theme = Theme({
@@ -174,6 +177,135 @@ def find_and_resolve_all_pairs(repo_root: str, quiet: bool = False, extensions: 
         
     return pairs
 
+def get_git_changed_files(repo_root: str, base_branch: str = "main") -> Set[str]:
+    """Get the set of files changed relative to a base branch.
+
+    Combines three sources:
+    - Files changed between merge-base and HEAD (committed changes)
+    - Uncommitted changes (staged + unstaged vs HEAD)
+    - Untracked files
+
+    Args:
+        repo_root: Absolute path to the repository root.
+        base_branch: The base branch to compare against.
+
+    Returns:
+        Set of absolute file paths that have changed.
+    """
+    changed: Set[str] = set()
+
+    try:
+        # Find the merge base
+        merge_base = subprocess.run(
+            ["git", "merge-base", "HEAD", base_branch],
+            capture_output=True, text=True, cwd=repo_root, check=True,
+        ).stdout.strip()
+
+        # Committed changes since merge-base (Added, Copied, Modified, Renamed)
+        committed = subprocess.run(
+            ["git", "diff", "--name-only", "--diff-filter=ACMR", merge_base, "HEAD"],
+            capture_output=True, text=True, cwd=repo_root, check=True,
+        ).stdout.strip()
+        if committed:
+            for f in committed.splitlines():
+                changed.add(os.path.join(repo_root, f))
+    except subprocess.CalledProcessError:
+        # If merge-base fails (e.g., no common ancestor), skip committed changes
+        pass
+
+    try:
+        # Uncommitted changes (staged + unstaged)
+        uncommitted = subprocess.run(
+            ["git", "diff", "--name-only", "HEAD"],
+            capture_output=True, text=True, cwd=repo_root, check=True,
+        ).stdout.strip()
+        if uncommitted:
+            for f in uncommitted.splitlines():
+                changed.add(os.path.join(repo_root, f))
+    except subprocess.CalledProcessError:
+        pass
+
+    try:
+        # Untracked files
+        untracked = subprocess.run(
+            ["git", "ls-files", "--others", "--exclude-standard"],
+            capture_output=True, text=True, cwd=repo_root, check=True,
+        ).stdout.strip()
+        if untracked:
+            for f in untracked.splitlines():
+                changed.add(os.path.join(repo_root, f))
+    except subprocess.CalledProcessError:
+        pass
+
+    return changed
+
+
+def derive_basename_and_language(
+    code_file_path: str, repo_root: str
+) -> Tuple[Optional[str], Optional[str]]:
+    """Extract basename (file stem) and language from a code file path.
+
+    Args:
+        code_file_path: Absolute path to the code file.
+        repo_root: Absolute path to the repository root.
+
+    Returns:
+        (basename, language) or (None, None) for unknown extensions.
+    """
+    ext = os.path.splitext(code_file_path)[1]
+    language = get_language(ext)
+    if not language:
+        return None, None
+
+    basename = os.path.splitext(os.path.basename(code_file_path))[0]
+    return basename, language.lower()
+
+
+def is_code_changed(
+    code_file_path: str,
+    repo_root: str,
+    git_changed_files: Set[str],
+) -> Tuple[bool, str]:
+    """Determine whether a code file has changed since last sync.
+
+    Strategy:
+    1. If a fingerprint exists, compare current SHA256 vs stored code_hash.
+    2. If no fingerprint, fall back to git changed-files set.
+
+    Args:
+        code_file_path: Absolute path to the code file.
+        repo_root: Absolute path to the repository root.
+        git_changed_files: Set of absolute paths from get_git_changed_files().
+
+    Returns:
+        (is_changed, reason) tuple.
+    """
+    basename, language = derive_basename_and_language(code_file_path, repo_root)
+    if basename is None or language is None:
+        return False, "unknown extension"
+
+    fingerprint = read_fingerprint(basename, language)
+
+    if fingerprint is not None:
+        stored_hash = fingerprint.code_hash
+        if stored_hash is None:
+            return True, "fingerprint exists but has no code_hash"
+
+        current_hash = calculate_sha256(Path(code_file_path))
+        if current_hash is None:
+            return False, "could not compute current hash"
+
+        if current_hash != stored_hash:
+            return True, "code hash differs from fingerprint"
+        return False, "code hash matches fingerprint"
+
+    # No fingerprint — fall back to git
+    abs_path = os.path.abspath(code_file_path)
+    if abs_path in git_changed_files:
+        return True, "no fingerprint, file in git changed set"
+    return False, "no fingerprint, file not in git changed set"
+
+
 def update_file_pair(prompt_file: str, code_file: str, ctx: click.Context, repo: git.Repo, simple: bool = False) -> Dict[str, Any]:
     """
     Wrapper to update a single file pair, choosing the correct method based on Git status and prompt content.
@@ -283,6 +415,15 @@ def update_file_pair(prompt_file: str, code_file: str, ctx: click.Context, repo:
             "error": str(e),
         }
 
+def _find_prd_file(project_root: Path) -> Optional[Path]:
+    """Find PRD file by convention: PRD.md, prd.md, *_prd.md, *_PRD.md."""
+    for pattern in ["PRD.md", "prd.md", "*_prd.md", "*_PRD.md"]:
+        matches = list(project_root.glob(pattern))
+        if matches:
+            return matches[0]
+    return None
+
+
 def update_main(
     ctx: click.Context,
     input_prompt_file: Optional[str],
@@ -296,6 +437,7 @@ def update_main(
     strength: Optional[float] = None,
     temperature: Optional[float] = None,
     simple: bool = False,
+    base_branch: str = "main",
 ) -> Optional[Tuple[str, float, str]]:
     """
     CLI wrapper for updating prompts based on modified code.
@@ -312,6 +454,7 @@ def update_main(
     :param directory: Optional directory to scan in repo mode (defaults to repo root).
     :param strength: Optional strength parameter (overrides ctx.obj if provided).
     :param temperature: Optional temperature parameter (overrides ctx.obj if provided).
+    :param base_branch: Git branch to compare against for change detection in repo mode.
     :return: Tuple containing the updated prompt, total cost, and model name.
     """
     quiet = ctx.obj.get("quiet", False)
@@ -337,12 +480,30 @@ def update_main(
         else:
             scan_dir = repo_root
         pairs = find_and_resolve_all_pairs(scan_dir, quiet, extensions, output)
-        
+
         if not pairs:
             rprint("[info]No scannable code files found in the repository.[/info]")
             return None
 
-        rprint(f"[info]Found {len(pairs)} total prompt/code pairs to process.[/info]")
+        # Change-detection: filter to only changed code files
+        git_changed_files = get_git_changed_files(repo_root, base_branch)
+
+        changed_pairs = []
+        for prompt_path, code_path in pairs:
+            changed, reason = is_code_changed(code_path, repo_root, git_changed_files)
+            if changed:
+                changed_pairs.append((prompt_path, code_path))
+
+        if not changed_pairs:
+            if not quiet:
+                rprint("[info]No changed code files detected. Everything is in sync.[/info]")
+            return None
+
+        if not quiet:
+            rprint(
+                f"[info]Found {len(changed_pairs)} changed file(s) "
+                f"out of {len(pairs)} total pairs.[/info]"
+            )
 
         results = []
         total_repo_cost = 0.0
@@ -362,21 +523,99 @@ def update_main(
 
         with progress:
             task = progress.add_task(
-                "Updating prompts...", 
-                total=len(pairs),
+                "Updating prompts...",
+                total=len(changed_pairs),
                 total_cost=0.0
             )
-            
-            for prompt_path, code_path in pairs:
+
+            for prompt_path, code_path in changed_pairs:
                 relative_path = os.path.relpath(code_path, repo_root)
                 progress.update(task, description=f"Processing [path]{relative_path}[/path]")
-                
+
                 result = update_file_pair(prompt_path, code_path, ctx, repo_obj, simple=simple)
                 results.append(result)
-                
+
                 total_repo_cost += result.get("cost", 0.0)
-                
+
                 progress.update(task, advance=1, total_cost=total_repo_cost)
+
+        # --- Post-update: Architecture sync ---
+        arch_entries_updated = 0
+        prd_status = "skipped"
+
+        # Determine prompts directory and architecture path
+        prompts_dir = Path(repo_root) / "prompts"
+        architecture_path = Path(repo_root) / "architecture.json"
+
+        successful_prompts = [
+            res["prompt_file"] for res in results
+            if "Success" in res.get("status", "")
+        ]
+
+        if successful_prompts and architecture_path.exists():
+            for prompt_file in successful_prompts:
+                prompt_filename = os.path.basename(prompt_file)
+                try:
+                    arch_result = update_architecture_from_prompt(
+                        prompt_filename,
+                        prompts_dir=prompts_dir,
+                        architecture_path=architecture_path,
+                    )
+                    if arch_result.get("success") and arch_result.get("updated"):
+                        arch_entries_updated += 1
+                except Exception:
+                    # Architecture sync is best-effort; don't fail the update
+                    pass
+
+        # --- Post-update: PRD sync (only if architecture changed) ---
+        if arch_entries_updated > 0:
+            prd_file = _find_prd_file(Path(repo_root))
+            if prd_file is None:
+                prd_status = "not found"
+            else:
+                try:
+                    from .agentic_common import run_agentic_task
+
+                    prd_content = prd_file.read_text(encoding="utf-8")
+                    arch_json = architecture_path.read_text(encoding="utf-8")
+
+                    instruction = (
+                        "You are reviewing whether a PRD (Product Requirements Document) needs updating "
+                        "after architecture changes.\n\n"
+                        f"Current PRD:\n{prd_content}\n\n"
+                        f"Updated architecture.json:\n{arch_json}\n\n"
+                        f"Architecture entries updated: {arch_entries_updated}\n\n"
+                        "If the PRD needs updating to reflect these architecture changes, output the "
+                        "complete updated PRD between <updated-prd> and </updated-prd> tags.\n"
+                        "If no update is needed, output: NO_UPDATE_NEEDED"
+                    )
+
+                    llm_output = run_agentic_task(
+                        instruction=instruction,
+                        cwd=Path(repo_root),
+                        verbose=ctx.obj.get("verbose", False),
+                        quiet=True,
+                        label="prd-sync",
+                    )
+
+                    if llm_output and "<updated-prd>" in llm_output:
+                        import re
+                        match = re.search(
+                            r"<updated-prd>(.*?)</updated-prd>",
+                            llm_output,
+                            re.DOTALL,
+                        )
+                        if match:
+                            prd_file.write_text(match.group(1).strip() + "\n", encoding="utf-8")
+                            prd_status = "updated"
+                        else:
+                            prd_status = "unchanged"
+                    else:
+                        prd_status = "unchanged"
+                except Exception:
+                    prd_status = "error"
+        else:
+            prd_status = "skipped (no arch changes)"
 
         table = Table(show_header=True, header_style="bold magenta")
         table.add_column("Prompt File", style="dim", width=50)
@@ -399,8 +638,11 @@ def update_main(
 
         console.print("\n[bold]Repository Update Summary[/bold]")
         console.print(table)
+        if arch_entries_updated > 0 or prd_status != "skipped (no arch changes)":
+            console.print(f"\n[info]Architecture entries updated: {arch_entries_updated}[/info]")
+            console.print(f"[info]PRD status: {prd_status}[/info]")
         console.print(f"\n[bold]Total Estimated Cost: ${total_repo_cost:.6f}[/bold]")
-        
+
         final_model_str = ", ".join(sorted(models_used)) if models_used else "N/A"
         return "Repository update complete.", total_repo_cost, final_model_str
 
