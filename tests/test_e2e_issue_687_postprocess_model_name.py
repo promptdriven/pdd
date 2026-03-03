@@ -16,7 +16,7 @@ The test should FAIL on buggy code and PASS once the fix is applied.
 
 import pytest
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from click.testing import CliRunner
 
 from pdd import cli
@@ -87,6 +87,7 @@ class TestPostprocessModelNameE2E:
                     runner = CliRunner()
                     result = runner.invoke(cli.cli, [
                         "--local",
+                        "--verbose",
                         "generate",
                         "test_python.prompt",
                         "--output", "output.py"
@@ -99,6 +100,13 @@ class TestPostprocessModelNameE2E:
         # Verify the output file was created
         output_file = tmp_path / "output.py"
         assert output_file.exists(), "Output file was not created"
+
+        # Verify the verbose output shows the postprocess model, not the initial model
+        assert POSTPROCESS_MODEL in result.output, (
+            f"BUG DETECTED (Issue #687): Verbose output shows initial model "
+            f"'{INITIAL_MODEL}' instead of postprocess model '{POSTPROCESS_MODEL}'.\n"
+            f"CLI output:\n{result.output}"
+        )
 
     def test_code_generator_returns_postprocess_model_directly(self):
         """
