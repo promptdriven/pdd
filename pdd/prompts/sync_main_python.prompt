@@ -23,6 +23,7 @@
         - `no_steer` (bool): Disable interactive steering and always use recommended operations
         - `steer_timeout` (Optional[float]): Steering choice timeout in seconds. None = default timeout.
         - `agentic_mode` (bool): When True, Python behaves like non-Python languages (uses agentic path for operations)
+        - `one_session` (bool): When True, run example/crash/verify/test/fix in a single agentic session instead of separate steps
 
     Outputs:
         - Tuple of (Dict[str, Any] results, float total_cost, str model_name)
@@ -74,14 +75,21 @@
     - Warn if budget < 1.0: `Warning: Budget of $X.XX is low`
     - max_attempts=0 is valid (skips LLM loop, goes straight to agentic mode)
 
-8. **Multi-Language Processing**:
-    - Process each detected language separately via sync_orchestration
+8. **One-Session Mode** (when `one_session=True`):
+    - Use `get_pdd_file_paths()` from `sync_determine_operation` to resolve module file paths
+    - Phase 1: If code file doesn't exist or `force`, run `code_generator_main()` to generate the code file; track the generation cost as `pre_cost`
+    - Phase 2: Call `run_one_session_sync()` from `one_session_sync` to run example/crash/verify/test in a single agent session
+    - Merge costs: add `pre_cost` to the one-session result's `total_cost`
+    - If code generation fails (code file still missing), return failure without proceeding to one-session
+
+9. **Multi-Language Processing**:
+    - Process each detected language separately via sync_orchestration (or one-session mode)
     - Track remaining_budget across languages (reduce after each language's cost)
     - Skip subsequent languages if budget exhausted
     - Aggregate results and costs from all language syncs
     - Forward steerability controls (`no_steer`, resolved `steer_timeout`) to each sync_orchestration call
 
-9. **User Feedback** (unless quiet=True):
+10. **User Feedback** (unless quiet=True):
     - Show sync progress summary before starting (detected context, languages, settings)
     - Display final results table (language, status, cost, details)
     - Total time elapsed, total cost, overall status
