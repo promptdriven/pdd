@@ -372,8 +372,10 @@ def get_available_agents() -> List[str]:
         available.append("google")
 
     # 3. OpenAI (Codex)
-    # Available if 'codex' CLI exists AND OPENAI_API_KEY is set
-    if _find_cli_binary("codex") and os.environ.get("OPENAI_API_KEY"):
+    # Available if 'codex' CLI exists AND (OPENAI_API_KEY is set OR codex auth signaled)
+    if _find_cli_binary("codex") and (
+        os.environ.get("OPENAI_API_KEY") or os.environ.get("PDD_CODEX_AUTH_AVAILABLE")
+    ):
         available.append("openai")
 
     return available
