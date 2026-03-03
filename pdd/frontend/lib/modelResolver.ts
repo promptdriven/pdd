@@ -8,7 +8,9 @@ import { ModelInfo } from '../api';
 export const ALL_MODELS: ModelInfo[] = [
   { model: 'openai/mlx-community/Qwen3-30B-A3B-4bit', provider: 'OpenAI', input_cost: 0, output_cost: 0, elo: 1040, context_limit: 128000, max_thinking_tokens: 0, reasoning_type: 'none', structured_output: false },
   { model: 'lm_studio/openai-gpt-oss-120b-mlx-6', provider: 'lm_studio', input_cost: 0.0001, output_cost: 0, elo: 1082, context_limit: 128000, max_thinking_tokens: 0, reasoning_type: 'effort', structured_output: true },
-  { model: 'gpt-5-nano', provider: 'OpenAI', input_cost: 0.05, output_cost: 0.4, elo: 1249, context_limit: 128000, max_thinking_tokens: 0, reasoning_type: 'none', structured_output: true },
+  { model: 'gemini/gemini-3.1-flash-lite-preview', provider: 'Google', input_cost: 0.25, output_cost: 1.5, elo: 1432, context_limit: 1000000, max_thinking_tokens: 0, reasoning_type: 'effort', structured_output: true },
+  { model: 'vertex_ai/gemini-3.1-flash-lite-preview', provider: 'Google', input_cost: 0.25, output_cost: 1.5, elo: 1432, context_limit: 1000000, max_thinking_tokens: 0, reasoning_type: 'effort', structured_output: true },
+  { model: 'gpt-5-nano', provider: 'OpenAI', input_cost: 0.05, output_cost: 0.4, elo: 1300, context_limit: 128000, max_thinking_tokens: 0, reasoning_type: 'effort', structured_output: true },
   { model: 'anthropic/claude-haiku-4-5-20251001', provider: 'Anthropic', input_cost: 1.0, output_cost: 5.0, elo: 1270, context_limit: 200000, max_thinking_tokens: 128000, reasoning_type: 'budget', structured_output: true },
   { model: 'gpt-5.1-codex-mini', provider: 'OpenAI', input_cost: 0.25, output_cost: 2.0, elo: 1325, context_limit: 200000, max_thinking_tokens: 0, reasoning_type: 'effort', structured_output: true },
   { model: 'groq/moonshotai/kimi-k2-instruct-0905', provider: 'OpenAI', input_cost: 1.0, output_cost: 3.0, elo: 1330, context_limit: 128000, max_thinking_tokens: 0, reasoning_type: 'none', structured_output: true },
