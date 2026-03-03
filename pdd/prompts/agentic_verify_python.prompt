@@ -12,7 +12,7 @@ Uses explore mode only because:
 2. What's needed is exploration, not another fix attempt with the code and/or program file.
 
 % Entry Point
-`run_agentic_verify(prompt_file, code_file, program_file, verification_log_file, *, verbose: bool = False, quiet: bool = False)`
+`run_agentic_verify(prompt_file, code_file, program_file, verification_log_file, *, verbose: bool = False, quiet: bool = False, deadline: Optional[float] = None)`
 
 Note: `program_file` is an example/demo program (NOT unit tests).
       `verification_log_file` contains LLM judgment + previous fix attempts.
@@ -25,6 +25,8 @@ Uses `agentic_verify_explore_LLM` (loaded via load_prompt_template).
 2. Record file mtimes before agent runs, detect changes after
 3. Parse the json from the agentic CLI call to get the success, message, cost, model, and changed_files
 4. Return 5-tuple: `(success, message, cost, model, changed_files)`
+5. Accept optional `deadline` param; fall back to `get_job_deadline()` from agentic_common when not provided. Forward effective deadline to `run_agentic_task`.
+6. Use `DEFAULT_MAX_RETRIES` from agentic_common for `run_agentic_task` max_retries.
 
 % Dependencies
 <module_dependencies>
@@ -32,6 +34,8 @@ Uses `agentic_verify_explore_LLM` (loaded via load_prompt_template).
     <pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
     <pdd.prompt.agentic_verify_explore_LLM><include>prompts/agentic_verify_explore_LLM.prompt</include></pdd.prompt.agentic_verify_explore_LLM>
 </module_dependencies>
+
+Note: Also import `DEFAULT_MAX_RETRIES` and `get_job_deadline` from `pdd.agentic_common`.
 
 % Deliverables
 - Code: `pdd/agentic_verify.py`

@@ -1,44 +1,48 @@
+% You are an expert LLM Prompt Engineer.
 <include>context/python_preamble.prompt</include>
 
-% Goal
-Write `pdd/git_update.py` with a `git_update` function.
-
 % Role & Scope
-Retrieves original code from Git HEAD, routes to agentic or legacy prompt update, preserves user's modified code on disk.
+Write `pdd/git_update.py`. This module is responsible for managing the prompt synchronization workflow. It retrieves original source code from Git HEAD, routes the update logic to either an agentic or legacy prompt update path, and ensures the user's local modifications are preserved on disk throughout the process.
 
 % Requirements
-1. Function signature (preserve existing params, add `simple`, `quiet`, `prompt_file` at end):
-   ```
+1. **Function Signature**: Implement `git_update` with the following signature:
+   ```python
    git_update(input_prompt: str, modified_code_file: str, strength: float, temperature: float, verbose: bool = False, time: float = DEFAULT_TIME, simple: bool = False, quiet: bool = False, prompt_file: Optional[str] = None) -> Tuple[Optional[str], float, str]
    ```
-   Note: `input_prompt` is the prompt TEXT content, not a file path.
-   Note: `prompt_file` is the path to the prompt file (required for agentic path).
-2. Read modified code from disk before any git operations
-3. Restore original code from Git HEAD (local only, no fetch) using `git.Repo` with `search_parent_directories=True`
-4. Routing logic:
-   - If `simple=False` AND `prompt_file` is provided AND `get_available_agents()` returns non-empty: use `run_agentic_update()`
-   - On agentic success: READ the prompt file to get updated content, then return that content
-   - Otherwise (simple=True, no prompt_file, no agents, or agentic failed): fall back to `update_prompt()`
-5. Always restore user's modified code to disk before returning
-6. Never stage or commit changes to Git
-7. Return (updated_prompt_content, cost, model) on success, (None, cost, model) on failure
-
-% Agentic Integration
-When using agentic update:
-- Need the prompt FILE PATH (not content) for `run_agentic_update()`
-- After success, read the file to get the updated prompt content for return value
-- Pass `verbose` and `quiet` parameters to agentic functions
-
-% Error Handling
-- Print Rich success/error panels
-- Follow return conventions from tests
+   - `input_prompt` is the raw text content of the prompt.
+   - `prompt_file` is the filesystem path to the prompt (required for agentic updates).
+2. **State Management**: 
+   - Read the `modified_code` from disk before performing any Git operations.
+   - Use `git.Repo(path, search_parent_directories=True)` to locate the repository.
+   - Restore the original code from `Git HEAD` using a local checkout (do not fetch).
+   - **Crucial**: Always restore the user's modified code to the disk in a `finally` block to prevent data loss.
+3. **Routing Logic**:
+   - Use `run_agentic_update()` if `simple=False`, `prompt_file` is provided, and `get_available_agents()` returns a non-empty list.
+   - If the agentic path succeeds, read the updated content from `prompt_file` and return it.
+   - Fall back to `update_prompt()` (legacy path) if agentic conditions are not met or if the agentic update fails.
+4. **Git Safety**: Never stage (`git add`) or commit changes to the repository.
+5. **Output**: Return a tuple containing `(updated_prompt_content, total_cost, model_name)`. Return `None` for the prompt content on failure.
+6. **Logging**: Use `rich.panel.Panel` and `rich.console.Console` to display success and error messages.
 
 % Dependencies
 <module_dependencies>
-<pdd.update_prompt><include>context/update_prompt_example.py</include></pdd.update_prompt>
-<pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
-<pdd.agentic_update><include>context/agentic_update_example.py</include></pdd.agentic_update>
+<pdd.update_prompt>
+    <include>context/update_prompt_example.py</include>
+</pdd.update_prompt>
+<pdd.agentic_common>
+    <include>context/agentic_common_example.py</include>
+</pdd.agentic_common>
+<pdd.agentic_update>
+    <include>context/agentic_update_example.py</include>
+</pdd.agentic_update>
 </module_dependencies>
 
+% Instructions
+- Ensure `relative_path` is calculated correctly from the repo root for the `git checkout` command.
+- When calling `run_agentic_update`, pass the `verbose` and `quiet` flags.
+- When calling `update_prompt`, use the `original_input_code` (from Git) and the `modified_code` (from disk).
+- Handle exceptions by printing a Rich Panel with the error message and returning the current accumulated cost.
+- Use `DEFAULT_TIME` imported from the local package.
+
 % Deliverables
-- Code: `pdd/git_update.py`
+- A single Python file: `pdd/git_update.py`

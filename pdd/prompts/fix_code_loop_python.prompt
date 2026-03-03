@@ -16,36 +16,37 @@
     strength: float, temperature: float, max_attempts: int, budget: float,
     error_log_file: str, verbose: bool = False, time: float = DEFAULT_TIME,
     prompt_file: str = "", agentic_fallback: bool = True,
-    use_cloud: bool = False
+    use_cloud: bool = False, prior_cost: float = 0.0
   ) -> Tuple[bool, str, str, int, float, Optional[str]]
   # Returns: (success, final_program, final_code, total_attempts, total_cost, model_name)
   # On failure: success=False, final_program="", final_code="" (even if originals restored)
   # Hybrid Cloud: When use_cloud=True, LLM fix calls go to cloud crashCode endpoint while local program execution stays local.
+  # prior_cost: Accumulated cost from prior operations (e.g. auto-deps). Initializes total_cost so displayed "Total Cost" reflects cumulative spending (Issue #364).
 
 % Helpers
   - `_normalize_agentic_result(result)`: Normalize 2/3/4/5-tuple from run_agentic_crash to 5-tuple.
-  - `_safe_run_agentic_crash(*, prompt_file, code_file, program_file, crash_log_file, cwd=None)`: Wrapper that returns failure if prompt_file empty. Maps verification_program → program_file, error_log_file → crash_log_file. Pass `cwd=Path(prompt_file).parent` when calling.
-  - `run_process_with_output(cmd_args, timeout=300)`: Subprocess with threaded byte-by-byte streaming capture. Returns (returncode, stdout, stderr).
+  - `_safe_run_agentic_crash(*, prompt_file, code_file, program_file, crash_log_file, cwd=None)`: Wrapper that returns failure if prompt_file empty. Maps verification_program → program_file, error_log_file → crash_log_file. Accepts cwd for API but does NOT pass it to run_agentic_crash. Passes verbose=True, quiet=False.
+  - `run_process_with_output(cmd_args, timeout=300)`: Subprocess with start_new_session=True and threaded byte-by-byte streaming capture. On timeout, kills entire process group via os.killpg. Thread joins have timeouts; closes pipes if threads remain alive. Returns (returncode, stdout, stderr).
   - `ProcessResult`: Simple class holding returncode, stdout, stderr.
-  - `cloud_crash_fix(program, prompt, code, errors, strength, temperature, time, verbose, program_path, code_path, language)`: Call cloud crashCode endpoint for LLM crash fix. Returns (update_program, update_code, fixed_program, fixed_code, analysis, cost, model_name). Falls back to local on cloud failure.
+  - `cloud_crash_fix(program, prompt, code, errors, strength, temperature, time, verbose, program_path, code_path, language)`: Call cloud crashCode endpoint (CLOUD_REQUEST_TIMEOUT=400s) for LLM crash fix. Returns (update_program, update_code, fixed_program, fixed_code, analysis, cost, model_name). Falls back to local on cloud failure.
 
 % Process
-  0. Validate files: code_file missing → FileNotFoundError; verification_program missing → return failure. Non-Python: run default_verify_cmd_for, trigger agentic fallback on failure or return success.
+  0. Validate files: code_file missing → FileNotFoundError; verification_program missing → return failure. Non-Python: get verify_cmd via default_verify_cmd_for. If no verify_cmd available, create error_log_file and trigger agentic fallback directly. If verify_cmd fails, write output to error_log_file and trigger agentic fallback. If verify_cmd succeeds, return success.
 
-  1. Remove error_log_file if exists. Create backups: `{stem}_original_backup{suffix}`.
+  1. Remove error_log_file if exists. Create backups in `.pdd/backups/<code_stem>/<timestamp>/` as `code_original{ext}` and `program_original{ext}`.
 
-  2. Init: attempts=0, total_cost=0.0, success=False, model_name=None, history_log="<history>\n".
+  2. Init: attempts=0, total_cost=prior_cost, success=False, model_name=None, history_log="<history>\n".
 
   3. Loop while attempts < max_attempts and total_cost <= budget:
      - Run verification (300s timeout), append <verification> with <status>/<output>/<error> CDATA.
      - Success (rc=0): break. Failure: add <current_error>, check limits.
-     - Create per-attempt backups: `{base}_{N}{ext}`.
+     - Create per-attempt backups: `code_{N}{ext}`, `program_{N}{ext}` in same backup dir.
      - Call fix_code_module_errors, append <fixing> with <llm_analysis>/<decision>/<cost>/<model>.
-     - Write history to error_log_file. Accumulate cost.
+     - Write history to error_log_file. Accumulate cost. Increment attempts.
      - Stop if budget exceeded or no changes suggested.
-     - Apply fixes, then increment attempts.
+     - Apply fixes.
 
-  4. On failure: restore original backups. Always cleanup backups. Write final history.
+  4. On failure: restore original backups. Always cleanup backup files. Write final history.
 
   5. Success: read final contents. Failure: return empty strings.
 

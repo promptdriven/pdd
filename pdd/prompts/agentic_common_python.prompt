@@ -28,214 +28,155 @@ Shared infrastructure for agentic CLI invocations (Claude Code, Gemini, Codex). 
 </codex_cli_reference>
 
 % Requirements
-1. Export `AGENT_PROVIDER_PREFERENCE = ["anthropic", "google", "openai"]`
+1. Provider preference: private `_DEFAULT_PROVIDER_PREFERENCE = ["anthropic", "google", "openai"]` with public `get_agent_provider_preference() -> List[str]` that reads `PDD_AGENTIC_PROVIDER` env var for comma-separated override (e.g., `google,anthropic`). Falls back to default if unset/empty.
 2. Provide logging utilities that accept `verbose: bool` and `quiet: bool` as function parameters (callers pass these from their context)
-3. Check agent availability:
-   - CLI command must exist (use `shutil.which`)
-   - API key must be configured (via `_load_model_data()` from llm_invoke)
-   - Exception: Anthropic is available if Claude CLI exists, even without API key (supports subscription auth)
+3. Check agent availability via multi-strategy CLI discovery (`_find_cli_binary`):
+   - Strategy 1: `.pddrc` config override (`agentic.{name}_path`)
+   - Strategy 2: `shutil.which` for standard PATH lookup
+   - Strategy 3: Search common installation directories (`_COMMON_CLI_PATHS`) with nvm glob expansion
+   - Anthropic: available if Claude CLI exists, even without API key (subscription auth)
+   - Google: requires CLI AND (API key OR Vertex AI auth via `GOOGLE_GENAI_USE_VERTEXAI=true` with `GOOGLE_APPLICATION_CREDENTIALS` or `GOOGLE_CLOUD_PROJECT`)
+   - OpenAI: requires CLI AND `OPENAI_API_KEY`
 4. Run agents in **headless mode** with JSON output for structured response parsing and real cost tracking. Each provider requires specific flags for auto-approval of file operations.
 5. Write prompt to unique temp file (`.agentic_prompt_<random>.txt`), invoke CLI with agentic instruction, clean up
-6. Sanitize environment for non-interactive subprocess execution (TERM=dumb, NO_COLOR=1, CI=1). Strip `PDD_OUTPUT_COST_PATH` from the subprocess env so child processes don't write to the parent's cost CSV. For Anthropic, remove ANTHROPIC_API_KEY from env to force subscription auth.
+6. Sanitize environment for non-interactive subprocess execution (TERM=dumb, NO_COLOR=1, CI=1). Strip `PDD_OUTPUT_COST_PATH` from the subprocess env so child processes don't write to the parent's cost CSV.
 7. Parse JSON output to extract actual cost:
-   - Anthropic: `data["total_cost_usd"]` (USD directly); extract response from `data["result"]` or `data["response"]`
-   - Google: Calculate from `data["stats"]["models"][model]["tokens"]` fields (prompt, candidates, cached)
-   - OpenAI: Calculate from `data["usage"]` fields (input_tokens, output_tokens, cached_input_tokens)
+   - Anthropic: `total_cost_usd` first; fallback to `modelUsage[model].costUSD` sum; then token-based estimation from `usage` field using `ANTHROPIC_PRICING_BY_FAMILY`. Extract response from `data["result"]` or `data["response"]`.
+   - Google: Calculate from `data["stats"]["models"][model]["tokens"]` fields using `GEMINI_PRICING_BY_FAMILY` (flash vs pro detection by model name)
+   - OpenAI: Calculate from `data["usage"]` fields using `CODEX_PRICING`. Handle both legacy single-JSON and modern NDJSON format (item.completed agent_message + session.end/turn.completed for usage).
 
 % Function Signatures
 
+`get_agent_provider_preference() -> List[str]`
+- Returns provider preference order, overridable via `PDD_AGENTIC_PROVIDER` env var
+
 `get_available_agents() -> List[str]`
 - Returns list of available provider names (e.g., `["anthropic", "google"]`)
-- Checks both CLI binary exists AND API key is configured
+- Uses `_find_cli_binary()` for robust CLI discovery
 
-`run_agentic_task(instruction: str, cwd: Path, *, verbose: bool = False, quiet: bool = False, label: str = "", timeout: Optional[float] = None, max_retries: int = 1, retry_delay: float = DEFAULT_RETRY_DELAY) -> Tuple[bool, str, float, str]`
-- Tries providers in `AGENT_PROVIDER_PREFERENCE` order
+`run_agentic_task(instruction: str, cwd: Path, *, verbose: bool = False, quiet: bool = False, label: str = "", timeout: Optional[float] = None, max_retries: int = 1, retry_delay: float = DEFAULT_RETRY_DELAY, deadline: Optional[float] = None) -> Tuple[bool, str, float, str]`
+- Tries providers in `get_agent_provider_preference()` order (filtered to available agents)
 - Returns (success, output, cost, provider_used)
-- Optional `timeout` parameter overrides environment variable and default
+- Optional `timeout` overrides default
 - Optional `max_retries` controls retry attempts per provider before fallback (default: 1 for backward compatibility; use DEFAULT_MAX_RETRIES in production)
-- Optional `retry_delay` is base delay in seconds for exponential backoff (default: DEFAULT_RETRY_DELAY)
+- Optional `deadline` (Unix timestamp) for job-level time budgeting; also reads `PDD_JOB_DEADLINE` env var
 
-% Default Timeout
-Export `DEFAULT_TIMEOUT_SECONDS: float = 240.0` as fallback for orchestrators that don't specify step-specific timeouts.
+`post_step_comment(repo_owner, repo_name, issue_number, step_num, total_steps, description, output, cwd) -> bool`
+- Posts fallback GitHub comment when agent fails to run (e.g., no providers available)
+- Truncates output to 1000 chars; returns False without crashing if `gh` CLI is missing
 
-Note: Per-step timeout dictionaries (BUG_STEP_TIMEOUTS, CHANGE_STEP_TIMEOUTS, E2E_FIX_STEP_TIMEOUTS) are defined in their respective orchestrator modules, not here. This keeps workflow-specific configuration with the workflow.
+% Constants
+- `DEFAULT_TIMEOUT_SECONDS: float = 600.0` — increased from 240s; complex agentic tasks (verify, fix) need time for file exploration, sub-agent spawning, and code editing
+- `MIN_VALID_OUTPUT_LENGTH: int = 50`
+- `DEFAULT_MAX_RETRIES: int = 3`
+- `DEFAULT_RETRY_DELAY: float = 5.0`
+- `MAX_ERROR_SNIPPET_LENGTH: int = 2000` — truncation length for provider error messages
+- `JOB_TIMEOUT_MARGIN_SECONDS: float = 120.0` — reserve for cleanup/reporting after last attempt
+- `MIN_ATTEMPT_TIMEOUT_SECONDS: float = 60.0` — don't start an attempt if less than this remains
 
-% Retry Constants
-Export `DEFAULT_MAX_RETRIES: int = 3` for orchestrators to use.
-Export `DEFAULT_RETRY_DELAY: float = 5.0` as base delay for exponential backoff.
+Note: Per-step timeout dictionaries (BUG_STEP_TIMEOUTS, etc.) are defined in their respective orchestrator modules, not here.
 
-All orchestrators should import and use these constants for consistent retry behavior.
+% Token Pricing
 
-% Agentic Debug Logging
+Use a `Pricing` dataclass with `input_per_million`, `output_per_million`, `cached_input_multiplier` fields.
 
-Export `AGENTIC_LOG_DIR = ".pdd/agentic-logs"` - directory for storing debug logs.
+- `GEMINI_PRICING_BY_FAMILY`: flash ($0.35/$1.05, cached 50%), pro ($3.50/$10.50, cached 50%)
+- `CODEX_PRICING`: $1.50/$6.00, cached 25%
+- `ANTHROPIC_PRICING_BY_FAMILY`: opus ($15/$75, cached 10%), sonnet ($3/$15, cached 10%), haiku ($0.80/$4, cached 10%). Cache write billed at 1.25x input.
 
-Internal module-level variable `_AGENTIC_SESSION_ID: Optional[str] = None` - initialized on first log call per workflow run.
+Cost formula for all providers: `new_input = max(0, total_input - cached)`, then sum input_cost + cached_cost + output_cost.
 
-`_log_agentic_interaction(label: str, prompt: str, response: str, cost: float, provider: str, success: bool, duration: float, cwd: Path) -> None`
-- Logs full prompt and response to JSONL file in `.pdd/agentic-logs/`
-- Creates log directory if it doesn't exist
-- Each workflow run generates a single session file: `session_YYYYMMDD_HHMMSS.jsonl`
-- Session ID is initialized on first call (using `datetime.now().strftime("%Y%m%d_%H%M%S")`)
-- Silently handles write errors (never crashes workflow for logging failures)
+% CLI Discovery
 
-JSONL Entry Format:
-```json
-{
-  "timestamp": "ISO8601 timestamp",
-  "label": "step identifier (e.g., step1, step5_5)",
-  "cwd": "working directory path",
-  "provider": "anthropic|google|openai",
-  "success": true|false,
-  "cost_usd": 0.05,
-  "duration_seconds": 2.5,
-  "prompt_length": 1234,
-  "response_length": 567,
-  "prompt": "full prompt text",
-  "response": "full response text"
-}
-```
+`_find_cli_binary(name: str, config: Optional[Dict] = None) -> Optional[str]`
+- Multi-strategy search: .pddrc override → shutil.which → common paths with nvm glob expansion
+- `_COMMON_CLI_PATHS` dict maps CLI names to lists of `Path` objects for common installation locations
+- nvm paths use glob expansion (`~/.nvm/versions/node/*/bin/`) to search all installed node versions
 
-Integration with `run_agentic_task()`:
-- On successful completion with `verbose=True`: log the interaction with `success=True`
-- On provider failure with `verbose=True`: log the failed attempt with `success=False`, `cost=0.0`
-- When `verbose=False`: no logging occurs (preserves default quiet behavior)
+`_load_agentic_config() -> Dict`
+- Loads `agentic` section from `.pddrc` (searches current dir up to `MAX_PDDRC_SEARCH_DEPTH=10` parents, then home dir)
 
-% False Positive Detection (Issue #261)
-Export `MIN_VALID_OUTPUT_LENGTH: int = 50`
-
-In `run_agentic_task()`, after a provider returns success, detect false positives:
-- If `cost == 0.0` AND `len(message.strip()) < MIN_VALID_OUTPUT_LENGTH`:
-  - This indicates no actual work was done (provider returned success without doing anything)
-  - Log error: "Provider '{provider}' returned success but appears to be a false positive"
-  - Treat as failure and try next provider (continue to fallback)
-- Only return success if provider produces legitimate output (>= 50 chars) OR has non-zero cost
-
-% Token Pricing (for providers that return tokens, not USD)
-- Gemini: Refer to current pricing from CLI documentation above
-- Codex: $1.50/1M input, $6/1M output (75% discount for cached tokens)
+`_get_cli_diagnostic_info(name: str) -> str`
+- Returns actionable troubleshooting message when CLI not found (common paths, .pddrc config example, current PATH)
 
 % CLI Invocation Pattern
 Critical: Build agentic instruction pointing to temp file:
 `"Read the file {prompt_file} for instructions. You have full file access to explore and modify files as needed."`
 
 Provider commands (headless + JSON output + file write permissions):
-- Anthropic: `["claude", "-p", <instruction>, "--dangerously-skip-permissions", "--output-format", "json"]`
-- Google: `["gemini", "-p", <instruction>, "--yolo", "--output-format", "json"]`
-- OpenAI: `["codex", "exec", "--full-auto", "--json", <instruction>]`
+- Anthropic: `[cli_path, "-p", "-", "--dangerously-skip-permissions", "--output-format", "json"]` — pipe prompt via stdin (prevents Claude from interpreting file-based instructions as automated bot). Optional `--model` via `CLAUDE_MODEL` env var.
+- Google: `[cli_path, "Read the file {filename} for your full instructions...", "--yolo", "--output-format", "json"]` — pass instruction as positional arg (not `-p`, which passes text literally). Optional `--model` via `GEMINI_MODEL` env var.
+- OpenAI: `[cli_path, "exec", "--sandbox", <sandbox_mode>, "--json", <prompt_path>]` — sandbox mode from `CODEX_SANDBOX_MODE` env var (default: `danger-full-access` to avoid Landlock/seccomp panics in containers). Optional `--model` via `CODEX_MODEL` env var.
 
-Notes:
-- `--dangerously-skip-permissions` (Claude): allows file modifications without prompts
-- `--yolo` (Gemini): auto-approves all operations without prompts
-- `--full-auto` (Codex): exits read-only sandbox, allows file edits
+% False Positive Detection
+After a provider returns success, detect false positives:
+- Empty output (after strip) is ALWAYS a false positive, regardless of cost
+- Zero cost AND short output (< MIN_VALID_OUTPUT_LENGTH) is a false positive
+- Treat as failure and retry/fallback
 
-% Error Handling
-- Return `(False, "No agents available", 0.0, "")` if no providers have both CLI and API key configured
-- Return `(False, "{provider} error: {message}", 0.0, provider)` on subprocess failure
-- Try next provider in preference order on failure; return failure only if all providers fail
-- Log false positive detection at error level before trying next provider
+% Deadline-Aware Retry Budgeting
+`get_job_deadline() -> Optional[float]` reads `PDD_JOB_DEADLINE` env var (set by server for subprocess jobs).
+
+Before each attempt, compute `remaining = deadline - now - JOB_TIMEOUT_MARGIN_SECONDS`. If `remaining < MIN_ATTEMPT_TIMEOUT_SECONDS`, skip attempt and break (don't try other providers either). Otherwise cap per-attempt timeout to `min(effective_timeout, remaining)`.
 
 % Retry Logic
 - `max_retries` controls how many times to attempt a provider before moving to next (default: 1 = no retries for backward compatibility with tests)
-- `retry_delay` is the base delay in seconds between retries
-- On failure, retry the same provider with exponential backoff: delay = retry_delay * attempt_number
-- Only after all retries exhausted for a provider, move to next provider in preference order
-- Log retry attempts when verbose mode is enabled
+- On failure, retry with exponential backoff: `delay = retry_delay * attempt_number`
+- Only after all retries exhausted for a provider, move to next provider
 - Orchestrators should import `DEFAULT_MAX_RETRIES` and pass it explicitly
+
+% Agentic Debug Logging
+
+Export `AGENTIC_LOG_DIR = ".pdd/agentic-logs"`.
+
+`_log_agentic_interaction(label, prompt, response, cost, provider, success, duration, cwd) -> None`
+- JSONL file per session in `.pdd/agentic-logs/session_YYYYMMDD_HHMMSS.jsonl`
+- Silently handles write errors (never crashes workflow)
+- Only called when `verbose=True` in `run_agentic_task`
+
+% User Feedback Injection
+In `run_agentic_task()`, read the `PDD_USER_FEEDBACK` environment variable. If set, append a "User Feedback" section to the agentic instruction before the prompt file reference.
 
 % GitHub State Persistence (Cross-Machine Resume)
 
 Shared infrastructure for storing workflow state in GitHub issue comments using hidden HTML markers.
-This enables workflows to resume from any machine with access to the repository.
 
 Constants:
 - `GITHUB_STATE_MARKER_START = "<!-- PDD_WORKFLOW_STATE:"`
 - `GITHUB_STATE_MARKER_END = "-->"`
 
-State Comment Format:
-```html
-<!-- PDD_WORKFLOW_STATE:change:issue-123
-{
-  "workflow": "change",
-  "last_completed_step": 7,
-  "step_outputs": {...},
-  "total_cost": 0.45,
-  "github_comment_id": 12345678
-}
--->
-```
-
 Low-Level Functions:
 
 `_build_state_marker(workflow_type: str, issue_number: int) -> str`
-- Build unique marker prefix: `<!-- PDD_WORKFLOW_STATE:{workflow_type}:issue-{issue_number}`
-
 `_serialize_state_comment(workflow_type: str, issue_number: int, state: Dict) -> str`
-- Serialize state dict to hidden HTML comment format
-- Include newline after marker, JSON body, then closing marker
-
 `_parse_state_from_comment(body: str, workflow_type: str, issue_number: int) -> Optional[Dict]`
-- Extract state JSON from comment body if marker matches
-- Return None if marker not found or JSON parse fails
 
-GitHub API Functions (use `gh` CLI):
+GitHub API Functions (use `gh` CLI with `--paginate`):
 
-`_find_state_comment(repo_owner: str, repo_name: str, issue_number: int, workflow_type: str, cwd: Path) -> Optional[Tuple[int, Dict]]`
-- List comments via `gh api repos/{owner}/{repo}/issues/{number}/comments`
-- Search for comment containing matching state marker
-- Return (comment_id, state_dict) or None
-- Handle missing `gh` CLI gracefully (return None, log warning)
+`_find_state_comment(repo_owner, repo_name, issue_number, workflow_type, cwd) -> Optional[Tuple[int, Dict]]`
+- List comments via `gh api ... --paginate`, search for matching state marker
+- Handle missing `gh` CLI gracefully (return None)
 
-`github_save_state(repo_owner: str, repo_name: str, issue_number: int, workflow_type: str, state: Dict, cwd: Path, comment_id: Optional[int] = None) -> Optional[int]`
-- If comment_id provided: PATCH existing comment via `gh api -X PATCH repos/{owner}/{repo}/issues/comments/{comment_id} -f body=...`
-- If no comment_id: POST new comment via `gh api -X POST repos/{owner}/{repo}/issues/{number}/comments -f body=...`
-- Return comment_id on success, None on failure (log warning, never crash)
-
-`github_load_state(repo_owner: str, repo_name: str, issue_number: int, workflow_type: str, cwd: Path) -> Tuple[Optional[Dict], Optional[int]]`
-- Call `_find_state_comment` to load state from GitHub
-- Return (state_dict, comment_id) or (None, None)
-
-`github_clear_state(repo_owner: str, repo_name: str, issue_number: int, workflow_type: str, cwd: Path) -> bool`
-- Find state comment, DELETE via `gh api -X DELETE repos/{owner}/{repo}/issues/comments/{comment_id}`
-- Return True on success or if no comment found, False on error
+`github_save_state(...)` — PATCH existing or POST new comment, return comment_id
+`github_load_state(...)` — wrapper around `_find_state_comment`, returns (state, comment_id)
+`github_clear_state(...)` — DELETE state comment if exists
 
 State Validation (Issue #467):
 
-`validate_cached_state(last_completed_step: Union[int, float], step_outputs: Dict[str, str], step_order: Optional[List[Union[int, float]]] = None, quiet: bool = False) -> Union[int, float]`
-- Scans step_outputs for entries with "FAILED:" prefix and corrects last_completed_step to the actual last successfully completed step
-- Prevents the "blind resume" bug where the orchestrator trusts a corrupted last_completed_step and skips failed steps
-- If step_order is None, derives order from step_outputs keys sorted numerically
-- Iterates steps in order; stops at the first missing or "FAILED:"-prefixed entry
-- Returns the corrected last_completed_step (unchanged if no correction needed)
-- Prints a warning when correction is applied (unless quiet=True)
+`validate_cached_state(last_completed_step, step_outputs, step_order=None, quiet=False) -> Union[int, float]`
+- Scans step_outputs for "FAILED:" prefix entries and corrects last_completed_step
+- Prevents "blind resume" bug
 
-High-Level Wrapper Functions (used by orchestrators):
+High-Level Wrappers:
 
-`load_workflow_state(cwd: Path, issue_number: int, workflow_type: str, state_dir: Path, repo_owner: str, repo_name: str, use_github_state: bool = True) -> Tuple[Optional[Dict], Optional[int]]`
-- If `use_github_state` and `_should_use_github_state()`: fetch from GitHub first
-- If GitHub returns state: cache locally for fast subsequent reads, return (state, comment_id)
-- If GitHub fails or disabled: try local file fallback
-- Return (state, github_comment_id) or (None, None)
-- Gracefully handle: missing gh CLI, API errors, permission errors
+`load_workflow_state(cwd, issue_number, workflow_type, state_dir, repo_owner, repo_name, use_github_state=True) -> Tuple[Optional[Dict], Optional[int]]`
+- GitHub first (with `--paginate`), cache locally, fallback to local file
 
-`save_workflow_state(cwd: Path, issue_number: int, workflow_type: str, state: Dict, state_dir: Path, repo_owner: str, repo_name: str, use_github_state: bool = True, github_comment_id: Optional[int] = None) -> Optional[int]`
-- Always write to local file first (fast, reliable)
-- If `use_github_state` and `_should_use_github_state()`: write to GitHub
-- On GitHub failure: log warning, continue (local write succeeded)
-- Return new/updated github_comment_id or None
-
-`clear_workflow_state(cwd: Path, issue_number: int, workflow_type: str, state_dir: Path, repo_owner: str, repo_name: str, use_github_state: bool = True) -> None`
-- Clear local state file
-- If `use_github_state` and `_should_use_github_state()`: delete GitHub comment
-- Log any errors but never raise (workflow completed successfully)
+`save_workflow_state(...)` — local first, then GitHub
+`clear_workflow_state(...)` — clear both local and GitHub
 
 `_should_use_github_state(use_github_state: bool) -> bool`
-- Return False if `use_github_state` parameter is False
-- Return False if `PDD_NO_GITHUB_STATE=1` environment variable is set
-- Return True otherwise
-
-% User Feedback Injection
-In `run_agentic_task()`, read the `PDD_USER_FEEDBACK` environment variable. If set, append a "User Feedback" section to the agentic instruction before the prompt file reference. This injects user comments from a previous execution attempt into the LLM prompt so the agent factors in the user's corrections.
+- Returns False if param is False or `PDD_NO_GITHUB_STATE=1` env var is set
 
 % Dependencies
 <pdd.llm_invoke><include>context/llm_invoke_example.py</include></pdd.llm_invoke>

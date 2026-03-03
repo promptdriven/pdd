@@ -10,12 +10,12 @@ Agentic prompt update using Claude Code, Gemini, or Codex CLI. Invokes AI agents
 1. Function: `run_agentic_update(prompt_file: str, code_file: str, test_files: Optional[List[Path]] = None, *, tests_dir: Optional[Path] = None, verbose: bool = False, quiet: bool = False) -> Tuple[bool, str, float, str, List[str]]`
 2. Return 5-tuple: (success, message, cost, model_used, changed_files)
 3. If no agents available, return `(False, "No agentic CLI available", 0.0, "", [])`
-4. Auto-discover test files if `test_files` is None using pattern `test_{code_stem}*{code_suffix}`
+4. Auto-discover test files if `test_files` is None using pattern `test_{code_stem}*{code_suffix}`. If explicit test files are provided, validate they exist (fail early if missing).
 5. Search for tests in order: `tests_dir` (if provided), `tests/` relative to code, same directory, sibling `../tests/`, project root `tests/`
 6. Load `agentic_update_LLM` template via `load_prompt_template()`, format with prompt_path, code_path, test_paths
-7. Use `run_agentic_task()` from agentic_common to execute
-8. Detect changed files by comparing mtimes before/after agent run
-9. Return success if prompt file was modified
+7. Use `run_agentic_task()` from agentic_common to execute with `DEFAULT_MAX_RETRIES`
+8. Detect changed files by comparing mtimes before/after agent run. After agent run, re-discover test files to catch newly created ones.
+9. Return success if prompt file was modified (regardless of agent-reported success)
 
 % Dependencies
 <pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>

@@ -45,4 +45,4 @@
   - Extract the file extension from the test file path to perform CSV lookup.
   - When replacing `{file}` placeholder, use the original test_file string as provided.
   - Include docstrings for all public functions.
-  - Call `default_verify_cmd_for()` with the language in lowercase.
+  - Call `default_verify_cmd_for(language, test_file)` with the language in lowercase and the test file path.
