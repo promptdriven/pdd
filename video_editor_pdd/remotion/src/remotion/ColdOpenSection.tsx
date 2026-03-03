@@ -24,9 +24,12 @@ const Subtitles: React.FC = () => {
     (w) => currentTime >= w.start && currentTime <= w.end + 0.3
   );
 
-  // Show a rolling window of recent words to prevent text from clipping frame edges
-  const recentWords = visible.slice(-3);
-  const text = recentWords.map((w) => w.word).join(" ");
+  // Show only the current segment's recent words to prevent text from clipping frame edges
+  const currentSegment = visible.length > 0 ? visible[visible.length - 1].segmentId : null;
+  const segmentWords = currentSegment
+    ? visible.filter((w) => w.segmentId === currentSegment)
+    : [];
+  const text = segmentWords.map((w) => w.word).join(" ");
 
   return (
     <div
@@ -37,7 +40,7 @@ const Subtitles: React.FC = () => {
         right: 0,
         display: "flex",
         justifyContent: "center",
-        padding: "0 160px",
+        padding: "0 100px",
         boxSizing: "border-box",
       }}
     >
