@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from pdd.one_session_sync import (
+    _STEP_TO_PHASE,
     _compute_import_base,
     _format_step_display,
     _read_new_progress,
@@ -119,6 +120,150 @@ class TestProgressHelpers:
 
     def test_format_unknown_step(self):
         assert _format_step_display("something_custom") == "something_custom"
+
+
+# ---------------------------------------------------------------------------
+# _STEP_TO_PHASE mapping
+# ---------------------------------------------------------------------------
+
+class TestStepToPhase:
+    """Tests for _STEP_TO_PHASE mapping dict."""
+
+    def test_known_phase_mappings(self):
+        assert _STEP_TO_PHASE["example_generate"] == "example"
+        assert _STEP_TO_PHASE["crash_fix"] == "crash"
+        assert _STEP_TO_PHASE["verify"] == "verify"
+        assert _STEP_TO_PHASE["test_generate"] == "test"
+        assert _STEP_TO_PHASE["done"] == "synced"
+
+    def test_intermediate_steps_not_mapped(self):
+        """crash_fix_attempt, test_fix_attempt, test_pass have no phase mapping."""
+        assert "crash_fix_attempt:1" not in _STEP_TO_PHASE
+        assert "test_fix_attempt:1" not in _STEP_TO_PHASE
+        assert "test_pass" not in _STEP_TO_PHASE
+
+
+# ---------------------------------------------------------------------------
+# PDD_PHASE marker emission
+# ---------------------------------------------------------------------------
+
+class TestPhaseMarkerEmission:
+    """Tests that PDD_PHASE: markers are printed to stdout."""
+
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
+    def test_heartbeat_emits_phase_markers(self, mock_build, mock_task, tmp_path, capsys):
+        """Heartbeat should print PDD_PHASE: markers when steps complete."""
+        pdd_files = _make_pdd_files(tmp_path)
+        progress_file = tmp_path / ".pdd_one_session_progress_my_module"
+
+        def fake_task(**kwargs):
+            # Simulate agent writing progress during task
+            progress_file.write_text(
+                "STEP_COMPLETE:example_generate\n"
+                "STEP_COMPLETE:crash_fix\n"
+                "STEP_COMPLETE:verify\n"
+            )
+            # Give heartbeat time to read (heartbeat runs every 10s, but we
+            # want the remaining-progress path to pick these up)
+            return (True, "done", 1.0, "claude-code")
+
+        mock_task.side_effect = fake_task
+
+        run_one_session_sync(
+            basename="my_module",
+            language="python",
+            pdd_files=pdd_files,
+            project_root=tmp_path,
+        )
+
+        captured = capsys.readouterr()
+        # Phase markers should appear in stdout (from heartbeat or remaining progress)
+        assert "PDD_PHASE: example" in captured.out
+        assert "PDD_PHASE: crash" in captured.out
+        assert "PDD_PHASE: verify" in captured.out
+
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
+    def test_success_emits_synced_phase(self, mock_build, mock_task, tmp_path, capsys):
+        """On success, final PDD_PHASE: synced is emitted."""
+        mock_task.return_value = (True, "done", 1.0, "claude-code")
+        pdd_files = _make_pdd_files(tmp_path)
+
+        run_one_session_sync(
+            basename="my_module",
+            language="python",
+            pdd_files=pdd_files,
+            project_root=tmp_path,
+        )
+
+        captured = capsys.readouterr()
+        assert "PDD_PHASE: synced" in captured.out
+
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
+    def test_failure_emits_conflict_phase(self, mock_build, mock_task, tmp_path, capsys):
+        """On failure, PDD_PHASE: conflict is emitted."""
+        mock_task.return_value = (False, "error", 0.5, "claude-code")
+        pdd_files = _make_pdd_files(tmp_path)
+
+        run_one_session_sync(
+            basename="my_module",
+            language="python",
+            pdd_files=pdd_files,
+            project_root=tmp_path,
+        )
+
+        captured = capsys.readouterr()
+        assert "PDD_PHASE: conflict" in captured.out
+
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
+    def test_intermediate_steps_do_not_emit_phase(self, mock_build, mock_task, tmp_path, capsys):
+        """Steps like crash_fix_attempt and test_pass should NOT emit PDD_PHASE."""
+        pdd_files = _make_pdd_files(tmp_path)
+        progress_file = tmp_path / ".pdd_one_session_progress_my_module"
+
+        def fake_task(**kwargs):
+            progress_file.write_text(
+                "STEP_COMPLETE:crash_fix_attempt:1\n"
+                "STEP_COMPLETE:test_pass\n"
+                "STEP_COMPLETE:test_fix_attempt:2\n"
+            )
+            return (True, "done", 1.0, "claude-code")
+
+        mock_task.side_effect = fake_task
+
+        run_one_session_sync(
+            basename="my_module",
+            language="python",
+            pdd_files=pdd_files,
+            project_root=tmp_path,
+        )
+
+        captured = capsys.readouterr()
+        # These intermediate steps should not produce PDD_PHASE markers
+        lines = [l for l in captured.out.splitlines() if l.startswith("PDD_PHASE:")]
+        # Only the final "synced" should be there
+        assert lines == ["PDD_PHASE: synced"]
+
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
+    def test_phase_markers_emitted_even_when_quiet(self, mock_build, mock_task, tmp_path, capsys):
+        """PDD_PHASE: synced/conflict are always emitted regardless of quiet flag."""
+        mock_task.return_value = (True, "done", 1.0, "claude-code")
+        pdd_files = _make_pdd_files(tmp_path)
+
+        run_one_session_sync(
+            basename="my_module",
+            language="python",
+            pdd_files=pdd_files,
+            project_root=tmp_path,
+            quiet=True,
+        )
+
+        captured = capsys.readouterr()
+        assert "PDD_PHASE: synced" in captured.out
 
 
 # ---------------------------------------------------------------------------
@@ -511,12 +656,11 @@ class TestCliOneSessionFlag:
 
         mock_sync_main.assert_called_once()
         call_kwargs = mock_sync_main.call_args
-        assert call_kwargs.kwargs.get("one_session") is True or \
-               (len(call_kwargs.args) > 0 and "one_session" in str(call_kwargs))
+        assert call_kwargs.kwargs.get("one_session") is True
 
     @patch("pdd.commands.maintenance.sync_main")
-    def test_flag_default_false(self, mock_sync_main):
-        """Without --one-session, one_session defaults to False."""
+    def test_single_module_default_false(self, mock_sync_main):
+        """Single-module sync defaults to one_session=False."""
         from click.testing import CliRunner
         from pdd.commands.maintenance import sync
 
@@ -531,8 +675,66 @@ class TestCliOneSessionFlag:
 
         mock_sync_main.assert_called_once()
         call_kwargs = mock_sync_main.call_args
-        assert call_kwargs.kwargs.get("one_session") is False or \
-               (len(call_kwargs.args) > 0 and "one_session" in str(call_kwargs))
+        assert call_kwargs.kwargs.get("one_session") is False
+
+    @patch("pdd.commands.maintenance.sync_main")
+    def test_no_one_session_flag(self, mock_sync_main):
+        """--no-one-session explicitly disables one_session."""
+        from click.testing import CliRunner
+        from pdd.commands.maintenance import sync
+
+        mock_sync_main.return_value = ({}, 0.0, "")
+        runner = CliRunner()
+        result = runner.invoke(
+            sync,
+            ["my_module", "--no-one-session"],
+            obj={"quiet": False, "verbose": False},
+            catch_exceptions=False,
+        )
+
+        mock_sync_main.assert_called_once()
+        call_kwargs = mock_sync_main.call_args
+        assert call_kwargs.kwargs.get("one_session") is False
+
+    @patch("pdd.commands.maintenance.run_agentic_sync")
+    @patch("pdd.commands.maintenance._is_github_issue_url", return_value=True)
+    def test_agentic_sync_default_true(self, mock_is_url, mock_agentic):
+        """Agentic sync (issue URL) defaults to one_session=True."""
+        from click.testing import CliRunner
+        from pdd.commands.maintenance import sync
+
+        mock_agentic.return_value = (True, "ok", 1.0, "claude")
+        runner = CliRunner()
+        result = runner.invoke(
+            sync,
+            ["https://github.com/org/repo/issues/1"],
+            obj={"quiet": False, "verbose": False},
+            catch_exceptions=False,
+        )
+
+        mock_agentic.assert_called_once()
+        call_kwargs = mock_agentic.call_args
+        assert call_kwargs.kwargs.get("one_session") is True
+
+    @patch("pdd.commands.maintenance.run_agentic_sync")
+    @patch("pdd.commands.maintenance._is_github_issue_url", return_value=True)
+    def test_agentic_sync_no_one_session(self, mock_is_url, mock_agentic):
+        """--no-one-session disables one_session even for agentic sync."""
+        from click.testing import CliRunner
+        from pdd.commands.maintenance import sync
+
+        mock_agentic.return_value = (True, "ok", 1.0, "claude")
+        runner = CliRunner()
+        result = runner.invoke(
+            sync,
+            ["https://github.com/org/repo/issues/1", "--no-one-session"],
+            obj={"quiet": False, "verbose": False},
+            catch_exceptions=False,
+        )
+
+        mock_agentic.assert_called_once()
+        call_kwargs = mock_agentic.call_args
+        assert call_kwargs.kwargs.get("one_session") is False
 
 
 # ---------------------------------------------------------------------------

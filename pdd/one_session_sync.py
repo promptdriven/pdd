@@ -30,6 +30,15 @@ _STEP_DISPLAY = {
     "done": "All steps complete",
 }
 
+# Map one-session step markers to PDD_PHASE names that AsyncSyncRunner parses
+_STEP_TO_PHASE = {
+    "example_generate": "example",
+    "crash_fix": "crash",
+    "verify": "verify",
+    "test_generate": "test",
+    "done": "synced",
+}
+
 
 def _read_new_progress(progress_file: Path, skip_count: int) -> List[str]:
     """Read new STEP_COMPLETE lines from the progress file, skipping already-reported ones."""
@@ -239,6 +248,9 @@ def run_one_session_sync(
                     console.print(
                         f"  [green]{display}[/green] [dim]({mins}m{secs:02d}s)[/dim]"
                     )
+                    phase = _STEP_TO_PHASE.get(step_name)
+                    if phase:
+                        print(f"PDD_PHASE: {phase}", flush=True)
                 last_reported_line_count += len(new_steps)
             else:
                 # No new steps — just show elapsed time every 30s
@@ -273,6 +285,9 @@ def run_one_session_sync(
                 console.print(
                     f"  [green]{display}[/green] [dim]({mins}m{secs:02d}s)[/dim]"
                 )
+                phase = _STEP_TO_PHASE.get(step_name)
+                if phase:
+                    print(f"PDD_PHASE: {phase}", flush=True)
 
         # Clean up progress file
         if progress_file.exists():
@@ -283,6 +298,12 @@ def run_one_session_sync(
 
     elapsed = time.time() - start_time
     mins, secs = divmod(int(elapsed), 60)
+
+    # Emit final phase marker for runner to parse
+    if success:
+        print("PDD_PHASE: synced", flush=True)
+    else:
+        print("PDD_PHASE: conflict", flush=True)
 
     # Show completion summary
     if not quiet:

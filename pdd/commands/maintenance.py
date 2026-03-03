@@ -89,10 +89,9 @@ from ..core.utils import _run_setup_utility
     help="Disable GitHub comment updates (agentic sync mode).",
 )
 @click.option(
-    "--one-session",
-    is_flag=True,
-    default=False,
-    help="Run example/crash/verify/test/fix in a single agentic session (requires pdd generate first).",
+    "--one-session/--no-one-session",
+    default=None,
+    help="Run example/crash/verify/test/fix in a single agentic session. Default: enabled for agentic sync (issue URL), disabled for single-module sync.",
 )
 @click.pass_context
 @track_cost
@@ -132,6 +131,8 @@ def sync(
 
     # Detect GitHub issue URL -> dispatch to agentic sync
     if _is_github_issue_url(basename):
+        # Default to one-session for agentic sync unless explicitly disabled
+        effective_one_session = one_session if one_session is not None else True
         return _run_agentic_sync_dispatch(
             ctx=ctx,
             issue_url=basename,
@@ -143,10 +144,12 @@ def sync(
             max_attempts=max_attempts,
             timeout_adder=timeout_adder,
             no_github_state=no_github_state,
-            one_session=one_session,
+            one_session=effective_one_session,
         )
 
     try:
+        # Default to multi-step for single-module sync unless explicitly enabled
+        effective_one_session = one_session if one_session is not None else False
         result, total_cost, model_name = sync_main(
             ctx=ctx,
             basename=basename,
@@ -159,7 +162,7 @@ def sync(
             no_steer=no_steer,
             steer_timeout=steer_timeout,
             agentic_mode=agentic,
-            one_session=one_session,
+            one_session=effective_one_session,
         )
         return str(result), total_cost, model_name
     except click.Abort:
