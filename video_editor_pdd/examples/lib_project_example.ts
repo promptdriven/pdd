@@ -4,12 +4,33 @@
 //
 // NOTE: This module is marked 'server-only' and must run in a Node.js
 // server context (e.g., Next.js API routes or server components).
+// When running outside Next.js (e.g., via tsx), we mock the server-only guard.
 
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-import {
+import type { ProjectConfig, Section } from '../lib/types';
+
+// ---------------------------------------------------------------------------
+// Mock 'server-only' so the example can run outside Next.js via tsx.
+// This MUST execute before require('../lib/project') which internally
+// imports 'server-only'. Using require() (not import) for the project module
+// ensures this mock is in place before the module loads.
+// ---------------------------------------------------------------------------
+const serverOnlyPath = require.resolve('server-only');
+require.cache[serverOnlyPath] = {
+  id: serverOnlyPath,
+  filename: serverOnlyPath,
+  loaded: true,
+  exports: {},
+  parent: null,
+  children: [],
+  path: path.dirname(serverOnlyPath),
+  paths: [],
+} as any;
+
+const {
   loadProject,
   saveProject,
   validateProjectConfig,
@@ -17,9 +38,7 @@ import {
   projectConfigSchema,
   sectionSchema,
   ttsConfigSchema,
-} from '../lib/project';
-
-import type { ProjectConfig, Section } from '../lib/types';
+} = require('../lib/project');
 
 // ============================================================================
 // Example 1: Validate raw/untrusted data against the schema
@@ -43,11 +62,14 @@ import type { ProjectConfig, Section } from '../lib/types';
 // Simulating data received from an API request
 const rawRequestBody: unknown = {
   name: 'Demo Video Project',
-  outputResolution: '1920x1080',
+  outputResolution: { width: 1920, height: 1080 },
   tts: {
-    voice: 'en-US-Neural2-F',
-    rate: 1.0, // Will be coerced via z.coerce.number()
-    model: 'google-tts-v2',
+    engine: 'qwen3-tts',
+    modelPath: '/models/qwen3-tts',
+    tokenizerPath: '/models/qwen3-tokenizer',
+    speaker: 'en-US-Neural2-F',
+    speakingRate: 1.0,
+    sampleRate: 24000,
   },
   sections: [
     {
@@ -73,24 +95,35 @@ const rawRequestBody: unknown = {
   ],
   audioSync: {
     sectionGroups: {
-      narration: ['intro', 'main'],
-      music: ['intro'],
+      narration: { startSegment: 'intro', endSegment: 'main' },
+      music: { startSegment: 'intro', endSegment: 'intro' },
     },
+    silenceGapDefault: 0.5,
   },
   veo: {
     model: 'veo-2.0-generate-001',
-    aspectRatio: '16:9',
-    referenceImages: {
-      logo: 'assets/logo.png',
-      background: 'assets/bg-gradient.png',
-    },
+    defaultAspectRatio: '16:9',
+    maxConcurrentGenerations: 3,
+    references: [
+      {
+        id: 'logo-ref',
+        label: 'Logo',
+        imagePath: 'assets/logo.png',
+        sections: ['intro', 'main'],
+      },
+    ],
+    frameChains: [
+      {
+        clips: ['intro-clip-1', 'intro-clip-2'],
+        referenceId: 'logo-ref',
+      },
+    ],
   },
   render: {
     maxParallelRenders: 3,
-    outputDir: 'output/final',
+    useLambda: false,
+    lambdaRegion: 'us-east-1',
     fps: 30,
-    width: 1920,
-    height: 1080,
   },
 };
 
@@ -107,12 +140,12 @@ console.log(
 try {
   validateProjectConfig({
     name: 123, // wrong type — should be string
-    outputResolution: '4K', // not in enum ['1920x1080', '1280x720']
+    outputResolution: '4K', // not an object with width/height
   });
 } catch (err) {
   // ZodError with detailed field-level issues:
   // - path: ['name'], expected: string, received: number
-  // - path: ['outputResolution'], invalid enum value
+  // - path: ['outputResolution'], expected: object, received: string
   // - path: ['tts'], required
   // - path: ['sections'], required
   // etc.
@@ -143,11 +176,14 @@ try {
 
 const projectConfig: ProjectConfig = {
   name: 'Product Launch Video',
-  outputResolution: '1920x1080',
+  outputResolution: { width: 1920, height: 1080 },
   tts: {
-    voice: 'en-US-Neural2-F',
-    rate: 1.0,
-    model: 'google-tts-v2',
+    engine: 'qwen3-tts',
+    modelPath: '/models/qwen3-tts',
+    tokenizerPath: '/models/qwen3-tokenizer',
+    speaker: 'en-US-Neural2-F',
+    speakingRate: 1.0,
+    sampleRate: 24000,
   },
   sections: [
     {
@@ -183,23 +219,30 @@ const projectConfig: ProjectConfig = {
   ],
   audioSync: {
     sectionGroups: {
-      narration: ['intro', 'main', 'outro'],
-      music: ['intro', 'outro'],
+      narration: { startSegment: 'intro', endSegment: 'outro' },
+      music: { startSegment: 'intro', endSegment: 'outro' },
     },
+    silenceGapDefault: 0.5,
   },
   veo: {
     model: 'veo-2.0-generate-001',
-    aspectRatio: '16:9',
-    referenceImages: {
-      logo: 'assets/logo.png',
-    },
+    defaultAspectRatio: '16:9',
+    maxConcurrentGenerations: 3,
+    references: [
+      {
+        id: 'logo-ref',
+        label: 'Logo',
+        imagePath: 'assets/logo.png',
+        sections: ['intro', 'outro'],
+      },
+    ],
+    frameChains: [],
   },
   render: {
     maxParallelRenders: 3,
-    outputDir: 'output/final',
+    useLambda: false,
+    lambdaRegion: 'us-east-1',
     fps: 30,
-    width: 1920,
-    height: 1080,
   },
 };
 
@@ -240,9 +283,9 @@ console.log(`Project saved to ${path.join(subDir, 'project.json')}`);
 const config: ProjectConfig = loadProject(tmpDir);
 
 console.log(`\nLoaded project: "${config.name}"`);
-console.log(`Resolution: ${config.outputResolution}`);
+console.log(`Resolution: ${config.outputResolution.width}x${config.outputResolution.height}`);
 console.log(`Sections: ${config.sections.length}`);
-console.log(`TTS voice: ${config.tts.voice}`);
+console.log(`TTS speaker: ${config.tts.speaker}`);
 console.log(`Veo model: ${config.veo.model}`);
 console.log(`Render FPS: ${config.render.fps}`);
 
@@ -296,9 +339,16 @@ console.log(`\nSection "nonexistent" found: ${missing !== undefined}`); // false
  */
 
 // Validate just a TTS config (e.g., from a PATCH /api/config/tts endpoint)
-const ttsPayload = { voice: 'en-US-Neural2-D', rate: '1.2', model: 'google-tts-v2' };
+const ttsPayload = {
+  engine: 'qwen3-tts',
+  modelPath: '/models/qwen3-tts',
+  tokenizerPath: '/models/qwen3-tokenizer',
+  speaker: 'en-US-Neural2-D',
+  speakingRate: '1.2', // string coerced to number
+  sampleRate: 24000,
+};
 const validatedTts = ttsConfigSchema.parse(ttsPayload);
-console.log(`\nTTS rate (coerced from string): ${validatedTts.rate}`); // 1.2 (number)
+console.log(`\nTTS speakingRate (coerced from string): ${validatedTts.speakingRate}`); // 1.2 (number)
 
 // Validate a single section
 const sectionPayload = {
@@ -333,7 +383,7 @@ function addSectionToProject(newSection: Section, dir?: string): ProjectConfig {
   const cfg = loadProject(dir);
 
   // 2. Check for duplicate IDs
-  if (cfg.sections.some((s) => s.id === newSection.id)) {
+  if (cfg.sections.some((s: Section) => s.id === newSection.id)) {
     throw new Error(`Section with id "${newSection.id}" already exists`);
   }
 

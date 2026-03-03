@@ -10,7 +10,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import { runClaudeAnalysis, runClaudeFix, parseJsonWithFallback } from '../lib/claude';
+import { runClaudeAnalysis, runClaudeFix, runClaudeFixDryRun, parseJsonWithFallback } from '../lib/claude';
 import type { AnnotationAnalysis, ClaudeFixResult } from '../lib/types';
 
 // ============================================================================
@@ -39,6 +39,7 @@ function example1_verifyExports(): void {
 
   assert(typeof runClaudeAnalysis === 'function', 'runClaudeAnalysis is a function');
   assert(typeof runClaudeFix === 'function', 'runClaudeFix is a function');
+  assert(typeof runClaudeFixDryRun === 'function', 'runClaudeFixDryRun is a function');
   assert(typeof parseJsonWithFallback === 'function', 'parseJsonWithFallback is a function');
 
   // Verify function signatures by checking .length (number of declared params)
@@ -46,6 +47,8 @@ function example1_verifyExports(): void {
   assert(runClaudeAnalysis.length >= 1, 'runClaudeAnalysis accepts at least 1 parameter');
   // runClaudeFix(prompt, scopeDir, onLog?) => 3 params
   assert(runClaudeFix.length >= 2, 'runClaudeFix accepts at least 2 parameters');
+  // runClaudeFixDryRun(prompt, scopeDir, onLog?) => 3 params
+  assert(runClaudeFixDryRun.length >= 2, 'runClaudeFixDryRun accepts at least 2 parameters');
 
   console.log('');
 }
@@ -225,6 +228,18 @@ function example6_sourceStructure(): void {
   // Console.warn for fallback strategies
   assert(sourceCode.includes('console.warn'), 'Warns on fallback parsing strategies');
 
+  // Dry Run: exports runClaudeFixDryRun
+  assert(/export\s+(async\s+)?function\s+runClaudeFixDryRun/.test(sourceCode), 'Exports runClaudeFixDryRun function');
+
+  // Dry Run: injects DRY RUN instruction
+  assert(sourceCode.includes('DRY RUN'), 'Has DRY RUN instruction in prompt');
+
+  // Dry Run: includes proposedDiff in schema
+  assert(sourceCode.includes('proposedDiff'), 'Dry run schema includes proposedDiff field');
+
+  // Dry Run: uses read-only tools (no Write or Edit)
+  assert(sourceCode.includes("'Read,Glob,Grep'"), 'Dry run uses read-only tools Read,Glob,Grep');
+
   console.log('');
 }
 
@@ -322,6 +337,42 @@ function example8_typeShapes(): void {
 }
 
 // ============================================================================
+// Example 9: Dry-run mode verification
+// ============================================================================
+
+function example9_dryRunMode(): void {
+  console.log('=== Example 9: Dry-run mode (runClaudeFixDryRun) ===');
+
+  // Verify the source code wraps the prompt with DRY RUN instructions
+  const sourceCode = fs.readFileSync(
+    path.join(__dirname, '..', 'lib', 'claude.ts'),
+    'utf-8'
+  );
+
+  // The dry-run function should contain instructions to NOT modify files
+  assert(
+    sourceCode.includes('Do NOT modify') || sourceCode.includes('Do NOT write'),
+    'Dry run instructs Claude not to modify files'
+  );
+
+  // The dry-run prompt should define the expected JSON schema fields
+  assert(sourceCode.includes('fixType'), 'Dry run schema has fixType');
+  assert(sourceCode.includes('filesModified'), 'Dry run schema has filesModified');
+  assert(sourceCode.includes('changeDescription'), 'Dry run schema has changeDescription');
+  assert(sourceCode.includes('confidence'), 'Dry run schema has confidence');
+  assert(sourceCode.includes('proposedDiff'), 'Dry run schema has proposedDiff');
+
+  // Demonstrate how runClaudeFixDryRun would be called
+  const dryRunPrompt = 'Preview changes for fixing text overlap in intro section';
+  const scopeDir = '/absolute/path/to/project/remotion/intro';
+  console.log(`  Dry-run prompt constructed (not executed — requires claude CLI)`);
+  console.log(`  Prompt: "${dryRunPrompt}"`);
+  console.log(`  Scope directory: ${scopeDir}`);
+
+  console.log('');
+}
+
+// ============================================================================
 // Run all examples
 // ============================================================================
 
@@ -334,6 +385,7 @@ async function main(): Promise<void> {
   example6_sourceStructure();
   example7_usagePatterns();
   example8_typeShapes();
+  example9_dryRunMode();
 
   console.log('========================================');
   console.log(`Results: ${passed} passed, ${failed} failed`);
