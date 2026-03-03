@@ -1027,6 +1027,7 @@ def run_agentic_architecture_orchestrator(
             if not quiet:
                 console.print(f"[yellow]Warning: Missing template {audit_template_name}, skipping 9b[/yellow]")
             state["last_completed_step"] = 9.5
+            save_workflow_state(cwd, issue_number, "architecture", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
 
     # --- Validation Steps (10-12) with In-Place Fixing ---
     # Design: Each validation step retries with fixes up to MAX_STEP_RETRIES times.

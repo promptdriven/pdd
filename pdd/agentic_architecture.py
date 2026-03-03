@@ -164,7 +164,7 @@ def _ensure_repo_context(owner: str, repo: str, current_cwd: Path, quiet: bool) 
 
 def _parse_related_issues(issue_body: str) -> List[int]:
     """Extract related sub-issue numbers from issue body."""
-    pattern = r'###\s*Related sub-issues:\s*\n((?:\s*-\s*#\d+.*\n)*)'
+    pattern = r'###\s*Related sub-issues:\s*\n((?:\s*-\s*#\d+.*\n?)*)'
     match = re.search(pattern, issue_body, re.IGNORECASE)
     if not match:
         return []
