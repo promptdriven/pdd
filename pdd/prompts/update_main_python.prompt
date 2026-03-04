@@ -2,7 +2,7 @@
 <include>context/ctx_obj_params.prompt</include>
 
 % Goal
-Write `pdd/update_main.py` — the CLI wrapper for updating prompts based on modified code.
+Write `pdd/update_main.py` — the CLI wrapper for updating prompts based on modified code, featuring repository-wide scanning, agentic routing, and post-update synchronization.
 
 % Role & Scope
 Supports three modes: true update, regeneration, and repository-wide updates. Routes to agentic or legacy update based on `simple` parameter and agent availability. In repo mode, detects changed files via fingerprint comparison (with git fallback) and performs post-update architecture/PRD sync.
@@ -19,9 +19,9 @@ Supports three modes: true update, regeneration, and repository-wide updates. Ro
 9. use_git and input_code_file are mutually exclusive (raise ValueError).
 
 % Modes
-1. **True update**: input_prompt_file + modified_code_file + (use_git OR input_code_file). Empty prompt triggers generation mode. When --output differs from input, copy source to output before agentic update (protects source from mutation).
-2. **Regeneration**: Only modified_code_file provided. Derive prompt path via `resolve_prompt_code_pair`. Detect directory vs file for --output.
-3. **Repo mode** (repo=True): Scan repo, detect changes, update only changed pairs with progress bar, then run post-update sync.
+1. **True update**: `input_prompt_file` + `modified_code_file` + (use_git OR `input_code_file`).
+2. **Regeneration**: Only `modified_code_file` provided. Derive prompt path via `resolve_prompt_code_pair`.
+3. **Repo mode** (repo=True): Scan repo, detect changes via `is_code_changed`, update changed pairs, and run post-update sync.
 
 % Helper Functions
 - `_extract_template_vars(concrete_path, template) -> Optional[Dict]`: Reverse-match a path against a template to extract variables like `{category}` and `{name}`.
