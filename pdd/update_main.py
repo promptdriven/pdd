@@ -644,15 +644,25 @@ def update_main(
             scan_dir = repo_root
         pairs = find_and_resolve_all_pairs(scan_dir, quiet, extensions, output)
 
+        if pairs:
+            from .pddrc_initializer import ensure_pddrc_for_scan
+            code_files_for_pddrc = [code_path for _, code_path in pairs]
+            ensure_pddrc_for_scan(scan_dir, repo_root, code_files_for_pddrc, quiet=quiet)
+
         if not pairs:
             rprint("[info]No scannable code files found in the repository.[/info]")
             return None
 
-        # Change-detection: filter to only changed code files
+        # Change-detection: filter to only changed code files OR empty prompts
         git_changed_files = get_git_changed_files(repo_root, base_branch)
 
         changed_pairs = []
         for prompt_path, code_path in pairs:
+            # Include pairs whose prompt file is empty (newly created)
+            prompt_p = Path(prompt_path)
+            if prompt_p.exists() and prompt_p.stat().st_size == 0:
+                changed_pairs.append((prompt_path, code_path))
+                continue
             changed, reason = is_code_changed(code_path, repo_root, git_changed_files)
             if changed:
                 changed_pairs.append((prompt_path, code_path))
