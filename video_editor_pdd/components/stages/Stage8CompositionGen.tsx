@@ -112,13 +112,24 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
     return list;
   }, [sections]);
 
-  const allComponentNames = useMemo(
-    () => sections.flatMap((s) => s.components.map((c) => c.name)),
-    [sections]
-  );
   const allWrapperNames = useMemo(
     () => sections.flatMap((s) => (s.wrappers ?? []).map((w) => w.name)),
     [sections]
+  );
+
+  const missingSectionComponents = useMemo(
+    () => sections
+      .map(s => ({
+        sectionId: s.id,
+        components: s.components.filter(c => c.status === 'missing').map(c => c.name),
+      }))
+      .filter(entry => entry.components.length > 0),
+    [sections]
+  );
+
+  const missingComponentCount = useMemo(
+    () => missingSectionComponents.reduce((sum, e) => sum + e.components.length, 0),
+    [missingSectionComponents]
   );
 
   const loadCollapsed = () => {
@@ -171,6 +182,15 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
     loadCollapsed();
     refreshData();
   }, [refreshData]);
+
+  // Periodically refresh component statuses while a job is active
+  useEffect(() => {
+    if (!activeJobId) return;
+    const interval = setInterval(() => {
+      refreshData();
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [activeJobId, refreshData]);
 
   const toggleSection = (id: string) => {
     setCollapsed((prev) => {
@@ -271,7 +291,13 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
             </h3>
             <button
               className="rounded bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
-              onClick={() => runJob('/api/pipeline/compositions/run', { components: allComponentNames, wrappers: allWrapperNames }, 'generate-all')}
+              onClick={() => runJob('/api/pipeline/compositions/run', {
+                sectionComponents: sections.map(s => ({
+                  sectionId: s.id,
+                  components: s.components.map(c => c.name),
+                })),
+                wrappers: allWrapperNames,
+              }, 'generate-all')}
               disabled={actionBusy['generate-all']}
             >
               {actionBusy['generate-all'] ? 'Generating...' : 'Generate All Compositions'}

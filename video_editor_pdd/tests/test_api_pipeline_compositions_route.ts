@@ -897,6 +897,125 @@ describe("compositions executor factory — section-scoped generation", () => {
 });
 
 // ---------------------------------------------------------------------------
+// 7c. Executor factory — sectionComponents (full-run scoping)
+// ---------------------------------------------------------------------------
+
+describe("compositions executor factory — sectionComponents full-run scoping", () => {
+  function setupMockSpawn(exitCode = 0) {
+    const proc = createMockSpawnProcess(exitCode);
+    mockSpawn.mockReturnValue(proc);
+    setTimeout(() => proc._triggerClose(), 5);
+    return proc;
+  }
+
+  it("generates section-scoped files for each entry in sectionComponents", async () => {
+    mockExistsSync.mockReturnValue(false);
+    mockReaddirSync.mockReturnValue([]);
+    setupMockSpawn(0);
+
+    const config = mockProjectConfig();
+    config.sections[0].specDir = "specs/intro";
+    config.sections[1].specDir = "specs/main";
+    config.sections[2].specDir = "specs/outro";
+    mockLoadProject.mockReturnValue(config);
+
+    const mockSend = jest.fn();
+    const executor = registerCallArgs.factory(
+      {
+        sectionComponents: [
+          { sectionId: "intro", components: ["title_card"] },
+          { sectionId: "main", components: ["title_card"] },
+        ],
+        wrappers: [],
+      },
+      mockSend
+    );
+    await executor(jest.fn());
+
+    // Should call runClaudeFix twice — once per section
+    expect(mockRunClaudeFix).toHaveBeenCalledTimes(2);
+
+    const prompt1 = mockRunClaudeFix.mock.calls[0][0] as string;
+    const prompt2 = mockRunClaudeFix.mock.calls[1][0] as string;
+
+    // Each prompt should reference the section-scoped name
+    expect(prompt1).toContain("intro_title_card");
+    expect(prompt2).toContain("main_title_card");
+  });
+
+  it("uses each section's specDir for spec lookup", async () => {
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p === "string" && p.includes("specs")) return true;
+      return false;
+    });
+    mockReaddirSync.mockReturnValue([]);
+    mockReadFileSync.mockReturnValue("# Spec content");
+    setupMockSpawn(0);
+
+    const config = mockProjectConfig();
+    config.sections[0].specDir = "specs/intro";
+    config.sections[1].specDir = "specs/main";
+    mockLoadProject.mockReturnValue(config);
+
+    const mockSend = jest.fn();
+    const executor = registerCallArgs.factory(
+      {
+        sectionComponents: [
+          { sectionId: "intro", components: ["title_card"] },
+          { sectionId: "main", components: ["title_card"] },
+        ],
+        wrappers: [],
+      },
+      mockSend
+    );
+    await executor(jest.fn());
+
+    // Should have looked up specs in both section dirs
+    const readCalls = mockReadFileSync.mock.calls.map((c: any) => c[0]);
+    const introSpec = readCalls.find(
+      (p: string) => typeof p === "string" && p.includes("specs/intro")
+    );
+    const mainSpec = readCalls.find(
+      (p: string) => typeof p === "string" && p.includes("specs/main")
+    );
+    expect(introSpec).toBeDefined();
+    expect(mainSpec).toBeDefined();
+  });
+
+  it("emits per-component status events for sectionComponents", async () => {
+    mockExistsSync.mockReturnValue(false);
+    mockReaddirSync.mockReturnValue([]);
+    setupMockSpawn(0);
+
+    const mockSend = jest.fn();
+    const executor = registerCallArgs.factory(
+      {
+        sectionComponents: [
+          { sectionId: "intro", components: ["title_card"] },
+          { sectionId: "main", components: ["title_card"] },
+        ],
+        wrappers: [],
+      },
+      mockSend
+    );
+    await executor(jest.fn());
+
+    const generatingEvents = mockSend.mock.calls
+      .filter((c: any[]) => c[0]?.type === "component" && c[0]?.status === "generating")
+      .map((c: any[]) => c[0].name);
+    const doneEvents = mockSend.mock.calls
+      .filter((c: any[]) => c[0]?.type === "component" && c[0]?.status === "done")
+      .map((c: any[]) => c[0].name);
+
+    expect(generatingEvents).toContain("title_card");
+    expect(doneEvents).toContain("title_card");
+    // Two generating + two done events (one per section)
+    expect(generatingEvents.length).toBe(2);
+    expect(doneEvents.length).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 8. Executor factory — wrapper generation via python subprocess
 // ---------------------------------------------------------------------------
 

@@ -9,10 +9,16 @@ import { runClaudeFix } from "@/lib/claude";
 import { loadProject, saveProject } from "@/lib/project";
 import type { SseSend } from "@/lib/types";
 
+type SectionComponentEntry = {
+  sectionId: string;
+  components: string[];
+};
+
 type RunBody = {
   components?: string[];
   wrappers?: string[];
   sectionId?: string;
+  sectionComponents?: SectionComponentEntry[];
 };
 
 const REMOTION_SCOPE_DIR = path.join(process.cwd(), "remotion/src/remotion");
@@ -298,34 +304,60 @@ registerExecutor("compositions", (params, send: SseSend) => {
 
     const veoAssets = listVeoAssets();
 
-    const total = components.length + wrappers.length || 1;
+    // Build a unified work list of { name, outputName, specDir } items.
+    // When sectionComponents is provided (full run), each section's components
+    // are generated with section-scoped filenames to avoid collisions.
+    const sectionComponents = params.sectionComponents as SectionComponentEntry[] | undefined;
+
+    type WorkItem = { name: string; outputName: string; specDir?: string };
+    const workItems: WorkItem[] = [];
+
+    if (sectionComponents && sectionComponents.length > 0) {
+      const cfg = loadProject();
+      for (const entry of sectionComponents) {
+        const sec = cfg.sections.find((s: { id: string }) => s.id === entry.sectionId);
+        const specDir = sec ? path.join("specs", sec.specDir) : undefined;
+        for (const name of entry.components) {
+          workItems.push({
+            name,
+            outputName: `${entry.sectionId}_${name}`,
+            specDir,
+          });
+        }
+      }
+    } else {
+      for (const name of components) {
+        workItems.push({
+          name,
+          outputName: sectionId ? `${sectionId}_${name}` : name,
+          specDir: sectionSpecDir,
+        });
+      }
+    }
+
+    const total = workItems.length + wrappers.length || 1;
     let completed = 0;
 
     // Generate components via Claude Code (or deterministic fallback for _main)
-    for (const name of components) {
-      // When sectionId is provided, scope output filename to avoid collisions
-      const outputName = sectionId ? `${sectionId}_${name}` : name;
-
-      send({ type: "component", name, status: "generating" });
-      onLog(`[compositions] Generating component: ${outputName}`);
+    for (const item of workItems) {
+      send({ type: "component", name: item.name, status: "generating" });
+      onLog(`[compositions] Generating component: ${item.outputName}`);
 
       try {
-        if (name.endsWith("_main")) {
-          // Use deterministic template for fallback components to avoid
-          // non-deterministic Claude output that may render all-black.
-          const spec = findSpecForComponent(name, sectionSpecDir);
-          generateFallbackComponent(outputName, spec, veoAssets, onLog);
+        if (item.name.endsWith("_main")) {
+          const spec = findSpecForComponent(item.name, item.specDir);
+          generateFallbackComponent(item.outputName, spec, veoAssets, onLog);
         } else {
-          const spec = findSpecForComponent(name, sectionSpecDir);
-          const prompt = buildComponentPrompt(outputName, spec, veoAssets);
+          const spec = findSpecForComponent(item.name, item.specDir);
+          const prompt = buildComponentPrompt(item.outputName, spec, veoAssets);
           await runClaudeFix(prompt, REMOTION_SCOPE_DIR, (line) => onLog(line));
         }
 
-        send({ type: "component", name, status: "done" });
+        send({ type: "component", name: item.name, status: "done" });
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Unknown error";
-        send({ type: "component", name, status: "error" });
-        onLog(`[compositions] Error generating ${name}: ${msg}`);
+        send({ type: "component", name: item.name, status: "error" });
+        onLog(`[compositions] Error generating ${item.name}: ${msg}`);
         throw err;
       } finally {
         completed++;

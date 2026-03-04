@@ -23,7 +23,7 @@
       "durationSeconds": 15.288,
       "offsetSeconds": 0,
       "compositions": [
-        "title_card"
+        "cold_open_title_card"
       ]
     },
     {
@@ -34,7 +34,13 @@
       "remotionDir": "S01-Economics",
       "compositionId": "Part1Economics",
       "durationSeconds": 382.176,
-      "offsetSeconds": 15.288
+      "offsetSeconds": 15.288,
+      "compositions": [
+        "part1_economics_split_perception_vs_reality",
+        "part1_economics_stat_callout_gitclear",
+        "part1_economics_stat_callout_github",
+        "part1_economics_stat_callout_uplevel"
+      ]
     },
     {
       "id": "part2_paradigm_shift",
@@ -56,7 +62,11 @@
       "durationSeconds": 280.728,
       "offsetSeconds": 593.256,
       "compositions": [
-        "title_card"
+        "part3_mold_split_prompt_vs_code",
+        "part3_mold_stat_callout_coderabbit",
+        "part3_mold_stat_callout_dora",
+        "part3_mold_stat_callout_nl_context",
+        "part3_mold_title_card"
       ]
     },
     {
@@ -69,7 +79,9 @@
       "durationSeconds": 96.912,
       "offsetSeconds": 873.9839999999999,
       "compositions": [
-        "title_card"
+        "part4_precision_split_prompt_detail_vs_tests",
+        "part4_precision_stat_callout_prompt_compression",
+        "part4_precision_title_card"
       ]
     },
     {
@@ -82,7 +94,10 @@
       "durationSeconds": 98.424,
       "offsetSeconds": 970.896,
       "compositions": [
-        "title_card"
+        "part5_compound_split_patching_vs_pdd",
+        "part5_compound_stat_callout_cisq",
+        "part5_compound_stat_callout_maintenance",
+        "part5_compound_title_card"
       ]
     },
     {
@@ -95,7 +110,9 @@
       "durationSeconds": 21.072,
       "offsetSeconds": 1069.32,
       "compositions": [
-        "title_card"
+        "closing_split_darning_vs_molding",
+        "closing_stat_callout_roi",
+        "closing_title_card"
       ]
     }
   ],
