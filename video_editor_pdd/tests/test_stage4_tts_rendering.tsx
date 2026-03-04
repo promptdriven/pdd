@@ -806,3 +806,13 @@ describe("layout and structure", () => {
     expect(matches!.length).toBeGreaterThanOrEqual(2);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 30. Render Missing early return on empty (bug fix)
+// ---------------------------------------------------------------------------
+
+describe("Render Missing early return", () => {
+  it("handleRenderMissing returns early when no missing segments", () => {
+    expect(sourceCode).toMatch(/missing\.length\s*===\s*0/);
+  });
+});
