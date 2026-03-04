@@ -1184,7 +1184,7 @@ class TestConfigFileExclusion:
 
 # --- Tests for hardened scanning filters (.stories, .test, .spec, .config, .pddignore) ---
 
-from pdd.update_main import _has_skip_suffix, _is_pddignored, _load_pddignore
+from pdd.update_main import _has_skip_suffix, _has_meaningful_code, _is_pddignored, _load_pddignore
 
 
 class TestHasSkipSuffix:
@@ -1225,6 +1225,33 @@ class TestHasSkipSuffix:
 
     def test_path_with_directories(self):
         assert _has_skip_suffix("src/components/Button.stories.tsx") is True
+
+
+class TestHasMeaningfulCode:
+    """Unit tests for _has_meaningful_code helper."""
+
+    def test_empty_file(self, tmp_path):
+        f = tmp_path / "empty.py"
+        f.write_text("")
+        assert _has_meaningful_code(str(f)) is False
+
+    def test_comment_only(self, tmp_path):
+        f = tmp_path / "comments.py"
+        f.write_text("# just a comment\n# another comment\n")
+        assert _has_meaningful_code(str(f)) is False
+
+    def test_blank_lines_and_comments(self, tmp_path):
+        f = tmp_path / "blank.py"
+        f.write_text("\n\n# comment\n\n")
+        assert _has_meaningful_code(str(f)) is False
+
+    def test_real_code(self, tmp_path):
+        f = tmp_path / "real.py"
+        f.write_text("# header\nfrom .core import main\n")
+        assert _has_meaningful_code(str(f)) is True
+
+    def test_nonexistent_file(self):
+        assert _has_meaningful_code("/nonexistent/file.py") is False
 
 
 class TestSkipStoriesFiles:
@@ -1405,8 +1432,8 @@ class TestPddignore:
         assert "app.ts" in basenames
         assert "module.ts" in basenames
 
-    def test_skip_init_py(self, tmp_path, monkeypatch):
-        """__init__.py files are excluded from repo scan."""
+    def test_skip_empty_files(self, tmp_path, monkeypatch):
+        """Empty files and comment-only files are excluded from repo scan."""
         repo_path = tmp_path / "repo"
         repo_path.mkdir()
         git.Repo.init(repo_path)
@@ -1414,6 +1441,7 @@ class TestPddignore:
         pkg_dir = repo_path / "mypackage"
         pkg_dir.mkdir()
         (pkg_dir / "__init__.py").write_text("")
+        (pkg_dir / "comment_only.py").write_text("# just a comment\n# nothing else\n")
         (pkg_dir / "core.py").write_text("def main(): pass")
 
         monkeypatch.chdir(repo_path)
@@ -1425,6 +1453,28 @@ class TestPddignore:
         basenames = [os.path.basename(p[1]) for p in pairs]
         assert "core.py" in basenames
         assert "__init__.py" not in basenames
+        assert "comment_only.py" not in basenames
+
+    def test_keep_init_py_with_real_code(self, tmp_path, monkeypatch):
+        """__init__.py with real code IS included in repo scan."""
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+        git.Repo.init(repo_path)
+
+        pkg_dir = repo_path / "mypackage"
+        pkg_dir.mkdir()
+        (pkg_dir / "__init__.py").write_text(
+            "from .core import main\n\n__all__ = ['main']\n"
+        )
+
+        monkeypatch.chdir(repo_path)
+
+        with patch("pdd.update_main.get_language") as mock_lang:
+            mock_lang.return_value = "python"
+            pairs = find_and_resolve_all_pairs(str(repo_path), quiet=True)
+
+        basenames = [os.path.basename(p[1]) for p in pairs]
+        assert "__init__.py" in basenames
 
     def test_pddignore_found_in_parent_when_scanning_subdirectory(self, tmp_path, monkeypatch):
         """When scanning a subdirectory, .pddignore in parent repo root is found."""

@@ -49,7 +49,6 @@ _SKIP_FILENAMES = {
     '.prettierrc.js', '.prettierrc.json', '.prettierrc.cjs',
     'setupTests.ts', 'setupTests.js',
     'mockServiceWorker.js',
-    '__init__.py',
 }
 
 _SKIP_BASENAME_SUFFIXES = {
@@ -98,6 +97,19 @@ def _load_pddignore(scan_root: str) -> Tuple[List[str], str]:
             break
         current = parent
     return [], scan_root
+
+
+def _has_meaningful_code(filepath: str) -> bool:
+    """Return True if a file contains at least one non-blank, non-comment line."""
+    try:
+        with open(filepath, 'r', errors='replace') as f:
+            for line in f:
+                stripped = line.strip()
+                if stripped and not stripped.startswith('#'):
+                    return True
+    except (OSError, IOError):
+        return False
+    return False
 
 
 def _is_pddignored(filepath: str, pddignore_root: str, patterns: List[str]) -> bool:
@@ -428,7 +440,8 @@ def find_and_resolve_all_pairs(repo_root: str, quiet: bool = False, extensions: 
             os.path.splitext(f)[1].lower() not in _SKIP_EXTENSIONS and
             os.path.basename(f) not in _SKIP_FILENAMES and
             not _has_skip_suffix(f) and
-            not _is_pddignored(f, pddignore_root, pddignore_patterns)
+            not _is_pddignored(f, pddignore_root, pddignore_patterns) and
+            _has_meaningful_code(f)
         )
     ]
 
