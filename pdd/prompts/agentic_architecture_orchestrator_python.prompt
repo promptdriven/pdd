@@ -11,36 +11,23 @@
 </pdd-interface>
 <include>context/python_preamble.prompt</include>
 
-% Goal
-Write the `pdd/agentic_architecture_orchestrator.py` module.
-
 % Role & Scope
-Orchestrator for the agentic architecture workflow. Runs each step as a separate agentic task, accumulates context between steps, tracks overall progress and cost, and supports resuming from saved state. Includes gate steps (1b complexity, 5b completeness) and per-step validation with in-place fixing (steps 10-12). Post-processes successful output via render_mermaid.py.
+Orchestrator for the agentic architecture workflow. Runs each step as a separate agentic task, accumulates context between steps, tracks overall progress and cost, and supports resuming from saved state. Includes gate steps (1b complexity, 2b codebase scan, 5b completeness, 7b self-review, 9b consistency) and per-step validation with in-place fixing (steps 10-12). Post-processes successful output via render_mermaid.py.
 
 % Requirements
-1. Function: `run_agentic_architecture_orchestrator(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, *, cwd, verbose=False, quiet=False, timeout_adder=0.0, use_github_state=True, skip_prompts=False, target_dir=None, force_single=False, sibling_architectures="", existing_pddrc="", related_issues=None) -> Tuple[bool, str, float, str, List[str]]`
+1. Function: `run_agentic_architecture_orchestrator(...) -> Tuple[bool, str, float, str, List[str]]`
 2. Return 5-tuple: (success, final_message, total_cost, model_used, output_files)
-3. Accumulate step outputs as context for subsequent steps; track total cost
-4. `base_dir = cwd / target_dir` if target_dir else cwd (create if needed)
+3. Accumulate step outputs as context for subsequent steps; track total cost.
+4. `base_dir = cwd / target_dir` if target_dir else cwd (create if needed).
+5. Support fractional step resume logic (e.g., 1.5, 2.5, 5.5, 7.5, 9.5).
+6. Validation failures in steps 10-12 must block final success (return False).
 
 % Per-Step Timeouts
 ```python
 ARCH_STEP_TIMEOUTS: Dict[Union[int, float], float] = {
-    1: 340.0,    # Analyze PRD
-    1.5: 340.0,  # Complexity assessment
-    2: 340.0,    # Deep Analysis
-    3: 600.0,    # Research
-    4: 600.0,    # Data Model Design
-    5: 600.0,    # Design
-    5.5: 600.0,  # Early completeness gate
-    6: 600.0,    # Research Dependencies
-    7: 1000.0,   # Generate (architecture.json + scaffolding)
-    8: 600.0,    # Generate and validate .pddrc
-    9: 900.0,    # Generate prompts
-    10: 340.0,   # Validate completeness
-    11: 600.0,   # Validate sync
-    12: 600.0,   # Validate dependencies
-    13: 900.0,   # Fix all validation errors
+    1: 340.0, 1.5: 340.0, 2: 340.0, 2.5: 340.0, 3: 600.0, 4: 600.0, 5: 600.0, 
+    5.5: 600.0, 6: 600.0, 7: 1000.0, 7.5: 340.0, 8: 600.0, 9: 900.0, 
+    9.5: 600.0, 10: 340.0, 11: 600.0, 12: 600.0, 13: 900.0
 }
 ```
 
@@ -50,109 +37,48 @@ ARCH_STEP_TIMEOUTS: Dict[Union[int, float], float] = {
 | 1 | agentic_arch_step1_analyze_prd_LLM | Extract features, tech stack, requirements from PRD |
 | 1b | agentic_arch_step1b_complexity_LLM | Assess PRD complexity; exit if COMPLEX (unless force_single) |
 | 2 | agentic_arch_step2_analyze_LLM | Deep analysis: module boundaries, shared concerns |
+| 2b | agentic_arch_step2b_codebase_scan_LLM | Scan existing codebase for context |
 | 3 | agentic_arch_step3_research_LLM | Web research for tech stack docs and conventions |
 | 4 | agentic_arch_step4_data_model_LLM | Data model design: entities, relationships, storage |
 | 5 | agentic_arch_step5_design_LLM | Design module breakdown with dependency graph |
-| 5b | agentic_arch_step5b_completeness_gate_LLM | Validate module design completeness (max 3 retries; hard stop on failure) |
+| 5b | agentic_arch_step5b_completeness_gate_LLM | Validate module design completeness (max 3 retries) |
 | 6 | agentic_arch_step6_research_deps_LLM | Find API docs and code examples per module |
 | 7 | agentic_arch_step7_generate_LLM | Generate architecture.json and scaffolding files |
+| 7b | agentic_arch_step7b_review_LLM | Architecture self-review (naming, deps, priority) |
 | 8 | agentic_arch_step8_pddrc_LLM | Generate and validate .pddrc configuration |
 | 9 | agentic_arch_step9_prompts_LLM | Generate prompt files (skipped if skip_prompts) |
+| 9b | agentic_arch_step9b_cross_audit_LLM | Cross-file consistency audit for identifiers |
 | 10 | agentic_arch_step10_completeness_LLM | Validate architecture completeness |
 | 11 | agentic_arch_step11_sync_LLM | Validate sync configuration |
 | 12 | agentic_arch_step12_deps_LLM | Validate prompt dependencies |
 
-% Step Execution (Steps 1-5 and 6-8)
-For each step in two groups (steps_1_5 and steps_6_8):
-1. Skip if step < start_step (cached)
-2. Load template via `load_prompt_template(f"agentic_arch_step{n}_{name}_LLM")`
-3. Call `preprocess(template, recursive=True, double_curly_brackets=True, exclude_keys=context.keys())` to expand includes
-4. Un-double curly braces (`{{` → `{`), then substitute all context keys via string replace
-5. Call `run_agentic_task(instruction=formatted, cwd=cwd, timeout=..., label=f"step{n}", max_retries=DEFAULT_MAX_RETRIES)`
-6. On success: store output, advance last_completed_step
-7. On failure (not hard stop): store "FAILED: {output}", do NOT advance last_completed_step
-8. Save state after each step
-
-% Step 1b: Complexity Gate
-After step 1 succeeds (skipped if `force_single`):
-- Run `agentic_arch_step1b_complexity_LLM`
-- If output contains `COMPLEXITY_RESULT: COMPLEX`: return failure ("PRD too complex - sub-issues created")
-- Otherwise: continue to step 2, save last_completed_step = 1.5
-
-% Step 4: Output Validation
-After step 4 succeeds, call `_check_step4_output(output)` which checks for data model markers vs wrong-step markers (module design). If step 4 output looks like module design instead of data model, mark as failed and retry.
-
-% Step 5b: Completeness Gate (MAX_STEP5B_RETRIES = 3)
-After step 5, before step 6:
-- Run `agentic_arch_step5b_completeness_gate_LLM`
-- Check for `VALIDATION_RESULT: VALID` to pass
-- On failure: run `agentic_arch_step5b_fix_LLM`, replace step5_output with fix output, retry
-- Hard stop after exhausting retries
-
-% Step 7: Special Handling
-- Parse `FILES_CREATED:` marker to track scaffolding files
-- Hash architecture.json before and after; detect no-op (unchanged file = agent failure)
-- Validate architecture.json exists, is valid JSON, and is a JSON array
-- Read verified architecture content into step7_output
-
-% Step 8: .pddrc Generation
-- Parse `FILES_CREATED:` marker, track scaffolding files
-- Verify .pddrc exists and is valid YAML
-
-% Step 9: Prompt Generation (skipped if skip_prompts)
-- Read .pddrc content and add to context as `pddrc_content`
-- Parse `FILES_CREATED:` marker, track prompt files
-
-% Validation Steps 10-12 (skipped if skip_prompts)
-Each runs via a `_run_validation_with_fix()` helper with MAX_STEP_RETRIES = 3:
-- Run validation template; check for `VALIDATION_RESULT: VALID`
-- On failure: run fix template (`agentic_arch_step13_fix_LLM`), parse `FILES_MODIFIED:` marker, re-read architecture.json from base_dir
-- If still failing after max retries: mark validation_success = False but continue to next step
-- After all three: if any failed, return success=False
-
-% File Tracking Helpers
-- `_parse_files_marker(output, marker)`: Parse `FILES_CREATED:` or `FILES_MODIFIED:` lines → list of file paths
-- `_verify_files_exist(cwd, files, quiet)`: Filter to files that actually exist on disk
-- Track `scaffolding_files` and `prompt_files` lists in state; add to output_files at the end
-
-% Early Exit Conditions (Hard Stops)
-| Step | Stop Condition | Detection |
-|------|----------------|-----------|
-| 1 | PRD insufficient | Output contains "PRD Content Insufficient" |
-| 2 | Tech stack ambiguous | Output contains "Tech Stack Ambiguous" |
-| 5 | Clarification needed | Output contains "Clarification Needed" |
-
-% Post-Processing
-After all steps complete:
-1. Call `_save_architecture_files(base_dir, final_architecture, issue_title)` — validates architecture.json, strips markdown fencing, writes clean JSON, generates Mermaid HTML diagram
-2. Add scaffolding files and prompt files to output_files (deduplicated)
-3. If validation_success is False: return (False, "validation errors detected", ...)
-4. On full success: clear_workflow_state and return True
-
-% State Persistence
-Use shared functions from agentic_common:
-- `load_workflow_state(cwd, issue_number, "architecture", state_dir, repo_owner, repo_name, use_github_state)`
-- `save_workflow_state(cwd, issue_number, "architecture", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)`
-- `clear_workflow_state(cwd, issue_number, "architecture", state_dir, repo_owner, repo_name, use_github_state)`
-- `validate_cached_state(last_completed_step, step_outputs, quiet=quiet)` - Correct last_completed_step by scanning for "FAILED:" prefixed outputs
-- State directory: `.pdd/arch-state/`
-
-Orchestrator logic:
-- On start: load state, validate cached state, determine start_step
-- Handle fractional step resume: 1.5 → start at 2, 5.5 → start at 6
-- Handle high step resume: ≥9 → start at 10, ≥8 → start at 9, ≥7 → start at 8
-- On failure (not hard stop): store "FAILED: {output}", keep last_completed_step unchanged (do NOT advance)
-- On successful completion: clear_workflow_state
-
-% Context Dict
-Build context dict with: issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, target_dir, target_dir_note, sibling_architectures, existing_pddrc, related_issues. Populate with cached step outputs on resume.
+% Instructions
+1. **Execution Groups**: Run steps 1-5 and 6-8 in loops. Skip if step < start_step.
+2. **Template Processing**: Load via `load_prompt_template`, `preprocess` (recursive=True, double_curly_brackets=True), un-double curly braces, then substitute context keys.
+3. **Step 1b (Complexity)**: If output contains `COMPLEXITY_RESULT: COMPLEX`, return failure.
+4. **Step 2b (Codebase Scan)**: Run after step 2 to provide codebase context.
+5. **Step 4 (Validation)**: Call `_check_step4_output` to ensure data model content (not module design).
+6. **Step 5b (Completeness Gate)**: Max 3 retries. If invalid, run `agentic_arch_step5b_fix_LLM` and update step 5 output. Hard stop on final failure.
+7. **Step 7 (Generation)**: Detect no-ops via MD5 hash of `architecture.json`. Parse `FILES_CREATED:`.
+8. **Step 7b (Self-Review)**: If `REVIEW_RESULT: FIXED`, re-read `architecture.json` into context.
+9. **Step 9b (Consistency Audit)**: If `AUDIT_RESULT: INCONSISTENT`, parse `FILES_MODIFIED:` and update `prompt_files`.
+10. **Validation (10-12)**: Use `_run_validation_with_fix` helper (max 3 retries). If failing, run `agentic_arch_step13_fix_LLM`. If any fail after retries, `validation_success = False`.
+11. **State Persistence**: Use `load_workflow_state`, `save_workflow_state`, `clear_workflow_state`, and `validate_cached_state`. Only advance `last_completed_step` on success.
+12. **Post-Processing**: Call `_save_architecture_files` to clean JSON and generate Mermaid HTML. Deduplicate and return all created/modified files.
 
 % Dependencies
-Import from `agentic_common`: `run_agentic_task`, `DEFAULT_MAX_RETRIES`, `load_workflow_state`, `save_workflow_state`, `clear_workflow_state`, `validate_cached_state`
-Import from `pdd.preprocess`: `preprocess`
-<pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
-<pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
-<pdd.render_mermaid><include>context/render_mermaid_example.py</include></pdd.render_mermaid>
+<agentic_common>
+  <include>context/agentic_common_example.py</include>
+</agentic_common>
+<load_prompt_template>
+  <include>context/load_prompt_template_example.py</include>
+</load_prompt_template>
+<render_mermaid>
+  <include>context/render_mermaid_example.py</include>
+</render_mermaid>
+<preprocess>
+  <include>pdd/preprocess.py</include>
+</preprocess>
 
 % Deliverables
 - Code: `pdd/agentic_architecture_orchestrator.py`
