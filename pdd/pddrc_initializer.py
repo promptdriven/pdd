@@ -407,23 +407,26 @@ def ensure_pddrc_for_scan(
     if not new_contexts:
         return None
 
-    # Build output
+    # Build output (best-effort — don't crash if repo_root is read-only)
     target = Path(repo_root) / PDDRC_FILENAME
-    if existing_content:
-        # Append new contexts to existing file
-        lines = [existing_content.rstrip("\n")]
-        lines.append("")  # blank separator
-        for name, ctx in new_contexts.items():
-            lines.extend(_format_context_block(name, ctx))
-        lines.append("")
-        target.write_text("\n".join(lines), encoding="utf-8")
-    else:
-        # Build from scratch
-        lines = ['version: "1.0"', "", "contexts:"]
-        for name, ctx in new_contexts.items():
-            lines.extend(_format_context_block(name, ctx))
-        lines.append("")
-        target.write_text("\n".join(lines), encoding="utf-8")
+    try:
+        if existing_content:
+            # Append new contexts to existing file
+            lines = [existing_content.rstrip("\n")]
+            lines.append("")  # blank separator
+            for name, ctx in new_contexts.items():
+                lines.extend(_format_context_block(name, ctx))
+            lines.append("")
+            target.write_text("\n".join(lines), encoding="utf-8")
+        else:
+            # Build from scratch
+            lines = ['version: "1.0"', "", "contexts:"]
+            for name, ctx in new_contexts.items():
+                lines.extend(_format_context_block(name, ctx))
+            lines.append("")
+            target.write_text("\n".join(lines), encoding="utf-8")
+    except OSError:
+        return None
 
     if not quiet:
         names = ", ".join(sorted(new_contexts.keys()))
