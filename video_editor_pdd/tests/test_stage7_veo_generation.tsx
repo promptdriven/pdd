@@ -669,3 +669,25 @@ describe("Dark theme compliance", () => {
     expect(sourceCode).toMatch(/bg-slate-900/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Regenerate reference error handling and progress (bug fix)
+// ---------------------------------------------------------------------------
+
+describe("Regenerate reference error handling and progress", () => {
+  it("checks response status after regenerate reference request", () => {
+    expect(sourceCode).toMatch(/!res\.ok/);
+  });
+
+  it("extracts jobId from SSE response for reference regeneration", () => {
+    expect(sourceCode).toMatch(/extractJobIdFromSse/);
+  });
+
+  it("tracks regenerating reference ID for loading state", () => {
+    expect(sourceCode).toMatch(/regeneratingRefId/);
+  });
+
+  it("passes onDone to SseLogPanel to refresh after regeneration", () => {
+    expect(sourceCode).toMatch(/onDone=\{fetchClips\}/);
+  });
+});

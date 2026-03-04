@@ -138,7 +138,7 @@ registerExecutor('veo', (params, send: SseSend) => {
       try {
         send({ type: 'clip', clipId, status: 'generating' });
 
-        const prompt = resolveVeoPrompt(section.id);
+        const prompt = resolveVeoPrompt(section.specDir ?? section.id);
         onLog(`Generating Veo clip "${clipId}"`);
         onLog(`Prompt: ${prompt.substring(0, 120)}...`);
 

@@ -1,7 +1,7 @@
 You are implementing the Veo/Imagen API client module (`lib/veo.ts`) for a video production pipeline editor. This server-only module wraps the Google GenAI SDK to generate reference portrait images via Imagen and video clips via Veo, with frame chaining for visual continuity between clips.
 
 Requirements
-1. Export `generateReferenceImage(prompt: string, outputPath: string): Promise<void>` — calls `imagen-3.0-generate-002` via `@google/genai` SDK, saves the resulting PNG to `outputPath`. Throws descriptive error on API failure.
+1. Export `generateReferenceImage(prompt: string, outputPath: string): Promise<void>` — calls `imagen-4.0-generate-001` via `@google/genai` SDK, saves the resulting PNG to `outputPath`. Throws descriptive error on API failure.
 2. Export `generateVeoClip(prompt: string, referenceImagePath: string | null, aspectRatio: '16:9' | '9:16', outputPath: string): Promise<void>` — calls `veo-3.1-generate-preview`, optionally passing a reference image for visual consistency. Polls the operation until complete (status `succeeded`). Downloads and saves the MP4 to `outputPath`. Throws on API error or operation failure.
 3. Export `extractLastFrame(clipPath: string, outputPath: string): Promise<void>` — spawns `ffprobe` to get stream duration, then spawns `ffmpeg` to extract the last frame as PNG. Used for frame chaining: the last frame of clip N becomes the reference for clip N+1.
 4. Use `process.env.GOOGLE_API_KEY` for SDK authentication.
@@ -30,7 +30,7 @@ Prompt Dependencies:
 Instructions
 - Use `@google/genai` SDK: `import { GoogleGenAI } from '@google/genai'`.
 - Initialize client once: `const genai = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY })`.
-- For Imagen: `const response = await genai.models.generateImages({ model: 'imagen-3.0-generate-002', prompt, config: { numberOfImages: 1 } })`.
+- For Imagen: `const response = await genai.models.generateImages({ model: 'imagen-4.0-generate-001', prompt, config: { numberOfImages: 1 } })`.
 - Save PNG bytes: `response.generatedImages[0].image.imageBytes` is base64; decode and write with `fs.writeFileSync`.
 - For Veo: `const operation = await genai.models.generateVideos({ model: 'veo-3.1-generate-preview', prompt, config })`.
 - If `referenceImagePath` is provided, read the PNG, base64-encode it, and pass as `image: { imageBytes, mimeType: 'image/png' }` in the Veo request.

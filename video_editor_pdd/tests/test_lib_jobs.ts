@@ -111,8 +111,11 @@ function createMockSend(): { send: SseSend; calls: object[] } {
 
 beforeEach(() => {
   testDb = createTestDb();
-  // Clear executor registry between tests
+  // Clear executor registry between tests (both module-level and globalThis)
   jest.resetModules();
+  delete (globalThis as any).__pipelineExecutors;
+  delete (globalThis as any).__jobSendMap;
+  delete (globalThis as any).__pipelineDb;
 });
 
 afterEach(() => {
