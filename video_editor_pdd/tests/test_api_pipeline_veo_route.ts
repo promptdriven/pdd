@@ -62,6 +62,15 @@ jest.mock("@/lib/veo", () => ({
     mockGenerateReferenceImage(...args),
 }));
 
+// Mock clip-events
+const mockEmitClipEvent = jest.fn();
+const mockOnClipEvent = jest.fn();
+
+jest.mock("@/lib/clip-events", () => ({
+  emitClipEvent: (...args: unknown[]) => mockEmitClipEvent(...args),
+  onClipEvent: (...args: unknown[]) => mockOnClipEvent(...args),
+}));
+
 // Mock fs
 const mockExistsSync = jest.fn();
 const mockReadFileSync = jest.fn();
@@ -224,6 +233,8 @@ beforeEach(() => {
   mockMkdirSync.mockReset();
   mockStatSync.mockReset();
   mockReaddirSync.mockReset();
+  mockEmitClipEvent.mockReset();
+  mockOnClipEvent.mockReset();
 
   mockRunPipelineStage.mockResolvedValue("test-job-veo-001");
   mockLoadProject.mockReturnValue(mockProjectConfig());
@@ -1568,5 +1579,77 @@ describe("app/api/pipeline/veo/run/route.ts source structure", () => {
 
   it("uses loadProject to get sections config", () => {
     expect(sourceCode).toMatch(/loadProject\(\)/);
+  });
+
+  it("imports emitClipEvent from @/lib/clip-events", () => {
+    expect(sourceCode).toMatch(/@\/lib\/clip-events/);
+    expect(sourceCode).toMatch(/emitClipEvent/);
+  });
+
+  it("calls emitClipEvent for generating, done, and error statuses", () => {
+    const emitCalls = (sourceCode.match(/emitClipEvent\s*\(/g) || []).length;
+    expect(emitCalls).toBeGreaterThanOrEqual(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// veo/stream/route.ts — source structure for clip event forwarding
+// ---------------------------------------------------------------------------
+
+describe("app/api/pipeline/veo/stream/route.ts source structure", () => {
+  let streamSourceCode: string;
+
+  beforeAll(() => {
+    const realFs = jest.requireActual("fs") as typeof import("fs");
+    const pathMod = require("path");
+    streamSourceCode = realFs.readFileSync(
+      pathMod.join(
+        __dirname,
+        "..",
+        "app",
+        "api",
+        "pipeline",
+        "veo",
+        "stream",
+        "route.ts"
+      ),
+      "utf-8"
+    );
+  });
+
+  it("exports async function GET", () => {
+    expect(streamSourceCode).toMatch(/export\s+async\s+function\s+GET/);
+  });
+
+  it("imports onClipEvent from @/lib/clip-events", () => {
+    expect(streamSourceCode).toMatch(/@\/lib\/clip-events/);
+    expect(streamSourceCode).toMatch(/onClipEvent/);
+  });
+
+  it("subscribes to clip events (not just heartbeats)", () => {
+    expect(streamSourceCode).toMatch(/onClipEvent\s*\(/);
+  });
+
+  it("forwards clip events as SSE data lines", () => {
+    expect(streamSourceCode).toMatch(/type.*clip/);
+    expect(streamSourceCode).toMatch(/data:/);
+  });
+
+  it("sends heartbeat for connection keep-alive", () => {
+    expect(streamSourceCode).toMatch(/heartbeat/);
+  });
+
+  it("has a 5-minute auto-close timeout", () => {
+    expect(streamSourceCode).toMatch(/5\s*\*\s*60\s*\*\s*1000/);
+  });
+
+  it("uses runtime = 'nodejs'", () => {
+    expect(streamSourceCode).toMatch(/runtime\s*=\s*["']nodejs["']/);
+  });
+
+  it("returns SSE response headers", () => {
+    expect(streamSourceCode).toMatch(/text\/event-stream/);
+    expect(streamSourceCode).toMatch(/no-cache/);
+    expect(streamSourceCode).toMatch(/keep-alive/);
   });
 });

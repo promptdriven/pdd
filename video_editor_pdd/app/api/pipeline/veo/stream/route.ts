@@ -3,33 +3,69 @@
  *
  * SSE endpoint for streaming Veo clip generation progress events.
  * The Stage 7 component connects to this to receive real-time status updates.
- * For now this returns an open SSE stream that sends a heartbeat every 30s.
+ *
+ * Subscribes to the clip event bus (lib/clip-events.ts) so that events
+ * emitted by the Veo executor are forwarded to the frontend EventSource.
  */
+
+import { onClipEvent } from "@/lib/clip-events";
 
 export const runtime = "nodejs";
 
 export async function GET(): Promise<Response> {
-  const stream = new TransformStream();
-  const writer = stream.writable.getWriter();
   const encoder = new TextEncoder();
+  let cleanup: (() => void) | null = null;
 
-  // Send initial connection event
-  writer.write(encoder.encode(`data: ${JSON.stringify({ type: "connected" })}\n\n`));
+  const stream = new ReadableStream({
+    start(controller) {
+      // Send initial connection event
+      controller.enqueue(
+        encoder.encode(`data: ${JSON.stringify({ type: "connected" })}\n\n`)
+      );
 
-  // Heartbeat to keep connection alive; close after 5 minutes of inactivity
-  const interval = setInterval(() => {
-    writer.write(encoder.encode(`: heartbeat\n\n`)).catch(() => {
-      clearInterval(interval);
-    });
-  }, 30_000);
+      // Subscribe to clip events and forward them as SSE data
+      const unsubscribe = onClipEvent((event) => {
+        const payload = JSON.stringify({ type: "clip", ...event });
+        try {
+          controller.enqueue(encoder.encode(`data: ${payload}\n\n`));
+        } catch {
+          // Stream already closed
+        }
+      });
 
-  // Auto-close after 5 minutes
-  setTimeout(() => {
-    clearInterval(interval);
-    writer.close().catch(() => {});
-  }, 5 * 60 * 1000);
+      // Heartbeat to keep connection alive
+      const interval = setInterval(() => {
+        try {
+          controller.enqueue(encoder.encode(`: heartbeat\n\n`));
+        } catch {
+          clearInterval(interval);
+        }
+      }, 30_000);
 
-  return new Response(stream.readable, {
+      // Auto-close after 5 minutes
+      const timeout = setTimeout(() => {
+        clearInterval(interval);
+        unsubscribe();
+        try {
+          controller.close();
+        } catch {
+          // already closed
+        }
+      }, 5 * 60 * 1000);
+
+      // Store cleanup for cancel()
+      cleanup = () => {
+        clearInterval(interval);
+        clearTimeout(timeout);
+        unsubscribe();
+      };
+    },
+    cancel() {
+      cleanup?.();
+    },
+  });
+
+  return new Response(stream, {
     headers: {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
