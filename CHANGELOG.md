@@ -2,64 +2,39 @@
 
 ### Feat
 
-- Add video element specifications and narration audio for multiple video parts.
-- Implement "Detect Segments" functionality in Stage 5 Audio Sync, add a guard for missing segments in Stage 4 TTS rendering, and document staging environments.
-- add Gemini 3.1 Flash Lite to model catalog and update base model references
-- merge sync-code into update + add post-update architecture/PRD sync
-- add `pdd sync-code` command for reverse-syncing code changes to prompts
+- **Change-detection in `pdd update --repo`** — repo-wide update now compares fingerprint hashes and git diffs against `--base-branch` (default `main`) to skip unchanged files, replacing the previous "update everything" approach. New helpers `get_git_changed_files`, `is_code_changed`, and `derive_basename_and_language` power the detection; fingerprints are saved after each successful update so the next run is incremental.
+- **Post-update architecture & PRD sync** — after repo-wide update, automatically refresh `architecture.json` entries for updated prompts and, if entries changed, run an LLM pass to keep `PRD.md` in sync.
+- **Template-based prompt resolution from `.pddrc`** — `_resolve_prompt_from_pddrc` reverse-matches code paths against `.pddrc` output templates to locate or create the correct prompt file, eliminating manual path wiring for template-based projects.
+- **Merge `sync-code` into `update`** — the standalone `pdd sync-code` reverse-sync command is now the default behaviour of `pdd update --repo`; the `sync-code` entry point remains as an alias. Added `--base-branch` CLI option.
+- **Gemini 3.1 Flash Lite** — add `gemini-3.1-flash-lite-preview` (Vertex AI + Gemini API) to the model catalog and frontend model resolver as a low-cost base model option.
 
 ### Fix
 
-- Clean up stale pdd.cli attribute in test_cli.py teardown
-- spec executor uses section ID instead of specDir for directory paths
-- Stage 6 spec list not refreshing after regeneration completes
-- Stage 5 "Save Config" silently fails — section groups lost on refresh
-- subtract cache_creation from new_input to prevent double-counting (#686)
-- address Copilot review — reuse expand_template, fix {ext} dot
-- use git ls-files to respect .gitignore in repo scan
-- exclude .next and other build directories from repo scan
-- resolve prompt discovery bugs in `pdd update --repo`
-- ensure scaffolded .gitignore tracks .pdd/meta/ fingerprints
-- store relative paths in fingerprint include_deps for portability
-- accept PDD_CODEX_AUTH_AVAILABLE sentinel for Codex agent discovery
-- **test**: use patch.object to target real generate module in error tests
-- patch update_main at correct import location in CLI test
-- catch-all pddrc pattern skipping and SYNC_CMD dry-run fix
-- **test-batch-ann-1772530285220**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772530067058**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772529895950**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772529653837**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772529265712**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772528693765**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772528552660**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772528383877**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772528125988**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772527990694**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772527823452**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772527699472**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772527367189**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772527157529**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772527010958**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772526870445**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772526740123**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772526643851**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772526519257**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772526399758**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772526263551**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772526156841**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772526058700**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772525974230**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772525892652**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772525786581**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772525706650**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772525606120**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772525497271**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772525403413**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772525290523**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772523271731**: Subtitle font size 96px causes text to clip the ri
-- handle None return from update_main in repo mode
-- convert architecture_sync and operation_log imports to lazy imports
-- save fingerprint after successful repo-mode update
+- **Anthropic cost double-counting** — subtract `cache_creation` tokens from `new_input` before pricing so cache-write tokens aren't billed at both the 1.25× write rate and the regular input rate.
+- **Repo scan respects `.gitignore`** — `find_and_resolve_all_pairs` now uses `git ls-files` instead of `os.walk`, and filters out config/data extensions (`.json`, `.yaml`, `.md`, etc.) and known non-code filenames (`package-lock.json`, `tsconfig.json`, etc.).
+- **Catch-all `.pddrc` pattern skipping** — subdirectory `.pddrc` files with only wildcard patterns (`**`, `*`) no longer claim ownership of unrelated modules during `_resolve_module_cwd`.
+- **SYNC_CMD dry-run execution** — LLM-suggested fix commands are now executed via shell subprocess instead of parsed as directory paths, correctly handling chained `cd` + `pdd sync` commands.
+- **Fingerprint portability** — `include_deps` paths are stored as relative paths instead of absolute, preventing cross-machine mismatches.
+- **Codex agent discovery** — accept `PDD_CODEX_AUTH_AVAILABLE` env var as an alternative to `OPENAI_API_KEY` for detecting the Codex CLI.
+- **Stage 5 "Save Config"** — fix silent failure where section groups were lost on refresh.
+- **Stage 6 spec list** — refresh the spec list after regeneration completes.
+- **Spec executor paths** — use section ID instead of `specDir` for directory paths.
+- **Stale CLI attribute** — clean up `pdd.cli` attribute in `test_cli.py` teardown to prevent cross-test leakage.
+- **Prompt discovery** — resolve multiple bugs in `pdd update --repo` prompt path resolution; reuse `expand_template` and fix `{ext}` dot handling.
+- **Repo-mode robustness** — handle `None` return from `update_main`, lazy-import `architecture_sync` and `operation_log` to avoid circular imports, save fingerprint after successful update.
+
+### Refactor
+
+- **Prompts refresh** — bulk update 19 prompt files via `pdd update` to reflect current code (net −132 lines across prompts). Remove unused `one_session_agent_LLM.prompt`.
+
+### Build
+
+- Update cloud-batch test durations from latest run.
+
+### Docs
+
+- Document staging environments (`staging` vs `staging2`) and their purposes in `ONBOARDING_INTERNAL.md`.
+- Add `context/sync_code_main_example.py` demonstrating change-detection functions.
 
 ## v0.0.165 (2026-03-02)
 
