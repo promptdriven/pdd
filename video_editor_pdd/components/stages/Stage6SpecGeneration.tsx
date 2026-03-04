@@ -78,38 +78,35 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
 
   const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Load spec list
-  useEffect(() => {
-    let isMounted = true;
-    const load = async () => {
-      try {
-        setLoading(true);
-        const res = await fetch('/api/pipeline/specs/list');
-        if (!res.ok) throw new Error(`Failed to fetch specs: ${res.status}`);
-        const data = (await res.json()) as SpecListResponse;
-        if (!isMounted) return;
+  // Reusable spec list fetcher (called on mount and after regeneration)
+  const fetchSpecList = useCallback(async () => {
+    try {
+      setLoading(true);
+      const res = await fetch('/api/pipeline/specs/list');
+      if (!res.ok) throw new Error(`Failed to fetch specs: ${res.status}`);
+      const data = (await res.json()) as SpecListResponse;
 
-        setSections(data.sections);
+      setSections(data.sections);
 
-        // Initialize expanded defaults for new sections
-        setExpanded((prev) => {
-          const next = { ...prev };
-          for (const section of data.sections) {
-            if (next[section.id] === undefined) next[section.id] = true;
-          }
-          return next;
-        });
-      } catch (err) {
-        setError((err as Error).message);
-      } finally {
-        if (isMounted) setLoading(false);
-      }
-    };
-    load();
-    return () => {
-      isMounted = false;
-    };
+      // Initialize expanded defaults for new sections
+      setExpanded((prev) => {
+        const next = { ...prev };
+        for (const section of data.sections) {
+          if (next[section.id] === undefined) next[section.id] = true;
+        }
+        return next;
+      });
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  // Load spec list on mount
+  useEffect(() => {
+    fetchSpecList();
+  }, [fetchSpecList]);
 
   // Persist expanded state
   useEffect(() => {
@@ -379,7 +376,7 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
       <details className="mt-6 rounded border border-slate-700 bg-slate-900">
         <summary className="cursor-pointer px-4 py-2 font-medium">Spec Generation Logs</summary>
         <div className="p-4">
-          <SseLogPanel jobId={latestJobId} />
+          <SseLogPanel jobId={latestJobId} onDone={fetchSpecList} />
         </div>
       </details>
     </div>
