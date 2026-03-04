@@ -8,10 +8,12 @@ from pdd.agentic_common import (
     get_available_agents,
     get_agent_provider_preference,
     run_agentic_task,
+    _calculate_anthropic_cost,
     _calculate_gemini_cost,
     _calculate_codex_cost,
     _find_cli_binary,
     _log_agentic_interaction,
+    ANTHROPIC_PRICING_BY_FAMILY,
     GEMINI_PRICING_BY_FAMILY,
     CODEX_PRICING,
     DEFAULT_TIMEOUT_SECONDS,
@@ -1040,6 +1042,149 @@ def test_calculate_codex_cost():
                (1000 * pricing.input_per_million * pricing.cached_input_multiplier / 1e6) + \
                (1000 * pricing.output_per_million / 1e6)
     assert cost == pytest.approx(expected)
+
+
+# --- Tests for _calculate_anthropic_cost (Issue #686) ---
+
+def test_anthropic_cost_cache_creation_not_double_counted():
+    """Test that cache_creation tokens are NOT double-counted.
+
+    Bug #686: cache_creation tokens were charged at both the regular input
+    rate (1.0x) AND the cache write rate (1.25x), totaling 2.25x instead
+    of just 1.25x. The fix subtracts cache_creation from new_input.
+    """
+    data = {
+        "usage": {
+            "input_tokens": 1000,
+            "output_tokens": 200,
+            "cache_read_input_tokens": 500,
+            "cache_creation_input_tokens": 300,
+        }
+    }
+    cost = _calculate_anthropic_cost(data)
+
+    pricing = ANTHROPIC_PRICING_BY_FAMILY["sonnet"]
+    # new_input should be 1000 - 500 (cache_read) - 300 (cache_creation) = 200
+    new_input = 200
+    expected = (
+        (new_input / 1e6) * pricing.input_per_million
+        + (500 / 1e6) * pricing.input_per_million * pricing.cached_input_multiplier
+        + (300 / 1e6) * pricing.input_per_million * 1.25
+        + (200 / 1e6) * pricing.output_per_million
+    )
+    assert cost == pytest.approx(expected), (
+        f"cache_creation tokens appear double-counted: got {cost}, expected {expected}"
+    )
+
+
+def test_anthropic_cost_no_cache():
+    """Test cost calculation with no caching (baseline)."""
+    data = {
+        "usage": {
+            "input_tokens": 1000,
+            "output_tokens": 500,
+        }
+    }
+    cost = _calculate_anthropic_cost(data)
+
+    pricing = ANTHROPIC_PRICING_BY_FAMILY["sonnet"]
+    expected = (
+        (1000 / 1e6) * pricing.input_per_million
+        + (500 / 1e6) * pricing.output_per_million
+    )
+    assert cost == pytest.approx(expected)
+
+
+def test_anthropic_cost_cache_read_only():
+    """Test cost calculation with cache_read but no cache_creation."""
+    data = {
+        "usage": {
+            "input_tokens": 1000,
+            "output_tokens": 200,
+            "cache_read_input_tokens": 600,
+        }
+    }
+    cost = _calculate_anthropic_cost(data)
+
+    pricing = ANTHROPIC_PRICING_BY_FAMILY["sonnet"]
+    expected = (
+        (400 / 1e6) * pricing.input_per_million
+        + (600 / 1e6) * pricing.input_per_million * pricing.cached_input_multiplier
+        + (200 / 1e6) * pricing.output_per_million
+    )
+    assert cost == pytest.approx(expected)
+
+
+def test_anthropic_cost_costusd_shortcut():
+    """Test that costUSD in modelUsage bypasses token-based calculation."""
+    data = {
+        "modelUsage": {
+            "claude-sonnet-4-20250514": {
+                "costUSD": 0.42,
+            }
+        },
+        "usage": {
+            "input_tokens": 99999,
+            "output_tokens": 99999,
+        },
+    }
+    cost = _calculate_anthropic_cost(data)
+    assert cost == pytest.approx(0.42)
+
+
+def test_anthropic_cost_opus_pricing():
+    """Test Opus model family detection and correct cache_creation handling."""
+    data = {
+        "modelUsage": {
+            "claude-opus-4-20250514": {}  # No costUSD → falls through to token math
+        },
+        "usage": {
+            "input_tokens": 2000,
+            "output_tokens": 500,
+            "cache_read_input_tokens": 800,
+            "cache_creation_input_tokens": 400,
+        },
+    }
+    cost = _calculate_anthropic_cost(data)
+
+    pricing = ANTHROPIC_PRICING_BY_FAMILY["opus"]
+    # new_input should be 2000 - 800 - 400 = 800
+    new_input = 800
+    expected = (
+        (new_input / 1e6) * pricing.input_per_million
+        + (800 / 1e6) * pricing.input_per_million * pricing.cached_input_multiplier
+        + (400 / 1e6) * pricing.input_per_million * 1.25
+        + (500 / 1e6) * pricing.output_per_million
+    )
+    assert cost == pytest.approx(expected), (
+        f"Opus cache_creation double-counted: got {cost}, expected {expected}"
+    )
+
+
+def test_anthropic_cost_all_tokens_cached():
+    """Test edge case where all input tokens are cached (read + creation = total)."""
+    data = {
+        "usage": {
+            "input_tokens": 1000,
+            "output_tokens": 100,
+            "cache_read_input_tokens": 700,
+            "cache_creation_input_tokens": 300,
+        }
+    }
+    cost = _calculate_anthropic_cost(data)
+
+    pricing = ANTHROPIC_PRICING_BY_FAMILY["sonnet"]
+    # new_input should be 1000 - 700 - 300 = 0
+    expected = (
+        0  # no regular input cost
+        + (700 / 1e6) * pricing.input_per_million * pricing.cached_input_multiplier
+        + (300 / 1e6) * pricing.input_per_million * 1.25
+        + (100 / 1e6) * pricing.output_per_million
+    )
+    assert cost == pytest.approx(expected), (
+        f"All-cached edge case failed: got {cost}, expected {expected}"
+    )
+
 
 # --- Tests for run_agentic_task ---
 

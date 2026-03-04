@@ -100,6 +100,29 @@ make cloud-test-push
 
 After initial setup, `make cloud-test` handles image rebuilds automatically when dependencies change.
 
+### Staging Environments
+
+There are two staging Firebase projects:
+
+| Alias | Project ID | Purpose |
+|-------|-----------|---------|
+| `staging` | `prompt-driven-development-stg` | Manual testing, ad-hoc deploys |
+| `staging2` | `prompt-driven-development-stg2` | Dedicated CI deploys (Cloud Batch) |
+
+**Why two?** Cloud Batch deploys overwrite the staging site each run. A dedicated `staging2` project prevents CI from breaking manual staging work.
+
+**Targeting staging2 in Cloud Batch:**
+```bash
+STAGING_PROJECT=prompt-driven-development-stg2 make test-cloud DEPLOY=1
+```
+
+**Env files per environment:**
+- `frontend/.env.staging` / `frontend/.env.staging2`
+- `extensions/github_pdd_app/.env.staging.yaml` / `.env.staging2.yaml`
+- `backend/functions/.env.staging2` (backend uses `.env` + Firebase alias)
+
+The `.firebaserc` file has both aliases configured. `STAGING_ALIAS` is derived automatically from the project name.
+
 ### Results
 
 A summary prints to the terminal when the job finishes. The full report (pass/fail per shard, failure logs) is saved to `test-results/cloud-batch-results.md`.

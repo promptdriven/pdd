@@ -90,7 +90,6 @@ echo "STEP_COMPLETE:example_generate" >> {progress_file}
       print("MY_API_KEY not set. Set it to run this example.")
       sys.exit(0)
   ```
-- The PDD_PATH environment variable IS always set and does not need this check.
 - Do NOT use `try/except` blocks for environment variable access. Use `os.environ.get()` with an if-check instead.
 - CRITICAL: Never include hardcoded absolute paths like "/Users/username/project/examples/" in comments or code.
   Use only relative path descriptions in comments (e.g., "relative to project root").
