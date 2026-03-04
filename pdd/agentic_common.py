@@ -372,8 +372,10 @@ def get_available_agents() -> List[str]:
         available.append("google")
 
     # 3. OpenAI (Codex)
-    # Available if 'codex' CLI exists AND OPENAI_API_KEY is set
-    if _find_cli_binary("codex") and os.environ.get("OPENAI_API_KEY"):
+    # Available if 'codex' CLI exists AND (OPENAI_API_KEY is set OR codex auth signaled)
+    if _find_cli_binary("codex") and (
+        os.environ.get("OPENAI_API_KEY") or os.environ.get("PDD_CODEX_AUTH_AVAILABLE")
+    ):
         available.append("openai")
 
     return available
@@ -463,8 +465,8 @@ def _calculate_anthropic_cost(data: Dict[str, Any]) -> float:
 
     pricing = ANTHROPIC_PRICING_BY_FAMILY.get(family, ANTHROPIC_PRICING_BY_FAMILY["sonnet"])
 
-    # new_input = total input minus cached reads (cache creation is billed at 1.25x input)
-    new_input = max(0, input_tokens - cache_read)
+    # new_input = total input minus cached reads and cache creation (those tokens are billed separately)
+    new_input = max(0, input_tokens - cache_read - cache_creation)
     input_cost = (new_input / 1_000_000) * pricing.input_per_million
     cache_read_cost = (cache_read / 1_000_000) * pricing.input_per_million * pricing.cached_input_multiplier
     cache_write_cost = (cache_creation / 1_000_000) * pricing.input_per_million * 1.25

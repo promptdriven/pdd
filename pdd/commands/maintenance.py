@@ -294,3 +294,5 @@ def setup(ctx: click.Context):
         _run_setup_utility()
     except Exception as e:
         handle_error(e, "setup", False)
+
+

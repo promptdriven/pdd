@@ -883,7 +883,11 @@ def extract_include_deps(prompt_path: Path) -> Dict[str, str]:
         if dep_path and dep_path.exists():
             dep_hash = calculate_sha256(dep_path)
             if dep_hash:
-                deps[str(dep_path)] = dep_hash
+                try:
+                    rel_path = dep_path.relative_to(Path.cwd())
+                except ValueError:
+                    rel_path = dep_path
+                deps[str(rel_path)] = dep_hash
 
     return deps
 
