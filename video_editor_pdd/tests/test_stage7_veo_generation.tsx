@@ -687,7 +687,10 @@ describe("Regenerate reference error handling and progress", () => {
     expect(sourceCode).toMatch(/regeneratingRefId/);
   });
 
-  it("passes onDone to SseLogPanel to refresh after regeneration", () => {
-    expect(sourceCode).toMatch(/onDone=\{fetchClips\}/);
+  it("passes onDone to SseLogPanel that clears jobId and refreshes clips", () => {
+    // onDone must call setJobId(null) BEFORE fetchClips to prevent
+    // the remount loop: done → fetchClips → setLoading(true) → unmount
+    // SseLogPanel → setLoading(false) → remount with stale jobId → repeat
+    expect(sourceCode).toMatch(/onDone=\{.*setJobId\(null\).*fetchClips/);
   });
 });

@@ -348,7 +348,7 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
 
         {/* SSE Log Panel */}
         <div>
-          <SseLogPanel jobId={jobId} onDone={fetchClips} />
+          <SseLogPanel jobId={jobId} onDone={() => { setJobId(null); fetchClips(); }} />
         </div>
 
         {/* Per-clip logs */}
