@@ -379,7 +379,7 @@ describe("save config handler", () => {
   });
 
   it("sends audioSync.sectionGroups in body", () => {
-    expect(sourceCode).toMatch(/audioSync\s*:\s*\{\s*sectionGroups/);
+    expect(sourceCode).toMatch(/audioSync\s*:\s*\{[\s\S]*?sectionGroups/);
   });
 
   it("tracks saving state", () => {
@@ -848,5 +848,49 @@ describe("save config SegmentRange conversion", () => {
 
   it("uses segments[segments.length - 1] for end", () => {
     expect(sourceCode).toMatch(/segments\[segments\.length\s*-\s*1\]/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 32. Detect Segments skips foreign-project segments (bug fix)
+// ---------------------------------------------------------------------------
+
+describe("Detect Segments skips foreign-project segments", () => {
+  it("tracks whether any section prefix matched a segment", () => {
+    expect(sourceCode).toMatch(/let\s+prefixMatched\s*=\s*false/);
+  });
+
+  it("only flags unmatched segments when prefix was recognized", () => {
+    expect(sourceCode).toMatch(/!matched\s*&&\s*prefixMatched/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 33. Save Config preserves existing audioSync fields (bug fix)
+// ---------------------------------------------------------------------------
+
+describe("Save Config preserves existing audioSync fields", () => {
+  it("spreads existing project audioSync into save payload", () => {
+    expect(sourceCode).toMatch(/\.\.\.project\?\.audioSync/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 34. Save Config error handling (bug fix)
+// ---------------------------------------------------------------------------
+
+describe("Save Config error handling", () => {
+  it("checks response status after save", () => {
+    expect(sourceCode).toMatch(/!res\.ok/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 35. SegmentRange expansion on load (bug fix)
+// ---------------------------------------------------------------------------
+
+describe("SegmentRange expansion on load", () => {
+  it("generates full segment range between start and end", () => {
+    expect(sourceCode).toMatch(/expandRange/);
   });
 });

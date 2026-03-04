@@ -15,6 +15,20 @@ interface WordTimestamp {
   segmentId?: string;
 }
 
+function expandRange(start: string, end: string): string[] {
+  const sm = start.match(/^(.+)_(\d{3})$/);
+  const em = end.match(/^(.+)_(\d{3})$/);
+  if (!sm || !em || sm[1] !== em[1]) return [start, end].filter(Boolean);
+  const prefix = sm[1];
+  const s = parseInt(sm[2], 10);
+  const e = parseInt(em[2], 10);
+  const result: string[] = [];
+  for (let i = s; i <= e; i++) {
+    result.push(`${prefix}_${String(i).padStart(3, '0')}`);
+  }
+  return result;
+}
+
 const ROW_HEIGHT = 32;
 const VIEWPORT_HEIGHT = 320;
 
@@ -65,7 +79,7 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
             normalized[key] = val;
           } else if (val && typeof val === 'object' && 'startSegment' in val) {
             const sr = val as { startSegment: string; endSegment: string };
-            normalized[key] = [sr.startSegment, sr.endSegment].filter(Boolean);
+            normalized[key] = expandRange(sr.startSegment, sr.endSegment);
           } else {
             normalized[key] = [];
           }
@@ -170,9 +184,11 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
 
       for (const seg of allSegments) {
         let matched = false;
+        let prefixMatched = false;
         for (const sectionId of sortedSectionIds) {
           const prefix = sectionId + '_';
           if (seg.id.startsWith(prefix)) {
+            prefixMatched = true;
             const suffix = seg.id.slice(prefix.length);
             if (/^\d{3}$/.test(suffix)) {
               if (!grouped[sectionId]) grouped[sectionId] = [];
@@ -182,7 +198,7 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
             }
           }
         }
-        if (!matched) unmatched.push(seg.id);
+        if (!matched && prefixMatched) unmatched.push(seg.id);
       }
 
       setUnmatchedSegments(unmatched);
@@ -211,6 +227,7 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
 
   const handleSaveConfig = async () => {
     setSavingConfig(true);
+    setDetectError(null);
     try {
       // Convert string[] arrays to {startSegment, endSegment} SegmentRange objects
       const rangeGroups: Record<string, { startSegment: string; endSegment: string }> = {};
@@ -222,13 +239,19 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
           };
         }
       }
-      await fetch('/api/project', {
+      const res = await fetch('/api/project', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          audioSync: { sectionGroups: rangeGroups },
+          audioSync: { ...project?.audioSync, sectionGroups: rangeGroups },
         }),
       });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to save config');
+      }
+    } catch (err: any) {
+      setDetectError(err?.message ?? 'Failed to save config');
     } finally {
       setSavingConfig(false);
     }
