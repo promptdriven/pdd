@@ -1,0 +1,52 @@
+<pdd-reason>Provides precise extraction of file content based on criteria like lines, AST, and regex for selective includes.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "ContentSelector.select", "signature": "(content: str, selectors: list[str], file_path: str = None, mode: str = \"full\")", "returns": "str"}
+    ]
+  }
+}
+</pdd-interface>
+
+<include>context/python_preamble.prompt</include>
+
+% You are an expert Python engineer. Your goal is to create a module for deterministic content selection from files.
+
+% Role & Scope
+The `content_selector` module provides precise extraction of file content based on various criteria (lines, AST, Markdown sections, regex). It is used by the PDD preprocessor to handle selective includes.
+
+% Requirements
+1. Implement `ContentSelector` class with a `select(content: str, selectors: list[str], file_path: str = None, mode: str = "full") -> str` method.
+2. Support `lines` selector: `lines:N-M`, `lines:N-`, `lines:-M`, `lines:N` (1-based indices).
+3. Support Python structural selection using `ast` for `.py` files:
+   - `def:function_name`: Extracts the full function definition, including decorators.
+   - `class:ClassName`: Extracts the full class definition, including decorators and all members.
+   - `class:ClassName.method_name`: Extracts a specific method from a class.
+4. Support Markdown structural selection for `.md` files:
+   - `section:Heading`: Extracts all content under the specified heading until the next heading of the same or higher level.
+5. Support regex pattern selection: `pattern:/regex/`.
+6. Support JSON/YAML structural selection for `.json`, `.yaml`, `.yml` files:
+   - `path:key` — extract a top-level key and its value.
+   - `path:key.nested.child` — dot-notation traversal into nested objects.
+   - `path:key[0]` — array index access (0-based).
+   - `path:key[0].name` — array index followed by dot traversal.
+   - Parse the file with `json` (for `.json`) or `yaml` (PyYAML, for `.yaml`/`.yml`), navigate to the requested path, and re-serialize the extracted value as pretty-printed JSON or YAML (matching the source format). If the path does not exist, raise a `SelectorError`.
+   - No external JSONPath library — just stdlib `json` + `yaml` with manual dot/bracket traversal.
+7. Support `mode="interface"` for Python:
+   - Extract only class/function/method signatures, docstrings, and type hints.
+   - Remove function/method bodies (replace with `...`).
+   - Exclude private members (starting with `_` but not `__init__`) by default.
+8. Handle multiple selectors (comma-separated string or list) by returning the union of selected parts, preserved in original file order.
+9. Use `rich` for formatted error reporting and console status.
+10. Ensure robust error handling for malformed selectors or missing content, providing descriptive error messages.
+
+% Dependencies
+<rich_example>
+  <include>context/core/errors_example.py</include>
+</rich_example>
+
+% Deliverables
+- Code: `pdd/content_selector.py`

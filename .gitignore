@@ -223,6 +223,9 @@ yarn.lock
 
 # PDD internal directory (backups, locks, meta, worktrees, etc.)
 .pdd/
+# Allow extracts cache to be committed (semantic extracts should be versioned)
+!.pdd/extracts/
+!.pdd/extracts/**
 Makefile.test-staging
 
 # Large model weights (HuggingFace clones)

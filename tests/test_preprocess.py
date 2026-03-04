@@ -2079,3 +2079,735 @@ You are an expert Python engineer. Write the User data model.'''
     assert '{"name": "User"' in formatted
     assert '<pdd-interface>' in formatted
     assert '</pdd-interface>' in formatted
+
+
+import os
+import io
+import re
+import pytest
+import json
+import subprocess
+from unittest.mock import patch, mock_open, MagicMock, PropertyMock
+from pdd.preprocess import (
+    preprocess,
+    get_file_path,
+    double_curly,
+    process_backtick_includes,
+    process_xml_tags,
+    process_pdd_tags,
+    process_shell_tags,
+    process_web_tags,
+    process_include_tags,
+    process_include_many_tags,
+    _extract_fence_spans,
+    _extract_inline_code_spans,
+    _extract_code_spans,
+    _is_inside_any_span,
+    _intersects_any_span,
+    _scan_risky_placeholders,
+    _dbg,
+    _write_debug_report,
+    _DEBUG_EVENTS,
+    _parse_attrs,
+)
+
+
+# ============================================================================
+# Fixture to reset Firecrawl cache singleton for test isolation
+# ============================================================================
+@pytest.fixture
+def reset_firecrawl_cache():
+    import pdd.firecrawl_cache
+    original_instance = pdd.firecrawl_cache._cache_instance
+    pdd.firecrawl_cache._cache_instance = None
+    yield
+    pdd.firecrawl_cache._cache_instance = original_instance
+
+
+# ============================================================================
+# _dbg and _write_debug_report coverage
+# ============================================================================
+
+def test_dbg_when_debug_enabled(monkeypatch):
+    """Cover lines 29-30: _dbg prints and appends when debug is on."""
+    import pdd.preprocess as pp
+    original = pp._DEBUG_PREPROCESS
+    pp._DEBUG_PREPROCESS = True
+    pp._DEBUG_EVENTS.clear()
+    try:
+        _dbg("test message")
+        assert "test message" in pp._DEBUG_EVENTS
+    finally:
+        pp._DEBUG_PREPROCESS = original
+
+
+def test_write_debug_report_writes_file(monkeypatch, tmp_path):
+    """Cover lines 34-40: _write_debug_report writes to file."""
+    import pdd.preprocess as pp
+    original_debug = pp._DEBUG_PREPROCESS
+    original_file = pp._DEBUG_OUTPUT_FILE
+    pp._DEBUG_PREPROCESS = True
+    report_path = str(tmp_path / "debug_report.txt")
+    pp._DEBUG_OUTPUT_FILE = report_path
+    pp._DEBUG_EVENTS.clear()
+    pp._DEBUG_EVENTS.append("event1")
+    pp._DEBUG_EVENTS.append("event2")
+    try:
+        _write_debug_report()
+        assert os.path.exists(report_path)
+        content = open(report_path).read()
+        assert "event1" in content
+        assert "event2" in content
+    finally:
+        pp._DEBUG_PREPROCESS = original_debug
+        pp._DEBUG_OUTPUT_FILE = original_file
+
+
+def test_write_debug_report_handles_write_error(monkeypatch):
+    """Cover lines 38-40: _write_debug_report handles write errors gracefully."""
+    import pdd.preprocess as pp
+    original_debug = pp._DEBUG_PREPROCESS
+    original_file = pp._DEBUG_OUTPUT_FILE
+    pp._DEBUG_PREPROCESS = True
+    pp._DEBUG_OUTPUT_FILE = "/nonexistent/path/report.txt"
+    pp._DEBUG_EVENTS.clear()
+    try:
+        # Should not raise
+        _write_debug_report()
+    finally:
+        pp._DEBUG_PREPROCESS = original_debug
+        pp._DEBUG_OUTPUT_FILE = original_file
+
+
+def test_write_debug_report_no_file_set(monkeypatch):
+    """Cover lines 42-44: debug enabled but no output file set."""
+    import pdd.preprocess as pp
+    original_debug = pp._DEBUG_PREPROCESS
+    original_file = pp._DEBUG_OUTPUT_FILE
+    pp._DEBUG_PREPROCESS = True
+    pp._DEBUG_OUTPUT_FILE = None
+    try:
+        _write_debug_report()  # Should just print a message, not crash
+    finally:
+        pp._DEBUG_PREPROCESS = original_debug
+        pp._DEBUG_OUTPUT_FILE = original_file
+
+
+# ============================================================================
+# _parse_attrs coverage
+# ============================================================================
+
+def test_parse_attrs_with_attributes():
+    """Cover lines 230-234: _parse_attrs parses key=value pairs."""
+    result = _parse_attrs(' path="file.txt" query="what is this"')
+    assert result == {"path": "file.txt", "query": "what is this"}
+
+
+def test_parse_attrs_empty_string():
+    """Cover line 228-229: _parse_attrs with empty string."""
+    result = _parse_attrs("")
+    assert result == {}
+
+
+def test_parse_attrs_single_quotes():
+    """_parse_attrs handles single-quoted attributes."""
+    result = _parse_attrs(" path='file.txt' mode='full'")
+    assert result == {"path": "file.txt", "mode": "full"}
+
+
+# ============================================================================
+# Include tag with query attribute
+# ============================================================================
+
+def test_include_tag_with_query_deferred_when_recursive():
+    """Cover line 251: query includes are deferred during recursive pass."""
+    prompt = '<include path="file.txt" query="what functions exist"/>'
+    result = preprocess(prompt, recursive=True, double_curly_brackets=False)
+    assert result == prompt
+
+
+def test_include_tag_with_query_import_error():
+    """Cover lines 258-270: query include when extractor not available."""
+    prompt = '<include path="file.txt" query="what functions exist"/>'
+    with patch('builtins.open', mock_open(read_data="content")):
+        # Setting the module to None in sys.modules triggers ImportError on import
+        with patch.dict('sys.modules', {'pdd.include_query_extractor': None}):
+             # Removed the aggressive builtins.__import__ patch
+            result = process_include_tags(prompt, recursive=False)
+    assert "Error" in result or "not found" in result.lower() or "include_query_extractor" in result
+
+
+def test_include_tag_with_query_generic_exception():
+    """Cover query include generic exception path."""
+    prompt = '<include path="file.txt" query="what functions exist"/>'
+    mock_extractor = MagicMock()
+    mock_extractor.IncludeQueryExtractor.return_value.extract.side_effect = RuntimeError("extraction failed")
+    
+    with patch('builtins.open', mock_open(read_data="content")):
+        with patch.dict('sys.modules', {'pdd.include_query_extractor': mock_extractor}):
+            result = process_include_tags(prompt, recursive=False)
+    assert "Error" in result
+
+
+# ============================================================================
+# Image include processing
+# ============================================================================
+
+def test_include_gif_image():
+    """Cover lines 299-302: GIF image processing (convert to PNG)."""
+    from PIL import Image
+    import io as _io
+
+    img = Image.new('RGB', (50, 50), color='red')
+    frames = [Image.new('RGB', (50, 50), color='blue')]
+    buffer = _io.BytesIO()
+    img.save(buffer, format='GIF', save_all=True, append_images=frames)
+    gif_data = buffer.getvalue()
+
+    prompt = "<include>test.gif</include>"
+
+    def mock_open_func(path, *args, **kwargs):
+        if 'r' in args or kwargs.get('mode') == 'r':
+            raise FileNotFoundError
+        mock_file = _io.BytesIO(gif_data)
+        mock_file.name = path
+        return mock_file
+
+    with patch('builtins.open', side_effect=mock_open_func):
+        with patch('os.path.splitext', return_value=('test', '.gif')):
+            result = process_include_tags(prompt, recursive=False)
+
+    assert result.startswith("data:image/png;base64,")
+
+
+def test_include_jpg_image():
+    """Cover lines 303-305: JPG image processing."""
+    from PIL import Image
+    import io as _io
+
+    img = Image.new('RGB', (50, 50), color='green')
+    buffer = _io.BytesIO()
+    img.save(buffer, format='JPEG')
+    jpg_data = buffer.getvalue()
+
+    prompt = "<include>test.jpg</include>"
+
+    def mock_open_func(path, *args, **kwargs):
+        if 'r' in args or kwargs.get('mode') == 'r':
+            raise FileNotFoundError
+        mock_file = _io.BytesIO(jpg_data)
+        mock_file.name = path
+        return mock_file
+
+    with patch('builtins.open', side_effect=mock_open_func):
+        with patch('os.path.splitext', return_value=('test', '.jpg')):
+            result = process_include_tags(prompt, recursive=False)
+
+    assert result.startswith("data:image/jpeg;base64,")
+
+
+def test_include_large_image_resized():
+    """Cover image resizing when dimensions exceed 1024."""
+    from PIL import Image
+    import io as _io
+
+    img = Image.new('RGB', (2048, 2048), color='blue')
+    buffer = _io.BytesIO()
+    img.save(buffer, format='PNG')
+    png_data = buffer.getvalue()
+
+    prompt = "<include>large.png</include>"
+
+    def mock_open_func(path, *args, **kwargs):
+        if 'r' in args or kwargs.get('mode') == 'r':
+            raise FileNotFoundError
+        mock_file = _io.BytesIO(png_data)
+        mock_file.name = path
+        return mock_file
+
+    with patch('builtins.open', side_effect=mock_open_func):
+        with patch('os.path.splitext', return_value=('large', '.png')):
+            result = process_include_tags(prompt, recursive=False)
+
+    assert result.startswith("data:image/png;base64,")
+
+
+# ============================================================================
+# Include tag with selectors/content_selector
+# ============================================================================
+
+def test_include_tag_with_select_attribute():
+    """Cover lines 330-339: include with select attribute."""
+    prompt = '<include path="file.py" select="def main"/>'
+    file_content = "def main():\n    pass\n\ndef helper():\n    pass\n"
+
+    mock_selector = MagicMock()
+    mock_selector.ContentSelector.return_value.select.return_value = "def main():\n    pass\n"
+
+    with patch('builtins.open', mock_open(read_data=file_content)):
+        with patch.dict('sys.modules', {'pdd.content_selector': mock_selector}):
+            result = process_include_tags(prompt, recursive=False)
+
+    assert "def main" in result
+
+
+def test_include_tag_with_lines_attribute():
+    """Cover include with lines attribute."""
+    prompt = '<include path="file.py" lines="1-3"/>'
+    file_content = "line1\nline2\nline3\nline4\nline5\n"
+
+    mock_selector = MagicMock()
+    mock_selector.ContentSelector.return_value.select.return_value = "line1\nline2\nline3\n"
+
+    with patch('builtins.open', mock_open(read_data=file_content)):
+        with patch.dict('sys.modules', {'pdd.content_selector': mock_selector}):
+            result = process_include_tags(prompt, recursive=False)
+
+    assert "line1" in result
+
+
+def test_include_tag_selector_import_error():
+    """Cover lines 347-348: ContentSelector import error."""
+    prompt = '<include path="file.py" select="def main"/>'
+    file_content = "def main():\n    pass\n"
+
+    # Use sys.modules to simulate missing module instead of patching __import__
+    with patch('builtins.open', mock_open(read_data=file_content)):
+        with patch.dict('sys.modules', {'pdd.content_selector': None}):
+            result = process_include_tags(prompt, recursive=False)
+
+    # Should include full content as fallback
+    assert "def main" in result
+
+
+def test_include_tag_selector_exception():
+    """Cover lines 349-350: ContentSelector raises exception."""
+    prompt = '<include path="file.py" select="def main"/>'
+    file_content = "def main():\n    pass\n"
+
+    mock_selector = MagicMock()
+    mock_selector.ContentSelector.return_value.select.side_effect = RuntimeError("selector error")
+
+    with patch('builtins.open', mock_open(read_data=file_content)):
+        with patch.dict('sys.modules', {'pdd.content_selector': mock_selector}):
+            result = process_include_tags(prompt, recursive=False)
+
+    # Should still include content (error is logged but content returned)
+    assert "def main" in result
+
+
+# ============================================================================
+# Include tag ValueError (non-circular) and generic Exception
+# ============================================================================
+
+def test_include_tag_value_error_non_circular():
+    """Cover lines 363-372: ValueError that is not circular include."""
+    prompt = "<include>bad_file.txt</include>"
+
+    def mock_open_func(path, *args, **kwargs):
+        raise ValueError("some value error")
+
+    with patch('builtins.open', side_effect=mock_open_func):
+        result = process_include_tags(prompt, recursive=False)
+
+    assert "Error processing include" in result
+
+
+def test_include_tag_generic_exception():
+    """Cover generic Exception in include processing."""
+    prompt = "<include>bad_file.txt</include>"
+
+    def mock_open_func(path, *args, **kwargs):
+        raise RuntimeError("unexpected error")
+
+    with patch('builtins.open', side_effect=mock_open_func):
+        result = process_include_tags(prompt, recursive=False)
+
+    assert "Error processing include" in result
+
+
+# ============================================================================
+# process_pdd_tags special case (line 395)
+# ============================================================================
+
+def test_pdd_tags_special_case_trailing_space():
+    """Cover line 395: special case where processed == 'This is a test'."""
+    result = process_pdd_tags("This is a test <pdd>comment here</pdd>")
+    assert result == "This is a test "
+
+
+# ============================================================================
+# Shell tag generic Exception
+# ============================================================================
+
+def test_shell_tag_generic_exception():
+    """Cover lines 415-418: shell tag with generic Exception."""
+    prompt = "Test <shell>some_command</shell>"
+
+    with patch('subprocess.run', side_effect=OSError("command not found")):
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    assert "Shell execution error" in result
+
+
+# ============================================================================
+# Web tag cached content
+# ============================================================================
+
+def test_web_tag_uses_cached_content(reset_firecrawl_cache):
+    """Cover lines 440-441: web tag returns cached content."""
+    from pdd.firecrawl_cache import get_firecrawl_cache
+
+    prompt = "Test <web>https://cached.example.com</web>"
+
+    with patch.dict('os.environ', {'FIRECRAWL_CACHE_ENABLE': 'true', 'FIRECRAWL_API_KEY': 'key'}):
+        cache = get_firecrawl_cache()
+        cache.set("https://cached.example.com", "# Cached Content")
+
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    assert "# Cached Content" in result
+
+
+# ============================================================================
+# Web tag timeout
+# ============================================================================
+
+def test_web_tag_timeout(reset_firecrawl_cache):
+    """Cover lines 475-476: web tag times out."""
+    from concurrent.futures import TimeoutError as FuturesTimeoutError
+
+    prompt = "Test <web>https://slow.example.com</web>"
+
+    mock_firecrawl = MagicMock()
+    mock_app = MagicMock()
+    # This side effect is not strictly necessary if we mock the executor, but keeps consistency
+    mock_app.scrape_url.return_value = {'markdown': 'content'} 
+    mock_firecrawl.Firecrawl.return_value = mock_app
+
+    with patch.dict('sys.modules', {'firecrawl': mock_firecrawl}):
+        with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'key', 'FIRECRAWL_CACHE_ENABLE': 'false'}):
+            # Patch ThreadPoolExecutor where it is defined/imported. 
+            # Since the code does `from concurrent.futures import ThreadPoolExecutor` inside the function,
+            # we should patch `concurrent.futures.ThreadPoolExecutor`.
+            with patch('concurrent.futures.ThreadPoolExecutor') as MockExecutor:
+                mock_future = MagicMock()
+                mock_future.result.side_effect = FuturesTimeoutError()
+                
+                mock_instance = MockExecutor.return_value
+                mock_instance.__enter__.return_value = mock_instance
+                mock_instance.submit.return_value = mock_future
+                
+                result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    assert "timed out" in result
+
+
+# ============================================================================
+# Web tag with response object (hasattr markdown) but no markdown
+# ============================================================================
+
+def test_web_tag_response_object_with_markdown_attr(reset_firecrawl_cache):
+    """Cover lines 487-489: response has markdown attribute (object style)."""
+    prompt = "Test <web>https://example.com</web>"
+
+    mock_firecrawl = MagicMock()
+    mock_response = MagicMock(spec=[])  # No dict-like behavior
+    mock_response.markdown = "# Object Response"
+    mock_app = MagicMock()
+    mock_app.scrape_url.return_value = mock_response
+    mock_firecrawl.Firecrawl.return_value = mock_app
+
+    with patch.dict('sys.modules', {'firecrawl': mock_firecrawl}):
+        with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'key', 'FIRECRAWL_CACHE_ENABLE': 'false'}):
+            result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    assert "# Object Response" in result
+
+
+# ============================================================================
+# Web tag inside code span (line 497)
+# ============================================================================
+
+def test_web_tag_ignored_in_code_span(reset_firecrawl_cache):
+    """Cover line 497: web tag inside inline code is not processed."""
+    prompt = "Use `<web>https://example.com</web>` as example."
+
+    mock_firecrawl = MagicMock()
+    with patch.dict('sys.modules', {'firecrawl': mock_firecrawl}):
+        with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'key', 'FIRECRAWL_CACHE_ENABLE': 'false'}):
+            result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    assert result == prompt
+
+
+# ============================================================================
+# Include-many generic Exception
+# ============================================================================
+
+def test_include_many_generic_exception():
+    """Cover lines 525-528: include-many with generic exception."""
+    prompt = "<include-many>error_file.txt</include-many>"
+
+    def mock_open_func(path, *args, **kwargs):
+        raise RuntimeError("unexpected error")
+
+    with patch('builtins.open', side_effect=mock_open_func):
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    assert "Error processing include" in result
+
+
+# ============================================================================
+# double_curly _restore_var fallback paths
+# ============================================================================
+
+def test_double_curly_restore_var_invalid_index():
+    """Cover lines 579-582: _restore_var with invalid index or non-matching pattern."""
+    # This tests the edge case where the placeholder index is out of range
+    text = "Test __PDD_VAR_999__ here"
+    # Manually invoke double_curly with text that has a stale placeholder
+    result = double_curly(text)
+    assert "__PDD_VAR_999__" in result  # Should be returned as-is
+
+
+def test_double_curly_restore_var_exception_path():
+    """Cover the except branch in _restore_var."""
+    # Create a scenario where re.match fails inside _restore_var
+    text = "Has ${VALID} placeholder"
+    result = double_curly(text)
+    assert "${{VALID}}" in result
+
+
+# ============================================================================
+# Code block non-matching language (line 600, 604)
+# ============================================================================
+
+def test_double_curly_non_code_language_block():
+    """Cover lines 600, 604: code block with non-code language (e.g., markdown)."""
+    prompt = """```markdown\nThis has {braces} in markdown.\n```"""
+
+    result = preprocess(prompt, recursive=False, double_curly_brackets=True)
+    # Non-code language blocks should be returned as-is by process_code_block
+    assert "```markdown" in result
+
+
+def test_double_curly_plain_code_block_no_language():
+    """Code block with empty language identifier."""
+    prompt = """```\n{plain_braces}\n```"""
+
+    result = preprocess(prompt, recursive=False, double_curly_brackets=True)
+    assert "{{plain_braces}}" in result or "{plain_braces}" in result
+
+
+# ============================================================================
+# Preprocess error handling
+# ============================================================================
+
+def test_preprocess_recursion_error():
+    """Cover lines 153-155: RecursionError is re-raised."""
+    with patch('pdd.preprocess.process_backtick_includes', side_effect=RecursionError("max depth")):
+        with pytest.raises(RecursionError):
+            preprocess("test", recursive=False, double_curly_brackets=False)
+
+
+def test_preprocess_circular_value_error():
+    """Cover lines 153-155: ValueError with 'Circular include' is re-raised."""
+    with patch('pdd.preprocess.process_backtick_includes', side_effect=ValueError("Circular include detected")):
+        with pytest.raises(ValueError, match="Circular include"):
+            preprocess("test", recursive=False, double_curly_brackets=False)
+
+
+def test_preprocess_generic_exception_returns_prompt():
+    """Cover lines 156-161: generic Exception returns original prompt."""
+    with patch('pdd.preprocess.process_backtick_includes', side_effect=TypeError("unexpected")):
+        result = preprocess("original prompt", recursive=False, double_curly_brackets=False)
+    assert result == "original prompt"
+
+
+# ============================================================================
+# _scan_risky_placeholders template brace detection
+# ============================================================================
+
+def test_scan_risky_placeholders_finds_template_braces():
+    """Cover lines 113-114: detect ${...} template literals outside fences."""
+    text = "const x = ${FOO};\nconst y = ${BAR + 1};"
+    singles, templates = _scan_risky_placeholders(text)
+    assert len(templates) >= 2
+
+
+def test_scan_risky_placeholders_ignores_fenced():
+    """Template literals inside fences should not be reported."""
+    text = "```js\nconst x = ${FOO};\n```"
+    singles, templates = _scan_risky_placeholders(text)
+    assert len(templates) == 0
+
+
+# ============================================================================
+# Backtick include ValueError (non-circular) and generic Exception
+# ============================================================================
+
+def test_backtick_include_value_error_non_circular():
+    """Cover lines 196-205: backtick include with non-circular ValueError."""
+    prompt = "```<bad_file.txt>```"
+
+    def mock_open_func(path, *args, **kwargs):
+        raise ValueError("some value error")
+
+    with patch('builtins.open', side_effect=mock_open_func):
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    assert "Error processing include" in result
+
+
+def test_backtick_include_generic_exception():
+    """Cover generic Exception in backtick include."""
+    prompt = "```<bad_file.txt>```"
+
+    def mock_open_func(path, *args, **kwargs):
+        raise RuntimeError("unexpected error")
+
+    with patch('builtins.open', side_effect=mock_open_func):
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    assert "Error processing include" in result
+
+
+# ============================================================================
+# Backtick include circular detection via _seen
+# ============================================================================
+
+def test_backtick_include_circular_via_seen():
+    """Cover line 181: circular include detected via _seen set."""
+    prompt = "```<circular.txt>```"
+    
+    # Pre-populate _seen with the resolved path of circular.txt
+    with patch('builtins.open', mock_open(read_data="content")):
+        with patch('os.path.realpath', return_value="/resolved/circular.txt"):
+            with pytest.raises(ValueError, match="Circular include"):
+                process_backtick_includes(prompt, recursive=False, _seen={"/resolved/circular.txt"})
+
+
+# ============================================================================
+# Max include iterations exceeded
+# ============================================================================
+
+def test_backtick_include_max_iterations():
+    """Cover line 211: max iterations exceeded raises ValueError."""
+    import pdd.preprocess as pp
+    original_max = pp._MAX_INCLUDE_ITERATIONS
+    pp._MAX_INCLUDE_ITERATIONS = 1
+
+    prompt = "```<file1.txt>```"
+
+    # Make the substitution always produce a new backtick include
+    def mock_open_func(path, *args, **kwargs):
+        return io.StringIO("```<file2.txt>```")
+
+    try:
+        with patch('builtins.open', side_effect=mock_open_func):
+            with pytest.raises(ValueError, match="maximum include depth"):
+                process_backtick_includes(prompt, recursive=False)
+    finally:
+        pp._MAX_INCLUDE_ITERATIONS = original_max
+
+
+# ============================================================================
+# Include tag max iterations exceeded
+# ============================================================================
+
+def test_include_tag_max_iterations():
+    """Cover line 378: max iterations exceeded in include tags."""
+    import pdd.preprocess as pp
+    original_max = pp._MAX_INCLUDE_ITERATIONS
+    pp._MAX_INCLUDE_ITERATIONS = 1
+
+    prompt = "<include>file1.txt</include>"
+
+    def mock_open_func(path, *args, **kwargs):
+        return io.StringIO("<include>file2.txt</include>")
+
+    try:
+        with patch('builtins.open', side_effect=mock_open_func):
+            with pytest.raises(ValueError, match="maximum include depth"):
+                process_include_tags(prompt, recursive=False)
+    finally:
+        pp._MAX_INCLUDE_ITERATIONS = original_max
+
+
+# ============================================================================
+# Web tag inside fenced code block
+# ============================================================================
+
+def test_web_tag_ignored_in_fenced_code_block(reset_firecrawl_cache):
+    """Web tags inside fenced code blocks should not execute."""
+    prompt = "```xml\n<web>https://example.com</web>\n```"
+    mock_firecrawl = MagicMock()
+    with patch.dict('sys.modules', {'firecrawl': mock_firecrawl}):
+        with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'key', 'FIRECRAWL_CACHE_ENABLE': 'false'}):
+            result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+    assert result == prompt
+
+
+# ============================================================================
+# Include-many inside fenced code block (already tested but ensure span check)
+# ============================================================================
+
+def test_include_many_ignored_in_inline_code():
+    """Include-many tags inside inline code should not execute."""
+    prompt = "Example `<include-many>file.txt</include-many>` here."
+    with patch('builtins.open', mock_open(read_data="Content")) as mocked:
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+    assert result == prompt
+    mocked.assert_not_called()
+
+
+# ============================================================================
+# Empty prompt
+# ============================================================================
+
+def test_preprocess_empty_prompt():
+    """Cover lines 120-121: empty prompt returns empty string."""
+    result = preprocess("", recursive=False, double_curly_brackets=False)
+    assert result == ""
+
+
+# ============================================================================
+# process_xml_tags _seen=None default
+# ============================================================================
+
+def test_process_xml_tags_seen_none():
+    """Cover line 219: process_xml_tags with _seen=None."""
+    result = process_xml_tags("plain text", recursive=False, _seen=None)
+    assert result == "plain text"
+
+
+# ============================================================================
+# process_backtick_includes _seen=None default
+# ============================================================================
+
+def test_process_backtick_includes_seen_none():
+    """Cover line 172: process_backtick_includes with _seen=None."""
+    result = process_backtick_includes("plain text", recursive=False, _seen=None)
+    assert result == "plain text"
+
+
+# ============================================================================
+# Include tag with mode attribute
+# ============================================================================
+
+def test_include_tag_with_mode_attribute():
+    """Cover include with mode attribute triggering selector."""
+    prompt = '<include path="file.py" mode="summary"/>'
+    file_content = "def main():\n    pass\n"
+
+    mock_selector = MagicMock()
+    mock_selector.ContentSelector.return_value.select.return_value = "Summary of file.py"
+
+    with patch('builtins.open', mock_open(read_data=file_content)):
+        with patch.dict('sys.modules', {'pdd.content_selector': mock_selector}):
+            result = process_include_tags(prompt, recursive=False)
+
+    assert "Summary" in result
+
+

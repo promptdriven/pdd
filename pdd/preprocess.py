@@ -224,12 +224,51 @@ def process_xml_tags(text: str, recursive: bool, _seen: Optional[set] = None) ->
     text = process_web_tags(text, recursive)
     return text
 
+def _parse_attrs(attr_str: str) -> dict:
+    if not attr_str:
+        return {}
+    attrs = {}
+    # Simple attribute parser: key="value" or key='value'
+    for match in re.finditer(r'(\w+)\s*=\s*["\']([^"\']*)["\']', attr_str):
+        attrs[match.group(1)] = match.group(2)
+    return attrs
+
 def process_include_tags(text: str, recursive: bool, _seen: Optional[set] = None) -> str:
     if _seen is None:
         _seen = set()
-    pattern = r'<include>(.*?)</include>'
+    # Support both <include>path</include> and <include path="path" attrs... />
+    pattern = r'<include(?P<attrs>\s+[^>]*?)?>(?P<content>.*?)</include>|<include(?P<attrs_self>\s+[^>]*?)\s*/>'
+    
     def replace_include(match):
-        file_path = match.group(1).strip()
+        attrs_str = match.group('attrs') or match.group('attrs_self') or ""
+        attrs = _parse_attrs(attrs_str)
+
+        # Content between tags (used as path for bare <include>path</include>)
+        content = match.group('content') if match.group('content') is not None else ""
+
+        file_path = attrs.get('path') or content.strip()
+        if not file_path:
+            return match.group(0)
+
+        file_path = file_path.strip()
+
+        # Handle query attribute — semantic LLM extraction
+        query = attrs.get('query')
+        if query:
+            if recursive:
+                return match.group(0)
+            try:
+                resolved_path = get_file_path(file_path)
+                from pdd.include_query_extractor import IncludeQueryExtractor
+                extractor = IncludeQueryExtractor()
+                return extractor.extract(file_path=resolved_path, query=query)
+            except ImportError:
+                console.print("[yellow]Warning: pdd.include_query_extractor not found. Cannot perform semantic query.[/yellow]")
+                return f"[Error: pdd.include_query_extractor not found. Cannot query from {file_path}]"
+            except Exception as e:
+                console.print(f"[bold red]Error in semantic query:[/bold red] {e}")
+                return f"[Error in semantic query from {file_path}: {e}]"
+
         try:
             full_path = get_file_path(file_path)
             resolved = os.path.realpath(full_path)
@@ -237,7 +276,7 @@ def process_include_tags(text: str, recursive: bool, _seen: Optional[set] = None
                 raise ValueError(f"Circular include detected: {file_path} is already in the include chain")
             ext = os.path.splitext(file_path)[1].lower()
             image_extensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.heic']
-            
+
             if ext in image_extensions:
                 console.print(f"Processing image include: [cyan]{full_path}[/cyan]")
                 from PIL import Image
@@ -279,6 +318,33 @@ def process_include_tags(text: str, recursive: bool, _seen: Optional[set] = None
                 console.print(f"Processing XML include: [cyan]{full_path}[/cyan]")
                 with open(full_path, 'r', encoding='utf-8') as file:
                     content = file.read()
+                    
+                    # Apply selectors if any
+                    selectors_str = attrs.get('select')
+                    lines_str = attrs.get('lines')
+                    mode = attrs.get('mode', 'full')
+
+                    if selectors_str or lines_str or mode != 'full':
+                        selectors = []
+                        if selectors_str:
+                            selectors.extend([s.strip() for s in selectors_str.split(',')])
+                        if lines_str:
+                            selectors.append(f"lines:{lines_str}")
+                        
+                        try:
+                            from pdd.content_selector import ContentSelector
+                            selector = ContentSelector()
+                            content = selector.select(
+                                content=content,
+                                selectors=selectors,
+                                file_path=full_path,
+                                mode=mode,
+                            )
+                        except ImportError:
+                            console.print("[yellow]Warning: pdd.content_selector not found. Including full content.[/yellow]")
+                        except Exception as e:
+                            console.print(f"[bold red]Error in content selection:[/bold red] {e}")
+                    
                     if recursive:
                         child_seen = _seen | {resolved}
                         content = preprocess(content, recursive=True, double_curly_brackets=False, _seen=child_seen)

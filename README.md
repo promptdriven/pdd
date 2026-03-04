@@ -599,14 +599,15 @@ graph TB
 ### Prompt Management
 - **[`preprocess`](#5-preprocess)**: Preprocesses prompt files, handling includes, comments, and other directives
 - **[`split`](#7-split)**: Splits large prompt files into smaller, more manageable ones
+- **[`extracts prune`](#21-extracts)**: Garbage-collect orphaned extracts cache entries
 - **[`auto-deps`](#15-auto-deps)**: Analyzes and inserts needed dependencies into a prompt file
 - **[`detect`](#10-detect)**: Analyzes prompts to determine which ones need changes based on a description
 - **[`conflicts`](#11-conflicts)**: Finds and suggests resolutions for conflicts between two prompt files
 - **[`trace`](#13-trace)**: Finds the corresponding line number in a prompt file for a given code line
 
 ### Utility Commands
-- **[`auth`](#18-auth)**: Manages authentication with PDD Cloud
-- **[`sessions`](#19-pdd-sessions---manage-remote-sessions)**: Manage remote sessions for `connect`
+- **[`auth`](#19-auth)**: Manages authentication with PDD Cloud
+- **[`sessions`](#20-pdd-sessions---manage-remote-sessions)**: Manage remote sessions for `connect`
 
 ## Global Options
 
@@ -2460,7 +2461,7 @@ pdd connect --session-name "my-dev-server"
 
 **When to use**: Use `connect` when you prefer a graphical interface for working with PDD, when demonstrating PDD to others, or when integrating PDD with other tools that can communicate via REST APIs.
 
-### 18. auth
+### 19. auth
 
 Manages authentication with PDD Cloud. The `auth` command provides subcommands for signing in, signing out, checking status, and retrieving authentication tokens.
 
@@ -2521,7 +2522,7 @@ pdd auth token [OPTIONS]
 
 **When to use**: Use `auth` commands to manage your PDD Cloud authentication state. Use `auth login` to authenticate before using cloud features, `auth status` to verify your current session, and `auth token` when you need to pass credentials to scripts or other tools.
 
-### 19. `pdd sessions` - Manage Remote Sessions
+### 20. `pdd sessions` - Manage Remote Sessions
 
 The `sessions` command group allows you to manage remote PDD sessions registered with PDD Cloud. Remote sessions enable you to control PDD instances running on other machines through the web frontend.
 
@@ -2559,7 +2560,16 @@ pdd sessions cleanup --all --force
 
 **When to use**: Use `sessions list` to discover available remote sessions, `sessions info` to check session details, and `sessions cleanup` to remove stale or orphaned sessions.
 
-### 20. Firecrawl Web Scraping Cache
+### 21. extracts
+
+The `<include path="..." query="..."/>` tag in prompts triggers LLM-powered semantic extraction with automatic caching in `.pdd/extracts/`. Results are **auto-refreshed**: if the source file changes, PDD automatically re-extracts and updates the cache upon processing the `<include ... query>` tag the next time.
+
+```bash
+# Remove orphaned cache entries not referenced by any prompt
+pdd extracts prune
+```
+
+### 22. Firecrawl Web Scraping Cache
 
 **Automatic caching** for web content scraped via `<web>` tags in prompts. Reduces API credit usage by caching results for 24 hours by default.
 
