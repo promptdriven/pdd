@@ -1509,3 +1509,102 @@ class TestPddignore:
         basenames = [os.path.basename(p[1]) for p in pairs]
         assert "app.tsx" in basenames
         assert "button.tsx" not in basenames
+
+
+# --- Tests for fingerprint collision fix ---
+
+from pdd.update_main import derive_basename_and_language
+
+
+class TestFingerprintCollisionAvoidance:
+    """Tests that same-named files in different dirs get distinct fingerprint keys."""
+
+    def test_same_name_different_dirs_distinct_basenames(self):
+        """Two page.tsx files in different directories must produce different basenames."""
+        with patch("pdd.update_main.get_language", return_value="TypescriptReact"):
+            b1, l1 = derive_basename_and_language(
+                "/repo/frontend/src/app/settings/page.tsx", "/repo"
+            )
+            b2, l2 = derive_basename_and_language(
+                "/repo/frontend/src/app/dashboard/page.tsx", "/repo"
+            )
+            b3, l3 = derive_basename_and_language(
+                "/repo/frontend/src/app/login/page.tsx", "/repo"
+            )
+
+        # All basenames must be unique
+        assert len({b1, b2, b3}) == 3
+        assert b1 == "frontend/src/app/settings/page"
+        assert b2 == "frontend/src/app/dashboard/page"
+        assert b3 == "frontend/src/app/login/page"
+
+    def test_fingerprint_paths_are_distinct(self):
+        """Distinct basenames produce distinct fingerprint file paths via _safe_basename."""
+        from pdd.operation_log import get_fingerprint_path, _safe_basename
+
+        b1 = "frontend/src/app/settings/page"
+        b2 = "frontend/src/app/dashboard/page"
+        lang = "typescriptreact"
+
+        # _safe_basename converts slashes to underscores
+        assert _safe_basename(b1) != _safe_basename(b2)
+        assert _safe_basename(b1) == "frontend_src_app_settings_page"
+        assert _safe_basename(b2) == "frontend_src_app_dashboard_page"
+
+
+class TestDataFileExclusion:
+    """Tests that .csv and .txt data files are excluded from repo scan."""
+
+    def test_csv_files_excluded(self, tmp_path, monkeypatch):
+        """CSV files should be excluded from repo scan."""
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+        git.Repo.init(repo_path)
+
+        (repo_path / "module.py").write_text("def foo(): pass")
+        (repo_path / "golden_results.csv").write_text("col1,col2\nval1,val2")
+        (repo_path / "llm_model.csv").write_text("model,cost\ngpt-4,0.01")
+
+        monkeypatch.chdir(repo_path)
+
+        with patch("pdd.update_main.get_language") as mock_lang:
+            def lang_for_ext(ext):
+                if ext == ".py":
+                    return "python"
+                if ext == ".csv":
+                    return "CSV"
+                return None
+            mock_lang.side_effect = lang_for_ext
+
+            pairs = find_and_resolve_all_pairs(str(repo_path), quiet=True)
+
+        code_files = [p[1] for p in pairs]
+        assert any("module.py" in f for f in code_files)
+        assert not any(".csv" in f for f in code_files)
+
+    def test_txt_files_excluded(self, tmp_path, monkeypatch):
+        """Text files should be excluded from repo scan."""
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+        git.Repo.init(repo_path)
+
+        (repo_path / "module.py").write_text("def foo(): pass")
+        (repo_path / "requirements.txt").write_text("flask==2.0\n")
+        (repo_path / "notes.txt").write_text("some notes")
+
+        monkeypatch.chdir(repo_path)
+
+        with patch("pdd.update_main.get_language") as mock_lang:
+            def lang_for_ext(ext):
+                if ext == ".py":
+                    return "python"
+                if ext == ".txt":
+                    return "Text"
+                return None
+            mock_lang.side_effect = lang_for_ext
+
+            pairs = find_and_resolve_all_pairs(str(repo_path), quiet=True)
+
+        code_files = [p[1] for p in pairs]
+        assert any("module.py" in f for f in code_files)
+        assert not any(".txt" in f for f in code_files)

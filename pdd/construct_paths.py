@@ -41,13 +41,34 @@ def _find_pddrc_file(start_path: Optional[Path] = None) -> Optional[Path]:
     """Find .pddrc file by searching upward from the given path."""
     if start_path is None:
         start_path = Path.cwd()
-    
+
     # Search upward through parent directories
     for path in [start_path] + list(start_path.parents):
         pddrc_file = path / ".pddrc"
         if pddrc_file.is_file():
             return pddrc_file
     return None
+
+
+def _find_nearest_pddrc_for_file(
+    file_path: Path,
+    stop_at: Optional[Path] = None,
+) -> Tuple[Optional[Path], Optional[Path]]:
+    """Find the nearest .pddrc to a file, searching upward from its directory.
+
+    Returns (pddrc_path, effective_root) where effective_root is the
+    directory containing the .pddrc. Returns (None, None) if not found.
+    """
+    start = file_path.parent if file_path.is_file() else file_path
+    stop_at_resolved = stop_at.resolve() if stop_at else None
+
+    for path in [start] + list(start.parents):
+        pddrc_file = path / ".pddrc"
+        if pddrc_file.is_file():
+            return pddrc_file, path
+        if stop_at_resolved and path.resolve() == stop_at_resolved:
+            break
+    return None, None
 
 def _load_pddrc_config(pddrc_path: Path) -> Dict[str, Any]:
     """Load and parse .pddrc configuration file."""
@@ -275,8 +296,19 @@ def detect_context_for_file(file_path: str, repo_root: Optional[str] = None) -> 
     else:
         relative_path = file_path
 
-    # Find and load .pddrc
-    pddrc_path = _find_pddrc_file(Path(repo_root))
+    # Find and load .pddrc — prefer one closer to the file over repo_root
+    pddrc_path = _find_pddrc_file(Path(file_path).parent)
+    if not pddrc_path:
+        pddrc_path = _find_pddrc_file(Path(repo_root))
+
+    # If the nearest .pddrc is in a nested directory, recalculate
+    # repo_root_abs and relative_path so context matching works correctly
+    if pddrc_path:
+        pddrc_root_abs = os.path.abspath(str(pddrc_path.parent))
+        if file_path_abs.startswith(pddrc_root_abs + os.sep) or file_path_abs == pddrc_root_abs:
+            repo_root_abs = pddrc_root_abs
+            relative_path = os.path.relpath(file_path_abs, repo_root_abs)
+
     if not pddrc_path:
         return None, {}
 

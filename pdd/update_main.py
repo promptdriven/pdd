@@ -34,6 +34,7 @@ _SKIP_EXTENSIONS = {
     '.json', '.jsonl', '.yaml', '.yml', '.md', '.toml', '.ini',
     '.css', '.html', '.lock', '.svg', '.png', '.jpg', '.gif',
     '.ico', '.woff', '.woff2', '.ttf', '.eot', '.map',
+    '.csv', '.txt',
 }
 _SKIP_FILENAMES = {
     'package-lock.json', '.prettierrc', '.eslintrc', '.gitignore',
@@ -523,7 +524,11 @@ def get_git_changed_files(repo_root: str, base_branch: str = "main") -> Set[str]
 def derive_basename_and_language(
     code_file_path: str, repo_root: str
 ) -> Tuple[Optional[str], Optional[str]]:
-    """Extract basename (file stem) and language from a code file path.
+    """Extract basename (relative path stem) and language from a code file path.
+
+    Uses the path relative to repo_root (without extension) as the basename
+    to avoid fingerprint collisions when multiple files share the same filename
+    (e.g., settings/page.tsx vs dashboard/page.tsx).
 
     Args:
         code_file_path: Absolute path to the code file.
@@ -537,7 +542,11 @@ def derive_basename_and_language(
     if not language:
         return None, None
 
-    basename = os.path.splitext(os.path.basename(code_file_path))[0]
+    try:
+        rel_path = os.path.relpath(code_file_path, repo_root)
+    except ValueError:
+        rel_path = os.path.basename(code_file_path)
+    basename = os.path.splitext(rel_path)[0]
     return basename, language.lower()
 
 
@@ -545,6 +554,7 @@ def is_code_changed(
     code_file_path: str,
     repo_root: str,
     git_changed_files: Set[str],
+    prompt_file_path: Optional[str] = None,
 ) -> Tuple[bool, str]:
     """Determine whether a code file has changed since last sync.
 
@@ -552,15 +562,30 @@ def is_code_changed(
     1. If a fingerprint exists, compare current SHA256 vs stored code_hash.
     2. If no fingerprint, fall back to git changed-files set.
 
+    When *prompt_file_path* is provided, uses ``infer_module_identity`` to
+    derive the fingerprint key (matching the write path in update_main).
+    Falls back to ``derive_basename_and_language`` otherwise.
+
     Args:
         code_file_path: Absolute path to the code file.
         repo_root: Absolute path to the repository root.
         git_changed_files: Set of absolute paths from get_git_changed_files().
+        prompt_file_path: Optional prompt path for accurate fingerprint lookup.
 
     Returns:
         (is_changed, reason) tuple.
     """
-    basename, language = derive_basename_and_language(code_file_path, repo_root)
+    basename, language = None, None
+
+    # Prefer prompt-path-based identity (matches the write path)
+    if prompt_file_path:
+        from .operation_log import infer_module_identity
+        basename, language = infer_module_identity(prompt_file_path)
+
+    # Fallback to code-path-based identity
+    if basename is None or language is None:
+        basename, language = derive_basename_and_language(code_file_path, repo_root)
+
     if basename is None or language is None:
         return False, "unknown extension"
 
@@ -780,7 +805,7 @@ def update_main(
             if prompt_p.exists() and prompt_p.stat().st_size == 0:
                 changed_pairs.append((prompt_path, code_path))
                 continue
-            changed, reason = is_code_changed(code_path, repo_root, git_changed_files)
+            changed, reason = is_code_changed(code_path, repo_root, git_changed_files, prompt_file_path=prompt_path)
             if changed:
                 changed_pairs.append((prompt_path, code_path))
 
@@ -855,7 +880,9 @@ def update_main(
 
         # Determine prompts directory and architecture path
         prompts_dir = Path(repo_root) / "prompts"
-        architecture_path = Path(repo_root) / "architecture.json"
+        from .architecture_registry import find_architecture_for_project
+        arch_files = find_architecture_for_project(Path(repo_root))
+        architecture_path = arch_files[0] if arch_files else Path(repo_root) / "architecture.json"
 
         successful_prompts = [
             res["prompt_file"] for res in results

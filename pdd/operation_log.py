@@ -52,27 +52,50 @@ def get_run_report_path(basename: str, language: str) -> Path:
 def infer_module_identity(prompt_file_path: Union[str, Path]) -> Tuple[Optional[str], Optional[str]]:
     """
     Infer basename and language from a prompt file path.
-    
-    Expected pattern: prompts/{basename}_{language}.prompt
-    
+
+    Expected pattern: prompts/[subdir/...]/{filestem}_{language}.prompt
+
+    Reconstructs directory context from the prompt path's position relative
+    to the nearest ``prompts/`` ancestor directory so that basenames include
+    subdirectory prefixes (e.g., ``frontend/page`` instead of just ``page``).
+    This avoids fingerprint collisions when multiple files share the same
+    filename stem.
+
     Args:
         prompt_file_path: Path to the prompt file.
-        
+
     Returns:
         Tuple of (basename, language) or (None, None) if inference fails.
     """
     path_obj = Path(prompt_file_path)
     filename = path_obj.stem  # e.g., "my_module_python" from "my_module_python.prompt"
-    
+
     # Try to split by the last underscore to separate language
     # This is a heuristic; strict naming conventions are assumed
     match = re.match(r"^(.*)_([^_]+)$", filename)
-    if match:
-        basename = match.group(1)
-        language = match.group(2).lower()
-        return basename, language
-        
-    return None, None
+    if not match:
+        return None, None
+
+    file_basename = match.group(1)
+    language = match.group(2).lower()
+
+    # Reconstruct directory context from prompt path.
+    # Prompt paths look like: .../prompts/frontend/src/app/settings/page_typescriptreact.prompt
+    # We need to extract "frontend/src/app/settings/page" (not just "page").
+    parts = path_obj.parts
+    try:
+        prompts_idx = len(parts) - 1 - list(reversed(parts)).index("prompts")
+        # Get the subdirectory path between "prompts/" and the filename
+        subdir_parts = parts[prompts_idx + 1 : -1]
+        if subdir_parts:
+            basename = str(Path(*subdir_parts) / file_basename)
+        else:
+            basename = file_basename
+    except ValueError:
+        # No "prompts" directory in path — fall back to filename-only
+        basename = file_basename
+
+    return basename, language
 
 
 def load_operation_log(basename: str, language: str) -> List[Dict[str, Any]]:

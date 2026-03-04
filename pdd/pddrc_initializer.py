@@ -399,9 +399,25 @@ def ensure_pddrc_for_scan(
 
     Returns the path to the ``.pddrc`` file, or ``None`` if no changes were made.
     """
-    from .construct_paths import _find_pddrc_file
+    from .construct_paths import _find_pddrc_file, _find_nearest_pddrc_for_file
 
-    needed = infer_contexts_from_scan(scan_dir, repo_root, code_files)
+    # Filter out code files whose nearest .pddrc is NOT the top-level one.
+    # Those files belong to a nested sub-project and should not get contexts
+    # generated in the top-level .pddrc.
+    top_level_pddrc = Path(repo_root) / PDDRC_FILENAME
+    files_for_top_level = []
+    for fpath in code_files:
+        nearest_pddrc, _ = _find_nearest_pddrc_for_file(
+            Path(fpath), stop_at=Path(repo_root)
+        )
+        # Include files whose nearest .pddrc IS the top-level one (or none exists)
+        if nearest_pddrc is None or nearest_pddrc.resolve() == top_level_pddrc.resolve():
+            files_for_top_level.append(fpath)
+
+    if not files_for_top_level:
+        return None
+
+    needed = infer_contexts_from_scan(scan_dir, repo_root, files_for_top_level)
     if not needed:
         return None
 

@@ -215,14 +215,16 @@ def _fetch_sibling_architectures(cwd: Path, current_target_dir: Optional[str]) -
     ]
     for dir_name, modules in siblings.items():
         lines.append(f"### `{dir_name}/` ({len(modules)} modules)")
-        lines.append("| Filename | Filepath | Description | Interface Type |")
-        lines.append("|----------|----------|-------------|----------------|")
+        lines.append("| Filename | Filepath | Description | Interface Type | Origin Issue |")
+        lines.append("|----------|----------|-------------|----------------|--------------|")
         for mod in modules:
             fn = mod.get("filename", "?")
             fp = mod.get("filepath", "?")
             desc = mod.get("reason", mod.get("description", ""))[:80]
             itype = mod.get("interface", {}).get("type", "?") if isinstance(mod.get("interface"), dict) else "?"
-            lines.append(f"| {fn} | {fp} | {desc} | {itype} |")
+            origin = mod.get("origin", {})
+            origin_issue = f"#{origin.get('issue_number', '?')}" if isinstance(origin, dict) and origin.get("issue_number") else "-"
+            lines.append(f"| {fn} | {fp} | {desc} | {itype} | {origin_issue} |")
         lines.append("")
     return "\n".join(lines)
 
@@ -233,6 +235,18 @@ def _read_existing_pddrc(cwd: Path) -> str:
     if pddrc_file.exists():
         try:
             return pddrc_file.read_text(encoding="utf-8")
+        except IOError:
+            return ""
+    return ""
+
+
+def _read_existing_architecture(cwd: Path, target_dir: Optional[str]) -> str:
+    """Read existing architecture.json at the target location."""
+    base = cwd / target_dir if target_dir else cwd
+    arch_file = base / "architecture.json"
+    if arch_file.exists():
+        try:
+            return arch_file.read_text(encoding="utf-8")
         except IOError:
             return ""
     return ""
@@ -367,6 +381,7 @@ def run_agentic_architecture(
     related_issues = _parse_related_issues(issue_body)
     sibling_arch_context = _fetch_sibling_architectures(repo_path, target_dir)
     existing_pddrc_context = _read_existing_pddrc(repo_path)
+    existing_arch_context = _read_existing_architecture(repo_path, target_dir)
 
     # 7. Invoke Orchestrator
     return run_agentic_architecture_orchestrator(
@@ -387,5 +402,6 @@ def run_agentic_architecture(
         force_single=force_single,
         sibling_architectures=sibling_arch_context,
         existing_pddrc=existing_pddrc_context,
+        existing_architecture=existing_arch_context,
         related_issues=related_issues,
     )

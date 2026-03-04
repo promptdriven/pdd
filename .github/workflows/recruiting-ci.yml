@@ -1,0 +1,37 @@
+name: Recruiting Pipeline CI
+
+on:
+  push:
+    paths:
+      - 'extensions/recruiting/**'
+  pull_request:
+    paths:
+      - 'extensions/recruiting/**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.12']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          pip install -r extensions/recruiting/requirements.txt
+
+      - name: Lint
+        run: |
+          pip install pylint
+          pylint extensions/recruiting/*.py --disable=C0114,C0115,C0116 || true
+
+      - name: Test
+        run: |
+          pytest -vv extensions/recruiting/tests/ --cov=extensions/recruiting --cov-report=term-missing

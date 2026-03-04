@@ -2276,10 +2276,15 @@ def analyze_conflict_with_llm(
         paths = get_pdd_file_paths(basename, language, prompts_dir, context_override=context_override)
         
         # Generate diffs for changed files
+        # Escape braces in diffs to prevent .format() from interpreting
+        # code content like {uid} as template placeholders
+        def _escape_braces(s: str) -> str:
+            return s.replace("{", "{{").replace("}", "}}")
+
         diffs = {}
         for file_type in changed_files:
             if file_type in paths and paths[file_type].exists():
-                diffs[f"{file_type}_diff"] = get_git_diff(paths[file_type])
+                diffs[f"{file_type}_diff"] = _escape_braces(get_git_diff(paths[file_type]))
                 diffs[f"{file_type}_path"] = str(paths[file_type])
             else:
                 diffs[f"{file_type}_diff"] = ""

@@ -1,0 +1,64 @@
+% You are an expert Python engineer. Your goal is to write the CLI commands module `pdd/commands/generate.py`, which defines three Click commands: `generate`, `example`, and `test`.
+
+<include>context/python_preamble.prompt</include>
+<include>context/command_logging.prompt</include>
+
+% Role & Scope
+  This module defines three Click commands for PDD's code generation pipeline.
+  Each command delegates to an internal "main" function and is decorated with
+  `@log_operation` and `@track_cost`. All commands return `Optional[Tuple[str, float, str]]`
+  (result, cost, model_name) on success, or None on failure.
+
+% Dependencies
+  <generate_example>
+    <include>context/commands/generate_example.py</include>
+  </generate_example>
+
+% Requirements
+
+  1. Module-level lazy loading: `code_generator_main` and `_DEFAULT_CODE_GENERATOR_MAIN`
+     are module-level globals initialized to None. The `generate` function lazily imports
+     and assigns the real `code_generator_main` on first call, allowing tests to patch it.
+
+  2. GitHub issue URL regex: compile `_GITHUB_ISSUE_RE` at module level to detect
+     GitHub issue URLs in the PROMPT_FILE argument.
+
+  3. `generate` command (custom `GenerateCommand` class):
+     - PROMPT_FILE argument: optional, type=click.UNPROCESSED (to allow GitHub URLs).
+     - Options: --template, -e/--env (multiple), --output, --original-prompt, --incremental,
+       --unit-test, --exclude-tests, --skip-prompts, --output-dir, --force-single.
+     - Decorated with `@log_operation(operation="generate", clears_run_report=True, updates_fingerprint=True)`.
+     - Mutex: cannot specify both PROMPT_FILE and --template; must specify one.
+     - Template resolution: lazily import `load_template` from `..template_registry`
+       (handle ImportError gracefully).
+     - GitHub issue URL detection: if PROMPT_FILE matches the regex, delegate to
+       `run_agentic_architecture` from `..agentic_architecture`, passing skip_prompts,
+       target_dir=output_dir, and force_single.
+     - File validation: if not a template, validate the path exists and is not a directory.
+     - Env vars: parse KEY=VALUE pairs; Docker-style fallback reads from os.environ for bare keys.
+       Update `os.environ` with parsed vars.
+     - Delegates to `code_generator_main(ctx, prompt_file, output, original_prompt_file_path,
+       force_incremental_flag, env_vars, unit_test_file, exclude_tests)`.
+
+  4. `example` command:
+     - Arguments: PROMPT_FILE and CODE_FILE (both required, exists=True, dir_okay=False).
+     - Options: --output, --format (choice: code|md, default code).
+     - Decorated with `@log_operation(operation="example", updates_fingerprint=True)`.
+     - Delegates to `context_generator_main(ctx, prompt_file, code_file, output, format)`.
+
+  5. `test` command:
+     - Accepts variadic ARGS (nargs=-1) instead of named positional arguments.
+     - Options: --manual, --timeout-adder, --no-github-state, --output, --language,
+       --coverage-report, --existing-tests (multiple), --target-coverage, --merge.
+     - Decorated with `@log_operation(operation="test", updates_run_report=True)`.
+     - Two modes determined by first arg:
+       a. Agentic mode (URL detected, --manual not set): delegates to `run_agentic_test`.
+       b. Manual mode (--manual or non-URL): requires exactly 2 args (prompt_file, code_file),
+          delegates to `cmd_test_main` with strength/temperature from ctx.obj.
+
+  6. Error handling: all three commands re-raise Click exceptions (Abort, UsageError,
+     BadArgumentUsage, FileError, BadParameter) and catch all other exceptions via
+     `handle_error(e, command_name, quiet)`.
+
+% Deliverables
+  - Code: `pdd/commands/generate.py`

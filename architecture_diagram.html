@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>[Split from #510] Core Recruiting Pipeline — Ingestion, Chatbot, Scoring &amp; Call Queue</title>
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+mermaid.initialize({startOnLoad:true,theme:'default'});
+window.addEventListener('load', () => {
+    const moduleData = {"candidate_models_Python": {"filename": "candidate_models_Python.prompt", "priority": 1, "description": "Pydantic v2 models for all Firestore document types: CandidateDocument (30+ fields covering identity, academic, screening, pipeline, call tracking, homework, trial data), ConversationDocument (messages array, screening signals, session metadata), HandshakeSyncState (polling watermark), RecruitingConfig (parsed YAML runtime config). Enums for PipelineStage (ingested, registered, screening, scored, call_queued, called, homework, trial, hired, rejected), CallOutcome, HomeworkStatus, TrialStatus. Includes Firestore serialization helpers (to_dict/from_dict) and validation rules. All models use strict mode with field validators for email, phone, URL formats.", "dependencies": [], "tags": ["backend", "data", "pydantic"], "filepath": "extensions/recruiting/models.py"}, "config_loader_Python": {"filename": "config_loader_Python.prompt", "priority": 2, "description": "Loads and validates extensions/recruiting/config.yaml into a RecruitingConfig Pydantic model. Provides a cached singleton accessor get_config() that reads YAML once and returns validated config. Handles missing file with sensible defaults, validates scoring weight totals sum to 1.0, and exposes typed accessors for chatbot_prompt, screening_criteria, scoring_weights, filter_rules, brevo_template_ids, and scheduling config. Supports config reload for testing.", "dependencies": ["candidate_models_Python.prompt"], "tags": ["backend", "config"], "filepath": "extensions/recruiting/config_loader.py"}, "auth_utils_Python": {"filename": "auth_utils_Python.prompt", "priority": 3, "description": "Three auth patterns: (1) verify_firebase_token(token) validates Firebase ID tokens via firebase_admin.auth.verify_id_token(), returns uid and claims, handles expired/invalid/revoked tokens. (2) verify_github_oauth(code) exchanges GitHub OAuth code for access token, fetches user profile (login, email, avatar_url, name), returns GitHubProfile. (3) create_signed_jwt(payload, expiry) and verify_signed_jwt(token) use RS256 JWT signing/verification via PyJWT for call outcome deep-links with configurable secret from environment. All functions raise typed AuthError exceptions with error codes. Includes helper for extracting Bearer tokens from Authorization headers.", "dependencies": ["candidate_models_Python.prompt"], "tags": ["backend", "auth"], "filepath": "extensions/recruiting/auth_utils.py"}, "handshake_ingestion_Python": {"filename": "handshake_ingestion_Python.prompt", "priority": 4, "description": "Cloud Function entry point recruiting_handshake_poll triggered by Cloud Scheduler (hourly). Fetches applicants from Handshake EDU API using updated_since watermark from recruiting/handshake_sync_state document. For each applicant: extracts identity and academic fields, checks for duplicates by email in recruiting/candidates collection, applies configurable auto-filter rules (GPA threshold, graduation year, major whitelist from config.yaml), creates CandidateDocument with stage=ingested for passing applicants. Updates sync watermark on success. Handles API rate limits with exponential backoff, logs filtered-out candidates with rejection reasons, implements idempotency via Handshake application ID. Uses structured Cloud Logging.", "dependencies": ["candidate_models_Python.prompt", "config_loader_Python.prompt"], "tags": ["backend", "api", "ingestion"], "filepath": "extensions/recruiting/handshake_poll.py"}, "candidate_registration_Python": {"filename": "candidate_registration_Python.prompt", "priority": 5, "description": "Cloud Function entry point recruiting_register triggered by HTTP POST. Accepts GitHub OAuth authorization code, exchanges for access token via auth_utils, creates or links Firebase Auth account with GitHub provider, creates CandidateDocument with stage=registered populated from GitHub profile (login, email, avatar_url, name). Creates user_waitlist entry with source='recruiting' and recruiting_uid reference. Returns Firebase custom token for client-side auth. Handles duplicate registration (same GitHub user) by returning existing candidate. Uses Firestore batch write for atomicity across candidates, waitlist, and users collections. Validates request payload with Pydantic.", "dependencies": ["candidate_models_Python.prompt", "auth_utils_Python.prompt", "config_loader_Python.prompt"], "tags": ["backend", "api", "auth"], "filepath": "extensions/recruiting/registration.py"}, "chatbot_screen_Python": {"filename": "chatbot_screen_Python.prompt", "priority": 6, "description": "Cloud Function entry point recruiting_chat triggered by HTTP POST with Firebase token auth. Manages multi-turn conversation flow: loads conversation history from recruiting/conversations/{uid}, appends user message, constructs system prompt from config.yaml with candidate context, calls Claude via LiteLLM (model from config, temperature=0.7), extracts screening signals from assistant response (technical depth, communication quality, motivation indicators), persists updated conversation and signals to Firestore. Handles conversation lifecycle: creates new conversation on first message, enforces max turns from config, marks conversation status=complete when screening criteria met or max turns reached. On completion, updates candidate stage to screening complete and triggers score_candidate via Firestore write. Returns assistant message and conversation metadata. Implements request-level idempotency via message_id.", "dependencies": ["candidate_models_Python.prompt", "auth_utils_Python.prompt", "config_loader_Python.prompt"], "tags": ["backend", "api", "ai"], "filepath": "extensions/recruiting/chatbot.py"}, "scoring_Python": {"filename": "scoring_Python.prompt", "priority": 7, "description": "Cloud Function entry point recruiting_score_candidate triggered by Firestore document update on recruiting/conversations/{uid} when status changes to complete. Reads screening signals from conversation document, loads scoring weights from config.yaml (technical_depth, communication, motivation, experience, culture_fit), computes weighted composite score (0-100). Generates text dossier summarizing candidate strengths, concerns, and recommended next steps using LiteLLM. Updates CandidateDocument with composite_score, individual dimension scores, dossier text, and advances stage to scored. Handles at-least-once delivery via idempotency check on candidate stage. Logs scoring breakdown for audit trail.", "dependencies": ["candidate_models_Python.prompt", "config_loader_Python.prompt"], "tags": ["backend", "ai", "firestore-trigger"], "filepath": "extensions/recruiting/scoring.py"}, "email_outreach_Python": {"filename": "email_outreach_Python.prompt", "priority": 8, "description": "Brevo transactional email integration module. Provides send_email(to, template_id, params) using Brevo Python SDK v4.0. Template IDs loaded from config.yaml for each email type: post_screen_notification, homework_instructions, call_invitation, rejection_notice. Handles Brevo API errors with retry logic (3 attempts, exponential backoff). Validates email addresses before sending. Logs all email sends with template_id and recipient for audit. Provides bulk_send for daily digest. All functions are async for non-blocking operation within Cloud Functions.", "dependencies": ["candidate_models_Python.prompt", "config_loader_Python.prompt"], "tags": ["backend", "email"], "filepath": "extensions/recruiting/email_outreach.py"}, "daily_digest_Python": {"filename": "daily_digest_Python.prompt", "priority": 9, "description": "Cloud Function entry point recruiting_daily_digest triggered by Cloud Scheduler at 4 PM PT daily. Queries Firestore for all candidates with stage=scored or stage=call_queued, ranks by composite_score descending, generates HTML email with: ranked table (name, score, phone, key strengths), individual dossier summaries, pre-filled email template links for each candidate, and signed JWT deep-links for call outcome tracking. Sends digest via email_outreach.send_bulk_digest to configured admin email. Updates candidates to stage=call_queued if not already. Handles empty queue gracefully (sends no-candidates summary). Uses config.yaml for admin_email, digest schedule, and email template.", "dependencies": ["candidate_models_Python.prompt", "config_loader_Python.prompt", "auth_utils_Python.prompt", "email_outreach_Python.prompt"], "tags": ["backend", "api", "scheduling"], "filepath": "extensions/recruiting/daily_digest.py"}, "call_tracking_Python": {"filename": "call_tracking_Python.prompt", "priority": 10, "description": "Cloud Function entry point recruiting_call_outcome triggered by HTTP POST. Accepts signed JWT (from daily digest deep-link) or admin Firebase token auth. Validates JWT payload contains candidate_uid, extracts call outcome (interested, not_interested, no_answer, callback_requested, hired, rejected) and optional notes. Updates CandidateDocument with call outcome, call timestamp, and notes. Advances pipeline stage based on outcome: interested to homework, hired to hired, rejected to rejected, no_answer remains call_queued, callback_requested remains call_queued with callback_date. Triggers downstream effects: homework stage triggers send_homework via Firestore write. Returns updated candidate status. Implements idempotency via call_outcome_id in JWT payload.", "dependencies": ["candidate_models_Python.prompt", "auth_utils_Python.prompt", "config_loader_Python.prompt"], "tags": ["backend", "api", "auth"], "filepath": "extensions/recruiting/call_outcome.py"}, "homework_pipeline_Python": {"filename": "homework_pipeline_Python.prompt", "priority": 11, "description": "Cloud Function entry point recruiting_send_homework triggered by Firestore document update on recruiting/candidates/{uid} when stage changes to homework. Performs three atomic operations: (1) updates user_waitlist entry to approved=true for the candidate waitlist doc, (2) grants homework_credits to users/{uid} document (credit amount from config.yaml), (3) sends homework instruction email via email_outreach with assignment details, deadline, and submission instructions. Updates CandidateDocument with homework_assigned_at timestamp, homework_deadline, and homework_status=assigned. Handles at-least-once delivery via idempotency check on homework_status. Uses Firestore batch write for atomicity across three collections.", "dependencies": ["candidate_models_Python.prompt", "config_loader_Python.prompt", "email_outreach_Python.prompt"], "tags": ["backend", "firestore-trigger", "email"], "filepath": "extensions/recruiting/homework.py"}, "trial_tracking_Python": {"filename": "trial_tracking_Python.prompt", "priority": 12, "description": "Provides functions for trial lifecycle management. start_trial(uid) sets trial_start_date, trial_end_date (from config duration), and trial_status=active on CandidateDocument. check_trial_contributions(uid) queries GitHub REST API for candidate recent contributions (commits, PRs, issues) in the organization repositories, computes contribution metrics (commit_count, pr_count, lines_added, lines_removed, review_comments). update_trial_status(uid) evaluates contributions against config thresholds and updates trial_status (active to completed, extended, or failed). Can be called by a scheduled function or admin endpoint. Handles GitHub API rate limits, caches API responses, and logs contribution details. Uses candidate GitHub login from CandidateDocument for API queries.", "dependencies": ["candidate_models_Python.prompt", "config_loader_Python.prompt"], "tags": ["backend", "github"], "filepath": "extensions/recruiting/trial_tracking.py"}};
+    
+    // Add hover listeners to all nodes
+    setTimeout(() => {
+        const nodes = document.querySelectorAll('.node');
+        nodes.forEach(node => {
+            const text = node.querySelector('.nodeLabel');
+            if (!text) return;
+            
+            const nodeText = text.textContent.trim();
+            const moduleId = nodeText.split(' ')[0];
+            const data = moduleData[moduleId];
+            
+            if (data) {
+                node.style.cursor = 'pointer';
+                
+                node.addEventListener('mouseenter', (e) => {
+                    showTooltip(e, data);
+                });
+                
+                node.addEventListener('mouseleave', () => {
+                    hideTooltip();
+                });
+            }
+        });
+    }, 500);
+});
+function showTooltip(e, data) {
+    hideTooltip();
+    
+    const tooltip = document.createElement('div');
+    tooltip.id = 'module-tooltip';
+    tooltip.innerHTML = `
+        <div style="font-weight:600;margin-bottom:8px;font-size:1.1em;">${data.filename}</div>
+        <div style="margin-bottom:6px;"><strong>Priority:</strong> ${data.priority}</div>
+        <div style="margin-bottom:6px;"><strong>Path:</strong> ${data.filepath}</div>
+        <div style="margin-bottom:6px;"><strong>Tags:</strong> ${data.tags.join(', ')}</div>
+        <div style="margin-bottom:6px;"><strong>Dependencies:</strong> ${data.dependencies.length > 0 ? data.dependencies.join(', ') : 'None'}</div>
+        <div style="margin-top:8px;padding-top:8px;border-top:1px solid #ddd;font-size:0.9em;color:#444;">${data.description}</div>
+    `;
+    
+    document.body.appendChild(tooltip);
+    
+    const rect = e.target.closest('.node').getBoundingClientRect();
+    tooltip.style.left = rect.right + 10 + 'px';
+    tooltip.style.top = rect.top + window.scrollY + 'px';
+}
+function hideTooltip() {
+    const existing = document.getElementById('module-tooltip');
+    if (existing) existing.remove();
+}
+</script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:system-ui,sans-serif;background:#fff;color:#000;padding:2rem;max-width:1400px;margin:0 auto}
+h1{font-size:2rem;font-weight:600;margin-bottom:2rem;padding-bottom:1rem;border-bottom:2px solid #000}
+.diagram{border:1px solid #000;padding:2rem;margin:2rem 0;overflow-x:auto;position:relative}
+.mermaid{display:flex;justify-content:center}
+#module-tooltip{
+    position:absolute;
+    background:#fff;
+    border:2px solid #000;
+    padding:1rem;
+    max-width:400px;
+    z-index:1000;
+    box-shadow:4px 4px 0 rgba(0,0,0,0.1);
+    font-size:0.9rem;
+    line-height:1.5;
+}
+.node{transition:opacity 0.2s}
+.node:hover{opacity:0.8}
+</style></head><body>
+<h1>[Split from #510] Core Recruiting Pipeline — Ingestion, Chatbot, Scoring &amp; Call Queue</h1>
+<div class="diagram"><pre class="mermaid">flowchart TB
+        PRD["[Split from #510] Core Recruiting Pipeline — Ingestion, Chatbot, Scoring & Call Queue"]
+    
+    subgraph Backend
+        candidate_models_Python["candidate_models_Python (1)"]
+        config_loader_Python["config_loader_Python (2)"]
+        auth_utils_Python["auth_utils_Python (3)"]
+        handshake_ingestion_Python["handshake_ingestion_Python (4)"]
+        candidate_registration_Python["candidate_registration_Python (5)"]
+        chatbot_screen_Python["chatbot_screen_Python (6)"]
+        scoring_Python["scoring_Python (7)"]
+        email_outreach_Python["email_outreach_Python (8)"]
+        daily_digest_Python["daily_digest_Python (9)"]
+        call_tracking_Python["call_tracking_Python (10)"]
+        homework_pipeline_Python["homework_pipeline_Python (11)"]
+        trial_tracking_Python["trial_tracking_Python (12)"]
+    end
+    
+    PRD --> Backend
+
+    config_loader_Python -->|uses| candidate_models_Python
+    auth_utils_Python -->|uses| candidate_models_Python
+    handshake_ingestion_Python -->|uses| candidate_models_Python
+    handshake_ingestion_Python -->|uses| config_loader_Python
+    candidate_registration_Python -->|uses| candidate_models_Python
+    candidate_registration_Python -->|uses| auth_utils_Python
+    candidate_registration_Python -->|uses| config_loader_Python
+    chatbot_screen_Python -->|uses| candidate_models_Python
+    chatbot_screen_Python -->|uses| auth_utils_Python
+    chatbot_screen_Python -->|uses| config_loader_Python
+    scoring_Python -->|uses| candidate_models_Python
+    scoring_Python -->|uses| config_loader_Python
+    email_outreach_Python -->|uses| candidate_models_Python
+    email_outreach_Python -->|uses| config_loader_Python
+    daily_digest_Python -->|uses| candidate_models_Python
+    daily_digest_Python -->|uses| config_loader_Python
+    daily_digest_Python -->|uses| auth_utils_Python
+    daily_digest_Python -->|uses| email_outreach_Python
+    call_tracking_Python -->|uses| candidate_models_Python
+    call_tracking_Python -->|uses| auth_utils_Python
+    call_tracking_Python -->|uses| config_loader_Python
+    homework_pipeline_Python -->|uses| candidate_models_Python
+    homework_pipeline_Python -->|uses| config_loader_Python
+    homework_pipeline_Python -->|uses| email_outreach_Python
+    trial_tracking_Python -->|uses| candidate_models_Python
+    trial_tracking_Python -->|uses| config_loader_Python
+    
+    classDef frontend fill:#FFF3E0,stroke:#F57C00,stroke-width:2px
+    classDef backend fill:#E3F2FD,stroke:#1976D2,stroke-width:2px
+    classDef shared fill:#E8F5E9,stroke:#388E3C,stroke-width:2px
+    classDef system fill:#E0E0E0,stroke:#616161,stroke-width:3px
+    
+    class candidate_models_Python,config_loader_Python,auth_utils_Python,handshake_ingestion_Python,candidate_registration_Python,chatbot_screen_Python,scoring_Python,email_outreach_Python,daily_digest_Python,call_tracking_Python,homework_pipeline_Python,trial_tracking_Python backend
+    class PRD system</pre></div>
+</body></html>

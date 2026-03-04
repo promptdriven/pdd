@@ -45,24 +45,44 @@ def _find_project_root(start: Path) -> Path:
     return start.resolve()
 
 
-def _load_architecture_json(project_root: Path) -> Tuple[Optional[List[Dict[str, Any]]], Path]:
+def _load_architecture_json(
+    project_root: Path,
+    issue_number: Optional[int] = None,
+) -> Tuple[Optional[List[Dict[str, Any]]], Path]:
     """
     Load architecture.json from the project root.
 
+    If multiple architecture files exist (root + subdirs), loads and combines them.
+
+    Args:
+        project_root: Root directory of the project.
+        issue_number: Optional issue number for logging origin info.
+
     Returns:
-        Tuple of (parsed data or None, path to architecture.json).
+        Tuple of (parsed data or None, path to primary architecture.json).
     """
-    arch_path = project_root / "architecture.json"
-    if not arch_path.exists():
-        return None, arch_path
-    try:
-        with open(arch_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, list):
-            return data, arch_path
-        return None, arch_path
-    except (json.JSONDecodeError, OSError):
-        return None, arch_path
+    from .architecture_registry import find_architecture_for_project
+
+    arch_files = find_architecture_for_project(project_root)
+    if not arch_files:
+        return None, project_root / "architecture.json"
+
+    primary_path = arch_files[0]
+    combined: List[Dict[str, Any]] = []
+
+    for arch_path in arch_files:
+        try:
+            with open(arch_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                combined.extend(data)
+        except (json.JSONDecodeError, OSError):
+            continue
+
+    if not combined:
+        return None, primary_path
+
+    return combined, primary_path
 
 
 def _is_catchall_match(basename: str, config: Dict[str, Any]) -> bool:
@@ -110,24 +130,18 @@ def _resolve_module_cwd(basename: str, project_root: Path) -> Path:
     """Determine the correct working directory for a module based on .pddrc discovery.
 
     Logic:
-    1. Try project root first — load its .pddrc, check if a non-default context matches.
-    2. If matched, return project_root.
-    3. If not, scan subdirectories (recursive, max depth 2) for .pddrc files.
-       For each, load and check if a context matches. Deepest match wins.
+    1. If a root .pddrc exists, treat it as authoritative — return project_root.
+       The root .pddrc is the centralized config and should be the default cwd.
+    2. If no root .pddrc exists, scan subdirectories (recursive, max depth 2)
+       for .pddrc files. Deepest match wins.
        Skip catch-all matches (e.g. paths: ['**']) from subdirectories —
        they match everything and should not claim ownership of unrelated modules.
-    4. Fall back to project_root.
+    3. Fall back to project_root.
     """
-    # 1. Check project root .pddrc
+    # 1. If root .pddrc exists, it's authoritative — always use project_root
     root_pddrc = project_root / ".pddrc"
     if root_pddrc.exists():
-        try:
-            config = _load_pddrc_config(root_pddrc)
-            detected = _detect_context_from_basename(basename, config)
-            if detected and detected != "default":
-                return project_root
-        except (ValueError, OSError):
-            pass
+        return project_root
 
     # 2. Scan subdirectories for .pddrc files (max depth 2)
     best_match: Optional[Path] = None
@@ -569,7 +583,7 @@ def run_agentic_sync(
 
     # 6. Find project root and load architecture.json
     project_root = _find_project_root(Path.cwd())
-    architecture, arch_path = _load_architecture_json(project_root)
+    architecture, arch_path = _load_architecture_json(project_root, issue_number=issue_number)
 
     if architecture is None:
         if not quiet:
@@ -581,9 +595,12 @@ def run_agentic_sync(
         return False, "Failed to load agentic_sync_identify_modules_LLM prompt template", 0.0, ""
 
     arch_json_str = json.dumps(architecture, indent=2) if architecture else "No architecture.json available."
+    # Escape braces in dynamic content to prevent .format() from interpreting
+    # code references like {uid} as template placeholders
+    safe_arch_json = arch_json_str.replace("{", "{{").replace("}", "}}")
     prompt = prompt_template.format(
         issue_content=issue_content,
-        architecture_json=arch_json_str,
+        architecture_json=safe_arch_json,
     )
 
     if not quiet:

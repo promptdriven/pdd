@@ -41,6 +41,8 @@ CRITICAL — If an existing .pddrc is shown above:
 3. The `default` context should be shared — update only if needed
 4. Add your sub-project's contexts alongside existing ones
 5. Write the MERGED result to `.pddrc` at the repo root
+6. NEVER create .pddrc in a subdirectory — it MUST be at the repository root (`.pddrc`, not `{target_dir}/.pddrc`)
+7. NEVER remove or replace existing contexts — you are only ADDING new contexts. Every context name present in the existing file MUST remain in the output file.
 
 If no existing .pddrc is shown, create from scratch as before.
 
@@ -135,6 +137,8 @@ Group modules by their output directory:
 % Output Requirements
 
 1. **Write .pddrc to disk**
+
+1b. **Location check**: .pddrc MUST be written to the repository root directory only. Do NOT write .pddrc to any subdirectory such as `{target_dir}/`.
 
 2. **Verify YAML syntax:**
    ```bash
