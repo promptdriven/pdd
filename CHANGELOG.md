@@ -1,3 +1,66 @@
+## v0.0.166 (2026-03-03)
+
+### Feat
+
+- Add video element specifications and narration audio for multiple video parts.
+- Implement "Detect Segments" functionality in Stage 5 Audio Sync, add a guard for missing segments in Stage 4 TTS rendering, and document staging environments.
+- add Gemini 3.1 Flash Lite to model catalog and update base model references
+- merge sync-code into update + add post-update architecture/PRD sync
+- add `pdd sync-code` command for reverse-syncing code changes to prompts
+
+### Fix
+
+- Clean up stale pdd.cli attribute in test_cli.py teardown
+- spec executor uses section ID instead of specDir for directory paths
+- Stage 6 spec list not refreshing after regeneration completes
+- Stage 5 "Save Config" silently fails — section groups lost on refresh
+- subtract cache_creation from new_input to prevent double-counting (#686)
+- address Copilot review — reuse expand_template, fix {ext} dot
+- use git ls-files to respect .gitignore in repo scan
+- exclude .next and other build directories from repo scan
+- resolve prompt discovery bugs in `pdd update --repo`
+- ensure scaffolded .gitignore tracks .pdd/meta/ fingerprints
+- store relative paths in fingerprint include_deps for portability
+- accept PDD_CODEX_AUTH_AVAILABLE sentinel for Codex agent discovery
+- **test**: use patch.object to target real generate module in error tests
+- patch update_main at correct import location in CLI test
+- catch-all pddrc pattern skipping and SYNC_CMD dry-run fix
+- **test-batch-ann-1772530285220**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772530067058**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772529895950**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772529653837**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772529265712**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772528693765**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772528552660**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772528383877**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772528125988**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772527990694**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772527823452**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772527699472**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772527367189**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772527157529**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772527010958**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772526870445**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772526740123**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772526643851**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772526519257**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772526399758**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772526263551**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772526156841**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772526058700**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772525974230**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772525892652**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772525786581**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772525706650**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772525606120**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772525497271**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772525403413**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772525290523**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772523271731**: Subtitle font size 96px causes text to clip the ri
+- handle None return from update_main in repo mode
+- convert architecture_sync and operation_log imports to lazy imports
+- save fingerprint after successful repo-mode update
+
 ## v0.0.165 (2026-03-02)
 
 ### Feat
