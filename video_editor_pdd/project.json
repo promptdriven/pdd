@@ -21,7 +21,10 @@
       "remotionDir": "S00-ColdOpen",
       "compositionId": "ColdOpenSection",
       "durationSeconds": 15.288,
-      "offsetSeconds": 0
+      "offsetSeconds": 0,
+      "compositions": [
+        "title_card"
+      ]
     },
     {
       "id": "part1_economics",
@@ -40,8 +43,8 @@
       "specDir": "02-paradigm-shift",
       "remotionDir": "S02-ParadigmShift",
       "compositionId": "Part2ParadigmShift",
-      "durationSeconds": 0,
-      "offsetSeconds": 0
+      "durationSeconds": 195.792,
+      "offsetSeconds": 397.464
     },
     {
       "id": "part3_mold",
@@ -50,8 +53,11 @@
       "specDir": "03-mold-has-three-parts",
       "remotionDir": "S03-MoldThreeParts",
       "compositionId": "Part3MoldThreeParts",
-      "durationSeconds": 0,
-      "offsetSeconds": 0
+      "durationSeconds": 280.728,
+      "offsetSeconds": 593.256,
+      "compositions": [
+        "title_card"
+      ]
     },
     {
       "id": "part4_precision",
@@ -60,8 +66,11 @@
       "specDir": "04-precision-brings-cost",
       "remotionDir": "S04-PrecisionTradeoff",
       "compositionId": "Part4PrecisionTradeoff",
-      "durationSeconds": 0,
-      "offsetSeconds": 0
+      "durationSeconds": 96.912,
+      "offsetSeconds": 873.9839999999999,
+      "compositions": [
+        "title_card"
+      ]
     },
     {
       "id": "part5_compound",
@@ -70,8 +79,11 @@
       "specDir": "05-compound",
       "remotionDir": "S05-CompoundReturns",
       "compositionId": "Part5CompoundReturns",
-      "durationSeconds": 0,
-      "offsetSeconds": 0
+      "durationSeconds": 98.424,
+      "offsetSeconds": 970.896,
+      "compositions": [
+        "title_card"
+      ]
     },
     {
       "id": "closing",
@@ -80,8 +92,11 @@
       "specDir": "06-closing",
       "remotionDir": "S06-Closing",
       "compositionId": "ClosingSection",
-      "durationSeconds": 0,
-      "offsetSeconds": 0
+      "durationSeconds": 21.072,
+      "offsetSeconds": 1069.32,
+      "compositions": [
+        "title_card"
+      ]
     }
   ],
   "audioSync": {
