@@ -1180,3 +1180,261 @@ class TestConfigFileExclusion:
         assert ".eslintrc" not in code_files
         assert ".gitignore" not in code_files
         assert "next-env.d.ts" not in code_files
+
+
+# --- Tests for hardened scanning filters (.stories, .test, .spec, .config, .pddignore) ---
+
+from pdd.update_main import _has_skip_suffix, _is_pddignored, _load_pddignore
+
+
+class TestHasSkipSuffix:
+    """Unit tests for _has_skip_suffix helper."""
+
+    def test_stories_suffix(self):
+        assert _has_skip_suffix("Button.stories.tsx") is True
+
+    def test_story_suffix(self):
+        assert _has_skip_suffix("Button.story.tsx") is True
+
+    def test_test_suffix(self):
+        assert _has_skip_suffix("auth.test.ts") is True
+
+    def test_spec_suffix(self):
+        assert _has_skip_suffix("auth.spec.ts") is True
+
+    def test_config_suffix(self):
+        assert _has_skip_suffix("jest.config.ts") is True
+
+    def test_setup_suffix(self):
+        assert _has_skip_suffix("jest.setup.ts") is True
+
+    def test_e2e_test_suffix(self):
+        assert _has_skip_suffix("login.e2e.test.ts") is True
+
+    def test_e2e_spec_suffix(self):
+        assert _has_skip_suffix("login.e2e.spec.ts") is True
+
+    def test_d_ts_suffix(self):
+        assert _has_skip_suffix("firebase.d.ts") is True
+
+    def test_normal_file_not_skipped(self):
+        assert _has_skip_suffix("Button.tsx") is False
+
+    def test_normal_py_file_not_skipped(self):
+        assert _has_skip_suffix("main.py") is False
+
+    def test_path_with_directories(self):
+        assert _has_skip_suffix("src/components/Button.stories.tsx") is True
+
+
+class TestSkipStoriesFiles:
+    """Tests that Storybook story files are excluded from repo scan."""
+
+    def test_skip_stories_files(self, tmp_path, monkeypatch):
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+        git.Repo.init(repo_path)
+
+        (repo_path / "Button.tsx").write_text("export function Button() {}")
+        (repo_path / "Button.stories.tsx").write_text("export default { title: 'Button' }")
+        (repo_path / "Card.story.tsx").write_text("export default { title: 'Card' }")
+
+        monkeypatch.chdir(repo_path)
+
+        with patch("pdd.update_main.get_language") as mock_lang:
+            def lang_for_ext(ext):
+                if ext == ".tsx":
+                    return "TypescriptReact"
+                return None
+            mock_lang.side_effect = lang_for_ext
+
+            pairs = find_and_resolve_all_pairs(str(repo_path), quiet=True)
+
+        basenames = [os.path.basename(p[1]) for p in pairs]
+        assert "Button.tsx" in basenames
+        assert "Button.stories.tsx" not in basenames
+        assert "Card.story.tsx" not in basenames
+
+
+class TestSkipTestAndSpecFiles:
+    """Tests that test and spec files are excluded from repo scan."""
+
+    def test_skip_test_and_spec_files(self, tmp_path, monkeypatch):
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+        git.Repo.init(repo_path)
+
+        (repo_path / "auth.ts").write_text("export function auth() {}")
+        (repo_path / "auth.test.ts").write_text("describe('auth', () => {})")
+        (repo_path / "auth.spec.ts").write_text("describe('auth', () => {})")
+        (repo_path / "login.e2e.test.ts").write_text("test('login', () => {})")
+
+        monkeypatch.chdir(repo_path)
+
+        with patch("pdd.update_main.get_language") as mock_lang:
+            def lang_for_ext(ext):
+                if ext == ".ts":
+                    return "typescript"
+                return None
+            mock_lang.side_effect = lang_for_ext
+
+            pairs = find_and_resolve_all_pairs(str(repo_path), quiet=True)
+
+        basenames = [os.path.basename(p[1]) for p in pairs]
+        assert "auth.ts" in basenames
+        assert "auth.test.ts" not in basenames
+        assert "auth.spec.ts" not in basenames
+        assert "login.e2e.test.ts" not in basenames
+
+
+class TestSkipConfigFiles:
+    """Tests that config files are excluded from repo scan."""
+
+    def test_skip_config_files(self, tmp_path, monkeypatch):
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+        git.Repo.init(repo_path)
+
+        (repo_path / "app.ts").write_text("const x = 1;")
+        (repo_path / "jest.config.ts").write_text("module.exports = {}")
+        (repo_path / "tailwind.config.js").write_text("module.exports = {}")
+        (repo_path / "vitest.config.ts").write_text("export default {}")
+        (repo_path / "mockServiceWorker.js").write_text("self.addEventListener()")
+
+        monkeypatch.chdir(repo_path)
+
+        with patch("pdd.update_main.get_language") as mock_lang:
+            def lang_for_ext(ext):
+                if ext in (".ts", ".js"):
+                    return "typescript" if ext == ".ts" else "javascript"
+                return None
+            mock_lang.side_effect = lang_for_ext
+
+            pairs = find_and_resolve_all_pairs(str(repo_path), quiet=True)
+
+        basenames = [os.path.basename(p[1]) for p in pairs]
+        assert "app.ts" in basenames
+        assert "jest.config.ts" not in basenames
+        assert "tailwind.config.js" not in basenames
+        assert "vitest.config.ts" not in basenames
+        assert "mockServiceWorker.js" not in basenames
+
+
+class TestPddignore:
+    """Tests for .pddignore support."""
+
+    def test_pddignore_excludes_patterns(self, tmp_path, monkeypatch):
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+        git.Repo.init(repo_path)
+
+        # Create .pddignore
+        (repo_path / ".pddignore").write_text(
+            "# Skip UI primitives\n"
+            "frontend/src/components/ui/*\n"
+            "*.generated.ts\n"
+        )
+
+        # Create files
+        ui_dir = repo_path / "frontend" / "src" / "components" / "ui"
+        ui_dir.mkdir(parents=True)
+        (ui_dir / "button.tsx").write_text("export function Button() {}")
+        (repo_path / "app.ts").write_text("const x = 1;")
+        (repo_path / "schema.generated.ts").write_text("export type Schema = {}")
+
+        monkeypatch.chdir(repo_path)
+
+        with patch("pdd.update_main.get_language") as mock_lang:
+            def lang_for_ext(ext):
+                if ext in (".ts", ".tsx"):
+                    return "typescript"
+                return None
+            mock_lang.side_effect = lang_for_ext
+
+            pairs = find_and_resolve_all_pairs(str(repo_path), quiet=True)
+
+        basenames = [os.path.basename(p[1]) for p in pairs]
+        assert "app.ts" in basenames
+        assert "button.tsx" not in basenames
+        assert "schema.generated.ts" not in basenames
+
+    def test_pddignore_directory_prefix(self, tmp_path, monkeypatch):
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+        git.Repo.init(repo_path)
+
+        # Create .pddignore with directory prefix pattern
+        (repo_path / ".pddignore").write_text("vendor/\n")
+
+        vendor_dir = repo_path / "lib" / "vendor"
+        vendor_dir.mkdir(parents=True)
+        (vendor_dir / "dep.ts").write_text("export const dep = 1;")
+        (repo_path / "app.ts").write_text("const x = 1;")
+
+        monkeypatch.chdir(repo_path)
+
+        with patch("pdd.update_main.get_language") as mock_lang:
+            def lang_for_ext(ext):
+                if ext == ".ts":
+                    return "typescript"
+                return None
+            mock_lang.side_effect = lang_for_ext
+
+            pairs = find_and_resolve_all_pairs(str(repo_path), quiet=True)
+
+        basenames = [os.path.basename(p[1]) for p in pairs]
+        assert "app.ts" in basenames
+        assert "dep.ts" not in basenames
+
+    def test_pddignore_missing_is_noop(self, tmp_path, monkeypatch):
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+        git.Repo.init(repo_path)
+
+        (repo_path / "app.ts").write_text("const x = 1;")
+        (repo_path / "module.ts").write_text("export const y = 2;")
+
+        monkeypatch.chdir(repo_path)
+
+        with patch("pdd.update_main.get_language") as mock_lang:
+            mock_lang.return_value = "typescript"
+
+            pairs = find_and_resolve_all_pairs(str(repo_path), quiet=True)
+
+        basenames = [os.path.basename(p[1]) for p in pairs]
+        assert "app.ts" in basenames
+        assert "module.ts" in basenames
+
+    def test_pddignore_found_in_parent_when_scanning_subdirectory(self, tmp_path, monkeypatch):
+        """When scanning a subdirectory, .pddignore in parent repo root is found."""
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+        git.Repo.init(repo_path)
+
+        # .pddignore at repo root with pattern relative to repo root
+        (repo_path / ".pddignore").write_text(
+            "frontend/src/components/ui/*\n"
+        )
+
+        # Create files inside frontend/ subdirectory
+        ui_dir = repo_path / "frontend" / "src" / "components" / "ui"
+        ui_dir.mkdir(parents=True)
+        (ui_dir / "button.tsx").write_text("export function Button() {}")
+        app_dir = repo_path / "frontend" / "src"
+        (app_dir / "app.tsx").write_text("export default function App() {}")
+
+        monkeypatch.chdir(repo_path)
+
+        with patch("pdd.update_main.get_language") as mock_lang:
+            def lang_for_ext(ext):
+                if ext == ".tsx":
+                    return "typescriptreact"
+                return None
+            mock_lang.side_effect = lang_for_ext
+
+            # Scan from frontend/ subdirectory (simulates --directory frontend)
+            pairs = find_and_resolve_all_pairs(str(repo_path / "frontend"), quiet=True)
+
+        basenames = [os.path.basename(p[1]) for p in pairs]
+        assert "app.tsx" in basenames
+        assert "button.tsx" not in basenames

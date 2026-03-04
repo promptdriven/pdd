@@ -1,3 +1,4 @@
+import fnmatch
 import re
 import subprocess
 import sys
@@ -37,7 +38,93 @@ _SKIP_EXTENSIONS = {
 _SKIP_FILENAMES = {
     'package-lock.json', '.prettierrc', '.eslintrc', '.gitignore',
     'tsconfig.json', 'next-env.d.ts',
+    'jest.config.js', 'jest.config.ts', 'jest.setup.js', 'jest.setup.ts',
+    'next.config.js', 'next.config.ts', 'next.config.mjs',
+    'tailwind.config.js', 'tailwind.config.ts',
+    'playwright.config.ts', 'playwright.config.js',
+    'vitest.config.ts', 'vitest.config.js', 'vitest.config.unit.ts',
+    'postcss.config.js', 'postcss.config.mjs', 'postcss.config.cjs',
+    'babel.config.js', 'babel.config.json',
+    '.eslintrc.js', '.eslintrc.json', '.eslintrc.cjs',
+    '.prettierrc.js', '.prettierrc.json', '.prettierrc.cjs',
+    'setupTests.ts', 'setupTests.js',
+    'mockServiceWorker.js',
 }
+
+_SKIP_BASENAME_SUFFIXES = {
+    '.config', '.setup',
+    '.stories', '.story',
+    '.test', '.spec',
+    '.e2e.test', '.e2e.spec',
+    '.d',
+}
+
+
+def _has_skip_suffix(filepath: str) -> bool:
+    """Check if file stem has a skip suffix like .test, .stories, .config."""
+    stem = os.path.splitext(os.path.basename(filepath))[0]
+    for suffix in _SKIP_BASENAME_SUFFIXES:
+        if stem.endswith(suffix):
+            return True
+    return False
+
+
+def _load_pddignore(scan_root: str) -> Tuple[List[str], str]:
+    """Load .pddignore patterns, searching upward from *scan_root* to git root.
+
+    Returns (patterns, pddignore_dir) where *pddignore_dir* is the directory
+    containing the .pddignore file (used as the base for relative-path matching).
+    If no file is found, returns ([], scan_root).
+    """
+    # Walk upward from scan_root to find .pddignore
+    current = os.path.abspath(scan_root)
+    while True:
+        candidate = os.path.join(current, '.pddignore')
+        if os.path.isfile(candidate):
+            patterns: List[str] = []
+            with open(candidate, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    patterns.append(line)
+            return patterns, current
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        # Stop at git root (don't escape the repo)
+        if os.path.isdir(os.path.join(current, '.git')):
+            break
+        current = parent
+    return [], scan_root
+
+
+def _is_pddignored(filepath: str, pddignore_root: str, patterns: List[str]) -> bool:
+    """Check if a file matches any .pddignore pattern.
+
+    Matches against:
+    - Relative path from *pddignore_root* (for patterns like ``frontend/src/components/ui/*``)
+    - Basename (for patterns like ``*.stories.tsx``)
+    - Directory prefix (for patterns ending with ``/`` like ``ui/``)
+    """
+    try:
+        rel_path = os.path.relpath(filepath, pddignore_root).replace('\\', '/')
+    except ValueError:
+        return False
+    basename = os.path.basename(filepath)
+    for pat in patterns:
+        if pat.endswith('/'):
+            # Directory prefix pattern: match if any path component equals the dir name
+            dir_name = pat.rstrip('/')
+            parts = rel_path.split('/')
+            if dir_name in parts[:-1]:
+                return True
+        else:
+            if fnmatch.fnmatch(rel_path, pat):
+                return True
+            if fnmatch.fnmatch(basename, pat):
+                return True
+    return False
 
 custom_theme = Theme({
     "info": "cyan",
@@ -99,7 +186,10 @@ def _resolve_prompt_from_pddrc(code_file_path: str, repo_root: str, language: st
     from .construct_paths import _find_pddrc_file, _load_pddrc_config, detect_context_for_file, BUILTIN_EXT_MAP
     from .template_expander import expand_template
 
-    pddrc_path = _find_pddrc_file(Path(repo_root))
+    # Prefer .pddrc closest to the code file, fall back to repo_root
+    pddrc_path = _find_pddrc_file(Path(code_file_path).parent)
+    if not pddrc_path:
+        pddrc_path = _find_pddrc_file(Path(repo_root))
     if not pddrc_path:
         return None
 
@@ -110,8 +200,8 @@ def _resolve_prompt_from_pddrc(code_file_path: str, repo_root: str, language: st
 
     pddrc_parent = pddrc_path.parent
 
-    # Find matching context
-    context_name, _ = detect_context_for_file(code_file_path, repo_root)
+    # Find matching context — use pddrc_parent as the effective root
+    context_name, _ = detect_context_for_file(code_file_path, str(pddrc_parent))
     if not context_name:
         return None
 
@@ -185,14 +275,23 @@ def resolve_prompt_code_pair(code_file_path: str, quiet: bool = False, output_di
 
     # Find the repository root (where the code file is located)
     # This is needed for relative path calculation to preserve structure
-    repo_root = code_dir
+    # First find the git root as fallback and search boundary
+    git_root = code_dir
     try:
         import git
         repo = git.Repo(code_dir, search_parent_directories=True)
-        repo_root = repo.working_tree_dir
+        git_root = repo.working_tree_dir
     except:
         # If not a git repo, use the directory containing the code file
         pass
+
+    # Find the nearest .pddrc starting from the code file — its parent
+    # directory becomes the effective repo_root for path calculations.
+    from .construct_paths import _find_nearest_pddrc_for_file
+    nearest_pddrc, effective_root = _find_nearest_pddrc_for_file(
+        Path(code_file_abs_path), stop_at=Path(git_root)
+    )
+    repo_root = str(effective_root) if effective_root else git_root
 
     # Try template-based resolution from .pddrc first (when no explicit output_dir)
     if not output_dir:
@@ -316,6 +415,8 @@ def find_and_resolve_all_pairs(repo_root: str, quiet: bool = False, extensions: 
             for file in files:
                 all_files.append(os.path.join(root, file))
 
+    pddignore_patterns, pddignore_root = _load_pddignore(repo_root)
+
     code_files = [
         f for f in all_files
         if (
@@ -324,7 +425,9 @@ def find_and_resolve_all_pairs(repo_root: str, quiet: bool = False, extensions: 
             not os.path.splitext(os.path.basename(f))[0].startswith('test_') and
             not os.path.splitext(os.path.basename(f))[0].endswith('_example') and
             os.path.splitext(f)[1].lower() not in _SKIP_EXTENSIONS and
-            os.path.basename(f) not in _SKIP_FILENAMES
+            os.path.basename(f) not in _SKIP_FILENAMES and
+            not _has_skip_suffix(f) and
+            not _is_pddignored(f, pddignore_root, pddignore_patterns)
         )
     ]
 
