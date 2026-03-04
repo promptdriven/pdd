@@ -839,6 +839,26 @@ describe("runPipelineStage", () => {
     expect(job!.status).toBe("done");
   });
 
+  it("sends { type: 'job', jobId } before the executor runs", async () => {
+    const { send, calls } = createMockSend();
+    let jobEventBeforeExec = false;
+
+    registerExecutor("setup", (_params, _send) => {
+      return async (onLog) => {
+        const jobEvents = calls.filter((c: any) => c.type === "job");
+        jobEventBeforeExec = jobEvents.length > 0;
+        onLog("running");
+      };
+    });
+
+    const jobId = await runPipelineStage("setup", {}, send);
+    expect(jobEventBeforeExec).toBe(true);
+
+    const jobEvents = calls.filter((c: any) => c.type === "job");
+    expect(jobEvents.length).toBe(1);
+    expect((jobEvents[0] as any).jobId).toBe(jobId);
+  });
+
   it("still throws when the explicitly requested stage has no executor", async () => {
     const { send } = createMockSend();
 

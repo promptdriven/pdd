@@ -355,7 +355,11 @@ describe("POST response shape", () => {
 
 describe("POST — success flow", () => {
   beforeEach(() => {
-    mockRunPipelineStage.mockResolvedValue("test-job-compositions-42");
+    // Simulate real runPipelineStage which sends { type: "job", jobId } before resolving
+    mockRunPipelineStage.mockImplementation((_stage: string, _params: unknown, send: (data: object) => void) => {
+      send({ type: "job", jobId: "test-job-compositions-42" });
+      return Promise.resolve("test-job-compositions-42");
+    });
   });
 
   it("calls runPipelineStage with 'compositions' stage", async () => {

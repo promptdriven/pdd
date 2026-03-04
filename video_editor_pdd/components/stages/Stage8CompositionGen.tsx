@@ -209,13 +209,13 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
     }
   };
 
-  const openPreview = async (componentName: string) => {
+  const openPreview = async (componentName: string, sectionId?: string) => {
     setPreviewName(componentName);
     setPreviewUrl(null);
     try {
-      const res = await fetch(
-        `/api/pipeline/compositions/preview?component=${encodeURIComponent(componentName)}`
-      );
+      const qs = new URLSearchParams({ component: componentName });
+      if (sectionId) qs.set('section', sectionId);
+      const res = await fetch(`/api/pipeline/compositions/preview?${qs}`);
       if (!res.ok) throw new Error(`Preview unavailable (${res.status})`);
       let url: string | null = null;
       if (res.headers.get('content-type')?.includes('application/json')) {
@@ -315,7 +315,7 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
                             <div className="flex items-center gap-2">
                               <button
                                 className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700"
-                                onClick={(e) => { e.stopPropagation(); openPreview(component.name); }}
+                                onClick={(e) => { e.stopPropagation(); openPreview(component.name, section.id); }}
                               >
                                 Preview
                               </button>
@@ -373,7 +373,7 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
                     <StatusBadge status={wrapper.status} error={wrapper.error} />
                     <button
                       className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700"
-                      onClick={() => openPreview(wrapper.name)}
+                      onClick={() => openPreview(wrapper.name, sectionId)}
                     >
                       Preview
                     </button>

@@ -421,7 +421,6 @@ export async function POST(request: NextRequest): Promise<Response> {
   (async () => {
     try {
       const jobId = await runPipelineStage("compositions", body, send);
-      send({ type: "job", jobId });
       send({ type: "complete", jobId });
       done();
     } catch (err) {

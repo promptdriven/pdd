@@ -5,10 +5,8 @@ import os from "os";
 import path from "path";
 import { promisify } from "util";
 import { exec, spawn } from "child_process";
-import {
-  renderStill as remotionRenderStill,
-  selectComposition,
-} from "@remotion/renderer";
+// @remotion/renderer is used in spawned child scripts (see renderSection / renderStill)
+// and must NOT be imported directly here — it crashes inside the Next.js server.
 import type { RenderProgress } from "./types";
 
 const execAsync = promisify(exec);
@@ -204,6 +202,9 @@ export const getSectionDuration = async (mp4Path: string): Promise<number> => {
 
 /**
  * Render a single frame as PNG for audit screenshots.
+ *
+ * Spawns a child process to avoid bufferUtil / module-resolution
+ * conflicts inside the Next.js dev server (same approach as renderSection).
  */
 export const renderStill = async (
   compositionId: string,
@@ -213,15 +214,64 @@ export const renderStill = async (
   await ensureDir(outputPath);
 
   const serveUrl = getServeUrl();
-  const composition = await selectComposition({
-    serveUrl,
-    id: compositionId,
-  });
 
-  await remotionRenderStill({
-    composition,
-    serveUrl,
-    output: outputPath,
-    frame,
-  });
+  const scriptPath = path.join(
+    os.tmpdir(),
+    `remotion-still-${compositionId}-${Date.now()}.cjs`
+  );
+
+  const script = `
+const { selectComposition, renderStill } = require('@remotion/renderer');
+
+async function run() {
+  const serveUrl = ${JSON.stringify(serveUrl)};
+  const compositionId = ${JSON.stringify(compositionId)};
+  const outputLocation = ${JSON.stringify(outputPath)};
+  const frame = ${JSON.stringify(frame)};
+
+  const composition = await selectComposition({ serveUrl, id: compositionId });
+  await renderStill({ composition, serveUrl, output: outputLocation, frame });
+}
+
+run().catch((err) => {
+  process.stderr.write(err.message || String(err));
+  process.exit(1);
+});
+`.trim();
+
+  await fs.promises.writeFile(scriptPath, script, "utf-8");
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn("node", [scriptPath], {
+        stdio: ["ignore", "ignore", "pipe"],
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          NODE_PATH: path.join(process.cwd(), "node_modules"),
+        },
+      });
+
+      let stderr = "";
+
+      child.stderr.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString();
+      });
+
+      child.on("error", reject);
+      child.on("close", (code) => {
+        if (code === 0) {
+          resolve();
+        } else {
+          reject(
+            new Error(
+              `Still render for "${compositionId}" frame ${frame} exited with code ${code}: ${stderr.trim()}`
+            )
+          );
+        }
+      });
+    });
+  } finally {
+    await fs.promises.unlink(scriptPath).catch(() => undefined);
+  }
 };

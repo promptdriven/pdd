@@ -353,6 +353,12 @@ export async function runPipelineStage(
 
       const jobId = createJob(current, params);
 
+      // Notify the client immediately so SseLogPanel can connect
+      // while the executor is still running.
+      if (forceRun) {
+        send({ type: "job", jobId });
+      }
+
       // Store send handler for runJob's onLog
       JOB_SEND_MAP.set(jobId, send);
 
