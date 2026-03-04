@@ -1,382 +1,68 @@
 # sync_determine_operation_python.prompt
 
-You are an expert Python developer. Your task is to implement the core decision-making logic for the `pdd sync` command. The goal is to create a deterministic, reliable, and safe function that analyzes the state of a PDD unit (identified by a `basename` and `language`) and decides which PDD operation to run next.
+You are an expert Python developer. Your task is to implement the core decision-making logic for the `pdd sync` command. This module is responsible for analyzing the current state of a PDD unit (basename + language) and deterministically deciding the next operation (e.g., generate, test, fix, verify) to ensure the code, examples, and tests are in sync with the prompt.
 
-This implementation will be a robust system based on file "fingerprints" and robust locking, as described below.
+### Requirements:
 
-**Note**: This function analyzes a single language unit (basename + language). The sync_main function handles multiple language detection and orchestration. This function is called once per language by the orchestration layer.
+1.  **Authoritative Fingerprints**: The system state must be derived by comparing current file hashes against a version-controlled JSON fingerprint file (`.pdd/meta/{basename}_{lang}.json`).
+2.  **Robust Locking**: Implement a `SyncLock` context manager using file-descriptor locking (`fcntl` or `msvcrt`). It must handle re-entrancy (same PID) and stale lock files (PID no longer exists).
+3.  **Deterministic Logic**: Decisions must follow a strict priority: 
+    -   Auto-deps completion (always `generate` after `auto-deps`).
+    -   Prompt changes (always take priority over runtime signals).
+    -   Runtime failures (`crash` or `fix`).
+    -   Coverage gaps (`test` or `test_extend`).
+    -   Missing derived files (code -> example -> test).
+4.  **Path Resolution (Issue #237)**: Use `construct_paths` for configuration-aware pathing. If `.pddrc` contains an `outputs` template section, use `_generate_paths_from_templates` to expand paths like `frontend/src/{category}/{name}.tsx`.
+5.  **Dependency Awareness (Issue #522)**: Detect `<include>` tags and backtick-wrapped includes. The prompt hash must be a composite of the prompt file and all its dependencies.
+6.  **Multi-file Test Support (Bug #156)**: Track hashes for all matching test files (e.g., `test_foo*.py`) in the fingerprint and run report.
+7.  **Runtime Signal Validation**:
+    -   **Bug #349**: If `tests_passed > 0` and `tests_failed == 0`, ignore non-zero exit codes (treat as tooling noise).
+    -   **Bug #573**: If `coverage == 0.0` but tests passed, the workflow is NOT complete (indicates broken imports/stubs).
+    -   **Agentic Tests**: For non-Python languages, trust the `run_report` if it indicates success even if the test file isn't at the default expected path.
+8.  **Conflict Resolution**: If both the prompt and derived files have changed, delete the fingerprint/run-report to force a fresh sync. For complex logic, provide an `analyze_conflict_with_llm` function.
 
-Context override handling:
-- Accept a `context_override: Optional[str]` input (threaded from the CLI via `ctx.obj.get('context')`) or explicitly instruct callers to pass the override through to every call into `construct_paths`. All internal calls to `construct_paths` must pass `context_override=context_override` so a global `--context` is consistently honored.
+### Dependencies:
 
-### Core Principles:
+<construct_paths>
+    <include>context/construct_paths_example.py</include>
+</construct_paths>
+<load_prompt_template>
+    <include>context/load_prompt_template_example.py</include>
+</load_prompt_template>
+<llm_invoke>
+    <include>context/llm_invoke_example.py</include>
+</llm_invoke>
+<get_language>
+    <include>context/get_language_example.py</include>
+</get_language>
+<sync_analysis_prompt>
+    <include>prompts/sync_analysis_LLM.prompt</include>
+</sync_analysis_prompt>
 
-1.  **Authoritative Fingerprints**: The system's state is not tracked in a complex state machine. Instead, it's derived by comparing the current state of files against a version-controlled "fingerprint" file that contains hashes of the last known good state from a PDD operation.
-2.  **Robust Locking**: Use file-descriptor based locking (`fcntl` or `msvcrt`) to ensure that only one `pdd sync` process can operate on a given unit at a time, preventing race conditions. The lock must be re-entrant and handle stale lock files from crashed processes.
-3.  **Deterministic Logic First**: Decisions must be made based on a clear, deterministic algorithm. An LLM should only be invoked for complex conflict resolution (e.g., when both the prompt and the code have changed), and its use must be made deterministic through caching. Deterministic/heuristic branches may express confidence values in the 0.80–0.95 range rather than always 1.0.
-4.  **Runtime Signal Integration**: The decision logic must be aware of the results from previous test runs. A failing test suite or a crashing program is a high-priority signal that should be addressed before proceeding with other operations.
+### Instructions:
 
-### File and Directory Structure:
+1.  **Data Structures**: Define `Fingerprint`, `RunReport`, and `SyncDecision` dataclasses.
+2.  **Locking**: Implement `SyncLock`. In `acquire()`, check `psutil.pid_exists()` for stale locks. Ensure `log_mode=True` bypasses locking.
+3.  **Pathing**: 
+    -   Implement `get_pdd_file_paths`. 
+    -   Perform case-insensitive prompt file lookups for Linux compatibility.
+    -   Handle subdirectory basenames (e.g., `core/cloud`) by sanitizing them for metadata filenames.
+4.  **Hashing**: 
+    -   Implement `calculate_prompt_hash` to include dependency content.
+    -   Implement `calculate_current_hashes` to return a dictionary of all relevant file hashes.
+5.  **Decision Logic (`sync_determine_operation`)**:
+    -   If `fingerprint.command == 'auto-deps'`, return `generate`.
+    -   If prompt hash changed, return `auto-deps` (if tags found) or `generate`.
+    -   Check `RunReport`: if `tests_failed > 0`, return `fix`. If `exit_code != 0` (and not Bug #349), return `crash`.
+    -   If `coverage < target_coverage`, return `test_extend` (Python) or `all_synced` (non-Python).
+    -   Implement `_is_workflow_complete` with the specific staleness and bug-fix checks mentioned in Requirements.
+6.  **LLM Conflict Resolution**: Implement `analyze_conflict_with_llm`. Gather `git diff` for changed files, format the `sync_analysis_LLM` template, and call `llm_invoke` with `temperature=0`.
 
-**Important**: All metadata paths use `language.lower()` for case-insensitive consistency on case-sensitive filesystems (Linux). Even if the prompt file is `task_model_Python.prompt`, all derived metadata uses the lowercased language `python`.
+### Deliverables:
 
--   **Lock Files**: `.pdd/locks/{basename}_{language.lower()}.lock`
--   **Fingerprint Files**: `.pdd/meta/{basename}_{language.lower()}.json` (This file should be version controlled)
--   **Run Report Files**: `.pdd/meta/{basename}_{language.lower()}_run.json` (This file should be in `.gitignore`)
-
-### Detailed Implementation Requirements:
-
-#### 1. Data Structures
-
-Create the following `dataclasses` to structure the data:
-
--   `Fingerprint`:
-    -   `pdd_version: str`
-    -   `timestamp: str` (ISO 8601 format)
-    -   `command: str` (e.g., "generate", "fix")
-    -   `prompt_hash: Optional[str]`
-    -   `code_hash: Optional[str]`
-    -   `example_hash: Optional[str]`
-    -   `test_hash: Optional[str]`  # Primary test file hash (for backward compatibility)
-    -   `test_files: Optional[Dict[str, str]]`  # Bug #156: Multiple test file support {"test_foo.py": "hash1", ...}
-    -   `include_deps: Optional[Dict[str, str]]`  # Issue #522: Include dependency paths and their hashes {"path": "hash", ...}
--   `RunReport`:
-    -   `timestamp: str`
-    -   `exit_code: int`
-    -   `tests_passed: int`
-    -   `tests_failed: int`
-    -   `coverage: float`
-    -   `test_hash: Optional[str]`  # Hash of test file when tests were run (for staleness detection)
-    -   `test_files: Optional[Dict[str, str]]`  # Bug #156: Multiple test file support {"test_foo.py": "hash1", ...}
--   `SyncDecision`:
-    -   `operation: str` (e.g., 'auto-deps', 'generate', 'example', 'crash', 'verify', 'test', 'test_extend', 'fix', 'update', 'nothing', 'all_synced', 'error', 'fail_and_request_manual_merge')
-    -   `reason: str` (A human-readable explanation for the decision)
-    -   `confidence: float` (Confidence level in the decision, 0.0 to 1.0, default 1.0 for deterministic decisions)
-    -   `estimated_cost: float` (Estimated cost for the operation in dollars, default 0.0)
-    -   `details: Optional[Dict[str, Any]]` (Extra context for logging and debugging, default None)
-    -   `prerequisites: Optional[List[str]]` (List of operations that should be completed first, default None)
-
-#### 2. Locking Mechanism
-
-Implement a `SyncLock` context manager:
-
--   `__init__(self, basename: str, language: str)`: Sets up the lock file path using `language.lower()` for case-insensitive consistency.
--   `acquire(self)`:
-    -   Checks if the lock is already held by the current process (re-entrancy).
-    -   If the lock file exists, read the PID.
-    -   Use `psutil.pid_exists()` to check if the PID corresponds to a running process. If not, the lock is stale and should be removed.
-    -   If the lock is held by another running process, raise a `TimeoutError`.
-    -   Use `fcntl.flock` (POSIX) or `msvcrt.locking` (Windows) to acquire an exclusive, non-blocking lock on the file descriptor.
-    -   Write the current PID to the lock file.
--   `release(self)`: Release the lock and delete the lock file.
--   The class should be usable as a context manager (`with SyncLock(...) as lock:`).
-    -   Re-entrancy clarification: if the lock file already contains the current process PID, treat the lock as held (no reference counting needed for this context).
-
-#### 3. State Analysis Functions
-
-Implement the following helper functions:
-
--   `_safe_basename(basename: str) -> str`: Sanitizes basename for use in metadata filenames by replacing '/' with '_' to prevent path interpretation for subdirectory basenames (e.g., 'core/cloud' → 'core_cloud').
--   `_extract_name_part(basename: str) -> Tuple[str, str]`: For subdirectory basenames like 'core/cloud', returns (dir_prefix, name_part) tuple - 'core/cloud' → ('core/', 'cloud'), 'calculator' → ('', 'calculator').
--   `_resolve_prompts_root(prompts_dir: str) -> Path`: Resolve prompts root relative to the `.pddrc` location when available. If `.pddrc` exists and `prompts_dir` is relative, join with `.pddrc`'s parent directory.
--   `_relative_basename_for_context(basename: str, context_name: Optional[str]) -> str`: Strip context-specific prefixes from basename when possible. Uses `.pddrc` context config paths and `prompts_dir` to determine which prefix to strip, returning the relative basename for template expansion.
--   `_generate_paths_from_templates(basename, language, extension, outputs_config, prompt_path) -> Dict[str, Path]` (Issue #237): Generate file paths from template configuration in `.pddrc`. Expands path templates like `"frontend/src/{category}/{name}/{name}.tsx"` using template context (`name`, `category`, `dir_prefix`, `ext`, `language`). Uses the `expand_template` function from `pdd.template_expander`. Ensures `prompt`, `example`, `test`, and `test_files` keys always exist (with fallback defaults). Derives `category` from actual prompt path when the basename doesn't include it.
--   `get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts", context_override: Optional[str] = None) -> Dict[str, Path]`: Returns a dictionary mapping file types ('prompt', 'code', 'example', 'test', 'test_files') to their expected `pathlib.Path` objects. The 'test_files' key contains a list of all matching test files for Bug #156 multi-file support. Supports subdirectory basenames (e.g., 'core/cloud'). Use the project's internal `construct_paths` function (see included examples) to get configuration-aware paths based on .pddrc settings. The function should:
-    - Build the prompt file path from basename, language, and prompts_dir
-    - **Case-insensitive prompt file lookup**: After constructing the prompt path, if the file doesn't exist, perform a case-insensitive search in the prompt directory (iterate files, compare `.lower()` names). This handles mixed-case prompt filenames like `task_model_Python.prompt` on case-sensitive filesystems.
-    - Call `construct_paths` with `command="sync"` and `context_override=context_override` to get config-aware paths
-    - **Issue #237: Template-based paths**: Check `resolved_config` for an `outputs` key. When present, use `_generate_paths_from_templates()` to build paths from template patterns instead of legacy path construction. This must be checked both when the prompt exists and when it doesn't.
-    - Extract the code path from `output_file_paths['generate_output_path']` with fallbacks to `'output'` or `'code_file'`
-    - Derive example and test paths by calling `construct_paths` with `command="example"` and `command="test"` respectively
-    - When the code file does not exist, optionally create a temporary empty code file to allow `construct_paths` to resolve example/test locations, then remove it
-    - Provide robust fallback mechanisms (derive directories from `resolved_config`; final fallback to defaults like `{basename}.{ext}`, `{basename}_example.{ext}`, `test_{basename}.{ext}`)
--   `get_extension(language: str) -> str`: Returns the file extension for a programming language. Must include mappings for: `python` → `py`, `javascript` → `js`, `typescript` → `ts`, `typescriptreact` → `tsx`, `javascriptreact` → `jsx`, `prisma` → `prisma`, and other common languages. Falls back to lowercase language name if no mapping found.
--   `calculate_sha256(file_path: Path) -> Optional[str]`: Calculates the SHA256 hash of a file if it exists, otherwise returns `None`.
--   `extract_include_deps(prompt_path: Path) -> Dict[str, str]` (Issue #522): Extract `<include>` dependency paths and their SHA256 hashes from a prompt file. Parses both `<include>...</include>` tags and backtick-wrapped include patterns (`` ```<path>``` ``). Resolves paths relative to the prompt directory and CWD. Returns only dependencies that exist on disk.
--   `calculate_prompt_hash(prompt_path: Path, stored_deps: Optional[Dict[str, str]] = None) -> Optional[str]` (Issue #522): Compute a composite SHA256 hash of the prompt file plus all its `<include>` dependencies. If the prompt has `<include>` tags, extracts and hashes those files. If no tags are found but `stored_deps` is provided (from a previous fingerprint's `include_deps`), uses those stored dependency paths to compute the hash. This handles the case where auto-deps strips `<include>` tags from the prompt file. Falls back to plain `calculate_sha256` when no dependencies are found.
--   `read_fingerprint(basename: str, language: str) -> Optional[Fingerprint]`: Reads and validates the JSON fingerprint file from `{META_DIR}/{safe_basename}_{language.lower()}.json`. Uses `_safe_basename()` for path construction and `language.lower()` for case-insensitive consistency. Returns `None` if it doesn't exist or is invalid. Must read `include_deps` from the JSON data.
--   `read_run_report(basename: str, language: str) -> Optional[RunReport]`: Reads and validates the JSON run report file from `{META_DIR}/{safe_basename}_{language.lower()}_run.json`. Uses `_safe_basename()` for path construction and `language.lower()` for case-insensitive consistency.
--   `calculate_current_hashes(paths: Dict[str, Any], stored_include_deps: Optional[Dict[str, str]] = None) -> Dict[str, Any]` (Issue #522): Computes the hashes for all current files on disk. For 'test_files', returns a dict of filename to hash mappings for Bug #156 multi-file support. For the 'prompt' key, uses `calculate_prompt_hash()` with `stored_include_deps` to include dependency content in the hash. Also extracts and returns current `include_deps` for persistence in the fingerprint. If no deps found in prompt but stored deps exist, re-hashes stored dependency paths.
--   `estimate_operation_cost(operation: str, language: str = "python") -> float`: Returns estimated cost in dollars for each operation based on typical LLM usage:
-    - 'auto-deps': 0.10
-    - 'generate': 0.50
-    - 'example': 0.30
-    - 'crash': 0.40
-    - 'verify': 0.35
-    - 'test': 0.60
-    - 'test_extend': 0.60  # Same cost as test - generates additional tests
-    - 'fix': 0.45
-    - 'update': 0.25
-    - Others ('nothing', 'all_synced', 'error', etc.): 0.0
-
-#### 4. The Main `sync_determine_operation` Function
-
-This is the core function that orchestrates the decision-making process.
-
-`sync_determine_operation(basename: str, language: str, target_coverage: float, budget: float = 10.0, log_mode: bool = False, prompts_dir: str = "prompts", skip_tests: bool = False, skip_verify: bool = False, context_override: Optional[str] = None) -> SyncDecision:`
-
-**Logic Flow:**
-
-1.  **Acquire Lock**: Start by acquiring the `SyncLock` for the given unit. The entire function should operate within the `with` block of the lock.
-
-**Important**: When `log_mode=True`, skip lock acquisition entirely to avoid blocking other processes. This allows real-time state inspection without interfering with active sync operations:
-
-```python
-if log_mode:
-    # Skip locking for read-only analysis
-    return _perform_sync_analysis(basename, language, target_coverage, budget)
-else:
-    # Normal exclusive locking for actual operations
-    with SyncLock(basename, language) as lock:
-        return _perform_sync_analysis(basename, language, target_coverage, budget)
-```
-
-Log mode performs the complete analysis (reading fingerprints, calculating hashes, checking run reports, and applying decision logic) but without any file modifications or lock coordination.
-
-2.  **Check auto-deps completion first** (before runtime signals):
-    -   Read the last `Fingerprint`.
-    -   **CRITICAL**: If `fingerprint.command == 'auto-deps'`, immediately return `generate` operation. This prevents infinite loops where auto-deps keeps running but code is never generated. Auto-deps updates dependencies but doesn't produce code, so we must always follow with generate.
-
-3.  **Check Runtime Signals (updated priority)**:
-    -   Read the latest `RunReport`.
-    -   **Only process runtime signals if both `run_report` and `fingerprint` exist.** Without a fingerprint, the run_report is stale/orphaned and should be ignored.
-    -   **CRITICAL: Prompt changes take priority over runtime signals**. Before processing runtime signals, check if the prompt has changed (current hash differs from fingerprint). Use `calculate_prompt_hash()` with `stored_deps=fingerprint.include_deps` (Issue #522) so changes to included dependency files are detected even when auto-deps has stripped `<include>` tags from the prompt. If prompt changed, return `auto-deps` or `generate` immediately (regardless of runtime state) - this ensures the source of truth (prompt) is always processed first.
-    -   If the last fingerprint command was `crash` and `skip_verify=False`:
-        -   If `run_report.exit_code != 0` → return `crash` (retry the failed crash fix)
-        -   Otherwise → return `verify` (verify the successful crash fix)
-    -   If `tests_failed > 0`:
-        -   If a test file exists → return `fix`.
-        -   If the test file is missing → return `test` to (re)generate tests.
-    -   If `exit_code != 0` (runtime error):
-        -   **Bug #349**: If tests passed successfully (`tests_failed == 0` AND `tests_passed > 0`), treat this as a tooling issue (e.g., pytest-cov warning) rather than a runtime error. Skip to the coverage check below instead of returning `fix` or `crash`.
-        -   If the example has previously run successfully (based on fingerprint/run reports history) → return `fix`.
-        -   Otherwise → return `crash`.
-    -   If `coverage < target_coverage` and `skip_tests=False`:
-        -   If tests pass (`tests_failed == 0` and `tests_passed > 0`):
-            -   **CRITICAL**: First check if the test file actually exists. The run_report may have synthetic `tests_passed=1` from crash/verify success but actual test file hasn't been generated yet.
-            -   **Distinguishing synthetic vs real run reports**: Synthetic run_reports are created by crash/verify operations to indicate successful execution (exit_code=0) without actual test execution. Real run_reports from test operations include a `test_hash` field.
-            -   For non-Python languages (agentic test generation): Check `run_report.test_hash` to differentiate:
-                - If `test_hash is None` (synthetic from crash/verify) AND test file missing → return `test` to generate tests
-                - If `test_hash is not None` (from agentic test generation, including sentinel value `"agentic_test_success"` when agent succeeds but file is at different path) → return `all_synced` (trust the agent's reported success)
-            -   For Python: If test file missing → return `test`; otherwise return `test_extend` to ADD more tests
-            -   **Non-Python `test_extend` skip**: Skip `test_extend` for non-Python languages since code coverage tooling is Python-specific. Return `all_synced` instead.
-        -   If `tests_passed == 0` AND `tests_failed == 0` AND `exit_code == 0` (unparseable test output): Return `all_synced` with lower confidence (0.70) since the test framework output couldn't be parsed but the process succeeded.
-        -   Otherwise → return `test` to generate tests
-    -   If `coverage < target_coverage` and `skip_tests=True` → return `all_synced` to indicate workflow completion despite low coverage.
-    -   If any of these conditions are met, stop analysis here.
-4.  **Analyze File State**:
-    -   Read the last saved `Fingerprint`.
-    -   Calculate the hashes of the current files. Pass `stored_include_deps=fingerprint.include_deps` (Issue #522) to `calculate_current_hashes` so prompt hash accounts for dependency changes.
-    -   **Validate Expected Files (required)**: Before comparing hashes, verify that files expected to exist based on the fingerprint (any non-null hash) actually exist. If expected files are missing, prioritize regenerating them rather than treating it as a complex conflict:
-        -   Missing code and prompt exists → choose `auto-deps` or `generate` based on dependency heuristics
-        -   Missing example but code exists → `example`
-        -   Missing test but code and example exist → `test` (or `nothing` if `skip_tests=True`)
-    -   Compare the current hashes with the hashes in the fingerprint for files that exist.
-5.  **Implement the Decision Tree**:
-
-    **Priority Order** (highest to lowest):
-    1. Runtime failures (`crash`) - highest priority
-    2. Test failures (`fix`) - second priority
-    3. Missing dependencies (`auto-deps`) - before generate
-    4. Code generation (`generate`) - when prompt changed
-    5. Example generation (`example`) - after code exists
-    6. Verification (`verify`) - after example exists and doesn't crash
-    7. Test generation (`test`) - after code verified
-    8. Prompt updates (`update`) - when code changed
-    9. Complex conflicts (prompt + derived files changed) - delete fingerprint and re-sync fresh
-
-    -   **No Fingerprint (New or Untracked Unit):**
-        -   If a `prompt` file exists:
-            -   Check if prompt has `include` xml tags or references to other modules -> Return `auto-deps`
-            -   Otherwise -> Return `generate`
-        -   Otherwise -> Return `nothing`
-    -   **No Changes (Hashes Match Fingerprint) with gating:**
-        -   If `code` exists but `example` does not → **`example`**.
-        -   If `code` and `example` exist but no `test` and `skip_tests=False`:
-            -   **For non-Python languages (agentic test generation)**: First check if run_report indicates successful agentic test generation (`tests_passed > 0`, `tests_failed == 0`, and `test_hash is not None`). If so, return **`all_synced`** even though test file doesn't exist at expected path (agent may have created it with different extension/name).
-            -   Apply runtime gating before `test`:
-                -   If no `RunReport` → **`crash`** (perform a runtime check of the example first)
-                -   If `RunReport.exit_code != 0` → **`crash`**
-                -   If last fingerprint command != `verify` and `skip_verify=False` → **`verify`**
-                -   Else → **`test`**
-        -   If `code`, `example`, AND `test` all exist but workflow is incomplete → apply same gating:
-            -   If no `RunReport` OR `RunReport.exit_code != 0` → **`crash`** (but if Bug #349 applies: tests passed successfully despite non-zero exit code, skip crash)
-            -   If last fingerprint command not in ['verify', 'test', 'fix', 'update'] and `skip_verify=False` → **`verify`**
-            -   If `RunReport.exit_code == 0` but `_is_workflow_complete` returns False (stale run_report) → **`test`** with `workflow_stage: 'revalidation'` (re-run tests to verify current state)
-            -   Otherwise continue to "all required files exist" check
-        -   If `code` does not exist (can occur when fingerprint.code_hash is null, e.g., after auto-deps):
-            -   **CRITICAL**: If `fingerprint.command == 'auto-deps'` → **`generate`** (prevents infinite loop back to auto-deps)
-            -   Otherwise, if prompt has dependencies → **`auto-deps`**
-            -   Otherwise → **`generate`**
-        -   If all required files exist considering skip flags → **`nothing`**.
-        -   **Skip Flags**: When `skip_tests=True`, test files are not required. When `skip_verify=True`, verification operations are not required.
-        -   **Operation names**: Use `nothing` for in-sync; use `all_synced` specifically when coverage is below target but tests are skipped.
-    -   **Simple Changes (Single File Modified)**:
-        -   If only the `prompt_hash` differs:
-            -   Use expanded dependency heuristics (see below) → **`auto-deps`** when dependencies are detected
-            -   Otherwise → **`generate`**
-        -   If only the `code_hash` differs -> **`update`**.
-        -   If only the `test_hash` differs -> **`test`** (to run the new tests).
-        -   If only the `example_hash` differs -> **`verify`** (to run the new example).
-    -   **Complex Changes (Multiple Files Modified)**:
-        -   **CRITICAL**: Only treat as a true conflict if the **prompt** (source of truth) changed along with derived artifacts. If only derived artifacts changed but the prompt is unchanged, this is NOT a conflict per PDD doctrine.
-        -   If `prompt` changed + derived files changed → **delete fingerprint and run report**, then re-run `_perform_sync_analysis()` which will hit the "no fingerprint" path and return **`generate`** (or `auto-deps`)
-        -   If ONLY derived artifacts changed (code, example, test) but prompt is unchanged:
-            -   If `code` changed → **`verify`** (re-verify the modified code works)
-            -   If `example` changed → **`verify`** (verify the modified example runs)
-            -   If `test` changed → **`test`** (run the modified tests)
-            -   Include `workflow_stage: 'continue_after_interruption'` in details
-
-    -   **Dependency Heuristics (expanded)**:
-        -   Treat these as dependency indicators: XML tags `<include>`, `<web>`, `<shell>` (case-sensitive) or phrases like "auto-deps", "auto_deps", "dependencies needed", "requires dependencies", "include dependencies" (case-insensitive)
-6.  **Return the Decision**: The function must always return a `SyncDecision` object with:
-    - `operation`: The recommended operation
-    - `reason`: A clear, human-readable explanation
-    - `confidence`: 1.0 for deterministic decisions, lower for LLM-based decisions
-    - `estimated_cost`: Use the `estimate_operation_cost` helper function
-    - `details`: A dictionary containing relevant context such as:
-        - `decision_type`: "heuristic" for algorithmic/deterministic decisions, "llm" for LLM-based decisions
-        - File existence states (`prompt_exists`, `code_exists`, etc.) and paths
-        - Hash comparisons (`prompt_changed`, `code_changed`, etc.)
-        - Fingerprint state (`fingerprint_found`, `last_command`/`previous_command`)
-        - Run report details (`tests_failed`, `coverage`, `exit_code`, timestamps)
-        - Workflow markers like `workflow_stage` (e.g., `crash_validation`, `crash_fix`, `crash_retry`, `verify_validation`, `test_generation`, `test_generation_needed`, `revalidation`, `post_regeneration_validation`, `verification_pending`, `continue_after_interruption`), `auto_deps_completed`, `no_run_report`, `skip_tests`, `skip_verify`, `has_dependencies`, `run_report_stale`
-        - Agentic test markers: `has_real_test_hash` (True when run_report has non-null test_hash from actual test generation), `agentic_test_complete` (True when agentic test generation completed successfully for non-Python language), `test_hash` (the actual hash or sentinel value)
-
-#### 7. References: Here is how to use the internal modules that are available and must be used in this implementation:
-    <internal_modules>
-        For loading prompt templates:
-        <load_prompt_template_example>
-            <include>context/load_prompt_template_example.py</include>
-        </load_prompt_template_example>
-
-        For running prompts with llm_invoke:
-        <llm_invoke_example>
-            <include>context/llm_invoke_example.py</include>
-        </llm_invoke_example>
-
-        For path construction and configuration:
-        <construct_paths_example>
-            <include>context/construct_paths_example.py</include>
-        </construct_paths_example>
-
-        For language detection:
-        <get_language_example>
-            <include>context/get_language_example.py</include>
-        </get_language_example>
-
-        Here is the LLM prompt that will be used to analyze the conflict:
-        <sync_analysis_LLM.prompt>
-            <include>prompts/sync_analysis_LLM.prompt</include>
-        </sync_analysis_LLM.prompt>
-
-    Do not mock any of these internal modules. The real implementation of these modules is in the pdd/ directory and must be used in this implementation.
-    </internal_modules>
-
-
-% Here is the README.md that describes how how the sync command is used:
-<README.md>
-    <include>README.md</include>
-</README.md>
-
-Implement a second function `analyze_conflict_with_llm` to resolve complex sync conflicts using an LLM.
-
-`analyze_conflict_with_llm(basename: str, language: str, fingerprint: Fingerprint, changed_files: List[str], prompts_dir: str = "prompts", context_override: Optional[str] = None) -> SyncDecision:`
-
-**Logic Flow:**
-
-1.  **Load LLM Prompt**: Use `load_prompt_template("sync_analysis_LLM")` to get the analysis prompt content.
-2.  **Gather Diffs**: For each file type in `changed_files` ('prompt', 'code', 'test', 'example'), generate a `git diff` of the current file against its last committed version (`HEAD`). You will need a helper function for this (e.g., `get_git_diff(file_path)`). If a diff cannot be generated (e.g., file is not in git), use an empty string.
-3.  **Format the Prompt**: Replace the placeholders in the loaded prompt template (`{fingerprint}`, `{changed_files_list}`, `{prompt_diff}`, etc.) with the actual data. The fingerprint should be formatted as a JSON string.
-4.  **Invoke LLM**: Call `llm_invoke` with the fully formatted prompt. Determinism is provided via the shared `llm_invoke`/LiteLLM caching layer; use temperature 0 and a constant strength to further reduce variance.
-5.  **Parse Response**: The LLM will respond with a JSON object. Parse this string into a dictionary.
-6.  **Validate and Return**:
-    -   Validate the JSON response to ensure it contains the required keys (`next_operation`, `reason`, `confidence`, etc.).
-    -   If the LLM response is valid, construct and return a `SyncDecision` object:
-        ```python
-        SyncDecision(
-            operation=llm_response.get('next_operation'),
-            reason=llm_response.get('reason'),
-            confidence=llm_response.get('confidence', 0.8),
-            estimated_cost=response_cost_when_available_or_estimate,
-            details={
-                'decision_type': 'llm',
-                'llm_analysis': True,
-                'changed_files': changed_files,
-                'last_command': fingerprint.command if fingerprint else None,
-                **llm_response.get('details', {})
-            }
-        )
-        ```
-    -   If the LLM response is not valid JSON or if the confidence is low (e.g., < 0.75), return:
-        ```python
-        SyncDecision(
-            operation='fail_and_request_manual_merge',
-            reason='Complex conflict requires manual resolution',
-            confidence=0.5,
-            estimated_cost=response_cost_when_available_or_0,
-            details={
-                'decision_type': 'llm',
-                'llm_error': True,
-                'changed_files': changed_files
-            }
-        )
-        ```
-
-Where `response_cost_when_available_or_estimate` means: prefer the actual `llm_invoke`-reported cost when available; otherwise fall back to `estimate_operation_cost(next_operation)`. For failure paths, prefer actual reported cost if available, else 0.
-
-The final Python script should be well-structured with clear functions, type hints, and docstrings, containing all the logic described above.
-
-### Integration with sync_orchestration
-
-This function is called by sync_orchestration for each language. The orchestration layer:
-1. Handles multiple language detection and iteration
-2. Executes the recommended operations
-3. Tracks cumulative costs and results
-4. Manages the overall workflow loop
-5. Handles budget constraints and maximum attempts
-
-The sync_determine_operation function provides single-unit analysis while sync_orchestration handles the execution and multi-language coordination. The orchestration layer will:
-- Call this function repeatedly as operations complete
-- Track total cost against the budget parameter
-- Stop if budget is exceeded or max attempts reached
-- Handle the actual execution of operations (generate, test, fix, etc.)
-- Update fingerprints and run reports after each operation
-
-**Note on Implementation**: The orchestration layer may pass additional parameters (like `prompts_dir`) to help locate prompt files in different project structures. The `get_pdd_file_paths` function should be flexible enough to accept such parameters.
-
-Define path resolution functions or constants for PDD_DIR, META_DIR, LOCKS_DIR that resolve paths dynamically relative to the current working directory. This ensures correct path resolution regardless of where the command is executed. For example:
-- `get_pdd_dir()` - Returns `.pdd` directory relative to current working directory
-- `get_meta_dir()` - Returns `.pdd/meta` directory
-- `get_locks_dir()` - Returns `.pdd/locks` directory
-
-### Logging Requirements
-
-The `SyncDecision` object returned by this function will be logged by the orchestration layer to `.pdd/meta/{basename}_{language.lower()}_sync.log`. Therefore, ensure that:
-
-1. **All decisions include complete information**: Every `SyncDecision` must have meaningful values for all fields
-2. **Confidence levels are accurate**: Heuristic/deterministic decisions may use 0.80–0.95; use lower values for LLM-based or uncertain decisions
-3. **Cost estimates are realistic**: Use the `estimate_operation_cost` helper to provide consistent estimates
-4. **Details provide debugging context**: Include relevant state information that would help understand why a decision was made
-5. **Reasons are user-friendly**: Write clear, concise explanations that non-technical users can understand
-
-### Helper Utilities (required)
-
-Add and use these helpers in the implementation to reflect the above logic:
-- `validate_expected_files(fingerprint, paths) -> Dict[str, bool]`: Determine which files should exist based on non-null fingerprint hashes and whether they actually exist
-- `_handle_missing_expected_files(...) -> SyncDecision`: Map missing-file scenarios to the appropriate recovery operation (`generate`, `auto-deps`, `example`, `test`, or `nothing` if `--skip-tests`)
-- `_is_workflow_complete(paths, skip_tests, skip_verify, basename=None, language=None) -> bool`: True when ALL of these are satisfied:
-          1. All required files exist (code, example, test unless skip_tests)
-          2. run_report exists and indicates success: either `exit_code == 0` OR (`tests_passed > 0` AND `tests_failed == 0`) — Bug #349: non-zero exit code with passing tests is treated as tooling noise
-          3. Bug #573: `coverage == 0.0` with `tests_passed > 0` is NEVER valid — tests are not exercising the module (e.g., sys.modules stubs masking broken imports). Workflow NOT complete.
-          4. fingerprint.command indicates verify has been done (unless skip_verify) - must be in ['verify', 'test', 'fix', 'update']
-          5. Bug #23: fingerprint.command must NOT start with 'skip:' prefix (which indicates operation was skipped, not executed)
-          6. Tests must have been run (unless skip_tests): fingerprint.command must be in ['test', 'fix', 'update']
-          7. run_report test hashes match current test file hashes (staleness check):
-             - Bug #156: If run_report.test_files exists, compare ALL test file hashes (detect added/removed/changed files)
-             - If run_report.test_hash exists and differs from current test hash → workflow NOT complete (stale report)
-             - For legacy reports without test_hash, compare fingerprint timestamp vs run_report timestamp as fallback
-             - If fingerprint is newer than run_report, the report may be stale → workflow NOT complete
-- `_check_example_success_history(basename, language) -> bool`: Whether the example has run successfully before (to prefer `fix` over `crash` on runtime errors)
-
-This enables users to run `pdd sync --dry-run` to understand the complete decision history and troubleshoot any issues.
+A standalone Python module `sync_determine_operation.py` containing:
+-   Dataclass definitions for state tracking.
+-   `SyncLock` class.
+-   `get_pdd_file_paths` and hashing utilities.
+-   `sync_determine_operation` (the primary entry point).
+-   `analyze_conflict_with_llm` (the LLM fallback).

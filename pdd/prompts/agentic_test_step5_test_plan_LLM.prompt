@@ -58,10 +58,25 @@ You are working on step 5 of 9 in an agentic test generation workflow. Previous 
    - Include authentication requirements
    - Include both success (2xx) and error scenarios (4xx, 5xx)
 
+1b. **Build contract-driven mocking strategy**
+    Using the External Service Contracts from Step 2:
+
+    For each external dependency the code under test relies on:
+    - **What to mock**: The EXACT function/method from Step 2's contract table
+    - **Mock return value**: EXACT shape from Step 2 (not invented — must match real return type)
+    - **Error scenarios**: What the real service returns on failure (401, 403, 500, exceptions)
+
+    Classification:
+    - **External boundary (MUST mock):** Third-party APIs, auth providers, databases, message queues, file storage
+    - **Internal logic (test directly):** Pure functions, data transformations, validations, business rules
+
+    CRITICAL: Do NOT invent mock return shapes. Use the EXACT types/fields found in the source code during Step 2.
+    If Step 2 didn't find the contract, read the relevant source files NOW to extract it.
+
 2. **Verify plan is achievable**
    Check for blockers:
    - Are all required URLs/endpoints accessible?
-   - Do we know how to authenticate (if needed)?
+   - Do we know how to authenticate (if needed)? If credentials are unavailable, plan to mock the auth layer using the contract from Step 2.
    - Are test data/fixtures available or can they be created?
    - Are there any external dependencies that might block tests?
 
@@ -126,6 +141,13 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 - **Fixtures needed:** [list fixtures]
 - **Cleanup:** [describe cleanup if needed]
 
+### Mocking Strategy (from source code contracts)
+| Dependency | Function to Mock | Mock Return Value (from source) | Error Case |
+|-----------|-----------------|--------------------------------|------------|
+| [Firebase Auth] | [app.auth.verify_token] | [{"uid": "test-123", "email": "t@t.com"}] | [raises InvalidIdTokenError] |
+
+**Contract source files:** [list the files where return shapes were found]
+
 ---
 *Proceeding to Step 6: Generate Tests*
 ```
@@ -156,6 +178,12 @@ The test plan cannot proceed due to:
 ---
 *Test generation paused - plan blocked by missing requirements.*
 ```
+
+CRITICAL: Missing credentials for external services is NEVER a blocker.
+When auth credentials, API keys, or database connections are unavailable:
+- Plan tests that MOCK the external service boundary using contracts from Step 2
+- The mock must return data shaped EXACTLY like the real service (from source code analysis)
+- Only mark PLAN_BLOCKED if test scenarios themselves cannot be determined (ambiguous requirements, source code inaccessible)
 
 % Machine-Readable Output (REQUIRED)
 

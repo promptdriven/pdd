@@ -82,7 +82,7 @@
 
 % Output (dictionary):
     - 'result': String or Pydantic object (or list if batch mode).
-    - 'cost': Total cost via LiteLLM callback and litellm.completion_cost, with CSV rate fallback.
+    - 'cost': Total accumulated cost across all attempts (original + retries) via LiteLLM callback and litellm.completion_cost, with CSV rate fallback.
     - 'model_name': Name of the selected model.
     - 'thinking_output': Reasoning output if available.
 
@@ -103,6 +103,7 @@
     - Empty: device flow or local model — no key needed, skip check. Exception: `github_copilot/` models in `PDD_FORCE` mode must check for an existing OAuth token at the path resolved from `GITHUB_COPILOT_TOKEN_DIR` (default `~/.config/litellm/github_copilot`) / `GITHUB_COPILOT_API_KEY_FILE` (default `api-key.json`). If the token file does not exist, skip the model to prevent litellm from hanging on an interactive device flow.
     - If missing and `PDD_FORCE` env var is set, skip model (non-interactive mode).
     - For single-var: prompt user via `input()`, sanitize key, set env var, save to .env file.
+    - .env save: Replace key in-place (no comment + append). Remove old commented versions of the same key. Preserve all other content.
     - Mark key as newly acquired for retry logic on auth errors.
 
 % Reasoning Parameters:
@@ -120,6 +121,8 @@
     - Pass CSV `location` column as `vertex_location` kwarg (e.g., "global" for Vertex AI models).
     - Pass CSV `base_url` column as both `base_url` and `api_base` kwargs for custom API endpoints.
     - Anthropic with thinking enabled: Force temperature=1.
+    - Claude models: Add `extra_headers={"anthropic-beta": "context-1m-2025-08-07"}` to enable 1M context window. Safe for all prompt lengths — API only charges premium rates when exceeding 200K tokens.
+    - Vertex AI: Pass `vertex_location` from the CSV's `location` column when present.
     - LM Studio: Set base_url from LM_STUDIO_API_BASE env (default http://localhost:1234/v1) and api_key placeholder "lm-studio".
 
 % Context Window Validation:
@@ -157,12 +160,20 @@
     - If invalid Python code remains after repair and language is "python" or None, retry with cache bypass.
     - Extract thinking output from response._hidden_params['thinking'] or response.choices[0].message.reasoning_content.
 
+% Retry Cost Accumulation:
+    - On cache-bypass retries (None content, malformed JSON, invalid Python), save the accumulated
+      cost and token counts from _LAST_CALLBACK_DATA before the retry call. After the retry,
+      add the retry's cost/tokens to the saved values. This ensures the final reported cost
+      reflects all API calls, not just the last one.
+
 % Retry and Fallback:
     - Define SchemaValidationError exception that triggers model fallback.
     - On auth error with newly acquired key: Re-prompt for same key and retry.
     - On schema validation failure: Raise SchemaValidationError to trigger fallback to next model.
     - Preserve provider credentials in retries: Pass api_key, base_url, api_version from original call.
     - Anthropic temperature auto-adjustment: If error mentions temperature+thinking, adjust and retry.
+      Two directions: (1) thinking enabled but temperature≠1 → force temperature=1;
+      (2) temperature=1 without thinking → retry with 0.99. Track adjustment to avoid infinite loop.
     - Catch litellm.ContextWindowExceededError as a post-call safety net (for cases where
       approximate pre-call token counting underestimates). Treat as model overflow: log warning
       and skip to next candidate model.

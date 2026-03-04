@@ -38,6 +38,128 @@ You are working on step 9 of the agentic architecture workflow. Step 7 generated
 <include>pdd/templates/generic/generate_prompt.prompt</include>
 </prompt_template>
 
+% Cross-File Consistency Rules (CRITICAL)
+
+When generating prompt files, you MUST enforce cross-file consistency:
+
+1. **Use the Naming Registry from Step 2:**
+   - Every prompt must use the EXACT canonical names for collections, endpoints, types, env vars
+   - If two prompts reference the same database collection, they must use identical names
+   - If two prompts import the same hook/utility, they must use identical import paths
+
+2. **Shared patterns must be identical across prompts:**
+   - Auth pattern: ALL prompts that use authentication must reference the SAME auth module with the SAME hook/function name
+   - Error handling: ALL prompts must use the SAME error handling utility
+   - API client: ALL prompts that make API calls must use the SAME client/fetch utility
+   - Toast/notification: ALL prompts must use the SAME notification pattern
+
+3. **Include explicit import instructions:**
+   - Each prompt must specify EXACT import paths for its dependencies
+   - Use relative imports consistently (always `@/lib/...` or always `../../lib/...`, not mixed)
+   - Import path format must match the project's tsconfig/path aliases
+
+4. **Environment variable documentation:**
+   - If a module needs env vars, the prompt must list them in a "Required Environment" section
+   - Use the exact variable names from the naming registry
+
+5. **Testing strategy documentation:**
+   - If a module depends on external services (auth, databases, third-party APIs),
+     the prompt MUST include a "Testing Strategy" section listing:
+     - The EXACT functions/methods that should be mocked in unit tests (from the Interface Contract Table)
+     - The EXACT return shapes the mocks should produce (from the interface definitions)
+     - Error scenarios that tests should cover
+
+% Interface Contract Table (Auto-Extracted from architecture.json) — CRITICAL
+
+Before writing ANY prompt file, you MUST build a flat Interface Contract Table from the architecture.json `interface` fields:
+
+**Step A: Build the table**
+
+Scan every module in architecture.json and extract its exported symbols:
+
+```
+| Module Filename | Exported Symbol | Signature/Type | Import Path |
+|-----------------|-----------------|----------------|-------------|
+| auth_service_Python.prompt | authenticate | (username: str, password: str) -> AuthResult | from src.auth.service import authenticate |
+| auth_service_Python.prompt | verify_token | (token: str) -> Optional[User] | from src.auth.service import verify_token |
+| user_models_Python.prompt | User | class(id, username, email, password_hash, created_at) | from src.models.user import User |
+| task_api_TypeScript.prompt | createTask | (data: CreateTaskInput) => Promise<Task> | import { createTask } from '@/lib/api/tasks' |
+```
+
+Derive the import path from the module's `filepath` field in architecture.json, using the project's import conventions (e.g., `@/` aliases for TypeScript/Next.js, `from src.` for Python).
+
+**Step B: Enforce the table in every prompt**
+
+For EVERY prompt that references another module:
+1. Look up the dependency in the Interface Contract Table
+2. Use the EXACT symbol name, signature, and import path from the table — no variations
+3. Add a `## Required Imports (from Interface Contract Table)` section to the prompt listing every cross-module import with its exact path and signature
+4. If a prompt calls a function from module X, include the EXACT import statement from the table
+5. If a prompt uses a type/class from module X, include the EXACT class definition reference from the table
+
+**Step C: Consistency check**
+
+After building all prompts, verify:
+- Every import path in every prompt matches the Interface Contract Table
+- No prompt invents a new function name or signature not in the table
+- If two prompts import the same symbol, they use identical import statements
+
+% Data Model Schema Injection (CRITICAL for correctness)
+
+When generating each prompt, you MUST inject the actual data model schemas from Step 4 output to prevent field hallucination:
+
+**1. For each module that has a data model module in its `dependencies`:**
+   - Extract the COMPLETE data model from Step 4 output (entity names, field names, field types, constraints, relationships)
+   - Inject the exact schema into the prompt as a `## Data Model Reference` section:
+     ```
+     ## Data Model Reference
+
+     ### User Entity
+     | Field | Type | Constraints |
+     |-------|------|-------------|
+     | id | UUID | primary key, auto-generated |
+     | username | string | unique, 3-50 chars |
+     | email | string | unique, valid email |
+     | password_hash | string | bcrypt, not exposed in API |
+     | created_at | datetime | auto-set on creation |
+
+     **IMPORTANT: Use ONLY these fields. Do NOT assume additional fields exist.**
+     ```
+   - The prompt MUST include the instruction: "Use ONLY these fields. Do NOT assume additional fields exist."
+
+**2. For each module that calls functions from another module:**
+   - Inject the exact function signatures from the Interface Contract Table as a `## Dependency API Reference` section:
+     ```
+     ## Dependency API Reference
+
+     ### auth_service
+     - `authenticate(username: str, password: str) -> AuthResult` — Returns AuthResult with token and user fields
+     - `verify_token(token: str) -> Optional[User]` — Returns None if token is invalid
+
+     **IMPORTANT: Call with EXACTLY these arguments. Do NOT pass additional parameters.**
+     ```
+   - The prompt MUST include the instruction: "Call with EXACTLY these arguments. Do NOT pass additional parameters."
+
+**3. For Firestore/MongoDB/database modules:**
+   - Inject exact collection schemas with field types and valid query operators
+   - Include the canonical collection names from the Step 2 naming registry
+   - Specify which fields are indexed and queryable
+
+**4. Schema source priority:**
+   - Step 4 data model output is the authoritative source for entity definitions
+   - architecture.json `interface` fields are authoritative for function signatures
+   - Step 2 naming registry is authoritative for collection/table names
+   - If there is a conflict, flag it and use Step 4 as ground truth for data fields
+
+**5. Auth-aware prompt generation:**
+   - If a module is tagged "auth" in architecture.json:
+     - Inject testability requirements: use dependency injection for auth providers (OAuth clients, token verifiers) so tests can substitute mock implementations
+     - Inject error handling requirements: handle expired tokens, invalid tokens, missing scopes, CSRF state mismatch, and network failures
+     - Add a "Testing Strategy" note: "Tests should use mock OAuth fixtures and pre-generated JWT tokens (see context/test.prompt Pattern 14)"
+   - If a module depends on an auth-tagged module:
+     - Reference the auth module's interface contract (token types, verification functions)
+     - Include token usage patterns in the prompt's "Dependency API Reference" section
+
 % Key Rules
 
 1. **Prompt file location:**
@@ -61,6 +183,11 @@ You are working on step 9 of the agentic architecture workflow. Step 7 generated
    <dependency_name>
      <include>examples/BASENAME_example.EXT</include>
    </dependency_name>
+
+   Testing Strategy (for modules with external dependencies)
+   - External services used: [list from architecture.json interface]
+   - Mock boundaries: [exact functions to mock, derived from the interface contract table]
+   - Expected mock return shapes: [from the module's interface.functions[].returns or interface.api.endpoints[].responseSchema]
 
    Instructions
    - [Implementation guidance]
@@ -100,6 +227,26 @@ This example shows the correct prompt file structure and naming.
 <verified_working_example>
 <include>pdd/templates/architecture/example_nextjs_task_notes.prompt</include>
 </verified_working_example>
+
+% Existing Codebase Profile (from Step 2b)
+
+<step2b_output>
+{step2b_output}
+</step2b_output>
+
+When generating prompts, you MUST reference real import paths from the codebase scan.
+You MUST use existing packages — do NOT introduce packages not in package.json/requirements.txt.
+You MUST follow existing patterns for auth, data fetching, error handling.
+You MUST reuse existing modules where applicable — reference their actual export signatures.
+
+% Existing Sibling Architectures
+
+{sibling_architectures}
+
+When generating prompts for modules that depend on sibling project modules:
+1. Add a "Cross-Project Dependencies" section in the prompt body
+2. Include the sibling module's API contract (endpoints, function signatures) from the table above
+3. Only use `<pdd-dependency>` tags for modules within THIS project — cross-project deps go in the prompt body
 
 % Your Task
 

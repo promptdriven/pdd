@@ -10,13 +10,13 @@ Supports three modes: true update, regeneration, and repository-wide updates. Ro
 % Requirements
 1. Function: `update_main(ctx, input_prompt_file: Optional[str], modified_code_file: Optional[str], input_code_file: Optional[str], output: Optional[str], use_git, repo, extensions, directory, strength: Optional[float], temperature: Optional[float], simple: bool = False, base_branch: str = "main") -> Optional[Tuple[str, float, str]]`
 2. Return (prompt, cost, model) on success, None on error.
-3. Agentic routing: try agentic first (if `simple=False` and agents available), fall back to legacy on failure.
-4. Resolve strength/temperature: prefer explicit params over `ctx.obj` values; update `ctx.obj` with resolved values.
-5. **Repo Mode Filtering**: Skip config/data files by extension (`.json`, `.yaml`, `.md`, `.html`, etc.) and specific filenames (`package-lock.json`, `.gitignore`, etc.) during repository scans.
-6. **Template-based Resolution**: Support `.pddrc` template-based prompt path resolution using `{name}`, `{category}`, and `{language}` placeholders.
-7. **Post-update sync**: After successful updates in repo mode, save fingerprints, update `architecture.json`, and agentically review/update the PRD if architecture changed.
-8. Validate prompt is non-empty before writing (true update mode).
-9. Without --output, overwrite `input_prompt_file` in place.
+3. Agentic routing (when `simple=False` and agents available): try agentic first, fall back to legacy on failure — applies to all three modes.
+4. Read updated prompt file content after successful agentic update (agentic writes directly to file).
+5. Retrieve verbose/quiet/time from ctx.obj; pass to update functions.
+6. Resolve strength/temperature: prefer explicit params over ctx.obj values; update ctx.obj with resolved values.
+7. Validate prompt is non-empty before writing (true update mode).
+8. Without --output, overwrite input_prompt_file in place.
+9. use_git and input_code_file are mutually exclusive (raise ValueError).
 
 % Modes
 1. **True update**: `input_prompt_file` + `modified_code_file` + (use_git OR `input_code_file`).
@@ -24,22 +24,35 @@ Supports three modes: true update, regeneration, and repository-wide updates. Ro
 3. **Repo mode** (repo=True): Scan repo, detect changes via `is_code_changed`, update changed pairs, and run post-update sync.
 
 % Helper Functions
-- `_extract_template_vars(concrete_path, template) -> Optional[Dict]`: Reverse-match a path against a template (e.g., `{category}/{name}`) to extract variables.
-- `_resolve_prompt_from_pddrc(code_file_path, repo_root, language) -> Optional[str]`: Loads `.pddrc`, matches context, and expands `outputs.prompt.path` template.
-- `resolve_prompt_code_pair(code_file_path, quiet, output_dir) -> (prompt_path, code_path)`: Derives prompt path. Tries `.pddrc` template resolution first, then falls back to `prompts_dir` logic.
-- `find_and_resolve_all_pairs(repo_root, quiet, extensions, output_dir)`: Walks repo, filters code files (applying `_SKIP_EXTENSIONS` and `_SKIP_FILENAMES`), resolves pairs.
-- `get_git_changed_files(repo_root, base_branch)`: Returns set of absolute paths for committed, uncommitted, and untracked changes.
-- `is_code_changed(code_file_path, repo_root, git_changed_files) -> (bool, reason)`: Check fingerprint `code_hash` first; fall back to git changed set.
-- `update_file_pair(prompt_file, code_file, ctx, repo, simple) -> Dict`: Single pair update wrapper.
-- `_find_prd_file(project_root) -> Optional[Path]`: Find PRD file (e.g., `PRD.md`, `prd.md`).
+- `_extract_template_vars(concrete_path, template) -> Optional[Dict]`: Reverse-match a path against a template to extract variables like `{category}` and `{name}`.
+- `_resolve_prompt_from_pddrc(code_file_path, repo_root, language) -> Optional[str]`: Loads `.pddrc`, finds matching context, and expands `outputs.prompt.path` template using extracted variables.
+- `resolve_prompt_code_pair(code_file_path, quiet, output_dir) -> (prompt_path, code_path)`: Derives prompt file path. Tries `.pddrc` template resolution first. Falls back to `prompts_dir` logic. Preserves subdirectory structure relative to repo root (stripping `generate_output_path` prefix). Creates missing directories and empty prompt files.
+- `find_and_resolve_all_pairs(repo_root, quiet, extensions, output_dir) -> List[Tuple]`: Walks repo (using `git ls-files` or `os.walk` fallback), filters code files, resolves prompt pairs.
+- `get_git_changed_files(repo_root, base_branch) -> Set[str]`: Combines merge-base diff, uncommitted changes, and untracked files into a set of absolute paths.
+- `derive_basename_and_language(code_file_path, repo_root) -> (basename, language)`: Extract file stem and language via `get_language`.
+- `is_code_changed(code_file_path, repo_root, git_changed_files) -> (bool, reason)`: Check fingerprint code_hash first; fall back to git changed set if no fingerprint.
+- `update_file_pair(prompt_file, code_file, ctx, repo, simple) -> Dict`: Wrapper for single pair update. Tries agentic first, then legacy (untracked/empty -> update_prompt with generation sentinel, else -> git_update). Returns dict with prompt_file, status, cost, model, error.
+- `_find_prd_file(project_root) -> Optional[Path]`: Find PRD file by convention: PRD.md, prd.md, *_prd.md, *_PRD.md.
 
 % Repo Mode Behavior
-- **Change detection**: Use `get_git_changed_files` + `is_code_changed`.
-- **Progress bar**: Rich Progress with spinner, total cost field, and file-specific descriptions.
-- **Post-update fingerprinting**: Call `save_fingerprint` for successful updates.
-- **Post-update architecture sync**: Call `update_architecture_from_prompt` for successful updates if `architecture.json` exists.
-- **Post-update PRD sync**: If architecture changed, use `run_agentic_task` to update the PRD. Parse `<updated-prd>` tags from LLM output.
-- Summary table: Show prompt file, status, cost, model, and error.
+- If `directory` provided, scan from that path; otherwise scan from repo root.
+- Ignore directories: .git, .idea, .vscode, __pycache__, node_modules, .venv, venv, dist, build, .next, .pdd, etc.
+- Exclude files: *.prompt, test_*, *_example, and common config/asset extensions (.json, .yaml, .png, etc.).
+- Only process files where `get_language()` returns non-None.
+- Filter by extensions if provided.
+- **Change detection**: Use `get_git_changed_files` + `is_code_changed` to filter pairs to only changed files. Skip if no changes detected.
+- Progress bar: Rich Progress with spinner, bar, percentage, time remaining, and running total cost.
+- **Post-update fingerprinting**: After successful update, `save_fingerprint` for the pair via `infer_module_identity`.
+- **Post-update architecture sync**: For each successfully updated prompt, call `update_architecture_from_prompt` if architecture.json exists.
+- **Post-update PRD sync**: If architecture entries were updated, find PRD file and use `run_agentic_task` to review/update PRD content (parse `<updated-prd>` tags from LLM output).
+- Summary table: prompt file, status, cost, model, error columns. Show architecture/PRD status if relevant.
+- Return: ("Repository update complete.", total_cost, "models") or None if no files/no changes.
+
+% Error Handling
+- Print Rich error (unless quiet) and return None on errors (ValueError, InvalidGitRepositoryError, Exception).
+- Re-raise click.Abort.
+- Pass confirm_callback, force, and context from ctx.obj to construct_paths.
+- Module-level Rich Console with custom theme (info=cyan, warning=yellow, error=bold red, success=green, path=dim blue).
 
 % Dependencies
 <module_dependencies>
@@ -50,6 +63,7 @@ Supports three modes: true update, regeneration, and repository-wide updates. Ro
   <sync_determine_operation_example><include>context/sync_determine_operation_example.py</include></sync_determine_operation_example>
   <architecture_sync_example><include>context/architecture_sync_example.py</include></architecture_sync_example>
   <operation_log_example><include>context/operation_log_example.py</include></operation_log_example>
+  <template_expander_example><include>context/template_expander_example.py</include></template_expander_example>
 </module_dependencies>
 
 % Deliverables

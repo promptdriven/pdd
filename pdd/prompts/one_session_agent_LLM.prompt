@@ -236,6 +236,32 @@ CRITICAL: You MUST analyze the actual code before writing any tests.
 4. Identify any error conditions or edge cases in the implementation.
 5. Read the module specification above to understand the intended functionality and edge cases.
 
+**Step 4b2: Extract External Service Contracts**
+Scan the code for external dependencies and extract their contracts before writing any tests.
+1. Identify all imports and calls to: HTTP clients (`requests`, `httpx`, `aiohttp`), database libs (`sqlalchemy`, `pymongo`, `psycopg2`), auth providers (`firebase-admin`, `auth0`, `jwt`), third-party SDKs (`stripe`, `boto3`, `google-cloud-*`, `twilio`, `sendgrid`), message queues, file storage.
+   - For OAuth/auth modules: extract each OAuth flow stage separately (authorization redirect, token exchange, token refresh, user info retrieval, revocation) — each has its own contract and must be tested independently.
+2. For each external call found, trace to its source and extract the exact function signature and return shape (from Pydantic models, TypeScript interfaces, dataclass definitions, or the function's return type annotation).
+3. Produce a table:
+   | External Service | Function/Method Call | Input Types | Return Shape |
+   |-----------------|---------------------|-------------|--------------|
+   | [e.g., Stripe] | [stripe.charges.create(amount, currency)] | [int, str] | [Charge(id=str, status=str, amount=int)] |
+4. If no external dependencies are found, skip to Step 4c.
+
+**Step 4b3: Build Mocking Strategy from Contracts**
+Transform the contract table from Step 4b2 into an actionable mocking plan.
+1. For each contract entry, determine:
+   - **Mock target**: The exact patch path (e.g., `module_under_test.stripe.charges.create`)
+   - **Mock return value**: The exact return shape from Step 4b2 — do NOT invent fields
+   - **Error case**: What the real service returns on failure (exception type, error response)
+2. Classify each dependency:
+   - **External boundary (MUST mock):** Third-party APIs, auth providers, databases, message queues, file storage
+   - **Internal logic (test directly):** Pure functions, data transformations, validations, business rules
+3. Produce a table:
+   | Dependency | Mock Target (patch path) | Mock Return Value | Error Case |
+   |-----------|-------------------------|-------------------|------------|
+   | [e.g., Firebase Auth] | [module.auth.verify_id_token] | [{"uid": "test-uid-123", "email": "user@example.com"}] | [raises InvalidIdTokenError] |
+4. Every mock in Step 4d MUST use the exact shapes defined in this table.
+
 **Step 4c: Read Existing Tests**
 - **Read ALL existing test files** for this module (at `{test_path}` and any related test files)
   - Understand what is already tested
@@ -265,8 +291,33 @@ Write or update tests at `{test_path}`:
 - NEVER access internal implementation details (variables/functions starting with underscore) in tests.
 - Design tests to be independent of implementation details that might change when code is regenerated.
 - For test isolation, use fixtures and mocking of external dependencies rather than manipulating internal module state.
-  Minimize the amount of mocking so tests are more robust to changes in the code under test.
+- MOCKING RULE: Mock at external boundaries, test internal logic directly.
+  Use the mocking strategy table from Step 4b3 — every mock MUST use the exact shapes defined there.
+  - ALWAYS mock: HTTP clients, database connections, auth providers, third-party SDKs, message queues, file storage, external service SDKs (firebase-admin, stripe, boto3, google-cloud-*)
+  - NEVER mock: The function under test, pure computation, data validation, business logic
+  - Mock return values MUST match the real return type from the source code — do not invent response shapes
+- The goal: test as much of YOUR code as possible while isolating external services that need credentials.
 - Tests must be self-contained and mock external dependencies.
+- If the code depends on environment variables for API keys/credentials:
+  - Use monkeypatch.setenv() with clearly fake values (e.g., "test-api-key-not-real")
+  - Do NOT let tests fail due to missing env vars
+  - Mock the external service call, not just the env var
+- Mock return values MUST match the real return type/shape from the source code:
+  - DO NOT invent fields — use only fields that exist in the real response
+  - DO NOT omit required fields — include all fields the code under test accesses
+  - Use realistic values (valid emails, UUIDs, timestamps) not "test" or "dummy"
+  - Always test error paths: what happens when the mock raises an exception?
+  - Derive mock shapes from: Pydantic models, TypeScript interfaces, dataclass definitions,
+    or the actual function's return type annotation in the source code
+  - If you built a mocking strategy table in Step 4b3, use it — do not re-derive shapes
+- Auth-specific test patterns (when the module involves OAuth, JWT, or session auth):
+  - Mock OAuth servers with monkeypatch fixtures — NEVER call real identity providers in tests
+  - Use pre-generated JWT tokens via pyjwt for token validation tests (valid, expired, no-scope tokens)
+  - Test token lifecycle: issuance, validation, refresh, revocation, and expiry handling
+  - Test each OAuth flow stage independently (authorization redirect, callback, token exchange, refresh, revocation)
+  - Mock token storage (keyring, session store) with in-memory implementations
+  - Test auth error scenarios: expired tokens, invalid tokens, missing scopes, revoked tokens, CSRF state mismatch
+  - See Pattern 14 in context/test.prompt for concrete fixture examples
 - CRITICAL (Python only): NEVER use module-level `sys.modules[...] = MagicMock()` — it pollutes
   pytest's module cache and breaks other test files. Use `@pytest.fixture` with `types.ModuleType`
   and `__path__ = []` instead.

@@ -852,7 +852,7 @@ The sync command automatically detects what files exist and executes the appropr
 3. **example**: Generate usage example if it doesn't exist or is outdated
 4. **crash**: Fix any runtime errors to make code executable
 5. **verify**: Run functional verification against prompt intent (unless --skip-verify)
-6. **test**: Generate comprehensive unit tests if they don't exist (unless --skip-tests)
+6. **test**: Generate comprehensive unit tests if they don't exist (unless --skip-tests). Auth modules get auth-specific test patterns (mock OAuth servers, JWT fixtures, token lifecycle testing)
 7. **fix**: Resolve any bugs found by unit tests
 8. **update**: Back-propagate any learnings to the prompt file
 
@@ -1058,7 +1058,7 @@ The 11-step workflow:
 1. **Analyze PRD**: Extract features, tech stack, and requirements from the issue content
 2. **Deep Analysis**: Feature decomposition, module boundaries, shared concerns
 3. **Research**: Web search for tech stack documentation and best practices
-4. **Design**: Module breakdown with dependency graph and priority ordering
+4. **Design**: Module breakdown with dependency graph and priority ordering (auth modules are separated into dedicated concerns with low priority numbers)
 5. **Research Dependencies**: Find relevant API docs and code examples per module
 6. **Generate**: Produce complete `architecture.json` and scaffolding files
 7. **Generate .pddrc**: Create project configuration with context-specific paths

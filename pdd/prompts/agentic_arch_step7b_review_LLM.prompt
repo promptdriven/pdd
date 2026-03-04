@@ -1,0 +1,129 @@
+<pdd-reason>Reviews architecture.json against PRD and naming registry, fixing naming inconsistencies, missing dependencies, and structural issues before prompt generation.</pdd-reason>
+<pdd-interface>
+{{
+  "type": "module",
+  "module": {{
+    "functions": [
+      {{"name": "review_architecture", "signature": "(architecture_json: str, step1_output: str, step2_output: str, step4_output: str)", "returns": "str ('REVIEW_RESULT: CLEAN' or 'REVIEW_RESULT: FIXED (N issues)')"}}
+    ]
+  }}
+}}
+</pdd-interface>
+<pdd-dependency>agentic_arch_step7_generate_LLM.prompt</pdd-dependency>
+% You are an expert software architect performing a SELF-REVIEW of a generated architecture.json. Your role is to act as a fresh pair of eyes — re-read the architecture from scratch and catch issues that single-pass generation missed.
+
+% Context
+
+You are working on step 7b of the agentic architecture workflow. Step 7 just generated architecture.json and scaffolding files. Before proceeding to .pddrc generation (Step 8) and prompt generation (Step 9), you must review the architecture for consistency, completeness, and correctness.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Original PRD (Source of Truth)
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Step 1: PRD Analysis
+<step1_output>
+{step1_output}
+</step1_output>
+
+% Step 2: Deep Analysis (includes Naming Registry)
+<step2_output>
+{step2_output}
+</step2_output>
+
+% Step 4: Data Model Design
+<step4_output>
+{step4_output}
+</step4_output>
+
+% Your Task
+
+Read the `architecture.json` file from disk (it was created by Step 7). Then perform the following checks:
+
+**1. Naming Consistency**
+
+Cross-reference EVERY identifier in architecture.json against the Step 2 naming registry:
+- Collection/table names must match the registry exactly
+- API endpoint paths must match the registry exactly
+- Type/class names must match the registry exactly
+- Env var names must match the registry exactly
+- Hook/utility function names must match the registry exactly
+
+If ANY name in architecture.json differs from the registry (e.g., "user_accounts" in arch vs "users" in registry), fix it in-place.
+
+**2. Dependency Completeness**
+
+For each module in architecture.json:
+- If the module references shared types (User, Task, etc.), verify the types module is in its `dependencies` list
+- If the module calls functions from another module, verify that module is in its `dependencies` list
+- If a module imports from another module in its `interface`, that module MUST be in `dependencies`
+
+Add any missing dependency references.
+
+**3. Priority / Topological Sort Correctness**
+
+Verify the priority ordering forms a valid topological sort:
+- No module should have a lower priority number than any of its dependencies
+- Dependencies must be built before dependents (lower priority = built first)
+- If the sort is invalid, re-number priorities to fix it
+
+**4. Interface Completeness**
+
+For each module:
+- Every API module must have `endpoints` defined in its interface (method, path, request/response types)
+- Every data module must have CRUD function signatures defined
+- Every service module must have its public methods defined
+- If any interface is empty or missing key functions, add them based on the PRD and data model
+
+**5. Missing Modules**
+
+Cross-check PRD features against the module list:
+- Every user-facing feature in the PRD must have at least one corresponding module
+- Every data entity from Step 4 must have a model module
+- Every API endpoint mentioned in the PRD must have a route module
+
+If a feature has no module, add a new module entry to architecture.json.
+
+**6. Duplicate / Overlapping Modules**
+
+Check for modules with overlapping responsibility:
+- Two modules that handle the same entity or feature
+- Modules with very similar names but different implementations
+- If duplicates found, merge them into one module
+
+% Output
+
+After completing your review:
+
+1. If you found ANY issues: Fix them directly in `architecture.json` on disk, then output:
+```
+REVIEW_RESULT: FIXED (N issues)
+
+Issues fixed:
+1. [description of fix]
+2. [description of fix]
+...
+```
+
+2. If the architecture is clean: Output:
+```
+REVIEW_RESULT: CLEAN
+
+Architecture verified against PRD and naming registry. No issues found.
+```
+
+% Important
+
+- Read `architecture.json` from disk — do NOT rely on the step 7 output text
+- Fix issues IN-PLACE by writing the corrected JSON back to `architecture.json`
+- Preserve the JSON array structure — architecture.json must remain a valid JSON array
+- Do NOT add modules that aren't justified by PRD requirements
+- Do NOT remove modules unless they are true duplicates
+- Keep the review focused — this is a consistency and completeness check, not a redesign
+- Always output `REVIEW_RESULT: CLEAN` or `REVIEW_RESULT: FIXED (N issues)`

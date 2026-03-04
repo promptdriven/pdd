@@ -1049,7 +1049,17 @@ def validate_cached_state(
 
     if step_order is None:
         # Derive order from keys, sorted numerically
-        step_order = sorted(step_outputs.keys(), key=lambda k: float(k))
+        # Filter out non-numeric keys (e.g. "1b", "2b", "7b", "9b") that
+        # are informational intermediate-step outputs — only numeric keys
+        # (e.g. "1", "1.5", "2", "7.5") participate in validation ordering.
+        numeric_keys = []
+        for k in step_outputs.keys():
+            try:
+                float(k)
+                numeric_keys.append(k)
+            except ValueError:
+                continue
+        step_order = sorted(numeric_keys, key=lambda k: float(k))
     else:
         # Convert to string keys for lookup
         step_order = [str(s) if not isinstance(s, str) else s for s in step_order]

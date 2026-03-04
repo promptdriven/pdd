@@ -51,6 +51,10 @@ You are now working in an isolated git worktree at: {worktree_path}
    - **Symlink `.env` files** from the main repo if they exist
    - Example: `ln -s ../../.env .env` (adjust path based on worktree depth)
    - Do NOT copy/symlink `venv`, `node_modules`, or other large directories
+   - If `.env` does not exist or contains only placeholders (e.g., `API_KEY=your-key-here`):
+     - Do NOT let tests fail due to missing env vars
+     - Use monkeypatch.setenv() (Python) or process.env mock (TypeScript) with test values
+     - The test values should be clearly fake (e.g., "test-api-key-not-real") so they never accidentally hit real services
 
 3. Install test dependencies if needed:
    - For Playwright: check if `npx playwright install` is needed
@@ -70,6 +74,17 @@ You are now working in an isolated git worktree at: {worktree_path}
    - Use proper assertions and error messages
    - Include setup/teardown as specified
    - Follow the project's existing test patterns
+
+2b. **Implement mocks from Step 5's contract-driven mocking strategy**
+    For each entry in the Mocking Strategy table:
+    - Mock the EXACT function specified (not a parent module, not a wrapper — the exact call site)
+    - Return data matching the EXACT shape from the contract (fields, types, nesting)
+    - Include error case tests (mock raising exceptions or returning error status codes)
+
+    CRITICAL: Mocks must reflect the REAL API contract found in source code.
+    - DO NOT invent fields that aren't in the contract
+    - DO NOT omit fields that ARE in the contract
+    - DO NOT use generic placeholder values like "test" or "dummy" — use realistic values matching the field type
 
 3. **For Web UI (Playwright):**
    ```typescript
@@ -138,6 +153,61 @@ You are now working in an isolated git worktree at: {worktree_path}
            response = await client.get(f"{{BASE_URL}}/path/from/plan")
            assert response.status_code == ...  # expected status from plan
            # Validate response per test plan
+   ```
+
+7. **For code with external auth dependencies (contract-driven mocks):**
+
+   **Python — Mock auth middleware using contract from Step 5:**
+   ```python
+   import pytest
+   from unittest.mock import patch, MagicMock
+
+   # Mock shape MUST match the real return type from source code (see Step 5 contract)
+   MOCK_AUTH_USER = {{
+       "uid": "test-user-123",          # str — matches verify_token return
+       "email": "test@example.com",     # str — matches verify_token return
+       # Include ALL fields from the contract, not just the ones you think you need
+   }}
+
+   class TestProtectedEndpoint:
+       @patch('app.auth.verify_token')  # EXACT function from Step 5 mocking strategy
+       def test_returns_data_for_authenticated_user(self, mock_verify):
+           mock_verify.return_value = MOCK_AUTH_USER
+           response = client.get("/api/resource",
+               headers={{"Authorization": "Bearer fake-token"}})
+           assert response.status_code == 200
+           mock_verify.assert_called_once_with("fake-token")
+
+       @patch('app.auth.verify_token')
+       def test_handles_invalid_token(self, mock_verify):
+           mock_verify.side_effect = InvalidIdTokenError("Token expired")
+           response = client.get("/api/resource",
+               headers={{"Authorization": "Bearer expired-token"}})
+           assert response.status_code == 401
+   ```
+
+   **Python — Mock database layer using contract from Step 5:**
+   ```python
+   def test_get_user_profile(monkeypatch):
+       # Return shape matches the User model from source code
+       mock_user = User(id=1, email="test@example.com", name="Test User", created_at=datetime.now())
+
+       monkeypatch.setattr('app.db.get_user', lambda user_id: mock_user)
+       result = get_user_profile(1)
+       assert result["email"] == "test@example.com"
+   ```
+
+   **TypeScript — Mock auth with jest using contract from Step 5:**
+   ```typescript
+   // Mock shape matches the REAL verifyIdToken return type from source
+   jest.mock('../lib/firebase-admin', () => ({{
+     auth: () => ({{
+       verifyIdToken: jest.fn().mockResolvedValue({{
+         uid: 'test-user-123',    // matches DecodedIdToken
+         email: 'test@example.com', // matches DecodedIdToken
+       }}),
+     }}),
+   }}));
    ```
 
 % Output

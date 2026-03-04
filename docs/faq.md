@@ -476,3 +476,30 @@ The AI development landscape has a tool for every project size. PDD's strength i
 -   **Small Projects / Demos**: Tools like **Lovable** or **Bolt** are fantastic for getting quick results with minimal setup.
 -   **Medium-Sized Features / Prototyping**: Interactive, chat-based tools like **Cursor** or the **Claude Code** are excellent for iterative refinement and exploration.
 -   **Production-Scale, Long-Lived Systems**: **PDD** is the best choice when you need deterministic, maintainable, and version-controlled code generation that can scale with your team and project complexity."*
+
+## Q: My auth/OAuth modules don't work after `pdd generate` + `pdd sync`. What's going wrong?
+
+*"Auth modules have unique challenges because they depend on external identity providers (Google, GitHub, Auth0, etc.) that can't be called during testing. PDD now detects auth automatically and applies specialized patterns."*
+
+**Why Auth Modules Fail Without Special Handling**
+
+1. **Real provider calls in tests**: Generated tests try to call real OAuth endpoints, which fail without credentials
+2. **Missing token lifecycle**: Code handles login but not refresh, revocation, or expiry
+3. **Inline auth logic**: Auth is embedded in business logic modules instead of being separated, making it untestable
+4. **No mock boundaries**: Tests don't know where to mock because auth isn't injected as a dependency
+
+**How PDD Solves This (v2.x+)**
+
+PDD now includes auth-aware detection and scaffolding across the pipeline:
+
+- **Architecture step** (`pdd generate <issue>`): Detects OAuth/JWT/session auth in your PRD and separates auth concerns into dedicated modules tagged with "auth"
+- **Prompt generation**: Auth-tagged modules automatically get testability requirements (dependency injection), error handling requirements (expired tokens, CSRF), and test fixture references
+- **Test generation**: Auth modules get specialized test patterns — mock OAuth fixtures, pre-generated JWT tokens, token lifecycle testing, and per-stage OAuth flow testing (see `context/test.prompt` Pattern 14)
+- **Completeness validation**: Checks that auth modules cover the full token lifecycle and that business modules don't contain inline auth logic
+
+**Remediation for Existing Projects**
+
+1. Tag your auth modules with `"auth"` in `architecture.json`
+2. Add Pattern 14 fixtures from `context/test.prompt` to your test files
+3. Ensure auth modules use dependency injection (injectable OAuth client, injectable token verifier)
+4. Re-run `pdd sync` on auth modules to regenerate tests with auth-aware patterns
