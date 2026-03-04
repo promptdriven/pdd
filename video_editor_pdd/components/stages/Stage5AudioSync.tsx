@@ -38,6 +38,12 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
   const [scrollTop, setScrollTop] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  const [detecting, setDetecting] = useState(false);
+  const [detectError, setDetectError] = useState<string | null>(null);
+  const [unmatchedSegments, setUnmatchedSegments] = useState<string[]>([]);
+  const [overwriteExisting, setOverwriteExisting] = useState(false);
+  const [autoFilledSections, setAutoFilledSections] = useState<string[]>([]);
+
   // ----------------------------------------
   // Load project config
   // ----------------------------------------
@@ -145,14 +151,82 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
     setSectionGroups((prev) => ({ ...prev, [sectionId]: segments }));
   };
 
+  const handleDetectSegments = async () => {
+    setDetecting(true);
+    setDetectError(null);
+    setUnmatchedSegments([]);
+    try {
+      const res = await fetch('/api/pipeline/tts-render/segments');
+      if (!res.ok) throw new Error('Failed to fetch segments');
+      const data = await res.json();
+      const allSegments: { id: string }[] = data.segments ?? [];
+
+      const sectionIds = sections.map((s) => s.id);
+      // Sort by length descending for longest-match-first
+      const sortedSectionIds = [...sectionIds].sort((a, b) => b.length - a.length);
+
+      const grouped: Record<string, string[]> = {};
+      const unmatched: string[] = [];
+
+      for (const seg of allSegments) {
+        let matched = false;
+        for (const sectionId of sortedSectionIds) {
+          const prefix = sectionId + '_';
+          if (seg.id.startsWith(prefix)) {
+            const suffix = seg.id.slice(prefix.length);
+            if (/^\d{3}$/.test(suffix)) {
+              if (!grouped[sectionId]) grouped[sectionId] = [];
+              grouped[sectionId].push(seg.id);
+              matched = true;
+              break;
+            }
+          }
+        }
+        if (!matched) unmatched.push(seg.id);
+      }
+
+      setUnmatchedSegments(unmatched);
+
+      const filled: string[] = [];
+      setSectionGroups((prev) => {
+        const next = { ...prev };
+        for (const [sectionId, segments] of Object.entries(grouped)) {
+          const existing = prev[sectionId] ?? [];
+          if (existing.length === 0 || overwriteExisting) {
+            next[sectionId] = segments.sort();
+            filled.push(sectionId);
+          }
+        }
+        return next;
+      });
+
+      setAutoFilledSections(filled);
+      setTimeout(() => setAutoFilledSections([]), 5000);
+    } catch (err: any) {
+      setDetectError(err?.message ?? 'Failed to detect segments');
+    } finally {
+      setDetecting(false);
+    }
+  };
+
   const handleSaveConfig = async () => {
     setSavingConfig(true);
     try {
+      // Convert string[] arrays to {startSegment, endSegment} SegmentRange objects
+      const rangeGroups: Record<string, { startSegment: string; endSegment: string }> = {};
+      for (const [sectionId, segments] of Object.entries(sectionGroups)) {
+        if (segments.length > 0) {
+          rangeGroups[sectionId] = {
+            startSegment: segments[0],
+            endSegment: segments[segments.length - 1],
+          };
+        }
+      }
       await fetch('/api/project', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          audioSync: { sectionGroups },
+          audioSync: { sectionGroups: rangeGroups },
         }),
       });
     } finally {
@@ -206,6 +280,21 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-semibold text-slate-100">Audio Sync Section Groups</h3>
           <div className="flex items-center gap-2">
+            <label className="flex items-center gap-1 text-xs text-slate-400">
+              <input
+                type="checkbox"
+                checked={overwriteExisting}
+                onChange={(e) => setOverwriteExisting(e.target.checked)}
+              />
+              Overwrite existing
+            </label>
+            <button
+              onClick={handleDetectSegments}
+              disabled={detecting}
+              className="rounded-md bg-amber-600 px-3 py-1.5 text-white text-sm disabled:opacity-50"
+            >
+              {detecting ? 'Detecting…' : 'Detect Segments'}
+            </button>
             <button
               onClick={handleSaveConfig}
               disabled={savingConfig}
@@ -232,7 +321,12 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
           <tbody>
             {sections.map((section) => (
               <tr key={section.id} className="border-b border-slate-700">
-                <td className="py-2 pr-4 font-medium text-slate-200">{section.label}</td>
+                <td className="py-2 pr-4 font-medium text-slate-200">
+                  {section.label}
+                  {autoFilledSections.includes(section.id) && (
+                    <span className="ml-2 text-xs text-amber-400">(auto-detected)</span>
+                  )}
+                </td>
                 <td className="py-2">
                   <input
                     className="w-full rounded border border-slate-600 bg-slate-800 px-2 py-1 text-sm text-slate-200 placeholder-slate-500"
@@ -247,6 +341,19 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
             ))}
           </tbody>
         </table>
+
+        {detectError && (
+          <div className="mt-3 rounded-md bg-red-900/50 border border-red-700 px-3 py-2 text-sm text-red-300">
+            {detectError}
+          </div>
+        )}
+
+        {unmatchedSegments.length > 0 && (
+          <div className="mt-3 rounded-md bg-yellow-900/50 border border-yellow-700 px-3 py-2 text-sm text-yellow-300">
+            {unmatchedSegments.length} segment(s) did not match any section:{' '}
+            {unmatchedSegments.join(', ')}
+          </div>
+        )}
 
         <div className="mt-4">
           <SseLogPanel jobId={jobId} onDone={handleSseDone} />

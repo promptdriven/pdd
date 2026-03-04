@@ -379,7 +379,7 @@ describe("save config handler", () => {
   });
 
   it("sends audioSync.sectionGroups in body", () => {
-    expect(sourceCode).toMatch(/audioSync\s*:\s*\{\s*sectionGroups\s*\}/);
+    expect(sourceCode).toMatch(/audioSync\s*:\s*\{\s*sectionGroups/);
   });
 
   it("tracks saving state", () => {
@@ -750,5 +750,103 @@ describe("layout and structure", () => {
 
   it("uses flex justify-end for bottom button area", () => {
     expect(sourceCode).toMatch(/flex\s+justify-end/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 29. Detect Segments button (Req 8)
+// ---------------------------------------------------------------------------
+
+describe("Detect Segments button", () => {
+  it("renders Detect Segments button text", () => {
+    expect(sourceCode).toMatch(/Detect Segments/);
+  });
+
+  it("defines handleDetectSegments as async function", () => {
+    expect(sourceCode).toMatch(/const\s+handleDetectSegments\s*=\s*async/);
+  });
+
+  it("fetches GET /api/pipeline/tts-render/segments", () => {
+    expect(sourceCode).toMatch(/fetch\s*\(\s*['"]\/api\/pipeline\/tts-render\/segments['"]\s*\)/);
+  });
+
+  it("button calls handleDetectSegments on click", () => {
+    expect(sourceCode).toMatch(/onClick=\{handleDetectSegments\}/);
+  });
+
+  it("button is disabled while detecting", () => {
+    expect(sourceCode).toMatch(/disabled=\{detecting\}/);
+  });
+
+  it("shows Detecting… while loading", () => {
+    expect(sourceCode).toMatch(/Detecting/);
+  });
+
+  it("tracks detecting state", () => {
+    expect(sourceCode).toMatch(/\[\s*detecting\s*,\s*setDetecting\s*\]/);
+  });
+
+  it("tracks unmatchedSegments state", () => {
+    expect(sourceCode).toMatch(/\[\s*unmatchedSegments\s*,\s*setUnmatchedSegments\s*\]/);
+  });
+
+  it("tracks overwriteExisting state", () => {
+    expect(sourceCode).toMatch(/\[\s*overwriteExisting\s*,\s*setOverwriteExisting\s*\]/);
+  });
+
+  it("tracks autoFilledSections state", () => {
+    expect(sourceCode).toMatch(/\[\s*autoFilledSections\s*,\s*setAutoFilledSections\s*\]/);
+  });
+
+  it("sorts section IDs by length descending for longest-first match", () => {
+    expect(sourceCode).toMatch(/b\.length\s*-\s*a\.length/);
+  });
+
+  it("validates suffix with 3-digit regex", () => {
+    expect(sourceCode).toMatch(/\/\^\\d\{3\}\$\//);
+  });
+
+  it("renders Overwrite existing checkbox text", () => {
+    expect(sourceCode).toMatch(/Overwrite existing/);
+  });
+
+  it("renders auto-detected badge text", () => {
+    expect(sourceCode).toMatch(/\(auto-detected\)/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 30. Unmatched segments warning (Req 8)
+// ---------------------------------------------------------------------------
+
+describe("unmatched segments warning", () => {
+  it("shows 'did not match any section' text", () => {
+    expect(sourceCode).toMatch(/did not match any section/);
+  });
+
+  it("references unmatchedSegments.length", () => {
+    expect(sourceCode).toMatch(/unmatchedSegments\.length/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 31. Save config SegmentRange conversion (Req 8)
+// ---------------------------------------------------------------------------
+
+describe("save config SegmentRange conversion", () => {
+  it("references startSegment in handleSaveConfig", () => {
+    expect(sourceCode).toMatch(/startSegment/);
+  });
+
+  it("references endSegment in handleSaveConfig", () => {
+    expect(sourceCode).toMatch(/endSegment/);
+  });
+
+  it("uses segments[0] for start", () => {
+    expect(sourceCode).toMatch(/segments\[0\]/);
+  });
+
+  it("uses segments[segments.length - 1] for end", () => {
+    expect(sourceCode).toMatch(/segments\[segments\.length\s*-\s*1\]/);
   });
 });

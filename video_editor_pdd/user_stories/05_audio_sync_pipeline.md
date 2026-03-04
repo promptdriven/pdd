@@ -14,6 +14,11 @@
 - [ ] A word timestamp viewer table shows: Word, Start (seconds), End (seconds), Segment ID
 - [ ] The word table supports filtering by section and searching by word
 - [ ] Virtual scrolling handles large scripts without UI lag
+- [ ] [Detect Segments] button fetches `GET /api/pipeline/tts-render/segments`, groups segment IDs by matching their prefix to project section IDs (longest-match-first, suffix must be exactly 3 digits), and auto-fills empty section inputs
+- [ ] "Overwrite existing" checkbox controls whether populated sections are replaced
+- [ ] Unmatched segments are shown in a yellow warning banner below the table
+- [ ] Auto-filled sections show a transient "(auto-detected)" badge (5s fade)
+- [ ] [Save Config] converts string arrays to `{startSegment, endSegment}` SegmentRange objects before PUT
 
 ## Mapping to PRD
 

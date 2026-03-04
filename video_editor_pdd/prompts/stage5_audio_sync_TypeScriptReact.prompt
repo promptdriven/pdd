@@ -8,6 +8,7 @@ Requirements
 5. Virtual scrolling for large timestamp lists: use CSS `contain: strict` with fixed row heights or `react-virtual`/`@tanstack/react-virtual` if available, otherwise simple CSS approach.
 6. Load timestamps: `GET /api/pipeline/audio-sync/timestamps?section={sectionId}`.
 7. `'use client'` directive.
+8. [Detect Segments] button: fetches `GET /api/pipeline/tts-render/segments`, groups segment IDs by section prefix (longest-match-first, `{sectionId}_{NNN}` where NNN is 3 digits), and fills empty section inputs. "Overwrite existing" checkbox. Unmatched segments shown in yellow warning. Auto-filled sections show a transient "(auto-detected)" badge (5s fade).
 
 Dependencies
 
@@ -28,6 +29,8 @@ Instructions
 - Timestamp table: filtered by search: `words.filter(w => w.word.toLowerCase().includes(search.toLowerCase()))`.
 - Virtual scroll: if using CSS approach, render only visible rows: calculate `scrollTop / rowHeight` to determine start index. Use `style.height` on container and `style.transform: translateY(...)` on inner list.
 - Section filter: `<select>` with sections loaded from project config prop or fetched from `/api/project`.
+- Detect segments: sort section IDs by length descending. For each segment, match `segment.id.startsWith(sectionId + "_")` where remainder passes `/^\d{3}$/`. Collect unmatched. Merge into `sectionGroups` state — skip non-empty unless overwrite checked.
+- Save config: convert `string[]` arrays to `{startSegment, endSegment}` SegmentRange objects before PUT to match Zod schema.
 - After audio sync completes (SSE done event), auto-load timestamps for first section.
 - Word count display: `{filteredWords.length} of {totalWords} words`.
 
