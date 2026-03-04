@@ -50,6 +50,7 @@ from pdd.pddrc_initializer import (
     _detect_language,
     _build_pddrc_content,
     _detect_language_from_extensions,
+    _paths_already_covered,
     _sanitize_context_name,
     infer_contexts_from_scan,
     ensure_pddrc_for_scan,
@@ -588,3 +589,49 @@ class TestPddrcAutoGeneration:
             contexts = infer_contexts_from_scan(repo_root, repo_root, code_files)
 
         assert contexts == {}
+
+    def test_paths_already_covered_by_parent_glob(self):
+        """New context 'pdd/commands/**' is covered by existing 'pdd/**'."""
+        assert _paths_already_covered(
+            ["pdd/commands/**"], ["pdd/**"]
+        ) is True
+
+    def test_paths_already_covered_exact_match(self):
+        """Exact path pattern match is detected as covered."""
+        assert _paths_already_covered(
+            ["pdd/commands/**"], ["pdd/commands/**"]
+        ) is True
+
+    def test_paths_not_covered(self):
+        """Unrelated path is not covered."""
+        assert _paths_already_covered(
+            ["crates/selune-compiler/**"], ["pdd/**", "tests/**"]
+        ) is False
+
+    def test_ensure_pddrc_skips_covered_paths(self, tmp_path):
+        """Contexts whose paths are already covered by existing .pddrc are skipped."""
+        existing = (
+            'version: "1.0"\n'
+            "\n"
+            "contexts:\n"
+            "  default:\n"
+            '    paths: ["pdd/**"]\n'
+            "    defaults:\n"
+            '      default_language: "python"\n'
+        )
+        pddrc_file = tmp_path / ".pddrc"
+        pddrc_file.write_text(existing, encoding="utf-8")
+
+        # Scan pdd/ subdirectories — should all be covered by "pdd/**"
+        scan_dir = str(tmp_path / "pdd")
+        repo_root = str(tmp_path)
+        code_files = [
+            str(tmp_path / "pdd" / "commands" / "modify.py"),
+            str(tmp_path / "pdd" / "core" / "engine.py"),
+        ]
+
+        with patch("pdd.pddrc_initializer._detect_language_from_extensions", return_value="python"), \
+             patch("pdd.construct_paths._find_pddrc_file", return_value=pddrc_file):
+            result = ensure_pddrc_for_scan(scan_dir, repo_root, code_files, quiet=True)
+
+        assert result is None  # All covered, nothing to add

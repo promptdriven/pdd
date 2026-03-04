@@ -357,6 +357,32 @@ def _build_context_defaults(rel_path: str, language: str) -> Dict:
     return defaults
 
 
+def _paths_already_covered(
+    new_patterns: List[str],
+    existing_patterns: List[str],
+) -> bool:
+    """Check if a new context's paths are already covered by existing patterns.
+
+    A new pattern like ``"pdd/commands/**"`` is covered if any existing pattern
+    would match the same directory tree — e.g. ``"pdd/**"`` or
+    ``"pdd/commands/**"``.  Uses ``fnmatch`` for glob matching.
+    """
+    import fnmatch
+
+    for new_pat in new_patterns:
+        # Strip trailing "/**" to get the directory prefix to test
+        test_dir = new_pat.removesuffix("/**")
+        for existing in existing_patterns:
+            # Direct pattern match: existing covers the new dir
+            if fnmatch.fnmatch(test_dir, existing.removesuffix("/**")):
+                return True
+            # Existing glob covers files under new dir
+            # e.g. existing="pdd/**" matches "pdd/commands/foo.py"
+            if fnmatch.fnmatch(test_dir + "/test.py", existing):
+                return True
+    return False
+
+
 def ensure_pddrc_for_scan(
     scan_dir: str,
     repo_root: str,
@@ -382,27 +408,35 @@ def ensure_pddrc_for_scan(
     pddrc_path = _find_pddrc_file(Path(repo_root))
     existing_content = ""
     existing_context_names: set[str] = set()
+    existing_path_patterns: List[str] = []
 
     if pddrc_path and pddrc_path.is_file():
         existing_content = pddrc_path.read_text(encoding="utf-8")
-        # Parse existing context names from the file
         try:
             import yaml
 
             existing_config = yaml.safe_load(existing_content)
             if isinstance(existing_config, dict):
-                existing_context_names = set(
-                    existing_config.get("contexts", {}).keys()
-                )
+                contexts_cfg = existing_config.get("contexts", {})
+                existing_context_names = set(contexts_cfg.keys())
+                # Collect all existing path patterns for overlap detection
+                for _cname, cval in contexts_cfg.items():
+                    if isinstance(cval, dict):
+                        for p in cval.get("paths", []):
+                            existing_path_patterns.append(p)
         except Exception:
             pass
 
-    # Filter out already-existing contexts
-    new_contexts = {
-        name: ctx
-        for name, ctx in needed.items()
-        if name not in existing_context_names
-    }
+    # Filter out contexts that are already covered — by name OR by path overlap.
+    # A new context for "crates/foo/**" is covered if any existing pattern
+    # already matches that directory (e.g. "crates/**", "pdd/**", "pdd/commands/**").
+    new_contexts: Dict[str, Dict] = {}
+    for name, ctx in needed.items():
+        if name in existing_context_names:
+            continue
+        if _paths_already_covered(ctx.get("paths", []), existing_path_patterns):
+            continue
+        new_contexts[name] = ctx
 
     if not new_contexts:
         return None
