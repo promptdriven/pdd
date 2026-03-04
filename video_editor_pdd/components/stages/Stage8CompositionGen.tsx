@@ -325,7 +325,7 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
                                   e.stopPropagation();
                                   runJob(
                                     '/api/pipeline/compositions/run',
-                                    { components: [component.name] },
+                                    { components: [component.name], sectionId: section.id },
                                     `regen-${component.name}`
                                   );
                                 }}

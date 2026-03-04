@@ -97,12 +97,13 @@ function listSpecComponents(specDir: string): string[] {
   return Array.from(names);
 }
 
-function buildComponent(name: string): CompositionComponent {
-  const filePath = path.join(REMOTION_DIR, `${name}.tsx`);
-  const exists = fs.existsSync(filePath);
+function buildComponent(name: string, sectionId?: string): CompositionComponent {
+  // Check section-scoped file first ({sectionId}_{name}.tsx), fall back to flat ({name}.tsx)
+  const scopedExists = sectionId && fs.existsSync(path.join(REMOTION_DIR, `${sectionId}_${name}.tsx`));
+  const flatExists = fs.existsSync(path.join(REMOTION_DIR, `${name}.tsx`));
   return {
     name,
-    status: exists ? "done" : "missing",
+    status: scopedExists || flatExists ? "done" : "missing",
     error: null,
   };
 }
@@ -123,7 +124,7 @@ export async function GET(): Promise<NextResponse> {
       return {
         id: section.id,
         label: section.label,
-        components: componentNames.map(buildComponent),
+        components: componentNames.map((n) => buildComponent(n, section.id)),
         wrappers: wrapperNames.map(buildComponent),
       };
     });

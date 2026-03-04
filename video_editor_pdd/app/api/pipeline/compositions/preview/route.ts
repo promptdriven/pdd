@@ -28,7 +28,8 @@ function resolveCompositionId(
 
   for (const section of sections) {
     const comps: string[] = section.compositions ?? [];
-    if (comps.includes(componentName)) {
+    // Check both flat name and section-scoped name ({sectionId}_{name})
+    if (comps.includes(componentName) || comps.includes(`${section.id}_${componentName}`)) {
       return section.compositionId;
     }
     if (componentName === `${section.id}_main`) {
