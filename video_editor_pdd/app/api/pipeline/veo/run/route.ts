@@ -138,7 +138,7 @@ registerExecutor('veo', (params, send: SseSend) => {
 
       try {
         send({ type: 'clip', clipId, status: 'generating' });
-        emitClipEvent({ clipId, status: 'generating' });
+        emitClipEvent({ clipId, status: 'generating', message: 'Generating…' });
 
         const prompt = resolveVeoPrompt(section.specDir ?? section.id);
         onLog(`Generating Veo clip "${clipId}"`);
@@ -159,7 +159,7 @@ registerExecutor('veo', (params, send: SseSend) => {
         }
 
         send({ type: 'clip', clipId, status: 'done' });
-        emitClipEvent({ clipId, status: 'done' });
+        emitClipEvent({ clipId, status: 'done', message: 'Done' });
 
         const percent = Math.round(((i + 1) / total) * 100);
         progressFn?.(percent);
@@ -167,7 +167,7 @@ registerExecutor('veo', (params, send: SseSend) => {
         const msg = err instanceof Error ? err.message : String(err);
         onLog(`Error generating clip "${clipId}": ${msg}`);
         send({ type: 'clip', clipId, status: 'error' });
-        emitClipEvent({ clipId, status: 'error' });
+        emitClipEvent({ clipId, status: 'error', message: msg });
         throw err;
       }
     }

@@ -12,6 +12,7 @@
 export interface ClipEvent {
   clipId: string;
   status: 'generating' | 'done' | 'error';
+  message?: string;
 }
 
 export type ClipEventListener = (event: ClipEvent) => void;

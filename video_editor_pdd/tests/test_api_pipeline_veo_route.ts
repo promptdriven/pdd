@@ -1590,6 +1590,14 @@ describe("app/api/pipeline/veo/run/route.ts source structure", () => {
     const emitCalls = (sourceCode.match(/emitClipEvent\s*\(/g) || []).length;
     expect(emitCalls).toBeGreaterThanOrEqual(3);
   });
+
+  it("passes a message string in every emitClipEvent call", () => {
+    const emitCalls = sourceCode.match(/emitClipEvent\s*\(\s*\{[^}]*\}\s*\)/g) || [];
+    expect(emitCalls.length).toBeGreaterThanOrEqual(3);
+    for (const call of emitCalls) {
+      expect(call).toMatch(/message\s*:/);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -80,6 +80,32 @@ describe('emitClipEvent', () => {
   });
 });
 
+describe('ClipEvent message field', () => {
+  it('accepts an optional message field', () => {
+    const event: ClipEvent = { clipId: 'intro', status: 'generating', message: 'Generating…' };
+    expect(event.message).toBe('Generating…');
+  });
+
+  it('delivers message to listeners intact', () => {
+    const received: ClipEvent[] = [];
+    onClipEvent((evt) => received.push(evt));
+
+    emitClipEvent({ clipId: 'intro', status: 'done', message: 'Done' });
+
+    expect(received).toHaveLength(1);
+    expect(received[0].message).toBe('Done');
+  });
+
+  it('message is undefined when omitted', () => {
+    const received: ClipEvent[] = [];
+    onClipEvent((evt) => received.push(evt));
+
+    emitClipEvent({ clipId: 'intro', status: 'generating' });
+
+    expect(received[0].message).toBeUndefined();
+  });
+});
+
 describe('onClipEvent', () => {
   it('returns an unsubscribe function', () => {
     const unsub = onClipEvent(() => {});
