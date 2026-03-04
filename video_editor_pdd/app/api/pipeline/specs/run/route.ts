@@ -15,6 +15,12 @@ registerExecutor("specs", (params, _send) => {
     const cfg = loadProject();
     const allSectionIds = cfg.sections.map((s) => s.id);
 
+    // Map section ID → specDir from project config (list API uses specDir)
+    const specDirMap = new Map<string, string>();
+    for (const s of cfg.sections) {
+      specDirMap.set(s.id, s.specDir);
+    }
+
     const sectionIds =
       Array.isArray(params.sections) && params.sections.length > 0
         ? (params.sections as string[])
@@ -30,7 +36,8 @@ registerExecutor("specs", (params, _send) => {
     // Preserve veo.json (Veo prompt overrides placed by users or tests).
     const specsBase = path.join(process.cwd(), "specs");
     for (const sid of sectionIds) {
-      const sectionSpecDir = path.join(specsBase, sid);
+      const dir = specDirMap.get(sid) ?? sid;
+      const sectionSpecDir = path.join(specsBase, dir);
       if (fs.existsSync(sectionSpecDir)) {
         // Preserve veo.json if it exists
         const veoJsonPath = path.join(sectionSpecDir, "veo.json");
@@ -53,13 +60,13 @@ You are generating visual spec markdown files for a video pipeline.
 
 Instructions:
 - Generate specs ONLY under the specs/ directory.
-- Each section should have spec files under: specs/<sectionId>/.
+- Each section should have spec files under: specs/<specDir>/ as listed below.
 - Use these visual type markers on the FIRST line if applicable:
   [Remotion], [veo:], [title:], [split:].
 - Only write markdown spec files.
 
 Sections to generate:
-${sectionIds.map((id) => `- ${id}`).join("\n")}
+${sectionIds.map((id) => `- ${id} → specs/${specDirMap.get(id) ?? id}/`).join("\n")}
 
 Files to focus on:
 ${files.length > 0 ? files.map((f) => `- ${f}`).join("\n") : "ALL spec files needed per section."}

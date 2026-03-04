@@ -82,6 +82,13 @@ def mock_pdd_dependencies():
     if 'pdd.cli' in sys.modules:
         del sys.modules['pdd.cli']
 
+    # Remove the cached 'cli' attribute on the pdd package so that
+    # subsequent `from pdd import cli` triggers a fresh re-import
+    # instead of returning the stale module with mocked dependencies.
+    pdd_pkg = sys.modules.get('pdd')
+    if pdd_pkg is not None and hasattr(pdd_pkg, 'cli'):
+        delattr(pdd_pkg, 'cli')
+
 
 def test_cli_registers_commands_on_import(mock_pdd_dependencies):
     """

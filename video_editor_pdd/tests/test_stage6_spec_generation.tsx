@@ -290,9 +290,8 @@ describe("spec list loading on mount", () => {
     expect(sourceCode).toMatch(/setError/);
   });
 
-  it("uses cleanup flag to prevent state updates on unmount", () => {
-    expect(sourceCode).toMatch(/let\s+isMounted\s*=\s*true/);
-    expect(sourceCode).toMatch(/isMounted\s*=\s*false/);
+  it("defines fetchSpecList as reusable callback", () => {
+    expect(sourceCode).toMatch(/const\s+fetchSpecList\s*=\s*useCallback/);
   });
 });
 
@@ -720,6 +719,10 @@ describe("SSE log drawer", () => {
 
   it("passes latestJobId to SseLogPanel", () => {
     expect(sourceCode).toMatch(/jobId=\{latestJobId\}/);
+  });
+
+  it("passes onDone={fetchSpecList} to SseLogPanel to refresh list after regeneration", () => {
+    expect(sourceCode).toMatch(/onDone=\{fetchSpecList\}/);
   });
 });
 

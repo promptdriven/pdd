@@ -93,6 +93,26 @@
       "part1_economics": {
         "startSegment": "part1_economics_001",
         "endSegment": "part1_economics_030"
+      },
+      "closing": {
+        "startSegment": "closing_001",
+        "endSegment": "closing_006"
+      },
+      "part2_paradigm_shift": {
+        "startSegment": "part2_paradigm_shift_001",
+        "endSegment": "part2_paradigm_shift_019"
+      },
+      "part3_mold": {
+        "startSegment": "part3_mold_001",
+        "endSegment": "part3_mold_025"
+      },
+      "part4_precision": {
+        "startSegment": "part4_precision_001",
+        "endSegment": "part4_precision_011"
+      },
+      "part5_compound": {
+        "startSegment": "part5_compound_001",
+        "endSegment": "part5_compound_010"
       }
     },
     "silenceGapDefault": 0.3

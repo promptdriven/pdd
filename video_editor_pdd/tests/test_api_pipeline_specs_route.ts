@@ -426,9 +426,9 @@ describe("specs executor factory", () => {
 
     expect(mockRunClaudeFix).toHaveBeenCalledTimes(1);
     const prompt = mockRunClaudeFix.mock.calls[0][0];
-    expect(prompt).toContain("- intro");
-    expect(prompt).toContain("- main");
-    expect(prompt).toContain("- outro");
+    expect(prompt).toContain("intro");
+    expect(prompt).toContain("main");
+    expect(prompt).toContain("outro");
   });
 
   it("uses all sections from loadProject when params.sections is not provided", async () => {
@@ -436,9 +436,9 @@ describe("specs executor factory", () => {
     await executor(jest.fn());
 
     const prompt = mockRunClaudeFix.mock.calls[0][0];
-    expect(prompt).toContain("- intro");
-    expect(prompt).toContain("- main");
-    expect(prompt).toContain("- outro");
+    expect(prompt).toContain("intro");
+    expect(prompt).toContain("main");
+    expect(prompt).toContain("outro");
   });
 
   it("uses specified sections from params when provided", async () => {
@@ -449,9 +449,19 @@ describe("specs executor factory", () => {
     await executor(jest.fn());
 
     const prompt = mockRunClaudeFix.mock.calls[0][0];
-    expect(prompt).toContain("- intro");
-    expect(prompt).toContain("- outro");
-    expect(prompt).not.toContain("- main");
+    expect(prompt).toContain("intro");
+    expect(prompt).toContain("outro");
+    expect(prompt).not.toContain("main");
+  });
+
+  it("includes specDir paths in prompt for each section", async () => {
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(jest.fn());
+
+    const prompt = mockRunClaudeFix.mock.calls[0][0];
+    expect(prompt).toContain("specs/specs/intro/");
+    expect(prompt).toContain("specs/specs/main/");
+    expect(prompt).toContain("specs/specs/outro/");
   });
 
   it("uses empty files list when params.files is not provided", async () => {
@@ -545,14 +555,14 @@ describe("specs executor factory", () => {
   it("handles loadProject returning a single section", async () => {
     mockLoadProject.mockReturnValue({
       ...mockProjectConfig(),
-      sections: [{ id: "only-section", label: "Only" }],
+      sections: [{ id: "only-section", label: "Only", specDir: "only-section" }],
     });
 
     const executor = registerCallArgs.factory({}, jest.fn());
     await executor(jest.fn());
 
     const prompt = mockRunClaudeFix.mock.calls[0][0];
-    expect(prompt).toContain("- only-section");
+    expect(prompt).toContain("only-section");
   });
 
   it("ignores empty sections array in params (uses all from project)", async () => {
@@ -583,6 +593,16 @@ describe("specs executor factory", () => {
     const onLog = jest.fn();
     const executor = registerCallArgs.factory({}, jest.fn());
     await expect(executor(onLog)).resolves.not.toThrow();
+  });
+
+  it("builds specDirMap from project config to resolve section ID to specDir", () => {
+    const fs = require("fs");
+    const pathMod = require("path");
+    const src = fs.readFileSync(
+      pathMod.join(__dirname, "..", "app", "api", "pipeline", "specs", "run", "route.ts"),
+      "utf-8"
+    );
+    expect(src).toMatch(/specDirMap\.get\(sid\)\s*\?\?\s*sid/);
   });
 });
 
@@ -709,8 +729,8 @@ describe("app/api/pipeline/specs/run/route.ts source structure", () => {
     expect(sourceCode).toMatch(/\[split:\]/);
   });
 
-  it("prompt references specs/ directory structure", () => {
-    expect(sourceCode).toMatch(/specs\/<sectionId>/);
+  it("prompt references specs/ directory structure with specDir", () => {
+    expect(sourceCode).toMatch(/specs\/<specDir>/);
   });
 
   it("uses loadProject to get section list", () => {
