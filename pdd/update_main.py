@@ -642,14 +642,6 @@ def update_main(
             scan_dir = os.path.abspath(directory)
         else:
             scan_dir = repo_root
-        # Snapshot existing prompt files so we can detect newly created ones
-        prompts_dir = Path(output) if output else Path(repo_root) / "prompts"
-        existing_prompts: Set[str] = set()
-        if prompts_dir.is_dir():
-            existing_prompts = {
-                str(p) for p in prompts_dir.rglob("*.prompt")
-            }
-
         pairs = find_and_resolve_all_pairs(scan_dir, quiet, extensions, output)
 
         if pairs:
@@ -661,17 +653,16 @@ def update_main(
             rprint("[info]No scannable code files found in the repository.[/info]")
             return None
 
-        # Change-detection: filter to changed code files OR newly created prompts
+        # Change-detection: filter to changed code files OR empty prompts
         git_changed_files = get_git_changed_files(repo_root, base_branch)
 
         changed_pairs = []
         for prompt_path, code_path in pairs:
-            # Include pairs whose prompt was just created by the scan above
-            if prompt_path not in existing_prompts:
-                prompt_p = Path(prompt_path)
-                if prompt_p.exists() and prompt_p.stat().st_size == 0:
-                    changed_pairs.append((prompt_path, code_path))
-                    continue
+            # Empty prompts always need generation, regardless of code changes
+            prompt_p = Path(prompt_path)
+            if prompt_p.exists() and prompt_p.stat().st_size == 0:
+                changed_pairs.append((prompt_path, code_path))
+                continue
             changed, reason = is_code_changed(code_path, repo_root, git_changed_files)
             if changed:
                 changed_pairs.append((prompt_path, code_path))
