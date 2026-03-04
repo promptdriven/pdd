@@ -463,7 +463,7 @@ def run_agentic_architecture_orchestrator(
             save_workflow_state(cwd, issue_number, "architecture", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
             return False, f"Stopped at step {step_num}: {stop_reason}", total_cost, model_used, []
 
-        if not step_success:
+        if not step_success and not quiet:
             console.print(f"[yellow]Warning: Step {step_num} reported failure but continuing...[/yellow]")
 
         # Special handling for Step 4 (data model): validate output content
@@ -727,7 +727,7 @@ def run_agentic_architecture_orchestrator(
         state["total_cost"] = total_cost
         state["model_used"] = model_used
 
-        if not step_success:
+        if not step_success and not quiet:
             console.print(f"[yellow]Warning: Step {step_num} reported failure but continuing...[/yellow]")
 
         # Special handling for Step 7 (generate)
