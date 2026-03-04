@@ -239,6 +239,7 @@ CRITICAL: You MUST analyze the actual code before writing any tests.
 **Step 4b2: Extract External Service Contracts**
 Scan the code for external dependencies and extract their contracts before writing any tests.
 1. Identify all imports and calls to: HTTP clients (`requests`, `httpx`, `aiohttp`), database libs (`sqlalchemy`, `pymongo`, `psycopg2`), auth providers (`firebase-admin`, `auth0`, `jwt`), third-party SDKs (`stripe`, `boto3`, `google-cloud-*`, `twilio`, `sendgrid`), message queues, file storage.
+   - For OAuth/auth modules: extract each OAuth flow stage separately (authorization redirect, token exchange, token refresh, user info retrieval, revocation) — each has its own contract and must be tested independently.
 2. For each external call found, trace to its source and extract the exact function signature and return shape (from Pydantic models, TypeScript interfaces, dataclass definitions, or the function's return type annotation).
 3. Produce a table:
    | External Service | Function/Method Call | Input Types | Return Shape |
@@ -309,6 +310,14 @@ Write or update tests at `{test_path}`:
   - Derive mock shapes from: Pydantic models, TypeScript interfaces, dataclass definitions,
     or the actual function's return type annotation in the source code
   - If you built a mocking strategy table in Step 4b3, use it — do not re-derive shapes
+- Auth-specific test patterns (when the module involves OAuth, JWT, or session auth):
+  - Mock OAuth servers with monkeypatch fixtures — NEVER call real identity providers in tests
+  - Use pre-generated JWT tokens via pyjwt for token validation tests (valid, expired, no-scope tokens)
+  - Test token lifecycle: issuance, validation, refresh, revocation, and expiry handling
+  - Test each OAuth flow stage independently (authorization redirect, callback, token exchange, refresh, revocation)
+  - Mock token storage (keyring, session store) with in-memory implementations
+  - Test auth error scenarios: expired tokens, invalid tokens, missing scopes, revoked tokens, CSRF state mismatch
+  - See Pattern 14 in context/test.prompt for concrete fixture examples
 - CRITICAL (Python only): NEVER use module-level `sys.modules[...] = MagicMock()` — it pollutes
   pytest's module cache and breaks other test files. Use `@pytest.fixture` with `types.ModuleType`
   and `__path__ = []` instead.

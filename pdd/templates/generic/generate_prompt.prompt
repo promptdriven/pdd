@@ -120,6 +120,12 @@ IMPORTANT: Your reply MUST begin with `<prompt>` on the very first line and end 
 - Explain concisely what you are going to do (create a prompt for the ${MODULE} module/component for the specified layer and stack).
 - Analyze any difficulties this prompt might encounter for ${MODULE} (e.g., data modeling, API or UI contracts, transactions, idempotency, auth, state management, error handling) and briefly state mitigation strategies tailored to the given LAYER and LANG_OR_FRAMEWORK.
 - Use the ARCHITECTURE_FILE to identify the item that corresponds to this prompt by matching `filename` to `${MODULE}_${LANG_OR_FRAMEWORK}.prompt` (or best match by basename and layer). Use that item's `reason`, `description`, `dependencies`, `interface`, and `tags` to shape the sections below.
+- If the matched architecture item has an "auth" tag, inject the following additional requirements into the prompt:
+  1. Testability: Use dependency injection for auth providers (OAuth clients, token verifiers) so tests can substitute mock implementations without calling real identity services.
+  2. Token lifecycle: Handle the full token lifecycle — issuance, validation, refresh, revocation, and expiry.
+  3. Error handling: Handle auth-specific errors — expired tokens, invalid tokens, missing scopes, CSRF state mismatch, and network failures during token exchange.
+  4. Security: Never log secrets or tokens at INFO level or above. Use CSRF state parameters for OAuth flows.
+  5. Test fixtures note: "Tests for this module should use mock OAuth fixtures and pre-generated JWT tokens (see context/test.prompt Pattern 14)."
 - Then create the prompt content for ${MODULE} inside XML tags named prompt, ensuring conventions fit the stack and layer.
 - Ensure the final response consists solely of the `<prompt>...</prompt>` block; nothing else (including whitespace) may appear before `<prompt>` or after `</prompt>`.
 

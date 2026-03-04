@@ -89,22 +89,33 @@ CRITICAL — Cross-Project Rules:
    - If a module produces output: it must include formatting/rendering logic
    - If a module uses external services: it must document required env vars and config
 
-3. **Determine dependency graph:**
+3. **Auth module design (if auth detected in PRD/tech stack):**
+   - If the PRD mentions OAuth, JWT, session auth, API keys, Firebase Auth, SAML, Auth0, Okta, or similar:
+     - Separate modules per auth concern: auth middleware, token management, OAuth callbacks, session handling, provider configuration
+     - Assign low priority numbers (generated early) since business modules depend on auth
+     - Tag all auth modules with "auth"
+     - No circular dependencies: business logic depends on auth modules, not vice versa
+     - Design for dependency injection: auth providers should be injectable so tests can substitute mocks
+     - Cover full token lifecycle in module descriptions: issuance, validation, refresh, revocation, expiry
+     - Include acceptance criteria for auth error handling: expired tokens, invalid tokens, missing scopes, CSRF state mismatch
+   - If no auth is detected, skip this step
+
+4. **Determine dependency graph:**
    - Which modules depend on which
    - Foundational modules (no deps) vs. dependent modules
    - Ensure no circular dependencies
 
-4. **Calculate priority ordering (topological sort):**
+5. **Calculate priority ordering (topological sort):**
    - Priority 1 = generated first (no dependencies)
    - A module's priority must be > all its dependencies' priorities
    - Sequential integers without gaps (1, 2, 3, ...)
 
-5. **Define interfaces:**
+6. **Define interfaces:**
    - For each module, determine the interface type (api, module, page, component, config, etc.)
    - Specify key functions, endpoints, or props
    - Note data sources and contracts between modules
 
-6. **Determine file paths:**
+7. **Determine file paths:**
    - Use framework-appropriate directory structure (from step 3 research)
    - Follow standard naming conventions for the tech stack
    - Include appropriate file extensions

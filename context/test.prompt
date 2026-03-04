@@ -3,6 +3,34 @@
     - Data files (language_format.csv and llm_model.csv) already exist in the PDD_PATH/`data` directory. Do not write over them. It already contains data for popular languages and LLM models and can be used for tests.
     - The PDD_PATH environment variable is already set.
 
+% EXTERNAL SERVICE BOUNDARY RULES:
+% CRITICAL: Tests must mock ALL external service boundaries. This ensures tests run without credentials.
+
+% WHEN TO MOCK (External Boundaries — ALWAYS mock these):
+    - HTTP calls to third-party APIs (Stripe, Twilio, SendGrid, AWS, GCP, Firebase, etc.)
+    - OAuth/OIDC token verification (Google, GitHub, Auth0, Okta, etc.)
+    - Database connections and queries (PostgreSQL, MongoDB, Redis, Firestore, DynamoDB)
+    - Message queue publish/subscribe (Kafka, RabbitMQ, SQS, Pub/Sub)
+    - File storage operations (S3, GCS, Azure Blob)
+    - Email/SMS sending (SMTP, Twilio, SNS)
+    - External service SDKs (firebase-admin, stripe, boto3, google-cloud-*)
+
+% WHEN NOT TO MOCK (Internal Logic — test directly):
+    - Pure functions (data transformations, calculations, validations)
+    - Data serialization/deserialization (JSON parsing, schema validation)
+    - Business logic that doesn't touch external services
+    - Route handler logic (mock only the external service it calls, not the handler itself)
+    - The function you are testing — NEVER mock the function under test
+
+% MOCK QUALITY RULES:
+    - Mock return values MUST match the real return type/shape from the source code
+    - DO NOT invent fields — use only fields that exist in the real response
+    - DO NOT omit required fields — include all fields the code under test accesses
+    - Use realistic values (valid emails, UUIDs, timestamps) not "test" or "dummy"
+    - Always test error paths: what happens when the mock raises an exception or returns an error?
+    - Derive mock shapes from: Pydantic models, TypeScript interfaces, dataclass definitions,
+      or the actual function's return type annotation in the source code
+
 % PYTEST TEST ISOLATION AND ANTI-POLLUTION RULES:
 % CRITICAL: Generated tests MUST be isolated and not pollute state for other tests. Follow these rules strictly:
 
@@ -237,6 +265,54 @@
             import pdd.cli
             importlib.reload(pdd.cli)  # Force fresh import
             yield pdd.cli
+
+% 14. AUTH/OAUTH TEST ISOLATION:
+    - Auth modules (OAuth, JWT, session auth, API key management) require special test isolation
+      because they interact with external identity providers and manage sensitive tokens.
+
+    - MOCK OAUTH PROVIDER (monkeypatch-based):
+        @pytest.fixture
+        def mock_token_exchange(monkeypatch):
+            async def fake_exchange(code: str, redirect_uri: str):
+                return {{"access_token": "fake-access-token", "token_type": "bearer", "expires_in": 3600, "refresh_token": "fake-refresh-token"}}
+            monkeypatch.setattr("myapp.auth.oauth.exchange_code_for_token", fake_exchange)
+
+        @pytest.fixture
+        def mock_get_user_info(monkeypatch):
+            async def fake_user_info(token: str):
+                return {{"sub": "user-123", "email": "test@example.com", "name": "Test User"}}
+            monkeypatch.setattr("myapp.auth.oauth.get_user_info", fake_user_info)
+
+    - JWT FIXTURE PATTERN (pre-generated tokens using pyjwt):
+        @pytest.fixture
+        def jwt_fixtures():
+            import jwt as pyjwt
+            secret = "test-secret-key"
+            valid = pyjwt.encode({{"sub": "user-123", "exp": datetime.utcnow() + timedelta(hours=1), "scope": "read write"}}, secret, algorithm="HS256")
+            expired = pyjwt.encode({{"sub": "user-123", "exp": datetime.utcnow() - timedelta(hours=1)}}, secret, algorithm="HS256")
+            no_scope = pyjwt.encode({{"sub": "user-123", "exp": datetime.utcnow() + timedelta(hours=1)}}, secret, algorithm="HS256")
+            return {{"valid": valid, "expired": expired, "no_scope": no_scope, "secret": secret}}
+
+    - TOKEN STORAGE ISOLATION (in-memory mock for keyring/token stores):
+        @pytest.fixture
+        def mock_token_store():
+            store = {{}}
+            class FakeTokenStore:
+                def get(self, key): return store.get(key)
+                def set(self, key, value): store[key] = value
+                def delete(self, key): store.pop(key, None)
+            return FakeTokenStore()
+
+    - OAUTH FLOW STAGE TESTING:
+        - Test each OAuth flow stage independently, not as a single end-to-end flow:
+          1. Authorization redirect: verify redirect URL contains correct client_id, scope, state, redirect_uri
+          2. Callback handling: verify code extraction, state validation, CSRF check
+          3. Token exchange: mock the provider's token endpoint, verify request payload and response parsing
+          4. Token refresh: test refresh before expiry, test refresh with expired refresh_token
+          5. User info retrieval: mock the provider's userinfo endpoint, verify field mapping
+          6. Revocation: verify revocation request is sent, verify local token cleanup
+        - Each stage should be a separate test function with its own mocks
+        - NEVER call a real OAuth provider in tests
 
 <isolation_example>
 <include>context/pytest_isolation_example.py</include>

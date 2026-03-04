@@ -309,6 +309,19 @@ PRIORITY AND ORDERING:
 
 TAGS (optional):
 - Use short, lower-case tags for slicing (e.g., ["frontend","nextjs"], ["backend","api"], ["config"]).
+- Use "auth" tag for any module handling authentication, authorization, or token management.
+
+AUTH DETECTION:
+- Scan the PRD and tech stack for auth-related technologies: OAuth 2.0, OIDC, JWT, session-based auth, API keys, Firebase Auth, SAML, Auth0, Okta, Clerk, Supabase Auth, Passport.js.
+- If auth is detected:
+  1. Separate auth concerns into dedicated modules: auth middleware, token management, OAuth callbacks, session handling, provider configuration.
+  2. Tag all auth modules with "auth" in the tags array.
+  3. Include `context_urls` for the auth provider's official documentation (e.g., OAuth provider docs, JWT libraries).
+  4. Design auth modules for testability: use dependency injection for auth providers so tests can substitute mock providers.
+  5. Cover the full token lifecycle: issuance, validation, refresh, revocation, expiry handling.
+  6. Specify error handling requirements: expired tokens, invalid tokens, missing scopes, state mismatch, network failures.
+  7. Auth modules should have low priority numbers (generated early) since other modules depend on them.
+  8. Business logic modules should depend on auth modules, not the reverse — no circular dependencies.
 
 CONTENT GUIDANCE:
 - Descriptions must be architectural and actionable: responsibilities, interfaces, error handling, cross-cutting concerns.

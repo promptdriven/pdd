@@ -62,6 +62,13 @@ When generating prompt files, you MUST enforce cross-file consistency:
    - If a module needs env vars, the prompt must list them in a "Required Environment" section
    - Use the exact variable names from the naming registry
 
+5. **Testing strategy documentation:**
+   - If a module depends on external services (auth, databases, third-party APIs),
+     the prompt MUST include a "Testing Strategy" section listing:
+     - The EXACT functions/methods that should be mocked in unit tests (from the Interface Contract Table)
+     - The EXACT return shapes the mocks should produce (from the interface definitions)
+     - Error scenarios that tests should cover
+
 % Interface Contract Table (Auto-Extracted from architecture.json) — CRITICAL
 
 Before writing ANY prompt file, you MUST build a flat Interface Contract Table from the architecture.json `interface` fields:
@@ -144,6 +151,15 @@ When generating each prompt, you MUST inject the actual data model schemas from 
    - Step 2 naming registry is authoritative for collection/table names
    - If there is a conflict, flag it and use Step 4 as ground truth for data fields
 
+**5. Auth-aware prompt generation:**
+   - If a module is tagged "auth" in architecture.json:
+     - Inject testability requirements: use dependency injection for auth providers (OAuth clients, token verifiers) so tests can substitute mock implementations
+     - Inject error handling requirements: handle expired tokens, invalid tokens, missing scopes, CSRF state mismatch, and network failures
+     - Add a "Testing Strategy" note: "Tests should use mock OAuth fixtures and pre-generated JWT tokens (see context/test.prompt Pattern 14)"
+   - If a module depends on an auth-tagged module:
+     - Reference the auth module's interface contract (token types, verification functions)
+     - Include token usage patterns in the prompt's "Dependency API Reference" section
+
 % Key Rules
 
 1. **Prompt file location:**
@@ -167,6 +183,11 @@ When generating each prompt, you MUST inject the actual data model schemas from 
    <dependency_name>
      <include>examples/BASENAME_example.EXT</include>
    </dependency_name>
+
+   Testing Strategy (for modules with external dependencies)
+   - External services used: [list from architecture.json interface]
+   - Mock boundaries: [exact functions to mock, derived from the interface contract table]
+   - Expected mock return shapes: [from the module's interface.functions[].returns or interface.api.endpoints[].responseSchema]
 
    Instructions
    - [Implementation guidance]

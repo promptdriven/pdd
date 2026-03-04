@@ -109,7 +109,28 @@ cat architecture.json | jq -r '.[].filepath' | grep -E "route\.(ts|js|py)$"
 - A specific route path in the PRD has no corresponding module
 - Multiple distinct routes are collapsed under one module
 
-**4. Layer Completeness Check**
+**4. Auth Flow Completeness Check**
+
+If the PRD mentions authentication, authorization, OAuth, JWT, sessions, or API keys, verify auth coverage:
+
+```bash
+# List all auth-tagged modules
+cat architecture.json | jq -r '.[] | select(.tags != null and (.tags | index("auth"))) | .filename'
+```
+
+**Check for:**
+- **Token lifecycle coverage:** At least one module handles each of: token issuance/exchange, token validation, token refresh, token revocation
+- **Auth dependency chain:** Business logic modules that need auth should depend on auth modules (not implement auth inline)
+- **Auth error handling:** Auth modules should specify error handling for: expired tokens, invalid tokens, missing scopes, CSRF state mismatch
+- **No auth in business modules:** Business logic modules should NOT contain inline auth logic — auth should be separated into dedicated modules
+
+**Flag as ERROR if:**
+- PRD mentions OAuth/JWT/auth but no modules are tagged "auth"
+- Auth modules exist but don't cover token refresh or revocation
+- Business logic modules contain inline auth handling instead of depending on auth modules
+- Auth modules lack error handling requirements in their prompts
+
+**5. Layer Completeness Check**
 
 Based on the project type, verify all essential layers exist:
 
@@ -145,7 +166,7 @@ cat architecture.json | jq -r '.[].filepath' | grep -E "(route\.|api/|endpoint)"
 cat architecture.json | jq -r '.[].filepath' | grep -E "(types|models|schemas|interfaces)"
 ```
 
-**5. Dependency Graph Analysis**
+**6. Dependency Graph Analysis**
 
 Verify the dependency graph is valid and complete:
 
@@ -162,7 +183,7 @@ cat architecture.json | jq -r '.[] | select(.dependencies | length == 0) | .file
 - Orphan modules (not connected to the graph, except config/types)
 - Missing dependency references (referencing non-existent modules)
 
-**6. Compilability Check**
+**7. Compilability Check**
 
 Verify the architecture would compile without import errors:
 
@@ -170,7 +191,7 @@ Verify the architecture would compile without import errors:
 - For Python: All imported modules should exist
 - Shared utilities referenced by multiple modules should exist
 
-**7. Stub/Placeholder Detection Check**
+**8. Stub/Placeholder Detection Check**
 
 Read each prompt file and check for patterns that indicate incomplete specifications:
 
@@ -264,6 +285,12 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 - Routes found in PRD: [N]
 - Routes with modules: [M]/[N]
 - Missing route modules: [list or "None"]
+
+### Auth Flow Coverage
+- Auth detected in PRD: [Yes/No]
+- Auth-tagged modules: [N or "N/A"]
+- Token lifecycle coverage: [Complete/Incomplete/N/A]
+- Auth error handling: [Yes/No/N/A]
 
 ### Layer Completeness
 - Entry points: [Yes/No]

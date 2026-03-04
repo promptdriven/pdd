@@ -4271,8 +4271,8 @@
     }
   },
   {
-    "reason": "Generates unit tests for PDD-generated code modules.",
-    "description": "Creates pytest-compatible test files based on module prompts and generated code. Tests accumulate over time to prevent regressions.",
+    "reason": "Generates unit tests for PDD-generated code modules with auth-aware test patterns.",
+    "description": "Creates pytest-compatible test files based on module prompts and generated code with auth-aware test patterns. Tests accumulate over time to prevent regressions.",
     "dependencies": [],
     "priority": 110,
     "filename": "generate_test_LLM.prompt",
@@ -7682,8 +7682,8 @@
     }
   },
   {
-    "reason": "Validates architecture completeness: PRD coverage, layer completeness, dependency graph validity.",
-    "description": "Validates architecture completeness: PRD coverage, layer completeness, dependency graph validity.",
+    "reason": "Validates architecture completeness: PRD coverage, layer completeness, dependency graph validity, and auth flow completeness.",
+    "description": "Validates architecture completeness: PRD coverage, layer completeness, dependency graph validity, and auth flow completeness.",
     "dependencies": [
       "agentic_arch_step9_prompts_LLM.prompt"
     ],
@@ -7827,8 +7827,8 @@
     }
   },
   {
-    "reason": "Designs module breakdown with dependency graph, priority ordering, and interface specifications.",
-    "description": "Designs module breakdown with dependency graph, priority ordering, and interface specifications.",
+    "reason": "Designs module breakdown with dependency graph, priority ordering, interface specifications, and auth module separation.",
+    "description": "Designs module breakdown with dependency graph, priority ordering, interface specifications, and auth module separation.",
     "dependencies": [
       "agentic_arch_step4_data_model_LLM.prompt"
     ],
@@ -7943,8 +7943,8 @@
     }
   },
   {
-    "reason": "Generates prompt files for all modules defined in architecture.json, placing them in the correct directories based on .pddrc configuration.",
-    "description": "Generates prompt files for all modules defined in architecture.json, placing them in the correct directories based on .pddrc configuration.",
+    "reason": "Generates prompt files for all modules defined in architecture.json with auth-aware prompt injection, placing them in the correct directories based on .pddrc configuration.",
+    "description": "Generates prompt files for all modules defined in architecture.json with auth-aware prompt injection, placing them in the correct directories based on .pddrc configuration.",
     "dependencies": [
       "agentic_arch_step8_pddrc_LLM.prompt"
     ],
