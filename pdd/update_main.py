@@ -49,6 +49,7 @@ _SKIP_FILENAMES = {
     '.prettierrc.js', '.prettierrc.json', '.prettierrc.cjs',
     'setupTests.ts', 'setupTests.js',
     'mockServiceWorker.js',
+    '__init__.py',
 }
 
 _SKIP_BASENAME_SUFFIXES = {

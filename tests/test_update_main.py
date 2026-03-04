@@ -1405,6 +1405,27 @@ class TestPddignore:
         assert "app.ts" in basenames
         assert "module.ts" in basenames
 
+    def test_skip_init_py(self, tmp_path, monkeypatch):
+        """__init__.py files are excluded from repo scan."""
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+        git.Repo.init(repo_path)
+
+        pkg_dir = repo_path / "mypackage"
+        pkg_dir.mkdir()
+        (pkg_dir / "__init__.py").write_text("")
+        (pkg_dir / "core.py").write_text("def main(): pass")
+
+        monkeypatch.chdir(repo_path)
+
+        with patch("pdd.update_main.get_language") as mock_lang:
+            mock_lang.return_value = "python"
+            pairs = find_and_resolve_all_pairs(str(repo_path), quiet=True)
+
+        basenames = [os.path.basename(p[1]) for p in pairs]
+        assert "core.py" in basenames
+        assert "__init__.py" not in basenames
+
     def test_pddignore_found_in_parent_when_scanning_subdirectory(self, tmp_path, monkeypatch):
         """When scanning a subdirectory, .pddignore in parent repo root is found."""
         repo_path = tmp_path / "repo"
