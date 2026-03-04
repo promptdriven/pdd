@@ -6388,6 +6388,7 @@ def test_agentic_python_sync_measures_real_coverage(orchestration_fixture):
         SyncDecision(operation='test', reason='Need tests'),
         SyncDecision(operation='all_synced', reason='Done'),
     ]
+    mock_test.side_effect = None
     mock_test.return_value = (True, 0.1, "agentic-model", True)
 
     with patch('pdd.sync_orchestration._create_synthetic_run_report_for_agentic_success') as mock_synthetic, \
@@ -6415,6 +6416,7 @@ def test_agentic_non_python_sync_uses_synthetic_report(orchestration_fixture):
         SyncDecision(operation='test', reason='Need tests'),
         SyncDecision(operation='all_synced', reason='Done'),
     ]
+    mock_test.side_effect = None
     mock_test.return_value = (True, 0.1, "agentic-model", True)
 
     with patch('pdd.sync_orchestration._create_synthetic_run_report_for_agentic_success') as mock_synthetic, \

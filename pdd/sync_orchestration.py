@@ -2107,14 +2107,26 @@ def sync_orchestration(
                                 # For agentic test generation (non-Python): if agent succeeded, skip execution
                                 # and create synthetic RunReport instead (tests already ran in agentic mode)
                                 if agentic_success is True:
-                                    # Create synthetic run report - trust the agent's success report
-                                    # even if the test file is at a different path than expected
-                                    _create_synthetic_run_report_for_agentic_success(
-                                        pdd_files['test'],
-                                        basename,
-                                        language,
-                                        atomic_state=atomic_state,
-                                    )
+                                    if language.lower() in ('python', 'typescript'):
+                                        # Python/TS have coverage tooling — measure actual coverage instead of synthetic 0%
+                                        _execute_tests_and_create_run_report(
+                                            pdd_files['test'],
+                                            basename,
+                                            language,
+                                            target_coverage,
+                                            code_file=pdd_files.get("code"),
+                                            atomic_state=atomic_state,
+                                            test_files=pdd_files.get('test_files'),
+                                        )
+                                    else:
+                                        # Create synthetic run report - trust the agent's success report
+                                        # even if the test file is at a different path than expected
+                                        _create_synthetic_run_report_for_agentic_success(
+                                            pdd_files['test'],
+                                            basename,
+                                            language,
+                                            atomic_state=atomic_state,
+                                        )
                                 elif pdd_files['test'].exists():
                                     _execute_tests_and_create_run_report(
                                         pdd_files['test'],
