@@ -184,6 +184,13 @@ def _find_prompt_in_contexts(basename: str) -> Optional[Tuple[str, Path, str]]:
             }
 
             expanded_path = expand_template(prompt_template, template_context)
+
+            # Guard: if the template doesn't use {name}, only match if the context
+            # name matches the basename (i.e., this is the module's own context).
+            if '{name}' not in prompt_template:
+                if context_name != basename:
+                    continue
+
             # Resolve relative to .pddrc location, not CWD
             prompt_path = pddrc_parent / expanded_path
 

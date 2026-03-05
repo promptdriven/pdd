@@ -12,7 +12,7 @@ import click
 import pytest
 from click.testing import CliRunner
 
-from pdd.sync_main import sync_main, _normalize_prompts_root
+from pdd.sync_main import sync_main, _normalize_prompts_root, _find_prompt_in_contexts
 from pdd import DEFAULT_STRENGTH
 
 # Test Plan
@@ -906,3 +906,130 @@ contexts:
         f"Expected: {expected}\n"
         f"Got: {result}"
     )
+
+
+# ============================================================================
+# Tests for _find_prompt_in_contexts {name} guard fix
+# ============================================================================
+
+class TestFindPromptInContextsNameGuard:
+    """Tests that _find_prompt_in_contexts skips contexts whose template
+    lacks {name} when the context_name doesn't match the basename."""
+
+    def test_template_with_name_placeholder_works_as_before(self, tmp_path, monkeypatch):
+        """Template containing {name} should match any basename (existing behavior)."""
+        pddrc = tmp_path / ".pddrc"
+        pddrc.write_text("""version: "1.0"
+contexts:
+  backend_utils:
+    paths: ["backend/utils/**"]
+    defaults:
+      outputs:
+        prompt:
+          path: "prompts/backend/utils/{name}_{language}.prompt"
+""")
+        prompt_dir = tmp_path / "prompts" / "backend" / "utils"
+        prompt_dir.mkdir(parents=True)
+        (prompt_dir / "credit_helpers_python.prompt").write_text("test")
+
+        monkeypatch.chdir(tmp_path)
+
+        result = _find_prompt_in_contexts("credit_helpers")
+        assert result is not None
+        context_name, prompt_path, lang = result
+        assert context_name == "backend_utils"
+        assert lang == "python"
+        assert "credit_helpers_python.prompt" in str(prompt_path)
+
+    def test_template_without_name_matches_own_context(self, tmp_path, monkeypatch):
+        """Template without {name} should match when context_name == basename."""
+        pddrc = tmp_path / ".pddrc"
+        pddrc.write_text("""version: "1.0"
+contexts:
+  recruiting_nurture_models:
+    paths: ["recruiting/**"]
+    defaults:
+      outputs:
+        prompt:
+          path: "prompts/recruiting/recruiting_nurture_models_{language}.prompt"
+""")
+        prompt_dir = tmp_path / "prompts" / "recruiting"
+        prompt_dir.mkdir(parents=True)
+        (prompt_dir / "recruiting_nurture_models_python.prompt").write_text("test")
+
+        monkeypatch.chdir(tmp_path)
+
+        result = _find_prompt_in_contexts("recruiting_nurture_models")
+        assert result is not None
+        context_name, prompt_path, lang = result
+        assert context_name == "recruiting_nurture_models"
+        assert lang == "python"
+
+    def test_template_without_name_skips_unrelated_basename(self, tmp_path, monkeypatch):
+        """Template without {name} must NOT match when context_name != basename.
+
+        This is the core bug fix: previously, _find_prompt_in_contexts would return
+        the first context whose static template path pointed to an existing file,
+        even if the basename was completely unrelated.
+        """
+        pddrc = tmp_path / ".pddrc"
+        pddrc.write_text("""version: "1.0"
+contexts:
+  recruiting_nurture_models:
+    paths: ["recruiting/**"]
+    defaults:
+      outputs:
+        prompt:
+          path: "prompts/recruiting/recruiting_nurture_models_{language}.prompt"
+""")
+        prompt_dir = tmp_path / "prompts" / "recruiting"
+        prompt_dir.mkdir(parents=True)
+        (prompt_dir / "recruiting_nurture_models_python.prompt").write_text("test")
+
+        monkeypatch.chdir(tmp_path)
+
+        # "recruiting_models" != "recruiting_nurture_models" — should NOT match
+        result = _find_prompt_in_contexts("recruiting_models")
+        assert result is None, (
+            "Bug: _find_prompt_in_contexts returned a match for 'recruiting_models' "
+            "using the 'recruiting_nurture_models' context whose template has no {name} placeholder"
+        )
+
+    def test_mixed_contexts_returns_correct_match(self, tmp_path, monkeypatch):
+        """With multiple contexts (some with {name}, some without), the correct one is matched."""
+        pddrc = tmp_path / ".pddrc"
+        pddrc.write_text("""version: "1.0"
+contexts:
+  static_module:
+    paths: ["static/**"]
+    defaults:
+      outputs:
+        prompt:
+          path: "prompts/static/static_module_{language}.prompt"
+  dynamic_context:
+    paths: ["dynamic/**"]
+    defaults:
+      outputs:
+        prompt:
+          path: "prompts/dynamic/{name}_{language}.prompt"
+""")
+        # Create both prompt files
+        (tmp_path / "prompts" / "static").mkdir(parents=True)
+        (tmp_path / "prompts" / "static" / "static_module_python.prompt").write_text("test")
+        (tmp_path / "prompts" / "dynamic").mkdir(parents=True)
+        (tmp_path / "prompts" / "dynamic" / "my_widget_python.prompt").write_text("test")
+
+        monkeypatch.chdir(tmp_path)
+
+        # "my_widget" should match dynamic_context (which has {name}), NOT static_module
+        result = _find_prompt_in_contexts("my_widget")
+        assert result is not None
+        context_name, prompt_path, lang = result
+        assert context_name == "dynamic_context"
+        assert "my_widget_python.prompt" in str(prompt_path)
+
+        # "static_module" should match its own context (context_name == basename)
+        result2 = _find_prompt_in_contexts("static_module")
+        assert result2 is not None
+        context_name2, _, _ = result2
+        assert context_name2 == "static_module"
