@@ -20,8 +20,10 @@ from rich.console import Console
 from .agentic_change import _check_gh_cli, _escape_format_braces, _parse_issue_url, _run_gh_command
 from .agentic_common import run_agentic_task
 from .agentic_sync_runner import AsyncSyncRunner, _find_pdd_executable, build_dep_graph_from_architecture
-from .construct_paths import _detect_context_from_basename, _load_pddrc_config
+from .construct_paths import _detect_context_from_basename, _find_pddrc_file, _load_pddrc_config
 from .load_prompt_template import load_prompt_template
+from .sync_determine_operation import sync_determine_operation
+from .sync_main import _detect_languages_with_context
 from .sync_order import build_dependency_graph, extract_module_from_include, topological_sort
 
 console = Console()
@@ -398,6 +400,85 @@ def _run_dry_run_validation(
     return all_valid, module_cwds, errors, total_llm_cost
 
 
+def _filter_already_synced(
+    modules: List[str],
+    module_cwds: Dict[str, Path],
+    quiet: bool = False,
+) -> List[str]:
+    """Filter out modules that are already fully synced (fingerprint matches).
+
+    For each module, runs sync_determine_operation in log_mode (read-only)
+    to check if the operation is 'nothing' (all hashes match, workflow complete).
+    Modules returning 'nothing' are removed from the sync list.
+
+    Returns:
+        List of module basenames that actually need syncing.
+    """
+    needs_sync: List[str] = []
+
+    for basename in modules:
+        cwd = module_cwds.get(basename)
+        if cwd is None:
+            # No resolved cwd — keep it in the list for the runner to handle
+            needs_sync.append(basename)
+            continue
+
+        # Detect context and prompts_dir for this module
+        try:
+            pddrc_path = _find_pddrc_file(cwd)
+            context_name = None
+            prompts_dir = cwd / "prompts"
+
+            if pddrc_path:
+                config = _load_pddrc_config(pddrc_path)
+                context_name = _detect_context_from_basename(basename, config)
+                defaults = config.get("contexts", {}).get(context_name or "default", {}).get("defaults", {})
+                prompts_dir_raw = defaults.get("prompts_dir", "prompts")
+                if not Path(prompts_dir_raw).is_absolute():
+                    prompts_dir = pddrc_path.parent / prompts_dir_raw
+                else:
+                    prompts_dir = Path(prompts_dir_raw)
+
+            lang_to_path = _detect_languages_with_context(basename, prompts_dir, context_name=context_name)
+        except Exception:
+            # Language discovery failed — keep module in the list (safe fallback)
+            needs_sync.append(basename)
+            continue
+
+        if not lang_to_path:
+            # No languages found — keep it for the runner to handle
+            needs_sync.append(basename)
+            continue
+
+        # Check fingerprint for each language; if ANY needs work, keep the module
+        all_nothing = True
+        for lang in lang_to_path:
+            try:
+                decision = sync_determine_operation(
+                    basename=basename,
+                    language=lang,
+                    target_coverage=90.0,
+                    log_mode=True,
+                    prompts_dir=str(prompts_dir),
+                    context_override=context_name,
+                )
+                if decision.operation != "nothing":
+                    all_nothing = False
+                    break
+            except Exception:
+                # Fingerprint check failed — keep module (safe fallback)
+                all_nothing = False
+                break
+
+        if all_nothing:
+            if not quiet:
+                console.print(f"  [green]\u2713[/green] {basename} — already synced, skipping")
+        else:
+            needs_sync.append(basename)
+
+    return needs_sync
+
+
 def _parse_llm_response(response: str) -> Tuple[List[str], bool, List[Dict[str, Any]]]:
     """
     Parse the LLM response for module identification and dependency validation.
@@ -689,6 +770,17 @@ def run_agentic_sync(
                     rel = cwd
             console.print(f"  [green]\u2713[/green] {bn} \u2192 cwd: {rel}")
         console.print("[green]All modules passed dry-run validation[/green]")
+
+    # 11.75 Filter out already-synced modules (fingerprint check)
+    if not quiet:
+        console.print("[bold]Checking fingerprints for already-synced modules...[/bold]")
+
+    modules_to_sync = _filter_already_synced(modules_to_sync, module_cwds, quiet=quiet)
+    if not modules_to_sync:
+        msg = "All modules are already synced — nothing to do."
+        if not quiet:
+            console.print(f"[green]{msg}[/green]")
+        return True, msg, llm_cost, provider
 
     # 12. Run parallel sync
     sync_options = {

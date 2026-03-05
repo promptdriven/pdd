@@ -123,6 +123,19 @@ def _normalize_prompts_root(prompts_dir: Path) -> Path:
     return prompts_root
 
 
+def _case_insensitive_prompt_lookup(path: Path) -> Path:
+    """Return the actual file path with correct casing, or the original if no match."""
+    if path.exists():
+        return path
+    parent = path.parent
+    if parent.is_dir():
+        target_lower = path.name.lower()
+        for candidate in parent.iterdir():
+            if candidate.name.lower() == target_lower and candidate.is_file():
+                return candidate
+    return path
+
+
 def _find_prompt_in_contexts(basename: str) -> Optional[Tuple[str, Path, str]]:
     """
     Search for a prompt file across all contexts using outputs.prompt.path templates.
@@ -193,6 +206,7 @@ def _find_prompt_in_contexts(basename: str) -> Optional[Tuple[str, Path, str]]:
 
             # Resolve relative to .pddrc location, not CWD
             prompt_path = pddrc_parent / expanded_path
+            prompt_path = _case_insensitive_prompt_lookup(prompt_path)
 
             if prompt_path.exists():
                 return (context_name, prompt_path, lang)
@@ -297,6 +311,7 @@ def _detect_languages_with_context(basename: str, prompts_dir: Path, context_nam
                             expanded_path = expand_template(prompt_template, template_context)
                             # Resolve relative to .pddrc location, not CWD
                             full_path = pddrc_parent / expanded_path
+                            full_path = _case_insensitive_prompt_lookup(full_path)
                             if full_path.exists():
                                 found_lang_to_path[lang] = full_path
 

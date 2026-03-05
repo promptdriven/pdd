@@ -12,7 +12,7 @@ import click
 import pytest
 from click.testing import CliRunner
 
-from pdd.sync_main import sync_main, _normalize_prompts_root, _find_prompt_in_contexts
+from pdd.sync_main import sync_main, _normalize_prompts_root, _find_prompt_in_contexts, _case_insensitive_prompt_lookup
 from pdd import DEFAULT_STRENGTH
 
 # Test Plan
@@ -1033,3 +1033,54 @@ contexts:
         assert result2 is not None
         context_name2, _, _ = result2
         assert context_name2 == "static_module"
+
+
+# Tests for _case_insensitive_prompt_lookup
+class TestCaseInsensitivePromptLookup:
+    """Tests for the _case_insensitive_prompt_lookup helper."""
+
+    def test_exact_match_returns_immediately(self, tmp_path):
+        """When the path exists with exact casing, return it directly."""
+        prompt = tmp_path / "my_module_Python.prompt"
+        prompt.write_text("test")
+        result = _case_insensitive_prompt_lookup(prompt)
+        assert result == prompt
+
+    def test_case_insensitive_match(self, tmp_path, monkeypatch):
+        """Lowercase path finds file with capitalized language suffix on case-sensitive FS."""
+        actual_file = tmp_path / "recruiting_types_TypeScript.prompt"
+        actual_file.write_text("test")
+        lowercase_path = tmp_path / "recruiting_types_typescript.prompt"
+
+        # On case-insensitive FS (macOS default), lowercase_path.exists() is True,
+        # so the function returns early. Simulate a case-sensitive FS by patching.
+        original_exists = Path.exists
+        def fake_exists(self):
+            """Return False for the lowercase path to simulate case-sensitive FS."""
+            if self.name == "recruiting_types_typescript.prompt":
+                return False
+            return original_exists(self)
+        monkeypatch.setattr(Path, "exists", fake_exists)
+
+        result = _case_insensitive_prompt_lookup(lowercase_path)
+        assert result == actual_file
+
+    def test_no_match_returns_original(self, tmp_path):
+        """When no file matches, return the original path unchanged."""
+        missing_path = tmp_path / "nonexistent_python.prompt"
+        result = _case_insensitive_prompt_lookup(missing_path)
+        assert result == missing_path
+
+    def test_parent_dir_does_not_exist(self, tmp_path):
+        """When the parent directory doesn't exist, return the original path."""
+        missing_path = tmp_path / "no_such_dir" / "module_python.prompt"
+        result = _case_insensitive_prompt_lookup(missing_path)
+        assert result == missing_path
+
+    def test_directory_with_same_name_ignored(self, tmp_path):
+        """Directories with matching names are not returned (only files)."""
+        (tmp_path / "my_module_python.prompt").mkdir()
+        query = tmp_path / "My_Module_Python.prompt"
+        result = _case_insensitive_prompt_lookup(query)
+        # Should return original since the match is a directory, not a file
+        assert result == query
