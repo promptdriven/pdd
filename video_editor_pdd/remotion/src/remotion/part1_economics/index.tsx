@@ -8,7 +8,7 @@ import { Part1EconomicsStatCalloutUplevel } from "../part1_economics_stat_callou
 
 export const Part1EconomicsSection: React.FC = () => {
   const fps = 30;
-  const offsetSeconds = 15.288;
+  const offsetSeconds = 15.552;
   const durationSeconds = 382.176;
 
   return (

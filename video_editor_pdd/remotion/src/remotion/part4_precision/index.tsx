@@ -7,7 +7,7 @@ import { Part4PrecisionTitleCard } from "../part4_precision_title_card";
 
 export const Part4PrecisionSection: React.FC = () => {
   const fps = 30;
-  const offsetSeconds = 873.9839999999999;
+  const offsetSeconds = 874.248;
   const durationSeconds = 96.912;
 
   return (

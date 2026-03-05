@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import path from "path";
 import fs from "fs/promises";
+import { spawn, execSync } from "child_process";
 
 import { registerExecutor, runPipelineStage } from "@/lib/jobs";
 import { renderSection, getSectionDuration } from "@/lib/render";
@@ -93,6 +94,38 @@ async function renderSections(
 }
 
 /**
+ * Regenerate Root.tsx (to pick up Claude-generated flat section files)
+ * and rebuild the Remotion bundle before rendering.
+ */
+async function rebuildBundle(onLog: (msg: string) => void): Promise<void> {
+  // Regenerate section wrappers and Root.tsx from project.json
+  onLog("Regenerating Root.tsx...");
+  await new Promise<void>((resolve, reject) => {
+    const proc = spawn(
+      "python3",
+      ["scripts/generate_section_compositions.py", "--force"],
+      { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] }
+    );
+    proc.stdout.on("data", (d) => onLog(d.toString()));
+    proc.stderr.on("data", (d) => onLog(d.toString()));
+    proc.on("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`Wrapper generation failed (code ${code})`));
+    });
+  });
+
+  // Rebuild Remotion bundle so the renderer uses fresh compositions
+  onLog("Rebuilding Remotion bundle...");
+  const remotionDir = path.join(process.cwd(), "remotion");
+  execSync("npx remotion bundle src/index.ts --out build", {
+    cwd: remotionDir,
+    stdio: "pipe",
+    timeout: 120_000,
+  });
+  onLog("Remotion bundle rebuilt.");
+}
+
+/**
  * Register the render executor for pipeline jobs
  */
 registerExecutor("render", (params, send) => {
@@ -101,6 +134,7 @@ registerExecutor("render", (params, send) => {
       ? (params.sections as string[])
       : undefined;
 
+    await rebuildBundle(onLog);
     await renderSections(sectionsParam, send, onLog);
   };
 });
