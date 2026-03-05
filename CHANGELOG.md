@@ -1,3 +1,53 @@
+## v0.0.167 (2026-03-04)
+
+### Feat
+
+- add --verification-program and dynamic path discovery to fix prompts (#709) (#711)
+- automatically time Remotion sub-compositions by extracting timing from word timestamps and applying it via sequence wrappers.
+- Implement delegation to flat section components in Remotion generation script and update build process, alongside minor section timing adjustments.
+- add `Part2ParadigmShiftMain` Remotion composition and adjust video section timings in `project.json`.
+- introduce new Remotion video scenes and integrate them into the composition generation process.
+- Introduce new Remotion video sections and a title card component, updating project configuration with their timings and compositions.
+- add detailed video specifications for Part 6: The Closing section of the PDD video.
+- Tune pdd generate, fix one-session sync template KeyError, and multiple improvements
+- Harden pdd update scanning filters and add .pddignore support
+- auto-generate .pddrc from scan and update empty prompts
+- update test prompts and cloud test durations
+- add auth-aware detection, test scaffolding, and validation across pipeline
+- add contract-aware test generation to one-session sync prompt
+- add architecture stability improvements with 5 incremental checks
+- improve architecture generation quality with naming registry, codebase scan, and consistency checks
+- add cross-sub-issue architecture awareness for multi-project generation
+
+### Fix
+
+- Skip one-session sync for already-synced modules and fix TSX/JSX misclassification (#730)
+- increase pdd crash E2E test timeout from 300s to 600s
+- escape JSON braces in pdd-interface blocks and update test assertion
+- Deduplicate modules after language suffix stripping
+- Prevent prompt path duplication when prompts_dir is already absolute
+- section-scoped composition generation, per-component previews, and wrapper status detection
+- scope component files by section to prevent cross-section overwrites
+- Stage 8 preview — add compositions/preview endpoint, fix section disambiguation, send jobId early
+- add message field to clip events and fix collapsed SseLogPanel
+- break SseLogPanel remount loop by clearing jobId on done
+- Stage 7 clip statuses stuck on "generating" — add globalThis event bus
+- Stage 7 Veo Generation — wire up reference regeneration and fix five runtime bugs
+- Prevent _find_prompt_in_contexts from returning wrong prompt for unrelated basenames
+- Correct failing cloud test assertions for module CWD resolution and update test durations
+- Skip empty/comment-only files instead of blanket-skipping __init__.py
+- Skip __init__.py files from pdd update scanning
+- check path overlap before adding .pddrc contexts
+- always generate empty prompts regardless of when they were created
+- make .pddrc auto-generation best-effort and scope empty-prompt detection
+- only treat newly created empty prompts as needing generation
+- respect --quiet flag for step failure warnings
+- address PR review — validate_cached_state crash, missing state persist, regex edge case
+- account for step2b in issue-467 partial failure test
+- mock Rich Console in test_core_errors to avoid stream capture issues
+- capture stderr in test_core_errors for Rich Console compatibility
+- update tests for step 1b/5b gate awareness
+
 ## v0.0.166 (2026-03-03)
 
 ### Feat
