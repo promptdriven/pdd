@@ -351,7 +351,7 @@ def resolve_prompt_code_pair(code_file_path: str, quiet: bool = False, output_di
             # If context has a code root (generate_output_path), strip that prefix
             # E.g., for pdd/commands/file.py with generate_output_path="pdd",
             # strip "pdd/" to get "commands/"
-            code_root = context_config.get("generate_output_path", "")
+            code_root = context_config.get("generate_output_path", "").rstrip(os.sep + "/")
             if code_root and rel_dir.startswith(code_root + os.sep):
                 # Strip the code root prefix
                 rel_dir = rel_dir[len(code_root) + len(os.sep):]
@@ -366,7 +366,7 @@ def resolve_prompt_code_pair(code_file_path: str, quiet: bool = False, output_di
     final_prompts_dir = os.path.join(base_prompts_dir, rel_dir)
 
     # Construct the prompt filename in the determined directory
-    prompt_filename = f"{base_name}_{language}.prompt"
+    prompt_filename = f"{base_name}_{language.lower()}.prompt"
     prompt_path_str = os.path.join(final_prompts_dir, prompt_filename)
     prompt_path = Path(prompt_path_str)
 

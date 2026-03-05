@@ -1,10 +1,10 @@
-<input_prompt><include>context/python_preamble.prompt</include>
+% <include>context/python_preamble.prompt</include>
 
 % Goal
 Write the `pdd/agentic_common.py` module.
 
 % Role & Scope
-Shared infrastructure for agentic CLI invocations (Claude Code, Gemini, Codex). Provides reusable utilities for agent discovery, environment sanitization, logging, and subprocess orchestration. This module acts as the low-level interface between PDD orchestrators and external agentic CLIs.
+Shared infrastructure for agentic CLI invocations (Claude Code, Gemini, Codex). Provides reusable utilities for agent discovery, environment sanitization, logging, and subprocess orchestration. This module acts as the low-level interface between PDD orchestrators and external agentic CLIs, handling provider-specific JSON parsing, cost calculation, and state persistence.
 
 % External Documentation
 <claude_code_json_output>
@@ -44,49 +44,28 @@ Shared infrastructure for agentic CLI invocations (Claude Code, Gemini, Codex). 
    - Google: Calculate from `stats["models"]` using `GEMINI_PRICING_BY_FAMILY`.
    - OpenAI: Calculate from `usage` using `CODEX_PRICING`. Handle NDJSON (item.completed + session.end/turn.completed).
 7. **False Positive Detection**: Treat empty output or (zero cost + short output < 50 chars) as failure.
-8. **Deadline Awareness**: Read `PDD_JOB_DEADLINE`. Skip attempts if remaining time < `MIN_ATTEMPT_TIMEOUT_SECONDS` (60s) after `JOB_TIMEOUT_MARGIN_SECONDS` (120s) reserve.
+8. **Deadline Awareness**: Read `PDD_JOB_DEADLINE`. Skip attempts if remaining time < `60s` after `120s` reserve.
 9. **GitHub State Persistence**: Provide functions to save/load/clear workflow state in GitHub issue comments using hidden HTML markers (`<!-- PDD_WORKFLOW_STATE:... -->`). Use `gh api` with `--paginate`.
 10. **State Validation**: `validate_cached_state` must scan `step_outputs` for "FAILED:" prefixes to correct `last_completed_step`, preventing "blind resume" bugs.
-
-% Function Signatures
-
-`get_agent_provider_preference() -> List[str]`
-`get_available_agents() -> List[str]`
-`run_agentic_task(instruction: str, cwd: Path, *, verbose: bool = False, quiet: bool = False, label: str = "", timeout: Optional[float] = None, max_retries: int = 1, retry_delay: float = 5.0, deadline: Optional[float] = None) -> Tuple[bool, str, float, str]`
-`post_step_comment(repo_owner, repo_name, issue_number, step_num, total_steps, description, output, cwd) -> bool`
-`validate_cached_state(last_completed_step, step_outputs, step_order=None, quiet=False) -> Union[int, float]`
-`load_workflow_state(cwd, issue_number, workflow_type, state_dir, repo_owner, repo_name, use_github_state=True) -> Tuple[Optional[Dict], Optional[int]]`
-`save_workflow_state(...) -> Optional[int]`
-`clear_workflow_state(...) -> None`
-
-% Constants
-- `DEFAULT_TIMEOUT_SECONDS: float = 600.0`
-- `MIN_VALID_OUTPUT_LENGTH: int = 50`
-- `DEFAULT_MAX_RETRIES: int = 3`
-- `JOB_TIMEOUT_MARGIN_SECONDS: float = 120.0`
-- `MIN_ATTEMPT_TIMEOUT_SECONDS: float = 60.0`
-
-% Token Pricing
-Use `Pricing` dataclass:
-- `GEMINI_PRICING_BY_FAMILY`: flash ($0.35/$1.05, 0.5 cached), pro ($3.50/$10.50, 0.5 cached).
-- `CODEX_PRICING`: $1.50/$6.00, 0.25 cached.
-- `ANTHROPIC_PRICING_BY_FAMILY`: opus ($15/$75), sonnet ($3/$15), haiku ($0.80/$4). All 0.1 cached. Cache write = 1.25x input.
-
-% Instructions
-1. Implement `_run_with_provider` to handle CLI-specific flags:
-   - Anthropic: `-p -` (stdin) + `--dangerously-skip-permissions` + `--output-format json`.
-   - Google: Positional instruction + `--yolo` + `--output-format json`.
-   - OpenAI: `exec --sandbox <mode> --json <path>`. Default mode `danger-full-access`.
-2. Support model overrides via `CLAUDE_MODEL`, `GEMINI_MODEL`, and `CODEX_MODEL` env vars.
-3. In `run_agentic_task`, inject `PDD_USER_FEEDBACK` into the prompt if present.
-4. Implement exponential backoff for retries: `delay = retry_delay * attempt`.
-5. Ensure `_find_state_comment` uses `gh api ... --paginate` to find existing state markers in issue comments.
-6. If single-letter files `C`, `E`, or `T` are detected in `cwd` after a successful run, log a bold red warning.
 
 % Dependencies
 <pdd.llm_invoke>
     <include>context/llm_invoke_example.py</include>
 </pdd.llm_invoke>
+
+% Instructions
+1. **Pricing Constants**: Implement a `Pricing` dataclass. 
+   - `GEMINI_PRICING_BY_FAMILY`: flash ($0.35/$1.05, 0.5 cached), pro ($3.50/$10.50, 0.5 cached).
+   - `CODEX_PRICING`: $1.50/$6.00, 0.25 cached.
+   - `ANTHROPIC_PRICING_BY_FAMILY`: opus ($15/$75), sonnet ($3/$15), haiku ($0.80/$4). All 0.1 cached. Cache write = 1.25x input.
+2. **CLI Invocation**: Implement `_run_with_provider` to handle CLI-specific flags:
+   - Anthropic: `-p -` (stdin) + `--dangerously-skip-permissions` + `--output-format json`.
+   - Google: Positional instruction + `--yolo` + `--output-format json`.
+   - OpenAI: `exec --sandbox <mode> --json <path>`. Default mode `danger-full-access`.
+3. **Environment & Overrides**: Support model overrides via `CLAUDE_MODEL`, `GEMINI_MODEL`, and `CODEX_MODEL`. In `run_agentic_task`, inject `PDD_USER_FEEDBACK` into the prompt if present.
+4. **Retries**: Implement exponential backoff: `delay = retry_delay * attempt`.
+5. **GitHub Integration**: Ensure `_find_state_comment` uses `gh api ... --paginate`. Implement `post_step_comment` to provide visibility when the agent fails to run.
+6. **Safety Checks**: If single-letter files `C`, `E`, or `T` are detected in `cwd` after a successful run, log a bold red warning.
 
 % Deliverables
 - `pdd/agentic_common.py`
