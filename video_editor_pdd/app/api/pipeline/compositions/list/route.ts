@@ -97,13 +97,22 @@ function listSpecComponents(specDir: string, sectionId?: string): string[] {
   return Array.from(names);
 }
 
+function toPascalCase(s: string): string {
+  return s.replace(/(^|_)(\w)/g, (_, __, c) => c.toUpperCase());
+}
+
 function buildComponent(name: string, sectionId?: string): CompositionComponent {
-  // Check section-scoped file first ({sectionId}_{name}.tsx), fall back to flat ({name}.tsx)
+  // Check component directory ({NN}-{PascalName}/index.ts) first
+  const nnMatch = name.match(/^(\d{2})_/);
+  const strippedPascal = nnMatch ? toPascalCase(name.slice(nnMatch[0].length)) : toPascalCase(name);
+  const dirName = nnMatch ? `${nnMatch[1]}-${strippedPascal}` : strippedPascal;
+  const dirExists = fs.existsSync(path.join(REMOTION_DIR, dirName, "index.ts"));
+  // Then check section-scoped file ({sectionId}_{name}.tsx), fall back to flat ({name}.tsx)
   const scopedExists = sectionId && fs.existsSync(path.join(REMOTION_DIR, `${sectionId}_${name}.tsx`));
   const flatExists = fs.existsSync(path.join(REMOTION_DIR, `${name}.tsx`));
   return {
     name,
-    status: scopedExists || flatExists ? "done" : "missing",
+    status: dirExists || scopedExists || flatExists ? "done" : "missing",
     error: null,
   };
 }

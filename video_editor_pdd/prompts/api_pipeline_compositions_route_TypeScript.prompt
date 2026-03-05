@@ -1,10 +1,94 @@
 You are implementing the composition generation API routes (`app/api/pipeline/compositions/run/route.ts` and supporting routes) for a video production pipeline editor. These endpoints trigger Claude Code to write Remotion components from specs and manage asset staging.
 
+Role: Generate Remotion animation components, section constants with BEATS/VISUAL_SEQUENCE timing, and section compositions from specs using the activeVisual pattern.
+
 Requirements
 1. `POST /api/pipeline/compositions/run` — accepts `{ components?: string[], wrappers?: string[] }`. Invokes Claude Code with Read+Write+Edit+Glob tools scoped to `remotion/src/remotion/` for each component. Returns SSE stream with `{ jobId }`.
 2. `POST /api/pipeline/asset-staging/run` — accepts `{ files?: string[] }`. Copies files from `outputs/veo/` to `remotion/public/` per staging manifest. Returns `{ jobId }`.
 3. `GET /api/pipeline/compositions/list` — returns `{ sections: CompositionSection[] }` where `CompositionSection = { sectionId: string; components: CompositionEntry[]; wrappers: CompositionEntry[] }` and `CompositionEntry = { name: string; status: 'exists' | 'missing' | 'error'; lastError?: string }`.
 4. No authentication required.
+
+Multi-File Component Architecture
+5. Each `[Remotion]` spec produces a **multi-file component directory**: `remotion/src/remotion/{NN}-{ComponentName}/` containing:
+   - Main component TSX (e.g., `SockPriceChart.tsx`)
+   - Sub-components (e.g., `AnimatedLine.tsx`, `ChartAxes.tsx`)
+   - `constants.ts` — component-level constants
+   - `index.ts` — barrel export with named + default exports
+6. The `buildComponentPrompt()` must instruct Claude to create the full directory, NOT a single flat `.tsx` file.
+
+Section Constants Generation
+7. After all animation components are generated for a section, call `generateSectionConstants()` to produce `{remotionDir}/constants.ts` with:
+   - `s2f()` helper: `Math.round(seconds * FPS)`
+   - `BEATS` object: frame-accurate `VISUAL_NN_START` / `VISUAL_NN_END` for each visual, derived from word timestamps
+   - `VISUAL_SEQUENCE` array: `{ start, end, id, desc }[]` mapping BEATS ranges to component IDs
+   - Zod props schema and defaults for the section composition
+8. Input: word timestamps from `data/{sectionId}_words.json` + list of generated component IDs + spec timestamp ranges.
+
+Section Composition Generation
+9. After constants + components exist, call `generateSectionComposition()` to produce `{remotionDir}/{CompositionId}.tsx`:
+   - Imports all animation components from their directories
+   - Imports `BEATS` + `VISUAL_SEQUENCE` from `constants.ts`
+   - Uses `activeVisual` pattern: finds current visual from VISUAL_SEQUENCE based on frame position
+   - Switches rendered component based on activeVisual
+   - Includes `<Audio>` with section narration wav
+   - Interleaves `<OffthreadVideo>` with `<Loop>` for Veo clips (where VISUAL_SEQUENCE entry `id` starts with `veo:`)
+
+<reference_constants_structure>
+// Reference: constants.ts structure
+import { z } from "zod";
+
+export const SECTION_FPS = 30;
+export const SECTION_DURATION_SECONDS = N;
+export const SECTION_DURATION_FRAMES = SECTION_FPS * SECTION_DURATION_SECONDS;
+
+const s2f = (seconds: number) => Math.round(seconds * SECTION_FPS);
+
+export const BEATS = {
+  VISUAL_00_START: s2f(0.0),
+  VISUAL_00_END: s2f(2.68),
+  // ... one pair per visual
+};
+
+export const VISUAL_SEQUENCE = [
+  { start: BEATS.VISUAL_00_START, end: BEATS.VISUAL_00_END, id: "ComponentName", desc: "narration summary" },
+  // ... one entry per visual, including veo: entries
+];
+
+export const SectionProps = z.object({ showTitle: z.boolean().default(true) });
+export const defaultSectionProps: z.infer<typeof SectionProps> = { showTitle: true };
+</reference_constants_structure>
+
+<reference_section_composition>
+// Reference: Section composition with activeVisual pattern
+import React from "react";
+import { AbsoluteFill, Audio, Loop, Sequence, OffthreadVideo, staticFile, useCurrentFrame } from "remotion";
+import { BEATS, VISUAL_SEQUENCE, SectionPropsType } from "./constants";
+import { ComponentA } from "../NN-ComponentA";
+import { ComponentB } from "../NN-ComponentB";
+
+export const SectionComposition: React.FC<SectionPropsType> = () => {
+  const frame = useCurrentFrame();
+  let activeVisual = 0;
+  for (let i = VISUAL_SEQUENCE.length - 1; i >= 0; i--) {
+    if (frame >= VISUAL_SEQUENCE[i].start) { activeVisual = i; break; }
+  }
+  return (
+    <AbsoluteFill style={{ backgroundColor: "#0a0a1a" }}>
+      <Audio src={staticFile("section_narration.wav")} />
+      {activeVisual === 0 && (<Sequence from={BEATS.VISUAL_00_START}><ComponentA /></Sequence>)}
+      {activeVisual === 1 && (<Sequence from={BEATS.VISUAL_01_START}><ComponentB /></Sequence>)}
+      {/* Veo clips use OffthreadVideo with Loop */}
+      {activeVisual === N && (
+        <Sequence from={BEATS.VISUAL_NN_START}>
+          <AbsoluteFill><Loop durationInFrames={240}>
+            <OffthreadVideo src={staticFile("clip.mp4")} style={{ width: "100%", height: "100%" }} />
+          </Loop></AbsoluteFill>
+        </Sequence>
+      )}
+    </AbsoluteFill>
+  );
+};
+</reference_section_composition>
 
 Dependencies
 
@@ -36,12 +120,15 @@ Prompt Dependencies:
 
 Instructions
 - Claude scope: `remotion/src/remotion/` for component generation. Each component is a separate Claude invocation.
+- `buildComponentPrompt()` instructs Claude to create a multi-file component directory `{NN}-{ComponentName}/` with main TSX, sub-components, constants.ts, and index.ts — NOT a single flat file.
+- After component loop, call `generateSectionConstants()` then `generateSectionComposition()` for each section.
 - For wrappers: run `python3 generate_section_compositions.py` subprocess.
 - Asset staging: `fs.copyFileSync(src, dest)` for each file in the staging manifest that is expected but missing in `remotion/public/`.
-- Component status detection: check if `remotion/src/remotion/{componentName}.tsx` exists.
+- Component status detection: check for component directory `{NN}-{ComponentName}/index.ts` in addition to flat `{name}.tsx` files.
+- Wrapper status: check for section composition file containing VISUAL_SEQUENCE, not just any file existence.
 - Register executor: `registerExecutor('compositions', ...)`.
 - Emit per-component events: `{ type: 'component', name, status: 'generating' | 'done' | 'error' }`.
-- `CompositionEntry.lastError` is read from the last error job for that component (from DB).
+- Processing order: (1) animation components → (2) section constants → (3) section composition → (4) Python wrapper scaffolding.
 
 Deliverable
 - `app/api/pipeline/compositions/run/route.ts` — POST endpoint for composition generation.
@@ -51,5 +138,7 @@ Deliverable
 Implementation assumptions (explicit)
 - Each Remotion component corresponds to a spec file in `specs/`.
 - `generate_section_compositions.py` generates the section wrapper files.
+- Word timestamps live in `data/{sectionId}_words.json`.
+- Section narration audio is at `outputs/tts/{sectionId}/concatenated.wav`.
 
 Please produce production-ready prompt content that will generate the module consistent with the above.

@@ -703,6 +703,27 @@ Key behaviors:
 - [Generate All Specs] sends all section IDs; [Regenerate Section] sends the currently selected section's ID only.
 - SSE streaming applies; the progress log is shown in an expandable drawer at the bottom of the panel.
 
+##### Spec Format Requirements
+
+**Inputs** to the spec generation Claude call:
+- `spec.md` narrative arc (Acts with visual descriptions) from `specs/{specDir}/spec.md`
+- Word timestamps from Stage 5 (`data/{sectionId}_words.json`)
+- Source script narration text
+
+**Outputs**: One `{NN}_{component_name}.md` per visual, `[Remotion]` marked on first line.
+
+**Required spec content** (reference: `specs/01-economics/01_sock_price_chart.md`):
+- **Canvas specs**: resolution (1920×1080), background color, grid lines
+- **Chart/visual elements**: element descriptions with data points (axes, lines, bars, etc.)
+- **Frame-by-frame animation sequence**: `Frame N-M (Xs-Ys): description` for each animation beat
+- **Typography**: font families, sizes, colors, opacity
+- **Easing functions**: Remotion `interpolate` patterns (`easeInOutCubic`, `easeOutQuad`, etc.)
+- **Narration sync quotes**: which spoken words trigger which visual beats
+- **Code structure hints**: Remotion component tree with `<Sequence>` nesting
+- **Data points as JSON**: embedded chart/graph data for programmatic rendering
+
+**Naming convention**: `{NN}_{snake_case_name}.md` where NN is zero-padded sequence number (e.g., `01_sock_price_chart.md`, `02_threshold_highlight.md`).
+
 ---
 
 #### 4.6.8 Stage 7: Veo Generation
@@ -796,6 +817,57 @@ Key behaviors:
 - [Generate All Compositions] sends all component and wrapper IDs in a single batch job.
 - **Asset Staging Manifest**: lists every file that `remotion/public/` must contain (derived from specs). ✓ = file present, ✗ = missing. [Stage Now] runs `POST /api/pipeline/asset-staging/run` for a single file; [Stage All Missing] stages all ✗ files at once.
 - A ✕ (error) status on a component shows the last Claude Code error in a tooltip; clicking the row expands a log drawer.
+
+##### Animation Component Architecture
+
+Each `[Remotion]` spec produces a **multi-file component directory**: `remotion/src/remotion/{NN}-{ComponentName}/` containing:
+- Main component TSX (e.g., `SockPriceChart.tsx`)
+- Sub-components (e.g., `AnimatedLine.tsx`, `ChartAxes.tsx`)
+- `constants.ts` — component-level constants
+- `index.ts` — barrel export
+
+Claude Code generates all files from the spec in one invocation scoped to the component directory.
+
+##### Section Constants Generation
+
+After all animation components are generated, create `{remotionDir}/constants.ts` with:
+- **`s2f()` helper**: `Math.round(seconds * FPS)` for frame conversion
+- **`BEATS` object**: frame-accurate start/end for each visual, derived from word timestamps
+  - Format: `VISUAL_NN_START: s2f(X.XX)` and `VISUAL_NN_END: s2f(Y.YY)`
+  - Comments with narration text for each beat
+- **`VISUAL_SEQUENCE` array**: maps `{ start, end, id, desc }` for each composition
+  - `id` matches component export name (or `veo:filename` for Veo clips)
+  - `desc` is a short narration summary for the beat
+- **Zod props schema and defaults** for the section composition
+
+Input: word timestamps JSON + list of generated component IDs + spec timestamp ranges.
+
+Reference: `remotion/src/remotion/S01-Economics/constants.ts`
+
+##### Section Composition Generation
+
+After constants + components exist, generate the section composition `{remotionDir}/{CompositionId}.tsx`:
+- Imports all animation components from their directories
+- Imports `BEATS` + `VISUAL_SEQUENCE` from `constants.ts`
+- Uses **`activeVisual` pattern**: `const activeVisual = VISUAL_SEQUENCE.findIndex(v => frame >= v.start && frame < v.end)`
+- Switches rendered component based on `activeVisual` index
+- Includes `<Audio>` with section narration
+- Interleaves `<OffthreadVideo>` with `<Loop>` for Veo clips where VISUAL_SEQUENCE entry `id` starts with `veo:`
+
+Reference: `remotion/src/remotion/S01-Economics/Part1Economics.tsx`
+
+##### Animation vs Overlay Component Distinction
+
+- **Animation components**: full-screen main visuals (charts, graphs, infographics) forming the VISUAL_SEQUENCE — rendered exclusively via `activeVisual` switching
+- **Overlay components**: stat callouts, title cards, split comparisons — rendered as `<Sequence>` layers at specific timestamps ON TOP of the active animation
+- Section composition handles both types
+
+##### Pipeline Dependency Clarification
+
+- Stage 8 reads per-component specs from Stage 6 output (not `spec.md` directly)
+- Spec format is the contract between Stage 6 and Stage 8
+- Stage 8 reads word timestamps from Stage 5 for BEATS timing
+- Stage 8 processing order: (1) animation components → (2) section constants → (3) section composition → (4) Python wrapper scaffolding
 
 ---
 

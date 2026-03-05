@@ -96,18 +96,29 @@ function buildComponentPrompt(name: string, spec: string, veoAssets: string[]): 
     : "";
 
   const exportName = toPascalCase(name);
+  // Extract NN prefix if present (e.g., "01_sock_price_chart" → "01")
+  // Strip prefix before PascalCasing for directory name (e.g., "02-SockPriceChart")
+  const nnMatch = name.match(/^(\d{2})_/);
+  const strippedPascal = nnMatch ? toPascalCase(name.slice(nnMatch[0].length)) : exportName;
+  const dirName = nnMatch ? `${nnMatch[1]}-${strippedPascal}` : exportName;
 
   return `
-You are Claude Code. Generate a Remotion component.
+You are Claude Code. Generate a Remotion animation component as a multi-file directory.
 
 Component name: ${name}
-Target directory: remotion/src/remotion/
-Output file: remotion/src/remotion/${name}.tsx
+Export name: ${exportName}
+
+OUTPUT STRUCTURE — create a subdirectory with multiple files:
+  remotion/src/remotion/${dirName}/
+    ├── ${exportName}.tsx          (main component)
+    ├── constants.ts               (component-level constants, colors, dimensions)
+    ├── index.ts                   (barrel export: export { ${exportName}, default${exportName}Props } from './${exportName}')
+    └── (optional sub-components like AnimatedLine.tsx, ChartAxes.tsx, etc.)
 
 CRITICAL EXPORT REQUIREMENT:
-- The component MUST be exported as BOTH a named export AND a default export with EXACTLY this name: ${exportName}
-- Example: export const ${exportName}: React.FC = () => { ... }; export default ${exportName};
-- Do NOT use any other name for the export.
+- index.ts MUST re-export the main component as BOTH named and default: export { ${exportName} } from './${exportName}'; export { default } from './${exportName}';
+- The main TSX MUST export as: export const ${exportName}: React.FC = () => { ... }; export default ${exportName};
+- Also export default props: export const default${exportName}Props = {};
 
 CRITICAL RENDERING REQUIREMENTS:
 - The component MUST render visible content from frame 0 (no delayed fade-ins).
@@ -116,7 +127,8 @@ CRITICAL RENDERING REQUIREMENTS:
 - Every visual element must have explicit width, height, and position.
 - Do NOT import external data files (e.g., JSON word timestamps) that may not exist.
   If subtitles are needed, embed word data inline or skip subtitles.
-- Only import from "remotion" — do not import from other local files unless they are guaranteed to exist.
+- Only import from "remotion" — do not import from other local files in the component directory.
+- Break complex visuals into sub-components (e.g., AnimatedLine.tsx, ChartAxes.tsx) for maintainability.
 
 Use the spec below to implement the component accurately.
 
@@ -126,6 +138,159 @@ ${spec || "(spec not found, infer from naming)"}
 ${veoSection}
 Return valid TypeScript/React code.
 `;
+}
+
+// ---------------------------------------------------------------------------
+// Generate section constants.ts with BEATS / VISUAL_SEQUENCE
+// ---------------------------------------------------------------------------
+const DATA_DIR = path.join(process.cwd(), "data");
+
+async function generateSectionConstants(
+  sectionId: string,
+  compositionId: string,
+  componentIds: string[],
+  remotionDir: string,
+  onLog: (msg: string) => void,
+): Promise<void> {
+  // Read word timestamps for timing data
+  const wordsPath = path.join(DATA_DIR, `${sectionId}_words.json`);
+  let wordTimestamps = "[]";
+  if (fs.existsSync(wordsPath)) {
+    try { wordTimestamps = fs.readFileSync(wordsPath, "utf-8"); } catch { /* ignore */ }
+  }
+
+  const pascalCompositionId = toPascalCase(compositionId);
+
+  const prompt = `
+You are Claude Code. Generate a constants.ts file for a Remotion section composition.
+
+Output file: ${remotionDir}/constants.ts
+
+This file provides frame-accurate timing for the section's visual sequence.
+
+REQUIRED STRUCTURE:
+1. Import { z } from "zod"
+2. Export FPS, DURATION_SECONDS, DURATION_FRAMES constants
+3. Define s2f() helper: const s2f = (seconds: number) => Math.round(seconds * FPS)
+4. Export BEATS object with VISUAL_NN_START / VISUAL_NN_END pairs for each component
+5. Export VISUAL_SEQUENCE array: { start, end, id, desc }[] mapping BEATS to component IDs
+6. Export Zod props schema and defaults for ${pascalCompositionId}
+
+Component IDs to include in VISUAL_SEQUENCE:
+${componentIds.map((id, i) => `- Visual ${String(i).padStart(2, "0")}: ${id}`).join("\n")}
+
+Word timestamps (JSON) for timing:
+${wordTimestamps}
+
+REFERENCE FORMAT:
+\`\`\`typescript
+import { z } from "zod";
+
+export const SECTION_FPS = 30;
+export const SECTION_DURATION_SECONDS = N;
+export const SECTION_DURATION_FRAMES = SECTION_FPS * SECTION_DURATION_SECONDS;
+
+const s2f = (seconds: number) => Math.round(seconds * SECTION_FPS);
+
+export const BEATS = {
+  VISUAL_00_START: s2f(0.0),
+  VISUAL_00_END: s2f(X.XX),
+  // ... one pair per visual
+};
+
+export const VISUAL_SEQUENCE = [
+  { start: BEATS.VISUAL_00_START, end: BEATS.VISUAL_00_END, id: "ComponentName", desc: "narration summary" },
+];
+
+export const ${pascalCompositionId}Props = z.object({
+  showTitle: z.boolean().default(true),
+});
+export const default${pascalCompositionId}Props: z.infer<typeof ${pascalCompositionId}Props> = { showTitle: true };
+export type ${pascalCompositionId}PropsType = z.infer<typeof ${pascalCompositionId}Props>;
+\`\`\`
+
+Generate the complete constants.ts file.
+`.trim();
+
+  onLog(`[compositions] Generating section constants: ${remotionDir}/constants.ts`);
+  await runClaudeFix(prompt, path.join(process.cwd(), "remotion/src/remotion"), onLog);
+}
+
+// ---------------------------------------------------------------------------
+// Generate section composition with activeVisual pattern
+// ---------------------------------------------------------------------------
+async function generateSectionComposition(
+  sectionId: string,
+  compositionId: string,
+  componentIds: string[],
+  remotionDir: string,
+  onLog: (msg: string) => void,
+): Promise<void> {
+  const pascalCompositionId = toPascalCase(compositionId);
+
+  // Build import list for components
+  const componentImports = componentIds
+    .filter((id) => !id.startsWith("veo:"))
+    .map((id) => {
+      const pascal = toPascalCase(id);
+      const nnMatch = id.match(/^(\d{2})_/);
+      const strippedPascal = nnMatch ? toPascalCase(id.slice(nnMatch[0].length)) : pascal;
+      const dirName = nnMatch ? `${nnMatch[1]}-${strippedPascal}` : strippedPascal;
+      return `import { ${strippedPascal}, default${strippedPascal}Props } from "../${dirName}";`;
+    })
+    .join("\n");
+
+  const prompt = `
+You are Claude Code. Generate a section composition TSX file using the activeVisual pattern.
+
+Output file: ${remotionDir}/${pascalCompositionId}.tsx
+
+This composition sequences all animation components for section "${sectionId}" using frame-accurate timing.
+
+REQUIRED PATTERN:
+1. Import React, AbsoluteFill, Audio, Loop, Sequence, OffthreadVideo, staticFile, useCurrentFrame from "remotion"
+2. Import BEATS, VISUAL_SEQUENCE, ${pascalCompositionId}PropsType from "./constants"
+3. Import all animation components:
+${componentImports}
+
+4. Use activeVisual pattern to switch between components:
+\`\`\`typescript
+export const ${pascalCompositionId}: React.FC<${pascalCompositionId}PropsType> = () => {
+  const frame = useCurrentFrame();
+  let activeVisual = 0;
+  for (let i = VISUAL_SEQUENCE.length - 1; i >= 0; i--) {
+    if (frame >= VISUAL_SEQUENCE[i].start) { activeVisual = i; break; }
+  }
+  return (
+    <AbsoluteFill style={{ backgroundColor: "#0a0a1a" }}>
+      <Audio src={staticFile("${sectionId}_narration.wav")} />
+      {/* For each visual in VISUAL_SEQUENCE: */}
+      {activeVisual === 0 && (
+        <Sequence from={BEATS.VISUAL_00_START}>
+          <ComponentName {...defaultComponentNameProps} />
+        </Sequence>
+      )}
+      {/* For veo: entries, use OffthreadVideo with Loop: */}
+      {activeVisual === N && (
+        <Sequence from={BEATS.VISUAL_NN_START}>
+          <AbsoluteFill><Loop durationInFrames={240}>
+            <OffthreadVideo src={staticFile("clip.mp4")} style={{ width: "100%", height: "100%" }} />
+          </Loop></AbsoluteFill>
+        </Sequence>
+      )}
+    </AbsoluteFill>
+  );
+};
+\`\`\`
+
+Component IDs in VISUAL_SEQUENCE order:
+${componentIds.map((id, i) => `- Visual ${i}: ${id}${id.startsWith("veo:") ? " (use OffthreadVideo + Loop)" : ""}`).join("\n")}
+
+Generate the complete section composition file. Include ALL visuals from VISUAL_SEQUENCE.
+`.trim();
+
+  onLog(`[compositions] Generating section composition: ${remotionDir}/${pascalCompositionId}.tsx`);
+  await runClaudeFix(prompt, path.join(process.cwd(), "remotion/src/remotion"), onLog);
 }
 
 // ---------------------------------------------------------------------------
@@ -392,10 +557,16 @@ registerExecutor("compositions", (params, send: SseSend) => {
               if (firstLine.includes("[veo:")) continue;
             } catch { /* ignore read errors */ }
           }
-          // Check for section-scoped file first ({sectionId}_{base}.tsx), then flat ({base}.tsx)
+          // Check for component directory ({NN}-{PascalName}/index.ts), section-scoped file, or flat file
+          const nnMatch = base.match(/^(\d{2})_/);
+          const strippedPascal = nnMatch ? toPascalCase(base.slice(nnMatch[0].length)) : toPascalCase(base);
+          const dirName = nnMatch ? `${nnMatch[1]}-${strippedPascal}` : strippedPascal;
+          const dirIndex = path.join(REMOTION_SCOPE_DIR, dirName, "index.ts");
           const scopedTsx = path.join(REMOTION_SCOPE_DIR, `${section.id}_${base}.tsx`);
           const flatTsx = path.join(REMOTION_SCOPE_DIR, `${base}.tsx`);
-          if (fs.existsSync(scopedTsx)) {
+          if (fs.existsSync(dirIndex)) {
+            discoveredComponents.push(base);
+          } else if (fs.existsSync(scopedTsx)) {
             discoveredComponents.push(`${section.id}_${base}`);
           } else if (fs.existsSync(flatTsx)) {
             discoveredComponents.push(base);
@@ -422,6 +593,34 @@ registerExecutor("compositions", (params, send: SseSend) => {
       if (compositionsUpdated) {
         saveProject(freshConfig);
         onLog("[compositions] Updated project.json with discovered compositions.");
+      }
+
+      // Generate section constants and section composition for each section
+      // that has discovered components (animation components → constants → composition)
+      for (const section of freshConfig.sections) {
+        if (!section.compositions || section.compositions.length === 0) continue;
+
+        const sectionRemotionDir = path.join("remotion/src/remotion", section.id);
+        try {
+          await generateSectionConstants(
+            section.id,
+            section.compositionId,
+            section.compositions,
+            sectionRemotionDir,
+            onLog,
+          );
+          await generateSectionComposition(
+            section.id,
+            section.compositionId,
+            section.compositions,
+            sectionRemotionDir,
+            onLog,
+          );
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "Unknown error";
+          onLog(`[compositions] Warning: section constants/composition generation failed for ${section.id}: ${msg}`);
+          // Non-fatal — the Python wrapper can still scaffold a basic composition
+        }
       }
     }
 

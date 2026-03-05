@@ -2020,4 +2020,331 @@ describe("app/api/pipeline/compositions/run/route.ts source structure", () => {
   it("uses new Response(stream, ...) for SSE streaming", () => {
     expect(sourceCode).toMatch(/new\s+Response\s*\(\s*stream/);
   });
+
+  it("defines generateSectionConstants function", () => {
+    expect(sourceCode).toMatch(/generateSectionConstants/);
+  });
+
+  it("defines generateSectionComposition function", () => {
+    expect(sourceCode).toMatch(/generateSectionComposition/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 21. Specs prompt includes spec.md content and word timestamps
+// ---------------------------------------------------------------------------
+
+describe("specs route — enhanced prompt with spec.md and word timestamps", () => {
+  let specsSourceCode: string;
+
+  beforeAll(() => {
+    const realFs = jest.requireActual("fs") as typeof import("fs");
+    const pathMod = require("path");
+    specsSourceCode = realFs.readFileSync(
+      pathMod.join(
+        __dirname,
+        "..",
+        "app",
+        "api",
+        "pipeline",
+        "specs",
+        "run",
+        "route.ts"
+      ),
+      "utf-8"
+    );
+  });
+
+  it("reads spec.md content for context", () => {
+    expect(specsSourceCode).toMatch(/spec\.md/);
+    expect(specsSourceCode).toMatch(/readFileSync/);
+  });
+
+  it("references word timestamps file path", () => {
+    expect(specsSourceCode).toMatch(/_words\.json/);
+  });
+
+  it("includes reference spec format example in prompt", () => {
+    // The prompt should include guidance about canvas specs, animation sequence, etc.
+    expect(specsSourceCode).toMatch(/Canvas|canvas/);
+    expect(specsSourceCode).toMatch(/Animation Sequence|animation sequence|Frame.*\d/i);
+  });
+
+  it("instructs Claude to generate numbered spec files", () => {
+    expect(specsSourceCode).toMatch(/\{NN\}|zero-padded|numbered/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 22. buildComponentPrompt supports multi-file output
+// ---------------------------------------------------------------------------
+
+describe("compositions executor — buildComponentPrompt multi-file output", () => {
+  let compositionsSourceCode: string;
+
+  beforeAll(() => {
+    const realFs = jest.requireActual("fs") as typeof import("fs");
+    const pathMod = require("path");
+    compositionsSourceCode = realFs.readFileSync(
+      pathMod.join(
+        __dirname,
+        "..",
+        "app",
+        "api",
+        "pipeline",
+        "compositions",
+        "run",
+        "route.ts"
+      ),
+      "utf-8"
+    );
+  });
+
+  it("instructs Claude to create component subdirectory", () => {
+    // buildComponentPrompt should reference creating a directory structure
+    expect(compositionsSourceCode).toMatch(/directory|subdirectory|sub-component/i);
+  });
+
+  it("references index.ts barrel export pattern", () => {
+    expect(compositionsSourceCode).toMatch(/index\.ts/);
+  });
+
+  it("does NOT constrain output to single flat .tsx file only", () => {
+    // The prompt should mention directory-based output, not just single file
+    expect(compositionsSourceCode).toMatch(/constants\.ts|sub.*component/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 23. generateSectionConstants produces BEATS/VISUAL_SEQUENCE
+// ---------------------------------------------------------------------------
+
+describe("compositions executor — generateSectionConstants", () => {
+  function setupMockSpawn(exitCode = 0) {
+    const proc = createMockSpawnProcess(exitCode);
+    mockSpawn.mockReturnValue(proc);
+    setTimeout(() => proc._triggerClose(), 5);
+    return proc;
+  }
+
+  /**
+   * Set up mocks so that component discovery finds a generated component,
+   * triggering the section constants and composition generation flow.
+   */
+  function setupDiscoveryMocks() {
+    const pathMod = require("path");
+    const specsDir = pathMod.join(process.cwd(), "specs");
+    const remotionDir = pathMod.join(process.cwd(), "remotion/src/remotion");
+
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return false;
+      // Spec directory exists
+      if (p.includes(pathMod.join("specs", "specs/intro"))) return true;
+      // Generated TSX file exists (section-scoped: intro_01_chart.tsx)
+      if (p.endsWith("intro_01_chart.tsx")) return true;
+      // Word timestamps
+      if (p.includes("_words.json")) return true;
+      return false;
+    });
+    mockReaddirSync.mockImplementation((dir: string) => {
+      if (typeof dir === "string" && dir.includes("specs")) {
+        return [
+          { name: "01_chart.md", isDirectory: () => false, isFile: () => true },
+        ];
+      }
+      return [];
+    });
+    mockReadFileSync.mockImplementation((p: string) => {
+      if (typeof p === "string" && p.includes("_words.json")) {
+        return JSON.stringify([
+          { word: "Hello", start: 0.0, end: 0.5 },
+          { word: "world", start: 0.6, end: 1.0 },
+        ]);
+      }
+      if (typeof p === "string" && p.includes("01_chart.md")) {
+        return "# Chart spec\nSome content";
+      }
+      return "";
+    });
+  }
+
+  it("calls runClaudeFix with prompt mentioning BEATS and VISUAL_SEQUENCE", async () => {
+    const config = mockProjectConfig();
+    config.sections[0].specDir = "specs/intro";
+    mockLoadProject.mockReturnValue(config);
+    setupDiscoveryMocks();
+    setupMockSpawn(0);
+
+    const mockSend = jest.fn();
+    const executor = registerCallArgs.factory(
+      {
+        components: ["01_chart"],
+        wrappers: [],
+        sectionId: "intro",
+      },
+      mockSend
+    );
+    await executor(jest.fn());
+
+    // After component generation, generateSectionConstants should have been called
+    // which invokes runClaudeFix with BEATS/VISUAL_SEQUENCE instructions
+    const allCalls = mockRunClaudeFix.mock.calls;
+    const constantsCall = allCalls.find(
+      (call: any[]) =>
+        typeof call[0] === "string" &&
+        (call[0].includes("BEATS") || call[0].includes("VISUAL_SEQUENCE"))
+    );
+    expect(constantsCall).toBeDefined();
+  });
+
+  it("includes s2f helper reference in constants prompt", async () => {
+    const config = mockProjectConfig();
+    config.sections[0].specDir = "specs/intro";
+    mockLoadProject.mockReturnValue(config);
+    setupDiscoveryMocks();
+    setupMockSpawn(0);
+
+    const mockSend = jest.fn();
+    const executor = registerCallArgs.factory(
+      { components: ["01_chart"], wrappers: [], sectionId: "intro" },
+      mockSend
+    );
+    await executor(jest.fn());
+
+    const allCalls = mockRunClaudeFix.mock.calls;
+    const constantsCall = allCalls.find(
+      (call: any[]) =>
+        typeof call[0] === "string" && call[0].includes("s2f")
+    );
+    expect(constantsCall).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 24. generateSectionComposition generates activeVisual pattern
+// ---------------------------------------------------------------------------
+
+describe("compositions executor — generateSectionComposition", () => {
+  function setupMockSpawn(exitCode = 0) {
+    const proc = createMockSpawnProcess(exitCode);
+    mockSpawn.mockReturnValue(proc);
+    setTimeout(() => proc._triggerClose(), 5);
+    return proc;
+  }
+
+  function setupDiscoveryMocks() {
+    const pathMod = require("path");
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return false;
+      if (p.includes(pathMod.join("specs", "specs/intro"))) return true;
+      if (p.endsWith("intro_01_chart.tsx")) return true;
+      if (p.includes("_words.json")) return true;
+      return false;
+    });
+    mockReaddirSync.mockImplementation((dir: string) => {
+      if (typeof dir === "string" && dir.includes("specs")) {
+        return [
+          { name: "01_chart.md", isDirectory: () => false, isFile: () => true },
+        ];
+      }
+      return [];
+    });
+    mockReadFileSync.mockImplementation((p: string) => {
+      if (typeof p === "string" && p.includes("_words.json")) {
+        return JSON.stringify([]);
+      }
+      if (typeof p === "string" && p.includes("01_chart.md")) {
+        return "# Chart spec\nSome content";
+      }
+      return "";
+    });
+  }
+
+  it("calls runClaudeFix with prompt mentioning activeVisual pattern", async () => {
+    const config = mockProjectConfig();
+    config.sections[0].specDir = "specs/intro";
+    mockLoadProject.mockReturnValue(config);
+    setupDiscoveryMocks();
+    setupMockSpawn(0);
+
+    const mockSend = jest.fn();
+    const executor = registerCallArgs.factory(
+      { components: ["01_chart"], wrappers: [], sectionId: "intro" },
+      mockSend
+    );
+    await executor(jest.fn());
+
+    const allCalls = mockRunClaudeFix.mock.calls;
+    const compositionCall = allCalls.find(
+      (call: any[]) =>
+        typeof call[0] === "string" && call[0].includes("activeVisual")
+    );
+    expect(compositionCall).toBeDefined();
+  });
+
+  it("references Audio and OffthreadVideo in section composition prompt", async () => {
+    const config = mockProjectConfig();
+    config.sections[0].specDir = "specs/intro";
+    mockLoadProject.mockReturnValue(config);
+    setupDiscoveryMocks();
+    setupMockSpawn(0);
+
+    const mockSend = jest.fn();
+    const executor = registerCallArgs.factory(
+      { components: ["01_chart"], wrappers: [], sectionId: "intro" },
+      mockSend
+    );
+    await executor(jest.fn());
+
+    const allCalls = mockRunClaudeFix.mock.calls;
+    const compositionCall = allCalls.find(
+      (call: any[]) =>
+        typeof call[0] === "string" &&
+        call[0].includes("Audio") &&
+        call[0].includes("OffthreadVideo")
+    );
+    expect(compositionCall).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 25. Composition list — component directory detection
+// ---------------------------------------------------------------------------
+
+describe("GET_CompositionList — component directory detection", () => {
+  it("returns 'done' when component directory with index.ts exists", async () => {
+    const pathMod = require("path");
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p === "string" && p.includes("specs")) return true;
+      // Component directory exists: {NN}-{ComponentName}/index.ts
+      if (typeof p === "string" && p.endsWith(pathMod.join("02-SockPriceChart", "index.ts"))) return true;
+      // Also check flat file path (should fail)
+      if (typeof p === "string" && p.endsWith("intro_02_sock_price_chart.tsx")) return false;
+      if (typeof p === "string" && p.endsWith("02_sock_price_chart.tsx")) return false;
+      return false;
+    });
+    mockReaddirSync.mockImplementation((dir: string, opts?: any) => {
+      if (typeof dir === "string" && dir.includes("specs")) {
+        return [
+          {
+            name: "02_sock_price_chart.md",
+            isDirectory: () => false,
+            isFile: () => true,
+          },
+        ];
+      }
+      return [];
+    });
+    mockReadFileSync.mockReturnValue("# Sock Price Chart\n[Remotion]");
+
+    const response = await GET_CompositionList();
+    const data = await response.json();
+
+    const introSection = data.sections.find((s: any) => s.id === "intro");
+    const comp = introSection?.components.find(
+      (c: any) => c.name === "02_sock_price_chart"
+    );
+    expect(comp).toBeDefined();
+    expect(comp.status).toBe("done");
+  });
 });

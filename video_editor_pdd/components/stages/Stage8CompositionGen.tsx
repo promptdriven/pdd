@@ -233,9 +233,8 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
     setPreviewName(componentName);
     setPreviewUrl(null);
     try {
-      const qs = new URLSearchParams({ component: componentName });
-      if (sectionId) qs.set('section', sectionId);
-      const res = await fetch(`/api/pipeline/compositions/preview?${qs}`);
+      const sectionParam = sectionId ? `&section=${encodeURIComponent(sectionId)}` : '';
+      const res = await fetch(`/api/pipeline/compositions/preview?component=${encodeURIComponent(componentName)}${sectionParam}`);
       if (!res.ok) throw new Error(`Preview unavailable (${res.status})`);
       let url: string | null = null;
       if (res.headers.get('content-type')?.includes('application/json')) {
@@ -313,7 +312,7 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
                 }, 'generate-all')}
                 disabled={actionBusy['generate-all'] || actionBusy['generate-missing']}
               >
-                {actionBusy['generate-all'] ? 'Generating...' : 'Generate All'}
+                {actionBusy['generate-all'] ? 'Generating...' : 'Generate All Compositions'}
               </button>
             </div>
           </div>

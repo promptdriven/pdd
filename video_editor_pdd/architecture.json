@@ -972,7 +972,7 @@
   },
   {
     "reason": "Spec generation API triggers Claude Code to expand visual descriptions into detailed spec markdown files per section",
-    "description": "POST /api/pipeline/specs/run accepts { sections?: string[], files?: string[] }. If sections omitted, generates all. Invokes Claude Code with Read+Write tools scoped to specs/. Returns { jobId }. GET /api/pipeline/specs/list returns tree of specs by section with visual type badges (Remotion/veo/title/split). GET /api/pipeline/specs/file?path=X returns spec file content for the inline editor. PUT /api/pipeline/specs/file saves spec file content.",
+    "description": "POST /api/pipeline/specs/run accepts { sections?: string[], files?: string[] }. If sections omitted, generates all. Reads spec.md narrative arc and word timestamps from data/{sectionId}_words.json to provide context. Prompt includes reference spec format (chart data, animation frames, code structure hints, narration sync) so Claude generates rich {NN}_{component_name}.md specs instead of minimal overlays. Invokes Claude Code with Read+Write tools scoped to specs/. Returns { jobId }. GET /api/pipeline/specs/list returns tree of specs by section with visual type badges (Remotion/veo/title/split). GET /api/pipeline/specs/file?path=X returns spec file content for the inline editor. PUT /api/pipeline/specs/file saves spec file content.",
     "dependencies": [
       "types_TypeScript.prompt",
       "lib_jobs_TypeScript.prompt",
@@ -1090,7 +1090,7 @@
   },
   {
     "reason": "Composition generation API triggers Claude Code to write Remotion components from specs and generates section wrapper scaffolding",
-    "description": "POST /api/pipeline/compositions/run accepts { components?: string[], wrappers?: string[] }. Invokes Claude Code with Read+Write+Edit+Glob tools scoped to remotion/src/remotion/ for each component. Also runs scripts/generate_section_compositions.py for section wrappers. Returns { jobId }. POST /api/pipeline/asset-staging/run copies files from outputs/veo/ to remotion/public/ per staging manifest. GET /api/pipeline/compositions/list returns components and wrappers by section with status.",
+    "description": "POST /api/pipeline/compositions/run accepts { components?: string[], wrappers?: string[] }. For each [Remotion] spec, invokes Claude Code to generate a multi-file component directory ({NN}-{ComponentName}/ with main TSX, sub-components, constants, index). After all components, calls generateSectionConstants() to produce {remotionDir}/constants.ts with s2f() helper, BEATS object (frame-accurate timing from word timestamps), VISUAL_SEQUENCE array, and Zod props schema. Then calls generateSectionComposition() to produce {CompositionId}.tsx using activeVisual pattern that switches between animation components and interleaves Veo clips. Processing order: components → constants → composition → Python wrapper scaffolding. Returns { jobId }. POST /api/pipeline/asset-staging/run copies files from outputs/veo/ to remotion/public/ per staging manifest. GET /api/pipeline/compositions/list returns components and wrappers by section with status (checks for section composition file containing VISUAL_SEQUENCE, not just any file existence).",
     "dependencies": [
       "types_TypeScript.prompt",
       "lib_jobs_TypeScript.prompt",
@@ -1136,6 +1136,18 @@
             "path": "/api/pipeline/compositions/list",
             "auth": "none",
             "responseSchema": "{ sections: CompositionSection[] }"
+          }
+        ],
+        "internalFunctions": [
+          {
+            "name": "generateSectionConstants",
+            "signature": "generateSectionConstants(sectionId: string, componentIds: string[], wordTimestamps: WordTimestamp[], remotionDir: string, onLog: (msg: string) => void) → Promise<void>",
+            "description": "Generates {remotionDir}/constants.ts with s2f() helper, BEATS object, VISUAL_SEQUENCE array, and Zod props schema from word timestamps and component list"
+          },
+          {
+            "name": "generateSectionComposition",
+            "signature": "generateSectionComposition(sectionId: string, compositionId: string, componentIds: string[], remotionDir: string, onLog: (msg: string) => void) → Promise<void>",
+            "description": "Generates {remotionDir}/{CompositionId}.tsx with activeVisual pattern, importing all animation components and using BEATS/VISUAL_SEQUENCE from constants.ts"
           }
         ]
       }

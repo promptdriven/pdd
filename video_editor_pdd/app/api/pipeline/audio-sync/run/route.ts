@@ -117,6 +117,7 @@ export async function POST(_request: NextRequest): Promise<Response> {
   (async () => {
     try {
       const jobId = await runPipelineStage("audio-sync", {}, send);
+      send({ type: "job", jobId });
       send({ type: "complete", jobId });
       done();
     } catch (err) {
