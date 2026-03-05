@@ -1262,3 +1262,68 @@ class TestAssetDetection:
         tsx = generate_section_component(section, fps=30, remotion_public="")
         assert "Audio" not in tsx
         assert "OffthreadVideo" not in tsx
+
+
+# ===========================================================================
+# Tests: generate_root_tsx - Flat section file preference
+# ===========================================================================
+
+class TestRootTsxFlatFilePreference:
+    """Root.tsx should always import from wrapper directory, even when flat file exists."""
+
+    def test_generate_root_tsx_always_imports_from_wrapper(self, tmp_path):
+        """Root.tsx should always import from wrapper dir, even when flat file exists."""
+        remotion_dir = tmp_path / "remotion"
+        remotion_src = remotion_dir / "src" / "remotion"
+        remotion_src.mkdir(parents=True)
+
+        # Create a Claude-generated flat section file
+        (remotion_src / "ColdOpenSection.tsx").write_text("export const ColdOpenSection = () => null;")
+
+        sections = [{"id": "cold_open", "compositionId": "ColdOpenSection", "durationSeconds": 15, "compositions": []}]
+
+        root_content = generate_root_tsx(sections, 30, str(remotion_dir))
+
+        assert 'from "./cold_open"' in root_content
+        assert 'from "./ColdOpenSection"' not in root_content
+
+    def test_generate_root_tsx_no_flat_file(self, tmp_path):
+        """When no flat section file exists, Root.tsx should import from the wrapper directory."""
+        remotion_dir = tmp_path / "remotion"
+        remotion_src = remotion_dir / "src" / "remotion"
+        remotion_src.mkdir(parents=True)
+
+        sections = [{"id": "cold_open", "compositionId": "ColdOpenSection", "durationSeconds": 15, "compositions": []}]
+
+        root_content = generate_root_tsx(sections, 30, str(remotion_dir))
+
+        assert 'from "./cold_open"' in root_content
+        assert 'from "./ColdOpenSection"' not in root_content
+
+
+class TestWrapperDelegation:
+    """Wrapper should delegate to flat file when it exists, rendering sub-compositions on top."""
+
+    def test_wrapper_delegates_to_flat_file(self, tmp_path):
+        """When flat file exists, wrapper imports it as Base and renders it, no Audio/Video."""
+        remotion_src = str(tmp_path)
+        (tmp_path / "ColdOpenSection.tsx").write_text("export const ColdOpenSection = () => null;")
+
+        section = {"id": "cold_open", "durationSeconds": 15, "offsetSeconds": 0, "compositions": ["cold_open_title_card"]}
+        tsx = generate_section_component(section, 30, remotion_public="", remotion_src=remotion_src)
+
+        assert 'import { ColdOpenSection as ColdOpenSectionBase } from "../ColdOpenSection"' in tsx
+        assert '<ColdOpenSectionBase />' in tsx
+        assert '<ColdOpenTitleCard />' in tsx
+        assert 'Audio' not in tsx
+        assert 'OffthreadVideo' not in tsx
+
+    def test_wrapper_falls_back_without_flat_file(self, tmp_path):
+        """When no flat file exists, wrapper renders its own Audio/Video."""
+        remotion_src = str(tmp_path)
+
+        section = {"id": "cold_open", "durationSeconds": 15, "offsetSeconds": 0, "compositions": ["cold_open_title_card"]}
+        tsx = generate_section_component(section, 30, remotion_public=str(tmp_path / "public"), remotion_src=remotion_src)
+
+        assert 'ColdOpenSectionBase' not in tsx
+        assert '<ColdOpenTitleCard />' in tsx

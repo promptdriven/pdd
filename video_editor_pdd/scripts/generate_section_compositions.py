@@ -55,11 +55,13 @@ def generate_section_component(
     section: Dict[str, Any],
     fps: int,
     remotion_public: str = '',
+    remotion_src: str = '',
 ) -> str:
     """Generate the TSX source code for a section wrapper component.
 
-    Includes audio narration from public/{section_id}/narration.wav and
-    Veo video from public/veo/{section_id}.mp4 when available.
+    When a Claude-generated flat section file ({ComponentName}.tsx) exists in
+    remotion_src, the wrapper delegates to it (imports as Base) and only adds
+    sub-compositions on top.  Otherwise renders its own Audio/Video.
     """
     section_id = section['id']
     pascal_name = to_pascal_case(section_id)
@@ -68,10 +70,16 @@ def generate_section_component(
     offset_seconds = section.get('offsetSeconds', 0)
     compositions: List[Dict[str, Any]] = section.get('compositions', [])
 
-    # Detect available assets in remotion/public/
+    # Check for flat section file to delegate to
+    has_flat_file = False
+    if remotion_src:
+        flat_file_path = os.path.join(remotion_src, f'{component_name}.tsx')
+        has_flat_file = os.path.isfile(flat_file_path)
+
+    # Detect available assets in remotion/public/ (only when NOT delegating)
     has_narration = False
     has_veo_clip = False
-    if remotion_public:
+    if not has_flat_file and remotion_public:
         narration_path = os.path.join(remotion_public, section_id, 'narration.wav')
         has_narration = os.path.isfile(narration_path)
         veo_clip_path = os.path.join(remotion_public, 'veo', f'{section_id}.mp4')
@@ -80,18 +88,22 @@ def generate_section_component(
     lines: List[str] = []
 
     # Imports
-    imports = ['React']
     remotion_imports = ['Sequence']
-    if has_narration:
-        remotion_imports.append('Audio')
-    if has_veo_clip:
-        remotion_imports.append('OffthreadVideo')
-    if has_narration or has_veo_clip:
-        remotion_imports.append('staticFile')
+    if not has_flat_file:
+        if has_narration:
+            remotion_imports.append('Audio')
+        if has_veo_clip:
+            remotion_imports.append('OffthreadVideo')
+        if has_narration or has_veo_clip:
+            remotion_imports.append('staticFile')
 
     lines.append('import React from "react";')
     lines.append(f'import {{ {", ".join(remotion_imports)} }} from "remotion";')
     lines.append('')
+
+    # Import flat file as Base when delegating
+    if has_flat_file:
+        lines.append(f'import {{ {component_name} as {component_name}Base }} from "../{component_name}";')
 
     # Import sub-compositions if present
     if compositions:
@@ -100,6 +112,8 @@ def generate_section_component(
             if comp_id:
                 comp_pascal = to_pascal_case(comp_id)
                 lines.append(f'import {{ {comp_pascal} }} from "../{comp_id}";')
+
+    if has_flat_file or compositions:
         lines.append('')
 
     # Component definition
@@ -111,21 +125,24 @@ def generate_section_component(
     lines.append('  return (')
     lines.append(f'    <Sequence from={{0}} durationInFrames={{Math.ceil(durationSeconds * fps)}}>')
 
-    # Audio narration
-    if has_narration:
-        lines.append(f'      <Audio src={{staticFile("{section_id}/narration.wav")}} />')
+    if has_flat_file:
+        # Delegate to flat file for base content (video, audio, subtitles)
+        lines.append(f'      <{component_name}Base />')
+    else:
+        # Render Audio/Video directly
+        if has_narration:
+            lines.append(f'      <Audio src={{staticFile("{section_id}/narration.wav")}} />')
+        if has_veo_clip:
+            lines.append(f'      <OffthreadVideo src={{staticFile("veo/{section_id}.mp4")}} style={{{{ width: "100%", height: "100%" }}}} />')
 
-    # Veo video clip (stretched to fill)
-    if has_veo_clip:
-        lines.append(f'      <OffthreadVideo src={{staticFile("veo/{section_id}.mp4")}} style={{{{ width: "100%", height: "100%" }}}} />')
-
+    # Sub-compositions rendered on top
     if compositions:
         for comp in compositions:
             comp_id = comp if isinstance(comp, str) else comp.get('id', '')
             if comp_id:
                 comp_pascal = to_pascal_case(comp_id)
                 lines.append(f'      <{comp_pascal} />')
-    elif not has_veo_clip:
+    elif not has_flat_file and not has_veo_clip:
         lines.append('      {/* Sub-compositions will be added here */}')
 
     lines.append('    </Sequence>')
@@ -151,7 +168,7 @@ def generate_root_tsx(
     lines.append('import { Composition } from "remotion";')
     lines.append('')
 
-    # Import all section components
+    # Import all section components (always from wrapper directory)
     for section in sections:
         section_id = section['id']
         pascal_name = to_pascal_case(section_id)
@@ -248,6 +265,7 @@ def _merge_root_tsx(
     existing_content: str,
     sections: List[Dict[str, Any]],
     fps: int,
+    remotion_dir: str = '',
 ) -> str:
     """Merge section compositions into an existing Root.tsx file.
 
@@ -259,6 +277,7 @@ def _merge_root_tsx(
     # Build the set of section imports and compositions we need
     import_lines: List[str] = []
     composition_lines: List[str] = []
+    remotion_src = os.path.join(remotion_dir, 'src', 'remotion') if remotion_dir else ''
 
     for section in sections:
         section_id = section['id']
@@ -482,7 +501,8 @@ def main() -> None:
 
         # Generate component source
         remotion_public = os.path.join(remotion_dir, 'public')
-        tsx_content = generate_section_component(section, fps, remotion_public)
+        remotion_src = os.path.join(remotion_dir, 'src', 'remotion')
+        tsx_content = generate_section_component(section, fps, remotion_public, remotion_src=remotion_src)
 
         # Write file
         with open(output_path, 'w', encoding='utf-8') as f:

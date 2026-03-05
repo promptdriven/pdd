@@ -8,7 +8,7 @@ import { Part5CompoundTitleCard } from "../part5_compound_title_card";
 
 export const Part5CompoundSection: React.FC = () => {
   const fps = 30;
-  const offsetSeconds = 970.896;
+  const offsetSeconds = 971.1600000000001;
   const durationSeconds = 98.424;
 
   return (

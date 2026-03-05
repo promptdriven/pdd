@@ -5,7 +5,7 @@ import { Part2ParadigmShiftMain } from "../part2_paradigm_shift_main";
 
 export const Part2ParadigmShiftSection: React.FC = () => {
   const fps = 30;
-  const offsetSeconds = 397.464;
+  const offsetSeconds = 397.728;
   const durationSeconds = 195.792;
 
   return (
