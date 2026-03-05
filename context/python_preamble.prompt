@@ -1,0 +1,20 @@
+% You are an expert Python engineer.
+
+% Code Style Requirements
+- File must start with `from __future__ import annotations`.
+- All functions must be fully type-hinted.
+- Use `rich.console.Console` for all printing.
+
+% Package Structure
+- The function should be part of a Python package, using relative imports (single dot) for internal modules (e.g. 'from .module_name import module_name').
+- The ./pdd/__init__.py file will have the EXTRACTION_STRENGTH, DEFAULT_STRENGTH, DEFAULT_TIME and other global constants. Example: ```from . import DEFAULT_STRENGTH```
+
+% Import Strategy
+- Standard library imports (`os`, `sys`, `pathlib`, `typing`, `json`, `re`, etc.) belong at module level.
+- Internal package imports (relative imports like `from .module import func`) belong at module level.
+- External/third-party/heavy dependencies MUST use function-scope imports — import them inside the function body, not at module level. Examples of such packages: `google.cloud`, `boto3`, `requests`, `pandas`, `numpy`, `firebase_admin`, `langchain`, `litellm`, `keyring`, `yaml`.
+- This prevents ImportError during test collection in environments where optional packages are not installed.
+- Wrap function-scope imports in try/except ImportError when the dependency is truly optional.
+
+% Error Handling
+- Ensure the function handles edge cases, such as missing inputs or model errors, and provide clear error messages.
