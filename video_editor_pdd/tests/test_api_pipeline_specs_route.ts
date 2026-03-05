@@ -756,4 +756,16 @@ describe("app/api/pipeline/specs/run/route.ts source structure", () => {
   it("imports NextRequest from next/server", () => {
     expect(sourceCode).toMatch(/import.*NextRequest.*from\s+["']next\/server["']/);
   });
+
+  it("prompt explicitly forbids creating a single monolithic spec.md", () => {
+    expect(sourceCode).toMatch(/DO NOT create a single spec\.md/);
+  });
+
+  it("prompt instructs to create multiple separate files per section", () => {
+    expect(sourceCode).toMatch(/MUST create MULTIPLE separate files/);
+  });
+
+  it("prompt includes example numbered filenames", () => {
+    expect(sourceCode).toMatch(/01_.*\.md.*02_.*\.md/);
+  });
 });

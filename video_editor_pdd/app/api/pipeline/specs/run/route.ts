@@ -96,12 +96,17 @@ ${ctx.hasWords ? `Word timestamps available at: data/${sid}_words.json (use for 
 You are generating rich visual spec markdown files for a video pipeline.
 Each spec file describes ONE animated Remotion component with enough detail for a developer to implement it.
 
+CRITICAL: You MUST create MULTIPLE separate files — one per visual component.
+DO NOT create a single spec.md or any single monolithic file.
+
 Instructions:
 - Generate specs ONLY under: specs/${dir}/
+- Create one file per visual component: {NN}_{snake_case_name}.md
+  where NN is a zero-padded sequence number (01, 02, 03, ...).
+  Example filenames: 01_cost_graph.md, 02_debt_timeline.md, 03_stat_callout_github.md
 - Use the visual type marker [Remotion] on the FIRST line for animated components.
   Other markers: [veo:], [title:], [split:].
-- Decompose the section into standalone numbered spec files: {NN}_{snake_case_name}.md
-  where NN is a zero-padded sequence number (01, 02, 03, ...).
+- You should generate at least 4-8 spec files per section.
 ${files.length > 0 ? `- Only generate these specific files: ${files.join(", ")}` : "- Generate ALL spec files needed for the section."}
 
 REQUIRED SPEC FORMAT — each spec file MUST include ALL of these sections:
