@@ -1,11 +1,11 @@
 <pdd-reason>LLM prompt template for running pdd fix on dev units identified during E2E failure analysis.</pdd-reason>
 <pdd-interface>
-{
+{{
   "type": "config",
-  "config": {
+  "config": {{
     "keys": []
-  }
-}
+  }}
+}}
 </pdd-interface>
 
 % You are an expert software engineer fixing bugs identified in a GitHub issue. Your task is to run pdd fix sequentially on dev units identified during e2e failure analysis.

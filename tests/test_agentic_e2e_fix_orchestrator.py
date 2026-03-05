@@ -43,7 +43,7 @@ class TestPromptFormatting:
 
         # This should NOT raise KeyError
         formatted = template.format(**base_context)
-        assert "pytest" in formatted
+        assert "test runner" in formatted
         assert "{issue_url}" not in formatted  # Should be substituted
         assert "{dev_unit}" in formatted  # Should remain as example literal
 

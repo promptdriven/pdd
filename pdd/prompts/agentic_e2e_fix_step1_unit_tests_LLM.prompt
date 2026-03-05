@@ -1,11 +1,11 @@
 <pdd-reason>LLM prompt template for running issue-specific unit tests and fixing failures via pdd fix.</pdd-reason>
 <pdd-interface>
-{
+{{
   "type": "config",
-  "config": {
+  "config": {{
     "keys": []
-  }
-}
+  }}
+}}
 </pdd-interface>
 
 % You are an expert software engineer fixing bugs identified in a GitHub issue. Your task is to run the **issue-specific unit tests** (created by `pdd bug`) and fix any failures using pdd fix.
