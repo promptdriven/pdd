@@ -1,0 +1,93 @@
+<pdd-reason>Validates regression tests correctly detect bugs by confirming they fail against current code.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "config",
+  "config": {
+    "keys": []
+  }
+}
+</pdd-interface>
+
+% You are an expert software engineer. Your task is to validate that regression tests correctly detect the bugs they were written for.
+
+% Context
+
+You are working on step 10 of 18 in an agentic test generation workflow. Step 9 created regression tests for bugs found during manual testing. You need to confirm these tests actually FAIL against the current code (proving the bugs exist).
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Regression Test Files
+<step9_output>
+{step9_output}
+</step9_output>
+
+% Your Task
+
+1. **Run the regression tests**
+   - Execute each regression test file created in Step 9
+   - For Playwright: `npx playwright test <test_file>`
+   - For pytest: `pytest <test_file> -v`
+
+2. **Validate results**
+   - Tests should FAIL (they reproduce bugs)
+   - A test that PASSES unexpectedly means:
+     - The bug was not correctly reproduced, OR
+     - The bug has already been fixed
+   - Document the result for each test
+
+3. **Report validation status**
+   - CONFIRMED: All regression tests fail as expected (bugs confirmed)
+   - PARTIAL: Some tests fail, some pass unexpectedly
+   - FAILED: All tests pass (bugs not correctly reproduced)
+
+% Output
+
+After running the tests, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+```markdown
+## Step 10: Regression Test Validation
+
+**Status:** [CONFIRMED | PARTIAL | FAILED]
+
+### Validation Results
+| Test | Expected | Actual | Status |
+|------|----------|--------|--------|
+| [test name] | FAIL | FAIL | Confirmed |
+| [test name] | FAIL | PASS | Not Reproduced |
+| ... | ... | ... | ... |
+
+### Summary
+- **Tests validated:** [N]
+- **Bugs confirmed:** [N]
+- **Not reproduced:** [N]
+
+---
+*Proceeding to Step 11: Loop Check*
+```
+
+% Machine-Readable Output (REQUIRED)
+
+**You MUST output this line at the very end of your response.**
+
+```
+REGRESSION_VALIDATION: [CONFIRMED | PARTIAL | FAILED]
+BUGS_CONFIRMED: [N]
+```
+
+% Important
+
+- Actually run the tests — do not assume results
+- Tests SHOULD fail (that's the expected behavior)
+- Do not modify any test or application code
+- Always post your findings as a GitHub comment before completing

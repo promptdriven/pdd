@@ -39,13 +39,22 @@
 #   23. test_write_error_returns_false: OSError on write → returns False, error shown
 
 import json
+import os
 import pytest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 from io import StringIO
 
 from pdd import pddrc_initializer
-from pdd.pddrc_initializer import _detect_language, _build_pddrc_content
+from pdd.pddrc_initializer import (
+    _detect_language,
+    _build_pddrc_content,
+    _detect_language_from_extensions,
+    _paths_already_covered,
+    _sanitize_context_name,
+    infer_contexts_from_scan,
+    ensure_pddrc_for_scan,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -211,9 +220,9 @@ def test_build_content_standard_defaults():
 
 def test_build_content_unknown_language_fallback():
     """Unknown language falls back to Python paths but uses given language name."""
-    content = _build_pddrc_content("rust")
+    content = _build_pddrc_content("haskell")
     assert 'generate_output_path: "pdd/"' in content
-    assert 'default_language: "rust"' in content
+    assert 'default_language: "haskell"' in content
 
 
 def test_build_content_ends_with_newline():
@@ -354,3 +363,275 @@ def test_write_error_returns_false(tmp_path, monkeypatch):
         )
     assert result is False
     assert "Failed" in output or "error" in output.lower()
+
+
+# ---------------------------------------------------------------------------
+# IX. Auto-generation for `pdd update --directory / --repo`
+# ---------------------------------------------------------------------------
+
+class TestPddrcAutoGeneration:
+    """Tests for auto-generation of .pddrc from scan results."""
+
+    def test_infer_contexts_groups_by_subdir(self, tmp_path):
+        """Rust crates are grouped into separate contexts by subdirectory."""
+        # Create a file structure mimicking a monorepo with crates
+        scan_dir = str(tmp_path / "crates")
+        repo_root = str(tmp_path)
+        code_files = [
+            str(tmp_path / "crates" / "selune-compiler" / "src" / "lib.rs"),
+            str(tmp_path / "crates" / "selune-compiler" / "src" / "compiler" / "expr.rs"),
+            str(tmp_path / "crates" / "selune-core" / "src" / "lib.rs"),
+        ]
+
+        with patch("pdd.pddrc_initializer._detect_language_from_extensions") as mock_lang:
+            mock_lang.return_value = "rust"
+            contexts = infer_contexts_from_scan(scan_dir, repo_root, code_files)
+
+        assert "crates-selune-compiler" in contexts
+        assert "crates-selune-core" in contexts
+        assert len(contexts) == 2
+
+        # Verify paths pattern
+        assert contexts["crates-selune-compiler"]["paths"] == ["crates/selune-compiler/**"]
+        assert contexts["crates-selune-core"]["paths"] == ["crates/selune-core/**"]
+
+    def test_infer_contexts_flat_directory(self, tmp_path):
+        """Single context when all files are directly in scan_dir (no subdirs)."""
+        scan_dir = str(tmp_path / "lib")
+        repo_root = str(tmp_path)
+        code_files = [
+            str(tmp_path / "lib" / "utils.py"),
+            str(tmp_path / "lib" / "helpers.py"),
+        ]
+
+        with patch("pdd.pddrc_initializer._detect_language_from_extensions") as mock_lang:
+            mock_lang.return_value = "python"
+            contexts = infer_contexts_from_scan(scan_dir, repo_root, code_files)
+
+        assert len(contexts) == 1
+        name = list(contexts.keys())[0]
+        assert name == "lib"
+        assert contexts[name]["paths"] == ["lib/**"]
+
+    def test_infer_contexts_language_detection(self, tmp_path):
+        """Majority-vote .rs files → 'rust'."""
+        code_files = [
+            "/repo/crates/a/src/lib.rs",
+            "/repo/crates/a/src/main.rs",
+            "/repo/crates/a/build.py",
+        ]
+
+        with patch("pdd.get_language.get_language") as mock_gl:
+            # .rs → "Rust", .py → "Python"
+            def side_effect(ext):
+                return {".rs": "Rust", ".py": "Python"}.get(ext, "")
+            mock_gl.side_effect = side_effect
+
+            result = _detect_language_from_extensions(code_files)
+
+        assert result == "rust"
+
+    def test_sanitize_context_name(self):
+        """Special chars are stripped, result is lowercase with hyphens."""
+        assert _sanitize_context_name("crates", "selune-compiler") == "crates-selune-compiler"
+        assert _sanitize_context_name("src", "utils") == "src-utils"
+        assert _sanitize_context_name("", "backend") == "backend"
+        # Special characters replaced
+        assert _sanitize_context_name("my.dir", "sub@pkg") == "my-dir-sub-pkg"
+        # Consecutive hyphens collapsed
+        assert _sanitize_context_name("a--b", "c") == "a-b-c"
+
+    def test_ensure_pddrc_creates_when_missing(self, tmp_path):
+        """Creates .pddrc with correct contexts when none exists."""
+        scan_dir = str(tmp_path / "crates")
+        repo_root = str(tmp_path)
+        code_files = [
+            str(tmp_path / "crates" / "foo" / "src" / "lib.rs"),
+        ]
+
+        with patch("pdd.pddrc_initializer._detect_language_from_extensions", return_value="rust"), \
+             patch("pdd.construct_paths._find_pddrc_file", return_value=None):
+            result = ensure_pddrc_for_scan(scan_dir, repo_root, code_files, quiet=True)
+
+        assert result is not None
+        assert result == tmp_path / ".pddrc"
+        content = result.read_text(encoding="utf-8")
+        assert 'version: "1.0"' in content
+        assert "crates-foo:" in content
+        assert '"crates/foo/**"' in content
+        assert '"prompts/crates/foo"' in content
+        assert '"crates/foo"' in content
+
+    def test_ensure_pddrc_adds_to_existing(self, tmp_path):
+        """Adds new context to existing .pddrc, preserves existing contexts."""
+        existing = (
+            'version: "1.0"\n'
+            "\n"
+            "contexts:\n"
+            "  default:\n"
+            "    defaults:\n"
+            '      default_language: "python"\n'
+        )
+        pddrc_file = tmp_path / ".pddrc"
+        pddrc_file.write_text(existing, encoding="utf-8")
+
+        scan_dir = str(tmp_path / "crates")
+        repo_root = str(tmp_path)
+        code_files = [
+            str(tmp_path / "crates" / "bar" / "src" / "main.rs"),
+        ]
+
+        with patch("pdd.pddrc_initializer._detect_language_from_extensions", return_value="rust"), \
+             patch("pdd.construct_paths._find_pddrc_file", return_value=pddrc_file):
+            result = ensure_pddrc_for_scan(scan_dir, repo_root, code_files, quiet=True)
+
+        assert result is not None
+        content = result.read_text(encoding="utf-8")
+        # Existing content preserved
+        assert "default:" in content
+        assert 'default_language: "python"' in content
+        # New context added
+        assert "crates-bar:" in content
+
+    def test_ensure_pddrc_noop_when_covered(self, tmp_path):
+        """No-op if contexts already match."""
+        existing = (
+            'version: "1.0"\n'
+            "\n"
+            "contexts:\n"
+            "  crates-foo:\n"
+            "    paths:\n"
+            '      - "crates/foo/**"\n'
+            "    defaults:\n"
+            '      prompts_dir: "prompts/crates/foo"\n'
+        )
+        pddrc_file = tmp_path / ".pddrc"
+        pddrc_file.write_text(existing, encoding="utf-8")
+
+        scan_dir = str(tmp_path / "crates")
+        repo_root = str(tmp_path)
+        code_files = [
+            str(tmp_path / "crates" / "foo" / "src" / "lib.rs"),
+        ]
+
+        with patch("pdd.pddrc_initializer._detect_language_from_extensions", return_value="rust"), \
+             patch("pdd.construct_paths._find_pddrc_file", return_value=pddrc_file):
+            result = ensure_pddrc_for_scan(scan_dir, repo_root, code_files, quiet=True)
+
+        assert result is None  # No changes made
+
+    def test_generate_output_path_no_trailing_slash(self, tmp_path):
+        """Critical: generate_output_path must NOT have trailing slash."""
+        scan_dir = str(tmp_path / "crates")
+        repo_root = str(tmp_path)
+        code_files = [
+            str(tmp_path / "crates" / "selune-compiler" / "src" / "lib.rs"),
+        ]
+
+        with patch("pdd.pddrc_initializer._detect_language_from_extensions", return_value="rust"):
+            contexts = infer_contexts_from_scan(scan_dir, repo_root, code_files)
+
+        ctx = contexts["crates-selune-compiler"]
+        gen_path = ctx["defaults"]["generate_output_path"]
+        assert not gen_path.endswith("/"), (
+            f"generate_output_path must not end with '/' but got: {gen_path!r}"
+        )
+        assert gen_path == "crates/selune-compiler"
+
+    def test_consistency_invariant(self, tmp_path):
+        """resolve_prompt_code_pair produces same path with and without .pddrc.
+
+        The path-mirroring logic without .pddrc places prompts at:
+            prompts/<full-rel-dir>/<name>_<Language>.prompt
+
+        With the auto-generated .pddrc (prompts_dir + generate_output_path
+        stripping), the result must be identical.
+        """
+        # Simulate what resolve_prompt_code_pair does internally for the
+        # "without pddrc" case.
+        # For crates/selune-compiler/src/compiler/expr.rs:
+        #   rel_dir = "crates/selune-compiler/src/compiler"
+        #   code_root = ""  (no context)
+        #   result = "prompts/crates/selune-compiler/src/compiler/expr_Rust.prompt"
+        rel_dir = "crates/selune-compiler/src/compiler"
+        base_name = "expr"
+        language = "Rust"
+        prompts_base_no_pddrc = "prompts"
+        path_without = os.path.join(prompts_base_no_pddrc, rel_dir, f"{base_name}_{language}.prompt")
+
+        # With auto-generated pddrc context:
+        #   prompts_dir = "prompts/crates/selune-compiler"
+        #   generate_output_path = "crates/selune-compiler"
+        #   code_root = "crates/selune-compiler"
+        #   stripped rel_dir = "src/compiler"
+        #   result = "prompts/crates/selune-compiler/src/compiler/expr_Rust.prompt"
+        code_root = "crates/selune-compiler"
+        if rel_dir.startswith(code_root + os.sep):
+            stripped = rel_dir[len(code_root) + len(os.sep):]
+        else:
+            stripped = rel_dir
+        prompts_base_with_pddrc = "prompts/crates/selune-compiler"
+        path_with = os.path.join(prompts_base_with_pddrc, stripped, f"{base_name}_{language}.prompt")
+
+        assert path_without == path_with, (
+            f"Paths diverge!\n  Without .pddrc: {path_without}\n  With .pddrc:    {path_with}"
+        )
+
+    def test_infer_contexts_repo_root_flat_skips(self, tmp_path):
+        """When scan_dir == repo_root and all files are flat, returns empty."""
+        repo_root = str(tmp_path)
+        code_files = [
+            str(tmp_path / "main.py"),
+            str(tmp_path / "utils.py"),
+        ]
+
+        with patch("pdd.pddrc_initializer._detect_language_from_extensions", return_value="python"):
+            contexts = infer_contexts_from_scan(repo_root, repo_root, code_files)
+
+        assert contexts == {}
+
+    def test_paths_already_covered_by_parent_glob(self):
+        """New context 'pdd/commands/**' is covered by existing 'pdd/**'."""
+        assert _paths_already_covered(
+            ["pdd/commands/**"], ["pdd/**"]
+        ) is True
+
+    def test_paths_already_covered_exact_match(self):
+        """Exact path pattern match is detected as covered."""
+        assert _paths_already_covered(
+            ["pdd/commands/**"], ["pdd/commands/**"]
+        ) is True
+
+    def test_paths_not_covered(self):
+        """Unrelated path is not covered."""
+        assert _paths_already_covered(
+            ["crates/selune-compiler/**"], ["pdd/**", "tests/**"]
+        ) is False
+
+    def test_ensure_pddrc_skips_covered_paths(self, tmp_path):
+        """Contexts whose paths are already covered by existing .pddrc are skipped."""
+        existing = (
+            'version: "1.0"\n'
+            "\n"
+            "contexts:\n"
+            "  default:\n"
+            '    paths: ["pdd/**"]\n'
+            "    defaults:\n"
+            '      default_language: "python"\n'
+        )
+        pddrc_file = tmp_path / ".pddrc"
+        pddrc_file.write_text(existing, encoding="utf-8")
+
+        # Scan pdd/ subdirectories — should all be covered by "pdd/**"
+        scan_dir = str(tmp_path / "pdd")
+        repo_root = str(tmp_path)
+        code_files = [
+            str(tmp_path / "pdd" / "commands" / "modify.py"),
+            str(tmp_path / "pdd" / "core" / "engine.py"),
+        ]
+
+        with patch("pdd.pddrc_initializer._detect_language_from_extensions", return_value="python"), \
+             patch("pdd.construct_paths._find_pddrc_file", return_value=pddrc_file):
+            result = ensure_pddrc_for_scan(scan_dir, repo_root, code_files, quiet=True)
+
+        assert result is None  # All covered, nothing to add

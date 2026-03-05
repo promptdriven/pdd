@@ -1,3 +1,14 @@
+<pdd-reason>Generates unit tests for PDD-generated code modules with auth-aware test patterns.</pdd-reason>
+<pdd-interface>
+{{
+  "type": "module",
+  "module": {{
+    "functions": [
+      {{"name": "generate_test", "signature": "(prompt_content: str, code_content: str, language: str)", "returns": "str (test file content)"}}
+    ]
+  }}
+}}
+</pdd-interface>
 % You are an expert Software Test Engineer. Your goal is to generate tests that ensures correct functionality of the code under test.
 
 % Here a description of what the code is supposed to do and was the prompt that generated the code: <prompt_that_generated_code>{prompt_that_generated_code}</prompt_that_generated_code>
@@ -32,7 +43,12 @@
     - CRITICAL (Python only): NEVER use module-level `sys.modules[...] = MagicMock()` - it pollutes pytest's module cache and breaks other test files. Use @pytest.fixture with types.ModuleType and __path__ = [] instead.
     - Setup and teardown methods should only use public APIs and environment variables, never reset internal module state directly.
     - Design tests to be independent of implementation details that might change when code is regenerated.
-    - For test isolation, use fixtures and mocking of external dependencies rather than manipulating internal module state. In general minimize the amount of mocking needed so that the tests are more robust to changes in the code under test and more code is tested.
+    - For test isolation, use fixtures and mocking of external dependencies rather than manipulating internal module state.
+    - MOCKING RULE: Mock at external boundaries, test internal logic directly.
+      - ALWAYS mock: HTTP clients, database connections, auth providers, third-party SDKs, message queues, file storage
+      - NEVER mock: The function under test, pure computation, data validation, business logic
+      - Mock return values MUST match the real return type from the source code — do not invent response shapes
+    - The goal: test as much of YOUR code as possible while isolating external services that need credentials.
 
 % TEST ISOLATION PRINCIPLE:
 % CRITICAL: Each test MUST be isolated and not pollute state for other tests.
@@ -42,6 +58,16 @@
     - Prefer function-scoped test resources over shared/module-scoped ones to ensure isolation
 
 <include>context/test.prompt</include>
+
+% AUTH MODULE TEST PATTERNS:
+% When the code under test involves authentication, authorization, OAuth, JWT, or session management:
+    - NEVER call real OAuth providers or identity services in tests
+    - Use monkeypatch-based mock OAuth fixtures (mock token exchange, mock user info endpoints)
+    - Use pre-generated JWT tokens with pyjwt for token validation tests (valid, expired, no-scope tokens)
+    - Test each OAuth flow stage independently (redirect, callback, exchange, refresh, revoke)
+    - Test auth error scenarios: expired tokens, invalid tokens, missing scopes, revoked tokens, network failures
+    - Mock token storage (keyring, session store, cookie jar) with in-memory implementations
+    - See Pattern 14 in context/test.prompt for concrete fixture examples
 
 <instructions>
     1. FIRST: Carefully analyze the ACTUAL code provided in code_under_test:

@@ -58,6 +58,18 @@ You are working on step 7 of 13 in an agentic architecture workflow. All analysi
 {step6_output}
 </step6_output>
 
+<step2b_output>
+{step2b_output}
+</step2b_output>
+
+% Existing Codebase Profile (from Step 2b)
+
+The codebase scan found existing packages, patterns, and modules.
+You MUST use existing packages — do NOT introduce packages not in package.json/requirements.txt unless clearly required by the PRD.
+You MUST follow existing patterns for auth, data fetching, error handling.
+You MUST reuse existing modules where applicable.
+When generating scaffolding files (package.json, requirements.txt), MERGE with existing dependencies — do not overwrite them.
+
 % Target Directory
 
 {target_dir_note}
@@ -65,7 +77,47 @@ You are working on step 7 of 13 in an agentic architecture workflow. All analysi
 - Write `architecture.json` to `{target_dir}/architecture.json` (NOT the repo root, unless target_dir is `.`)
 - Create all scaffolding files under `{target_dir}/`
 - In the FILES_CREATED marker, list all paths relative to the repo root (e.g. `{target_dir}/architecture.json`, `{target_dir}/src/main.py`)
-- If `{target_dir}/architecture.json` already exists, REPLACE it with the new project architecture
+- Write architecture.json for THIS sub-project to `{target_dir}/architecture.json`
+- Do NOT modify architecture.json files in other directories — they belong to other sub-projects
+- For cross-project dependencies, use `"external:<dir>/<module_filename>"` in the `dependencies` array
+
+% Existing Architecture at Target Location
+
+{existing_architecture}
+
+If an existing architecture.json is shown above, you MUST:
+1. READ and understand all existing module entries
+2. DECIDE how the new issue's requirements relate to existing modules:
+   - If a new feature MODIFIES an existing module, UPDATE that module's entry (keep its filename, update description/interface/dependencies)
+   - If a new feature requires NEW modules, ADD them alongside existing ones
+   - NEVER remove existing modules unless the issue explicitly says to deprecate them
+3. Tag each new/updated module entry with:
+   "origin": {{"issue_number": {issue_number}, "issue_url": "{issue_url}"}}
+4. Re-number priorities so the combined set forms a valid topological order
+5. Write the COMPLETE architecture (existing + new/updated) to `{target_dir}/architecture.json`
+
+If no existing architecture is shown, generate from scratch as normal.
+
+% Existing Sibling Architectures
+
+{sibling_architectures}
+
+When generating architecture.json:
+1. Read sibling architecture.json files (shown above) to understand existing modules
+2. Do NOT duplicate modules that exist in siblings
+3. Reference sibling modules using `"external:sibling_dir/module_filename"` in dependencies
+4. Note cross-project dependencies in the `reason` field
+
+% Naming Registry Enforcement (from Step 2)
+
+The Step 2 output contains a NAMING REGISTRY — a canonical list of shared identifiers.
+You MUST use these EXACT names in architecture.json:
+- `description` field must reference collection/table names exactly as listed
+- `interface.api.endpoints[].path` must match the registered API paths
+- All environment variable references must use registered names
+- Do NOT normalize, rename, or re-case any registered identifier
+
+If Step 2's naming registry is missing or incomplete, derive one from the PRD and be consistent.
 
 % Your Task
 
@@ -144,6 +196,10 @@ Generate a complete, valid architecture.json following these rules:
 
    **CI/CD:**
    - `.github/workflows/ci.yml` - Basic workflow for lint, test, build
+
+   **Environment manifest (REQUIRED if any module uses environment variables):**
+   - `.env.example` — Template with all required env vars, commented with purpose
+   - Document all env vars in README.md under "## Configuration"
 
    **Framework-specific configs:**
    - Next.js: `next.config.js` or `next.config.ts`

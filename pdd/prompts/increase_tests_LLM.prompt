@@ -13,3 +13,6 @@ Here is the coverage report: ```{coverage_report}```
     - The unit test should be in {language}. If Python, use pytest.
     - Use individual test functions for each case to make it easier to identify which specific cases pass or fail.
     - Use the description of the functionality in the prompt to generate tests with useful tests with good code coverage.
+    - MOCKING RULE: Mock at external boundaries (HTTP clients, databases, auth providers, third-party SDKs), test internal logic directly.
+    - Mock return values MUST match the real return type from the source code — do not invent response shapes.
+    - NEVER mock the function under test.

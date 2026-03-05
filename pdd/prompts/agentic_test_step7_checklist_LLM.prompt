@@ -1,0 +1,127 @@
+<pdd-reason>Creates manual testing checklist for browser-based exploratory testing via playwright-cli.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "config",
+  "config": {
+    "keys": []
+  }
+}
+</pdd-interface>
+
+% You are an expert QA engineer. Your task is to create a comprehensive manual testing checklist for browser-based exploratory testing.
+
+% Context
+
+You are working on step 7 of 18 in an agentic test generation workflow. Step 6 identified coverage gaps that require manual testing. You must create a checklist that will be executed via `playwright-cli` commands.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Steps Output
+<step4_output>
+{step4_output}
+</step4_output>
+
+<step5b_output>
+{step5b_output}
+</step5b_output>
+
+<step6_output>
+{step6_output}
+</step6_output>
+
+% Your Task
+
+Create a manual testing checklist using three complementary strategies:
+
+1. **Page-by-page exhaustive testing**
+   - Visit every page/route in the application
+   - Test every interactive element on each page (buttons, forms, links, dropdowns, modals)
+   - Verify visual appearance, layout, and responsiveness
+   - Each item: `[ ] Page: /path — Element: description — Action: what to test`
+
+2. **User-story-driven walkthroughs**
+   - Generate user stories from the PRD/issue requirements
+   - Walk through each user story end-to-end
+   - Test the complete flow from start to finish
+   - Each item: `[ ] Story: "As a [user], I want to [action]" — Steps: 1, 2, 3...`
+
+3. **Accessibility spot-checks**
+   - Keyboard navigation (tab order, focus indicators, keyboard-only usage)
+   - Focus management (modal focus trapping, focus return after dialog close)
+   - Screen reader compatibility (semantic HTML, meaningful labels)
+   - These complement the automated axe-core checks from Step 5b with aspects axe cannot catch
+   - Each item: `[ ] Accessibility: [page] — [check description]`
+
+% Checklist Format
+
+Output the checklist in a structured format that can be chunked for execution:
+
+```
+CHECKLIST:
+[ ] PAGE:/path | Element: button#submit | Action: Click and verify form submission
+[ ] PAGE:/path | Element: input#email | Action: Enter invalid email, verify error message
+[ ] STORY: User registration | Steps: Navigate to /register, fill form, submit, verify redirect
+[ ] A11Y:/path | Check: Tab through all interactive elements, verify focus order
+...
+```
+
+Each item must be:
+- Self-contained (executable without context from other items)
+- Specific enough to produce a PASS/FAIL result
+- Suitable for execution via `playwright-cli` commands (open, click, fill, snapshot)
+
+% Output
+
+After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+```markdown
+## Step 7: Manual Testing Checklist
+
+**Status:** Checklist Created
+
+### Page-by-Page Tests
+- [N] items
+
+### User Story Walkthroughs
+- [N] items
+
+### Accessibility Spot-Checks
+- [N] items
+
+### Full Checklist
+[The complete checklist in the structured format above]
+
+---
+*Proceeding to Step 8: Manual Testing Execution*
+```
+
+% Machine-Readable Output (REQUIRED)
+
+**You MUST output this line at the very end of your response.**
+
+```
+MANUAL_CHECKLIST_ITEMS: [N]
+```
+
+% Important
+
+- Be exhaustive — the agent executing these tests tends to stop prematurely, so include everything
+- Each item must be independently testable
+- Group items into logical chunks (by page or by story) for batched execution
+- Always post your findings as a GitHub comment before completing

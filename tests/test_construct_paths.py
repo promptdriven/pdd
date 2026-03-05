@@ -3082,3 +3082,121 @@ def test_get_language_outputs_case_insensitive():
     assert get_language_outputs('Python') == {'code', 'test', 'example'}
     assert get_language_outputs('YAML') == {'code'}
 
+
+# ---------------------------------------------------------------------------
+# Fix: BUILTIN_EXT_MAP must include typescriptreact/javascriptreact
+# ---------------------------------------------------------------------------
+
+from pdd.construct_paths import BUILTIN_EXT_MAP
+
+
+def test_builtin_ext_map_has_typescriptreact():
+    """BUILTIN_EXT_MAP must map 'typescriptreact' to '.tsx' so the CSV-less
+    fallback produces the correct extension instead of '.typescriptreact'."""
+    assert 'typescriptreact' in BUILTIN_EXT_MAP
+    assert BUILTIN_EXT_MAP['typescriptreact'] == '.tsx'
+
+
+def test_builtin_ext_map_has_javascriptreact():
+    """BUILTIN_EXT_MAP must map 'javascriptreact' to '.jsx'."""
+    assert 'javascriptreact' in BUILTIN_EXT_MAP
+    assert BUILTIN_EXT_MAP['javascriptreact'] == '.jsx'
+
+
+def test_builtin_ext_map_has_svelte_and_vue():
+    """BUILTIN_EXT_MAP must also cover svelte and vue frameworks."""
+    assert BUILTIN_EXT_MAP.get('svelte') == '.svelte'
+    assert BUILTIN_EXT_MAP.get('vue') == '.vue'
+
+
+# ---------------------------------------------------------------------------
+# Fix: construct_paths should use prompt suffix language before defaulting
+# to Python when _determine_language returns None
+# ---------------------------------------------------------------------------
+
+def test_construct_paths_tsx_extension_when_csv_unavailable(tmpdir):
+    """When get_extension raises (no CSV / no PDD_PATH), BUILTIN_EXT_MAP must
+    still resolve 'typescriptreact' to '.tsx' — not fall through to
+    '.typescriptreact' or default to '.py'."""
+    tmp_path = Path(str(tmpdir))
+
+    prompt_file = tmp_path / 'my_component_typescriptreact.prompt'
+    prompt_file.write_text('Create a React component')
+
+    input_file_paths = {'prompt_file': str(prompt_file)}
+    command_options = {}
+
+    mock_output_paths = {'output': str(tmp_path / 'my_component.tsx')}
+
+    # Simulate CSV being unavailable (get_extension raises ValueError)
+    with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths) as mock_gen, \
+         patch('pdd.construct_paths.get_extension', side_effect=ValueError("PDD_PATH not set")):
+
+        _, _, output_file_paths, language = construct_paths(
+            input_file_paths, True, True, 'generate', command_options
+        )
+
+        assert language == 'typescriptreact', \
+            f"Language should be 'typescriptreact', got '{language}'"
+
+        # Verify BUILTIN_EXT_MAP fallback produced '.tsx', not '.typescriptreact'
+        mock_gen.assert_called_once()
+        call_kwargs = mock_gen.call_args
+        assert call_kwargs.kwargs.get('file_extension') == '.tsx', \
+            f"file_extension should be '.tsx', got '{call_kwargs.kwargs.get('file_extension')}'"
+
+
+def test_construct_paths_jsx_extension_when_csv_unavailable(tmpdir):
+    """Same as above but for javascriptreact → .jsx."""
+    tmp_path = Path(str(tmpdir))
+
+    prompt_file = tmp_path / 'my_widget_javascriptreact.prompt'
+    prompt_file.write_text('Create a React component')
+
+    input_file_paths = {'prompt_file': str(prompt_file)}
+    command_options = {}
+
+    mock_output_paths = {'output': str(tmp_path / 'my_widget.jsx')}
+
+    with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths) as mock_gen, \
+         patch('pdd.construct_paths.get_extension', side_effect=ValueError("PDD_PATH not set")):
+
+        _, _, output_file_paths, language = construct_paths(
+            input_file_paths, True, True, 'generate', command_options
+        )
+
+        assert language == 'javascriptreact', \
+            f"Language should be 'javascriptreact', got '{language}'"
+
+        # Verify BUILTIN_EXT_MAP fallback produced '.jsx', not '.javascriptreact'
+        mock_gen.assert_called_once()
+        call_kwargs = mock_gen.call_args
+        assert call_kwargs.kwargs.get('file_extension') == '.jsx', \
+            f"file_extension should be '.jsx', got '{call_kwargs.kwargs.get('file_extension')}'"
+
+
+def test_construct_paths_null_language_uses_prompt_suffix_not_python(tmpdir):
+    """When _determine_language returns None but the prompt file has a valid
+    language suffix (e.g., _typescriptreact.prompt), construct_paths should
+    extract the language from the prompt suffix rather than blindly defaulting
+    to Python."""
+    tmp_path = Path(str(tmpdir))
+
+    prompt_file = tmp_path / 'recruit_chat_page_typescriptreact.prompt'
+    prompt_file.write_text('Create a chat page')
+
+    input_file_paths = {'prompt_file': str(prompt_file)}
+    command_options = {}
+
+    mock_output_paths = {'output': str(tmp_path / 'recruit_chat_page.tsx')}
+
+    with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths), \
+         patch('pdd.construct_paths._determine_language', return_value=None):
+
+        _, _, _, language = construct_paths(
+            input_file_paths, True, True, 'sync', command_options
+        )
+
+        assert language == 'typescriptreact', \
+            f"Expected 'typescriptreact' from prompt suffix, got '{language}'"
+

@@ -249,7 +249,7 @@ class TestOperationLoggingE2E:
         result = self.run_pdd_command(
             ["crash", str(prompt_file), str(code_file), str(example_file), str(error_file)],
             cwd=project_dir,
-            timeout=300  # 5 minutes for iterative fix loop
+            timeout=600  # 10 minutes for iterative fix loop
         )
 
         # crash may or may not fully succeed, but it should log

@@ -214,16 +214,17 @@ class AsyncSyncRunner:
         except (OSError, json.JSONDecodeError):
             return
 
-        # Must match the same issue URL and module list
+        # Must match the same issue URL
         if saved.get("issue_url") != self.issue_url:
             return
         saved_modules = saved.get("modules", {})
-        if set(saved_modules.keys()) != set(self.basenames):
-            return
 
-        # Restore succeeded modules and comment_id
+        # Restore succeeded modules that are still in the current module list.
+        # Allow partial resumption: if the LLM returns a different (larger or
+        # smaller) module list on re-run, we still honour previously completed
+        # work instead of discarding everything and re-syncing from scratch.
         for basename, info in saved_modules.items():
-            if info.get("status") == "success":
+            if basename in self.module_states and info.get("status") == "success":
                 self.module_states[basename].status = "success"
                 self.module_states[basename].cost = info.get("cost", 0.0)
                 self._resumed_modules.append(basename)

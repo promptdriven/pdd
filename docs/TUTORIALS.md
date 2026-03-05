@@ -84,12 +84,17 @@ This tutorial walks through implementing a GitHub issue using PDD.
      - **API**: Endpoints to test, HTTP methods, expected responses
    - Include examples of expected behavior
    - Specify what elements/interactions/responses should be verified
+   - If you have an OpenAPI/Swagger spec, mention its location for contract validation
 
 2. **Generate Tests**
    ```bash
    pdd test https://github.com/myorg/myrepo/issues/789
    ```
-   This analyzes the target and creates comprehensive tests (Playwright for web, pytest for CLI, pytest+requests for API).
+   This runs an 18-step workflow that analyzes the target and creates comprehensive tests:
+   - Behavioral tests (Playwright for web, pytest for CLI, pytest+requests for API)
+   - Contract/schema validation tests (when OpenAPI/Swagger spec is found)
+   - Accessibility tests (for web apps, using `@axe-core/playwright` at WCAG 2.1 AA)
+   - Manual/exploratory tests via `playwright-cli` (for web apps, optional)
 
 3. **Handle Clarifying Questions**
    - If PDD needs more information (e.g., credentials, test environment setup, API authentication), it posts questions to the issue
@@ -98,9 +103,10 @@ This tutorial walks through implementing a GitHub issue using PDD.
 
 4. **Review the Generated Tests**
    - The PR contains tests for the specified target:
-     - **Web UI**: Playwright tests
+     - **Web UI**: Playwright tests + accessibility audits + optional regression tests from exploratory testing
      - **CLI**: pytest with subprocess
-     - **API**: pytest with requests/httpx
+     - **API**: pytest with requests/httpx + contract validation tests
+   - The PR description includes test plan coverage ratio and summaries
    - Review and adjust tests as needed
 
 5. **Fix Any Issues Found**
@@ -108,6 +114,10 @@ This tutorial walks through implementing a GitHub issue using PDD.
    pdd fix https://github.com/myorg/myrepo/issues/789
    ```
    Use this if tests reveal bugs that need fixing.
+
+**Optional prerequisites for manual testing:**
+- Install `playwright-cli` to enable browser-based exploratory testing (Steps 6-11). Without it, these steps are skipped with a warning.
+- Set `PDD_CLOUD_RUN=true` for parallel execution via Cloud Batch (GitHub App mode).
 
 ### Tips
 

@@ -1,8 +1,19 @@
-% You are an expert software engineer handling a test generation request. Your task is to generate comprehensive tests based on the test plan.
+<pdd-reason>Generates comprehensive test code from enhanced test plan including contract and accessibility tests.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "config",
+  "config": {
+    "keys": []
+  }
+}
+</pdd-interface>
+
+% You are an expert software engineer handling a test generation request. Your task is to generate comprehensive tests based on the enhanced test plan.
 
 % Context
 
-You are working on step 6 of 9 in an agentic test generation workflow. Previous steps have created a detailed test plan.
+You are working on step 12 of 18 in an agentic test generation workflow. Previous steps have created a detailed test plan and enhanced it with contract validation and accessibility test cases.
 
 % Inputs
 
@@ -36,6 +47,18 @@ You are working on step 6 of 9 in an agentic test generation workflow. Previous 
 {step5_output}
 </step5_output>
 
+<step5b_output>
+{step5b_output}
+</step5b_output>
+
+% Enhanced Plan
+
+The test plan has been enhanced (Step 5b) with additional test cases:
+- **Contract validation tests** (if OpenAPI/Swagger spec was found): Use `jsonschema` (Python) or `ajv` (TypeScript) to validate API response schemas against the spec. Each endpoint × method × status code should have a contract test.
+- **Accessibility tests** (if TEST_TYPE is web): Use `@axe-core/playwright` with WCAG 2.1 AA tags. Each page/route should have an accessibility test.
+
+Generate all test types from the enhanced plan: behavioral tests, contract tests, and accessibility tests.
+
 % Worktree Setup
 
 You are now working in an isolated git worktree at: {worktree_path}
@@ -51,6 +74,10 @@ You are now working in an isolated git worktree at: {worktree_path}
    - **Symlink `.env` files** from the main repo if they exist
    - Example: `ln -s ../../.env .env` (adjust path based on worktree depth)
    - Do NOT copy/symlink `venv`, `node_modules`, or other large directories
+   - If `.env` does not exist or contains only placeholders (e.g., `API_KEY=your-key-here`):
+     - Do NOT let tests fail due to missing env vars
+     - Use monkeypatch.setenv() (Python) or process.env mock (TypeScript) with test values
+     - The test values should be clearly fake (e.g., "test-api-key-not-real") so they never accidentally hit real services
 
 3. Install test dependencies if needed:
    - For Playwright: check if `npx playwright install` is needed
@@ -58,8 +85,8 @@ You are now working in an isolated git worktree at: {worktree_path}
 
 % Your Task
 
-1. **Review the test plan from Step 5**
-   - Extract all test scenarios and test cases
+1. **Review the enhanced test plan from Steps 5 and 5b**
+   - Extract all test scenarios and test cases (behavioral, contract, accessibility)
    - Note the test framework to use (Playwright, pytest, etc.)
    - Understand the file naming and directory conventions
 
@@ -70,6 +97,17 @@ You are now working in an isolated git worktree at: {worktree_path}
    - Use proper assertions and error messages
    - Include setup/teardown as specified
    - Follow the project's existing test patterns
+
+2b. **Implement mocks from Step 5's contract-driven mocking strategy**
+    For each entry in the Mocking Strategy table:
+    - Mock the EXACT function specified (not a parent module, not a wrapper — the exact call site)
+    - Return data matching the EXACT shape from the contract (fields, types, nesting)
+    - Include error case tests (mock raising exceptions or returning error status codes)
+
+    CRITICAL: Mocks must reflect the REAL API contract found in source code.
+    - DO NOT invent fields that aren't in the contract
+    - DO NOT omit fields that ARE in the contract
+    - DO NOT use generic placeholder values like "test" or "dummy" — use realistic values matching the field type
 
 3. **For Web UI (Playwright):**
    ```typescript
@@ -140,6 +178,86 @@ You are now working in an isolated git worktree at: {worktree_path}
            # Validate response per test plan
    ```
 
+7. **For Contract/Schema tests (Python + jsonschema):**
+   ```python
+   import jsonschema
+   import requests
+
+   def test_endpoint_contract():
+       """Validate response matches OpenAPI schema."""
+       response = requests.get(f"{{BASE_URL}}/path")
+       schema = {{...}}  # extracted from OpenAPI spec
+       jsonschema.validate(instance=response.json(), schema=schema)
+   ```
+
+8. **For Accessibility tests (Playwright + axe-core):**
+   ```typescript
+   import {{ test, expect }} from '@playwright/test';
+   import AxeBuilder from '@axe-core/playwright';
+
+   test.describe('Accessibility', () => {{
+     test('page should pass axe-core WCAG 2.1 AA', async ({{ page }}) => {{
+       await page.goto('/path');
+       const results = await new AxeBuilder({{ page }}).withTags(['wcag2a', 'wcag2aa']).analyze();
+       expect(results.violations).toEqual([]);
+     }});
+   }});
+
+9. **For code with external auth dependencies (contract-driven mocks):**
+
+   **Python — Mock auth middleware using contract from Step 5:**
+   ```python
+   import pytest
+   from unittest.mock import patch, MagicMock
+
+   # Mock shape MUST match the real return type from source code (see Step 5 contract)
+   MOCK_AUTH_USER = {{
+       "uid": "test-user-123",          # str — matches verify_token return
+       "email": "test@example.com",     # str — matches verify_token return
+       # Include ALL fields from the contract, not just the ones you think you need
+   }}
+
+   class TestProtectedEndpoint:
+       @patch('app.auth.verify_token')  # EXACT function from Step 5 mocking strategy
+       def test_returns_data_for_authenticated_user(self, mock_verify):
+           mock_verify.return_value = MOCK_AUTH_USER
+           response = client.get("/api/resource",
+               headers={{"Authorization": "Bearer fake-token"}})
+           assert response.status_code == 200
+           mock_verify.assert_called_once_with("fake-token")
+
+       @patch('app.auth.verify_token')
+       def test_handles_invalid_token(self, mock_verify):
+           mock_verify.side_effect = InvalidIdTokenError("Token expired")
+           response = client.get("/api/resource",
+               headers={{"Authorization": "Bearer expired-token"}})
+           assert response.status_code == 401
+   ```
+
+   **Python — Mock database layer using contract from Step 5:**
+   ```python
+   def test_get_user_profile(monkeypatch):
+       # Return shape matches the User model from source code
+       mock_user = User(id=1, email="test@example.com", name="Test User", created_at=datetime.now())
+
+       monkeypatch.setattr('app.db.get_user', lambda user_id: mock_user)
+       result = get_user_profile(1)
+       assert result["email"] == "test@example.com"
+   ```
+
+   **TypeScript — Mock auth with jest using contract from Step 5:**
+   ```typescript
+   // Mock shape matches the REAL verifyIdToken return type from source
+   jest.mock('../lib/firebase-admin', () => ({{
+     auth: () => ({{
+       verifyIdToken: jest.fn().mockResolvedValue({{
+         uid: 'test-user-123',    // matches DecodedIdToken
+         email: 'test@example.com', // matches DecodedIdToken
+       }}),
+     }}),
+   }}));
+   ```
+
 % Output
 
 After generating the tests, use `gh issue comment` to post your findings to issue #{issue_number}:
@@ -151,7 +269,7 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 Your comment should follow this format:
 
 ```markdown
-## Step 6: Generated Tests
+## Step 12: Generated Tests
 
 ### Test Files Created
 - `{{test_file_path_1}}`
@@ -176,7 +294,7 @@ Your comment should follow this format:
 ```
 
 ---
-*Proceeding to Step 7: Run Tests*
+*Proceeding to Step 13: Run Tests*
 ```
 
 % CRITICAL: Machine-Readable Output (REQUIRED)
@@ -203,7 +321,7 @@ Examples:
 % Important
 
 - Write test files to disk before posting the comment
-- Follow the test plan from Step 5 exactly
+- Follow the enhanced test plan from Steps 5 and 5b exactly
 - Use descriptive test names and error messages
 - Include proper setup and cleanup
 - Tests should be self-contained and runnable

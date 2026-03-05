@@ -1,20 +1,24 @@
-<pdd-reason>Validates architecture completeness: PRD coverage, layer completeness, dependency graph validity.</pdd-reason>
+<pdd-reason>Validates prompt-level completeness: all modules have prompt files, prompts capture module specs, dependencies correct.</pdd-reason>
 <pdd-interface>
 {{
   "type": "module",
   "module": {{
     "functions": [
-      {{"name": "validate_completeness", "signature": "(architecture_json: str, prd_summary: str)", "returns": "str ('VALID' or list of completeness errors)"}}
+      {{"name": "validate_completeness", "signature": "(architecture_json: str, prd_summary: str, issue_content: str)", "returns": "str ('VALID' or list of completeness errors)"}}
     ]
   }}
 }}
 </pdd-interface>
 <pdd-dependency>agentic_arch_step9_prompts_LLM.prompt</pdd-dependency>
-% You are an expert software architect. Your task is to validate that the architecture is COMPLETE and covers all PRD requirements.
+% You are an expert software architect. Your task is to validate that the architecture is COMPLETE at the prompt level — all modules have corresponding prompt files that adequately capture their specifications.
 
 % Context
 
-You are working on step 10 of the agentic architecture workflow. Step 9 generated prompt files. Now validate that the architecture covers ALL requirements for a COMPLETE, COMPILABLE, RUNNABLE project - NOT just a skeleton.
+You are working on step 10 of the agentic architecture workflow. Step 5b already validated module-level completeness against the PRD. Step 9 generated prompt files. Now validate that:
+1. All modules in architecture.json have corresponding prompt files on disk
+2. Prompt files adequately capture each module's description, reason, and interface
+3. Prompt file dependencies are correct
+4. The architecture still covers all PRD requirements (cross-check against original PRD)
 
 % Inputs
 
@@ -27,6 +31,11 @@ You are working on step 10 of the agentic architecture workflow. Step 9 generate
 {step7_output}
 </architecture_json>
 
+% Original PRD (Source of Truth)
+<issue_content>
+{issue_content}
+</issue_content>
+
 % PRD Summary (from Step 1)
 <prd_summary>
 {step1_output}
@@ -34,25 +43,60 @@ You are working on step 10 of the agentic architecture workflow. Step 9 generate
 
 % Validation Checks
 
-**1. PRD Coverage Check**
+**1. Prompt File Existence Check**
 
-Extract ALL features/requirements from the PRD summary and verify each has a corresponding module:
+Verify every module in architecture.json has a corresponding prompt file on disk:
 
 ```bash
-# List all modules
+# List all modules from architecture.json
+cat architecture.json | jq -r '.[].filename'
+
+# Check which prompt files actually exist
+ls prompts/*.prompt 2>/dev/null
+```
+
+**Flag as ERROR if:**
+- A module in architecture.json has no corresponding prompt file
+- A prompt file exists that isn't in architecture.json (orphan prompt)
+
+**2. Prompt Content Quality Check**
+
+For each prompt file, verify it adequately captures the module's specification:
+
+```bash
+# For each module, check its prompt file content
+cat architecture.json | jq -r '.[] | "\(.filename): \(.reason) | \(.description)"'
+```
+
+**Check each prompt file contains:**
+- `<pdd-reason>` tag that matches or expands on the module's `reason` field
+- `<pdd-interface>` tag with proper interface specification
+- `<pdd-dependency>` tags matching the module's `dependencies` in architecture.json
+- Actual implementation instructions (not just a skeleton)
+
+**Flag as ERROR if:**
+- A prompt file has empty or placeholder content
+- A prompt file's `<pdd-dependency>` tags don't match architecture.json dependencies
+- A prompt file's interface doesn't match the module's role
+
+**3. PRD Cross-Reference Check**
+
+Cross-reference the ORIGINAL PRD (`issue_content`) against the architecture to catch any requirements that may have been dropped between Steps 5b and 9:
+
+```bash
+# List all modules with their reasons
 cat architecture.json | jq -r '.[] | "\(.filename): \(.reason)"'
 ```
 
-For EACH PRD requirement, find the module(s) that implement it:
-- User authentication → auth_middleware, login_page, etc.
-- Course management → api_courses_route, courses_page, etc.
-- Data persistence → database models, API routes, etc.
+Extract key features from the original PRD and verify each has a corresponding module:
+- User authentication → auth modules
+- Data operations → API route modules + model modules
+- UI features → page/component modules
 
 **Flag as ERROR if:**
-- A PRD feature has NO corresponding module
-- A core user flow is incomplete (e.g., create without read/update/delete)
+- A PRD feature has NO corresponding module (regression from step 5b)
 
-**1b. API Route Coverage Check**
+**3b. API Route Coverage Check**
 
 If the PRD contains an API specification table or lists specific endpoint paths, extract EVERY distinct URL pattern and verify a 1:1 corresponding route module exists:
 
@@ -61,13 +105,32 @@ If the PRD contains an API specification table or lists specific endpoint paths,
 cat architecture.json | jq -r '.[].filepath' | grep -E "route\.(ts|js|py)$"
 ```
 
-For EACH distinct route path mentioned in the PRD, there must be a **separate** route module — not just a parent module that "covers" the same resource. For example, if the PRD lists both `POST /api/pipeline/veo/run` and `GET /api/pipeline/veo/clips`, these require two separate modules (`api_pipeline_veo_route` and `api_pipeline_veo_clips_route`), not one.
-
 **Flag as ERROR if:**
 - A specific route path in the PRD has no corresponding module
 - Multiple distinct routes are collapsed under one module
 
-**2. Layer Completeness Check**
+**4. Auth Flow Completeness Check**
+
+If the PRD mentions authentication, authorization, OAuth, JWT, sessions, or API keys, verify auth coverage:
+
+```bash
+# List all auth-tagged modules
+cat architecture.json | jq -r '.[] | select(.tags != null and (.tags | index("auth"))) | .filename'
+```
+
+**Check for:**
+- **Token lifecycle coverage:** At least one module handles each of: token issuance/exchange, token validation, token refresh, token revocation
+- **Auth dependency chain:** Business logic modules that need auth should depend on auth modules (not implement auth inline)
+- **Auth error handling:** Auth modules should specify error handling for: expired tokens, invalid tokens, missing scopes, CSRF state mismatch
+- **No auth in business modules:** Business logic modules should NOT contain inline auth logic — auth should be separated into dedicated modules
+
+**Flag as ERROR if:**
+- PRD mentions OAuth/JWT/auth but no modules are tagged "auth"
+- Auth modules exist but don't cover token refresh or revocation
+- Business logic modules contain inline auth handling instead of depending on auth modules
+- Auth modules lack error handling requirements in their prompts
+
+**5. Layer Completeness Check**
 
 Based on the project type, verify all essential layers exist:
 
@@ -103,7 +166,7 @@ cat architecture.json | jq -r '.[].filepath' | grep -E "(route\.|api/|endpoint)"
 cat architecture.json | jq -r '.[].filepath' | grep -E "(types|models|schemas|interfaces)"
 ```
 
-**3. Dependency Graph Analysis**
+**6. Dependency Graph Analysis**
 
 Verify the dependency graph is valid and complete:
 
@@ -113,22 +176,44 @@ cat architecture.json | jq -r '.[] | "\(.filename) depends on: \(.dependencies |
 
 # Find modules with no dependencies (should be base/config modules)
 cat architecture.json | jq -r '.[] | select(.dependencies | length == 0) | .filename'
-
-# Find modules that nothing depends on (should be entry points/pages)
 ```
 
 **Check for:**
-- Circular dependencies (A→B→C→A)
+- Circular dependencies (A->B->C->A)
 - Orphan modules (not connected to the graph, except config/types)
 - Missing dependency references (referencing non-existent modules)
 
-**4. Compilability Check**
+**7. Compilability Check**
 
 Verify the architecture would compile without import errors:
 
 - For TypeScript: All imported types should have corresponding type modules
 - For Python: All imported modules should exist
 - Shared utilities referenced by multiple modules should exist
+
+**8. Stub/Placeholder Detection Check**
+
+Read each prompt file and check for patterns that indicate incomplete specifications:
+
+FORBIDDEN patterns in prompt files:
+- "coming soon", "TODO", "placeholder", "to be implemented"
+- Requirements sections with fewer than 3 items for non-trivial modules
+- Missing error handling requirements
+- Missing input validation requirements
+- Vague instructions like "handle edge cases" without specifying which ones
+
+REQUIRED completeness per prompt:
+- At least 3 specific, implementable requirements
+- At least 1 error handling requirement
+- Explicit input/output data shapes
+- For API modules: request/response schema
+- For page modules: data sources and user interactions
+- For data modules: all CRUD operations that the PRD requires
+
+**Flag as ERROR if:**
+- Any prompt file contains stub/placeholder language
+- Any prompt has fewer than 3 concrete requirements
+- Any API prompt lacks request/response schemas
 
 % Output
 
@@ -152,6 +237,13 @@ Followed by error details:
 ```markdown
 ## Completeness Validation Errors
 
+### Missing Prompt Files
+- [ ] Module X: No prompt file found at prompts/X.prompt
+
+### Prompt Content Issues
+- [ ] Module Y: pdd-dependency tags don't match architecture.json
+- [ ] Module Z: Empty/placeholder content
+
 ### PRD Coverage Gaps
 - [ ] Feature X: No module implements this
 - [ ] Feature Y: Incomplete implementation (missing update/delete)
@@ -161,7 +253,7 @@ Followed by error details:
 - [ ] No type definitions for shared data
 
 ### Dependency Graph Issues
-- [ ] Circular dependency: A → B → A
+- [ ] Circular dependency: A -> B -> A
 - [ ] Orphan module: X is not connected
 
 ### Compilability Issues
@@ -175,9 +267,14 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 ```
 
 ```markdown
-## Step 10: Architecture Completeness Validation
+## Step 10: Prompt-Level Completeness Validation
 
 **Status:** [VALID | INVALID]
+
+### Prompt File Coverage
+- Modules in architecture.json: [N]
+- Prompt files found: [M]/[N]
+- Missing: [list or "None"]
 
 ### PRD Coverage
 - Requirements found: [N]
@@ -188,6 +285,12 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 - Routes found in PRD: [N]
 - Routes with modules: [M]/[N]
 - Missing route modules: [list or "None"]
+
+### Auth Flow Coverage
+- Auth detected in PRD: [Yes/No]
+- Auth-tagged modules: [N or "N/A"]
+- Token lifecycle coverage: [Complete/Incomplete/N/A]
+- Auth error handling: [Yes/No/N/A]
 
 ### Layer Completeness
 - Entry points: [Yes/No]
@@ -207,9 +310,21 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 *[Proceeding to Step 11 | Returning to Step 13 for fixes]*
 ```
 
+% Existing Sibling Architectures
+
+{sibling_architectures}
+
+**7. Cross-Project Dependency Validation**
+- Verify `external:` dependency references point to modules that exist in the sibling architecture
+- Do NOT flag features as missing if they're implemented in a sibling project
+- DO flag if a cross-project reference points to a non-existent module
+
 % Important
 
 - A skeleton is NOT valid - the architecture must cover ALL PRD requirements
+- Cross-reference the ORIGINAL PRD (`issue_content`), not just the Step 1 summary
+- Every module in architecture.json MUST have a prompt file on disk
+- Every prompt file must have meaningful content (not placeholders)
 - Every user-facing feature needs: UI + API + data layer
 - Missing CRUD operations for an entity is an error
 - Orphan modules (except config/types/constants) indicate incomplete architecture

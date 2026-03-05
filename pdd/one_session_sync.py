@@ -143,6 +143,14 @@ def build_one_session_prompt(
     verify_step_num = 3
     test_step_num = 4
 
+    # Escape braces in dynamic content to prevent .format() from interpreting
+    # code like {uid} or {name} as template placeholders
+    def _escape_braces(s: str) -> str:
+        return s.replace("{", "{{").replace("}", "}}")
+
+    safe_prompt_content = _escape_braces(resolved_prompt_content)
+    safe_code_content = _escape_braces(code_content)
+
     # Substitute all placeholders
     prompt = template.format(
         basename=basename,
@@ -152,8 +160,8 @@ def build_one_session_prompt(
         example_path=pdd_files["example"],
         test_path=pdd_files["test"],
         project_root=project_root,
-        resolved_prompt_content=resolved_prompt_content,
-        code_content=code_content,
+        resolved_prompt_content=safe_prompt_content,
+        code_content=safe_code_content,
         target_coverage=target_coverage,
         progress_file=progress_file,
         import_base=import_base,

@@ -1,0 +1,103 @@
+<pdd-reason>Assesses automated test coverage gaps requiring manual/exploratory testing.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "config",
+  "config": {
+    "keys": []
+  }
+}
+</pdd-interface>
+
+% You are an expert software engineer handling a test generation request. Your task is to assess automated test coverage gaps that require manual/exploratory testing.
+
+% Context
+
+You are working on step 6 of 18 in an agentic test generation workflow. This step only runs when TEST_TYPE is `web` and `playwright-cli` is available.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Steps Output
+<step4_output>
+{step4_output}
+</step4_output>
+
+<step5_output>
+{step5_output}
+</step5_output>
+
+<step5b_output>
+{step5b_output}
+</step5b_output>
+
+% Your Task
+
+1. **Compare PRD/issue requirements against the enhanced test plan**
+   - Review all requirements from the issue content
+   - Review the enhanced test plan from Steps 5 and 5b
+   - Identify requirements that cannot be adequately covered by automated tests alone
+   - Focus on: visual layout, user experience flows, cross-browser rendering, dynamic interactions
+
+2. **Identify coverage gaps**
+   - Visual/layout issues that need human-like inspection
+   - Complex multi-step user flows that benefit from exploratory testing
+   - Edge cases in interactive elements (drag-and-drop, animations, transitions)
+   - Cross-browser rendering differences
+   - Responsive design behavior at different viewport sizes
+
+3. **Output structured gap list**
+   - Each gap should specify what aspect is not covered and why automated tests are insufficient
+
+% Output
+
+After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+```markdown
+## Step 6: Automated Test Coverage Assessment
+
+**Status:** Assessment Complete
+
+### Coverage Gaps Identified
+
+1. **[Gap description]** — [Why automated tests are insufficient]
+2. **[Gap description]** — [Why automated tests are insufficient]
+...
+
+### Summary
+- **Total gaps identified:** [N]
+- **Recommendation:** [Proceed with manual testing / Skip manual testing]
+
+---
+*Proceeding to Step 7: Create Manual Testing Checklist*
+```
+
+% Machine-Readable Output (REQUIRED)
+
+**You MUST output this line at the very end of your response.**
+
+```
+COVERAGE_GAPS: [N]
+```
+
+If no gaps found, output `COVERAGE_GAPS: 0` (this will cause Steps 7-11 to be skipped).
+
+% Important
+
+- Be thorough but realistic about what automated tests can and cannot cover
+- If `COVERAGE_GAPS: 0`, Steps 7-11 will be skipped entirely
+- Always post your findings as a GitHub comment before completing

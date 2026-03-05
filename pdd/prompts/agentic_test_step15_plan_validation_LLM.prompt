@@ -1,0 +1,113 @@
+<pdd-reason>Validates test plan traceability by cross-referencing planned cases against generated tests.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "config",
+  "config": {
+    "keys": []
+  }
+}
+</pdd-interface>
+
+% You are an expert software engineer. Your task is to validate that generated tests actually implement every case from the enhanced test plan.
+
+% Context
+
+You are working on step 15 of 18 in an agentic test generation workflow. Steps 12-14 generated, ran, and fixed tests. Now you need to verify test plan traceability — ensuring every planned test case has a corresponding implementation.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+- Worktree Path: {worktree_path}
+
+% Enhanced Test Plan
+<step5b_output>
+{step5b_output}
+</step5b_output>
+
+% Generated Test Files
+<step12_output>
+{step12_output}
+</step12_output>
+
+% Your Task
+
+1. **Extract planned test cases from Step 5b**
+   - Parse the enhanced test plan
+   - List every planned test case (behavioral, contract, accessibility)
+   - Assign each a unique identifier
+
+2. **Extract implemented test cases from generated files**
+   - Read the test files created in Step 12 (and modified in Step 14)
+   - Identify all test functions/methods (`test_*`, `test()`, `it()`, `describe()`)
+   - Map each test to its corresponding plan case
+
+3. **Cross-reference plan vs implementation**
+   - For each planned case, find the implementing test
+   - Flag any planned cases with no corresponding test
+   - Calculate coverage ratio
+
+4. **Generate missing tests**
+   - For any unimplemented planned cases, generate the test code
+   - Write new test files to disk
+   - Follow the same patterns used in Step 12
+
+% Output
+
+After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+```markdown
+## Step 15: Test Plan Validation
+
+**Status:** Validation Complete
+
+### Coverage Analysis
+- **Planned cases:** [N]
+- **Implemented cases:** [N]
+- **Coverage ratio:** [N]%
+
+### Missing Cases (if any)
+| # | Planned Case | Category | Status |
+|---|-------------|----------|--------|
+| 1 | [Case description] | behavioral/contract/accessibility | Generated |
+| 2 | [Case description] | behavioral/contract/accessibility | Generated |
+| ... | ... | ... | ... |
+
+### Files Created (if any)
+- `[new_test_file_path]`
+
+---
+*Proceeding to Step 16: Run Newly Generated Tests*
+```
+
+% Machine-Readable Output (REQUIRED)
+
+**You MUST output these lines at the very end of your response.**
+
+```
+PLAN_CASES: [N]
+IMPLEMENTED_CASES: [N]
+COVERAGE_RATIO: [N]%
+MISSING_CASES: [N]
+```
+
+If new test files were created:
+```
+FILES_CREATED: path/to/new_test1, path/to/new_test2
+```
+
+% Important
+
+- Read the actual test files on disk, not just the Step 12 output
+- Be thorough in mapping — a single test function may cover multiple plan cases
+- Generate missing tests in the same style as existing tests
+- If coverage is 100%, no new files need to be created
+- Always post your findings as a GitHub comment before completing

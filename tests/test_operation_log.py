@@ -98,21 +98,53 @@ def test_get_paths(temp_pdd_env):
 def test_infer_module_identity_valid():
     """Test inferring identity from valid paths."""
     # Pattern: prompts/{basename}_{language}.prompt
-    
-    # Standard case
+
+    # Standard case (file directly in prompts/)
     b, l = operation_log.infer_module_identity("prompts/my_module_python.prompt")
     assert b == "my_module"
     assert l == "python"
-    
+
     # Path object
     b, l = operation_log.infer_module_identity(Path("prompts/complex_name_go.prompt"))
     assert b == "complex_name"
     assert l == "go"
-    
+
     # Underscores in basename
     b, l = operation_log.infer_module_identity("prompts/foo_bar_baz_rust.prompt")
     assert b == "foo_bar_baz"
     assert l == "rust"
+
+
+def test_infer_module_identity_with_subdirectory():
+    """Test inferring identity from prompt paths with subdirectory structure."""
+    # Prompt in subdirectory under prompts/
+    b, l = operation_log.infer_module_identity(
+        "prompts/frontend/page_typescriptreact.prompt"
+    )
+    assert b == "frontend/page"
+    assert l == "typescriptreact"
+
+    # Deeply nested prompt path
+    b, l = operation_log.infer_module_identity(
+        "/repo/prompts/frontend/src/app/settings/page_typescriptreact.prompt"
+    )
+    assert b == "frontend/src/app/settings/page"
+    assert l == "typescriptreact"
+
+    # Subdirectory with underscores in filename
+    b, l = operation_log.infer_module_identity(
+        "prompts/backend/commands/my_module_python.prompt"
+    )
+    assert b == "backend/commands/my_module"
+    assert l == "python"
+
+
+def test_infer_module_identity_no_prompts_dir():
+    """Test that paths without a prompts/ ancestor fall back to filename-only."""
+    b, l = operation_log.infer_module_identity("other_dir/my_module_python.prompt")
+    assert b == "my_module"
+    assert l == "python"
+
 
 def test_infer_module_identity_invalid():
     """Test inferring identity from invalid paths."""
@@ -120,7 +152,7 @@ def test_infer_module_identity_invalid():
     b, l = operation_log.infer_module_identity("prompts/simple.prompt")
     assert b is None
     assert l is None
-    
+
     # Empty string
     b, l = operation_log.infer_module_identity("")
     assert b is None

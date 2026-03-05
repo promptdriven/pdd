@@ -42,6 +42,17 @@ You are working on step 3 of 8 in an agentic architecture workflow. Step 2 ident
 {step2_output}
 </step2_output>
 
+<step2b_output>
+{step2b_output}
+</step2b_output>
+
+% Existing Codebase Profile (from Step 2b)
+
+The codebase scan found existing packages, patterns, and modules.
+You MUST use existing packages — do NOT introduce packages not in package.json/requirements.txt unless clearly required by the PRD.
+You MUST follow existing patterns for auth, data fetching, error handling.
+You MUST reuse existing modules where applicable.
+
 % Your Task
 
 1. **Research each technology in the stack:**

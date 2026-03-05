@@ -91,8 +91,14 @@ Build a simple Python data model system with examples.
             """Mock LLM agent for each step of the architecture workflow."""
             step_calls.append(label)
 
+            # Step 1b: Complexity gate — must return MANAGEABLE to continue
+            if "step1b" in label:
+                return (True, "COMPLEXITY_RESULT: MANAGEABLE\nScore: 2/14.", 0.001, "mock-model")
+            # Step 5b: Completeness gate — must return VALID to continue
+            elif "step5b" in label:
+                return (True, "VALIDATION_RESULT: VALID\nAll requirements covered.", 0.001, "mock-model")
             # Steps 1-6: Analysis and generation
-            if "step1" in label:
+            elif "step1" in label:
                 return (True, "Analysis complete: Python project with data models", 0.001, "mock-model")
             elif "step2" in label:
                 return (True, "Deep analysis: Core models identified", 0.001, "mock-model")

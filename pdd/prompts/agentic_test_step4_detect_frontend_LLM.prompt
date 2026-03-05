@@ -2,7 +2,7 @@
 
 % Context
 
-You are working on step 4 of 9 in an agentic test generation workflow. Previous steps checked for duplicates, researched the codebase, and confirmed sufficient information exists.
+You are working on step 4 of 18 in an agentic test generation workflow. Previous steps checked for duplicates, researched the codebase, and confirmed sufficient information exists.
 
 % Inputs
 
@@ -61,7 +61,7 @@ You are working on step 4 of 9 in an agentic test generation workflow. Previous 
    - Use existing test patterns if found in codebase
 
 3. **Identify test environment requirements**
-   - Base URL or command to launch
+   - Base URL or command to launch (this becomes `TARGET_URL` for browser testing steps)
    - Any required environment variables
    - Authentication method (if needed)
    - Test data or fixtures required
@@ -110,12 +110,13 @@ These are required for the orchestrator to parse.
 ```
 TEST_TYPE: [web | cli | desktop | api]
 TEST_FRAMEWORK: [playwright | pytest | pytest-requests | pytest-httpx | jest | cypress | other]
+TARGET_URL: [base URL for testing, e.g., http://localhost:3000 — required for web type, use "N/A" for CLI/API]
 ```
 
 Examples:
-- `TEST_TYPE: web` / `TEST_FRAMEWORK: playwright`
-- `TEST_TYPE: cli` / `TEST_FRAMEWORK: pytest`
-- `TEST_TYPE: api` / `TEST_FRAMEWORK: pytest-requests`
+- `TEST_TYPE: web` / `TEST_FRAMEWORK: playwright` / `TARGET_URL: http://localhost:3000`
+- `TEST_TYPE: cli` / `TEST_FRAMEWORK: pytest` / `TARGET_URL: N/A`
+- `TEST_TYPE: api` / `TEST_FRAMEWORK: pytest-requests` / `TARGET_URL: http://localhost:8000`
 
 % Important
 

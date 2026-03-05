@@ -2476,6 +2476,7 @@ def test_pdd_user_feedback_not_injected_when_absent(mock_cwd, mock_env, mock_loa
 from pdd.agentic_common import (
     _find_state_comment,
     _serialize_state_comment,
+    _parse_state_from_comment,
     _build_state_marker,
     github_load_state,
     load_workflow_state,
@@ -3385,3 +3386,347 @@ def test_codex_turn_completed_usage_parsed_for_cost(tmp_path):
         f"Issue #658: turn.completed usage not parsed — cost was ${cost}. "
         f"Expected non-zero cost from input_tokens=18616, output_tokens=168."
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue #652: Playwright Mode Tests
+# ---------------------------------------------------------------------------
+
+from pdd.agentic_common import (
+    validate_cached_state,
+    _calculate_anthropic_cost,
+    _should_use_github_state,
+    save_workflow_state,
+    clear_workflow_state,
+    ANTHROPIC_PRICING_BY_FAMILY,
+)
+
+
+def test_playwright_mode_anthropic_uses_allowed_tools(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """When use_playwright=True, Anthropic uses --allowedTools instead of --dangerously-skip-permissions."""
+    mock_shutil_which.return_value = "/bin/claude"
+
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Playwright tests passed. All assertions verified successfully.",
+        "total_cost_usd": 0.05,
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    success, msg, cost, provider = run_agentic_task(
+        "Run playwright tests", mock_cwd, use_playwright=True
+    )
+
+    assert success
+    assert provider == "anthropic"
+
+    args, kwargs = mock_subprocess.call_args
+    cmd = args[0]
+    # Playwright mode must NOT use --dangerously-skip-permissions
+    assert "--dangerously-skip-permissions" not in cmd, (
+        f"Playwright mode should not use --dangerously-skip-permissions, got: {cmd}"
+    )
+    # Must use --allowedTools with specific tools
+    assert "--allowedTools" in cmd, f"Expected --allowedTools in command, got: {cmd}"
+    # Must include Bash, Read, Write
+    allowed_idx = cmd.index("--allowedTools")
+    allowed_tools = cmd[allowed_idx + 1:allowed_idx + 4]
+    assert "Bash" in allowed_tools
+    assert "Read" in allowed_tools
+    assert "Write" in allowed_tools
+    # Must include --max-turns 30 as cost ceiling
+    assert "--max-turns" in cmd, f"Expected --max-turns in command, got: {cmd}"
+    turns_idx = cmd.index("--max-turns")
+    assert cmd[turns_idx + 1] == "30"
+
+
+def test_playwright_mode_false_uses_skip_permissions(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """When use_playwright=False (default), Anthropic uses --dangerously-skip-permissions."""
+    mock_shutil_which.return_value = "/bin/claude"
+
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Task done. Output is long enough to pass the false positive check easily.",
+        "total_cost_usd": 0.05,
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    success, msg, cost, provider = run_agentic_task(
+        "Fix the bug", mock_cwd, use_playwright=False
+    )
+
+    assert success
+    args, kwargs = mock_subprocess.call_args
+    cmd = args[0]
+    assert "--dangerously-skip-permissions" in cmd
+    assert "--allowedTools" not in cmd
+    assert "--max-turns" not in cmd
+
+
+def test_playwright_mode_google_unchanged(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """Playwright mode does not change Google CLI command (no per-tool restrictions)."""
+    def which_side_effect(cmd):
+        return "/bin/gemini" if cmd == "gemini" else None
+    mock_shutil_which.side_effect = which_side_effect
+    os.environ["GEMINI_API_KEY"] = "key"
+
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "response": "Browser tests completed. All checks passed in the playwright run.",
+        "stats": {"models": {"gemini-2.5-flash": {"tokens": {"prompt": 100, "candidates": 100}}}}
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    success, msg, cost, provider = run_agentic_task(
+        "Run playwright tests", mock_cwd, use_playwright=True
+    )
+
+    assert success
+    assert provider == "google"
+    args, kwargs = mock_subprocess.call_args
+    cmd = args[0]
+    # Google should still use --yolo (same as standard mode)
+    assert "--yolo" in cmd
+
+
+# ---------------------------------------------------------------------------
+# validate_cached_state() Tests — Issue #467
+# ---------------------------------------------------------------------------
+
+
+def test_validate_cached_state_all_ok():
+    """All steps succeeded — no correction needed."""
+    step_outputs = {"1": "done", "2": "done", "3": "done"}
+    result = validate_cached_state(3, step_outputs, quiet=True)
+    assert result == 3
+
+
+def test_validate_cached_state_failed_step_corrects():
+    """Step 2 failed — last_completed_step should be corrected to 1."""
+    step_outputs = {"1": "done", "2": "FAILED: error", "3": "done"}
+    result = validate_cached_state(3, step_outputs, quiet=True)
+    assert result == 1
+
+
+def test_validate_cached_state_first_step_failed():
+    """First step failed — should return 0."""
+    step_outputs = {"1": "FAILED: crash", "2": "done"}
+    result = validate_cached_state(2, step_outputs, quiet=True)
+    assert result == 0
+
+
+def test_validate_cached_state_empty_outputs():
+    """Empty step_outputs — returns last_completed_step unchanged."""
+    result = validate_cached_state(5, {}, quiet=True)
+    assert result == 5
+
+
+def test_validate_cached_state_with_explicit_order():
+    """Custom step order is respected."""
+    step_outputs = {"1": "done", "3": "done", "2": "FAILED: error"}
+    result = validate_cached_state(3, step_outputs, step_order=[1, 2, 3], quiet=True)
+    assert result == 1
+
+
+def test_validate_cached_state_no_correction_needed():
+    """When actual_last_success >= last_completed_step, no correction."""
+    step_outputs = {"1": "done", "2": "done"}
+    result = validate_cached_state(1, step_outputs, quiet=True)
+    assert result == 1
+
+
+# ---------------------------------------------------------------------------
+# _calculate_anthropic_cost() Tests
+# ---------------------------------------------------------------------------
+
+
+def test_anthropic_cost_from_total_cost_usd():
+    """total_cost_usd is used directly when available."""
+    data = {"total_cost_usd": 0.042, "result": "Hello"}
+    cost = float(data.get("total_cost_usd", 0.0))
+    if cost == 0.0:
+        cost = _calculate_anthropic_cost(data)
+    assert cost == pytest.approx(0.042)
+
+
+def test_anthropic_cost_from_model_usage_costUSD():
+    """Fallback to modelUsage costUSD sum."""
+    data = {
+        "modelUsage": {
+            "claude-sonnet-4-20250514": {"costUSD": 0.025},
+            "claude-haiku-3-5-20241022": {"costUSD": 0.005},
+        },
+        "result": "Done",
+    }
+    cost = _calculate_anthropic_cost(data)
+    assert cost == pytest.approx(0.030)
+
+
+def test_anthropic_cost_token_based_fallback():
+    """Token-based estimation when no costUSD or total_cost_usd."""
+    data = {
+        "usage": {
+            "input_tokens": 5000,
+            "output_tokens": 1000,
+            "cache_read_input_tokens": 2000,
+            "cache_creation_input_tokens": 500,
+        },
+        "modelUsage": {"claude-sonnet-4-20250514": {}},
+        "result": "Done",
+    }
+    cost = _calculate_anthropic_cost(data)
+    # Sonnet pricing: $3/M input, $15/M output, cache read 10%, cache write 1.25x input
+    # new_input = 5000 - 2000 - 500 = 2500 (subtract both cache_read and cache_creation)
+    # input_cost = 2500/1M * 3 = 0.0075
+    # cache_read_cost = 2000/1M * 3 * 0.1 = 0.0006
+    # cache_write_cost = 500/1M * 3 * 1.25 = 0.001875
+    # output_cost = 1000/1M * 15 = 0.015
+    expected = 0.0075 + 0.0006 + 0.001875 + 0.015
+    assert cost == pytest.approx(expected, abs=1e-6)
+
+
+def test_anthropic_cost_opus_model_detection():
+    """Opus model is detected by name for pricing."""
+    data = {
+        "usage": {
+            "input_tokens": 1000,
+            "output_tokens": 1000,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+        },
+        "modelUsage": {"claude-opus-4-20250514": {}},
+    }
+    cost = _calculate_anthropic_cost(data)
+    pricing = ANTHROPIC_PRICING_BY_FAMILY["opus"]
+    expected = (1000 / 1_000_000) * pricing.input_per_million + (1000 / 1_000_000) * pricing.output_per_million
+    assert cost == pytest.approx(expected)
+
+
+def test_anthropic_cost_no_usage():
+    """Returns 0 when no usage data available."""
+    data = {"modelUsage": {}, "result": "Done"}
+    cost = _calculate_anthropic_cost(data)
+    assert cost == 0.0
+
+
+# ---------------------------------------------------------------------------
+# _should_use_github_state() Tests
+# ---------------------------------------------------------------------------
+
+
+def test_should_use_github_state_default():
+    """Returns True when use_github_state=True and no env override."""
+    with patch.dict(os.environ, {}, clear=True):
+        assert _should_use_github_state(True) is True
+
+
+def test_should_use_github_state_param_false():
+    """Returns False when use_github_state=False."""
+    assert _should_use_github_state(False) is False
+
+
+def test_should_use_github_state_env_override():
+    """Returns False when PDD_NO_GITHUB_STATE=1."""
+    with patch.dict(os.environ, {"PDD_NO_GITHUB_STATE": "1"}):
+        assert _should_use_github_state(True) is False
+
+
+# ---------------------------------------------------------------------------
+# save_workflow_state / clear_workflow_state Tests
+# ---------------------------------------------------------------------------
+
+
+def test_save_workflow_state_creates_local_file(tmp_path):
+    """save_workflow_state creates a local state file."""
+    state_dir = tmp_path / "state"
+    state = {"last_completed_step": 3, "step_outputs": {"1": "done"}}
+
+    with patch.dict(os.environ, {"PDD_NO_GITHUB_STATE": "1"}):
+        save_workflow_state(
+            cwd=tmp_path,
+            issue_number=42,
+            workflow_type="bug",
+            state=state,
+            state_dir=state_dir,
+            repo_owner="owner",
+            repo_name="repo",
+            use_github_state=False,
+        )
+
+    local_file = state_dir / "bug_state_42.json"
+    assert local_file.exists()
+    saved = json.loads(local_file.read_text())
+    assert saved["last_completed_step"] == 3
+
+
+def test_clear_workflow_state_removes_local_file(tmp_path):
+    """clear_workflow_state removes the local state file."""
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    local_file = state_dir / "bug_state_42.json"
+    local_file.write_text(json.dumps({"step": 1}))
+
+    with patch.dict(os.environ, {"PDD_NO_GITHUB_STATE": "1"}):
+        clear_workflow_state(
+            cwd=tmp_path,
+            issue_number=42,
+            workflow_type="bug",
+            state_dir=state_dir,
+            repo_owner="owner",
+            repo_name="repo",
+            use_github_state=False,
+        )
+
+    assert not local_file.exists()
+
+
+# ---------------------------------------------------------------------------
+# State Serialization / Parsing Tests
+# ---------------------------------------------------------------------------
+
+
+def test_build_state_marker_format():
+    """State marker follows expected format."""
+    marker = _build_state_marker("bug", 42)
+    assert marker == "<!-- PDD_WORKFLOW_STATE:bug:issue-42"
+
+
+def test_serialize_and_parse_state_roundtrip():
+    """State can be serialized and parsed back correctly."""
+    state = {"last_completed_step": 5, "step_outputs": {"1": "OK", "2": "OK"}}
+    body = _serialize_state_comment("test_flow", 100, state)
+    parsed = _parse_state_from_comment(body, "test_flow", 100)
+    assert parsed == state
+
+
+def test_parse_state_wrong_workflow_returns_none():
+    """Parsing with wrong workflow type returns None."""
+    state = {"step": 1}
+    body = _serialize_state_comment("bug", 42, state)
+    assert _parse_state_from_comment(body, "test", 42) is None
+
+
+def test_parse_state_wrong_issue_returns_none():
+    """Parsing with wrong issue number returns None."""
+    state = {"step": 1}
+    body = _serialize_state_comment("bug", 42, state)
+    assert _parse_state_from_comment(body, "bug", 99) is None
+
+
+def test_pdd_output_cost_path_stripped_from_subprocess_env(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """PDD_OUTPUT_COST_PATH is stripped from subprocess env to prevent child cost writes."""
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["PDD_OUTPUT_COST_PATH"] = "/tmp/costs.csv"
+
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Done. Task completed successfully with sufficient output text.",
+        "total_cost_usd": 0.01,
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    run_agentic_task("instruction", mock_cwd)
+
+    args, kwargs = mock_subprocess.call_args
+    env_passed = kwargs["env"]
+    assert "PDD_OUTPUT_COST_PATH" not in env_passed

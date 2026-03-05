@@ -412,6 +412,9 @@ def _generate_paths_from_templates(
             template = config['path']
             expanded = expand_template(template, template_context)
             result[output_type] = Path(expanded)
+            if output_type == 'prompt':
+                from pdd.sync_main import _case_insensitive_prompt_lookup
+                result[output_type] = _case_insensitive_prompt_lookup(result[output_type])
             logger.debug(f"Template {output_type}: {template} -> {expanded}")
 
     # Ensure prompt is always present (fallback to provided prompt_path)
@@ -467,7 +470,11 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                         prefix = ''
                     elif normalized.startswith('prompts/'):
                         prefix = normalized[len('prompts/'):]
-                    if prefix and not (basename == prefix or basename.startswith(prefix + '/')):
+                    # Only prepend prefix if prompts_root doesn't already end with it
+                    # (when prompts_dir is passed as an absolute path like
+                    # /path/to/prompts/recruiting, prompts_root already contains the prefix)
+                    prompts_root_ends_with_prefix = prefix and prompts_root.parts[-len(Path(prefix).parts):] == Path(prefix).parts
+                    if prefix and not prompts_root_ends_with_prefix and not (basename == prefix or basename.startswith(prefix + '/')):
                         prompt_path = str(prompts_root / prefix / prompt_filename)
             except ValueError:
                 pass
@@ -475,14 +482,8 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         # Case-insensitive prompt file lookup: if the exact path doesn't exist,
         # search for a case-insensitive match (e.g., "task_model_python.prompt"
         # should find "task_model_Python.prompt" on case-sensitive filesystems)
-        if not Path(prompt_path).exists():
-            prompt_dir = Path(prompt_path).parent
-            if prompt_dir.is_dir():
-                target_lower = Path(prompt_path).name.lower()
-                for candidate in prompt_dir.iterdir():
-                    if candidate.name.lower() == target_lower and candidate.is_file():
-                        prompt_path = str(candidate)
-                        break
+        from pdd.sync_main import _case_insensitive_prompt_lookup
+        prompt_path = str(_case_insensitive_prompt_lookup(Path(prompt_path)))
 
         logger.info(f"Checking prompt_path={prompt_path}, exists={Path(prompt_path).exists()}")
 
@@ -2276,10 +2277,15 @@ def analyze_conflict_with_llm(
         paths = get_pdd_file_paths(basename, language, prompts_dir, context_override=context_override)
         
         # Generate diffs for changed files
+        # Escape braces in diffs to prevent .format() from interpreting
+        # code content like {uid} as template placeholders
+        def _escape_braces(s: str) -> str:
+            return s.replace("{", "{{").replace("}", "}}")
+
         diffs = {}
         for file_type in changed_files:
             if file_type in paths and paths[file_type].exists():
-                diffs[f"{file_type}_diff"] = get_git_diff(paths[file_type])
+                diffs[f"{file_type}_diff"] = _escape_braces(get_git_diff(paths[file_type]))
                 diffs[f"{file_type}_path"] = str(paths[file_type])
             else:
                 diffs[f"{file_type}_diff"] = ""

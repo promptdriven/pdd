@@ -32,6 +32,12 @@ You are working on step 2 of 11 in an agentic architecture workflow. Step 1 extr
 {step1_output}
 </step1_output>
 
+% Existing Sibling Architectures
+
+{sibling_architectures}
+
+When analyzing modules, consider what already exists in sibling projects. Note existing modules as available dependencies rather than re-designing them.
+
 % Your Task
 
 1. **Feature decomposition:**
@@ -55,6 +61,21 @@ You are working on step 2 of 11 in an agentic architecture workflow. Step 1 extr
    - List potential modules with responsibilities
    - Identify which modules are foundational (no deps) vs. dependent
    - Note interfaces between modules
+
+5. **Establish naming registry (CRITICAL for cross-file consistency):**
+   - Define canonical names for ALL shared identifiers:
+     - Database collection/table names (exact casing)
+     - API endpoint paths (exact format)
+     - Environment variable names
+     - Shared type/interface names
+     - Authentication hook/utility names
+     - Error handling pattern names
+   - Specify casing convention per layer:
+     - Database: [snake_case / camelCase / as-specified]
+     - API routes: [kebab-case / camelCase]
+     - TypeScript types: [PascalCase]
+     - Python models: [PascalCase class, snake_case fields]
+   - This registry is the SINGLE SOURCE OF TRUTH — all subsequent steps MUST use these exact names
 
 % Output
 
@@ -90,6 +111,30 @@ Your comment should follow this format:
 
 ### Inter-Module Interfaces
 - [module A] -> [module B]: [interface description]
+
+### Naming Registry (Single Source of Truth)
+
+#### Database Collections/Tables
+| Canonical Name | Casing | Used By Modules |
+|----------------|--------|-----------------|
+
+#### API Endpoints
+| Path | Method | Handler Module |
+|------|--------|----------------|
+
+#### Shared Types
+| Type Name | Casing | Defined In | Used By |
+|-----------|--------|-----------|---------|
+
+#### Environment Variables
+| Variable Name | Purpose | Required By |
+|---------------|---------|-------------|
+
+#### Conventions
+- Database naming: [convention]
+- API routes: [convention]
+- TypeScript types: [convention]
+- Python: [convention]
 
 ---
 *Proceeding to Step 3: Research*

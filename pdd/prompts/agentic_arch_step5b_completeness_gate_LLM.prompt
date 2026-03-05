@@ -1,0 +1,223 @@
+<pdd-reason>Validates module design completeness against original PRD before expensive generation steps.</pdd-reason>
+<pdd-interface>
+{{
+  "type": "module",
+  "module": {{
+    "functions": [
+      {{"name": "validate_module_design_completeness", "signature": "(issue_content: str, step1_output: str, step4_output: str, step5_output: str)", "returns": "str ('VALID' or list of coverage gaps)"}}
+    ]
+  }}
+}}
+</pdd-interface>
+<pdd-dependency>agentic_arch_step5_design_LLM.prompt</pdd-dependency>
+% You are an expert software architect performing a strict completeness audit. Your task is to validate that the module design (Step 5) covers ALL requirements from the ORIGINAL PRD before proceeding to expensive generation steps.
+
+% Context
+
+You are working on step 5b of the agentic architecture workflow. Step 5 just produced a module design (module list with priorities, filenames, filepaths, dependencies, and interfaces). Before we spend time on dependency research (Step 6, ~600s) and architecture generation (Step 7, ~1000s), you must verify the design is COMPLETE.
+
+This is a TEXT-ONLY validation. Do NOT run bash commands or read files from disk. The module design exists only as text output from Step 5 — no files have been created yet.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Original PRD (Source of Truth)
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Step 1: PRD Analysis
+<step1_output>
+{step1_output}
+</step1_output>
+
+% Step 4: Data Model Design
+<step4_output>
+{step4_output}
+</step4_output>
+
+% Step 5: Module Design (To Validate)
+<step5_output>
+{step5_output}
+</step5_output>
+
+% Validation Process
+
+**1. Extract ALL Requirements from the ORIGINAL PRD**
+
+Read the ORIGINAL PRD (`issue_content` above) — NOT just the Step 1 summary. Extract EVERY requirement and assign an ID:
+
+```
+R1: [requirement description]
+R2: [requirement description]
+R3: [requirement description]
+...
+```
+
+Include requirements from:
+- Feature descriptions
+- User stories / acceptance criteria
+- API specification tables (each distinct endpoint = separate requirement)
+- Data flow diagrams
+- UI wireframe descriptions
+- Non-functional requirements (auth, performance, etc.)
+
+**2. Build Coverage Matrix**
+
+For EACH requirement, find the module(s) in the Step 5 design that implement it:
+
+| Requirement | Module(s) | Coverage Status |
+|-------------|-----------|-----------------|
+| R1: [desc] | [module_name] | COVERED / PARTIAL / MISSING |
+| R2: [desc] | [module_name] | COVERED / PARTIAL / MISSING |
+
+**3. Check Commonly Missed Items**
+
+Verify the design includes modules for these commonly overlooked areas (if mentioned or implied in the PRD):
+
+- [ ] Error handling / error boundary modules
+- [ ] Auth flows: login, logout, signup, password reset, session management
+- [ ] Settings / preferences pages
+- [ ] Admin panels (if mentioned in PRD)
+- [ ] Notification systems
+- [ ] Search functionality
+- [ ] Pagination
+- [ ] File upload/download handling
+- [ ] API rate limiting / middleware
+- [ ] Database migrations / seed data
+- [ ] Environment configuration
+- [ ] Logging / monitoring setup
+- [ ] Loading states / skeleton screens
+- [ ] Navigation / routing layout
+- [ ] Shared types / interfaces module
+- [ ] API client / utility module
+
+For each item: mark as N/A (not in PRD), COVERED (module exists), or MISSING (in PRD but no module).
+
+**4. Validate API Route 1:1 Mapping**
+
+If the PRD specifies API routes/endpoints, verify EACH distinct URL pattern has a corresponding route module:
+- `POST /api/users` needs a module
+- `GET /api/users/:id` needs a module (or can share with the above if same resource)
+- `POST /api/pipeline/veo/run` needs its OWN module (NOT collapsed with other pipeline routes)
+
+**5. Cross-check Data Model Entities**
+
+Verify each data entity from Step 4 has corresponding modules:
+- Entity definition → model/schema module
+- CRUD operations → API route modules
+- Relationships → proper dependency links between modules
+
+**6. Verify Design Consistency**
+
+- No circular dependencies in the module list
+- Priority ordering forms valid topological sort
+- All dependency references point to modules that exist in the list
+- File paths use correct framework conventions
+
+**7. Naming Consistency Check**
+
+Cross-reference identifiers across the module design:
+- If two modules reference the same database entity, they must use the same name
+- If the data model (Step 4) defines entity names, all modules must use those exact names
+- API endpoint paths must be consistent (no `/api/users` in one module and `/users` in another)
+- All enum/status values must be consistent across modules
+
+**Flag as ERROR if:**
+- The same entity is referred to by different names in different modules
+- API paths are inconsistent
+- Data model entity names don't match module references
+
+**8. Wiring Completeness Check**
+
+Verify that modules are not isolated — every module must be connected to the application through proper wiring:
+
+**8a. Route Registration:**
+- Every API route handler module MUST have a parent router/app module that imports and registers it
+- If a module defines endpoints (e.g., `POST /api/users`), there must be a router or app entry module that mounts it
+- Flag as MISSING if a route handler exists but no module imports/registers it
+
+**8b. Environment Variables:**
+- Every module that uses environment variables MUST have a corresponding entry in a config/env module
+- If a module references `process.env.DATABASE_URL` or `os.environ["DATABASE_URL"]`, the config module must define `DATABASE_URL`
+- A `.env.example` or config module should document all required env vars
+- Flag as MISSING if a module uses env vars but no config module defines them
+
+**8c. Navigation Wiring (web apps only):**
+- Every page module MUST be reachable from navigation, routing, or layout modules
+- If the design includes a page at `/dashboard`, a routing or navigation module must link to it
+- Flag as MISSING if a page exists but no navigation/layout/routing module connects to it
+
+**8d. Entry Point Connection:**
+- Every handler/service module MUST be imported by the main entry point (directly or transitively)
+- Trace the import chain from the application entry point — every module must be reachable
+- Flag as MISSING if a service is defined but no entry point or parent module imports it
+
+**8e. Test Coverage Intent:**
+- Every feature module SHOULD note what test scenarios are needed
+- This does not require separate test modules, but the design should acknowledge testability
+- Flag as WARNING (not ERROR) if a complex feature module has no testing consideration
+
+% Output
+
+**DO NOT run any bash commands. This is a text-only analysis.**
+
+Based on your analysis, output one of the following:
+
+**If ALL requirements are covered (100% coverage, no MISSING items):**
+
+```
+VALIDATION_RESULT: VALID
+```
+
+Followed by a brief summary:
+```
+All [N] requirements covered by [M] modules. No gaps found.
+```
+
+**If ANY requirement is MISSING or PARTIAL:**
+
+```
+VALIDATION_RESULT: INVALID
+```
+
+Followed by detailed gap report:
+```markdown
+## Module Design Completeness Gaps
+
+### Missing Requirements
+- R[X]: [requirement] — No module implements this
+- R[Y]: [requirement] — Only partially covered by [module], missing [what]
+
+### Missing Commonly-Overlooked Items
+- [item]: Required by PRD but no module exists
+
+### API Route Gaps
+- [METHOD] [path]: No corresponding module
+
+### Data Model Gaps
+- Entity [name]: No CRUD route modules
+
+### Suggested Additions
+For each gap, suggest:
+1. Module name (filename)
+2. Filepath
+3. Priority (relative to existing modules)
+4. Dependencies
+5. Brief description
+```
+
+% Important
+
+- Cross-reference the ORIGINAL PRD (`issue_content`), NOT just the Step 1 summary
+- A requirement is MISSING if no module in Step 5 output addresses it
+- A requirement is PARTIAL if a module exists but doesn't fully cover the requirement
+- Be strict: 100% coverage is required for VALID
+- Every user-facing feature needs: UI + API + data layer modules
+- Missing CRUD operations for a PRD-specified entity is an error
+- Do NOT run bash commands — this is a pure text analysis step
+- Do NOT suggest unnecessary modules not backed by PRD requirements
+- Always output `VALIDATION_RESULT: VALID` or `VALIDATION_RESULT: INVALID`

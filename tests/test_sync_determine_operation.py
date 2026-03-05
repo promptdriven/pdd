@@ -2457,6 +2457,76 @@ def test_get_pdd_file_paths_no_path_duplication_with_deep_prompts_dir(tmp_path, 
     assert prompt_path.exists(), f"Prompt path does not exist: {prompt_path}"
 
 
+def test_get_pdd_file_paths_no_duplication_when_prompts_dir_is_absolute_with_subdirectory(tmp_path, monkeypatch):
+    """
+    Regression test: prompt path duplication when prompts_dir is an absolute path
+    that already contains the context's subdirectory.
+
+    Bug scenario (from pdd_cloud recruiting modules):
+      - .pddrc context has prompts_dir: "prompts/recruiting"
+      - sync_main discovers a prompt via template and passes the absolute parent as
+        prompts_dir, e.g. "/abs/path/prompts/recruiting"
+      - _resolve_prompts_root returns it unchanged (already absolute)
+      - The prefix logic extracts "recruiting" from prompts_dir config and prepends
+        it AGAIN, producing "/abs/path/prompts/recruiting/recruiting/mod_python.prompt"
+      - The prompt file is then not found because the doubled path doesn't exist
+
+    The bug is in the early prompt_path construction (before the construct_paths
+    fallback). When the outputs config does NOT include a prompt template, the
+    corrupted prompt_path is passed as fallback to _generate_paths_from_templates
+    and used directly.
+
+    Expected: The prompt path should be "/abs/path/prompts/recruiting/mod_python.prompt"
+    (no duplicated "recruiting" directory segment).
+    """
+    monkeypatch.chdir(tmp_path)
+
+    # Directory structure mimicking pdd_cloud recruiting
+    prompts_recruiting = tmp_path / "prompts" / "recruiting"
+    prompts_recruiting.mkdir(parents=True)
+
+    # Create the prompt file at the correct location
+    prompt_file = prompts_recruiting / "recruiting_nurture_models_python.prompt"
+    prompt_file.write_text("Build nurture models")
+
+    # .pddrc with prompts_dir: "prompts/recruiting" but NO prompt path in outputs.
+    # This forces the fallback to use the initial prompt_path built by the prefix logic.
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n'
+        '  recruiting_nurture_models:\n'
+        '    paths: ["backend/functions/recruiting/nurture/**"]\n'
+        '    defaults:\n'
+        '      prompts_dir: "prompts/recruiting"\n'
+        '      generate_output_path: "backend/functions/recruiting/nurture/"\n'
+        '      outputs:\n'
+        '        code:\n'
+        '          path: "backend/functions/recruiting/nurture/recruiting_nurture_models.py"\n'
+        '        test:\n'
+        '          path: "backend/tests/recruiting/test_recruiting_nurture_models.py"\n'
+    )
+
+    # Call with ABSOLUTE prompts_dir (as sync_main does after template discovery)
+    paths = get_pdd_file_paths(
+        basename="recruiting_nurture_models",
+        language="python",
+        prompts_dir=str(prompts_recruiting),  # absolute, already includes "recruiting"
+        context_override="recruiting_nurture_models",
+    )
+
+    prompt_path = paths.get("prompt")
+    assert prompt_path is not None
+
+    # Key assertion: the "recruiting" directory must NOT be duplicated in the path.
+    # Note: "recruiting/recruiting_nurture_models..." is fine (dir/filename), but
+    # "recruiting/recruiting/" (two consecutive directory segments) is the bug.
+    path_str = str(prompt_path)
+    assert "recruiting/recruiting/" not in path_str, \
+        f"Path has duplicated 'recruiting' directory segment: {path_str}"
+
+    # Should resolve to the actual file
+    assert prompt_path.exists(), f"Prompt path does not exist: {prompt_path}"
+
+
 # --- Regression Tests: All Files Exist But Workflow Incomplete ---
 
 class TestAllFilesExistWorkflowIncomplete:

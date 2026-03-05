@@ -25,96 +25,95 @@ if _generate_module is None:
     _generate_module = importlib.import_module('pdd.commands.generate')
 
 
+def _console_output(mock_console):
+    """Join all positional args from mock_console.print() calls into one string."""
+    parts = []
+    for c in mock_console.print.call_args_list:
+        for arg in c.args:
+            parts.append(str(arg))
+    return " ".join(parts)
+
+
+@patch('pdd.core.errors.console', new_callable=MagicMock)
 @patch('pdd.core.cli.auto_update')
-@patch.object(_generate_module, 'handle_error')
-@patch.object(_generate_module, 'code_generator_main')
-def test_cli_handle_error_filenotfound(mock_main, mock_handle_error, mock_auto_update, runner, create_dummy_files):
+@patch('pdd.commands.generate.code_generator_main')
+def test_cli_handle_error_filenotfound(mock_main, mock_auto_update, mock_console, create_dummy_files):
     """Test handle_error for FileNotFoundError."""
     files = create_dummy_files("test.prompt")
 
     # Simulate FileNotFoundError
     mock_main.side_effect = FileNotFoundError("Input file missing")
 
-    result = runner.invoke(cli.cli, ["generate", str(files["test.prompt"])])
+    result = CliRunner().invoke(cli.cli, ["generate", str(files["test.prompt"])])
 
     # Expect exit code 0 because the exception is caught by the command's
     # try-except, calling handle_error (which prints), and returning None.
     assert result.exit_code == 0
-    assert result.exception is None
+    assert result.exception is None  # Exception should be handled, not re-raised to runner
+    output = _console_output(mock_console)
+    assert "Error during 'generate' command" in output
+    assert "File not found" in output
+    mock_main.assert_called_once()  # Main is called before raising the error
+    mock_auto_update.assert_called_once_with()  # Auto update runs before command error
 
-    # Verify handle_error was called with the right exception and command name
-    mock_handle_error.assert_called_once()
-    exc_arg, cmd_arg, quiet_arg = mock_handle_error.call_args[0]
-    assert isinstance(exc_arg, FileNotFoundError)
-    assert str(exc_arg) == "Input file missing"
-    assert cmd_arg == "generate"
-    assert quiet_arg is False
-    mock_main.assert_called_once()
-
+@patch('pdd.core.errors.console', new_callable=MagicMock)
 @patch('pdd.core.cli.auto_update')
-@patch.object(_generate_module, 'handle_error')
-@patch.object(_generate_module, 'code_generator_main')
-def test_cli_handle_error_valueerror(mock_main, mock_handle_error, mock_auto_update, runner, create_dummy_files):
+@patch('pdd.commands.generate.code_generator_main')
+def test_cli_handle_error_valueerror(mock_main, mock_auto_update, mock_console, create_dummy_files):
     """Test handle_error for ValueError."""
     files = create_dummy_files("test.prompt")
 
     # Simulate ValueError
     mock_main.side_effect = ValueError("Invalid prompt content")
 
-    result = runner.invoke(cli.cli, ["generate", str(files["test.prompt"])])
+    result = CliRunner().invoke(cli.cli, ["generate", str(files["test.prompt"])])
 
-    assert result.exit_code == 0
-    assert result.exception is None
-
-    mock_handle_error.assert_called_once()
-    exc_arg, cmd_arg, quiet_arg = mock_handle_error.call_args[0]
-    assert isinstance(exc_arg, ValueError)
-    assert str(exc_arg) == "Invalid prompt content"
-    assert cmd_arg == "generate"
-    assert quiet_arg is False
+    assert result.exit_code == 0  # Should be 0
+    assert result.exception is None  # Exception should be handled
+    output = _console_output(mock_console)
+    assert "Error during 'generate' command" in output
+    assert "Input/Output Error" in output  # ValueError maps to this
+    assert "Invalid prompt content" in output
     mock_main.assert_called_once()
 
+@patch('pdd.core.errors.console', new_callable=MagicMock)
 @patch('pdd.core.cli.auto_update')
-@patch.object(_generate_module, 'handle_error')
-@patch.object(_generate_module, 'code_generator_main')
-def test_cli_handle_error_generic(mock_main, mock_handle_error, mock_auto_update, runner, create_dummy_files):
+@patch('pdd.commands.generate.code_generator_main')
+def test_cli_handle_error_generic(mock_main, mock_auto_update, mock_console, create_dummy_files):
     """Test handle_error for generic Exception."""
     files = create_dummy_files("test.prompt")
 
     # Simulate generic Exception
     mock_main.side_effect = Exception("Unexpected LLM issue")
 
-    result = runner.invoke(cli.cli, ["generate", str(files["test.prompt"])])
+    result = CliRunner().invoke(cli.cli, ["generate", str(files["test.prompt"])])
 
-    assert result.exit_code == 0
-    assert result.exception is None
-
-    mock_handle_error.assert_called_once()
-    exc_arg, cmd_arg, quiet_arg = mock_handle_error.call_args[0]
-    assert isinstance(exc_arg, Exception)
-    assert str(exc_arg) == "Unexpected LLM issue"
-    assert cmd_arg == "generate"
-    assert quiet_arg is False
+    assert result.exit_code == 0  # Should be 0
+    assert result.exception is None  # Exception should be handled
+    output = _console_output(mock_console)
+    assert "Error during 'generate' command" in output
+    assert "An unexpected error occurred" in output
+    assert "Unexpected LLM issue" in output
     mock_main.assert_called_once()
 
+@patch('pdd.core.errors.console', new_callable=MagicMock)
 @patch('pdd.core.cli.auto_update')
-@patch.object(_generate_module, 'handle_error')
-@patch.object(_generate_module, 'code_generator_main')
-def test_cli_handle_error_quiet(mock_main, mock_handle_error, mock_auto_update, runner, create_dummy_files):
-    """Test handle_error respects --quiet flag by passing quiet=True."""
+@patch('pdd.commands.generate.code_generator_main')
+def test_cli_handle_error_quiet(mock_main, mock_auto_update, mock_console, create_dummy_files):
+    """Test handle_error respects --quiet."""
     files = create_dummy_files("test.prompt")
 
     # Simulate FileNotFoundError
     mock_main.side_effect = FileNotFoundError("Input file missing")
 
-    result = runner.invoke(cli.cli, ["--quiet", "generate", str(files["test.prompt"])])
+    result = CliRunner().invoke(cli.cli, ["--quiet", "generate", str(files["test.prompt"])])
 
     assert result.exit_code == 0
-    assert result.exception is None
-
-    mock_handle_error.assert_called_once()
-    exc_arg, cmd_arg, quiet_arg = mock_handle_error.call_args[0]
-    assert isinstance(exc_arg, FileNotFoundError)
-    assert cmd_arg == "generate"
-    assert quiet_arg is True
+    assert result.exception is None  # Exception should be handled
+    # Error messages should be suppressed by handle_error when quiet=True
+    output = _console_output(mock_console)
+    assert "Error during 'generate' command" not in output
+    assert "File not found" not in output
     mock_main.assert_called_once()
+    # Auto update still runs but prints nothing when quiet
+    mock_auto_update.assert_called_once_with()
