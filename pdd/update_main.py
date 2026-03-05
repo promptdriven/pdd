@@ -550,6 +550,22 @@ def derive_basename_and_language(
     return basename, language.lower()
 
 
+def _check_include_deps_changed(fingerprint) -> Tuple[bool, str]:
+    """Check if any stored include dependencies have changed on disk."""
+    if not isinstance(fingerprint.include_deps, dict) or not fingerprint.include_deps:
+        return False, "no include deps in fingerprint"
+    for dep_path_str, stored_hash in fingerprint.include_deps.items():
+        dep_path = Path(dep_path_str)
+        if not dep_path.exists():
+            return True, f"include dependency deleted: {dep_path_str}"
+        current_hash = calculate_sha256(dep_path)
+        if current_hash is None:
+            continue
+        if current_hash != stored_hash:
+            return True, f"include dependency changed: {dep_path_str}"
+    return False, "include deps unchanged"
+
+
 def is_code_changed(
     code_file_path: str,
     repo_root: str,
@@ -560,7 +576,8 @@ def is_code_changed(
 
     Strategy:
     1. If a fingerprint exists, compare current SHA256 vs stored code_hash.
-    2. If no fingerprint, fall back to git changed-files set.
+    2. If code hash matches, check stored include dependency hashes.
+    3. If no fingerprint, fall back to git changed-files set.
 
     When *prompt_file_path* is provided, uses ``infer_module_identity`` to
     derive the fingerprint key (matching the write path in update_main).
@@ -602,6 +619,12 @@ def is_code_changed(
 
         if current_hash != stored_hash:
             return True, "code hash differs from fingerprint"
+
+        # Check include dependencies (shared files like preambles, examples)
+        include_changed, include_reason = _check_include_deps_changed(fingerprint)
+        if include_changed:
+            return True, include_reason
+
         return False, "code hash matches fingerprint"
 
     # No fingerprint — fall back to git

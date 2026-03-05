@@ -67,6 +67,7 @@ ARCH_STEP_TIMEOUTS: Dict[Union[int, float], float] = {
     8: 600.0,    # Generate and validate .pddrc
     9: 900.0,    # Generate prompts
     9.5: 600.0,  # Cross-file consistency audit
+    9.7: 600.0,  # Cross-sub-issue reconciliation
     10: 340.0,   # Validate completeness (prompt-level)
     11: 600.0,   # Validate sync (pdd sync --dry-run for each module)
     12: 600.0,   # Validate dependencies (preprocess)
@@ -274,6 +275,80 @@ def _save_architecture_files(
 def _check_validation_result(output: str) -> bool:
     """Check if validation output indicates VALID."""
     return "VALIDATION_RESULT: VALID" in output
+
+
+def _validate_generated_test_syntax(cwd: Path) -> List[str]:
+    """Scan prompt files for embedded code blocks and validate their syntax.
+
+    Checks Python blocks with ast.parse() and TypeScript/JS blocks with basic
+    brace/bracket matching.  Returns a list of human-readable error strings.
+    Non-blocking — callers should log warnings, not fail the workflow.
+    """
+    import ast as _ast
+    import re as _re
+
+    errors: List[str] = []
+    prompts_dir = cwd / "prompts"
+    if not prompts_dir.exists():
+        return errors
+
+    # Match fenced code blocks: ```python ... ``` or ```typescript ... ```
+    block_pattern = _re.compile(
+        r"```(python|typescript|ts|javascript|js)\s*\n(.*?)```",
+        _re.DOTALL | _re.IGNORECASE,
+    )
+
+    for prompt_file in sorted(prompts_dir.glob("*.prompt")):
+        try:
+            content = prompt_file.read_text(encoding="utf-8")
+        except Exception:
+            continue
+
+        for match in block_pattern.finditer(content):
+            lang = match.group(1).lower()
+            code = match.group(2)
+
+            if lang == "python":
+                try:
+                    _ast.parse(code)
+                except SyntaxError as exc:
+                    errors.append(
+                        f"{prompt_file.name}: Python syntax error at line {exc.lineno}: {exc.msg}"
+                    )
+            elif lang in ("typescript", "ts", "javascript", "js"):
+                # Lightweight brace/bracket balance check
+                stack: List[str] = []
+                openers = {"(": ")", "[": "]", "{": "}"}
+                closers = {")", "]", "}"}
+                in_string = False
+                string_char = ""
+                for ch in code:
+                    if in_string:
+                        if ch == string_char:
+                            in_string = False
+                        continue
+                    if ch in ("'", '"', '`'):
+                        in_string = True
+                        string_char = ch
+                        continue
+                    if ch in openers:
+                        stack.append(openers[ch])
+                    elif ch in closers:
+                        if not stack or stack[-1] != ch:
+                            errors.append(
+                                f"{prompt_file.name}: TypeScript/JS unmatched '{ch}'"
+                            )
+                            break
+                        stack.pop()
+                if stack and not any(
+                    e.startswith(prompt_file.name) for e in errors
+                ):
+                    errors.append(
+                        f"{prompt_file.name}: TypeScript/JS unclosed bracket(s): "
+                        f"{''.join(stack)}"
+                    )
+
+    return errors
 
 
 def run_agentic_architecture_orchestrator(
@@ -1114,6 +1189,13 @@ def run_agentic_architecture_orchestrator(
 
         save_workflow_state(cwd, issue_number, "architecture", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
 
+        # --- Post-Step-9: Validate embedded code block syntax in prompts ---
+        syntax_errors = _validate_generated_test_syntax(cwd)
+        if syntax_errors and not quiet:
+            console.print("[yellow]Warning: Syntax issues in embedded code blocks:[/yellow]")
+            for err in syntax_errors:
+                console.print(f"   [yellow]• {escape(err)}[/yellow]")
+
     # --- Step 9b: Cross-File Consistency Audit ---
     if not skip_prompts and state.get("last_completed_step", 0) >= 9 and state.get("last_completed_step", 0) < 9.5:
         if not quiet:
@@ -1183,6 +1265,77 @@ def run_agentic_architecture_orchestrator(
                 console.print(f"[yellow]Warning: Missing template {audit_template_name}, skipping 9b[/yellow]")
             state["last_completed_step"] = 9.5
             save_workflow_state(cwd, issue_number, "architecture", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+
+    # --- Step 9c: Cross-Sub-Issue Reconciliation ---
+    if (
+        not skip_prompts
+        and related_issues
+        and state.get("last_completed_step", 0) >= 9.5
+        and state.get("last_completed_step", 0) < 9.7
+    ):
+        if not quiet:
+            console.print(f"[bold][Step 9c/{TOTAL_STEPS}][/bold] Cross-sub-issue reconciliation...")
+
+        reconcile_template_name = "cross_issue_reconcile_LLM"
+        reconcile_template = load_prompt_template(reconcile_template_name)
+        if reconcile_template:
+            exclude_keys_9c = list(context.keys())
+            reconcile_template = preprocess(reconcile_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys_9c)
+            reconcile_template = reconcile_template.replace("{{", "{").replace("}}", "}")
+            formatted_reconcile = reconcile_template
+            for key, value in context.items():
+                formatted_reconcile = formatted_reconcile.replace(f'{{{key}}}', str(value))
+
+            timeout_9c = ARCH_STEP_TIMEOUTS.get(9.7, 600.0) + timeout_adder
+            reconcile_success, reconcile_output, reconcile_cost, reconcile_model = run_agentic_task(
+                instruction=formatted_reconcile,
+                cwd=cwd,
+                verbose=verbose,
+                quiet=quiet,
+                timeout=timeout_9c,
+                label="step9c",
+                max_retries=DEFAULT_MAX_RETRIES,
+            )
+
+            total_cost += reconcile_cost
+            model_used = reconcile_model
+            state["total_cost"] = total_cost
+
+            context["step9c_output"] = reconcile_output
+            state["step_outputs"]["9c"] = reconcile_output
+            state["last_completed_step"] = 9.7
+
+            if "RECONCILE_RESULT: CONFLICTS_FIXED" in reconcile_output:
+                modified_files_9c = _parse_files_marker(reconcile_output, "FILES_MODIFIED:")
+                if modified_files_9c:
+                    verified_9c = _verify_files_exist(cwd, modified_files_9c, quiet)
+                    for mf in verified_9c:
+                        if mf not in prompt_files:
+                            prompt_files.append(mf)
+                    state["prompt_files"] = prompt_files
+                if not quiet:
+                    console.print("   → Cross-issue conflicts found and fixed")
+            elif not quiet:
+                console.print("   → All sub-issues are consistent ✓")
+
+            save_result = save_workflow_state(cwd, issue_number, "architecture", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+            if save_result:
+                github_comment_id = save_result
+                state["github_comment_id"] = github_comment_id
+        else:
+            if not quiet:
+                console.print(f"[yellow]Warning: Missing template {reconcile_template_name}, skipping 9c[/yellow]")
+            state["last_completed_step"] = 9.7
+            save_workflow_state(cwd, issue_number, "architecture", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+    elif (
+        not skip_prompts
+        and not related_issues
+        and state.get("last_completed_step", 0) >= 9.5
+        and state.get("last_completed_step", 0) < 9.7
+    ):
+        # No related issues — skip 9c cleanly
+        state["last_completed_step"] = 9.7
+        save_workflow_state(cwd, issue_number, "architecture", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
 
     # --- Validation Steps (10-12) with In-Place Fixing ---
     # Design: Each validation step retries with fixes up to MAX_STEP_RETRIES times.

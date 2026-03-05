@@ -44,7 +44,10 @@ from pathlib import Path
 from typing import Any, Dict, Tuple
 
 # Import the code under test
-from pdd.agentic_architecture_orchestrator import run_agentic_architecture_orchestrator
+from pdd.agentic_architecture_orchestrator import (
+    run_agentic_architecture_orchestrator,
+    _validate_generated_test_syntax,
+)
 
 # --- Fixtures ---
 
@@ -2586,3 +2589,229 @@ def test_generate_first_time_records_registry(mock_dependencies, base_args):
     gen = registry["generations"][0]
     assert sorted(gen["modules_added"]) == ["mod_a_Python.prompt", "mod_b_Python.prompt"]
     assert gen["modules_updated"] == []
+
+
+# === Fix 5: _validate_generated_test_syntax Tests ===
+
+class TestValidateGeneratedTestSyntax:
+    """Tests for _validate_generated_test_syntax (Fix 5)."""
+
+    def test_valid_python_block(self, tmp_path):
+        """Valid Python code block produces no errors."""
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "test_module_Python.prompt").write_text(
+            "Some prompt text\n"
+            "```python\n"
+            "def hello():\n"
+            "    return 'world'\n"
+            "```\n"
+        )
+        errors = _validate_generated_test_syntax(tmp_path)
+        assert errors == []
+
+    def test_invalid_python_block(self, tmp_path):
+        """Invalid Python code block is detected."""
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "test_module_Python.prompt").write_text(
+            "```python\n"
+            "def hello(\n"
+            "    return 'world'\n"
+            "```\n"
+        )
+        errors = _validate_generated_test_syntax(tmp_path)
+        assert len(errors) == 1
+        assert "Python syntax error" in errors[0]
+        assert "test_module_Python.prompt" in errors[0]
+
+    def test_valid_typescript_block(self, tmp_path):
+        """Valid TypeScript code block with balanced braces produces no errors."""
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "api_TypeScript.prompt").write_text(
+            "```typescript\n"
+            "function hello(): string {\n"
+            "  return 'world';\n"
+            "}\n"
+            "```\n"
+        )
+        errors = _validate_generated_test_syntax(tmp_path)
+        assert errors == []
+
+    def test_unbalanced_typescript_block(self, tmp_path):
+        """Unbalanced braces in TypeScript code block are detected."""
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "api_TypeScript.prompt").write_text(
+            "```typescript\n"
+            "function hello(): string {\n"
+            "  return 'world';\n"
+            "\n"
+            "```\n"
+        )
+        errors = _validate_generated_test_syntax(tmp_path)
+        assert len(errors) == 1
+        assert "api_TypeScript.prompt" in errors[0]
+
+    def test_no_prompts_dir(self, tmp_path):
+        """No prompts directory returns empty errors."""
+        errors = _validate_generated_test_syntax(tmp_path)
+        assert errors == []
+
+    def test_no_code_blocks(self, tmp_path):
+        """Prompt with no code blocks returns no errors."""
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "plain.prompt").write_text("Just plain text, no code blocks.\n")
+        errors = _validate_generated_test_syntax(tmp_path)
+        assert errors == []
+
+    def test_multiple_blocks_mixed(self, tmp_path):
+        """Multiple code blocks — valid and invalid — are all checked."""
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "multi.prompt").write_text(
+            "```python\n"
+            "x = 1\n"
+            "```\n"
+            "\n"
+            "```python\n"
+            "def bad(\n"
+            "```\n"
+        )
+        errors = _validate_generated_test_syntax(tmp_path)
+        assert len(errors) == 1
+        assert "Python syntax error" in errors[0]
+
+    def test_strings_ignored_in_bracket_matching(self, tmp_path):
+        """Braces inside strings should not affect bracket matching."""
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "strings.prompt").write_text(
+            "```typescript\n"
+            "const x = '{';\n"
+            "const y = '}';\n"
+            "```\n"
+        )
+        errors = _validate_generated_test_syntax(tmp_path)
+        assert errors == []
+
+
+# === Fix 3A: Step 9c Cross-Sub-Issue Reconciliation Tests ===
+
+class TestStep9cReconciliation:
+    """Tests for Step 9c cross-sub-issue reconciliation (Fix 3A)."""
+
+    def test_step9c_runs_when_related_issues_present(self, mock_dependencies, base_args):
+        """Step 9c runs when related_issues is provided."""
+        mocks = mock_dependencies
+        cwd = base_args["cwd"]
+        base_args["related_issues"] = [2, 3]
+
+        call_count_tracker = {"step9c_ran": False}
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step1b" in label:
+                return (True, "COMPLEXITY_RESULT: MANAGEABLE", 0.1, "gpt-4")
+            if "step5b" in label:
+                return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+            if "step7b" in label:
+                return (True, "REVIEW_RESULT: CLEAN", 0.1, "gpt-4")
+            if "step9b" in label:
+                return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
+            if "step9c" in label:
+                call_count_tracker["step9c_ran"] = True
+                return (True, "RECONCILE_RESULT: CONSISTENT", 0.1, "gpt-4")
+            if "step10" in label or "step11" in label or "step12" in label:
+                return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+            if "step7" in label:
+                (cwd / "architecture.json").write_text('[{"priority": 1, "filename": "test.prompt"}]')
+                return (True, "FILES_CREATED: architecture.json", 0.1, "gpt-4")
+            if "step8" in label:
+                (cwd / ".pddrc").write_text("prompts_dir: prompts\n")
+                return (True, "FILES_CREATED: .pddrc", 0.1, "gpt-4")
+            if "step9" in label:
+                return (True, "FILES_CREATED: prompts/test.prompt", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mocks["run"].side_effect = side_effect
+
+        success, msg, cost, model, files = run_agentic_architecture_orchestrator(**base_args)
+        assert success is True
+        assert call_count_tracker["step9c_ran"]
+
+    def test_step9c_skipped_when_no_related_issues(self, mock_dependencies, base_args):
+        """Step 9c is skipped when related_issues is empty/None."""
+        mocks = mock_dependencies
+        cwd = base_args["cwd"]
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step9c" in label:
+                pytest.fail("Step 9c should not run when no related issues")
+            if "step1b" in label:
+                return (True, "COMPLEXITY_RESULT: MANAGEABLE", 0.1, "gpt-4")
+            if "step5b" in label:
+                return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+            if "step7b" in label:
+                return (True, "REVIEW_RESULT: CLEAN", 0.1, "gpt-4")
+            if "step9b" in label:
+                return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
+            if "step10" in label or "step11" in label or "step12" in label:
+                return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+            if "step7" in label:
+                (cwd / "architecture.json").write_text('[{"priority": 1, "filename": "test.prompt"}]')
+                return (True, "FILES_CREATED: architecture.json", 0.1, "gpt-4")
+            if "step8" in label:
+                (cwd / ".pddrc").write_text("prompts_dir: prompts\n")
+                return (True, "FILES_CREATED: .pddrc", 0.1, "gpt-4")
+            if "step9" in label:
+                return (True, "FILES_CREATED: prompts/test.prompt", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mocks["run"].side_effect = side_effect
+
+        success, msg, cost, model, files = run_agentic_architecture_orchestrator(**base_args)
+        assert success is True
+
+    def test_step9c_tracks_modified_files(self, mock_dependencies, base_args):
+        """Step 9c tracks modified files when conflicts are fixed."""
+        mocks = mock_dependencies
+        cwd = base_args["cwd"]
+        base_args["related_issues"] = [2]
+
+        # Create the prompt file that will be reported as modified
+        prompts_dir = cwd / "prompts"
+        prompts_dir.mkdir(exist_ok=True)
+        (prompts_dir / "shared_types_Python.prompt").write_text("prompt content")
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step1b" in label:
+                return (True, "COMPLEXITY_RESULT: MANAGEABLE", 0.1, "gpt-4")
+            if "step5b" in label:
+                return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+            if "step7b" in label:
+                return (True, "REVIEW_RESULT: CLEAN", 0.1, "gpt-4")
+            if "step9b" in label:
+                return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
+            if "step9c" in label:
+                return (True, "RECONCILE_RESULT: CONFLICTS_FIXED\nFILES_MODIFIED: prompts/shared_types_Python.prompt", 0.1, "gpt-4")
+            if "step10" in label or "step11" in label or "step12" in label:
+                return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+            if "step7" in label:
+                (cwd / "architecture.json").write_text('[{"priority": 1, "filename": "test.prompt"}]')
+                return (True, "FILES_CREATED: architecture.json", 0.1, "gpt-4")
+            if "step8" in label:
+                (cwd / ".pddrc").write_text("prompts_dir: prompts\n")
+                return (True, "FILES_CREATED: .pddrc", 0.1, "gpt-4")
+            if "step9" in label:
+                return (True, "FILES_CREATED: prompts/test.prompt", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mocks["run"].side_effect = side_effect
+
+        success, msg, cost, model, files = run_agentic_architecture_orchestrator(**base_args)
+        assert success is True

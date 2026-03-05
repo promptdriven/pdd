@@ -157,7 +157,21 @@ When generating each prompt, you MUST inject the actual data model schemas from 
    - Step 2 naming registry is authoritative for collection/table names
    - If there is a conflict, flag it and use Step 4 as ground truth for data fields
 
-**5. Auth-aware prompt generation:**
+**5. Cross-language field name mapping (for multi-language projects):**
+   - For every prompt that defines or consumes a shared data type used across languages (e.g., Python backend + TypeScript frontend):
+     - Include a "Field Name Mapping" table showing the exact field names in each language:
+       ```
+       ## Field Name Mapping (Python ↔ TypeScript)
+       | Python (snake_case) | TypeScript (camelCase) | API Wire Format |
+       |--------------------|-----------------------|-----------------|
+       | user_id            | userId                | user_id         |
+       | created_at         | createdAt             | created_at      |
+       ```
+     - Specify the API serialization convention: does the REST API use snake_case (Python default) or camelCase (TypeScript default)?
+     - The prompt MUST include: "When serializing/deserializing, use the EXACT field names from the API Wire Format column. Do NOT let language-specific conventions override the wire format."
+   - For enum types shared across languages: ensure enum string values are IDENTICAL in both language prompts (e.g., `"pending"`, not `"PENDING"` in one and `"pending"` in another)
+
+**6. Auth-aware prompt generation:**
    - If a module is tagged "auth" in architecture.json:
      - Inject testability requirements: use dependency injection for auth providers (OAuth clients, token verifiers) so tests can substitute mock implementations
      - Inject error handling requirements: handle expired tokens, invalid tokens, missing scopes, CSRF state mismatch, and network failures
@@ -165,6 +179,27 @@ When generating each prompt, you MUST inject the actual data model schemas from 
    - If a module depends on an auth-tagged module:
      - Reference the auth module's interface contract (token types, verification functions)
      - Include token usage patterns in the prompt's "Dependency API Reference" section
+
+% Model Extension Awareness (extends field in architecture.json)
+
+When generating a prompt for a base data model module, scan architecture.json for ALL modules that have an `extends` entry targeting this module. If found:
+
+1. Inject a "Model Extensions" section into the base model's prompt listing the additional fields from dependent modules:
+   ```
+   ## Model Extensions (from dependent modules)
+
+   The following modules extend this data model with additional fields.
+   The base model MUST include these fields to support dependent functionality:
+
+   ### Extended by: [extending_module_filename]
+   | Field Name | Type | Default | Added By |
+   |-----------|------|---------|----------|
+   | [name]    | [type] | [default or "required"] | [module filename] |
+   ```
+
+2. The prompt MUST include: "Include ALL extension fields listed above in the base model definition. These fields are required by dependent modules."
+
+3. If a module's `extends` references a `target_class` that doesn't exist in the target module's interface, flag it as an error.
 
 % Key Rules
 

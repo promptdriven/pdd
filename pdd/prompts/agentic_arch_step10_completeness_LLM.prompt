@@ -215,6 +215,53 @@ REQUIRED completeness per prompt:
 - Any prompt has fewer than 3 concrete requirements
 - Any API prompt lacks request/response schemas
 
+**9. Entry Point Wiring Check**
+
+Verify that modules which export callable functionality are properly wired into the application:
+
+```bash
+# List modules with entryPoints defined
+cat architecture.json | jq -r '.[] | select(.entryPoints != null and (.entryPoints | length > 0)) | "\(.filename): \(.entryPoints | length) entry points"'
+
+# List API route modules (interface.type == "api") — these MUST have entryPoints
+cat architecture.json | jq -r '.[] | select(.interface.type == "api") | .filename'
+
+# List page modules — these should have layout entryPoints if applicable
+cat architecture.json | jq -r '.[] | select(.interface.type == "page") | .filename'
+```
+
+**Check for:**
+- API route modules (`interface.type == "api"`) have `entryPoints` specifying route registration (e.g., in router config, Express app, FastAPI app)
+- Page modules have layout `entryPoints` if the framework requires explicit layout/navigation wiring (e.g., adding to sidebar, navigation menu)
+- Entry point `file` references actually exist in the codebase or are being created by another module in the architecture
+- **Orphan detection:** Flag modules that export callable functionality (API endpoints, pages, middleware) but have NO `entryPoints` and are NOT referenced as a dependency by any other module — these will be unreachable at runtime
+
+**Flag as ERROR if:**
+- An API route module has no `entryPoints` and no module depends on it
+- A page module has no `entryPoints` and the framework requires explicit route/layout registration
+- An `entryPoints[].file` references a file that doesn't exist and isn't being created by the architecture
+
+**10. Cross-Language Type Consistency Check**
+
+For projects with modules in multiple languages (e.g., Python backend + TypeScript frontend), verify type consistency:
+
+```bash
+# Find all modules and their languages
+cat architecture.json | jq -r '.[] | "\(.filename) | \(.interface.type)"'
+```
+
+**Check for:**
+- Python and TypeScript modules sharing data types have documented field name mappings in their prompts
+- Serialization convention is specified: does the API use snake_case or camelCase for JSON field names?
+- Enum values are identical strings in both Python and TypeScript module prompts (e.g., both use `"pending"`, not `"PENDING"` in one and `"pending"` in another)
+- Field counts match: if a Python model has 5 fields, the corresponding TypeScript interface should have 5 fields (plus any framework-specific additions like `id`)
+- The `extends` entries (if any) reference valid target modules and classes
+
+**Flag as ERROR if:**
+- A shared data type appears in both Python and TypeScript modules but prompts lack a field name mapping table
+- Enum string values differ between language implementations
+- Field count mismatch between cross-language type definitions (off by more than 1 field)
+
 % Output
 
 **1. Run all validation checks**
