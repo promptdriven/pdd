@@ -16,6 +16,9 @@ shared:
   # Package data
   - pdd/data/
 
+  # Templates
+  - pdd/templates/
+
   # Tests (unit tests — recursive to include subdirectories)
   - tests/**/*.py
   - tests/*regression*.sh
