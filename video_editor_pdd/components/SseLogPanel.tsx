@@ -8,6 +8,7 @@ interface SseLogPanelProps {
   onDone?: () => void;
   onError?: (msg: string) => void;
   className?: string;
+  logClassName?: string;
 }
 
 const formatTimestamp = () =>
@@ -18,6 +19,7 @@ export const SseLogPanel: React.FC<SseLogPanelProps> = ({
   onDone,
   onError,
   className,
+  logClassName,
 }) => {
   const [logs, setLogs] = useState<string[]>([]);
   const [completed, setCompleted] = useState(false);
@@ -174,7 +176,7 @@ export const SseLogPanel: React.FC<SseLogPanelProps> = ({
     <div className={className}>
       <div
         ref={logRef}
-        className="overflow-y-auto max-h-64 font-mono text-xs bg-black/20 p-2 rounded"
+        className={`overflow-y-auto ${logClassName ?? 'max-h-64'} font-mono text-xs bg-black/20 p-2 rounded`}
         style={{ contain: 'content' }}
       >
         {logs.length === 0 ? (

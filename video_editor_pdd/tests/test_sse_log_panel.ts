@@ -14,7 +14,7 @@
  *   6. On event: error, show red error banner and call onError(message)
  *   7. Auto-scroll to bottom on each new log line
  *   8. Fall back to polling GET /api/jobs/${jobId} every 2s if EventSource fails
- *   9. Virtualize log list using CSS contain: strict
+ *   9. Virtualize log list using CSS contain: content
  *  10. Close EventSource on unmount or jobId change
  *  11. 'use client' directive at the top
  */
@@ -223,8 +223,8 @@ describe("polling fallback", () => {
 // ---------------------------------------------------------------------------
 
 describe("CSS virtualization", () => {
-  it("uses contain: strict for log container", () => {
-    expect(sourceCode).toMatch(/contain\s*:\s*['"]strict['"]/);
+  it("uses contain: content for log container (not strict, which collapses height)", () => {
+    expect(sourceCode).toMatch(/contain\s*:\s*['"]content['"]/);
   });
 
   it("log container has overflow-y: auto via className", () => {
@@ -237,10 +237,12 @@ describe("CSS virtualization", () => {
 // ---------------------------------------------------------------------------
 
 describe("log container", () => {
-  it("has correct className with max-h-64, font-mono, text-xs, bg-black/20, p-2, rounded", () => {
-    expect(sourceCode).toMatch(
-      /className="overflow-y-auto max-h-64 font-mono text-xs bg-black\/20 p-2 rounded"/
-    );
+  it("uses logClassName prop to allow overriding default max-h-64", () => {
+    expect(sourceCode).toMatch(/logClassName\s*\?\?\s*['"]max-h-64['"]/);
+  });
+
+  it("declares optional logClassName prop", () => {
+    expect(sourceCode).toMatch(/logClassName\?\s*:\s*string/);
   });
 
   it("uses a div ref for the log container", () => {

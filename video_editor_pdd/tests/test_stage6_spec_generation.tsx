@@ -704,16 +704,12 @@ describe("inline CodeMirror editor", () => {
 // 26. SSE log drawer (Req 6)
 // ---------------------------------------------------------------------------
 
-describe("SSE log drawer", () => {
-  it("renders a <details> element for SSE log", () => {
-    expect(sourceCode).toMatch(/<details/);
+describe("SSE log panel", () => {
+  it("renders logs directly without a <details> wrapper (always visible)", () => {
+    expect(sourceCode).not.toMatch(/<details[\s\S]*?<SseLogPanel/);
   });
 
-  it("renders a <summary> element with log title", () => {
-    expect(sourceCode).toMatch(/<summary[\s\S]*?>[\s\S]*?Spec Generation Logs[\s\S]*?<\/summary>/);
-  });
-
-  it("renders SseLogPanel component inside the drawer", () => {
+  it("renders SseLogPanel component", () => {
     expect(sourceCode).toMatch(/<SseLogPanel/);
   });
 
@@ -723,6 +719,10 @@ describe("SSE log drawer", () => {
 
   it("passes onDone={fetchSpecList} to SseLogPanel to refresh list after regeneration", () => {
     expect(sourceCode).toMatch(/onDone=\{fetchSpecList\}/);
+  });
+
+  it("passes logClassName with a tall height to SseLogPanel", () => {
+    expect(sourceCode).toMatch(/logClassName=["'][^"']*max-h-/);
   });
 });
 

@@ -372,13 +372,10 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
           </div>
         ))}
 
-      {/* SSE Log Drawer */}
-      <details className="mt-6 rounded border border-slate-700 bg-slate-900">
-        <summary className="cursor-pointer px-4 py-2 font-medium">Spec Generation Logs</summary>
-        <div className="p-4">
-          <SseLogPanel jobId={latestJobId} onDone={fetchSpecList} />
-        </div>
-      </details>
+      {/* SSE Log Panel */}
+      <div className="mt-6">
+        <SseLogPanel jobId={latestJobId} onDone={fetchSpecList} logClassName="max-h-[50vh]" />
+      </div>
     </div>
   );
 };
