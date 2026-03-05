@@ -137,7 +137,7 @@ Provider commands in playwright mode:
 - Google: `[cli_path, "<instruction>", "--yolo", "--output-format", "json"]` — same as standard mode (gemini CLI does not support per-tool restrictions)
 - OpenAI: `[cli_path, "exec", "--sandbox", <sandbox_mode>, "--json", <prompt_path>]` — same as standard mode (codex CLI does not support per-tool restrictions)
 
-The `use_playwright` flag assumes `playwright-cli` is available in PATH. The prompt instructs the agent to use `playwright-cli` commands for browser interaction. The `--max-turns 30` flag provides a cost ceiling for Anthropic; for Google/OpenAI, the existing timeout mechanism serves as the cost ceiling.
+The `use_playwright` flag assumes Playwright is available (via `npx playwright`). The prompt instructs the agent to use `npx playwright` commands for browser interaction. The `--max-turns 30` flag provides a cost ceiling for Anthropic; for Google/OpenAI, the existing timeout mechanism serves as the cost ceiling.
 
 % False Positive Detection
 After a provider returns success, detect false positives:

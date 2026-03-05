@@ -33,7 +33,7 @@ Orchestrator for the 18-step agentic test generation workflow. Runs each step as
 8. Support state persistence and resumption via `load_workflow_state()`, `save_workflow_state()`, `clear_workflow_state()`
 9. Validate cached state on load using `validate_cached_state()` to prevent blind-resume from failed steps
 10. Create isolated git worktree before Step 12 for test generation and PR creation
-11. Support conditional step execution based on TEST_TYPE and playwright-cli availability
+11. Support conditional step execution based on TEST_TYPE and Playwright availability
 12. Detect hard stop conditions and exit early with descriptive messages
 13. Provide console output for progress tracking (unless quiet=True)
 
@@ -72,7 +72,7 @@ Add `timeout_adder` to each timeout when calling `run_agentic_task()`.
 | 4 | agentic_test_step4_detect_frontend_LLM | Identify test type & framework | Always |
 | 5 | agentic_test_step5_test_plan_LLM | Create test plan | Always |
 | 5.5 | agentic_test_step5b_enhance_plan_LLM | Add contract/schema/a11y tests | Always |
-| 6 | agentic_test_step6_coverage_LLM | Assess coverage gaps | TEST_TYPE=web AND playwright-cli exists |
+| 6 | agentic_test_step6_coverage_LLM | Assess coverage gaps | TEST_TYPE=web AND Playwright available |
 | 7 | agentic_test_step7_checklist_LLM | Manual testing checklist | Step 6 ran AND COVERAGE_GAPS > 0 |
 | 8 | agentic_test_step8_manual_test_LLM | Browser testing | Step 7 ran |
 | 9 | agentic_test_step9_regression_LLM | Create regression tests | Step 8 found issues |
@@ -94,7 +94,7 @@ Parse step output to detect stop conditions. Return early with error:
 
 % Conditional Steps (6-11)
 - Only run when TEST_TYPE=web (parsed from Step 4 output)
-- Only run when `shutil.which("playwright-cli")` returns truthy
+- Only run when Playwright is available (check via `subprocess.run(["npx", "playwright", "--version"], capture_output=True).returncode == 0`)
 - If Step 6 output contains "COVERAGE_GAPS: 0", skip Steps 7-11
 - Steps 8-11 form a loop (max 3 iterations) until CHECKLIST_STATUS=COMPLETE
 
