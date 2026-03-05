@@ -486,6 +486,7 @@ def run_agentic_task(
     max_retries: int = 1,
     retry_delay: float = DEFAULT_RETRY_DELAY,
     deadline: Optional[float] = None,
+    use_playwright: bool = False,
 ) -> Tuple[bool, str, float, str]:
     """
     Runs an agentic task using available providers in preference order.
@@ -499,6 +500,8 @@ def run_agentic_task(
         timeout: Optional timeout override
         max_retries: Number of attempts per provider before fallback (default: 1 = no retries)
         retry_delay: Base delay in seconds for exponential backoff (default: DEFAULT_RETRY_DELAY)
+        deadline: Optional Unix timestamp for job-level time budgeting
+        use_playwright: Enable constrained tool access mode for browser-based testing
 
     Returns:
         (success, output_text, cost_usd, provider_used)
@@ -573,7 +576,8 @@ def run_agentic_task(
                     console.print(f"[dim]Retry {attempt}/{max_retries} for {provider} (task: {label})[/dim]")
 
                 success, output, cost = _run_with_provider(
-                    provider, prompt_path, cwd, attempt_timeout, verbose, quiet
+                    provider, prompt_path, cwd, attempt_timeout, verbose, quiet,
+                    use_playwright=use_playwright,
                 )
                 last_output = output
 
@@ -660,6 +664,7 @@ def _run_with_provider(
     quiet: bool = False,
     cli_path: Optional[str] = None,
     label: str = "",
+    use_playwright: bool = False,
 ) -> Tuple[bool, str, float]:
     """
     Internal helper to run a specific provider's CLI.
@@ -674,6 +679,7 @@ def _run_with_provider(
         quiet: Suppress output
         cli_path: Optional explicit CLI path (if None, uses _find_cli_binary)
         label: Task label for heartbeat messages
+        use_playwright: Enable constrained tool access for browser testing
     """
 
     # Prepare Environment
@@ -704,12 +710,22 @@ def _run_with_provider(
         # Use -p - to pipe prompt as direct user message via stdin.
         # This prevents Claude from interpreting file-discovered instructions
         # as "automated bot workflow" and refusing to execute.
-        cmd = [
-            cli_path,
-            "-p", "-",
-            "--dangerously-skip-permissions",
-            "--output-format", "json",
-        ]
+        if use_playwright:
+            # Playwright mode: constrained tool access with cost ceiling
+            cmd = [
+                cli_path,
+                "-p", "-",
+                "--allowedTools", "Bash", "Read", "Write",
+                "--max-turns", "30",
+                "--output-format", "json",
+            ]
+        else:
+            cmd = [
+                cli_path,
+                "-p", "-",
+                "--dangerously-skip-permissions",
+                "--output-format", "json",
+            ]
         # Allow model override via CLAUDE_MODEL env var (Issue #318)
         claude_model = env.get("CLAUDE_MODEL")
         if claude_model:

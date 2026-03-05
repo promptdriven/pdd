@@ -1,0 +1,127 @@
+<pdd-reason>Enhances test plan with contract/schema validation and accessibility test cases.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "config",
+  "config": {
+    "keys": []
+  }
+}
+</pdd-interface>
+
+% You are an expert software engineer handling a test generation request. Your task is to enhance the test plan with contract validation and accessibility test cases.
+
+% Context
+
+You are working on step 5b of 18 in an agentic test generation workflow. Step 5 created a comprehensive test plan. Your job is to enhance it with schema/contract tests and accessibility tests.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Steps Output
+<step2_output>
+{step2_output}
+</step2_output>
+
+<step4_output>
+{step4_output}
+</step4_output>
+
+<step5_output>
+{step5_output}
+</step5_output>
+
+% Your Task
+
+1. **For API tests (when OpenAPI/Swagger spec found in Step 2):**
+   - Parse the OpenAPI/Swagger spec path identified in Step 2's output
+   - Read the spec file and extract endpoint definitions
+   - Add **contract validation test cases** for every endpoint:
+     - Response status code validation
+     - Response body schema validation (required fields, field types, nested objects)
+     - Response headers validation
+     - Handle `$ref` resolution in the spec
+   - Add negative contract tests: verify 4xx responses match their error schema
+   - If no OpenAPI/Swagger spec was found in Step 2, skip this section gracefully
+
+2. **For web tests (`TEST_TYPE: web` from Step 4):**
+   - Add **accessibility test cases** for every page/route using `@axe-core/playwright` at WCAG 2.1 AA level
+   - Include test cases for:
+     - Color contrast
+     - Alt text for images
+     - Keyboard navigation
+     - ARIA labels
+     - Focus management
+   - If TEST_TYPE is not `web`, skip this section gracefully
+
+3. **Merge with existing plan**
+   - Combine the original test plan from Step 5 with new contract and accessibility cases
+   - Maintain the original plan structure, adding new sections
+
+% Output
+
+After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+```markdown
+## Step 5b: Enhanced Test Plan
+
+**Status:** Plan Enhanced
+
+### Contract Validation Tests (if applicable)
+- **Endpoints covered:** [N]
+- **Contract test cases added:** [N]
+- **Schema validation library:** jsonschema (Python) / ajv (TypeScript)
+
+#### Contract Test Cases
+1. [Endpoint] [Method] — validate [status] response schema
+2. ...
+
+### Accessibility Tests (if applicable)
+- **Pages/routes covered:** [N]
+- **Accessibility test cases added:** [N]
+- **Standard:** WCAG 2.1 AA via @axe-core/playwright
+
+#### Accessibility Test Cases
+1. [Page/route] — axe-core WCAG 2.1 AA audit
+2. ...
+
+### Enhanced Plan Summary
+- **Original test cases:** [N] (from Step 5)
+- **Contract test cases:** [N]
+- **Accessibility test cases:** [N]
+- **Total enhanced plan cases:** [N]
+
+---
+*Proceeding to Step 6: Assess Automated Test Coverage*
+```
+
+% Machine-Readable Output (REQUIRED)
+
+**You MUST output these lines at the very end of your response.**
+
+```
+CONTRACT_TEST_CASES: [N]
+ACCESSIBILITY_TEST_CASES: [N]
+ENHANCED_PLAN_CASES: [N]
+```
+
+% Important
+
+- If no OpenAPI spec found, output `CONTRACT_TEST_CASES: 0`
+- If TEST_TYPE is not web, output `ACCESSIBILITY_TEST_CASES: 0`
+- Preserve all original test cases from Step 5
+- Always post your findings as a GitHub comment before completing

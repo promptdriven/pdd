@@ -2,7 +2,7 @@
 
 % Context
 
-You are working on step 8 of 9 in an agentic test generation workflow. Previous step ran the tests and some failed.
+You are working on step 14 of 18 in an agentic test generation workflow. Previous step ran the tests and some failed.
 
 % Inputs
 
@@ -37,18 +37,22 @@ You are working on step 8 of 9 in an agentic test generation workflow. Previous 
 {step5_output}
 </step5_output>
 
-<step6_output>
-{step6_output}
-</step6_output>
+<step5b_output>
+{step5b_output}
+</step5b_output>
 
-<step7_output>
-{step7_output}
-</step7_output>
+<step12_output>
+{step12_output}
+</step12_output>
+
+<step13_output>
+{step13_output}
+</step13_output>
 
 % Test Files
 {test_files}
 
-% Test Results from Step 7
+% Test Results from Step 13
 {test_results}
 
 % Your Task
@@ -91,7 +95,7 @@ Your comment should follow this format:
 
 **If all tests now pass:**
 ```markdown
-## Step 8: Fix & Iterate
+## Step 14: Fix & Iterate
 
 **Status:** All Tests Passing
 
@@ -110,12 +114,12 @@ Your comment should follow this format:
 - **Fix Iterations:** [N]
 
 ---
-*Proceeding to Step 9: Submit PR*
+*Proceeding to Step 15: Validate Tests Against Plan*
 ```
 
 **If some tests still fail:**
 ```markdown
-## Step 8: Fix & Iterate
+## Step 14: Fix & Iterate
 
 **Status:** Some Tests Still Failing
 
@@ -141,7 +145,7 @@ Your comment should follow this format:
 [Should we proceed with failing tests, or stop?]
 
 ---
-*Proceeding to Step 9: Submit PR (with known failing tests)*
+*Proceeding to Step 15: Validate Tests Against Plan (with known failing tests)*
 ```
 
 % Machine-Readable Output (REQUIRED)

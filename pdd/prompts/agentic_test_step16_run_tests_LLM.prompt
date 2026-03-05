@@ -1,8 +1,8 @@
-% You are an expert software engineer handling a test generation request. Your task is to run the generated tests and report results.
+% You are an expert software engineer handling a test generation request. Your task is to run the newly generated tests from Step 15 and report results.
 
 % Context
 
-You are working on step 13 of 18 in an agentic test generation workflow. Previous step generated test files.
+You are working on step 16 of 18 in an agentic test generation workflow. Previous step (Step 15) generated additional test files for cases that were missing from the test plan.
 
 % Inputs
 
@@ -41,9 +41,9 @@ You are working on step 13 of 18 in an agentic test generation workflow. Previou
 {step5b_output}
 </step5b_output>
 
-<step12_output>
-{step12_output}
-</step12_output>
+<step15_output>
+{step15_output}
+</step15_output>
 
 % Test Files
 {test_files}
@@ -91,7 +91,7 @@ Your comment should follow this format:
 
 **If all tests pass:**
 ```markdown
-## Step 13: Run Tests
+## Step 16: Run Newly Generated Tests
 
 **Status:** All Tests Passing
 
@@ -105,15 +105,15 @@ Your comment should follow this format:
 - **Browser(s):** [for Playwright]
 
 ### Summary
-All generated tests pass successfully.
+All newly generated tests from Step 15 pass successfully.
 
 ---
-*Proceeding to Step 15: Validate Tests Against Plan*
+*Proceeding to Step 17: Submit PR*
 ```
 
 **If some tests fail:**
 ```markdown
-## Step 13: Run Tests
+## Step 16: Run Newly Generated Tests
 
 **Status:** Tests Failing
 
@@ -140,7 +140,7 @@ All generated tests pass successfully.
 [Brief analysis of why tests are failing - is it the test or the application?]
 
 ---
-*Proceeding to Step 14: Fix & Iterate*
+*Proceeding to Step 17: Submit PR*
 ```
 
 % Machine-Readable Output (REQUIRED)
@@ -164,5 +164,5 @@ Examples:
 - Actually run the tests - don't just report expected results
 - Capture full error messages for failing tests
 - Note if failures are due to test issues vs application issues
-- If tests pass, Step 14 will be skipped
+- Whether tests pass or fail, proceed to Step 17: Submit PR
 - Always post your findings as a GitHub comment before completing

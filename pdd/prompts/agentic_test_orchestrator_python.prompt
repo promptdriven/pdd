@@ -1,75 +1,135 @@
+<pdd-reason>Orchestrates the 18-step agentic test workflow with exploratory testing and plan validation.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "run_agentic_test_orchestrator", "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, *, cwd, verbose, quiet, timeout_adder, use_github_state)", "returns": "Tuple[bool, str, float, str, List[str]]"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>agentic_common_python.prompt</pdd-dependency>
+<pdd-dependency>load_prompt_template_python.prompt</pdd-dependency>
+
 <include>context/python_preamble.prompt</include>
 
 % Goal
 Write the `pdd/agentic_test_orchestrator.py` module.
 
 % Role & Scope
-Orchestrator for the 9-step agentic test generation workflow. Runs each step as a separate agentic task, accumulates context between steps, and tracks overall progress and cost. Generates tests (Playwright for web, pytest for CLI, pytest+requests for API, etc.) from GitHub issue descriptions.
+Orchestrator for the 18-step agentic test generation workflow. Runs each step as a separate agentic task, accumulates context between steps, and tracks overall progress and cost. Generates tests (Playwright for web, pytest for CLI, pytest+requests for API, etc.) from GitHub issue descriptions. Includes exploratory browser testing via Playwright CLI, contract/schema validation, accessibility audits, and test plan traceability.
 
 % Requirements
 1. Function: `run_agentic_test_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True) -> Tuple[bool, str, float, str, List[str]]`
 2. Return 5-tuple: (success, final_message, total_cost, model_used, changed_files)
-3. Run 9 steps sequentially, each as a separate `run_agentic_task()` call
+3. Run up to 18 steps sequentially, each as a separate `run_agentic_task()` call (some steps are conditional)
 4. Accumulate step outputs to pass as context to subsequent steps
 5. Track total cost across all steps
-6. For Step 6: Parse agent output for `FILES_CREATED: path1, path2` or `FILES_MODIFIED: path1, path2` lines to extract test files
-7. Pass extracted files to Step 9 (PR) via `files_to_stage` context variable for explicit git staging
+6. For Step 12 (generate tests): Parse agent output for `FILES_CREATED: path1, path2` or `FILES_MODIFIED: path1, path2` lines to extract test files
+7. Pass extracted files to Step 17 (PR) via `files_to_stage` context variable for explicit git staging
+8. Steps 6-11 (manual/exploratory testing) are conditional: only run when `TEST_TYPE: web` AND `playwright-cli` is in PATH
+9. Step 5.5 (enhance plan) always runs after Step 5
+10. Step 8 supports two execution modes: serial (CLI) and parallel (GitHub App with `PDD_CLOUD_RUN=true`)
+11. Steps 8-11 form a loop (max 3 iterations) to ensure exhaustive manual test coverage
 
 % Per-Step Timeouts
-Define locally (workflow-specific configuration stays with the workflow):
+Define locally (workflow-specific configuration stays with the workflow).
+Use float keys for fractional steps (5.5 for Step 5b):
 ```python
-TEST_STEP_TIMEOUTS: Dict[int, float] = {
-    1: 240.0,   # Duplicate Check
-    2: 400.0,   # Docs Check
-    3: 400.0,   # Analyze & Clarify
-    4: 340.0,   # Detect Frontend
-    5: 600.0,   # Create Test Plan
-    6: 1000.0,  # Generate Tests (Most Complex)
-    7: 600.0,   # Run Tests
-    8: 800.0,   # Fix & Iterate
-    9: 240.0,   # Submit PR
+TEST_STEP_TIMEOUTS: Dict[Union[int, float], float] = {
+    1: 240.0,    # Duplicate Check
+    2: 400.0,    # Docs Check
+    3: 400.0,    # Analyze & Clarify
+    4: 340.0,    # Detect Frontend
+    5: 600.0,    # Create Test Plan
+    5.5: 400.0,  # Enhance Plan (schema + accessibility)
+    6: 300.0,    # Assess Automated Test Coverage (web only)
+    7: 400.0,    # Create Manual Testing Checklist (web only)
+    8: 1800.0,   # Manual Testing Execution (web only, serial mode)
+    9: 600.0,    # Create Regression Tests (web only)
+    10: 400.0,   # Validate Regression Tests (web only)
+    11: 60.0,    # Loop Until Checklist Complete (web only)
+    12: 1000.0,  # Generate Tests (Most Complex)
+    13: 600.0,   # Run Tests
+    14: 800.0,   # Fix & Iterate
+    15: 600.0,   # Validate Tests Against Plan
+    16: 600.0,   # Run Newly Generated Tests
+    17: 240.0,   # Submit PR
 }
 ```
 
 % Step Execution
-For each step (1-9):
+For each step in the step sequence:
 1. Load the step prompt template via `load_prompt_template(f"agentic_test_step{n}_{name}_LLM")`
-2. Format template with: issue_url, repo_owner, repo_name, issue_number, issue_content, issue_author, step1_output, step2_output, etc.
+   - For step 5.5: use template name `agentic_test_step5b_enhance_plan_LLM`
+   - For step 12: use template name `agentic_test_step6_generate_tests_LLM` (reuses existing generate_tests template)
+   - For step 13: use template name `agentic_test_step7_run_tests_LLM` (reuses existing run_tests template)
+   - For step 14: use template name `agentic_test_step8_fix_iterate_LLM` (reuses existing fix_iterate template)
+   - For step 16: use template name `agentic_test_step16_run_tests_LLM` (dedicated Step 16 template with correct step references)
+   - For step 17: use template name `agentic_test_step9_submit_pr_LLM` (reuses existing submit_pr template)
+2. Format template with: issue_url, repo_owner, repo_name, issue_number, issue_content, issue_author, step outputs, and any additional context vars
 3. Call `run_agentic_task(formatted_prompt, cwd, ..., timeout=TEST_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder, max_retries=DEFAULT_MAX_RETRIES)`
    - Use step-specific timeout plus optional timeout_adder to allow caller to extend timeouts
    - Use DEFAULT_MAX_RETRIES for consistent retry behavior across all orchestrators
+   - For Step 8: pass `use_playwright=True` to `run_agentic_task()`
 4. Store the output for use by subsequent steps
 5. Accumulate cost: `total_cost += step_cost`
 
 % Step Sequence
-| Step | Template Name | Purpose |
-|------|---------------|---------|
-| 1 | agentic_test_step1_duplicate_LLM | Search for duplicate test requests |
-| 2 | agentic_test_step2_docs_LLM | Review codebase to understand what to test |
-| 3 | agentic_test_step3_clarify_LLM | Determine if enough info, ask clarifying questions if needed |
-| 4 | agentic_test_step4_detect_frontend_LLM | Identify test type (web/CLI/desktop/api) and testing framework |
-| 5 | agentic_test_step5_test_plan_LLM | Create comprehensive test plan |
-| 6 | agentic_test_step6_generate_tests_LLM | Generate tests in worktree |
-| 7 | agentic_test_step7_run_tests_LLM | Execute generated tests |
-| 8 | agentic_test_step8_fix_iterate_LLM | Fix failing tests and re-run |
-| 9 | agentic_test_step9_submit_pr_LLM | Create draft PR and link to issue |
+| Step | Template Name | Purpose | Condition |
+|------|---------------|---------|-----------|
+| 1 | agentic_test_step1_duplicate_LLM | Search for duplicate test requests | Always |
+| 2 | agentic_test_step2_docs_LLM | Review codebase to understand what to test | Always |
+| 3 | agentic_test_step3_clarify_LLM | Determine if enough info, ask clarifying questions if needed | Always |
+| 4 | agentic_test_step4_detect_frontend_LLM | Identify test type (web/CLI/desktop/api) and testing framework | Always |
+| 5 | agentic_test_step5_test_plan_LLM | Create comprehensive test plan | Always |
+| 5.5 | agentic_test_step5b_enhance_plan_LLM | Enhance plan with contract/schema tests and accessibility cases | Always |
+| 6 | agentic_test_step6_coverage_LLM | Assess automated test coverage gaps | `TEST_TYPE: web` AND `playwright-cli` in PATH |
+| 7 | agentic_test_step7_checklist_LLM | Create manual testing checklist | `TEST_TYPE: web` AND `playwright-cli` in PATH AND `COVERAGE_GAPS > 0` |
+| 8 | agentic_test_step8_manual_test_LLM | Browser-based manual testing execution | `TEST_TYPE: web` AND `playwright-cli` in PATH AND `COVERAGE_GAPS > 0` |
+| 9 | agentic_test_step9_regression_LLM | Create regression tests from found bugs | `TEST_TYPE: web` AND `ISSUES_FOUND > 0` |
+| 10 | agentic_test_step10_validate_LLM | Validate regression tests fail against current code | Step 9 created files |
+| 11 | agentic_test_step11_loop_LLM | Check checklist completion, loop to Step 8 if incomplete (max 3) | `CHECKLIST_STATUS != COMPLETE` |
+| 12 | agentic_test_step6_generate_tests_LLM | Generate tests from enhanced plan (contract + accessibility + behavioral) | Always |
+| 13 | agentic_test_step7_run_tests_LLM | Execute generated tests | Always |
+| 14 | agentic_test_step8_fix_iterate_LLM | Fix failing tests and re-run | Always |
+| 15 | agentic_test_step15_plan_validation_LLM | Cross-reference test plan vs generated tests, generate missing | Always |
+| 16 | agentic_test_step16_run_tests_LLM | Run newly generated tests from Step 15 | Step 15 created files |
+| 17 | agentic_test_step9_submit_pr_LLM | Create draft PR with enhanced description | Always |
+
+Note: Steps 12-14 reuse the existing step6/step7/step8 LLM prompt templates (renamed for clarity). The template file names remain `agentic_test_step6_generate_tests_LLM`, `agentic_test_step7_run_tests_LLM`, `agentic_test_step8_fix_iterate_LLM` to avoid breaking existing grounding history. The orchestrator maps step numbers 12→step6 template, 13→step7 template, 14→step8 template internally. Step 16 has its own dedicated template (`agentic_test_step16_run_tests_LLM`) with correct step references and `{step15_output}` variable.
 
 % Context Accumulation
 - Step 1 receives: issue_content
 - Step 2 receives: issue_content, step1_output
 - Step 3 receives: issue_content, step1_output, step2_output
 - Step 4 receives: issue_content, step1_output through step3_output
+- Step 4 also outputs `TARGET_URL:` — extract and store as `target_url` in context (used by Step 8 for browser testing)
 - Step 5 receives: issue_content, step1_output through step4_output, frontend_type, test_framework
-- Step 6 receives: issue_content, step1_output through step5_output, worktree_path, test_plan
-- Step 7 receives: issue_content, step1_output through step6_output, worktree_path, test_files
-- Step 8 receives: issue_content, step1_output through step7_output, worktree_path, test_files, test_results
-- Step 9 receives: issue_content, step1_output through step8_output, worktree_path, files_to_stage
+- Step 5.5 receives: issue_content, step5_output (test plan), step2_output (OpenAPI spec path), step4_output (TEST_TYPE)
+- Step 6 receives: issue_content, step5_output, step5b_output (enhanced plan), step4_output (TEST_TYPE)
+- Step 7 receives: issue_content, step6_output (coverage gaps), step5b_output, step4_output
+- Step 8 receives: step7_output (checklist), target_url (from Step 4 `TARGET_URL:` output), checklist_chunks
+- Step 9 receives: step8_output (manual test results), issues_found
+- Step 10 receives: step9_output (regression test files)
+- Step 11 receives: step7_output (original checklist), step8_output (results), iteration_count
+- Step 12 receives: issue_content, step1_output through step5b_output, worktree_path, enhanced_test_plan
+- Step 13 receives: issue_content, step1_output through step12_output, worktree_path, test_files
+- Step 14 receives: issue_content, step1_output through step13_output, worktree_path, test_files, test_results
+- Step 15 receives: step5b_output (enhanced plan), step12_output (generated test files), worktree_path
+- Step 16 receives: step15_output (newly generated test files), worktree_path
+- Step 17 receives: all step outputs, worktree_path, files_to_stage, coverage_ratio, manual_test_summary, contract_test_summary, accessibility_summary
 
 % Files to Stage
-After Step 6 parses FILES_CREATED/FILES_MODIFIED, pass the extracted file list to Steps 7-9:
+After Step 12 parses FILES_CREATED/FILES_MODIFIED, pass the extracted file list to Steps 13-17:
 - `context["files_to_stage"] = ", ".join(changed_files)`
-- After Step 8 fixes, update files_to_stage if new files were created
-- Step 9 prompt uses `{files_to_stage}` to display the explicit list of files to stage
+- After Step 14 fixes, update files_to_stage if new files were created
+- After Step 9 (regression tests), add regression test files to files_to_stage
+- After Step 15 (plan validation), add newly generated test files to files_to_stage
+- Step 17 prompt uses `{files_to_stage}` to display the explicit list of files to stage
 
 % Early Exit Conditions (Hard Stops)
 
@@ -80,7 +140,8 @@ The orchestrator must parse step output to detect stop conditions:
 | 1 | Issue is a duplicate | Output contains "Duplicate of #" |
 | 3 | Needs more info from author | Output contains "Needs More Info" |
 | 5 | Test plan not achievable | Output contains "PLAN_BLOCKED" |
-| 6 | No test file generated | No FILES_CREATED or FILES_MODIFIED line in output, or empty file list |
+| 6 | No coverage gaps for manual testing | Output contains "COVERAGE_GAPS: 0" → skip Steps 7-11 |
+| 12 | No test file generated | No FILES_CREATED or FILES_MODIFIED line in output, or empty file list |
 
 **Hard stop behavior:**
 - Return `(False, "Stopped at step N: {reason}", total_cost, model_used, changed_files)`
@@ -92,9 +153,45 @@ The orchestrator must parse step output to detect stop conditions:
 - This applies to all steps - only the specific hard stop patterns above terminate the workflow
 - Steps should post their findings to GitHub even on partial failure
 
+% Conditional Step Execution
+
+**Steps 6-11 (Manual/Exploratory Testing):**
+- Only run when `TEST_TYPE: web` (parsed from Step 4 output)
+- Only run when `playwright-cli` is found in PATH (check via `shutil.which("playwright-cli")`)
+- If `playwright-cli` not found, print warning: `[yellow]playwright-cli not found in PATH. Skipping manual testing steps (6-11).[/yellow]`
+- If `TEST_TYPE` is not `web`, skip silently
+
+**Step 6 hard stop:**
+- If output contains `COVERAGE_GAPS: 0`, skip Steps 7-11 (no manual testing needed)
+
+**Steps 8-11 Loop Logic:**
+- Steps 8-11 form a loop with max 3 iterations
+- After Step 11, parse `CHECKLIST_STATUS:` from output
+- If `CHECKLIST_STATUS: COMPLETE` or iteration count >= 3, exit loop and proceed to Step 12
+- If `CHECKLIST_STATUS: PARTIAL`, loop back to Step 8 with remaining unchecked items
+- Each loop iteration starts Step 8 with fresh context (only the checklist with completion state carries over)
+
+**Step 8 Mode Detection:**
+- Check `PDD_CLOUD_RUN` environment variable
+- If `PDD_CLOUD_RUN=true`: write parallel execution request to `.pdd/parallel-manual-test-request.json` and poll for `.pdd/parallel-manual-test-results.json`
+- Otherwise: run each checklist chunk serially via `run_agentic_task(use_playwright=True)`
+
+**Step 15-16 (Plan Validation):**
+- Step 15 always runs
+- Step 16 only runs if Step 15 output contains `FILES_CREATED:` (new tests were generated for missing cases)
+
+% Playwright CLI Prerequisite Check
+
+Before Step 6, check if `playwright-cli` is available:
+```python
+import shutil
+playwright_available = shutil.which("playwright-cli") is not None
+```
+Store this in context for gating Steps 6-11.
+
 % Git Worktree Isolation
 
-Before Step 6, create an isolated git worktree for test generation and PR creation. This prevents the workflow from disturbing the user's current branch.
+Before Step 12, create an isolated git worktree for test generation and PR creation. This prevents the workflow from disturbing the user's current branch.
 
 1. Helper function: `_setup_worktree(cwd: Path, issue_number: int, quiet: bool) -> Tuple[Optional[Path], Optional[str]]`
    - Create worktree at `.pdd/worktrees/test-issue-{issue_number}/` relative to git root
@@ -105,12 +202,12 @@ Before Step 6, create an isolated git worktree for test generation and PR creati
    - Create worktree: `git worktree add -b {branch} {path} HEAD`
    - Return (worktree_path, None) on success, (None, error_msg) on failure
 
-2. In orchestrator loop, before Step 6:
+2. In orchestrator loop, before Step 12:
    - Check current branch with `git rev-parse --abbrev-ref HEAD`. If NOT "main" or "master" and NOT quiet, print warning: `[yellow]Note: Creating branch from HEAD ({current_branch}), not origin/main. PR will include commits from this branch. Run from main for independent changes.[/yellow]`
    - Call `_setup_worktree(cwd, issue_number, quiet)`
    - If worktree creation fails, return early with error: `(False, "Failed to create worktree: {error}", ...)`
-   - Switch working directory to worktree path for Steps 6-9
-   - Add `worktree_path` to context dict (for Step 9 prompt formatting)
+   - Switch working directory to worktree path for Steps 12-17
+   - Add `worktree_path` to context dict (for Step 17 prompt formatting)
    - Print: `"[blue]Working in worktree: {worktree_path}[/blue]"` (unless quiet)
 
 3. Additional helper functions:
@@ -131,7 +228,11 @@ The orchestrator must provide real-time feedback to the user via rich console ou
 
 2. **Step progress** (before each step):
    ```
-   [Step N/9] {step_description}...
+   [Step N/18] {step_description}...
+   ```
+   For conditional steps that are skipped, print:
+   ```
+   [Step N/18] {step_description}... (skipped)
    ```
 
 3. **Agentic output** (during each step):
@@ -216,6 +317,9 @@ To avoid re-running completed steps when the workflow is paused (e.g., needs mor
 % Dependencies
 Import from `agentic_common`: `run_agentic_task`, `DEFAULT_MAX_RETRIES`, `load_workflow_state`, `save_workflow_state`, `clear_workflow_state`
 Note: `TEST_STEP_TIMEOUTS` is defined locally in this module (see Per-Step Timeouts section)
+Import `shutil` for `playwright-cli` PATH check
+Import `os` for `PDD_CLOUD_RUN` env var check
+Import `json` for parallel execution request/results file I/O
 <pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
 <pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
 

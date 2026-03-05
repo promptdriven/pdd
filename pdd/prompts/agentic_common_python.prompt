@@ -1,10 +1,31 @@
-% <include>context/python_preamble.prompt</include>
+<pdd-reason>Shared infrastructure for agentic CLI invocations with multi-provider support and playwright mode.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "get_agent_provider_preference", "signature": "() -> List[str]", "returns": "List[str]"},
+      {"name": "get_available_agents", "signature": "() -> List[str]", "returns": "List[str]"},
+      {"name": "run_agentic_task", "signature": "(instruction, cwd, *, verbose, quiet, label, timeout, max_retries, retry_delay, deadline, use_playwright)", "returns": "Tuple[bool, str, float, str]"},
+      {"name": "post_step_comment", "signature": "(repo_owner, repo_name, issue_number, step_num, total_steps, description, output, cwd)", "returns": "bool"},
+      {"name": "github_save_state", "signature": "(...)", "returns": "Optional[int]"},
+      {"name": "github_load_state", "signature": "(...)", "returns": "Tuple[Optional[Dict], Optional[int]]"},
+      {"name": "validate_cached_state", "signature": "(last_completed_step, step_outputs, step_order, quiet)", "returns": "Union[int, float]"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>llm_invoke_python.prompt</pdd-dependency>
+
+<input_prompt><include>context/python_preamble.prompt</include>
 
 % Goal
 Write the `pdd/agentic_common.py` module.
 
 % Role & Scope
-Shared infrastructure for agentic CLI invocations (Claude Code, Gemini, Codex). Provides reusable utilities for agent discovery, environment sanitization, logging, and subprocess orchestration. This module acts as the low-level interface between PDD orchestrators and external agentic CLIs, handling provider-specific JSON parsing, cost calculation, and state persistence.
+Shared infrastructure for agentic CLI invocations (Claude Code, Gemini, Codex). Provides reusable utilities for agent discovery, environment sanitization, logging, and subprocess orchestration. This module acts as the low-level interface between PDD orchestrators and external agentic CLIs.
 
 % External Documentation
 <claude_code_json_output>
@@ -44,28 +65,172 @@ Shared infrastructure for agentic CLI invocations (Claude Code, Gemini, Codex). 
    - Google: Calculate from `stats["models"]` using `GEMINI_PRICING_BY_FAMILY`.
    - OpenAI: Calculate from `usage` using `CODEX_PRICING`. Handle NDJSON (item.completed + session.end/turn.completed).
 7. **False Positive Detection**: Treat empty output or (zero cost + short output < 50 chars) as failure.
-8. **Deadline Awareness**: Read `PDD_JOB_DEADLINE`. Skip attempts if remaining time < `60s` after `120s` reserve.
+8. **Deadline Awareness**: Read `PDD_JOB_DEADLINE`. Skip attempts if remaining time < `MIN_ATTEMPT_TIMEOUT_SECONDS` (60s) after `JOB_TIMEOUT_MARGIN_SECONDS` (120s) reserve.
 9. **GitHub State Persistence**: Provide functions to save/load/clear workflow state in GitHub issue comments using hidden HTML markers (`<!-- PDD_WORKFLOW_STATE:... -->`). Use `gh api` with `--paginate`.
 10. **State Validation**: `validate_cached_state` must scan `step_outputs` for "FAILED:" prefixes to correct `last_completed_step`, preventing "blind resume" bugs.
+
+% Function Signatures
+
+`get_agent_provider_preference() -> List[str]`
+`get_available_agents() -> List[str]`
+- Returns list of available provider names (e.g., `["anthropic", "google"]`)
+- Uses `_find_cli_binary()` for robust CLI discovery
+
+`run_agentic_task(instruction: str, cwd: Path, *, verbose: bool = False, quiet: bool = False, label: str = "", timeout: Optional[float] = None, max_retries: int = 1, retry_delay: float = DEFAULT_RETRY_DELAY, deadline: Optional[float] = None, use_playwright: bool = False) -> Tuple[bool, str, float, str]`
+- Tries providers in `get_agent_provider_preference()` order (filtered to available agents)
+- Returns (success, output, cost, provider_used)
+- Optional `timeout` overrides default
+- Optional `max_retries` controls retry attempts per provider before fallback (default: 1 for backward compatibility; use DEFAULT_MAX_RETRIES in production)
+- Optional `deadline` (Unix timestamp) for job-level time budgeting; also reads `PDD_JOB_DEADLINE` env var
+- Optional `use_playwright` enables constrained tool access mode for browser-based testing (see Playwright Mode section)
+`post_step_comment(repo_owner, repo_name, issue_number, step_num, total_steps, description, output, cwd) -> bool`
+`validate_cached_state(last_completed_step, step_outputs, step_order=None, quiet=False) -> Union[int, float]`
+`load_workflow_state(cwd, issue_number, workflow_type, state_dir, repo_owner, repo_name, use_github_state=True) -> Tuple[Optional[Dict], Optional[int]]`
+`save_workflow_state(...) -> Optional[int]`
+`clear_workflow_state(...) -> None`
+
+% Constants
+- `DEFAULT_TIMEOUT_SECONDS: float = 600.0`
+- `MIN_VALID_OUTPUT_LENGTH: int = 50`
+- `DEFAULT_MAX_RETRIES: int = 3`
+- `JOB_TIMEOUT_MARGIN_SECONDS: float = 120.0`
+- `MIN_ATTEMPT_TIMEOUT_SECONDS: float = 60.0`
+
+% Token Pricing
+Use `Pricing` dataclass:
+- `GEMINI_PRICING_BY_FAMILY`: flash ($0.35/$1.05, 0.5 cached), pro ($3.50/$10.50, 0.5 cached).
+- `CODEX_PRICING`: $1.50/$6.00, 0.25 cached.
+- `ANTHROPIC_PRICING_BY_FAMILY`: opus ($15/$75), sonnet ($3/$15), haiku ($0.80/$4). All 0.1 cached. Cache write = 1.25x input.
+
+Use a `Pricing` dataclass with `input_per_million`, `output_per_million`, `cached_input_multiplier` fields.
+
+- `GEMINI_PRICING_BY_FAMILY`: flash ($0.35/$1.05, cached 50%), pro ($3.50/$10.50, cached 50%)
+- `CODEX_PRICING`: $1.50/$6.00, cached 25%
+- `ANTHROPIC_PRICING_BY_FAMILY`: opus ($15/$75, cached 10%), sonnet ($3/$15, cached 10%), haiku ($0.80/$4, cached 10%). Cache write billed at 1.25x input.
+
+Cost formula for all providers: `new_input = max(0, total_input - cached)`, then sum input_cost + cached_cost + output_cost.
+
+% CLI Discovery
+
+`_find_cli_binary(name: str, config: Optional[Dict] = None) -> Optional[str]`
+- Multi-strategy search: .pddrc override → shutil.which → common paths with nvm glob expansion
+- `_COMMON_CLI_PATHS` dict maps CLI names to lists of `Path` objects for common installation locations
+- nvm paths use glob expansion (`~/.nvm/versions/node/*/bin/`) to search all installed node versions
+
+`_load_agentic_config() -> Dict`
+- Loads `agentic` section from `.pddrc` (searches current dir up to `MAX_PDDRC_SEARCH_DEPTH=10` parents, then home dir)
+
+`_get_cli_diagnostic_info(name: str) -> str`
+- Returns actionable troubleshooting message when CLI not found (common paths, .pddrc config example, current PATH)
+
+% CLI Invocation Pattern
+Critical: Build agentic instruction pointing to temp file:
+`"Read the file {prompt_file} for instructions. You have full file access to explore and modify files as needed."`
+
+Provider commands (headless + JSON output + file write permissions):
+- Anthropic: `[cli_path, "-p", "-", "--dangerously-skip-permissions", "--output-format", "json"]` — pipe prompt via stdin (prevents Claude from interpreting file-based instructions as automated bot). Optional `--model` via `CLAUDE_MODEL` env var.
+- Google: `[cli_path, "Read the file {filename} for your full instructions...", "--yolo", "--output-format", "json"]` — pass instruction as positional arg (not `-p`, which passes text literally). Optional `--model` via `GEMINI_MODEL` env var.
+- OpenAI: `[cli_path, "exec", "--sandbox", <sandbox_mode>, "--json", <prompt_path>]` — sandbox mode from `CODEX_SANDBOX_MODE` env var (default: `danger-full-access` to avoid Landlock/seccomp panics in containers). Optional `--model` via `CODEX_MODEL` env var.
+
+% Playwright Mode (`use_playwright=True`)
+
+When `use_playwright=True`, constrain tool access and add a cost ceiling for browser-based testing:
+
+Provider commands in playwright mode:
+- Anthropic: `[cli_path, "-p", "-", "--allowedTools", "Bash", "Read", "Write", "--max-turns", "30", "--output-format", "json"]` — replaces `--dangerously-skip-permissions` with explicit tool allowlist
+- Google: `[cli_path, "<instruction>", "--yolo", "--output-format", "json"]` — same as standard mode (gemini CLI does not support per-tool restrictions; `--yolo` already grants full access)
+- OpenAI: `[cli_path, "exec", "--sandbox", <sandbox_mode>, "--json", <prompt_path>]` — same as standard mode (codex CLI does not support per-tool restrictions)
+
+The `use_playwright` flag assumes `playwright-cli` is available in PATH. The prompt instructs the agent to use `playwright-cli` commands for browser interaction. The `--max-turns 30` flag provides a cost ceiling for Anthropic; for Google/OpenAI, the existing timeout mechanism serves as the cost ceiling.
+
+% False Positive Detection
+After a provider returns success, detect false positives:
+- Empty output (after strip) is ALWAYS a false positive, regardless of cost
+- Zero cost AND short output (< MIN_VALID_OUTPUT_LENGTH) is a false positive
+- Treat as failure and retry/fallback
+
+% Suspicious File Detection
+After a genuine success (not false positive), check for single-letter files named `C`, `E`, `T` in the working directory. If found, log a bold red warning. These indicate CLI argument misinterpretation artifacts.
+
+% Deadline-Aware Retry Budgeting
+`get_job_deadline() -> Optional[float]` reads `PDD_JOB_DEADLINE` env var (set by server for subprocess jobs).
+
+Before each attempt, compute `remaining = deadline - now - JOB_TIMEOUT_MARGIN_SECONDS`. If `remaining < MIN_ATTEMPT_TIMEOUT_SECONDS`, skip attempt and break (don't try other providers either). Otherwise cap per-attempt timeout to `min(effective_timeout, remaining)`.
+
+% Retry Logic
+- `max_retries` controls how many times to attempt a provider before moving to next (default: 1 = no retries for backward compatibility with tests)
+- On failure, retry with exponential backoff: `delay = retry_delay * attempt_number`
+- Only after all retries exhausted for a provider, move to next provider
+- Orchestrators should import `DEFAULT_MAX_RETRIES` and pass it explicitly
+
+% Agentic Debug Logging
+
+Export `AGENTIC_LOG_DIR = ".pdd/agentic-logs"`.
+
+`_log_agentic_interaction(label, prompt, response, cost, provider, success, duration, cwd) -> None`
+- JSONL file per session in `.pdd/agentic-logs/session_YYYYMMDD_HHMMSS.jsonl`
+- Silently handles write errors (never crashes workflow)
+- Only called when `verbose=True` in `run_agentic_task`
+
+% User Feedback Injection
+In `run_agentic_task()`, read the `PDD_USER_FEEDBACK` environment variable. If set, append a "User Feedback" section to the agentic instruction before the prompt file reference.
+
+% GitHub State Persistence (Cross-Machine Resume)
+
+Shared infrastructure for storing workflow state in GitHub issue comments using hidden HTML markers.
+
+Constants:
+- `GITHUB_STATE_MARKER_START = "<!-- PDD_WORKFLOW_STATE:"`
+- `GITHUB_STATE_MARKER_END = "-->"`
+
+Low-Level Functions:
+
+`_build_state_marker(workflow_type: str, issue_number: int) -> str`
+`_serialize_state_comment(workflow_type: str, issue_number: int, state: Dict) -> str`
+`_parse_state_from_comment(body: str, workflow_type: str, issue_number: int) -> Optional[Dict]`
+
+GitHub API Functions (use `gh` CLI with `--paginate`):
+
+`_find_state_comment(repo_owner, repo_name, issue_number, workflow_type, cwd) -> Optional[Tuple[int, Dict]]`
+- List comments via `gh api ... --paginate`, search for matching state marker
+- Handle missing `gh` CLI gracefully (return None)
+
+`github_save_state(...)` — PATCH existing or POST new comment, return comment_id
+`github_load_state(...)` — wrapper around `_find_state_comment`, returns (state, comment_id)
+`github_clear_state(...)` — DELETE state comment if exists
+
+State Validation (Issue #467):
+
+`validate_cached_state(last_completed_step, step_outputs, step_order=None, quiet=False) -> Union[int, float]`
+- Scans step_outputs for "FAILED:" prefix entries and corrects last_completed_step
+- Prevents "blind resume" bug
+
+High-Level Wrappers:
+
+`load_workflow_state(cwd, issue_number, workflow_type, state_dir, repo_owner, repo_name, use_github_state=True) -> Tuple[Optional[Dict], Optional[int]]`
+- GitHub first (with `--paginate`), cache locally, fallback to local file
+
+`save_workflow_state(...)` — local first, then GitHub
+`clear_workflow_state(...)` — clear both local and GitHub
+
+`_should_use_github_state(use_github_state: bool) -> bool`
+- Returns False if param is False or `PDD_NO_GITHUB_STATE=1` env var is set
+
+% Instructions
+1. Implement `_run_with_provider` to handle CLI-specific flags:
+   - Anthropic: `-p -` (stdin) + `--dangerously-skip-permissions` + `--output-format json`.
+   - Google: Positional instruction + `--yolo` + `--output-format json`.
+   - OpenAI: `exec --sandbox <mode> --json <path>`. Default mode `danger-full-access`.
+2. Support model overrides via `CLAUDE_MODEL`, `GEMINI_MODEL`, and `CODEX_MODEL` env vars.
+3. In `run_agentic_task`, inject `PDD_USER_FEEDBACK` into the prompt if present.
+4. Implement exponential backoff for retries: `delay = retry_delay * attempt`.
+5. Ensure `_find_state_comment` uses `gh api ... --paginate` to find existing state markers in issue comments.
+6. If single-letter files `C`, `E`, or `T` are detected in `cwd` after a successful run, log a bold red warning.
 
 % Dependencies
 <pdd.llm_invoke>
     <include>context/llm_invoke_example.py</include>
 </pdd.llm_invoke>
-
-% Instructions
-1. **Pricing Constants**: Implement a `Pricing` dataclass. 
-   - `GEMINI_PRICING_BY_FAMILY`: flash ($0.35/$1.05, 0.5 cached), pro ($3.50/$10.50, 0.5 cached).
-   - `CODEX_PRICING`: $1.50/$6.00, 0.25 cached.
-   - `ANTHROPIC_PRICING_BY_FAMILY`: opus ($15/$75), sonnet ($3/$15), haiku ($0.80/$4). All 0.1 cached. Cache write = 1.25x input.
-2. **CLI Invocation**: Implement `_run_with_provider` to handle CLI-specific flags:
-   - Anthropic: `-p -` (stdin) + `--dangerously-skip-permissions` + `--output-format json`.
-   - Google: Positional instruction + `--yolo` + `--output-format json`.
-   - OpenAI: `exec --sandbox <mode> --json <path>`. Default mode `danger-full-access`.
-3. **Environment & Overrides**: Support model overrides via `CLAUDE_MODEL`, `GEMINI_MODEL`, and `CODEX_MODEL`. In `run_agentic_task`, inject `PDD_USER_FEEDBACK` into the prompt if present.
-4. **Retries**: Implement exponential backoff: `delay = retry_delay * attempt`.
-5. **GitHub Integration**: Ensure `_find_state_comment` uses `gh api ... --paginate`. Implement `post_step_comment` to provide visibility when the agent fails to run.
-6. **Safety Checks**: If single-letter files `C`, `E`, or `T` are detected in `cwd` after a successful run, log a bold red warning.
 
 % Deliverables
 - `pdd/agentic_common.py`

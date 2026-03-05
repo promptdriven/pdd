@@ -2,7 +2,7 @@
 
 % Context
 
-You are working on step 5 of 9 in an agentic test generation workflow. Previous steps have identified the test type and testing framework.
+You are working on step 5 of 18 in an agentic test generation workflow. Previous steps have identified the test type and testing framework.
 
 **This step may terminate the workflow** if the test plan is blocked by missing information.
 
@@ -149,7 +149,7 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 **Contract source files:** [list the files where return shapes were found]
 
 ---
-*Proceeding to Step 6: Generate Tests*
+*Proceeding to Step 5b: Enhance Plan*
 ```
 
 **If plan is BLOCKED (STOP workflow):**
