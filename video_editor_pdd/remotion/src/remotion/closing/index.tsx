@@ -14,9 +14,15 @@ export const ClosingSection: React.FC = () => {
     <Sequence from={0} durationInFrames={Math.ceil(durationSeconds * fps)}>
       <Audio src={staticFile("closing/narration.wav")} />
       <OffthreadVideo src={staticFile("veo/closing.mp4")} style={{ width: "100%", height: "100%" }} />
-      <ClosingSplitDarningVsMolding />
-      <ClosingStatCalloutRoi />
-      <ClosingTitleCard />
+      <Sequence from={Math.round(18.5 * fps)} durationInFrames={Math.ceil(5.0 * fps)}>
+        <ClosingSplitDarningVsMolding />
+      </Sequence>
+      <Sequence from={Math.round(0.0 * fps)} durationInFrames={Math.ceil(5.0 * fps)}>
+        <ClosingStatCalloutRoi />
+      </Sequence>
+      <Sequence from={Math.round(0.0 * fps)} durationInFrames={Math.ceil(5.0 * fps)}>
+        <ClosingTitleCard />
+      </Sequence>
     </Sequence>
   );
 };

@@ -12,7 +12,9 @@ export const ColdOpenSection: React.FC = () => {
   return (
     <Sequence from={0} durationInFrames={Math.ceil(durationSeconds * fps)}>
       <ColdOpenSectionBase />
-      <ColdOpenTitleCard />
+      <Sequence from={Math.round(0.0 * fps)} durationInFrames={Math.ceil(5.0 * fps)}>
+        <ColdOpenTitleCard />
+      </Sequence>
     </Sequence>
   );
 };

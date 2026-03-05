@@ -16,11 +16,21 @@ export const Part3MoldSection: React.FC = () => {
     <Sequence from={0} durationInFrames={Math.ceil(durationSeconds * fps)}>
       <Audio src={staticFile("part3_mold/narration.wav")} />
       <OffthreadVideo src={staticFile("veo/part3_mold.mp4")} style={{ width: "100%", height: "100%" }} />
-      <Part3MoldSplitPromptVsCode />
-      <Part3MoldStatCalloutCoderabbit />
-      <Part3MoldStatCalloutDora />
-      <Part3MoldStatCalloutNlContext />
-      <Part3MoldTitleCard />
+      <Sequence from={Math.round(21.0 * fps)} durationInFrames={Math.ceil(5.0 * fps)}>
+        <Part3MoldSplitPromptVsCode />
+      </Sequence>
+      <Sequence from={Math.round(25.72 * fps)} durationInFrames={Math.ceil(5.0 * fps)}>
+        <Part3MoldStatCalloutCoderabbit />
+      </Sequence>
+      <Sequence from={Math.round(40.82 * fps)} durationInFrames={Math.ceil(5.0 * fps)}>
+        <Part3MoldStatCalloutDora />
+      </Sequence>
+      <Sequence from={Math.round(207.3 * fps)} durationInFrames={Math.ceil(5.0 * fps)}>
+        <Part3MoldStatCalloutNlContext />
+      </Sequence>
+      <Sequence from={Math.round(0.0 * fps)} durationInFrames={Math.ceil(5.0 * fps)}>
+        <Part3MoldTitleCard />
+      </Sequence>
     </Sequence>
   );
 };

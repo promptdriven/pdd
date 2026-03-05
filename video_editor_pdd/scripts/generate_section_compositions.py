@@ -139,9 +139,16 @@ def generate_section_component(
     if compositions:
         for comp in compositions:
             comp_id = comp if isinstance(comp, str) else comp.get('id', '')
+            start_seconds = comp.get('startSeconds') if isinstance(comp, dict) else None
+            comp_duration = comp.get('durationSeconds') if isinstance(comp, dict) else None
             if comp_id:
                 comp_pascal = to_pascal_case(comp_id)
-                lines.append(f'      <{comp_pascal} />')
+                if start_seconds is not None and comp_duration is not None:
+                    lines.append(f'      <Sequence from={{Math.round({start_seconds} * fps)}} durationInFrames={{Math.ceil({comp_duration} * fps)}}>')
+                    lines.append(f'        <{comp_pascal} />')
+                    lines.append(f'      </Sequence>')
+                else:
+                    lines.append(f'      <{comp_pascal} />')
     elif not has_flat_file and not has_veo_clip:
         lines.append('      {/* Sub-compositions will be added here */}')
 

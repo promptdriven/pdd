@@ -14,9 +14,15 @@ export const Part4PrecisionSection: React.FC = () => {
     <Sequence from={0} durationInFrames={Math.ceil(durationSeconds * fps)}>
       <Audio src={staticFile("part4_precision/narration.wav")} />
       <OffthreadVideo src={staticFile("veo/part4_precision.mp4")} style={{ width: "100%", height: "100%" }} />
-      <Part4PrecisionSplitPromptDetailVsTests />
-      <Part4PrecisionStatCalloutPromptCompression />
-      <Part4PrecisionTitleCard />
+      <Sequence from={Math.round(25.38 * fps)} durationInFrames={Math.ceil(5.0 * fps)}>
+        <Part4PrecisionSplitPromptDetailVsTests />
+      </Sequence>
+      <Sequence from={Math.round(26.32 * fps)} durationInFrames={Math.ceil(5.0 * fps)}>
+        <Part4PrecisionStatCalloutPromptCompression />
+      </Sequence>
+      <Sequence from={Math.round(0.0 * fps)} durationInFrames={Math.ceil(5.0 * fps)}>
+        <Part4PrecisionTitleCard />
+      </Sequence>
     </Sequence>
   );
 };

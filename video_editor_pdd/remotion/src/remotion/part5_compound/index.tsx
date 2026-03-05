@@ -15,10 +15,18 @@ export const Part5CompoundSection: React.FC = () => {
     <Sequence from={0} durationInFrames={Math.ceil(durationSeconds * fps)}>
       <Audio src={staticFile("part5_compound/narration.wav")} />
       <OffthreadVideo src={staticFile("veo/part5_compound.mp4")} style={{ width: "100%", height: "100%" }} />
-      <Part5CompoundSplitPatchingVsPdd />
-      <Part5CompoundStatCalloutCisq />
-      <Part5CompoundStatCalloutMaintenance />
-      <Part5CompoundTitleCard />
+      <Sequence from={Math.round(85.86 * fps)} durationInFrames={Math.ceil(5.0 * fps)}>
+        <Part5CompoundSplitPatchingVsPdd />
+      </Sequence>
+      <Sequence from={Math.round(32.7 * fps)} durationInFrames={Math.ceil(5.0 * fps)}>
+        <Part5CompoundStatCalloutCisq />
+      </Sequence>
+      <Sequence from={Math.round(18.08 * fps)} durationInFrames={Math.ceil(5.0 * fps)}>
+        <Part5CompoundStatCalloutMaintenance />
+      </Sequence>
+      <Sequence from={Math.round(0.0 * fps)} durationInFrames={Math.ceil(5.0 * fps)}>
+        <Part5CompoundTitleCard />
+      </Sequence>
     </Sequence>
   );
 };

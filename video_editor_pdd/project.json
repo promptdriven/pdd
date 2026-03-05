@@ -23,7 +23,11 @@
       "durationSeconds": 15.552,
       "offsetSeconds": 0,
       "compositions": [
-        "cold_open_title_card"
+        {
+          "id": "cold_open_title_card",
+          "startSeconds": 0.0,
+          "durationSeconds": 5.0
+        }
       ]
     },
     {
@@ -36,10 +40,28 @@
       "durationSeconds": 382.176,
       "offsetSeconds": 15.552,
       "compositions": [
-        "part1_economics_split_perception_vs_reality",
-        "part1_economics_stat_callout_gitclear",
-        "part1_economics_stat_callout_github",
-        "part1_economics_stat_callout_uplevel"
+        {
+          "id": "part1_economics_split_perception_vs_reality",
+          "triggerKeyword": "slower",
+          "startSeconds": 255.68,
+          "durationSeconds": 10.0
+        },
+        {
+          "id": "part1_economics_stat_callout_gitclear",
+          "triggerKeyword": "churn",
+          "startSeconds": 115.58,
+          "durationSeconds": 5.0
+        },
+        {
+          "id": "part1_economics_stat_callout_github",
+          "startSeconds": 68.64,
+          "durationSeconds": 5.0
+        },
+        {
+          "id": "part1_economics_stat_callout_uplevel",
+          "startSeconds": 83.82,
+          "durationSeconds": 5.0
+        }
       ]
     },
     {
@@ -52,7 +74,11 @@
       "durationSeconds": 195.792,
       "offsetSeconds": 397.728,
       "compositions": [
-        "part2_paradigm_shift_main"
+        {
+          "id": "part2_paradigm_shift_main",
+          "startSeconds": 0.0,
+          "durationSeconds": 195.79
+        }
       ]
     },
     {
@@ -65,11 +91,31 @@
       "durationSeconds": 280.728,
       "offsetSeconds": 593.52,
       "compositions": [
-        "part3_mold_split_prompt_vs_code",
-        "part3_mold_stat_callout_coderabbit",
-        "part3_mold_stat_callout_dora",
-        "part3_mold_stat_callout_nl_context",
-        "part3_mold_title_card"
+        {
+          "id": "part3_mold_split_prompt_vs_code",
+          "startSeconds": 21.0,
+          "durationSeconds": 5.0
+        },
+        {
+          "id": "part3_mold_stat_callout_coderabbit",
+          "startSeconds": 25.72,
+          "durationSeconds": 5.0
+        },
+        {
+          "id": "part3_mold_stat_callout_dora",
+          "startSeconds": 40.82,
+          "durationSeconds": 5.0
+        },
+        {
+          "id": "part3_mold_stat_callout_nl_context",
+          "startSeconds": 207.3,
+          "durationSeconds": 5.0
+        },
+        {
+          "id": "part3_mold_title_card",
+          "startSeconds": 0.0,
+          "durationSeconds": 5.0
+        }
       ]
     },
     {
@@ -82,9 +128,21 @@
       "durationSeconds": 96.912,
       "offsetSeconds": 874.248,
       "compositions": [
-        "part4_precision_split_prompt_detail_vs_tests",
-        "part4_precision_stat_callout_prompt_compression",
-        "part4_precision_title_card"
+        {
+          "id": "part4_precision_split_prompt_detail_vs_tests",
+          "startSeconds": 25.38,
+          "durationSeconds": 5.0
+        },
+        {
+          "id": "part4_precision_stat_callout_prompt_compression",
+          "startSeconds": 26.32,
+          "durationSeconds": 5.0
+        },
+        {
+          "id": "part4_precision_title_card",
+          "startSeconds": 0.0,
+          "durationSeconds": 5.0
+        }
       ]
     },
     {
@@ -97,10 +155,27 @@
       "durationSeconds": 98.424,
       "offsetSeconds": 971.1600000000001,
       "compositions": [
-        "part5_compound_split_patching_vs_pdd",
-        "part5_compound_stat_callout_cisq",
-        "part5_compound_stat_callout_maintenance",
-        "part5_compound_title_card"
+        {
+          "id": "part5_compound_split_patching_vs_pdd",
+          "startSeconds": 85.86,
+          "durationSeconds": 5.0
+        },
+        {
+          "id": "part5_compound_stat_callout_cisq",
+          "triggerKeyword": "trillion",
+          "startSeconds": 32.7,
+          "durationSeconds": 5.0
+        },
+        {
+          "id": "part5_compound_stat_callout_maintenance",
+          "startSeconds": 18.08,
+          "durationSeconds": 5.0
+        },
+        {
+          "id": "part5_compound_title_card",
+          "startSeconds": 0.0,
+          "durationSeconds": 5.0
+        }
       ]
     },
     {
@@ -113,9 +188,22 @@
       "durationSeconds": 21.072,
       "offsetSeconds": 1069.584,
       "compositions": [
-        "closing_split_darning_vs_molding",
-        "closing_stat_callout_roi",
-        "closing_title_card"
+        {
+          "id": "closing_split_darning_vs_molding",
+          "triggerKeyword": "mold",
+          "startSeconds": 18.5,
+          "durationSeconds": 5.0
+        },
+        {
+          "id": "closing_stat_callout_roi",
+          "startSeconds": 0.0,
+          "durationSeconds": 5.0
+        },
+        {
+          "id": "closing_title_card",
+          "startSeconds": 0.0,
+          "durationSeconds": 5.0
+        }
       ]
     }
   ],

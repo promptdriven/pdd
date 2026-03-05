@@ -1327,3 +1327,66 @@ class TestWrapperDelegation:
 
         assert 'ColdOpenSectionBase' not in tsx
         assert '<ColdOpenTitleCard />' in tsx
+
+
+class TestCompositionTiming:
+    """Sub-compositions with timing get their own Sequence wrappers."""
+
+    def test_composition_with_timing_gets_sequence(self):
+        """Composition objects with startSeconds/durationSeconds get wrapped in Sequence."""
+        section = {
+            "id": "part1_economics",
+            "durationSeconds": 382,
+            "offsetSeconds": 0,
+            "compositions": [
+                {"id": "part1_economics_stat_callout_gitclear", "startSeconds": 126, "durationSeconds": 5},
+            ],
+        }
+        tsx = generate_section_component(section, 30)
+        # Should wrap in a timed Sequence
+        assert 'from={Math.round(126 * fps)}' in tsx
+        assert 'durationInFrames={Math.ceil(5 * fps)}' in tsx
+        assert '<Part1EconomicsStatCalloutGitclear />' in tsx
+
+    def test_composition_without_timing_no_inner_sequence(self):
+        """String compositions (no timing) render directly without inner Sequence."""
+        section = {
+            "id": "part1_economics",
+            "durationSeconds": 382,
+            "offsetSeconds": 0,
+            "compositions": ["part1_economics_stat_callout_gitclear"],
+        }
+        tsx = generate_section_component(section, 30)
+        assert '<Part1EconomicsStatCalloutGitclear />' in tsx
+        # Should not have a timed inner Sequence (from={Math.round(...)})
+        assert 'from={Math.round(' not in tsx
+
+    def test_mixed_timed_and_untimed_compositions(self):
+        """Mix of timed objects and plain string compositions."""
+        section = {
+            "id": "part1_economics",
+            "durationSeconds": 382,
+            "offsetSeconds": 0,
+            "compositions": [
+                {"id": "part1_economics_stat_callout_gitclear", "startSeconds": 126, "durationSeconds": 5},
+                "part1_economics_stat_callout_github",
+            ],
+        }
+        tsx = generate_section_component(section, 30)
+        assert 'from={Math.round(126 * fps)}' in tsx
+        assert '<Part1EconomicsStatCalloutGitclear />' in tsx
+        assert '<Part1EconomicsStatCalloutGithub />' in tsx
+
+    def test_root_tsx_handles_composition_objects(self):
+        """Root.tsx generation handles composition objects (not just strings)."""
+        sections = [{
+            "id": "part1_economics",
+            "compositionId": "Part1Economics",
+            "durationSeconds": 382,
+            "compositions": [
+                {"id": "part1_economics_stat_callout_gitclear", "startSeconds": 126, "durationSeconds": 5},
+            ],
+        }]
+        root = generate_root_tsx(sections, 30, "")
+        assert 'Part1EconomicsStatCalloutGitclear' in root
+        assert 'part1-economics-stat-callout-gitclear' in root
