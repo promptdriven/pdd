@@ -494,8 +494,10 @@ def _parse_llm_response(response: str) -> Tuple[List[str], bool, List[Dict[str, 
     modules_match = re.search(r"MODULES_TO_SYNC:\s*\[([^\]]*)\]", response)
     if modules_match:
         raw = modules_match.group(1)
-        # Parse quoted strings
-        modules_to_sync = [m.strip().strip('"').strip("'") for m in raw.split(",") if m.strip().strip('"').strip("'")]
+        # Parse quoted strings and deduplicate (preserve order)
+        modules_to_sync = list(dict.fromkeys(
+            m.strip().strip('"').strip("'") for m in raw.split(",") if m.strip().strip('"').strip("'")
+        ))
 
     # Extract DEPS_VALID
     deps_match = re.search(r"DEPS_VALID:\s*(true|false)", response, re.IGNORECASE)
@@ -711,11 +713,13 @@ def run_agentic_sync(
     # LLM returns basenames from architecture.json filenames (e.g., "crm_models_Python").
     # pdd sync expects basenames without the language suffix (e.g., "crm_models").
     # Strip language suffixes using the same logic as the step 10 dry-run guide.
+    # Deduplicate after stripping: LLM may return both "recruiting_config_Python" and
+    # "recruiting_config" which both map to "recruiting_config" after suffix removal.
     stripped_modules = []
     for m in modules_to_sync:
         stripped = extract_module_from_include(m + ".prompt")
         stripped_modules.append(stripped if stripped else m)
-    modules_to_sync = stripped_modules
+    modules_to_sync = list(dict.fromkeys(stripped_modules))
 
     if not quiet:
         console.print(f"[green]Modules to sync: {modules_to_sync}[/green]")
