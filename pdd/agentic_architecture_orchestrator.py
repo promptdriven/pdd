@@ -38,6 +38,7 @@ from pdd.agentic_common import (
     validate_cached_state,
     DEFAULT_MAX_RETRIES,
 )
+from pdd.architecture_registry import merge_architecture, record_generation
 from pdd.load_prompt_template import load_prompt_template
 from pdd.preprocess import preprocess
 # Import render_mermaid dynamically or assume it's available in the package
@@ -125,6 +126,65 @@ def _check_step4_output(output: str) -> bool:
 def _get_state_dir(cwd: Path) -> Path:
     """Get the state directory relative to git root or cwd."""
     return cwd / ".pdd" / "arch-state"
+
+
+def _ensure_pddrc_contexts_preserved(
+    pddrc_file: Path,
+    existing_pddrc: str,
+    quiet: bool = False,
+) -> None:
+    """Restore any contexts the LLM dropped from .pddrc during Step 8.
+
+    Parses the original existing_pddrc and the newly written file.
+    If any context names from the original are missing in the new file,
+    merges them back in and rewrites the file.
+    """
+    if not existing_pddrc or not existing_pddrc.strip():
+        return
+
+    import yaml
+
+    try:
+        old_config = yaml.safe_load(existing_pddrc)
+    except Exception:
+        return
+    if not isinstance(old_config, dict):
+        return
+    old_contexts = old_config.get("contexts", {})
+    if not isinstance(old_contexts, dict) or not old_contexts:
+        return
+
+    try:
+        new_content = pddrc_file.read_text(encoding="utf-8")
+        new_config = yaml.safe_load(new_content)
+    except Exception:
+        return
+    if not isinstance(new_config, dict):
+        return
+    new_contexts = new_config.get("contexts", {})
+    if not isinstance(new_contexts, dict):
+        new_contexts = {}
+
+    missing = set(old_contexts.keys()) - set(new_contexts.keys())
+    if not missing:
+        return
+
+    if not quiet:
+        console.print(
+            f"[yellow]Warning: LLM dropped {len(missing)} existing "
+            f"context(s) from .pddrc: {sorted(missing)}. Restoring...[/yellow]"
+        )
+
+    for name in missing:
+        new_contexts[name] = old_contexts[name]
+    new_config["contexts"] = new_contexts
+    pddrc_file.write_text(
+        yaml.dump(new_config, default_flow_style=False, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    if not quiet:
+        console.print(f"   → Restored {len(missing)} missing context(s)")
 
 
 def _parse_files_marker(output: str, marker: str = "FILES_CREATED:") -> List[str]:
@@ -235,6 +295,7 @@ def run_agentic_architecture_orchestrator(
     force_single: bool = False,
     sibling_architectures: str = "",
     existing_pddrc: str = "",
+    existing_architecture: str = "",
     related_issues: Optional[List[int]] = None,
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
@@ -314,6 +375,7 @@ def run_agentic_architecture_orchestrator(
         ),
         "sibling_architectures": sibling_architectures or "No existing sibling architectures found.",
         "existing_pddrc": existing_pddrc or "No existing .pddrc found.",
+        "existing_architecture": existing_architecture or "No existing architecture.json found.",
         "related_issues": ", ".join(f"#{n}" for n in related_issues) if related_issues else "None",
         "step2b_output": "No codebase scan performed.",
     }
@@ -712,6 +774,18 @@ def run_agentic_architecture_orchestrator(
             else None
         )
 
+        # Snapshot existing architecture before Step 7 for post-merge
+        existing_arch_snapshot: Optional[List[dict]] = None
+        if step_num == 7 and arch_file_step7.exists():
+            try:
+                existing_arch_snapshot = json.loads(
+                    arch_file_step7.read_text(encoding="utf-8")
+                )
+                if not isinstance(existing_arch_snapshot, list):
+                    existing_arch_snapshot = None
+            except (json.JSONDecodeError, OSError):
+                existing_arch_snapshot = None
+
         step_success, step_output, step_cost, step_model = run_agentic_task(
             instruction=formatted_prompt,
             cwd=cwd,
@@ -770,9 +844,65 @@ def run_agentic_architecture_orchestrator(
                     arch_data = json.loads(arch_content)
                     if not isinstance(arch_data, list):
                         raise ValueError("Architecture must be a JSON array")
-                    step_output = arch_content
-                    if not quiet:
-                        console.print(f"   → architecture.json created with {len(arch_data)} modules")
+
+                    # Post-Step-7 merge: merge new arch with snapshot
+                    if existing_arch_snapshot is not None:
+                        merged_arch, merge_report = merge_architecture(
+                            existing_arch=existing_arch_snapshot,
+                            new_arch=arch_data,
+                            issue_number=issue_number,
+                            issue_url=issue_url,
+                        )
+                        # Write full merged architecture to disk
+                        with open(arch_file, "w", encoding="utf-8") as f:
+                            json.dump(merged_arch, f, indent=2, ensure_ascii=False)
+
+                        # Scope step7_output to only new/updated modules
+                        new_updated_filenames = set(
+                            merge_report["added"] + merge_report["updated"]
+                        )
+                        scoped_modules = [
+                            m for m in merged_arch
+                            if m.get("filename") in new_updated_filenames
+                        ]
+                        step_output = json.dumps(scoped_modules, indent=2)
+
+                        if not quiet:
+                            console.print(
+                                f"   → architecture.json merged: "
+                                f"{len(merge_report['added'])} added, "
+                                f"{len(merge_report['updated'])} updated, "
+                                f"{len(merge_report['unchanged'])} unchanged"
+                            )
+
+                        # Record in registry
+                        record_generation(
+                            project_root=cwd,
+                            issue_number=issue_number,
+                            issue_url=issue_url,
+                            modules_added=merge_report["added"],
+                            modules_updated=merge_report["updated"],
+                            target_dir=target_dir,
+                        )
+                    else:
+                        step_output = arch_content
+                        if not quiet:
+                            console.print(f"   → architecture.json created with {len(arch_data)} modules")
+
+                        # Record first generation in registry
+                        module_filenames = [
+                            m.get("filename", "") for m in arch_data
+                            if m.get("filename")
+                        ]
+                        record_generation(
+                            project_root=cwd,
+                            issue_number=issue_number,
+                            issue_url=issue_url,
+                            modules_added=module_filenames,
+                            modules_updated=[],
+                            target_dir=target_dir,
+                        )
+
                 except (json.JSONDecodeError, ValueError) as e:
                     if not quiet:
                         console.print(f"[yellow]Warning: architecture.json issue: {e}[/yellow]")
@@ -795,6 +925,13 @@ def run_agentic_architecture_orchestrator(
                     with open(pddrc_file, "r", encoding="utf-8") as f:
                         pddrc_content = f.read()
                     yaml.safe_load(pddrc_content)
+
+                    # Safety net: restore any contexts the LLM dropped
+                    if existing_pddrc:
+                        _ensure_pddrc_contexts_preserved(
+                            pddrc_file, existing_pddrc, quiet
+                        )
+
                     if not quiet:
                         if existing_pddrc:
                             console.print(f"   → .pddrc merged with existing configuration")
@@ -806,6 +943,24 @@ def run_agentic_architecture_orchestrator(
             else:
                 if not quiet:
                     console.print(f"[yellow]Warning: .pddrc was not created[/yellow]")
+
+            # Guard: remove stray .pddrc from subdirectory
+            if target_dir:
+                stray_pddrc = base_dir / ".pddrc"
+                if stray_pddrc.exists() and stray_pddrc != pddrc_file:
+                    if not quiet:
+                        console.print(
+                            f"[yellow]Warning: Removing stray .pddrc from "
+                            f"{target_dir}/ (must live at repo root)[/yellow]"
+                        )
+                    # If root .pddrc missing but stray exists, move it to root
+                    if not pddrc_file.exists():
+                        import shutil
+                        shutil.move(str(stray_pddrc), str(pddrc_file))
+                        if not quiet:
+                            console.print("   → Moved stray .pddrc to repo root")
+                    else:
+                        stray_pddrc.unlink()
 
         context[f"step{step_num}_output"] = step_output
 

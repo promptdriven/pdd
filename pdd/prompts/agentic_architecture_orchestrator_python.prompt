@@ -4,7 +4,7 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "run_agentic_architecture_orchestrator", "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool, skip_prompts: bool, target_dir: Optional[str], force_single: bool, sibling_architectures: str, existing_pddrc: str, related_issues: Optional[List[int]])", "returns": "Tuple[bool, str, float, str, List[str]]"}
+      {"name": "run_agentic_architecture_orchestrator", "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool, skip_prompts: bool, target_dir: Optional[str], force_single: bool, sibling_architectures: str, existing_pddrc: str, existing_architecture: str, related_issues: Optional[List[int]])", "returns": "Tuple[bool, str, float, str, List[str]]"}
     ]
   }
 }
@@ -55,16 +55,18 @@ ARCH_STEP_TIMEOUTS: Dict[Union[int, float], float] = {
 % Instructions
 1. **Execution Groups**: Run steps 1-5 and 6-8 in loops. Skip if step < start_step.
 2. **Template Processing**: Load via `load_prompt_template`, `preprocess` (recursive=True, double_curly_brackets=True), un-double curly braces, then substitute context keys.
-3. **Step 1b (Complexity)**: If output contains `COMPLEXITY_RESULT: COMPLEX`, return failure.
-4. **Step 2b (Codebase Scan)**: Run after step 2 to provide codebase context.
-5. **Step 4 (Validation)**: Call `_check_step4_output` to ensure data model content (not module design).
-6. **Step 5b (Completeness Gate)**: Max 3 retries. If invalid, run `agentic_arch_step5b_fix_LLM` and update step 5 output. Hard stop on final failure.
-7. **Step 7 (Generation)**: Detect no-ops via MD5 hash of `architecture.json`. Parse `FILES_CREATED:`.
-8. **Step 7b (Self-Review)**: If `REVIEW_RESULT: FIXED`, re-read `architecture.json` into context.
-9. **Step 9b (Consistency Audit)**: If `AUDIT_RESULT: INCONSISTENT`, parse `FILES_MODIFIED:` and update `prompt_files`.
-10. **Validation (10-12)**: Use `_run_validation_with_fix` helper (max 3 retries). If failing, run `agentic_arch_step13_fix_LLM`. If any fail after retries, `validation_success = False`.
-11. **State Persistence**: Use `load_workflow_state`, `save_workflow_state`, `clear_workflow_state`, and `validate_cached_state`. Only advance `last_completed_step` on success.
-12. **Post-Processing**: Call `_save_architecture_files` to clean JSON and generate Mermaid HTML. Deduplicate and return all created/modified files.
+3. **Hard Stops**: `_check_hard_stop` exits early on step 1 ("PRD Content Insufficient"), step 2 ("Tech Stack Ambiguous"), step 5 ("Clarification Needed").
+4. **Step 1b (Complexity)**: If output contains `COMPLEXITY_RESULT: COMPLEX`, return failure.
+5. **Step 2b (Codebase Scan)**: Run after step 2 to provide codebase context.
+6. **Step 4 (Validation)**: Call `_check_step4_output` to ensure data model content (not module design).
+7. **Step 5b (Completeness Gate)**: Max 3 retries. If invalid, run `agentic_arch_step5b_fix_LLM` and update step 5 output. Hard stop on final failure.
+8. **Step 7 (Generation)**: Detect no-ops via MD5 hash of `architecture.json`. Parse `FILES_CREATED:`. If `existing_architecture` exists, snapshot it before Step 7; after Step 7, call `merge_architecture` to merge new modules with existing, write merged result, and scope `step7_output` to only new/updated modules. Call `record_generation` to record in architecture registry.
+9. **Step 7b (Self-Review)**: If `REVIEW_RESULT: FIXED`, re-read `architecture.json` into context.
+10. **Step 8 (.pddrc)**: After generation, call `_ensure_pddrc_contexts_preserved` to restore any contexts the LLM dropped from existing `.pddrc`. If `target_dir` is set, detect and remove stray `.pddrc` from the subdirectory (move to root if root is missing, else delete).
+11. **Step 9b (Consistency Audit)**: If `AUDIT_RESULT: INCONSISTENT`, parse `FILES_MODIFIED:` and update `prompt_files`.
+12. **Validation (10-12)**: Use `_run_validation_with_fix` helper (max 3 retries). If failing, run `agentic_arch_step13_fix_LLM`. If any fail after retries, `validation_success = False`.
+13. **State Persistence**: Use `load_workflow_state`, `save_workflow_state`, `clear_workflow_state`, and `validate_cached_state`. Only advance `last_completed_step` on success.
+14. **Post-Processing**: Call `_save_architecture_files` to clean JSON and generate Mermaid HTML. Deduplicate and return all created/modified files.
 
 % Dependencies
 <agentic_common>
@@ -79,6 +81,9 @@ ARCH_STEP_TIMEOUTS: Dict[Union[int, float], float] = {
 <preprocess>
   <include>pdd/preprocess.py</include>
 </preprocess>
+<architecture_registry>
+  <include>pdd/architecture_registry.py</include>
+</architecture_registry>
 
 % Deliverables
 - Code: `pdd/agentic_architecture_orchestrator.py`

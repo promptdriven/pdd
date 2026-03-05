@@ -20,8 +20,10 @@ from rich.console import Console
 from .agentic_change import _check_gh_cli, _escape_format_braces, _parse_issue_url, _run_gh_command
 from .agentic_common import run_agentic_task
 from .agentic_sync_runner import AsyncSyncRunner, _find_pdd_executable, build_dep_graph_from_architecture
-from .construct_paths import _detect_context_from_basename, _load_pddrc_config
+from .construct_paths import _detect_context_from_basename, _find_pddrc_file, _load_pddrc_config
 from .load_prompt_template import load_prompt_template
+from .sync_determine_operation import sync_determine_operation
+from .sync_main import _detect_languages_with_context
 from .sync_order import build_dependency_graph, extract_module_from_include, topological_sort
 
 console = Console()
@@ -45,24 +47,44 @@ def _find_project_root(start: Path) -> Path:
     return start.resolve()
 
 
-def _load_architecture_json(project_root: Path) -> Tuple[Optional[List[Dict[str, Any]]], Path]:
+def _load_architecture_json(
+    project_root: Path,
+    issue_number: Optional[int] = None,
+) -> Tuple[Optional[List[Dict[str, Any]]], Path]:
     """
     Load architecture.json from the project root.
 
+    If multiple architecture files exist (root + subdirs), loads and combines them.
+
+    Args:
+        project_root: Root directory of the project.
+        issue_number: Optional issue number for logging origin info.
+
     Returns:
-        Tuple of (parsed data or None, path to architecture.json).
+        Tuple of (parsed data or None, path to primary architecture.json).
     """
-    arch_path = project_root / "architecture.json"
-    if not arch_path.exists():
-        return None, arch_path
-    try:
-        with open(arch_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, list):
-            return data, arch_path
-        return None, arch_path
-    except (json.JSONDecodeError, OSError):
-        return None, arch_path
+    from .architecture_registry import find_architecture_for_project
+
+    arch_files = find_architecture_for_project(project_root)
+    if not arch_files:
+        return None, project_root / "architecture.json"
+
+    primary_path = arch_files[0]
+    combined: List[Dict[str, Any]] = []
+
+    for arch_path in arch_files:
+        try:
+            with open(arch_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                combined.extend(data)
+        except (json.JSONDecodeError, OSError):
+            continue
+
+    if not combined:
+        return None, primary_path
+
+    return combined, primary_path
 
 
 def _is_catchall_match(basename: str, config: Dict[str, Any]) -> bool:
@@ -110,24 +132,18 @@ def _resolve_module_cwd(basename: str, project_root: Path) -> Path:
     """Determine the correct working directory for a module based on .pddrc discovery.
 
     Logic:
-    1. Try project root first — load its .pddrc, check if a non-default context matches.
-    2. If matched, return project_root.
-    3. If not, scan subdirectories (recursive, max depth 2) for .pddrc files.
-       For each, load and check if a context matches. Deepest match wins.
+    1. If a root .pddrc exists, treat it as authoritative — return project_root.
+       The root .pddrc is the centralized config and should be the default cwd.
+    2. If no root .pddrc exists, scan subdirectories (recursive, max depth 2)
+       for .pddrc files. Deepest match wins.
        Skip catch-all matches (e.g. paths: ['**']) from subdirectories —
        they match everything and should not claim ownership of unrelated modules.
-    4. Fall back to project_root.
+    3. Fall back to project_root.
     """
-    # 1. Check project root .pddrc
+    # 1. If root .pddrc exists, it's authoritative — always use project_root
     root_pddrc = project_root / ".pddrc"
     if root_pddrc.exists():
-        try:
-            config = _load_pddrc_config(root_pddrc)
-            detected = _detect_context_from_basename(basename, config)
-            if detected and detected != "default":
-                return project_root
-        except (ValueError, OSError):
-            pass
+        return project_root
 
     # 2. Scan subdirectories for .pddrc files (max depth 2)
     best_match: Optional[Path] = None
@@ -384,6 +400,85 @@ def _run_dry_run_validation(
     return all_valid, module_cwds, errors, total_llm_cost
 
 
+def _filter_already_synced(
+    modules: List[str],
+    module_cwds: Dict[str, Path],
+    quiet: bool = False,
+) -> List[str]:
+    """Filter out modules that are already fully synced (fingerprint matches).
+
+    For each module, runs sync_determine_operation in log_mode (read-only)
+    to check if the operation is 'nothing' (all hashes match, workflow complete).
+    Modules returning 'nothing' are removed from the sync list.
+
+    Returns:
+        List of module basenames that actually need syncing.
+    """
+    needs_sync: List[str] = []
+
+    for basename in modules:
+        cwd = module_cwds.get(basename)
+        if cwd is None:
+            # No resolved cwd — keep it in the list for the runner to handle
+            needs_sync.append(basename)
+            continue
+
+        # Detect context and prompts_dir for this module
+        try:
+            pddrc_path = _find_pddrc_file(cwd)
+            context_name = None
+            prompts_dir = cwd / "prompts"
+
+            if pddrc_path:
+                config = _load_pddrc_config(pddrc_path)
+                context_name = _detect_context_from_basename(basename, config)
+                defaults = config.get("contexts", {}).get(context_name or "default", {}).get("defaults", {})
+                prompts_dir_raw = defaults.get("prompts_dir", "prompts")
+                if not Path(prompts_dir_raw).is_absolute():
+                    prompts_dir = pddrc_path.parent / prompts_dir_raw
+                else:
+                    prompts_dir = Path(prompts_dir_raw)
+
+            lang_to_path = _detect_languages_with_context(basename, prompts_dir, context_name=context_name)
+        except Exception:
+            # Language discovery failed — keep module in the list (safe fallback)
+            needs_sync.append(basename)
+            continue
+
+        if not lang_to_path:
+            # No languages found — keep it for the runner to handle
+            needs_sync.append(basename)
+            continue
+
+        # Check fingerprint for each language; if ANY needs work, keep the module
+        all_nothing = True
+        for lang in lang_to_path:
+            try:
+                decision = sync_determine_operation(
+                    basename=basename,
+                    language=lang,
+                    target_coverage=90.0,
+                    log_mode=True,
+                    prompts_dir=str(prompts_dir),
+                    context_override=context_name,
+                )
+                if decision.operation != "nothing":
+                    all_nothing = False
+                    break
+            except Exception:
+                # Fingerprint check failed — keep module (safe fallback)
+                all_nothing = False
+                break
+
+        if all_nothing:
+            if not quiet:
+                console.print(f"  [green]\u2713[/green] {basename} — already synced, skipping")
+        else:
+            needs_sync.append(basename)
+
+    return needs_sync
+
+
 def _parse_llm_response(response: str) -> Tuple[List[str], bool, List[Dict[str, Any]]]:
     """
     Parse the LLM response for module identification and dependency validation.
@@ -569,7 +664,7 @@ def run_agentic_sync(
 
     # 6. Find project root and load architecture.json
     project_root = _find_project_root(Path.cwd())
-    architecture, arch_path = _load_architecture_json(project_root)
+    architecture, arch_path = _load_architecture_json(project_root, issue_number=issue_number)
 
     if architecture is None:
         if not quiet:
@@ -581,9 +676,12 @@ def run_agentic_sync(
         return False, "Failed to load agentic_sync_identify_modules_LLM prompt template", 0.0, ""
 
     arch_json_str = json.dumps(architecture, indent=2) if architecture else "No architecture.json available."
+    # Escape braces in dynamic content to prevent .format() from interpreting
+    # code references like {uid} as template placeholders
+    safe_arch_json = arch_json_str.replace("{", "{{").replace("}", "}}")
     prompt = prompt_template.format(
         issue_content=issue_content,
-        architecture_json=arch_json_str,
+        architecture_json=safe_arch_json,
     )
 
     if not quiet:
@@ -672,6 +770,17 @@ def run_agentic_sync(
                     rel = cwd
             console.print(f"  [green]\u2713[/green] {bn} \u2192 cwd: {rel}")
         console.print("[green]All modules passed dry-run validation[/green]")
+
+    # 11.75 Filter out already-synced modules (fingerprint check)
+    if not quiet:
+        console.print("[bold]Checking fingerprints for already-synced modules...[/bold]")
+
+    modules_to_sync = _filter_already_synced(modules_to_sync, module_cwds, quiet=quiet)
+    if not modules_to_sync:
+        msg = "All modules are already synced — nothing to do."
+        if not quiet:
+            console.print(f"[green]{msg}[/green]")
+        return True, msg, llm_cost, provider
 
     # 12. Run parallel sync
     sync_options = {

@@ -12,7 +12,7 @@ Entry point for the agentic sync workflow. Accepts a GitHub issue URL, fetches i
 3. Parse GitHub issue URL to extract: owner, repo, issue_number (reuse `_parse_issue_url` from `agentic_change.py`)
 4. Fetch issue content and comments via `gh api` (reuse `_run_gh_command` from `agentic_change.py`)
 5. Escape curly braces in issue content for safe `.format()` calls (reuse `_escape_format_braces`)
-6. Load `architecture.json` from project root; return None if missing or invalid
+6. Load architecture via `find_architecture_for_project` (from `architecture_registry`): discovers multiple architecture.json files (root + subdirs), combines all entries into one list. Return None if none found or all invalid.
 7. Build LLM prompt using `load_prompt_template("agentic_sync_identify_modules_LLM")` with `{issue_content}` and `{architecture_json}` placeholders
 8. Call `run_agentic_task()` to identify modules and validate dependencies
 9. Parse LLM response for `MODULES_TO_SYNC: [...]`, `DEPS_VALID: true|false`, and optional `DEPS_CORRECTIONS: [...]`
@@ -27,7 +27,7 @@ Entry point for the agentic sync workflow. Accepts a GitHub issue URL, fetches i
 
 % Dry-Run Validation
 Before dispatching to the runner, validate each module can actually sync:
-1. `_resolve_module_cwd(basename, project_root)`: determine correct cwd by scanning .pddrc files — check project root first, then subdirectories (max depth 2, deepest match wins). Skip catch-all pattern matches (`**`, `*`) from subdirectories via `_is_catchall_match`. Uses `_detect_context_from_basename` and `_load_pddrc_config` from `construct_paths`.
+1. `_resolve_module_cwd(basename, project_root)`: determine correct cwd by scanning .pddrc files — if root .pddrc exists, it's authoritative (return project_root). Otherwise scan subdirectories (max depth 2, deepest match wins). Skip catch-all pattern matches (`**`, `*`) from subdirectories via `_is_catchall_match`. Uses `_detect_context_from_basename` and `_load_pddrc_config` from `construct_paths`.
 2. `_run_single_dry_run(basename, cwd)`: run `pdd --force sync <basename> --dry-run --agentic --no-steer` as subprocess with 60s timeout and env `PDD_FORCE=1, CI=1`. Return (success, stderr).
 3. On dry-run failure, invoke `_llm_fix_dry_run_failure` as fallback: load `agentic_sync_fix_dry_run_LLM` prompt template with project tree (2 levels), .pddrc locations, and the error. Run the LLM-suggested command via shell, extract effective cwd using a pwd marker appended to the command. Validate resolved cwd is within project root.
 4. `_run_dry_run_validation(modules, project_root)`: orchestrates the above per module, returns (all_valid, module_to_cwd_map, errors, total_llm_cost).
@@ -35,7 +35,7 @@ Before dispatching to the runner, validate each module can actually sync:
 % Helper Functions
 - `_is_github_issue_url(s: str) -> bool`: regex check for `github\.com/.+/issues/\d+`
 - `_find_project_root(start: Path) -> Path`: walk up to find `.pddrc` or `.git`
-- `_load_architecture_json(project_root: Path) -> Tuple[Optional[List], Path]`: load and validate architecture.json
+- `_load_architecture_json(project_root: Path, issue_number: Optional[int] = None) -> Tuple[Optional[List], Path]`: discover and combine architecture files via `find_architecture_for_project`
 - `_parse_llm_response(response: str) -> Tuple[List[str], bool, List[Dict]]`: extract modules, deps validity, corrections
 - `_apply_architecture_corrections(arch_path, architecture, corrections, quiet) -> List[Dict]`: patch and write architecture.json
 - `_is_catchall_match(basename: str, config: Dict) -> bool`: check if match is only from wildcard patterns (specificity 0)
@@ -53,6 +53,7 @@ Before dispatching to the runner, validate each module can actually sync:
 Also imports from `construct_paths`: `_detect_context_from_basename`, `_load_pddrc_config`
 Also imports from `agentic_sync_runner`: `_find_pdd_executable`
 Also imports from `sync_order`: `extract_module_from_include`
+Also imports from `architecture_registry`: `find_architecture_for_project` (function-scope import inside `_load_architecture_json`)
 
 % Error Handling
 - Return `(False, "gh CLI not found...", 0.0, "")` if `gh` command not available

@@ -259,7 +259,7 @@ Transform the contract table from Step 4b2 into an actionable mocking plan.
 3. Produce a table:
    | Dependency | Mock Target (patch path) | Mock Return Value | Error Case |
    |-----------|-------------------------|-------------------|------------|
-   | [e.g., Firebase Auth] | [module.auth.verify_id_token] | [{"uid": "test-uid-123", "email": "user@example.com"}] | [raises InvalidIdTokenError] |
+   | [e.g., Firebase Auth] | [module.auth.verify_id_token] | [{{"uid": "test-uid-123", "email": "user@example.com"}}] | [raises InvalidIdTokenError] |
 4. Every mock in Step 4d MUST use the exact shapes defined in this table.
 
 **Step 4c: Read Existing Tests**

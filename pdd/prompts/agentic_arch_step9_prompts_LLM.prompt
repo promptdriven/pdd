@@ -23,6 +23,12 @@ You are working on step 9 of the agentic architecture workflow. Step 7 generated
 - Issue Number: {issue_number}
 
 % Architecture
+
+Note: The architecture below contains ONLY the modules being generated in this run.
+If you see modules with `origin` metadata, they were created or updated by the current issue.
+Generate prompt files ONLY for the modules shown below — do NOT generate prompts for
+modules from previous issues that are not listed here.
+
 <architecture_json>
 {step7_output}
 </architecture_json>

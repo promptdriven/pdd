@@ -1,25 +1,36 @@
 # sync_determine_operation_python.prompt
 
-You are an expert Python developer. Your task is to implement the core decision-making logic for the `pdd sync` command. This module is responsible for analyzing the current state of a PDD unit (basename + language) and deterministically deciding the next operation (e.g., generate, test, fix, verify) to ensure the code, examples, and tests are in sync with the prompt.
+You are an expert Python developer. Your task is to implement the core decision-making logic for the `pdd sync` command. This module analyzes a PDD unit's state (basename + language) via fingerprint-based hashing and deterministically selects the next operation to keep code, examples, and tests in sync with the prompt.
 
 ### Requirements:
 
-1.  **Authoritative Fingerprints**: The system state must be derived by comparing current file hashes against a version-controlled JSON fingerprint file (`.pdd/meta/{basename}_{lang}.json`).
-2.  **Robust Locking**: Implement a `SyncLock` context manager using file-descriptor locking (`fcntl` or `msvcrt`). It must handle re-entrancy (same PID) and stale lock files (PID no longer exists).
-3.  **Deterministic Logic**: Decisions must follow a strict priority: 
-    -   Auto-deps completion (always `generate` after `auto-deps`).
-    -   Prompt changes (always take priority over runtime signals).
-    -   Runtime failures (`crash` or `fix`).
-    -   Coverage gaps (`test` or `test_extend`).
-    -   Missing derived files (code -> example -> test).
-4.  **Path Resolution (Issue #237)**: Use `construct_paths` for configuration-aware pathing. If `.pddrc` contains an `outputs` template section, use `_generate_paths_from_templates` to expand paths like `frontend/src/{category}/{name}.tsx`.
-5.  **Dependency Awareness (Issue #522)**: Detect `<include>` tags and backtick-wrapped includes. The prompt hash must be a composite of the prompt file and all its dependencies.
-6.  **Multi-file Test Support (Bug #156)**: Track hashes for all matching test files (e.g., `test_foo*.py`) in the fingerprint and run report.
-7.  **Runtime Signal Validation**:
-    -   **Bug #349**: If `tests_passed > 0` and `tests_failed == 0`, ignore non-zero exit codes (treat as tooling noise).
-    -   **Bug #573**: If `coverage == 0.0` but tests passed, the workflow is NOT complete (indicates broken imports/stubs).
-    -   **Agentic Tests**: For non-Python languages, trust the `run_report` if it indicates success even if the test file isn't at the default expected path.
-8.  **Conflict Resolution**: If both the prompt and derived files have changed, delete the fingerprint/run-report to force a fresh sync. For complex logic, provide an `analyze_conflict_with_llm` function.
+1.  **Authoritative Fingerprints**: Compare current file SHA256 hashes against `.pdd/meta/{safe_basename}_{lang}.json`. Sanitize basenames containing `/` (e.g., `core/cloud` → `core_cloud`) for metadata filenames.
+2.  **Robust Locking**: `SyncLock` context manager using `fcntl`/`msvcrt` file-descriptor locking. Handle re-entrancy (same PID), stale locks (`psutil.pid_exists`), and cleanup on failure. `log_mode=True` bypasses locking entirely.
+3.  **Deterministic Decision Priority** (strict ordering):
+    1.  Auto-deps completion → always `generate` after `auto-deps` (prevents infinite loop).
+    2.  Prompt changes → always take priority over runtime signals; return `auto-deps` (if dependency tags found) or `generate`.
+    3.  Runtime failures:
+        -   After `crash` command with `exit_code != 0` → retry `crash`.
+        -   After `crash` command with `exit_code == 0` → `verify`.
+        -   `tests_failed > 0` → `fix` (only if test file exists; else `test`).
+        -   `exit_code != 0` → context-aware: `fix` if example has succeeded before (`_check_example_success_history`), else `crash`.
+    4.  Coverage gaps → `test_extend` (Python only) or `all_synced` (non-Python, since coverage tooling is Python-specific).
+    5.  Missing derived files → code → example → test (respecting `skip_tests`/`skip_verify` flags).
+    6.  Conflict: prompt + derived files both changed → delete fingerprint/run-report, re-run analysis fresh. Derived-only changes → `verify` or `test` (not a conflict).
+4.  **Skip Flags**: `skip_tests` and `skip_verify` parameters flow through `sync_determine_operation`, `_is_workflow_complete`, and `_handle_missing_expected_files`. When `skip_tests=True`, low coverage returns `all_synced` instead of `test`/`test_extend`.
+5.  **Context Override**: All path-resolving functions accept `context_override` to select a specific `.pddrc` context. `_relative_basename_for_context` strips context-specific prefixes from basenames for template expansion.
+6.  **Path Resolution (Issue #237)**: Use `construct_paths` for configuration-aware pathing. If `.pddrc` has an `outputs` template section, use `_generate_paths_from_templates`. `_resolve_prompts_root` resolves prompts_dir relative to `.pddrc` location. Case-insensitive prompt file lookups for Linux compatibility.
+7.  **Dependency Awareness (Issue #522)**: Detect `<include>` and backtick-wrapped `<path>` tags. Prompt hash is composite of prompt + dependency content. When auto-deps strips tags, use `stored_deps` from fingerprint to maintain hash continuity.
+8.  **Multi-file Test Support (Bug #156)**: `test_files` dict in `Fingerprint` and `RunReport` tracks `{filename: hash}` for all matching `test_{name}*.{ext}` files. Staleness checks compare all test file sets.
+9.  **Runtime Signal Validation**:
+    -   **Bug #349**: `tests_passed > 0` and `tests_failed == 0` → ignore non-zero exit codes.
+    -   **Bug #573**: `coverage == 0.0` with passing tests → workflow NOT complete (broken imports/stubs).
+    -   **Bug #23**: Fingerprint commands prefixed with `skip:` indicate skipped operations; workflow is NOT complete.
+    -   **Agentic Tests**: For non-Python languages, trust `run_report` success when `test_hash` is set (real test execution). `test_hash=None` indicates synthetic run_report from crash/verify.
+    -   **Unparseable output**: `tests_passed=0`, `tests_failed=0`, `exit_code=0` → accept as `all_synced` (confidence=0.70).
+10. **Missing File Recovery**: `validate_expected_files` checks fingerprint expectations against disk. `_handle_missing_expected_files` returns appropriate recovery operation with priority: code → example → test.
+11. **Cost Estimation**: `estimate_operation_cost` returns dollar estimates per operation for budget tracking.
+12. **Stale Run Report Handling**: Run reports without a fingerprint are ignored (orphaned). After `auto-deps`, existing run reports are stale and ignored (the early auto-deps check fires before run_report processing).
 
 ### Dependencies:
 
@@ -35,34 +46,30 @@ You are an expert Python developer. Your task is to implement the core decision-
 <get_language>
     <include>context/get_language_example.py</include>
 </get_language>
+<template_expander>
+    Uses `expand_template(template_str, context_dict)` from `pdd.template_expander` to expand `{name}`, `{category}`, `{ext}`, `{language}` placeholders in `.pddrc` output path templates.
+</template_expander>
 <sync_analysis_prompt>
     <include>prompts/sync_analysis_LLM.prompt</include>
 </sync_analysis_prompt>
 
 ### Instructions:
 
-1.  **Data Structures**: Define `Fingerprint`, `RunReport`, and `SyncDecision` dataclasses.
-2.  **Locking**: Implement `SyncLock`. In `acquire()`, check `psutil.pid_exists()` for stale locks. Ensure `log_mode=True` bypasses locking.
-3.  **Pathing**: 
-    -   Implement `get_pdd_file_paths`. 
-    -   Perform case-insensitive prompt file lookups for Linux compatibility.
-    -   Handle subdirectory basenames (e.g., `core/cloud`) by sanitizing them for metadata filenames.
-4.  **Hashing**: 
-    -   Implement `calculate_prompt_hash` to include dependency content.
-    -   Implement `calculate_current_hashes` to return a dictionary of all relevant file hashes.
-5.  **Decision Logic (`sync_determine_operation`)**:
-    -   If `fingerprint.command == 'auto-deps'`, return `generate`.
-    -   If prompt hash changed, return `auto-deps` (if tags found) or `generate`.
-    -   Check `RunReport`: if `tests_failed > 0`, return `fix`. If `exit_code != 0` (and not Bug #349), return `crash`.
-    -   If `coverage < target_coverage`, return `test_extend` (Python) or `all_synced` (non-Python).
-    -   Implement `_is_workflow_complete` with the specific staleness and bug-fix checks mentioned in Requirements.
-6.  **LLM Conflict Resolution**: Implement `analyze_conflict_with_llm`. Gather `git diff` for changed files, format the `sync_analysis_LLM` template, and call `llm_invoke` with `temperature=0`.
+1.  **Data Structures**: Define `Fingerprint` (with `test_files: Dict[str,str]`, `include_deps: Dict[str,str]`), `RunReport` (with `test_hash`, `test_files`), and `SyncDecision` (with `confidence`, `estimated_cost`, `details`, `prerequisites`) dataclasses.
+2.  **Locking**: `SyncLock` with `acquire()`/`release()`. On failure, clean up fd and lock file before re-raising.
+3.  **Pathing**: `get_pdd_file_paths` returns `{prompt, code, example, test, test_files}` using `construct_paths` with template-based and legacy fallback paths. `_extract_name_part` splits subdirectory basenames. `get_extension` maps language names to file extensions.
+4.  **Hashing**: `calculate_prompt_hash` builds composite hash from prompt + resolved include deps. `extract_include_deps` finds and hashes all `<include>` references. `calculate_current_hashes` handles `test_files` (Bug #156) and `include_deps` (Issue #522) specially.
+5.  **Decision Logic (`sync_determine_operation`)**: Accepts `basename, language, target_coverage, budget, log_mode, prompts_dir, skip_tests, skip_verify, context_override`. Delegates to `_perform_sync_analysis` (with or without lock). Follow the priority order in Requirement 3.
+6.  **Workflow Completion (`_is_workflow_complete`)**: Requires all files exist, run_report with success, coverage > 0 when tests pass, non-stale test hashes, and fingerprint command in `{verify, test, fix, update}` (not prefixed with `skip:`).
+7.  **LLM Conflict Resolution**: `analyze_conflict_with_llm` gathers git diffs (with brace-escaping for `.format()`), formats `sync_analysis_LLM` template, calls `llm_invoke` with `temperature=0`. Falls back to `fail_and_request_manual_merge` on any error or confidence < 0.75.
 
 ### Deliverables:
 
 A standalone Python module `sync_determine_operation.py` containing:
 -   Dataclass definitions for state tracking.
 -   `SyncLock` class.
--   `get_pdd_file_paths` and hashing utilities.
--   `sync_determine_operation` (the primary entry point).
--   `analyze_conflict_with_llm` (the LLM fallback).
+-   `get_pdd_file_paths`, `_generate_paths_from_templates`, and hashing utilities.
+-   `sync_determine_operation` (primary entry point) and `_perform_sync_analysis`.
+-   `_check_example_success_history`, `validate_expected_files`, `_handle_missing_expected_files`.
+-   `analyze_conflict_with_llm` (LLM fallback).
+-   `estimate_operation_cost`, `check_for_dependencies`.

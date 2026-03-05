@@ -7,7 +7,7 @@
   across all cloud-enabled PDD commands (generate, fix, test, sync, etc.).
 
 % Requirements
-  1) Class: `CloudConfig` with all static methods
+  1) Class: `CloudConfig` with static methods for URL, auth, and cloud detection
   2) `get_base_url()`: Return cloud base URL; allow override via `PDD_CLOUD_URL` env var
      - Default: `https://us-central1-prompt-driven-development.cloudfunctions.net`
      - Strip trailing slash from custom URLs
@@ -16,37 +16,37 @@
      - Otherwise, append path from `CLOUD_ENDPOINTS` dict or default to `/{endpoint_name}`
   4) `get_jwt_token(verbose, app_name)`: Return JWT token or None
      - First check `PDD_JWT_TOKEN` env var (for testing/CI)
+     - Then check file cache via `_get_cached_jwt` (critical for async contexts like FastAPI)
      - Fall back to device flow auth via `get_jwt_token` from `..get_jwt_token`
+     - Before device flow, detect running event loop via `asyncio.get_running_loop()`;
+       if in async context, raise AuthError directing user to run `pdd auth login` first
      - Always display auth errors to user (critical for debugging auth issues)
-     - Return None on failure after displaying error
-  5) `is_running_in_cloud()`: Return True if running inside a cloud environment
-     - Check for `K_SERVICE` env var (set by Google Cloud Functions/Cloud Run)
-     - Check for `FUNCTIONS_EMULATOR` env var (set by Firebase emulator)
-     - This prevents infinite loops when cloud endpoints call CLI internally
-  6) `is_cloud_enabled()`: Return True if cloud features are available. Cloud is DISABLED if:
-     - `PDD_FORCE_LOCAL` is set (respects --local CLI flag, prevents keychain prompts)
-     - Running inside cloud environment (detected by `is_running_in_cloud()`)
+     - Catch both expected auth exceptions and unexpected exceptions; return None on failure
+  5) `_ensure_default_env()`: Auto-default `PDD_ENV` when unset, called at start of `get_jwt_token`
+     - Set "local" if emulator env vars are detected (FUNCTIONS_EMULATOR, FIREBASE_AUTH_EMULATOR_HOST, FIREBASE_EMULATOR_HUB)
+     - Set "local" if PDD_CLOUD_URL points to localhost/127.0.0.1/0.0.0.0
+     - Set "staging" if PDD_CLOUD_URL contains "prompt-driven-development-stg" or "staging"
+     - Default to "prod" for typical CLI usage
+  6) `is_running_in_cloud()`: Return True if running inside a cloud environment
+     - Check for `K_SERVICE` env var (Google Cloud Functions/Cloud Run)
+     - Check for `FUNCTIONS_EMULATOR` env var (Firebase emulator)
+  7) `is_cloud_enabled()`: Return True if cloud features are available. Cloud is DISABLED if:
+     - `PDD_FORCE_LOCAL` is set (respects --local CLI flag)
+     - Running inside cloud environment (prevents infinite loops)
      Cloud is ENABLED if:
-     - `PDD_JWT_TOKEN` is set (for injected token in testing/CI scenarios), OR
+     - `PDD_JWT_TOKEN` is set (injected token for testing/CI), OR
      - Both `FIREBASE_API_KEY_ENV` and `GITHUB_CLIENT_ID_ENV` are set (for device flow auth)
-  7) `get_cloud_timeout()`: Return cloud request timeout in seconds
-     - Check `PDD_CLOUD_TIMEOUT` env var first
-     - Fall back to `DEFAULT_CLOUD_TIMEOUT` (900 seconds / 15 minutes)
+  8) Module-level function `get_cloud_timeout()`: Return cloud request timeout in seconds
+     - Check `PDD_CLOUD_TIMEOUT` env var, fall back to `DEFAULT_CLOUD_TIMEOUT` (900s)
      - Return int, handle invalid env var values gracefully (return default)
-  8) Export module-level constants for env var names and cloud endpoints
-  9) Re-export auth exception classes (`AuthError`, `NetworkError`, `TokenError`, `UserCancelledError`, `RateLimitError`)
+  9) Export module-level constants for env var names, `DEFAULT_BASE_URL`, and cloud endpoints
+  10) Re-export auth exception classes (`AuthError`, `NetworkError`, `TokenError`, `UserCancelledError`, `RateLimitError`)
 
 % Constants
-  - `FIREBASE_API_KEY_ENV = "NEXT_PUBLIC_FIREBASE_API_KEY"`
-  - `GITHUB_CLIENT_ID_ENV = "GITHUB_CLIENT_ID"`
-  - `PDD_CLOUD_URL_ENV = "PDD_CLOUD_URL"`
-  - `PDD_JWT_TOKEN_ENV = "PDD_JWT_TOKEN"`
-  - `PDD_CLOUD_TIMEOUT_ENV = "PDD_CLOUD_TIMEOUT"`
-  - `DEFAULT_CLOUD_TIMEOUT = 900` (15 minutes, configurable via PDD_CLOUD_TIMEOUT env var)
-  - `CLOUD_ENDPOINTS` dict with keys: generateCode, generateExample, generateTest, generateBugTest, fixCode, crashCode, verifyCode, syncState, trackUsage, getCreditBalance, llmInvoke, registerSession, listSessions, heartbeatSession, deregisterSession, getCommands, updateCommand
+  - `CLOUD_ENDPOINTS` dict with keys for: generateCode, generateExample, generateTest, generateBugTest, fixCode, crashCode, verifyCode, syncState, trackUsage, getCreditBalance, llmInvoke, registerSession, listSessions, heartbeatSession, deregisterSession, getCommands, getCommandStatus, updateCommand, cancelCommand
 
 % Dependencies
-  - Import auth functions and exceptions from `..get_jwt_token`
+  - Import auth functions and exceptions from `..get_jwt_token` (including `_get_cached_jwt`)
   - Use `asyncio.run()` for the async device flow
   - Use `rich.console.Console` for status messages
 

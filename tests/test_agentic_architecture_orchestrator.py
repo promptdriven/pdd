@@ -511,7 +511,7 @@ def test_z3_termination_proof():
 # --- Tests for Scaffolding File Tracking ---
 
 from pdd.agentic_architecture import _parse_related_issues, _fetch_sibling_architectures, _read_existing_pddrc
-from pdd.agentic_architecture_orchestrator import _parse_files_marker, _verify_files_exist
+from pdd.agentic_architecture_orchestrator import _parse_files_marker, _verify_files_exist, _ensure_pddrc_contexts_preserved
 
 
 class TestParseFilesMarker:
@@ -2102,3 +2102,487 @@ class TestSiblingContextInjection:
         # Check that step 2 prompt was called (it uses sibling_architectures)
         step2_calls = [(l, p) for l, p in captured_prompts if l == "step2"]
         assert len(step2_calls) > 0, "Step 2 should have been called"
+
+
+# --- Tests for Step 8 Merge Safety Net and Stray Guard ---
+
+import yaml
+
+
+def test_step8_merge_preserves_existing_contexts(mock_dependencies, base_args):
+    """Step 8 safety net restores contexts the LLM dropped from .pddrc."""
+    mocks = mock_dependencies
+    cwd = base_args["cwd"]
+
+    existing_pddrc_content = yaml.dump({
+        "contexts": {
+            "default": {"paths": ["*"], "prompts_dir": "prompts"},
+            "backend": {"paths": ["backend/*"], "generate_output_path": "backend/"},
+        }
+    }, default_flow_style=False)
+
+    def side_effect(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if "step1b" in label:
+            return (True, "COMPLEXITY_RESULT: MANAGEABLE", 0.1, "gpt-4")
+        if "step5b" in label:
+            return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+        if "step7b" in label:
+            return (True, "REVIEW_RESULT: CLEAN", 0.1, "gpt-4")
+        if "step9b" in label:
+            return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
+        if "step10" in label or "step11" in label or "step12" in label:
+            return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+        if "step7" in label:
+            (cwd / "architecture.json").write_text('[{"priority": 1}]')
+            return (True, 'FILES_CREATED: architecture.json', 0.1, "gpt-4")
+        if "step8" in label:
+            # LLM drops "backend" context, only writes default + frontend
+            (cwd / ".pddrc").write_text(yaml.dump({
+                "contexts": {
+                    "default": {"paths": ["*"], "prompts_dir": "prompts"},
+                    "frontend": {"paths": ["frontend/*"], "generate_output_path": "frontend/"},
+                }
+            }, default_flow_style=False))
+            return (True, 'FILES_CREATED: .pddrc', 0.1, "gpt-4")
+        if "step9" in label:
+            return (True, 'FILES_CREATED: prompts/test.prompt', 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mocks["run"].side_effect = side_effect
+
+    success, msg, cost, model, files = run_agentic_architecture_orchestrator(
+        **base_args,
+        existing_pddrc=existing_pddrc_content,
+    )
+
+    assert success is True
+
+    # Read final .pddrc and verify all 3 contexts are present
+    final_pddrc = yaml.safe_load((cwd / ".pddrc").read_text())
+    assert "default" in final_pddrc["contexts"]
+    assert "backend" in final_pddrc["contexts"]
+    assert "frontend" in final_pddrc["contexts"]
+
+
+def test_step8_merge_noop_when_all_contexts_preserved(mock_dependencies, base_args):
+    """Safety net does not rewrite .pddrc when all contexts are preserved."""
+    mocks = mock_dependencies
+    cwd = base_args["cwd"]
+
+    existing_pddrc_content = yaml.dump({
+        "contexts": {
+            "default": {"paths": ["*"], "prompts_dir": "prompts"},
+            "backend": {"paths": ["backend/*"], "generate_output_path": "backend/"},
+        }
+    }, default_flow_style=False)
+
+    # LLM preserves both existing contexts and adds frontend
+    new_pddrc_content = yaml.dump({
+        "contexts": {
+            "default": {"paths": ["*"], "prompts_dir": "prompts"},
+            "backend": {"paths": ["backend/*"], "generate_output_path": "backend/"},
+            "frontend": {"paths": ["frontend/*"], "generate_output_path": "frontend/"},
+        }
+    }, default_flow_style=False)
+
+    def side_effect(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if "step1b" in label:
+            return (True, "COMPLEXITY_RESULT: MANAGEABLE", 0.1, "gpt-4")
+        if "step5b" in label:
+            return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+        if "step7b" in label:
+            return (True, "REVIEW_RESULT: CLEAN", 0.1, "gpt-4")
+        if "step9b" in label:
+            return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
+        if "step10" in label or "step11" in label or "step12" in label:
+            return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+        if "step7" in label:
+            (cwd / "architecture.json").write_text('[{"priority": 1}]')
+            return (True, 'FILES_CREATED: architecture.json', 0.1, "gpt-4")
+        if "step8" in label:
+            (cwd / ".pddrc").write_text(new_pddrc_content)
+            return (True, 'FILES_CREATED: .pddrc', 0.1, "gpt-4")
+        if "step9" in label:
+            return (True, 'FILES_CREATED: prompts/test.prompt', 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mocks["run"].side_effect = side_effect
+
+    success, msg, cost, model, files = run_agentic_architecture_orchestrator(
+        **base_args,
+        existing_pddrc=existing_pddrc_content,
+    )
+
+    assert success is True
+
+    # Content should be unchanged (no rewrite needed)
+    final_content = (cwd / ".pddrc").read_text()
+    assert final_content == new_pddrc_content
+
+
+def test_step8_stray_pddrc_removed_when_target_dir_set(mock_dependencies, base_args):
+    """Stray .pddrc in subdirectory is removed when root .pddrc exists."""
+    mocks = mock_dependencies
+    cwd = base_args["cwd"]
+
+    def side_effect(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if "step1b" in label:
+            return (True, "COMPLEXITY_RESULT: MANAGEABLE", 0.1, "gpt-4")
+        if "step5b" in label:
+            return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+        if "step7b" in label:
+            return (True, "REVIEW_RESULT: CLEAN", 0.1, "gpt-4")
+        if "step9b" in label:
+            return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
+        if "step10" in label or "step11" in label or "step12" in label:
+            return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+        if "step7" in label:
+            (cwd / "architecture.json").write_text('[{"priority": 1}]')
+            return (True, 'FILES_CREATED: architecture.json', 0.1, "gpt-4")
+        if "step8" in label:
+            # LLM writes root .pddrc AND stray subdirectory .pddrc
+            (cwd / ".pddrc").write_text("contexts:\n  default:\n    paths: ['*']\n")
+            subdir = cwd / "subproject"
+            subdir.mkdir(exist_ok=True)
+            (subdir / ".pddrc").write_text("contexts:\n  default:\n    paths: ['*']\n")
+            return (True, 'FILES_CREATED: .pddrc', 0.1, "gpt-4")
+        if "step9" in label:
+            return (True, 'FILES_CREATED: prompts/test.prompt', 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mocks["run"].side_effect = side_effect
+
+    success, msg, cost, model, files = run_agentic_architecture_orchestrator(
+        **base_args,
+        target_dir="subproject",
+    )
+
+    assert success is True
+    # Root .pddrc should exist
+    assert (cwd / ".pddrc").exists()
+    # Stray .pddrc in subdirectory should be removed
+    assert not (cwd / "subproject" / ".pddrc").exists()
+
+
+def test_step8_stray_pddrc_moved_to_root_when_root_missing(mock_dependencies, base_args):
+    """Stray .pddrc in subdirectory is moved to root when root .pddrc is missing."""
+    mocks = mock_dependencies
+    cwd = base_args["cwd"]
+
+    def side_effect(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if "step1b" in label:
+            return (True, "COMPLEXITY_RESULT: MANAGEABLE", 0.1, "gpt-4")
+        if "step5b" in label:
+            return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+        if "step7b" in label:
+            return (True, "REVIEW_RESULT: CLEAN", 0.1, "gpt-4")
+        if "step9b" in label:
+            return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
+        if "step10" in label or "step11" in label or "step12" in label:
+            return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+        if "step7" in label:
+            (cwd / "architecture.json").write_text('[{"priority": 1}]')
+            return (True, 'FILES_CREATED: architecture.json', 0.1, "gpt-4")
+        if "step8" in label:
+            # LLM writes .pddrc ONLY in subdirectory (not root)
+            subdir = cwd / "subproject"
+            subdir.mkdir(exist_ok=True)
+            (subdir / ".pddrc").write_text("contexts:\n  default:\n    paths: ['*']\n")
+            return (True, 'FILES_CREATED: .pddrc', 0.1, "gpt-4")
+        if "step9" in label:
+            return (True, 'FILES_CREATED: prompts/test.prompt', 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mocks["run"].side_effect = side_effect
+
+    success, msg, cost, model, files = run_agentic_architecture_orchestrator(
+        **base_args,
+        target_dir="subproject",
+    )
+
+    assert success is True
+    # Root .pddrc should now exist (moved from subdirectory)
+    assert (cwd / ".pddrc").exists()
+    # Stray .pddrc in subdirectory should be gone
+    assert not (cwd / "subproject" / ".pddrc").exists()
+    # Content should match what was in the stray file
+    content = (cwd / ".pddrc").read_text()
+    assert "default" in content
+
+
+class TestEnsurePddrcContextsPreserved:
+    """Unit tests for the _ensure_pddrc_contexts_preserved helper."""
+
+    def test_empty_existing_pddrc(self, tmp_path):
+        """No-op when existing_pddrc is empty."""
+        pddrc_file = tmp_path / ".pddrc"
+        pddrc_file.write_text("contexts:\n  default:\n    paths: ['*']\n")
+        original = pddrc_file.read_text()
+        _ensure_pddrc_contexts_preserved(pddrc_file, "", quiet=True)
+        assert pddrc_file.read_text() == original
+
+    def test_malformed_existing_yaml(self, tmp_path):
+        """No-op when existing_pddrc is malformed YAML."""
+        pddrc_file = tmp_path / ".pddrc"
+        pddrc_file.write_text("contexts:\n  default:\n    paths: ['*']\n")
+        original = pddrc_file.read_text()
+        _ensure_pddrc_contexts_preserved(pddrc_file, "{{{{not yaml", quiet=True)
+        assert pddrc_file.read_text() == original
+
+    def test_no_missing_contexts(self, tmp_path):
+        """No-op when all existing contexts are present in new file."""
+        existing = yaml.dump({"contexts": {"default": {"paths": ["*"]}}})
+        pddrc_file = tmp_path / ".pddrc"
+        new_content = yaml.dump({
+            "contexts": {
+                "default": {"paths": ["*"]},
+                "frontend": {"paths": ["frontend/*"]},
+            }
+        }, default_flow_style=False)
+        pddrc_file.write_text(new_content)
+        _ensure_pddrc_contexts_preserved(pddrc_file, existing, quiet=True)
+        assert pddrc_file.read_text() == new_content
+
+    def test_some_missing_contexts_restored(self, tmp_path):
+        """Missing contexts from existing .pddrc are restored."""
+        existing = yaml.dump({
+            "contexts": {
+                "default": {"paths": ["*"]},
+                "backend": {"paths": ["backend/*"], "generate_output_path": "backend/"},
+            }
+        }, default_flow_style=False)
+
+        pddrc_file = tmp_path / ".pddrc"
+        pddrc_file.write_text(yaml.dump({
+            "contexts": {
+                "default": {"paths": ["*"]},
+                "frontend": {"paths": ["frontend/*"]},
+            }
+        }, default_flow_style=False))
+
+        _ensure_pddrc_contexts_preserved(pddrc_file, existing, quiet=True)
+
+        result = yaml.safe_load(pddrc_file.read_text())
+        assert "default" in result["contexts"]
+        assert "backend" in result["contexts"]
+        assert "frontend" in result["contexts"]
+        assert result["contexts"]["backend"]["generate_output_path"] == "backend/"
+
+    def test_all_missing_contexts_restored(self, tmp_path):
+        """All contexts restored when LLM writes completely new set."""
+        existing = yaml.dump({
+            "contexts": {
+                "api": {"paths": ["api/*"]},
+                "models": {"paths": ["models/*"]},
+            }
+        }, default_flow_style=False)
+
+        pddrc_file = tmp_path / ".pddrc"
+        pddrc_file.write_text(yaml.dump({
+            "contexts": {
+                "frontend": {"paths": ["frontend/*"]},
+            }
+        }, default_flow_style=False))
+
+        _ensure_pddrc_contexts_preserved(pddrc_file, existing, quiet=True)
+
+        result = yaml.safe_load(pddrc_file.read_text())
+        assert "api" in result["contexts"]
+        assert "models" in result["contexts"]
+        assert "frontend" in result["contexts"]
+
+    def test_new_file_parse_error(self, tmp_path):
+        """No-op when new .pddrc file has parse errors."""
+        existing = yaml.dump({"contexts": {"default": {"paths": ["*"]}}})
+        pddrc_file = tmp_path / ".pddrc"
+        bad_content = "{{{{not valid yaml at all"
+        pddrc_file.write_text(bad_content)
+        _ensure_pddrc_contexts_preserved(pddrc_file, existing, quiet=True)
+        # File should remain unchanged (not corrupted)
+        assert pddrc_file.read_text() == bad_content
+
+    def test_existing_no_contexts_key(self, tmp_path):
+        """No-op when existing .pddrc has no 'contexts' key."""
+        existing = yaml.dump({"prompts_dir": "prompts"})
+        pddrc_file = tmp_path / ".pddrc"
+        new_content = yaml.dump({"contexts": {"default": {"paths": ["*"]}}})
+        pddrc_file.write_text(new_content)
+        _ensure_pddrc_contexts_preserved(pddrc_file, existing, quiet=True)
+        assert pddrc_file.read_text() == new_content
+
+
+# --- Multi-Architecture Merge Tests ---
+
+
+def test_generate_merges_with_existing(mock_dependencies, base_args):
+    """When architecture.json exists, new generation merges with it."""
+    mocks = mock_dependencies
+    cwd = base_args["cwd"]
+
+    # Pre-existing architecture.json
+    existing_arch = [
+        {"filename": "old_module_Python.prompt", "priority": 1, "dependencies": []},
+    ]
+    (cwd / "architecture.json").write_text(json.dumps(existing_arch))
+
+    def side_effect(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if "step1b" in label:
+            return (True, "COMPLEXITY_RESULT: MANAGEABLE", 0.1, "gpt-4")
+        if "step5b" in label:
+            return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+        if "step7b" in label:
+            return (True, "REVIEW_RESULT: CLEAN", 0.1, "gpt-4")
+        if "step9b" in label:
+            return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
+        if "step7" in label:
+            # Step 7 writes NEW architecture with both old and new modules
+            new_arch = [
+                {"filename": "old_module_Python.prompt", "priority": 1, "dependencies": [], "description": "updated"},
+                {"filename": "new_module_Python.prompt", "priority": 2, "dependencies": ["old_module_Python.prompt"]},
+            ]
+            (cwd / "architecture.json").write_text(json.dumps(new_arch))
+            return (True, "FILES_CREATED: architecture.json", 0.1, "gpt-4")
+        if "step8" in label:
+            (cwd / ".pddrc").write_text("prompts_dir: prompts\n")
+            return (True, "FILES_CREATED: .pddrc", 0.1, "gpt-4")
+        if "step9" in label:
+            return (True, "FILES_CREATED: prompts/new_module_Python.prompt", 0.1, "gpt-4")
+        if "step10" in label or "step11" in label or "step12" in label:
+            return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mocks["run"].side_effect = side_effect
+
+    success, msg, cost, model, files = run_agentic_architecture_orchestrator(**base_args)
+
+    assert success is True
+
+    # Verify merged architecture on disk
+    arch_on_disk = json.loads((cwd / "architecture.json").read_text())
+    filenames = {m["filename"] for m in arch_on_disk}
+    assert "old_module_Python.prompt" in filenames
+    assert "new_module_Python.prompt" in filenames
+    assert len(arch_on_disk) == 2
+
+    # Verify updated module has origin metadata
+    old_mod = [m for m in arch_on_disk if m["filename"] == "old_module_Python.prompt"][0]
+    assert old_mod.get("origin", {}).get("issue_number") == 1  # base_args issue_number
+
+    # Verify registry was created
+    registry_path = cwd / ".pdd" / "architecture_registry.json"
+    assert registry_path.exists()
+    registry = json.loads(registry_path.read_text())
+    assert len(registry["generations"]) == 1
+    gen = registry["generations"][0]
+    assert gen["issue_number"] == 1
+    assert "new_module_Python.prompt" in gen["modules_added"]
+    assert "old_module_Python.prompt" in gen["modules_updated"]
+
+
+def test_step7_output_scoped_to_current_issue(mock_dependencies, base_args):
+    """step7_output in context contains only new/updated modules, not unchanged ones."""
+    mocks = mock_dependencies
+    cwd = base_args["cwd"]
+
+    # Pre-existing architecture with a module from a previous issue
+    existing_arch = [
+        {"filename": "legacy_Python.prompt", "priority": 1, "dependencies": []},
+    ]
+    (cwd / "architecture.json").write_text(json.dumps(existing_arch))
+
+    # Use a template that includes {step7_output} so we can inspect substitution
+    mocks["load_template"].return_value = "Template with arch: {step7_output} and title: {issue_title}"
+
+    captured_step9_instruction = {}
+
+    def side_effect(*args, **kwargs):
+        label = kwargs.get("label", "")
+        instruction = kwargs.get("instruction", args[0] if args else "")
+        if "step1b" in label:
+            return (True, "COMPLEXITY_RESULT: MANAGEABLE", 0.1, "gpt-4")
+        if "step5b" in label:
+            return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+        if "step7b" in label:
+            return (True, "REVIEW_RESULT: CLEAN", 0.1, "gpt-4")
+        if "step9b" in label:
+            return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
+        if "step7" in label:
+            # LLM writes arch with ONLY new modules (not the legacy one)
+            new_arch = [
+                {"filename": "fresh_Python.prompt", "priority": 1, "dependencies": []},
+            ]
+            (cwd / "architecture.json").write_text(json.dumps(new_arch))
+            return (True, "FILES_CREATED: architecture.json", 0.1, "gpt-4")
+        if "step8" in label:
+            (cwd / ".pddrc").write_text("prompts_dir: prompts\n")
+            return (True, "FILES_CREATED: .pddrc", 0.1, "gpt-4")
+        if label == "step9":
+            # Capture the instruction sent to step 9
+            captured_step9_instruction["text"] = instruction
+            return (True, "FILES_CREATED: prompts/fresh_Python.prompt", 0.1, "gpt-4")
+        if "step10" in label or "step11" in label or "step12" in label:
+            return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mocks["run"].side_effect = side_effect
+
+    success, _, _, _, _ = run_agentic_architecture_orchestrator(**base_args)
+    assert success is True
+
+    # Verify the step9 instruction contains the scoped step7_output
+    assert "text" in captured_step9_instruction
+    step9_text = captured_step9_instruction["text"]
+    # fresh_Python should be in the scoped output (it's new)
+    assert "fresh_Python.prompt" in step9_text
+    # legacy_Python should NOT be in the scoped step7_output (it's unchanged)
+    assert "legacy_Python.prompt" not in step9_text
+
+
+def test_generate_first_time_records_registry(mock_dependencies, base_args):
+    """First-time generation records all modules in registry."""
+    mocks = mock_dependencies
+    cwd = base_args["cwd"]
+
+    def side_effect(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if "step1b" in label:
+            return (True, "COMPLEXITY_RESULT: MANAGEABLE", 0.1, "gpt-4")
+        if "step5b" in label:
+            return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+        if "step7b" in label:
+            return (True, "REVIEW_RESULT: CLEAN", 0.1, "gpt-4")
+        if "step9b" in label:
+            return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
+        if "step7" in label:
+            arch = [
+                {"filename": "mod_a_Python.prompt", "priority": 1, "dependencies": []},
+                {"filename": "mod_b_Python.prompt", "priority": 2, "dependencies": ["mod_a_Python.prompt"]},
+            ]
+            (cwd / "architecture.json").write_text(json.dumps(arch))
+            return (True, "FILES_CREATED: architecture.json", 0.1, "gpt-4")
+        if "step8" in label:
+            (cwd / ".pddrc").write_text("prompts_dir: prompts\n")
+            return (True, "FILES_CREATED: .pddrc", 0.1, "gpt-4")
+        if "step9" in label:
+            return (True, "FILES_CREATED: prompts/mod_a_Python.prompt", 0.1, "gpt-4")
+        if "step10" in label or "step11" in label or "step12" in label:
+            return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mocks["run"].side_effect = side_effect
+
+    success, _, _, _, _ = run_agentic_architecture_orchestrator(**base_args)
+    assert success is True
+
+    # Registry should exist with both modules as "added"
+    registry_path = cwd / ".pdd" / "architecture_registry.json"
+    assert registry_path.exists()
+    registry = json.loads(registry_path.read_text())
+    gen = registry["generations"][0]
+    assert sorted(gen["modules_added"]) == ["mod_a_Python.prompt", "mod_b_Python.prompt"]
+    assert gen["modules_updated"] == []

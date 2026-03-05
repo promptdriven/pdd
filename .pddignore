@@ -1,0 +1,5 @@
+# Ignore __init__.py files - these are just re-exports, not standalone modules
+**/__init__.py
+
+# Internal registry module (tracks generation provenance, not a user-facing module)
+pdd/architecture_registry.py
