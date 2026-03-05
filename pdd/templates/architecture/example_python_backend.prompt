@@ -1,0 +1,272 @@
+% Complete Working Example: Python FastAPI Backend Application
+% This is a verified, working example that passes pdd sync validation.
+% Use this as a reference when generating architecture.json and .pddrc for Python/Go backend projects.
+% This example uses TEMPLATE-BASED GROUP CONTEXTS (Strategy B).
+
+% ============================================================================
+% PROJECT OVERVIEW
+% ============================================================================
+
+A Python FastAPI backend project with:
+- SQLAlchemy for database (PostgreSQL)
+- Pydantic for request/response schemas
+- Python throughout
+- REST API with routers
+
+% ============================================================================
+% WHY TEMPLATE-BASED GROUP CONTEXTS?
+% ============================================================================
+
+In this project, output filenames DERIVE from the basename:
+- basename `crm_models` → filepath `backend/crm_models.py`
+- basename `crm_schemas` → filepath `backend/crm_schemas.py`
+- basename `auth_service` → filepath `backend/auth_service.py`
+
+Because all modules follow the pattern `{directory}/{name}.{ext}`, we use a SINGLE
+group context with template placeholders instead of one context per module.
+
+This is the OPPOSITE of Next.js where `home_page` → `app/page.tsx` (no derivation).
+
+% ============================================================================
+% ARCHITECTURE.JSON (VERIFIED WORKING)
+% ============================================================================
+
+```json
+[
+  {
+    "reason": "SQLAlchemy models define database tables for CRM entities",
+    "description": "Database models using SQLAlchemy ORM with Customer, Contact, Deal, and Activity tables.",
+    "dependencies": [],
+    "priority": 1,
+    "filename": "crm_models_Python.prompt",
+    "filepath": "backend/crm_models.py",
+    "tags": ["database", "models"],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {"name": "Customer", "signature": "class Customer(Base)", "returns": "SQLAlchemy model"},
+          {"name": "Deal", "signature": "class Deal(Base)", "returns": "SQLAlchemy model"}
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Pydantic schemas for request/response validation",
+    "description": "Pydantic v2 schemas for Customer, Contact, Deal. Includes Create, Update, and Response variants.",
+    "dependencies": ["crm_models_Python.prompt"],
+    "priority": 2,
+    "filename": "crm_schemas_Python.prompt",
+    "filepath": "backend/crm_schemas.py",
+    "tags": ["schemas", "validation"],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {"name": "CustomerCreate", "signature": "class CustomerCreate(BaseModel)", "returns": "Pydantic schema"},
+          {"name": "CustomerResponse", "signature": "class CustomerResponse(BaseModel)", "returns": "Pydantic schema"}
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Database session management and connection configuration",
+    "description": "SQLAlchemy engine and session factory. Provides get_db dependency for FastAPI routes.",
+    "dependencies": [],
+    "priority": 1,
+    "filename": "database_Python.prompt",
+    "filepath": "backend/database.py",
+    "tags": ["database", "config"],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {"name": "get_db", "signature": "def get_db() -> Generator[Session, None, None]", "returns": "Database session"}
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Authentication service handling JWT tokens and user verification",
+    "description": "Auth service with JWT token creation/validation, password hashing, and FastAPI dependency for protected routes.",
+    "dependencies": ["crm_models_Python.prompt", "database_Python.prompt"],
+    "priority": 3,
+    "filename": "auth_service_Python.prompt",
+    "filepath": "backend/auth_service.py",
+    "tags": ["auth", "security"],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {"name": "create_token", "signature": "def create_token(user_id: int) -> str", "returns": "JWT token string"},
+          {"name": "get_current_user", "signature": "def get_current_user(token: str) -> User", "returns": "User model"}
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Customer API router with CRUD endpoints",
+    "description": "FastAPI router for customer management. Includes list, create, get, update, delete endpoints.",
+    "dependencies": ["crm_models_Python.prompt", "crm_schemas_Python.prompt", "auth_service_Python.prompt", "database_Python.prompt"],
+    "priority": 4,
+    "filename": "customers_router_Python.prompt",
+    "filepath": "backend/customers_router.py",
+    "tags": ["api", "router"],
+    "interface": {
+      "type": "api",
+      "api": {
+        "endpoints": [
+          {"method": "GET", "path": "/api/customers", "auth": "bearer", "responseSchema": "list[CustomerResponse]"},
+          {"method": "POST", "path": "/api/customers", "auth": "bearer", "requestSchema": "CustomerCreate", "responseSchema": "CustomerResponse"}
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Deal API router with pipeline management",
+    "description": "FastAPI router for deal/pipeline management. Includes CRUD and stage transition endpoints.",
+    "dependencies": ["crm_models_Python.prompt", "crm_schemas_Python.prompt", "auth_service_Python.prompt", "database_Python.prompt"],
+    "priority": 4,
+    "filename": "deals_router_Python.prompt",
+    "filepath": "backend/deals_router.py",
+    "tags": ["api", "router"],
+    "interface": {
+      "type": "api",
+      "api": {
+        "endpoints": [
+          {"method": "GET", "path": "/api/deals", "auth": "bearer", "responseSchema": "list[DealResponse]"},
+          {"method": "POST", "path": "/api/deals", "auth": "bearer", "requestSchema": "DealCreate", "responseSchema": "DealResponse"}
+        ]
+      }
+    }
+  },
+  {
+    "reason": "FastAPI application entry point with router registration and middleware",
+    "description": "Main FastAPI app instance. Registers all routers, configures CORS, adds error handlers.",
+    "dependencies": ["customers_router_Python.prompt", "deals_router_Python.prompt", "auth_service_Python.prompt"],
+    "priority": 5,
+    "filename": "main_Python.prompt",
+    "filepath": "backend/main.py",
+    "tags": ["entrypoint", "app"],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {"name": "app", "signature": "app = FastAPI()", "returns": "FastAPI application instance"}
+        ]
+      }
+    }
+  }
+]
+```
+
+% ============================================================================
+% .PDDRC CONFIGURATION (VERIFIED WORKING - TEMPLATE-BASED GROUP CONTEXT)
+% ============================================================================
+
+```yaml
+version: "1.0"
+
+contexts:
+  # ============================================================
+  # BACKEND GROUP CONTEXT (Strategy B: Template-based)
+  # ============================================================
+  # All backend modules follow the pattern: backend/{name}.py
+  # A single group context with templates handles ALL modules.
+
+  backend:
+    paths: ["*"]
+    defaults:
+      prompts_dir: "prompts/backend"
+      generate_output_path: "backend/"
+```
+
+% ============================================================================
+% KEY DIFFERENCE FROM NEXT.JS EXAMPLE
+% ============================================================================
+
+**Next.js (Strategy A - per-module contexts):**
+- `home_page` → `app/page.tsx` (basename does NOT derive filepath)
+- Needs: 13 individual contexts with exact `outputs.code.path`
+- `prompts_dir` only in `default` context
+
+**Python Backend (Strategy B - group context with templates):**
+- `crm_models` → `backend/crm_models.py` (basename DERIVES filepath)
+- Needs: 1 group context with `generate_output_path: "backend/"`
+- `prompts_dir` on the group context pointing to subdirectory: `"prompts/backend"`
+
+% ============================================================================
+% PROMPT FILES (IN SUBDIRECTORY MATCHING prompts_dir)
+% ============================================================================
+
+Prompt files go in the `prompts_dir` configured on the group context:
+
+```
+prompts/
+└── backend/
+    ├── crm_models_Python.prompt
+    ├── crm_schemas_Python.prompt
+    ├── database_Python.prompt
+    ├── auth_service_Python.prompt
+    ├── customers_router_Python.prompt
+    ├── deals_router_Python.prompt
+    └── main_Python.prompt
+```
+
+% ============================================================================
+% VERIFICATION RESULTS (CONFIRMED WORKING)
+% ============================================================================
+
+Running `pdd sync` with template-based paths:
+
+```bash
+# Template expansion: generate_output_path "backend/" + basename + extension
+pdd sync crm_models        # → backend/crm_models.py
+pdd sync crm_schemas       # → backend/crm_schemas.py
+pdd sync database          # → backend/database.py
+pdd sync auth_service      # → backend/auth_service.py
+pdd sync customers_router  # → backend/customers_router.py
+pdd sync deals_router      # → backend/deals_router.py
+pdd sync main              # → backend/main.py
+
+# Dry run to verify without generating
+pdd sync crm_models --dry-run
+```
+
+% ============================================================================
+% KEY PATTERNS TO FOLLOW (STRATEGY B)
+% ============================================================================
+
+1. **Filename format**: `{basename}_{Language}.prompt` (same as Strategy A)
+   - `crm_models_Python.prompt`, `auth_service_Python.prompt`
+
+2. **Filepath derivation**: `{directory}/{basename}.{ext}`
+   - The output path is predictable from the basename
+
+3. **Group context**: One context covers ALL modules in a directory
+   - `paths: ["*"]` matches all basenames
+   - `generate_output_path: "backend/"` sets output directory
+   - `prompts_dir: "prompts/backend"` sets prompt subdirectory
+
+4. **No outputs.code.path needed**: Template expansion handles paths automatically
+   - PDD computes: `generate_output_path` + basename + extension from language
+
+5. **prompts_dir on group context**: Points to subdirectory, NOT flat `prompts/`
+   - This keeps prompts organized by group (e.g., `prompts/backend/`, `prompts/frontend/`)
+
+6. **When to use Strategy B**: When ALL modules in a group have filepaths that
+   follow `{directory}/{basename}.{ext}` — the basename appears in the filepath.
+
+% ============================================================================
+% COMMANDS TO RUN
+% ============================================================================
+
+```bash
+# Sync individual modules
+pdd sync crm_models        # → backend/crm_models.py
+pdd sync auth_service      # → backend/auth_service.py
+pdd sync customers_router  # → backend/customers_router.py
+
+# Dry run to verify without generating
+pdd sync crm_models --dry-run
+```

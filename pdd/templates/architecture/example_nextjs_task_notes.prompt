@@ -1,0 +1,505 @@
+% Complete Working Example: Next.js Task Notes Application
+% This is a verified, working example that passes pdd sync validation.
+% Use this as a reference when generating architecture.json and .pddrc for Next.js projects.
+
+% ============================================================================
+% PROJECT OVERVIEW
+% ============================================================================
+
+A Next.js 14 App Router project with:
+- Prisma for database (PostgreSQL)
+- TypeScript throughout
+- App Router pages and API routes
+- React components
+
+% ============================================================================
+% ARCHITECTURE.JSON (VERIFIED WORKING)
+% ============================================================================
+
+```json
+[
+  {
+    "reason": "Prisma schema defines the database structure for tasks and categories with proper relationships",
+    "description": "Database schema using Prisma ORM with Task and Category models. Tasks have title, content, status, priority, and belong to a category.",
+    "dependencies": [],
+    "priority": 1,
+    "filename": "prisma_schema_Prisma.prompt",
+    "filepath": "prisma/schema.prisma",
+    "tags": ["database", "prisma", "schema"],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": [
+          {"name": "DATABASE_URL", "type": "string", "required": true, "source": "env"}
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Prisma client singleton for database connections across the application",
+    "description": "TypeScript module exporting a singleton Prisma client instance. Handles connection pooling and prevents multiple instances in development.",
+    "dependencies": ["prisma_schema_Prisma.prompt"],
+    "priority": 2,
+    "filename": "prisma_client_TypeScript.prompt",
+    "filepath": "lib/prisma.ts",
+    "tags": ["database", "prisma", "client"],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {"name": "prisma", "signature": "export const prisma: PrismaClient", "returns": "PrismaClient instance"}
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Shared TypeScript types for tasks and categories used across frontend and API",
+    "description": "Type definitions for Task, Category, TaskStatus, and TaskPriority. Includes request/response types for API operations.",
+    "dependencies": [],
+    "priority": 3,
+    "filename": "types_TypeScript.prompt",
+    "filepath": "lib/types.ts",
+    "tags": ["types", "shared"],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {"name": "Task", "signature": "interface Task", "returns": "Task type"},
+          {"name": "Category", "signature": "interface Category", "returns": "Category type"}
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Root layout provides the app shell with navigation and global providers",
+    "description": "Next.js App Router root layout with global styles, metadata, navigation sidebar, and React Query provider.",
+    "dependencies": ["types_TypeScript.prompt"],
+    "priority": 4,
+    "filename": "root_layout_TypeScriptReact.prompt",
+    "filepath": "app/layout.tsx",
+    "tags": ["frontend", "layout", "nextjs"],
+    "interface": {
+      "type": "page",
+      "page": {
+        "route": "/",
+        "params": [],
+        "dataSources": []
+      }
+    }
+  },
+  {
+    "reason": "Home page displays dashboard with task summary and quick actions",
+    "description": "Main landing page showing task statistics, recent tasks, and quick action buttons. Server component with parallel data fetching.",
+    "dependencies": ["types_TypeScript.prompt", "api_tasks_route_TypeScript.prompt"],
+    "priority": 5,
+    "filename": "home_page_TypeScriptReact.prompt",
+    "filepath": "app/page.tsx",
+    "tags": ["frontend", "page", "nextjs"],
+    "interface": {
+      "type": "page",
+      "page": {
+        "route": "/",
+        "params": [],
+        "dataSources": [
+          {"kind": "api", "source": "/api/tasks", "method": "GET"}
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Tasks list page with filtering, sorting, and pagination",
+    "description": "Page displaying all tasks with category filter, status filter, priority sort, and pagination.",
+    "dependencies": ["types_TypeScript.prompt", "api_tasks_route_TypeScript.prompt", "task_card_component_TypeScriptReact.prompt"],
+    "priority": 6,
+    "filename": "tasks_page_TypeScriptReact.prompt",
+    "filepath": "app/tasks/page.tsx",
+    "tags": ["frontend", "page", "nextjs"],
+    "interface": {
+      "type": "page",
+      "page": {
+        "route": "/tasks",
+        "params": [
+          {"name": "category", "type": "string"},
+          {"name": "status", "type": "string"},
+          {"name": "page", "type": "number"}
+        ],
+        "dataSources": [
+          {"kind": "api", "source": "/api/tasks", "method": "GET"}
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Task detail page with full content view and edit capabilities",
+    "description": "Dynamic route page displaying single task details with inline editing and status updates.",
+    "dependencies": ["types_TypeScript.prompt", "api_tasks_id_route_TypeScript.prompt"],
+    "priority": 7,
+    "filename": "task_detail_page_TypeScriptReact.prompt",
+    "filepath": "app/tasks/[id]/page.tsx",
+    "tags": ["frontend", "page", "nextjs", "dynamic"],
+    "interface": {
+      "type": "page",
+      "page": {
+        "route": "/tasks/[id]",
+        "params": [
+          {"name": "id", "type": "string"}
+        ],
+        "dataSources": [
+          {{"kind": "api", "source": "/api/tasks/{{id}}", "method": "GET"}}
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Categories page for managing task categories",
+    "description": "Page for viewing and managing categories with task counts and color picker.",
+    "dependencies": ["types_TypeScript.prompt", "api_categories_route_TypeScript.prompt"],
+    "priority": 8,
+    "filename": "categories_page_TypeScriptReact.prompt",
+    "filepath": "app/categories/page.tsx",
+    "tags": ["frontend", "page", "nextjs"],
+    "interface": {
+      "type": "page",
+      "page": {
+        "route": "/categories",
+        "params": [],
+        "dataSources": [
+          {"kind": "api", "source": "/api/categories", "method": "GET"}
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Reusable task card component for displaying task preview",
+    "description": "Client component rendering task preview card with title, status badge, priority indicator, and category tag.",
+    "dependencies": ["types_TypeScript.prompt"],
+    "priority": 9,
+    "filename": "task_card_component_TypeScriptReact.prompt",
+    "filepath": "components/TaskCard.tsx",
+    "tags": ["frontend", "component", "ui"],
+    "interface": {
+      "type": "component",
+      "component": {
+        "props": [
+          {"name": "task", "type": "Task", "required": true},
+          {"name": "onStatusChange", "type": "(status: TaskStatus) => void", "required": false}
+        ],
+        "emits": ["statusChange", "click"]
+      }
+    }
+  },
+  {
+    "reason": "Task form component for creating and editing tasks",
+    "description": "Form component with controlled inputs for task title, content, category, priority, and due date.",
+    "dependencies": ["types_TypeScript.prompt"],
+    "priority": 10,
+    "filename": "task_form_component_TypeScriptReact.prompt",
+    "filepath": "components/TaskForm.tsx",
+    "tags": ["frontend", "component", "form"],
+    "interface": {
+      "type": "component",
+      "component": {
+        "props": [
+          {"name": "initialData", "type": "Partial<Task>", "required": false},
+          {"name": "categories", "type": "Category[]", "required": true},
+          {"name": "onSubmit", "type": "(data: CreateTaskInput) => Promise<void>", "required": true}
+        ],
+        "emits": ["submit", "cancel"]
+      }
+    }
+  },
+  {
+    "reason": "API route for listing and creating tasks",
+    "description": "Next.js API route handler for GET (list with filters) and POST (create) operations.",
+    "dependencies": ["prisma_client_TypeScript.prompt", "types_TypeScript.prompt"],
+    "priority": 11,
+    "filename": "api_tasks_route_TypeScript.prompt",
+    "filepath": "app/api/tasks/route.ts",
+    "tags": ["backend", "api", "nextjs"],
+    "interface": {
+      "type": "api",
+      "api": {
+        "endpoints": [
+          {"method": "GET", "path": "/api/tasks", "auth": "none", "responseSchema": "{ tasks: Task[], total: number }"},
+          {"method": "POST", "path": "/api/tasks", "auth": "none", "requestSchema": "CreateTaskInput", "responseSchema": "Task"}
+        ]
+      }
+    }
+  },
+  {
+    "reason": "API route for single task operations (read, update, delete)",
+    "description": "Dynamic API route for task CRUD operations by ID.",
+    "dependencies": ["prisma_client_TypeScript.prompt", "types_TypeScript.prompt"],
+    "priority": 12,
+    "filename": "api_tasks_id_route_TypeScript.prompt",
+    "filepath": "app/api/tasks/[id]/route.ts",
+    "tags": ["backend", "api", "nextjs", "dynamic"],
+    "interface": {
+      "type": "api",
+      "api": {
+        "endpoints": [
+          {"method": "GET", "path": "/api/tasks/[id]", "auth": "none", "responseSchema": "Task"},
+          {"method": "PATCH", "path": "/api/tasks/[id]", "auth": "none", "requestSchema": "Partial<Task>", "responseSchema": "Task"},
+          {"method": "DELETE", "path": "/api/tasks/[id]", "auth": "none", "responseSchema": "{ success: boolean }"}
+        ]
+      }
+    }
+  },
+  {
+    "reason": "API route for category management",
+    "description": "API route for listing categories with task counts and creating new categories.",
+    "dependencies": ["prisma_client_TypeScript.prompt", "types_TypeScript.prompt"],
+    "priority": 13,
+    "filename": "api_categories_route_TypeScript.prompt",
+    "filepath": "app/api/categories/route.ts",
+    "tags": ["backend", "api", "nextjs"],
+    "interface": {
+      "type": "api",
+      "api": {
+        "endpoints": [
+          {"method": "GET", "path": "/api/categories", "auth": "none", "responseSchema": "{ categories: CategoryWithCount[] }"},
+          {"method": "POST", "path": "/api/categories", "auth": "none", "requestSchema": "{ name: string, color?: string }", "responseSchema": "Category"}
+        ]
+      }
+    }
+  }
+]
+```
+
+% ============================================================================
+% .PDDRC CONFIGURATION (VERIFIED WORKING)
+% ============================================================================
+
+```yaml
+version: "1.0"
+
+contexts:
+  # ============================================================
+  # DATABASE / PRISMA
+  # ============================================================
+
+  prisma_schema:
+    paths: ["*prisma_schema*"]
+    defaults:
+      outputs:
+        code:
+          path: "prisma/schema.prisma"
+
+  prisma_client:
+    paths: ["*prisma_client*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/prisma.ts"
+
+  # ============================================================
+  # SHARED TYPES
+  # ============================================================
+
+  types:
+    paths: ["*types*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/types.ts"
+
+  # ============================================================
+  # PAGES (Next.js App Router)
+  # ============================================================
+
+  root_layout:
+    paths: ["*root_layout*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/layout.tsx"
+
+  home_page:
+    paths: ["*home_page*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/page.tsx"
+
+  tasks_page:
+    paths: ["*tasks_page*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/tasks/page.tsx"
+
+  task_detail_page:
+    paths: ["*task_detail_page*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/tasks/[id]/page.tsx"
+
+  categories_page:
+    paths: ["*categories_page*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/categories/page.tsx"
+
+  # ============================================================
+  # COMPONENTS
+  # ============================================================
+
+  task_card_component:
+    paths: ["*task_card_component*"]
+    defaults:
+      outputs:
+        code:
+          path: "components/TaskCard.tsx"
+
+  task_form_component:
+    paths: ["*task_form_component*"]
+    defaults:
+      outputs:
+        code:
+          path: "components/TaskForm.tsx"
+
+  # ============================================================
+  # API ROUTES
+  # ============================================================
+
+  api_tasks_route:
+    paths: ["*api_tasks_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/tasks/route.ts"
+
+  api_tasks_id_route:
+    paths: ["*api_tasks_id_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/tasks/[id]/route.ts"
+
+  api_categories_route:
+    paths: ["*api_categories_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/categories/route.ts"
+
+  # ============================================================
+  # DEFAULT FALLBACK
+  # ============================================================
+  # CRITICAL: prompts_dir goes ONLY here, not in other contexts!
+
+  default:
+    defaults:
+      prompts_dir: "prompts/"
+      generate_output_path: "src/"
+```
+
+% ============================================================================
+% PROMPT FILES (FLAT DIRECTORY STRUCTURE)
+% ============================================================================
+
+All prompt files are placed FLAT in the `prompts/` directory:
+
+```
+prompts/
+├── prisma_schema_Prisma.prompt
+├── prisma_client_TypeScript.prompt
+├── types_TypeScript.prompt
+├── root_layout_TypeScriptReact.prompt
+├── home_page_TypeScriptReact.prompt
+├── tasks_page_TypeScriptReact.prompt
+├── task_detail_page_TypeScriptReact.prompt
+├── categories_page_TypeScriptReact.prompt
+├── task_card_component_TypeScriptReact.prompt
+├── task_form_component_TypeScriptReact.prompt
+├── api_tasks_route_TypeScript.prompt
+├── api_tasks_id_route_TypeScript.prompt
+└── api_categories_route_TypeScript.prompt
+```
+
+% ============================================================================
+% VERIFICATION RESULTS (CONFIRMED WORKING)
+% ============================================================================
+
+Running the verification script:
+
+```python
+from pdd.sync_determine_operation import get_pdd_file_paths
+
+modules = [
+    ('prisma_schema', 'prisma', 'prisma_schema'),
+    ('prisma_client', 'typescript', 'prisma_client'),
+    ('types', 'typescript', 'types'),
+    ('root_layout', 'typescriptreact', 'root_layout'),
+    ('home_page', 'typescriptreact', 'home_page'),
+    ('tasks_page', 'typescriptreact', 'tasks_page'),
+    ('task_detail_page', 'typescriptreact', 'task_detail_page'),
+    ('categories_page', 'typescriptreact', 'categories_page'),
+    ('task_card_component', 'typescriptreact', 'task_card_component'),
+    ('task_form_component', 'typescriptreact', 'task_form_component'),
+    ('api_tasks_route', 'typescript', 'api_tasks_route'),
+    ('api_tasks_id_route', 'typescript', 'api_tasks_id_route'),
+    ('api_categories_route', 'typescript', 'api_categories_route'),
+]
+
+for basename, language, context in modules:
+    result = get_pdd_file_paths(basename, language, 'prompts', context_override=context)
+    print(f"{{basename}}: {{result.get('code')}}")
+```
+
+**Output (all paths correct):**
+```
+prisma_schema: prisma/schema.prisma
+prisma_client: lib/prisma.ts
+types: lib/types.ts
+root_layout: app/layout.tsx
+home_page: app/page.tsx
+tasks_page: app/tasks/page.tsx
+task_detail_page: app/tasks/[id]/page.tsx
+categories_page: app/categories/page.tsx
+task_card_component: components/TaskCard.tsx
+task_form_component: components/TaskForm.tsx
+api_tasks_route: app/api/tasks/route.ts
+api_tasks_id_route: app/api/tasks/[id]/route.ts
+api_categories_route: app/api/categories/route.ts
+```
+
+% ============================================================================
+% KEY PATTERNS TO FOLLOW
+% ============================================================================
+
+1. **Filename format**: `{{descriptive_name}}_{{Language}}.prompt`
+   - Use underscores, NOT slashes
+   - Language is PascalCase: `TypeScript`, `TypeScriptReact`, `Prisma`
+
+2. **Basename extraction**:
+   - `home_page_TypeScriptReact.prompt` → basename = `home_page`
+   - `api_tasks_id_route_TypeScript.prompt` → basename = `api_tasks_id_route`
+
+3. **Context naming**: Use basename as context name
+   - filename `home_page_TypeScriptReact.prompt` → context name `home_page`
+
+4. **paths pattern**: Use `["*{{basename}}*"]`
+   - Context `home_page` → paths `["*home_page*"]`
+
+5. **outputs.code.path**: Use EXACT filepath from architecture.json
+   - filepath `app/page.tsx` → `outputs.code.path: "app/page.tsx"`
+
+6. **prompts_dir**: ONLY in `default` context
+   - Never duplicate in other contexts
+
+% ============================================================================
+% COMMANDS TO RUN
+% ============================================================================
+
+```bash
+# Sync individual modules
+pdd sync prisma_schema    # → prisma/schema.prisma
+pdd sync home_page        # → app/page.tsx
+pdd sync api_tasks_route  # → app/api/tasks/route.ts
+
+# Dry run to verify without generating
+pdd sync home_page --dry-run
+```

@@ -2,51 +2,45 @@
 
 ### Feat
 
-- add --verification-program and dynamic path discovery to fix prompts (#709) (#711)
-- automatically time Remotion sub-compositions by extracting timing from word timestamps and applying it via sequence wrappers.
-- Implement delegation to flat section components in Remotion generation script and update build process, alongside minor section timing adjustments.
-- add `Part2ParadigmShiftMain` Remotion composition and adjust video section timings in `project.json`.
-- introduce new Remotion video scenes and integrate them into the composition generation process.
-- Introduce new Remotion video sections and a title card component, updating project configuration with their timings and compositions.
-- add detailed video specifications for Part 6: The Closing section of the PDD video.
-- Tune pdd generate, fix one-session sync template KeyError, and multiple improvements
-- Harden pdd update scanning filters and add .pddignore support
-- auto-generate .pddrc from scan and update empty prompts
-- update test prompts and cloud test durations
-- add auth-aware detection, test scaffolding, and validation across pipeline
-- add contract-aware test generation to one-session sync prompt
-- add architecture stability improvements with 5 incremental checks
-- improve architecture generation quality with naming registry, codebase scan, and consistency checks
-- add cross-sub-issue architecture awareness for multi-project generation
+- **Architecture registry** — new `architecture_registry.py` module tracks multi-issue generation provenance in `.pdd/architecture_registry.json`, recording which modules came from which GitHub issue with merge logic for combining new entries with existing ones.
+- **Expanded architecture orchestrator** — add 5 new half-steps (1b complexity assessment, 2b codebase scan, 5b completeness gate, 7b architecture self-review, 9b cross-file consistency audit) for quality gates throughout the architecture workflow.
+- **Cross-sub-issue architecture awareness** — multi-project generation now loads and combines architecture files from subdirectories, enabling modules from different issues to coexist.
+- **Naming registry and codebase scan** — architecture generation scans existing code for naming conventions and validates consistency across generated modules.
+- **Expanded test orchestrator (9 → 18 steps)** — add plan enhancement, coverage assessment, manual testing checklist, regression test creation, test plan validation, and dedicated test execution steps.
+- **Auth-aware pipeline detection** — detect OAuth/JWT/session auth in PRDs and auto-tag modules, inject testability requirements (dependency injection, mock fixtures), and generate specialized test patterns.
+- **Contract-aware test generation** — one-session sync prompt now includes OpenAPI/Swagger contract validation when specs are found.
+- **`--verification-program` for fix prompts** — add CLI option and dynamic path discovery so `pdd fix` can validate fixes against a user-specified program.
+- **`.pddignore` support** — new ignore file (searched upward to git root) filters files from `pdd update` scanning, with glob-pattern matching against basenames, relative paths, and directory prefixes.
+- **Hardened `pdd update` scanning** — expanded skip lists for config files (jest, vitest, playwright, postcss, babel, eslint configs), test/story files (`.test`, `.spec`, `.stories` suffixes), and data formats (`.csv`, `.txt`). Skip empty/comment-only files instead of blanket-skipping `__init__.py`.
+- **Auto-generate `.pddrc` from scan** — `pdd update --directory` now auto-generates `.pddrc` by majority-vote language detection from file extensions, with best-effort scope and empty-prompt handling.
+- **Rust language support** — add Rust project detection (`Cargo.toml`) and default paths (`src/`, `tests/`, `examples/`) to `.pddrc` initializer.
+- **Frontend framework extension mappings** — add `typescriptreact` (`.tsx`), `javascriptreact` (`.jsx`), `svelte` (`.svelte`), and `vue` (`.vue`) to the built-in extension map.
+- **Nearest `.pddrc` discovery** — `detect_context_for_file` now prefers a `.pddrc` closer to the file over one at the repo root, supporting monorepo layouts.
+- **Case-insensitive prompt lookup** — `sync_main` falls back to case-insensitive filename matching when the exact-case prompt path doesn't exist.
+- **Directory-aware module identity** — `infer_module_identity` now reconstructs subdirectory prefixes from the prompt path (e.g., `frontend/page` instead of just `page`) to avoid fingerprint collisions.
+- **One-session sync fingerprint skip** — skip one-session sync for modules whose fingerprint shows they're already fully synced, saving unnecessary LLM calls.
 
 ### Fix
 
-- Skip one-session sync for already-synced modules and fix TSX/JSX misclassification (#730)
-- increase pdd crash E2E test timeout from 300s to 600s
-- escape JSON braces in pdd-interface blocks and update test assertion
+- Skip one-session sync for already-synced modules and fix TSX/JSX misclassification
+- escape JSON braces in `pdd-interface` blocks to prevent `.format()` errors with code containing `{uid}` or similar patterns
 - Deduplicate modules after language suffix stripping
 - Prevent prompt path duplication when prompts_dir is already absolute
-- section-scoped composition generation, per-component previews, and wrapper status detection
-- scope component files by section to prevent cross-section overwrites
-- Stage 8 preview — add compositions/preview endpoint, fix section disambiguation, send jobId early
-- add message field to clip events and fix collapsed SseLogPanel
-- break SseLogPanel remount loop by clearing jobId on done
-- Stage 7 clip statuses stuck on "generating" — add globalThis event bus
-- Stage 7 Veo Generation — wire up reference regeneration and fix five runtime bugs
-- Prevent _find_prompt_in_contexts from returning wrong prompt for unrelated basenames
-- Correct failing cloud test assertions for module CWD resolution and update test durations
-- Skip empty/comment-only files instead of blanket-skipping __init__.py
-- Skip __init__.py files from pdd update scanning
-- check path overlap before adding .pddrc contexts
-- always generate empty prompts regardless of when they were created
-- make .pddrc auto-generation best-effort and scope empty-prompt detection
-- only treat newly created empty prompts as needing generation
-- respect --quiet flag for step failure warnings
-- address PR review — validate_cached_state crash, missing state persist, regex edge case
-- account for step2b in issue-467 partial failure test
-- mock Rich Console in test_core_errors to avoid stream capture issues
-- capture stderr in test_core_errors for Rich Console compatibility
-- update tests for step 1b/5b gate awareness
+- Prevent `_find_prompt_in_contexts` from returning wrong prompt for unrelated basenames by guarding templates without `{name}`
+- check path overlap before adding `.pddrc` contexts
+- respect `--quiet` flag for step failure warnings
+- address PR review — `validate_cached_state` crash, missing state persist, regex edge case
+
+### Build
+
+- Update cloud batch test durations.
+- increase pdd crash E2E test timeout from 300s to 600s.
+- Add `.infisical.json` and `test-durations.json` to `.gitignore`.
+
+### Docs
+
+- Update `TUTORIALS.md` to reflect expanded 18-step test workflow, contract validation, accessibility audits, and manual testing prerequisites.
+- Add auth/OAuth FAQ entry explaining auth-aware detection, scaffolding, and remediation steps.
 
 ## v0.0.166 (2026-03-03)
 
@@ -111,7 +105,6 @@
 
 - new prompt files: `one_session_agent_LLM.prompt` (375-line mega-prompt template), `one_session_sync_python.prompt` (module spec)
 - update `sync_main_python.prompt`, `agentic_sync_python.prompt`, `agentic_sync_runner_python.prompt`, `code_generator_python.prompt`, and `maintenance_python.prompt` to document `one_session` parameter and corrected model name semantics
-
 
 ## v0.0.164 (2026-03-01)
 
