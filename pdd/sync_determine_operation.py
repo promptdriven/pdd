@@ -470,7 +470,11 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                         prefix = ''
                     elif normalized.startswith('prompts/'):
                         prefix = normalized[len('prompts/'):]
-                    if prefix and not (basename == prefix or basename.startswith(prefix + '/')):
+                    # Only prepend prefix if prompts_root doesn't already end with it
+                    # (when prompts_dir is passed as an absolute path like
+                    # /path/to/prompts/recruiting, prompts_root already contains the prefix)
+                    prompts_root_ends_with_prefix = prefix and prompts_root.parts[-len(Path(prefix).parts):] == Path(prefix).parts
+                    if prefix and not prompts_root_ends_with_prefix and not (basename == prefix or basename.startswith(prefix + '/')):
                         prompt_path = str(prompts_root / prefix / prompt_filename)
             except ValueError:
                 pass
