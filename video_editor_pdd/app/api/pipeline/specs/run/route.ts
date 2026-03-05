@@ -104,8 +104,12 @@ Instructions:
 - Create one file per visual component: {NN}_{snake_case_name}.md
   where NN is a zero-padded sequence number (01, 02, 03, ...).
   Example filenames: 01_cost_graph.md, 02_debt_timeline.md, 03_stat_callout_github.md
-- Use the visual type marker [Remotion] on the FIRST line for animated components.
-  Other markers: [veo:], [title:], [split:].
+- Each file MUST start with a visual type marker on the FIRST line. Use a MIX of types:
+  [Remotion] — for animated chart, graph, infographic, or data visualization components
+  [veo:] — for cinematic video footage or B-roll (live-action style, no data overlay)
+  [title:] — for title cards, section headers, or text-only screens
+  [split:] — for split-screen comparison layouts
+- A typical section should have a mix: 2-4 [Remotion] animations, 2-3 [veo:] clips, and 1-2 [title:] or [split:] cards.
 - You should generate at least 4-8 spec files per section.
 ${files.length > 0 ? `- Only generate these specific files: ${files.join(", ")}` : "- Generate ALL spec files needed for the section."}
 

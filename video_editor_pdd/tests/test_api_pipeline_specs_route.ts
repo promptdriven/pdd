@@ -768,4 +768,10 @@ describe("app/api/pipeline/specs/run/route.ts source structure", () => {
   it("prompt includes example numbered filenames", () => {
     expect(sourceCode).toMatch(/01_.*\.md.*02_.*\.md/);
   });
+
+  it("prompt explains when to use each visual type marker", () => {
+    // Should describe what each marker is for, not just list them
+    expect(sourceCode).toMatch(/\[Remotion\].*chart|graph|infographic|animation/i);
+    expect(sourceCode).toMatch(/\[veo:\].*video|footage|cinematic/i);
+  });
 });
