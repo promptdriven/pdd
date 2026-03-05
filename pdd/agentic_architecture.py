@@ -162,6 +162,96 @@ def _ensure_repo_context(owner: str, repo: str, current_cwd: Path, quiet: bool) 
         return current_cwd, f"Failed to clone repository: {err_msg}"
 
 
+def _parse_related_issues(issue_body: str) -> List[int]:
+    """Extract related sub-issue numbers from issue body."""
+    pattern = r'###\s*Related sub-issues:\s*\n((?:\s*-\s*#\d+.*\n?)*)'
+    match = re.search(pattern, issue_body, re.IGNORECASE)
+    if not match:
+        return []
+    refs = re.findall(r'#(\d+)', match.group(1))
+    return [int(n) for n in refs]
+
+
+def _fetch_sibling_architectures(cwd: Path, current_target_dir: Optional[str]) -> str:
+    """Scan repo for existing architecture.json files from sibling sub-projects."""
+    siblings = {}
+    try:
+        children = list(cwd.iterdir())
+    except (OSError, IOError):
+        return ""
+    for child in children:
+        if not child.is_dir() or child.name.startswith('.') or child.name in ('node_modules', '__pycache__'):
+            continue
+        if current_target_dir and child.name == current_target_dir:
+            continue
+        arch_file = child / "architecture.json"
+        if arch_file.exists():
+            try:
+                arch_data = json.loads(arch_file.read_text(encoding="utf-8"))
+                if isinstance(arch_data, list):
+                    siblings[child.name] = arch_data
+            except (json.JSONDecodeError, IOError):
+                continue
+    # Also check root architecture.json if we're generating into a subdir
+    if current_target_dir:
+        root_arch = cwd / "architecture.json"
+        if root_arch.exists():
+            try:
+                arch_data = json.loads(root_arch.read_text(encoding="utf-8"))
+                if isinstance(arch_data, list):
+                    siblings["."] = arch_data
+            except (json.JSONDecodeError, IOError):
+                pass
+    if not siblings:
+        return ""
+    # Format as markdown summary table
+    lines = [
+        "## Existing Architecture from Related Sub-Issues",
+        "",
+        "The following sub-projects have already been generated. "
+        "You MUST read their architecture.json files and make proper updates rather than overwriting. "
+        "Do NOT duplicate modules that already exist.",
+        "",
+    ]
+    for dir_name, modules in siblings.items():
+        lines.append(f"### `{dir_name}/` ({len(modules)} modules)")
+        lines.append("| Filename | Filepath | Description | Interface Type | Origin Issue |")
+        lines.append("|----------|----------|-------------|----------------|--------------|")
+        for mod in modules:
+            fn = mod.get("filename", "?")
+            fp = mod.get("filepath", "?")
+            desc = mod.get("reason", mod.get("description", ""))[:80]
+            itype = mod.get("interface", {}).get("type", "?") if isinstance(mod.get("interface"), dict) else "?"
+            origin = mod.get("origin", {})
+            origin_issue = f"#{origin.get('issue_number', '?')}" if isinstance(origin, dict) and origin.get("issue_number") else "-"
+            lines.append(f"| {fn} | {fp} | {desc} | {itype} | {origin_issue} |")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _read_existing_pddrc(cwd: Path) -> str:
+    """Read root .pddrc if it exists, return its content for merge context."""
+    pddrc_file = cwd / ".pddrc"
+    if pddrc_file.exists():
+        try:
+            return pddrc_file.read_text(encoding="utf-8")
+        except IOError:
+            return ""
+    return ""
+
+
+def _read_existing_architecture(cwd: Path, target_dir: Optional[str]) -> str:
+    """Read existing architecture.json at the target location."""
+    base = cwd / target_dir if target_dir else cwd
+    arch_file = base / "architecture.json"
+    if arch_file.exists():
+        try:
+            return arch_file.read_text(encoding="utf-8")
+        except IOError:
+            return ""
+    return ""
+
+
 def _extract_target_dir(issue_body: str) -> Optional[str]:
     """
     Parse target directory from issue body.
@@ -195,7 +285,8 @@ def run_agentic_architecture(
     timeout_adder: float = 0.0,
     use_github_state: bool = True,
     skip_prompts: bool = False,
-    target_dir: Optional[str] = None
+    target_dir: Optional[str] = None,
+    force_single: bool = False
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
     Entry point for the agentic architecture workflow.
@@ -213,6 +304,7 @@ def run_agentic_architecture(
         use_github_state: Whether to persist state to GitHub comments.
         skip_prompts: If True, skip Step 9 (prompt generation). Default False (prompts ARE generated).
         target_dir: Optional subdirectory for new project. If None, parsed from issue body.
+        force_single: If True, skip complexity check and force single-project generation.
 
     Returns:
         Tuple containing:
@@ -285,7 +377,13 @@ def run_agentic_architecture(
         if target_dir and not quiet:
             console.print(f"[blue]Detected subproject directory: {target_dir}[/blue]")
 
-    # 6. Invoke Orchestrator
+    # 6. Discover sibling architectures and related context
+    related_issues = _parse_related_issues(issue_body)
+    sibling_arch_context = _fetch_sibling_architectures(repo_path, target_dir)
+    existing_pddrc_context = _read_existing_pddrc(repo_path)
+    existing_arch_context = _read_existing_architecture(repo_path, target_dir)
+
+    # 7. Invoke Orchestrator
     return run_agentic_architecture_orchestrator(
         issue_url=issue_url,
         issue_content=full_issue_content,
@@ -301,4 +399,9 @@ def run_agentic_architecture(
         use_github_state=use_github_state,
         skip_prompts=skip_prompts,
         target_dir=target_dir,
+        force_single=force_single,
+        sibling_architectures=sibling_arch_context,
+        existing_pddrc=existing_pddrc_context,
+        existing_architecture=existing_arch_context,
+        related_issues=related_issues,
     )

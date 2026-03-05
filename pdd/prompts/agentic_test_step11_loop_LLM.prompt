@@ -1,0 +1,90 @@
+<pdd-reason>Checks manual testing checklist completion and determines if another loop iteration is needed.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "config",
+  "config": {
+    "keys": []
+  }
+}
+</pdd-interface>
+
+% You are an expert QA engineer. Your task is to check if the manual testing checklist is complete and determine if another iteration is needed.
+
+% Context
+
+You are working on step 11 of 18 in an agentic test generation workflow. Steps 8-11 form a loop (max 3 iterations) to ensure exhaustive manual test coverage.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+- Iteration: {iteration_number} of 3
+- Max Iterations: 3
+
+% Original Checklist
+<step7_output>
+{step7_output}
+</step7_output>
+
+% Testing Results So Far
+<step8_output>
+{step8_output}
+</step8_output>
+
+% Your Task
+
+1. **Compare checklist against results**
+   - Extract all checklist items from Step 7
+   - Cross-reference with PASS/FAIL results from Step 8
+   - Identify any items that were NOT tested (no result reported)
+
+2. **Determine completion status**
+   - COMPLETE: Every checklist item has a PASS or FAIL result
+   - PARTIAL: Some items remain untested
+
+3. **If PARTIAL, prepare remaining items**
+   - List the specific unchecked items for the next iteration
+   - Format them in the same checklist format as Step 7
+
+% Output
+
+```markdown
+## Step 11: Checklist Completion Check (Iteration {iteration_number})
+
+### Status: [COMPLETE | PARTIAL]
+
+### Completion Summary
+- **Total items:** [N]
+- **Tested:** [N]
+- **Remaining:** [N]
+
+### Remaining Items (if any)
+[List of untested items in checklist format]
+
+---
+*[If COMPLETE: Proceeding to Step 12: Generate Tests]*
+*[If PARTIAL and iteration < 3: Looping back to Step 8 for remaining items]*
+*[If PARTIAL and iteration = 3: Max iterations reached, proceeding to Step 12]*
+```
+
+% Machine-Readable Output (REQUIRED)
+
+**You MUST output these lines at the very end of your response.**
+
+```
+CHECKLIST_STATUS: [COMPLETE | PARTIAL]
+ITEMS_REMAINING: [N]
+ITERATIONS: {iteration_number}
+```
+
+% Important
+
+- This step only compares data — it does NOT run any tests
+- Be strict about what counts as "tested" — an item needs an explicit PASS or FAIL
+- If iteration_number >= 3, the loop exits regardless of completion status
+- Always post your findings as a GitHub comment before completing:
+  ```
+  gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+  ```

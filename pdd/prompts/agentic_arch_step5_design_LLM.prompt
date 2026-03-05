@@ -44,6 +44,28 @@ You are working on step 5 of 13 in an agentic architecture workflow. Previous st
 {step4_output}
 </step4_output>
 
+<step2b_output>
+{step2b_output}
+</step2b_output>
+
+% Existing Codebase Profile (from Step 2b)
+
+The codebase scan found existing packages, patterns, and modules.
+You MUST reuse existing modules where applicable — do NOT design new modules that duplicate existing functionality.
+You MUST follow existing naming conventions and patterns.
+If existing reusable modules are listed, reference them as dependencies rather than redesigning them.
+
+% Existing Sibling Architectures
+
+{sibling_architectures}
+
+CRITICAL — Cross-Project Rules:
+1. DO NOT design modules that duplicate functionality from sibling projects
+2. If a sibling has shared types, auth, or config — reference them as external dependencies
+3. Mark cross-project dependencies with prefix `[external:<dir>/]` in the dependency graph
+4. If this sub-project needs a shared module that doesn't exist yet, create it and note it should be shared
+5. Read sibling architecture.json files before designing to understand existing interfaces
+
 % Your Task
 
 1. **Use the data model from Step 4 to inform module boundaries:**
@@ -58,23 +80,42 @@ You are working on step 5 of 13 in an agentic architecture workflow. Previous st
    - Modules should be independently testable
    - **API route modules: one module per distinct URL path.** Do NOT consolidate multiple routes under a single module. Each distinct endpoint (e.g., `/api/pipeline/veo/run`, `/api/pipeline/veo/clips`, `/api/pipeline/veo/stream`) gets its own module.
    - **Before finalizing:** cross-check against every route listed in the PRD's API specification table or data flow diagrams. A route mentioned in the PRD must have a corresponding module.
+   - **Each module MUST include acceptance criteria** — a concrete list of what "done" means:
+     - What functions/endpoints must exist and be callable
+     - What error cases must be handled
+     - What environment variables/config must be present
+     - What test scenarios must pass
+   - If a module handles data: it must include parsing/extraction logic, not just model definitions
+   - If a module produces output: it must include formatting/rendering logic
+   - If a module uses external services: it must document required env vars and config
 
-3. **Determine dependency graph:**
+3. **Auth module design (if auth detected in PRD/tech stack):**
+   - If the PRD mentions OAuth, JWT, session auth, API keys, Firebase Auth, SAML, Auth0, Okta, or similar:
+     - Separate modules per auth concern: auth middleware, token management, OAuth callbacks, session handling, provider configuration
+     - Assign low priority numbers (generated early) since business modules depend on auth
+     - Tag all auth modules with "auth"
+     - No circular dependencies: business logic depends on auth modules, not vice versa
+     - Design for dependency injection: auth providers should be injectable so tests can substitute mocks
+     - Cover full token lifecycle in module descriptions: issuance, validation, refresh, revocation, expiry
+     - Include acceptance criteria for auth error handling: expired tokens, invalid tokens, missing scopes, CSRF state mismatch
+   - If no auth is detected, skip this step
+
+4. **Determine dependency graph:**
    - Which modules depend on which
    - Foundational modules (no deps) vs. dependent modules
    - Ensure no circular dependencies
 
-4. **Calculate priority ordering (topological sort):**
+5. **Calculate priority ordering (topological sort):**
    - Priority 1 = generated first (no dependencies)
    - A module's priority must be > all its dependencies' priorities
    - Sequential integers without gaps (1, 2, 3, ...)
 
-5. **Define interfaces:**
+6. **Define interfaces:**
    - For each module, determine the interface type (api, module, page, component, config, etc.)
    - Specify key functions, endpoints, or props
    - Note data sources and contracts between modules
 
-6. **Determine file paths:**
+7. **Determine file paths:**
    - Use framework-appropriate directory structure (from step 3 research)
    - Follow standard naming conventions for the tech stack
    - Include appropriate file extensions
@@ -97,10 +138,10 @@ Your comment should follow this format:
 **Status:** [Design Complete | Clarification Needed]
 
 ### Module List
-| Priority | Module (filename) | Filepath | Dependencies | Interface Type |
-|----------|-------------------|----------|--------------|----------------|
-| 1 | [name]_[Lang].prompt | [path] | [] | [type] |
-| 2 | [name]_[Lang].prompt | [path] | [dep1] | [type] |
+| Priority | Module (filename) | Filepath | Dependencies | Interface Type | Acceptance Criteria |
+|----------|-------------------|----------|--------------|----------------|---------------------|
+| 1 | [name]_[Lang].prompt | [path] | [] | [type] | [2-3 testable criteria] |
+| 2 | [name]_[Lang].prompt | [path] | [dep1] | [type] | [2-3 testable criteria] |
 
 ### Dependency Graph
 ```

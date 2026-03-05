@@ -36,17 +36,17 @@ class TestDeriveBasenameAndLanguage:
 
     @patch("pdd.update_main.get_language", return_value="Python")
     def test_python_file(self, mock_lang):
-        """Extracts basename and lowercased language for a .py file."""
+        """Extracts relative-path basename and lowercased language for a .py file."""
         basename, lang = derive_basename_and_language("/repo/src/my_module.py", "/repo")
-        assert basename == "my_module"
+        assert basename == "src/my_module"
         assert lang == "python"
         mock_lang.assert_called_once_with(".py")
 
     @patch("pdd.update_main.get_language", return_value="JavaScript")
     def test_javascript_file(self, mock_lang):
-        """Extracts basename and lowercased language for a .js file."""
+        """Extracts relative-path basename and lowercased language for a .js file."""
         basename, lang = derive_basename_and_language("/repo/app/index.js", "/repo")
-        assert basename == "index"
+        assert basename == "app/index"
         assert lang == "javascript"
 
     @patch("pdd.update_main.get_language", return_value="")
@@ -65,12 +65,33 @@ class TestDeriveBasenameAndLanguage:
 
     @patch("pdd.update_main.get_language", return_value="Python")
     def test_nested_path(self, mock_lang):
-        """Extracts only the filename stem, not the directory structure."""
+        """Extracts the full relative path stem, including directory structure."""
         basename, lang = derive_basename_and_language(
             "/repo/a/b/c/deep_module.py", "/repo"
         )
-        assert basename == "deep_module"
+        assert basename == "a/b/c/deep_module"
         assert lang == "python"
+
+    @patch("pdd.update_main.get_language", return_value="Python")
+    def test_file_at_repo_root(self, mock_lang):
+        """File at repo root has no directory prefix in basename."""
+        basename, lang = derive_basename_and_language("/repo/module.py", "/repo")
+        assert basename == "module"
+        assert lang == "python"
+
+    @patch("pdd.update_main.get_language", return_value="TypescriptReact")
+    def test_same_name_different_dirs_no_collision(self, mock_lang):
+        """Same filename in different directories produces different basenames."""
+        b1, l1 = derive_basename_and_language(
+            "/repo/frontend/src/app/settings/page.tsx", "/repo"
+        )
+        b2, l2 = derive_basename_and_language(
+            "/repo/frontend/src/app/dashboard/page.tsx", "/repo"
+        )
+        assert b1 != b2
+        assert b1 == "frontend/src/app/settings/page"
+        assert b2 == "frontend/src/app/dashboard/page"
+        assert l1 == l2 == "typescriptreact"
 
 
 # ---------------------------------------------------------------------------

@@ -594,6 +594,12 @@ FILES_MODIFIED: architecture.json, .pddrc, prompts/new_module_TypeScript.prompt,
 FILES_DELETED: prompts/api/old_module_TypeScript.prompt, prompts/nested/path.prompt, ...
 ```
 
+% Existing Sibling Architectures
+
+{sibling_architectures}
+
+When fixing errors, do NOT add modules that already exist in sibling projects. Use `external:` prefix for cross-project dependencies.
+
 % Important
 
 - Focus ONLY on fixing the specific validation error reported

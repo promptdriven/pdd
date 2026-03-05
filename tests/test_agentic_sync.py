@@ -12,6 +12,7 @@ import pytest
 
 from pdd.agentic_sync import (
     _apply_architecture_corrections,
+    _filter_already_synced,
     _find_project_root,
     _is_catchall_match,
     _is_github_issue_url,
@@ -411,10 +412,7 @@ class TestResolveModuleCwd:
 
     def test_module_found_in_subdirectory_pddrc(self, tmp_path):
         """Module found in subdirectory .pddrc returns that subdirectory."""
-        # Root .pddrc has no matching context
-        self._write_pddrc(tmp_path / ".pddrc", {
-            "default": {"paths": ["**"]},
-        })
+        # No root .pddrc — so subdirectory scanning is used
         # Subdirectory has a matching context
         sub = tmp_path / "examples" / "hello"
         sub.mkdir(parents=True)
@@ -636,3 +634,240 @@ class TestRunDryRunValidation:
         assert all_valid is False
         assert "mod_y" in errors[0]
         assert cost == pytest.approx(0.01)
+
+
+# ---------------------------------------------------------------------------
+# _filter_already_synced
+# ---------------------------------------------------------------------------
+
+class TestFilterAlreadySynced:
+    """Tests for fingerprint-based pre-filtering of already-synced modules."""
+
+    @patch("pdd.agentic_sync.sync_determine_operation")
+    @patch("pdd.agentic_sync._detect_languages_with_context")
+    @patch("pdd.agentic_sync._load_pddrc_config")
+    @patch("pdd.agentic_sync._find_pddrc_file")
+    def test_nothing_operation_filtered_out(self, mock_pddrc_file, mock_config, mock_detect, mock_determine):
+        """Module with operation='nothing' gets filtered out."""
+        cwd = Path("/project")
+        mock_pddrc_file.return_value = cwd / ".pddrc"
+        mock_config.return_value = {"contexts": {"default": {"defaults": {"prompts_dir": "prompts"}}}}
+        mock_detect.return_value = {"python": Path("prompts/mod_a_python.prompt")}
+
+        decision = MagicMock()
+        decision.operation = "nothing"
+        mock_determine.return_value = decision
+
+        result = _filter_already_synced(["mod_a"], {"mod_a": cwd}, quiet=True)
+        assert result == []
+
+    @patch("pdd.agentic_sync.sync_determine_operation")
+    @patch("pdd.agentic_sync._detect_languages_with_context")
+    @patch("pdd.agentic_sync._load_pddrc_config")
+    @patch("pdd.agentic_sync._find_pddrc_file")
+    def test_generate_operation_kept(self, mock_pddrc_file, mock_config, mock_detect, mock_determine):
+        """Module with operation='generate' stays in the list."""
+        cwd = Path("/project")
+        mock_pddrc_file.return_value = cwd / ".pddrc"
+        mock_config.return_value = {"contexts": {"default": {"defaults": {"prompts_dir": "prompts"}}}}
+        mock_detect.return_value = {"python": Path("prompts/mod_b_python.prompt")}
+
+        decision = MagicMock()
+        decision.operation = "generate"
+        mock_determine.return_value = decision
+
+        result = _filter_already_synced(["mod_b"], {"mod_b": cwd}, quiet=True)
+        assert result == ["mod_b"]
+
+    @patch("pdd.agentic_sync.sync_determine_operation")
+    @patch("pdd.agentic_sync._detect_languages_with_context")
+    @patch("pdd.agentic_sync._load_pddrc_config")
+    @patch("pdd.agentic_sync._find_pddrc_file")
+    def test_mixed_modules(self, mock_pddrc_file, mock_config, mock_detect, mock_determine):
+        """Mix of synced and unsynced modules — only unsynced remain."""
+        cwd = Path("/project")
+        mock_pddrc_file.return_value = cwd / ".pddrc"
+        mock_config.return_value = {"contexts": {"default": {"defaults": {"prompts_dir": "prompts"}}}}
+        mock_detect.return_value = {"python": Path("prompts/x_python.prompt")}
+
+        nothing_decision = MagicMock()
+        nothing_decision.operation = "nothing"
+        generate_decision = MagicMock()
+        generate_decision.operation = "generate"
+
+        mock_determine.side_effect = [nothing_decision, generate_decision]
+
+        result = _filter_already_synced(
+            ["synced_mod", "needs_work_mod"],
+            {"synced_mod": cwd, "needs_work_mod": cwd},
+            quiet=True,
+        )
+        assert result == ["needs_work_mod"]
+
+    def test_missing_cwd_keeps_module(self):
+        """Module without resolved cwd stays in the list."""
+        result = _filter_already_synced(["mod_x"], {}, quiet=True)
+        assert result == ["mod_x"]
+
+    @patch("pdd.agentic_sync._find_pddrc_file")
+    def test_language_discovery_failure_keeps_module(self, mock_pddrc_file):
+        """If language discovery raises an exception, module stays in the list."""
+        mock_pddrc_file.side_effect = Exception("pddrc read error")
+
+        result = _filter_already_synced(
+            ["mod_err"], {"mod_err": Path("/project")}, quiet=True
+        )
+        assert result == ["mod_err"]
+
+    @patch("pdd.agentic_sync.sync_determine_operation")
+    @patch("pdd.agentic_sync._detect_languages_with_context")
+    @patch("pdd.agentic_sync._load_pddrc_config")
+    @patch("pdd.agentic_sync._find_pddrc_file")
+    def test_fingerprint_check_exception_keeps_module(self, mock_pddrc_file, mock_config, mock_detect, mock_determine):
+        """If sync_determine_operation raises, module stays in the list."""
+        cwd = Path("/project")
+        mock_pddrc_file.return_value = cwd / ".pddrc"
+        mock_config.return_value = {"contexts": {"default": {"defaults": {"prompts_dir": "prompts"}}}}
+        mock_detect.return_value = {"python": Path("prompts/mod_c_python.prompt")}
+        mock_determine.side_effect = Exception("hash computation error")
+
+        result = _filter_already_synced(["mod_c"], {"mod_c": cwd}, quiet=True)
+        assert result == ["mod_c"]
+
+    @patch("pdd.agentic_sync._detect_languages_with_context")
+    @patch("pdd.agentic_sync._load_pddrc_config")
+    @patch("pdd.agentic_sync._find_pddrc_file")
+    def test_no_languages_found_keeps_module(self, mock_pddrc_file, mock_config, mock_detect):
+        """Module with no detected languages stays in the list."""
+        cwd = Path("/project")
+        mock_pddrc_file.return_value = cwd / ".pddrc"
+        mock_config.return_value = {"contexts": {"default": {"defaults": {"prompts_dir": "prompts"}}}}
+        mock_detect.return_value = {}
+
+        result = _filter_already_synced(["mod_d"], {"mod_d": cwd}, quiet=True)
+        assert result == ["mod_d"]
+
+    @patch("pdd.agentic_sync.sync_determine_operation")
+    @patch("pdd.agentic_sync._detect_languages_with_context")
+    @patch("pdd.agentic_sync._load_pddrc_config")
+    @patch("pdd.agentic_sync._find_pddrc_file")
+    def test_multi_language_any_needs_work_keeps_module(self, mock_pddrc_file, mock_config, mock_detect, mock_determine):
+        """If any language needs work, the module stays."""
+        cwd = Path("/project")
+        mock_pddrc_file.return_value = cwd / ".pddrc"
+        mock_config.return_value = {"contexts": {"default": {"defaults": {"prompts_dir": "prompts"}}}}
+        mock_detect.return_value = {
+            "python": Path("prompts/mod_e_python.prompt"),
+            "typescript": Path("prompts/mod_e_typescript.prompt"),
+        }
+
+        nothing_decision = MagicMock()
+        nothing_decision.operation = "nothing"
+        fix_decision = MagicMock()
+        fix_decision.operation = "fix"
+
+        mock_determine.side_effect = [nothing_decision, fix_decision]
+
+        result = _filter_already_synced(["mod_e"], {"mod_e": cwd}, quiet=True)
+        assert result == ["mod_e"]
+
+    @patch("pdd.agentic_sync.sync_determine_operation")
+    @patch("pdd.agentic_sync._detect_languages_with_context")
+    @patch("pdd.agentic_sync._load_pddrc_config")
+    @patch("pdd.agentic_sync._find_pddrc_file")
+    def test_all_filtered_returns_empty(self, mock_pddrc_file, mock_config, mock_detect, mock_determine):
+        """When all modules are already synced, returns empty list."""
+        cwd = Path("/project")
+        mock_pddrc_file.return_value = cwd / ".pddrc"
+        mock_config.return_value = {"contexts": {"default": {"defaults": {"prompts_dir": "prompts"}}}}
+        mock_detect.return_value = {"python": Path("prompts/x_python.prompt")}
+
+        decision = MagicMock()
+        decision.operation = "nothing"
+        mock_determine.return_value = decision
+
+        result = _filter_already_synced(
+            ["mod_1", "mod_2", "mod_3"],
+            {"mod_1": cwd, "mod_2": cwd, "mod_3": cwd},
+            quiet=True,
+        )
+        assert result == []
+
+
+# ---------------------------------------------------------------------------
+# Tests for _parse_llm_response deduplication
+# ---------------------------------------------------------------------------
+
+class TestParseLlmResponseDedup:
+    """Tests that _parse_llm_response deduplicates modules in the LLM output."""
+
+    def test_exact_duplicates_removed(self):
+        """LLM returns the same module name twice — dedup removes the second."""
+        response = 'MODULES_TO_SYNC: ["recruiting_config", "recruiting_config", "recruiting_chat"]\nDEPS_VALID: true'
+        modules, deps_valid, _ = _parse_llm_response(response)
+        assert modules == ["recruiting_config", "recruiting_chat"]
+
+    def test_no_duplicates_unchanged(self):
+        """When all modules are unique, list is returned as-is."""
+        response = 'MODULES_TO_SYNC: ["mod_a", "mod_b", "mod_c"]\nDEPS_VALID: true'
+        modules, deps_valid, _ = _parse_llm_response(response)
+        assert modules == ["mod_a", "mod_b", "mod_c"]
+
+    def test_preserves_order(self):
+        """Dedup preserves first-occurrence order."""
+        response = 'MODULES_TO_SYNC: ["c", "a", "b", "a", "c"]\nDEPS_VALID: true'
+        modules, _, _ = _parse_llm_response(response)
+        assert modules == ["c", "a", "b"]
+
+
+# ---------------------------------------------------------------------------
+# Tests for post-suffix-stripping deduplication
+# ---------------------------------------------------------------------------
+
+class TestPostStrippingDedup:
+    """Tests that modules are deduplicated after language suffix removal.
+
+    The LLM may return both "recruiting_config_Python" and "recruiting_config"
+    which are different strings but both map to "recruiting_config" after
+    suffix stripping.
+    """
+
+    def test_suffix_stripping_creates_duplicates(self):
+        """Two different LLM entries that converge to the same basename after stripping."""
+        from pdd.sync_order import extract_module_from_include
+
+        # Simulate the stripping + dedup logic from run_agentic_sync lines 718-722
+        raw_modules = ["recruiting_config_Python", "recruiting_config", "recruiting_chat_Python"]
+        stripped = []
+        for m in raw_modules:
+            s = extract_module_from_include(m + ".prompt")
+            stripped.append(s if s else m)
+        result = list(dict.fromkeys(stripped))
+
+        assert result == ["recruiting_config", "recruiting_chat"]
+
+    def test_no_convergence_no_dedup(self):
+        """Different modules stay separate after stripping."""
+        from pdd.sync_order import extract_module_from_include
+
+        raw_modules = ["recruiting_config_Python", "recruiting_config_yaml_YAML", "recruiting_chat_Python"]
+        stripped = []
+        for m in raw_modules:
+            s = extract_module_from_include(m + ".prompt")
+            stripped.append(s if s else m)
+        result = list(dict.fromkeys(stripped))
+
+        assert result == ["recruiting_config", "recruiting_config_yaml", "recruiting_chat"]
+
+    def test_preserves_order_after_stripping(self):
+        """First occurrence wins when duplicates appear after stripping."""
+        from pdd.sync_order import extract_module_from_include
+
+        raw_modules = ["recruiting_chat_Python", "recruiting_config", "recruiting_config_Python"]
+        stripped = []
+        for m in raw_modules:
+            s = extract_module_from_include(m + ".prompt")
+            stripped.append(s if s else m)
+        result = list(dict.fromkeys(stripped))
+
+        assert result == ["recruiting_chat", "recruiting_config"]

@@ -369,24 +369,31 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
     }
   };
 
-  // Handle module click - navigate to PromptSpace
-  const handleModuleClick = useCallback((module: ArchitectureModule) => {
-    // Extract language from filename (e.g., "models_Python.prompt" -> "python")
+  // Helper: build a PromptInfo from an architecture module
+  const buildPromptInfoForModule = useCallback((module: ArchitectureModule): PromptInfo => {
+    const promptMap = new Map<string, PromptInfo>();
+    promptsInfo.forEach(p => {
+      const filename = p.prompt.split('/').pop() || '';
+      promptMap.set(filename, p);
+    });
+
     const match = module.filename.match(/_([A-Za-z]+)\.prompt$/);
     const language = match ? match[1].toLowerCase() : undefined;
-
-    // Extract basename (e.g., "models_Python.prompt" -> "models")
     const basename = module.filename.replace(/_[A-Za-z]+\.prompt$/, '');
 
-    const promptInfo: PromptInfo = {
+    const existingPrompt = promptMap.get(module.filename);
+    return existingPrompt || {
       prompt: `prompts/${module.filename}`,
       sync_basename: basename,
       language,
       code: module.filepath,
     };
+  }, [promptsInfo]);
 
-    onOpenPromptSpace(promptInfo);
-  }, [onOpenPromptSpace]);
+  // Handle module click - navigate to PromptSpace
+  const handleModuleClick = useCallback((module: ArchitectureModule) => {
+    onOpenPromptSpace(buildPromptInfoForModule(module));
+  }, [onOpenPromptSpace, buildPromptInfoForModule]);
 
   // Open the order modal before generating prompts
   const handleGeneratePrompts = useCallback(() => {
@@ -428,27 +435,6 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
     }
     return counts;
   }, [batches, promptsInfo]);
-
-  // Helper: build a PromptInfo from an architecture module
-  const buildPromptInfoForModule = useCallback((module: ArchitectureModule): PromptInfo => {
-    const promptMap = new Map<string, PromptInfo>();
-    promptsInfo.forEach(p => {
-      const filename = p.prompt.split('/').pop() || '';
-      promptMap.set(filename, p);
-    });
-
-    const match = module.filename.match(/_([A-Za-z]+)\.prompt$/);
-    const language = match ? match[1].toLowerCase() : undefined;
-    const basename = module.filename.replace(/_[A-Za-z]+\.prompt$/, '');
-
-    const existingPrompt = promptMap.get(module.filename);
-    return existingPrompt || {
-      prompt: `prompts/${module.filename}`,
-      sync_basename: basename,
-      language,
-      code: module.filepath,
-    };
-  }, [promptsInfo]);
 
   // Helper: get modules that still need syncing from a list
   const getModulesNeedingSync = useCallback((modules: ArchitectureModule[]): ArchitectureModule[] => {

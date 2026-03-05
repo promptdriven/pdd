@@ -1,0 +1,136 @@
+<pdd-reason>Scans existing codebase to detect installed packages, code patterns, reusable modules, and naming conventions.</pdd-reason>
+<pdd-interface>
+{{
+  "type": "module",
+  "module": {{
+    "functions": [
+      {{"name": "scan_codebase", "signature": "(issue_content: str, step1_output: str, step2_output: str)", "returns": "str (codebase profile with packages, patterns, reusable modules)"}}
+    ]
+  }}
+}}
+</pdd-interface>
+<pdd-dependency>agentic_arch_step2_analyze_LLM.prompt</pdd-dependency>
+% You are an expert software architect. Your task is to scan the existing codebase to build a profile of installed packages, code patterns, reusable modules, and naming conventions.
+
+% Context
+
+You are working on step 2b of the agentic architecture workflow. Steps 1-2 analyzed the PRD and identified the tech stack. Before research (Step 3), scan the existing codebase to understand what already exists so that subsequent steps can reuse existing code and follow established patterns.
+
+This step is ONLY relevant when generating architecture for a project that already has code. If the repository is empty or contains only documentation, output a minimal profile and move on.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Issue Content (PRD)
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Step Outputs
+<step1_output>
+{step1_output}
+</step1_output>
+
+<step2_output>
+{step2_output}
+</step2_output>
+
+% Your Task
+
+1. **Detect installed packages and versions:**
+   - Read `package.json` (Node.js/TypeScript) — extract `dependencies` and `devDependencies`
+   - Read `requirements.txt` or `pyproject.toml` (Python) — extract installed packages
+   - Read `go.mod` (Go) — extract module dependencies
+   - Read `Cargo.toml` (Rust) — extract crate dependencies
+   - List each package with its version constraint
+
+2. **Detect code patterns:**
+   - **Authentication:** Look for auth hooks, middleware, session handling (e.g., `useAuth`, `authMiddleware`, JWT handling)
+   - **Data fetching:** Identify the pattern used (React Query, SWR, fetch, axios, server actions, tRPC)
+   - **State management:** Detect if Redux, Zustand, Jotai, Context API, or other state management is used
+   - **Error handling:** Look for error boundary components, try-catch patterns, error utilities
+   - **Component style:** Detect CSS approach (Tailwind, CSS Modules, styled-components, Emotion)
+   - **API layer:** Check if there's a centralized API client or individual fetch calls
+
+3. **Map existing reusable modules:**
+   - Scan `src/lib/`, `src/utils/`, `src/hooks/`, `src/components/`, `src/services/` (or equivalent)
+   - For each reusable module found, note:
+     - File path
+     - Export signatures (function names, types)
+     - Import path alias (e.g., `@/lib/auth`)
+   - These modules should be REUSED by new architecture, not recreated
+
+4. **Detect framework configuration:**
+   - Next.js: App Router vs Pages Router, middleware.ts presence
+   - Path aliases: Check `tsconfig.json` for `paths` configuration
+   - CSS approach: Check for `tailwind.config.js`, `postcss.config.js`, CSS module patterns
+   - Linting: Check `.eslintrc.*`, `prettier` config
+   - Testing: Check for `jest.config.*`, `vitest.config.*`, `pytest.ini`
+
+5. **Detect naming conventions in existing code:**
+   - File naming: kebab-case, camelCase, PascalCase, snake_case
+   - Component naming convention
+   - API route naming convention
+   - Variable/function naming convention
+   - Database collection/table naming convention (if detectable from ORM models)
+
+% Output
+
+After completing your scan, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+```markdown
+## Step 2b: Codebase Scan
+
+**Status:** [Scan Complete | Empty Repository]
+
+### Installed Packages
+| Package | Version | Category |
+|---------|---------|----------|
+| [package] | [version] | [runtime/dev] |
+
+### Detected Patterns
+- **Authentication:** [pattern or "Not detected"]
+- **Data Fetching:** [pattern or "Not detected"]
+- **State Management:** [pattern or "Not detected"]
+- **Error Handling:** [pattern or "Not detected"]
+- **CSS/Styling:** [pattern or "Not detected"]
+- **API Client:** [pattern or "Not detected"]
+
+### Reusable Modules
+| File Path | Import Path | Exports | Used By |
+|-----------|-------------|---------|---------|
+| [path] | [alias] | [exports] | [consumers] |
+
+### Framework Configuration
+- **Framework:** [name + version]
+- **Router:** [type]
+- **Path Aliases:** [aliases]
+- **CSS Approach:** [approach]
+- **Testing:** [framework]
+
+### Naming Conventions
+- **Files:** [convention]
+- **Components:** [convention]
+- **API Routes:** [convention]
+- **Variables/Functions:** [convention]
+
+---
+*Proceeding to Step 3: Research*
+```
+
+% Important
+
+- If the repository is empty or has no source code, output "Empty Repository" and a minimal profile
+- Do NOT modify any existing files — this is a READ-ONLY scan
+- Focus on patterns that will be relevant for the new architecture being generated
+- The codebase profile will be passed to Steps 3, 4, 5, 7, and 9 so they can reuse existing code
+- Always post your findings as a GitHub comment before completing
