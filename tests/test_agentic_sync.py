@@ -411,10 +411,7 @@ class TestResolveModuleCwd:
 
     def test_module_found_in_subdirectory_pddrc(self, tmp_path):
         """Module found in subdirectory .pddrc returns that subdirectory."""
-        # Root .pddrc has no matching context
-        self._write_pddrc(tmp_path / ".pddrc", {
-            "default": {"paths": ["**"]},
-        })
+        # No root .pddrc — so subdirectory scanning is used
         # Subdirectory has a matching context
         sub = tmp_path / "examples" / "hello"
         sub.mkdir(parents=True)
