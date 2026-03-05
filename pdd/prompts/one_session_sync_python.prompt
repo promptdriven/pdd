@@ -4,7 +4,7 @@
 Write the `pdd/one_session_sync.py` module.
 
 % Role & Scope
-Runs example generation, crash-fix, verify, test generation, and test-fix steps in a single agentic session instead of separate sessions per step. Builds a mega-prompt from the module's spec and generated code, then delegates execution to `run_agentic_task()`. Reports step-level progress via a file-based heartbeat mechanism.
+Runs example generation, crash-fix, verify, test generation, and test-fix steps in a single agentic session instead of separate sessions per step. Builds a mega-prompt from the module's spec and generated code, then delegates execution to `run_agentic_task()`. Reports step-level progress via a file-based heartbeat mechanism and emits `PDD_PHASE:` markers to stdout for `AsyncSyncRunner` to parse.
 
 % Requirements
 1. Function: `build_one_session_prompt(basename: str, language: str, pdd_files: Dict[str, Path], project_root: Path, *, target_coverage: float = 90.0) -> str`
@@ -12,20 +12,24 @@ Runs example generation, crash-fix, verify, test generation, and test-fix steps 
 3. Reads generated code from `pdd_files["code"]`
 4. Loads the mega-prompt template via `load_prompt_template("one_session_agent_LLM")`
 5. Computes `import_base` from code file path relative to project root (e.g., `pdd.crm_models`)
-6. Substitutes all placeholders: `{basename}`, `{language}`, `{prompt_path}`, `{code_path}`, `{example_path}`, `{test_path}`, `{project_root}`, `{resolved_prompt_content}`, `{code_content}`, `{target_coverage}`, `{progress_file}`, `{import_base}`, `{verify_step_num}`, `{test_step_num}`
-7. Function: `run_one_session_sync(basename, language, pdd_files, project_root, *, target_coverage=90.0, budget=None, verbose=False, quiet=False, timeout=None) -> Dict[str, Any]`
-8. Validates code file exists; raises `FileNotFoundError` if not
-9. Calls `run_agentic_task(instruction=prompt, cwd=project_root, label="one_session_sync:{basename}", timeout=timeout or 1200)`
-10. Returns dict with keys: `success`, `total_cost`, `model_name`, `operations_completed`, `errors`
-11. On success, `operations_completed` = `["example", "crash_fix", "verify", "test"]`
-12. Progress file at `{project_root}/.pdd_one_session_progress_{basename}` — agent writes `STEP_COMPLETE:<step>` lines
-13. Heartbeat thread polls progress file every 10s and prints step-level updates via Rich console
-14. Cleans up stale progress files before starting and after completion
+6. Escapes `{`/`}` in resolved prompt content and code content before `.format()` to prevent code like `{uid}` from being treated as template placeholders
+7. Sanitizes basename for progress file path: replace `/` with `_` to handle subdirectory modules (e.g., `core/cloud` → `core_cloud`)
+8. Substitutes all placeholders: `{basename}`, `{language}`, `{prompt_path}`, `{code_path}`, `{example_path}`, `{test_path}`, `{project_root}`, `{resolved_prompt_content}`, `{code_content}`, `{target_coverage}`, `{progress_file}`, `{import_base}`, `{verify_step_num}`, `{test_step_num}`
+9. Function: `run_one_session_sync(basename, language, pdd_files, project_root, *, target_coverage=90.0, budget=None, verbose=False, quiet=False, timeout=None) -> Dict[str, Any]`
+10. Validates code file exists; raises `FileNotFoundError` if not
+11. Forwards `verbose` and `quiet` to `run_agentic_task(instruction=prompt, cwd=project_root, verbose=verbose, quiet=quiet, label="one_session_sync:{basename}", timeout=timeout or 1200)`
+12. Returns dict with keys: `success`, `total_cost`, `model_name`, `operations_completed`, `errors`
+13. On success, `operations_completed` = `["example", "crash_fix", "verify", "test"]`
+14. Progress file at `{project_root}/.pdd_one_session_progress_{safe_basename}` — agent writes `STEP_COMPLETE:<step>` lines
+15. Heartbeat thread polls progress file every 10s and prints step-level updates via Rich console
+16. Cleans up stale progress files before starting and after completion
+17. `_STEP_TO_PHASE` mapping translates step markers to PDD phase names (e.g., `example_generate`→`example`, `crash_fix`→`crash`, `verify`→`verify`, `test_generate`→`test`, `done`→`synced`); heartbeat and post-run drain emit `PDD_PHASE: {phase}` to stdout for each mapped step
+18. After task completes, emit final `PDD_PHASE: synced` on success or `PDD_PHASE: conflict` on failure (always, regardless of `quiet`)
 
 % Helper Functions
-- `_compute_import_base(code_path: Path, project_root: Path) -> str`: dotted module path from code file path
+- `_compute_import_base(code_path: Path, project_root: Path) -> str`: dotted module path from code file path; falls back to stem if path is not relative to project root
 - `_read_new_progress(progress_file: Path, skip_count: int) -> List[str]`: reads new STEP_COMPLETE lines from progress file
-- `_format_step_display(step_name: str) -> str`: maps step markers to user-friendly display strings
+- `_format_step_display(step_name: str) -> str`: maps step markers to user-friendly display strings; handles `crash_fix_attempt:N` and `test_fix_attempt:N` patterns
 
 % Dependencies
 <pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>

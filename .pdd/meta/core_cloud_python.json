@@ -1,12 +1,15 @@
 {
-  "pdd_version": "0.0.91",
-  "timestamp": "2025-12-26T06:38:12.344369+00:00",
-  "command": "fix",
-  "prompt_hash": "30fa3a8051de2f1d1acdf17884bfe56b1d5e4c066fccfa733b04d2cf4c88b7e9",
-  "code_hash": "1e0ef465e7bc73e32488db4794fe18443f71edf78bfe540099448605db57da67",
-  "example_hash": "4ff33d961b949bc512affb79542b8400174731d88754144a2563e1200499e9fe",
-  "test_hash": "62013a3551421376305c1702849cac13660fae08d5ae56ab468bf6be0d017257",
-  "test_files": {
-    "test_cloud.py": "62013a3551421376305c1702849cac13660fae08d5ae56ab468bf6be0d017257"
+  "pdd_version": "0.0.166",
+  "timestamp": "2026-03-05T00:15:51.753105+00:00",
+  "command": "update",
+  "prompt_hash": "af44bae4c890a47eef04c9fac3706292de697f8f102842ff63af810e2e5aa2ac",
+  "code_hash": "6a4fbb62e3331bc30e582a51ff8de8385b1e202ceb8f0dbd30b013abec9ca555",
+  "example_hash": null,
+  "test_hash": null,
+  "test_files": null,
+  "include_deps": {
+    "context/core/errors_example.py": "b50dbf08aec028bd57a8fe74762bf92aee9a1fe953fb3d7db50cc686c72bfee3",
+    "context/core/utils_example.py": "efdc29724f5f2de035193da6f57f5354448c920c79182138a648369a75dd91c2",
+    "context/python_preamble.prompt": "57a3e51f529024ec0cb9658cd6ac61a7c8051ba0c8e887b31cf00b2e78a07d83"
   }
 }

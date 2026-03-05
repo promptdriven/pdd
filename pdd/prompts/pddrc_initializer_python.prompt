@@ -1,11 +1,13 @@
-<pdd-reason>Creates .pddrc configuration files with sensible defaults for the current project directory.</pdd-reason>
+<pdd-reason>Creates and auto-generates .pddrc configuration files with sensible defaults, including multi-context support for monorepos.</pdd-reason>
 
 <pdd-interface>
 {
   "type": "module",
   "module": {
     "functions": [
-      {"name": "offer_pddrc_init", "signature": "() -> bool", "returns": "bool"}
+      {"name": "offer_pddrc_init", "signature": "() -> bool", "returns": "bool"},
+      {"name": "infer_contexts_from_scan", "signature": "(scan_dir: str, repo_root: str, code_files: List[str]) -> Dict[str, Dict]", "returns": "Dict[str, Dict]"},
+      {"name": "ensure_pddrc_for_scan", "signature": "(scan_dir: str, repo_root: str, code_files: List[str], quiet: bool = False) -> Optional[Path]", "returns": "Optional[Path]"}
     ]
   }
 }
@@ -14,16 +16,28 @@
 % You are an expert Python engineer. Your goal is to write the pdd/pddrc_initializer.py module.
 
 % Role & Scope
-Offers to create a basic `.pddrc` configuration file in the current project directory if one doesn't exist. Sets sensible defaults based on detected project type.
+Two responsibilities:
+1. **Interactive init**: Offer to create a `.pddrc` in the current directory with sensible defaults based on detected project type.
+2. **Auto-generation**: Programmatically generate or update `.pddrc` with per-subdirectory contexts for `pdd update --directory/--repo` workflows (monorepo support).
 
-% Requirements
-1. Function: `offer_pddrc_init() -> bool` — returns True if file was created, False otherwise
+Uses `rich` for console output (Console, Syntax for YAML preview).
+
+% Requirements — Interactive Init
+1. `offer_pddrc_init() -> bool` — returns True if file was created, False otherwise
 2. If .pddrc exists in cwd: inform user and return False
-3. If no .pddrc: show preview of defaults, prompt `Create .pddrc? [Y/n]` (Enter = yes)
-4. Language detection: Python (setup.py, pyproject.toml, setup.cfg, Pipfile, requirements.txt), TypeScript (package.json with typescript dep), Go (go.mod). Prompt user if unclear.
-5. Path defaults by language: Python: pdd/, tests/, context/ | TypeScript: src/, __tests__/, examples/ | Go: ., ., examples/
+3. If no .pddrc: show YAML preview via `rich.syntax.Syntax`, prompt `Create .pddrc? [Y/n]` (Enter = yes)
+4. Language detection priority: Python (setup.py, pyproject.toml, setup.cfg, Pipfile, requirements.txt) > TypeScript (package.json with `typescript` in deps/devDeps) > Go (go.mod) > Rust (Cargo.toml). Prompt user with numbered menu if unclear.
+5. Path defaults by language: Python: pdd/, tests/, context/ | TypeScript: src/, __tests__/, examples/ | Go: ., ., examples/ | Rust: src/, tests/, examples/
 6. Standard defaults: strength=0.818, temperature=0.0, target_coverage=80.0, budget=10.0, max_attempts=3
-7. Write YAML format matching .pddrc specification
+
+% Requirements — Auto-generation for Scan
+7. `infer_contexts_from_scan(scan_dir, repo_root, code_files) -> Dict[str, Dict]` — groups code files by first-level subdirectory under scan_dir; each group becomes a context with `paths` (glob pattern) and `defaults` (prompts_dir, generate_output_path, default_language, standard defaults)
+8. `generate_output_path` must NOT have a trailing slash (critical for path-mirroring in resolve_prompt_code_pair)
+9. Context names: sanitize from directory components — lowercase, replace non-alphanumeric with hyphens, collapse consecutive hyphens, strip leading/trailing hyphens. Fallback: "default-scan"
+10. Language detection for scan: majority-vote via file extensions using `get_language()` from `.get_language`
+11. `ensure_pddrc_for_scan(scan_dir, repo_root, code_files, quiet=False) -> Optional[Path]` — reads existing .pddrc via `construct_paths._find_pddrc_file`, infers needed contexts, filters out contexts already covered (by name OR by path overlap using fnmatch), appends new context blocks, returns path or None if no changes
+12. Nested sub-project filtering: files whose nearest .pddrc (via `_find_nearest_pddrc_for_file`) is NOT the top-level one are excluded from context generation
+13. Path overlap detection: a new pattern like "pdd/commands/**" is covered if any existing pattern matches that directory tree (e.g., "pdd/**")
 
 % Dependencies
 <pddrc_example>
@@ -43,5 +57,8 @@ contexts:
       max_attempts: 3
 </pddrc_example>
 
+Uses `construct_paths._find_pddrc_file` and `_find_nearest_pddrc_for_file` for .pddrc discovery.
+Uses `get_language.get_language` for extension-to-language mapping.
+
 % Deliverables
-- Module at `pdd/pddrc_initializer.py` exporting `offer_pddrc_init`.
+- Module at `pdd/pddrc_initializer.py`

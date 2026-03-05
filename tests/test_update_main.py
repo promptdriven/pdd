@@ -1022,8 +1022,8 @@ contexts:
 class TestLanguageCasingPreservation:
     """Tests for Bug 2 fix: language suffix should preserve original casing."""
 
-    def test_resolve_prompt_code_pair_preserves_language_case(self, tmp_path, monkeypatch):
-        """Language suffix should use original casing (e.g., TypescriptReact, not typescriptreact)."""
+    def test_resolve_prompt_code_pair_lowercases_language(self, tmp_path, monkeypatch):
+        """Language suffix should be lowercased (e.g., typescriptreact, not TypescriptReact)."""
         repo_path = tmp_path / "repo"
         repo_path.mkdir()
         code_file = repo_path / "page.tsx"
@@ -1036,7 +1036,7 @@ class TestLanguageCasingPreservation:
             mock_lang.return_value = "TypescriptReact"
             prompt_path, _ = resolve_prompt_code_pair(str(code_file), quiet=True)
 
-        assert prompt_path.endswith("page_TypescriptReact.prompt")
+        assert prompt_path.endswith("page_typescriptreact.prompt")
 
     def test_resolve_prompt_code_pair_unknown_language_fallback(self, tmp_path, monkeypatch):
         """Unknown extension should fall back to 'unknown' language suffix."""
