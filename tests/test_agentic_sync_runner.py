@@ -998,8 +998,8 @@ class TestResumability:
 
         assert runner.module_states["a"].status == "pending"
 
-    def test_no_resume_different_module_list(self, tmp_path):
-        """State file with different modules is ignored."""
+    def test_partial_resume_different_module_list(self, tmp_path):
+        """State file with different module list still resumes overlapping succeeded modules."""
         url = "https://github.com/o/r/issues/4"
         state_dir = tmp_path / ".pdd"
         state_dir.mkdir(parents=True)
@@ -1008,7 +1008,7 @@ class TestResumability:
             "issue_url": url,
             "modules": {
                 "a": {"status": "success", "cost": 0.10},
-                "c": {"status": "pending", "cost": 0.0},  # different set
+                "c": {"status": "pending", "cost": 0.0},  # not in current list
             },
         }))
 
@@ -1016,7 +1016,12 @@ class TestResumability:
         runner.project_root = tmp_path
         runner._load_state()
 
-        assert runner.module_states["a"].status == "pending"
+        # 'a' was successful in saved state and is in current list — should be restored
+        assert runner.module_states["a"].status == "success"
+        assert runner.module_states["a"].cost == pytest.approx(0.10)
+        assert "a" in runner._resumed_modules
+        # 'b' is new — should remain pending
+        assert runner.module_states["b"].status == "pending"
 
     @patch.object(AsyncSyncRunner, "_sync_one_module")
     @patch.object(AsyncSyncRunner, "_update_github_comment")

@@ -771,7 +771,10 @@ def sync_main(
                     )
 
                 from .one_session_sync import run_one_session_sync
-                from .sync_determine_operation import get_pdd_file_paths
+                from .sync_determine_operation import (
+                    get_pdd_file_paths,
+                    sync_determine_operation,
+                )
 
                 # Get file paths for this module
                 pdd_files = get_pdd_file_paths(
@@ -780,67 +783,93 @@ def sync_main(
                     context_override=context_override,
                 )
 
-                # Phase 1: Run pdd generate to create the code file
-                pre_cost = 0.0
-                if not pdd_files["code"].exists() or force:
-                    from .code_generator_main import code_generator_main
-
-                    if not quiet:
-                        rprint("[dim]Running pdd generate...[/dim]")
-                    pdd_files["code"].parent.mkdir(parents=True, exist_ok=True)
-                    gen_result = code_generator_main(
-                        ctx,
-                        prompt_file=str(pdd_files["prompt"].resolve()),
-                        output=str(pdd_files["code"].resolve()),
-                        original_prompt_file_path=None,
-                        force_incremental_flag=False,
+                # Check fingerprint — skip if module is already fully synced
+                _one_session_skipped = False
+                if not force:
+                    decision = sync_determine_operation(
+                        basename, resolved_language,
+                        final_target_coverage,
+                        remaining_budget or final_budget,
+                        log_mode=True,
+                        prompts_dir=str(prompt_file_path.parent),
+                        context_override=context_override,
                     )
-                    # code_generator_main returns (content, was_incremental, cost, model)
-                    pre_cost = gen_result[2] if gen_result and len(gen_result) > 2 else 0.0
-                elif not quiet:
-                    rprint("[dim]Code file exists, skipping generate.[/dim]")
+                    if decision.operation == "nothing":
+                        if not quiet:
+                            rprint(
+                                f"[dim]{basename} is already synced (fingerprint unchanged), skipping.[/dim]"
+                            )
+                        sync_result = {
+                            "success": True,
+                            "total_cost": 0.0,
+                            "model_name": "",
+                            "operations_completed": [],
+                            "errors": [],
+                        }
+                        _one_session_skipped = True
 
-                if not pdd_files["code"].exists():
-                    # Generate failed — don't proceed
-                    sync_result = {
-                        "success": False,
-                        "total_cost": pre_cost,
-                        "model_name": "",
-                        "operations_completed": [],
-                        "errors": ["Code generation failed"],
-                    }
-                else:
-                    # Phase 2: Hand off to one-session agent for example + crash + verify + test
-                    one_session_result = run_one_session_sync(
-                        basename=basename,
-                        language=resolved_language,
-                        pdd_files=pdd_files,
-                        project_root=Path.cwd(),
-                        target_coverage=final_target_coverage,
-                        budget=remaining_budget,
-                        verbose=verbose,
-                        quiet=quiet,
-                    )
-                    # Merge costs from both phases
-                    one_session_result["total_cost"] = pre_cost + one_session_result.get("total_cost", 0.0)
-                    sync_result = one_session_result
+                if not _one_session_skipped:
+                    # Phase 1: Run pdd generate to create the code file
+                    pre_cost = 0.0
+                    if not pdd_files["code"].exists() or force:
+                        from .code_generator_main import code_generator_main
 
-                    # Post-sync: save fingerprint so next sync sees files as up-to-date
-                    if one_session_result.get("success"):
-                        from .operation_log import save_fingerprint
-                        save_fingerprint(
-                            basename, resolved_language, "fix",
-                            pdd_files, one_session_result.get("total_cost", 0.0),
-                            one_session_result.get("model_name", "unknown"),
+                        if not quiet:
+                            rprint("[dim]Running pdd generate...[/dim]")
+                        pdd_files["code"].parent.mkdir(parents=True, exist_ok=True)
+                        gen_result = code_generator_main(
+                            ctx,
+                            prompt_file=str(pdd_files["prompt"].resolve()),
+                            output=str(pdd_files["code"].resolve()),
+                            original_prompt_file_path=None,
+                            force_incremental_flag=False,
                         )
+                        # code_generator_main returns (content, was_incremental, cost, model)
+                        pre_cost = gen_result[2] if gen_result and len(gen_result) > 2 else 0.0
+                    elif not quiet:
+                        rprint("[dim]Code file exists, skipping generate.[/dim]")
 
-                    # Post-sync: auto-submit example to cloud on success
-                    if one_session_result.get("success") and not local:
-                        try:
-                            _auto_submit_example(basename, resolved_language, pdd_files, ctx)
-                        except Exception as e:
-                            if not quiet:
-                                rprint(f"[yellow]Warning: Example submission failed: {e}[/yellow]")
+                    if not pdd_files["code"].exists():
+                        # Generate failed — don't proceed
+                        sync_result = {
+                            "success": False,
+                            "total_cost": pre_cost,
+                            "model_name": "",
+                            "operations_completed": [],
+                            "errors": ["Code generation failed"],
+                        }
+                    else:
+                        # Phase 2: Hand off to one-session agent for example + crash + verify + test
+                        one_session_result = run_one_session_sync(
+                            basename=basename,
+                            language=resolved_language,
+                            pdd_files=pdd_files,
+                            project_root=Path.cwd(),
+                            target_coverage=final_target_coverage,
+                            budget=remaining_budget,
+                            verbose=verbose,
+                            quiet=quiet,
+                        )
+                        # Merge costs from both phases
+                        one_session_result["total_cost"] = pre_cost + one_session_result.get("total_cost", 0.0)
+                        sync_result = one_session_result
+
+                        # Post-sync: save fingerprint so next sync sees files as up-to-date
+                        if one_session_result.get("success"):
+                            from .operation_log import save_fingerprint
+                            save_fingerprint(
+                                basename, resolved_language, "fix",
+                                pdd_files, one_session_result.get("total_cost", 0.0),
+                                one_session_result.get("model_name", "unknown"),
+                            )
+
+                        # Post-sync: auto-submit example to cloud on success
+                        if one_session_result.get("success") and not local:
+                            try:
+                                _auto_submit_example(basename, resolved_language, pdd_files, ctx)
+                            except Exception as e:
+                                if not quiet:
+                                    rprint(f"[yellow]Warning: Example submission failed: {e}[/yellow]")
             else:
                 sync_result = sync_orchestration(
                     basename=basename,

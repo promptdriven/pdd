@@ -41,6 +41,7 @@
     - **Template-based discovery (primary)**: Search contexts in .pddrc for `outputs.prompt.path` templates. Expand template with basename and common languages until a prompt file is found. Use `_find_pddrc_file`, `_load_pddrc_config`, and `expand_template` from template_expander.
     - **Directory scanning (fallback)**: If template discovery fails, call `construct_paths` in discovery mode and scan prompts_dir for `{basename}_{language}.prompt` files.
     - When template discovery succeeds, set `context_override` to the discovered context name (if not already set by user).
+    - **Case-insensitive lookup**: Use `_case_insensitive_prompt_lookup()` helper to find prompt files with correct casing on case-sensitive filesystems (e.g., TypeScript vs typescript).
 
 3. **Dry-Run Mode**:
     - Display sync analysis for basename, then exit
@@ -58,8 +59,10 @@
 
 5. **Language Detection**:
     - If context was discovered via template, use template-based detection: expand template for each known language and check file existence
+    - **Static template handling**: If template lacks `{language}` and `{ext}` placeholders, infer language from filename suffix (e.g., "action_engine_Python.prompt" → python) to avoid duplicate syncs
     - Otherwise, scan for prompt files matching `{basename}_{language}.prompt` in prompts directory
     - **Case-insensitive**: Normalize detected language keys to lowercase (e.g., `"Python"` from `task_model_Python.prompt` becomes `"python"`). This ensures consistent metadata paths on case-sensitive filesystems (Linux).
+    - **Template guard**: When template lacks `{name}` placeholder, only match if context_name equals basename (prevents wrong context matches)
     - Support subdirectory basenames (e.g., "core/cloud" searches prompts/core/ for cloud_*.prompt)
     - Exclude runtime languages (LLM) - they cannot form valid development units
     - Python prioritized first, then remaining languages sorted alphabetically
@@ -76,23 +79,90 @@
     - max_attempts=0 is valid (skips LLM loop, goes straight to agentic mode)
 
 8. **One-Session Mode** (when `one_session=True`):
+    - Mutually exclusive with `skip_tests` and `skip_verify` (raise UsageError if combined)
     - Use `get_pdd_file_paths()` from `sync_determine_operation` to resolve module file paths
-    - Phase 1: If code file doesn't exist or `force`, run `code_generator_main()` to generate the code file; track the generation cost as `pre_cost`
-    - Phase 2: Call `run_one_session_sync()` from `one_session_sync` to run example/crash/verify/test in a single agent session
+    - **Fingerprint check**: If not force mode, call `sync_determine_operation()` to check if module is already synced; skip if operation is "nothing"
+    - **Phase 1 (Generation)**: If code file doesn't exist or `force`, run `code_generator_main()` to generate the code file; track the generation cost as `pre_cost`
+    - **Phase 2 (One-session sync)**: Call `run_one_session_sync()` from `one_session_sync` to run example/crash/verify/test in a single agent session
     - Merge costs: add `pre_cost` to the one-session result's `total_cost`
     - If code generation fails (code file still missing), return failure without proceeding to one-session
+    - **Post-sync**: Save fingerprint via `save_fingerprint()` so next sync sees files as up-to-date
+    - **Auto-submit**: On success and not local mode, call `_auto_submit_example()` to submit the example to PDD Cloud
 
-9. **Multi-Language Processing**:
+9. **Auto-Submit Example** (`_auto_submit_example` helper):
+    - Skip if `PDD_FORCE_LOCAL` env var is set
+    - Get JWT token via `get_jwt_token()` with Firebase API key and GitHub client ID from env
+    - Preprocess prompt content via `preprocess()` with `recursive=False` and `double_curly_brackets=True`
+    - Build payload with command="fix", prompt/code/example/test files, metadata (title, language, tags)
+    - POST to submitExample endpoint with Bearer token
+    - Log success/failure (only if not quiet mode)
+
+10. **Multi-Language Processing**:
     - Process each detected language separately via sync_orchestration (or one-session mode)
     - Track remaining_budget across languages (reduce after each language's cost)
     - Skip subsequent languages if budget exhausted
     - Aggregate results and costs from all language syncs
     - Forward steerability controls (`no_steer`, resolved `steer_timeout`) to each sync_orchestration call
 
-10. **User Feedback** (unless quiet=True):
+11. **User Feedback** (unless quiet=True):
     - Show sync progress summary before starting (detected context, languages, settings)
     - Display final results table (language, status, cost, details)
     - Total time elapsed, total cost, overall status
+
+% Helper Functions (implement as internal functions):
+
+1. **`_validate_basename(basename: str) -> None`**:
+   - Use VALID_BASENAME_CHARS regex to validate
+   - Raise click.UsageError for invalid basenames
+
+2. **`_python_first_sorted(lang_to_path: Dict[str, Path]) -> Dict[str, Path]`**:
+   - Return dictionary with python first (if present), then alphabetically sorted
+
+3. **`_get_extension_safe(language: str) -> str`**:
+   - Try get_extension() from construct_paths; on error, use builtin fallback map
+
+4. **`_relative_basename_for_context(basename: str, context_config: Dict[str, Any]) -> str`**:
+   - Return basename relative to context's most specific path or prompt prefix
+   - Match against paths patterns and prompts_dir
+   - Select longest matching prefix
+
+5. **`_normalize_prompts_root(prompts_dir: Path) -> Path`**:
+   - Resolve prompts_dir to absolute path relative to .pddrc location
+   - Preserve context-specific subdirectories (fix for Issue #253)
+
+6. **`_case_insensitive_prompt_lookup(path: Path) -> Path`**:
+   - Return actual file path with correct casing, or original if no match
+   - Search parent directory for case-insensitive filename match
+
+7. **`_find_prompt_in_contexts(basename: str) -> Optional[Tuple[str, Path, str]]`**:
+   - Search for prompt file across all contexts using outputs.prompt.path templates
+   - Try common languages (python, typescript, javascript, typescriptreact, go, rust, java)
+   - **Guard**: Skip templates without `{name}` unless context_name == basename
+   - Return (context_name, prompt_path, language) if found
+
+8. **`_extract_prompts_base_dir(prompt_template: str) -> Optional[str]`**:
+   - Extract base prompts directory from a template path
+   - Return fixed prefix before first placeholder, or None if no prefix
+
+9. **`_detect_languages_with_context(basename: str, prompts_dir: Path, context_name: Optional[str]) -> Dict[str, Path]`**:
+   - Use template-based discovery if context_name provided and has outputs.prompt.path
+   - **Static template**: If template lacks `{language}` and `{ext}`, infer single language from filename
+   - Fallback to recursive glob search in context's prompts directory if template expansion fails
+   - Otherwise, fallback to `_detect_languages()`
+
+10. **`_detect_languages(basename: str, prompts_dir: Path) -> Dict[str, Path]`**:
+    - Scan prompts directory for files matching `{basename}_{language}.prompt`
+    - Support subdirectory basenames (adjust pattern based on prompts_dir parts)
+    - Normalize language names to lowercase
+    - Exclude LLM language
+
+11. **`_auto_submit_example(basename: str, language: str, pdd_files: Dict[str, Path], ctx: click.Context) -> None`**:
+    - Skip if PDD_FORCE_LOCAL env var is truthy
+    - Get JWT token via `get_jwt_token()` (asyncio.run)
+    - Read and preprocess prompt file
+    - Build payload with prompt, code, example, test (if exists)
+    - POST to submitExample endpoint
+    - Log success/failure (quiet mode respected)
 
 <examples>
    <sync_main_example>

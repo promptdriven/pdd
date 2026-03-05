@@ -4,14 +4,16 @@
 Write the `pdd/agentic_sync_runner.py` module.
 
 % Role & Scope
-Parallel sync engine that runs `pdd sync` for multiple modules concurrently using a ThreadPoolExecutor, respecting dependency ordering. Posts live progress updates to a GitHub issue comment. On failure, pauses execution (running modules finish, no new ones start).
+Parallel sync engine that runs `pdd sync` for multiple modules concurrently using a ThreadPoolExecutor, respecting dependency ordering. Posts live progress updates to a GitHub issue comment. Supports state persistence for resumability across runs, phase tracking, and graceful interrupt handling.
 
 % Requirements
-1. Class: `AsyncSyncRunner(basenames, dep_graph, sync_options, github_info, quiet, verbose)`
+1. Class: `AsyncSyncRunner(basenames, dep_graph, sync_options, github_info, quiet, verbose, issue_url, module_cwds)`
    - `basenames: List[str]` — modules to sync
    - `dep_graph: Dict[str, List[str]]` — basename -> [dependency basenames]
    - `sync_options: Dict` — budget, skip_verify, skip_tests, agentic, no_steer, max_attempts, one_session
    - `github_info: Optional[Dict]` — owner, repo, issue_number, cwd (None to disable comments)
+   - `issue_url: Optional[str]` — GitHub issue URL for state persistence (None disables resumability)
+   - `module_cwds: Optional[Dict[str, Path]]` — per-module working directories (defaults to project_root)
    - Tracks per-module state: pending -> running -> success | failed
 2. Method: `run() -> Tuple[bool, str, float]` — returns (all_success, summary_message, total_cost)
 3. Use `concurrent.futures.ThreadPoolExecutor` with `MAX_WORKERS = 4`
@@ -21,7 +23,18 @@ Parallel sync engine that runs `pdd sync` for multiple modules concurrently usin
 7. Each module runs as a `pdd sync` subprocess with `--force`, `--agentic`, `--no-steer` flags; append `--one-session` if `sync_options["one_session"]` is truthy
 8. Use `PDD_OUTPUT_COST_PATH` env var for cost capture from subprocess (CSV format)
 9. Sync failure detection: exit code != 0 OR "Overall status:" line contains "Failed"
-10. Per-module timeout: `MODULE_TIMEOUT = 900` seconds (15 minutes)
+10. Per-module timeout: `MODULE_TIMEOUT = 1800` seconds (30 minutes)
+11. State persistence: save state to `.pdd/agentic_sync_state.json` after each module completion; restore on init if issue_url matches
+12. Resumability: skip modules with status "success" in saved state; allow partial resumption when module lists differ
+13. Delete state file on full success; preserve on failure
+14. Signal handling: install SIGINT/SIGTERM handlers that kill child process groups before re-raising
+15. Phase tracking: parse `PDD_PHASE: <phase>` markers from subprocess stdout; update `ModuleState.current_phase` and `completed_phases`
+16. Skip phases (prefixed `skip:`) are not added to completed_phases
+17. Rate-limit GitHub comment updates for phase changes to once per 15 seconds
+18. Per-module working directories: use `module_cwds[basename]` if present, else `project_root`
+19. Subprocess env: include `PYTHONUNBUFFERED=1` for real-time output
+20. Forward "Successfully submitted example" messages from child stdout to parent console
+21. Heartbeat logging: during long-running syncs, print progress updates every 60s with last non-box-drawing output line
 
 % Dataclass: `ModuleState`
 - `status: str` — "pending", "running", "success", "failed"
@@ -29,11 +42,14 @@ Parallel sync engine that runs `pdd sync` for multiple modules concurrently usin
 - `end_time: Optional[float]`
 - `cost: float`
 - `error: Optional[str]`
+- `current_phase: Optional[str]` — current phase name or None
+- `completed_phases: List[str]` — list of completed phase names (excludes skip: phases)
 
 % GitHub Comment Updates
 - Create comment on first update (`gh api POST`), store `comment_id`
 - Subsequent updates: PATCH existing comment
-- Markdown table format: Module | Status | Duration | Cost
+- Markdown table format: Module | Status | Phase | Duration | Cost
+- Phase column: running modules show `current_phase (N done)`, completed modules show `N phases` or `-`
 - Status icons: pending (hourglass), running (sync), success (checkmark), failed (cross)
 - Footer: total cost, overall status (in progress / paused / all success)
 
@@ -48,6 +64,29 @@ Parallel sync engine that runs `pdd sync` for multiple modules concurrently usin
 - `_parse_cost_from_csv(csv_path: str) -> float`: sum cost column from PDD_OUTPUT_COST_PATH CSV
 - `_format_duration(start, end) -> str`: format seconds as "Xs" or "Xm Ys"
 
+% State Management (Private Methods)
+- `_state_file_path() -> Path`: return `.pdd/agentic_sync_state.json` path
+- `_load_state()`: restore succeeded modules from state file if issue_url matches
+- `_save_state()`: atomically persist state (temp file + os.replace)
+- `_delete_state()`: remove state file (called on full success)
+
+% Signal Handling
+- Install SIGINT/SIGTERM handlers in `run()` that call `_kill_children()` then restore and re-raise
+- Track child process groups in `self._child_pgids`
+- `_kill_children()`: SIGTERM all tracked pgids, wait 1s, then SIGKILL survivors
+
+% Phase Tracking
+- `_on_phase_change(basename, phase)`: move current_phase to completed_phases, set new current_phase
+- Call `_update_github_comment_throttled()` after phase change
+- `_update_github_comment_throttled()`: update at most once per 15 seconds
+
+% Subprocess Execution
+- Use `subprocess.Popen` with `start_new_session=True` to create process group
+- Use threaded pipe readers to prevent deadlock when output exceeds OS buffer
+- Parse `PDD_PHASE:` markers from stdout lines in reader thread
+- Heartbeat: poll with timeout every 60s; print last informative output line (skip box-drawing chars)
+- Box-drawing filter: `_BOX_CHARS_RE` matches lines with only `╭╮╰╯─│┌┐└┘├┤┬┴┼═║╔╗╚╝╠╣╦╩╬-|+` and whitespace
+
 % Dependencies
 <pdd.agentic_change><include>context/agentic_change_example.py</include></pdd.agentic_change>
 <pdd.sync_order><include>context/sync_order_example.py</include></pdd.sync_order>
@@ -55,8 +94,10 @@ Parallel sync engine that runs `pdd sync` for multiple modules concurrently usin
 % Instructions
 - Use `threading.Lock` for thread-safe state updates
 - Reuse `_run_gh_command` from `agentic_change.py` for GitHub comment API calls
-- Set subprocess env: `CI=1`, `PDD_FORCE=1`, `TERM=dumb` for headless execution
+- Set subprocess env: `CI=1`, `PDD_FORCE=1`, `TERM=dumb`, `PDD_AUTO_UPDATE=false`, `PYTHONUNBUFFERED=1` for headless execution
 - Fallback to `sys.executable -m pdd` if `_find_pdd_executable()` returns None
+- Separate `run()` into `run()` (signal handler setup) and `_run_inner()` (actual execution loop)
+- `_record_result()`: finalize current_phase by moving to completed_phases (unless skip: prefixed), then persist state
 
 % Deliverables
 - Code: `pdd/agentic_sync_runner.py`

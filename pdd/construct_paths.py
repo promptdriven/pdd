@@ -32,6 +32,9 @@ BUILTIN_EXT_MAP = {
     'scala': '.scala', 'r': '.r', 'lua': '.lua', 'perl': '.pl', 'bash': '.sh',
     'shell': '.sh', 'powershell': '.ps1', 'sql': '.sql', 'html': '.html', 'css': '.css',
     'prompt': '.prompt', 'makefile': '',
+    # Frontend framework variants
+    'typescriptreact': '.tsx', 'javascriptreact': '.jsx',
+    'svelte': '.svelte', 'vue': '.vue',
     # Common data/config formats
     'json': '.json', 'jsonl': '.jsonl', 'yaml': '.yaml', 'yml': '.yml', 'toml': '.toml', 'ini': '.ini',
 }
@@ -1142,14 +1145,22 @@ def construct_paths(
         
         # Add validation to ensure language is never None
         if language is None:
-            # Set a default language based on command, defaulting to 'python' for most commands
-            if command == 'bug':
-                # The bug command typically defaults to python in bug_main.py
+            # Try to extract language from the prompt filename suffix before
+            # falling back to Python.  This prevents TypeScript/TSX modules
+            # (e.g. *_typescriptreact.prompt) from being mis-classified as
+            # Python when _determine_language fails to detect the language.
+            prompt_path = _candidate_prompt_path(input_paths)
+            if prompt_path and prompt_path.suffix == ".prompt":
+                stem = prompt_path.stem
+                if "_" in stem:
+                    suffix_token = stem.rsplit("_", 1)[-1]
+                    if _is_known_language(suffix_token):
+                        language = suffix_token.lower()
+
+            # Final default when no prompt suffix could be extracted
+            if language is None:
                 language = 'python'
-            else:
-                # General fallback for other commands
-                language = 'python'
-            
+
             # Log the issue for debugging
             if not quiet:
                 console.print(

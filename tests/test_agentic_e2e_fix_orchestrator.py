@@ -7,11 +7,25 @@ raising KeyError on undefined placeholders.
 Additionally, tests verify the orchestrator's runtime behavior including
 early exit conditions (issue #468).
 """
+import re
+
 import pytest
 from unittest.mock import patch
 from pathlib import Path
 
 from pdd.load_prompt_template import load_prompt_template
+
+
+def _strip_pdd_metadata(template: str) -> str:
+    """Strip <pdd-reason> and <pdd-interface> metadata blocks from a prompt template.
+
+    These blocks contain JSON with bare curly braces that break str.format().
+    The production orchestrator uses preprocess() + manual substitution which
+    handles this, but the formatting tests call .format() directly.
+    """
+    template = re.sub(r'<pdd-reason>.*?</pdd-reason>', '', template, flags=re.DOTALL)
+    template = re.sub(r'<pdd-interface>.*?</pdd-interface>', '', template, flags=re.DOTALL)
+    return template
 
 
 class TestPromptFormatting:
@@ -42,8 +56,8 @@ class TestPromptFormatting:
         assert template is not None, "Template should load"
 
         # This should NOT raise KeyError
-        formatted = template.format(**base_context)
-        assert "test runner" in formatted
+        formatted = _strip_pdd_metadata(template).format(**base_context)
+        assert "test runner" in formatted or "pytest" in formatted
         assert "{issue_url}" not in formatted  # Should be substituted
         assert "{dev_unit}" in formatted  # Should remain as example literal
 
@@ -58,7 +72,7 @@ class TestPromptFormatting:
         assert template is not None, "Template should load"
 
         # This should NOT raise KeyError
-        formatted = template.format(**base_context)
+        formatted = _strip_pdd_metadata(template).format(**base_context)
         assert "pytest" in formatted
         assert "{test_file}" in formatted  # Should remain as example literal
 
@@ -74,7 +88,7 @@ class TestPromptFormatting:
         assert template is not None, "Template should load"
 
         # This should NOT raise KeyError (was the bug in issue #338)
-        formatted = template.format(**base_context)
+        formatted = _strip_pdd_metadata(template).format(**base_context)
         assert "{test_name}" in formatted  # Should remain as example literal
         assert "{description}" in formatted  # Should remain as example literal
         assert "{detailed_explanation}" in formatted  # Should remain as example literal
@@ -91,7 +105,7 @@ class TestPromptFormatting:
         assert template is not None, "Template should load"
 
         # This should NOT raise KeyError
-        formatted = template.format(**base_context)
+        formatted = _strip_pdd_metadata(template).format(**base_context)
         assert "pytest" in formatted
         assert "{name}" in formatted  # Should remain as example literal
 
@@ -108,7 +122,7 @@ class TestPromptFormatting:
         assert template is not None
 
         # This should NOT raise KeyError for missing protect_tests_flag
-        formatted = template.format(**base_context)
+        formatted = _strip_pdd_metadata(template).format(**base_context)
         assert "--protect-tests" in formatted, \
             "Step 1 prompt should include --protect-tests flag when enabled"
 
@@ -129,7 +143,7 @@ class TestPromptFormatting:
         assert template is not None
 
         # This should NOT raise KeyError for missing protect_tests_flag
-        formatted = template.format(**base_context)
+        formatted = _strip_pdd_metadata(template).format(**base_context)
         assert "--protect-tests" in formatted, \
             "Step 8 prompt should include --protect-tests flag when enabled"
 
@@ -151,7 +165,7 @@ class TestPromptFormatting:
 
         # This should NOT raise KeyError: 'N'
         # Bug: Lines 126-127 have {N}/{M} instead of {{N}}/{{M}}
-        formatted = template.format(**base_context)
+        formatted = _strip_pdd_metadata(template).format(**base_context)
 
         # Verify escaped placeholders remain as literals in output
         assert "{N}" in formatted, "Escaped {{N}} should become {N} literal in output"

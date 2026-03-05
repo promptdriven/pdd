@@ -56,15 +56,15 @@ Shared infrastructure for agentic CLI invocations (Claude Code, Gemini, Codex). 
    - Strategy 2: `shutil.which` for PATH lookup.
    - Strategy 3: `_COMMON_CLI_PATHS` search with nvm glob expansion (`~/.nvm/versions/node/*/bin/`).
 4. **Availability Logic**:
-   - Anthropic: CLI exists.
+   - Anthropic: CLI exists (subscription auth supported, API key optional).
    - Google: CLI exists AND (`GOOGLE_API_KEY` OR `GEMINI_API_KEY` OR Vertex AI auth).
    - OpenAI: CLI exists AND (`OPENAI_API_KEY` OR `PDD_CODEX_AUTH_AVAILABLE`).
-5. **Execution**: Run agents in headless mode with JSON output. Sanitize environment (TERM=dumb, NO_COLOR=1, CI=1). Strip `PDD_OUTPUT_COST_PATH` from child env.
+5. **Execution**: Run agents in headless mode with JSON output. Sanitize environment (TERM=dumb, NO_COLOR=1, CI=1). Strip `PDD_OUTPUT_COST_PATH` from child env. Preserve API keys (ANTHROPIC_API_KEY, etc.) for API-key-based auth.
 6. **Cost Parsing**:
    - Anthropic: `total_cost_usd` first; fallback to `modelUsage` sum; then token-based estimation using `ANTHROPIC_PRICING_BY_FAMILY`.
    - Google: Calculate from `stats["models"]` using `GEMINI_PRICING_BY_FAMILY`.
    - OpenAI: Calculate from `usage` using `CODEX_PRICING`. Handle NDJSON (item.completed + session.end/turn.completed).
-7. **False Positive Detection**: Treat empty output or (zero cost + short output < 50 chars) as failure.
+7. **False Positive Detection**: Treat empty output (after strip) as failure. Also treat (zero cost + short output < `MIN_VALID_OUTPUT_LENGTH`) as failure. Retry/fallback on detection.
 8. **Deadline Awareness**: Read `PDD_JOB_DEADLINE`. Skip attempts if remaining time < `MIN_ATTEMPT_TIMEOUT_SECONDS` (60s) after `JOB_TIMEOUT_MARGIN_SECONDS` (120s) reserve.
 9. **GitHub State Persistence**: Provide functions to save/load/clear workflow state in GitHub issue comments using hidden HTML markers (`<!-- PDD_WORKFLOW_STATE:... -->`). Use `gh api` with `--paginate`.
 10. **State Validation**: `validate_cached_state` must scan `step_outputs` for "FAILED:" prefixes to correct `last_completed_step`, preventing "blind resume" bugs.
@@ -90,19 +90,15 @@ Shared infrastructure for agentic CLI invocations (Claude Code, Gemini, Codex). 
 `clear_workflow_state(...) -> None`
 
 % Constants
-- `DEFAULT_TIMEOUT_SECONDS: float = 600.0`
+- `DEFAULT_TIMEOUT_SECONDS: float = 600.0` (increased from 240s for complex verify tasks)
 - `MIN_VALID_OUTPUT_LENGTH: int = 50`
 - `DEFAULT_MAX_RETRIES: int = 3`
 - `JOB_TIMEOUT_MARGIN_SECONDS: float = 120.0`
 - `MIN_ATTEMPT_TIMEOUT_SECONDS: float = 60.0`
+- `MAX_ERROR_SNIPPET_LENGTH: int = 2000` (truncation for provider error messages)
 
 % Token Pricing
-Use `Pricing` dataclass:
-- `GEMINI_PRICING_BY_FAMILY`: flash ($0.35/$1.05, 0.5 cached), pro ($3.50/$10.50, 0.5 cached).
-- `CODEX_PRICING`: $1.50/$6.00, 0.25 cached.
-- `ANTHROPIC_PRICING_BY_FAMILY`: opus ($15/$75), sonnet ($3/$15), haiku ($0.80/$4). All 0.1 cached. Cache write = 1.25x input.
-
-Use a `Pricing` dataclass with `input_per_million`, `output_per_million`, `cached_input_multiplier` fields.
+Use `Pricing` dataclass with `input_per_million`, `output_per_million`, `cached_input_multiplier` fields.
 
 - `GEMINI_PRICING_BY_FAMILY`: flash ($0.35/$1.05, cached 50%), pro ($3.50/$10.50, cached 50%)
 - `CODEX_PRICING`: $1.50/$6.00, cached 25%
@@ -121,7 +117,7 @@ Cost formula for all providers: `new_input = max(0, total_input - cached)`, then
 - Loads `agentic` section from `.pddrc` (searches current dir up to `MAX_PDDRC_SEARCH_DEPTH=10` parents, then home dir)
 
 `_get_cli_diagnostic_info(name: str) -> str`
-- Returns actionable troubleshooting message when CLI not found (common paths, .pddrc config example, current PATH)
+- Returns actionable troubleshooting message when CLI not found (common paths, .pddrc config example, current PATH truncated to `MAX_PATH_DISPLAY_LENGTH`)
 
 % CLI Invocation Pattern
 Critical: Build agentic instruction pointing to temp file:
@@ -138,7 +134,7 @@ When `use_playwright=True`, constrain tool access and add a cost ceiling for bro
 
 Provider commands in playwright mode:
 - Anthropic: `[cli_path, "-p", "-", "--allowedTools", "Bash", "Read", "Write", "--max-turns", "30", "--output-format", "json"]` — replaces `--dangerously-skip-permissions` with explicit tool allowlist
-- Google: `[cli_path, "<instruction>", "--yolo", "--output-format", "json"]` — same as standard mode (gemini CLI does not support per-tool restrictions; `--yolo` already grants full access)
+- Google: `[cli_path, "<instruction>", "--yolo", "--output-format", "json"]` — same as standard mode (gemini CLI does not support per-tool restrictions)
 - OpenAI: `[cli_path, "exec", "--sandbox", <sandbox_mode>, "--json", <prompt_path>]` — same as standard mode (codex CLI does not support per-tool restrictions)
 
 The `use_playwright` flag assumes `playwright-cli` is available in PATH. The prompt instructs the agent to use `playwright-cli` commands for browser interaction. The `--max-turns 30` flag provides a cost ceiling for Anthropic; for Google/OpenAI, the existing timeout mechanism serves as the cost ceiling.
@@ -150,7 +146,7 @@ After a provider returns success, detect false positives:
 - Treat as failure and retry/fallback
 
 % Suspicious File Detection
-After a genuine success (not false positive), check for single-letter files named `C`, `E`, `T` in the working directory. If found, log a bold red warning. These indicate CLI argument misinterpretation artifacts.
+After a genuine success (not false positive), check for single-letter files named `C`, `E`, `T` in the working directory. If found, log a bold red warning via `console.print`. These indicate CLI argument misinterpretation artifacts.
 
 % Deadline-Aware Retry Budgeting
 `get_job_deadline() -> Optional[float]` reads `PDD_JOB_DEADLINE` env var (set by server for subprocess jobs).
@@ -204,6 +200,7 @@ State Validation (Issue #467):
 `validate_cached_state(last_completed_step, step_outputs, step_order=None, quiet=False) -> Union[int, float]`
 - Scans step_outputs for "FAILED:" prefix entries and corrects last_completed_step
 - Prevents "blind resume" bug
+- Filter out non-numeric keys (e.g., "1b", "2b") when deriving step_order from step_outputs keys
 
 High-Level Wrappers:
 
@@ -217,15 +214,17 @@ High-Level Wrappers:
 - Returns False if param is False or `PDD_NO_GITHUB_STATE=1` env var is set
 
 % Instructions
-1. Implement `_run_with_provider` to handle CLI-specific flags:
-   - Anthropic: `-p -` (stdin) + `--dangerously-skip-permissions` + `--output-format json`.
-   - Google: Positional instruction + `--yolo` + `--output-format json`.
-   - OpenAI: `exec --sandbox <mode> --json <path>`. Default mode `danger-full-access`.
+1. Implement `_run_with_provider` to handle CLI-specific flags per provider.
 2. Support model overrides via `CLAUDE_MODEL`, `GEMINI_MODEL`, and `CODEX_MODEL` env vars.
 3. In `run_agentic_task`, inject `PDD_USER_FEEDBACK` into the prompt if present.
 4. Implement exponential backoff for retries: `delay = retry_delay * attempt`.
 5. Ensure `_find_state_comment` uses `gh api ... --paginate` to find existing state markers in issue comments.
 6. If single-letter files `C`, `E`, or `T` are detected in `cwd` after a successful run, log a bold red warning.
+7. Implement `_parse_provider_json(provider: str, data: Dict[str, Any]) -> Tuple[bool, str, float]` to extract (success, text_response, cost_usd) from provider JSON output.
+8. For Anthropic, extract output from `data.get("result")` or `data.get("response")`.
+9. For Google, extract output from `data.get("result")` or `data.get("response")` or `data.get("output")`.
+10. For OpenAI (modern Codex CLI 0.104.0+), extract text from `data["item"]["text"]` if `data["item"]["type"] == "agent_message"`, else fallback to `data.get("result")` or `data.get("output")`.
+11. Truncate provider error messages to `MAX_ERROR_SNIPPET_LENGTH` (2000 chars) when building failure messages.
 
 % Dependencies
 <pdd.llm_invoke>
